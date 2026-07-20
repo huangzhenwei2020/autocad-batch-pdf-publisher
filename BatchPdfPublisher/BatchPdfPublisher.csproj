@@ -1,0 +1,37 @@
+<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{A0D764B9-6CC8-45B1-9F96-9BEEF91C4F7E}</ProjectGuid>
+    <OutputType>Library</OutputType>
+    <RootNamespace>BatchPdfPublisher</RootNamespace>
+    <AssemblyName>BatchPdfPublisher</AssemblyName>
+    <TargetFrameworkVersion>v4.8.1</TargetFrameworkVersion>
+    <PlatformTarget>x64</PlatformTarget>
+    <FileAlignment>512</FileAlignment>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <DebugSymbols>true</DebugSymbols><DebugType>full</DebugType><Optimize>false</Optimize><OutputPath>bin\Debug\</OutputPath>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <DebugType>pdbonly</DebugType><Optimize>true</Optimize><OutputPath>bin\Release\</OutputPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System" /><Reference Include="System.Core" /><Reference Include="System.Xaml" /><Reference Include="System.Runtime.Serialization" /><Reference Include="System.Xml" /><Reference Include="System.Drawing" />
+    <Reference Include="WindowsBase" /><Reference Include="PresentationCore" /><Reference Include="PresentationFramework" />
+    <Reference Include="acmgd" HintPath="C:\Program Files\Autodesk\AutoCAD 2022\acmgd.dll" Private="False" />
+    <Reference Include="acdbmgd" HintPath="C:\Program Files\Autodesk\AutoCAD 2022\acdbmgd.dll" Private="False" />
+    <Reference Include="accoremgd" HintPath="C:\Program Files\Autodesk\AutoCAD 2022\accoremgd.dll" Private="False" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Commands.cs" />
+    <Compile Include="Models\FrameDefinition.cs" /><Compile Include="Models\SheetItem.cs" />
+    <Compile Include="Services\DrawingScanner.cs" /><Compile Include="Services\FrameSizeDetector.cs" /><Compile Include="Services\FrameRegistrationService.cs" /><Compile Include="Services\PublishPlanStore.cs" />
+    <Compile Include="ViewModels\PublisherViewModel.cs" />
+    <Compile Include="Views\PublisherControl.xaml.cs"><DependentUpon>PublisherControl.xaml</DependentUpon></Compile>
+    <Compile Include="Views\FrameRegistrationWindow.xaml.cs"><DependentUpon>FrameRegistrationWindow.xaml</DependentUpon></Compile>
+    <Page Include="Views\PublisherControl.xaml" />
+    <Page Include="Views\FrameRegistrationWindow.xaml" />
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>
