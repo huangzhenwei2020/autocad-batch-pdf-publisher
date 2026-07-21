@@ -41,7 +41,7 @@ BatchPdfPublisher.dll
 2. AutoCAD 2022
 3. AutoCAD 2024
 
-选择后，启动器会把最新版 DLL 安装到当前用户的 `BatchPdfPublisher\\releases` 目录，禁用旧的自动加载 bundle，等待 CAD 完成初始化后只执行 `NETLOAD`。为避免 AutoCAD 2022/T20 在初始化阶段处理 COM 命令导致致命错误，启动器不会自动发送 `BPPUBLISH`；看到“插件已加载”提示后，在 CAD 命令行输入一次 `BPPUBLISH` 即可打开面板。T20 必须选择“T20 天正建筑”，不要选择普通 AutoCAD 2022；这样会使用天正自己的 `TGStart.exe` 启动链。
+选择后，启动器会把最新版 DLL 安装到当前用户的 `BatchPdfPublisher\\releases` 目录，并写入 AutoCAD 自动加载 bundle。启动 CAD 后插件会自动加载，Ribbon 中出现“批量打印”选项卡；如果当前 CAD 已经运行，启动器还会通过 COM 发送 `NETLOAD` 和 `BPPUBLISH`。T20 必须选择“T20 天正建筑”，不要选择普通 AutoCAD 2022；这样会使用天正自己的 `TGStart.exe` 启动链。
 
 无需再手工执行 `NETLOAD`。每次重新编译插件后，再双击一次启动器即可更新并加载最新版。
 

@@ -16,12 +16,14 @@ namespace BatchPdfPublisherLauncher
     {
         private const string PluginAssemblyName = "BatchPdfPublisher.dll";
         private const string LastPlatformFileName = "BatchPdfPublisher.last-platform.txt";
+        private static readonly string LaunchLogPath = Path.Combine(Path.GetTempPath(), "BatchPdfPublisher.launcher.log");
 
         [STAThread]
         private static void Main()
         {
             try
             {
+                Log("启动器开始运行");
                 var launcherDirectory = AppDomain.CurrentDomain.BaseDirectory;
                 var sourceAssembly = Path.Combine(launcherDirectory, PluginAssemblyName);
                 if (!File.Exists(sourceAssembly)) throw new FileNotFoundException("启动器旁边缺少 BatchPdfPublisher.dll，请重新编译完整项目。", sourceAssembly);
@@ -37,10 +39,12 @@ namespace BatchPdfPublisherLauncher
 
                 File.WriteAllText(LastPlatformPath(), selected.Id);
                 var installedAssembly = InstallPlugin(sourceAssembly);
+                Log("已安装插件: " + installedAssembly);
                 StartPlatform(selected, installedAssembly);
             }
             catch (Exception exception)
             {
+                Log("启动失败: " + exception);
                 MessageBox.Show(exception.Message, "批量打印插件启动失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
@@ -64,6 +68,7 @@ namespace BatchPdfPublisherLauncher
 
         private static void StartPlatform(PlatformOption platform, string installedAssembly)
         {
+            Log("启动平台: " + platform.DisplayName);
             Process.Start(new ProcessStartInfo
             {
                 FileName = platform.Executable,
@@ -79,6 +84,7 @@ namespace BatchPdfPublisherLauncher
             // Waiting longer and loading only the assembly avoids the fatal
             // c000041d crashes caused by sending a second command too early.
             Thread.Sleep(string.Equals(platform.Id, "t20", StringComparison.OrdinalIgnoreCase) ? 25000 : 15000);
+            Log("AutoCAD 进程已就绪，开始发送加载命令");
             if (!TrySendLoad(platform.ProgId, installedAssembly))
             {
                 MessageBox.Show("CAD 已启动，插件文件已经安装。请在 CAD 命令行输入 BPPUBLISH 加载并打开面板。", "批量打印插件", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -97,25 +103,35 @@ namespace BatchPdfPublisherLauncher
 
         private static bool TrySendLoad(string progId, string installedAssembly)
         {
+            var progIds = new[] { progId, "AutoCAD.Application.24.0", "AutoCAD.Application.24.1", "AutoCAD.Application.24.2", "AutoCAD.Application.24.3", "AutoCAD.Application.25.0" }
+                .Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             for (var attempt = 0; attempt < 15; attempt++)
             {
                 try
                 {
-                    var application = Marshal.GetActiveObject(progId);
+                    object application = null;
+                    Exception last = null;
+                    foreach (var candidate in progIds)
+                    {
+                        try { application = Marshal.GetActiveObject(candidate); break; }
+                        catch (Exception exception) { last = exception; }
+                    }
+                    if (application == null) throw last ?? new InvalidOperationException("AutoCAD COM 服务尚未注册");
                     var document = application.GetType().InvokeMember("ActiveDocument", BindingFlags.GetProperty, null, application, null);
                     var directory = Path.GetDirectoryName(installedAssembly).Replace('\\', '/');
                     // Queue the commands in a single command stream. AutoCAD
                     // executes NETLOAD fully before BPPUBLISH, avoiding the
                     // startup race that previously caused fatal errors while
                     // still giving the user a true double-click experience.
+                    var assemblyPath = installedAssembly.Replace('\\', '/').Replace("\\\"", "\\\\\"");
                     SendCommand(document,
-                        "(setvar \"TRUSTEDPATHS\" (strcat (getvar \"TRUSTEDPATHS\") \";" + directory + "\")) \r\n" +
-                        "_.NETLOAD \r\n" +
-                        "\"" + installedAssembly.Replace('\\', '/') + "\" \r\n" +
-                        "BPPUBLISH \r\n");
+                        "(setvar \"TRUSTEDPATHS\" (strcat (getvar \"TRUSTEDPATHS\") \";" + directory + "\")) " +
+                        "(command \"_.NETLOAD\" \"" + assemblyPath + "\") " +
+                        "(command \"BPPUBLISH\") \r\n");
+                    Log("已向 AutoCAD 发送 NETLOAD + BPPUBLISH");
                     return true;
                 }
-                catch { Thread.Sleep(1000); }
+                catch (Exception exception) { Log("COM 尝试 " + (attempt + 1) + " 失败: " + exception.Message); Thread.Sleep(1000); }
             }
             return false;
         }
@@ -123,6 +139,11 @@ namespace BatchPdfPublisherLauncher
         private static void SendCommand(object document, string command)
         {
             document.GetType().InvokeMember("SendCommand", BindingFlags.InvokeMethod, null, document, new object[] { command });
+        }
+
+        private static void Log(string message)
+        {
+            try { File.AppendAllText(LaunchLogPath, DateTime.Now.ToString("s") + " " + message + Environment.NewLine); } catch { }
         }
 
         private static string LoadLastPlatform()
@@ -135,23 +156,32 @@ namespace BatchPdfPublisherLauncher
 
         private static string InstallPlugin(string sourceAssembly)
         {
-            DisableLegacyBundle();
             var contentsDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "BatchPdfPublisher", "releases");
             Directory.CreateDirectory(contentsDirectory);
             var hash = GetFileHash(sourceAssembly).Substring(0, 12);
             var installedFileName = "BatchPdfPublisher." + hash + ".dll";
             var installedAssembly = Path.Combine(contentsDirectory, installedFileName);
-            if (!File.Exists(installedAssembly)) File.Copy(sourceAssembly, installedAssembly);
+            if (!File.Exists(installedAssembly) || new FileInfo(installedAssembly).Length != new FileInfo(sourceAssembly).Length)
+                File.Copy(sourceAssembly, installedAssembly, true);
+            InstallAutoLoadBundle(installedAssembly);
             return installedAssembly;
         }
 
-        private static void DisableLegacyBundle()
+        private static void InstallAutoLoadBundle(string installedAssembly)
         {
             var bundle = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Autodesk", "ApplicationPlugins", "BatchPdfPublisher.bundle");
-            if (!Directory.Exists(bundle)) return;
-            var disabled = bundle + ".disabled";
-            if (Directory.Exists(disabled)) disabled = bundle + ".disabled." + DateTime.Now.ToString("yyyyMMddHHmmss");
-            Directory.Move(bundle, disabled);
+            var contents = Path.Combine(bundle, "Contents");
+            Directory.CreateDirectory(contents);
+            File.Copy(installedAssembly, Path.Combine(contents, PluginAssemblyName), true);
+            var package = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n" +
+                "<ApplicationPackage SchemaVersion=\"1.0\" AutodeskProduct=\"AutoCAD\" Name=\"BatchPdfPublisher\" AppVersion=\"1.0.0\" ProductCode=\"{BPP-7B9E2D72-1C3E-4F3D-9C0C-7D5D3E5A0A01}\">\r\n" +
+                "  <CompanyDetails Name=\"BatchPdfPublisher\" />\r\n" +
+                "  <Components>\r\n" +
+                "    <RuntimeRequirements OS=\"Win64\" Platform=\"AutoCAD*\" SeriesMin=\"R24.0\" SeriesMax=\"R25.9\" />\r\n" +
+                "    <ComponentEntry AppName=\"BatchPdfPublisher\" ModuleName=\"Contents\\BatchPdfPublisher.dll\" AppDescription=\"批量 PDF 发布\" LoadReasons=\"LoadOnStartup\" />\r\n" +
+                "  </Components>\r\n" +
+                "</ApplicationPackage>\r\n";
+            File.WriteAllText(Path.Combine(bundle, "PackageContents.xml"), package, Encoding.UTF8);
         }
 
         private static string GetFileHash(string path)

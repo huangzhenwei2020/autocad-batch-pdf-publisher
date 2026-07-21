@@ -38,6 +38,9 @@ namespace BatchPdfPublisher.Services
                 ribbon.Tabs.Add(tab);
             };
             Application.Idle += _idleHandler;
+            // A freshly started AutoCAD may already have a Ribbon when NETLOAD
+            // completes; install immediately as well as on subsequent idle ticks.
+            _idleHandler(null, EventArgs.Empty);
         }
 
         public static void Remove()
