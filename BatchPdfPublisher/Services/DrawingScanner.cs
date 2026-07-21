@@ -103,7 +103,18 @@ namespace BatchPdfPublisher.Services
         {
             extents = default(Extents3d);
             try { extents = reference.GeometricExtents; }
-            catch (Autodesk.AutoCAD.Runtime.Exception) { return false; }
+            catch (Autodesk.AutoCAD.Runtime.Exception)
+            {
+                // T20/proxy block references can reject GeometricExtents even though
+                // AutoCAD has a usable display bounds box. Bounds keeps those registered
+                // frames visible in the scan and preview without exploding the command.
+                try
+                {
+                    var bounds = reference.Bounds;
+                    if (bounds.HasValue) extents = bounds.Value;
+                }
+                catch (Autodesk.AutoCAD.Runtime.Exception) { return false; }
+            }
             var values = new[] { extents.MinPoint.X, extents.MinPoint.Y, extents.MaxPoint.X, extents.MaxPoint.Y };
             if (values.Any(x => double.IsNaN(x) || double.IsInfinity(x))) return false;
             return extents.MaxPoint.X > extents.MinPoint.X && extents.MaxPoint.Y > extents.MinPoint.Y;

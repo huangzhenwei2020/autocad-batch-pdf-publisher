@@ -129,7 +129,10 @@ namespace BatchPdfPublisher.Services
                             if (!documentStarted)
                             {
                                 stage = "创建 PDF 文档";
-                                engine.BeginDocument(plotInfo, document.Name, null, 1, true, outputPath);
+                                // The page count is part of PlotEngine's document state.
+                                // Declaring one page and then calling BeginPage again makes
+                                // AutoCAD 2022 reject page 2 with eInvalidPlotInfo.
+                                engine.BeginDocument(plotInfo, document.Name, null, sheets.Count, true, outputPath);
                                 documentStarted = true;
                             }
                             using (var pageInfo = new PlotPageInfo())
