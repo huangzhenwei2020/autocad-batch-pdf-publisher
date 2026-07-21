@@ -211,7 +211,11 @@ namespace BatchPdfPublisherLauncher
             var decoded = new MemoryStream();
             using (var inflater = new DeflateStream(compressed, CompressionMode.Decompress)) inflater.CopyTo(decoded);
             var text = Encoding.ASCII.GetString(decoded.ToArray());
-            text = Regex.Replace(text, "user_defined_model_pathname=\\\"[^\\\"]*\\\"", "user_defined_model_pathname=\\\"" + pmpPath + "\\\"");
+            text = Regex.Replace(text, "user_defined_model_pathname=\\\"[^\\\"]*\\\"", "user_defined_model_pathname=\"" + pmpPath + "\"");
+            var expectedBinding = "user_defined_model_pathname=\"" + pmpPath + "\"";
+            if (text.IndexOf(expectedBinding, StringComparison.OrdinalIgnoreCase) < 0 ||
+                text.IndexOf("user_defined_model_pathname=\\\"", StringComparison.Ordinal) >= 0)
+                throw new InvalidDataException("写入 BatchPdfPublisher.pc3 的 PMP 路径时产生了非法转义语法。");
             var raw = Encoding.ASCII.GetBytes(text);
             var packed = new MemoryStream();
             packed.WriteByte(0x78); packed.WriteByte(0xDA);
