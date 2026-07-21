@@ -205,7 +205,7 @@ namespace BatchPdfPublisherLauncher
         private static void BindPmp(string pc3Path, string pmpPath)
         {
             var bytes = File.ReadAllBytes(pc3Path);
-            if (bytes.Length < 64 || Encoding.ASCII.GetString(bytes, 0, 32).IndexOf("PIAFILEVERSION_2.0,PC3VER1,compress", StringComparison.Ordinal) < 0)
+            if (bytes.Length < 64 || Encoding.ASCII.GetString(bytes, 0, Math.Min(bytes.Length, 60)).IndexOf("PIAFILEVERSION_2.0,PC3VER1,compress", StringComparison.Ordinal) < 0)
                 throw new InvalidDataException("BatchPdfPublisher.pc3 不是可识别的 AutoCAD 压缩 PC3 文件。");
             var compressed = new MemoryStream(bytes, 62, bytes.Length - 62, false);
             var decoded = new MemoryStream();
