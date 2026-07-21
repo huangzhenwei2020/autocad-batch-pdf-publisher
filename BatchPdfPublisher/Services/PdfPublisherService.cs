@@ -93,16 +93,19 @@ namespace BatchPdfPublisher.Services
                 var layout = (Layout)transaction.GetObject(LayoutManager.Current.GetLayoutId(LayoutManager.Current.CurrentLayout), OpenMode.ForRead);
                 engine.BeginPlot(null, null);
                 var documentStarted = false;
+                var settingsToKeep = new List<PlotSettings>();
+                var plotInfosToKeep = new List<PlotInfo>();
                 for (var index = 0; index < sheets.Count; index++)
                 {
                     var sheet = sheets[index];
                     var stage = "创建打印设置";
                     try
                     {
-                        using (var settings = CreateSettings(layout, sheet, defaultPlotStyle, marginMode))
-                        using (var plotInfo = new PlotInfo { Layout = layout.ObjectId, OverrideSettings = settings })
-                        {
-                            stage = "校验打印信息";
+                        var settings = CreateSettings(layout, sheet, defaultPlotStyle, marginMode);
+                        var plotInfo = new PlotInfo { Layout = layout.ObjectId, OverrideSettings = settings };
+                        settingsToKeep.Add(settings);
+                        plotInfosToKeep.Add(plotInfo);
+                        stage = "校验打印信息";
                             using (var validator = new PlotInfoValidator { MediaMatchingPolicy = MatchingPolicy.MatchEnabled })
                             {
                                 try
@@ -129,10 +132,7 @@ namespace BatchPdfPublisher.Services
                             if (!documentStarted)
                             {
                                 stage = "创建 PDF 文档";
-                                // The page count is part of PlotEngine's document state.
-                                // Declaring one page and then calling BeginPage again makes
-                                // AutoCAD 2022 reject page 2 with eInvalidPlotInfo.
-                                engine.BeginDocument(plotInfo, document.Name, null, sheets.Count, true, outputPath);
+                                engine.BeginDocument(plotInfo, document.Name, null, 1, true, outputPath);
                                 documentStarted = true;
                             }
                             using (var pageInfo = new PlotPageInfo())
@@ -144,7 +144,6 @@ namespace BatchPdfPublisher.Services
                                 engine.EndGenerateGraphics(null);
                                 engine.EndPage(null);
                             }
-                        }
                     }
                     catch (Exception exception)
                     {
@@ -155,6 +154,8 @@ namespace BatchPdfPublisher.Services
                 }
                 if (documentStarted) engine.EndDocument(null);
                 engine.EndPlot(null);
+                for (var i = plotInfosToKeep.Count - 1; i >= 0; i--) plotInfosToKeep[i].Dispose();
+                for (var i = settingsToKeep.Count - 1; i >= 0; i--) settingsToKeep[i].Dispose();
                 transaction.Commit();
             }
         }
