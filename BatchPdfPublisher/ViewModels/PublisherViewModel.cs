@@ -5,6 +5,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Windows.Data;
 using System.Windows.Input;
+using System.Threading.Tasks;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using BatchPdfPublisher.Models;
@@ -389,17 +390,18 @@ namespace BatchPdfPublisher.ViewModels
             Status = "已收藏打印样式：" + PlotStyle;
         }
 
-        private void PublishPdf()
+        private async void PublishPdf()
         {
             var document = Application.DocumentManager.MdiActiveDocument;
             if (document == null) { Status = "没有打开的图纸。"; return; }
+            if (IsPublishing) return;
+            IsPublishing = true;
+            PublishProgressValue = 0;
+            PublishProgressMaximum = Math.Max(Sheets.Count, 1);
             try
             {
                 _preview.Clear();
                 SaveCurrentProject();
-                IsPublishing = true;
-                PublishProgressValue = 0;
-                PublishProgressMaximum = Math.Max(Sheets.Count, 1);
                 Status = $"正在生成 PDF：0 / {PublishProgressMaximum}";
                 var project = _selectedProject ?? new ProjectProfile
                 {
@@ -409,12 +411,17 @@ namespace BatchPdfPublisher.ViewModels
                     OutputDirectory = OutputDirectory,
                     MergeByBuilding = MergeByBuilding
                 };
-                var result = _publisher.Publish(document, Sheets, project, progress =>
+                PdfPublishResult result = null;
+                await Application.DocumentManager.ExecuteInCommandContextAsync(async unused =>
                 {
-                    PublishProgressMaximum = Math.Max(progress.Total, 1);
-                    PublishProgressValue = progress.Current;
-                    Status = $"正在生成 PDF：{progress.Current} / {progress.Total} · {progress.SheetLabel}";
-                });
+                    result = _publisher.Publish(document, Sheets, project, progress =>
+                    {
+                        PublishProgressMaximum = Math.Max(progress.Total, 1);
+                        PublishProgressValue = progress.Current;
+                        Status = $"正在生成 PDF：{progress.Current} / {progress.Total} · {progress.SheetLabel}";
+                    });
+                    await Task.CompletedTask;
+                }, null);
                 Status = $"发布完成：{result.SheetCount} 张图纸，生成 {result.Files.Count} 个 PDF。输出到 {project.OutputDirectory}";
                 if (PreviewEnabled) UpdatePreview();
             }
