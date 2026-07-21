@@ -1,31 +1,74 @@
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Runtime;
-using Autodesk.AutoCAD.Windows;
 using BatchPdfPublisher.Services;
 using BatchPdfPublisher.Views;
+using System;
+using System.IO;
 
 namespace BatchPdfPublisher
 {
     public sealed class Commands : IExtensionApplication
     {
-        private static PaletteSet _palette;
-        public void Initialize() { }
-        public void Terminate() { }
+        private static PublisherForm _publisherForm;
+        private static readonly string DiagnosticLog = Path.Combine(Path.GetTempPath(), "BatchPdfPublisher.trace.log");
+        public void Initialize() { RibbonService.InstallWhenReady(); }
+        public void Terminate() { RibbonService.Remove(); }
 
         [CommandMethod("BPPUBLISH")]
         public void OpenPublisher()
         {
-            if (_palette == null)
+            Trace("BPPUBLISH entered");
+            ShowPublisher(null);
+        }
+
+        [CommandMethod("BPPSCAN")]
+        public void ScanFromRibbon() => ShowPublisher(form => form.ScanDrawing());
+
+        [CommandMethod("BPPMAKEPDF")]
+        public void PublishFromRibbon() => ShowPublisher(form => form.PublishPdf());
+
+        private static void ShowPublisher(Action<PublisherForm> afterShow)
+        {
+            // Build the modeless UI only after AutoCAD has returned to its
+            // idle message loop.
+            EventHandler handler = null;
+            handler = (sender, args) =>
             {
-                _palette = new PaletteSet("批量 PDF 发布")
+                Trace("Idle callback entered");
+                Application.Idle -= handler;
+                try
                 {
-                    Style = PaletteSetStyles.ShowAutoHideButton | PaletteSetStyles.ShowCloseButton | PaletteSetStyles.ShowPropertiesMenu,
-                    MinimumSize = new System.Drawing.Size(760, 460)
-                };
-                _palette.AddVisual("发布中心", new PublisherControl());
-            }
-            _palette.Visible = true;
+                    if (_publisherForm == null || _publisherForm.IsDisposed)
+                    {
+                        Trace("Creating modeless WinForms window");
+                        _publisherForm = new PublisherForm();
+                        _publisherForm.FormClosed += (closedSender, closedArgs) => _publisherForm = null;
+                        Trace("Modeless WinForms window created");
+                    }
+                    Trace("Showing modeless WinForms window");
+                    if (!_publisherForm.Visible)
+                    {
+                        Application.ShowModelessDialog(_publisherForm);
+                    }
+                    else
+                        _publisherForm.Activate();
+                    afterShow?.Invoke(_publisherForm);
+                    Trace("Modeless WinForms window visible");
+                }
+                catch (System.Exception exception)
+                {
+                    try { File.WriteAllText(Path.Combine(Path.GetTempPath(), "BatchPdfPublisher.error.log"), exception.ToString()); } catch { }
+                    Application.ShowAlertDialog("批量打印面板加载失败：" + exception.Message);
+                }
+            };
+            Application.Idle += handler;
+            Trace("Idle callback registered");
+        }
+
+        private static void Trace(string message)
+        {
+            try { File.AppendAllText(DiagnosticLog, DateTime.Now.ToString("O") + " " + message + Environment.NewLine); } catch { }
         }
 
         [CommandMethod("BPPICKFRAME")]

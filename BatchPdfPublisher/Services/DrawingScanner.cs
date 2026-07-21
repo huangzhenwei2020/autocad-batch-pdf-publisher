@@ -9,11 +9,6 @@ namespace BatchPdfPublisher.Services
 {
     public sealed class DrawingScanner
     {
-        private static readonly string[] BuildingTags = { "楼栋", "BUILDING", "栋号" };
-        private static readonly string[] NumberTags = { "图号", "SHEETNO", "SHEET_NO", "DRAWINGNO" };
-        private static readonly string[] NameTags = { "图名", "SHEETNAME", "SHEET_NAME", "DRAWINGNAME" };
-        private static readonly string[] ScaleTags = { "比例", "SCALE", "PRINTSCALE" };
-
         public IReadOnlyList<SheetItem> Scan(Document document, IEnumerable<FrameDefinition> frameDefinitions)
         {
             var frames = frameDefinitions.ToList();
@@ -27,25 +22,58 @@ namespace BatchPdfPublisher.Services
                 {
                     var reference = transaction.GetObject(id, OpenMode.ForRead) as BlockReference;
                     if (reference == null) continue;
-                    var blockName = GetBlockName(reference, transaction);
-                    var frame = frames.FirstOrDefault(x => string.Equals(x.BlockName, blockName, StringComparison.OrdinalIgnoreCase));
-                    if (frame == null) continue;
-                    var attributes = ReadAttributes(reference, transaction);
-                    result.Add(new SheetItem
+                    try
                     {
-                        BlockId = reference.ObjectId,
-                        Building = GetAttribute(attributes, frame.BuildingAttributeTag, BuildingTags, "未分组"),
-                        SheetNumber = GetAttribute(attributes, frame.SheetNumberAttributeTag, NumberTags, "未填写图号"),
-                        SheetName = GetAttribute(attributes, frame.SheetNameAttributeTag, NameTags, "未填写图名"),
-                        Frame = frame.PaperSize,
-                        Extension = frame.Extension,
-                        PrintScale = GetAttribute(attributes, frame.PrintScaleAttributeTag, ScaleTags, "1:1"),
-                        SourceFile = document.Name
-                    });
+                        var blockName = GetBlockName(reference, transaction);
+                        var frame = frames.FirstOrDefault(x => string.Equals(x.BlockName, blockName, StringComparison.OrdinalIgnoreCase));
+                        if (frame == null) continue;
+                        if (!TryGetUsableExtents(reference, out var extents)) continue;
+                        var attributes = ReadAttributes(reference, transaction);
+                        result.Add(new SheetItem
+                        {
+                            BlockId = reference.ObjectId,
+                            Building = GetAttribute(attributes, frame.BuildingAttributeTag, frame.DefaultBuilding, "未分组"),
+                            SheetNumber = GetAttribute(attributes, frame.SheetNumberAttributeTag, frame.DefaultSheetNumber, "未填写图号"),
+                            SheetName = GetAttribute(attributes, frame.SheetNameAttributeTag, frame.DefaultSheetName, "未填写图名"),
+                            Frame = frame.PaperSize,
+                            Extension = frame.Extension,
+                            PaperOrientation = string.IsNullOrWhiteSpace(frame.PaperOrientation) ? (extents.MaxPoint.X - extents.MinPoint.X >= extents.MaxPoint.Y - extents.MinPoint.Y ? "横向" : "纵向") : frame.PaperOrientation,
+                            PrintScale = GetAttribute(attributes, frame.PrintScaleAttributeTag, frame.DefaultPrintScale, "1:1"),
+                            PlotStyle = "使用输出设置",
+                            SourceFile = document.Name,
+                            MinX = extents.MinPoint.X,
+                            MinY = extents.MinPoint.Y,
+                            MaxX = extents.MaxPoint.X,
+                            MaxY = extents.MaxPoint.Y
+                        });
+                    }
+                    catch (Autodesk.AutoCAD.Runtime.Exception)
+                    {
+                        // Proxy or partially loaded third-party blocks can report invalid extents.
+                        // A single damaged block must not abort the entire drawing scan.
+                    }
                 }
                 transaction.Commit();
             }
-            return result.OrderBy(x => x.Building).ThenBy(x => x.SheetNumber).Select((x, i) => { x.Order = i + 1; return x; }).ToList();
+            var sorted = result.OrderBy(x => x.Building)
+                .ThenBy(x => TitlePriority(x.SheetName))
+                .ThenBy(x => x.SheetNumber)
+                .ThenBy(x => x.SheetName)
+                .ToList();
+            foreach (var group in sorted.GroupBy(x => x.Building))
+            {
+                var order = 1;
+                foreach (var item in group) item.Order = order++;
+            }
+            return sorted;
+        }
+
+        private static int TitlePriority(string sheetName)
+        {
+            if (string.IsNullOrWhiteSpace(sheetName)) return 2;
+            if (sheetName.IndexOf("封面", StringComparison.OrdinalIgnoreCase) >= 0) return 0;
+            if (sheetName.IndexOf("目录", StringComparison.OrdinalIgnoreCase) >= 0) return 1;
+            return 2;
         }
 
         private static string GetBlockName(BlockReference reference, Transaction transaction)
@@ -65,12 +93,20 @@ namespace BatchPdfPublisher.Services
             return values;
         }
 
-        private static string GetAttribute(IDictionary<string, string> values, string selectedTag, IEnumerable<string> aliases, string fallback)
+        private static string GetAttribute(IDictionary<string, string> values, string selectedTag, string configuredFallback, string emptyFallback)
         {
             if (!string.IsNullOrWhiteSpace(selectedTag) && values.TryGetValue(selectedTag, out var selectedValue) && !string.IsNullOrWhiteSpace(selectedValue)) return selectedValue.Trim();
-            foreach (var alias in aliases)
-                if (values.TryGetValue(alias, out var value) && !string.IsNullOrWhiteSpace(value)) return value.Trim();
-            return fallback;
+            return string.IsNullOrWhiteSpace(configuredFallback) ? emptyFallback : configuredFallback.Trim();
+        }
+
+        private static bool TryGetUsableExtents(BlockReference reference, out Extents3d extents)
+        {
+            extents = default(Extents3d);
+            try { extents = reference.GeometricExtents; }
+            catch (Autodesk.AutoCAD.Runtime.Exception) { return false; }
+            var values = new[] { extents.MinPoint.X, extents.MinPoint.Y, extents.MaxPoint.X, extents.MaxPoint.Y };
+            if (values.Any(x => double.IsNaN(x) || double.IsInfinity(x))) return false;
+            return extents.MaxPoint.X > extents.MinPoint.X && extents.MaxPoint.Y > extents.MinPoint.Y;
         }
     }
 }

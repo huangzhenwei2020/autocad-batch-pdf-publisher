@@ -6,7 +6,7 @@
     <OutputType>Library</OutputType>
     <RootNamespace>BatchPdfPublisher</RootNamespace>
     <AssemblyName>BatchPdfPublisher</AssemblyName>
-    <TargetFrameworkVersion>v4.8.1</TargetFrameworkVersion>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
     <PlatformTarget>x64</PlatformTarget>
     <FileAlignment>512</FileAlignment>
   </PropertyGroup>
@@ -17,18 +17,32 @@
     <DebugType>pdbonly</DebugType><Optimize>true</Optimize><OutputPath>bin\Release\</OutputPath>
   </PropertyGroup>
   <ItemGroup>
-    <Reference Include="System" /><Reference Include="System.Core" /><Reference Include="System.Xaml" /><Reference Include="System.Runtime.Serialization" /><Reference Include="System.Xml" /><Reference Include="System.Drawing" />
+    <Reference Include="System" /><Reference Include="System.Core" /><Reference Include="System.Xaml" /><Reference Include="System.Runtime.Serialization" /><Reference Include="System.Xml" /><Reference Include="System.Drawing" /><Reference Include="System.Windows.Forms" />
     <Reference Include="WindowsBase" /><Reference Include="PresentationCore" /><Reference Include="PresentationFramework" />
-    <Reference Include="acmgd" HintPath="C:\Program Files\Autodesk\AutoCAD 2022\acmgd.dll" Private="False" />
-    <Reference Include="acdbmgd" HintPath="C:\Program Files\Autodesk\AutoCAD 2022\acdbmgd.dll" Private="False" />
-    <Reference Include="accoremgd" HintPath="C:\Program Files\Autodesk\AutoCAD 2022\accoremgd.dll" Private="False" />
+    <Reference Include="acmgd">
+      <HintPath>C:\Program Files\Autodesk\AutoCAD 2022\acmgd.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="acdbmgd">
+      <HintPath>C:\Program Files\Autodesk\AutoCAD 2022\acdbmgd.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="accoremgd">
+      <HintPath>C:\Program Files\Autodesk\AutoCAD 2022\accoremgd.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="AdWindows">
+      <HintPath>C:\Program Files\Autodesk\AutoCAD 2022\AdWindows.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Commands.cs" />
-    <Compile Include="Models\FrameDefinition.cs" /><Compile Include="Models\SheetItem.cs" />
-    <Compile Include="Services\DrawingScanner.cs" /><Compile Include="Services\FrameSizeDetector.cs" /><Compile Include="Services\FrameRegistrationService.cs" /><Compile Include="Services\PublishPlanStore.cs" />
+    <Compile Include="Models\FrameDefinition.cs" /><Compile Include="Models\ProjectProfile.cs" /><Compile Include="Models\SheetItem.cs" />
+    <Compile Include="Services\DrawingScanner.cs" /><Compile Include="Services\FrameSizeDetector.cs" /><Compile Include="Services\FrameRegistrationService.cs" /><Compile Include="Services\PrintRangePreviewService.cs" /><Compile Include="Services\PdfPublisherService.cs" /><Compile Include="Services\PublishPlanStore.cs" /><Compile Include="Services\RibbonService.cs" />
     <Compile Include="ViewModels\PublisherViewModel.cs" />
     <Compile Include="Views\PublisherControl.xaml.cs"><DependentUpon>PublisherControl.xaml</DependentUpon></Compile>
+    <Compile Include="Views\PublisherForm.cs" />
     <Compile Include="Views\FrameRegistrationWindow.xaml.cs"><DependentUpon>FrameRegistrationWindow.xaml</DependentUpon></Compile>
     <Page Include="Views\PublisherControl.xaml" />
     <Page Include="Views\FrameRegistrationWindow.xaml" />
