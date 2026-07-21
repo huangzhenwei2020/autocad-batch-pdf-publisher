@@ -45,6 +45,8 @@ BatchPdfPublisher.dll
 
 无需再手工执行 `NETLOAD`。每次重新编译插件后，再双击一次启动器即可更新并加载最新版。
 
+发布包内的 `BatchPdfPublisher.pc3` 和 `BatchPdfPublisher.pmp` 是以毫米为单位的加长纸张库。启动器会自动安装到已创建的 AutoCAD `Plotters` / `PMP Files` 用户目录。自定义介质的不可打印边界为 `0 mm`；面板选择“无白边（满幅）”时保持满幅，选择“保留 3 mm 白边”时会在最终 PDF 每页四边精确留出 `3 mm`。
+
 如需手工加载和排查，可按以下步骤操作：
 
 1. 启动 AutoCAD 2022，打开一张包含块图框的 DWG。

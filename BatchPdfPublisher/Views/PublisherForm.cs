@@ -115,7 +115,7 @@ namespace BatchPdfPublisher.Views
             var plotButtons = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, WrapContents = true };
             plotButtons.Controls.Add(Button("刷新 CAD 样式", () => { _viewModel.RefreshPlotStylesCommand.Execute(null); RefreshPlotStyles(); }));
             plotButtons.Controls.Add(Button("收藏当前样式", () => { _viewModel.SaveFavoritePlotStyleCommand.Execute(null); RefreshPlotStyles(); }));
-            right.Controls.Add(plotButtons); right.Controls.Add(Label("白边 / 出血位"));
+            right.Controls.Add(plotButtons); right.Controls.Add(Label("白边 / 出血位（单位：mm）"));
             _marginMode.Items.AddRange(new object[] { "自动适配", "无白边（满幅）", "保留 3 mm 白边" });
             _marginMode.Dock = DockStyle.Top; right.Controls.Add(_marginMode); right.Controls.Add(Label("输出目录")); _outputDirectory.Dock = DockStyle.Top; right.Controls.Add(_outputDirectory);
             _mergeByBuilding.Text = "每个子项目生成一个 PDF"; _mergeByBuilding.AutoSize = true; _mergeByBuilding.Margin = new Padding(3, 12, 3, 3); right.Controls.Add(_mergeByBuilding);

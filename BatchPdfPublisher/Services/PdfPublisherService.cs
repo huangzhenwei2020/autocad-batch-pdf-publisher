@@ -106,7 +106,7 @@ namespace BatchPdfPublisher.Services
                     PlotSinglePage(document, sheets[index], temporaryPath, defaultPlotStyle, marginMode, index);
                     pagePublished?.Invoke(sheets[index]);
                 }
-                PdfMerger.Merge(temporaryFiles, sheets, outputPath);
+                PdfMerger.Merge(temporaryFiles, sheets, outputPath, marginMode);
             }
             finally
             {
@@ -150,8 +150,9 @@ namespace BatchPdfPublisher.Services
 
         private static class PdfMerger
         {
-            public static void Merge(IList<string> files, IList<SheetItem> sheets, string outputPath)
+            public static void Merge(IList<string> files, IList<SheetItem> sheets, string outputPath, string marginMode)
             {
+                var marginMillimeters = string.Equals(marginMode, "保留 3 mm 白边", StringComparison.OrdinalIgnoreCase) ? 3d : 0d;
                 using (var output = new PdfSharp.Pdf.PdfDocument())
                 {
                     for (var index = 0; index < files.Count; index++)
@@ -167,7 +168,10 @@ namespace BatchPdfPublisher.Services
                         {
                             form.PageNumber = 1;
                             var crop = CenterCrop(source.Width.Point, source.Height.Point, target[0] / target[1]);
-                            graphics.DrawImage(form, new PdfSharp.Drawing.XRect(0, 0, page.Width.Point, page.Height.Point), new PdfSharp.Drawing.XRect(crop[0], crop[1], crop[2], crop[3]), PdfSharp.Drawing.XGraphicsUnit.Point);
+                            var inset = PdfSharp.Drawing.XUnit.FromMillimeter(marginMillimeters).Point;
+                            var width = Math.Max(1d, page.Width.Point - inset * 2d);
+                            var height = Math.Max(1d, page.Height.Point - inset * 2d);
+                            graphics.DrawImage(form, new PdfSharp.Drawing.XRect(inset, inset, width, height), new PdfSharp.Drawing.XRect(crop[0], crop[1], crop[2], crop[3]), PdfSharp.Drawing.XGraphicsUnit.Point);
                         }
                     }
                     output.Save(outputPath);
@@ -274,7 +278,11 @@ namespace BatchPdfPublisher.Services
                 var score = Math.Min(direct, rotated);
                 if (requireExactSize && score > .003d) continue;
                 var fullBleed = media.IndexOf("full_bleed", StringComparison.OrdinalIgnoreCase) >= 0 || media.IndexOf("expand", StringComparison.OrdinalIgnoreCase) >= 0;
+                var bundledMedia = media.IndexOf("BPP_", StringComparison.OrdinalIgnoreCase) >= 0;
                 if (string.Equals(marginMode, "无白边（满幅）", StringComparison.OrdinalIgnoreCase) && !fullBleed) score += 0.2d;
+                // Prefer the millimetre, zero-margin media shipped with the plug-in.
+                // PdfMerger then applies the selected 0 mm or 3 mm edge policy.
+                if (bundledMedia) score -= 0.05d;
                 if (score < bestScore) { bestScore = score; best = media; }
             }
             return best;
@@ -289,6 +297,14 @@ namespace BatchPdfPublisher.Services
             var match = matches[matches.Count - 1];
             if (!double.TryParse(match.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var first)) return null;
             if (!double.TryParse(match.Groups[2].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var second)) return null;
+            // Canonical media names can contain either millimetres or inches.
+            // Normalize every candidate to millimetres before comparing it
+            // with PaperSizeCatalog, whose dimensions are always millimetres.
+            if (media.IndexOf("INCH", StringComparison.OrdinalIgnoreCase) >= 0 || media.IndexOf("英寸", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                first *= 25.4d;
+                second *= 25.4d;
+            }
             return new[] { first, second };
         }
 

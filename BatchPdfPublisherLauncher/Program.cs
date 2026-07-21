@@ -16,6 +16,8 @@ namespace BatchPdfPublisherLauncher
     {
         private const string PluginAssemblyName = "BatchPdfPublisher.dll";
         private const string PdfDependencyName = "PdfSharp.dll";
+        private const string PlotterConfigName = "BatchPdfPublisher.pc3";
+        private const string PlotterMediaName = "BatchPdfPublisher.pmp";
         private const string LastPlatformFileName = "BatchPdfPublisher.last-platform.txt";
         private static readonly string LaunchLogPath = Path.Combine(Path.GetTempPath(), "BatchPdfPublisher.launcher.log");
 
@@ -30,6 +32,10 @@ namespace BatchPdfPublisherLauncher
                 if (!File.Exists(sourceAssembly)) throw new FileNotFoundException("启动器旁边缺少 BatchPdfPublisher.dll，请重新编译完整项目。", sourceAssembly);
                 var sourcePdfDependency = Path.Combine(launcherDirectory, PdfDependencyName);
                 if (!File.Exists(sourcePdfDependency)) throw new FileNotFoundException("启动器旁边缺少 PdfSharp.dll，请重新编译完整项目。", sourcePdfDependency);
+                var sourcePlotterConfig = Path.Combine(launcherDirectory, PlotterConfigName);
+                var sourcePlotterMedia = Path.Combine(launcherDirectory, PlotterMediaName);
+                if (!File.Exists(sourcePlotterConfig) || !File.Exists(sourcePlotterMedia))
+                    throw new FileNotFoundException("启动器旁边缺少 BatchPdfPublisher.pc3/pmp 毫米纸张库，请使用完整发布包。");
 
                 var platforms = FindPlatforms();
                 if (platforms.Count == 0) throw new FileNotFoundException("未找到 AutoCAD 2022、AutoCAD 2024 或 T20 天正建筑。请先安装兼容平台。");
@@ -41,6 +47,7 @@ namespace BatchPdfPublisherLauncher
                 }
 
                 File.WriteAllText(LastPlatformPath(), options.Platform.Id);
+                InstallPlotterProfiles(sourcePlotterConfig, sourcePlotterMedia);
                 var installedAssembly = InstallPlugin(sourceAssembly, sourcePdfDependency, options.InstallPermanently);
                 Log("已安装插件: " + installedAssembly);
                 if (options.LoadIntoRunningCad)
@@ -169,6 +176,26 @@ namespace BatchPdfPublisherLauncher
         }
 
         private static string LastPlatformPath() => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), LastPlatformFileName);
+
+        private static void InstallPlotterProfiles(string sourcePlotterConfig, string sourcePlotterMedia)
+        {
+            var autodeskRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Autodesk");
+            if (!Directory.Exists(autodeskRoot)) throw new DirectoryNotFoundException("未找到 AutoCAD 用户配置目录。");
+            var plotterDirectories = Directory.GetDirectories(autodeskRoot, "Plotters", SearchOption.AllDirectories)
+                .Where(path => path.IndexOf("AutoCAD ", StringComparison.OrdinalIgnoreCase) >= 0)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (plotterDirectories.Count == 0) throw new DirectoryNotFoundException("未找到 AutoCAD Plotters 目录，请先启动一次 CAD。");
+
+            foreach (var plotterDirectory in plotterDirectories)
+            {
+                var pmpDirectory = Path.Combine(plotterDirectory, "PMP Files");
+                Directory.CreateDirectory(pmpDirectory);
+                File.Copy(sourcePlotterConfig, Path.Combine(plotterDirectory, PlotterConfigName), true);
+                File.Copy(sourcePlotterMedia, Path.Combine(pmpDirectory, PlotterMediaName), true);
+                Log("已部署毫米纸张库: " + plotterDirectory);
+            }
+        }
 
         private static string InstallPlugin(string sourceAssembly, string sourcePdfDependency, bool installPermanently)
         {
