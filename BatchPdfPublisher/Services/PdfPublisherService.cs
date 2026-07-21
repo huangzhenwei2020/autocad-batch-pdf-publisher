@@ -86,77 +86,67 @@ namespace BatchPdfPublisher.Services
 
         private static void PlotGroup(Document document, IList<SheetItem> sheets, string outputPath, string defaultPlotStyle, string marginMode)
         {
+            var temporaryFiles = new List<string>();
+            try
+            {
+                for (var index = 0; index < sheets.Count; index++)
+                {
+                    var temporaryPath = Path.Combine(Path.GetTempPath(), "BatchPdfPublisher_" + Guid.NewGuid().ToString("N") + ".pdf");
+                    temporaryFiles.Add(temporaryPath);
+                    PlotSinglePage(document, sheets[index], temporaryPath, defaultPlotStyle, marginMode, index);
+                }
+                PdfMerger.Merge(temporaryFiles, outputPath);
+            }
+            finally
+            {
+                foreach (var file in temporaryFiles)
+                    try { if (File.Exists(file)) File.Delete(file); } catch { }
+            }
+        }
+
+        private static void PlotSinglePage(Document document, SheetItem sheet, string outputPath, string defaultPlotStyle, string marginMode, int index)
+        {
             using (document.LockDocument())
             using (var transaction = document.Database.TransactionManager.StartTransaction())
             using (var engine = PlotFactory.CreatePublishEngine())
             {
                 var layout = (Layout)transaction.GetObject(LayoutManager.Current.GetLayoutId(LayoutManager.Current.CurrentLayout), OpenMode.ForRead);
-                engine.BeginPlot(null, null);
-                var documentStarted = false;
-                var settingsToKeep = new List<PlotSettings>();
-                var plotInfosToKeep = new List<PlotInfo>();
-                for (var index = 0; index < sheets.Count; index++)
+                var stage = "创建打印设置";
+                using (var settings = CreateSettings(layout, sheet, defaultPlotStyle, marginMode))
+                using (var plotInfo = new PlotInfo { Layout = layout.ObjectId, OverrideSettings = settings })
                 {
-                    var sheet = sheets[index];
-                    var stage = "创建打印设置";
-                    try
+                    stage = "校验打印信息";
+                    using (var validator = new PlotInfoValidator { MediaMatchingPolicy = MatchingPolicy.MatchEnabled })
+                        validator.Validate(plotInfo);
+                    engine.BeginPlot(null, null);
+                    engine.BeginDocument(plotInfo, document.Name, null, 1, true, outputPath);
+                    using (var pageInfo = new PlotPageInfo())
                     {
-                        var settings = CreateSettings(layout, sheet, defaultPlotStyle, marginMode);
-                        var plotInfo = new PlotInfo { Layout = layout.ObjectId, OverrideSettings = settings };
-                        settingsToKeep.Add(settings);
-                        plotInfosToKeep.Add(plotInfo);
-                        stage = "校验打印信息";
-                            using (var validator = new PlotInfoValidator { MediaMatchingPolicy = MatchingPolicy.MatchEnabled })
-                            {
-                                try
-                                {
-                                    validator.Validate(plotInfo);
-                                }
-                                catch (Autodesk.AutoCAD.Runtime.Exception exception)
-                                {
-                                    // AutoCAD 2022 rejects window PlotInfo when a DWG carries
-                                    // stale/proxy layout metadata. Keep the PDF job usable by
-                                    // retrying with the same validated device/media as a layout
-                                    // plot; this is also safer than crashing AutoCAD.
-                                    if (exception.ErrorStatus != Autodesk.AutoCAD.Runtime.ErrorStatus.InvalidPlotInfo)
-                                        throw;
-                                    var settingsValidator = PlotSettingsValidator.Current;
-                                    settingsValidator.SetPlotType(settings, Autodesk.AutoCAD.DatabaseServices.PlotType.Layout);
-                                    settingsValidator.SetPlotCentered(settings, true);
-                                    settingsValidator.SetUseStandardScale(settings, true);
-                                    settingsValidator.SetStdScaleType(settings, StdScaleType.ScaleToFit);
-                                    settingsValidator.SetPlotRotation(settings, PlotRotation.Degrees000);
-                                    validator.Validate(plotInfo);
-                                }
-                            }
-                            if (!documentStarted)
-                            {
-                                stage = "创建 PDF 文档";
-                                engine.BeginDocument(plotInfo, document.Name, null, 1, true, outputPath);
-                                documentStarted = true;
-                            }
-                            using (var pageInfo = new PlotPageInfo())
-                            {
-                                stage = "创建 PDF 页面";
-                                engine.BeginPage(pageInfo, plotInfo, index == sheets.Count - 1, null);
-                                stage = "生成页面图形";
-                                engine.BeginGenerateGraphics(null);
-                                engine.EndGenerateGraphics(null);
-                                engine.EndPage(null);
-                            }
+                        stage = "创建 PDF 页面";
+                        engine.BeginPage(pageInfo, plotInfo, true, null);
+                        stage = "生成页面图形";
+                        engine.BeginGenerateGraphics(null);
+                        engine.EndGenerateGraphics(null);
+                        engine.EndPage(null);
                     }
-                    catch (Exception exception)
-                    {
-                        throw new InvalidOperationException(
-                            string.Format("第 {0} 张（{1} / {2}）在“{3}”时失败：{4}", index + 1, sheet.SheetNumber, sheet.SheetName, stage, exception.Message),
-                            exception);
-                    }
+                    engine.EndDocument(null);
+                    engine.EndPlot(null);
                 }
-                if (documentStarted) engine.EndDocument(null);
-                engine.EndPlot(null);
-                for (var i = plotInfosToKeep.Count - 1; i >= 0; i--) plotInfosToKeep[i].Dispose();
-                for (var i = settingsToKeep.Count - 1; i >= 0; i--) settingsToKeep[i].Dispose();
                 transaction.Commit();
+            }
+        }
+
+        private static class PdfMerger
+        {
+            public static void Merge(IList<string> files, string outputPath)
+            {
+                using (var output = new PdfSharp.Pdf.PdfDocument())
+                {
+                    foreach (var file in files)
+                    using (var input = PdfSharp.Pdf.IO.PdfReader.Open(file, PdfSharp.Pdf.IO.PdfDocumentOpenMode.Import))
+                        foreach (PdfSharp.Pdf.PdfPage page in input.Pages) output.AddPage(page);
+                    output.Save(outputPath);
+                }
             }
         }
 

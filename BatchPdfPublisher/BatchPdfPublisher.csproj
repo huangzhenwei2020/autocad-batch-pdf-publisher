@@ -35,6 +35,10 @@
       <HintPath>C:\Program Files\Autodesk\AutoCAD 2022\AdWindows.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <Reference Include="PdfSharp">
+      <HintPath>..\lib\PdfSharp.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Commands.cs" />

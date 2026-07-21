@@ -15,6 +15,7 @@ namespace BatchPdfPublisherLauncher
     internal static class Program
     {
         private const string PluginAssemblyName = "BatchPdfPublisher.dll";
+        private const string PdfDependencyName = "PdfSharp.dll";
         private const string LastPlatformFileName = "BatchPdfPublisher.last-platform.txt";
         private static readonly string LaunchLogPath = Path.Combine(Path.GetTempPath(), "BatchPdfPublisher.launcher.log");
 
@@ -27,6 +28,8 @@ namespace BatchPdfPublisherLauncher
                 var launcherDirectory = AppDomain.CurrentDomain.BaseDirectory;
                 var sourceAssembly = Path.Combine(launcherDirectory, PluginAssemblyName);
                 if (!File.Exists(sourceAssembly)) throw new FileNotFoundException("启动器旁边缺少 BatchPdfPublisher.dll，请重新编译完整项目。", sourceAssembly);
+                var sourcePdfDependency = Path.Combine(launcherDirectory, PdfDependencyName);
+                if (!File.Exists(sourcePdfDependency)) throw new FileNotFoundException("启动器旁边缺少 PdfSharp.dll，请重新编译完整项目。", sourcePdfDependency);
 
                 var platforms = FindPlatforms();
                 if (platforms.Count == 0) throw new FileNotFoundException("未找到 AutoCAD 2022、AutoCAD 2024 或 T20 天正建筑。请先安装兼容平台。");
@@ -38,7 +41,7 @@ namespace BatchPdfPublisherLauncher
                 }
 
                 File.WriteAllText(LastPlatformPath(), selected.Id);
-                var installedAssembly = InstallPlugin(sourceAssembly);
+                var installedAssembly = InstallPlugin(sourceAssembly, sourcePdfDependency);
                 Log("已安装插件: " + installedAssembly);
                 StartPlatform(selected, installedAssembly);
             }
@@ -154,7 +157,7 @@ namespace BatchPdfPublisherLauncher
 
         private static string LastPlatformPath() => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), LastPlatformFileName);
 
-        private static string InstallPlugin(string sourceAssembly)
+        private static string InstallPlugin(string sourceAssembly, string sourcePdfDependency)
         {
             var contentsDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "BatchPdfPublisher", "releases");
             Directory.CreateDirectory(contentsDirectory);
@@ -163,16 +166,17 @@ namespace BatchPdfPublisherLauncher
             var installedAssembly = Path.Combine(contentsDirectory, installedFileName);
             if (!File.Exists(installedAssembly) || new FileInfo(installedAssembly).Length != new FileInfo(sourceAssembly).Length)
                 File.Copy(sourceAssembly, installedAssembly, true);
-            InstallAutoLoadBundle(installedAssembly);
+            InstallAutoLoadBundle(installedAssembly, sourcePdfDependency);
             return installedAssembly;
         }
 
-        private static void InstallAutoLoadBundle(string installedAssembly)
+        private static void InstallAutoLoadBundle(string installedAssembly, string sourcePdfDependency)
         {
             var bundle = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Autodesk", "ApplicationPlugins", "BatchPdfPublisher.bundle");
             var contents = Path.Combine(bundle, "Contents");
             Directory.CreateDirectory(contents);
             File.Copy(installedAssembly, Path.Combine(contents, PluginAssemblyName), true);
+            File.Copy(sourcePdfDependency, Path.Combine(contents, PdfDependencyName), true);
             var package = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n" +
                 "<ApplicationPackage SchemaVersion=\"1.0\" AutodeskProduct=\"AutoCAD\" Name=\"BatchPdfPublisher\" AppVersion=\"1.0.0\" ProductCode=\"{BPP-7B9E2D72-1C3E-4F3D-9C0C-7D5D3E5A0A01}\">\r\n" +
                 "  <CompanyDetails Name=\"BatchPdfPublisher\" />\r\n" +
