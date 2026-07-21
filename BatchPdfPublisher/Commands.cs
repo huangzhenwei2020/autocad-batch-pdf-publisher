@@ -12,7 +12,11 @@ namespace BatchPdfPublisher
     {
         private static PublisherForm _publisherForm;
         private static readonly string DiagnosticLog = Path.Combine(Path.GetTempPath(), "BatchPdfPublisher.trace.log");
-        public void Initialize() { RibbonService.InstallWhenReady(); }
+        public void Initialize()
+        {
+            try { Application.SetSystemVariable("RIBBONSTATE", 1); } catch { }
+            RibbonService.InstallWhenReady();
+        }
         public void Terminate() { RibbonService.Remove(); }
 
         [CommandMethod("BPPUBLISH")]
