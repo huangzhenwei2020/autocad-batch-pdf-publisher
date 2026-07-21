@@ -200,7 +200,7 @@ namespace BatchPdfPublisher.Services
             var target = TargetPaperSize(sheet);
             var media = ChooseMedia(validator, settings, target[0], target[1], marginMode, !string.IsNullOrWhiteSpace(sheet.Extension));
             if (string.IsNullOrWhiteSpace(media))
-                throw new InvalidOperationException($"当前 PDF 绘图仪没有 {PaperSizeCatalog.Describe(sheet.Frame, sheet.Extension, sheet.PaperOrientation)} 的精确纸张。请在“绘图仪配置编辑器 → 用户自定义图纸尺寸 → 自定义图纸尺寸 → 添加”中创建该尺寸，并保存为 BatchPdfPublisher.pc3；加长图纸不会降级为普通 A1/A0。 ");
+                throw new InvalidOperationException($"当前 PDF 绘图仪没有 {PaperSizeCatalog.Describe(sheet.Frame, sheet.Extension, sheet.PaperOrientation)} 的精确纸张。请先关闭 CAD，再双击启动器让它重新部署 BatchPdfPublisher.pc3/pmp；当前进程不会自动刷新绘图仪介质列表。加长图纸不会降级为普通 A1/A0。 ");
             // SetPlotConfigurationName 同时写入设备和有效介质，避免留下一个
             // 设备有效但介质为空的 PlotSettings（AutoCAD 2022 会报 eInvalidPlotInfo）。
             validator.SetPlotConfigurationName(settings, device, media);
@@ -216,7 +216,12 @@ namespace BatchPdfPublisher.Services
             validator.SetStdScaleType(settings, StdScaleType.ScaleToFit);
             var mediaSize = ParseMediaSize(media);
             var mediaLandscape = mediaSize != null && mediaSize[0] > mediaSize[1];
-            var desiredLandscape = string.Equals(sheet.PaperOrientation, "横向", StringComparison.OrdinalIgnoreCase);
+            // Derive the requested orientation from the normalized target
+            // dimensions, not only from the display text.  This keeps edited
+            // rows and custom media (whose canonical name may be portrait)
+            // consistent: 1051x594 always requires a 90-degree rotation when
+            // the available media is stored as 594x1051.
+            var desiredLandscape = target[0] > target[1];
             validator.SetPlotRotation(settings, desiredLandscape == mediaLandscape ? PlotRotation.Degrees000 : PlotRotation.Degrees090);
             var style = string.IsNullOrWhiteSpace(sheet.PlotStyle) || string.Equals(sheet.PlotStyle, "使用输出设置", StringComparison.OrdinalIgnoreCase)
                 ? defaultPlotStyle
