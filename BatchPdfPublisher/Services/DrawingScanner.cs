@@ -31,12 +31,14 @@ namespace BatchPdfPublisher.Services
                         var attributes = ReadAttributes(reference, transaction);
                         result.Add(new SheetItem
                         {
-                            BlockId = reference.ObjectId,
+                        BlockId = reference.ObjectId,
+                        BlockHandle = reference.Handle.ToString(),
                             Building = GetAttribute(attributes, frame.BuildingAttributeTag, frame.DefaultBuilding, "未分组"),
                             SheetNumber = GetAttribute(attributes, frame.SheetNumberAttributeTag, frame.DefaultSheetNumber, "未填写图号"),
                             SheetName = GetAttribute(attributes, frame.SheetNameAttributeTag, frame.DefaultSheetName, "未填写图名"),
                             Frame = frame.PaperSize,
                             Extension = frame.Extension,
+                            FrameNote = frame.Note,
                             PaperOrientation = string.IsNullOrWhiteSpace(frame.PaperOrientation) ? (extents.MaxPoint.X - extents.MinPoint.X >= extents.MaxPoint.Y - extents.MinPoint.Y ? "横向" : "纵向") : frame.PaperOrientation,
                             PrintScale = GetAttribute(attributes, frame.PrintScaleAttributeTag, frame.DefaultPrintScale, "1:1"),
                             PlotStyle = "使用输出设置",

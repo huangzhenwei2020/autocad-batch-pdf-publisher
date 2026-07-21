@@ -18,19 +18,19 @@ namespace BatchPdfPublisher.Services
         public int SheetCount { get; set; }
     }
 
+    public sealed class PdfPublishProgress
+    {
+        public int Current { get; set; }
+        public int Total { get; set; }
+        public string SheetLabel { get; set; }
+    }
+
     public sealed class PdfPublisherService
     {
-        private static readonly Dictionary<string, double[]> PaperSizes = new Dictionary<string, double[]>(StringComparer.OrdinalIgnoreCase)
-        {
-            { "A0", new[] { 841d, 1189d } }, { "A1", new[] { 594d, 841d } },
-            { "A2", new[] { 420d, 594d } }, { "A3", new[] { 297d, 420d } },
-            { "A4", new[] { 210d, 297d } }
-        };
-
-        public PdfPublishResult Publish(Document document, IEnumerable<SheetItem> sourceSheets, ProjectProfile project)
+        public PdfPublishResult Publish(Document document, IEnumerable<SheetItem> sourceSheets, ProjectProfile project, Action<PdfPublishProgress> progress = null)
         {
             if (document == null) throw new InvalidOperationException("没有打开的图纸。");
-            var sheets = sourceSheets?.OrderBy(x => x.Building).ThenBy(x => x.Order).ToList() ?? new List<SheetItem>();
+            var sheets = sourceSheets?.OrderBy(x => x.Building).ThenBy(PublishPriority).ThenBy(x => x.Order).ToList() ?? new List<SheetItem>();
             if (sheets.Count == 0) throw new InvalidOperationException("图纸列表为空，请先扫描当前图纸。");
             if (PlotFactory.ProcessPlotState != ProcessPlotState.NotPlotting)
                 throw new InvalidOperationException("AutoCAD 正在执行其他打印任务，请稍后再试。");
@@ -40,13 +40,23 @@ namespace BatchPdfPublisher.Services
             Directory.CreateDirectory(engineeringFolder);
             var result = new PdfPublishResult();
             var jobs = BuildJobs(sheets, project?.MergeByBuilding ?? true, project?.Name ?? "默认工程", engineeringFolder);
+            var completed = 0;
             var previousBackgroundPlot = Autodesk.AutoCAD.ApplicationServices.Core.Application.GetSystemVariable("BACKGROUNDPLOT");
             Autodesk.AutoCAD.ApplicationServices.Core.Application.SetSystemVariable("BACKGROUNDPLOT", 0);
             try
             {
                 foreach (var job in jobs)
                 {
-                    PlotGroup(document, job.Value, job.Key, project?.PlotStyle, project?.MarginMode);
+                    PlotGroup(document, job.Value, job.Key, project?.PlotStyle, project?.MarginMode, sheet =>
+                    {
+                        completed++;
+                        progress?.Invoke(new PdfPublishProgress
+                        {
+                            Current = completed,
+                            Total = sheets.Count,
+                            SheetLabel = string.Join(" · ", new[] { sheet.Building, sheet.SheetNumber, sheet.SheetName }.Where(x => !string.IsNullOrWhiteSpace(x)))
+                        });
+                    });
                     result.Files.Add(job.Key);
                     result.SheetCount += job.Value.Count;
                 }
@@ -66,7 +76,7 @@ namespace BatchPdfPublisher.Services
                 foreach (var group in sheets.GroupBy(x => x.Building))
                 {
                     var name = SafeName(projectName) + "_" + SafeName(group.Key) + ".pdf";
-                    jobs.Add(new KeyValuePair<string, List<SheetItem>>(UniquePath(Path.Combine(outputRoot, name)), group.OrderBy(x => x.Order).ToList()));
+                    jobs.Add(new KeyValuePair<string, List<SheetItem>>(UniquePath(Path.Combine(outputRoot, name)), group.OrderBy(PublishPriority).ThenBy(x => x.Order).ToList()));
                 }
             }
             else
@@ -84,7 +94,7 @@ namespace BatchPdfPublisher.Services
             return jobs;
         }
 
-        private static void PlotGroup(Document document, IList<SheetItem> sheets, string outputPath, string defaultPlotStyle, string marginMode)
+        private static void PlotGroup(Document document, IList<SheetItem> sheets, string outputPath, string defaultPlotStyle, string marginMode, Action<SheetItem> pagePublished)
         {
             var temporaryFiles = new List<string>();
             try
@@ -94,8 +104,9 @@ namespace BatchPdfPublisher.Services
                     var temporaryPath = Path.Combine(Path.GetTempPath(), "BatchPdfPublisher_" + Guid.NewGuid().ToString("N") + ".pdf");
                     temporaryFiles.Add(temporaryPath);
                     PlotSinglePage(document, sheets[index], temporaryPath, defaultPlotStyle, marginMode, index);
+                    pagePublished?.Invoke(sheets[index]);
                 }
-                PdfMerger.Merge(temporaryFiles, outputPath);
+                PdfMerger.Merge(temporaryFiles, sheets, outputPath);
             }
             finally
             {
@@ -106,6 +117,7 @@ namespace BatchPdfPublisher.Services
 
         private static void PlotSinglePage(Document document, SheetItem sheet, string outputPath, string defaultPlotStyle, string marginMode, int index)
         {
+            ValidateDeclaredFrameRatio(sheet);
             using (document.LockDocument())
             using (var transaction = document.Database.TransactionManager.StartTransaction())
             using (var engine = PlotFactory.CreatePublishEngine())
@@ -138,15 +150,39 @@ namespace BatchPdfPublisher.Services
 
         private static class PdfMerger
         {
-            public static void Merge(IList<string> files, string outputPath)
+            public static void Merge(IList<string> files, IList<SheetItem> sheets, string outputPath)
             {
                 using (var output = new PdfSharp.Pdf.PdfDocument())
                 {
-                    foreach (var file in files)
-                    using (var input = PdfSharp.Pdf.IO.PdfReader.Open(file, PdfSharp.Pdf.IO.PdfDocumentOpenMode.Import))
-                        foreach (PdfSharp.Pdf.PdfPage page in input.Pages) output.AddPage(page);
+                    for (var index = 0; index < files.Count; index++)
+                    using (var input = PdfSharp.Pdf.IO.PdfReader.Open(files[index], PdfSharp.Pdf.IO.PdfDocumentOpenMode.Import))
+                    {
+                        var source = input.Pages[0];
+                        var target = TargetPaperSize(sheets[index]);
+                        var page = output.AddPage();
+                        page.Width = PdfSharp.Drawing.XUnit.FromMillimeter(target[0]);
+                        page.Height = PdfSharp.Drawing.XUnit.FromMillimeter(target[1]);
+                        using (var form = PdfSharp.Drawing.XPdfForm.FromFile(files[index]))
+                        using (var graphics = PdfSharp.Drawing.XGraphics.FromPdfPage(page))
+                        {
+                            form.PageNumber = 1;
+                            var crop = CenterCrop(source.Width.Point, source.Height.Point, target[0] / target[1]);
+                            graphics.DrawImage(form, new PdfSharp.Drawing.XRect(0, 0, page.Width.Point, page.Height.Point), new PdfSharp.Drawing.XRect(crop[0], crop[1], crop[2], crop[3]), PdfSharp.Drawing.XGraphicsUnit.Point);
+                        }
+                    }
                     output.Save(outputPath);
                 }
+            }
+
+            private static double[] CenterCrop(double width, double height, double targetRatio)
+            {
+                if (width / height > targetRatio)
+                {
+                    var cropWidth = height * targetRatio;
+                    return new[] { (width - cropWidth) / 2d, 0d, cropWidth, height };
+                }
+                var cropHeight = width / targetRatio;
+                return new[] { 0d, (height - cropHeight) / 2d, width, cropHeight };
             }
         }
 
@@ -158,9 +194,9 @@ namespace BatchPdfPublisher.Services
             var device = ChoosePdfDevice(validator);
             InitializePdfDevice(validator, settings, layout, device);
             var target = TargetPaperSize(sheet);
-            var media = ChooseMedia(validator, settings, target[0], target[1], marginMode);
+            var media = ChooseMedia(validator, settings, target[0], target[1], marginMode, !string.IsNullOrWhiteSpace(sheet.Extension));
             if (string.IsNullOrWhiteSpace(media))
-                throw new InvalidOperationException("PDF 打印设备没有返回可用纸张。请检查 DWG To PDF.pc3 配置。");
+                throw new InvalidOperationException($"当前 PDF 绘图仪没有 {PaperSizeCatalog.Describe(sheet.Frame, sheet.Extension, sheet.PaperOrientation)} 的精确纸张。请在“绘图仪配置编辑器 → 用户自定义图纸尺寸 → 自定义图纸尺寸 → 添加”中创建该尺寸，并保存为 BatchPdfPublisher.pc3；加长图纸不会降级为普通 A1/A0。 ");
             // SetPlotConfigurationName 同时写入设备和有效介质，避免留下一个
             // 设备有效但介质为空的 PlotSettings（AutoCAD 2022 会报 eInvalidPlotInfo）。
             validator.SetPlotConfigurationName(settings, device, media);
@@ -169,17 +205,11 @@ namespace BatchPdfPublisher.Services
             validator.SetPlotType(settings, Autodesk.AutoCAD.DatabaseServices.PlotType.Window);
             validator.SetPlotWindowArea(settings, new Extents2d(sheet.MinX, sheet.MinY, sheet.MaxX, sheet.MaxY));
             validator.SetPlotCentered(settings, true);
-            var scale = ParseScale(sheet.PrintScale);
-            if (scale > 0)
-            {
-                validator.SetUseStandardScale(settings, false);
-                validator.SetCustomPrintScale(settings, new CustomScale(1d, scale));
-            }
-            else
-            {
-                validator.SetUseStandardScale(settings, true);
-                validator.SetStdScaleType(settings, StdScaleType.ScaleToFit);
-            }
+            // “打印比例”是图纸属性，不能直接作为 CAD 的 PlotScale。若把
+            // 1:100 写入 PlotScale，会把 420 mm 的图框缩成 4.2 mm。
+            // 始终让选定图框窗口适配页面，才能保证 PDF 与图框比例一致。
+            validator.SetUseStandardScale(settings, true);
+            validator.SetStdScaleType(settings, StdScaleType.ScaleToFit);
             var mediaSize = ParseMediaSize(media);
             var mediaLandscape = mediaSize != null && mediaSize[0] > mediaSize[1];
             var desiredLandscape = string.Equals(sheet.PaperOrientation, "横向", StringComparison.OrdinalIgnoreCase);
@@ -225,12 +255,13 @@ namespace BatchPdfPublisher.Services
         private static string ChoosePdfDevice(PlotSettingsValidator validator)
         {
             var devices = validator.GetPlotDeviceList().Cast<string>().ToList();
-            return devices.FirstOrDefault(x => string.Equals(x, "DWG To PDF.pc3", StringComparison.OrdinalIgnoreCase))
+            return devices.FirstOrDefault(x => string.Equals(x, "BatchPdfPublisher.pc3", StringComparison.OrdinalIgnoreCase))
+                ?? devices.FirstOrDefault(x => string.Equals(x, "DWG To PDF.pc3", StringComparison.OrdinalIgnoreCase))
                 ?? devices.FirstOrDefault(x => x.IndexOf("PDF", StringComparison.OrdinalIgnoreCase) >= 0)
                 ?? throw new InvalidOperationException("当前 CAD 没有可用的 PDF 打印设备。");
         }
 
-        private static string ChooseMedia(PlotSettingsValidator validator, PlotSettings settings, double targetWidth, double targetHeight, string marginMode)
+        private static string ChooseMedia(PlotSettingsValidator validator, PlotSettings settings, double targetWidth, double targetHeight, string marginMode, bool requireExactSize)
         {
             string best = null;
             var bestScore = double.MaxValue;
@@ -241,6 +272,7 @@ namespace BatchPdfPublisher.Services
                 var direct = RelativeError(size[0], targetWidth) + RelativeError(size[1], targetHeight);
                 var rotated = RelativeError(size[1], targetWidth) + RelativeError(size[0], targetHeight);
                 var score = Math.Min(direct, rotated);
+                if (requireExactSize && score > .003d) continue;
                 var fullBleed = media.IndexOf("full_bleed", StringComparison.OrdinalIgnoreCase) >= 0 || media.IndexOf("expand", StringComparison.OrdinalIgnoreCase) >= 0;
                 if (string.Equals(marginMode, "无白边（满幅）", StringComparison.OrdinalIgnoreCase) && !fullBleed) score += 0.2d;
                 if (score < bestScore) { bestScore = score; best = media; }
@@ -262,27 +294,32 @@ namespace BatchPdfPublisher.Services
 
         private static double[] TargetPaperSize(SheetItem sheet)
         {
-            if (!PaperSizes.TryGetValue(sheet.Frame ?? string.Empty, out var baseSize)) baseSize = PaperSizes["A3"];
-            var factor = 1d + ParseExtension(sheet.Extension);
-            var shortSide = baseSize[0];
-            var longSide = baseSize[1] * factor;
-            return string.Equals(sheet.PaperOrientation, "横向", StringComparison.OrdinalIgnoreCase)
-                ? new[] { longSide, shortSide }
-                : new[] { shortSide, longSide };
+            return PaperSizeCatalog.GetSize(sheet.Frame, sheet.Extension, sheet.PaperOrientation);
+        }
+
+        private static void ValidateDeclaredFrameRatio(SheetItem sheet)
+        {
+            var target = TargetPaperSize(sheet);
+            var expected = target[0] / target[1];
+            var width = Math.Abs(sheet.MaxX - sheet.MinX);
+            var height = Math.Abs(sheet.MaxY - sheet.MinY);
+            if (width < 0.0001d || height < 0.0001d) return;
+            var actual = width / height;
+            if (Math.Abs(actual - expected) / expected > .02d)
+                throw new InvalidOperationException($"图纸“{sheet.SheetNumber} {sheet.SheetName}”的实际图框比例为 {actual:0.###}，但登记的 {sheet.FrameDisplay} 页面比例为 {expected:0.###}。请在图框登记中改正纸张规格或加长比例后再发布，不能用标准 A1 代替加长图纸。");
+        }
+
+        private static int PublishPriority(SheetItem sheet)
+        {
+            var note = sheet?.FrameNote ?? string.Empty;
+            if (note.IndexOf("封面", StringComparison.OrdinalIgnoreCase) >= 0) return 0;
+            if (note.IndexOf("目录", StringComparison.OrdinalIgnoreCase) >= 0) return 1;
+            return 2;
         }
 
         private static double ParseExtension(string value)
         {
-            if (string.IsNullOrWhiteSpace(value)) return 0d;
-            var total = 0d;
-            foreach (var part in value.Trim().Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries))
-            {
-                var fraction = part.Split('/');
-                if (fraction.Length == 2 && double.TryParse(fraction[0], out var numerator) && double.TryParse(fraction[1], out var denominator) && denominator != 0)
-                    total += numerator / denominator;
-                else if (double.TryParse(part, out var whole)) total += whole;
-            }
-            return total;
+            return PaperSizeCatalog.ParseExtension(value);
         }
 
         private static int ParseScale(string value)

@@ -117,6 +117,7 @@ namespace BatchPdfPublisher.Services
                 if (string.IsNullOrWhiteSpace(project.MarginMode)) project.MarginMode = "自动适配";
                 if (string.IsNullOrWhiteSpace(project.OutputDirectory)) project.OutputDirectory = "D:\\PDF输出";
                 if (project.FavoritePlotStyles == null) project.FavoritePlotStyles = new List<string>();
+                if (project.SavedSheets == null) project.SavedSheets = new List<SheetCatalogItem>();
             }
             if (projects.Count == 0) projects.Add(new ProjectProfile { Name = "默认项目" });
         }

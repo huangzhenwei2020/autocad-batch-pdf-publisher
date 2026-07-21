@@ -29,6 +29,9 @@ namespace BatchPdfPublisher.ViewModels
         private bool _mergeByBuilding;
         private bool _previewEnabled = true;
         private string _status = "请先录入图框，再扫描当前图纸。";
+        private int _publishProgressValue;
+        private int _publishProgressMaximum = 1;
+        private bool _isPublishing;
         private bool _loadingProject;
 
         public PublisherViewModel()
@@ -77,6 +80,9 @@ namespace BatchPdfPublisher.ViewModels
         public ICommand RefreshPlotStylesCommand { get; }
         public ICommand SaveFavoritePlotStyleCommand { get; }
         public ICommand PublishCommand { get; }
+        public int PublishProgressValue { get => _publishProgressValue; private set { _publishProgressValue = value; OnPropertyChanged(); } }
+        public int PublishProgressMaximum { get => _publishProgressMaximum; private set { _publishProgressMaximum = value; OnPropertyChanged(); } }
+        public bool IsPublishing { get => _isPublishing; private set { _isPublishing = value; OnPropertyChanged(); CommandManager.InvalidateRequerySuggested(); } }
 
         public ProjectProfile SelectedProject
         {
@@ -149,9 +155,9 @@ namespace BatchPdfPublisher.ViewModels
             Sheets.Clear();
             using (document.LockDocument())
                 foreach (var item in _scanner.Scan(document, Frames)) Sheets.Add(item);
-            Buildings.Clear();
-            foreach (var building in Sheets.Select(x => x.Building).Distinct()) Buildings.Add(building);
-            SelectedBuilding = Buildings.Contains(previousBuilding) ? previousBuilding : Buildings.FirstOrDefault();
+            NormalizeSheetOrder();
+            RebuildBuildings(previousBuilding);
+            SaveCurrentProject();
             Status = Sheets.Count == 0 ? "没有找到已登记图框。请检查图框名称或图框库。" : $"已读取 {Sheets.Count} 个图框；封面和目录已优先排序，同一子项目内可继续手工调整。";
         }
 
@@ -159,7 +165,7 @@ namespace BatchPdfPublisher.ViewModels
         {
             var selected = SelectedSheet;
             var ordered = Sheets.OrderBy(x => x.Building)
-                .ThenBy(x => RequiredTitlePriority(x.SheetName))
+                .ThenBy(RequiredTitlePriority)
                 .ThenBy(x => x.Order)
                 .ThenBy(x => x.SheetNumber)
                 .ToList();
@@ -168,30 +174,19 @@ namespace BatchPdfPublisher.ViewModels
                 var current = Sheets.IndexOf(ordered[target]);
                 if (current != target) Sheets.Move(current, target);
             }
-            foreach (var group in Sheets.GroupBy(x => x.Building))
-            {
-                var order = 1;
-                foreach (var item in group) item.Order = order++;
-            }
+            NormalizeSheetOrder();
             var preferredBuilding = selected?.Building ?? SelectedBuilding;
-            Buildings.Clear();
-            foreach (var building in Sheets.Select(x => x.Building).Distinct()) Buildings.Add(building);
-            if (!string.Equals(SelectedBuilding, preferredBuilding, StringComparison.Ordinal))
-                SelectedBuilding = Buildings.Contains(preferredBuilding) ? preferredBuilding : Buildings.FirstOrDefault();
-            else
-            {
-                SheetView.Refresh();
-                UpdatePreview();
-            }
+            RebuildBuildings(preferredBuilding);
             SelectedSheet = selected;
-            Status = "已保存字段修改；封面和目录保持在当前子项目前面。";
+            SaveCurrentProject();
+            Status = "图纸列表已保存；封面和目录保持在当前子项目前面。";
         }
 
-        private static int RequiredTitlePriority(string sheetName)
+        private static int RequiredTitlePriority(SheetItem sheet)
         {
-            if (string.IsNullOrWhiteSpace(sheetName)) return 2;
-            if (sheetName.IndexOf("封面", StringComparison.OrdinalIgnoreCase) >= 0) return 0;
-            if (sheetName.IndexOf("目录", StringComparison.OrdinalIgnoreCase) >= 0) return 1;
+            var note = sheet?.FrameNote ?? string.Empty;
+            if (note.IndexOf("封面", StringComparison.OrdinalIgnoreCase) >= 0) return 0;
+            if (note.IndexOf("目录", StringComparison.OrdinalIgnoreCase) >= 0) return 1;
             return 2;
         }
 
@@ -235,6 +230,7 @@ namespace BatchPdfPublisher.ViewModels
         {
             if (_selectedProject == null || _loadingProject) return;
             _selectedProject.Frames = Frames.ToList();
+            _selectedProject.SavedSheets = Sheets.Select(ToCatalogItem).ToList();
             _selectedProject.PlotStyle = PlotStyle;
             _selectedProject.MarginMode = MarginMode;
             _selectedProject.OutputDirectory = OutputDirectory;
@@ -250,6 +246,10 @@ namespace BatchPdfPublisher.ViewModels
             {
                 Frames.Clear();
                 foreach (var frame in project.Frames ?? new System.Collections.Generic.List<FrameDefinition>()) Frames.Add(frame);
+                Sheets.Clear();
+                foreach (var sheet in project.SavedSheets ?? new System.Collections.Generic.List<SheetCatalogItem>()) Sheets.Add(ToSheetItem(sheet));
+                NormalizeSheetOrder();
+                RebuildBuildings(null);
                 PlotStyle = project.PlotStyle;
                 MarginMode = project.MarginMode;
                 OutputDirectory = project.OutputDirectory;
@@ -266,6 +266,52 @@ namespace BatchPdfPublisher.ViewModels
             foreach (var frame in _store.LoadFrames()) Frames.Add(frame);
             if (_selectedProject != null) _selectedProject.Frames = Frames.ToList();
             Status = "图框登记已保存。";
+        }
+
+        private void NormalizeSheetOrder()
+        {
+            var ordered = Sheets.OrderBy(x => x.Building).ThenBy(RequiredTitlePriority).ThenBy(x => x.Order).ThenBy(x => x.SheetNumber).ToList();
+            for (var target = 0; target < ordered.Count; target++)
+            {
+                var current = Sheets.IndexOf(ordered[target]);
+                if (current != target) Sheets.Move(current, target);
+            }
+            foreach (var group in Sheets.GroupBy(x => x.Building))
+            {
+                var order = 1;
+                foreach (var item in group) item.Order = order++;
+            }
+        }
+
+        private void RebuildBuildings(string preferredBuilding)
+        {
+            Buildings.Clear();
+            foreach (var building in Sheets.Select(x => x.Building).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct()) Buildings.Add(building);
+            var selected = Buildings.Contains(preferredBuilding) ? preferredBuilding : Buildings.FirstOrDefault();
+            if (!string.Equals(SelectedBuilding, selected, StringComparison.Ordinal)) SelectedBuilding = selected;
+            else { SheetView.Refresh(); UpdatePreview(); }
+        }
+
+        private static SheetCatalogItem ToCatalogItem(SheetItem sheet)
+        {
+            return new SheetCatalogItem
+            {
+                Order = sheet.Order, BlockHandle = sheet.BlockHandle, Building = sheet.Building, SheetNumber = sheet.SheetNumber, SheetName = sheet.SheetName,
+                Frame = sheet.Frame, Extension = sheet.Extension, FrameNote = sheet.FrameNote, PaperOrientation = sheet.PaperOrientation,
+                PrintScale = sheet.PrintScale, PlotStyle = sheet.PlotStyle, SourceFile = sheet.SourceFile,
+                MinX = sheet.MinX, MinY = sheet.MinY, MaxX = sheet.MaxX, MaxY = sheet.MaxY
+            };
+        }
+
+        private static SheetItem ToSheetItem(SheetCatalogItem sheet)
+        {
+            return new SheetItem
+            {
+                Order = sheet.Order, BlockHandle = sheet.BlockHandle, Building = sheet.Building, SheetNumber = sheet.SheetNumber, SheetName = sheet.SheetName,
+                Frame = sheet.Frame, Extension = sheet.Extension, FrameNote = sheet.FrameNote, PaperOrientation = sheet.PaperOrientation,
+                PrintScale = sheet.PrintScale, PlotStyle = sheet.PlotStyle, SourceFile = sheet.SourceFile,
+                MinX = sheet.MinX, MinY = sheet.MinY, MaxX = sheet.MaxX, MaxY = sheet.MaxY
+            };
         }
 
         private void Move(int delta)
@@ -351,7 +397,10 @@ namespace BatchPdfPublisher.ViewModels
             {
                 _preview.Clear();
                 SaveCurrentProject();
-                Status = "正在生成 PDF，请稍候……";
+                IsPublishing = true;
+                PublishProgressValue = 0;
+                PublishProgressMaximum = Math.Max(Sheets.Count, 1);
+                Status = $"正在生成 PDF：0 / {PublishProgressMaximum}";
                 var project = _selectedProject ?? new ProjectProfile
                 {
                     Name = "默认工程",
@@ -360,7 +409,12 @@ namespace BatchPdfPublisher.ViewModels
                     OutputDirectory = OutputDirectory,
                     MergeByBuilding = MergeByBuilding
                 };
-                var result = _publisher.Publish(document, Sheets, project);
+                var result = _publisher.Publish(document, Sheets, project, progress =>
+                {
+                    PublishProgressMaximum = Math.Max(progress.Total, 1);
+                    PublishProgressValue = progress.Current;
+                    Status = $"正在生成 PDF：{progress.Current} / {progress.Total} · {progress.SheetLabel}";
+                });
                 Status = $"发布完成：{result.SheetCount} 张图纸，生成 {result.Files.Count} 个 PDF。输出到 {project.OutputDirectory}";
                 if (PreviewEnabled) UpdatePreview();
             }
@@ -368,6 +422,10 @@ namespace BatchPdfPublisher.ViewModels
             {
                 Status = "PDF 发布失败：" + exception.Message;
                 Application.ShowAlertDialog(Status);
+            }
+            finally
+            {
+                IsPublishing = false;
             }
         }
 

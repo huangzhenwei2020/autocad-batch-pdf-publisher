@@ -12,5 +12,6 @@ namespace BatchPdfPublisher.Models
         public bool MergeByBuilding { get; set; } = true;
         public bool PreviewEnabled { get; set; } = true;
         public List<string> FavoritePlotStyles { get; set; } = new List<string>();
+        public List<SheetCatalogItem> SavedSheets { get; set; } = new List<SheetCatalogItem>();
     }
 }

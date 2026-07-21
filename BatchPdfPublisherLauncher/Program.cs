@@ -33,17 +33,22 @@ namespace BatchPdfPublisherLauncher
 
                 var platforms = FindPlatforms();
                 if (platforms.Count == 0) throw new FileNotFoundException("未找到 AutoCAD 2022、AutoCAD 2024 或 T20 天正建筑。请先安装兼容平台。");
-                PlatformOption selected;
-                using (var picker = new PlatformPicker(platforms, LoadLastPlatform()))
+                LauncherOptions options;
+                using (var picker = new PlatformPicker(platforms, LoadLastPlatform(), HasRunningCad()))
                 {
                     if (picker.ShowDialog() != DialogResult.OK) return;
-                    selected = picker.SelectedPlatform;
+                    options = picker.Options;
                 }
 
-                File.WriteAllText(LastPlatformPath(), selected.Id);
-                var installedAssembly = InstallPlugin(sourceAssembly, sourcePdfDependency);
+                File.WriteAllText(LastPlatformPath(), options.Platform.Id);
+                var installedAssembly = InstallPlugin(sourceAssembly, sourcePdfDependency, options.InstallPermanently);
                 Log("已安装插件: " + installedAssembly);
-                StartPlatform(selected, installedAssembly);
+                if (options.LoadIntoRunningCad)
+                {
+                    if (!TrySendLoad(options.Platform.ProgId, installedAssembly))
+                        throw new InvalidOperationException("没有连接到已启动的 CAD。请确认目标 CAD 已完全打开，或取消“加载到已启动 CAD”后重新运行启动器。");
+                }
+                else StartPlatform(options.Platform, installedAssembly);
             }
             catch (Exception exception)
             {
@@ -104,6 +109,14 @@ namespace BatchPdfPublisherLauncher
             return false;
         }
 
+        private static bool HasRunningCad()
+        {
+            if (Process.GetProcessesByName("acad").Length > 0) return true;
+            foreach (var progId in new[] { "AutoCAD.Application.24.1", "AutoCAD.Application.24.3", "AutoCAD.Application.25.0" })
+                try { if (Marshal.GetActiveObject(progId) != null) return true; } catch { }
+            return false;
+        }
+
         private static bool TrySendLoad(string progId, string installedAssembly)
         {
             var progIds = new[] { progId, "AutoCAD.Application.24.0", "AutoCAD.Application.24.1", "AutoCAD.Application.24.2", "AutoCAD.Application.24.3", "AutoCAD.Application.25.0" }
@@ -157,7 +170,7 @@ namespace BatchPdfPublisherLauncher
 
         private static string LastPlatformPath() => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), LastPlatformFileName);
 
-        private static string InstallPlugin(string sourceAssembly, string sourcePdfDependency)
+        private static string InstallPlugin(string sourceAssembly, string sourcePdfDependency, bool installPermanently)
         {
             var contentsDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "BatchPdfPublisher", "releases");
             Directory.CreateDirectory(contentsDirectory);
@@ -166,7 +179,8 @@ namespace BatchPdfPublisherLauncher
             var installedAssembly = Path.Combine(contentsDirectory, installedFileName);
             if (!File.Exists(installedAssembly) || new FileInfo(installedAssembly).Length != new FileInfo(sourceAssembly).Length)
                 File.Copy(sourceAssembly, installedAssembly, true);
-            InstallAutoLoadBundle(installedAssembly, sourcePdfDependency);
+            File.Copy(sourcePdfDependency, Path.Combine(contentsDirectory, PdfDependencyName), true);
+            if (installPermanently) InstallAutoLoadBundle(installedAssembly, sourcePdfDependency);
             return installedAssembly;
         }
 
@@ -217,23 +231,40 @@ namespace BatchPdfPublisherLauncher
         public override string ToString() => DisplayName;
     }
 
+    internal sealed class LauncherOptions
+    {
+        public PlatformOption Platform { get; set; }
+        public bool LoadIntoRunningCad { get; set; }
+        public bool InstallPermanently { get; set; }
+    }
+
     internal sealed class PlatformPicker : Form
     {
         private readonly ComboBox _platformBox;
-        public PlatformOption SelectedPlatform => _platformBox.SelectedItem as PlatformOption;
-
-        public PlatformPicker(IList<PlatformOption> platforms, string lastPlatform)
+        private readonly CheckBox _runningCad;
+        private readonly CheckBox _permanentInstall;
+        public LauncherOptions Options => new LauncherOptions
         {
-            Text = "选择 CAD 平台";
-            Width = 500; Height = 190; FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = false; MinimizeBox = false; StartPosition = FormStartPosition.CenterScreen;
-            var label = new Label { Left = 18, Top = 20, Width = 440, Text = "请选择要启动并加载批量打印插件的平台：" };
+            Platform = _platformBox.SelectedItem as PlatformOption,
+            LoadIntoRunningCad = _runningCad.Checked,
+            InstallPermanently = _permanentInstall.Checked
+        };
+
+        public PlatformPicker(IList<PlatformOption> platforms, string lastPlatform, bool hasRunningCad)
+        {
+            Text = "启动批量打印插件";
+            Width = 540; Height = 290; FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = false; MinimizeBox = false; StartPosition = FormStartPosition.CenterScreen;
+            var label = new Label { Left = 18, Top = 20, Width = 480, Text = "选择要加载插件的 CAD 平台：" };
             _platformBox = new ComboBox { Left = 18, Top = 52, Width = 440, DropDownStyle = ComboBoxStyle.DropDownList };
             foreach (var platform in platforms) _platformBox.Items.Add(platform);
             var last = platforms.FirstOrDefault(x => string.Equals(x.Id, lastPlatform, StringComparison.OrdinalIgnoreCase));
             _platformBox.SelectedItem = last ?? platforms[0];
-            var startButton = new Button { Left = 278, Top = 96, Width = 85, Text = "启动并加载", DialogResult = DialogResult.OK };
-            var cancelButton = new Button { Left = 373, Top = 96, Width = 85, Text = "取消", DialogResult = DialogResult.Cancel };
-            Controls.Add(label); Controls.Add(_platformBox); Controls.Add(startButton); Controls.Add(cancelButton);
+            _runningCad = new CheckBox { Left = 18, Top = 94, Width = 480, Text = hasRunningCad ? "加载到已启动的 CAD（已检测到 AutoCAD 进程）" : "加载到已启动的 CAD（当前未检测到，可稍后重试）", Checked = hasRunningCad, Enabled = hasRunningCad };
+            _permanentInstall = new CheckBox { Left = 18, Top = 128, Width = 480, Text = "永久自动加载（以后每次启动 CAD 都加载插件）", Checked = false };
+            var tip = new Label { Left = 18, Top = 160, Width = 480, Height = 38, ForeColor = System.Drawing.Color.FromArgb(80, 90, 105), Text = "默认仅本次加载，不会写入永久自动加载配置。已永久安装时，取消勾选不会自动卸载旧配置。" };
+            var startButton = new Button { Left = 318, Top = 215, Width = 90, Text = "继续", DialogResult = DialogResult.OK };
+            var cancelButton = new Button { Left = 418, Top = 215, Width = 85, Text = "取消", DialogResult = DialogResult.Cancel };
+            Controls.Add(label); Controls.Add(_platformBox); Controls.Add(_runningCad); Controls.Add(_permanentInstall); Controls.Add(tip); Controls.Add(startButton); Controls.Add(cancelButton);
             AcceptButton = startButton; CancelButton = cancelButton;
         }
     }

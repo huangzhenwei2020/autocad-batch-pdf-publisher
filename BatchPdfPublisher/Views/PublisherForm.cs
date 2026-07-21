@@ -28,6 +28,8 @@ namespace BatchPdfPublisher.Views
         private readonly CheckBox _mergeByBuilding = new CheckBox();
         private readonly CheckBox _previewEnabled = new CheckBox();
         private readonly Label _status = new Label();
+        private readonly ProgressBar _publishProgress = new ProgressBar();
+        private readonly Label _publishProgressText = new Label();
         private bool _refreshing;
         private bool _gridCommitPending;
 
@@ -119,8 +121,11 @@ namespace BatchPdfPublisher.Views
             _mergeByBuilding.Text = "每个子项目生成一个 PDF"; _mergeByBuilding.AutoSize = true; _mergeByBuilding.Margin = new Padding(3, 12, 3, 3); right.Controls.Add(_mergeByBuilding);
             body.Controls.Add(right, 2, 0);
 
-            var footer = new Panel { Dock = DockStyle.Fill, BackColor = System.Drawing.Color.White, Padding = new Padding(16, 9, 16, 6) };
-            _status.Dock = DockStyle.Fill; _status.ForeColor = System.Drawing.Color.FromArgb(65, 84, 110); footer.Controls.Add(_status);
+            var footer = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = System.Drawing.Color.White, Padding = new Padding(16, 8, 16, 6), ColumnCount = 3 };
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 52));
+            _status.Dock = DockStyle.Fill; _status.ForeColor = System.Drawing.Color.FromArgb(65, 84, 110); footer.Controls.Add(_status, 0, 0);
+            _publishProgress.Dock = DockStyle.Fill; _publishProgress.Minimum = 0; _publishProgress.Maximum = 1; _publishProgress.Value = 0; _publishProgress.Style = ProgressBarStyle.Continuous; footer.Controls.Add(_publishProgress, 1, 0);
+            _publishProgressText.Dock = DockStyle.Fill; _publishProgressText.TextAlign = System.Drawing.ContentAlignment.MiddleRight; _publishProgressText.ForeColor = System.Drawing.Color.FromArgb(65, 84, 110); _publishProgressText.Text = "0 / 0"; footer.Controls.Add(_publishProgressText, 2, 0);
             root.Controls.Add(footer, 0, 3);
         }
 
@@ -139,6 +144,7 @@ namespace BatchPdfPublisher.Views
             AddColumn("Order", "序", 42, true); AddColumn("Building", "子项目", 88, false);
             AddColumn("SheetNumber", "图号", 90, false); AddColumn("SheetName", "图名", 150, false);
             AddColumn("FrameDisplay", "图框", 78, true);
+            AddColumn("OutputPaperSize", "PDF 尺寸", 112, true);
             AddComboColumn("PaperOrientation", "方向", 68, new[] { "横向", "纵向" });
             AddColumn("PrintScale", "打印比例", 82, false);
             AddComboColumn("PlotStyle", "打印样式", 150, PlotStyleChoices());
@@ -210,6 +216,21 @@ namespace BatchPdfPublisher.Views
         private void ViewModelPropertyChanged(object sender, PropertyChangedEventArgs e)
         {
             if (e.PropertyName == "Status") _status.Text = _viewModel.Status;
+            if (e.PropertyName == "PublishProgressValue" || e.PropertyName == "PublishProgressMaximum" || e.PropertyName == "IsPublishing") RefreshPublishProgress();
+        }
+
+        private void RefreshPublishProgress()
+        {
+            if (IsDisposed) return;
+            if (InvokeRequired) { BeginInvoke(new Action(RefreshPublishProgress)); return; }
+            var maximum = Math.Max(_viewModel.PublishProgressMaximum, 1);
+            var value = Math.Min(Math.Max(_viewModel.PublishProgressValue, 0), maximum);
+            _publishProgress.Maximum = maximum;
+            _publishProgress.Value = value;
+            _publishProgressText.Text = value + " / " + ( _viewModel.IsPublishing ? maximum : value == 0 ? 0 : maximum);
+            _publishProgress.Refresh();
+            _publishProgressText.Refresh();
+            _status.Refresh();
         }
 
         private void RefreshAll()
@@ -225,6 +246,7 @@ namespace BatchPdfPublisher.Views
                 _outputDirectory.Text = _viewModel.OutputDirectory; _mergeByBuilding.Checked = _viewModel.MergeByBuilding;
                 _previewEnabled.Checked = _viewModel.PreviewEnabled;
                 _status.Text = _viewModel.Status;
+                RefreshPublishProgress();
                 RefreshSheetsCore();
             }
             finally { _refreshing = false; }
