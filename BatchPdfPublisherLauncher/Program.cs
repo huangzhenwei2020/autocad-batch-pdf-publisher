@@ -2,11 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -191,10 +193,47 @@ namespace BatchPdfPublisherLauncher
             {
                 var pmpDirectory = Path.Combine(plotterDirectory, "PMP Files");
                 Directory.CreateDirectory(pmpDirectory);
-                File.Copy(sourcePlotterConfig, Path.Combine(plotterDirectory, PlotterConfigName), true);
-                File.Copy(sourcePlotterMedia, Path.Combine(pmpDirectory, PlotterMediaName), true);
+                var targetPc3 = Path.Combine(plotterDirectory, PlotterConfigName);
+                var targetPmp = Path.Combine(pmpDirectory, PlotterMediaName);
+                File.Copy(sourcePlotterConfig, targetPc3, true);
+                File.Copy(sourcePlotterMedia, targetPmp, true);
+                BindPmp(targetPc3, targetPmp);
                 Log("已部署毫米纸张库: " + plotterDirectory);
             }
+        }
+
+        private static void BindPmp(string pc3Path, string pmpPath)
+        {
+            var bytes = File.ReadAllBytes(pc3Path);
+            if (bytes.Length < 64 || Encoding.ASCII.GetString(bytes, 0, 32).IndexOf("PIAFILEVERSION_2.0,PC3VER1,compress", StringComparison.Ordinal) < 0)
+                throw new InvalidDataException("BatchPdfPublisher.pc3 不是可识别的 AutoCAD 压缩 PC3 文件。");
+            var compressed = new MemoryStream(bytes, 62, bytes.Length - 62, false);
+            var decoded = new MemoryStream();
+            using (var inflater = new DeflateStream(compressed, CompressionMode.Decompress)) inflater.CopyTo(decoded);
+            var text = Encoding.ASCII.GetString(decoded.ToArray());
+            text = Regex.Replace(text, "user_defined_model_pathname=\\\"[^\\\"]*\\\"", "user_defined_model_pathname=\\\"" + pmpPath + "\\\"");
+            var raw = Encoding.ASCII.GetBytes(text);
+            var packed = new MemoryStream();
+            packed.WriteByte(0x78); packed.WriteByte(0xDA);
+            using (var deflater = new DeflateStream(packed, CompressionMode.Compress, true)) deflater.Write(raw, 0, raw.Length);
+            var checksum = Adler32(raw);
+            packed.Write(checksum, 0, checksum.Length);
+            var prefix = new byte[60]; Array.Copy(bytes, prefix, prefix.Length);
+            Array.Copy(BitConverter.GetBytes(raw.Length), 0, prefix, 52, 4);
+            Array.Copy(BitConverter.GetBytes((int)packed.Length), 0, prefix, 56, 4);
+            using (var output = new MemoryStream())
+            {
+                output.Write(prefix, 0, prefix.Length);
+                var payload = packed.ToArray(); output.Write(payload, 0, payload.Length);
+                File.WriteAllBytes(pc3Path, output.ToArray());
+            }
+        }
+
+        private static byte[] Adler32(byte[] data)
+        {
+            var a = 1; var b = 0;
+            foreach (var value in data) { a = (a + value) % 65521; b = (b + a) % 65521; }
+            return new[] { (byte)(b >> 8), (byte)b, (byte)(a >> 8), (byte)a };
         }
 
         private static string InstallPlugin(string sourceAssembly, string sourcePdfDependency, bool installPermanently)
