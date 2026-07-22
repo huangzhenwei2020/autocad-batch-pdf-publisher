@@ -357,11 +357,14 @@ namespace BatchPdfPublisher.Services
         private static void ValidateDeclaredFrameRatio(SheetItem sheet)
         {
             var target = TargetPaperSize(sheet);
-            var expected = target[0] / target[1];
+            // Paper orientation is applied later through PlotRotation.  Compare
+            // the long/short side ratio here so the same frame rotated by 90
+            // degrees is not rejected (for example 1261x594 vs 594x1261).
+            var expected = Math.Max(target[0], target[1]) / Math.Min(target[0], target[1]);
             var width = Math.Abs(sheet.MaxX - sheet.MinX);
             var height = Math.Abs(sheet.MaxY - sheet.MinY);
             if (width < 0.0001d || height < 0.0001d) return;
-            var actual = width / height;
+            var actual = Math.Max(width, height) / Math.Min(width, height);
             if (Math.Abs(actual - expected) / expected > .02d)
                 throw new InvalidOperationException($"图纸“{sheet.SheetNumber} {sheet.SheetName}”的实际图框比例为 {actual:0.###}，但登记的 {sheet.FrameDisplay} 页面比例为 {expected:0.###}。请在图框登记中改正纸张规格或加长比例后再发布，不能用标准 A1 代替加长图纸。");
         }

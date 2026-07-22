@@ -163,10 +163,10 @@ namespace BatchPdfPublisher.Views
             };
 
             var footer = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = System.Drawing.Color.White, Padding = new Padding(16, 8, 16, 6), ColumnCount = 3 };
-            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 52));
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             _status.Dock = DockStyle.Fill; _status.ForeColor = System.Drawing.Color.FromArgb(65, 84, 110); footer.Controls.Add(_status, 0, 0);
             _publishProgress.Dock = DockStyle.Fill; _publishProgress.Minimum = 0; _publishProgress.Maximum = 1; _publishProgress.Value = 0; _publishProgress.Style = ProgressBarStyle.Continuous; footer.Controls.Add(_publishProgress, 1, 0);
-            _publishProgressText.Dock = DockStyle.Fill; _publishProgressText.TextAlign = System.Drawing.ContentAlignment.MiddleRight; _publishProgressText.ForeColor = System.Drawing.Color.FromArgb(65, 84, 110); _publishProgressText.Text = "0 / 0"; footer.Controls.Add(_publishProgressText, 2, 0);
+            _publishProgressText.AutoSize = true; _publishProgressText.MinimumSize = new System.Drawing.Size(82, 0); _publishProgressText.Padding = new Padding(8, 0, 2, 0); _publishProgressText.Dock = DockStyle.Fill; _publishProgressText.TextAlign = System.Drawing.ContentAlignment.MiddleRight; _publishProgressText.ForeColor = System.Drawing.Color.FromArgb(65, 84, 110); _publishProgressText.Text = "0 / 0"; footer.Controls.Add(_publishProgressText, 2, 0);
             root.Controls.Add(footer, 0, 3);
         }
 

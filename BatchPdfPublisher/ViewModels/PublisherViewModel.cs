@@ -412,16 +412,32 @@ namespace BatchPdfPublisher.ViewModels
                     MergeByBuilding = MergeByBuilding
                 };
                 PdfPublishResult result = null;
+                System.Exception publishException = null;
                 await Application.DocumentManager.ExecuteInCommandContextAsync(async unused =>
                 {
-                    result = _publisher.Publish(document, Sheets, project, progress =>
+                    try
                     {
-                        PublishProgressMaximum = Math.Max(progress.Total, 1);
-                        PublishProgressValue = progress.Current;
-                        Status = $"正在生成 PDF：{progress.Current} / {progress.Total} · {progress.SheetLabel}";
-                    });
+                        result = _publisher.Publish(document, Sheets, project, progress =>
+                        {
+                            PublishProgressMaximum = Math.Max(progress.Total, 1);
+                            PublishProgressValue = progress.Current;
+                            Status = $"正在生成 PDF：{progress.Current} / {progress.Total} · {progress.SheetLabel}";
+                        });
+                    }
+                    catch (System.Exception exception)
+                    {
+                        // AutoCAD 2022 can consume exceptions thrown out of the
+                        // command-context callback. Preserve it and rethrow on
+                        // the modeless UI continuation so the real sheet/stage
+                        // error is not replaced by a null-result exception.
+                        publishException = exception;
+                    }
                     await Task.CompletedTask;
                 }, null);
+                if (publishException != null)
+                    System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(publishException).Throw();
+                if (result == null)
+                    throw new System.InvalidOperationException("AutoCAD 没有返回 PDF 发布结果，请重新打开当前图纸后再试。");
                 Status = $"发布完成：{result.SheetCount} 张图纸，生成 {result.Files.Count} 个 PDF。输出到 {project.OutputDirectory}";
                 if (PreviewEnabled) UpdatePreview();
             }
