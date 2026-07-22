@@ -38,8 +38,10 @@ namespace BatchPdfPublisher.Views
             Text = "批量 PDF 发布";
             Width = 1240;
             Height = 760;
-            MinimumSize = new System.Drawing.Size(1020, 600);
+            MinimumSize = new System.Drawing.Size(840, 540);
             StartPosition = FormStartPosition.CenterParent;
+            AutoScaleMode = AutoScaleMode.Dpi;
+            SizeGripStyle = SizeGripStyle.Show;
             Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
 
             BuildInterface();
@@ -77,11 +79,28 @@ namespace BatchPdfPublisher.Views
             projectBar.Controls.Add(Button("保存工程参数", () => _viewModel.SaveProjectCommand.Execute(null)));
             root.Controls.Add(projectBar, 0, 1);
 
-            var body = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, Padding = new Padding(14, 12, 14, 10) };
-            body.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 250));
-            body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            body.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 260));
+            var body = new Panel { Dock = DockStyle.Fill, Padding = new Padding(14, 12, 14, 10) };
             root.Controls.Add(body, 0, 2);
+
+            var leftSplitter = new SplitContainer
+            {
+                Dock = DockStyle.Fill,
+                Orientation = Orientation.Vertical,
+                FixedPanel = FixedPanel.None,
+                IsSplitterFixed = false,
+                SplitterWidth = 7
+            };
+            body.Controls.Add(leftSplitter);
+
+            var rightSplitter = new SplitContainer
+            {
+                Dock = DockStyle.Fill,
+                Orientation = Orientation.Vertical,
+                FixedPanel = FixedPanel.None,
+                IsSplitterFixed = false,
+                SplitterWidth = 7
+            };
+            leftSplitter.Panel2.Controls.Add(rightSplitter);
 
             var left = Card(7, new Padding(12)); left.Margin = new Padding(0, 0, 10, 0);
             left.RowStyles.Add(new RowStyle(SizeType.AutoSize)); left.RowStyles.Add(new RowStyle(SizeType.Percent, 35));
@@ -94,7 +113,8 @@ namespace BatchPdfPublisher.Views
             frameButtons.Controls.Add(Button("修改", EditFrame)); frameButtons.Controls.Add(Button("删除", RemoveFrame));
             left.Controls.Add(frameButtons, 0, 4);
             left.Controls.Add(Button("保存当前图框库", () => _viewModel.SaveFrameLibraryCommand.Execute(null)), 0, 5);
-            body.Controls.Add(left, 0, 0);
+            left.Margin = Padding.Empty;
+            leftSplitter.Panel1.Controls.Add(left);
 
             var center = Card(3, new Padding(12)); center.Margin = new Padding(0, 0, 10, 0);
             center.RowStyles.Add(new RowStyle(SizeType.AutoSize)); center.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); center.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -106,9 +126,10 @@ namespace BatchPdfPublisher.Views
             sheetHeader.Controls.Add(Button("下移", () => { _viewModel.MoveDownCommand.Execute(null); RefreshSheets(); }));
             center.Controls.Add(sheetHeader, 0, 0);
             ConfigureGrid(); center.Controls.Add(_sheets, 0, 1);
-            body.Controls.Add(center, 1, 0);
+            center.Margin = Padding.Empty;
+            rightSplitter.Panel1.Controls.Add(center);
 
-            var right = Card(12, new Padding(14)); right.AutoSize = true;
+            var right = Card(12, new Padding(14));
             right.Controls.Add(SectionLabel("输出设置")); right.Controls.Add(Label("CAD 打印样式"));
             _plotStyle.DropDownStyle = ComboBoxStyle.DropDown; _plotStyle.Dock = DockStyle.Top;
             right.Controls.Add(_plotStyle);
@@ -119,7 +140,27 @@ namespace BatchPdfPublisher.Views
             _marginMode.Items.AddRange(new object[] { "自动适配", "无白边（满幅）", "保留 3 mm 白边" });
             _marginMode.Dock = DockStyle.Top; right.Controls.Add(_marginMode); right.Controls.Add(Label("输出目录")); _outputDirectory.Dock = DockStyle.Top; right.Controls.Add(_outputDirectory);
             _mergeByBuilding.Text = "每个子项目生成一个 PDF"; _mergeByBuilding.AutoSize = true; _mergeByBuilding.Margin = new Padding(3, 12, 3, 3); right.Controls.Add(_mergeByBuilding);
-            body.Controls.Add(right, 2, 0);
+            rightSplitter.Panel2.Controls.Add(right);
+
+            body.Resize += (sender, args) =>
+            {
+                // Keep both side panels usable on small or high-DPI displays;
+                // users can still drag either splitter to their preferred width.
+                if (leftSplitter.Width > leftSplitter.Panel1MinSize + leftSplitter.Panel2MinSize + leftSplitter.SplitterWidth)
+                    leftSplitter.SplitterDistance = Math.Min(leftSplitter.SplitterDistance, Math.Max(leftSplitter.Panel1MinSize, leftSplitter.Width / 3));
+                if (rightSplitter.Width > rightSplitter.Panel1MinSize + rightSplitter.Panel2MinSize + rightSplitter.SplitterWidth)
+                    rightSplitter.SplitterDistance = Math.Min(rightSplitter.SplitterDistance, rightSplitter.Width - rightSplitter.Panel2MinSize - rightSplitter.SplitterWidth);
+            };
+            Shown += (sender, args) =>
+            {
+                leftSplitter.Panel1MinSize = 180;
+                leftSplitter.Panel2MinSize = Math.Min(480, Math.Max(180, leftSplitter.Width - 180 - leftSplitter.SplitterWidth));
+                leftSplitter.SplitterDistance = Math.Min(250, Math.Max(leftSplitter.Panel1MinSize, leftSplitter.Width / 4));
+
+                rightSplitter.Panel1MinSize = Math.Min(320, Math.Max(160, rightSplitter.Width - 190 - rightSplitter.SplitterWidth));
+                rightSplitter.Panel2MinSize = Math.Min(190, Math.Max(140, rightSplitter.Width - rightSplitter.Panel1MinSize - rightSplitter.SplitterWidth));
+                rightSplitter.SplitterDistance = Math.Max(rightSplitter.Panel1MinSize, rightSplitter.Width - 260 - rightSplitter.SplitterWidth);
+            };
 
             var footer = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = System.Drawing.Color.White, Padding = new Padding(16, 8, 16, 6), ColumnCount = 3 };
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 52));

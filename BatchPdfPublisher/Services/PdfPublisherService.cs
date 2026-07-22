@@ -27,10 +27,12 @@ namespace BatchPdfPublisher.Services
 
     public sealed class PdfPublisherService
     {
+        private static readonly string DiagnosticLogPath = Path.Combine(Path.GetTempPath(), "BatchPdfPublisher.publish.log");
+
         public PdfPublishResult Publish(Document document, IEnumerable<SheetItem> sourceSheets, ProjectProfile project, Action<PdfPublishProgress> progress = null)
         {
             if (document == null) throw new InvalidOperationException("没有打开的图纸。");
-            var sheets = sourceSheets?.OrderBy(x => x.Building).ThenBy(PublishPriority).ThenBy(x => x.Order).ToList() ?? new List<SheetItem>();
+            var sheets = sourceSheets?.Where(x => x != null).OrderBy(x => x.Building).ThenBy(PublishPriority).ThenBy(x => x.Order).ToList() ?? new List<SheetItem>();
             if (sheets.Count == 0) throw new InvalidOperationException("图纸列表为空，请先扫描当前图纸。");
             if (PlotFactory.ProcessPlotState != ProcessPlotState.NotPlotting)
                 throw new InvalidOperationException("AutoCAD 正在执行其他打印任务，请稍后再试。");
@@ -117,35 +119,69 @@ namespace BatchPdfPublisher.Services
 
         private static void PlotSinglePage(Document document, SheetItem sheet, string outputPath, string defaultPlotStyle, string marginMode, int index)
         {
-            ValidateDeclaredFrameRatio(sheet);
-            using (document.LockDocument())
-            using (var transaction = document.Database.TransactionManager.StartTransaction())
-            using (var engine = PlotFactory.CreatePublishEngine())
+            if (sheet == null) throw new InvalidOperationException("图纸列表中存在空记录，请重新扫描当前图纸。");
+            var label = string.Join(" · ", new[] { sheet.Building, sheet.SheetNumber, sheet.SheetName }.Where(x => !string.IsNullOrWhiteSpace(x)));
+            var stage = "检查图框尺寸";
+            try
             {
-                var layout = (Layout)transaction.GetObject(LayoutManager.Current.GetLayoutId(LayoutManager.Current.CurrentLayout), OpenMode.ForRead);
-                var stage = "创建打印设置";
-                using (var settings = CreateSettings(layout, sheet, defaultPlotStyle, marginMode))
-                using (var plotInfo = new PlotInfo { Layout = layout.ObjectId, OverrideSettings = settings })
+                ValidateDeclaredFrameRatio(sheet);
+                using (document.LockDocument())
+                using (var transaction = document.Database.TransactionManager.StartTransaction())
                 {
-                    stage = "校验打印信息";
-                    using (var validator = new PlotInfoValidator { MediaMatchingPolicy = MatchingPolicy.MatchEnabled })
-                        validator.Validate(plotInfo);
-                    engine.BeginPlot(null, null);
-                    engine.BeginDocument(plotInfo, document.Name, null, 1, true, outputPath);
-                    using (var pageInfo = new PlotPageInfo())
+                    stage = "读取当前模型/布局";
+                    var currentSpace = transaction.GetObject(document.Database.CurrentSpaceId, OpenMode.ForRead) as BlockTableRecord;
+                    if (currentSpace == null || currentSpace.LayoutId.IsNull)
+                        throw new InvalidOperationException("无法取得当前模型空间或布局，请激活要发布的图纸后重试。");
+                    var layout = transaction.GetObject(currentSpace.LayoutId, OpenMode.ForRead) as Layout;
+                    if (layout == null)
+                        throw new InvalidOperationException("当前空间没有有效的打印布局。");
+
+                    stage = "创建打印设置";
+                    using (var settings = CreateSettings(layout, sheet, defaultPlotStyle, marginMode))
+                    using (var plotInfo = new PlotInfo { Layout = layout.ObjectId, OverrideSettings = settings })
                     {
-                        stage = "创建 PDF 页面";
-                        engine.BeginPage(pageInfo, plotInfo, true, null);
-                        stage = "生成页面图形";
-                        engine.BeginGenerateGraphics(null);
-                        engine.EndGenerateGraphics(null);
-                        engine.EndPage(null);
+                        stage = "校验打印信息";
+                        using (var validator = new PlotInfoValidator { MediaMatchingPolicy = MatchingPolicy.MatchEnabled })
+                            validator.Validate(plotInfo);
+
+                        stage = "创建 PDF 打印引擎";
+                        using (var engine = PlotFactory.CreatePublishEngine())
+                        {
+                            if (engine == null) throw new InvalidOperationException("AutoCAD 未能创建 PDF 打印引擎，请确认没有其他打印任务正在运行。");
+                            stage = "开始打印";
+                            engine.BeginPlot(null, null);
+                            engine.BeginDocument(plotInfo, document.Name, null, 1, true, outputPath);
+                            using (var pageInfo = new PlotPageInfo())
+                            {
+                                stage = "创建 PDF 页面";
+                                engine.BeginPage(pageInfo, plotInfo, true, null);
+                                stage = "生成页面图形";
+                                engine.BeginGenerateGraphics(null);
+                                engine.EndGenerateGraphics(null);
+                                engine.EndPage(null);
+                            }
+                            engine.EndDocument(null);
+                            engine.EndPlot(null);
+                        }
                     }
-                    engine.EndDocument(null);
-                    engine.EndPlot(null);
+                    transaction.Commit();
                 }
-                transaction.Commit();
             }
+            catch (Exception exception)
+            {
+                var detail = $"第 {index + 1} 张（{label}）在“{stage}”时失败：{exception.Message}";
+                WriteDiagnostic(detail, exception);
+                throw new InvalidOperationException(detail, exception);
+            }
+        }
+
+        private static void WriteDiagnostic(string message, Exception exception)
+        {
+            try
+            {
+                File.AppendAllText(DiagnosticLogPath, DateTime.Now.ToString("s") + " " + message + Environment.NewLine + exception + Environment.NewLine + Environment.NewLine);
+            }
+            catch { }
         }
 
         private static class PdfMerger

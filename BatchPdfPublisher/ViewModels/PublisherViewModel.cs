@@ -428,6 +428,12 @@ namespace BatchPdfPublisher.ViewModels
             catch (System.Exception exception)
             {
                 Status = "PDF 发布失败：" + exception.Message;
+                try
+                {
+                    System.IO.File.AppendAllText(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "BatchPdfPublisher.publish.log"),
+                        System.DateTime.Now.ToString("s") + " 发布入口异常" + System.Environment.NewLine + exception + System.Environment.NewLine + System.Environment.NewLine);
+                }
+                catch { }
                 Application.ShowAlertDialog(Status);
             }
             finally
