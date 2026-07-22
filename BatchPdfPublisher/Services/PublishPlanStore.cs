@@ -118,6 +118,10 @@ namespace BatchPdfPublisher.Services
                 if (string.IsNullOrWhiteSpace(project.OutputDirectory)) project.OutputDirectory = "D:\\PDF输出";
                 if (project.FavoritePlotStyles == null) project.FavoritePlotStyles = new List<string>();
                 if (project.SavedSheets == null) project.SavedSheets = new List<SheetCatalogItem>();
+                if (project.CadFiles == null) project.CadFiles = new List<string>();
+                if (project.SelectedCadFiles == null) project.SelectedCadFiles = new List<string>();
+            if (project.SelectedPublishBuildings == null) project.SelectedPublishBuildings = new List<string>();
+            if (project.SelectedLayouts == null) project.SelectedLayouts = new List<string>();
             }
             if (projects.Count == 0) projects.Add(new ProjectProfile { Name = "默认项目" });
         }

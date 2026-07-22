@@ -15,6 +15,7 @@ namespace BatchPdfPublisher.Models
         public string PrintScale { get; set; }
         public string PlotStyle { get; set; }
         public string SourceFile { get; set; }
+        public string SourceLayout { get; set; }
         public double MinX { get; set; }
         public double MinY { get; set; }
         public double MaxX { get; set; }

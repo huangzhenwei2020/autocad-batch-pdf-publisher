@@ -86,10 +86,16 @@ namespace BatchPdfPublisherLauncher
         private static void StartPlatform(PlatformOption platform, string installedAssembly)
         {
             Log("启动平台: " + platform.DisplayName);
+            var startupScript = Path.Combine(Path.GetTempPath(), "BatchPdfPublisher." + Guid.NewGuid().ToString("N") + ".scr");
+            var trustedDirectory = Path.GetDirectoryName(installedAssembly).Replace('\\', '/');
+            var assemblyPath = installedAssembly.Replace('\\', '/');
+            File.WriteAllText(startupScript,
+                "(setvar \"TRUSTEDPATHS\" (strcat (getvar \"TRUSTEDPATHS\") \";" + trustedDirectory + "\"))\r\n" +
+                "_.NETLOAD\r\n\"" + assemblyPath + "\"\r\nBPPUBLISH065\r\n", Encoding.Default);
             Process.Start(new ProcessStartInfo
             {
                 FileName = platform.Executable,
-                Arguments = platform.Arguments,
+                Arguments = platform.Arguments + " /b \"" + startupScript + "\"",
                 WorkingDirectory = platform.WorkingDirectory,
                 UseShellExecute = true
             });
@@ -97,15 +103,7 @@ namespace BatchPdfPublisherLauncher
             if (!WaitForCadProcess(45))
                 throw new InvalidOperationException(platform.DisplayName + " 启动后没有检测到 AutoCAD 进程。请确认平台可以单独正常启动。\r\n\r\n插件文件已经安装，进入 CAD 后仍可手工执行 BPPUBLISH。\r\n\r\n如使用天正，请从选择列表中选择“T20 天正建筑”，不要选择普通 AutoCAD 2022。 ");
 
-            // AutoCAD/T20 may expose COM before its command processor is ready.
-            // Waiting longer and loading only the assembly avoids the fatal
-            // c000041d crashes caused by sending a second command too early.
-            Thread.Sleep(string.Equals(platform.Id, "t20", StringComparison.OrdinalIgnoreCase) ? 25000 : 15000);
-            Log("AutoCAD 进程已就绪，开始发送加载命令");
-            if (!TrySendLoad(platform.ProgId, installedAssembly))
-            {
-                MessageBox.Show("CAD 已启动，插件文件已经安装。请在 CAD 命令行输入 BPPUBLISH 加载并打开面板。", "批量打印插件", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            }
+            Log("已通过启动脚本安排 NETLOAD + BPPUBLISH065");
         }
 
         private static bool WaitForCadProcess(int seconds)
@@ -152,7 +150,7 @@ namespace BatchPdfPublisherLauncher
                     SendCommand(document,
                         "(setvar \"TRUSTEDPATHS\" (strcat (getvar \"TRUSTEDPATHS\") \";" + directory + "\")) " +
                         "(command \"_.NETLOAD\" \"" + assemblyPath + "\") " +
-                        "(command \"BPPUBLISH\") \r\n");
+                        "(command \"BPPUBLISH065\") \r\n");
                     Log("已向 AutoCAD 发送 NETLOAD + BPPUBLISH");
                     return true;
                 }

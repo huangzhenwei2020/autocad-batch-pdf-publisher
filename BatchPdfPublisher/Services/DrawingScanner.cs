@@ -9,19 +9,59 @@ namespace BatchPdfPublisher.Services
 {
     public sealed class DrawingScanner
     {
-        public IReadOnlyList<SheetItem> Scan(Document document, IEnumerable<FrameDefinition> frameDefinitions)
+        public IReadOnlyList<string> GetLayoutNames(Database database)
         {
-            var frames = frameDefinitions.ToList();
-            var result = new List<SheetItem>();
-            var database = document.Database;
+            var names = new List<string>();
             using (var transaction = database.TransactionManager.StartTransaction())
             {
                 var blockTable = (BlockTable)transaction.GetObject(database.BlockTableId, OpenMode.ForRead);
-                var modelSpace = (BlockTableRecord)transaction.GetObject(blockTable[BlockTableRecord.ModelSpace], OpenMode.ForRead);
-                foreach (ObjectId id in modelSpace)
+                foreach (ObjectId recordId in blockTable)
+                {
+                    var record = transaction.GetObject(recordId, OpenMode.ForRead) as BlockTableRecord;
+                    if (record == null || !record.IsLayout) continue;
+                    var layout = transaction.GetObject(record.LayoutId, OpenMode.ForRead) as Layout;
+                    if (layout != null && layout.ModelType) continue;
+                    names.Add(layout == null ? record.Name : layout.LayoutName);
+                }
+                transaction.Commit();
+            }
+            return names.OrderBy(x => x).ToList();
+        }
+
+        public IReadOnlyList<SheetItem> Scan(Document document, IEnumerable<FrameDefinition> frameDefinitions, bool scanModelSpace = true, bool scanAllLayouts = true, IEnumerable<string> selectedLayouts = null)
+        {
+            return Scan(document.Database, string.IsNullOrWhiteSpace(document.Database.Filename) ? document.Name : document.Database.Filename, frameDefinitions, scanModelSpace, scanAllLayouts, selectedLayouts);
+        }
+
+        public IReadOnlyList<SheetItem> Scan(Database database, string sourceFile, IEnumerable<FrameDefinition> frameDefinitions, bool scanModelSpace = true, bool scanAllLayouts = true, IEnumerable<string> selectedLayouts = null)
+        {
+            var frames = frameDefinitions.ToList();
+            var result = new List<SheetItem>();
+            var seenReferences = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var wantedLayouts = new HashSet<string>(selectedLayouts ?? Enumerable.Empty<string>(), StringComparer.OrdinalIgnoreCase);
+            using (var transaction = database.TransactionManager.StartTransaction())
+            {
+                var blockTable = (BlockTable)transaction.GetObject(database.BlockTableId, OpenMode.ForRead);
+                var spaces = new List<BlockTableRecord>();
+                if (scanModelSpace) spaces.Add((BlockTableRecord)transaction.GetObject(blockTable[BlockTableRecord.ModelSpace], OpenMode.ForRead));
+                foreach (ObjectId recordId in blockTable)
+                {
+                    var record = transaction.GetObject(recordId, OpenMode.ForRead) as BlockTableRecord;
+                    if (record == null || !record.IsLayout) continue;
+                    var layout = transaction.GetObject(record.LayoutId, OpenMode.ForRead) as Layout;
+                    if (layout != null && layout.ModelType) continue;
+                    var layoutName = layout == null ? record.Name : layout.LayoutName;
+                    if (scanAllLayouts || wantedLayouts.Contains(layoutName)) spaces.Add(record);
+                }
+                foreach (var space in spaces)
+                foreach (ObjectId id in space)
                 {
                     var reference = transaction.GetObject(id, OpenMode.ForRead) as BlockReference;
                     if (reference == null) continue;
+                    // A layout record must only be visited once. Keep an explicit
+                    // identity guard as some third-party/T20 drawings can expose
+                    // the same reference through proxy layout records.
+                    if (!seenReferences.Add(reference.Handle.ToString())) continue;
                     try
                     {
                         var blockName = GetBlockName(reference, transaction);
@@ -42,7 +82,8 @@ namespace BatchPdfPublisher.Services
                             PaperOrientation = string.IsNullOrWhiteSpace(frame.PaperOrientation) ? (extents.MaxPoint.X - extents.MinPoint.X >= extents.MaxPoint.Y - extents.MinPoint.Y ? "横向" : "纵向") : frame.PaperOrientation,
                             PrintScale = GetAttribute(attributes, frame.PrintScaleAttributeTag, frame.DefaultPrintScale, "1:1"),
                             PlotStyle = "使用输出设置",
-                            SourceFile = document.Name,
+                            SourceFile = sourceFile,
+                            SourceLayout = SpaceName(space, transaction),
                             MinX = extents.MinPoint.X,
                             MinY = extents.MinPoint.Y,
                             MaxX = extents.MaxPoint.X,
@@ -58,7 +99,7 @@ namespace BatchPdfPublisher.Services
                 transaction.Commit();
             }
             var sorted = result.OrderBy(x => x.Building)
-                .ThenBy(x => TitlePriority(x.SheetName))
+                .ThenBy(TitlePriority)
                 .ThenBy(x => x.SheetNumber)
                 .ThenBy(x => x.SheetName)
                 .ToList();
@@ -70,12 +111,20 @@ namespace BatchPdfPublisher.Services
             return sorted;
         }
 
-        private static int TitlePriority(string sheetName)
+        private static int TitlePriority(SheetItem sheet)
         {
-            if (string.IsNullOrWhiteSpace(sheetName)) return 2;
-            if (sheetName.IndexOf("封面", StringComparison.OrdinalIgnoreCase) >= 0) return 0;
-            if (sheetName.IndexOf("目录", StringComparison.OrdinalIgnoreCase) >= 0) return 1;
-            return 2;
+            var note = sheet?.FrameNote ?? string.Empty;
+            if (note.IndexOf("封面", StringComparison.OrdinalIgnoreCase) >= 0) return 0;
+            if (note.IndexOf("目录", StringComparison.OrdinalIgnoreCase) >= 0) return 1;
+            if (note.IndexOf("总平图", StringComparison.OrdinalIgnoreCase) >= 0 || (sheet?.SheetNumber ?? string.Empty).IndexOf("总平图", StringComparison.OrdinalIgnoreCase) >= 0) return 2;
+            return 3;
+        }
+
+        private static string SpaceName(BlockTableRecord space, Transaction transaction)
+        {
+            var layout = transaction.GetObject(space.LayoutId, OpenMode.ForRead) as Layout;
+            if (layout != null && layout.ModelType) return "模型空间";
+            return layout == null ? space.Name : layout.LayoutName;
         }
 
         private static string GetBlockName(BlockReference reference, Transaction transaction)

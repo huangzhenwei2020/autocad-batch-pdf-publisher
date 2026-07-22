@@ -26,6 +26,17 @@ namespace BatchPdfPublisher
             ShowPublisher(null);
         }
 
+        // Versioned diagnostic entry point lets an updated assembly be tested
+        // in a CAD process that still has an older BPPUBLISH command loaded.
+        [CommandMethod("BPPUBLISH063")]
+        public void OpenPublisher063() => ShowPublisher(null);
+
+        [CommandMethod("BPPUBLISH064")]
+        public void OpenPublisher064() => ShowPublisher(null);
+
+        [CommandMethod("BPPUBLISH065")]
+        public void OpenPublisher065() => ShowPublisher(null);
+
         [CommandMethod("BPPSCAN")]
         public void ScanFromRibbon() => ShowPublisher(form => form.ScanDrawing());
 

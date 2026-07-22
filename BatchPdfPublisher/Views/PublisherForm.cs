@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Windows.Forms;
 using BatchPdfPublisher.Models;
@@ -20,22 +22,30 @@ namespace BatchPdfPublisher.Views
         private readonly ComboBox _projects = new ComboBox();
         private readonly TextBox _newProjectName = new TextBox();
         private readonly ListBox _buildings = new ListBox();
+        private readonly CheckedListBox _cadFiles = new CheckedListBox();
         private readonly ListBox _frames = new ListBox();
         private readonly DataGridView _sheets = new DataGridView();
         private readonly ComboBox _plotStyle = new ComboBox();
         private readonly ComboBox _marginMode = new ComboBox();
         private readonly TextBox _outputDirectory = new TextBox();
+        private readonly Label _actualOutputDirectories = new Label();
+        private readonly CheckedListBox _publishBuildings = new CheckedListBox();
+        private readonly CheckBox _outputNextToCad = new CheckBox();
+        private readonly CheckBox _includeProjectName = new CheckBox();
+        private readonly CheckBox _includeBuildingName = new CheckBox();
+        private readonly CheckBox _overwriteExisting = new CheckBox();
         private readonly CheckBox _mergeByBuilding = new CheckBox();
         private readonly CheckBox _previewEnabled = new CheckBox();
         private readonly Label _status = new Label();
         private readonly ProgressBar _publishProgress = new ProgressBar();
         private readonly Label _publishProgressText = new Label();
+        private readonly ToolTip _toolTip = new ToolTip();
         private bool _refreshing;
         private bool _gridCommitPending;
 
         public PublisherForm()
         {
-            Text = "批量 PDF 发布";
+            Text = "批量 PDF 发布  v0.6.5";
             Width = 1240;
             Height = 760;
             MinimumSize = new System.Drawing.Size(840, 540);
@@ -53,20 +63,18 @@ namespace BatchPdfPublisher.Views
         {
             BackColor = System.Drawing.Color.FromArgb(242, 245, 249);
             var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(0), RowCount = 4, ColumnCount = 1 };
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 64));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
             Controls.Add(root);
 
-            var header = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Padding = new Padding(20, 8, 20, 8), BackColor = System.Drawing.Color.FromArgb(22, 39, 65) };
+            var header = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Padding = Padding.Empty, BackColor = System.Drawing.Color.White };
             header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             var heading = new Panel { Dock = DockStyle.Fill };
             heading.Controls.Add(new Label { Text = "批量 PDF 发布", ForeColor = System.Drawing.Color.White, Font = new System.Drawing.Font(Font.FontFamily, 15F, System.Drawing.FontStyle.Bold), AutoSize = true, Location = new System.Drawing.Point(0, 8) });
             header.Controls.Add(heading, 0, 0);
             var headerActions = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = false, FlowDirection = FlowDirection.LeftToRight, Padding = new Padding(0, 6, 0, 0) };
-            headerActions.Controls.Add(AccentButton("扫描当前图纸", () => { _viewModel.ScanCommand.Execute(null); RefreshAll(); }));
-            var publish = AccentButton("发布 PDF", PublishPdf); headerActions.Controls.Add(publish);
             header.Controls.Add(headerActions, 1, 0);
             root.Controls.Add(header, 0, 0);
 
@@ -76,6 +84,7 @@ namespace BatchPdfPublisher.Views
             _newProjectName.Width = 160; _newProjectName.Margin = new Padding(14, 3, 4, 3);
             projectBar.Controls.Add(_projects); projectBar.Controls.Add(_newProjectName);
             projectBar.Controls.Add(Button("新建工程", CreateProject));
+            projectBar.Controls.Add(Button("扫描设置", ConfigureScanScope));
             projectBar.Controls.Add(Button("保存工程参数", () => _viewModel.SaveProjectCommand.Execute(null)));
             root.Controls.Add(projectBar, 0, 1);
 
@@ -102,17 +111,28 @@ namespace BatchPdfPublisher.Views
             };
             leftSplitter.Panel2.Controls.Add(rightSplitter);
 
-            var left = Card(7, new Padding(12)); left.Margin = new Padding(0, 0, 10, 0);
-            left.RowStyles.Add(new RowStyle(SizeType.AutoSize)); left.RowStyles.Add(new RowStyle(SizeType.Percent, 35));
-            left.RowStyles.Add(new RowStyle(SizeType.AutoSize)); left.RowStyles.Add(new RowStyle(SizeType.Percent, 65));
+            var left = Card(10, new Padding(12)); left.Margin = new Padding(0, 0, 10, 0);
+            left.RowStyles.Add(new RowStyle(SizeType.AutoSize)); left.RowStyles.Add(new RowStyle(SizeType.Percent, 34)); left.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            left.RowStyles.Add(new RowStyle(SizeType.AutoSize)); left.RowStyles.Add(new RowStyle(SizeType.Percent, 21));
+            left.RowStyles.Add(new RowStyle(SizeType.AutoSize)); left.RowStyles.Add(new RowStyle(SizeType.Percent, 45));
             left.RowStyles.Add(new RowStyle(SizeType.AutoSize)); left.RowStyles.Add(new RowStyle(SizeType.AutoSize)); left.RowStyles.Add(new RowStyle(SizeType.Absolute, 1));
-            left.Controls.Add(SectionLabel("子项目名称"), 0, 0); _buildings.Dock = DockStyle.Fill; left.Controls.Add(_buildings, 0, 1);
-            left.Controls.Add(SectionLabel("图框登记（双击修改）"), 0, 2); _frames.Dock = DockStyle.Fill; _frames.HorizontalScrollbar = true; left.Controls.Add(_frames, 0, 3);
+            left.Controls.Add(SectionLabel("工程 CAD 文件（双击打开）"), 0, 0); _cadFiles.Dock = DockStyle.Fill; _cadFiles.CheckOnClick = true; _cadFiles.HorizontalScrollbar = true; left.Controls.Add(_cadFiles, 0, 1);
+            var cadButtons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true };
+            cadButtons.Controls.Add(Button("添加", ChooseCadFiles)); cadButtons.Controls.Add(Button("移除", RemoveCadFile));
+            cadButtons.Controls.Add(AccentButton("扫描当前", () => { _viewModel.ScanCommand.Execute(null); RefreshAll(); }));
+            cadButtons.Controls.Add(AccentButton("扫描所选", ScanCheckedCadFiles));
+            cadButtons.Controls.Add(Button("框选发布当前文件", OpenCurrentSelectionPublisher)); left.Controls.Add(cadButtons, 0, 2);
+            left.Controls.Add(SectionLabel("子项目名称"), 0, 3); _buildings.Dock = DockStyle.Fill; left.Controls.Add(_buildings, 0, 4);
+            var frameToggle = new CheckBox { Text = "图框登记（展开后可修改）", AutoSize = true, Font = new System.Drawing.Font(Font, System.Drawing.FontStyle.Bold), ForeColor = System.Drawing.Color.FromArgb(25, 45, 78), Margin = new Padding(3, 6, 3, 3) };
+            left.Controls.Add(frameToggle, 0, 5); _frames.Dock = DockStyle.Fill; _frames.HorizontalScrollbar = true; _frames.Visible = false; left.Controls.Add(_frames, 0, 6);
             var frameButtons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true };
             frameButtons.Controls.Add(AccentButton("拾取并登记", () => _viewModel.RegisterFrameCommand.Execute(null)));
             frameButtons.Controls.Add(Button("修改", EditFrame)); frameButtons.Controls.Add(Button("删除", RemoveFrame));
-            left.Controls.Add(frameButtons, 0, 4);
-            left.Controls.Add(Button("保存当前图框库", () => _viewModel.SaveFrameLibraryCommand.Execute(null)), 0, 5);
+            frameButtons.Visible = false;
+            left.Controls.Add(frameButtons, 0, 7);
+            var saveFrames = Button("保存当前图框库", () => _viewModel.SaveFrameLibraryCommand.Execute(null)); saveFrames.Visible = false; left.Controls.Add(saveFrames, 0, 8);
+            left.RowStyles[6].SizeType = SizeType.Absolute; left.RowStyles[6].Height = 0; left.RowStyles[7].SizeType = SizeType.Absolute; left.RowStyles[7].Height = 0; left.RowStyles[8].SizeType = SizeType.Absolute; left.RowStyles[8].Height = 0;
+            frameToggle.CheckedChanged += (s, e) => { _frames.Visible = frameToggle.Checked; frameButtons.Visible = frameToggle.Checked; saveFrames.Visible = frameToggle.Checked; left.RowStyles[6].Height = frameToggle.Checked ? 150 : 0; left.RowStyles[7].Height = frameToggle.Checked ? 36 : 0; left.RowStyles[8].Height = frameToggle.Checked ? 36 : 0; };
             left.Margin = Padding.Empty;
             leftSplitter.Panel1.Controls.Add(left);
 
@@ -129,7 +149,7 @@ namespace BatchPdfPublisher.Views
             center.Margin = Padding.Empty;
             rightSplitter.Panel1.Controls.Add(center);
 
-            var right = Card(12, new Padding(14));
+            var right = Card(20, new Padding(14));
             right.Controls.Add(SectionLabel("输出设置")); right.Controls.Add(Label("CAD 打印样式"));
             _plotStyle.DropDownStyle = ComboBoxStyle.DropDown; _plotStyle.Dock = DockStyle.Top;
             right.Controls.Add(_plotStyle);
@@ -138,8 +158,28 @@ namespace BatchPdfPublisher.Views
             plotButtons.Controls.Add(Button("收藏当前样式", () => { _viewModel.SaveFavoritePlotStyleCommand.Execute(null); RefreshPlotStyles(); }));
             right.Controls.Add(plotButtons); right.Controls.Add(Label("白边 / 出血位（单位：mm）"));
             _marginMode.Items.AddRange(new object[] { "自动适配", "无白边（满幅）", "保留 3 mm 白边" });
-            _marginMode.Dock = DockStyle.Top; right.Controls.Add(_marginMode); right.Controls.Add(Label("输出目录")); _outputDirectory.Dock = DockStyle.Top; right.Controls.Add(_outputDirectory);
+            _marginMode.Dock = DockStyle.Top; right.Controls.Add(_marginMode); right.Controls.Add(Label("输出目录"));
+            var outputFolder = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top, WrapContents = false };
+            _outputDirectory.Width = 150; outputFolder.Controls.Add(_outputDirectory);
+            outputFolder.Controls.Add(Button("选择", ChooseOutputDirectory)); outputFolder.Controls.Add(Button("打开", OpenOutputDirectory));
+            right.Controls.Add(outputFolder);
+            _outputNextToCad.Text = "输出到各 CAD 文件同级目录"; _outputNextToCad.AutoSize = true; right.Controls.Add(_outputNextToCad);
+            _actualOutputDirectories.AutoSize = true;
+            _actualOutputDirectories.MaximumSize = new System.Drawing.Size(270, 66);
+            _actualOutputDirectories.ForeColor = System.Drawing.Color.FromArgb(77, 99, 128);
+            _actualOutputDirectories.Padding = new Padding(3, 1, 3, 3);
+            right.Controls.Add(_actualOutputDirectories);
             _mergeByBuilding.Text = "每个子项目生成一个 PDF"; _mergeByBuilding.AutoSize = true; _mergeByBuilding.Margin = new Padding(3, 12, 3, 3); right.Controls.Add(_mergeByBuilding);
+            var publishBuildingHeader = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top, WrapContents = false };
+            publishBuildingHeader.Controls.Add(SectionLabel("发布子项目（可多选）"));
+            publishBuildingHeader.Controls.Add(Button("全选", () => SetAllPublishBuildings(true)));
+            publishBuildingHeader.Controls.Add(Button("取消全选", () => SetAllPublishBuildings(false)));
+            right.Controls.Add(publishBuildingHeader);
+            _publishBuildings.CheckOnClick = true; _publishBuildings.Height = 106; _publishBuildings.Dock = DockStyle.Top; right.Controls.Add(_publishBuildings);
+            right.Controls.Add(SectionLabel("PDF 文件命名"));
+            _includeProjectName.Text = "文件名包含工程名"; _includeProjectName.AutoSize = true; right.Controls.Add(_includeProjectName);
+            _includeBuildingName.Text = "文件名包含子项目名"; _includeBuildingName.AutoSize = true; right.Controls.Add(_includeBuildingName);
+            _overwriteExisting.Text = "同名 PDF 直接覆盖"; _overwriteExisting.AutoSize = true; right.Controls.Add(_overwriteExisting);
             rightSplitter.Panel2.Controls.Add(right);
 
             body.Resize += (sender, args) =>
@@ -162,11 +202,12 @@ namespace BatchPdfPublisher.Views
                 rightSplitter.SplitterDistance = Math.Max(rightSplitter.Panel1MinSize, rightSplitter.Width - 260 - rightSplitter.SplitterWidth);
             };
 
-            var footer = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = System.Drawing.Color.White, Padding = new Padding(16, 8, 16, 6), ColumnCount = 3 };
-            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            var footer = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = System.Drawing.Color.White, Padding = new Padding(16, 6, 16, 4), ColumnCount = 4 };
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 180)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             _status.Dock = DockStyle.Fill; _status.ForeColor = System.Drawing.Color.FromArgb(65, 84, 110); footer.Controls.Add(_status, 0, 0);
             _publishProgress.Dock = DockStyle.Fill; _publishProgress.Minimum = 0; _publishProgress.Maximum = 1; _publishProgress.Value = 0; _publishProgress.Style = ProgressBarStyle.Continuous; footer.Controls.Add(_publishProgress, 1, 0);
             _publishProgressText.AutoSize = true; _publishProgressText.MinimumSize = new System.Drawing.Size(82, 0); _publishProgressText.Padding = new Padding(8, 0, 2, 0); _publishProgressText.Dock = DockStyle.Fill; _publishProgressText.TextAlign = System.Drawing.ContentAlignment.MiddleRight; _publishProgressText.ForeColor = System.Drawing.Color.FromArgb(65, 84, 110); _publishProgressText.Text = "0 / 0"; footer.Controls.Add(_publishProgressText, 2, 0);
+            footer.Controls.Add(AccentButton("发布 PDF", PublishPdf), 3, 0);
             root.Controls.Add(footer, 0, 3);
         }
 
@@ -182,14 +223,16 @@ namespace BatchPdfPublisher.Views
             _sheets.DefaultCellStyle.SelectionBackColor = System.Drawing.Color.FromArgb(214, 231, 251);
             _sheets.DefaultCellStyle.SelectionForeColor = System.Drawing.Color.FromArgb(20, 36, 60);
             _sheets.AlternatingRowsDefaultCellStyle.BackColor = System.Drawing.Color.FromArgb(248, 250, 253);
-            AddColumn("Order", "序", 42, true); AddColumn("Building", "子项目", 88, false);
+            AddColumn("Order", "序", 42, true); AddComboColumn("Building", "子项目", 100, _viewModel.Buildings.Concat(new[] { "未分组" }));
             AddColumn("SheetNumber", "图号", 90, false); AddColumn("SheetName", "图名", 150, false);
             AddColumn("FrameDisplay", "图框", 78, true);
             AddColumn("OutputPaperSize", "PDF 尺寸", 112, true);
             AddComboColumn("PaperOrientation", "方向", 68, new[] { "横向", "纵向" });
             AddColumn("PrintScale", "打印比例", 82, false);
             AddComboColumn("PlotStyle", "打印样式", 150, PlotStyleChoices());
+            AddColumn("SourceFileName", "CAD 文件", 128, true);
             AddColumn("SourceFile", "来源文件", 180, true);
+            AddColumn("SourceLayout", "空间", 96, true);
             _sheets.DataError += (s, e) => e.ThrowException = false;
         }
 
@@ -225,6 +268,21 @@ namespace BatchPdfPublisher.Views
             _projects.SelectedIndexChanged += (s, e) => { if (_refreshing) return; _viewModel.SelectedProject = _projects.SelectedItem as ProjectProfile; RefreshAll(); };
             _buildings.SelectedIndexChanged += (s, e) => { if (_refreshing) return; _viewModel.SelectedBuilding = _buildings.SelectedItem as string; RefreshSheets(); };
             _frames.SelectedIndexChanged += (s, e) => { if (!_refreshing) _viewModel.SelectedFrame = _frames.SelectedItem as FrameDefinition; };
+            _cadFiles.ItemCheck += (s, e) =>
+            {
+                if (_refreshing || e.Index < 0) return;
+                BeginInvoke(new Action(() =>
+                {
+                    var item = _cadFiles.Items[e.Index] as CadFileItem;
+                    if (item != null) _viewModel.SetCadFileSelected(item.Path, _cadFiles.GetItemChecked(e.Index));
+                    RefreshActualOutputDirectories();
+                }));
+            };
+            _cadFiles.DoubleClick += (s, e) =>
+            {
+                var item = _cadFiles.SelectedItem as CadFileItem;
+                if (item != null) _viewModel.OpenCadFile(item.Path);
+            };
             _frames.DoubleClick += (s, e) => EditFrame();
             _sheets.SelectionChanged += (s, e) => { if (_refreshing) return; _viewModel.SelectedSheet = CurrentSheet(); };
             _sheets.CellEndEdit += (s, e) =>
@@ -246,8 +304,21 @@ namespace BatchPdfPublisher.Views
             };
             _plotStyle.TextChanged += (s, e) => { if (!_refreshing) _viewModel.PlotStyle = _plotStyle.Text; };
             _marginMode.TextChanged += (s, e) => { if (!_refreshing) _viewModel.MarginMode = _marginMode.Text; };
-            _outputDirectory.TextChanged += (s, e) => { if (!_refreshing) _viewModel.OutputDirectory = _outputDirectory.Text; };
+            _outputDirectory.TextChanged += (s, e) => { if (!_refreshing) _viewModel.OutputDirectory = _outputDirectory.Text; RefreshActualOutputDirectories(); };
             _mergeByBuilding.CheckedChanged += (s, e) => { if (!_refreshing) _viewModel.MergeByBuilding = _mergeByBuilding.Checked; };
+            _outputNextToCad.CheckedChanged += (s, e) => { if (!_refreshing) _viewModel.OutputNextToCadFile = _outputNextToCad.Checked; RefreshActualOutputDirectories(); };
+            _includeProjectName.CheckedChanged += (s, e) => { if (!_refreshing) _viewModel.IncludeProjectNameInFileName = _includeProjectName.Checked; };
+            _includeBuildingName.CheckedChanged += (s, e) => { if (!_refreshing) _viewModel.IncludeBuildingNameInFileName = _includeBuildingName.Checked; };
+            _overwriteExisting.CheckedChanged += (s, e) => { if (!_refreshing) _viewModel.OverwriteExistingPdf = _overwriteExisting.Checked; };
+            _publishBuildings.ItemCheck += (s, e) =>
+            {
+                if (_refreshing || e.Index < 0) return;
+                BeginInvoke(new Action(() =>
+                {
+                    var item = _publishBuildings.Items[e.Index] as BuildingPublishItem;
+                    if (item != null) _viewModel.SetPublishBuilding(item.Name, _publishBuildings.GetItemChecked(e.Index));
+                }));
+            };
             _previewEnabled.CheckedChanged += (s, e) => { if (!_refreshing) _viewModel.PreviewEnabled = _previewEnabled.Checked; };
             _viewModel.PropertyChanged += ViewModelPropertyChanged;
             _viewModel.Frames.CollectionChanged += (s, e) => BeginInvoke(new Action(RefreshFrames));
@@ -291,8 +362,17 @@ namespace BatchPdfPublisher.Views
                 _newProjectName.Text = _viewModel.NewProjectName;
                 RefreshFramesCore();
                 _buildings.DataSource = _viewModel.Buildings.ToList(); _buildings.SelectedItem = _viewModel.SelectedBuilding;
+                _cadFiles.Items.Clear();
+                foreach (var item in _viewModel.CadFiles) _cadFiles.Items.Add(item, item.IsSelected);
                 RefreshPlotStyles(); _marginMode.Text = _viewModel.MarginMode;
                 _outputDirectory.Text = _viewModel.OutputDirectory; _mergeByBuilding.Checked = _viewModel.MergeByBuilding;
+                _outputNextToCad.Checked = _viewModel.OutputNextToCadFile;
+                RefreshActualOutputDirectories();
+                _includeProjectName.Checked = _viewModel.IncludeProjectNameInFileName;
+                _includeBuildingName.Checked = _viewModel.IncludeBuildingNameInFileName;
+                _overwriteExisting.Checked = _viewModel.OverwriteExistingPdf;
+                _publishBuildings.Items.Clear();
+                foreach (var item in _viewModel.PublishBuildings) _publishBuildings.Items.Add(item, item.IsSelected);
                 _previewEnabled.Checked = _viewModel.PreviewEnabled;
                 _status.Text = _viewModel.Status;
                 RefreshPublishProgress();
@@ -318,6 +398,12 @@ namespace BatchPdfPublisher.Views
 
         private void RefreshSheetsCore()
         {
+            var buildingColumn = _sheets.Columns["BuildingColumn"] as DataGridViewComboBoxColumn;
+            if (buildingColumn != null)
+            {
+                buildingColumn.Items.Clear();
+                foreach (var name in _viewModel.Buildings.Concat(new[] { "未分组" }).Distinct()) buildingColumn.Items.Add(name);
+            }
             var visible = _viewModel.SheetView.Cast<SheetItem>().ToList();
             _sheets.DataSource = new BindingList<SheetItem>(visible);
             if (_viewModel.SelectedSheet != null)
@@ -363,6 +449,133 @@ namespace BatchPdfPublisher.Views
             _viewModel.PublishCommand.Execute(null);
         }
 
+        private void ChooseCadFiles()
+        {
+            using (var dialog = new OpenFileDialog { Filter = "AutoCAD 图纸 (*.dwg)|*.dwg", Multiselect = true, Title = "选择要扫描的 CAD 文件" })
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                _viewModel.AddCadFiles(dialog.FileNames);
+                RefreshAll();
+            }
+        }
+
+        private void RemoveCadFile()
+        {
+            var item = _cadFiles.SelectedItem as CadFileItem;
+            if (item == null) return;
+            _viewModel.RemoveCadFile(item.Path);
+            RefreshAll();
+        }
+
+        private void ScanCheckedCadFiles()
+        {
+            // Read CheckedItems at click time. This avoids relying on the
+            // deferred ItemCheck event when the user checks a file and
+            // immediately presses “扫描所选”.
+            var paths = _cadFiles.CheckedItems.Cast<CadFileItem>().Select(x => x.Path).ToList();
+            foreach (CadFileItem item in _cadFiles.Items)
+                _viewModel.SetCadFileSelected(item.Path, paths.Contains(item.Path, StringComparer.OrdinalIgnoreCase));
+            _viewModel.ScanCadFiles(paths);
+            RefreshAll();
+        }
+
+        private void SetAllPublishBuildings(bool selected)
+        {
+            for (var index = 0; index < _publishBuildings.Items.Count; index++) _publishBuildings.SetItemChecked(index, selected);
+        }
+
+        private void ConfigureScanScope()
+        {
+            var layouts = _viewModel.GetActiveLayoutNames();
+            if (layouts.Count == 0 && !_viewModel.ScanModelSpace)
+            {
+                MessageBox.Show(this, "当前图纸没有可选空间。", "扫描设置");
+                return;
+            }
+            using (var dialog = new Form
+            {
+                Text = "扫描设置",
+                Width = 360,
+                Height = 430,
+                StartPosition = FormStartPosition.CenterParent,
+                Font = Font,
+                MinimizeBox = false,
+                MaximizeBox = false
+            })
+            {
+                var panel = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(16), RowCount = 4, ColumnCount = 1 };
+                panel.RowStyles.Add(new RowStyle(SizeType.AutoSize)); panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); panel.RowStyles.Add(new RowStyle(SizeType.AutoSize)); panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                panel.Controls.Add(new Label { Text = "勾选本次要扫描的空间（设置会保存到工程）", AutoSize = true }, 0, 0);
+                var spaces = new CheckedListBox { Dock = DockStyle.Fill, CheckOnClick = true };
+                spaces.Items.Add("模型空间", _viewModel.ScanModelSpace);
+                foreach (var layout in layouts)
+                    spaces.Items.Add(layout, _viewModel.ScanAllLayouts || (_viewModel.SelectedProject?.SelectedLayouts?.Contains(layout) ?? false));
+                panel.Controls.Add(spaces, 0, 1);
+                var allLayouts = new CheckBox { Text = "自动扫描所有布局（包括以后新增的布局）", AutoSize = true, Checked = _viewModel.ScanAllLayouts };
+                panel.Controls.Add(allLayouts, 0, 2);
+                var actions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft };
+                var ok = Button("确定", () => dialog.DialogResult = DialogResult.OK);
+                var cancel = Button("取消", () => dialog.DialogResult = DialogResult.Cancel);
+                actions.Controls.Add(ok); actions.Controls.Add(cancel); panel.Controls.Add(actions, 0, 3);
+                dialog.Controls.Add(panel);
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                var selected = new List<string>();
+                for (var i = 1; i < spaces.Items.Count; i++) if (spaces.GetItemChecked(i)) selected.Add((string)spaces.Items[i]);
+                _viewModel.SetScanScope(spaces.GetItemChecked(0), selected, allLayouts.Checked);
+            }
+        }
+
+        private void ChooseOutputDirectory()
+        {
+            using (var dialog = new FolderBrowserDialog { Description = "选择 PDF 输出目录", SelectedPath = _outputDirectory.Text })
+            {
+                if (dialog.ShowDialog(this) == DialogResult.OK) _outputDirectory.Text = dialog.SelectedPath;
+            }
+        }
+
+        private void OpenOutputDirectory()
+        {
+            var folder = _outputDirectory.Text;
+            if (_outputNextToCad.Checked)
+            {
+                var firstCad = _viewModel.SelectedProject?.CadFiles?.FirstOrDefault();
+                if (!string.IsNullOrWhiteSpace(firstCad)) folder = Path.GetDirectoryName(firstCad);
+            }
+            if (string.IsNullOrWhiteSpace(folder)) { MessageBox.Show(this, "请先选择输出目录或扫描 CAD 文件。", "批量 PDF 发布"); return; }
+            Directory.CreateDirectory(folder);
+            Process.Start(new ProcessStartInfo { FileName = folder, UseShellExecute = true });
+        }
+
+        private void RefreshActualOutputDirectories()
+        {
+            _outputDirectory.Enabled = !_outputNextToCad.Checked;
+            if (!_outputNextToCad.Checked)
+            {
+                _actualOutputDirectories.Text = "实际输出：" + (string.IsNullOrWhiteSpace(_outputDirectory.Text) ? "尚未选择" : _outputDirectory.Text);
+                return;
+            }
+            var directories = _viewModel.CadFiles
+                .Where(x => x.IsSelected && !string.IsNullOrWhiteSpace(x.Path))
+                .Select(x => Path.GetDirectoryName(x.Path))
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (directories.Count == 0)
+            {
+                _actualOutputDirectories.Text = "实际输出：请先勾选 CAD 文件";
+                return;
+            }
+            _actualOutputDirectories.Text = "实际输出：\r\n" + string.Join("\r\n", directories.Take(2))
+                + (directories.Count > 2 ? "\r\n…另有 " + (directories.Count - 2) + " 个目录" : string.Empty);
+            _toolTip.SetToolTip(_actualOutputDirectories, string.Join(Environment.NewLine, directories));
+        }
+
+        private void OpenCurrentSelectionPublisher()
+        {
+            var dialog = new CurrentSelectionPublishForm(_viewModel.Frames.ToList(), _plotStyle.Text, _marginMode.Text);
+            Autodesk.AutoCAD.ApplicationServices.Application.ShowModelessDialog(dialog);
+        }
+
         private void EditFrame()
         {
             _viewModel.SelectedFrame = _frames.SelectedItem as FrameDefinition; _viewModel.EditFrameCommand.Execute(null); RefreshFrames();
@@ -385,8 +598,8 @@ namespace BatchPdfPublisher.Views
                 Text = text,
                 AutoSize = true,
                 Margin = new Padding(3),
-                Padding = new Padding(8, 3, 8, 3),
-                MinimumSize = new System.Drawing.Size(0, 31),
+                Padding = new Padding(5, 2, 5, 2),
+                MinimumSize = new System.Drawing.Size(0, 26),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = System.Drawing.Color.White,
                 ForeColor = System.Drawing.Color.FromArgb(31, 48, 74),

@@ -80,11 +80,13 @@ namespace BatchPdfPublisher.Services
             if (PlotFactory.ProcessPlotState != ProcessPlotState.NotPlotting)
                 throw new InvalidOperationException("AutoCAD 正在执行其他打印任务，请稍后再试。");
 
-            var outputRoot = string.IsNullOrWhiteSpace(project?.OutputDirectory) ? @"D:\PDF输出" : project.OutputDirectory;
-            var engineeringFolder = Path.Combine(outputRoot, SafeName(project?.Name ?? "默认工程"));
+            var outputRoot = project?.OutputNextToCadFile == true && !string.IsNullOrWhiteSpace(document.Database.Filename)
+                ? Path.GetDirectoryName(document.Database.Filename)
+                : (string.IsNullOrWhiteSpace(project?.OutputDirectory) ? @"D:\PDF输出" : project.OutputDirectory);
+            var engineeringFolder = project?.IncludeProjectNameInFileName == true ? Path.Combine(outputRoot, SafeName(project?.Name ?? "默认工程")) : outputRoot;
             Directory.CreateDirectory(engineeringFolder);
             var result = new PdfPublishResult();
-            var jobs = BuildJobs(sheets, project?.MergeByBuilding ?? true, project?.Name ?? "默认工程", engineeringFolder);
+            var jobs = BuildJobs(sheets, project, engineeringFolder);
             var completed = 0;
             var previousBackgroundPlot = Autodesk.AutoCAD.ApplicationServices.Core.Application.GetSystemVariable("BACKGROUNDPLOT");
             Autodesk.AutoCAD.ApplicationServices.Core.Application.SetSystemVariable("BACKGROUNDPLOT", 0);
@@ -92,6 +94,7 @@ namespace BatchPdfPublisher.Services
             {
                 foreach (var job in jobs)
                 {
+                    if (project?.OverwriteExistingPdf == true && File.Exists(job.Key)) File.Delete(job.Key);
                     PlotGroup(document, job.Value, job.Key, project?.PlotStyle, project?.MarginMode, sheet =>
                     {
                         completed++;
@@ -113,27 +116,73 @@ namespace BatchPdfPublisher.Services
             return result;
         }
 
-        private static List<KeyValuePair<string, List<SheetItem>>> BuildJobs(List<SheetItem> sheets, bool mergeByBuilding, string projectName, string outputRoot)
+        public PdfPublishResult PublishMerged(Document document, IEnumerable<SheetItem> sourceSheets, string requestedOutputPath,
+            string defaultPlotStyle, string marginMode, bool overwrite, Action<PdfPublishProgress> progress = null)
+        {
+            if (document == null || document.Database == null) throw new InvalidOperationException("没有打开的图纸。");
+            var sheets = sourceSheets?.Where(x => x != null).OrderBy(PublishPriority).ThenBy(x => x.Order).ToList() ?? new List<SheetItem>();
+            if (sheets.Count == 0) throw new InvalidOperationException("尚未框选有效的已登记图框。");
+            if (string.IsNullOrWhiteSpace(requestedOutputPath)) throw new InvalidOperationException("请设置 PDF 保存位置。");
+            if (PlotFactory.ProcessPlotState != ProcessPlotState.NotPlotting)
+                throw new InvalidOperationException("AutoCAD 正在执行其他打印任务，请稍后再试。");
+
+            var folder = Path.GetDirectoryName(requestedOutputPath);
+            if (string.IsNullOrWhiteSpace(folder)) throw new InvalidOperationException("PDF 保存目录无效。");
+            Directory.CreateDirectory(folder);
+            var outputPath = overwrite ? requestedOutputPath : UniquePath(requestedOutputPath);
+            if (overwrite && File.Exists(outputPath)) File.Delete(outputPath);
+            var completed = 0;
+            var previousBackgroundPlot = Autodesk.AutoCAD.ApplicationServices.Core.Application.GetSystemVariable("BACKGROUNDPLOT");
+            Autodesk.AutoCAD.ApplicationServices.Core.Application.SetSystemVariable("BACKGROUNDPLOT", 0);
+            try
+            {
+                PlotGroup(document, sheets, outputPath, defaultPlotStyle, marginMode, sheet =>
+                {
+                    completed++;
+                    progress?.Invoke(new PdfPublishProgress
+                    {
+                        Current = completed,
+                        Total = sheets.Count,
+                        SheetLabel = string.Join(" · ", new[] { sheet.SheetNumber, sheet.SheetName }.Where(x => !string.IsNullOrWhiteSpace(x)))
+                    });
+                });
+            }
+            finally
+            {
+                try { Autodesk.AutoCAD.ApplicationServices.Core.Application.SetSystemVariable("BACKGROUNDPLOT", previousBackgroundPlot); } catch { }
+            }
+            var result = new PdfPublishResult { SheetCount = sheets.Count };
+            result.Files.Add(outputPath);
+            return result;
+        }
+
+        private static List<KeyValuePair<string, List<SheetItem>>> BuildJobs(List<SheetItem> sheets, ProjectProfile project, string outputRoot)
         {
             var jobs = new List<KeyValuePair<string, List<SheetItem>>>();
+            var mergeByBuilding = project?.MergeByBuilding ?? true;
+            var projectName = project?.Name ?? "默认工程";
             if (mergeByBuilding)
             {
                 foreach (var group in sheets.GroupBy(x => x.Building))
                 {
-                    var name = SafeName(projectName) + "_" + SafeName(group.Key) + ".pdf";
-                    jobs.Add(new KeyValuePair<string, List<SheetItem>>(UniquePath(Path.Combine(outputRoot, name)), group.OrderBy(PublishPriority).ThenBy(x => x.Order).ToList()));
+                    var parts = new List<string>();
+                    if (project?.IncludeProjectNameInFileName != false) parts.Add(SafeName(projectName));
+                    if (project?.IncludeBuildingNameInFileName != false) parts.Add(SafeName(group.Key));
+                    if (parts.Count == 0) parts.Add("图纸");
+                    var path = Path.Combine(outputRoot, string.Join("_", parts) + ".pdf");
+                    jobs.Add(new KeyValuePair<string, List<SheetItem>>(project?.OverwriteExistingPdf == true ? path : UniquePath(path), group.OrderBy(PublishPriority).ThenBy(x => x.Order).ToList()));
                 }
             }
             else
             {
                 foreach (var sheet in sheets)
                 {
-                    var name = string.Join("_", new[]
-                    {
-                        SafeName(projectName), SafeName(sheet.Building), sheet.Order.ToString("D3"),
-                        SafeName(sheet.SheetNumber), SafeName(sheet.SheetName)
-                    }.Where(x => !string.IsNullOrWhiteSpace(x))) + ".pdf";
-                    jobs.Add(new KeyValuePair<string, List<SheetItem>>(UniquePath(Path.Combine(outputRoot, name)), new List<SheetItem> { sheet }));
+                    var parts = new List<string>();
+                    if (project?.IncludeProjectNameInFileName != false) parts.Add(SafeName(projectName));
+                    if (project?.IncludeBuildingNameInFileName != false) parts.Add(SafeName(sheet.Building));
+                    parts.Add(sheet.Order.ToString("D3")); parts.Add(SafeName(sheet.SheetNumber)); parts.Add(SafeName(sheet.SheetName));
+                    var path = Path.Combine(outputRoot, string.Join("_", parts.Where(x => !string.IsNullOrWhiteSpace(x))) + ".pdf");
+                    jobs.Add(new KeyValuePair<string, List<SheetItem>>(project?.OverwriteExistingPdf == true ? path : UniquePath(path), new List<SheetItem> { sheet }));
                 }
             }
             return jobs;
@@ -165,19 +214,43 @@ namespace BatchPdfPublisher.Services
             if (sheet == null) throw new InvalidOperationException("图纸列表中存在空记录，请重新扫描当前图纸。");
             var label = string.Join(" · ", new[] { sheet.Building, sheet.SheetNumber, sheet.SheetName }.Where(x => !string.IsNullOrWhiteSpace(x)));
             var stage = "检查图框尺寸";
+            Database previousWorkingDatabase = null;
             try
             {
                 ValidateDeclaredFrameRatio(sheet);
+                // PlotInfoValidator requires the PlotInfo layout to belong to
+                // the active MDI document. This is especially important when
+                // one publish operation contains several DWG files.
+                if (!ReferenceEquals(Application.DocumentManager.MdiActiveDocument, document))
+                    Application.DocumentManager.MdiActiveDocument = document;
+                previousWorkingDatabase = HostApplicationServices.WorkingDatabase;
+                HostApplicationServices.WorkingDatabase = document.Database;
                 using (document.LockDocument())
-                using (var transaction = document.Database.TransactionManager.StartTransaction())
                 {
                     stage = "读取当前模型/布局";
-                    var currentSpace = transaction.GetObject(document.Database.CurrentSpaceId, OpenMode.ForRead) as BlockTableRecord;
-                    if (currentSpace == null || currentSpace.LayoutId.IsNull)
-                        throw new InvalidOperationException("无法取得当前模型空间或布局，请激活要发布的图纸后重试。");
-                    var layout = transaction.GetObject(currentSpace.LayoutId, OpenMode.ForRead) as Layout;
+                    var requestedLayout = string.Equals(sheet.SourceLayout, "模型空间", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(sheet.SourceLayout, "Model", StringComparison.OrdinalIgnoreCase) ? "Model" : sheet.SourceLayout;
+                    var layoutManager = LayoutManager.Current;
+                    using (var transaction = document.Database.TransactionManager.StartTransaction())
+                    {
+                    var layouts = transaction.GetObject(document.Database.LayoutDictionaryId, OpenMode.ForRead) as DBDictionary;
+                    if (layouts == null) throw new InvalidOperationException("无法读取当前图纸的布局字典。");
+                    ObjectId requestedLayoutId = ObjectId.Null;
+                    foreach (DBDictionaryEntry entry in layouts)
+                        if (string.Equals(entry.Key, requestedLayout, StringComparison.OrdinalIgnoreCase)) { requestedLayoutId = entry.Value; break; }
+                    if (requestedLayoutId.IsNull)
+                        throw new InvalidOperationException("图纸中找不到扫描记录对应的空间：" + requestedLayout);
+
+                    // Setting only CurrentLayout by name is not sufficient in an
+                    // MDI batch. SetCurrentLayoutId synchronizes the native layout
+                    // object used by PlotInfoValidator and prevents
+                    // eLayoutNotCurrent.
+                    layoutManager.SetCurrentLayoutId(requestedLayoutId);
+                    var currentLayoutId = layoutManager.GetLayoutId(layoutManager.CurrentLayout);
+                    var layout = transaction.GetObject(currentLayoutId, OpenMode.ForRead) as Layout;
                     if (layout == null)
                         throw new InvalidOperationException("当前空间没有有效的打印布局。");
+                    WriteDiagnosticState(document, sheet, requestedLayoutId, currentLayoutId, layout);
 
                     stage = "创建打印设置";
                     using (var settings = CreateSettings(layout, sheet, defaultPlotStyle, marginMode))
@@ -208,6 +281,7 @@ namespace BatchPdfPublisher.Services
                         }
                     }
                     transaction.Commit();
+                    }
                 }
             }
             catch (Exception exception)
@@ -216,6 +290,11 @@ namespace BatchPdfPublisher.Services
                 WriteDiagnostic(detail, exception);
                 throw new InvalidOperationException(detail, exception);
             }
+            finally
+            {
+                if (previousWorkingDatabase != null)
+                    try { HostApplicationServices.WorkingDatabase = previousWorkingDatabase; } catch { }
+            }
         }
 
         private static void WriteDiagnostic(string message, Exception exception)
@@ -223,6 +302,24 @@ namespace BatchPdfPublisher.Services
             try
             {
                 File.AppendAllText(DiagnosticLogPath, DateTime.Now.ToString("s") + " " + message + Environment.NewLine + exception + Environment.NewLine + Environment.NewLine);
+            }
+            catch { }
+        }
+
+        private static void WriteDiagnosticState(Document document, SheetItem sheet, ObjectId requestedLayoutId, ObjectId currentLayoutId, Layout layout)
+        {
+            try
+            {
+                File.AppendAllText(DiagnosticLogPath,
+                    DateTime.Now.ToString("s") + " 打印状态：DWG=" + document.Database.Filename
+                    + "；来源空间=" + sheet.SourceLayout
+                    + "；当前布局=" + layout.LayoutName
+                    + "；请求ID=" + requestedLayoutId.Handle
+                    + "；当前ID=" + currentLayoutId.Handle
+                    + "；WorkingDb匹配=" + (HostApplicationServices.WorkingDatabase != null
+                        && HostApplicationServices.WorkingDatabase.UnmanagedObject == document.Database.UnmanagedObject)
+                    + "；活动文档匹配=" + ReferenceEquals(Application.DocumentManager.MdiActiveDocument, document)
+                    + Environment.NewLine);
             }
             catch { }
         }
@@ -417,7 +514,8 @@ namespace BatchPdfPublisher.Services
             var note = sheet?.FrameNote ?? string.Empty;
             if (note.IndexOf("封面", StringComparison.OrdinalIgnoreCase) >= 0) return 0;
             if (note.IndexOf("目录", StringComparison.OrdinalIgnoreCase) >= 0) return 1;
-            return 2;
+            if (note.IndexOf("总平图", StringComparison.OrdinalIgnoreCase) >= 0 || (sheet?.SheetNumber ?? string.Empty).IndexOf("总平图", StringComparison.OrdinalIgnoreCase) >= 0) return 2;
+            return 3;
         }
 
         private static double ParseExtension(string value)

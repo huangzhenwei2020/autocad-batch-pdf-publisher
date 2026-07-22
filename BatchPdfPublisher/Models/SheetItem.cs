@@ -20,6 +20,8 @@ namespace BatchPdfPublisher.Models
         public string PrintScale { get; set; }
         public string PlotStyle { get; set; }
         public string SourceFile { get; set; }
+        public string SourceLayout { get; set; }
+        public string SourceFileName => string.IsNullOrWhiteSpace(SourceFile) ? string.Empty : System.IO.Path.GetFileName(SourceFile);
         public double MinX { get; set; }
         public double MinY { get; set; }
         public double MaxX { get; set; }

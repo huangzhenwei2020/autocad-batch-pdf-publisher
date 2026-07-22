@@ -41,12 +41,14 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="AssemblyInfo.cs" />
     <Compile Include="Commands.cs" />
-    <Compile Include="Models\FrameDefinition.cs" /><Compile Include="Models\ProjectProfile.cs" /><Compile Include="Models\SheetCatalogItem.cs" /><Compile Include="Models\SheetItem.cs" />
-    <Compile Include="Services\DrawingScanner.cs" /><Compile Include="Services\FrameSizeDetector.cs" /><Compile Include="Services\FrameRegistrationService.cs" /><Compile Include="Services\PaperSizeCatalog.cs" /><Compile Include="Services\PrintRangePreviewService.cs" /><Compile Include="Services\PdfPublisherService.cs" /><Compile Include="Services\PublishPlanStore.cs" /><Compile Include="Services\RibbonService.cs" />
+    <Compile Include="Models\BuildingPublishItem.cs" /><Compile Include="Models\CadFileItem.cs" /><Compile Include="Models\FrameDefinition.cs" /><Compile Include="Models\ProjectProfile.cs" /><Compile Include="Models\SheetCatalogItem.cs" /><Compile Include="Models\SheetItem.cs" />
+    <Compile Include="Services\CadCompatibilityService.cs" /><Compile Include="Services\DrawingScanner.cs" /><Compile Include="Services\FrameSizeDetector.cs" /><Compile Include="Services\FrameRegistrationService.cs" /><Compile Include="Services\PaperSizeCatalog.cs" /><Compile Include="Services\PrintRangePreviewService.cs" /><Compile Include="Services\PdfPublisherService.cs" /><Compile Include="Services\PublishPlanStore.cs" /><Compile Include="Services\RibbonService.cs" />
     <Compile Include="ViewModels\PublisherViewModel.cs" />
     <Compile Include="Views\PublisherControl.xaml.cs"><DependentUpon>PublisherControl.xaml</DependentUpon></Compile>
     <Compile Include="Views\PublisherForm.cs" />
+    <Compile Include="Views\CurrentSelectionPublishForm.cs" />
     <Compile Include="Views\FrameRegistrationWindow.xaml.cs"><DependentUpon>FrameRegistrationWindow.xaml</DependentUpon></Compile>
     <Page Include="Views\PublisherControl.xaml" />
     <Page Include="Views\FrameRegistrationWindow.xaml" />
