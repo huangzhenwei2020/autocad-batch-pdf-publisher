@@ -14,7 +14,7 @@ namespace BatchPdfPublisher.Services
         private readonly List<Entity> _drawables = new List<Entity>();
         private readonly IntegerCollection _viewports = new IntegerCollection();
 
-        public void Show(Document document, IEnumerable<SheetItem> sheets, SheetItem selectedSheet)
+        public void Show(Document document, IEnumerable<SheetItem> sheets, SheetItem selectedSheet, SheetItem errorSheet = null)
         {
             Clear();
             if (document == null || selectedSheet == null) return;
@@ -24,6 +24,7 @@ namespace BatchPdfPublisher.Services
                 foreach (var sheet in sheets.OrderBy(x => x.Order))
                 {
                     var isSelected = ReferenceEquals(sheet, selectedSheet);
+                    var isError = ReferenceEquals(sheet, errorSheet);
                     var width = Math.Abs(sheet.MaxX - sheet.MinX);
                     var height = Math.Abs(sheet.MaxY - sheet.MinY);
                     if (!IsFinite(sheet.MinX) || !IsFinite(sheet.MinY) || !IsFinite(sheet.MaxX) || !IsFinite(sheet.MaxY) ||
@@ -32,8 +33,8 @@ namespace BatchPdfPublisher.Services
                     var rectangle = new Autodesk.AutoCAD.DatabaseServices.Polyline(4)
                     {
                         Closed = true,
-                        ColorIndex = isSelected ? 1 : 2,
-                        LineWeight = LineWeight.LineWeight050
+                        ColorIndex = isError ? 1 : isSelected ? 2 : 3,
+                        LineWeight = isError ? LineWeight.LineWeight100 : LineWeight.LineWeight050
                     };
                     rectangle.AddVertexAt(0, new Point2d(sheet.MinX, sheet.MinY), 0, 0, 0);
                     rectangle.AddVertexAt(1, new Point2d(sheet.MaxX, sheet.MinY), 0, 0, 0);
@@ -43,24 +44,24 @@ namespace BatchPdfPublisher.Services
 
                     var firstDiagonal = new Line(new Point3d(sheet.MinX, sheet.MinY, 0), new Point3d(sheet.MaxX, sheet.MaxY, 0))
                     {
-                        ColorIndex = isSelected ? 1 : 2,
-                        LineWeight = LineWeight.LineWeight050
+                        ColorIndex = isError ? 1 : isSelected ? 2 : 3,
+                        LineWeight = isError ? LineWeight.LineWeight100 : LineWeight.LineWeight050
                     };
                     var secondDiagonal = new Line(new Point3d(sheet.MinX, sheet.MaxY, 0), new Point3d(sheet.MaxX, sheet.MinY, 0))
                     {
-                        ColorIndex = isSelected ? 1 : 2,
-                        LineWeight = LineWeight.LineWeight050
+                        ColorIndex = isError ? 1 : isSelected ? 2 : 3,
+                        LineWeight = isError ? LineWeight.LineWeight100 : LineWeight.LineWeight050
                     };
                     Add(firstDiagonal);
                     Add(secondDiagonal);
 
                     var label = new MText
                     {
-                        Contents = sheet.Order.ToString(),
+                        Contents = isError ? "错误\\P" + sheet.Order : sheet.Order.ToString(),
                         Location = new Point3d((sheet.MinX + sheet.MaxX) / 2d, (sheet.MinY + sheet.MaxY) / 2d, 0),
                         Attachment = AttachmentPoint.MiddleCenter,
                         TextHeight = Math.Max(1d, Math.Min(width, height) * 0.62d),
-                        ColorIndex = isSelected ? 1 : 2,
+                        ColorIndex = isError ? 1 : isSelected ? 2 : 3,
                         BackgroundFill = false,
                         UseBackgroundColor = false
                     };

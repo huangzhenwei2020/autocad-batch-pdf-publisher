@@ -33,6 +33,7 @@ namespace BatchPdfPublisher.ViewModels
         private int _publishProgressValue;
         private int _publishProgressMaximum = 1;
         private bool _isPublishing;
+        private SheetItem _previewErrorSheet;
         private bool _loadingProject;
 
         public PublisherViewModel()
@@ -353,7 +354,7 @@ namespace BatchPdfPublisher.ViewModels
             try
             {
                 _preview.Show(Application.DocumentManager.MdiActiveDocument,
-                    Sheets.Where(x => string.Equals(x.Building, SelectedBuilding, StringComparison.Ordinal)), SelectedSheet);
+                    Sheets.Where(x => string.Equals(x.Building, SelectedBuilding, StringComparison.Ordinal)), SelectedSheet, _previewErrorSheet);
             }
             catch (Autodesk.AutoCAD.Runtime.Exception)
             {
@@ -400,6 +401,22 @@ namespace BatchPdfPublisher.ViewModels
             PublishProgressMaximum = Math.Max(Sheets.Count, 1);
             try
             {
+                var validationIssues = _publisher.ValidateAndNormalizeSheets(Sheets);
+                OnPropertyChanged(nameof(Sheets));
+                if (validationIssues.Count > 0)
+                {
+                    var issue = validationIssues[0];
+                    _previewErrorSheet = issue.Sheet;
+                    SelectedBuilding = issue.Sheet.Building;
+                    SelectedSheet = issue.Sheet;
+                    if (!PreviewEnabled) PreviewEnabled = true;
+                    else UpdatePreview();
+                    SaveCurrentProject();
+                    Status = $"发布前检查发现 {validationIssues.Count} 个图框问题。第一个：{issue.Sheet.SheetNumber} {issue.Sheet.SheetName}。{issue.Message}";
+                    Application.ShowAlertDialog(Status);
+                    return;
+                }
+                _previewErrorSheet = null;
                 _preview.Clear();
                 SaveCurrentProject();
                 Status = $"正在生成 PDF：0 / {PublishProgressMaximum}";

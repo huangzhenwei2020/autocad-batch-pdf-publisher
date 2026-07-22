@@ -257,6 +257,14 @@ namespace BatchPdfPublisher.Views
         private void ViewModelPropertyChanged(object sender, PropertyChangedEventArgs e)
         {
             if (e.PropertyName == "Status") _status.Text = _viewModel.Status;
+            if (e.PropertyName == "Sheets") RefreshSheets();
+            if (e.PropertyName == "SelectedBuilding")
+            {
+                _refreshing = true;
+                try { _buildings.SelectedItem = _viewModel.SelectedBuilding; RefreshSheetsCore(); }
+                finally { _refreshing = false; }
+            }
+            if (e.PropertyName == "SelectedSheet") RefreshSheets();
             if (e.PropertyName == "PublishProgressValue" || e.PropertyName == "PublishProgressMaximum" || e.PropertyName == "IsPublishing") RefreshPublishProgress();
         }
 

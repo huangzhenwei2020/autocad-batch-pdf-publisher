@@ -25,9 +25,52 @@ namespace BatchPdfPublisher.Services
         public string SheetLabel { get; set; }
     }
 
+    public sealed class SheetValidationIssue
+    {
+        public SheetItem Sheet { get; set; }
+        public string Message { get; set; }
+    }
+
     public sealed class PdfPublisherService
     {
         private static readonly string DiagnosticLogPath = Path.Combine(Path.GetTempPath(), "BatchPdfPublisher.publish.log");
+
+        public List<SheetValidationIssue> ValidateAndNormalizeSheets(IEnumerable<SheetItem> sourceSheets)
+        {
+            var issues = new List<SheetValidationIssue>();
+            foreach (var sheet in sourceSheets?.Where(x => x != null) ?? Enumerable.Empty<SheetItem>())
+            {
+                var width = Math.Abs(sheet.MaxX - sheet.MinX);
+                var height = Math.Abs(sheet.MaxY - sheet.MinY);
+                if (width < 0.0001d || height < 0.0001d || double.IsNaN(width) || double.IsNaN(height) || double.IsInfinity(width) || double.IsInfinity(height))
+                {
+                    issues.Add(new SheetValidationIssue { Sheet = sheet, Message = "图框范围无效。建议删除该条目后重新扫描，或重新登记这个图块。" });
+                    continue;
+                }
+
+                var target = TargetPaperSize(sheet);
+                var expected = Math.Max(target[0], target[1]) / Math.Min(target[0], target[1]);
+                var actual = Math.Max(width, height) / Math.Min(width, height);
+                if (Math.Abs(actual - expected) / expected <= .02d)
+                {
+                    // The ratio is valid; derive orientation from the geometry
+                    // so a frame rotated by 90 degrees needs no manual edit.
+                    sheet.PaperOrientation = width >= height ? "横向" : "纵向";
+                    continue;
+                }
+
+                var guess = FrameSizeDetector.Guess(new Extents3d(
+                    new Point3d(sheet.MinX, sheet.MinY, 0d),
+                    new Point3d(sheet.MaxX, sheet.MaxY, 0d)), sheet.PrintScale);
+                var suggestedFrame = guess.PaperSize + (string.IsNullOrWhiteSpace(guess.Extension) ? string.Empty : "+" + guess.Extension);
+                issues.Add(new SheetValidationIssue
+                {
+                    Sheet = sheet,
+                    Message = $"实际长宽比 {actual:0.###} 与登记的 {sheet.FrameDisplay}（{expected:0.###}）不一致。建议把图框规格改为 {suggestedFrame}、方向改为{guess.PaperOrientation}、打印比例检查为 {guess.PrintScale}；如果建议不对，请双击对应图框登记修改纸张或加长倍数。"
+                });
+            }
+            return issues;
+        }
 
         public PdfPublishResult Publish(Document document, IEnumerable<SheetItem> sourceSheets, ProjectProfile project, Action<PdfPublishProgress> progress = null)
         {
