@@ -21,6 +21,7 @@ namespace BatchPdfPublisher.Views
         private readonly PublisherViewModel _viewModel = new PublisherViewModel();
         private readonly ComboBox _projects = new ComboBox();
         private readonly TextBox _newProjectName = new TextBox();
+        private readonly Label _projectSummary = new Label();
         private readonly ListBox _buildings = new ListBox();
         private readonly CheckedListBox _cadFiles = new CheckedListBox();
         private readonly ListBox _frames = new ListBox();
@@ -37,7 +38,9 @@ namespace BatchPdfPublisher.Views
         private readonly CheckBox _mergeByBuilding = new CheckBox();
         private readonly CheckBox _previewEnabled = new CheckBox();
         private readonly Label _status = new Label();
+        private readonly Label _sheetCountText = new Label();
         private readonly ProgressBar _publishProgress = new ProgressBar();
+        private readonly Panel _progressTrack = new Panel();
         private readonly Label _publishProgressText = new Label();
         private readonly ToolTip _toolTip = new ToolTip();
         private bool _refreshing;
@@ -45,7 +48,7 @@ namespace BatchPdfPublisher.Views
 
         public PublisherForm()
         {
-            Text = "批量 PDF 发布  v0.6.5";
+            Text = "批量 PDF 发布  v0.6.6";
             Width = 1240;
             Height = 760;
             MinimumSize = new System.Drawing.Size(840, 540);
@@ -63,29 +66,32 @@ namespace BatchPdfPublisher.Views
         {
             BackColor = System.Drawing.Color.FromArgb(242, 245, 249);
             var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(0), RowCount = 4, ColumnCount = 1 };
+            // The native window title bar is the app title.  The approved
+            // design keeps the project actions in a white row directly below
+            // it; the internal decorative header therefore remains collapsed.
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 64));
             Controls.Add(root);
 
-            var header = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Padding = Padding.Empty, BackColor = System.Drawing.Color.White };
+            var header = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Padding = Padding.Empty, BackColor = System.Drawing.Color.FromArgb(24, 49, 84) };
             header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            var heading = new Panel { Dock = DockStyle.Fill };
-            heading.Controls.Add(new Label { Text = "批量 PDF 发布", ForeColor = System.Drawing.Color.White, Font = new System.Drawing.Font(Font.FontFamily, 15F, System.Drawing.FontStyle.Bold), AutoSize = true, Location = new System.Drawing.Point(0, 8) });
+            var heading = new Panel { Dock = DockStyle.Fill, Padding = new Padding(24, 6, 0, 0) };
+            heading.Controls.Add(new Label { Text = "批量 PDF 发布", ForeColor = System.Drawing.Color.White, Font = new System.Drawing.Font(Font.FontFamily, 17F, System.Drawing.FontStyle.Bold), AutoSize = true, Location = new System.Drawing.Point(24, 5) });
+            heading.Controls.Add(new Label { Text = "图框登记 · 自动排序 · PDF 预览", ForeColor = System.Drawing.Color.FromArgb(194, 211, 233), Font = new System.Drawing.Font(Font.FontFamily, 9F), AutoSize = true, Location = new System.Drawing.Point(26, 32) });
             header.Controls.Add(heading, 0, 0);
-            var headerActions = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = false, FlowDirection = FlowDirection.LeftToRight, Padding = new Padding(0, 6, 0, 0) };
+            var headerActions = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = false, FlowDirection = FlowDirection.LeftToRight, Padding = new Padding(0, 10, 14, 0), BackColor = System.Drawing.Color.FromArgb(24, 49, 84) };
+            headerActions.Controls.Add(AccentButton("扫描当前图纸", () => { _viewModel.ScanCommand.Execute(null); RefreshAll(); }));
+            headerActions.Controls.Add(AccentButton("发布 PDF", PublishPdf));
             header.Controls.Add(headerActions, 1, 0);
             root.Controls.Add(header, 0, 0);
 
-            var projectBar = new FlowLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(18, 9, 18, 7), BackColor = System.Drawing.Color.White, WrapContents = false };
-            projectBar.Controls.Add(new Label { Text = "工程名称", AutoSize = true, Font = new System.Drawing.Font(Font, System.Drawing.FontStyle.Bold), Margin = new Padding(2, 7, 10, 0) });
-            _projects.Width = 190; _projects.DropDownStyle = ComboBoxStyle.DropDownList;
-            _newProjectName.Width = 160; _newProjectName.Margin = new Padding(14, 3, 4, 3);
-            projectBar.Controls.Add(_projects); projectBar.Controls.Add(_newProjectName);
-            projectBar.Controls.Add(Button("新建工程", CreateProject));
-            projectBar.Controls.Add(Button("扫描设置", ConfigureScanScope));
-            projectBar.Controls.Add(Button("保存工程参数", () => _viewModel.SaveProjectCommand.Execute(null)));
+            var projectBar = new FlowLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(20, 6, 18, 5), BackColor = System.Drawing.Color.White, WrapContents = false };
+            projectBar.Controls.Add(new Label { Text = "当前项目：", AutoSize = true, Font = new System.Drawing.Font(Font, System.Drawing.FontStyle.Bold), Margin = new Padding(0, 8, 8, 0) });
+            _projects.Width = 270; _projects.DropDownStyle = ComboBoxStyle.DropDownList; _projects.Margin = new Padding(0, 1, 10, 0);
+            projectBar.Controls.Add(_projects);
+            var projectManagerButton = ProjectManagerButton(); projectManagerButton.Margin = new Padding(0, 1, 0, 0); projectBar.Controls.Add(projectManagerButton);
             root.Controls.Add(projectBar, 0, 1);
 
             var body = new Panel { Dock = DockStyle.Fill, Padding = new Padding(14, 12, 14, 10) };
@@ -111,57 +117,100 @@ namespace BatchPdfPublisher.Views
             };
             leftSplitter.Panel2.Controls.Add(rightSplitter);
 
-            var left = Card(10, new Padding(12)); left.Margin = new Padding(0, 0, 10, 0);
-            left.RowStyles.Add(new RowStyle(SizeType.AutoSize)); left.RowStyles.Add(new RowStyle(SizeType.Percent, 34)); left.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            left.RowStyles.Add(new RowStyle(SizeType.AutoSize)); left.RowStyles.Add(new RowStyle(SizeType.Percent, 21));
-            left.RowStyles.Add(new RowStyle(SizeType.AutoSize)); left.RowStyles.Add(new RowStyle(SizeType.Percent, 45));
-            left.RowStyles.Add(new RowStyle(SizeType.AutoSize)); left.RowStyles.Add(new RowStyle(SizeType.AutoSize)); left.RowStyles.Add(new RowStyle(SizeType.Absolute, 1));
-            left.Controls.Add(SectionLabel("工程 CAD 文件（双击打开）"), 0, 0); _cadFiles.Dock = DockStyle.Fill; _cadFiles.CheckOnClick = true; _cadFiles.HorizontalScrollbar = true; left.Controls.Add(_cadFiles, 0, 1);
-            var cadButtons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true };
-            cadButtons.Controls.Add(Button("添加", ChooseCadFiles)); cadButtons.Controls.Add(Button("移除", RemoveCadFile));
-            cadButtons.Controls.Add(AccentButton("扫描当前", () => { _viewModel.ScanCommand.Execute(null); RefreshAll(); }));
-            cadButtons.Controls.Add(AccentButton("扫描所选", ScanCheckedCadFiles));
-            cadButtons.Controls.Add(Button("框选发布当前文件", OpenCurrentSelectionPublisher)); left.Controls.Add(cadButtons, 0, 2);
-            left.Controls.Add(SectionLabel("子项目名称"), 0, 3); _buildings.Dock = DockStyle.Fill; left.Controls.Add(_buildings, 0, 4);
-            var frameToggle = new CheckBox { Text = "图框登记（展开后可修改）", AutoSize = true, Font = new System.Drawing.Font(Font, System.Drawing.FontStyle.Bold), ForeColor = System.Drawing.Color.FromArgb(25, 45, 78), Margin = new Padding(3, 6, 3, 3) };
-            left.Controls.Add(frameToggle, 0, 5); _frames.Dock = DockStyle.Fill; _frames.HorizontalScrollbar = true; _frames.Visible = false; left.Controls.Add(_frames, 0, 6);
-            var frameButtons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true };
-            frameButtons.Controls.Add(AccentButton("拾取并登记", () => _viewModel.RegisterFrameCommand.Execute(null)));
-            frameButtons.Controls.Add(Button("修改", EditFrame)); frameButtons.Controls.Add(Button("删除", RemoveFrame));
-            frameButtons.Visible = false;
-            left.Controls.Add(frameButtons, 0, 7);
-            var saveFrames = Button("保存当前图框库", () => _viewModel.SaveFrameLibraryCommand.Execute(null)); saveFrames.Visible = false; left.Controls.Add(saveFrames, 0, 8);
-            left.RowStyles[6].SizeType = SizeType.Absolute; left.RowStyles[6].Height = 0; left.RowStyles[7].SizeType = SizeType.Absolute; left.RowStyles[7].Height = 0; left.RowStyles[8].SizeType = SizeType.Absolute; left.RowStyles[8].Height = 0;
-            frameToggle.CheckedChanged += (s, e) => { _frames.Visible = frameToggle.Checked; frameButtons.Visible = frameToggle.Checked; saveFrames.Visible = frameToggle.Checked; left.RowStyles[6].Height = frameToggle.Checked ? 150 : 0; left.RowStyles[7].Height = frameToggle.Checked ? 36 : 0; left.RowStyles[8].Height = frameToggle.Checked ? 36 : 0; };
-            left.Margin = Padding.Empty;
-            leftSplitter.Panel1.Controls.Add(left);
+            // The left rail has three independently resizable sections.  The
+            // lower splitter defaults to the project/building list being the
+            // largest, while CAD files and frame definitions remain usable.
+            var cadBuildingSplit = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, SplitterWidth = 32, IsSplitterFixed = false, FixedPanel = FixedPanel.None };
+            var buildingFrameSplit = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, SplitterWidth = 32, IsSplitterFixed = false, FixedPanel = FixedPanel.None };
+            AddHeightDragIndicator(cadBuildingSplit);
+            AddHeightDragIndicator(buildingFrameSplit);
+            cadBuildingSplit.Panel2.Controls.Add(buildingFrameSplit);
 
-            var center = Card(3, new Padding(12)); center.Margin = new Padding(0, 0, 10, 0);
+            var cadPane = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = Padding.Empty, RowCount = 3, ColumnCount = 1 };
+            cadPane.RowStyles.Add(new RowStyle(SizeType.AutoSize)); cadPane.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); cadPane.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            cadPane.Controls.Add(SectionHeader("工程 CAD 文件（双击打开）"), 0, 0);
+            _cadFiles.Dock = DockStyle.Fill; _cadFiles.Margin = new Padding(8, 8, 8, 4); _cadFiles.CheckOnClick = true; _cadFiles.HorizontalScrollbar = true; cadPane.Controls.Add(_cadFiles, 0, 1);
+            var cadButtons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true, Margin = new Padding(8, 0, 8, 6) };
+            cadButtons.Controls.Add(IconButton("添加", UiIcon.Plus, ChooseCadFiles)); cadButtons.Controls.Add(IconButton("移除", UiIcon.Remove, RemoveCadFile));
+            cadButtons.Controls.Add(IconAccentButton("扫描当前", UiIcon.Refresh, () => { _viewModel.ScanCommand.Execute(null); RefreshAll(); }));
+            cadButtons.Controls.Add(IconAccentButton("扫描所选", UiIcon.List, ScanCheckedCadFiles));
+            cadButtons.Controls.Add(IconButton("框选发布当前文件", UiIcon.Select, OpenCurrentSelectionPublisher)); cadPane.Controls.Add(cadButtons, 0, 2);
+            cadBuildingSplit.Panel1.Controls.Add(cadPane);
+
+            var buildingPane = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = Padding.Empty, RowCount = 3, ColumnCount = 1 };
+            buildingPane.RowStyles.Add(new RowStyle(SizeType.AutoSize)); buildingPane.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); buildingPane.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            buildingPane.Controls.Add(SectionHeader("子项目名称"), 0, 0); _buildings.Dock = DockStyle.Fill; _buildings.Margin = new Padding(8, 8, 8, 4); buildingPane.Controls.Add(_buildings, 0, 1);
+            var frameToggle = new CheckBox
+            {
+                Text = "▶ 图框登记（点击展开后可修改）",
+                AutoSize = false,
+                Dock = DockStyle.Fill,
+                Height = 40,
+                TextAlign = System.Drawing.ContentAlignment.MiddleLeft,
+                Padding = new Padding(10, 0, 6, 0),
+                CheckAlign = System.Drawing.ContentAlignment.MiddleLeft,
+                Font = new System.Drawing.Font(Font.FontFamily, 9F, System.Drawing.FontStyle.Bold),
+                AutoEllipsis = true,
+                ForeColor = System.Drawing.Color.White,
+                BackColor = System.Drawing.Color.FromArgb(12, 42, 78),
+                Margin = Padding.Empty
+            };
+            ApplyRoundedRegion(frameToggle, 4);
+            buildingPane.Controls.Add(frameToggle, 0, 2);
+            buildingFrameSplit.Panel1.Controls.Add(buildingPane);
+
+            var framePane = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = Padding.Empty, RowCount = 4, ColumnCount = 1 };
+            framePane.RowStyles.Add(new RowStyle(SizeType.AutoSize)); framePane.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); framePane.RowStyles.Add(new RowStyle(SizeType.AutoSize)); framePane.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            framePane.RowStyles[0] = new RowStyle(SizeType.Absolute, 0);
+            _frames.Dock = DockStyle.Fill; _frames.Margin = new Padding(8, 8, 8, 4); _frames.HorizontalScrollbar = true; framePane.Controls.Add(_frames, 0, 1);
+            var frameButtons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true, Margin = new Padding(8, 0, 8, 4) };
+            frameButtons.Controls.Add(AccentButton("拾取并登记", () => _viewModel.RegisterFrameCommand.Execute(null)));
+            frameButtons.Controls.Add(Button("修改", EditFrame)); frameButtons.Controls.Add(Button("删除", RemoveFrame)); framePane.Controls.Add(frameButtons, 0, 2);
+            framePane.Controls.Add(Button("保存当前图框库", () => _viewModel.SaveFrameLibraryCommand.Execute(null)), 0, 3);
+            buildingFrameSplit.Panel2.Controls.Add(framePane);
+            buildingFrameSplit.Panel2Collapsed = true;
+            frameToggle.CheckedChanged += (sender, args) =>
+            {
+                buildingFrameSplit.Panel2Collapsed = !frameToggle.Checked;
+                frameToggle.Text = frameToggle.Checked ? "▼ 图框登记（点击折叠）" : "▶ 图框登记（点击展开后可修改）";
+                if (frameToggle.Checked && buildingFrameSplit.Height > 360)
+                {
+                    var preferredBuildingHeight = Math.Max(buildingFrameSplit.Panel1MinSize, buildingFrameSplit.Height * 3 / 5);
+                    buildingFrameSplit.SplitterDistance = Math.Min(preferredBuildingHeight, buildingFrameSplit.Height - buildingFrameSplit.Panel2MinSize - buildingFrameSplit.SplitterWidth);
+                }
+            };
+            var leftRail = new Panel { Dock = DockStyle.Fill, Padding = new Padding(12, 12, 12, 0), BorderStyle = BorderStyle.FixedSingle, BackColor = System.Drawing.Color.White };
+            ApplyRoundedRegion(leftRail, 5);
+            leftRail.Controls.Add(cadBuildingSplit);
+            leftSplitter.Panel1.Controls.Add(leftRail);
+
+            var center = Card(3, new Padding(12, 12, 12, 0)); center.Margin = new Padding(0, 0, 10, 0);
             center.RowStyles.Add(new RowStyle(SizeType.AutoSize)); center.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); center.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            var sheetHeader = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = false };
-            sheetHeader.Controls.Add(SectionLabel("图纸列表"));
-            _previewEnabled.Text = "显示当前子项目预览"; _previewEnabled.AutoSize = true; _previewEnabled.Margin = new Padding(16, 6, 8, 3);
+            var sheetHeader = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = false, Height = 44, WrapContents = false, BackColor = System.Drawing.Color.FromArgb(12, 42, 78), Padding = Padding.Empty };
+            var sheetTitle = SectionHeader("图纸列表"); sheetTitle.Width = 220; sheetTitle.Height = 44; sheetHeader.Controls.Add(sheetTitle);
+            _previewEnabled.Text = "显示当前子项目预览"; _previewEnabled.AutoSize = true; _previewEnabled.ForeColor = System.Drawing.Color.White; _previewEnabled.Margin = new Padding(16, 8, 8, 3);
             sheetHeader.Controls.Add(_previewEnabled);
-            sheetHeader.Controls.Add(Button("上移", () => { _viewModel.MoveUpCommand.Execute(null); RefreshSheets(); }));
-            sheetHeader.Controls.Add(Button("下移", () => { _viewModel.MoveDownCommand.Execute(null); RefreshSheets(); }));
+            sheetHeader.Controls.Add(IconButton("上移", UiIcon.Up, () => { _viewModel.MoveUpCommand.Execute(null); RefreshSheets(); }));
+            sheetHeader.Controls.Add(IconButton("下移", UiIcon.Down, () => { _viewModel.MoveDownCommand.Execute(null); RefreshSheets(); }));
             center.Controls.Add(sheetHeader, 0, 0);
             ConfigureGrid(); center.Controls.Add(_sheets, 0, 1);
             center.Margin = Padding.Empty;
             rightSplitter.Panel1.Controls.Add(center);
 
-            var right = Card(20, new Padding(14));
-            right.Controls.Add(SectionLabel("输出设置")); right.Controls.Add(Label("CAD 打印样式"));
+            var right = Card(20, new Padding(12, 12, 12, 0));
+            right.AutoScroll = true;
+            right.Controls.Add(SectionHeader("输出设置")); right.Controls.Add(Label("CAD 打印样式"));
             _plotStyle.DropDownStyle = ComboBoxStyle.DropDown; _plotStyle.Dock = DockStyle.Top;
             right.Controls.Add(_plotStyle);
             var plotButtons = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, WrapContents = true };
-            plotButtons.Controls.Add(Button("刷新 CAD 样式", () => { _viewModel.RefreshPlotStylesCommand.Execute(null); RefreshPlotStyles(); }));
-            plotButtons.Controls.Add(Button("收藏当前样式", () => { _viewModel.SaveFavoritePlotStyleCommand.Execute(null); RefreshPlotStyles(); }));
+            plotButtons.Controls.Add(IconButton("刷新 CAD 样式", UiIcon.Refresh, () => { _viewModel.RefreshPlotStylesCommand.Execute(null); RefreshPlotStyles(); }));
+            plotButtons.Controls.Add(IconButton("收藏当前样式", UiIcon.Save, () => { _viewModel.SaveFavoritePlotStyleCommand.Execute(null); RefreshPlotStyles(); }));
             right.Controls.Add(plotButtons); right.Controls.Add(Label("白边 / 出血位（单位：mm）"));
             _marginMode.Items.AddRange(new object[] { "自动适配", "无白边（满幅）", "保留 3 mm 白边" });
             _marginMode.Dock = DockStyle.Top; right.Controls.Add(_marginMode); right.Controls.Add(Label("输出目录"));
-            var outputFolder = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top, WrapContents = false };
+            var outputFolder = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top, WrapContents = true };
             _outputDirectory.Width = 150; outputFolder.Controls.Add(_outputDirectory);
-            outputFolder.Controls.Add(Button("选择", ChooseOutputDirectory)); outputFolder.Controls.Add(Button("打开", OpenOutputDirectory));
+            outputFolder.Controls.Add(IconButton("选择", UiIcon.Folder, ChooseOutputDirectory)); outputFolder.Controls.Add(IconButton("打开", UiIcon.Open, OpenOutputDirectory));
             right.Controls.Add(outputFolder);
             _outputNextToCad.Text = "输出到各 CAD 文件同级目录"; _outputNextToCad.AutoSize = true; right.Controls.Add(_outputNextToCad);
             _actualOutputDirectories.AutoSize = true;
@@ -193,21 +242,29 @@ namespace BatchPdfPublisher.Views
             };
             Shown += (sender, args) =>
             {
-                leftSplitter.Panel1MinSize = 180;
-                leftSplitter.Panel2MinSize = Math.Min(480, Math.Max(180, leftSplitter.Width - 180 - leftSplitter.SplitterWidth));
-                leftSplitter.SplitterDistance = Math.Min(250, Math.Max(leftSplitter.Panel1MinSize, leftSplitter.Width / 4));
+                leftSplitter.Panel1MinSize = Math.Min(320, Math.Max(240, leftSplitter.Width - 470 - leftSplitter.SplitterWidth));
+                leftSplitter.Panel2MinSize = Math.Min(470, Math.Max(320, leftSplitter.Width - leftSplitter.Panel1MinSize - leftSplitter.SplitterWidth));
+                leftSplitter.SplitterDistance = Math.Min(330, Math.Max(leftSplitter.Panel1MinSize, leftSplitter.Width / 4));
+                // CAD file list keeps a practical default height; the project
+                // list receives all remaining height while frame registration
+                // is collapsed. Both dividers remain user-draggable.
+                cadBuildingSplit.Panel1MinSize = 220; cadBuildingSplit.Panel2MinSize = 180;
+                cadBuildingSplit.SplitterDistance = Math.Min(330, Math.Max(240, cadBuildingSplit.Height / 3));
+                buildingFrameSplit.Panel1MinSize = 150; buildingFrameSplit.Panel2MinSize = 180;
 
-                rightSplitter.Panel1MinSize = Math.Min(320, Math.Max(160, rightSplitter.Width - 190 - rightSplitter.SplitterWidth));
-                rightSplitter.Panel2MinSize = Math.Min(190, Math.Max(140, rightSplitter.Width - rightSplitter.Panel1MinSize - rightSplitter.SplitterWidth));
-                rightSplitter.SplitterDistance = Math.Max(rightSplitter.Panel1MinSize, rightSplitter.Width - 260 - rightSplitter.SplitterWidth);
+                rightSplitter.Panel1MinSize = Math.Min(420, Math.Max(180, rightSplitter.Width - 300 - rightSplitter.SplitterWidth));
+                rightSplitter.Panel2MinSize = Math.Min(300, Math.Max(210, rightSplitter.Width - rightSplitter.Panel1MinSize - rightSplitter.SplitterWidth));
+                rightSplitter.SplitterDistance = Math.Max(rightSplitter.Panel1MinSize, rightSplitter.Width - rightSplitter.Panel2MinSize - rightSplitter.SplitterWidth);
             };
 
-            var footer = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = System.Drawing.Color.White, Padding = new Padding(16, 6, 16, 4), ColumnCount = 4 };
-            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 180)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            _status.Dock = DockStyle.Fill; _status.ForeColor = System.Drawing.Color.FromArgb(65, 84, 110); footer.Controls.Add(_status, 0, 0);
-            _publishProgress.Dock = DockStyle.Fill; _publishProgress.Minimum = 0; _publishProgress.Maximum = 1; _publishProgress.Value = 0; _publishProgress.Style = ProgressBarStyle.Continuous; footer.Controls.Add(_publishProgress, 1, 0);
-            _publishProgressText.AutoSize = true; _publishProgressText.MinimumSize = new System.Drawing.Size(82, 0); _publishProgressText.Padding = new Padding(8, 0, 2, 0); _publishProgressText.Dock = DockStyle.Fill; _publishProgressText.TextAlign = System.Drawing.ContentAlignment.MiddleRight; _publishProgressText.ForeColor = System.Drawing.Color.FromArgb(65, 84, 110); _publishProgressText.Text = "0 / 0"; footer.Controls.Add(_publishProgressText, 2, 0);
-            footer.Controls.Add(AccentButton("发布 PDF", PublishPdf), 3, 0);
+            var footer = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = System.Drawing.Color.White, Padding = new Padding(16, 10, 16, 8), ColumnCount = 5 };
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 340)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 70)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 160));
+            _status.AutoSize = false; _status.AutoEllipsis = true; _status.Dock = DockStyle.Fill; _status.ForeColor = System.Drawing.Color.FromArgb(65, 84, 110); footer.Controls.Add(_status, 0, 0);
+            _sheetCountText.AutoSize = false; _sheetCountText.MinimumSize = new System.Drawing.Size(110, 0); _sheetCountText.Dock = DockStyle.Fill; _sheetCountText.TextAlign = System.Drawing.ContentAlignment.MiddleCenter; _sheetCountText.Margin = new Padding(4, 0, 4, 0); _sheetCountText.ForeColor = System.Drawing.Color.FromArgb(65, 84, 110); footer.Controls.Add(_sheetCountText, 1, 0);
+            _progressTrack.Dock = DockStyle.Fill; _progressTrack.Height = 22; _progressTrack.Margin = new Padding(0, 8, 0, 0); _progressTrack.BackColor = System.Drawing.Color.Transparent; ApplyRoundedRegion(_progressTrack, 8); _progressTrack.Paint += PaintProgressTrack; footer.Controls.Add(_progressTrack, 2, 0);
+            _publishProgress.Minimum = 0; _publishProgress.Maximum = 1; _publishProgress.Value = 0; _publishProgress.Style = ProgressBarStyle.Continuous;
+            _publishProgressText.AutoSize = true; _publishProgressText.MinimumSize = new System.Drawing.Size(82, 0); _publishProgressText.Padding = new Padding(8, 0, 2, 0); _publishProgressText.Dock = DockStyle.Fill; _publishProgressText.TextAlign = System.Drawing.ContentAlignment.MiddleRight; _publishProgressText.ForeColor = System.Drawing.Color.FromArgb(65, 84, 110); _publishProgressText.Text = "0 / 0"; footer.Controls.Add(_publishProgressText, 3, 0);
+            var footerPublish = IconAccentButton("发布 PDF", UiIcon.Publish, PublishPdf); footerPublish.MinimumSize = new System.Drawing.Size(150, 34); footer.Controls.Add(footerPublish, 4, 0);
             root.Controls.Add(footer, 0, 3);
         }
 
@@ -336,21 +393,53 @@ namespace BatchPdfPublisher.Views
                 finally { _refreshing = false; }
             }
             if (e.PropertyName == "SelectedSheet") RefreshSheets();
-            if (e.PropertyName == "PublishProgressValue" || e.PropertyName == "PublishProgressMaximum" || e.PropertyName == "IsPublishing") RefreshPublishProgress();
+            if (e.PropertyName == "PublishProgressValue" || e.PropertyName == "PublishProgressMaximum" || e.PropertyName == "IsPublishing" || e.PropertyName == "ScanProgressValue" || e.PropertyName == "ScanProgressMaximum" || e.PropertyName == "IsScanning") RefreshPublishProgress();
         }
 
         private void RefreshPublishProgress()
         {
             if (IsDisposed) return;
             if (InvokeRequired) { BeginInvoke(new Action(RefreshPublishProgress)); return; }
-            var maximum = Math.Max(_viewModel.PublishProgressMaximum, 1);
-            var value = Math.Min(Math.Max(_viewModel.PublishProgressValue, 0), maximum);
+            var maximum = _viewModel.IsScanning ? Math.Max(_viewModel.ScanProgressMaximum, 1) : Math.Max(Math.Max(_viewModel.PublishProgressMaximum, _viewModel.Sheets.Count), 1);
+            var value = _viewModel.IsScanning ? _viewModel.ScanProgressValue : _viewModel.PublishProgressValue;
+            value = Math.Min(Math.Max(value, 0), maximum);
             _publishProgress.Maximum = maximum;
             _publishProgress.Value = value;
-            _publishProgressText.Text = value + " / " + ( _viewModel.IsPublishing ? maximum : value == 0 ? 0 : maximum);
+            _publishProgressText.Text = value + " / " + maximum;
+            _sheetCountText.Text = "共 " + _viewModel.Sheets.Count + " 张图纸";
+            _progressTrack.Invalidate();
             _publishProgress.Refresh();
             _publishProgressText.Refresh();
             _status.Refresh();
+        }
+
+        private void PaintProgressTrack(object sender, PaintEventArgs args)
+        {
+            var bounds = new System.Drawing.Rectangle(0, 2, Math.Max(1, _progressTrack.Width - 1), Math.Max(12, _progressTrack.Height - 5));
+            var maximum = _viewModel.IsScanning ? Math.Max(_viewModel.ScanProgressMaximum, 1) : Math.Max(Math.Max(_viewModel.PublishProgressMaximum, _viewModel.Sheets.Count), 1);
+            var value = _viewModel.IsScanning ? _viewModel.ScanProgressValue : _viewModel.PublishProgressValue;
+            var ratio = Math.Max(0, Math.Min(1, value / (double)maximum));
+            using (var track = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(232, 236, 242)))
+            using (var fill = new System.Drawing.SolidBrush(_viewModel.IsScanning ? System.Drawing.Color.FromArgb(64, 139, 220) : System.Drawing.Color.FromArgb(40, 165, 72)))
+            using (var border = new System.Drawing.Pen(System.Drawing.Color.FromArgb(205, 213, 224)))
+            {
+                args.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                using (var path = RoundedRectangle(bounds, 8)) args.Graphics.FillPath(track, path);
+                if (ratio > 0) using (var path = RoundedRectangle(new System.Drawing.Rectangle(bounds.X, bounds.Y, Math.Max(1, (int)(bounds.Width * ratio)), bounds.Height), 8)) args.Graphics.FillPath(fill, path);
+                using (var path = RoundedRectangle(bounds, 8)) args.Graphics.DrawPath(border, path);
+            }
+        }
+
+        private static System.Drawing.Drawing2D.GraphicsPath RoundedRectangle(System.Drawing.Rectangle rectangle, int radius)
+        {
+            var path = new System.Drawing.Drawing2D.GraphicsPath();
+            var diameter = radius * 2;
+            path.AddArc(rectangle.X, rectangle.Y, diameter, diameter, 180, 90);
+            path.AddArc(rectangle.Right - diameter, rectangle.Y, diameter, diameter, 270, 90);
+            path.AddArc(rectangle.Right - diameter, rectangle.Bottom - diameter, diameter, diameter, 0, 90);
+            path.AddArc(rectangle.X, rectangle.Bottom - diameter, diameter, diameter, 90, 90);
+            path.CloseFigure();
+            return path;
         }
 
         private void RefreshAll()
@@ -360,6 +449,7 @@ namespace BatchPdfPublisher.Views
             {
                 _projects.DataSource = _viewModel.Projects.ToList(); _projects.DisplayMember = "Name"; _projects.SelectedItem = _viewModel.SelectedProject;
                 _newProjectName.Text = _viewModel.NewProjectName;
+                _projectSummary.Text = _viewModel.SelectedProject == null ? "未选择工程" : _viewModel.SelectedProject.Name;
                 RefreshFramesCore();
                 _buildings.DataSource = _viewModel.Buildings.ToList(); _buildings.SelectedItem = _viewModel.SelectedBuilding;
                 _cadFiles.Items.Clear();
@@ -375,6 +465,7 @@ namespace BatchPdfPublisher.Views
                 foreach (var item in _viewModel.PublishBuildings) _publishBuildings.Items.Add(item, item.IsSelected);
                 _previewEnabled.Checked = _viewModel.PreviewEnabled;
                 _status.Text = _viewModel.Status;
+                _sheetCountText.Text = "共 " + _viewModel.Sheets.Count + " 张图纸";
                 RefreshPublishProgress();
                 RefreshSheetsCore();
             }
@@ -432,6 +523,55 @@ namespace BatchPdfPublisher.Views
         private void CreateProject()
         {
             _viewModel.NewProjectName = _newProjectName.Text; _viewModel.NewProjectCommand.Execute(null); RefreshAll();
+        }
+
+        private Button ProjectManagerButton()
+        {
+            var button = new Button
+            {
+                Width = 38,
+                Height = 32,
+                Margin = new Padding(2, 2, 2, 2),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = System.Drawing.Color.White,
+                Image = DrawProjectManagerIcon(),
+                Cursor = Cursors.Hand
+            };
+            button.FlatAppearance.BorderColor = System.Drawing.Color.FromArgb(157, 181, 214);
+            ApplyRoundedRegion(button, 4);
+            _toolTip.SetToolTip(button, "项目管理：新建、删除、切换工程，扫描设置、保存参数和保存当前 CAD 到项目文件夹");
+            button.Click += (sender, args) => OpenProjectManager();
+            return button;
+        }
+
+        // Code-drawn folder + gear icon: crisp at the WinForms DPI scaling size
+        // and avoids an external bitmap dependency in the AutoCAD plug-in.
+        private static System.Drawing.Image DrawProjectManagerIcon()
+        {
+            var bitmap = new System.Drawing.Bitmap(22, 22);
+            using (var graphics = System.Drawing.Graphics.FromImage(bitmap))
+            using (var folder = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(36, 116, 210)))
+            using (var tab = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(89, 157, 232)))
+            using (var gear = new System.Drawing.Pen(System.Drawing.Color.FromArgb(23, 67, 122), 2f))
+            {
+                graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                graphics.FillRectangle(tab, 2, 4, 9, 5);
+                graphics.FillRectangle(folder, 2, 7, 15, 10);
+                graphics.DrawRectangle(gear, 2, 7, 15, 10);
+                graphics.DrawEllipse(gear, 13, 13, 7, 7);
+                graphics.DrawLine(gear, 16.5f, 11, 16.5f, 13);
+                graphics.DrawLine(gear, 16.5f, 20, 16.5f, 22);
+                graphics.DrawLine(gear, 11, 16.5f, 13, 16.5f);
+                graphics.DrawLine(gear, 20, 16.5f, 22, 16.5f);
+            }
+            return bitmap;
+        }
+
+        private void OpenProjectManager()
+        {
+            using (var dialog = new ProjectManagerForm(_viewModel, RefreshAll, ConfigureScanScope))
+                dialog.ShowDialog(this);
+            RefreshAll();
         }
 
         public void ScanDrawing()
@@ -591,6 +731,58 @@ namespace BatchPdfPublisher.Views
             return _sheets.CurrentRow == null ? null : _sheets.CurrentRow.DataBoundItem as SheetItem;
         }
 
+        private enum UiIcon { Plus, Remove, Refresh, List, Select, Gear, Save, Folder, Open, Up, Down, Publish }
+
+        private static Button IconButton(string text, UiIcon icon, Action action)
+        {
+            var button = Button(text, action);
+            button.Image = DrawUiIcon(icon, System.Drawing.Color.FromArgb(40, 115, 205));
+            button.ImageAlign = System.Drawing.ContentAlignment.MiddleLeft;
+            button.TextImageRelation = TextImageRelation.ImageBeforeText;
+            button.Padding = new Padding(7, 2, 7, 2);
+            return button;
+        }
+
+        private static Button IconAccentButton(string text, UiIcon icon, Action action)
+        {
+            var button = IconButton(text, icon, action);
+            button.BackColor = System.Drawing.Color.FromArgb(34, 116, 210);
+            button.ForeColor = System.Drawing.Color.White;
+            button.FlatAppearance.BorderColor = System.Drawing.Color.FromArgb(34, 116, 210);
+            button.Image = DrawUiIcon(icon, System.Drawing.Color.White);
+            return button;
+        }
+
+        private static System.Drawing.Image DrawUiIcon(UiIcon icon, System.Drawing.Color color)
+        {
+            var bitmap = new System.Drawing.Bitmap(16, 16);
+            using (var graphics = System.Drawing.Graphics.FromImage(bitmap))
+            using (var pen = new System.Drawing.Pen(color, 1.8F))
+            using (var brush = new System.Drawing.SolidBrush(color))
+            {
+                graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                switch (icon)
+                {
+                    case UiIcon.Plus: graphics.DrawLine(pen, 8, 3, 8, 13); graphics.DrawLine(pen, 3, 8, 13, 8); break;
+                    case UiIcon.Remove: graphics.DrawLine(pen, 3, 8, 13, 8); break;
+                    case UiIcon.Refresh: graphics.DrawArc(pen, 2, 2, 11, 11, 35, 285); graphics.FillPolygon(brush, new[] { new System.Drawing.Point(12, 2), new System.Drawing.Point(14, 2), new System.Drawing.Point(13, 5) }); break;
+                    case UiIcon.List:
+                        for (var row = 0; row < 3; row++) { graphics.FillRectangle(brush, 2, 3 + row * 5, 2, 2); graphics.DrawLine(pen, 6, 4 + row * 5, 14, 4 + row * 5); } break;
+                    case UiIcon.Select: graphics.DrawRectangle(pen, 3, 3, 10, 10); graphics.DrawLine(pen, 1, 8, 5, 8); graphics.DrawLine(pen, 11, 8, 15, 8); break;
+                    case UiIcon.Gear:
+                        graphics.DrawEllipse(pen, 4, 4, 8, 8); graphics.DrawEllipse(pen, 7, 7, 2, 2);
+                        for (var angle = 0; angle < 360; angle += 45) { var radians = angle * Math.PI / 180.0; var x1 = 8 + (int)(Math.Cos(radians) * 5); var y1 = 8 + (int)(Math.Sin(radians) * 5); var x2 = 8 + (int)(Math.Cos(radians) * 7); var y2 = 8 + (int)(Math.Sin(radians) * 7); graphics.DrawLine(pen, x1, y1, x2, y2); } break;
+                    case UiIcon.Save: graphics.DrawRectangle(pen, 2, 2, 12, 12); graphics.DrawRectangle(pen, 5, 2, 6, 4); graphics.DrawRectangle(pen, 5, 9, 6, 5); break;
+                    case UiIcon.Folder: graphics.DrawLine(pen, 2, 5, 6, 5); graphics.DrawLine(pen, 6, 5, 8, 3); graphics.DrawRectangle(pen, 2, 5, 12, 8); break;
+                    case UiIcon.Open: graphics.DrawRectangle(pen, 3, 3, 10, 10); graphics.DrawLine(pen, 8, 8, 14, 2); graphics.DrawLine(pen, 10, 2, 14, 2); graphics.DrawLine(pen, 14, 2, 14, 6); break;
+                    case UiIcon.Up: graphics.DrawLine(pen, 8, 13, 8, 3); graphics.DrawLine(pen, 4, 7, 8, 3); graphics.DrawLine(pen, 12, 7, 8, 3); break;
+                    case UiIcon.Down: graphics.DrawLine(pen, 8, 3, 8, 13); graphics.DrawLine(pen, 4, 9, 8, 13); graphics.DrawLine(pen, 12, 9, 8, 13); break;
+                    case UiIcon.Publish: graphics.DrawRectangle(pen, 3, 2, 10, 12); graphics.DrawLine(pen, 6, 5, 10, 5); graphics.DrawLine(pen, 6, 8, 10, 8); graphics.DrawLine(pen, 6, 11, 9, 11); break;
+                }
+            }
+            return bitmap;
+        }
+
         private static Button Button(string text, Action action)
         {
             var button = new Button
@@ -599,13 +791,14 @@ namespace BatchPdfPublisher.Views
                 AutoSize = true,
                 Margin = new Padding(3),
                 Padding = new Padding(5, 2, 5, 2),
-                MinimumSize = new System.Drawing.Size(0, 26),
+                MinimumSize = new System.Drawing.Size(0, 32),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = System.Drawing.Color.White,
                 ForeColor = System.Drawing.Color.FromArgb(31, 48, 74),
                 Cursor = Cursors.Hand
             };
             button.FlatAppearance.BorderColor = System.Drawing.Color.FromArgb(190, 201, 216);
+            ApplyRoundedRegion(button, 4);
             if (action != null) button.Click += (s, e) => action();
             return button;
         }
@@ -619,9 +812,30 @@ namespace BatchPdfPublisher.Views
             return button;
         }
 
+        private static void AddHeightDragIndicator(SplitContainer splitter)
+        {
+            splitter.BackColor = System.Drawing.Color.FromArgb(248, 250, 253);
+            splitter.Paint += (sender, args) =>
+            {
+                var y = splitter.Panel1.Height;
+                using (var pen = new System.Drawing.Pen(System.Drawing.Color.FromArgb(180, 195, 214)))
+                using (var brush = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(56, 105, 168)))
+                using (var background = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(248, 250, 253)))
+                using (var font = new System.Drawing.Font("Microsoft YaHei UI", 8F))
+                {
+                    args.Graphics.DrawLine(pen, 8, y + splitter.SplitterWidth / 2, splitter.Width - 8, y + splitter.SplitterWidth / 2);
+                    var caption = "↕  拖动调整高度  ↕";
+                    var size = args.Graphics.MeasureString(caption, font);
+                    var x = Math.Max(8, (splitter.Width - size.Width) / 2);
+                    args.Graphics.FillRectangle(background, x - 4, y + 5, size.Width + 8, size.Height + 2);
+                    args.Graphics.DrawString(caption, font, brush, x, y + 5);
+                }
+            };
+        }
+
         private static TableLayoutPanel Card(int rows, Padding padding)
         {
-            return new TableLayoutPanel
+            var card = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 RowCount = rows,
@@ -631,6 +845,8 @@ namespace BatchPdfPublisher.Views
                 CellBorderStyle = TableLayoutPanelCellBorderStyle.None
                 , BorderStyle = BorderStyle.FixedSingle
             };
+            ApplyRoundedRegion(card, 5);
+            return card;
         }
 
         private static Label Label(string text)
@@ -648,6 +864,40 @@ namespace BatchPdfPublisher.Views
                 ForeColor = System.Drawing.Color.FromArgb(25, 45, 78),
                 Margin = new Padding(3, 3, 3, 8)
             };
+        }
+
+        private static Label SectionHeader(string text)
+        {
+            var label = new Label
+            {
+                Text = text,
+                AutoSize = false,
+                Height = 44,
+                Width = 260,
+                Dock = DockStyle.Fill,
+                TextAlign = System.Drawing.ContentAlignment.MiddleLeft,
+                Padding = new Padding(10, 0, 8, 0),
+                Font = new System.Drawing.Font("Microsoft YaHei UI", 10F, System.Drawing.FontStyle.Bold),
+                ForeColor = System.Drawing.Color.White,
+                BackColor = System.Drawing.Color.FromArgb(12, 42, 78),
+                Margin = Padding.Empty
+            };
+            ApplyRoundedRegion(label, 4);
+            return label;
+        }
+
+        private static void ApplyRoundedRegion(Control control, int radius)
+        {
+            Action update = () =>
+            {
+                if (control.Width < 2 || control.Height < 2) return;
+                var region = new System.Drawing.Region(RoundedRectangle(new System.Drawing.Rectangle(0, 0, control.Width - 1, control.Height - 1), radius));
+                var old = control.Region;
+                control.Region = region;
+                if (old != null) old.Dispose();
+            };
+            control.Resize += (s, e) => update();
+            update();
         }
     }
 }

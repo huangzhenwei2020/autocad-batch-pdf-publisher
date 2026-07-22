@@ -5,6 +5,8 @@ namespace BatchPdfPublisher.Models
     public sealed class ProjectProfile
     {
         public string Name { get; set; }
+        // Empty means the standard per-user project directory is used.
+        public string ProjectFolder { get; set; }
         public List<FrameDefinition> Frames { get; set; } = new List<FrameDefinition>();
         public string PlotStyle { get; set; } = "monochrome.ctb";
         public string MarginMode { get; set; } = "自动适配";

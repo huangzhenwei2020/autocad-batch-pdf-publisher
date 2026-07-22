@@ -38,6 +38,9 @@ namespace BatchPdfPublisher.ViewModels
         private string _status = "请先录入图框，再扫描当前图纸。";
         private int _publishProgressValue;
         private int _publishProgressMaximum = 1;
+        private int _scanProgressValue;
+        private int _scanProgressMaximum = 1;
+        private bool _isScanning;
         private bool _isPublishing;
         private SheetItem _previewErrorSheet;
         private bool _loadingProject;
@@ -94,6 +97,9 @@ namespace BatchPdfPublisher.ViewModels
         public ICommand PublishCommand { get; }
         public int PublishProgressValue { get => _publishProgressValue; private set { _publishProgressValue = value; OnPropertyChanged(); } }
         public int PublishProgressMaximum { get => _publishProgressMaximum; private set { _publishProgressMaximum = value; OnPropertyChanged(); } }
+        public int ScanProgressValue { get => _scanProgressValue; private set { _scanProgressValue = value; OnPropertyChanged(); } }
+        public int ScanProgressMaximum { get => _scanProgressMaximum; private set { _scanProgressMaximum = value; OnPropertyChanged(); } }
+        public bool IsScanning { get => _isScanning; private set { _isScanning = value; OnPropertyChanged(); CommandManager.InvalidateRequerySuggested(); } }
         public bool IsPublishing { get => _isPublishing; private set { _isPublishing = value; OnPropertyChanged(); CommandManager.InvalidateRequerySuggested(); } }
 
         public ProjectProfile SelectedProject
@@ -190,6 +196,10 @@ namespace BatchPdfPublisher.ViewModels
             var tianzhengFiles = new System.Collections.Generic.List<string>();
             var successfulPaths = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var scannedSheets = new System.Collections.Generic.List<SheetItem>();
+            ScanProgressValue = 0;
+            ScanProgressMaximum = Math.Max(paths.Count, 1);
+            IsScanning = true;
+            Status = "正在扫描 CAD：0 / " + ScanProgressMaximum;
             foreach (var path in paths)
             {
                 try
@@ -219,7 +229,14 @@ namespace BatchPdfPublisher.ViewModels
                 {
                     failures.Add(System.IO.Path.GetFileName(path) + "（" + exception.Message + "）");
                 }
+                ScanProgressValue++;
+                Status = "正在扫描 CAD：" + ScanProgressValue + " / " + ScanProgressMaximum + " · " + System.IO.Path.GetFileName(path);
+                // Scanning uses AutoCAD's document/database API and therefore
+                // stays on the CAD thread. Pump only the WinForms paint queue
+                // so the progress track can visibly advance between files.
+                System.Windows.Forms.Application.DoEvents();
             }
+            IsScanning = false;
             // Only replace catalog rows belonging to files that were actually
             // rescanned. Other project DWGs stay in the accumulated catalog.
             var retained = Sheets.Where(x => string.IsNullOrWhiteSpace(x.SourceFile) || !successfulPaths.Contains(System.IO.Path.GetFullPath(x.SourceFile))).ToList();
@@ -330,15 +347,82 @@ namespace BatchPdfPublisher.ViewModels
 
         private void CreateProject()
         {
-            var name = (NewProjectName ?? string.Empty).Trim();
-            if (string.IsNullOrWhiteSpace(name)) { Status = "请输入工程名称。"; return; }
+            CreateOrSelectProject(NewProjectName);
+        }
+
+        public bool CreateOrSelectProject(string requestedName)
+        {
+            var name = (requestedName ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(name)) { Status = "请输入工程名称。"; return false; }
             var existing = Projects.FirstOrDefault(x => string.Equals(x.Name, name, StringComparison.OrdinalIgnoreCase));
-            if (existing != null) { SelectedProject = existing; Status = "已切换到已有工程：" + name; return; }
+            if (existing != null) { SelectedProject = existing; Status = "已切换到已有工程：" + name; return true; }
             var project = _store.CreateProject(name);
             Projects.Add(project);
             SelectedProject = project;
             NewProjectName = "新工程";
             Status = "已创建工程：" + name;
+            return true;
+        }
+
+        public bool DeleteProject(ProjectProfile project)
+        {
+            if (project == null) { Status = "请选择要删除的工程。"; return false; }
+            if (Projects.Count <= 1) { Status = "至少保留一个工程，不能删除最后一个工程。"; return false; }
+            var wasSelected = ReferenceEquals(_selectedProject, project);
+            if (!_store.DeleteProject(project.Name)) { Status = "删除工程失败。"; return false; }
+            Projects.Remove(project);
+            if (wasSelected)
+            {
+                // Do not go through SelectedProject here: its normal setter first saves
+                // the old project, which would accidentally write the deleted profile back.
+                _selectedProject = Projects.FirstOrDefault();
+                if (_selectedProject != null)
+                {
+                    _store.SetActiveProject(_selectedProject.Name);
+                    LoadProjectIntoEditor(_selectedProject);
+                    RefreshPlotStyles();
+                    OnPropertyChanged(nameof(SelectedProject));
+                }
+            }
+            Status = "已删除工程参数：" + project.Name + "。项目文件夹中的 CAD 文件已保留。";
+            return true;
+        }
+
+        public void SaveProjectParameters()
+        {
+            SaveCurrentProject();
+            Status = "工程参数已保存。";
+        }
+
+        public string GetProjectFolder(ProjectProfile project = null)
+        {
+            return _store.GetProjectFolder(project ?? SelectedProject);
+        }
+
+        public bool SaveCurrentCadToProjectFolder(out string destination, out string error)
+        {
+            destination = string.Empty;
+            error = string.Empty;
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document == null || SelectedProject == null) { error = "请先打开 CAD 图纸并选择工程。"; return false; }
+            try
+            {
+                var folder = System.IO.Path.Combine(GetProjectFolder(), "CAD");
+                System.IO.Directory.CreateDirectory(folder);
+                var sourceName = System.IO.Path.GetFileName(document.Database.Filename);
+                if (string.IsNullOrWhiteSpace(sourceName)) sourceName = "未命名图纸.dwg";
+                destination = System.IO.Path.Combine(folder, sourceName);
+                using (document.LockDocument()) document.Database.SaveAs(destination, DwgVersion.Current);
+                AddCadFiles(new[] { destination });
+                SaveCurrentProject();
+                Status = "已将当前 CAD 保存到工程文件夹：" + destination;
+                return true;
+            }
+            catch (System.Exception exception)
+            {
+                error = exception.Message;
+                return false;
+            }
         }
 
         private void SaveCurrentProject()

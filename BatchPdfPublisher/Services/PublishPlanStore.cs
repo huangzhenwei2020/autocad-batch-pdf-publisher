@@ -67,7 +67,7 @@ namespace BatchPdfPublisher.Services
             var projects = LoadProjects();
             var existing = projects.FirstOrDefault(x => string.Equals(x.Name, cleanName, StringComparison.OrdinalIgnoreCase));
             if (existing != null) return existing;
-            var project = new ProjectProfile { Name = cleanName };
+            var project = new ProjectProfile { Name = cleanName, ProjectFolder = DefaultProjectFolder(cleanName) };
             projects.Add(project);
             SaveProjects(projects);
             SetActiveProject(cleanName);
@@ -83,6 +83,26 @@ namespace BatchPdfPublisher.Services
             else projects[index] = project;
             SaveProjects(projects);
             SetActiveProject(project.Name);
+        }
+
+        public bool DeleteProject(string name)
+        {
+            var cleanName = (name ?? string.Empty).Trim();
+            var projects = LoadProjects();
+            if (projects.Count <= 1) return false;
+            var removed = projects.RemoveAll(x => string.Equals(x.Name, cleanName, StringComparison.OrdinalIgnoreCase));
+            if (removed == 0) return false;
+            SaveProjects(projects);
+            var active = LoadActiveProjectName();
+            if (string.Equals(active, cleanName, StringComparison.OrdinalIgnoreCase)) SetActiveProject(projects[0].Name);
+            return true;
+        }
+
+        public string GetProjectFolder(ProjectProfile project)
+        {
+            if (project == null) return string.Empty;
+            if (string.IsNullOrWhiteSpace(project.ProjectFolder)) project.ProjectFolder = DefaultProjectFolder(project.Name);
+            return project.ProjectFolder;
         }
 
         public List<FrameDefinition> LoadFrames()
@@ -121,7 +141,8 @@ namespace BatchPdfPublisher.Services
                 if (project.CadFiles == null) project.CadFiles = new List<string>();
                 if (project.SelectedCadFiles == null) project.SelectedCadFiles = new List<string>();
             if (project.SelectedPublishBuildings == null) project.SelectedPublishBuildings = new List<string>();
-            if (project.SelectedLayouts == null) project.SelectedLayouts = new List<string>();
+                if (project.SelectedLayouts == null) project.SelectedLayouts = new List<string>();
+                if (string.IsNullOrWhiteSpace(project.ProjectFolder)) project.ProjectFolder = DefaultProjectFolder(project.Name);
             }
             if (projects.Count == 0) projects.Add(new ProjectProfile { Name = "默认项目" });
         }
@@ -140,5 +161,11 @@ namespace BatchPdfPublisher.Services
 
         private static string ProjectsPath() => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), ProjectsFileName);
         private static string ActiveProjectPath() => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), ActiveProjectFileName);
+        private static string DefaultProjectFolder(string projectName)
+        {
+            var name = string.IsNullOrWhiteSpace(projectName) ? "默认项目" : projectName.Trim();
+            foreach (var invalid in Path.GetInvalidFileNameChars()) name = name.Replace(invalid, '_');
+            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "BatchPdfPublisher", "Projects", name);
+        }
     }
 }

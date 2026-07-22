@@ -48,6 +48,7 @@
     <Compile Include="ViewModels\PublisherViewModel.cs" />
     <Compile Include="Views\PublisherControl.xaml.cs"><DependentUpon>PublisherControl.xaml</DependentUpon></Compile>
     <Compile Include="Views\PublisherForm.cs" />
+    <Compile Include="Views\ProjectManagerForm.cs" />
     <Compile Include="Views\CurrentSelectionPublishForm.cs" />
     <Compile Include="Views\FrameRegistrationWindow.xaml.cs"><DependentUpon>FrameRegistrationWindow.xaml</DependentUpon></Compile>
     <Page Include="Views\PublisherControl.xaml" />
