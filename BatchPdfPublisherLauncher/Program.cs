@@ -198,25 +198,48 @@ namespace BatchPdfPublisherLauncher
                 File.Copy(sourcePlotterConfig, targetPc3, true);
                 File.Copy(sourcePlotterMedia, targetPmp, true);
                 BindPmp(targetPc3, targetPmp);
+                BindPmpSelfPath(targetPmp);
                 Log("已部署毫米纸张库: " + plotterDirectory);
             }
         }
 
+        private static void BindPmpSelfPath(string pmpPath)
+        {
+            RewriteCompressedPlotterFile(pmpPath, text =>
+            {
+                var rewritten = Regex.Replace(text, "user_defined_model_pathname=\\\"[^\\r\\n]*", "user_defined_model_pathname=\"" + pmpPath);
+                if (rewritten.IndexOf("user_defined_model_pathname=\"" + pmpPath, StringComparison.OrdinalIgnoreCase) < 0)
+                    throw new InvalidDataException("写入 BatchPdfPublisher.pmp 自身路径失败。");
+                return rewritten;
+            });
+        }
+
         private static void BindPmp(string pc3Path, string pmpPath)
         {
-            var bytes = File.ReadAllBytes(pc3Path);
+            RewriteCompressedPlotterFile(pc3Path, text =>
+            {
+                // AutoCAD's PC3/PMP text grammar uses an opening quote and the
+                // end of the line as the value terminator. A closing quote is
+                // treated as part of the filename (for example "file.pmp\"").
+                var rewritten = Regex.Replace(text, "user_defined_model_pathname=\\\"[^\\r\\n]*", "user_defined_model_pathname=\"" + pmpPath);
+                var expectedBinding = "user_defined_model_pathname=\"" + pmpPath;
+                if (rewritten.IndexOf(expectedBinding, StringComparison.OrdinalIgnoreCase) < 0)
+                    throw new InvalidDataException("写入 BatchPdfPublisher.pc3 的 PMP 路径时产生了非法转义语法。");
+                return rewritten;
+            });
+        }
+
+        private static void RewriteCompressedPlotterFile(string path, Func<string, string> rewrite)
+        {
+            var bytes = File.ReadAllBytes(path);
             if (bytes.Length < 64 || Encoding.ASCII.GetString(bytes, 0, Math.Min(bytes.Length, 60)).IndexOf("PIAFILEVERSION_2.0,PC3VER1,compress", StringComparison.Ordinal) < 0)
-                throw new InvalidDataException("BatchPdfPublisher.pc3 不是可识别的 AutoCAD 压缩 PC3 文件。");
+                throw new InvalidDataException(Path.GetFileName(path) + " 不是可识别的 AutoCAD 压缩配置文件。");
             var compressed = new MemoryStream(bytes, 62, bytes.Length - 62, false);
             var decoded = new MemoryStream();
             using (var inflater = new DeflateStream(compressed, CompressionMode.Decompress)) inflater.CopyTo(decoded);
-            var text = Encoding.ASCII.GetString(decoded.ToArray());
-            text = Regex.Replace(text, "user_defined_model_pathname=\\\"[^\\\"]*\\\"", "user_defined_model_pathname=\"" + pmpPath + "\"");
-            var expectedBinding = "user_defined_model_pathname=\"" + pmpPath + "\"";
-            if (text.IndexOf(expectedBinding, StringComparison.OrdinalIgnoreCase) < 0 ||
-                text.IndexOf("user_defined_model_pathname=\\\"", StringComparison.Ordinal) >= 0)
-                throw new InvalidDataException("写入 BatchPdfPublisher.pc3 的 PMP 路径时产生了非法转义语法。");
-            var raw = Encoding.ASCII.GetBytes(text);
+            var raw = decoded.ToArray();
+            var encoding = Encoding.GetEncoding(936);
+            raw = encoding.GetBytes(rewrite(encoding.GetString(raw)));
             var packed = new MemoryStream();
             packed.WriteByte(0x78); packed.WriteByte(0xDA);
             using (var deflater = new DeflateStream(packed, CompressionMode.Compress, true)) deflater.Write(raw, 0, raw.Length);
@@ -229,7 +252,7 @@ namespace BatchPdfPublisherLauncher
             {
                 output.Write(prefix, 0, prefix.Length);
                 var payload = packed.ToArray(); output.Write(payload, 0, payload.Length);
-                File.WriteAllBytes(pc3Path, output.ToArray());
+                File.WriteAllBytes(path, output.ToArray());
             }
         }
 
