@@ -30,6 +30,20 @@ namespace BatchPdfPublisherLauncher
             {
                 Log("启动器开始运行");
                 var launcherDirectory = AppDomain.CurrentDomain.BaseDirectory;
+                var platforms = FindPlatforms();
+                LauncherOptions options;
+                using (var picker = new PlatformPicker(platforms, LoadLastPlatform(), HasRunningCad()))
+                {
+                    if (picker.ShowDialog() != DialogResult.OK) return;
+                    if (picker.UninstallRequested)
+                    {
+                        UninstallPlugin();
+                        MessageBox.Show("批量打印插件及永久自动加载配置已卸载。工程文件和 CAD 图纸不会删除。", "卸载完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        return;
+                    }
+                    if (picker.Options.Platform == null) throw new FileNotFoundException("未找到可用的 AutoCAD 2021-2024。AutoCAD 2025/2026 使用 .NET 8，需使用对应版本插件。 ");
+                    options = picker.Options;
+                }
                 var sourceAssembly = Path.Combine(launcherDirectory, PluginAssemblyName);
                 if (!File.Exists(sourceAssembly)) throw new FileNotFoundException("启动器旁边缺少 BatchPdfPublisher.dll，请重新编译完整项目。", sourceAssembly);
                 var sourcePdfDependency = Path.Combine(launcherDirectory, PdfDependencyName);
@@ -38,15 +52,6 @@ namespace BatchPdfPublisherLauncher
                 var sourcePlotterMedia = Path.Combine(launcherDirectory, PlotterMediaName);
                 if (!File.Exists(sourcePlotterConfig) || !File.Exists(sourcePlotterMedia))
                     throw new FileNotFoundException("启动器旁边缺少 BatchPdfPublisher.pc3/pmp 毫米纸张库，请使用完整发布包。");
-
-                var platforms = FindPlatforms();
-                if (platforms.Count == 0) throw new FileNotFoundException("未找到 AutoCAD 2022、AutoCAD 2024 或 T20 天正建筑。请先安装兼容平台。");
-                LauncherOptions options;
-                using (var picker = new PlatformPicker(platforms, LoadLastPlatform(), HasRunningCad()))
-                {
-                    if (picker.ShowDialog() != DialogResult.OK) return;
-                    options = picker.Options;
-                }
 
                 File.WriteAllText(LastPlatformPath(), options.Platform.Id);
                 InstallPlotterProfiles(sourcePlotterConfig, sourcePlotterMedia);
@@ -69,12 +74,17 @@ namespace BatchPdfPublisherLauncher
         private static List<PlatformOption> FindPlatforms()
         {
             var result = new List<PlatformOption>();
-            AddIfExists(result, new PlatformOption("T20 天正建筑 V9（AutoCAD 2022）", "t20", @"C:\Tangent\TArchT20V9\TGStart.exe", "", @"C:\Tangent\TArchT20V9", "AutoCAD.Application.24.1"));
+            AddIfExists(result, new PlatformOption("T20 天正建筑 V9（AutoCAD 2022）", "t20v9", @"C:\Tangent\TArchT20V9\TGStart.exe", "", @"C:\Tangent\TArchT20V9", "AutoCAD.Application.24.1"));
+            AddIfExists(result, new PlatformOption("T20 天正建筑 V9（AutoCAD 2024）", "t20v9-2024", @"C:\Tangent\TArchT20V9\TGStart2024.exe", "", @"C:\Tangent\TArchT20V9", "AutoCAD.Application.24.3"));
             // The machine may have T20 as the default AutoCAD profile. Force
             // the unnamed vanilla profile so launching plain AutoCAD cannot
             // pull the T20 ARX/LSP startup chain into the session.
-            AddIfExists(result, new PlatformOption("AutoCAD 2022", "acad2022", @"C:\Program Files\Autodesk\AutoCAD 2022\acad.exe", "/nologo /p \"<<Unnamed Profile>>\"", @"C:\Program Files\Autodesk\AutoCAD 2022", "AutoCAD.Application.24.1"));
-            AddIfExists(result, new PlatformOption("AutoCAD 2024", "acad2024", @"C:\Program Files\Autodesk\AutoCAD 2024\acad.exe", "/nologo /p \"<<Unnamed Profile>>\"", @"C:\Program Files\Autodesk\AutoCAD 2024", "AutoCAD.Application.24.3"));
+            var versions = new[] { new { Year = 2021, Release = "24.0" }, new { Year = 2022, Release = "24.1" }, new { Year = 2023, Release = "24.2" }, new { Year = 2024, Release = "24.3" } };
+            foreach (var version in versions)
+            {
+                var root = @"C:\Program Files\Autodesk\AutoCAD " + version.Year;
+                AddIfExists(result, new PlatformOption("AutoCAD " + version.Year + "（R" + version.Release + "）", "acad" + version.Year, Path.Combine(root, "acad.exe"), "/nologo /p \"<<Unnamed Profile>>\"", root, "AutoCAD.Application." + version.Release));
+            }
             return result;
         }
 
@@ -106,6 +116,25 @@ namespace BatchPdfPublisherLauncher
             Log("已通过启动脚本安排 NETLOAD + BPPUBLISH065");
         }
 
+        private static void UninstallPlugin()
+        {
+            var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            var bundle = Path.Combine(appData, "Autodesk", "ApplicationPlugins", "BatchPdfPublisher.bundle");
+            if (Directory.Exists(bundle)) Directory.Delete(bundle, true);
+            var releases = Path.Combine(appData, "BatchPdfPublisher", "releases");
+            if (Directory.Exists(releases)) Directory.Delete(releases, true);
+            var autodeskRoot = Path.Combine(appData, "Autodesk");
+            if (Directory.Exists(autodeskRoot))
+                foreach (var plotters in Directory.GetDirectories(autodeskRoot, "Plotters", SearchOption.AllDirectories))
+                {
+                    TryDelete(Path.Combine(plotters, PlotterConfigName));
+                    TryDelete(Path.Combine(plotters, "PMP Files", PlotterMediaName));
+                }
+            TryDelete(LastPlatformPath());
+        }
+
+        private static void TryDelete(string path) { try { if (File.Exists(path)) File.Delete(path); } catch { } }
+
         private static bool WaitForCadProcess(int seconds)
         {
             for (var i = 0; i < seconds; i++)
@@ -119,14 +148,14 @@ namespace BatchPdfPublisherLauncher
         private static bool HasRunningCad()
         {
             if (Process.GetProcessesByName("acad").Length > 0) return true;
-            foreach (var progId in new[] { "AutoCAD.Application.24.1", "AutoCAD.Application.24.3", "AutoCAD.Application.25.0" })
+            foreach (var progId in new[] { "AutoCAD.Application.24.0", "AutoCAD.Application.24.1", "AutoCAD.Application.24.2", "AutoCAD.Application.24.3", "AutoCAD.Application.25.0", "AutoCAD.Application.25.1" })
                 try { if (Marshal.GetActiveObject(progId) != null) return true; } catch { }
             return false;
         }
 
         private static bool TrySendLoad(string progId, string installedAssembly)
         {
-            var progIds = new[] { progId, "AutoCAD.Application.24.0", "AutoCAD.Application.24.1", "AutoCAD.Application.24.2", "AutoCAD.Application.24.3", "AutoCAD.Application.25.0" }
+            var progIds = new[] { progId, "AutoCAD.Application.24.0", "AutoCAD.Application.24.1", "AutoCAD.Application.24.2", "AutoCAD.Application.24.3", "AutoCAD.Application.25.0", "AutoCAD.Application.25.1" }
                 .Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             for (var attempt = 0; attempt < 15; attempt++)
             {
@@ -334,6 +363,8 @@ namespace BatchPdfPublisherLauncher
         private readonly ComboBox _platformBox;
         private readonly CheckBox _runningCad;
         private readonly CheckBox _permanentInstall;
+        private readonly Button _uninstallButton;
+        public bool UninstallRequested { get; private set; }
         public LauncherOptions Options => new LauncherOptions
         {
             Platform = _platformBox.SelectedItem as PlatformOption,
@@ -349,13 +380,15 @@ namespace BatchPdfPublisherLauncher
             _platformBox = new ComboBox { Left = 18, Top = 52, Width = 440, DropDownStyle = ComboBoxStyle.DropDownList };
             foreach (var platform in platforms) _platformBox.Items.Add(platform);
             var last = platforms.FirstOrDefault(x => string.Equals(x.Id, lastPlatform, StringComparison.OrdinalIgnoreCase));
-            _platformBox.SelectedItem = last ?? platforms[0];
+            if (platforms.Count > 0) _platformBox.SelectedItem = last ?? platforms[0];
             _runningCad = new CheckBox { Left = 18, Top = 94, Width = 480, Text = hasRunningCad ? "加载到已启动的 CAD（已检测到 AutoCAD 进程）" : "加载到已启动的 CAD（当前未检测到，可稍后重试）", Checked = hasRunningCad, Enabled = hasRunningCad };
             _permanentInstall = new CheckBox { Left = 18, Top = 128, Width = 480, Text = "永久自动加载（以后每次启动 CAD 都加载插件）", Checked = false };
             var tip = new Label { Left = 18, Top = 160, Width = 480, Height = 38, ForeColor = System.Drawing.Color.FromArgb(80, 90, 105), Text = "默认仅本次加载，不会写入永久自动加载配置。已永久安装时，取消勾选不会自动卸载旧配置。" };
-            var startButton = new Button { Left = 318, Top = 215, Width = 90, Text = "继续", DialogResult = DialogResult.OK };
+            var startButton = new Button { Left = 318, Top = 215, Width = 90, Text = "继续", DialogResult = DialogResult.OK, Enabled = platforms.Count > 0 };
             var cancelButton = new Button { Left = 418, Top = 215, Width = 85, Text = "取消", DialogResult = DialogResult.Cancel };
-            Controls.Add(label); Controls.Add(_platformBox); Controls.Add(_runningCad); Controls.Add(_permanentInstall); Controls.Add(tip); Controls.Add(startButton); Controls.Add(cancelButton);
+            _uninstallButton = new Button { Left = 18, Top = 215, Width = 90, Text = "卸载" };
+            _uninstallButton.Click += (s, e) => { UninstallRequested = true; DialogResult = DialogResult.OK; };
+            Controls.Add(label); Controls.Add(_platformBox); Controls.Add(_runningCad); Controls.Add(_permanentInstall); Controls.Add(tip); Controls.Add(_uninstallButton); Controls.Add(startButton); Controls.Add(cancelButton);
             AcceptButton = startButton; CancelButton = cancelButton;
         }
     }

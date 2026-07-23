@@ -759,6 +759,8 @@ namespace BatchPdfPublisher.Views
             Autodesk.AutoCAD.ApplicationServices.Application.ShowModelessDialog(dialog);
         }
 
+        public void OpenFrameCreationForCommand() => OpenFrameCreation();
+
         private void OpenCatalogInsert()
         {
             var document = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
@@ -766,6 +768,8 @@ namespace BatchPdfPublisher.Views
             var dialog = new CatalogInsertForm(document, _viewModel.Sheets.ToList(), RefreshAll);
             Autodesk.AutoCAD.ApplicationServices.Application.ShowModelessDialog(dialog);
         }
+
+        public void OpenCatalogInsertForCommand() => OpenCatalogInsert();
 
         private static System.Drawing.Image DrawUiIcon(UiIcon icon, System.Drawing.Color color)
         {

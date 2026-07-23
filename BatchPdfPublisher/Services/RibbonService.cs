@@ -3,6 +3,9 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.Windows;
+using System.Windows.Media;
+using WpfRect = System.Windows.Rect;
+using WpfPoint = System.Windows.Point;
 
 namespace BatchPdfPublisher.Services
 {
@@ -21,21 +24,21 @@ namespace BatchPdfPublisher.Services
                 var existing = ribbon.FindTab(TabId);
                 if (existing != null)
                 {
-                    // Switching drawings or workspaces can keep the tab object
-                    // but hide it. Restore visibility instead of returning silently.
-                    existing.IsVisible = true;
-                    return;
+                    // Replace an older tab from a previous DLL load so the
+                    // three current commands are always the only buttons.
+                    ribbon.Tabs.Remove(existing);
                 }
 
-                var tab = new RibbonTab { Id = TabId, Title = "批量打印" };
-                var source = new RibbonPanelSource { Title = "PDF 发布工具" };
+                var tab = new RibbonTab { Id = TabId, Title = "BPP_批量打印" };
+                var source = new RibbonPanelSource { Title = "批量打印" };
                 var panel = new RibbonPanel { Source = source };
-                source.Items.Add(CreateButton("打开面板", "BPPUBLISH ", RibbonItemSize.Standard));
-                source.Items.Add(CreateButton("扫描图纸", "BPPSCAN ", RibbonItemSize.Standard));
-                source.Items.Add(CreateButton("登记图框", "BPPICKFRAME ", RibbonItemSize.Standard));
-                source.Items.Add(CreateButton("发布 PDF", "BPPMAKEPDF ", RibbonItemSize.Standard));
+                source.Items.Add(CreateButton("打开面板", "BPP ", "panel"));
+                source.Items.Add(CreateButton("创建图框", "TKK ", "frame"));
+                source.Items.Add(CreateButton("插入目录", "ML1 ", "catalog"));
                 tab.Panels.Add(panel);
                 ribbon.Tabs.Add(tab);
+                Application.Idle -= _idleHandler;
+                _idleHandler = null;
             };
             Application.Idle += _idleHandler;
             // A freshly started AutoCAD may already have a Ribbon when NETLOAD
@@ -55,17 +58,47 @@ namespace BatchPdfPublisher.Services
             if (tab != null) ribbon.Tabs.Remove(tab);
         }
 
-        private static RibbonButton CreateButton(string text, string command, RibbonItemSize size)
+        private static RibbonButton CreateButton(string text, string command, string icon)
         {
+            var image = CreateIcon(icon);
             return new RibbonButton
             {
                 Text = text,
                 ShowText = true,
-                Size = size,
+                ShowImage = true,
+                Image = image,
+                LargeImage = image,
+                Size = RibbonItemSize.Standard,
                 Orientation = Orientation.Horizontal,
                 CommandParameter = command,
                 CommandHandler = new CommandHandler(command)
             };
+        }
+
+        private static ImageSource CreateIcon(string kind)
+        {
+            var group = new DrawingGroup();
+            var pen = new Pen(Brushes.DarkSlateBlue, 1.6);
+            var brush = new SolidColorBrush(Color.FromRgb(45, 112, 190));
+            if (kind == "frame")
+            {
+                group.Children.Add(new GeometryDrawing(null, pen, new RectangleGeometry(new WpfRect(2, 2, 12, 12))));
+                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(5, 5), new WpfPoint(11, 11))));
+                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(11, 5), new WpfPoint(5, 11))));
+            }
+            else if (kind == "catalog")
+            {
+                for (var y = 3; y <= 11; y += 4)
+                    group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(3, y), new WpfPoint(13, y))));
+                group.Children.Add(new GeometryDrawing(null, pen, new RectangleGeometry(new WpfRect(2, 2, 12, 12))));
+            }
+            else
+            {
+                group.Children.Add(new GeometryDrawing(brush, pen, new RectangleGeometry(new WpfRect(2, 2, 12, 12))));
+                group.Children.Add(new GeometryDrawing(Brushes.White, null, new LineGeometry(new WpfPoint(5, 6), new WpfPoint(11, 6))));
+                group.Children.Add(new GeometryDrawing(Brushes.White, null, new LineGeometry(new WpfPoint(5, 9), new WpfPoint(11, 9))));
+            }
+            return new DrawingImage(group);
         }
 
         private sealed class CommandHandler : ICommand

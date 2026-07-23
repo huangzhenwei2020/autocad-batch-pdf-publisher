@@ -21,8 +21,18 @@ namespace BatchPdfPublisher
         {
             try { Application.SetSystemVariable("RIBBONSTATE", 1); } catch { }
             RibbonService.InstallWhenReady();
+            MenuService.InstallWhenReady();
         }
-        public void Terminate() { RibbonService.Remove(); }
+        public void Terminate() { RibbonService.Remove(); MenuService.Remove(); }
+
+        [CommandMethod("BPP")]
+        public void BppCommand() => OpenPublisher();
+
+        [CommandMethod("TKK")]
+        public void CreateFrameCommand() => ShowPublisher(form => form.OpenFrameCreationForCommand());
+
+        [CommandMethod("ML1")]
+        public void InsertCatalogShortcut() => ShowPublisher(form => form.OpenCatalogInsertForCommand());
 
         [CommandMethod("BPPUBLISH")]
         public void OpenPublisher()
