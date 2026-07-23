@@ -34,7 +34,7 @@ namespace BatchPdfPublisher.ViewModels
         private bool _scanModelSpace = true;
         private bool _scanAllLayouts = true;
         private bool _mergeByBuilding;
-        private bool _previewEnabled = true;
+        private bool _previewEnabled;
         private string _status = "请先录入图框，再扫描当前图纸。";
         private int _publishProgressValue;
         private int _publishProgressMaximum = 1;
@@ -288,6 +288,13 @@ namespace BatchPdfPublisher.ViewModels
         public void OpenCadFile(string path)
         {
             if (string.IsNullOrWhiteSpace(path) || !System.IO.File.Exists(path)) { Status = "CAD 文件不存在：" + path; return; }
+            var existing = FindOpenDocument(path);
+            if (existing != null)
+            {
+                Application.DocumentManager.MdiActiveDocument = existing;
+                Status = "已激活 CAD 文件：" + System.IO.Path.GetFileName(path);
+                return;
+            }
             Application.DocumentManager.Open(path, false);
             Status = "已打开 CAD 文件：" + System.IO.Path.GetFileName(path);
         }
@@ -397,6 +404,14 @@ namespace BatchPdfPublisher.ViewModels
         public string GetProjectFolder(ProjectProfile project = null)
         {
             return _store.GetProjectFolder(project ?? SelectedProject);
+        }
+
+        public void SetProjectFolder(string folder)
+        {
+            if (SelectedProject == null || string.IsNullOrWhiteSpace(folder)) return;
+            SelectedProject.ProjectFolder = folder.Trim();
+            SaveCurrentProject();
+            Status = "项目文件夹已更新。";
         }
 
         public bool SaveCurrentCadToProjectFolder(out string destination, out string error)

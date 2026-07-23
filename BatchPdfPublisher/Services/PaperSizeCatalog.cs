@@ -42,6 +42,22 @@ namespace BatchPdfPublisher.Services
             return Math.Round(size[0]).ToString(CultureInfo.InvariantCulture) + " × " + Math.Round(size[1]).ToString(CultureInfo.InvariantCulture) + " mm";
         }
 
+        public static bool TryIdentify(double width, double height, out string paper, out string extension, out string orientation)
+        {
+            paper = string.Empty; extension = string.Empty; orientation = string.Empty;
+            var candidates = new[] { "A0", "A1", "A2", "A3", "A4" };
+            var extensions = new[] { string.Empty, "1/4", "1/2", "3/4", "1", "1 1/4", "1 1/2", "2" };
+            foreach (var candidate in candidates)
+                foreach (var candidateExtension in extensions)
+                    foreach (var candidateOrientation in new[] { "横向", "纵向" })
+                    {
+                        var size = GetSize(candidate, candidateExtension, candidateOrientation);
+                        if (Math.Abs(width - size[0]) <= 1.0 && Math.Abs(height - size[1]) <= 1.0)
+                        { paper = candidate; extension = candidateExtension; orientation = candidateOrientation; return true; }
+                    }
+            return false;
+        }
+
         public static double ParseExtension(string value)
         {
             if (string.IsNullOrWhiteSpace(value)) return 0d;

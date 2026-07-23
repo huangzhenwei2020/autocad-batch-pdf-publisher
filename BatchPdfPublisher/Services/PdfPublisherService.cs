@@ -83,7 +83,10 @@ namespace BatchPdfPublisher.Services
             var outputRoot = project?.OutputNextToCadFile == true && !string.IsNullOrWhiteSpace(document.Database.Filename)
                 ? Path.GetDirectoryName(document.Database.Filename)
                 : (string.IsNullOrWhiteSpace(project?.OutputDirectory) ? @"D:\PDF输出" : project.OutputDirectory);
-            var engineeringFolder = project?.IncludeProjectNameInFileName == true ? Path.Combine(outputRoot, SafeName(project?.Name ?? "默认工程")) : outputRoot;
+            // Every publishing mode is scoped to an engineering folder.  The
+            // filename checkbox controls only the PDF name, never this folder.
+            var requestedEngineeringFolder = Path.Combine(outputRoot, SafeName(project?.Name ?? "默认工程"));
+            var engineeringFolder = UniqueDirectory(requestedEngineeringFolder);
             Directory.CreateDirectory(engineeringFolder);
             var result = new PdfPublishResult();
             var jobs = BuildJobs(sheets, project, engineeringFolder);
@@ -94,6 +97,8 @@ namespace BatchPdfPublisher.Services
             {
                 foreach (var job in jobs)
                 {
+                    var jobDirectory = Path.GetDirectoryName(job.Key);
+                    if (!string.IsNullOrWhiteSpace(jobDirectory)) Directory.CreateDirectory(jobDirectory);
                     if (project?.OverwriteExistingPdf == true && File.Exists(job.Key)) File.Delete(job.Key);
                     PlotGroup(document, job.Value, job.Key, project?.PlotStyle, project?.MarginMode, sheet =>
                     {
@@ -177,11 +182,14 @@ namespace BatchPdfPublisher.Services
             {
                 foreach (var sheet in sheets)
                 {
-                    var parts = new List<string>();
-                    if (project?.IncludeProjectNameInFileName != false) parts.Add(SafeName(projectName));
-                    if (project?.IncludeBuildingNameInFileName != false) parts.Add(SafeName(sheet.Building));
-                    parts.Add(sheet.Order.ToString("D3")); parts.Add(SafeName(sheet.SheetNumber)); parts.Add(SafeName(sheet.SheetName));
-                    var path = Path.Combine(outputRoot, string.Join("_", parts.Where(x => !string.IsNullOrWhiteSpace(x))) + ".pdf");
+                    // Non-merged output is organized by sub-project, with the
+                    // drawing title as the PDF filename.  A numbered fallback
+                    // keeps unnamed drawings usable while UniquePath handles
+                    // duplicate titles safely.
+                    var folder = Path.Combine(outputRoot, SafeName(sheet.Building));
+                    var title = string.IsNullOrWhiteSpace(sheet.SheetName) ? sheet.SheetNumber : sheet.SheetName;
+                    var fileName = (sheet.Order.ToString("D3") + "_" + (string.IsNullOrWhiteSpace(title) ? "图纸" : SafeName(title))).Trim('_');
+                    var path = Path.Combine(folder, fileName + ".pdf");
                     jobs.Add(new KeyValuePair<string, List<SheetItem>>(project?.OverwriteExistingPdf == true ? path : UniquePath(path), new List<SheetItem> { sheet }));
                 }
             }
@@ -554,6 +562,17 @@ namespace BatchPdfPublisher.Services
                 if (!File.Exists(candidate)) return candidate;
             }
             return Path.Combine(directory, stem + " " + DateTime.Now.ToString("yyyyMMdd-HHmmss") + extension);
+        }
+
+        private static string UniqueDirectory(string requested)
+        {
+            if (!Directory.Exists(requested)) return requested;
+            for (var index = 2; index < 10000; index++)
+            {
+                var candidate = requested + " (" + index + ")";
+                if (!Directory.Exists(candidate)) return candidate;
+            }
+            return requested + " " + DateTime.Now.ToString("yyyyMMdd-HHmmss");
         }
     }
 }

@@ -16,7 +16,7 @@ namespace BatchPdfPublisher.Models
         public bool IncludeBuildingNameInFileName { get; set; } = true;
         public bool OverwriteExistingPdf { get; set; }
         public bool MergeByBuilding { get; set; } = true;
-        public bool PreviewEnabled { get; set; } = true;
+        public bool PreviewEnabled { get; set; }
         public List<string> FavoritePlotStyles { get; set; } = new List<string>();
         public List<SheetCatalogItem> SavedSheets { get; set; } = new List<SheetCatalogItem>();
         public List<string> CadFiles { get; set; } = new List<string>();

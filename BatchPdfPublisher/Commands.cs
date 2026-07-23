@@ -5,12 +5,17 @@ using BatchPdfPublisher.Services;
 using BatchPdfPublisher.Views;
 using System;
 using System.IO;
+using System.Collections.Generic;
+using BatchPdfPublisher.Models;
 
 namespace BatchPdfPublisher
 {
     public sealed class Commands : IExtensionApplication
     {
         private static PublisherForm _publisherForm;
+        private static IList<SheetItem> _catalogSheets;
+        private static CatalogSettings _catalogSettings;
+        private static Action _catalogDone;
         private static readonly string DiagnosticLog = Path.Combine(Path.GetTempPath(), "BatchPdfPublisher.trace.log");
         public void Initialize()
         {
@@ -42,6 +47,37 @@ namespace BatchPdfPublisher
 
         [CommandMethod("BPPMAKEPDF")]
         public void PublishFromRibbon() => ShowPublisher(form => form.PublishPdf());
+
+        public static void StartCatalogInsert(IList<SheetItem> sheets, CatalogSettings settings, Action done)
+        {
+            _catalogSheets = sheets; _catalogSettings = settings; _catalogDone = done;
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document == null) throw new InvalidOperationException("没有可用的 CAD 图纸。请先打开图纸后再插入目录。");
+            document.SendStringToExecute("BPPINSERTCATALOG ", true, false, false);
+        }
+
+        [CommandMethod("BPPINSERTCATALOG")]
+        public void InsertCatalogCommand()
+        {
+            var document = Application.DocumentManager.MdiActiveDocument;
+            var done = _catalogDone;
+            try
+            {
+                if (document == null || _catalogSheets == null || _catalogSettings == null) return;
+                document.Editor.WriteMessage("\n批量打印插件：请指定目录左上角插入点。\n");
+                if (CatalogInsertionService.Insert(document, _catalogSheets, _catalogSettings)) done?.Invoke();
+                else Application.ShowAlertDialog("未插入目录，可能取消了插入点选择。");
+            }
+            catch (System.Exception ex)
+            {
+                Trace("BPPINSERTCATALOG failed: " + ex);
+                Application.ShowAlertDialog("插入目录失败：\n" + ex.Message);
+            }
+            finally
+            {
+                _catalogSheets = null; _catalogSettings = null; _catalogDone = null;
+            }
+        }
 
         private static void ShowPublisher(Action<PublisherForm> afterShow)
         {

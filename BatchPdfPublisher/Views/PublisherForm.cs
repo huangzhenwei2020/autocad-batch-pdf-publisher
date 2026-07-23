@@ -39,7 +39,6 @@ namespace BatchPdfPublisher.Views
         private readonly CheckBox _previewEnabled = new CheckBox();
         private readonly Label _status = new Label();
         private readonly Label _sheetCountText = new Label();
-        private readonly ProgressBar _publishProgress = new ProgressBar();
         private readonly Panel _progressTrack = new Panel();
         private readonly Label _publishProgressText = new Label();
         private readonly ToolTip _toolTip = new ToolTip();
@@ -65,6 +64,11 @@ namespace BatchPdfPublisher.Views
         private void BuildInterface()
         {
             BackColor = System.Drawing.Color.FromArgb(242, 245, 249);
+            ApplyInputStyle(_projects);
+            ApplyInputStyle(_newProjectName);
+            ApplyInputStyle(_plotStyle);
+            ApplyInputStyle(_marginMode);
+            ApplyInputStyle(_outputDirectory);
             var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(0), RowCount = 4, ColumnCount = 1 };
             // The native window title bar is the app title.  The approved
             // design keeps the project actions in a white row directly below
@@ -72,7 +76,7 @@ namespace BatchPdfPublisher.Views
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 64));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 82));
             Controls.Add(root);
 
             var header = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Padding = Padding.Empty, BackColor = System.Drawing.Color.FromArgb(24, 49, 84) };
@@ -91,6 +95,7 @@ namespace BatchPdfPublisher.Views
             projectBar.Controls.Add(new Label { Text = "当前项目：", AutoSize = true, Font = new System.Drawing.Font(Font, System.Drawing.FontStyle.Bold), Margin = new Padding(0, 8, 8, 0) });
             _projects.Width = 270; _projects.DropDownStyle = ComboBoxStyle.DropDownList; _projects.Margin = new Padding(0, 1, 10, 0);
             projectBar.Controls.Add(_projects);
+            projectBar.Controls.Add(Button("插入目录", OpenCatalogInsert));
             var projectManagerButton = ProjectManagerButton(); projectManagerButton.Margin = new Padding(0, 1, 0, 0); projectBar.Controls.Add(projectManagerButton);
             root.Controls.Add(projectBar, 0, 1);
 
@@ -151,8 +156,8 @@ namespace BatchPdfPublisher.Views
                 CheckAlign = System.Drawing.ContentAlignment.MiddleLeft,
                 Font = new System.Drawing.Font(Font.FontFamily, 9F, System.Drawing.FontStyle.Bold),
                 AutoEllipsis = true,
-                ForeColor = System.Drawing.Color.White,
-                BackColor = System.Drawing.Color.FromArgb(12, 42, 78),
+                ForeColor = System.Drawing.Color.FromArgb(31, 48, 74),
+                BackColor = System.Drawing.Color.FromArgb(231, 237, 246),
                 Margin = Padding.Empty
             };
             ApplyRoundedRegion(frameToggle, 4);
@@ -165,6 +170,7 @@ namespace BatchPdfPublisher.Views
             _frames.Dock = DockStyle.Fill; _frames.Margin = new Padding(8, 8, 8, 4); _frames.HorizontalScrollbar = true; framePane.Controls.Add(_frames, 0, 1);
             var frameButtons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true, Margin = new Padding(8, 0, 8, 4) };
             frameButtons.Controls.Add(AccentButton("拾取并登记", () => _viewModel.RegisterFrameCommand.Execute(null)));
+            frameButtons.Controls.Add(Button("创建图框", OpenFrameCreation));
             frameButtons.Controls.Add(Button("修改", EditFrame)); frameButtons.Controls.Add(Button("删除", RemoveFrame)); framePane.Controls.Add(frameButtons, 0, 2);
             framePane.Controls.Add(Button("保存当前图框库", () => _viewModel.SaveFrameLibraryCommand.Execute(null)), 0, 3);
             buildingFrameSplit.Panel2.Controls.Add(framePane);
@@ -186,9 +192,9 @@ namespace BatchPdfPublisher.Views
 
             var center = Card(3, new Padding(12, 12, 12, 0)); center.Margin = new Padding(0, 0, 10, 0);
             center.RowStyles.Add(new RowStyle(SizeType.AutoSize)); center.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); center.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            var sheetHeader = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = false, Height = 44, WrapContents = false, BackColor = System.Drawing.Color.FromArgb(12, 42, 78), Padding = Padding.Empty };
-            var sheetTitle = SectionHeader("图纸列表"); sheetTitle.Width = 220; sheetTitle.Height = 44; sheetHeader.Controls.Add(sheetTitle);
-            _previewEnabled.Text = "显示当前子项目预览"; _previewEnabled.AutoSize = true; _previewEnabled.ForeColor = System.Drawing.Color.White; _previewEnabled.Margin = new Padding(16, 8, 8, 3);
+            var sheetHeader = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = false, Height = 30, WrapContents = false, BackColor = System.Drawing.Color.FromArgb(231, 237, 246), Padding = Padding.Empty };
+            var sheetTitle = SectionHeader("图纸列表"); sheetTitle.Width = 220; sheetTitle.Height = 30; sheetHeader.Controls.Add(sheetTitle);
+            _previewEnabled.Text = "显示当前子项目预览"; _previewEnabled.AutoSize = true; _previewEnabled.ForeColor = System.Drawing.Color.FromArgb(31, 48, 74); _previewEnabled.Checked = false; _previewEnabled.Margin = new Padding(16, 4, 8, 2);
             sheetHeader.Controls.Add(_previewEnabled);
             sheetHeader.Controls.Add(IconButton("上移", UiIcon.Up, () => { _viewModel.MoveUpCommand.Execute(null); RefreshSheets(); }));
             sheetHeader.Controls.Add(IconButton("下移", UiIcon.Down, () => { _viewModel.MoveDownCommand.Execute(null); RefreshSheets(); }));
@@ -231,15 +237,6 @@ namespace BatchPdfPublisher.Views
             _overwriteExisting.Text = "同名 PDF 直接覆盖"; _overwriteExisting.AutoSize = true; right.Controls.Add(_overwriteExisting);
             rightSplitter.Panel2.Controls.Add(right);
 
-            body.Resize += (sender, args) =>
-            {
-                // Keep both side panels usable on small or high-DPI displays;
-                // users can still drag either splitter to their preferred width.
-                if (leftSplitter.Width > leftSplitter.Panel1MinSize + leftSplitter.Panel2MinSize + leftSplitter.SplitterWidth)
-                    leftSplitter.SplitterDistance = Math.Min(leftSplitter.SplitterDistance, Math.Max(leftSplitter.Panel1MinSize, leftSplitter.Width / 3));
-                if (rightSplitter.Width > rightSplitter.Panel1MinSize + rightSplitter.Panel2MinSize + rightSplitter.SplitterWidth)
-                    rightSplitter.SplitterDistance = Math.Min(rightSplitter.SplitterDistance, rightSplitter.Width - rightSplitter.Panel2MinSize - rightSplitter.SplitterWidth);
-            };
             Shown += (sender, args) =>
             {
                 leftSplitter.Panel1MinSize = Math.Min(320, Math.Max(240, leftSplitter.Width - 470 - leftSplitter.SplitterWidth));
@@ -257,14 +254,14 @@ namespace BatchPdfPublisher.Views
                 rightSplitter.SplitterDistance = Math.Max(rightSplitter.Panel1MinSize, rightSplitter.Width - rightSplitter.Panel2MinSize - rightSplitter.SplitterWidth);
             };
 
-            var footer = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = System.Drawing.Color.White, Padding = new Padding(16, 10, 16, 8), ColumnCount = 5 };
-            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 340)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 70)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 160));
-            _status.AutoSize = false; _status.AutoEllipsis = true; _status.Dock = DockStyle.Fill; _status.ForeColor = System.Drawing.Color.FromArgb(65, 84, 110); footer.Controls.Add(_status, 0, 0);
-            _sheetCountText.AutoSize = false; _sheetCountText.MinimumSize = new System.Drawing.Size(110, 0); _sheetCountText.Dock = DockStyle.Fill; _sheetCountText.TextAlign = System.Drawing.ContentAlignment.MiddleCenter; _sheetCountText.Margin = new Padding(4, 0, 4, 0); _sheetCountText.ForeColor = System.Drawing.Color.FromArgb(65, 84, 110); footer.Controls.Add(_sheetCountText, 1, 0);
-            _progressTrack.Dock = DockStyle.Fill; _progressTrack.Height = 22; _progressTrack.Margin = new Padding(0, 8, 0, 0); _progressTrack.BackColor = System.Drawing.Color.Transparent; ApplyRoundedRegion(_progressTrack, 8); _progressTrack.Paint += PaintProgressTrack; footer.Controls.Add(_progressTrack, 2, 0);
-            _publishProgress.Minimum = 0; _publishProgress.Maximum = 1; _publishProgress.Value = 0; _publishProgress.Style = ProgressBarStyle.Continuous;
-            _publishProgressText.AutoSize = true; _publishProgressText.MinimumSize = new System.Drawing.Size(82, 0); _publishProgressText.Padding = new Padding(8, 0, 2, 0); _publishProgressText.Dock = DockStyle.Fill; _publishProgressText.TextAlign = System.Drawing.ContentAlignment.MiddleRight; _publishProgressText.ForeColor = System.Drawing.Color.FromArgb(65, 84, 110); _publishProgressText.Text = "0 / 0"; footer.Controls.Add(_publishProgressText, 3, 0);
-            var footerPublish = IconAccentButton("发布 PDF", UiIcon.Publish, PublishPdf); footerPublish.MinimumSize = new System.Drawing.Size(150, 34); footer.Controls.Add(footerPublish, 4, 0);
+            var footer = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = System.Drawing.Color.White, Padding = new Padding(16, 7, 16, 7), ColumnCount = 3, RowCount = 2 };
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 82)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 160));
+            footer.RowStyles.Add(new RowStyle(SizeType.Percent, 50)); footer.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
+            _status.AutoSize = false; _status.AutoEllipsis = true; _status.Dock = DockStyle.Fill; _status.ForeColor = System.Drawing.Color.FromArgb(65, 84, 110); footer.Controls.Add(_status, 0, 0); footer.SetColumnSpan(_status, 2);
+            _sheetCountText.AutoSize = false; _sheetCountText.MinimumSize = new System.Drawing.Size(82, 0); _sheetCountText.Dock = DockStyle.Fill; _sheetCountText.TextAlign = System.Drawing.ContentAlignment.MiddleRight; _sheetCountText.Margin = new Padding(4, 0, 4, 0); _sheetCountText.ForeColor = System.Drawing.Color.FromArgb(65, 84, 110); footer.Controls.Add(_sheetCountText, 2, 0);
+            _progressTrack.Dock = DockStyle.Fill; _progressTrack.Height = 22; _progressTrack.Margin = new Padding(0, 4, 10, 0); _progressTrack.BackColor = System.Drawing.Color.Transparent; ApplyRoundedRegion(_progressTrack, 8); _progressTrack.Paint += PaintProgressTrack; footer.Controls.Add(_progressTrack, 0, 1);
+            _publishProgressText.AutoSize = false; _publishProgressText.MinimumSize = new System.Drawing.Size(82, 0); _publishProgressText.Padding = new Padding(0, 0, 8, 0); _publishProgressText.Dock = DockStyle.Fill; _publishProgressText.TextAlign = System.Drawing.ContentAlignment.MiddleRight; _publishProgressText.ForeColor = System.Drawing.Color.FromArgb(65, 84, 110); _publishProgressText.Text = "0 / 0"; footer.Controls.Add(_publishProgressText, 1, 1);
+            var footerPublish = IconAccentButton("发布 PDF", UiIcon.Publish, PublishPdf); footerPublish.MinimumSize = new System.Drawing.Size(150, 30); footer.Controls.Add(footerPublish, 2, 1);
             root.Controls.Add(footer, 0, 3);
         }
 
@@ -403,12 +400,9 @@ namespace BatchPdfPublisher.Views
             var maximum = _viewModel.IsScanning ? Math.Max(_viewModel.ScanProgressMaximum, 1) : Math.Max(Math.Max(_viewModel.PublishProgressMaximum, _viewModel.Sheets.Count), 1);
             var value = _viewModel.IsScanning ? _viewModel.ScanProgressValue : _viewModel.PublishProgressValue;
             value = Math.Min(Math.Max(value, 0), maximum);
-            _publishProgress.Maximum = maximum;
-            _publishProgress.Value = value;
             _publishProgressText.Text = value + " / " + maximum;
             _sheetCountText.Text = "共 " + _viewModel.Sheets.Count + " 张图纸";
             _progressTrack.Invalidate();
-            _publishProgress.Refresh();
             _publishProgressText.Refresh();
             _status.Refresh();
         }
@@ -423,10 +417,9 @@ namespace BatchPdfPublisher.Views
             using (var fill = new System.Drawing.SolidBrush(_viewModel.IsScanning ? System.Drawing.Color.FromArgb(64, 139, 220) : System.Drawing.Color.FromArgb(40, 165, 72)))
             using (var border = new System.Drawing.Pen(System.Drawing.Color.FromArgb(205, 213, 224)))
             {
-                args.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                using (var path = RoundedRectangle(bounds, 8)) args.Graphics.FillPath(track, path);
-                if (ratio > 0) using (var path = RoundedRectangle(new System.Drawing.Rectangle(bounds.X, bounds.Y, Math.Max(1, (int)(bounds.Width * ratio)), bounds.Height), 8)) args.Graphics.FillPath(fill, path);
-                using (var path = RoundedRectangle(bounds, 8)) args.Graphics.DrawPath(border, path);
+                args.Graphics.FillRectangle(track, bounds);
+                if (ratio > 0) args.Graphics.FillRectangle(fill, new System.Drawing.Rectangle(bounds.X, bounds.Y, Math.Max(1, (int)(bounds.Width * ratio)), bounds.Height));
+                args.Graphics.DrawRectangle(border, bounds);
             }
         }
 
@@ -530,7 +523,7 @@ namespace BatchPdfPublisher.Views
             var button = new Button
             {
                 Width = 38,
-                Height = 32,
+                Height = 30,
                 Margin = new Padding(2, 2, 2, 2),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = System.Drawing.Color.White,
@@ -583,7 +576,12 @@ namespace BatchPdfPublisher.Views
         public void PublishPdf()
         {
             Validate();
+            _sheets.CommitEdit(DataGridViewDataErrorContexts.Commit);
             _sheets.EndEdit();
+            // CellEndEdit is queued to avoid rebinding the grid during an edit.
+            // Commit the pending building change synchronously before creating
+            // the publish plan, otherwise the old sub-project is still used.
+            _viewModel.ApplySheetEdits();
             _viewModel.PlotStyle = _plotStyle.Text;
             _viewModel.OutputDirectory = _outputDirectory.Text;
             _viewModel.PublishCommand.Execute(null);
@@ -746,11 +744,27 @@ namespace BatchPdfPublisher.Views
         private static Button IconAccentButton(string text, UiIcon icon, Action action)
         {
             var button = IconButton(text, icon, action);
-            button.BackColor = System.Drawing.Color.FromArgb(34, 116, 210);
-            button.ForeColor = System.Drawing.Color.White;
-            button.FlatAppearance.BorderColor = System.Drawing.Color.FromArgb(34, 116, 210);
-            button.Image = DrawUiIcon(icon, System.Drawing.Color.White);
+            button.BackColor = System.Drawing.Color.White;
+            button.ForeColor = System.Drawing.Color.FromArgb(25, 54, 99);
+            button.FlatAppearance.BorderColor = System.Drawing.Color.FromArgb(104, 145, 185);
+            button.Image = DrawUiIcon(icon, System.Drawing.Color.FromArgb(40, 115, 205));
             return button;
+        }
+
+        private void OpenFrameCreation()
+        {
+            var document = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
+            if (document == null) return;
+            var dialog = new FrameCreationForm(document, RefreshFrames);
+            Autodesk.AutoCAD.ApplicationServices.Application.ShowModelessDialog(dialog);
+        }
+
+        private void OpenCatalogInsert()
+        {
+            var document = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
+            if (document == null || _viewModel.Sheets.Count == 0) { MessageBox.Show(this, "请先扫描当前工程的图纸。", "插入目录", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+            var dialog = new CatalogInsertForm(document, _viewModel.Sheets.ToList(), RefreshAll);
+            Autodesk.AutoCAD.ApplicationServices.Application.ShowModelessDialog(dialog);
         }
 
         private static System.Drawing.Image DrawUiIcon(UiIcon icon, System.Drawing.Color color)
@@ -789,16 +803,18 @@ namespace BatchPdfPublisher.Views
             {
                 Text = text,
                 AutoSize = true,
-                Margin = new Padding(3),
-                Padding = new Padding(5, 2, 5, 2),
-                MinimumSize = new System.Drawing.Size(0, 32),
+                Height = 30,
+                Margin = new Padding(3, 0, 3, 4),
+                Padding = new Padding(7, 2, 7, 2),
+                MinimumSize = new System.Drawing.Size(0, 30),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = System.Drawing.Color.White,
                 ForeColor = System.Drawing.Color.FromArgb(31, 48, 74),
                 Cursor = Cursors.Hand
             };
             button.FlatAppearance.BorderColor = System.Drawing.Color.FromArgb(190, 201, 216);
-            ApplyRoundedRegion(button, 4);
+            button.FlatAppearance.MouseOverBackColor = System.Drawing.Color.FromArgb(239, 244, 250);
+            button.FlatAppearance.MouseDownBackColor = System.Drawing.Color.FromArgb(226, 235, 246);
             if (action != null) button.Click += (s, e) => action();
             return button;
         }
@@ -806,10 +822,19 @@ namespace BatchPdfPublisher.Views
         private static Button AccentButton(string text, Action action)
         {
             var button = Button(text, action);
-            button.BackColor = System.Drawing.Color.FromArgb(34, 116, 210);
-            button.ForeColor = System.Drawing.Color.White;
-            button.FlatAppearance.BorderColor = System.Drawing.Color.FromArgb(34, 116, 210);
+            button.BackColor = System.Drawing.Color.White;
+            button.ForeColor = System.Drawing.Color.FromArgb(25, 54, 99);
+            button.FlatAppearance.BorderColor = System.Drawing.Color.FromArgb(104, 145, 185);
             return button;
+        }
+
+        private static void ApplyInputStyle(Control control)
+        {
+            control.AutoSize = false;
+            control.Height = 30;
+            control.Margin = new Padding(0, 0, 8, 4);
+            var combo = control as ComboBox;
+            if (combo != null) combo.IntegralHeight = false;
         }
 
         private static void AddHeightDragIndicator(SplitContainer splitter)
@@ -845,7 +870,6 @@ namespace BatchPdfPublisher.Views
                 CellBorderStyle = TableLayoutPanelCellBorderStyle.None
                 , BorderStyle = BorderStyle.FixedSingle
             };
-            ApplyRoundedRegion(card, 5);
             return card;
         }
 
@@ -872,32 +896,23 @@ namespace BatchPdfPublisher.Views
             {
                 Text = text,
                 AutoSize = false,
-                Height = 44,
+                Height = 30,
                 Width = 260,
                 Dock = DockStyle.Fill,
                 TextAlign = System.Drawing.ContentAlignment.MiddleLeft,
                 Padding = new Padding(10, 0, 8, 0),
                 Font = new System.Drawing.Font("Microsoft YaHei UI", 10F, System.Drawing.FontStyle.Bold),
-                ForeColor = System.Drawing.Color.White,
-                BackColor = System.Drawing.Color.FromArgb(12, 42, 78),
+                ForeColor = System.Drawing.Color.FromArgb(31, 48, 74),
+                BackColor = System.Drawing.Color.FromArgb(231, 237, 246),
                 Margin = Padding.Empty
             };
-            ApplyRoundedRegion(label, 4);
             return label;
         }
 
         private static void ApplyRoundedRegion(Control control, int radius)
         {
-            Action update = () =>
-            {
-                if (control.Width < 2 || control.Height < 2) return;
-                var region = new System.Drawing.Region(RoundedRectangle(new System.Drawing.Rectangle(0, 0, control.Width - 1, control.Height - 1), radius));
-                var old = control.Region;
-                control.Region = region;
-                if (old != null) old.Dispose();
-            };
-            control.Resize += (s, e) => update();
-            update();
+            // Intentionally left square: the publisher uses a compact, native
+            // WinForms layout and avoids clipped corners at different DPI scales.
         }
     }
 }
