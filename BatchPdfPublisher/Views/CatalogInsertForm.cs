@@ -20,7 +20,8 @@ namespace BatchPdfPublisher.Views
         private readonly CheckBox[] _columnChecks = { Check("序号", true), Check("图号", true), Check("图名", true), Check("图框", true), Check("比例", true) };
         private readonly TextBox _rows = Box("30"), _rowHeight = Box("7");
         private readonly ComboBox _textHeight = Preset("1.5", "2.5", "3.5", "5", "7", "10", "14", "20");
-        private readonly ComboBox _insertScale = Preset("0.5", "1", "2", "5", "10");
+        // 目录插入比例是图纸比例：1:20、1:50、1:100；可直接编辑输入自定义比例。
+        private readonly ComboBox _insertScale = RatioPreset("1:1", "1:20", "1:50", "1:100", "1:200", "1:500");
         private readonly TextBox[] _widthBoxes = { Box("20"), Box("30"), Box("70"), Box("24"), Box("24") };
         private readonly ComboBox _font = new ComboBox();
         private readonly Button _color = new Button();
@@ -53,7 +54,7 @@ namespace BatchPdfPublisher.Views
             root.Controls.Add(new Label { Text = "字体样式 / 颜色", AutoSize = true, Margin = new Padding(0, 7, 0, 3) }, 0, 7);
             var styleLine = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = false };
             _font.DropDownStyle = ComboBoxStyle.DropDownList; _font.Width = 210; _font.Items.AddRange(FrameCreationService.GetTextStyleNames(_document)); _font.SelectedItem = "黑体"; if (_font.SelectedIndex < 0 && _font.Items.Count > 0) _font.SelectedIndex = 0;
-            _color.Text = string.Empty; _color.Width = 32; _color.Height = 30; _color.FlatStyle = FlatStyle.Flat; _color.BackColor = DisplayColor(_acColor); _color.Click += (s, e) => ChooseColor(); styleLine.Controls.Add(_font); styleLine.Controls.Add(_color);
+            _color.Text = string.Empty; _color.Width = 32; _color.Height = 30; _color.MinimumSize = new Size(32, 30); _color.Margin = new Padding(3, 0, 3, 0); _color.FlatStyle = FlatStyle.Flat; _color.BackColor = DisplayColor(_acColor); _color.Click += (s, e) => ChooseColor(); styleLine.Controls.Add(_font); styleLine.Controls.Add(_color);
             root.Controls.Add(styleLine, 1, 7);
             var actions = new FlowLayoutPanel { Dock = DockStyle.Bottom, FlowDirection = FlowDirection.RightToLeft, Height = 38 };
             actions.Controls.Add(Button("关闭", (s, e) => Close())); actions.Controls.Add(Button("插入目录", (s, e) => Insert(), true)); Controls.Add(actions);
@@ -61,8 +62,8 @@ namespace BatchPdfPublisher.Views
 
         private void Insert()
         {
-            if (!int.TryParse(_rows.Text, out var rows) || rows < 1 || !double.TryParse(_rowHeight.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var rowHeight) || rowHeight <= 0 || !double.TryParse(_textHeight.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var textHeight) || textHeight <= 0 || !double.TryParse(_insertScale.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var scale) || scale <= 0)
-            { MessageBox.Show(this, "行数、行高、文字高度和插入比例必须是有效正数。", "插入目录"); return; }
+            if (!int.TryParse(_rows.Text, out var rows) || rows < 1 || !double.TryParse(_rowHeight.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var rowHeight) || rowHeight <= 0 || !double.TryParse(_textHeight.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var textHeight) || textHeight <= 0 || !TryParseDrawingScale(_insertScale.Text, out var scale))
+            { MessageBox.Show(this, "行数、行高、文字高度必须有效；图纸比例请输入例如 1:20、1:50 或 1:100。", "插入目录"); return; }
             var widths = _widthBoxes.Select(x => double.TryParse(x.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) ? value : 0).ToArray();
             if (widths.Any(x => x <= 0)) { MessageBox.Show(this, "请分别填写五列的正数列宽。", "插入目录"); return; }
             var selected = _buildings.CheckedItems.Cast<string>().ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -93,6 +94,22 @@ namespace BatchPdfPublisher.Views
         private static TextBox Box(string text) { return new TextBox { Text = text, Height = 30, Width = 70 }; }
         private static CheckBox Check(string text, bool value) { return new CheckBox { Text = text, Checked = value, AutoSize = true, Margin = new Padding(3, 5, 10, 3) }; }
         private static ComboBox Preset(params string[] values) { var box = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 90, Height = 30 }; box.Items.AddRange(values); box.SelectedIndex = 0; return box; }
+        private static ComboBox RatioPreset(params string[] values) { var box = new ComboBox { DropDownStyle = ComboBoxStyle.DropDown, Width = 100, Height = 30, AutoCompleteMode = AutoCompleteMode.SuggestAppend, AutoCompleteSource = AutoCompleteSource.ListItems }; box.Items.AddRange(values); box.SelectedIndex = 3; return box; }
+        private static bool TryParseDrawingScale(string text, out double scale)
+        {
+            scale = 0;
+            if (string.IsNullOrWhiteSpace(text)) return false;
+            var value = text.Trim().Replace('：', ':').Replace('／', '/');
+            var separator = value.IndexOf(':'); if (separator < 0) separator = value.IndexOf('/');
+            if (separator >= 0)
+            {
+                var leftText = value.Substring(0, separator).Trim(); var rightText = value.Substring(separator + 1).Trim();
+                if (!double.TryParse(leftText, NumberStyles.Float, CultureInfo.InvariantCulture, out var left) || !double.TryParse(rightText, NumberStyles.Float, CultureInfo.InvariantCulture, out var right) || left <= 0 || right <= 0) return false;
+                scale = right / left; return scale > 0;
+            }
+            // 兼容旧版保存的纯数字比例；新界面推荐使用 1:N。
+            return double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out scale) && scale > 0;
+        }
         private void SaveSettings() { try { var path = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "BatchPdfPublisher.catalog.settings"); var vals = new[] { _rows.Text, _rowHeight.Text, string.Join(",", _widthBoxes.Select(x => x.Text)), _textHeight.Text, _insertScale.Text, _font.Text, _acColor.ColorMethod.ToString(), _acColor.ColorIndex.ToString(), string.Join("", _columnChecks.Select(x => x.Checked ? "1" : "0")) }; System.IO.File.WriteAllLines(path, vals); } catch { } }
         private void LoadSettings() { try { var path = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "BatchPdfPublisher.catalog.settings"); if (!System.IO.File.Exists(path)) return; var vals = System.IO.File.ReadAllLines(path); if (vals.Length > 0) _rows.Text = vals[0]; if (vals.Length > 1) _rowHeight.Text = vals[1]; if (vals.Length > 2) { var widths = vals[2].Split(','); for (var i = 0; i < _widthBoxes.Length && i < widths.Length; i++) _widthBoxes[i].Text = widths[i]; } if (vals.Length > 3 && _textHeight.Items.Contains(vals[3])) _textHeight.SelectedItem = vals[3]; if (vals.Length > 4 && _insertScale.Items.Contains(vals[4])) _insertScale.SelectedItem = vals[4]; if (vals.Length > 5 && _font.Items.Contains(vals[5])) _font.SelectedItem = vals[5]; if (vals.Length > 6 && vals[6].IndexOf("ByAci", StringComparison.OrdinalIgnoreCase) >= 0 && vals.Length > 7 && short.TryParse(vals[7], out var aci)) { _acColor = AcColor.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, aci); _color.BackColor = DisplayColor(_acColor); } if (vals.Length > 8) for (var i = 0; i < _columnChecks.Length && i < vals[8].Length; i++) _columnChecks[i].Checked = vals[8][i] == '1'; } catch { } }
         private static void Add(TableLayoutPanel root, string label, Control control, int row) { root.Controls.Add(new Label { Text = label, AutoSize = true, Margin = new Padding(0, 7, 0, 3) }, 0, row); control.Dock = DockStyle.Fill; root.Controls.Add(control, 1, row); }
