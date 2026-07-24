@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
@@ -240,9 +241,14 @@ namespace BatchPdfPublisher.ViewModels
             // Only replace catalog rows belonging to files that were actually
             // rescanned. Other project DWGs stay in the accumulated catalog.
             var orphanedCount = 0;
+            var successfulNames = successfulPaths
+                .GroupBy(x => System.IO.Path.GetFileName(x), StringComparer.OrdinalIgnoreCase)
+                .Where(x => x.Count() == 1)
+                .Select(x => x.Key)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
             var retained = Sheets.Where(x =>
             {
-                if (string.IsNullOrWhiteSpace(x.SourceFile) || successfulPaths.Contains(System.IO.Path.GetFullPath(x.SourceFile))) return true;
+                if (string.IsNullOrWhiteSpace(x.SourceFile) || !IsSourceInSet(x.SourceFile, successfulPaths, successfulNames)) return true;
                 if (IsSourceAvailable(x.SourceFile)) return true;
                 orphanedCount++;
                 return false;
@@ -289,8 +295,12 @@ namespace BatchPdfPublisher.ViewModels
             var item = CadFiles.FirstOrDefault(x => string.Equals(x.Path, path, StringComparison.OrdinalIgnoreCase));
             if (item == null) return;
             CadFiles.Remove(item);
+            var removedSheets = Sheets.Where(x => IsSameSourcePath(x.SourceFile, path)).ToList();
+            foreach (var sheet in removedSheets) Sheets.Remove(sheet);
+            NormalizeSheetOrder();
             SaveCurrentProject();
-            Status = "已从工程文件列表移除：" + System.IO.Path.GetFileName(path);
+            Status = "已从工程文件列表移除：" + System.IO.Path.GetFileName(path)
+                + (removedSheets.Count == 0 ? string.Empty : "，同时移除 " + removedSheets.Count + " 张关联图纸");
         }
 
         public void OpenCadFile(string path)
@@ -914,6 +924,30 @@ namespace BatchPdfPublisher.ViewModels
             if (string.IsNullOrWhiteSpace(sourceFile)) return false;
             if (FindOpenDocument(sourceFile) != null) return true;
             try { return System.IO.File.Exists(sourceFile); } catch { return false; }
+        }
+
+        private static bool IsSourceInSet(string sourceFile, HashSet<string> fullPaths, HashSet<string> uniqueNames)
+        {
+            if (string.IsNullOrWhiteSpace(sourceFile)) return false;
+            if (fullPaths.Contains(sourceFile)) return true;
+            try
+            {
+                if (fullPaths.Contains(System.IO.Path.GetFullPath(sourceFile))) return true;
+                return uniqueNames.Contains(System.IO.Path.GetFileName(sourceFile));
+            }
+            catch { return false; }
+        }
+
+        private static bool IsSameSourcePath(string left, string right)
+        {
+            if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right)) return false;
+            if (string.Equals(left, right, StringComparison.OrdinalIgnoreCase)) return true;
+            try
+            {
+                if (string.Equals(System.IO.Path.GetFullPath(left), System.IO.Path.GetFullPath(right), StringComparison.OrdinalIgnoreCase)) return true;
+                return string.Equals(System.IO.Path.GetFileName(left), System.IO.Path.GetFileName(right), StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return false; }
         }
 
         private static void WritePublishStage(string message)
