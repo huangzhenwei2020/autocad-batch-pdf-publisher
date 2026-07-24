@@ -287,7 +287,6 @@ namespace BatchPdfPublisher.ViewModels
 
         public void OpenCadFile(string path)
         {
-            if (string.IsNullOrWhiteSpace(path) || !System.IO.File.Exists(path)) { Status = "CAD 文件不存在：" + path; return; }
             var existing = FindOpenDocument(path);
             if (existing != null)
             {
@@ -295,6 +294,7 @@ namespace BatchPdfPublisher.ViewModels
                 Status = "已激活 CAD 文件：" + System.IO.Path.GetFileName(path);
                 return;
             }
+            if (string.IsNullOrWhiteSpace(path) || !System.IO.File.Exists(path)) { Status = "CAD 文件不存在：" + path; return; }
             Application.DocumentManager.Open(path, false);
             Status = "已打开 CAD 文件：" + System.IO.Path.GetFileName(path);
         }
@@ -819,15 +819,49 @@ namespace BatchPdfPublisher.ViewModels
         private static Document FindOpenDocument(string sourcePath)
         {
             if (string.IsNullOrWhiteSpace(sourcePath)) return Application.DocumentManager.MdiActiveDocument;
+            var requested = sourcePath.Trim();
+            var requestedFull = requested;
+            try { if (System.IO.Path.IsPathRooted(requested)) requestedFull = System.IO.Path.GetFullPath(requested); } catch { }
+            var requestedName = string.Empty;
+            var requestedStem = string.Empty;
+            try
+            {
+                requestedName = System.IO.Path.GetFileName(requested);
+                requestedStem = System.IO.Path.GetFileNameWithoutExtension(requestedName);
+            }
+            catch { }
+            // Prefer the active document for an unsaved Drawing1/Drawing1.dwg
+            // record, then compare exact paths, then compare file names. CAD
+            // can expose an unsaved document with an empty Database.Filename,
+            // so a strict File.Exists check is incorrect here.
+            var active = Application.DocumentManager.MdiActiveDocument;
+            if (active != null && IsSameOpenDocument(active, requested, requestedFull, requestedName, requestedStem)) return active;
             foreach (Document candidate in Application.DocumentManager)
             {
                 try
                 {
-                    if (string.Equals(SafeDocumentPath(candidate), sourcePath, StringComparison.OrdinalIgnoreCase)) return candidate;
+                    if (IsSameOpenDocument(candidate, requested, requestedFull, requestedName, requestedStem)) return candidate;
                 }
                 catch { }
             }
             return null;
+        }
+
+        private static bool IsSameOpenDocument(Document candidate, string requested, string requestedFull, string requestedName, string requestedStem)
+        {
+            var candidatePath = SafeDocumentPath(candidate);
+            if (string.IsNullOrWhiteSpace(candidatePath)) return false;
+            if (string.Equals(candidatePath, requested, StringComparison.OrdinalIgnoreCase)) return true;
+            try
+            {
+                if (string.Equals(System.IO.Path.GetFullPath(candidatePath), requestedFull, StringComparison.OrdinalIgnoreCase)) return true;
+                var candidateName = System.IO.Path.GetFileName(candidatePath);
+                if (!string.IsNullOrWhiteSpace(requestedName) && string.Equals(candidateName, requestedName, StringComparison.OrdinalIgnoreCase)) return true;
+                var candidateStem = System.IO.Path.GetFileNameWithoutExtension(candidateName);
+                if (!string.IsNullOrWhiteSpace(requestedStem) && string.Equals(candidateStem, requestedStem, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+            catch { }
+            return false;
         }
 
         private static void WritePublishStage(string message)
