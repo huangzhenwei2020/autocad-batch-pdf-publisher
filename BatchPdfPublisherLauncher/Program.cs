@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using Microsoft.Win32;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
@@ -82,10 +83,33 @@ namespace BatchPdfPublisherLauncher
             var versions = new[] { new { Year = 2021, Release = "24.0" }, new { Year = 2022, Release = "24.1" }, new { Year = 2023, Release = "24.2" }, new { Year = 2024, Release = "24.3" } };
             foreach (var version in versions)
             {
-                var root = @"C:\Program Files\Autodesk\AutoCAD " + version.Year;
+                var root = FindAcadInstallDirectory(version.Release) ?? (@"C:\Program Files\Autodesk\AutoCAD " + version.Year);
                 AddIfExists(result, new PlatformOption("AutoCAD " + version.Year + "（R" + version.Release + "）", "acad" + version.Year, Path.Combine(root, "acad.exe"), "/nologo /p \"<<Unnamed Profile>>\"", root, "AutoCAD.Application." + version.Release));
             }
             return result;
+        }
+
+        private static string FindAcadInstallDirectory(string release)
+        {
+            foreach (var view in new[] { RegistryView.Registry64, RegistryView.Registry32 })
+            {
+                try
+                {
+                    using (var baseKey = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, view))
+                    using (var releaseKey = baseKey.OpenSubKey("SOFTWARE\\Autodesk\\AutoCAD\\R" + release))
+                    {
+                        if (releaseKey == null) continue;
+                        foreach (var product in releaseKey.GetSubKeyNames())
+                        using (var install = releaseKey.OpenSubKey(product + "\\Install"))
+                        {
+                            var value = install?.GetValue("INSTALLDIR") as string;
+                            if (!string.IsNullOrWhiteSpace(value) && File.Exists(Path.Combine(value, "acad.exe"))) return value;
+                        }
+                    }
+                }
+                catch { }
+            }
+            return null;
         }
 
         private static void AddIfExists(List<PlatformOption> platforms, PlatformOption option)
