@@ -47,7 +47,7 @@ namespace BatchPdfPublisher.Views
 
         public PublisherForm()
         {
-            Text = "批量 PDF 发布  v0.6.6";
+            Text = "批量 PDF 发布  v0.6.7";
             Width = 1240;
             Height = 760;
             MinimumSize = new System.Drawing.Size(840, 540);
