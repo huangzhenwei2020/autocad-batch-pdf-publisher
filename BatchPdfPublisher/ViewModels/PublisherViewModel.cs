@@ -710,6 +710,19 @@ namespace BatchPdfPublisher.ViewModels
                 // application-context continuation is resumed; deferred GroupBy
                 // code must therefore never read document.Database mid-publish.
                 var initialSourcePath = SafeDocumentPath(initialDocument);
+                // A scanned row may retain a short/display path (for example
+                // "Drawing1.dwg" or "[天正] Drawing1.dwg") even after the
+                // drawing has been saved. Rebind those rows to the canonical
+                // path of the already-open document before grouping jobs.
+                foreach (var sheet in sheetsForPublish)
+                {
+                    var open = FindOpenDocument(sheet.SourceFile);
+                    if (open != null)
+                    {
+                        var canonical = SafeDocumentPath(open);
+                        if (!string.IsNullOrWhiteSpace(canonical)) sheet.SourceFile = canonical;
+                    }
+                }
                 var sourceGroups = sheetsForPublish
                     .GroupBy(x => string.IsNullOrWhiteSpace(x.SourceFile) ? initialSourcePath : x.SourceFile, StringComparer.OrdinalIgnoreCase)
                     .Select(x => new { SourcePath = x.Key, Sheets = x.Where(sheet => sheet != null).ToList() })
@@ -822,8 +835,8 @@ namespace BatchPdfPublisher.ViewModels
             var requested = sourcePath.Trim();
             var requestedFull = requested;
             try { if (System.IO.Path.IsPathRooted(requested)) requestedFull = System.IO.Path.GetFullPath(requested); } catch { }
-            var requestedName = string.Empty;
-            var requestedStem = string.Empty;
+                var requestedName = string.Empty;
+                var requestedStem = string.Empty;
             try
             {
                 requestedName = System.IO.Path.GetFileName(requested);
@@ -856,12 +869,26 @@ namespace BatchPdfPublisher.ViewModels
             {
                 if (string.Equals(System.IO.Path.GetFullPath(candidatePath), requestedFull, StringComparison.OrdinalIgnoreCase)) return true;
                 var candidateName = System.IO.Path.GetFileName(candidatePath);
-                if (!string.IsNullOrWhiteSpace(requestedName) && string.Equals(candidateName, requestedName, StringComparison.OrdinalIgnoreCase)) return true;
+                if (!string.IsNullOrWhiteSpace(requestedName) && (string.Equals(candidateName, requestedName, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(CleanCadDisplayName(candidateName), CleanCadDisplayName(requestedName), StringComparison.OrdinalIgnoreCase))) return true;
                 var candidateStem = System.IO.Path.GetFileNameWithoutExtension(candidateName);
-                if (!string.IsNullOrWhiteSpace(requestedStem) && string.Equals(candidateStem, requestedStem, StringComparison.OrdinalIgnoreCase)) return true;
+                if (!string.IsNullOrWhiteSpace(requestedStem) && (string.Equals(candidateStem, requestedStem, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(CleanCadDisplayName(candidateStem), CleanCadDisplayName(requestedStem), StringComparison.OrdinalIgnoreCase))) return true;
             }
             catch { }
             return false;
+        }
+
+        private static string CleanCadDisplayName(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+            var text = value.Trim();
+            if (text[0] == '[')
+            {
+                var end = text.IndexOf(']');
+                if (end >= 0 && end + 1 < text.Length) text = text.Substring(end + 1).Trim();
+            }
+            return text;
         }
 
         private static void WritePublishStage(string message)
