@@ -106,14 +106,57 @@ namespace BatchPdfPublisherLauncher
                     {
                         var name = Path.GetFileNameWithoutExtension(file).ToLowerInvariant();
                         if (!(name.Contains("tgstart") || name.Contains("telec") || name.Contains("tmelec") || name.Contains("tarch"))) continue;
-                        var product = name.Contains("elec") ? "正天电气" : "天正建筑";
-                        var id = product + "-" + GetFileHash(file).Substring(0, 8);
-                        if (!result.Any(x => string.Equals(x.Executable, file, StringComparison.OrdinalIgnoreCase))) result.Add(new TianzhengInstallation(product, id, file));
+                        AddTianzheng(result, file, file);
+                    }
+                }
+                catch { }
+            }
+            // Installed Tianzheng products publish their real launcher in the
+            // Start Menu. Reading shortcuts also covers custom drives and
+            // T20-Elec/T20-Water/T20-Hvac/T20-Struct product folders.
+            var shortcutRoots = new[] { Environment.GetFolderPath(Environment.SpecialFolder.CommonStartMenu), Environment.GetFolderPath(Environment.SpecialFolder.StartMenu) };
+            foreach (var root in shortcutRoots)
+            {
+                if (!Directory.Exists(root)) continue;
+                try
+                {
+                    foreach (var link in Directory.GetFiles(root, "*.lnk", SearchOption.AllDirectories))
+                    {
+                        var target = ResolveShortcut(link);
+                        if (!string.IsNullOrWhiteSpace(target) && File.Exists(target)) AddTianzheng(result, target, link);
                     }
                 }
                 catch { }
             }
             return result;
+        }
+
+        private static void AddTianzheng(List<TianzhengInstallation> result, string executable, string hint)
+        {
+            if (!string.Equals(Path.GetExtension(executable), ".exe", StringComparison.OrdinalIgnoreCase)) return;
+            var fullName = (executable + " " + hint).ToLowerInvariant();
+            if (!(fullName.Contains("t20") || fullName.Contains("t30") || fullName.Contains("tangent") || fullName.Contains("天正"))) return;
+            var product = fullName.Contains("elec") || fullName.Contains("电气") ? "天正电气" :
+                fullName.Contains("water") || fullName.Contains("给排水") ? "天正给排水" :
+                fullName.Contains("hvac") || fullName.Contains("暖通") ? "天正暖通" :
+                fullName.Contains("struct") || fullName.Contains("结构") ? "天正结构" : "天正建筑";
+            var match = Regex.Match(fullName, @"(?:t20|t30)[^v\d]{0,2}v?(\d+)(?:[\._](\d+))?", RegexOptions.IgnoreCase);
+            var version = match.Success ? " V" + match.Groups[1].Value + (match.Groups[2].Success ? "." + match.Groups[2].Value : ".0") : "";
+            var display = product + version;
+            var id = display + "-" + GetFileHash(executable).Substring(0, 8);
+            if (!result.Any(x => string.Equals(x.Executable, executable, StringComparison.OrdinalIgnoreCase))) result.Add(new TianzhengInstallation(display, id, executable));
+        }
+
+        private static string ResolveShortcut(string link)
+        {
+            try
+            {
+                var shellType = Type.GetTypeFromProgID("WScript.Shell");
+                var shell = Activator.CreateInstance(shellType);
+                var shortcut = shellType.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { link });
+                return shortcut.GetType().InvokeMember("TargetPath", BindingFlags.GetProperty, null, shortcut, null) as string;
+            }
+            catch { return null; }
         }
 
         private static string FindAcadInstallDirectory(string release)

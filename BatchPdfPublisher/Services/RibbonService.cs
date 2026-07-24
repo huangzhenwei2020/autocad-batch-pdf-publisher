@@ -24,6 +24,12 @@ namespace BatchPdfPublisher.Services
                     var ribbon = ComponentManager.Ribbon;
                     if (ribbon == null) return;
                     var existing = ribbon.FindTab(TabId);
+                    if (existing != null && existing.Panels.Count > 0 && existing.Panels[0].Source.Items.Count == 3)
+                    {
+                        existing.IsVisible = true;
+                        ribbon.ActiveTab = existing;
+                        return;
+                    }
                     if (existing != null) ribbon.Tabs.Remove(existing);
                     var tab = new RibbonTab { Id = TabId, Title = "BPP_批量打印" };
                     var source = new RibbonPanelSource { Title = "批量打印" };
@@ -34,8 +40,6 @@ namespace BatchPdfPublisher.Services
                     tab.Panels.Add(panel);
                     ribbon.Tabs.Add(tab);
                     ribbon.ActiveTab = tab;
-                    Application.Idle -= _idleHandler;
-                    _idleHandler = null;
                 }
                 catch (Exception exception) { Trace(exception); }
             };

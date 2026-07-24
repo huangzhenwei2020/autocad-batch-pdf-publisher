@@ -18,9 +18,7 @@ namespace BatchPdfPublisher.Services
             if (_idle != null) return;
             _idle = (s, e) =>
             {
-                if (_menu != null) { Application.Idle -= _idle; _idle = null; return; }
-                Install();
-                if (_menu != null) { Application.Idle -= _idle; _idle = null; }
+                if (!HasMenu()) Install();
             };
             Application.Idle += _idle;
             Install();
@@ -65,6 +63,17 @@ namespace BatchPdfPublisher.Services
             var count = (int)_menu.GetType().InvokeMember("Count", BindingFlags.GetProperty, null, _menu, null);
             var item = _menu.GetType().InvokeMember("AddMenuItem", BindingFlags.InvokeMethod, null, _menu, new object[] { count, label, "BPP_" + command, "^C^C_" + command + " " });
             _items.Add(item);
+        }
+
+        private static bool HasMenu()
+        {
+            try
+            {
+                if (_menu == null) return false;
+                var name = _menu.GetType().GetProperty("Name")?.GetValue(_menu, null) as string;
+                return string.Equals(name, MenuName, StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return false; }
         }
 
         private static void RemoveMenuFromBar(object menus, object menu)
