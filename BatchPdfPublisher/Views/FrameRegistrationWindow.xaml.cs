@@ -32,6 +32,7 @@ namespace BatchPdfPublisher.Views
             foreach (var box in TagBoxes()) box.ItemsSource = tags;
 
             SelectComboByText(PaperSizeBox, existing?.PaperSize ?? guess.PaperSize);
+            PaperSizeBox_SelectionChanged(null, null);
             SelectComboByText(ExtensionBox, string.IsNullOrWhiteSpace(existing?.Extension ?? guess.Extension) ? "无加长" : existing?.Extension ?? guess.Extension);
             SelectComboByText(OrientationBox, existing?.PaperOrientation ?? guess.PaperOrientation);
             NoteBox.Text = existing?.Note ?? string.Empty;
@@ -89,6 +90,18 @@ namespace BatchPdfPublisher.Views
                 DefaultPrintScale = PrintScaleValueBox.Text?.Trim()
             };
             DialogResult = true;
+        }
+
+        private void PaperSizeBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (ExtensionBox == null) return;
+            var paper = ItemText(PaperSizeBox);
+            var previous = ItemText(ExtensionBox);
+            ExtensionBox.Items.Clear();
+            ExtensionBox.Items.Add(new ComboBoxItem { Content = "无加长" });
+            foreach (var extension in PaperSizeCatalog.GetSupportedExtensions(paper).Where(x => !string.IsNullOrWhiteSpace(x)))
+                ExtensionBox.Items.Add(new ComboBoxItem { Content = extension });
+            SelectComboByText(ExtensionBox, string.IsNullOrWhiteSpace(previous) ? "无加长" : previous);
         }
 
         private void TagBox_SelectionChanged(object sender, SelectionChangedEventArgs e)

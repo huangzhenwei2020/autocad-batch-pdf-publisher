@@ -30,15 +30,16 @@ namespace BatchPdfPublisher.Services
             var longer = Math.Max(width, height);
             var bestScore = double.MaxValue;
             var bestScale = 1;
-            var bestQuarterCount = 0;
+            var bestExtension = string.Empty;
             string bestPaper = "A3";
             var knownScale = ParseScale(knownPrintScale);
             foreach (var candidate in BaseSizes)
             {
-                for (var quarterCount = 0; quarterCount <= 16; quarterCount++)
+                foreach (var extension in PaperSizeCatalog.GetSupportedExtensions(candidate.Key))
                 {
+                    var expected = PaperSizeCatalog.GetSize(candidate.Key, extension, "横向");
+                    var expectedLong = Math.Max(expected[0], expected[1]);
                     var expectedShort = candidate.Value[0];
-                    var expectedLong = candidate.Value[1] * (1d + quarterCount / 4d);
                     var shortScale = Math.Max(shorter, 1d) / expectedShort;
                     var longScale = Math.Max(longer, 1d) / expectedLong;
                     var averageScale = (shortScale + longScale) / 2d;
@@ -46,20 +47,20 @@ namespace BatchPdfPublisher.Services
                     var scaleMismatch = Math.Abs(shortScale - longScale) / Math.Max(averageScale, 1d);
                     var integerMismatch = Math.Abs(averageScale - integerScale) / integerScale;
                     var knownScaleMismatch = knownScale > 0 ? Math.Abs(Math.Log(integerScale / (double)knownScale)) : 0d;
-                    var score = scaleMismatch + integerMismatch + knownScaleMismatch + quarterCount * 0.0001d;
+                    var score = scaleMismatch + integerMismatch + knownScaleMismatch + PaperSizeCatalog.ParseExtension(extension) * 0.0001d;
                     if (score < bestScore)
                     {
                         bestScore = score;
                         bestPaper = candidate.Key;
                         bestScale = integerScale;
-                        bestQuarterCount = quarterCount;
+                        bestExtension = extension;
                     }
                 }
             }
             return new FrameSizeGuess
             {
                 PaperSize = bestPaper,
-                Extension = FormatExtension(bestQuarterCount),
+                Extension = PaperSizeCatalog.NormalizeExtension(bestExtension),
                 PaperOrientation = width >= height ? "横向" : "纵向",
                 PrintScale = "1:" + bestScale,
                 MeasuredSize = Math.Round(width, 1) + " × " + Math.Round(height, 1)
@@ -74,14 +75,5 @@ namespace BatchPdfPublisher.Services
             return int.TryParse(denominator.Trim(), out var scale) && scale > 0 ? scale : 0;
         }
 
-        private static string FormatExtension(int quarterCount)
-        {
-            if (quarterCount <= 0) return string.Empty;
-            var whole = quarterCount / 4;
-            var remainder = quarterCount % 4;
-            var fraction = remainder == 1 ? "1/4" : remainder == 2 ? "1/2" : remainder == 3 ? "3/4" : string.Empty;
-            if (whole == 0) return fraction;
-            return string.IsNullOrEmpty(fraction) ? whole.ToString() : whole + " " + fraction;
-        }
     }
 }

@@ -21,9 +21,23 @@ namespace BatchPdfPublisher.Services
         {
             { "A0", new Dictionary<double, double> { { .25d, 1486d }, { .5d, 1783d }, { .75d, 2080d }, { 1d, 2378d } } },
             { "A1", new Dictionary<double, double> { { .25d, 1051d }, { .5d, 1261d }, { .75d, 1471d }, { 1d, 1682d }, { 1.25d, 1892d }, { 1.5d, 2102d } } },
-            { "A2", new Dictionary<double, double> { { .25d, 743d }, { .5d, 891d }, { .75d, 1041d }, { 1d, 1189d }, { 1.25d, 1338d }, { 1.5d, 1486d } } },
-            { "A3", new Dictionary<double, double> { { .25d, 525d }, { .5d, 630d }, { .75d, 735d }, { 1d, 841d }, { 1.5d, 1051d } } }
+            { "A2", new Dictionary<double, double> { { .25d, 743d }, { .5d, 891d }, { .75d, 1041d }, { 1d, 1189d }, { 1.25d, 1338d }, { 1.5d, 1486d }, { 1.75d, 1635d }, { 2d, 1783d }, { 2.25d, 1932d }, { 2.5d, 2080d } } },
+            { "A3", new Dictionary<double, double> { { .5d, 630d }, { 1d, 841d }, { 1.5d, 1051d }, { 2d, 1261d }, { 2.5d, 1471d }, { 3d, 1682d }, { 3.5d, 1892d } } }
         };
+
+        private static readonly Dictionary<string, string[]> SupportedExtensions = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "A0", new[] { "", "1/4", "1/2", "3/4", "1" } },
+            { "A1", new[] { "", "1/4", "1/2", "3/4", "1", "5/4", "3/2" } },
+            { "A2", new[] { "", "1/4", "1/2", "3/4", "1", "5/4", "3/2", "7/4", "2", "9/4", "5/2" } },
+            { "A3", new[] { "", "1/2", "1", "3/2", "2", "5/2", "3", "7/2" } },
+            { "A4", new[] { "" } }
+        };
+
+        public static string[] GetSupportedExtensions(string paper)
+        {
+            return SupportedExtensions.TryGetValue(paper ?? string.Empty, out var values) ? (string[])values.Clone() : new[] { "" };
+        }
 
         public static double[] GetSize(string paper, string extension, string orientation)
         {
@@ -46,9 +60,8 @@ namespace BatchPdfPublisher.Services
         {
             paper = string.Empty; extension = string.Empty; orientation = string.Empty;
             var candidates = new[] { "A0", "A1", "A2", "A3", "A4" };
-            var extensions = new[] { string.Empty, "1/4", "1/2", "3/4", "1", "1 1/4", "1 1/2", "2" };
             foreach (var candidate in candidates)
-                foreach (var candidateExtension in extensions)
+                foreach (var candidateExtension in GetSupportedExtensions(candidate))
                     foreach (var candidateOrientation in new[] { "横向", "纵向" })
                     {
                         var size = GetSize(candidate, candidateExtension, candidateOrientation);
@@ -56,6 +69,24 @@ namespace BatchPdfPublisher.Services
                         { paper = candidate; extension = candidateExtension; orientation = candidateOrientation; return true; }
                     }
             return false;
+        }
+
+        public static string FormatExtension(double value)
+        {
+            var quarter = (int)Math.Round(value * 4d, MidpointRounding.AwayFromZero);
+            if (quarter <= 0) return string.Empty;
+            switch (quarter)
+            {
+                case 1: return "1/4"; case 2: return "1/2"; case 3: return "3/4";
+                case 4: return "1"; case 5: return "5/4"; case 6: return "3/2"; case 7: return "7/4";
+                case 8: return "2"; case 9: return "9/4"; case 10: return "5/2"; case 12: return "3"; case 14: return "7/2";
+                default: return (quarter / 4d).ToString(CultureInfo.InvariantCulture);
+            }
+        }
+
+        public static string NormalizeExtension(string value)
+        {
+            return FormatExtension(ParseExtension(value));
         }
 
         public static double ParseExtension(string value)

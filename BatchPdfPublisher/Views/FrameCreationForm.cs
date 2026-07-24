@@ -3,6 +3,7 @@ using System.Drawing;
 using System.Windows.Forms;
 using System.Threading.Tasks;
 using System.Collections.Generic;
+using System.Linq;
 using System.IO;
 using Autodesk.AutoCAD.ApplicationServices;
 using BatchPdfPublisher.Models;
@@ -45,8 +46,10 @@ namespace BatchPdfPublisher.Views
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); Controls.Add(root);
             root.Controls.Add(new Label { Text = "纸张规格", AutoSize = true, Margin = new Padding(0, 7, 0, 3) }, 0, 0);
             AddCombo(_paper, new[] { "A0", "A1", "A2", "A3", "A4" }, "A1", root, 1, 0);
+            _paper.SelectedIndexChanged += (s, e) => RefreshExtensionChoices();
             root.Controls.Add(new Label { Text = "加长", AutoSize = true, Margin = new Padding(0, 7, 0, 3) }, 0, 1);
-            AddCombo(_extension, new[] { "无加长", "1/4", "1/2" }, "无加长", root, 1, 1);
+            AddCombo(_extension, new[] { "无加长", "1/4", "1/2", "3/4", "1", "5/4", "3/2", "7/4", "2", "9/4", "5/2", "3", "7/2" }, "无加长", root, 1, 1);
+            RefreshExtensionChoices();
             root.Controls.Add(new Label { Text = "方向", AutoSize = true, Margin = new Padding(0, 7, 0, 3) }, 0, 2);
             AddCombo(_orientation, new[] { "横向", "纵向" }, "横向", root, 1, 2);
             root.Controls.Add(new Label { Text = "用户备注", AutoSize = true, Margin = new Padding(0, 7, 0, 3) }, 0, 3);
@@ -189,6 +192,17 @@ namespace BatchPdfPublisher.Views
 
         private static void AddCombo(ComboBox box, string[] values, string selected, TableLayoutPanel root, int column, int row)
         { box.DropDownStyle = ComboBoxStyle.DropDownList; box.Dock = DockStyle.Fill; box.Height = 30; box.Items.AddRange(values); box.SelectedItem = selected; root.Controls.Add(box, column, row); }
+
+        private void RefreshExtensionChoices()
+        {
+            if (_extension == null || _paper == null || string.IsNullOrWhiteSpace(_paper.Text)) return;
+            var previous = _extension.Text;
+            _extension.Items.Clear();
+            _extension.Items.Add("无加长");
+            foreach (var extension in PaperSizeCatalog.GetSupportedExtensions(_paper.Text).Where(x => !string.IsNullOrWhiteSpace(x))) _extension.Items.Add(extension);
+            _extension.SelectedItem = string.IsNullOrWhiteSpace(previous) ? "无加长" : previous;
+            if (_extension.SelectedIndex < 0) _extension.SelectedIndex = 0;
+        }
         private static Button Button(string text, EventHandler click, bool accent)
         { var b = new Button { Text = text, AutoSize = true, Height = 30, MinimumSize = new Size(0, 30), FlatStyle = FlatStyle.Flat, BackColor = Color.White, ForeColor = Color.FromArgb(25, 54, 99), Margin = new Padding(3), Padding = new Padding(7, 2, 7, 2) }; b.FlatAppearance.BorderColor = accent ? Color.FromArgb(104, 145, 185) : Color.FromArgb(190, 201, 216); b.Click += click; return b; }
     }

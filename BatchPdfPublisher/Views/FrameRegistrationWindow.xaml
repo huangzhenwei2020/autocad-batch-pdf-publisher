@@ -23,9 +23,9 @@
     <TextBlock Grid.Row="4" Text="纸张设置" Margin="0,12,0,0"/>
     <WrapPanel Grid.Row="4" Grid.Column="1" Margin="0,8,0,0">
       <TextBlock Text="规格" VerticalAlignment="Center" Margin="0,0,5,0"/>
-      <ComboBox x:Name="PaperSizeBox" Width="72"><ComboBoxItem Content="A0"/><ComboBoxItem Content="A1"/><ComboBoxItem Content="A2"/><ComboBoxItem Content="A3"/><ComboBoxItem Content="A4"/></ComboBox>
+      <ComboBox x:Name="PaperSizeBox" Width="72" SelectionChanged="PaperSizeBox_SelectionChanged"><ComboBoxItem Content="A0"/><ComboBoxItem Content="A1"/><ComboBoxItem Content="A2"/><ComboBoxItem Content="A3"/><ComboBoxItem Content="A4"/></ComboBox>
       <TextBlock Text="加长" VerticalAlignment="Center" Margin="12,0,5,0"/>
-      <ComboBox x:Name="ExtensionBox" Width="90" IsEditable="True"><ComboBoxItem Content="无加长"/><ComboBoxItem Content="1/4"/><ComboBoxItem Content="1/2"/><ComboBoxItem Content="3/4"/><ComboBoxItem Content="1"/><ComboBoxItem Content="1 1/4"/><ComboBoxItem Content="1 1/2"/><ComboBoxItem Content="2"/></ComboBox>
+      <ComboBox x:Name="ExtensionBox" Width="90" IsEditable="True"><ComboBoxItem Content="无加长"/><ComboBoxItem Content="1/4"/><ComboBoxItem Content="1/2"/><ComboBoxItem Content="3/4"/><ComboBoxItem Content="1"/><ComboBoxItem Content="5/4"/><ComboBoxItem Content="3/2"/><ComboBoxItem Content="7/4"/><ComboBoxItem Content="2"/><ComboBoxItem Content="9/4"/><ComboBoxItem Content="5/2"/><ComboBoxItem Content="3"/><ComboBoxItem Content="7/2"/></ComboBox>
       <TextBlock Text="方向" VerticalAlignment="Center" Margin="12,0,5,0"/>
       <ComboBox x:Name="OrientationBox" Width="72"><ComboBoxItem Content="横向"/><ComboBoxItem Content="纵向"/></ComboBox>
     </WrapPanel>

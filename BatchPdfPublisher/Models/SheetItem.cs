@@ -14,7 +14,7 @@ namespace BatchPdfPublisher.Models
         public string Frame { get; set; }
         public string Extension { get; set; }
         public string FrameNote { get; set; }
-        public string FrameDisplay => string.IsNullOrWhiteSpace(Extension) ? Frame : Frame + "+" + Extension;
+        public string FrameDisplay => string.IsNullOrWhiteSpace(Extension) ? Frame : Frame + "+" + PaperSizeCatalog.NormalizeExtension(Extension);
         public string OutputPaperSize => PaperSizeCatalog.Describe(Frame, Extension, PaperOrientation);
         public string PaperOrientation { get; set; }
         public string PrintScale { get; set; }

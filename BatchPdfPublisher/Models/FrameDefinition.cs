@@ -1,3 +1,5 @@
+using BatchPdfPublisher.Services;
+
 namespace BatchPdfPublisher.Models
 {
     public sealed class FrameDefinition
@@ -16,7 +18,7 @@ namespace BatchPdfPublisher.Models
         public string DefaultSheetName { get; set; }
         public string DefaultPrintScale { get; set; }
 
-        public string PaperDisplay => string.IsNullOrWhiteSpace(Extension) ? PaperSize : PaperSize + "+" + Extension;
+        public string PaperDisplay => string.IsNullOrWhiteSpace(Extension) ? PaperSize : PaperSize + "+" + PaperSizeCatalog.NormalizeExtension(Extension);
         public string DisplayName
         {
             get
