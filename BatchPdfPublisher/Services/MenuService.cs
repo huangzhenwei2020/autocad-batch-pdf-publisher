@@ -12,6 +12,7 @@ namespace BatchPdfPublisher.Services
         private static object _menu;
         private static readonly List<object> _items = new List<object>();
         private static EventHandler _idle;
+        private static bool _mnuRequested;
 
         public static void InstallWhenReady()
         {
@@ -42,6 +43,7 @@ namespace BatchPdfPublisher.Services
                 menus.GetType().InvokeMember("InsertMenuInMenuBar", BindingFlags.InvokeMethod, null, menus, new object[] { _menu, count + 1 });
             }
             catch (Exception exception) { Trace(exception); _menu = null; _items.Clear(); }
+            LoadPartialMenu();
         }
 
         public static void Remove()
@@ -56,6 +58,23 @@ namespace BatchPdfPublisher.Services
             }
             catch { }
             finally { _menu = null; _items.Clear(); }
+        }
+
+        private static void LoadPartialMenu()
+        {
+            if (_mnuRequested) return;
+            try
+            {
+                var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "BPP_批量打印.mnu");
+                var content = "***MENUGROUP=BPP\r\n***POP1\r\nBPP_批量打印\r\n[打开面板（BPP）]^C^C_BPP \r\n[创建图框（TKK）]^C^C_TKK \r\n[插入目录（ML1）]^C^C_ML1 \r\n";
+                System.IO.File.WriteAllText(path, content, System.Text.Encoding.Default);
+                var document = Application.DocumentManager.MdiActiveDocument;
+                if (document == null) return;
+                var escaped = path.Replace("\\", "/").Replace("\"", "\\\"");
+                document.SendStringToExecute("_.-MENULOAD\n\"" + escaped + "\"\n(menucmd \"P1=+BPP.POP1\") \n", true, false, false);
+                _mnuRequested = true;
+            }
+            catch (Exception exception) { Trace(exception); }
         }
 
         private static void AddItem(string label, string command)
