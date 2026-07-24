@@ -66,12 +66,12 @@ namespace BatchPdfPublisher.Services
             try
             {
                 var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "BPP_批量打印.mnu");
-                var content = "***MENUGROUP=BPP\r\n***POP1\r\nBPP_批量打印\r\n[打开面板（BPP）]^C^C_BPP \r\n[创建图框（TKK）]^C^C_TKK \r\n[插入目录（ML1）]^C^C_ML1 \r\n";
+                var content = "***MENUGROUP=BPP\r\n***POP16\r\nBPP_批量打印\r\n[打开面板（BPP）]^C^C_BPP \r\n[创建图框（TKK）]^C^C_TKK \r\n[插入目录（ML1）]^C^C_ML1 \r\n";
                 System.IO.File.WriteAllText(path, content, System.Text.Encoding.Default);
                 var document = Application.DocumentManager.MdiActiveDocument;
                 if (document == null) return;
                 var escaped = path.Replace("\\", "/").Replace("\"", "\\\"");
-                document.SendStringToExecute("_.-MENULOAD\n\"" + escaped + "\"\n(menucmd \"P1=+BPP.POP1\") \n", true, false, false);
+                document.SendStringToExecute("_.-MENULOAD\n\"" + escaped + "\"\n(menucmd \"P16=+BPP.POP16\") \n", true, false, false);
                 _mnuRequested = true;
             }
             catch (Exception exception) { Trace(exception); }
