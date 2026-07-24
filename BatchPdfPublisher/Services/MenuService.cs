@@ -33,13 +33,13 @@ namespace BatchPdfPublisher.Services
                 var groups = acad.GetType().InvokeMember("MenuGroups", BindingFlags.GetProperty, null, acad, null);
                 var group = groups.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, groups, new object[] { 0 });
                 var menus = group.GetType().InvokeMember("Menus", BindingFlags.GetProperty, null, group, null);
-                try { _menu = menus.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, menus, new object[] { MenuName }); } catch { _menu = null; }
+                try { _menu = menus.GetType().InvokeMember("Item", BindingFlags.GetProperty, null, menus, new object[] { MenuName }); } catch { _menu = null; }
                 if (_menu != null) RemoveMenuFromBar(menus, _menu);
                 _menu = menus.GetType().InvokeMember("Add", BindingFlags.InvokeMethod, null, menus, new object[] { MenuName });
                 AddItem("打开面板", "BPP"); AddItem("创建图框", "TKK"); AddItem("插入目录", "ML1");
                 var bar = acad.GetType().InvokeMember("MenuBar", BindingFlags.GetProperty, null, acad, null);
                 var count = (int)bar.GetType().InvokeMember("Count", BindingFlags.GetProperty, null, bar, null);
-                menus.GetType().InvokeMember("InsertMenuInMenuBar", BindingFlags.InvokeMethod, null, menus, new object[] { _menu, count });
+                menus.GetType().InvokeMember("InsertMenuInMenuBar", BindingFlags.InvokeMethod, null, menus, new object[] { _menu, count + 1 });
             }
             catch (Exception exception) { Trace(exception); _menu = null; _items.Clear(); }
         }
@@ -61,7 +61,7 @@ namespace BatchPdfPublisher.Services
         private static void AddItem(string label, string command)
         {
             var count = (int)_menu.GetType().InvokeMember("Count", BindingFlags.GetProperty, null, _menu, null);
-            var item = _menu.GetType().InvokeMember("AddMenuItem", BindingFlags.InvokeMethod, null, _menu, new object[] { count, label, "BPP_" + command, "^C^C_" + command + " " });
+            var item = _menu.GetType().InvokeMember("AddMenuItem", BindingFlags.InvokeMethod, null, _menu, new object[] { count + 1, label, "BPP_" + command, "^C^C_" + command + " " });
             _items.Add(item);
         }
 

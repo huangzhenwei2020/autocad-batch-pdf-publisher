@@ -24,7 +24,7 @@ namespace BatchPdfPublisher.Services
                     var ribbon = ComponentManager.Ribbon;
                     if (ribbon == null) return;
                     var existing = ribbon.FindTab(TabId);
-                    if (existing != null && existing.Panels.Count > 0 && existing.Panels[0].Source.Items.Count == 3)
+                    if (existing != null && existing.Panels.Count > 0 && existing.Panels[0].Source.Items.Count == 3 && existing.Panels[0].Source.Items[0].Text.IndexOf("BPP", StringComparison.OrdinalIgnoreCase) >= 0)
                     {
                         existing.IsVisible = true;
                         ribbon.ActiveTab = existing;
@@ -34,9 +34,9 @@ namespace BatchPdfPublisher.Services
                     var tab = new RibbonTab { Id = TabId, Title = "BPP_批量打印" };
                     var source = new RibbonPanelSource { Title = "批量打印" };
                     var panel = new RibbonPanel { Source = source };
-                    source.Items.Add(CreateButton("打开面板", "BPP ", "panel"));
-                    source.Items.Add(CreateButton("创建图框", "TKK ", "frame"));
-                    source.Items.Add(CreateButton("插入目录", "ML1 ", "catalog"));
+                    source.Items.Add(CreateButton("打开面板（BPP）", "BPP ", "panel"));
+                    source.Items.Add(CreateButton("创建图框（TKK）", "TKK ", "frame"));
+                    source.Items.Add(CreateButton("插入目录（ML1）", "ML1 ", "catalog"));
                     tab.Panels.Add(panel);
                     ribbon.Tabs.Add(tab);
                     ribbon.ActiveTab = tab;
