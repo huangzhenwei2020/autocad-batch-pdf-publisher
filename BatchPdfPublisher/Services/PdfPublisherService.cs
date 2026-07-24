@@ -381,13 +381,34 @@ namespace BatchPdfPublisher.Services
             var validator = PlotSettingsValidator.Current;
             var device = ChoosePdfDevice(validator);
             InitializePdfDevice(validator, settings, layout, device);
+            // AutoCAD 2022 validates custom metric media against the paper-unit
+            // mode currently held by PlotSettings.  A layout copied from a
+            // TArch drawing can still be in inches, which makes the otherwise
+            // valid BPP_* media name fail with eInvalidInput.  Set the unit
+            // mode before asking for, and applying, the custom media.
+            validator.SetPlotPaperUnits(settings, PlotPaperUnit.Millimeters);
             var target = TargetPaperSize(sheet);
             var media = ChooseMedia(validator, settings, target[0], target[1], marginMode, !string.IsNullOrWhiteSpace(sheet.Extension));
             if (string.IsNullOrWhiteSpace(media))
                 throw new InvalidOperationException($"当前 PDF 绘图仪没有 {PaperSizeCatalog.Describe(sheet.Frame, sheet.Extension, sheet.PaperOrientation)} 的精确纸张。请先关闭 CAD，再双击启动器让它重新部署 BatchPdfPublisher.pc3/pmp；当前进程不会自动刷新绘图仪介质列表。加长图纸不会降级为普通 A1/A0。 ");
             // SetPlotConfigurationName 同时写入设备和有效介质，避免留下一个
             // 设备有效但介质为空的 PlotSettings（AutoCAD 2022 会报 eInvalidPlotInfo）。
-            validator.SetPlotConfigurationName(settings, device, media);
+            try
+            {
+                validator.SetPlotConfigurationName(settings, device, media);
+            }
+            catch (Autodesk.AutoCAD.Runtime.Exception)
+            {
+                // The plotter cache can be stale immediately after the
+                // launcher deploys a PMP. Refresh once and retry the exact
+                // canonical name before surfacing the useful error.
+                validator.RefreshLists(settings);
+                try { validator.SetPlotConfigurationName(settings, device, media); }
+                catch (Autodesk.AutoCAD.Runtime.Exception retry)
+                {
+                    throw new InvalidOperationException($"无法应用 PDF 纸张“{media}”（目标 {target[0]:0.#} × {target[1]:0.#} mm）：{retry.Message}", retry);
+                }
+            }
             validator.RefreshLists(settings);
             validator.SetPlotPaperUnits(settings, PlotPaperUnit.Millimeters);
             validator.SetPlotType(settings, Autodesk.AutoCAD.DatabaseServices.PlotType.Window);
@@ -406,7 +427,18 @@ namespace BatchPdfPublisher.Services
             // consistent: 1051x594 always requires a 90-degree rotation when
             // the available media is stored as 594x1051.
             var desiredLandscape = target[0] > target[1];
-            validator.SetPlotRotation(settings, desiredLandscape == mediaLandscape ? PlotRotation.Degrees000 : PlotRotation.Degrees090);
+            try
+            {
+                validator.SetPlotRotation(settings, desiredLandscape == mediaLandscape ? PlotRotation.Degrees000 : PlotRotation.Degrees090);
+            }
+            catch (Autodesk.AutoCAD.Runtime.Exception rotationError)
+            {
+                // Some AutoCAD/TArch PDF drivers reject a rotation on a
+                // user-defined PMP medium even though the medium itself is
+                // valid. Keep the page and let ScaleToFit fit the window;
+                // the merger later restores the requested paper orientation.
+                WriteDiagnostic($"打印纸张 {media} 拒绝方向旋转，已使用默认方向：{rotationError.Message}", rotationError);
+            }
             var style = string.IsNullOrWhiteSpace(sheet.PlotStyle) || string.Equals(sheet.PlotStyle, "使用输出设置", StringComparison.OrdinalIgnoreCase)
                 ? defaultPlotStyle
                 : sheet.PlotStyle;

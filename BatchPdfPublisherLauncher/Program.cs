@@ -318,6 +318,7 @@ namespace BatchPdfPublisherLauncher
                 var targetPmp = Path.Combine(pmpDirectory, PlotterMediaName);
                 File.Copy(sourcePlotterConfig, targetPc3, true);
                 File.Copy(sourcePlotterMedia, targetPmp, true);
+                EnsureStandardExtendedMedia(targetPmp);
                 BindPmp(targetPc3, targetPmp);
                 BindPmpSelfPath(targetPmp);
                 Log("已部署毫米纸张库: " + plotterDirectory);
@@ -332,6 +333,74 @@ namespace BatchPdfPublisherLauncher
                 if (rewritten.IndexOf("user_defined_model_pathname=\"" + pmpPath, StringComparison.OrdinalIgnoreCase) < 0)
                     throw new InvalidDataException("写入 BatchPdfPublisher.pmp 自身路径失败。");
                 return rewritten;
+            });
+        }
+
+        private static void EnsureStandardExtendedMedia(string pmpPath)
+        {
+            // Keep the bundled PMP usable on machines where the file came
+            // from an older release.  AutoCAD caches the PMP media list, so
+            // adding the standard GB/T 50001 extended lengths at deployment
+            // time is safer than silently falling back to A1/A0.
+            var media = new[]
+            {
+                new { Paper = "A1", W = 594, H = 1682 },
+                new { Paper = "A2", W = 420, H = 891 },
+                new { Paper = "A2", W = 420, H = 1338 },
+                new { Paper = "A2", W = 420, H = 1486 },
+                new { Paper = "A2", W = 420, H = 1635 },
+                new { Paper = "A2", W = 420, H = 1783 },
+                new { Paper = "A2", W = 420, H = 1932 },
+                new { Paper = "A2", W = 420, H = 2080 },
+                new { Paper = "A3", W = 297, H = 630 },
+                new { Paper = "A3", W = 297, H = 841 },
+                new { Paper = "A3", W = 297, H = 1051 },
+                new { Paper = "A3", W = 297, H = 1261 },
+                new { Paper = "A3", W = 297, H = 1471 },
+                new { Paper = "A3", W = 297, H = 1682 },
+                new { Paper = "A3", W = 297, H = 1892 }
+            };
+            RewriteCompressedPlotterFile(pmpPath, text =>
+            {
+                var sizeInsert = new StringBuilder();
+                var descriptionInsert = new StringBuilder();
+                var nextSize = Regex.Matches(text, "\\n   (\\d+)\\{\\r?\\n    caps_type=2")
+                    .Cast<Match>().Select(m => int.Parse(m.Groups[1].Value)).DefaultIfEmpty(-1).Max() + 1;
+                var nextDescription = Regex.Matches(text, "\\n   (\\d+)\\{\\r?\\n    caps_type=2\\r?\\n    name=\\\"UserDefinedMetric")
+                    .Cast<Match>().Select(m => int.Parse(m.Groups[1].Value)).DefaultIfEmpty(-1).Max() + 1;
+                foreach (var item in media)
+                {
+                    var id = "BPP_" + item.Paper + "_" + item.W + "x" + item.H + "_MM_FULL_BLEED";
+                    if (text.IndexOf(id, StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                    var area = item.W * item.H;
+                    sizeInsert.AppendLine("   " + nextSize++ + "{");
+                    sizeInsert.AppendLine("    caps_type=2");
+                    sizeInsert.AppendLine("    name=\"UserDefinedMetric (" + item.W.ToString("0.00") + " x " + item.H.ToString("0.00") + "毫米)\"");
+                    sizeInsert.AppendLine("    localized_name=\"" + id + "\"");
+                    sizeInsert.AppendLine("    media_description_name=\"UserDefinedMetric " + item.W.ToString("0.00") + "W x " + item.H.ToString("0.00") + "H\"");
+                    sizeInsert.AppendLine("    media_group=15");
+                    sizeInsert.AppendLine("    landscape_mode=FALSE");
+                    sizeInsert.AppendLine("   }");
+                    descriptionInsert.AppendLine("   " + nextDescription++ + "{");
+                    descriptionInsert.AppendLine("    caps_type=2");
+                    descriptionInsert.AppendLine("    name=\"UserDefinedMetric " + item.W.ToString("0.00") + "W x " + item.H.ToString("0.00") + "H\"");
+                    descriptionInsert.AppendLine("    media_bounds_urx=" + item.W.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture));
+                    descriptionInsert.AppendLine("    media_bounds_ury=" + item.H.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture));
+                    descriptionInsert.AppendLine("    printable_bounds_llx=0.0");
+                    descriptionInsert.AppendLine("    printable_bounds_lly=0.0");
+                    descriptionInsert.AppendLine("    printable_bounds_urx=" + item.W.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture));
+                    descriptionInsert.AppendLine("    printable_bounds_ury=" + item.H.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture));
+                    descriptionInsert.AppendLine("    printable_area=" + area.ToString("0.00000", System.Globalization.CultureInfo.InvariantCulture));
+                    descriptionInsert.AppendLine("    dimensional=TRUE");
+                    descriptionInsert.AppendLine("   }");
+                }
+                if (sizeInsert.Length == 0) return text;
+                var sizeMarker = text.IndexOf("   description{", StringComparison.Ordinal);
+                if (sizeMarker < 0) return text;
+                text = text.Insert(sizeMarker, sizeInsert.ToString());
+                var closeMarker = text.LastIndexOf("\n  }\n }\n}", StringComparison.Ordinal);
+                if (closeMarker >= 0) text = text.Insert(closeMarker, descriptionInsert.ToString());
+                return text;
             });
         }
 
