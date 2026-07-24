@@ -27,7 +27,6 @@ namespace BatchPdfPublisher.Services
                     if (existing != null && existing.Panels.Count > 0 && existing.Panels[0].Source.Items.Count == 3 && existing.Panels[0].Source.Items[0].Text.IndexOf("BPP", StringComparison.OrdinalIgnoreCase) >= 0)
                     {
                         existing.IsVisible = true;
-                        ribbon.ActiveTab = existing;
                         return;
                     }
                     if (existing != null) ribbon.Tabs.Remove(existing);
@@ -39,7 +38,6 @@ namespace BatchPdfPublisher.Services
                     source.Items.Add(CreateButton("插入目录（ML1）", "ML1 ", "catalog"));
                     tab.Panels.Add(panel);
                     ribbon.Tabs.Add(tab);
-                    ribbon.ActiveTab = tab;
                 }
                 catch (Exception exception) { Trace(exception); }
             };
