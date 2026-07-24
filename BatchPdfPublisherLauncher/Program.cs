@@ -75,16 +75,43 @@ namespace BatchPdfPublisherLauncher
         private static List<PlatformOption> FindPlatforms()
         {
             var result = new List<PlatformOption>();
-            AddIfExists(result, new PlatformOption("T20 天正建筑 V9（AutoCAD 2022）", "t20v9", @"C:\Tangent\TArchT20V9\TGStart.exe", "", @"C:\Tangent\TArchT20V9", "AutoCAD.Application.24.1"));
-            AddIfExists(result, new PlatformOption("T20 天正建筑 V9（AutoCAD 2024）", "t20v9-2024", @"C:\Tangent\TArchT20V9\TGStart2024.exe", "", @"C:\Tangent\TArchT20V9", "AutoCAD.Application.24.3"));
             // The machine may have T20 as the default AutoCAD profile. Force
             // the unnamed vanilla profile so launching plain AutoCAD cannot
             // pull the T20 ARX/LSP startup chain into the session.
             var versions = new[] { new { Year = 2021, Release = "24.0" }, new { Year = 2022, Release = "24.1" }, new { Year = 2023, Release = "24.2" }, new { Year = 2024, Release = "24.3" } };
+            var cadPlatforms = new List<PlatformOption>();
             foreach (var version in versions)
             {
                 var root = FindAcadInstallDirectory(version.Release) ?? (@"C:\Program Files\Autodesk\AutoCAD " + version.Year);
-                AddIfExists(result, new PlatformOption("AutoCAD " + version.Year + "（R" + version.Release + "）", "acad" + version.Year, Path.Combine(root, "acad.exe"), "/nologo /p \"<<Unnamed Profile>>\"", root, "AutoCAD.Application." + version.Release));
+                var executable = Path.Combine(root, "acad.exe");
+                if (File.Exists(executable)) cadPlatforms.Add(new PlatformOption("AutoCAD " + version.Year + "（R" + version.Release + "）", "acad" + version.Year, executable, "/nologo /p \"<<Unnamed Profile>>\"", root, "AutoCAD.Application." + version.Release, "无天正", "AutoCAD " + version.Year));
+            }
+            result.AddRange(cadPlatforms);
+            foreach (var tz in FindTianzhengInstallations())
+                foreach (var cad in cadPlatforms)
+                    result.Add(new PlatformOption(tz.Name + " + " + cad.CadName, tz.Id + "-" + cad.Id, tz.Executable, "", Path.GetDirectoryName(tz.Executable), cad.ProgId, tz.Name, cad.CadName));
+            return result;
+        }
+
+        private static List<TianzhengInstallation> FindTianzhengInstallations()
+        {
+            var result = new List<TianzhengInstallation>();
+            var roots = new[] { @"C:\Tangent", @"D:\Tangent", @"C:\Program Files\Tangent", @"D:\Program Files\Tangent" };
+            foreach (var root in roots)
+            {
+                if (!Directory.Exists(root)) continue;
+                try
+                {
+                    foreach (var file in Directory.GetFiles(root, "*.exe", SearchOption.AllDirectories))
+                    {
+                        var name = Path.GetFileNameWithoutExtension(file).ToLowerInvariant();
+                        if (!(name.Contains("tgstart") || name.Contains("telec") || name.Contains("tmelec") || name.Contains("tarch"))) continue;
+                        var product = name.Contains("elec") ? "正天电气" : "天正建筑";
+                        var id = product + "-" + GetFileHash(file).Substring(0, 8);
+                        if (!result.Any(x => string.Equals(x.Executable, file, StringComparison.OrdinalIgnoreCase))) result.Add(new TianzhengInstallation(product, id, file));
+                    }
+                }
+                catch { }
             }
             return result;
         }
@@ -364,15 +391,27 @@ namespace BatchPdfPublisherLauncher
     {
         public PlatformOption(string displayName, string id, string executable, string arguments, string workingDirectory, string progId)
         {
-            DisplayName = displayName; Id = id; Executable = executable; Arguments = arguments; WorkingDirectory = workingDirectory; ProgId = progId;
+            DisplayName = displayName; Id = id; Executable = executable; Arguments = arguments; WorkingDirectory = workingDirectory; ProgId = progId; TianzhengName = "无天正"; CadName = displayName;
         }
+        public PlatformOption(string displayName, string id, string executable, string arguments, string workingDirectory, string progId, string tianzhengName, string cadName)
+        { DisplayName = displayName; Id = id; Executable = executable; Arguments = arguments; WorkingDirectory = workingDirectory; ProgId = progId; TianzhengName = tianzhengName; CadName = cadName; }
         public string DisplayName { get; }
         public string Id { get; }
         public string Executable { get; }
         public string Arguments { get; }
         public string WorkingDirectory { get; }
         public string ProgId { get; }
+        public string TianzhengName { get; }
+        public string CadName { get; }
         public override string ToString() => DisplayName;
+    }
+
+    internal sealed class TianzhengInstallation
+    {
+        public TianzhengInstallation(string name, string id, string executable) { Name = name; Id = id; Executable = executable; }
+        public string Name { get; }
+        public string Id { get; }
+        public string Executable { get; }
     }
 
     internal sealed class LauncherOptions
@@ -384,35 +423,46 @@ namespace BatchPdfPublisherLauncher
 
     internal sealed class PlatformPicker : Form
     {
-        private readonly ComboBox _platformBox;
+        private readonly IList<PlatformOption> _platforms;
+        private readonly ComboBox _tianzhengBox;
+        private readonly ComboBox _cadBox;
         private readonly CheckBox _runningCad;
         private readonly CheckBox _permanentInstall;
         private readonly Button _uninstallButton;
         public bool UninstallRequested { get; private set; }
         public LauncherOptions Options => new LauncherOptions
         {
-            Platform = _platformBox.SelectedItem as PlatformOption,
+            Platform = _platforms.FirstOrDefault(x => string.Equals(x.TianzhengName, _tianzhengBox.SelectedItem as string, StringComparison.OrdinalIgnoreCase) && string.Equals(x.CadName, _cadBox.SelectedItem as string, StringComparison.OrdinalIgnoreCase)),
             LoadIntoRunningCad = _runningCad.Checked,
             InstallPermanently = _permanentInstall.Checked
         };
 
         public PlatformPicker(IList<PlatformOption> platforms, string lastPlatform, bool hasRunningCad)
         {
+            _platforms = platforms;
             Text = "启动批量打印插件";
-            Width = 540; Height = 290; FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = false; MinimizeBox = false; StartPosition = FormStartPosition.CenterScreen;
-            var label = new Label { Left = 18, Top = 20, Width = 480, Text = "选择要加载插件的 CAD 平台：" };
-            _platformBox = new ComboBox { Left = 18, Top = 52, Width = 440, DropDownStyle = ComboBoxStyle.DropDownList };
-            foreach (var platform in platforms) _platformBox.Items.Add(platform);
+            Width = 560; Height = 330; FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = false; MinimizeBox = false; StartPosition = FormStartPosition.CenterScreen;
+            var label = new Label { Left = 18, Top = 18, Width = 500, Text = "请选择运行组合（先选天正产品，再选对应的 AutoCAD 版本）：" };
+            var tzLabel = new Label { Left = 18, Top = 53, Width = 100, Text = "天正产品：" };
+            _tianzhengBox = new ComboBox { Left = 118, Top = 49, Width = 390, DropDownStyle = ComboBoxStyle.DropDownList };
+            var cadLabel = new Label { Left = 18, Top = 90, Width = 100, Text = "AutoCAD：" };
+            _cadBox = new ComboBox { Left = 118, Top = 86, Width = 390, DropDownStyle = ComboBoxStyle.DropDownList };
+            foreach (var value in platforms.Select(x => x.TianzhengName).Distinct(StringComparer.OrdinalIgnoreCase)) _tianzhengBox.Items.Add(value);
+            foreach (var value in platforms.Select(x => x.CadName).Distinct(StringComparer.OrdinalIgnoreCase)) _cadBox.Items.Add(value);
             var last = platforms.FirstOrDefault(x => string.Equals(x.Id, lastPlatform, StringComparison.OrdinalIgnoreCase));
-            if (platforms.Count > 0) _platformBox.SelectedItem = last ?? platforms[0];
-            _runningCad = new CheckBox { Left = 18, Top = 94, Width = 480, Text = hasRunningCad ? "加载到已启动的 CAD（已检测到 AutoCAD 进程）" : "加载到已启动的 CAD（当前未检测到，可稍后重试）", Checked = hasRunningCad, Enabled = hasRunningCad };
-            _permanentInstall = new CheckBox { Left = 18, Top = 128, Width = 480, Text = "永久自动加载（以后每次启动 CAD 都加载插件）", Checked = false };
-            var tip = new Label { Left = 18, Top = 160, Width = 480, Height = 38, ForeColor = System.Drawing.Color.FromArgb(80, 90, 105), Text = "默认仅本次加载，不会写入永久自动加载配置。已永久安装时，取消勾选不会自动卸载旧配置。" };
-            var startButton = new Button { Left = 318, Top = 215, Width = 90, Text = "继续", DialogResult = DialogResult.OK, Enabled = platforms.Count > 0 };
-            var cancelButton = new Button { Left = 418, Top = 215, Width = 85, Text = "取消", DialogResult = DialogResult.Cancel };
-            _uninstallButton = new Button { Left = 18, Top = 215, Width = 90, Text = "卸载" };
+            if (platforms.Count > 0)
+            {
+                _tianzhengBox.SelectedItem = last?.TianzhengName ?? platforms[0].TianzhengName;
+                _cadBox.SelectedItem = last?.CadName ?? platforms[0].CadName;
+            }
+            _runningCad = new CheckBox { Left = 18, Top = 128, Width = 500, Text = hasRunningCad ? "加载到已启动的 CAD（已检测到 AutoCAD 进程）" : "加载到已启动的 CAD（当前未检测到，可稍后重试）", Checked = hasRunningCad, Enabled = hasRunningCad };
+            _permanentInstall = new CheckBox { Left = 18, Top = 162, Width = 500, Text = "永久自动加载（以后每次启动 CAD 都加载插件）", Checked = false };
+            var tip = new Label { Left = 18, Top = 194, Width = 500, Height = 38, ForeColor = System.Drawing.Color.FromArgb(80, 90, 105), Text = "默认仅本次加载，不会写入永久自动加载配置。请选择天正和 CAD 的实际组合。" };
+            var startButton = new Button { Left = 328, Top = 250, Width = 90, Text = "继续", DialogResult = DialogResult.OK, Enabled = platforms.Count > 0 };
+            var cancelButton = new Button { Left = 428, Top = 250, Width = 85, Text = "取消", DialogResult = DialogResult.Cancel };
+            _uninstallButton = new Button { Left = 18, Top = 250, Width = 90, Text = "卸载" };
             _uninstallButton.Click += (s, e) => { UninstallRequested = true; DialogResult = DialogResult.OK; };
-            Controls.Add(label); Controls.Add(_platformBox); Controls.Add(_runningCad); Controls.Add(_permanentInstall); Controls.Add(tip); Controls.Add(_uninstallButton); Controls.Add(startButton); Controls.Add(cancelButton);
+            Controls.Add(label); Controls.Add(tzLabel); Controls.Add(_tianzhengBox); Controls.Add(cadLabel); Controls.Add(_cadBox); Controls.Add(_runningCad); Controls.Add(_permanentInstall); Controls.Add(tip); Controls.Add(_uninstallButton); Controls.Add(startButton); Controls.Add(cancelButton);
             AcceptButton = startButton; CancelButton = cancelButton;
         }
     }
