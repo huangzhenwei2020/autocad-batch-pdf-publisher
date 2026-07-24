@@ -34,10 +34,15 @@ namespace BatchPdfPublisher.Services
                 var groups = acad.GetType().InvokeMember("MenuGroups", BindingFlags.GetProperty, null, acad, null);
                 var group = groups.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, groups, new object[] { 0 });
                 var menus = group.GetType().InvokeMember("Menus", BindingFlags.GetProperty, null, group, null);
-                try { _menu = menus.GetType().InvokeMember("Item", BindingFlags.GetProperty, null, menus, new object[] { MenuName }); } catch { _menu = null; }
-                if (_menu != null) RemoveMenuFromBar(menus, _menu);
-                _menu = menus.GetType().InvokeMember("Add", BindingFlags.InvokeMethod, null, menus, new object[] { MenuName });
-                AddItem("打开面板", "BPP"); AddItem("创建图框", "TKK"); AddItem("插入目录", "ML1");
+                _menu = FindMenu(menus);
+                if (_menu == null)
+                    _menu = menus.GetType().InvokeMember("Add", BindingFlags.InvokeMethod, null, menus, new object[] { MenuName });
+                RemoveMenuFromBar(menus, _menu);
+                var menuCount = (int)_menu.GetType().InvokeMember("Count", BindingFlags.GetProperty, null, _menu, null);
+                if (menuCount == 0)
+                {
+                    AddItem("打开面板", "BPP"); AddItem("创建图框", "TKK"); AddItem("插入目录", "ML1");
+                }
                 var bar = acad.GetType().InvokeMember("MenuBar", BindingFlags.GetProperty, null, acad, null);
                 var count = (int)bar.GetType().InvokeMember("Count", BindingFlags.GetProperty, null, bar, null);
                 menus.GetType().InvokeMember("InsertMenuInMenuBar", BindingFlags.InvokeMethod, null, menus, new object[] { _menu, count + 1 });
@@ -67,7 +72,9 @@ namespace BatchPdfPublisher.Services
             {
                 var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "BPP_批量打印.mnu");
                 var content = "***MENUGROUP=BPP\r\n***POP16\r\nBPP_批量打印\r\n[打开面板（BPP）]^C^C_BPP \r\n[创建图框（TKK）]^C^C_TKK \r\n[插入目录（ML1）]^C^C_ML1 \r\n";
-                System.IO.File.WriteAllText(path, content, System.Text.Encoding.Default);
+                // MNU is an ANSI file; AutoCAD on Chinese installations expects the
+                // system GBK code page rather than UTF-8/default .NET encoding.
+                System.IO.File.WriteAllText(path, content, System.Text.Encoding.GetEncoding(936));
                 var document = Application.DocumentManager.MdiActiveDocument;
                 if (document == null) return;
                 var escaped = path.Replace("\\", "/").Replace("\"", "\\\"");
@@ -86,8 +93,27 @@ namespace BatchPdfPublisher.Services
         private static void AddItem(string label, string command)
         {
             var count = (int)_menu.GetType().InvokeMember("Count", BindingFlags.GetProperty, null, _menu, null);
-            var item = _menu.GetType().InvokeMember("AddMenuItem", BindingFlags.InvokeMethod, null, _menu, new object[] { count + 1, label, "BPP_" + command, "^C^C_" + command + " " });
+            // AutoCAD's ActiveX AddMenuItem signature is (Index, Label, Macro).
+            // The previous implementation supplied an extra identifier argument,
+            // causing TargetParameterCountException before insertion into MenuBar.
+            var item = _menu.GetType().InvokeMember("AddMenuItem", BindingFlags.InvokeMethod, null, _menu, new object[] { count + 1, label, "^C^C_" + command + " " });
             _items.Add(item);
+        }
+
+        private static object FindMenu(object menus)
+        {
+            try
+            {
+                var count = (int)menus.GetType().InvokeMember("Count", BindingFlags.GetProperty, null, menus, null);
+                for (var i = 0; i < count; i++)
+                {
+                    var item = menus.GetType().InvokeMember("Item", BindingFlags.GetProperty, null, menus, new object[] { i });
+                    var name = item?.GetType().GetProperty("Name")?.GetValue(item, null) as string;
+                    if (string.Equals(name, MenuName, StringComparison.OrdinalIgnoreCase)) return item;
+                }
+            }
+            catch { }
+            return null;
         }
 
         private static bool HasMenu()
