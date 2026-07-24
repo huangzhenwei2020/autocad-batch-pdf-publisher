@@ -107,7 +107,9 @@ namespace BatchPdfPublisher.Services
                 var count = (int)menus.GetType().InvokeMember("Count", BindingFlags.GetProperty, null, menus, null);
                 for (var i = 0; i < count; i++)
                 {
-                    var item = menus.GetType().InvokeMember("Item", BindingFlags.GetProperty, null, menus, new object[] { i });
+                    object item;
+                    try { item = menus.GetType().InvokeMember("Item", BindingFlags.GetProperty, null, menus, new object[] { i }); }
+                    catch { item = menus.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, menus, new object[] { i }); }
                     var name = item?.GetType().GetProperty("Name")?.GetValue(item, null) as string;
                     if (string.Equals(name, MenuName, StringComparison.OrdinalIgnoreCase)) return item;
                 }
