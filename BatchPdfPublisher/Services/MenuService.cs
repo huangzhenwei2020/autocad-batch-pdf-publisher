@@ -104,6 +104,14 @@ namespace BatchPdfPublisher.Services
         {
             try
             {
+                // The ActiveX collection exposes Item as a default indexed
+                // property on some AutoCAD versions and as a method on others.
+                // Prefer the name lookup first; this avoids trying Add when the
+                // menu already exists (which raises "menu already exists").
+                try { return menus.GetType().InvokeMember("Item", BindingFlags.GetProperty, null, menus, new object[] { MenuName }); }
+                catch { }
+                try { return menus.GetType().InvokeMember("Item", BindingFlags.InvokeMethod, null, menus, new object[] { MenuName }); }
+                catch { }
                 var count = (int)menus.GetType().InvokeMember("Count", BindingFlags.GetProperty, null, menus, null);
                 for (var i = 0; i < count; i++)
                 {
