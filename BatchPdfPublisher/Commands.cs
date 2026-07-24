@@ -34,6 +34,14 @@ namespace BatchPdfPublisher
         [CommandMethod("ML1")]
         public void InsertCatalogShortcut() => ShowPublisher(form => form.OpenCatalogInsertForCommand());
 
+        [CommandMethod("BPPUI")]
+        public void RefreshPluginUi()
+        {
+            RibbonService.InstallWhenReady();
+            MenuService.InstallWhenReady();
+            Application.ShowAlertDialog("BPP 界面已请求刷新。若 Ribbon 仍未显示，请执行 RIBBON 命令后再执行 BPPUI。");
+        }
+
         [CommandMethod("BPPUBLISH")]
         public void OpenPublisher()
         {

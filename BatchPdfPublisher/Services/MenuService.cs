@@ -43,7 +43,7 @@ namespace BatchPdfPublisher.Services
                 var count = (int)bar.GetType().InvokeMember("Count", BindingFlags.GetProperty, null, bar, null);
                 menus.GetType().InvokeMember("InsertMenuInMenuBar", BindingFlags.InvokeMethod, null, menus, new object[] { _menu, count });
             }
-            catch { _menu = null; _items.Clear(); }
+            catch (Exception exception) { Trace(exception); _menu = null; _items.Clear(); }
         }
 
         public static void Remove()
@@ -70,6 +70,11 @@ namespace BatchPdfPublisher.Services
         private static void RemoveMenuFromBar(object menus, object menu)
         {
             try { menus?.GetType().InvokeMember("RemoveMenuFromMenuBar", BindingFlags.InvokeMethod, null, menus, new[] { menu }); } catch { }
+        }
+
+        private static void Trace(Exception exception)
+        {
+            try { System.IO.File.AppendAllText(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "BatchPdfPublisher.ui.log"), DateTime.Now.ToString("O") + " Menu: " + exception + Environment.NewLine); } catch { }
         }
     }
 }

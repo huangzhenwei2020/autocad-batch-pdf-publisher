@@ -19,31 +19,35 @@ namespace BatchPdfPublisher.Services
             if (_idleHandler != null) return;
             _idleHandler = (sender, args) =>
             {
-                var ribbon = ComponentManager.Ribbon;
-                if (ribbon == null) return;
-                var existing = ribbon.FindTab(TabId);
-                if (existing != null)
+                try
                 {
-                    // Replace an older tab from a previous DLL load so the
-                    // three current commands are always the only buttons.
-                    ribbon.Tabs.Remove(existing);
+                    var ribbon = ComponentManager.Ribbon;
+                    if (ribbon == null) return;
+                    var existing = ribbon.FindTab(TabId);
+                    if (existing != null) ribbon.Tabs.Remove(existing);
+                    var tab = new RibbonTab { Id = TabId, Title = "BPP_批量打印" };
+                    var source = new RibbonPanelSource { Title = "批量打印" };
+                    var panel = new RibbonPanel { Source = source };
+                    source.Items.Add(CreateButton("打开面板", "BPP ", "panel"));
+                    source.Items.Add(CreateButton("创建图框", "TKK ", "frame"));
+                    source.Items.Add(CreateButton("插入目录", "ML1 ", "catalog"));
+                    tab.Panels.Add(panel);
+                    ribbon.Tabs.Add(tab);
+                    ribbon.ActiveTab = tab;
+                    Application.Idle -= _idleHandler;
+                    _idleHandler = null;
                 }
-
-                var tab = new RibbonTab { Id = TabId, Title = "BPP_批量打印" };
-                var source = new RibbonPanelSource { Title = "批量打印" };
-                var panel = new RibbonPanel { Source = source };
-                source.Items.Add(CreateButton("打开面板", "BPP ", "panel"));
-                source.Items.Add(CreateButton("创建图框", "TKK ", "frame"));
-                source.Items.Add(CreateButton("插入目录", "ML1 ", "catalog"));
-                tab.Panels.Add(panel);
-                ribbon.Tabs.Add(tab);
-                Application.Idle -= _idleHandler;
-                _idleHandler = null;
+                catch (Exception exception) { Trace(exception); }
             };
             Application.Idle += _idleHandler;
             // A freshly started AutoCAD may already have a Ribbon when NETLOAD
             // completes; install immediately as well as on subsequent idle ticks.
             _idleHandler(null, EventArgs.Empty);
+        }
+
+        private static void Trace(Exception exception)
+        {
+            try { System.IO.File.AppendAllText(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "BatchPdfPublisher.ui.log"), DateTime.Now.ToString("O") + " Ribbon: " + exception + Environment.NewLine); } catch { }
         }
 
         public static void Remove()
