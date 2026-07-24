@@ -20,9 +20,12 @@ namespace BatchPdfPublisher.Views
             InitializeComponent();
             _attributeValues = attributeValues ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             BlockNameBox.Text = blockName;
+            var detectedAttributes = _attributeValues.Count == 0
+                ? "未检测到属性标签；可在右侧选择“不读取”并手工填写。"
+                : "检测到属性：" + string.Join("；", _attributeValues.Select(x => x.Key + " = " + (string.IsNullOrWhiteSpace(x.Value) ? "（空）" : x.Value.Trim())));
             MeasuredSizeText.Text = guess.MeasuredSize + "；建议 " + guess.PaperSize +
                                     (string.IsNullOrWhiteSpace(guess.Extension) ? string.Empty : "+" + guess.Extension) +
-                                    "，" + guess.PaperOrientation + "，打印比例 " + guess.PrintScale + "（均可修改）";
+                                    "，" + guess.PaperOrientation + "，打印比例 " + guess.PrintScale + "（均可修改）\n" + detectedAttributes;
 
             var selectedTags = existing == null
                 ? Enumerable.Empty<string>()
@@ -133,7 +136,7 @@ namespace BatchPdfPublisher.Views
 
         private static string TagOf(ComboBox box)
         {
-            var value = box.SelectedItem?.ToString();
+            var value = ItemText(box);
             return value == DoNotRead ? string.Empty : value;
         }
 

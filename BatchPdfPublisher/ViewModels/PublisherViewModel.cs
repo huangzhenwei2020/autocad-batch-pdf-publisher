@@ -239,7 +239,14 @@ namespace BatchPdfPublisher.ViewModels
             IsScanning = false;
             // Only replace catalog rows belonging to files that were actually
             // rescanned. Other project DWGs stay in the accumulated catalog.
-            var retained = Sheets.Where(x => string.IsNullOrWhiteSpace(x.SourceFile) || !successfulPaths.Contains(System.IO.Path.GetFullPath(x.SourceFile))).ToList();
+            var orphanedCount = 0;
+            var retained = Sheets.Where(x =>
+            {
+                if (string.IsNullOrWhiteSpace(x.SourceFile) || successfulPaths.Contains(System.IO.Path.GetFullPath(x.SourceFile))) return true;
+                if (IsSourceAvailable(x.SourceFile)) return true;
+                orphanedCount++;
+                return false;
+            }).ToList();
             Sheets.Clear();
             foreach (var item in retained.Concat(scannedSheets)) Sheets.Add(item);
             NormalizeSheetOrder();
@@ -249,6 +256,7 @@ namespace BatchPdfPublisher.ViewModels
                 ? " 警告：检测到 " + tianzhengFiles.Count + " 个天正图纸，当前是纯 AutoCAD 环境；请用对应版本天正打开后发布，否则专业对象可能缺失。"
                 : string.Empty;
             Status = $"已更新 {successfulPaths.Count} 个 CAD 文件，本次读取 {scannedSheets.Count} 张，工程清单共 {Sheets.Count} 张。"
+                + (orphanedCount == 0 ? string.Empty : " 已清理 " + orphanedCount + " 张来源文件已不存在的旧图纸。")
                 + compatibilityWarning + (failures.Count == 0 ? string.Empty : " 未读取：" + string.Join("；", failures));
         }
 
@@ -899,6 +907,13 @@ namespace BatchPdfPublisher.ViewModels
             if (!string.IsNullOrWhiteSpace(currentFile) && string.Equals(sheet.SourceFile, currentFile, StringComparison.OrdinalIgnoreCase)) return true;
             try { return ReferenceEquals(FindOpenDocument(sheet.SourceFile), document); }
             catch { return false; }
+        }
+
+        private static bool IsSourceAvailable(string sourceFile)
+        {
+            if (string.IsNullOrWhiteSpace(sourceFile)) return false;
+            if (FindOpenDocument(sourceFile) != null) return true;
+            try { return System.IO.File.Exists(sourceFile); } catch { return false; }
         }
 
         private static void WritePublishStage(string message)
