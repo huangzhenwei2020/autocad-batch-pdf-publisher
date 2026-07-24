@@ -71,7 +71,13 @@ namespace BatchPdfPublisher.Services
                 var document = Application.DocumentManager.MdiActiveDocument;
                 if (document == null) return;
                 var escaped = path.Replace("\\", "/").Replace("\"", "\\\"");
-                document.SendStringToExecute("_.-MENULOAD\n\"" + escaped + "\"\n(menucmd \"P16=+BPP.POP16\") \n", true, false, false);
+                // -MENULOAD is the command-line variant.  Supplying the menu group
+                // explicitly is important: AutoCAD otherwise leaves the command at
+                // the "menu group name" prompt and the following menucmd expression
+                // is never executed (which is why the Ribbon appeared but the classic
+                // menu did not).
+                var macro = "_.-MENULOAD\n\"" + escaped + "\"\nBPP\n(menucmd \"P16=+BPP.POP16\")\n";
+                document.SendStringToExecute(macro, true, false, false);
                 _mnuRequested = true;
             }
             catch (Exception exception) { Trace(exception); }
