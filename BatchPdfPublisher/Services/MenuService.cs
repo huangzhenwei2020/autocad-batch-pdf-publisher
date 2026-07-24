@@ -69,9 +69,17 @@ namespace BatchPdfPublisher.Services
         {
             try
             {
-                if (_menu == null) return false;
-                var name = _menu.GetType().GetProperty("Name")?.GetValue(_menu, null) as string;
-                return string.Equals(name, MenuName, StringComparison.OrdinalIgnoreCase);
+                var acad = typeof(Application).GetProperty("AcadApplication", BindingFlags.Public | BindingFlags.Static)?.GetValue(null, null);
+                if (acad == null) return false;
+                var bar = acad.GetType().InvokeMember("MenuBar", BindingFlags.GetProperty, null, acad, null);
+                var count = (int)bar.GetType().InvokeMember("Count", BindingFlags.GetProperty, null, bar, null);
+                for (var i = 0; i < count; i++)
+                {
+                    var item = bar.GetType().InvokeMember("Item", BindingFlags.GetProperty, null, bar, new object[] { i });
+                    var name = item?.GetType().GetProperty("Name")?.GetValue(item, null) as string;
+                    if (string.Equals(name, MenuName, StringComparison.OrdinalIgnoreCase)) return true;
+                }
+                return false;
             }
             catch { return false; }
         }
