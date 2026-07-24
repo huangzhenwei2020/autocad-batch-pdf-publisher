@@ -246,9 +246,32 @@ namespace BatchPdfPublisher.ViewModels
                 .Where(x => x.Count() == 1)
                 .Select(x => x.Key)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var projectPaths = CadFiles.Select(x => x.Path)
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Select(x =>
+                {
+                    try { return System.IO.Path.GetFullPath(x); }
+                    catch { return x; }
+                })
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var projectNames = projectPaths
+                .GroupBy(x => System.IO.Path.GetFileName(x), StringComparer.OrdinalIgnoreCase)
+                .Where(x => x.Count() == 1)
+                .Select(x => x.Key)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
             var retained = Sheets.Where(x =>
             {
-                if (string.IsNullOrWhiteSpace(x.SourceFile) || !IsSourceInSet(x.SourceFile, successfulPaths, successfulNames)) return true;
+                if (string.IsNullOrWhiteSpace(x.SourceFile)) return false;
+                // A successful rescan replaces every old row for that DWG.
+                if (IsSourceInSet(x.SourceFile, successfulPaths, successfulNames)) return false;
+                // The left project CAD list defines the project boundary.
+                // Existing TArch template drawings such as sys24x64\Drawing1.dwg
+                // must not survive merely because the physical file exists.
+                if (!IsSourceInSet(x.SourceFile, projectPaths, projectNames))
+                {
+                    orphanedCount++;
+                    return false;
+                }
                 if (IsSourceAvailable(x.SourceFile)) return true;
                 orphanedCount++;
                 return false;

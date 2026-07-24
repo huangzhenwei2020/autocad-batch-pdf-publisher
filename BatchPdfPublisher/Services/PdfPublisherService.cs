@@ -379,6 +379,18 @@ namespace BatchPdfPublisher.Services
             var settings = new PlotSettings(layout.ModelType);
             settings.CopyFrom(layout);
             var validator = PlotSettingsValidator.Current;
+            // AutoCAD 2022/TArch rejects SetPlotType(Window) after a custom
+            // PC3/PMP medium has already been applied. Configure the geometry
+            // while the copied layout is still active, then switch device and
+            // paper. This order is also accepted by plain AutoCAD.
+            ApplyPlotStep("设置窗口打印类型", () => validator.SetPlotType(settings, Autodesk.AutoCAD.DatabaseServices.PlotType.Window));
+            ApplyPlotStep("设置图框范围", () => validator.SetPlotWindowArea(settings, new Extents2d(sheet.MinX, sheet.MinY, sheet.MaxX, sheet.MaxY)));
+            ApplyPlotStep("居中打印", () => validator.SetPlotCentered(settings, true));
+            // “打印比例”是图纸属性，不能直接作为 CAD 的 PlotScale。若把
+            // 1:100 写入 PlotScale，会把 420 mm 的图框缩成 4.2 mm。
+            // 始终让选定图框窗口适配页面，才能保证 PDF 与图框比例一致。
+            ApplyPlotStep("设置适合纸张比例", () => validator.SetUseStandardScale(settings, true));
+            ApplyPlotStep("设置缩放类型", () => validator.SetStdScaleType(settings, StdScaleType.ScaleToFit));
             var device = ChoosePdfDevice(validator);
             InitializePdfDevice(validator, settings, layout, device);
             // AutoCAD 2022 validates custom metric media against the paper-unit
@@ -411,14 +423,6 @@ namespace BatchPdfPublisher.Services
             }
             validator.RefreshLists(settings);
             ApplyPlotStep("设置毫米单位", () => validator.SetPlotPaperUnits(settings, PlotPaperUnit.Millimeters));
-            ApplyPlotStep("设置窗口打印类型", () => validator.SetPlotType(settings, Autodesk.AutoCAD.DatabaseServices.PlotType.Window));
-            ApplyPlotStep("设置图框范围", () => validator.SetPlotWindowArea(settings, new Extents2d(sheet.MinX, sheet.MinY, sheet.MaxX, sheet.MaxY)));
-            ApplyPlotStep("居中打印", () => validator.SetPlotCentered(settings, true));
-            // “打印比例”是图纸属性，不能直接作为 CAD 的 PlotScale。若把
-            // 1:100 写入 PlotScale，会把 420 mm 的图框缩成 4.2 mm。
-            // 始终让选定图框窗口适配页面，才能保证 PDF 与图框比例一致。
-            ApplyPlotStep("设置适合纸张比例", () => validator.SetUseStandardScale(settings, true));
-            ApplyPlotStep("设置缩放类型", () => validator.SetStdScaleType(settings, StdScaleType.ScaleToFit));
             var mediaSize = ParseMediaSize(media);
             var mediaLandscape = mediaSize != null && mediaSize[0] > mediaSize[1];
             // Derive the requested orientation from the normalized target
