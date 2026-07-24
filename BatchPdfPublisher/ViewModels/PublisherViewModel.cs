@@ -621,11 +621,12 @@ namespace BatchPdfPublisher.ViewModels
             {
                 var document = Application.DocumentManager.MdiActiveDocument;
                 var currentFile = document?.Database?.Filename;
+                var visible = Sheets.Where(x => string.Equals(x.Building, SelectedBuilding, StringComparison.Ordinal)
+                    && IsSheetInDocument(x, document, currentFile)).ToList();
                 _preview.Show(document,
-                    Sheets.Where(x => string.Equals(x.Building, SelectedBuilding, StringComparison.Ordinal)
-                        && (string.IsNullOrWhiteSpace(currentFile) || string.Equals(x.SourceFile, currentFile, StringComparison.OrdinalIgnoreCase))),
-                    SelectedSheet != null && string.Equals(SelectedSheet.SourceFile, currentFile, StringComparison.OrdinalIgnoreCase) ? SelectedSheet : null,
-                    _previewErrorSheet != null && string.Equals(_previewErrorSheet.SourceFile, currentFile, StringComparison.OrdinalIgnoreCase) ? _previewErrorSheet : null);
+                    visible,
+                    SelectedSheet != null && visible.Contains(SelectedSheet) ? SelectedSheet : visible.FirstOrDefault(),
+                    _previewErrorSheet != null && visible.Contains(_previewErrorSheet) ? _previewErrorSheet : null);
             }
             catch (Autodesk.AutoCAD.Runtime.Exception)
             {
@@ -889,6 +890,15 @@ namespace BatchPdfPublisher.ViewModels
                 if (end >= 0 && end + 1 < text.Length) text = text.Substring(end + 1).Trim();
             }
             return text;
+        }
+
+        private static bool IsSheetInDocument(SheetItem sheet, Document document, string currentFile)
+        {
+            if (sheet == null || document == null) return false;
+            if (string.IsNullOrWhiteSpace(sheet.SourceFile)) return true;
+            if (!string.IsNullOrWhiteSpace(currentFile) && string.Equals(sheet.SourceFile, currentFile, StringComparison.OrdinalIgnoreCase)) return true;
+            try { return ReferenceEquals(FindOpenDocument(sheet.SourceFile), document); }
+            catch { return false; }
         }
 
         private static void WritePublishStage(string message)

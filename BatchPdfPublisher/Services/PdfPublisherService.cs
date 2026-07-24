@@ -386,7 +386,7 @@ namespace BatchPdfPublisher.Services
             // TArch drawing can still be in inches, which makes the otherwise
             // valid BPP_* media name fail with eInvalidInput.  Set the unit
             // mode before asking for, and applying, the custom media.
-            validator.SetPlotPaperUnits(settings, PlotPaperUnit.Millimeters);
+            ApplyPlotStep("初始化毫米单位", () => validator.SetPlotPaperUnits(settings, PlotPaperUnit.Millimeters));
             var target = TargetPaperSize(sheet);
             var media = ChooseMedia(validator, settings, target[0], target[1], marginMode, !string.IsNullOrWhiteSpace(sheet.Extension));
             if (string.IsNullOrWhiteSpace(media))
@@ -410,15 +410,15 @@ namespace BatchPdfPublisher.Services
                 }
             }
             validator.RefreshLists(settings);
-            validator.SetPlotPaperUnits(settings, PlotPaperUnit.Millimeters);
-            validator.SetPlotType(settings, Autodesk.AutoCAD.DatabaseServices.PlotType.Window);
-            validator.SetPlotWindowArea(settings, new Extents2d(sheet.MinX, sheet.MinY, sheet.MaxX, sheet.MaxY));
-            validator.SetPlotCentered(settings, true);
+            ApplyPlotStep("设置毫米单位", () => validator.SetPlotPaperUnits(settings, PlotPaperUnit.Millimeters));
+            ApplyPlotStep("设置窗口打印类型", () => validator.SetPlotType(settings, Autodesk.AutoCAD.DatabaseServices.PlotType.Window));
+            ApplyPlotStep("设置图框范围", () => validator.SetPlotWindowArea(settings, new Extents2d(sheet.MinX, sheet.MinY, sheet.MaxX, sheet.MaxY)));
+            ApplyPlotStep("居中打印", () => validator.SetPlotCentered(settings, true));
             // “打印比例”是图纸属性，不能直接作为 CAD 的 PlotScale。若把
             // 1:100 写入 PlotScale，会把 420 mm 的图框缩成 4.2 mm。
             // 始终让选定图框窗口适配页面，才能保证 PDF 与图框比例一致。
-            validator.SetUseStandardScale(settings, true);
-            validator.SetStdScaleType(settings, StdScaleType.ScaleToFit);
+            ApplyPlotStep("设置适合纸张比例", () => validator.SetUseStandardScale(settings, true));
+            ApplyPlotStep("设置缩放类型", () => validator.SetStdScaleType(settings, StdScaleType.ScaleToFit));
             var mediaSize = ParseMediaSize(media);
             var mediaLandscape = mediaSize != null && mediaSize[0] > mediaSize[1];
             // Derive the requested orientation from the normalized target
@@ -448,6 +448,15 @@ namespace BatchPdfPublisher.Services
             }
             settings.ShadePlot = PlotSettingsShadePlotType.AsDisplayed;
             return settings;
+        }
+
+        private static void ApplyPlotStep(string name, Action action)
+        {
+            try { action(); }
+            catch (Autodesk.AutoCAD.Runtime.Exception exception)
+            {
+                throw new InvalidOperationException($"打印设置步骤“{name}”失败：{exception.Message}", exception);
+            }
         }
 
         private static void InitializePdfDevice(PlotSettingsValidator validator, PlotSettings settings, Layout layout, string device)
