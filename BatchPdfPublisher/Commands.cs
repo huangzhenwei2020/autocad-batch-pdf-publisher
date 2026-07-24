@@ -20,6 +20,7 @@ namespace BatchPdfPublisher
         public void Initialize()
         {
             try { Application.SetSystemVariable("RIBBONSTATE", 1); } catch { }
+            try { Application.SetSystemVariable("MENUBAR", 1); } catch { }
             RibbonService.InstallWhenReady();
             MenuService.InstallWhenReady();
         }
@@ -29,10 +30,15 @@ namespace BatchPdfPublisher
         public void BppCommand() => OpenPublisher();
 
         [CommandMethod("TKK")]
-        public void CreateFrameCommand() => ShowPublisher(form => form.OpenFrameCreationForCommand());
+        public void CreateFrameCommand()
+        {
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document == null) return;
+            Application.ShowModelessDialog(new FrameCreationForm(document, null));
+        }
 
         [CommandMethod("ML1")]
-        public void InsertCatalogShortcut() => ShowPublisher(form => form.OpenCatalogInsertForCommand());
+        public void InsertCatalogShortcut() => ShowPublisher(form => form.OpenCatalogInsertForCommand(), false);
 
         [CommandMethod("BPPUI")]
         public void RefreshPluginUi()
@@ -97,7 +103,7 @@ namespace BatchPdfPublisher
             }
         }
 
-        private static void ShowPublisher(Action<PublisherForm> afterShow)
+        private static void ShowPublisher(Action<PublisherForm> afterShow, bool display = true)
         {
             // Build the modeless UI only after AutoCAD has returned to its
             // idle message loop.
@@ -116,11 +122,11 @@ namespace BatchPdfPublisher
                         Trace("Modeless WinForms window created");
                     }
                     Trace("Showing modeless WinForms window");
-                    if (!_publisherForm.Visible)
+                    if (display && !_publisherForm.Visible)
                     {
                         Application.ShowModelessDialog(_publisherForm);
                     }
-                    else
+                    else if (display)
                         _publisherForm.Activate();
                     afterShow?.Invoke(_publisherForm);
                     Trace("Modeless WinForms window visible");
