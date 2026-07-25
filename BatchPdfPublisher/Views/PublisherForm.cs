@@ -47,7 +47,7 @@ namespace BatchPdfPublisher.Views
 
         public PublisherForm()
         {
-            Text = "批量 PDF 发布  v0.6.8";
+            Text = "批量 PDF 发布  v0.7.0";
             Width = 1240;
             Height = 760;
             MinimumSize = new System.Drawing.Size(840, 540);
@@ -199,6 +199,7 @@ namespace BatchPdfPublisher.Views
             var sheetTitle = SectionHeader("图纸列表"); sheetTitle.Width = 220; sheetTitle.Height = 30; sheetHeader.Controls.Add(sheetTitle);
             _previewEnabled.Text = "显示当前子项目预览"; _previewEnabled.AutoSize = true; _previewEnabled.ForeColor = System.Drawing.Color.FromArgb(31, 48, 74); _previewEnabled.Checked = false; _previewEnabled.Margin = new Padding(16, 4, 8, 2);
             sheetHeader.Controls.Add(_previewEnabled);
+            sheetHeader.Controls.Add(IconButton("更新预览", UiIcon.Refresh, () => _viewModel.RefreshPreview()));
             sheetHeader.Controls.Add(IconButton("上移图纸", UiIcon.Up, () => { _viewModel.MoveUpCommand.Execute(null); RefreshSheets(); }));
             sheetHeader.Controls.Add(IconButton("下移图纸", UiIcon.Down, () => { _viewModel.MoveDownCommand.Execute(null); RefreshSheets(); }));
             center.Controls.Add(sheetHeader, 0, 0);
@@ -257,14 +258,18 @@ namespace BatchPdfPublisher.Views
                 rightSplitter.SplitterDistance = Math.Max(rightSplitter.Panel1MinSize, rightSplitter.Width - rightSplitter.Panel2MinSize - rightSplitter.SplitterWidth);
             };
 
-            var footer = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = System.Drawing.Color.White, Padding = new Padding(16, 8, 16, 8), ColumnCount = 3, RowCount = 2 };
-            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 180));
-            footer.RowStyles.Add(new RowStyle(SizeType.Percent, 50)); footer.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
-            _status.AutoSize = false; _status.AutoEllipsis = true; _status.Dock = DockStyle.Fill; _status.ForeColor = System.Drawing.Color.FromArgb(65, 84, 110); _status.TextAlign = System.Drawing.ContentAlignment.MiddleLeft; footer.Controls.Add(_status, 0, 0);
-            _sheetCountText.AutoSize = false; _sheetCountText.MinimumSize = new System.Drawing.Size(110, 0); _sheetCountText.Dock = DockStyle.Fill; _sheetCountText.TextAlign = System.Drawing.ContentAlignment.MiddleRight; _sheetCountText.Margin = new Padding(4, 0, 4, 0); _sheetCountText.ForeColor = System.Drawing.Color.FromArgb(65, 84, 110); footer.Controls.Add(_sheetCountText, 1, 0);
-            _progressTrack.Dock = DockStyle.Fill; _progressTrack.Height = 22; _progressTrack.Margin = new Padding(0, 4, 10, 0); _progressTrack.BackColor = System.Drawing.Color.Transparent; ApplyRoundedRegion(_progressTrack, 8); _progressTrack.Paint += PaintProgressTrack; footer.Controls.Add(_progressTrack, 0, 1);
-            _publishProgressText.AutoSize = false; _publishProgressText.MinimumSize = new System.Drawing.Size(82, 0); _publishProgressText.Padding = new Padding(0, 0, 8, 0); _publishProgressText.Dock = DockStyle.Fill; _publishProgressText.TextAlign = System.Drawing.ContentAlignment.MiddleRight; _publishProgressText.ForeColor = System.Drawing.Color.FromArgb(65, 84, 110); _publishProgressText.Text = "0 / 0"; footer.Controls.Add(_publishProgressText, 1, 1);
-            var footerPublish = IconAccentButton("发布 PDF", UiIcon.Publish, PublishPdf); footerPublish.MinimumSize = new System.Drawing.Size(150, 30); footer.Controls.Add(footerPublish, 2, 1);
+            var footer = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = System.Drawing.Color.White, Padding = new Padding(16, 8, 16, 8), ColumnCount = 3, RowCount = 1 };
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 280)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 250));
+            footer.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            _status.AutoSize = false; _status.AutoEllipsis = true; _status.Dock = DockStyle.Fill; _status.ForeColor = System.Drawing.Color.FromArgb(65, 84, 110); _status.TextAlign = System.Drawing.ContentAlignment.MiddleLeft; _status.Margin = new Padding(0, 0, 12, 0); footer.Controls.Add(_status, 0, 0);
+            _progressTrack.Dock = DockStyle.Fill; _progressTrack.Margin = new Padding(0, 22, 12, 22); _progressTrack.BackColor = System.Drawing.Color.Transparent; ApplyRoundedRegion(_progressTrack, 8); _progressTrack.Paint += PaintProgressTrack; footer.Controls.Add(_progressTrack, 1, 0);
+            var publishArea = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, Margin = Padding.Empty };
+            publishArea.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); publishArea.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 138));
+            publishArea.RowStyles.Add(new RowStyle(SizeType.Percent, 50)); publishArea.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
+            _sheetCountText.AutoSize = false; _sheetCountText.AutoEllipsis = true; _sheetCountText.Dock = DockStyle.Fill; _sheetCountText.TextAlign = System.Drawing.ContentAlignment.MiddleRight; _sheetCountText.ForeColor = System.Drawing.Color.FromArgb(65, 84, 110); publishArea.Controls.Add(_sheetCountText, 0, 0); publishArea.SetColumnSpan(_sheetCountText, 2);
+            _publishProgressText.AutoSize = false; _publishProgressText.Dock = DockStyle.Fill; _publishProgressText.TextAlign = System.Drawing.ContentAlignment.MiddleRight; _publishProgressText.ForeColor = System.Drawing.Color.FromArgb(65, 84, 110); _publishProgressText.Text = "0 / 0"; publishArea.Controls.Add(_publishProgressText, 0, 1);
+            var footerPublish = IconAccentButton("发布 PDF", UiIcon.Publish, PublishPdf); footerPublish.Dock = DockStyle.Fill; footerPublish.AutoSize = false; footerPublish.Margin = new Padding(8, 3, 0, 3); publishArea.Controls.Add(footerPublish, 1, 1);
+            footer.Controls.Add(publishArea, 2, 0);
             root.Controls.Add(footer, 0, 3);
             ApplyTooltips(this);
         }
@@ -401,20 +406,26 @@ namespace BatchPdfPublisher.Views
         {
             if (IsDisposed) return;
             if (InvokeRequired) { BeginInvoke(new Action(RefreshPublishProgress)); return; }
-            var maximum = _viewModel.IsScanning ? Math.Max(_viewModel.ScanProgressMaximum, 1) : Math.Max(Math.Max(_viewModel.PublishProgressMaximum, _viewModel.Sheets.Count), 1);
+            var maximum = _viewModel.IsScanning
+                ? Math.Max(_viewModel.ScanProgressMaximum, 1)
+                : _viewModel.IsPublishing ? Math.Max(_viewModel.PublishProgressMaximum, 1) : Math.Max(_viewModel.Sheets.Count, 1);
             var value = _viewModel.IsScanning ? _viewModel.ScanProgressValue : _viewModel.PublishProgressValue;
             value = Math.Min(Math.Max(value, 0), maximum);
             _publishProgressText.Text = value + " / " + maximum;
             _sheetCountText.Text = "共 " + _viewModel.Sheets.Count + " 张图纸";
             _progressTrack.Invalidate();
+            _progressTrack.Update();
             _publishProgressText.Refresh();
+            _sheetCountText.Refresh();
             _status.Refresh();
         }
 
         private void PaintProgressTrack(object sender, PaintEventArgs args)
         {
             var bounds = new System.Drawing.Rectangle(0, 2, Math.Max(1, _progressTrack.Width - 1), Math.Max(12, _progressTrack.Height - 5));
-            var maximum = _viewModel.IsScanning ? Math.Max(_viewModel.ScanProgressMaximum, 1) : Math.Max(Math.Max(_viewModel.PublishProgressMaximum, _viewModel.Sheets.Count), 1);
+            var maximum = _viewModel.IsScanning
+                ? Math.Max(_viewModel.ScanProgressMaximum, 1)
+                : _viewModel.IsPublishing ? Math.Max(_viewModel.PublishProgressMaximum, 1) : Math.Max(_viewModel.Sheets.Count, 1);
             var value = _viewModel.IsScanning ? _viewModel.ScanProgressValue : _viewModel.PublishProgressValue;
             var ratio = Math.Max(0, Math.Min(1, value / (double)maximum));
             using (var track = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(232, 236, 242)))
@@ -860,8 +871,41 @@ namespace BatchPdfPublisher.Views
             {
                 var button = child as Button;
                 if (button != null && button.Tag is string label)
-                    _toolTip.SetToolTip(button, "点击执行：" + label.Trim());
+                    _toolTip.SetToolTip(button, TooltipFor(label.Trim()));
                 if (child.HasChildren) ApplyTooltips(child);
+            }
+        }
+
+        private static string TooltipFor(string label)
+        {
+            switch (label)
+            {
+                case "添加文件": return "把一个或多个 DWG 加入当前工程文件清单。";
+                case "移除文件": return "从工程中移除选中的 DWG，并清除它的图纸和空子项目记录；不删除磁盘文件。";
+                case "扫描当前": return "读取当前激活 DWG 中的已登记图框，更新图纸列表。";
+                case "扫描所选": return "批量读取工程列表中已勾选 DWG 的图框和图纸信息。";
+                case "框选发布": return "在当前 DWG 中手动框选图框，只发布本次选中的图纸。";
+                case "批量改属性": return "框选多个带属性图块，按属性标记预览并批量写入新值。";
+                case "拾取登记": return "在当前 CAD 中选择一个已有图框块，登记它的纸张、方向、比例和属性字段。";
+                case "创建图框": return "按指定纸张、方向和比例在当前 CAD 中创建标准图框块。";
+                case "修改图框": return "修改选中图框登记的纸张、加长尺寸、方向、比例和属性映射。";
+                case "删除图框": return "从插件图框库删除选中的登记规则；不删除 CAD 中的实际图框。";
+                case "保存图框": return "保存当前图框库，供后续扫描其他 DWG 时继续识别使用。";
+                case "插入目录": return "根据当前图纸顺序生成目录表，并插入到 CAD 图纸中。";
+                case "存入工程": return "把当前 DWG 的副本保存到当前工程文件夹。";
+                case "目录打印": return "扫描当前工程文件夹中的 DWG，然后按工程设置发布 PDF。";
+                case "自动保存": return "把 AutoCAD/TArch 的自动保存文件复制到工程的“自动保存”目录作为备份。";
+                case "更新预览": return "重新在 CAD 中标出当前子项目的图框范围和当前图纸。";
+                case "发布 PDF": return "按当前勾选的子项目、图纸顺序、纸张和打印样式生成 PDF。";
+                case "上移图纸": return "把当前图纸在所属子项目的发布顺序中上移一位。";
+                case "下移图纸": return "把当前图纸在所属子项目的发布顺序中下移一位。";
+                case "刷新样式": return "重新读取 AutoCAD 当前可用的 CTB/STB 打印样式列表。";
+                case "收藏样式": return "把当前打印样式保存到本工程的常用样式列表。";
+                case "选择目录": return "选择本次工程 PDF 的根输出目录。";
+                case "打开目录": return "在 Windows 资源管理器中打开当前 PDF 输出目录。";
+                case "全选项目": return "勾选所有子项目，使其全部参与本次 PDF 发布。";
+                case "取消全选": return "取消所有子项目的发布勾选。";
+                default: return label;
             }
         }
 

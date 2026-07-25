@@ -17,7 +17,7 @@
     <DebugType>pdbonly</DebugType><Optimize>true</Optimize><OutputPath>bin\Release\</OutputPath>
   </PropertyGroup>
   <ItemGroup>
-    <Reference Include="System" /><Reference Include="System.Core" /><Reference Include="System.Xaml" /><Reference Include="System.Runtime.Serialization" /><Reference Include="System.Xml" /><Reference Include="System.Drawing" /><Reference Include="System.Windows.Forms" />
+    <Reference Include="System" /><Reference Include="System.Core" /><Reference Include="System.Numerics" /><Reference Include="System.Xaml" /><Reference Include="System.Runtime.Serialization" /><Reference Include="System.Xml" /><Reference Include="System.Drawing" /><Reference Include="System.Windows.Forms" /><Reference Include="Microsoft.VisualBasic" />
     <Reference Include="WindowsBase" /><Reference Include="PresentationCore" /><Reference Include="PresentationFramework" />
     <Reference Include="acmgd">
       <HintPath>C:\Program Files\Autodesk\AutoCAD 2022\acmgd.dll</HintPath>
@@ -44,14 +44,14 @@
     <Compile Include="AssemblyInfo.cs" />
     <Compile Include="Commands.cs" />
     <Compile Include="Models\BuildingPublishItem.cs" /><Compile Include="Models\CadFileItem.cs" /><Compile Include="Models\FrameDefinition.cs" /><Compile Include="Models\ProjectProfile.cs" /><Compile Include="Models\SheetCatalogItem.cs" /><Compile Include="Models\SheetItem.cs" />
-    <Compile Include="Services\CadCompatibilityService.cs" /><Compile Include="Services\DrawingScanner.cs" /><Compile Include="Services\FrameSizeDetector.cs" /><Compile Include="Services\FrameRegistrationService.cs" /><Compile Include="Services\FrameCreationService.cs" /><Compile Include="Services\CatalogInsertionService.cs" /><Compile Include="Services\PaperSizeCatalog.cs" /><Compile Include="Services\PrintRangePreviewService.cs" /><Compile Include="Services\PdfPublisherService.cs" /><Compile Include="Services\PublishPlanStore.cs" /><Compile Include="Services\RibbonService.cs" /><Compile Include="Services\MenuService.cs" />
+    <Compile Include="Services\CadCompatibilityService.cs" /><Compile Include="Services\DrawingScanner.cs" /><Compile Include="Services\FrameSizeDetector.cs" /><Compile Include="Services\FrameRegistrationService.cs" /><Compile Include="Services\FrameCreationService.cs" /><Compile Include="Services\CatalogInsertionService.cs" /><Compile Include="Services\PaperSizeCatalog.cs" /><Compile Include="Services\PrintRangePreviewService.cs" /><Compile Include="Services\PdfPublisherService.cs" /><Compile Include="Services\PublishPlanStore.cs" /><Compile Include="Services\RibbonService.cs" /><Compile Include="Services\MenuService.cs" /><Compile Include="Services\AttributeBatchService.cs" /><Compile Include="Services\AttributeMarkerService.cs" /><Compile Include="Services\CsvExportService.cs" />
     <Compile Include="ViewModels\PublisherViewModel.cs" />
     <Compile Include="Views\PublisherControl.xaml.cs"><DependentUpon>PublisherControl.xaml</DependentUpon></Compile>
     <Compile Include="Views\PublisherForm.cs" />
     <Compile Include="Views\ProjectManagerForm.cs" />
     <Compile Include="Views\FrameCreationForm.cs" />
     <Compile Include="Views\CatalogInsertForm.cs" />
-    <Compile Include="Views\CurrentSelectionPublishForm.cs" />
+    <Compile Include="Views\CurrentSelectionPublishForm.cs" /><Compile Include="Views\AttributeBatchForm.cs" /><Compile Include="Views\AttributeResultForm.cs" />
     <Compile Include="Views\FrameRegistrationWindow.xaml.cs"><DependentUpon>FrameRegistrationWindow.xaml</DependentUpon></Compile>
     <Page Include="Views\PublisherControl.xaml" />
     <Page Include="Views\FrameRegistrationWindow.xaml" />

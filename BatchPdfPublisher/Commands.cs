@@ -2,11 +2,11 @@ using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Runtime;
 using BatchPdfPublisher.Services;
-using BatchPdfPublisher.Views;
 using System;
 using System.IO;
 using System.Collections.Generic;
 using BatchPdfPublisher.Models;
+using BatchPdfPublisher.Views;
 
 namespace BatchPdfPublisher
 {
@@ -20,11 +20,9 @@ namespace BatchPdfPublisher
         public void Initialize()
         {
             try { Application.SetSystemVariable("RIBBONSTATE", 1); } catch { }
-            try { Application.SetSystemVariable("MENUBAR", 1); } catch { }
             RibbonService.InstallWhenReady();
-            MenuService.InstallWhenReady();
         }
-        public void Terminate() { RibbonService.Remove(); MenuService.Remove(); }
+        public void Terminate() { RibbonService.Remove(); }
 
         [CommandMethod("BPP")]
         public void BppCommand() => OpenPublisher();
@@ -44,8 +42,7 @@ namespace BatchPdfPublisher
         public void RefreshPluginUi()
         {
             RibbonService.InstallWhenReady();
-            MenuService.InstallWhenReady();
-            Application.ShowAlertDialog("BPP 界面已请求刷新。若 Ribbon 仍未显示，请执行 RIBBON 命令后再执行 BPPUI。");
+            Application.ShowAlertDialog("BPP Ribbon 已请求刷新。若仍未显示，请执行 RIBBON 命令后再执行 BPPUI。");
         }
 
         [CommandMethod("BPPUBLISH")]
@@ -71,6 +68,27 @@ namespace BatchPdfPublisher
 
         [CommandMethod("BPPMAKEPDF")]
         public void PublishFromRibbon() => ShowPublisher(form => form.PublishPdf());
+
+        [CommandMethod("BPPATTR")]
+        [CommandMethod("SBB")]
+        public void BatchAttributes()
+        {
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document == null) { Application.ShowAlertDialog("请先打开一个 CAD 文件。"); return; }
+            Application.ShowModalDialog(new AttributeBatchForm(document));
+        }
+
+        [CommandMethod("BPPSELFTEST")]
+        public void RunSelfTest()
+        {
+            var failures = AttributeBatchService.RunRegressionChecks();
+            var message = failures.Count == 0
+                ? "批量属性算法自检通过。"
+                : "批量属性算法自检失败：\n" + string.Join("\n", failures);
+            var document = Application.DocumentManager.MdiActiveDocument;
+            document?.Editor.WriteMessage("\n" + message + "\n");
+            Application.ShowAlertDialog(message);
+        }
 
         public static void StartCatalogInsert(IList<SheetItem> sheets, CatalogSettings settings, Action done)
         {

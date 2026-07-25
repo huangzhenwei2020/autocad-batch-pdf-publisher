@@ -15,6 +15,7 @@ namespace BatchPdfPublisher.Services
     public sealed class PdfPublishResult
     {
         public List<string> Files { get; } = new List<string>();
+        public List<string> Failures { get; } = new List<string>();
         public int SheetCount { get; set; }
     }
 
@@ -23,6 +24,12 @@ namespace BatchPdfPublisher.Services
         public int Current { get; set; }
         public int Total { get; set; }
         public string SheetLabel { get; set; }
+    }
+
+    public sealed class PreparedPdfPage
+    {
+        public SheetItem Sheet { get; set; }
+        public string TemporaryPath { get; set; }
     }
 
     public sealed class SheetValidationIssue
@@ -72,7 +79,153 @@ namespace BatchPdfPublisher.Services
             return issues;
         }
 
-        public PdfPublishResult Publish(Document document, IEnumerable<SheetItem> sourceSheets, ProjectProfile project, Action<PdfPublishProgress> progress = null)
+        public string CreateEngineeringOutputFolder(ProjectProfile project)
+        {
+            var outputRoot = string.IsNullOrWhiteSpace(project?.OutputDirectory) ? @"D:\PDF输出" : project.OutputDirectory;
+            var requestedEngineeringFolder = Path.Combine(outputRoot, SafeName(project?.Name ?? "默认工程"));
+            var engineeringFolder = UniqueDirectory(requestedEngineeringFolder);
+            Directory.CreateDirectory(engineeringFolder);
+            return engineeringFolder;
+        }
+
+        public List<PreparedPdfPage> PreparePages(Document document, IEnumerable<SheetItem> sourceSheets,
+            ProjectProfile project, Action<SheetItem> pagePublished, Action<SheetItem, string> pageFailed)
+        {
+            if (document == null || document.Database == null) throw new InvalidOperationException("没有打开的图纸。");
+            var sheets = sourceSheets?.Where(x => x != null).OrderBy(PublishPriority).ThenBy(x => x.Order).ToList() ?? new List<SheetItem>();
+            if (PlotFactory.ProcessPlotState != ProcessPlotState.NotPlotting)
+                throw new InvalidOperationException("AutoCAD 正在执行其他打印任务，请稍后再试。");
+
+            var pages = new List<PreparedPdfPage>();
+            var previousBackgroundPlot = Autodesk.AutoCAD.ApplicationServices.Core.Application.GetSystemVariable("BACKGROUNDPLOT");
+            Autodesk.AutoCAD.ApplicationServices.Core.Application.SetSystemVariable("BACKGROUNDPLOT", 0);
+            try
+            {
+                for (var index = 0; index < sheets.Count; index++)
+                {
+                    var sheet = sheets[index];
+                    var temporaryPath = Path.Combine(Path.GetTempPath(), "BatchPdfPublisher_" + Guid.NewGuid().ToString("N") + ".pdf");
+                    try
+                    {
+                        PlotSinglePage(document, sheet, temporaryPath, project?.PlotStyle, project?.MarginMode, index);
+                        pages.Add(new PreparedPdfPage { Sheet = sheet, TemporaryPath = temporaryPath });
+                        pagePublished?.Invoke(sheet);
+                    }
+                    catch (Exception exception)
+                    {
+                        try { if (File.Exists(temporaryPath)) File.Delete(temporaryPath); } catch { }
+                        pageFailed?.Invoke(sheet, exception.Message);
+                    }
+                }
+            }
+            finally
+            {
+                try { Autodesk.AutoCAD.ApplicationServices.Core.Application.SetSystemVariable("BACKGROUNDPLOT", previousBackgroundPlot); } catch { }
+            }
+            return pages;
+        }
+
+        public PdfPublishResult FinalizePreparedPages(IEnumerable<PreparedPdfPage> sourcePages, ProjectProfile project,
+            string engineeringFolder, Action<int, int, SheetItem> progress = null)
+        {
+            var pages = sourcePages?.Where(x => x?.Sheet != null && !string.IsNullOrWhiteSpace(x.TemporaryPath) && File.Exists(x.TemporaryPath))
+                .OrderBy(x => x.Sheet.Building).ThenBy(x => PublishPriority(x.Sheet)).ThenBy(x => x.Sheet.Order).ToList()
+                ?? new List<PreparedPdfPage>();
+            var result = new PdfPublishResult();
+            var completed = 0;
+            try
+            {
+                if (project?.MergeByBuilding ?? true)
+                {
+                    foreach (var group in pages.GroupBy(x => x.Sheet.Building))
+                    {
+                        var parts = new List<string>();
+                        if (project?.IncludeProjectNameInFileName != false) parts.Add(SafeName(project?.Name ?? "默认工程"));
+                        if (project?.IncludeBuildingNameInFileName != false) parts.Add(SafeName(group.Key));
+                        if (parts.Count == 0) parts.Add("图纸");
+                        var requestedPath = Path.Combine(engineeringFolder, string.Join("_", parts) + ".pdf");
+                        var outputPath = ResolveOutputPath(requestedPath, project?.OverwriteExistingPdf == true);
+                        var groupPages = group.ToList();
+                        var completedBeforeGroup = completed;
+                        try
+                        {
+                            PdfMerger.Merge(groupPages.Select(x => x.TemporaryPath).ToList(), groupPages.Select(x => x.Sheet).ToList(), outputPath, project?.MarginMode,
+                                sheet => { completed++; progress?.Invoke(completed, pages.Count, sheet); });
+                            result.Files.Add(outputPath);
+                            result.SheetCount += groupPages.Count;
+                        }
+                        catch (Exception exception)
+                        {
+                            TryDelete(outputPath);
+                            result.Failures.Add("子项目“" + (string.IsNullOrWhiteSpace(group.Key) ? "未分组" : group.Key) + "”合并失败：" + exception.Message);
+                            CompleteFailedProgress(groupPages, completedBeforeGroup, ref completed, pages.Count, progress);
+                        }
+                        GC.Collect(1, GCCollectionMode.Optimized, false);
+                    }
+                }
+                else
+                {
+                    foreach (var page in pages)
+                    {
+                        var folder = Path.Combine(engineeringFolder, SafeName(page.Sheet.Building));
+                        Directory.CreateDirectory(folder);
+                        var title = string.IsNullOrWhiteSpace(page.Sheet.SheetName) ? page.Sheet.SheetNumber : page.Sheet.SheetName;
+                        var fileName = (page.Sheet.Order.ToString("D3") + "_" + (string.IsNullOrWhiteSpace(title) ? "图纸" : SafeName(title))).Trim('_');
+                        var outputPath = ResolveOutputPath(Path.Combine(folder, fileName + ".pdf"), project?.OverwriteExistingPdf == true);
+                        var completedBeforePage = completed;
+                        try
+                        {
+                            PdfMerger.Merge(new List<string> { page.TemporaryPath }, new List<SheetItem> { page.Sheet }, outputPath, project?.MarginMode,
+                                sheet => { completed++; progress?.Invoke(completed, pages.Count, sheet); });
+                            result.Files.Add(outputPath);
+                            result.SheetCount++;
+                        }
+                        catch (Exception exception)
+                        {
+                            TryDelete(outputPath);
+                            result.Failures.Add(SheetLabel(page.Sheet) + "整理失败：" + exception.Message);
+                            if (completed == completedBeforePage) { completed++; progress?.Invoke(completed, pages.Count, page.Sheet); }
+                        }
+                        if (result.SheetCount % 100 == 0) GC.Collect(1, GCCollectionMode.Optimized, false);
+                    }
+                }
+                return result;
+            }
+            finally
+            {
+                CleanupPreparedPages(pages);
+            }
+        }
+
+        public void CleanupPreparedPages(IEnumerable<PreparedPdfPage> pages)
+        {
+            foreach (var page in pages ?? Enumerable.Empty<PreparedPdfPage>())
+                try { if (!string.IsNullOrWhiteSpace(page?.TemporaryPath) && File.Exists(page.TemporaryPath)) File.Delete(page.TemporaryPath); } catch { }
+        }
+
+        private static void CompleteFailedProgress(IList<PreparedPdfPage> groupPages, int completedBeforeGroup,
+            ref int completed, int total, Action<int, int, SheetItem> progress)
+        {
+            var alreadyReported = Math.Max(0, completed - completedBeforeGroup);
+            for (var index = alreadyReported; index < groupPages.Count; index++)
+            {
+                completed++;
+                progress?.Invoke(completed, total, groupPages[index].Sheet);
+            }
+        }
+
+        private static string SheetLabel(SheetItem sheet) => string.Join(" · ", new[]
+        {
+            Path.GetFileName(sheet?.SourceFile), sheet?.Building, sheet?.SheetNumber, sheet?.SheetName
+        }.Where(x => !string.IsNullOrWhiteSpace(x))) + "：";
+
+        private static void TryDelete(string path)
+        {
+            try { if (!string.IsNullOrWhiteSpace(path) && File.Exists(path)) File.Delete(path); } catch { }
+        }
+
+        public PdfPublishResult Publish(Document document, IEnumerable<SheetItem> sourceSheets, ProjectProfile project,
+            string engineeringFolder, Action<PdfPublishProgress> progress = null)
         {
             if (document == null) throw new InvalidOperationException("没有打开的图纸。");
             var sheets = sourceSheets?.Where(x => x != null).OrderBy(x => x.Building).ThenBy(PublishPriority).ThenBy(x => x.Order).ToList() ?? new List<SheetItem>();
@@ -80,13 +233,8 @@ namespace BatchPdfPublisher.Services
             if (PlotFactory.ProcessPlotState != ProcessPlotState.NotPlotting)
                 throw new InvalidOperationException("AutoCAD 正在执行其他打印任务，请稍后再试。");
 
-            // All PDFs belong to one engineering output folder.  The CAD
-            // source location must never change the project output layout.
-            var outputRoot = string.IsNullOrWhiteSpace(project?.OutputDirectory) ? @"D:\PDF输出" : project.OutputDirectory;
-            // Every publishing mode is scoped to an engineering folder.  The
-            // filename checkbox controls only the PDF name, never this folder.
-            var requestedEngineeringFolder = Path.Combine(outputRoot, SafeName(project?.Name ?? "默认工程"));
-            var engineeringFolder = UniqueDirectory(requestedEngineeringFolder);
+            if (string.IsNullOrWhiteSpace(engineeringFolder))
+                throw new InvalidOperationException("本次发布的工程输出目录无效。");
             Directory.CreateDirectory(engineeringFolder);
             var result = new PdfPublishResult();
             var jobs = BuildJobs(sheets, project, engineeringFolder);
@@ -175,7 +323,7 @@ namespace BatchPdfPublisher.Services
                     if (project?.IncludeBuildingNameInFileName != false) parts.Add(SafeName(group.Key));
                     if (parts.Count == 0) parts.Add("图纸");
                     var path = Path.Combine(outputRoot, string.Join("_", parts) + ".pdf");
-                    jobs.Add(new KeyValuePair<string, List<SheetItem>>(project?.OverwriteExistingPdf == true ? path : UniquePath(path), group.OrderBy(PublishPriority).ThenBy(x => x.Order).ToList()));
+                    jobs.Add(new KeyValuePair<string, List<SheetItem>>(ResolveOutputPath(path, project?.OverwriteExistingPdf == true), group.OrderBy(PublishPriority).ThenBy(x => x.Order).ToList()));
                 }
             }
             else
@@ -190,7 +338,7 @@ namespace BatchPdfPublisher.Services
                     var title = string.IsNullOrWhiteSpace(sheet.SheetName) ? sheet.SheetNumber : sheet.SheetName;
                     var fileName = (sheet.Order.ToString("D3") + "_" + (string.IsNullOrWhiteSpace(title) ? "图纸" : SafeName(title))).Trim('_');
                     var path = Path.Combine(folder, fileName + ".pdf");
-                    jobs.Add(new KeyValuePair<string, List<SheetItem>>(project?.OverwriteExistingPdf == true ? path : UniquePath(path), new List<SheetItem> { sheet }));
+                    jobs.Add(new KeyValuePair<string, List<SheetItem>>(ResolveOutputPath(path, project?.OverwriteExistingPdf == true), new List<SheetItem> { sheet }));
                 }
             }
             return jobs;
@@ -208,7 +356,7 @@ namespace BatchPdfPublisher.Services
                     PlotSinglePage(document, sheets[index], temporaryPath, defaultPlotStyle, marginMode, index);
                     pagePublished?.Invoke(sheets[index]);
                 }
-                PdfMerger.Merge(temporaryFiles, sheets, outputPath, marginMode);
+                PdfMerger.Merge(temporaryFiles, sheets, outputPath, marginMode, null);
             }
             finally
             {
@@ -220,7 +368,7 @@ namespace BatchPdfPublisher.Services
         private static void PlotSinglePage(Document document, SheetItem sheet, string outputPath, string defaultPlotStyle, string marginMode, int index)
         {
             if (sheet == null) throw new InvalidOperationException("图纸列表中存在空记录，请重新扫描当前图纸。");
-            var label = string.Join(" · ", new[] { sheet.Building, sheet.SheetNumber, sheet.SheetName }.Where(x => !string.IsNullOrWhiteSpace(x)));
+            var label = string.Join(" · ", new[] { Path.GetFileName(sheet.SourceFile), sheet.Building, sheet.SheetNumber, sheet.SheetName }.Where(x => !string.IsNullOrWhiteSpace(x)));
             var stage = "检查图框尺寸";
             Database previousWorkingDatabase = null;
             try
@@ -334,7 +482,7 @@ namespace BatchPdfPublisher.Services
 
         private static class PdfMerger
         {
-            public static void Merge(IList<string> files, IList<SheetItem> sheets, string outputPath, string marginMode)
+            public static void Merge(IList<string> files, IList<SheetItem> sheets, string outputPath, string marginMode, Action<SheetItem> pageMerged = null)
             {
                 var marginMillimeters = string.Equals(marginMode, "保留 3 mm 白边", StringComparison.OrdinalIgnoreCase) ? 3d : 0d;
                 using (var output = new PdfSharp.Pdf.PdfDocument())
@@ -357,6 +505,7 @@ namespace BatchPdfPublisher.Services
                             var height = Math.Max(1d, page.Height.Point - inset * 2d);
                             graphics.DrawImage(form, new PdfSharp.Drawing.XRect(inset, inset, width, height), new PdfSharp.Drawing.XRect(crop[0], crop[1], crop[2], crop[3]), PdfSharp.Drawing.XGraphicsUnit.Point);
                         }
+                        pageMerged?.Invoke(sheets[index]);
                     }
                     output.Save(outputPath);
                 }
@@ -635,6 +784,12 @@ namespace BatchPdfPublisher.Services
             var minute = day + "-" + DateTime.Now.ToString("HHmm");
             if (!Directory.Exists(minute)) return minute;
             return minute + "-" + DateTime.Now.ToString("ss");
+        }
+
+        private static string ResolveOutputPath(string path, bool overwrite)
+        {
+            if (overwrite && File.Exists(path)) File.Delete(path);
+            return overwrite ? path : UniquePath(path);
         }
     }
 }

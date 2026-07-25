@@ -13,13 +13,14 @@ namespace BatchPdfPublisher.Services
         private static readonly List<object> _items = new List<object>();
         private static EventHandler _idle;
         private static bool _mnuRequested;
+        private static int _installAttempts;
 
         public static void InstallWhenReady()
         {
             if (_idle != null) return;
             _idle = (s, e) =>
             {
-                if (!HasMenu()) Install();
+                if (!_mnuRequested && _installAttempts < 5) Install();
             };
             Application.Idle += _idle;
             Install();
@@ -27,6 +28,13 @@ namespace BatchPdfPublisher.Services
 
         public static void Install()
         {
+            _installAttempts++;
+            // ActiveX menu collections are version-sensitive and throw
+            // DISP_E_TYPEMISMATCH on several AutoCAD/T20 builds. The command
+            // driven MNU loader below is the stable classic-menu path.
+            LoadPartialMenu();
+            return;
+            /*
             try
             {
                 var acad = typeof(Application).GetProperty("AcadApplication", BindingFlags.Public | BindingFlags.Static)?.GetValue(null, null);
@@ -49,6 +57,7 @@ namespace BatchPdfPublisher.Services
             }
             catch (Exception exception) { Trace(exception); _menu = null; _items.Clear(); }
             LoadPartialMenu();
+            */
         }
 
         public static void Remove()
@@ -71,7 +80,7 @@ namespace BatchPdfPublisher.Services
             try
             {
                 var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "BPP_批量打印.mnu");
-                var content = "***MENUGROUP=BPP\r\n***POP16\r\nBPP_批量打印\r\n[打开面板（BPP）]^C^C_BPP \r\n[创建图框（TKK）]^C^C_TKK \r\n[插入目录（ML1）]^C^C_ML1 \r\n";
+                var content = "***MENUGROUP=BPP\r\n***POP16\r\nBPP_批量打印\r\n[打开面板（BPP）]^C^C_BPP \r\n[创建图框（TKK）]^C^C_TKK \r\n[插入目录（ML1）]^C^C_ML1 \r\n[批量改属性（BPPATTR）]^C^C_BPPATTR \r\n";
                 // MNU is an ANSI file; AutoCAD on Chinese installations expects the
                 // system GBK code page rather than UTF-8/default .NET encoding.
                 System.IO.File.WriteAllText(path, content, System.Text.Encoding.GetEncoding(936));

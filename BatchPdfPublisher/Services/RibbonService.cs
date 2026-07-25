@@ -24,7 +24,7 @@ namespace BatchPdfPublisher.Services
                     var ribbon = ComponentManager.Ribbon;
                     if (ribbon == null) return;
                     var existing = ribbon.FindTab(TabId);
-                    if (existing != null && existing.Panels.Count > 0 && existing.Panels[0].Source.Items.Count == 3 && existing.Panels[0].Source.Items[0].Text.IndexOf("BPP", StringComparison.OrdinalIgnoreCase) >= 0)
+                    if (existing != null && existing.Panels.Count > 0 && existing.Panels[0].Source.Items.Count == 4 && existing.Panels[0].Source.Items[0].Text.IndexOf("BPP", StringComparison.OrdinalIgnoreCase) >= 0)
                     {
                         existing.IsVisible = true;
                         return;
@@ -36,6 +36,7 @@ namespace BatchPdfPublisher.Services
                     source.Items.Add(CreateButton("打开面板（BPP）", "BPP ", "panel"));
                     source.Items.Add(CreateButton("创建图框（TKK）", "TKK ", "frame"));
                     source.Items.Add(CreateButton("插入目录（ML1）", "ML1 ", "catalog"));
+                    source.Items.Add(CreateButton("批量改属性（SBB）", "SBB ", "attribute"));
                     tab.Panels.Add(panel);
                     ribbon.Tabs.Add(tab);
                 }
@@ -67,9 +68,17 @@ namespace BatchPdfPublisher.Services
         private static RibbonButton CreateButton(string text, string command, string icon)
         {
             var image = CreateIcon(icon);
+            var description = command.Trim().Equals("SBB", StringComparison.OrdinalIgnoreCase)
+                ? "框选不同类型的属性图块，按坐标排序、批量递增并写入同一属性标记。"
+                : command.Trim().Equals("TKK", StringComparison.OrdinalIgnoreCase)
+                    ? "按纸张、方向和比例在当前图纸中创建标准图框。"
+                    : command.Trim().Equals("ML1", StringComparison.OrdinalIgnoreCase)
+                        ? "根据当前工程图纸顺序生成目录表并插入 CAD。"
+                        : "打开工程 DWG 管理、图框扫描和批量 PDF 发布面板。";
             return new RibbonButton
             {
                 Text = text,
+                ToolTip = description,
                 ShowText = true,
                 ShowImage = true,
                 Image = image,
@@ -97,6 +106,12 @@ namespace BatchPdfPublisher.Services
                 for (var y = 3; y <= 11; y += 4)
                     group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(3, y), new WpfPoint(13, y))));
                 group.Children.Add(new GeometryDrawing(null, pen, new RectangleGeometry(new WpfRect(2, 2, 12, 12))));
+            }
+            else if (kind == "attribute")
+            {
+                group.Children.Add(new GeometryDrawing(brush, pen, new RectangleGeometry(new WpfRect(2, 2, 12, 12))));
+                group.Children.Add(new GeometryDrawing(Brushes.White, null, new LineGeometry(new WpfPoint(5, 6), new WpfPoint(11, 6))));
+                group.Children.Add(new GeometryDrawing(Brushes.White, null, new LineGeometry(new WpfPoint(5, 9), new WpfPoint(11, 9))));
             }
             else
             {

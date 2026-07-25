@@ -43,6 +43,8 @@ namespace BatchPdfPublisher.ViewModels
         private int _scanProgressMaximum = 1;
         private bool _isScanning;
         private bool _isPublishing;
+        private readonly System.Collections.Generic.HashSet<string> _cadFilesBeingOpened =
+            new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private SheetItem _previewErrorSheet;
         private bool _loadingProject;
 
@@ -322,6 +324,9 @@ namespace BatchPdfPublisher.ViewModels
             var removedSheets = Sheets.Where(x => IsSameSourcePath(x.SourceFile, path)).ToList();
             foreach (var sheet in removedSheets) Sheets.Remove(sheet);
             NormalizeSheetOrder();
+            RebuildBuildings(SelectedBuilding);
+            if (_selectedProject != null)
+                _selectedProject.SelectedPublishBuildings = PublishBuildings.Where(x => x.IsSelected).Select(x => x.Name).ToList();
             SaveCurrentProject();
             Status = "已从工程文件列表移除：" + System.IO.Path.GetFileName(path)
                 + (removedSheets.Count == 0 ? string.Empty : "，同时移除 " + removedSheets.Count + " 张关联图纸");
@@ -329,16 +334,42 @@ namespace BatchPdfPublisher.ViewModels
 
         public void OpenCadFile(string path)
         {
+            var normalizedPath = NormalizeCadPath(path);
             var existing = FindOpenDocument(path);
             if (existing != null)
             {
                 Application.DocumentManager.MdiActiveDocument = existing;
+                WritePublishStage("工程文件双击：匹配已打开文档。请求=" + normalizedPath + "；命中=" + SafeDocumentPath(existing));
                 Status = "已激活 CAD 文件：" + System.IO.Path.GetFileName(path);
                 return;
             }
             if (string.IsNullOrWhiteSpace(path) || !System.IO.File.Exists(path)) { Status = "CAD 文件不存在：" + path; return; }
-            Application.DocumentManager.Open(path, false);
-            Status = "已打开 CAD 文件：" + System.IO.Path.GetFileName(path);
+            if (!_cadFilesBeingOpened.Add(normalizedPath))
+            {
+                Status = "CAD 文件正在打开：" + System.IO.Path.GetFileName(path);
+                return;
+            }
+            try
+            {
+                existing = FindOpenDocument(path);
+                if (existing == null)
+                {
+                    WritePublishStage("工程文件双击：未匹配已打开文档，执行打开。请求=" + normalizedPath + "；当前文档=" + DescribeOpenDocuments());
+                    existing = Application.DocumentManager.Open(path, false);
+                }
+                if (existing != null) Application.DocumentManager.MdiActiveDocument = existing;
+                Status = "已打开 CAD 文件：" + System.IO.Path.GetFileName(path);
+            }
+            catch (System.Exception exception)
+            {
+                Status = "打开 CAD 文件失败：" + exception.Message;
+                WritePublishStage("工程文件双击打开失败：" + normalizedPath + "；" + exception);
+                Application.ShowAlertDialog(Status);
+            }
+            finally
+            {
+                _cadFilesBeingOpened.Remove(normalizedPath);
+            }
         }
 
         public void ApplySheetEdits()
@@ -530,7 +561,10 @@ namespace BatchPdfPublisher.ViewModels
                 ScanModelSpace = project.ScanModelSpace;
                 ScanAllLayouts = project.ScanAllLayouts;
                 MergeByBuilding = project.MergeByBuilding;
-                PreviewEnabled = project.PreviewEnabled;
+                // Preview is a session-only visual aid. Always start disabled
+                // when an engineering project is opened.
+                PreviewEnabled = false;
+                project.PreviewEnabled = false;
                 SelectedFrame = Frames.FirstOrDefault();
             }
             finally { _loadingProject = false; }
@@ -709,12 +743,13 @@ namespace BatchPdfPublisher.ViewModels
         private async void PublishPdf()
         {
             var initialDocument = Application.DocumentManager.MdiActiveDocument;
-            if (initialDocument == null) { Status = "没有打开的图纸。"; return; }
+            var preparedPages = new System.Collections.Generic.List<PreparedPdfPage>();
             if (IsPublishing) return;
             IsPublishing = true;
             var selectedNames = PublishBuildings.Where(x => x.IsSelected).Select(x => x.Name).ToList();
             var sheetsForPublish = Sheets.Where(x => selectedNames.Contains(x.Building)).ToList();
             if (sheetsForPublish.Count == 0) { Status = "请至少勾选一个要发布的子项目。"; IsPublishing = false; return; }
+            if (!ConfirmFilesSavedBeforePublish()) { IsPublishing = false; return; }
             if (!ConfirmTianzhengPublish(sheetsForPublish)) { IsPublishing = false; return; }
             PublishProgressValue = 0;
             PublishProgressMaximum = Math.Max(sheetsForPublish.Count, 1);
@@ -747,8 +782,9 @@ namespace BatchPdfPublisher.ViewModels
                     OutputDirectory = OutputDirectory,
                     MergeByBuilding = MergeByBuilding
                 };
-                PdfPublishResult result = new PdfPublishResult();
+                var engineeringFolder = _publisher.CreateEngineeringOutputFolder(project);
                 var completedBeforeGroup = 0;
+                var publishFailures = new System.Collections.Generic.List<string>();
                 // Materialize every source group before activating another DWG.
                 // AutoCAD can invalidate the original document wrapper while an
                 // application-context continuation is resumed; deferred GroupBy
@@ -776,65 +812,99 @@ namespace BatchPdfPublisher.ViewModels
                 foreach (var sourceGroup in sourceGroups)
                 {
                     var sourcePath = sourceGroup.SourcePath;
+                    Document sourceDocument = null;
+                    var openedForPublish = false;
                     WritePublishStage("准备切换 CAD：" + sourcePath + "；" + sourceGroup.Sheets.Count + " 张。");
-                    var sourceDocument = FindOpenDocument(sourcePath);
-                    if (sourceDocument == null && string.Equals(sourcePath, initialSourcePath, StringComparison.OrdinalIgnoreCase))
-                        sourceDocument = initialDocument;
-                    if (sourceDocument == null && !string.IsNullOrWhiteSpace(sourcePath))
+                    try
                     {
-                        if (!System.IO.File.Exists(sourcePath))
-                            throw new System.IO.FileNotFoundException("发布所需的 CAD 文件不存在。", sourcePath);
-                        sourceDocument = Application.DocumentManager.Open(sourcePath, false);
-                    }
-                    if (sourceDocument == null || sourceDocument.Database == null)
-                        throw new System.InvalidOperationException("AutoCAD 无法打开发布所需的 CAD 文件：" + sourcePath);
+                        sourceDocument = FindOpenDocument(sourcePath);
+                        if (sourceDocument == null && initialDocument != null && string.Equals(sourcePath, initialSourcePath, StringComparison.OrdinalIgnoreCase))
+                            sourceDocument = initialDocument;
+                        if (sourceDocument == null && !string.IsNullOrWhiteSpace(sourcePath))
+                        {
+                            if (!System.IO.File.Exists(sourcePath))
+                                throw new System.IO.FileNotFoundException("发布所需的 CAD 文件不存在。", sourcePath);
+                            sourceDocument = Application.DocumentManager.Open(sourcePath, false);
+                            openedForPublish = true;
+                        }
+                        if (sourceDocument == null || sourceDocument.Database == null)
+                            throw new System.InvalidOperationException("AutoCAD 无法打开发布所需的 CAD 文件：" + sourcePath);
 
                     // ExecuteInCommandContextAsync binds its command context to
                     // the document that is active when it is called. Opening and
                     // switching DWGs inside one callback leaves the callback bound
                     // to the original document, so PlotInfoValidator reports
                     // eLayoutNotCurrent even when the layout ObjectId is correct.
-                    Application.DocumentManager.MdiActiveDocument = sourceDocument;
-                    if (!ReferenceEquals(Application.DocumentManager.MdiActiveDocument, sourceDocument))
-                        throw new System.InvalidOperationException("AutoCAD 无法把图纸切换为当前文档：" + sourcePath);
-                    var baseProgress = completedBeforeGroup;
-                    PdfPublishResult groupResult = null;
-                    System.Exception groupException = null;
-                    await Application.DocumentManager.ExecuteInCommandContextAsync(async unused =>
-                    {
-                        try
+                        Application.DocumentManager.MdiActiveDocument = sourceDocument;
+                        if (!ReferenceEquals(Application.DocumentManager.MdiActiveDocument, sourceDocument))
+                            throw new System.InvalidOperationException("AutoCAD 无法把图纸切换为当前文档：" + sourcePath);
+                        var baseProgress = completedBeforeGroup;
+                        System.Collections.Generic.List<PreparedPdfPage> groupPages = null;
+                        System.Exception groupException = null;
+                        await Application.DocumentManager.ExecuteInCommandContextAsync(async unused =>
                         {
-                            var publishedGroup = _publisher.Publish(sourceDocument, sourceGroup.Sheets, project, progress =>
+                            try
                             {
-                                PublishProgressMaximum = Math.Max(sheetsForPublish.Count, 1);
-                                PublishProgressValue = baseProgress + progress.Current;
-                                Status = $"正在生成 PDF：{PublishProgressValue} / {PublishProgressMaximum} · {progress.SheetLabel}";
-                            });
-                            // Assign through the outer variable after a successful
-                            // publish so the application-context continuation can
-                            // aggregate the result.
-                            groupResult = publishedGroup;
-                        }
-                        catch (System.Exception exception)
+                                var completedInGroup = 0;
+                                groupPages = _publisher.PreparePages(sourceDocument, sourceGroup.Sheets, project, sheet =>
+                                {
+                                    completedInGroup++;
+                                    PublishProgressMaximum = Math.Max(sheetsForPublish.Count, 1);
+                                    PublishProgressValue = baseProgress + completedInGroup;
+                                    Status = $"正在生成 PDF：{PublishProgressValue} / {PublishProgressMaximum} · {SheetPublishLabel(sheet)}";
+                                    PumpPublishingUi();
+                                }, (sheet, error) =>
+                                {
+                                    completedInGroup++;
+                                    PublishProgressValue = baseProgress + completedInGroup;
+                                    publishFailures.Add(SheetPublishLabel(sheet) + "（" + error + "）");
+                                    Status = $"生成失败，继续后续图纸：{PublishProgressValue} / {PublishProgressMaximum} · {SheetPublishLabel(sheet)} · {error}";
+                                    PumpPublishingUi();
+                                });
+                            }
+                            catch (System.Exception exception) { groupException = exception; }
+                            await Task.CompletedTask;
+                        }, null);
+                        if (groupException != null)
+                            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(groupException).Throw();
+                        if (groupPages == null)
+                            throw new System.InvalidOperationException("AutoCAD 没有返回当前 CAD 文件的临时 PDF 页。");
+                        preparedPages.AddRange(groupPages);
+                        WritePublishStage("CAD 发布完成：" + sourcePath + "；累计 " + (completedBeforeGroup + sourceGroup.Sheets.Count) + " / " + sheetsForPublish.Count + " 张。");
+                    }
+                    catch (System.Exception groupFailure)
+                    {
+                        var failure = System.IO.Path.GetFileName(sourcePath) + "（" + groupFailure.Message + "）";
+                        publishFailures.Add(failure);
+                        WritePublishStage("CAD 发布失败，继续后续文件：" + sourcePath + "；" + groupFailure);
+                    }
+                    finally
+                    {
+                        if (openedForPublish && sourceDocument != null)
                         {
-                            // AutoCAD 2022 can consume exceptions thrown out of a
-                            // command-context callback. Preserve the real error and
-                            // rethrow it after returning to the modeless UI context.
-                            groupException = exception;
+                            try { sourceDocument.CloseAndDiscard(); }
+                            catch (System.Exception closeFailure) { WritePublishStage("关闭插件自动打开的 CAD 失败：" + sourcePath + "；" + closeFailure.Message); }
                         }
-                        await Task.CompletedTask;
-                    }, null);
-                    if (groupException != null)
-                        System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(groupException).Throw();
-                    if (groupResult == null)
-                        throw new System.InvalidOperationException("AutoCAD 没有返回当前 CAD 文件的 PDF 发布结果，请重新打开该图纸后再试。");
-                    result.Files.AddRange(groupResult.Files);
-                    result.SheetCount += groupResult.SheetCount;
-                    completedBeforeGroup += sourceGroup.Sheets.Count;
-                    WritePublishStage("CAD 发布完成：" + sourcePath + "；累计 " + completedBeforeGroup + " / " + sheetsForPublish.Count + " 张。");
+                        completedBeforeGroup += sourceGroup.Sheets.Count;
+                        PublishProgressValue = Math.Min(completedBeforeGroup, PublishProgressMaximum);
+                        // AutoCAD documents carry large native databases. Give
+                        // their managed wrappers a chance to release between
+                        // files during projects containing hundreds of DWGs.
+                        if (openedForPublish) GC.Collect(1, GCCollectionMode.Optimized, false);
+                    }
                 }
-                if (result == null)
-                    throw new System.InvalidOperationException("AutoCAD 没有返回 PDF 发布结果，请重新打开当前图纸后再试。");
+                PublishProgressValue = 0;
+                PublishProgressMaximum = Math.Max(preparedPages.Count, 1);
+                Status = "所有 CAD 已处理，正在按子项目整理 PDF：0 / " + preparedPages.Count;
+                PumpPublishingUi();
+                var result = _publisher.FinalizePreparedPages(preparedPages, project, engineeringFolder, (current, total, sheet) =>
+                {
+                    PublishProgressValue = current;
+                    PublishProgressMaximum = Math.Max(total, 1);
+                    Status = $"正在整理 PDF：{current} / {total} · {SheetPublishLabel(sheet)}";
+                    PumpPublishingUi();
+                });
+                publishFailures.AddRange(result.Failures);
                 var outputDirectories = result.Files
                     .Select(System.IO.Path.GetDirectoryName)
                     .Where(x => !string.IsNullOrWhiteSpace(x))
@@ -843,7 +913,10 @@ namespace BatchPdfPublisher.ViewModels
                 var outputSummary = outputDirectories.Count == 1
                     ? outputDirectories[0]
                     : outputDirectories.Count + " 个目录";
-                Status = $"发布完成：{result.SheetCount} 张图纸，生成 {result.Files.Count} 个 PDF。输出到 {outputSummary}";
+                Status = publishFailures.Count == 0
+                    ? $"发布完成：{result.SheetCount} 张图纸，生成 {result.Files.Count} 个 PDF。输出到 {outputSummary}"
+                    : $"发布完成，但有 {publishFailures.Count} 个 CAD 失败：{string.Join("；", publishFailures)}。已生成 {result.Files.Count} 个 PDF，输出到 {engineeringFolder}";
+                if (publishFailures.Count > 0) Application.ShowAlertDialog(Status);
                 if (PreviewEnabled) UpdatePreview();
             }
             catch (System.Exception exception)
@@ -859,8 +932,27 @@ namespace BatchPdfPublisher.ViewModels
             }
             finally
             {
+                _publisher.CleanupPreparedPages(preparedPages);
+                TryRestoreActiveDocument(initialDocument);
                 IsPublishing = false;
             }
+        }
+
+        public void RefreshPreview()
+        {
+            if (!PreviewEnabled)
+            {
+                Status = "请先勾选“显示当前子项目预览”。";
+                return;
+            }
+            UpdatePreview();
+            Status = "已更新当前子项目的图框预览。";
+        }
+
+        private static void PumpPublishingUi()
+        {
+            System.Windows.Forms.Application.DoEvents();
+            try { Application.UpdateScreen(); } catch { }
         }
 
         private static string SafeDocumentPath(Document document)
@@ -876,32 +968,78 @@ namespace BatchPdfPublisher.ViewModels
         private static Document FindOpenDocument(string sourcePath)
         {
             if (string.IsNullOrWhiteSpace(sourcePath)) return Application.DocumentManager.MdiActiveDocument;
-            var requested = sourcePath.Trim();
-            var requestedFull = requested;
-            try { if (System.IO.Path.IsPathRooted(requested)) requestedFull = System.IO.Path.GetFullPath(requested); } catch { }
-                var requestedName = string.Empty;
-                var requestedStem = string.Empty;
+            var requestedFull = NormalizeCadPath(sourcePath);
+            var requestedName = System.IO.Path.GetFileName(requestedFull);
+            var documents = new System.Collections.Generic.List<Document>();
+            var active = Application.DocumentManager.MdiActiveDocument;
+            if (active != null) documents.Add(active);
+            foreach (Document candidate in Application.DocumentManager)
+            {
+                if (candidate != null && !documents.Contains(candidate)) documents.Add(candidate);
+            }
+            foreach (var candidate in documents)
+            {
+                foreach (var alias in OpenDocumentAliases(candidate))
+                    if (string.Equals(NormalizeCadPath(alias), requestedFull, StringComparison.OrdinalIgnoreCase)) return candidate;
+            }
+
+            // Some TArch hosts expose only the drawing name through Document.Name.
+            var nameMatches = documents.Where(candidate => OpenDocumentAliases(candidate).Any(alias =>
+                string.Equals(CleanCadDisplayName(System.IO.Path.GetFileName(alias)), CleanCadDisplayName(requestedName), StringComparison.OrdinalIgnoreCase))).ToList();
+            return nameMatches.Count == 1 ? nameMatches[0] : null;
+        }
+
+        private static void TryRestoreActiveDocument(Document document)
+        {
+            if (document == null) return;
             try
             {
-                requestedName = System.IO.Path.GetFileName(requested);
-                requestedStem = System.IO.Path.GetFileNameWithoutExtension(requestedName);
+                foreach (Document openDocument in Application.DocumentManager)
+                    if (ReferenceEquals(openDocument, document))
+                    {
+                        Application.DocumentManager.MdiActiveDocument = document;
+                        return;
+                    }
             }
             catch { }
-            // Prefer the active document for an unsaved Drawing1/Drawing1.dwg
-            // record, then compare exact paths, then compare file names. CAD
-            // can expose an unsaved document with an empty Database.Filename,
-            // so a strict File.Exists check is incorrect here.
-            var active = Application.DocumentManager.MdiActiveDocument;
-            if (active != null && IsSameOpenDocument(active, requested, requestedFull, requestedName, requestedStem)) return active;
-            foreach (Document candidate in Application.DocumentManager)
+        }
+
+        private static System.Collections.Generic.IEnumerable<string> OpenDocumentAliases(Document document)
+        {
+            var aliases = new System.Collections.Generic.List<string>();
+            try { if (!string.IsNullOrWhiteSpace(document?.Database?.Filename)) aliases.Add(document.Database.Filename); } catch { }
+            try { if (!string.IsNullOrWhiteSpace(document?.Name)) aliases.Add(document.Name); } catch { }
+            return aliases.Distinct(StringComparer.OrdinalIgnoreCase);
+        }
+
+        private static string NormalizeCadPath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return string.Empty;
+            try { return System.IO.Path.GetFullPath(path.Trim()); }
+            catch { return path.Trim(); }
+        }
+
+        private static string SheetPublishLabel(SheetItem sheet)
+        {
+            if (sheet == null) return "未知图纸";
+            return string.Join(" · ", new[]
+            {
+                System.IO.Path.GetFileName(sheet.SourceFile), sheet.SheetNumber, sheet.SheetName
+            }.Where(x => !string.IsNullOrWhiteSpace(x)));
+        }
+
+        private static string DescribeOpenDocuments()
+        {
+            var names = new System.Collections.Generic.List<string>();
+            foreach (Document document in Application.DocumentManager)
             {
                 try
                 {
-                    if (IsSameOpenDocument(candidate, requested, requestedFull, requestedName, requestedStem)) return candidate;
+                    names.Add("Name=" + document.Name + ", Database=" + document.Database?.Filename);
                 }
                 catch { }
             }
-            return null;
+            return string.Join(" | ", names);
         }
 
         /// <summary>Copies AutoCAD/TArch temporary saves into the project archive without moving user files.</summary>
@@ -938,25 +1076,6 @@ namespace BatchPdfPublisher.ViewModels
             }
             Status = copied == 0 ? "自动保存目录已是最新。" : "已归档 " + copied + " 个自动保存文件。";
             return copied;
-        }
-
-        private static bool IsSameOpenDocument(Document candidate, string requested, string requestedFull, string requestedName, string requestedStem)
-        {
-            var candidatePath = SafeDocumentPath(candidate);
-            if (string.IsNullOrWhiteSpace(candidatePath)) return false;
-            if (string.Equals(candidatePath, requested, StringComparison.OrdinalIgnoreCase)) return true;
-            try
-            {
-                if (string.Equals(System.IO.Path.GetFullPath(candidatePath), requestedFull, StringComparison.OrdinalIgnoreCase)) return true;
-                var candidateName = System.IO.Path.GetFileName(candidatePath);
-                if (!string.IsNullOrWhiteSpace(requestedName) && (string.Equals(candidateName, requestedName, StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(CleanCadDisplayName(candidateName), CleanCadDisplayName(requestedName), StringComparison.OrdinalIgnoreCase))) return true;
-                var candidateStem = System.IO.Path.GetFileNameWithoutExtension(candidateName);
-                if (!string.IsNullOrWhiteSpace(requestedStem) && (string.Equals(candidateStem, requestedStem, StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(CleanCadDisplayName(candidateStem), CleanCadDisplayName(requestedStem), StringComparison.OrdinalIgnoreCase))) return true;
-            }
-            catch { }
-            return false;
         }
 
         private static string CleanCadDisplayName(string value)
@@ -1044,6 +1163,17 @@ namespace BatchPdfPublisher.ViewModels
             return System.Windows.Forms.MessageBox.Show(message, "天正图纸兼容性提醒",
                 System.Windows.Forms.MessageBoxButtons.YesNo, System.Windows.Forms.MessageBoxIcon.Warning,
                 System.Windows.Forms.MessageBoxDefaultButton.Button2) == System.Windows.Forms.DialogResult.Yes;
+        }
+
+        private static bool ConfirmFilesSavedBeforePublish()
+        {
+            const string message = "发布过程会依次激活或打开工程 DWG。\r\n\r\n"
+                + "请先保存所有正在编辑的 CAD 文件，避免未保存修改影响发布内容。\r\n"
+                + "插件只会关闭它为本次发布自动打开的 DWG，不会关闭您原本已打开的文件。\r\n\r\n"
+                + "确认已保存并继续发布吗？";
+            return System.Windows.Forms.MessageBox.Show(message, "发布前请先保存 CAD",
+                System.Windows.Forms.MessageBoxButtons.OKCancel, System.Windows.Forms.MessageBoxIcon.Warning,
+                System.Windows.Forms.MessageBoxDefaultButton.Button2) == System.Windows.Forms.DialogResult.OK;
         }
 
         public void Dispose()
