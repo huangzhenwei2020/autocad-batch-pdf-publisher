@@ -80,9 +80,9 @@ namespace BatchPdfPublisher.Services
             if (PlotFactory.ProcessPlotState != ProcessPlotState.NotPlotting)
                 throw new InvalidOperationException("AutoCAD 正在执行其他打印任务，请稍后再试。");
 
-            var outputRoot = project?.OutputNextToCadFile == true && !string.IsNullOrWhiteSpace(document.Database.Filename)
-                ? Path.GetDirectoryName(document.Database.Filename)
-                : (string.IsNullOrWhiteSpace(project?.OutputDirectory) ? @"D:\PDF输出" : project.OutputDirectory);
+            // All PDFs belong to one engineering output folder.  The CAD
+            // source location must never change the project output layout.
+            var outputRoot = string.IsNullOrWhiteSpace(project?.OutputDirectory) ? @"D:\PDF输出" : project.OutputDirectory;
             // Every publishing mode is scoped to an engineering folder.  The
             // filename checkbox controls only the PDF name, never this folder.
             var requestedEngineeringFolder = Path.Combine(outputRoot, SafeName(project?.Name ?? "默认工程"));
@@ -630,12 +630,11 @@ namespace BatchPdfPublisher.Services
         private static string UniqueDirectory(string requested)
         {
             if (!Directory.Exists(requested)) return requested;
-            for (var index = 2; index < 10000; index++)
-            {
-                var candidate = requested + " (" + index + ")";
-                if (!Directory.Exists(candidate)) return candidate;
-            }
-            return requested + " " + DateTime.Now.ToString("yyyyMMdd-HHmmss");
+            var day = requested + " " + DateTime.Now.ToString("yyyyMMdd");
+            if (!Directory.Exists(day)) return day;
+            var minute = day + "-" + DateTime.Now.ToString("HHmm");
+            if (!Directory.Exists(minute)) return minute;
+            return minute + "-" + DateTime.Now.ToString("ss");
         }
     }
 }

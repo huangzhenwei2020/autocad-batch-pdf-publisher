@@ -76,7 +76,7 @@ namespace BatchPdfPublisher.Views
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 82));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 104));
             Controls.Add(root);
 
             var header = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Padding = Padding.Empty, BackColor = System.Drawing.Color.FromArgb(24, 49, 84) };
@@ -257,11 +257,11 @@ namespace BatchPdfPublisher.Views
                 rightSplitter.SplitterDistance = Math.Max(rightSplitter.Panel1MinSize, rightSplitter.Width - rightSplitter.Panel2MinSize - rightSplitter.SplitterWidth);
             };
 
-            var footer = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = System.Drawing.Color.White, Padding = new Padding(16, 7, 16, 7), ColumnCount = 3, RowCount = 2 };
-            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 82)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 160));
+            var footer = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = System.Drawing.Color.White, Padding = new Padding(16, 8, 16, 8), ColumnCount = 3, RowCount = 2 };
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 180));
             footer.RowStyles.Add(new RowStyle(SizeType.Percent, 50)); footer.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
-            _status.AutoSize = false; _status.AutoEllipsis = true; _status.Dock = DockStyle.Fill; _status.ForeColor = System.Drawing.Color.FromArgb(65, 84, 110); footer.Controls.Add(_status, 0, 0); footer.SetColumnSpan(_status, 2);
-            _sheetCountText.AutoSize = false; _sheetCountText.MinimumSize = new System.Drawing.Size(82, 0); _sheetCountText.Dock = DockStyle.Fill; _sheetCountText.TextAlign = System.Drawing.ContentAlignment.MiddleRight; _sheetCountText.Margin = new Padding(4, 0, 4, 0); _sheetCountText.ForeColor = System.Drawing.Color.FromArgb(65, 84, 110); footer.Controls.Add(_sheetCountText, 2, 0);
+            _status.AutoSize = false; _status.AutoEllipsis = true; _status.Dock = DockStyle.Fill; _status.ForeColor = System.Drawing.Color.FromArgb(65, 84, 110); _status.TextAlign = System.Drawing.ContentAlignment.MiddleLeft; footer.Controls.Add(_status, 0, 0);
+            _sheetCountText.AutoSize = false; _sheetCountText.MinimumSize = new System.Drawing.Size(110, 0); _sheetCountText.Dock = DockStyle.Fill; _sheetCountText.TextAlign = System.Drawing.ContentAlignment.MiddleRight; _sheetCountText.Margin = new Padding(4, 0, 4, 0); _sheetCountText.ForeColor = System.Drawing.Color.FromArgb(65, 84, 110); footer.Controls.Add(_sheetCountText, 1, 0);
             _progressTrack.Dock = DockStyle.Fill; _progressTrack.Height = 22; _progressTrack.Margin = new Padding(0, 4, 10, 0); _progressTrack.BackColor = System.Drawing.Color.Transparent; ApplyRoundedRegion(_progressTrack, 8); _progressTrack.Paint += PaintProgressTrack; footer.Controls.Add(_progressTrack, 0, 1);
             _publishProgressText.AutoSize = false; _publishProgressText.MinimumSize = new System.Drawing.Size(82, 0); _publishProgressText.Padding = new Padding(0, 0, 8, 0); _publishProgressText.Dock = DockStyle.Fill; _publishProgressText.TextAlign = System.Drawing.ContentAlignment.MiddleRight; _publishProgressText.ForeColor = System.Drawing.Color.FromArgb(65, 84, 110); _publishProgressText.Text = "0 / 0"; footer.Controls.Add(_publishProgressText, 1, 1);
             var footerPublish = IconAccentButton("发布 PDF", UiIcon.Publish, PublishPdf); footerPublish.MinimumSize = new System.Drawing.Size(150, 30); footer.Controls.Add(footerPublish, 2, 1);
