@@ -379,12 +379,13 @@ namespace BatchPdfPublisher.Services
             var settings = new PlotSettings(layout.ModelType);
             settings.CopyFrom(layout);
             var validator = PlotSettingsValidator.Current;
-            // AutoCAD 2022/TArch rejects SetPlotType(Window) after a custom
-            // PC3/PMP medium has already been applied. Configure the geometry
-            // while the copied layout is still active, then switch device and
-            // paper. This order is also accepted by plain AutoCAD.
+            // Some AutoCAD 2022/TArch drawings return eInvalidInput when
+            // SetPlotType(Window) is called before the window has a valid
+            // value. The native API accepts the reverse order. Coordinates
+            // must be expressed in DCS rather than the scanned WCS extents.
+            var plotWindow = GetPlotWindowInDcs(sheet);
+            ApplyPlotStep("预设图框范围", () => validator.SetPlotWindowArea(settings, plotWindow));
             ApplyPlotStep("设置窗口打印类型", () => validator.SetPlotType(settings, Autodesk.AutoCAD.DatabaseServices.PlotType.Window));
-            ApplyPlotStep("设置图框范围", () => validator.SetPlotWindowArea(settings, new Extents2d(sheet.MinX, sheet.MinY, sheet.MaxX, sheet.MaxY)));
             ApplyPlotStep("居中打印", () => validator.SetPlotCentered(settings, true));
             // “打印比例”是图纸属性，不能直接作为 CAD 的 PlotScale。若把
             // 1:100 写入 PlotScale，会把 420 mm 的图框缩成 4.2 mm。
@@ -461,6 +462,23 @@ namespace BatchPdfPublisher.Services
             {
                 throw new InvalidOperationException($"打印设置步骤“{name}”失败：{exception.Message}", exception);
             }
+        }
+
+        private static Extents2d GetPlotWindowInDcs(SheetItem sheet)
+        {
+            var extents = new Extents3d(
+                new Point3d(sheet.MinX, sheet.MinY, 0d),
+                new Point3d(sheet.MaxX, sheet.MaxY, 0d));
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document == null) return new Extents2d(sheet.MinX, sheet.MinY, sheet.MaxX, sheet.MaxY);
+            using (var view = document.Editor.GetCurrentView())
+            {
+                var wcsToDcs = Matrix3d.PlaneToWorld(view.ViewDirection);
+                wcsToDcs = Matrix3d.Displacement(view.Target - Point3d.Origin) * wcsToDcs;
+                wcsToDcs = Matrix3d.Rotation(-view.ViewTwist, view.ViewDirection, view.Target) * wcsToDcs;
+                extents.TransformBy(wcsToDcs.Inverse());
+            }
+            return new Extents2d(extents.MinPoint.X, extents.MinPoint.Y, extents.MaxPoint.X, extents.MaxPoint.Y);
         }
 
         private static void InitializePdfDevice(PlotSettingsValidator validator, PlotSettings settings, Layout layout, string device)
