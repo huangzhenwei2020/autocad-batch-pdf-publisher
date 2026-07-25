@@ -39,15 +39,18 @@ namespace BatchPdfPublisher.Services
                 {
                     var expected = PaperSizeCatalog.GetSize(candidate.Key, extension, "横向");
                     var expectedLong = Math.Max(expected[0], expected[1]);
-                    var expectedShort = candidate.Value[0];
-                    var shortScale = Math.Max(shorter, 1d) / expectedShort;
-                    var longScale = Math.Max(longer, 1d) / expectedLong;
+                    var expectedShort = Math.Min(expected[0], expected[1]);
+                    var shortScale = shorter / Math.Max(expectedShort, 1d);
+                    var longScale = longer / Math.Max(expectedLong, 1d);
                     var averageScale = (shortScale + longScale) / 2d;
-                    var integerScale = Math.Max(1, (int)Math.Round(averageScale));
+                    var integerScale = Math.Max(1, (int)Math.Round(averageScale, MidpointRounding.AwayFromZero));
+                    // Prefer an exact paper-library match (including 0.5/1x
+                    // and extended fractions) before considering print scale.
+                    var dimensionError = Math.Abs(shorter - expectedShort) / Math.Max(expectedShort, 1d)
+                        + Math.Abs(longer - expectedLong) / Math.Max(expectedLong, 1d);
                     var scaleMismatch = Math.Abs(shortScale - longScale) / Math.Max(averageScale, 1d);
-                    var integerMismatch = Math.Abs(averageScale - integerScale) / integerScale;
-                    var knownScaleMismatch = knownScale > 0 ? Math.Abs(Math.Log(integerScale / (double)knownScale)) : 0d;
-                    var score = scaleMismatch + integerMismatch + knownScaleMismatch + PaperSizeCatalog.ParseExtension(extension) * 0.0001d;
+                    var knownScaleMismatch = knownScale > 0 ? Math.Abs(Math.Log(Math.Max(averageScale, 0.01d) / knownScale)) : 0d;
+                    var score = dimensionError * 4d + scaleMismatch + knownScaleMismatch + PaperSizeCatalog.ParseExtension(extension) * 0.0001d;
                     if (score < bestScore)
                     {
                         bestScore = score;

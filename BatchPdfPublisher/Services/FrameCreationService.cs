@@ -118,7 +118,8 @@ namespace BatchPdfPublisher.Services
             using (document.LockDocument()) using (var tr = document.Database.TransactionManager.StartTransaction())
             {
                 var blocks = (BlockTable)tr.GetObject(document.Database.BlockTableId, OpenMode.ForWrite);
-                var baseName = detectedPaper + "_BPP_" + SafeName(remark);
+                var paperDisplay = detectedPaper + (string.IsNullOrWhiteSpace(detectedExtension) ? string.Empty : "+" + detectedExtension);
+                var baseName = paperDisplay + "_BPP_" + SafeName(remark);
                 var name = baseName; var index = 2; while (blocks.Has(name)) name = baseName + "_" + index++;
                 var record = new BlockTableRecord { Name = name, Origin = Point3d.Origin }; var recordId = blocks.Add(record); tr.AddNewlyCreatedDBObject(record, true);
                 var ids = new ObjectIdCollection(); foreach (SelectedObject selected in selection.Value) if (selected != null) ids.Add(selected.ObjectId);

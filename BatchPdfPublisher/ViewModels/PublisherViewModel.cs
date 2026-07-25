@@ -183,7 +183,7 @@ namespace BatchPdfPublisher.ViewModels
         public void ScanCadFiles(System.Collections.Generic.IEnumerable<string> files)
         {
             var paths = (files ?? Enumerable.Empty<string>())
-                .Where(x => !string.IsNullOrWhiteSpace(x) && System.IO.File.Exists(x))
+                .Where(x => !string.IsNullOrWhiteSpace(x) && string.Equals(System.IO.Path.GetExtension(x), ".dwg", StringComparison.OrdinalIgnoreCase) && System.IO.File.Exists(x))
                 .Select(System.IO.Path.GetFullPath)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
@@ -292,6 +292,7 @@ namespace BatchPdfPublisher.ViewModels
         public void AddCadFiles(System.Collections.Generic.IEnumerable<string> files)
         {
             var paths = (files ?? Enumerable.Empty<string>()).Where(x => !string.IsNullOrWhiteSpace(x))
+                .Where(x => string.Equals(System.IO.Path.GetExtension(x), ".dwg", StringComparison.OrdinalIgnoreCase))
                 .Select(System.IO.Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             foreach (var path in paths)
                 if (!CadFiles.Any(x => string.Equals(x.Path, path, StringComparison.OrdinalIgnoreCase)))
@@ -465,6 +466,7 @@ namespace BatchPdfPublisher.ViewModels
             {
                 var folder = System.IO.Path.Combine(GetProjectFolder(), "CAD");
                 System.IO.Directory.CreateDirectory(folder);
+                SyncAutoSaveFiles();
                 var sourceName = System.IO.Path.GetFileName(document.Database.Filename);
                 if (string.IsNullOrWhiteSpace(sourceName)) sourceName = "未命名图纸.dwg";
                 destination = System.IO.Path.Combine(folder, sourceName);
@@ -900,6 +902,42 @@ namespace BatchPdfPublisher.ViewModels
                 catch { }
             }
             return null;
+        }
+
+        /// <summary>Copies AutoCAD/TArch temporary saves into the project archive without moving user files.</summary>
+        public int SyncAutoSaveFiles()
+        {
+            if (SelectedProject == null) return 0;
+            var target = System.IO.Path.Combine(GetProjectFolder(), "自动保存");
+            System.IO.Directory.CreateDirectory(target);
+            var roots = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                var savePath = Convert.ToString(Application.GetSystemVariable("SAVEFILEPATH"));
+                if (!string.IsNullOrWhiteSpace(savePath)) foreach (var item in savePath.Split(';')) if (!string.IsNullOrWhiteSpace(item)) roots.Add(item.Trim());
+            }
+            catch { }
+            roots.Add(System.IO.Path.GetTempPath());
+            var copied = 0;
+            foreach (var root in roots.Where(System.IO.Directory.Exists))
+            {
+                IEnumerable<string> files;
+                try { files = System.IO.Directory.EnumerateFiles(root, "*.*", System.IO.SearchOption.TopDirectoryOnly); } catch { continue; }
+                foreach (var source in files.Where(x => new[] { ".sv$", ".ac$" }.Contains(System.IO.Path.GetExtension(x), StringComparer.OrdinalIgnoreCase)))
+                {
+                    try
+                    {
+                        var stamp = System.IO.File.GetLastWriteTime(source).ToString("yyyyMMdd_HHmmss");
+                        var name = System.IO.Path.GetFileNameWithoutExtension(source) + "_" + stamp + ".dwg";
+                        var destination = System.IO.Path.Combine(target, name);
+                        if (!System.IO.File.Exists(destination) || System.IO.File.GetLastWriteTimeUtc(destination) < System.IO.File.GetLastWriteTimeUtc(source))
+                        { System.IO.File.Copy(source, destination, true); copied++; }
+                    }
+                    catch { }
+                }
+            }
+            Status = copied == 0 ? "自动保存目录已是最新。" : "已归档 " + copied + " 个自动保存文件。";
+            return copied;
         }
 
         private static bool IsSameOpenDocument(Document candidate, string requested, string requestedFull, string requestedName, string requestedStem)

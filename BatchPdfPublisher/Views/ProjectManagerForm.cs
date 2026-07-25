@@ -16,6 +16,7 @@ namespace BatchPdfPublisher.Views
         private readonly ListBox _projects = new ListBox();
         private readonly TextBox _name = new TextBox();
         private readonly TextBox _folder = new TextBox();
+        private readonly ToolTip _toolTip = new ToolTip();
 
         public ProjectManagerForm(PublisherViewModel viewModel, Action refreshPublisher, Action configureScan)
         {
@@ -53,21 +54,21 @@ namespace BatchPdfPublisher.Views
             right.Controls.Add(Title("项目管理"), 0, 0);
             var nameLine = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top, WrapContents = false };
             nameLine.Controls.Add(new Label { Text = "工程名称", AutoSize = true, Margin = new Padding(0, 7, 8, 0) });
-            _name.Width = 240; nameLine.Controls.Add(_name); nameLine.Controls.Add(Button("新建 / 切换", CreateOrSwitch, true)); right.Controls.Add(nameLine, 0, 1);
+            _name.Width = 240; nameLine.Controls.Add(_name); nameLine.Controls.Add(Button("新建工程", CreateOrSwitch, true)); right.Controls.Add(nameLine, 0, 1);
             var folderLine = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top, WrapContents = false, Margin = new Padding(0, 8, 0, 5) };
             folderLine.Controls.Add(new Label { Text = "项目文件夹", AutoSize = true, Margin = new Padding(0, 7, 8, 0) });
-            _folder.Width = 300; ApplyInputStyle(_folder); folderLine.Controls.Add(_folder); folderLine.Controls.Add(Button("选择", ChooseFolder)); right.Controls.Add(folderLine, 0, 2);
+            _folder.Width = 300; ApplyInputStyle(_folder); folderLine.Controls.Add(_folder); folderLine.Controls.Add(Button("选择目录", ChooseFolder)); right.Controls.Add(folderLine, 0, 2);
             var projectActions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top, WrapContents = true };
-            projectActions.Controls.Add(Button("切换选中项目", SwitchSelected)); projectActions.Controls.Add(Button("删除项目", DeleteSelected));
-            projectActions.Controls.Add(Button("保存工程参数", SaveParameters, true)); right.Controls.Add(projectActions, 0, 3);
+            projectActions.Controls.Add(Button("切换项目", SwitchSelected)); projectActions.Controls.Add(Button("删除项目", DeleteSelected));
+            projectActions.Controls.Add(Button("保存参数", SaveParameters, true)); right.Controls.Add(projectActions, 0, 3);
             var cadActions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top, WrapContents = true, Margin = new Padding(0, 8, 0, 0) };
-            cadActions.Controls.Add(Button("保存当前 CAD 到项目文件夹", SaveCurrentCad, true)); cadActions.Controls.Add(Button("打开项目文件夹", OpenFolder)); right.Controls.Add(cadActions, 0, 4);
+            cadActions.Controls.Add(Button("保存 CAD", SaveCurrentCad, true)); cadActions.Controls.Add(Button("打开目录", OpenFolder)); right.Controls.Add(cadActions, 0, 4);
             var scanActions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top, WrapContents = true, Margin = new Padding(0, 8, 0, 0) };
             scanActions.Controls.Add(Button("扫描设置", () => _configureScan())); right.Controls.Add(scanActions, 0, 5);
             right.Controls.Add(new Label { Text = "说明：删除项目只删除插件中的项目参数，项目文件夹和其中的 DWG 会保留。", AutoSize = true, ForeColor = Color.FromArgb(110, 110, 110), MaximumSize = new Size(430, 48), Margin = new Padding(0, 14, 0, 0) }, 0, 6);
             root.Controls.Add(right, 1, 0);
 
-            var close = Button("关闭", () => Close()); close.DialogResult = DialogResult.OK;
+            var close = Button("关闭窗口", () => Close()); close.DialogResult = DialogResult.OK;
             var bottom = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.RightToLeft };
             bottom.Controls.Add(close); root.Controls.Add(bottom, 1, 1);
             _projects.SelectedIndexChanged += (sender, args) => UpdateSelection();
@@ -146,12 +147,14 @@ namespace BatchPdfPublisher.Views
             control.Margin = new Padding(0, 0, 8, 5);
         }
 
-        private static Button Button(string text, Action action, bool accent = false)
+        private Button Button(string text, Action action, bool accent = false)
         {
             var button = new Button { Text = text, AutoSize = true, Height = 30, MinimumSize = new Size(0, 30), FlatStyle = FlatStyle.Flat, BackColor = Color.White, ForeColor = Color.FromArgb(25, 54, 99), Padding = new Padding(7, 2, 7, 2), Margin = new Padding(0, 0, 6, 5) };
             button.FlatAppearance.BorderColor = accent ? Color.FromArgb(104, 145, 185) : Color.FromArgb(190, 201, 216);
             button.FlatAppearance.MouseOverBackColor = Color.FromArgb(239, 244, 250);
             button.FlatAppearance.MouseDownBackColor = Color.FromArgb(226, 235, 246);
+            button.Tag = text;
+            _toolTip.SetToolTip(button, "点击执行：" + text.Trim());
             button.Click += (sender, args) => action(); return button;
         }
     }
