@@ -12,12 +12,27 @@ namespace BatchPdfPublisher.Views
     {
         private const string DoNotRead = "（不读取）";
         private readonly IDictionary<string, string> _attributeValues;
+        private readonly FrameDefinition _existing;
+        private readonly string _attributeTagSignature;
+        private readonly string _definitionSignature;
+        private readonly double _referenceAspectRatio;
+        private readonly Func<FrameProjectScanReport> _projectScanner;
+        private FrameProjectScanReport _projectScan;
+        public List<FrameProjectScanIssue> RequestedIssues { get; } = new List<FrameProjectScanIssue>();
+        public bool OpenAllRequested { get; private set; }
 
         public FrameDefinition Definition { get; private set; }
 
-        public FrameRegistrationWindow(string blockName, FrameSizeGuess guess, IDictionary<string, string> attributeValues, FrameDefinition existing = null)
+        public FrameRegistrationWindow(string blockName, FrameSizeGuess guess, IDictionary<string, string> attributeValues, FrameDefinition existing = null,
+            string attributeTagSignature = null, string definitionSignature = null, double referenceAspectRatio = 0d,
+            Func<FrameProjectScanReport> projectScanner = null)
         {
             InitializeComponent();
+            _existing = existing;
+            _attributeTagSignature = attributeTagSignature;
+            _definitionSignature = definitionSignature;
+            _referenceAspectRatio = referenceAspectRatio;
+            _projectScanner = projectScanner;
             _attributeValues = attributeValues ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             BlockNameBox.Text = blockName;
             var detectedAttributes = _attributeValues.Count == 0
@@ -68,6 +83,13 @@ namespace BatchPdfPublisher.Views
 
         private void Save_Click(object sender, RoutedEventArgs e)
         {
+            if (_projectScanner != null && _projectScan == null) RunProjectScan();
+            if (_projectScan != null && _projectScan.Issues.Count > 0)
+            {
+                ShowIssueWindow(_projectScan);
+                return;
+            }
+            if (_projectScan != null && _projectScan.Failures.Count > 0 && MessageBox.Show("有 " + _projectScan.Failures.Count + " 个工程 CAD 未能完成检查：\r\n\r\n" + string.Join("\r\n", _projectScan.Failures.Take(12)) + "\r\n\r\n仍要保存登记吗？", "工程 CAD 未全部检查", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
             var paper = ItemText(PaperSizeBox);
             if (string.IsNullOrWhiteSpace(paper))
             {
@@ -78,7 +100,11 @@ namespace BatchPdfPublisher.Views
             var extension = ItemText(ExtensionBox);
             Definition = new FrameDefinition
             {
+                RegistrationId = string.IsNullOrWhiteSpace(_existing?.RegistrationId) ? Guid.NewGuid().ToString("N") : _existing.RegistrationId,
                 BlockName = BlockNameBox.Text,
+                AttributeTagSignature = _attributeTagSignature ?? _existing?.AttributeTagSignature,
+                DefinitionSignature = _definitionSignature ?? _existing?.DefinitionSignature,
+                ReferenceAspectRatio = _referenceAspectRatio > 0d ? _referenceAspectRatio : _existing?.ReferenceAspectRatio ?? 0d,
                 PaperSize = paper,
                 Extension = extension == "无加长" ? string.Empty : extension,
                 PaperOrientation = ItemText(OrientationBox),
@@ -93,6 +119,64 @@ namespace BatchPdfPublisher.Views
                 DefaultPrintScale = PrintScaleValueBox.Text?.Trim()
             };
             DialogResult = true;
+        }
+
+        private void ScanProject_Click(object sender, RoutedEventArgs e) => RunProjectScan();
+
+        private void RunProjectScan()
+        {
+            if (_projectScanner == null) return;
+            ProjectScanText.Text = "正在扫描工程 CAD，请稍候……";
+            try
+            {
+                _projectScan = _projectScanner();
+                ProjectScanText.Text = _projectScan.Summary;
+                if (_projectScan.Issues.Count > 0)
+                    ShowIssueWindow(_projectScan);
+                else if (_projectScan.Failures.Count > 0)
+                    MessageBox.Show("重复 TAG 检查未发现问题，但以下 CAD 读取失败：\r\n\r\n" + string.Join("\r\n", _projectScan.Failures.Take(20)), "工程图框检查未完成", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+            catch (Exception exception)
+            {
+                ProjectScanText.Text = "扫描失败：" + exception.Message;
+                MessageBox.Show(ProjectScanText.Text, "工程图框检查", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+
+        private void ShowIssueWindow(FrameProjectScanReport report)
+        {
+            var window = new Window { Title = "工程图框检查", Width = 650, Height = 430, MinWidth = 520, MinHeight = 320, Owner = this, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+            var root = new Grid { Margin = new Thickness(14) };
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            var description = new TextBlock { Text = "发现重复属性 TAG。请选择问题文件进入块编辑器修改属性定义，修改后执行 ATTSYNC。", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10) };
+            root.Children.Add(description);
+            var list = new ListBox { ItemsSource = report.Issues, DisplayMemberPath = "DisplayText" };
+            if (report.Issues.Count > 0) list.SelectedIndex = 0;
+            Grid.SetRow(list, 1); root.Children.Add(list);
+            var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 12, 0, 0) };
+            var openSelected = new Button { Content = "打开选中并修改", MinWidth = 125, Margin = new Thickness(0, 0, 8, 0), Padding = new Thickness(8, 4, 8, 4) };
+            openSelected.Click += (s, e) => RequestIssueAction(list.SelectedItem as FrameProjectScanIssue, report.Issues, false, window);
+            var openAll = new Button { Content = "全部打开并修改", MinWidth = 125, Margin = new Thickness(0, 0, 8, 0), Padding = new Thickness(8, 4, 8, 4) };
+            openAll.Click += (s, e) => RequestIssueAction(list.SelectedItem as FrameProjectScanIssue, report.Issues, true, window);
+            var close = new Button { Content = "关闭", MinWidth = 75, Padding = new Thickness(8, 4, 8, 4), IsCancel = true };
+            close.Click += (s, e) => window.Close();
+            buttons.Children.Add(openSelected); buttons.Children.Add(openAll); buttons.Children.Add(close);
+            Grid.SetRow(buttons, 2); root.Children.Add(buttons);
+            window.Content = root;
+            window.ShowDialog();
+        }
+
+        private void RequestIssueAction(FrameProjectScanIssue selected, IEnumerable<FrameProjectScanIssue> all, bool openAll, Window issueWindow)
+        {
+            if (selected == null) return;
+            RequestedIssues.Clear();
+            RequestedIssues.Add(selected);
+            if (openAll) RequestedIssues.AddRange(all.Where(x => !ReferenceEquals(x, selected)));
+            OpenAllRequested = openAll;
+            issueWindow.Close();
+            DialogResult = false;
         }
 
         private void PaperSizeBox_SelectionChanged(object sender, SelectionChangedEventArgs e)

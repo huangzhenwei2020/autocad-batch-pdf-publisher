@@ -24,7 +24,7 @@ namespace BatchPdfPublisher.Services
                     var ribbon = ComponentManager.Ribbon;
                     if (ribbon == null) return;
                     var existing = ribbon.FindTab(TabId);
-                    if (existing != null && existing.Panels.Count > 0 && existing.Panels[0].Source.Items.Count == 4 && existing.Panels[0].Source.Items[0].Text.IndexOf("BPP", StringComparison.OrdinalIgnoreCase) >= 0)
+                    if (existing != null && existing.Panels.Count > 0 && existing.Panels[0].Source.Items.Count == 5 && existing.Panels[0].Source.Items[0].Text.IndexOf("BPP", StringComparison.OrdinalIgnoreCase) >= 0)
                     {
                         existing.IsVisible = true;
                         return;
@@ -37,6 +37,7 @@ namespace BatchPdfPublisher.Services
                     source.Items.Add(CreateButton("创建图框（TKK）", "TKK ", "frame"));
                     source.Items.Add(CreateButton("插入目录（ML1）", "ML1 ", "catalog"));
                     source.Items.Add(CreateButton("批量改属性（SBB）", "SBB ", "attribute"));
+                    source.Items.Add(CreateButton("属性定义编辑", "BPPATTDEF ", "attribute"));
                     tab.Panels.Add(panel);
                     ribbon.Tabs.Add(tab);
                 }
@@ -70,6 +71,8 @@ namespace BatchPdfPublisher.Services
             var image = CreateIcon(icon);
             var description = command.Trim().Equals("SBB", StringComparison.OrdinalIgnoreCase)
                 ? "框选不同类型的属性图块，按坐标排序、批量递增并写入同一属性标记。"
+                : command.Trim().Equals("BPPATTDEF", StringComparison.OrdinalIgnoreCase)
+                    ? "拾取图块后修改图块名称、属性 TAG、默认内容、字体、字高、宽度和对齐方式。"
                 : command.Trim().Equals("TKK", StringComparison.OrdinalIgnoreCase)
                     ? "按纸张、方向和比例在当前图纸中创建标准图框。"
                     : command.Trim().Equals("ML1", StringComparison.OrdinalIgnoreCase)

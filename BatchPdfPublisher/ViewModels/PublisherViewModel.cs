@@ -11,6 +11,7 @@ using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using BatchPdfPublisher.Models;
 using BatchPdfPublisher.Services;
+using BatchPdfPublisher.Views;
 
 namespace BatchPdfPublisher.ViewModels
 {
@@ -284,7 +285,7 @@ namespace BatchPdfPublisher.ViewModels
             RebuildBuildings(previousBuilding);
             SaveCurrentProject();
             var compatibilityWarning = tianzhengFiles.Count > 0 && !CadCompatibilityService.IsTianzhengHostLoaded()
-                ? " 警告：检测到 " + tianzhengFiles.Count + " 个天正图纸，当前是纯 AutoCAD 环境；请用对应版本天正打开后发布，否则专业对象可能缺失。"
+                ? " 警告：检测到 " + tianzhengFiles.Count + " 个天正图纸，当前是纯 AutoCAD 环境（未加载 T20/T30 天正运行环境）；请用对应版本天正打开后发布，否则专业对象可能缺失。"
                 : string.Empty;
             Status = $"已更新 {successfulPaths.Count} 个 CAD 文件，本次读取 {scannedSheets.Count} 张，工程清单共 {Sheets.Count} 张。"
                 + (orphanedCount == 0 ? string.Empty : " 已清理 " + orphanedCount + " 张来源文件已不存在的旧图纸。")
@@ -699,7 +700,7 @@ namespace BatchPdfPublisher.ViewModels
                 var document = Application.DocumentManager.MdiActiveDocument;
                 var currentFile = document?.Database?.Filename;
                 var visible = Sheets.Where(x => string.Equals(x.Building, SelectedBuilding, StringComparison.Ordinal)
-                    && IsSheetInDocument(x, document, currentFile)).ToList();
+                    && IsSheetInCurrentSpace(x, document, currentFile)).ToList();
                 _preview.Show(document,
                     visible,
                     SelectedSheet != null && visible.Contains(SelectedSheet) ? SelectedSheet : visible.FirstOrDefault(),
@@ -766,8 +767,8 @@ namespace BatchPdfPublisher.ViewModels
                     if (!PreviewEnabled) PreviewEnabled = true;
                     else UpdatePreview();
                     SaveCurrentProject();
-                    Status = $"发布前检查发现 {validationIssues.Count} 个图框问题。第一个：{issue.Sheet.SheetNumber} {issue.Sheet.SheetName}。{issue.Message}";
-                    Application.ShowAlertDialog(Status);
+                    Status = $"发布前检查发现 {validationIssues.Count} 个图框问题。请在问题列表中定位或修改图框登记。";
+                    using (var dialog = new SheetValidationIssueForm(validationIssues, LocateValidationIssue, EditValidationIssue)) dialog.ShowDialog();
                     return;
                 }
                 _previewErrorSheet = null;
@@ -938,6 +939,93 @@ namespace BatchPdfPublisher.ViewModels
             }
         }
 
+        private void LocateValidationIssue(SheetValidationIssue issue)
+        {
+            var sheet = issue?.Sheet;
+            if (sheet == null) return;
+            try
+            {
+                var document = FindOpenDocument(sheet.SourceFile);
+                if (document == null && !string.IsNullOrWhiteSpace(sheet.SourceFile) && System.IO.File.Exists(sheet.SourceFile))
+                    document = Application.DocumentManager.Open(sheet.SourceFile, false);
+                if (document == null) throw new InvalidOperationException("找不到对应 DWG：" + sheet.SourceFile);
+                Application.DocumentManager.MdiActiveDocument = document;
+                if (!string.IsNullOrWhiteSpace(sheet.SourceLayout))
+                {
+                    var layout = string.Equals(sheet.SourceLayout, "模型空间", StringComparison.OrdinalIgnoreCase) ? "Model" : sheet.SourceLayout;
+                    Autodesk.AutoCAD.DatabaseServices.LayoutManager.Current.CurrentLayout = layout;
+                }
+                using (var view = document.Editor.GetCurrentView())
+                {
+                    var width = Math.Max(Math.Abs(sheet.MaxX - sheet.MinX), 1d);
+                    var height = Math.Max(Math.Abs(sheet.MaxY - sheet.MinY), 1d);
+                    var ratio = view.Height <= 1e-9 ? 1d : view.Width / view.Height;
+                    if (width / height > ratio) height = width / ratio; else width = height * ratio;
+                    view.CenterPoint = new Autodesk.AutoCAD.Geometry.Point2d((sheet.MinX + sheet.MaxX) / 2d, (sheet.MinY + sheet.MaxY) / 2d);
+                    view.Width = width * 1.15d; view.Height = height * 1.15d;
+                    document.Editor.SetCurrentView(view);
+                }
+                document.Editor.UpdateScreen();
+                Status = "已定位：" + sheet.SourceFileName + " / " + sheet.SourceLayout + " / 图框 " + sheet.FrameDisplay;
+            }
+            catch (Exception exception) { Application.ShowAlertDialog("无法定位图框：" + exception.Message); }
+        }
+
+        private void EditValidationIssue(SheetValidationIssue issue)
+        {
+            var sheet = issue?.Sheet;
+            if (sheet == null) return;
+            var frame = Frames.FirstOrDefault(x => string.Equals(x.BlockName, sheet.Frame, StringComparison.OrdinalIgnoreCase));
+            if (frame == null) { Application.ShowAlertDialog("当前工程没有找到图框登记：" + sheet.Frame); return; }
+            SelectedFrame = frame;
+            var document = FindOpenDocument(sheet.SourceFile);
+            if (document == null && !string.IsNullOrWhiteSpace(sheet.SourceFile) && System.IO.File.Exists(sheet.SourceFile)) document = Application.DocumentManager.Open(sheet.SourceFile, false);
+            if (document == null) { Application.ShowAlertDialog("找不到对应 DWG：" + sheet.SourceFile); return; }
+            Application.DocumentManager.MdiActiveDocument = document;
+            new FrameRegistrationService().Edit(document, frame);
+        }
+
+        public string SaveAllOpenCadFiles()
+        {
+            var projectPaths = CadFiles.Select(x => x.Path).Where(x => !string.IsNullOrWhiteSpace(x)).ToList();
+            if (projectPaths.Count == 0) return "当前工程 CAD 文件列表为空。";
+            var documents = projectPaths.Select(FindOpenDocument).Where(x => x?.Database != null).Distinct().ToList();
+            if (documents.Count == 0) return "当前工程没有正在打开的 CAD 文件，无需保存。";
+            var saved = 0;
+            var failures = new System.Collections.Generic.List<string>();
+            var active = Application.DocumentManager.MdiActiveDocument;
+            foreach (var document in documents)
+            {
+                var path = SafeDocumentPath(document);
+                if (string.IsNullOrWhiteSpace(path) || !System.IO.Path.IsPathRooted(path))
+                {
+                    failures.Add(document.Name + "：图纸尚未命名，无法按原路径保存");
+                    continue;
+                }
+                try
+                {
+                    if (document.IsReadOnly)
+                    {
+                        failures.Add(System.IO.Path.GetFileName(path) + "：文件以只读方式打开，无法保存");
+                        continue;
+                    }
+                    // 让 AutoCAD 自己执行 QSAVE，避免插件直接 SaveAs 正在使用的数据库导致原生崩溃。
+                    Application.DocumentManager.MdiActiveDocument = document;
+                    document.SendStringToExecute("_.QSAVE ", true, false, false);
+                    saved++;
+                }
+                catch (System.Exception exception)
+                {
+                    failures.Add(System.IO.Path.GetFileName(path) + "：" + exception.Message);
+                }
+            }
+            TryRestoreActiveDocument(active);
+            var message = "当前工程有 " + documents.Count + " 个 CAD 文件正在打开，已向 AutoCAD 请求保存 " + saved + " 个。";
+            if (failures.Count > 0) message += "\r\n失败 " + failures.Count + " 个：\r\n" + string.Join("\r\n", failures);
+            Status = message;
+            return message;
+        }
+
         public void RefreshPreview()
         {
             if (!PreviewEnabled)
@@ -1097,6 +1185,22 @@ namespace BatchPdfPublisher.ViewModels
             if (!string.IsNullOrWhiteSpace(currentFile) && string.Equals(sheet.SourceFile, currentFile, StringComparison.OrdinalIgnoreCase)) return true;
             try { return ReferenceEquals(FindOpenDocument(sheet.SourceFile), document); }
             catch { return false; }
+        }
+
+        private static bool IsSheetInCurrentSpace(SheetItem sheet, Document document, string currentFile)
+        {
+            if (!IsSheetInDocument(sheet, document, currentFile)) return false;
+            if (string.IsNullOrWhiteSpace(sheet.SourceLayout)) return true;
+            try
+            {
+                var currentLayout = Autodesk.AutoCAD.DatabaseServices.LayoutManager.Current.CurrentLayout;
+                var sheetLayout = sheet.SourceLayout.Trim();
+                if (string.Equals(sheetLayout, "模型空间", StringComparison.OrdinalIgnoreCase) || string.Equals(sheetLayout, "Model", StringComparison.OrdinalIgnoreCase))
+                    return string.Equals(currentLayout, "Model", StringComparison.OrdinalIgnoreCase);
+                return !string.Equals(currentLayout, "Model", StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(sheetLayout, currentLayout, StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return true; }
         }
 
         private static bool IsSourceAvailable(string sourceFile)

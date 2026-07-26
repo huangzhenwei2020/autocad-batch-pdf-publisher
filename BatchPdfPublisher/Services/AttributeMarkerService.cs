@@ -22,7 +22,7 @@ namespace BatchPdfPublisher.Services
             var point = target.AttributePosition;
             var label = new MText
             {
-                Contents = "当前属性：" + (target.NewValue ?? target.OldValue ?? string.Empty),
+                Contents = (string.IsNullOrWhiteSpace(target.Tag) ? "当前属性" : target.Tag) + "：" + (target.NewValue ?? target.OldValue ?? string.Empty),
                 Location = new Point3d(point.X + textHeight * 0.7d, point.Y + textHeight * 0.7d, point.Z),
                 Attachment = AttachmentPoint.BottomLeft,
                 TextHeight = textHeight,

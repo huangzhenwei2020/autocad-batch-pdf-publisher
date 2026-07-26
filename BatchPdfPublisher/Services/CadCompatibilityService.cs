@@ -56,6 +56,16 @@ namespace BatchPdfPublisher.Services
             catch { return false; }
         }
 
+        public static string DescribeTianzhengHost()
+        {
+            try
+            {
+                var loaded = AppDomain.CurrentDomain.GetAssemblies().Select(x => x.GetName().Name ?? string.Empty).FirstOrDefault(ContainsTianzhengToken);
+                return string.IsNullOrWhiteSpace(loaded) ? "未加载天正运行环境" : (loaded.IndexOf("T30", StringComparison.OrdinalIgnoreCase) >= 0 ? "T30 天正运行环境" : loaded.IndexOf("T20", StringComparison.OrdinalIgnoreCase) >= 0 ? "T20 天正运行环境" : "天正运行环境");
+            }
+            catch { return "未加载天正运行环境"; }
+        }
+
         private static bool ContainsTianzhengToken(string value)
         {
             if (string.IsNullOrWhiteSpace(value)) return false;

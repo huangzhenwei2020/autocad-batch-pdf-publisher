@@ -65,10 +65,13 @@ namespace BatchPdfPublisher.Services
                     try
                     {
                         var blockName = GetBlockName(reference, transaction);
-                        var frame = frames.FirstOrDefault(x => string.Equals(x.BlockName, blockName, StringComparison.OrdinalIgnoreCase));
-                        if (frame == null) continue;
-                        if (!TryGetUsableExtents(reference, out var extents)) continue;
+                        if (!TryGetFrameGeometryExtents(reference, transaction, out var extents)) continue;
                         var attributes = ReadAttributes(reference, transaction);
+                        var frame = FrameIdentityService.SelectBest(frames, blockName,
+                            FrameIdentityService.AttributeSignature(attributes.Keys),
+                            FrameIdentityService.DefinitionSignature(reference, transaction),
+                            FrameIdentityService.AspectRatio(extents));
+                        if (frame == null) continue;
                         result.Add(new SheetItem
                         {
                         BlockId = reference.ObjectId,
@@ -131,6 +134,36 @@ namespace BatchPdfPublisher.Services
         {
             var record = (BlockTableRecord)transaction.GetObject(reference.DynamicBlockTableRecord, OpenMode.ForRead);
             return record.Name;
+        }
+
+        private static bool TryGetFrameGeometryExtents(BlockReference reference, Transaction transaction, out Extents3d extents)
+        {
+            extents = default(Extents3d);
+            var hasExtents = false;
+            try
+            {
+                var definitionId = reference.IsDynamicBlock ? reference.DynamicBlockTableRecord : reference.BlockTableRecord;
+                var definition = transaction.GetObject(definitionId, OpenMode.ForRead, false) as BlockTableRecord;
+                if (definition != null)
+                {
+                    foreach (ObjectId id in definition)
+                    {
+                        var entity = transaction.GetObject(id, OpenMode.ForRead, false) as Entity;
+                        if (entity == null || entity is AttributeDefinition) continue;
+                        try
+                        {
+                            var child = entity.GeometricExtents;
+                            child.TransformBy(reference.BlockTransform);
+                            if (!hasExtents) { extents = child; hasExtents = true; } else extents.AddExtents(child);
+                        }
+                        catch { }
+                    }
+                }
+            }
+            catch { }
+            if (!hasExtents) return TryGetUsableExtents(reference, out extents);
+            var values = new[] { extents.MinPoint.X, extents.MinPoint.Y, extents.MaxPoint.X, extents.MaxPoint.Y };
+            return values.All(x => !double.IsNaN(x) && !double.IsInfinity(x)) && extents.MaxPoint.X > extents.MinPoint.X && extents.MaxPoint.Y > extents.MinPoint.Y;
         }
 
         private static Dictionary<string, string> ReadAttributes(BlockReference reference, Transaction transaction)

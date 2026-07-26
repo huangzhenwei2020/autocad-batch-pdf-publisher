@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Drawing;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -42,7 +43,7 @@ namespace BatchPdfPublisherLauncher
                         MessageBox.Show("批量打印插件及永久自动加载配置已卸载。工程文件和 CAD 图纸不会删除。", "卸载完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
                         return;
                     }
-                    if (picker.Options.Platform == null) throw new FileNotFoundException("未找到可用的 AutoCAD 2021-2024。AutoCAD 2025/2026 使用 .NET 8，需使用对应版本插件。 ");
+                    if (picker.Options.Platform == null) throw new FileNotFoundException("未找到可用的 AutoCAD 安装。请先安装 AutoCAD，或检查安装权限。");
                     options = picker.Options;
                 }
                 var sourceAssembly = Path.Combine(launcherDirectory, PluginAssemblyName);
@@ -78,25 +79,73 @@ namespace BatchPdfPublisherLauncher
             // The machine may have T20 as the default AutoCAD profile. Force
             // the unnamed vanilla profile so launching plain AutoCAD cannot
             // pull the T20 ARX/LSP startup chain into the session.
-            var versions = new[] { new { Year = 2021, Release = "24.0" }, new { Year = 2022, Release = "24.1" }, new { Year = 2023, Release = "24.2" }, new { Year = 2024, Release = "24.3" } };
             var cadPlatforms = new List<PlatformOption>();
-            foreach (var version in versions)
+            foreach (var version in FindAutoCadInstallations())
             {
-                var root = FindAcadInstallDirectory(version.Release) ?? (@"C:\Program Files\Autodesk\AutoCAD " + version.Year);
-                var executable = Path.Combine(root, "acad.exe");
-                if (File.Exists(executable)) cadPlatforms.Add(new PlatformOption("AutoCAD " + version.Year + "（R" + version.Release + "）", "acad" + version.Year, executable, "/nologo /p \"<<Unnamed Profile>>\"", root, "AutoCAD.Application." + version.Release, "无天正", "AutoCAD " + version.Year));
+                cadPlatforms.Add(new PlatformOption(version.DisplayName, "acad-" + version.Release, version.Executable, "/nologo /p \"<<Unnamed Profile>>\"", version.WorkingDirectory, version.ProgId, "无天正", version.DisplayName));
             }
             result.AddRange(cadPlatforms);
             foreach (var tz in FindTianzhengInstallations())
                 foreach (var cad in cadPlatforms)
                     result.Add(new PlatformOption(tz.Name + " + " + cad.CadName, tz.Id + "-" + cad.Id, tz.Executable, "", Path.GetDirectoryName(tz.Executable), cad.ProgId, tz.Name, cad.CadName));
+            if (result.Count == 0 && cadPlatforms.Count > 0) result.AddRange(cadPlatforms);
             return result;
+        }
+
+        private static List<AcadInstallation> FindAutoCadInstallations()
+        {
+            var result = new List<AcadInstallation>();
+            foreach (var view in new[] { RegistryView.Registry64, RegistryView.Registry32 })
+            {
+                try
+                {
+                    using (var baseKey = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, view))
+                    using (var root = baseKey.OpenSubKey("SOFTWARE\\Autodesk\\AutoCAD"))
+                    {
+                        if (root == null) continue;
+                        foreach (var release in root.GetSubKeyNames().Where(x => x.StartsWith("R", StringComparison.OrdinalIgnoreCase)))
+                        using (var releaseKey = root.OpenSubKey(release))
+                        {
+                            if (releaseKey == null) continue;
+                            foreach (var product in releaseKey.GetSubKeyNames())
+                            using (var install = releaseKey.OpenSubKey(product + "\\Install"))
+                            {
+                                var dir = install?.GetValue("INSTALLDIR") as string;
+                                var exe = string.IsNullOrWhiteSpace(dir) ? null : Path.Combine(dir, "acad.exe");
+                                if (!File.Exists(exe)) continue;
+                                var progId = "AutoCAD.Application." + release.Substring(1);
+                                var display = ReadCadDisplayName(install, release);
+                                if (!result.Any(x => string.Equals(x.Executable, exe, StringComparison.OrdinalIgnoreCase)))
+                                    result.Add(new AcadInstallation(display, release.Substring(1), exe, dir, progId));
+                            }
+                        }
+                    }
+                }
+                catch { }
+            }
+            return result.OrderBy(x => x.DisplayName, StringComparer.OrdinalIgnoreCase).ToList();
+        }
+
+        private static string ReadCadDisplayName(RegistryKey install, string release)
+        {
+            var name = install?.GetValue("ProductName") as string ?? install?.GetValue("ProductNameForDisplay") as string;
+            var yearMatch = Regex.Match((name ?? string.Empty) + " " + release, @"(?:20)(2[0-9])");
+            if (yearMatch.Success) return "AutoCAD " + yearMatch.Value;
+            var releaseNumber = release.StartsWith("R", StringComparison.OrdinalIgnoreCase) ? release.Substring(1) : release;
+            var parts = releaseNumber.Split('.');
+            if (parts.Length > 0 && int.TryParse(parts[0], out var major))
+            {
+                var minor = parts.Length > 1 && int.TryParse(parts[1], out var parsedMinor) ? parsedMinor : 0;
+                var year = major == 24 ? 2021 + minor : major >= 25 ? 2025 + minor : 0;
+                if (year >= 2000 && year <= 2099) return "AutoCAD " + year;
+            }
+            return string.IsNullOrWhiteSpace(name) ? "AutoCAD" : name.Trim();
         }
 
         private static List<TianzhengInstallation> FindTianzhengInstallations()
         {
             var result = new List<TianzhengInstallation>();
-            var roots = new[] { @"C:\Tangent", @"D:\Tangent", @"C:\Program Files\Tangent", @"D:\Program Files\Tangent" };
+            var roots = new[] { @"C:\Tangent", @"D:\Tangent", @"E:\Tangent", @"C:\Program Files\Tangent", @"D:\Program Files\Tangent", @"C:\Program Files (x86)\Tangent", @"D:\Program Files (x86)\Tangent" };
             foreach (var root in roots)
             {
                 if (!Directory.Exists(root)) continue;
@@ -142,7 +191,8 @@ namespace BatchPdfPublisherLauncher
                 fullName.Contains("struct") || fullName.Contains("结构") ? "天正结构" : "天正建筑";
             var match = Regex.Match(fullName, @"(?:t20|t30)[^v\d]{0,2}v?(\d+)(?:[\._](\d+))?", RegexOptions.IgnoreCase);
             var version = match.Success ? " V" + match.Groups[1].Value + (match.Groups[2].Success ? "." + match.Groups[2].Value : ".0") : "";
-            var display = product + version;
+            var generation = fullName.Contains("t30") ? "T30" : fullName.Contains("t20") ? "T20" : "天正";
+            var display = generation + " " + product + version;
             var id = display + "-" + GetFileHash(executable).Substring(0, 8);
             if (!result.Any(x => string.Equals(x.Executable, executable, StringComparison.OrdinalIgnoreCase))) result.Add(new TianzhengInstallation(display, id, executable));
         }
@@ -526,6 +576,16 @@ namespace BatchPdfPublisherLauncher
         public string Executable { get; }
     }
 
+    internal sealed class AcadInstallation
+    {
+        public AcadInstallation(string displayName, string release, string executable, string workingDirectory, string progId) { DisplayName = displayName; Release = release; Executable = executable; WorkingDirectory = workingDirectory; ProgId = progId; }
+        public string DisplayName { get; }
+        public string Release { get; }
+        public string Executable { get; }
+        public string WorkingDirectory { get; }
+        public string ProgId { get; }
+    }
+
     internal sealed class LauncherOptions
     {
         public PlatformOption Platform { get; set; }
@@ -535,6 +595,10 @@ namespace BatchPdfPublisherLauncher
 
     internal sealed class PlatformPicker : Form
     {
+        private static readonly Color Navy = Color.FromArgb(18, 52, 91);
+        private static readonly Color Cyan = Color.FromArgb(24, 167, 201);
+        private static readonly Color Canvas = Color.FromArgb(244, 247, 250);
+        private static readonly Color Muted = Color.FromArgb(92, 108, 124);
         private readonly IList<PlatformOption> _platforms;
         private readonly ComboBox _tianzhengBox;
         private readonly ComboBox _cadBox;
@@ -552,30 +616,214 @@ namespace BatchPdfPublisherLauncher
         public PlatformPicker(IList<PlatformOption> platforms, string lastPlatform, bool hasRunningCad)
         {
             _platforms = platforms;
-            Text = "启动批量打印插件";
-            Width = 560; Height = 330; FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = false; MinimizeBox = false; StartPosition = FormStartPosition.CenterScreen;
-            var label = new Label { Left = 18, Top = 18, Width = 500, Text = "请选择运行组合（先选天正产品，再选对应的 AutoCAD 版本）：" };
-            var tzLabel = new Label { Left = 18, Top = 53, Width = 100, Text = "天正产品：" };
-            _tianzhengBox = new ComboBox { Left = 118, Top = 49, Width = 390, DropDownStyle = ComboBoxStyle.DropDownList };
-            var cadLabel = new Label { Left = 18, Top = 90, Width = 100, Text = "AutoCAD：" };
-            _cadBox = new ComboBox { Left = 118, Top = 86, Width = 390, DropDownStyle = ComboBoxStyle.DropDownList };
-            foreach (var value in platforms.Select(x => x.TianzhengName).Distinct(StringComparer.OrdinalIgnoreCase)) _tianzhengBox.Items.Add(value);
-            foreach (var value in platforms.Select(x => x.CadName).Distinct(StringComparer.OrdinalIgnoreCase)) _cadBox.Items.Add(value);
-            var last = platforms.FirstOrDefault(x => string.Equals(x.Id, lastPlatform, StringComparison.OrdinalIgnoreCase));
-            if (platforms.Count > 0)
+            Text = "批量 PDF 发布 · 启动器";
+            Icon = LoadIcon();
+            AutoScaleMode = AutoScaleMode.Dpi;
+            ClientSize = new Size(660, 488); MinimumSize = new Size(660, 488);
+            FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = false; MinimizeBox = false; StartPosition = FormStartPosition.CenterScreen;
+            BackColor = Canvas; Font = new Font("Microsoft YaHei UI", 9F);
+            Padding = new Padding(0);
+
+            var root = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1, BackColor = Color.White };
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 116));
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
+
+            var header = new Panel { Dock = DockStyle.Fill, BackColor = Navy, Padding = new Padding(28, 18, 24, 16) };
+            var emblem = new PictureBox
             {
-                _tianzhengBox.SelectedItem = last?.TianzhengName ?? platforms[0].TianzhengName;
-                _cadBox.SelectedItem = last?.CadName ?? platforms[0].CadName;
-            }
-            _runningCad = new CheckBox { Left = 18, Top = 128, Width = 500, Text = hasRunningCad ? "加载到已启动的 CAD（已检测到 AutoCAD 进程）" : "加载到已启动的 CAD（当前未检测到，可稍后重试）", Checked = hasRunningCad, Enabled = hasRunningCad };
-            _permanentInstall = new CheckBox { Left = 18, Top = 162, Width = 500, Text = "永久自动加载（以后每次启动 CAD 都加载插件）", Checked = false };
-            var tip = new Label { Left = 18, Top = 194, Width = 500, Height = 38, ForeColor = System.Drawing.Color.FromArgb(80, 90, 105), Text = "默认仅本次加载，不会写入永久自动加载配置。请选择天正和 CAD 的实际组合。" };
-            var startButton = new Button { Left = 328, Top = 250, Width = 90, Text = "继续", DialogResult = DialogResult.OK, Enabled = platforms.Count > 0 };
-            var cancelButton = new Button { Left = 428, Top = 250, Width = 85, Text = "取消", DialogResult = DialogResult.Cancel };
-            _uninstallButton = new Button { Left = 18, Top = 250, Width = 90, Text = "卸载" };
+                Location = new Point(28, 18),
+                Size = new Size(78, 78),
+                SizeMode = PictureBoxSizeMode.Zoom,
+                Image = LoadBrandImage(),
+                BackColor = Color.Transparent
+            };
+            var title = new Label
+            {
+                Location = new Point(126, 24),
+                AutoSize = true,
+                Text = "批量 PDF 发布",
+                Font = new Font("Microsoft YaHei UI", 20F, FontStyle.Bold),
+                ForeColor = Color.White
+            };
+            var subtitle = new Label
+            {
+                Location = new Point(129, 69),
+                AutoSize = true,
+                Text = "选择天正产品与 AutoCAD 版本，然后安全加载插件",
+                Font = new Font("Microsoft YaHei UI", 9.5F),
+                ForeColor = Color.FromArgb(197, 222, 236)
+            };
+            var detected = new Label
+            {
+                AutoSize = false,
+                Size = new Size(104, 28),
+                Location = new Point(526, 25),
+                TextAlign = ContentAlignment.MiddleCenter,
+                Text = platforms.Count > 0 ? "已识别 " + platforms.Count + " 项" : "未识别平台",
+                ForeColor = platforms.Count > 0 ? Color.FromArgb(211, 247, 255) : Color.FromArgb(255, 220, 214),
+                BackColor = platforms.Count > 0 ? Color.FromArgb(27, 85, 118) : Color.FromArgb(112, 55, 55),
+                Font = new Font("Microsoft YaHei UI", 8.5F, FontStyle.Bold)
+            };
+            header.Controls.Add(emblem);
+            header.Controls.Add(title);
+            header.Controls.Add(subtitle);
+            header.Controls.Add(detected);
+            root.Controls.Add(header, 0, 0);
+
+            var bodyHost = new Panel { Dock = DockStyle.Fill, BackColor = Canvas, Padding = new Padding(28, 24, 28, 18) };
+            var card = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = Color.White,
+                Padding = new Padding(24, 18, 24, 16),
+                ColumnCount = 2,
+                RowCount = 6,
+                CellBorderStyle = TableLayoutPanelCellBorderStyle.None
+            };
+            card.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 124));
+            card.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            card.RowStyles.Add(new RowStyle(SizeType.Absolute, 56));
+            card.RowStyles.Add(new RowStyle(SizeType.Absolute, 56));
+            card.RowStyles.Add(new RowStyle(SizeType.Absolute, 45));
+            card.RowStyles.Add(new RowStyle(SizeType.Absolute, 45));
+            card.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+            card.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+            var tzLabel = CreateFieldLabel("天正产品");
+            _tianzhengBox = CreateComboBox();
+            var cadLabel = CreateFieldLabel("AutoCAD 版本");
+            _cadBox = CreateComboBox();
+            foreach (var value in platforms.Select(x => x.TianzhengName).Distinct(StringComparer.OrdinalIgnoreCase)) _tianzhengBox.Items.Add(value);
+            var last = platforms.FirstOrDefault(x => string.Equals(x.Id, lastPlatform, StringComparison.OrdinalIgnoreCase));
+            _tianzhengBox.SelectedIndexChanged += (s, e) => RefreshCadOptions(last?.CadName);
+            if (_tianzhengBox.Items.Count > 0) _tianzhengBox.SelectedItem = last?.TianzhengName ?? _tianzhengBox.Items[0];
+            _runningCad = CreateOptionCheckBox(hasRunningCad ? "加载到当前已启动的 CAD" : "加载到当前已启动的 CAD（当前未检测到）", hasRunningCad, hasRunningCad);
+            _permanentInstall = CreateOptionCheckBox("以后每次启动 CAD 时自动加载插件", false, true);
+            card.Controls.Add(tzLabel, 0, 0); card.Controls.Add(_tianzhengBox, 1, 0);
+            card.Controls.Add(cadLabel, 0, 1); card.Controls.Add(_cadBox, 1, 1);
+            card.Controls.Add(_runningCad, 1, 2); card.Controls.Add(_permanentInstall, 1, 3);
+            var separator = new Panel { Dock = DockStyle.Top, Height = 1, BackColor = Color.FromArgb(224, 231, 237), Margin = new Padding(0, 10, 0, 0) };
+            card.Controls.Add(separator, 0, 4); card.SetColumnSpan(separator, 2);
+            var tip = new Label
+            {
+                Dock = DockStyle.Fill,
+                Text = platforms.Count > 0
+                    ? "已按本机实际安装目录识别平台。天正名称会完整显示 T20/T30、专业及版本；AutoCAD 显示产品年份。"
+                    : "没有识别到可用的 AutoCAD。请确认 AutoCAD 已正确安装，或以管理员身份修复其注册信息。",
+                ForeColor = platforms.Count > 0 ? Muted : Color.FromArgb(181, 66, 49),
+                AutoSize = false,
+                Padding = new Padding(0, 8, 0, 0)
+            };
+            card.Controls.Add(tip, 0, 5); card.SetColumnSpan(tip, 2);
+            bodyHost.Controls.Add(card);
+            root.Controls.Add(bodyHost, 0, 1);
+
+            var footer = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(28, 14, 28, 14), ColumnCount = 4, BackColor = Color.White };
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            var startButton = CreateButton("启动并加载", 124, Cyan, Color.White);
+            startButton.DialogResult = DialogResult.OK;
+            startButton.Enabled = platforms.Count > 0;
+            var cancelButton = CreateButton("取消", 88, Color.White, Navy);
+            cancelButton.DialogResult = DialogResult.Cancel;
+            cancelButton.Margin = new Padding(10, 0, 0, 0);
+            _uninstallButton = CreateButton("卸载插件", 102, Color.White, Color.FromArgb(157, 66, 61));
             _uninstallButton.Click += (s, e) => { UninstallRequested = true; DialogResult = DialogResult.OK; };
-            Controls.Add(label); Controls.Add(tzLabel); Controls.Add(_tianzhengBox); Controls.Add(cadLabel); Controls.Add(_cadBox); Controls.Add(_runningCad); Controls.Add(_permanentInstall); Controls.Add(tip); Controls.Add(_uninstallButton); Controls.Add(startButton); Controls.Add(cancelButton);
+            footer.Controls.Add(_uninstallButton, 0, 0); footer.Controls.Add(startButton, 2, 0); footer.Controls.Add(cancelButton, 3, 0); root.Controls.Add(footer, 0, 2); Controls.Add(root);
+
+            var toolTip = new ToolTip { AutoPopDelay = 10000, InitialDelay = 350, ReshowDelay = 150, ShowAlways = true };
+            toolTip.SetToolTip(_tianzhengBox, "选择要启动的天正专业和版本；不使用天正时选择“无天正”。");
+            toolTip.SetToolTip(_cadBox, "选择插件要加载到的 AutoCAD 产品年份。");
+            toolTip.SetToolTip(_runningCad, "将插件直接载入已经打开的本机 AutoCAD，不再启动新的 CAD 进程。");
+            toolTip.SetToolTip(_permanentInstall, "写入 Autodesk ApplicationPlugins 自动加载配置，以后启动 CAD 时自动加载本插件。");
+            toolTip.SetToolTip(_uninstallButton, "删除本插件的自动加载配置和安装副本，不会删除工程文件或 DWG 图纸。");
             AcceptButton = startButton; CancelButton = cancelButton;
+        }
+
+        private static Label CreateFieldLabel(string text)
+        {
+            return new Label
+            {
+                Text = text,
+                AutoSize = true,
+                Anchor = AnchorStyles.Left,
+                ForeColor = Navy,
+                Font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold)
+            };
+        }
+
+        private static ComboBox CreateComboBox()
+        {
+            return new ComboBox
+            {
+                Dock = DockStyle.Fill,
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                FlatStyle = FlatStyle.System,
+                Font = new Font("Microsoft YaHei UI", 10F),
+                Margin = new Padding(0, 10, 0, 9)
+            };
+        }
+
+        private static CheckBox CreateOptionCheckBox(string text, bool isChecked, bool enabled)
+        {
+            return new CheckBox
+            {
+                Dock = DockStyle.Fill,
+                Text = text,
+                Checked = isChecked,
+                Enabled = enabled,
+                AutoSize = true,
+                ForeColor = enabled ? Color.FromArgb(47, 63, 78) : Color.FromArgb(145, 154, 163),
+                Padding = new Padding(0, 3, 0, 0)
+            };
+        }
+
+        private static Button CreateButton(string text, int width, Color backColor, Color foreColor)
+        {
+            var button = new Button
+            {
+                Width = width,
+                Height = 40,
+                Text = text,
+                BackColor = backColor,
+                ForeColor = foreColor,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold),
+                Cursor = Cursors.Hand
+            };
+            button.FlatAppearance.BorderColor = backColor == Color.White ? Color.FromArgb(202, 213, 222) : backColor;
+            button.FlatAppearance.BorderSize = 1;
+            button.FlatAppearance.MouseOverBackColor = backColor == Color.White ? Color.FromArgb(244, 247, 250) : Color.FromArgb(19, 143, 174);
+            return button;
+        }
+
+        private void RefreshCadOptions(string preferredCad)
+        {
+            var tianzheng = _tianzhengBox.SelectedItem as string;
+            var options = _platforms.Where(x => string.Equals(x.TianzhengName, tianzheng, StringComparison.OrdinalIgnoreCase)).Select(x => x.CadName).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            _cadBox.BeginUpdate(); _cadBox.Items.Clear(); foreach (var value in options) _cadBox.Items.Add(value); _cadBox.EndUpdate();
+            if (_cadBox.Items.Count > 0) _cadBox.SelectedItem = options.FirstOrDefault(x => string.Equals(x, preferredCad, StringComparison.OrdinalIgnoreCase)) ?? _cadBox.Items[0];
+        }
+
+        private static Icon LoadIcon()
+        {
+            try { return Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { return SystemIcons.Application; }
+        }
+
+        private static Image LoadBrandImage()
+        {
+            try
+            {
+                using (var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("BatchPdfPublisherLauncher.BatchPdfPublisherIcon.png"))
+                {
+                    if (stream == null) return LoadIcon().ToBitmap();
+                    using (var source = Image.FromStream(stream)) return new Bitmap(source);
+                }
+            }
+            catch { return LoadIcon().ToBitmap(); }
         }
     }
 }

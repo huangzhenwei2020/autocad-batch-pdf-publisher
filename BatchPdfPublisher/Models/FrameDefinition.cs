@@ -4,7 +4,11 @@ namespace BatchPdfPublisher.Models
 {
     public sealed class FrameDefinition
     {
+        public string RegistrationId { get; set; }
         public string BlockName { get; set; }
+        public string AttributeTagSignature { get; set; }
+        public string DefinitionSignature { get; set; }
+        public double ReferenceAspectRatio { get; set; }
         public string PaperSize { get; set; }
         public string Extension { get; set; }
         public string PaperOrientation { get; set; }

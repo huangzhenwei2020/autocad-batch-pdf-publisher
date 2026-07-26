@@ -6,3 +6,5 @@
 *.dll
 *.pdb
 *.exe
+.agents/
+宣传素材/

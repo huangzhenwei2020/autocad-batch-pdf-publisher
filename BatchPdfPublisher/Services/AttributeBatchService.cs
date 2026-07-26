@@ -272,7 +272,7 @@ namespace BatchPdfPublisher.Services
         public static AttributeApplyResult Apply(Document document, IEnumerable<AttributeTarget> targets)
         {
             var result = new AttributeApplyResult();
-            var list = targets?.Where(x => x != null && x.BlockId.IsValid && x.AttributeId.IsValid).ToList() ?? new List<AttributeTarget>();
+            var list = targets?.Where(x => x != null && IsUsable(x.BlockId) && IsUsable(x.AttributeId)).ToList() ?? new List<AttributeTarget>();
             if (list.Count == 0) return result;
             using (document.LockDocument())
             {
@@ -306,6 +306,12 @@ namespace BatchPdfPublisher.Services
                 }
             }
             return result;
+        }
+
+        public static bool IsUsable(ObjectId id)
+        {
+            try { return id.IsValid && !id.IsNull && !id.IsErased; }
+            catch { return false; }
         }
 
         private static string IncrementNumber(string token, long offset)

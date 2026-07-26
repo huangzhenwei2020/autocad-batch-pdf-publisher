@@ -5,7 +5,7 @@ AutoCAD / T20 天正建筑批量扫描图框、整理图纸并发布 PDF。插�
 ## 一、安装与启动
 
 1. 关闭正在运行的插件窗口（AutoCAD 可以保持打开）。
-2. 双击根目录的 `启动批量打印插件.exe`。
+2. 双击根目录的 `批量PDF发布启动器.exe`。
 3. 选择实际使用的 CAD 平台：AutoCAD 2021–2024 或检测到的 T20 天正版本。启动器会显示检测到的版本号。
 4. 如果 CAD 已经启动，启动器会连接并加载到已有 CAD；不会重复打开同一份 DWG。
 5. 选择 T20 时必须使用 T20 启动项，不要用普通 AutoCAD 打开天正对象，否则天正代理对象可能无法正确发布。
@@ -129,6 +129,6 @@ msbuild .\BatchPdfPublisherLauncher\BatchPdfPublisherLauncher.csproj /t:Rebuild 
 生成的主要文件为：
 
 ```text
-启动批量打印插件.exe
+批量PDF发布启动器.exe
 BatchPdfPublisher.dll
 ```

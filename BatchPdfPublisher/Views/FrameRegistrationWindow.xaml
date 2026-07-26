@@ -7,7 +7,7 @@
   <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
   <Grid Margin="18">
     <Grid.RowDefinitions>
-      <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
       <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
     </Grid.RowDefinitions>
     <Grid.ColumnDefinitions><ColumnDefinition Width="110"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
@@ -42,7 +42,11 @@
       <TextBlock Grid.Row="4" Text="打印比例" Margin="0,9,0,0"/><ComboBox Grid.Row="4" Grid.Column="1" x:Name="PrintScaleTagBox" Margin="0,5,0,0" SelectionChanged="TagBox_SelectionChanged"/><TextBox Grid.Row="4" Grid.Column="3" x:Name="PrintScaleValueBox" Margin="0,5,0,0" ToolTip="例如 1:100"/>
     </Grid>
 
-    <StackPanel Grid.Row="7" Grid.ColumnSpan="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,18,0,0">
+    <DockPanel Grid.Row="7" Grid.ColumnSpan="2" Margin="0,16,0,0">
+      <Button Content="扫描工程 CAD" Width="110" Click="ScanProject_Click" ToolTip="检查当前工程所有 DWG 中的同名图块版本和重复属性 TAG；未打开文件采用后台只读扫描。"/>
+      <TextBlock x:Name="ProjectScanText" Margin="12,3,0,0" Foreground="#526273" TextWrapping="Wrap" Text="保存登记前将自动检查工程中的同名图块。"/>
+    </DockPanel>
+    <StackPanel Grid.Row="8" Grid.ColumnSpan="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,18,0,0">
       <Button Content="取消" Width="75" IsCancel="True" Margin="0,0,8,0"/>
       <Button Content="保存登记" Width="90" IsDefault="True" Click="Save_Click" Background="#D8E7F7" Foreground="#172033"/>
     </StackPanel>

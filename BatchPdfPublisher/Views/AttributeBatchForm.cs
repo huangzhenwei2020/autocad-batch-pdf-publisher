@@ -38,7 +38,7 @@ namespace BatchPdfPublisher.Views
         private readonly AttributeBatchSettings _settings;
         private readonly AttributeMarkerService _markers = new AttributeMarkerService();
         private readonly ToolTip _toolTip = new ToolTip { AutoPopDelay = 10000, InitialDelay = 450, ReshowDelay = 100 };
-        private bool _selectionInitialized;
+        private readonly HashSet<Autodesk.AutoCAD.DatabaseServices.ObjectId> _excludedAttributeIds = new HashSet<Autodesk.AutoCAD.DatabaseServices.ObjectId>();
         private readonly Dictionary<Autodesk.AutoCAD.DatabaseServices.ObjectId, string> _manualValues = new Dictionary<Autodesk.AutoCAD.DatabaseServices.ObjectId, string>();
         private List<AttributeBatchPreset> _presetItems;
         private bool _updatingPreview;
@@ -50,7 +50,7 @@ namespace BatchPdfPublisher.Views
             _settings = AttributeBatchSettings.Load();
             _presetItems = AttributePresetStore.Load();
             _registeredBlockNames = new HashSet<string>(new PublishPlanStore().LoadFrames().Select(x => x.BlockName).Where(x => !string.IsNullOrWhiteSpace(x)), StringComparer.OrdinalIgnoreCase);
-            Text = "批量修改图块属性  v0.7.0"; Width = 900; Height = 600; StartPosition = FormStartPosition.CenterParent;
+            Text = "批量修改图块属性  v0.8.0"; Width = 900; Height = 600; StartPosition = FormStartPosition.CenterParent;
             Build();
             FormClosed += (s, e) => _markers.Dispose();
         }
@@ -101,7 +101,7 @@ namespace BatchPdfPublisher.Views
             _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Y", HeaderText = "图块插入点 Y", DataPropertyName = "Y", Width = 110, ReadOnly = true, Visible = false });
             _grid.DataSource = _previewRows;
             _grid.CurrentCellDirtyStateChanged += (s, e) => { if (_grid.IsCurrentCellDirty) _grid.CommitEdit(DataGridViewDataErrorContexts.Commit); };
-            _grid.CellValueChanged += (s, e) => { if (!_updatingPreview && e.RowIndex >= 0 && e.ColumnIndex == 0) UpdatePreviewStates(); };
+            _grid.CellValueChanged += (s, e) => { if (!_updatingPreview && e.RowIndex >= 0 && e.ColumnIndex == 0) { RememberPreviewSelection(e.RowIndex); UpdatePreviewStates(); } };
             _grid.CellEndEdit += GridCellEndEdit;
             _grid.CellDoubleClick += GridCellDoubleClick;
             _grid.CellFormatting += GridCellFormatting;
@@ -127,7 +127,7 @@ namespace BatchPdfPublisher.Views
             try
             {
                 _targets = AttributeBatchService.SelectTargets(_document, CurrentOrder());
-                _selectionInitialized = false;
+                _excludedAttributeIds.Clear();
                 _manualValues.Clear();
                 if (_scope.SelectedIndex == 1)
                 {
@@ -160,7 +160,6 @@ namespace BatchPdfPublisher.Views
             if (_loadingOptions) return;
             var tag = _tag.SelectedItem as string;
             var targets = _targets.Where(x => string.Equals(x.Tag, tag, StringComparison.OrdinalIgnoreCase)).ToList();
-            var selectedIds = new HashSet<Autodesk.AutoCAD.DatabaseServices.ObjectId>(_previewRows.Where(x => x.Selected && x.Target != null).Select(x => x.Target.AttributeId));
             _grid.SuspendLayout();
             _previewRows.RaiseListChangedEvents = false; _previewRows.Clear();
             for (var i = 0; i < targets.Count; i++)
@@ -171,9 +170,8 @@ namespace BatchPdfPublisher.Views
                 var suffixValue = AttributeBatchService.BuildValue(_suffix.Text, i, _suffixIncrement.Checked, _letters.Checked, (int)_step.Value, _reverse.Checked);
                 var automaticValue = prefixValue + bodyValue + suffixValue;
                 target.NewValue = _manualValues.TryGetValue(target.AttributeId, out var manualValue) ? manualValue : automaticValue;
-                _previewRows.Add(new AttributePreviewRow { Selected = !_selectionInitialized || selectedIds.Contains(target.AttributeId), Target = target, Sequence = i + 1, BlockName = target.BlockName, Tag = target.Tag, OldValue = target.OldValue, NewValue = target.NewValue, X = target.Center.X.ToString("0.###"), Y = target.Center.Y.ToString("0.###") });
+                _previewRows.Add(new AttributePreviewRow { Selected = !_excludedAttributeIds.Contains(target.AttributeId), Target = target, Sequence = i + 1, BlockName = target.BlockName, Tag = target.Tag, OldValue = target.OldValue, NewValue = target.NewValue, X = target.Center.X.ToString("0.###"), Y = target.Center.Y.ToString("0.###") });
             }
-            if (targets.Count > 0) _selectionInitialized = true;
             _previewRows.RaiseListChangedEvents = true; _previewRows.ResetBindings();
             _grid.ResumeLayout(false);
             UpdatePreviewStates();
@@ -183,13 +181,16 @@ namespace BatchPdfPublisher.Views
         {
             _grid.EndEdit();
             SyncPreviewValues();
+            RemoveInvalidTargets(true);
             var selectedRows = _previewRows.Where(x => x.Selected && x.Target != null).ToList();
             var rows = selectedRows.Select(x => x.Target).ToList();
             if (rows.Count == 0) return;
             var emptyCount = rows.Count(x => string.IsNullOrWhiteSpace(x.NewValue));
-            var duplicateCount = rows.Where(x => !string.IsNullOrWhiteSpace(x.NewValue)).GroupBy(x => x.NewValue, StringComparer.OrdinalIgnoreCase).Where(x => x.Count() > 1).Sum(x => x.Count());
+            var duplicateCount = HasActiveIncrement()
+                ? rows.Where(x => !string.IsNullOrWhiteSpace(x.NewValue)).GroupBy(x => x.NewValue, StringComparer.OrdinalIgnoreCase).Where(x => x.Count() > 1).Sum(x => x.Count())
+                : 0;
             if (emptyCount > 0 && MessageBox.Show(this, "勾选项中有 " + emptyCount + " 个新值为空，写入后会清空对应属性。是否继续？", "批量属性检查", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
-            if ((_increment.Checked || _prefixIncrement.Checked || _suffixIncrement.Checked) && duplicateCount > 0 && MessageBox.Show(this, "递增结果中有 " + duplicateCount + " 个属性值重复。请确认步长、起始值或手工修改是否正确。仍要继续吗？", "批量属性检查", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+            if (duplicateCount > 0 && MessageBox.Show(this, "递增结果中有 " + duplicateCount + " 个属性值重复。请确认步长、起始值或手工修改是否正确。仍要继续吗？", "批量属性检查", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
             if (MessageBox.Show(this, "确认写入预览中的属性值吗？本次操作可用 AutoCAD 撤销。", "批量属性", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
             var result = AttributeBatchService.Apply(_document, rows);
             foreach (var row in rows.Where(x => x != null && result.ChangedAttributeIds.Contains(x.AttributeId)))
@@ -199,7 +200,6 @@ namespace BatchPdfPublisher.Views
             }
             var message = "已修改 " + result.Changed + " 个属性，跳过 " + result.Skipped + " 个未变化属性。" + (result.Failed > 0 ? "\r\n失败 " + result.Failed + " 个，详情已写入临时日志。" : string.Empty);
             MessageBox.Show(this, message, "批量属性", MessageBoxButtons.OK, result.Failed > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
-            if (result.Details.Count > 0) new AttributeResultForm(result.Details, LocateTarget).Show(this);
             RefreshGrid();
         }
 
@@ -293,7 +293,24 @@ namespace BatchPdfPublisher.Views
             if (string.Equals(_settings.LastPreset, name, StringComparison.OrdinalIgnoreCase)) { _settings.LastPreset = string.Empty; SaveSettings(); }
             RefreshPresets();
         }
-        private void SetPreviewSelection(bool selected) { foreach (var row in _previewRows) row.Selected = selected; UpdatePreviewStates(); }
+        private void SetPreviewSelection(bool selected)
+        {
+            foreach (var row in _previewRows.Where(x => x.Target != null))
+            {
+                row.Selected = selected;
+                if (selected) _excludedAttributeIds.Remove(row.Target.AttributeId);
+                else _excludedAttributeIds.Add(row.Target.AttributeId);
+            }
+            UpdatePreviewStates();
+        }
+        private void RememberPreviewSelection(int rowIndex)
+        {
+            if (rowIndex < 0 || rowIndex >= _previewRows.Count) return;
+            var row = _previewRows[rowIndex];
+            if (row.Target == null) return;
+            if (row.Selected) _excludedAttributeIds.Remove(row.Target.AttributeId);
+            else _excludedAttributeIds.Add(row.Target.AttributeId);
+        }
         private void ResetManualValues()
         {
             foreach (var row in _previewRows.Where(x => x.Target != null)) _manualValues.Remove(row.Target.AttributeId);
@@ -319,13 +336,15 @@ namespace BatchPdfPublisher.Views
             _updatingPreview = true;
             try
             {
-            var duplicates = new HashSet<string>(_previewRows.Where(x => x.Selected && !string.IsNullOrWhiteSpace(x.NewValue)).GroupBy(x => x.NewValue, StringComparer.OrdinalIgnoreCase).Where(x => x.Count() > 1).Select(x => x.Key), StringComparer.OrdinalIgnoreCase);
+            var duplicates = HasActiveIncrement()
+                ? new HashSet<string>(_previewRows.Where(x => x.Selected && !string.IsNullOrWhiteSpace(x.NewValue)).GroupBy(x => x.NewValue, StringComparer.OrdinalIgnoreCase).Where(x => x.Count() > 1).Select(x => x.Key), StringComparer.OrdinalIgnoreCase)
+                : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var row in _previewRows)
             {
                 if (!row.Selected) row.State = "未选";
                 else if (string.IsNullOrWhiteSpace(row.NewValue)) row.State = "空值";
-                else if (duplicates.Contains(row.NewValue)) row.State = "重复";
                 else if (string.Equals(row.OldValue ?? string.Empty, row.NewValue ?? string.Empty, StringComparison.Ordinal)) row.State = "未变化";
+                else if (duplicates.Contains(row.NewValue)) row.State = "重复";
                 else row.State = "将修改";
             }
             _previewRows.ResetBindings(); _grid.Invalidate();
@@ -342,6 +361,7 @@ namespace BatchPdfPublisher.Views
             var warnings = _previewRows.Count(x => x.Selected && (x.State == "空值" || x.State == "重复"));
             _status.Text = string.IsNullOrWhiteSpace(tag) ? "请先框选图块" : "已选 " + _previewRows.Count(x => x.Selected) + "/" + _previewRows.Count + " · 修改 " + changed + " · 未变 " + unchanged + " · 异常 " + warnings + " · " + toleranceText;
         }
+        private bool HasActiveIncrement() => _increment.Checked || _prefixIncrement.Checked || _suffixIncrement.Checked;
         private void GridCellFormatting(object sender, DataGridViewCellFormattingEventArgs e)
         {
             if (e.RowIndex < 0) return;
@@ -361,7 +381,12 @@ namespace BatchPdfPublisher.Views
         {
             if (e.RowIndex < 0) return;
             var row = _grid.Rows[e.RowIndex].DataBoundItem as AttributePreviewRow;
-            if (row?.Target == null || !row.Target.BlockId.IsValid) return;
+            if (row?.Target == null) return;
+            if (!AttributeBatchService.IsUsable(row.Target.BlockId) || !AttributeBatchService.IsUsable(row.Target.AttributeId))
+            {
+                RemoveInvalidTargets(true);
+                return;
+            }
             try
             {
                 var highlightId = row.Target.AttributeId.IsValid ? row.Target.AttributeId : row.Target.BlockId;
@@ -430,6 +455,23 @@ namespace BatchPdfPublisher.Views
                 _document.Window.Focus();
             }
             catch { }
+        }
+
+        private void RemoveInvalidTargets(bool notify)
+        {
+            var invalid = _targets.Where(x => x == null || !AttributeBatchService.IsUsable(x.BlockId) || !AttributeBatchService.IsUsable(x.AttributeId)).ToList();
+            if (invalid.Count == 0) return;
+            foreach (var target in invalid)
+            {
+                _targets.Remove(target);
+                if (target != null)
+                {
+                    _manualValues.Remove(target.AttributeId);
+                    _excludedAttributeIds.Remove(target.AttributeId);
+                }
+            }
+            RefreshGrid();
+            if (notify) MessageBox.Show(this, "有 " + invalid.Count + " 个图块或属性在面板打开期间被删除、重定义或同步，已从当前预览安全移除。请重新框选以读取最新对象。", "批量属性已更新", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         private sealed class AttributePreviewRow

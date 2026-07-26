@@ -78,6 +78,14 @@ namespace BatchPdfPublisher
             Application.ShowModalDialog(new AttributeBatchForm(document));
         }
 
+        [CommandMethod("BPPATTDEF")]
+        public void EditAttributeDefinitions()
+        {
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document == null) { Application.ShowAlertDialog("请先打开一个 CAD 文件。"); return; }
+            Application.ShowModalDialog(new AttributeDefinitionEditorForm(document));
+        }
+
         [CommandMethod("BPPSELFTEST")]
         public void RunSelfTest()
         {

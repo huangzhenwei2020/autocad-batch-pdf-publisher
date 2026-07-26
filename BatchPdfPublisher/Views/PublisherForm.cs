@@ -47,7 +47,7 @@ namespace BatchPdfPublisher.Views
 
         public PublisherForm()
         {
-            Text = "批量 PDF 发布  v0.7.0";
+            Text = "批量 PDF 发布  v0.8.2";
             Width = 1240;
             Height = 760;
             MinimumSize = new System.Drawing.Size(840, 540);
@@ -140,6 +140,7 @@ namespace BatchPdfPublisher.Views
             _cadFiles.Dock = DockStyle.Fill; _cadFiles.Margin = new Padding(8, 8, 8, 4); _cadFiles.CheckOnClick = true; _cadFiles.HorizontalScrollbar = true; cadPane.Controls.Add(_cadFiles, 0, 1);
             var cadButtons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true, Margin = new Padding(8, 0, 8, 6) };
             cadButtons.Controls.Add(IconButton("添加文件", UiIcon.Plus, ChooseCadFiles)); cadButtons.Controls.Add(IconButton("移除文件", UiIcon.Remove, RemoveCadFile));
+            cadButtons.Controls.Add(IconButton("全部保存", UiIcon.SaveAll, SaveAllCadFiles));
             cadButtons.Controls.Add(IconAccentButton("扫描当前", UiIcon.Refresh, () => { _viewModel.ScanCommand.Execute(null); RefreshAll(); }));
             cadButtons.Controls.Add(IconAccentButton("扫描所选", UiIcon.List, ScanCheckedCadFiles));
             cadButtons.Controls.Add(IconButton("框选发布", UiIcon.Select, OpenCurrentSelectionPublisher)); cadPane.Controls.Add(cadButtons, 0, 2);
@@ -755,6 +756,13 @@ namespace BatchPdfPublisher.Views
             Autodesk.AutoCAD.ApplicationServices.Application.ShowModelessDialog(dialog);
         }
 
+        private void SaveAllCadFiles()
+        {
+            var result = _viewModel.SaveAllOpenCadFiles();
+            MessageBox.Show(this, result, "全部保存", MessageBoxButtons.OK,
+                result.IndexOf("失败", StringComparison.Ordinal) >= 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+        }
+
         private void EditFrame()
         {
             _viewModel.SelectedFrame = _frames.SelectedItem as FrameDefinition; _viewModel.EditFrameCommand.Execute(null); RefreshFrames();
@@ -770,7 +778,7 @@ namespace BatchPdfPublisher.Views
             return _sheets.CurrentRow == null ? null : _sheets.CurrentRow.DataBoundItem as SheetItem;
         }
 
-        private enum UiIcon { Plus, Remove, Refresh, List, Select, Gear, Save, Folder, Open, Up, Down, Publish }
+        private enum UiIcon { Plus, Remove, Refresh, List, Select, Gear, Save, SaveAll, Folder, Open, Up, Down, Publish }
 
         private static Button IconButton(string text, UiIcon icon, Action action)
         {
@@ -832,6 +840,9 @@ namespace BatchPdfPublisher.Views
                         graphics.DrawEllipse(pen, 4, 4, 8, 8); graphics.DrawEllipse(pen, 7, 7, 2, 2);
                         for (var angle = 0; angle < 360; angle += 45) { var radians = angle * Math.PI / 180.0; var x1 = 8 + (int)(Math.Cos(radians) * 5); var y1 = 8 + (int)(Math.Sin(radians) * 5); var x2 = 8 + (int)(Math.Cos(radians) * 7); var y2 = 8 + (int)(Math.Sin(radians) * 7); graphics.DrawLine(pen, x1, y1, x2, y2); } break;
                     case UiIcon.Save: graphics.DrawRectangle(pen, 2, 2, 12, 12); graphics.DrawRectangle(pen, 5, 2, 6, 4); graphics.DrawRectangle(pen, 5, 9, 6, 5); break;
+                    case UiIcon.SaveAll:
+                        graphics.DrawRectangle(pen, 1, 3, 10, 11); graphics.DrawRectangle(pen, 4, 3, 5, 3); graphics.DrawRectangle(pen, 4, 9, 5, 5);
+                        graphics.DrawRectangle(pen, 5, 1, 10, 11); graphics.DrawLine(pen, 11, 1, 11, 5); break;
                     case UiIcon.Folder: graphics.DrawLine(pen, 2, 5, 6, 5); graphics.DrawLine(pen, 6, 5, 8, 3); graphics.DrawRectangle(pen, 2, 5, 12, 8); break;
                     case UiIcon.Open: graphics.DrawRectangle(pen, 3, 3, 10, 10); graphics.DrawLine(pen, 8, 8, 14, 2); graphics.DrawLine(pen, 10, 2, 14, 2); graphics.DrawLine(pen, 14, 2, 14, 6); break;
                     case UiIcon.Up: graphics.DrawLine(pen, 8, 13, 8, 3); graphics.DrawLine(pen, 4, 7, 8, 3); graphics.DrawLine(pen, 12, 7, 8, 3); break;
@@ -882,6 +893,7 @@ namespace BatchPdfPublisher.Views
             {
                 case "添加文件": return "把一个或多个 DWG 加入当前工程文件清单。";
                 case "移除文件": return "从工程中移除选中的 DWG，并清除它的图纸和空子项目记录；不删除磁盘文件。";
+                case "全部保存": return "检查当前工程 CAD 文件列表，只保存其中已经在 AutoCAD 打开并正在编辑的 DWG；工程外图纸不处理。";
                 case "扫描当前": return "读取当前激活 DWG 中的已登记图框，更新图纸列表。";
                 case "扫描所选": return "批量读取工程列表中已勾选 DWG 的图框和图纸信息。";
                 case "框选发布": return "在当前 DWG 中手动框选图框，只发布本次选中的图纸。";
@@ -895,7 +907,7 @@ namespace BatchPdfPublisher.Views
                 case "存入工程": return "把当前 DWG 的副本保存到当前工程文件夹。";
                 case "目录打印": return "扫描当前工程文件夹中的 DWG，然后按工程设置发布 PDF。";
                 case "自动保存": return "把 AutoCAD/TArch 的自动保存文件复制到工程的“自动保存”目录作为备份。";
-                case "更新预览": return "重新在 CAD 中标出当前子项目的图框范围和当前图纸。";
+                case "更新预览": return "按当前激活 DWG 和当前布局重新显示图框；布局图框只在对应布局显示，模型空间图框只在模型空间显示。";
                 case "发布 PDF": return "按当前勾选的子项目、图纸顺序、纸张和打印样式生成 PDF。";
                 case "上移图纸": return "把当前图纸在所属子项目的发布顺序中上移一位。";
                 case "下移图纸": return "把当前图纸在所属子项目的发布顺序中下移一位。";
