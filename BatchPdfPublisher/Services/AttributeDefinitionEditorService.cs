@@ -9,6 +9,7 @@ namespace BatchPdfPublisher.Services
 {
     public sealed class AttributeDefinitionEditRow
     {
+        public bool IsSelected { get; set; } = true;
         public ObjectId DefinitionId { get; set; }
         public string OldTag { get; set; }
         public string Tag { get; set; }
@@ -67,6 +68,8 @@ namespace BatchPdfPublisher.Services
         {
             var rows = sourceRows?.ToList() ?? new List<AttributeDefinitionEditRow>();
             if (rows.Count == 0) throw new InvalidOperationException("当前图块没有属性定义。");
+            var editableRows = rows.Where(x => x.IsSelected).ToList();
+            if (editableRows.Count == 0) throw new InvalidOperationException("请至少勾选一个要修改的属性。");
             var emptyTags = rows.Where(x => string.IsNullOrWhiteSpace(x.Tag)).ToList();
             if (emptyTags.Count > 0) throw new InvalidOperationException("属性 TAG 不能为空。");
             var duplicateTags = rows.GroupBy(x => x.Tag.Trim(), StringComparer.OrdinalIgnoreCase).Where(x => x.Count() > 1).Select(x => x.Key).ToList();
@@ -89,7 +92,7 @@ namespace BatchPdfPublisher.Services
                 if (!string.Equals(record.Name, newBlockName, StringComparison.Ordinal)) record.Name = newBlockName;
                 var styleTable = transaction.GetObject(document.Database.TextStyleTableId, OpenMode.ForRead) as TextStyleTable;
                 var definitions = new Dictionary<ObjectId, AttributeDefinition>();
-                foreach (var row in rows)
+                foreach (var row in editableRows)
                 {
                     if (!IsUsable(row.DefinitionId)) continue;
                     var definition = transaction.GetObject(row.DefinitionId, OpenMode.ForWrite, false) as AttributeDefinition;
@@ -108,7 +111,7 @@ namespace BatchPdfPublisher.Services
 
                 foreach (var reference in FindReferences(document.Database, context.DefinitionId, transaction))
                 {
-                    var queues = rows.GroupBy(x => x.OldTag ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                    var queues = editableRows.GroupBy(x => x.OldTag ?? string.Empty, StringComparer.OrdinalIgnoreCase)
                         .ToDictionary(x => x.Key, x => new Queue<AttributeDefinitionEditRow>(x), StringComparer.OrdinalIgnoreCase);
                     foreach (ObjectId attributeId in reference.AttributeCollection)
                     {
@@ -119,9 +122,12 @@ namespace BatchPdfPublisher.Services
                         var currentValue = attribute.TextString;
                         var rotation = attribute.Rotation;
                         var oldAnchor = DisplayAnchor(attribute);
-                        ApplyDefinitionFormatting(attribute, definition);
-                        if (!string.Equals(row.Alignment, row.OriginalAlignment, StringComparison.Ordinal))
-                            ApplyAlignment(attribute, definition.HorizontalMode, definition.VerticalMode, oldAnchor, document.Database);
+                        ApplyDefinitionFormatting(attribute, definition, reference);
+                        // Height/style changes can make AutoCAD recalculate the
+                        // insertion point of centered/right-aligned attributes.
+                        // Restore the same visible anchor even when the user did
+                        // not change the alignment option.
+                        ApplyAlignment(attribute, definition.HorizontalMode, definition.VerticalMode, oldAnchor, document.Database);
                         attribute.TextString = currentValue;
                         attribute.Tag = row.Tag.Trim();
                         attribute.Rotation = rotation;
@@ -182,10 +188,31 @@ namespace BatchPdfPublisher.Services
             return null;
         }
 
-        private static void ApplyDefinitionFormatting(AttributeReference attribute, AttributeDefinition definition)
+        private static void ApplyDefinitionFormatting(AttributeReference attribute, AttributeDefinition definition, BlockReference reference)
         {
-            attribute.Height = definition.Height;
-            attribute.WidthFactor = definition.WidthFactor;
+            // Values edited in this window are block-definition values. An
+            // AttributeReference stores the geometry after the INSERT transform,
+            // so assigning definition.Height directly makes a 100x block display
+            // 100 times too small. Ask AutoCAD to calculate the transformed text
+            // size exactly as INSERT does, without replacing the live reference.
+            try
+            {
+                using (var transformed = new AttributeReference())
+                {
+                    transformed.SetAttributeFromBlock(definition, reference.BlockTransform);
+                    attribute.Height = transformed.Height;
+                    attribute.WidthFactor = transformed.WidthFactor;
+                }
+            }
+            catch
+            {
+                // Defensive fallback for malformed/proxy block transforms.
+                var scale = 1d;
+                try { scale = Math.Abs(reference.ScaleFactors.Y); } catch { }
+                if (scale <= 1e-9) scale = 1d;
+                attribute.Height = definition.Height * scale;
+                attribute.WidthFactor = definition.WidthFactor;
+            }
             attribute.TextStyleId = definition.TextStyleId;
             attribute.Invisible = definition.Invisible;
         }
@@ -233,6 +260,7 @@ namespace BatchPdfPublisher.Services
                 var style = transaction.GetObject(definition.TextStyleId, OpenMode.ForRead) as TextStyleTableRecord;
                 context.Rows.Add(new AttributeDefinitionEditRow
                 {
+                    IsSelected = true,
                     DefinitionId = id, OldTag = definition.Tag ?? string.Empty, Tag = definition.Tag ?? string.Empty,
                     Prompt = definition.Prompt ?? string.Empty, DefaultValue = definition.TextString ?? string.Empty,
                     Height = definition.Height, WidthFactor = definition.WidthFactor, TextStyle = style?.Name ?? string.Empty,

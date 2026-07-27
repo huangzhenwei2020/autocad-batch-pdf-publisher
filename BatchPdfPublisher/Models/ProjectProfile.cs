@@ -25,5 +25,7 @@ namespace BatchPdfPublisher.Models
         public bool ScanModelSpace { get; set; } = true;
         public bool ScanAllLayouts { get; set; } = true;
         public List<string> SelectedLayouts { get; set; } = new List<string>();
+        // Null means an older project that should follow AutoCAD SAVETIME.
+        public int? AutoSaveMinutes { get; set; }
     }
 }

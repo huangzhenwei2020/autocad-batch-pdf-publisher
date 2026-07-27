@@ -193,7 +193,7 @@ namespace BatchPdfPublisher.Services
             catch { return (path ?? string.Empty).Trim(); }
         }
 
-        private static void ScheduleIssueAction(IReadOnlyList<FrameProjectScanIssue> issues, bool openAll)
+        private static void ScheduleIssueAction(IList<FrameProjectScanIssue> issues, bool openAll)
         {
             if (issues == null || issues.Count == 0) return;
             EventHandler handler = null;

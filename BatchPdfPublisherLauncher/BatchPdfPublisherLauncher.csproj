@@ -35,12 +35,5 @@
     <Content Include="BatchPdfPublisher.ico" />
     <EmbeddedResource Include="BatchPdfPublisherIcon.png" />
   </ItemGroup>
-  <ItemGroup>
-    <ProjectReference Include="..\BatchPdfPublisher\BatchPdfPublisher.csproj">
-      <Project>{A0D764B9-6CC8-45B1-9F96-9BEEF91C4F7E}</Project>
-      <Name>BatchPdfPublisher</Name>
-      <Private>True</Private>
-    </ProjectReference>
-  </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

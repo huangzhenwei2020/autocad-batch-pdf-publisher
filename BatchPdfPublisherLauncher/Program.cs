@@ -46,10 +46,7 @@ namespace BatchPdfPublisherLauncher
                     if (picker.Options.Platform == null) throw new FileNotFoundException("未找到可用的 AutoCAD 安装。请先安装 AutoCAD，或检查安装权限。");
                     options = picker.Options;
                 }
-                var sourceAssembly = Path.Combine(launcherDirectory, PluginAssemblyName);
-                if (!File.Exists(sourceAssembly)) throw new FileNotFoundException("启动器旁边缺少 BatchPdfPublisher.dll，请重新编译完整项目。", sourceAssembly);
-                var sourcePdfDependency = Path.Combine(launcherDirectory, PdfDependencyName);
-                if (!File.Exists(sourcePdfDependency)) throw new FileNotFoundException("启动器旁边缺少 PdfSharp.dll，请重新编译完整项目。", sourcePdfDependency);
+                var payload = ResolvePluginPayload(launcherDirectory, options.Platform.Release);
                 var sourcePlotterConfig = Path.Combine(launcherDirectory, PlotterConfigName);
                 var sourcePlotterMedia = Path.Combine(launcherDirectory, PlotterMediaName);
                 if (!File.Exists(sourcePlotterConfig) || !File.Exists(sourcePlotterMedia))
@@ -57,7 +54,7 @@ namespace BatchPdfPublisherLauncher
 
                 File.WriteAllText(LastPlatformPath(), options.Platform.Id);
                 InstallPlotterProfiles(sourcePlotterConfig, sourcePlotterMedia);
-                var installedAssembly = InstallPlugin(sourceAssembly, sourcePdfDependency, options.InstallPermanently);
+                var installedAssembly = InstallPlugin(payload, options.InstallPermanently);
                 Log("已安装插件: " + installedAssembly);
                 if (options.LoadIntoRunningCad)
                 {
@@ -82,12 +79,12 @@ namespace BatchPdfPublisherLauncher
             var cadPlatforms = new List<PlatformOption>();
             foreach (var version in FindAutoCadInstallations())
             {
-                cadPlatforms.Add(new PlatformOption(version.DisplayName, "acad-" + version.Release, version.Executable, "/nologo /p \"<<Unnamed Profile>>\"", version.WorkingDirectory, version.ProgId, "无天正", version.DisplayName));
+                cadPlatforms.Add(new PlatformOption(version.DisplayName, "acad-" + version.Release, version.Executable, "/nologo /p \"<<Unnamed Profile>>\"", version.WorkingDirectory, version.ProgId, "无天正", version.DisplayName, version.Release));
             }
             result.AddRange(cadPlatforms);
             foreach (var tz in FindTianzhengInstallations())
                 foreach (var cad in cadPlatforms)
-                    result.Add(new PlatformOption(tz.Name + " + " + cad.CadName, tz.Id + "-" + cad.Id, tz.Executable, "", Path.GetDirectoryName(tz.Executable), cad.ProgId, tz.Name, cad.CadName));
+                    result.Add(new PlatformOption(tz.Name + " + " + cad.CadName, tz.Id + "-" + cad.Id, tz.Executable, "", Path.GetDirectoryName(tz.Executable), cad.ProgId, tz.Name, cad.CadName, cad.Release));
             if (result.Count == 0 && cadPlatforms.Count > 0) result.AddRange(cadPlatforms);
             return result;
         }
@@ -132,14 +129,56 @@ namespace BatchPdfPublisherLauncher
             var yearMatch = Regex.Match((name ?? string.Empty) + " " + release, @"(?:20)(2[0-9])");
             if (yearMatch.Success) return "AutoCAD " + yearMatch.Value;
             var releaseNumber = release.StartsWith("R", StringComparison.OrdinalIgnoreCase) ? release.Substring(1) : release;
-            var parts = releaseNumber.Split('.');
-            if (parts.Length > 0 && int.TryParse(parts[0], out var major))
+            var knownYears = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
             {
-                var minor = parts.Length > 1 && int.TryParse(parts[1], out var parsedMinor) ? parsedMinor : 0;
-                var year = major == 24 ? 2021 + minor : major >= 25 ? 2025 + minor : 0;
-                if (year >= 2000 && year <= 2099) return "AutoCAD " + year;
-            }
+                ["19.1"] = 2014,
+                ["20.0"] = 2015, ["20.1"] = 2016,
+                ["21.0"] = 2017, ["22.0"] = 2018,
+                ["23.0"] = 2019, ["23.1"] = 2020,
+                ["24.0"] = 2021, ["24.1"] = 2022, ["24.2"] = 2023, ["24.3"] = 2024,
+                ["25.0"] = 2025, ["25.1"] = 2026
+            };
+            if (knownYears.TryGetValue(releaseNumber, out var year)) return "AutoCAD " + year;
             return string.IsNullOrWhiteSpace(name) ? "AutoCAD" : name.Trim();
+        }
+
+        private static PluginPayload ResolvePluginPayload(string launcherDirectory, string release)
+        {
+            var band = GetApiBand(release);
+            var bandDirectory = Path.Combine(launcherDirectory, "CadApi", band);
+            var assembly = Path.Combine(bandDirectory, PluginAssemblyName);
+            var dependency = Path.Combine(bandDirectory, PdfDependencyName);
+            if (string.Equals(band, "R24", StringComparison.OrdinalIgnoreCase) && !File.Exists(assembly))
+            {
+                assembly = Path.Combine(launcherDirectory, PluginAssemblyName);
+                dependency = Path.Combine(launcherDirectory, PdfDependencyName);
+            }
+            if (!File.Exists(assembly) || !File.Exists(dependency))
+                throw new FileNotFoundException(
+                    "已识别 " + FormatRelease(release) + "，但发布包中缺少对应的 " + band + " 插件组件。\r\n\r\n"
+                    + "预期目录：" + bandDirectory + "\r\n"
+                    + "请使用包含 AutoCAD 2014–2026 分代 DLL 的完整发布包。");
+            return new PluginPayload(band, assembly, dependency);
+        }
+
+        private static string GetApiBand(string release)
+        {
+            if (!Version.TryParse((release ?? string.Empty).TrimStart('R', 'r'), out var version))
+                throw new InvalidOperationException("无法识别 AutoCAD 内部版本号：" + release);
+            if (version.Major == 19 && version.Minor >= 1) return "R19";
+            if (version.Major == 20) return "R20";
+            if (version.Major == 21) return "R21";
+            if (version.Major == 22) return "R22";
+            if (version.Major == 23) return "R23";
+            if (version.Major == 24) return "R24";
+            if (version.Major == 25) return "R25";
+            throw new NotSupportedException("当前启动器只支持 AutoCAD 2014–2026，检测到内部版本：" + release);
+        }
+
+        private static string FormatRelease(string release)
+        {
+            var display = ReadCadDisplayName(null, "R" + (release ?? string.Empty).TrimStart('R', 'r'));
+            return display + "（R" + (release ?? string.Empty).TrimStart('R', 'r') + "）";
         }
 
         private static List<TianzhengInstallation> FindTianzhengInstallations()
@@ -292,14 +331,14 @@ namespace BatchPdfPublisherLauncher
         private static bool HasRunningCad()
         {
             if (Process.GetProcessesByName("acad").Length > 0) return true;
-            foreach (var progId in new[] { "AutoCAD.Application.24.0", "AutoCAD.Application.24.1", "AutoCAD.Application.24.2", "AutoCAD.Application.24.3", "AutoCAD.Application.25.0", "AutoCAD.Application.25.1" })
+            foreach (var progId in KnownProgIds())
                 try { if (Marshal.GetActiveObject(progId) != null) return true; } catch { }
             return false;
         }
 
         private static bool TrySendLoad(string progId, string installedAssembly)
         {
-            var progIds = new[] { progId, "AutoCAD.Application.24.0", "AutoCAD.Application.24.1", "AutoCAD.Application.24.2", "AutoCAD.Application.24.3", "AutoCAD.Application.25.0", "AutoCAD.Application.25.1" }
+            var progIds = new[] { progId }.Concat(KnownProgIds())
                 .Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             for (var attempt = 0; attempt < 15; attempt++)
             {
@@ -330,6 +369,12 @@ namespace BatchPdfPublisherLauncher
                 catch (Exception exception) { Log("COM 尝试 " + (attempt + 1) + " 失败: " + exception.Message); Thread.Sleep(1000); }
             }
             return false;
+        }
+
+        private static IEnumerable<string> KnownProgIds()
+        {
+            var releases = new[] { "19.1", "20.0", "20.1", "21.0", "22.0", "23.0", "23.1", "24.0", "24.1", "24.2", "24.3", "25.0", "25.1" };
+            return releases.Select(x => "AutoCAD.Application." + x);
         }
 
         private static void SendCommand(object document, string command)
@@ -503,36 +548,62 @@ namespace BatchPdfPublisherLauncher
             return new[] { (byte)(b >> 8), (byte)b, (byte)(a >> 8), (byte)a };
         }
 
-        private static string InstallPlugin(string sourceAssembly, string sourcePdfDependency, bool installPermanently)
+        private static string InstallPlugin(PluginPayload payload, bool installPermanently)
         {
-            var contentsDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "BatchPdfPublisher", "releases");
+            var contentsDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "BatchPdfPublisher", "releases", payload.Band);
             Directory.CreateDirectory(contentsDirectory);
-            var hash = GetFileHash(sourceAssembly).Substring(0, 12);
+            var hash = GetFileHash(payload.AssemblyPath).Substring(0, 12);
             var installedFileName = "BatchPdfPublisher." + hash + ".dll";
             var installedAssembly = Path.Combine(contentsDirectory, installedFileName);
-            if (!File.Exists(installedAssembly) || new FileInfo(installedAssembly).Length != new FileInfo(sourceAssembly).Length)
-                File.Copy(sourceAssembly, installedAssembly, true);
-            File.Copy(sourcePdfDependency, Path.Combine(contentsDirectory, PdfDependencyName), true);
-            if (installPermanently) InstallAutoLoadBundle(installedAssembly, sourcePdfDependency);
+            if (!File.Exists(installedAssembly) || new FileInfo(installedAssembly).Length != new FileInfo(payload.AssemblyPath).Length)
+                File.Copy(payload.AssemblyPath, installedAssembly, true);
+            File.Copy(payload.PdfDependencyPath, Path.Combine(contentsDirectory, PdfDependencyName), true);
+            if (installPermanently) InstallAutoLoadBundle(installedAssembly, payload.PdfDependencyPath, payload.Band);
             return installedAssembly;
         }
 
-        private static void InstallAutoLoadBundle(string installedAssembly, string sourcePdfDependency)
+        private static void InstallAutoLoadBundle(string installedAssembly, string sourcePdfDependency, string band)
         {
             var bundle = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Autodesk", "ApplicationPlugins", "BatchPdfPublisher.bundle");
-            var contents = Path.Combine(bundle, "Contents");
+            var contents = Path.Combine(bundle, "Contents", band);
             Directory.CreateDirectory(contents);
             File.Copy(installedAssembly, Path.Combine(contents, PluginAssemblyName), true);
             File.Copy(sourcePdfDependency, Path.Combine(contents, PdfDependencyName), true);
-            var package = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n" +
-                "<ApplicationPackage SchemaVersion=\"1.0\" AutodeskProduct=\"AutoCAD\" Name=\"BatchPdfPublisher\" AppVersion=\"1.0.0\" ProductCode=\"{BPP-7B9E2D72-1C3E-4F3D-9C0C-7D5D3E5A0A01}\">\r\n" +
-                "  <CompanyDetails Name=\"BatchPdfPublisher\" />\r\n" +
-                "  <Components>\r\n" +
-                "    <RuntimeRequirements OS=\"Win64\" Platform=\"AutoCAD*\" SeriesMin=\"R24.0\" SeriesMax=\"R25.9\" />\r\n" +
-                "    <ComponentEntry AppName=\"BatchPdfPublisher\" ModuleName=\"Contents\\BatchPdfPublisher.dll\" AppDescription=\"批量 PDF 发布\" LoadReasons=\"LoadOnStartup\" />\r\n" +
-                "  </Components>\r\n" +
-                "</ApplicationPackage>\r\n";
-            File.WriteAllText(Path.Combine(bundle, "PackageContents.xml"), package, Encoding.UTF8);
+            var installedBands = Directory.GetDirectories(Path.Combine(bundle, "Contents"))
+                .Select(Path.GetFileName)
+                .Where(x => File.Exists(Path.Combine(bundle, "Contents", x, PluginAssemblyName)))
+                .Where(x => new[] { "R19", "R20", "R21", "R22", "R23", "R24", "R25" }.Contains(x, StringComparer.OrdinalIgnoreCase))
+                .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            var package = new StringBuilder();
+            package.AppendLine("<?xml version=\"1.0\" encoding=\"utf-8\"?>");
+            package.AppendLine("<ApplicationPackage SchemaVersion=\"1.0\" AutodeskProduct=\"AutoCAD\" Name=\"BatchPdfPublisher\" AppVersion=\"0.8.2\" ProductCode=\"{7B9E2D72-1C3E-4F3D-9C0C-7D5D3E5A0A01}\">");
+            package.AppendLine("  <CompanyDetails Name=\"BatchPdfPublisher\" />");
+            foreach (var installedBand in installedBands)
+            {
+                var range = GetSeriesRangeForBand(installedBand);
+                package.AppendLine("  <Components>");
+                package.AppendLine("    <RuntimeRequirements OS=\"Win64\" Platform=\"AutoCAD*\" SeriesMin=\"" + range.Item1 + "\" SeriesMax=\"" + range.Item2 + "\" />");
+                package.AppendLine("    <ComponentEntry AppName=\"BatchPdfPublisher-" + installedBand + "\" ModuleName=\"Contents\\" + installedBand + "\\BatchPdfPublisher.dll\" AppDescription=\"批量 PDF 发布\" LoadReasons=\"LoadOnStartup\" />");
+                package.AppendLine("  </Components>");
+            }
+            package.AppendLine("</ApplicationPackage>");
+            File.WriteAllText(Path.Combine(bundle, "PackageContents.xml"), package.ToString(), Encoding.UTF8);
+        }
+
+        private static Tuple<string, string> GetSeriesRangeForBand(string band)
+        {
+            switch (band)
+            {
+                case "R19": return Tuple.Create("R19.1", "R19.1");
+                case "R20": return Tuple.Create("R20.0", "R20.1");
+                case "R21": return Tuple.Create("R21.0", "R21.0");
+                case "R22": return Tuple.Create("R22.0", "R22.0");
+                case "R23": return Tuple.Create("R23.0", "R23.1");
+                case "R24": return Tuple.Create("R24.0", "R24.3");
+                case "R25": return Tuple.Create("R25.0", "R25.1");
+                default: throw new NotSupportedException("不支持的 AutoCAD API 分代：" + band);
+            }
         }
 
         private static string GetFileHash(string path)
@@ -551,12 +622,12 @@ namespace BatchPdfPublisherLauncher
 
     internal sealed class PlatformOption
     {
-        public PlatformOption(string displayName, string id, string executable, string arguments, string workingDirectory, string progId)
+        public PlatformOption(string displayName, string id, string executable, string arguments, string workingDirectory, string progId, string release)
         {
-            DisplayName = displayName; Id = id; Executable = executable; Arguments = arguments; WorkingDirectory = workingDirectory; ProgId = progId; TianzhengName = "无天正"; CadName = displayName;
+            DisplayName = displayName; Id = id; Executable = executable; Arguments = arguments; WorkingDirectory = workingDirectory; ProgId = progId; TianzhengName = "无天正"; CadName = displayName; Release = release;
         }
-        public PlatformOption(string displayName, string id, string executable, string arguments, string workingDirectory, string progId, string tianzhengName, string cadName)
-        { DisplayName = displayName; Id = id; Executable = executable; Arguments = arguments; WorkingDirectory = workingDirectory; ProgId = progId; TianzhengName = tianzhengName; CadName = cadName; }
+        public PlatformOption(string displayName, string id, string executable, string arguments, string workingDirectory, string progId, string tianzhengName, string cadName, string release)
+        { DisplayName = displayName; Id = id; Executable = executable; Arguments = arguments; WorkingDirectory = workingDirectory; ProgId = progId; TianzhengName = tianzhengName; CadName = cadName; Release = release; }
         public string DisplayName { get; }
         public string Id { get; }
         public string Executable { get; }
@@ -565,7 +636,19 @@ namespace BatchPdfPublisherLauncher
         public string ProgId { get; }
         public string TianzhengName { get; }
         public string CadName { get; }
+        public string Release { get; }
         public override string ToString() => DisplayName;
+    }
+
+    internal sealed class PluginPayload
+    {
+        public PluginPayload(string band, string assemblyPath, string pdfDependencyPath)
+        {
+            Band = band; AssemblyPath = assemblyPath; PdfDependencyPath = pdfDependencyPath;
+        }
+        public string Band { get; }
+        public string AssemblyPath { get; }
+        public string PdfDependencyPath { get; }
     }
 
     internal sealed class TianzhengInstallation

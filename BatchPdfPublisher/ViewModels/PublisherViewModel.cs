@@ -116,6 +116,7 @@ namespace BatchPdfPublisher.ViewModels
                 _selectedProject = value;
                 _store.SetActiveProject(value.Name);
                 LoadProjectIntoEditor(value);
+                ProjectAutoSaveService.ApplyInterval(GetProjectAutoSaveMinutes(value));
                 OnPropertyChanged();
                 RefreshPlotStyles();
                 Status = "已切换到工程：" + value.Name;
@@ -498,7 +499,6 @@ namespace BatchPdfPublisher.ViewModels
             {
                 var folder = System.IO.Path.Combine(GetProjectFolder(), "CAD");
                 System.IO.Directory.CreateDirectory(folder);
-                SyncAutoSaveFiles();
                 var sourceName = System.IO.Path.GetFileName(document.Database.Filename);
                 if (string.IsNullOrWhiteSpace(sourceName)) sourceName = "未命名图纸.dwg";
                 destination = System.IO.Path.Combine(folder, sourceName);
@@ -614,7 +614,7 @@ namespace BatchPdfPublisher.ViewModels
             SaveCurrentProject();
         }
 
-        public System.Collections.Generic.IReadOnlyList<string> GetActiveLayoutNames()
+        public System.Collections.Generic.IList<string> GetActiveLayoutNames()
         {
             var document = Application.DocumentManager.MdiActiveDocument;
             if (document == null) return new System.Collections.Generic.List<string>();
@@ -741,7 +741,11 @@ namespace BatchPdfPublisher.ViewModels
             Status = "已收藏打印样式：" + PlotStyle;
         }
 
+#if ACAD_R19
+        private void PublishPdf()
+#else
         private async void PublishPdf()
+#endif
         {
             var initialDocument = Application.DocumentManager.MdiActiveDocument;
             var preparedPages = new System.Collections.Generic.List<PreparedPdfPage>();
@@ -842,7 +846,11 @@ namespace BatchPdfPublisher.ViewModels
                         var baseProgress = completedBeforeGroup;
                         System.Collections.Generic.List<PreparedPdfPage> groupPages = null;
                         System.Exception groupException = null;
-                        await Application.DocumentManager.ExecuteInCommandContextAsync(async unused =>
+#if ACAD_R19
+                        CadCommandContext.Execute(() =>
+#else
+                        await CadCommandContext.ExecuteAsync(() =>
+#endif
                         {
                             try
                             {
@@ -864,10 +872,13 @@ namespace BatchPdfPublisher.ViewModels
                                 });
                             }
                             catch (System.Exception exception) { groupException = exception; }
-                            await Task.CompletedTask;
-                        }, null);
+                        });
                         if (groupException != null)
+#if ACAD_R19
+                            throw groupException;
+#else
                             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(groupException).Throw();
+#endif
                         if (groupPages == null)
                             throw new System.InvalidOperationException("AutoCAD 没有返回当前 CAD 文件的临时 PDF 页。");
                         preparedPages.AddRange(groupPages);
@@ -1130,40 +1141,49 @@ namespace BatchPdfPublisher.ViewModels
             return string.Join(" | ", names);
         }
 
-        /// <summary>Copies AutoCAD/TArch temporary saves into the project archive without moving user files.</summary>
+        public int GetProjectAutoSaveMinutes(ProjectProfile project = null)
+        {
+            var target = project ?? SelectedProject;
+            return target != null && target.AutoSaveMinutes.HasValue
+                ? target.AutoSaveMinutes.Value
+                : ProjectAutoSaveService.CurrentCadMinutes();
+        }
+
+        public void SetProjectAutoSaveMinutes(int minutes)
+        {
+            if (SelectedProject == null) return;
+            minutes = Math.Max(0, Math.Min(600, minutes));
+            SelectedProject.AutoSaveMinutes = minutes;
+            ProjectAutoSaveService.ApplyInterval(minutes);
+            SaveCurrentProject();
+            Status = minutes == 0
+                ? "已关闭 CAD 和当前项目的定时自动保存。"
+                : "自动保存间隔已设为 " + minutes + " 分钟，并已同步到 CAD 的 SAVETIME。";
+        }
+
+        public string SaveProjectAutoSaveNow()
+        {
+            if (SelectedProject == null) return "请先选择工程。";
+            System.Collections.Generic.List<string> failures;
+            var saved = ProjectAutoSaveService.SaveNow(SelectedProject, out failures);
+            var message = saved == 0
+                ? "当前工程没有正在打开的 CAD 文件可保存。"
+                : "已生成 " + saved + " 个可直接打开的自动保存 DWG。";
+            if (failures.Count > 0) message += "\r\n失败 " + failures.Count + " 个：\r\n" + string.Join("\r\n", failures);
+            Status = message;
+            return message;
+        }
+
+        /// <summary>Compatibility entry point retained for older UI callers.</summary>
         public int SyncAutoSaveFiles()
         {
             if (SelectedProject == null) return 0;
-            var target = System.IO.Path.Combine(GetProjectFolder(), "自动保存");
-            System.IO.Directory.CreateDirectory(target);
-            var roots = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            try
-            {
-                var savePath = Convert.ToString(Application.GetSystemVariable("SAVEFILEPATH"));
-                if (!string.IsNullOrWhiteSpace(savePath)) foreach (var item in savePath.Split(';')) if (!string.IsNullOrWhiteSpace(item)) roots.Add(item.Trim());
-            }
-            catch { }
-            roots.Add(System.IO.Path.GetTempPath());
-            var copied = 0;
-            foreach (var root in roots.Where(System.IO.Directory.Exists))
-            {
-                IEnumerable<string> files;
-                try { files = System.IO.Directory.EnumerateFiles(root, "*.*", System.IO.SearchOption.TopDirectoryOnly); } catch { continue; }
-                foreach (var source in files.Where(x => new[] { ".sv$", ".ac$" }.Contains(System.IO.Path.GetExtension(x), StringComparer.OrdinalIgnoreCase)))
-                {
-                    try
-                    {
-                        var stamp = System.IO.File.GetLastWriteTime(source).ToString("yyyyMMdd_HHmmss");
-                        var name = System.IO.Path.GetFileNameWithoutExtension(source) + "_" + stamp + ".dwg";
-                        var destination = System.IO.Path.Combine(target, name);
-                        if (!System.IO.File.Exists(destination) || System.IO.File.GetLastWriteTimeUtc(destination) < System.IO.File.GetLastWriteTimeUtc(source))
-                        { System.IO.File.Copy(source, destination, true); copied++; }
-                    }
-                    catch { }
-                }
-            }
-            Status = copied == 0 ? "自动保存目录已是最新。" : "已归档 " + copied + " 个自动保存文件。";
-            return copied;
+            System.Collections.Generic.List<string> failures;
+            var saved = ProjectAutoSaveService.SaveNow(SelectedProject, out failures);
+            Status = failures.Count == 0
+                ? "已生成 " + saved + " 个可直接打开的自动保存 DWG。"
+                : "自动保存完成 " + saved + " 个，失败 " + failures.Count + " 个。";
+            return saved;
         }
 
         private static string CleanCadDisplayName(string value)

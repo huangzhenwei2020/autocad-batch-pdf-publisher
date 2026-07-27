@@ -80,7 +80,7 @@ namespace BatchPdfPublisher.Services
             try
             {
                 var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "BPP_批量打印.mnu");
-                var content = "***MENUGROUP=BPP\r\n***POP16\r\nBPP_批量打印\r\n[打开面板（BPP）]^C^C_BPP \r\n[创建图框（TKK）]^C^C_TKK \r\n[插入目录（ML1）]^C^C_ML1 \r\n[批量改属性（BPPATTR）]^C^C_BPPATTR \r\n";
+                var content = "***MENUGROUP=BPP\r\n***POP16\r\nBPP_批量打印\r\n[打开面板（BPP）]^C^C_BPP \r\n[创建图框（TKK）]^C^C_TKK \r\n[插入目录（ML1）]^C^C_ML1 \r\n[批量改属性（SBB）]^C^C_SBB \r\n[图块属性定义编辑器（BPA）]^C^C_BPA \r\n";
                 // MNU is an ANSI file; AutoCAD on Chinese installations expects the
                 // system GBK code page rather than UTF-8/default .NET encoding.
                 System.IO.File.WriteAllText(path, content, System.Text.Encoding.GetEncoding(936));

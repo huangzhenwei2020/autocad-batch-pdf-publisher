@@ -21,8 +21,9 @@ namespace BatchPdfPublisher
         {
             try { Application.SetSystemVariable("RIBBONSTATE", 1); } catch { }
             RibbonService.InstallWhenReady();
+            ProjectAutoSaveService.Install();
         }
-        public void Terminate() { RibbonService.Remove(); }
+        public void Terminate() { ProjectAutoSaveService.Remove(); RibbonService.Remove(); }
 
         [CommandMethod("BPP")]
         public void BppCommand() => OpenPublisher();
@@ -79,6 +80,7 @@ namespace BatchPdfPublisher
         }
 
         [CommandMethod("BPPATTDEF")]
+        [CommandMethod("BPA")]
         public void EditAttributeDefinitions()
         {
             var document = Application.DocumentManager.MdiActiveDocument;
@@ -111,22 +113,36 @@ namespace BatchPdfPublisher
         {
             var document = Application.DocumentManager.MdiActiveDocument;
             var done = _catalogDone;
+            var inserted = false;
             try
             {
                 if (document == null || _catalogSheets == null || _catalogSettings == null) return;
                 document.Editor.WriteMessage("\n批量打印插件：请指定目录左上角插入点。\n");
-                if (CatalogInsertionService.Insert(document, _catalogSheets, _catalogSettings)) done?.Invoke();
-                else Application.ShowAlertDialog("未插入目录，可能取消了插入点选择。");
+                inserted = CatalogInsertionService.Insert(document, _catalogSheets, _catalogSettings);
             }
             catch (System.Exception ex)
             {
                 Trace("BPPINSERTCATALOG failed: " + ex);
                 Application.ShowAlertDialog("插入目录失败：\n" + ex.Message);
+                return;
             }
             finally
             {
                 _catalogSheets = null; _catalogSettings = null; _catalogDone = null;
             }
+
+            if (!inserted)
+            {
+                Application.ShowAlertDialog("未插入目录，可能取消了插入点选择。");
+                return;
+            }
+
+            // The drawing operation has already completed at this point. A modeless
+            // publisher window may have been closed while the insertion point was
+            // being selected, so its completion callback must not turn a successful
+            // insertion into a misleading "插入目录失败" message.
+            try { done?.Invoke(); }
+            catch (System.Exception ex) { Trace("Catalog inserted; nonessential publisher refresh was skipped: " + ex); }
         }
 
         private static void ShowPublisher(Action<PublisherForm> afterShow, bool display = true)

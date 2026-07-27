@@ -9,7 +9,7 @@ namespace BatchPdfPublisher.Services
 {
     public sealed class DrawingScanner
     {
-        public IReadOnlyList<string> GetLayoutNames(Database database)
+        public IList<string> GetLayoutNames(Database database)
         {
             var names = new List<string>();
             using (var transaction = database.TransactionManager.StartTransaction())
@@ -28,12 +28,12 @@ namespace BatchPdfPublisher.Services
             return names.OrderBy(x => x).ToList();
         }
 
-        public IReadOnlyList<SheetItem> Scan(Document document, IEnumerable<FrameDefinition> frameDefinitions, bool scanModelSpace = true, bool scanAllLayouts = true, IEnumerable<string> selectedLayouts = null)
+        public IList<SheetItem> Scan(Document document, IEnumerable<FrameDefinition> frameDefinitions, bool scanModelSpace = true, bool scanAllLayouts = true, IEnumerable<string> selectedLayouts = null)
         {
             return Scan(document.Database, string.IsNullOrWhiteSpace(document.Database.Filename) ? document.Name : document.Database.Filename, frameDefinitions, scanModelSpace, scanAllLayouts, selectedLayouts);
         }
 
-        public IReadOnlyList<SheetItem> Scan(Database database, string sourceFile, IEnumerable<FrameDefinition> frameDefinitions, bool scanModelSpace = true, bool scanAllLayouts = true, IEnumerable<string> selectedLayouts = null)
+        public IList<SheetItem> Scan(Database database, string sourceFile, IEnumerable<FrameDefinition> frameDefinitions, bool scanModelSpace = true, bool scanAllLayouts = true, IEnumerable<string> selectedLayouts = null)
         {
             var frames = frameDefinitions.ToList();
             var result = new List<SheetItem>();

@@ -83,16 +83,23 @@ namespace BatchPdfPublisher.Views
             if (FrameCreationService.InsertBorder(_document, size[0], size[1])) _refresh?.Invoke();
         }
 
+#if ACAD_R19
         private void RunCad(Action action)
+#else
+        private async void RunCad(Action action)
+#endif
         {
             Hide();
-            Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.ExecuteInCommandContextAsync(async unused =>
+#if ACAD_R19
+            CadCommandContext.Execute(() =>
+#else
+            await CadCommandContext.ExecuteAsync(() =>
+#endif
             {
                 try { action(); }
                 catch (Exception exception) { BeginInvoke(new Action(() => MessageBox.Show(this, exception.Message, "创建图框", MessageBoxButtons.OK, MessageBoxIcon.Error))); }
                 finally { BeginInvoke(new Action(() => { if (!IsDisposed) Show(); })); }
-                await Task.CompletedTask;
-            }, null);
+            });
         }
 
         private void InsertProperty()

@@ -16,6 +16,7 @@ namespace BatchPdfPublisher.Views
         private readonly ListBox _projects = new ListBox();
         private readonly TextBox _name = new TextBox();
         private readonly TextBox _folder = new TextBox();
+        private readonly NumericUpDown _autoSaveMinutes = new NumericUpDown();
         private readonly ToolTip _toolTip = new ToolTip();
 
         public ProjectManagerForm(PublisherViewModel viewModel, Action refreshPublisher, Action configureScan)
@@ -24,12 +25,13 @@ namespace BatchPdfPublisher.Views
             _refreshPublisher = refreshPublisher;
             _configureScan = configureScan;
             Text = "项目管理";
-            Width = 720;
-            Height = 460;
-            MinimumSize = new Size(640, 400);
+            Width = 900;
+            Height = 570;
+            MinimumSize = new Size(760, 480);
             StartPosition = FormStartPosition.CenterParent;
             Font = new Font("Microsoft YaHei UI", 9F);
             AutoScaleMode = AutoScaleMode.Dpi;
+            SizeGripStyle = SizeGripStyle.Show;
             ApplyInputStyle(_name);
             Build();
             RefreshProjects();
@@ -37,40 +39,53 @@ namespace BatchPdfPublisher.Views
 
         private void Build()
         {
-            var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(16), ColumnCount = 2, RowCount = 2 };
-            root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 230)); root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            Controls.Add(root);
+            BackColor = Color.FromArgb(247, 249, 252);
+            var outer = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(16), RowCount = 2, ColumnCount = 1 };
+            outer.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); outer.RowStyles.Add(new RowStyle(SizeType.AutoSize)); Controls.Add(outer);
+            var split = new SplitContainer { Size = new Size(850, 470), Dock = DockStyle.Fill, Orientation = Orientation.Vertical, SplitterWidth = 6, SplitterDistance = 245, Panel1MinSize = 190, Panel2MinSize = 470 };
+            outer.Controls.Add(split, 0, 0);
 
-            var left = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1 };
+            var left = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Padding = new Padding(0, 0, 12, 0) };
             left.RowStyles.Add(new RowStyle(SizeType.AutoSize)); left.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            left.Controls.Add(Title("工程列表"), 0, 0); _projects.Dock = DockStyle.Fill; left.Controls.Add(_projects, 0, 1);
-            root.Controls.Add(left, 0, 0);
+            left.Controls.Add(Title("工程列表"), 0, 0);
+            _projects.Dock = DockStyle.Fill; _projects.IntegralHeight = false; left.Controls.Add(_projects, 0, 1);
+            split.Panel1.Controls.Add(left);
 
-            var right = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(18, 0, 0, 0), RowCount = 8, ColumnCount = 1 };
-            right.RowStyles.Add(new RowStyle(SizeType.AutoSize)); right.RowStyles.Add(new RowStyle(SizeType.AutoSize)); right.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            right.RowStyles.Add(new RowStyle(SizeType.AutoSize)); right.RowStyles.Add(new RowStyle(SizeType.AutoSize)); right.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            right.RowStyles.Add(new RowStyle(SizeType.AutoSize)); right.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            var right = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 5, ColumnCount = 1, Padding = new Padding(14, 0, 0, 0) };
+            right.RowStyles.Add(new RowStyle(SizeType.AutoSize)); right.RowStyles.Add(new RowStyle(SizeType.AutoSize)); right.RowStyles.Add(new RowStyle(SizeType.AutoSize)); right.RowStyles.Add(new RowStyle(SizeType.AutoSize)); right.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             right.Controls.Add(Title("项目管理"), 0, 0);
-            var nameLine = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top, WrapContents = false };
-            nameLine.Controls.Add(new Label { Text = "工程名称", AutoSize = true, Margin = new Padding(0, 7, 8, 0) });
-            _name.Width = 240; nameLine.Controls.Add(_name); nameLine.Controls.Add(Button("新建工程", CreateOrSwitch, true)); right.Controls.Add(nameLine, 0, 1);
-            var folderLine = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top, WrapContents = false, Margin = new Padding(0, 8, 0, 5) };
-            folderLine.Controls.Add(new Label { Text = "项目文件夹", AutoSize = true, Margin = new Padding(0, 7, 8, 0) });
-            _folder.Width = 300; ApplyInputStyle(_folder); folderLine.Controls.Add(_folder); folderLine.Controls.Add(Button("选择目录", ChooseFolder)); right.Controls.Add(folderLine, 0, 2);
-            var projectActions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top, WrapContents = true };
-            projectActions.Controls.Add(Button("切换项目", SwitchSelected)); projectActions.Controls.Add(Button("删除项目", DeleteSelected));
-            projectActions.Controls.Add(Button("保存参数", SaveParameters, true)); right.Controls.Add(projectActions, 0, 3);
-            var cadActions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top, WrapContents = true, Margin = new Padding(0, 8, 0, 0) };
-            cadActions.Controls.Add(Button("保存 CAD", SaveCurrentCad, true)); cadActions.Controls.Add(Button("打开目录", OpenFolder)); right.Controls.Add(cadActions, 0, 4);
-            var scanActions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top, WrapContents = true, Margin = new Padding(0, 8, 0, 0) };
-            scanActions.Controls.Add(Button("扫描设置", () => _configureScan())); right.Controls.Add(scanActions, 0, 5);
-            right.Controls.Add(new Label { Text = "说明：删除项目只删除插件中的项目参数，项目文件夹和其中的 DWG 会保留。", AutoSize = true, ForeColor = Color.FromArgb(110, 110, 110), MaximumSize = new Size(430, 48), Margin = new Padding(0, 14, 0, 0) }, 0, 6);
-            root.Controls.Add(right, 1, 0);
+
+            var information = new GroupBox { Text = "工程信息", Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(12, 10, 12, 10), Margin = new Padding(0, 0, 0, 10) };
+            var infoGrid = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 3, RowCount = 2 };
+            infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 85)); infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            infoGrid.Controls.Add(FieldLabel("工程名称"), 0, 0); _name.Dock = DockStyle.Fill; infoGrid.Controls.Add(_name, 1, 0); infoGrid.Controls.Add(Button("新建工程", CreateOrSwitch, true), 2, 0);
+            infoGrid.Controls.Add(FieldLabel("项目文件夹"), 0, 1); ApplyInputStyle(_folder); _folder.Dock = DockStyle.Fill; infoGrid.Controls.Add(_folder, 1, 1); infoGrid.Controls.Add(Button("选择目录", ChooseFolder), 2, 1);
+            information.Controls.Add(infoGrid); right.Controls.Add(information, 0, 1);
+
+            var operations = new GroupBox { Text = "工程操作", Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(12, 10, 12, 8), Margin = new Padding(0, 0, 0, 10) };
+            var operationButtons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true };
+            operationButtons.Controls.Add(Button("切换项目", SwitchSelected)); operationButtons.Controls.Add(Button("保存参数", SaveParameters, true));
+            operationButtons.Controls.Add(Button("保存 CAD", SaveCurrentCad, true)); operationButtons.Controls.Add(Button("打开目录", OpenFolder));
+            operationButtons.Controls.Add(Button("扫描设置", () => _configureScan())); operationButtons.Controls.Add(Button("删除项目", DeleteSelected));
+            operations.Controls.Add(operationButtons); right.Controls.Add(operations, 0, 2);
+
+            var autoSave = new GroupBox { Text = "自动保存", Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(12, 10, 12, 10), Margin = new Padding(0, 0, 0, 10) };
+            var autoSaveGrid = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, RowCount = 2, ColumnCount = 1 };
+            var autoSaveLine = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, WrapContents = true };
+            autoSaveLine.Controls.Add(new Label { Text = "间隔", AutoSize = true, Margin = new Padding(0, 7, 6, 0) });
+            _autoSaveMinutes.Minimum = 0; _autoSaveMinutes.Maximum = 600; _autoSaveMinutes.Width = 70; _autoSaveMinutes.Height = 30;
+            autoSaveLine.Controls.Add(_autoSaveMinutes);
+            autoSaveLine.Controls.Add(new Label { Text = "分钟（0 表示关闭）", AutoSize = true, Margin = new Padding(3, 7, 10, 0) });
+            autoSaveLine.Controls.Add(Button("应用并同步 CAD", ApplyAutoSave, true)); autoSaveLine.Controls.Add(Button("立即生成备份", SaveAutoSaveNow));
+            autoSaveGrid.Controls.Add(autoSaveLine, 0, 0);
+            autoSaveGrid.Controls.Add(new Label { Text = "备份位置：项目文件夹\\自动保存\\原文件名_自动保存.dwg，可直接用 CAD 打开。", AutoSize = true, MaximumSize = new Size(560, 42), ForeColor = Color.FromArgb(105, 105, 105), Margin = new Padding(0, 6, 0, 0) }, 0, 1);
+            autoSave.Controls.Add(autoSaveGrid); right.Controls.Add(autoSave, 0, 3);
+            right.Controls.Add(new Label { Text = "删除项目只删除插件参数，项目文件夹及其中的 DWG 不会删除。", AutoSize = true, ForeColor = Color.FromArgb(105, 105, 105), Margin = new Padding(2, 3, 0, 0) }, 0, 4);
+            split.Panel2.Controls.Add(right);
 
             var close = Button("关闭窗口", () => Close()); close.DialogResult = DialogResult.OK;
-            var bottom = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.RightToLeft };
-            bottom.Controls.Add(close); root.Controls.Add(bottom, 1, 1);
+            var bottom = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(0, 10, 0, 0) };
+            bottom.Controls.Add(close); outer.Controls.Add(bottom, 0, 1);
             _projects.SelectedIndexChanged += (sender, args) => UpdateSelection();
             _projects.DoubleClick += (sender, args) => SwitchSelected();
         }
@@ -90,6 +105,7 @@ namespace BatchPdfPublisher.Views
             if (project == null) return;
             _name.Text = project.Name;
             _folder.Text = _viewModel.GetProjectFolder(project);
+            _autoSaveMinutes.Value = Math.Max(_autoSaveMinutes.Minimum, Math.Min(_autoSaveMinutes.Maximum, _viewModel.GetProjectAutoSaveMinutes(project)));
         }
 
         private void CreateOrSwitch()
@@ -114,8 +130,26 @@ namespace BatchPdfPublisher.Views
 
         private void SaveParameters()
         {
+            var selected = _projects.SelectedItem as ProjectProfile;
+            if (selected != null && !ReferenceEquals(selected, _viewModel.SelectedProject)) _viewModel.SelectedProject = selected;
             _viewModel.SetProjectFolder(_folder.Text);
+            _viewModel.SetProjectAutoSaveMinutes((int)_autoSaveMinutes.Value);
             _viewModel.SaveProjectParameters(); _refreshPublisher();
+        }
+
+        private void ApplyAutoSave()
+        {
+            var selected = _projects.SelectedItem as ProjectProfile;
+            if (selected != null && !ReferenceEquals(selected, _viewModel.SelectedProject)) _viewModel.SelectedProject = selected;
+            _viewModel.SetProjectAutoSaveMinutes((int)_autoSaveMinutes.Value);
+            MessageBox.Show(this, _viewModel.Status, "自动保存", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        private void SaveAutoSaveNow()
+        {
+            var selected = _projects.SelectedItem as ProjectProfile;
+            if (selected != null && !ReferenceEquals(selected, _viewModel.SelectedProject)) _viewModel.SelectedProject = selected;
+            MessageBox.Show(this, _viewModel.SaveProjectAutoSaveNow(), "自动保存", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         private void ChooseFolder()
@@ -140,6 +174,7 @@ namespace BatchPdfPublisher.Views
         }
 
         private static Label Title(string text) => new Label { Text = text, AutoSize = true, Font = new Font("Microsoft YaHei UI", 11F, FontStyle.Bold), ForeColor = Color.FromArgb(20, 54, 99), Margin = new Padding(0, 0, 0, 8) };
+        private static Label FieldLabel(string text) => new Label { Text = text, AutoSize = false, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, Width = 82, Height = 32, Margin = new Padding(0, 0, 6, 5), AutoEllipsis = true };
         private static void ApplyInputStyle(Control control)
         {
             control.AutoSize = false;
@@ -154,8 +189,27 @@ namespace BatchPdfPublisher.Views
             button.FlatAppearance.MouseOverBackColor = Color.FromArgb(239, 244, 250);
             button.FlatAppearance.MouseDownBackColor = Color.FromArgb(226, 235, 246);
             button.Tag = text;
-            _toolTip.SetToolTip(button, "点击执行：" + text.Trim());
+            _toolTip.SetToolTip(button, ButtonDescription(text));
             button.Click += (sender, args) => action(); return button;
+        }
+
+        private static string ButtonDescription(string text)
+        {
+            switch ((text ?? string.Empty).Trim())
+            {
+                case "新建工程": return "按当前工程名称建立一套新的图框、图纸和输出设置。";
+                case "选择目录": return "选择用于保存工程 CAD、自动保存备份和项目资料的文件夹。";
+                case "切换项目": return "切换到左侧选中的工程并载入该工程的设置。";
+                case "保存参数": return "保存当前工程名称、目录、扫描范围和自动保存间隔。";
+                case "保存 CAD": return "把当前正在编辑的 CAD 文件保存到项目文件夹。";
+                case "打开目录": return "在文件资源管理器中打开当前项目文件夹。";
+                case "扫描设置": return "设置扫描模型空间、布局以及参与扫描的布局名称。";
+                case "删除项目": return "仅删除插件中的工程配置，不删除项目文件夹或 DWG。";
+                case "应用并同步 CAD": return "保存自动保存间隔，并同步修改 CAD 的 SAVETIME。";
+                case "立即生成备份": return "立即为当前项目中已打开的 DWG 生成可直接打开的快照。";
+                case "关闭窗口": return "关闭项目管理窗口并返回主界面。";
+                default: return text ?? string.Empty;
+            }
         }
     }
 }

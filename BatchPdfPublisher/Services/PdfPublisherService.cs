@@ -97,8 +97,8 @@ namespace BatchPdfPublisher.Services
                 throw new InvalidOperationException("AutoCAD 正在执行其他打印任务，请稍后再试。");
 
             var pages = new List<PreparedPdfPage>();
-            var previousBackgroundPlot = Autodesk.AutoCAD.ApplicationServices.Core.Application.GetSystemVariable("BACKGROUNDPLOT");
-            Autodesk.AutoCAD.ApplicationServices.Core.Application.SetSystemVariable("BACKGROUNDPLOT", 0);
+            var previousBackgroundPlot = Autodesk.AutoCAD.ApplicationServices.Application.GetSystemVariable("BACKGROUNDPLOT");
+            Autodesk.AutoCAD.ApplicationServices.Application.SetSystemVariable("BACKGROUNDPLOT", 0);
             try
             {
                 for (var index = 0; index < sheets.Count; index++)
@@ -120,7 +120,7 @@ namespace BatchPdfPublisher.Services
             }
             finally
             {
-                try { Autodesk.AutoCAD.ApplicationServices.Core.Application.SetSystemVariable("BACKGROUNDPLOT", previousBackgroundPlot); } catch { }
+                try { Autodesk.AutoCAD.ApplicationServices.Application.SetSystemVariable("BACKGROUNDPLOT", previousBackgroundPlot); } catch { }
             }
             return pages;
         }
@@ -239,8 +239,8 @@ namespace BatchPdfPublisher.Services
             var result = new PdfPublishResult();
             var jobs = BuildJobs(sheets, project, engineeringFolder);
             var completed = 0;
-            var previousBackgroundPlot = Autodesk.AutoCAD.ApplicationServices.Core.Application.GetSystemVariable("BACKGROUNDPLOT");
-            Autodesk.AutoCAD.ApplicationServices.Core.Application.SetSystemVariable("BACKGROUNDPLOT", 0);
+            var previousBackgroundPlot = Autodesk.AutoCAD.ApplicationServices.Application.GetSystemVariable("BACKGROUNDPLOT");
+            Autodesk.AutoCAD.ApplicationServices.Application.SetSystemVariable("BACKGROUNDPLOT", 0);
             try
             {
                 foreach (var job in jobs)
@@ -264,7 +264,7 @@ namespace BatchPdfPublisher.Services
             }
             finally
             {
-                try { Autodesk.AutoCAD.ApplicationServices.Core.Application.SetSystemVariable("BACKGROUNDPLOT", previousBackgroundPlot); } catch { }
+                try { Autodesk.AutoCAD.ApplicationServices.Application.SetSystemVariable("BACKGROUNDPLOT", previousBackgroundPlot); } catch { }
             }
             return result;
         }
@@ -285,8 +285,8 @@ namespace BatchPdfPublisher.Services
             var outputPath = overwrite ? requestedOutputPath : UniquePath(requestedOutputPath);
             if (overwrite && File.Exists(outputPath)) File.Delete(outputPath);
             var completed = 0;
-            var previousBackgroundPlot = Autodesk.AutoCAD.ApplicationServices.Core.Application.GetSystemVariable("BACKGROUNDPLOT");
-            Autodesk.AutoCAD.ApplicationServices.Core.Application.SetSystemVariable("BACKGROUNDPLOT", 0);
+            var previousBackgroundPlot = Autodesk.AutoCAD.ApplicationServices.Application.GetSystemVariable("BACKGROUNDPLOT");
+            Autodesk.AutoCAD.ApplicationServices.Application.SetSystemVariable("BACKGROUNDPLOT", 0);
             try
             {
                 PlotGroup(document, sheets, outputPath, defaultPlotStyle, marginMode, sheet =>
@@ -302,7 +302,7 @@ namespace BatchPdfPublisher.Services
             }
             finally
             {
-                try { Autodesk.AutoCAD.ApplicationServices.Core.Application.SetSystemVariable("BACKGROUNDPLOT", previousBackgroundPlot); } catch { }
+                try { Autodesk.AutoCAD.ApplicationServices.Application.SetSystemVariable("BACKGROUNDPLOT", previousBackgroundPlot); } catch { }
             }
             var result = new PdfPublishResult { SheetCount = sheets.Count };
             result.Files.Add(outputPath);

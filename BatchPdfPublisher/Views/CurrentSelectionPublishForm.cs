@@ -118,7 +118,11 @@ namespace BatchPdfPublisher.Views
             _grid.DataSource = _sheets;
         }
 
+#if ACAD_R19
+        private void SelectFrames()
+#else
         private async void SelectFrames()
+#endif
         {
             if (_publishing) return;
             var document = AcApplication.DocumentManager.MdiActiveDocument;
@@ -127,7 +131,11 @@ namespace BatchPdfPublisher.Views
             Hide();
             try
             {
-                await AcApplication.DocumentManager.ExecuteInCommandContextAsync(async unused =>
+#if ACAD_R19
+                CadCommandContext.Execute(() =>
+#else
+                await CadCommandContext.ExecuteAsync(() =>
+#endif
                 {
                     var options = new PromptSelectionOptions
                     {
@@ -136,8 +144,7 @@ namespace BatchPdfPublisher.Views
                     };
                     var result = document.Editor.GetSelection(options);
                     if (result.Status == PromptStatus.OK) selectedIds = result.Value.GetObjectIds();
-                    await Task.CompletedTask;
-                }, null);
+                });
             }
             catch (Exception exception) { SetStatus("框选失败：" + exception.Message); }
             finally { Show(); Activate(); }
@@ -146,7 +153,7 @@ namespace BatchPdfPublisher.Views
             var handles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var id in selectedIds)
                 try { handles.Add(id.Handle.ToString()); } catch { }
-            IReadOnlyList<SheetItem> scanned;
+            IList<SheetItem> scanned;
             try { scanned = _scanner.Scan(document, _frames, true, true); }
             catch (Exception exception) { SetStatus("读取框选图框失败：" + exception.Message); return; }
             var picked = scanned.Where(x => handles.Contains(x.BlockHandle)).ToList();
@@ -157,7 +164,11 @@ namespace BatchPdfPublisher.Views
             if (picked.Count > 0) PreviewAll();
         }
 
+#if ACAD_R19
+        private void PublishSelection()
+#else
         private async void PublishSelection()
+#endif
         {
             if (_publishing || _sheets.Count == 0) { if (_sheets.Count == 0) SetStatus("请先框选图框。"); return; }
             var document = AcApplication.DocumentManager.MdiActiveDocument;
@@ -179,7 +190,11 @@ namespace BatchPdfPublisher.Views
             try
             {
                 AcApplication.DocumentManager.MdiActiveDocument = document;
-                await AcApplication.DocumentManager.ExecuteInCommandContextAsync(async unused =>
+#if ACAD_R19
+                CadCommandContext.Execute(() =>
+#else
+                await CadCommandContext.ExecuteAsync(() =>
+#endif
                 {
                     try
                     {
@@ -191,8 +206,7 @@ namespace BatchPdfPublisher.Views
                         });
                     }
                     catch (Exception exception) { publishException = exception; }
-                    await Task.CompletedTask;
-                }, null);
+                });
                 if (publishException != null) throw publishException;
                 if (publishResult == null || publishResult.Files.Count == 0) throw new InvalidOperationException("AutoCAD 没有返回 PDF 发布结果。");
                 SetStatus("发布完成：" + publishResult.SheetCount + " 张已合并到 " + publishResult.Files[0]);

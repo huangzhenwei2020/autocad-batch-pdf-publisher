@@ -30,34 +30,54 @@ namespace BatchPdfPublisher.Views
         public CatalogInsertForm(Document document, System.Collections.Generic.IList<SheetItem> sheets, Action done)
         {
             _document = document; _sheets = sheets; _done = done;
-            Text = "插入图纸目录"; Width = 620; Height = 540; StartPosition = FormStartPosition.CenterParent;
-            Font = new Font("Microsoft YaHei UI", 9F); Build();
+            Text = "插入图纸目录"; Width = 760; Height = 650; MinimumSize = new Size(660, 540); StartPosition = FormStartPosition.CenterParent;
+            Font = new Font("Microsoft YaHei UI", 9F); AutoScaleMode = AutoScaleMode.Dpi; SizeGripStyle = SizeGripStyle.Show; Build();
         }
 
         private void Build()
         {
-            var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(14), ColumnCount = 2, RowCount = 8 };
-            root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120)); root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); Controls.Add(root);
-            root.Controls.Add(new Label { Text = "选择子项目", AutoSize = true, Margin = new Padding(0, 7, 0, 3) }, 0, 0);
-            _buildings.CheckOnClick = true; _buildings.Height = 92; _buildings.Dock = DockStyle.Fill;
+            BackColor = Color.FromArgb(247, 249, 252);
+            var outer = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Padding = new Padding(16) };
+            outer.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); outer.RowStyles.Add(new RowStyle(SizeType.AutoSize)); Controls.Add(outer);
+            var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 8 };
+            root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 145)); root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            for (var row = 1; row < 8; row++) root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            outer.Controls.Add(root, 0, 0);
+            var selectionLabel = FieldLabel("选择子项目"); selectionLabel.TextAlign = ContentAlignment.TopLeft; selectionLabel.Padding = new Padding(0, 8, 0, 0);
+            root.Controls.Add(selectionLabel, 0, 0);
+            var buildingPicker = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Margin = new Padding(0) };
+            buildingPicker.RowStyles.Add(new RowStyle(SizeType.AutoSize)); buildingPicker.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            var buildingActions = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 0, 0, 6) };
+            buildingActions.Controls.Add(Button("全部勾选", (s, e) => SetAllBuildings(true)));
+            buildingActions.Controls.Add(Button("全部取消", (s, e) => SetAllBuildings(false)));
+            buildingPicker.Controls.Add(buildingActions, 0, 0);
+            _buildings.CheckOnClick = true; _buildings.IntegralHeight = false; _buildings.MinimumSize = new Size(0, 130); _buildings.Dock = DockStyle.Fill;
             foreach (var name in _sheets.Select(s => string.IsNullOrWhiteSpace(s.Building) ? "未分组" : s.Building).Distinct()) _buildings.Items.Add(name, true);
-            root.Controls.Add(_buildings, 1, 0);
-            root.Controls.Add(new Label { Text = "目录列", AutoSize = true, Margin = new Padding(0, 7, 0, 3) }, 0, 1); var columnPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true }; columnPanel.Controls.AddRange(_columnChecks); root.Controls.Add(columnPanel, 1, 1);
+            buildingPicker.Controls.Add(_buildings, 0, 1);
+            root.Controls.Add(buildingPicker, 1, 0);
+            root.Controls.Add(FieldLabel("目录列"), 0, 1); var columnPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true }; columnPanel.Controls.AddRange(_columnChecks); root.Controls.Add(columnPanel, 1, 1);
             Add(root, "每页行数", _rows, 2); Add(root, "行高", _rowHeight, 3);
-            root.Controls.Add(new Label { Text = "列宽（分别设置）", AutoSize = true, Margin = new Padding(0, 7, 0, 3) }, 0, 4);
+            root.Controls.Add(FieldLabel("列宽（分别设置）"), 0, 4);
             var widths = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true };
             var labels = new[] { "序号", "图号", "图名", "图框", "比例" };
             for (var i = 0; i < _widthBoxes.Length; i++) { var panel = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 0, 8, 0) }; panel.Controls.Add(new Label { Text = labels[i], AutoSize = true, Margin = new Padding(0, 7, 3, 0) }); panel.Controls.Add(_widthBoxes[i]); widths.Controls.Add(panel); }
             root.Controls.Add(widths, 1, 4);
             Add(root, "文字高度", _textHeight, 5); Add(root, "插入比例", _insertScale, 6);
             LoadSettings();
-            root.Controls.Add(new Label { Text = "字体样式 / 颜色", AutoSize = true, Margin = new Padding(0, 7, 0, 3) }, 0, 7);
+            root.Controls.Add(FieldLabel("字体样式 / 颜色"), 0, 7);
             var styleLine = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = false };
             _font.DropDownStyle = ComboBoxStyle.DropDownList; _font.Width = 210; _font.Items.AddRange(FrameCreationService.GetTextStyleNames(_document)); _font.SelectedItem = "黑体"; if (_font.SelectedIndex < 0 && _font.Items.Count > 0) _font.SelectedIndex = 0;
             _color.Text = string.Empty; _color.Width = 32; _color.Height = 30; _color.MinimumSize = new Size(32, 30); _color.Margin = new Padding(3, 0, 3, 0); _color.FlatStyle = FlatStyle.Flat; _color.BackColor = DisplayColor(_acColor); _color.Click += (s, e) => ChooseColor(); styleLine.Controls.Add(_font); styleLine.Controls.Add(_color);
             root.Controls.Add(styleLine, 1, 7);
-            var actions = new FlowLayoutPanel { Dock = DockStyle.Bottom, FlowDirection = FlowDirection.RightToLeft, Height = 38 };
-            actions.Controls.Add(Button("关闭", (s, e) => Close())); actions.Controls.Add(Button("插入目录", (s, e) => Insert(), true)); Controls.Add(actions);
+            var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(0, 10, 0, 0) };
+            actions.Controls.Add(Button("关闭", (s, e) => Close())); actions.Controls.Add(Button("插入目录", (s, e) => Insert(), true)); outer.Controls.Add(actions, 0, 1);
+        }
+
+        private void SetAllBuildings(bool selected)
+        {
+            for (var index = 0; index < _buildings.Items.Count; index++)
+                _buildings.SetItemChecked(index, selected);
         }
 
         private void Insert()
@@ -112,7 +132,8 @@ namespace BatchPdfPublisher.Views
         }
         private void SaveSettings() { try { var path = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "BatchPdfPublisher.catalog.settings"); var vals = new[] { _rows.Text, _rowHeight.Text, string.Join(",", _widthBoxes.Select(x => x.Text)), _textHeight.Text, _insertScale.Text, _font.Text, _acColor.ColorMethod.ToString(), _acColor.ColorIndex.ToString(), string.Join("", _columnChecks.Select(x => x.Checked ? "1" : "0")) }; System.IO.File.WriteAllLines(path, vals); } catch { } }
         private void LoadSettings() { try { var path = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "BatchPdfPublisher.catalog.settings"); if (!System.IO.File.Exists(path)) return; var vals = System.IO.File.ReadAllLines(path); if (vals.Length > 0) _rows.Text = vals[0]; if (vals.Length > 1) _rowHeight.Text = vals[1]; if (vals.Length > 2) { var widths = vals[2].Split(','); for (var i = 0; i < _widthBoxes.Length && i < widths.Length; i++) _widthBoxes[i].Text = widths[i]; } if (vals.Length > 3 && _textHeight.Items.Contains(vals[3])) _textHeight.SelectedItem = vals[3]; if (vals.Length > 4 && _insertScale.Items.Contains(vals[4])) _insertScale.SelectedItem = vals[4]; if (vals.Length > 5 && _font.Items.Contains(vals[5])) _font.SelectedItem = vals[5]; if (vals.Length > 6 && vals[6].IndexOf("ByAci", StringComparison.OrdinalIgnoreCase) >= 0 && vals.Length > 7 && short.TryParse(vals[7], out var aci)) { _acColor = AcColor.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, aci); _color.BackColor = DisplayColor(_acColor); } if (vals.Length > 8) for (var i = 0; i < _columnChecks.Length && i < vals[8].Length; i++) _columnChecks[i].Checked = vals[8][i] == '1'; } catch { } }
-        private static void Add(TableLayoutPanel root, string label, Control control, int row) { root.Controls.Add(new Label { Text = label, AutoSize = true, Margin = new Padding(0, 7, 0, 3) }, 0, row); control.Dock = DockStyle.Fill; root.Controls.Add(control, 1, row); }
+        private static Label FieldLabel(string text) { return new Label { Text = text, AutoSize = false, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, Height = 32, Margin = new Padding(0, 2, 8, 2), AutoEllipsis = true }; }
+        private static void Add(TableLayoutPanel root, string label, Control control, int row) { root.Controls.Add(FieldLabel(label), 0, row); control.Dock = DockStyle.Fill; control.Margin = new Padding(0, 2, 0, 2); root.Controls.Add(control, 1, row); }
         private static Button Button(string text, EventHandler action, bool accent = false) { var button = new Button { Text = text, AutoSize = true, Height = 30, MinimumSize = new Size(0, 30), FlatStyle = FlatStyle.Flat, BackColor = Color.White, ForeColor = Color.FromArgb(25, 54, 99), Padding = new Padding(8, 2, 8, 2), Margin = new Padding(3) }; button.FlatAppearance.BorderColor = accent ? Color.FromArgb(104, 145, 185) : Color.FromArgb(190, 201, 216); button.Click += action; return button; }
     }
 }

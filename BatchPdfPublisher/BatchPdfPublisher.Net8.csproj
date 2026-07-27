@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <OutputType>Library</OutputType>
+    <RootNamespace>BatchPdfPublisher</RootNamespace>
+    <AssemblyName>BatchPdfPublisher</AssemblyName>
+    <PlatformTarget>x64</PlatformTarget>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <AutoCadApiPath Condition="'$(AutoCadApiPath)' == ''">C:\Program Files\Autodesk\AutoCAD 2025</AutoCadApiPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="acmgd" HintPath="$(AutoCadApiPath)\acmgd.dll" Private="false" />
+    <Reference Include="acdbmgd" HintPath="$(AutoCadApiPath)\acdbmgd.dll" Private="false" />
+    <Reference Include="accoremgd" HintPath="$(AutoCadApiPath)\accoremgd.dll" Private="false" />
+    <Reference Include="AdWindows" HintPath="$(AutoCadApiPath)\AdWindows.dll" Private="false" />
+    <Reference Include="PdfSharp" HintPath="..\PdfSharp.dll" Private="true" />
+  </ItemGroup>
+</Project>

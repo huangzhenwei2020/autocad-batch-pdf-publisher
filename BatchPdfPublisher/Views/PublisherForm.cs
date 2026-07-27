@@ -98,7 +98,6 @@ namespace BatchPdfPublisher.Views
             projectBar.Controls.Add(IconButton("插入目录", UiIcon.List, OpenCatalogInsert));
             projectBar.Controls.Add(IconButton("存入工程", UiIcon.Save, SaveCurrentCad));
             projectBar.Controls.Add(IconButton("目录打印", UiIcon.Publish, PrintProjectFolder));
-            projectBar.Controls.Add(IconButton("自动保存", UiIcon.Folder, SyncAutoSave));
             var projectManagerButton = ProjectManagerButton(); projectManagerButton.Margin = new Padding(0, 1, 0, 0); projectBar.Controls.Add(projectManagerButton);
             root.Controls.Add(projectBar, 0, 1);
 
@@ -590,12 +589,6 @@ namespace BatchPdfPublisher.Views
             else MessageBox.Show(this, "保存 CAD 失败：\r\n" + error, "工程文件", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
 
-        private void SyncAutoSave()
-        {
-            var count = _viewModel.SyncAutoSaveFiles();
-            MessageBox.Show(this, count == 0 ? "自动保存目录已是最新。" : "已归档 " + count + " 个自动保存文件。", "自动保存", MessageBoxButtons.OK, MessageBoxIcon.Information);
-        }
-
         private void PrintProjectFolder()
         {
             var folder = _viewModel.GetProjectFolder();
@@ -814,11 +807,19 @@ namespace BatchPdfPublisher.Views
         {
             var document = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
             if (document == null || _viewModel.Sheets.Count == 0) { MessageBox.Show(this, "请先扫描当前工程的图纸。", "插入目录", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
-            var dialog = new CatalogInsertForm(document, _viewModel.Sheets.ToList(), RefreshAll);
+            var dialog = new CatalogInsertForm(document, _viewModel.Sheets.ToList(), RefreshAfterCatalogInsert);
             Autodesk.AutoCAD.ApplicationServices.Application.ShowModelessDialog(dialog);
         }
 
         public void OpenCatalogInsertForCommand() => OpenCatalogInsert();
+
+        private void RefreshAfterCatalogInsert()
+        {
+            // Selecting the CAD insertion point happens after this modeless dialog
+            // closes. The main panel can also be closed in that interval.
+            if (IsDisposed || Disposing || _cadFiles.IsDisposed || _publishBuildings.IsDisposed) return;
+            RefreshAll();
+        }
 
         private static System.Drawing.Image DrawUiIcon(UiIcon icon, System.Drawing.Color color)
         {
@@ -906,7 +907,6 @@ namespace BatchPdfPublisher.Views
                 case "插入目录": return "根据当前图纸顺序生成目录表，并插入到 CAD 图纸中。";
                 case "存入工程": return "把当前 DWG 的副本保存到当前工程文件夹。";
                 case "目录打印": return "扫描当前工程文件夹中的 DWG，然后按工程设置发布 PDF。";
-                case "自动保存": return "把 AutoCAD/TArch 的自动保存文件复制到工程的“自动保存”目录作为备份。";
                 case "更新预览": return "按当前激活 DWG 和当前布局重新显示图框；布局图框只在对应布局显示，模型空间图框只在模型空间显示。";
                 case "发布 PDF": return "按当前勾选的子项目、图纸顺序、纸张和打印样式生成 PDF。";
                 case "上移图纸": return "把当前图纸在所属子项目的发布顺序中上移一位。";
