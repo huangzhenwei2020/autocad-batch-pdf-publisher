@@ -41,6 +41,8 @@ namespace BatchPdfPublisher.Services
     public sealed class PdfPublisherService
     {
         private static readonly string DiagnosticLogPath = Path.Combine(Path.GetTempPath(), "BatchPdfPublisher.publish.log");
+        private static readonly object DiagnosticLogSync = new object();
+        private const long MinimumFreeSpaceBytes = 512L * 1024L * 1024L;
 
         public List<SheetValidationIssue> ValidateAndNormalizeSheets(IEnumerable<SheetItem> sourceSheets)
         {
@@ -105,6 +107,16 @@ namespace BatchPdfPublisher.Services
                 {
                     var sheet = sheets[index];
                     var temporaryPath = Path.Combine(Path.GetTempPath(), "BatchPdfPublisher_" + Guid.NewGuid().ToString("N") + ".pdf");
+                    var freeSpace = AvailableFreeSpace(temporaryPath);
+                    if (freeSpace >= 0 && freeSpace < MinimumFreeSpaceBytes)
+                    {
+                        var message = "系统临时目录剩余空间不足 512 MB，已停止继续生成单页 PDF，避免产生损坏文件。请清理 "
+                            + Path.GetPathRoot(temporaryPath) + " 后重新发布。";
+                        for (var remaining = index; remaining < sheets.Count; remaining++)
+                            pageFailed?.Invoke(sheets[remaining], message);
+                        WritePublishDiagnostic(message);
+                        break;
+                    }
                     try
                     {
                         PlotSinglePage(document, sheet, temporaryPath, project?.PlotStyle, project?.MarginMode, index);
@@ -156,7 +168,6 @@ namespace BatchPdfPublisher.Services
                         }
                         catch (Exception exception)
                         {
-                            TryDelete(outputPath);
                             result.Failures.Add("子项目“" + (string.IsNullOrWhiteSpace(group.Key) ? "未分组" : group.Key) + "”合并失败：" + exception.Message);
                             CompleteFailedProgress(groupPages, completedBeforeGroup, ref completed, pages.Count, progress);
                         }
@@ -182,7 +193,6 @@ namespace BatchPdfPublisher.Services
                         }
                         catch (Exception exception)
                         {
-                            TryDelete(outputPath);
                             result.Failures.Add(SheetLabel(page.Sheet) + "整理失败：" + exception.Message);
                             if (completed == completedBeforePage) { completed++; progress?.Invoke(completed, pages.Count, page.Sheet); }
                         }
@@ -247,7 +257,6 @@ namespace BatchPdfPublisher.Services
                 {
                     var jobDirectory = Path.GetDirectoryName(job.Key);
                     if (!string.IsNullOrWhiteSpace(jobDirectory)) Directory.CreateDirectory(jobDirectory);
-                    if (project?.OverwriteExistingPdf == true && File.Exists(job.Key)) File.Delete(job.Key);
                     PlotGroup(document, job.Value, job.Key, project?.PlotStyle, project?.MarginMode, sheet =>
                     {
                         completed++;
@@ -283,7 +292,6 @@ namespace BatchPdfPublisher.Services
             if (string.IsNullOrWhiteSpace(folder)) throw new InvalidOperationException("PDF 保存目录无效。");
             Directory.CreateDirectory(folder);
             var outputPath = overwrite ? requestedOutputPath : UniquePath(requestedOutputPath);
-            if (overwrite && File.Exists(outputPath)) File.Delete(outputPath);
             var completed = 0;
             var previousBackgroundPlot = Autodesk.AutoCAD.ApplicationServices.Application.GetSystemVariable("BACKGROUNDPLOT");
             Autodesk.AutoCAD.ApplicationServices.Application.SetSystemVariable("BACKGROUNDPLOT", 0);
@@ -415,6 +423,7 @@ namespace BatchPdfPublisher.Services
                         stage = "校验打印信息";
                         using (var validator = new PlotInfoValidator { MediaMatchingPolicy = MatchingPolicy.MatchEnabled })
                             validator.Validate(plotInfo);
+                        WritePlotConfiguration(document, sheet, index, outputPath, settings);
 
                         stage = "创建 PDF 打印引擎";
                         using (var engine = PlotFactory.CreatePublishEngine())
@@ -439,6 +448,7 @@ namespace BatchPdfPublisher.Services
                     transaction.Commit();
                     }
                 }
+                ValidateTemporaryPage(outputPath, sheet, index);
             }
             catch (Exception exception)
             {
@@ -455,27 +465,99 @@ namespace BatchPdfPublisher.Services
 
         private static void WriteDiagnostic(string message, Exception exception)
         {
-            try
-            {
-                File.AppendAllText(DiagnosticLogPath, DateTime.Now.ToString("s") + " " + message + Environment.NewLine + exception + Environment.NewLine + Environment.NewLine);
-            }
-            catch { }
+            WritePublishDiagnostic(message + Environment.NewLine + exception + Environment.NewLine);
         }
 
         private static void WriteDiagnosticState(Document document, SheetItem sheet, ObjectId requestedLayoutId, ObjectId currentLayoutId, Layout layout)
         {
+            WritePublishDiagnostic("打印状态：DWG=" + document.Database.Filename
+                + "；来源空间=" + sheet.SourceLayout
+                + "；当前布局=" + layout.LayoutName
+                + "；图号=" + sheet.SheetNumber
+                + "；图名=" + sheet.SheetName
+                + "；图框句柄=" + sheet.BlockHandle
+                + "；请求ID=" + requestedLayoutId.Handle
+                + "；当前ID=" + currentLayoutId.Handle
+                + "；WorkingDb匹配=" + (HostApplicationServices.WorkingDatabase != null
+                    && HostApplicationServices.WorkingDatabase.UnmanagedObject == document.Database.UnmanagedObject)
+                + "；活动文档匹配=" + ReferenceEquals(Application.DocumentManager.MdiActiveDocument, document));
+        }
+
+        private static void WritePlotConfiguration(Document document, SheetItem sheet, int index, string temporaryPath,
+            PlotSettings settings)
+        {
             try
             {
-                File.AppendAllText(DiagnosticLogPath,
-                    DateTime.Now.ToString("s") + " 打印状态：DWG=" + document.Database.Filename
-                    + "；来源空间=" + sheet.SourceLayout
-                    + "；当前布局=" + layout.LayoutName
-                    + "；请求ID=" + requestedLayoutId.Handle
-                    + "；当前ID=" + currentLayoutId.Handle
-                    + "；WorkingDb匹配=" + (HostApplicationServices.WorkingDatabase != null
-                        && HostApplicationServices.WorkingDatabase.UnmanagedObject == document.Database.UnmanagedObject)
-                    + "；活动文档匹配=" + ReferenceEquals(Application.DocumentManager.MdiActiveDocument, document)
-                    + Environment.NewLine);
+                var target = TargetPaperSize(sheet);
+                var paper = settings.PlotPaperSize;
+                var plotWindow = settings.PlotWindowArea;
+                WritePublishDiagnostic("单页打印参数：发布序号=" + (index + 1)
+                    + "；子项目=" + sheet.Building
+                    + "；图号=" + sheet.SheetNumber
+                    + "；图名=" + sheet.SheetName
+                    + "；DWG=" + document.Database.Filename
+                    + "；布局=" + sheet.SourceLayout
+                    + "；图框句柄=" + sheet.BlockHandle
+                    + "；WCS窗口=[" + FormatNumber(sheet.MinX) + "," + FormatNumber(sheet.MinY) + "]-["
+                        + FormatNumber(sheet.MaxX) + "," + FormatNumber(sheet.MaxY) + "]"
+                    + "；DCS窗口=[" + FormatNumber(plotWindow.MinPoint.X) + "," + FormatNumber(plotWindow.MinPoint.Y) + "]-["
+                        + FormatNumber(plotWindow.MaxPoint.X) + "," + FormatNumber(plotWindow.MaxPoint.Y) + "]"
+                    + "；登记纸张=" + sheet.FrameDisplay + " " + sheet.PaperOrientation
+                    + "；目标毫米=" + FormatMillimeters(target[0], target[1])
+                    + "；图纸标注比例=" + sheet.PrintScale
+                    + "；介质=" + settings.CanonicalMediaName
+                    + "；驱动纸张毫米=" + FormatMillimeters(paper.X, paper.Y)
+                    + "；旋转=" + settings.PlotRotation
+                    + "；适合纸张=" + settings.UseStandardScale + "/" + settings.StdScaleType
+                    + "；居中=" + settings.PlotCentered
+                    + "；临时PDF=" + temporaryPath);
+            }
+            catch (Exception exception)
+            {
+                WritePublishDiagnostic("记录单页打印参数失败，但不影响发布：" + exception.Message);
+            }
+        }
+
+        private static void ValidateTemporaryPage(string path, SheetItem sheet, int index)
+        {
+            if (!File.Exists(path) || new FileInfo(path).Length <= 0)
+                throw new InvalidOperationException("CAD 没有生成有效的临时单页 PDF。");
+            using (var input = PdfSharp.Pdf.IO.PdfReader.Open(path, PdfSharp.Pdf.IO.PdfDocumentOpenMode.Import))
+            {
+                if (input.PageCount != 1)
+                    throw new InvalidOperationException("临时 PDF 应为 1 页，实际为 " + input.PageCount + " 页。");
+                var page = input.Pages[0];
+                var width = PointsToMillimeters(page.Width.Point);
+                var height = PointsToMillimeters(page.Height.Point);
+                var target = TargetPaperSize(sheet);
+                if (!SamePaperSize(width, height, target[0], target[1]))
+                    throw new InvalidOperationException("临时 PDF 实际纸张为 " + FormatMillimeters(width, height)
+                        + " mm，与登记目标 " + FormatMillimeters(target[0], target[1])
+                        + " mm 不一致。请检查 PC3/PMP 介质配置，插件已阻止错误页面进入合并文件。");
+                WritePublishDiagnostic("单页PDF完成：发布序号=" + (index + 1)
+                    + "；子项目=" + sheet.Building
+                    + "；图号=" + sheet.SheetNumber
+                    + "；图名=" + sheet.SheetName
+                    + "；实际毫米=" + FormatMillimeters(width, height)
+                    + "；字节=" + new FileInfo(path).Length
+                    + "；临时PDF=" + path);
+            }
+        }
+
+        internal static void WritePublishDiagnostic(string message)
+        {
+            try
+            {
+                lock (DiagnosticLogSync)
+                {
+                    if (File.Exists(DiagnosticLogPath) && new FileInfo(DiagnosticLogPath).Length > 10L * 1024L * 1024L)
+                    {
+                        var previous = DiagnosticLogPath + ".previous.log";
+                        TryDelete(previous);
+                        File.Move(DiagnosticLogPath, previous);
+                    }
+                    File.AppendAllText(DiagnosticLogPath, DateTime.Now.ToString("s") + " " + message + Environment.NewLine);
+                }
             }
             catch { }
         }
@@ -484,31 +566,83 @@ namespace BatchPdfPublisher.Services
         {
             public static void Merge(IList<string> files, IList<SheetItem> sheets, string outputPath, string marginMode, Action<SheetItem> pageMerged = null)
             {
+                if (files == null || sheets == null || files.Count != sheets.Count || files.Count == 0)
+                    throw new InvalidOperationException("待合并的临时 PDF 与图纸记录数量不一致。");
+                var sourceBytes = files.Sum(path => File.Exists(path) ? new FileInfo(path).Length : 0L);
+                EnsureOutputStorageCapacity(outputPath, sourceBytes);
                 var marginMillimeters = string.Equals(marginMode, "保留 3 mm 白边", StringComparison.OrdinalIgnoreCase) ? 3d : 0d;
+                WritePublishDiagnostic("开始合并PDF：输出=" + outputPath + "；页数=" + files.Count
+                    + "；临时文件总字节=" + sourceBytes + "；托管内存字节=" + GC.GetTotalMemory(false));
                 using (var output = new PdfSharp.Pdf.PdfDocument())
                 {
                     for (var index = 0; index < files.Count; index++)
                     using (var input = PdfSharp.Pdf.IO.PdfReader.Open(files[index], PdfSharp.Pdf.IO.PdfDocumentOpenMode.Import))
                     {
+                        if (input.PageCount != 1)
+                            throw new InvalidOperationException("第 " + (index + 1) + " 个临时 PDF 不是单页文件：" + files[index]);
                         var source = input.Pages[0];
                         var target = TargetPaperSize(sheets[index]);
-                        var page = output.AddPage();
-                        page.Width = PdfSharp.Drawing.XUnit.FromMillimeter(target[0]);
-                        page.Height = PdfSharp.Drawing.XUnit.FromMillimeter(target[1]);
-                        using (var form = PdfSharp.Drawing.XPdfForm.FromFile(files[index]))
-                        using (var graphics = PdfSharp.Drawing.XGraphics.FromPdfPage(page))
+                        var sourceWidth = PointsToMillimeters(source.Width.Point);
+                        var sourceHeight = PointsToMillimeters(source.Height.Point);
+                        if (!SamePaperSize(sourceWidth, sourceHeight, target[0], target[1]))
+                            throw new InvalidOperationException("第 " + (index + 1) + " 页“" + sheets[index].SheetNumber
+                                + " " + sheets[index].SheetName + "”的临时 PDF 纸张 "
+                                + FormatMillimeters(sourceWidth, sourceHeight) + " mm 与目标 "
+                                + FormatMillimeters(target[0], target[1]) + " mm 不一致。");
+                        var canImportOriginal = marginMillimeters <= 0d
+                            && Math.Abs(sourceWidth - target[0]) <= .2d
+                            && Math.Abs(sourceHeight - target[1]) <= .2d;
+                        if (canImportOriginal)
                         {
-                            form.PageNumber = 1;
-                            var crop = CenterCrop(source.Width.Point, source.Height.Point, target[0] / target[1]);
-                            var inset = PdfSharp.Drawing.XUnit.FromMillimeter(marginMillimeters).Point;
-                            var width = Math.Max(1d, page.Width.Point - inset * 2d);
-                            var height = Math.Max(1d, page.Height.Point - inset * 2d);
-                            graphics.DrawImage(form, new PdfSharp.Drawing.XRect(inset, inset, width, height), new PdfSharp.Drawing.XRect(crop[0], crop[1], crop[2], crop[3]), PdfSharp.Drawing.XGraphicsUnit.Point);
+                            // Zero-margin pages already have the exact requested
+                            // media. Importing the page directly avoids a second
+                            // drawing transform, preserves CAD vector coordinates,
+                            // and uses less memory for very large projects.
+                            output.AddPage(source);
                         }
+                        else
+                        {
+                            var page = output.AddPage();
+                            page.Width = PdfSharp.Drawing.XUnit.FromMillimeter(target[0]);
+                            page.Height = PdfSharp.Drawing.XUnit.FromMillimeter(target[1]);
+                            using (var form = PdfSharp.Drawing.XPdfForm.FromFile(files[index]))
+                            using (var graphics = PdfSharp.Drawing.XGraphics.FromPdfPage(page))
+                            {
+                                form.PageNumber = 1;
+                                var crop = CenterCrop(source.Width.Point, source.Height.Point, target[0] / target[1]);
+                                var inset = PdfSharp.Drawing.XUnit.FromMillimeter(marginMillimeters).Point;
+                                var width = Math.Max(1d, page.Width.Point - inset * 2d);
+                                var height = Math.Max(1d, page.Height.Point - inset * 2d);
+                                graphics.DrawImage(form, new PdfSharp.Drawing.XRect(inset, inset, width, height), new PdfSharp.Drawing.XRect(crop[0], crop[1], crop[2], crop[3]), PdfSharp.Drawing.XGraphicsUnit.Point);
+                            }
+                        }
+                        var finalPage = output.Pages[output.PageCount - 1];
+                        var finalWidth = PointsToMillimeters(finalPage.Width.Point);
+                        var finalHeight = PointsToMillimeters(finalPage.Height.Point);
+                        WritePublishDiagnostic("合并页完成：最终页码=" + (index + 1)
+                            + "；子项目=" + sheets[index].Building
+                            + "；图号=" + sheets[index].SheetNumber
+                            + "；图名=" + sheets[index].SheetName
+                            + "；DWG=" + sheets[index].SourceFile
+                            + "；布局=" + sheets[index].SourceLayout
+                            + "；图框句柄=" + sheets[index].BlockHandle
+                            + "；窗口=[" + FormatNumber(sheets[index].MinX) + "," + FormatNumber(sheets[index].MinY) + "]-["
+                                + FormatNumber(sheets[index].MaxX) + "," + FormatNumber(sheets[index].MaxY) + "]"
+                            + "；源PDF毫米=" + FormatMillimeters(sourceWidth, sourceHeight)
+                            + "；最终PDF毫米=" + FormatMillimeters(finalWidth, finalHeight)
+                            + "；合并方式=" + (canImportOriginal ? "原页直接导入" : "标准化重绘")
+                            + "；介质策略=" + marginMode);
                         pageMerged?.Invoke(sheets[index]);
+                        if ((index + 1) % 100 == 0)
+                            WritePublishDiagnostic("合并资源：已完成=" + (index + 1) + "/" + files.Count
+                                + "；托管内存字节=" + GC.GetTotalMemory(false));
                     }
-                    output.Save(outputPath);
+                    if (output.PageCount != sheets.Count)
+                        throw new InvalidOperationException("合并文档页数校验失败：应为 " + sheets.Count + " 页，实际为 " + output.PageCount + " 页。");
+                    SavePdfAtomically(output, outputPath);
                 }
+                WritePublishDiagnostic("PDF合并完成：输出=" + outputPath + "；页数=" + sheets.Count
+                    + "；最终字节=" + new FileInfo(outputPath).Length);
             }
 
             private static double[] CenterCrop(double width, double height, double targetRatio)
@@ -749,6 +883,112 @@ namespace BatchPdfPublisher.Services
             var last = value.Trim().Split(':').Last();
             return int.TryParse(last.Trim(), out var scale) && scale > 0 ? scale : 0;
         }
+
+        private static void EnsureOutputStorageCapacity(string outputPath, long sourceBytes)
+        {
+            var freeSpace = AvailableFreeSpace(outputPath);
+            var required = Math.Max(MinimumFreeSpaceBytes, sourceBytes + 256L * 1024L * 1024L);
+            if (freeSpace >= 0 && freeSpace < required)
+                throw new IOException("输出磁盘剩余空间不足。合并前至少需要 "
+                    + Math.Ceiling(required / 1024d / 1024d) + " MB，当前约 "
+                    + Math.Floor(freeSpace / 1024d / 1024d) + " MB。原有 PDF 未被覆盖。");
+        }
+
+        private static long AvailableFreeSpace(string path)
+        {
+            try
+            {
+                var fullPath = Path.GetFullPath(path);
+                var root = Path.GetPathRoot(fullPath);
+                return string.IsNullOrWhiteSpace(root) ? -1L : new DriveInfo(root).AvailableFreeSpace;
+            }
+            catch { return -1L; }
+        }
+
+        private static void SavePdfAtomically(PdfSharp.Pdf.PdfDocument document, string outputPath)
+        {
+            var directory = Path.GetDirectoryName(outputPath);
+            if (string.IsNullOrWhiteSpace(directory)) throw new IOException("PDF 输出目录无效。");
+            Directory.CreateDirectory(directory);
+            var stagingPath = Path.Combine(directory, "." + Path.GetFileName(outputPath) + "."
+                + Guid.NewGuid().ToString("N") + ".bpp.tmp");
+            try
+            {
+                document.Save(stagingPath);
+                if (!File.Exists(stagingPath) || new FileInfo(stagingPath).Length <= 0)
+                    throw new IOException("PDF 合并程序没有生成有效的暂存文件。");
+                CommitStagedFile(stagingPath, outputPath);
+            }
+            finally
+            {
+                TryDelete(stagingPath);
+            }
+        }
+
+        private static void CommitStagedFile(string stagingPath, string outputPath)
+        {
+            if (!File.Exists(outputPath))
+            {
+                File.Move(stagingPath, outputPath);
+                return;
+            }
+
+            try
+            {
+                File.Replace(stagingPath, outputPath, null, true);
+                return;
+            }
+            catch (Exception replaceError)
+            {
+                var backupPath = outputPath + "." + Guid.NewGuid().ToString("N") + ".bpp.backup";
+                try
+                {
+                    File.Move(outputPath, backupPath);
+                    try
+                    {
+                        File.Move(stagingPath, outputPath);
+                        TryDelete(backupPath);
+                        return;
+                    }
+                    catch (Exception moveError)
+                    {
+                        TryDelete(outputPath);
+                        try
+                        {
+                            if (File.Exists(backupPath)) File.Move(backupPath, outputPath);
+                        }
+                        catch
+                        {
+                            // Keep the backup file rather than deleting the
+                            // user's previous valid PDF when restoration fails.
+                        }
+                        throw new IOException("备用替换失败：" + moveError.Message
+                            + (File.Exists(backupPath) ? "；旧 PDF 备份保留在 " + backupPath : string.Empty), moveError);
+                    }
+                }
+                catch (Exception fallbackError)
+                {
+                    throw new IOException("无法安全替换原 PDF，旧文件已尽量保留。File.Replace："
+                        + replaceError.Message + "；备用替换：" + fallbackError.Message, fallbackError);
+                }
+            }
+        }
+
+        private static bool SamePaperSize(double actualWidth, double actualHeight, double expectedWidth, double expectedHeight)
+        {
+            return (SameDimension(actualWidth, expectedWidth) && SameDimension(actualHeight, expectedHeight))
+                || (SameDimension(actualWidth, expectedHeight) && SameDimension(actualHeight, expectedWidth));
+        }
+
+        private static bool SameDimension(double actual, double expected)
+        {
+            return Math.Abs(actual - expected) <= Math.Max(3d, expected * .01d);
+        }
+
+        private static double PointsToMillimeters(double points) => points * 25.4d / 72d;
+        private static string FormatNumber(double value) => value.ToString("0.###", CultureInfo.InvariantCulture);
+        private static string FormatMillimeters(double width, double height) =>
+            FormatNumber(width) + "×" + FormatNumber(height);
 
         private static double RelativeError(double actual, double expected)
         {
