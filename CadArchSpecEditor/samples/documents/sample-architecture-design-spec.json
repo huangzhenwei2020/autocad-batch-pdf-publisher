@@ -1,0 +1,317 @@
+{
+  "documentId": "20000000-0000-0000-0000-000000000001",
+  "schemaVersion": 1,
+  "projectId": "10000000-0000-0000-0000-000000000001",
+  "name": "建筑设计说明助手示例办公项目建筑设计说明",
+  "sections": [
+    {
+      "sectionId": "21000000-0000-0000-0000-000000000001",
+      "sectionType": "DesignBasis",
+      "title": "设计依据",
+      "requirementState": "required",
+      "content": [
+        {
+          "nodeId": "21100000-0000-0000-0000-000000000001",
+          "nodeType": "paragraph",
+          "text": "本节内容为阶段0结构化示例，正式内容须由建筑专业人员依据有效文件编制。",
+          "fieldPath": "",
+          "standardId": "",
+          "tableId": "",
+          "drawingReference": "",
+          "level": 0,
+          "isLockedField": false,
+          "children": []
+        },
+        {
+          "nodeId": "21100000-0000-0000-0000-000000000002",
+          "nodeType": "standardCitation",
+          "text": "《民用建筑通用规范》",
+          "fieldPath": "",
+          "standardId": "STD-GB55031-2022",
+          "tableId": "",
+          "drawingReference": "",
+          "level": 0,
+          "isLockedField": true,
+          "children": []
+        }
+      ],
+      "applicableRuleIds": ["CN-ARCH-COMPLETE-001"],
+      "referencedProjectFields": [],
+      "reviewState": "notReviewed"
+    },
+    {
+      "sectionId": "21000000-0000-0000-0000-000000000002",
+      "sectionType": "ProjectOverview",
+      "title": "项目概况",
+      "requirementState": "required",
+      "content": [
+        {
+          "nodeId": "21200000-0000-0000-0000-000000000001",
+          "nodeType": "projectField",
+          "text": "建筑高度：{{building.buildingHeightMeters}}",
+          "fieldPath": "building.buildingHeightMeters",
+          "standardId": "",
+          "tableId": "",
+          "drawingReference": "",
+          "level": 0,
+          "isLockedField": true,
+          "children": []
+        }
+      ],
+      "applicableRuleIds": [],
+      "referencedProjectFields": ["projectName", "location.address", "building.totalFloorAreaSquareMeters", "building.buildingHeightMeters"],
+      "reviewState": "notReviewed"
+    },
+    {
+      "sectionId": "21000000-0000-0000-0000-000000000003",
+      "sectionType": "TechnicalIndicators",
+      "title": "主要技术经济指标",
+      "requirementState": "required",
+      "content": [
+        {
+          "nodeId": "21300000-0000-0000-0000-000000000001",
+          "nodeType": "tableReference",
+          "text": "主要技术经济指标表",
+          "fieldPath": "",
+          "standardId": "",
+          "tableId": "30000000-0000-0000-0000-000000000001",
+          "drawingReference": "",
+          "level": 0,
+          "isLockedField": true,
+          "children": []
+        }
+      ],
+      "applicableRuleIds": [],
+      "referencedProjectFields": ["planning.siteAreaSquareMeters", "building.totalFloorAreaSquareMeters", "planning.plotRatio"],
+      "reviewState": "notReviewed"
+    },
+    {
+      "sectionId": "21000000-0000-0000-0000-000000000004",
+      "sectionType": "Elevation",
+      "title": "设计标高",
+      "requirementState": "required",
+      "content": [],
+      "applicableRuleIds": [],
+      "referencedProjectFields": ["building.relativeZeroElevation", "building.absoluteZeroElevation"],
+      "reviewState": "notReviewed"
+    },
+    {
+      "sectionId": "21000000-0000-0000-0000-000000000005",
+      "sectionType": "GeneralLayout",
+      "title": "总平面建筑说明",
+      "requirementState": "required",
+      "content": [],
+      "applicableRuleIds": [],
+      "referencedProjectFields": [],
+      "reviewState": "notReviewed"
+    },
+    {
+      "sectionId": "21000000-0000-0000-0000-000000000006",
+      "sectionType": "MaterialsAndFinishes",
+      "title": "建筑用料和装修构造",
+      "requirementState": "required",
+      "content": [],
+      "applicableRuleIds": [],
+      "referencedProjectFields": [],
+      "reviewState": "notReviewed"
+    },
+    {
+      "sectionId": "21000000-0000-0000-0000-000000000007",
+      "sectionType": "DoorsWindowsCurtainWall",
+      "title": "门窗与幕墙",
+      "requirementState": "required",
+      "content": [],
+      "applicableRuleIds": [],
+      "referencedProjectFields": [],
+      "reviewState": "notReviewed"
+    },
+    {
+      "sectionId": "21000000-0000-0000-0000-000000000008",
+      "sectionType": "Waterproof",
+      "title": "防水设计",
+      "requirementState": "required",
+      "content": [
+        {
+          "nodeId": "21800000-0000-0000-0000-000000000001",
+          "nodeType": "tableReference",
+          "text": "防水设计表",
+          "fieldPath": "",
+          "standardId": "",
+          "tableId": "30000000-0000-0000-0000-000000000002",
+          "drawingReference": "",
+          "level": 0,
+          "isLockedField": true,
+          "children": []
+        }
+      ],
+      "applicableRuleIds": [],
+      "referencedProjectFields": ["waterproof.roofGrade", "waterproof.basementGrade"],
+      "reviewState": "notReviewed"
+    },
+    {
+      "sectionId": "21000000-0000-0000-0000-000000000009",
+      "sectionType": "Elevators",
+      "title": "电梯和自动扶梯",
+      "requirementState": "required",
+      "content": [],
+      "applicableRuleIds": [],
+      "referencedProjectFields": [],
+      "reviewState": "notReviewed"
+    },
+    {
+      "sectionId": "21000000-0000-0000-0000-000000000010",
+      "sectionType": "Accessibility",
+      "title": "无障碍设计",
+      "requirementState": "required",
+      "content": [],
+      "applicableRuleIds": [],
+      "referencedProjectFields": ["accessibility.applicableStandard", "accessibility.accessibleRouteSummary"],
+      "reviewState": "notReviewed"
+    },
+    {
+      "sectionId": "21000000-0000-0000-0000-000000000011",
+      "sectionType": "Safety",
+      "title": "建筑安全设计",
+      "requirementState": "required",
+      "content": [
+        {
+          "nodeId": "21b00000-0000-0000-0000-000000000001",
+          "nodeType": "tableReference",
+          "text": "建筑安全措施表",
+          "fieldPath": "",
+          "standardId": "",
+          "tableId": "30000000-0000-0000-0000-000000000003",
+          "drawingReference": "",
+          "level": 0,
+          "isLockedField": true,
+          "children": []
+        }
+      ],
+      "applicableRuleIds": [],
+      "referencedProjectFields": [],
+      "reviewState": "notReviewed"
+    },
+    {
+      "sectionId": "21000000-0000-0000-0000-000000000012",
+      "sectionType": "FireSafety",
+      "title": "建筑防火设计",
+      "requirementState": "required",
+      "content": [
+        {
+          "nodeId": "21c00000-0000-0000-0000-000000000001",
+          "nodeType": "tableReference",
+          "text": "防火分区汇总表",
+          "fieldPath": "",
+          "standardId": "",
+          "tableId": "30000000-0000-0000-0000-000000000004",
+          "drawingReference": "",
+          "level": 0,
+          "isLockedField": true,
+          "children": []
+        }
+      ],
+      "applicableRuleIds": [],
+      "referencedProjectFields": ["fire.fireClassification", "fire.fireResistanceRating"],
+      "reviewState": "notReviewed"
+    },
+    {
+      "sectionId": "21000000-0000-0000-0000-000000000013",
+      "sectionType": "EnergyAndGreen",
+      "title": "建筑节能与绿色建筑",
+      "requirementState": "required",
+      "content": [],
+      "applicableRuleIds": [],
+      "referencedProjectFields": ["energy.climateZone", "greenBuilding.targetRating"],
+      "reviewState": "notReviewed"
+    },
+    {
+      "sectionId": "21000000-0000-0000-0000-000000000014",
+      "sectionType": "SpecialistInterfaces",
+      "title": "专项深化设计责任边界",
+      "requirementState": "required",
+      "content": [],
+      "applicableRuleIds": [],
+      "referencedProjectFields": [],
+      "reviewState": "notReviewed"
+    }
+  ],
+  "tables": [
+    {
+      "tableId": "30000000-0000-0000-0000-000000000001",
+      "schemaVersion": 1,
+      "tableType": "technicalEconomicIndicators",
+      "tableNumber": "表1",
+      "title": "主要技术经济指标表",
+      "repeatHeader": true,
+      "allowSplitAcrossPages": true,
+      "columns": [],
+      "rows": [],
+      "formulaAudits": []
+    },
+    {
+      "tableId": "30000000-0000-0000-0000-000000000002",
+      "schemaVersion": 1,
+      "tableType": "waterproofDesign",
+      "tableNumber": "表2",
+      "title": "防水设计表",
+      "repeatHeader": true,
+      "allowSplitAcrossPages": true,
+      "columns": [],
+      "rows": [],
+      "formulaAudits": []
+    },
+    {
+      "tableId": "30000000-0000-0000-0000-000000000003",
+      "schemaVersion": 1,
+      "tableType": "buildingSafetyMeasures",
+      "tableNumber": "表3",
+      "title": "建筑安全措施表",
+      "repeatHeader": true,
+      "allowSplitAcrossPages": true,
+      "columns": [],
+      "rows": [],
+      "formulaAudits": []
+    },
+    {
+      "tableId": "30000000-0000-0000-0000-000000000004",
+      "schemaVersion": 1,
+      "tableType": "fireCompartmentSummary",
+      "tableNumber": "表4",
+      "title": "防火分区汇总表",
+      "repeatHeader": true,
+      "allowSplitAcrossPages": true,
+      "columns": [],
+      "rows": [],
+      "formulaAudits": []
+    }
+  ],
+  "layout": {
+    "layoutProfileId": "A1-Landscape-2C",
+    "paperName": "A1",
+    "landscape": true,
+    "paperWidthMillimeters": 841.0,
+    "paperHeightMillimeters": 594.0,
+    "marginLeftMillimeters": 25.0,
+    "marginTopMillimeters": 20.0,
+    "marginRightMillimeters": 190.0,
+    "marginBottomMillimeters": 20.0,
+    "columnCount": 2,
+    "columnGapMillimeters": 12.0,
+    "textStyle": "Standard",
+    "bodyTextHeightMillimeters": 3.5,
+    "headingTextHeightMillimeters": 5.0,
+    "tableTextHeightMillimeters": 3.5,
+    "lineSpacingFactor": 1.35,
+    "pageTitlePattern": "建筑设计说明（{page}）",
+    "drawingNumberPattern": "建施-{page:00}"
+  },
+  "cadBinding": null,
+  "revision": {
+    "revisionNumber": 0,
+    "revisionCode": "A",
+    "description": "阶段0示例文档",
+    "changedBy": "测试用户",
+    "changedAt": "2026-07-28T09:00:00+08:00",
+    "parentContentHash": ""
+  }
+}

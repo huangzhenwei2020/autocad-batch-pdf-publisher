@@ -1,0 +1,39 @@
+{
+  "version": 2,
+  "dependencies": {
+    "net8.0-windows7.0": {
+      "Microsoft.Web.WebView2": {
+        "type": "Direct",
+        "requested": "[1.0.4078.44, )",
+        "resolved": "1.0.4078.44",
+        "contentHash": "TQkHa/aOHUqFHnJIJ/2ZmJ4nLcQJi0Pc0rj9BAs7SP5sT/KtVtb8jFp9uqQL6cKzCRSrwjS/wEPA43NWUOzU+A=="
+      },
+      "cadarchspec.domain": {
+        "type": "Project"
+      },
+      "cadarchspec.editorbridge": {
+        "type": "Project",
+        "dependencies": {
+          "CadArchSpec.Domain": "[1.0.0, )",
+          "Newtonsoft.Json": "[13.0.3, )"
+        }
+      },
+      "cadarchspec.host.contracts": {
+        "type": "Project"
+      },
+      "cadarchspec.ruleengine": {
+        "type": "Project",
+        "dependencies": {
+          "CadArchSpec.Domain": "[1.0.0, )",
+          "Newtonsoft.Json": "[13.0.3, )"
+        }
+      },
+      "Newtonsoft.Json": {
+        "type": "CentralTransitive",
+        "requested": "[13.0.3, )",
+        "resolved": "13.0.3",
+        "contentHash": "HrC5BXdl00IP9zeV+0Z848QWPAoCr9P3bDEZguI+gkLcBKAOxix/tLEAAHC+UvDNPv4a2d18lOReHMOagPa+zQ=="
+      }
+    }
+  }
+}

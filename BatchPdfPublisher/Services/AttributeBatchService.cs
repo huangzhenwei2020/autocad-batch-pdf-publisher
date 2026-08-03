@@ -32,6 +32,33 @@ namespace BatchPdfPublisher.Services
 
     public enum AttributeSortOrder { LeftThenTop, TopThenLeft }
 
+    public enum AttributeNumberingStyle
+    {
+        Arabic = 0,
+        LatinUpper = 1,
+        LatinLower = 2,
+        RomanUpper = 3,
+        RomanLower = 4,
+        ChineseLower = 5,
+        ChineseFinancial = 6,
+        CircledNumber = 7,
+        ParenthesizedNumber = 8,
+        BlackCircledNumber = 9,
+        DoubleCircledNumber = 10,
+        DingbatCircledNumber = 11,
+        AsciiParenthesizedNumber = 12,
+        FullWidthParenthesizedNumber = 13,
+        SquareBracketNumber = 14,
+        FullWidthChineseNumber = 15,
+        CircledLatinUpper = 16,
+        CircledLatinLower = 17,
+        ParenthesizedLatinLower = 18,
+        AsciiParenthesizedLatinUpper = 19,
+        HeavenlyStems = 20,
+        EarthlyBranches = 21,
+        ChineseOrdinal = 22
+    }
+
     [DataContract]
     public sealed class AttributeBatchSettings
     {
@@ -45,6 +72,7 @@ namespace BatchPdfPublisher.Services
         [DataMember] public string LastPreset { get; set; }
         [DataMember] public bool PrefixIncrement { get; set; }
         [DataMember] public bool SuffixIncrement { get; set; }
+        [DataMember] public int? NumberingStyle { get; set; }
 
         public static AttributeBatchSettings Load()
         {
@@ -80,6 +108,7 @@ namespace BatchPdfPublisher.Services
         [DataMember] public string Tolerance { get; set; }
         [DataMember] public bool PrefixIncrement { get; set; }
         [DataMember] public bool SuffixIncrement { get; set; }
+        [DataMember] public int? NumberingStyle { get; set; }
     }
 
     public static class AttributePresetStore
@@ -224,20 +253,43 @@ namespace BatchPdfPublisher.Services
 
         public static string BuildValue(string seed, int index, bool increment, bool alphabetic, int step = 1, bool reverse = false)
         {
+            return BuildValue(seed, index, increment,
+                alphabetic ? AttributeNumberingStyle.LatinUpper : AttributeNumberingStyle.Arabic, step, reverse);
+        }
+
+        public static string BuildValue(string seed, int index, bool increment, AttributeNumberingStyle style, int step = 1, bool reverse = false)
+        {
             if (!increment) return seed ?? string.Empty;
             seed = seed ?? string.Empty;
             var offset = (long)Math.Max(0, index) * Math.Max(1, step);
             if (reverse) offset = -offset;
-            var match = Regex.Match(seed, alphabetic ? "[A-Za-z]+$" : "\\d+$");
-            if (!match.Success)
+            if (style == AttributeNumberingStyle.Arabic)
+            {
+                var numericMatch = Regex.Match(seed, "\\d+$");
+                if (!numericMatch.Success) return reverse ? seed : seed + (offset + 1).ToString(CultureInfo.InvariantCulture);
+                return seed.Substring(0, numericMatch.Index) + IncrementNumber(numericMatch.Value, offset);
+            }
+            string prefix;
+            long initial;
+            int padding;
+            if (!TryExtractNumberingToken(seed, style, out prefix, out initial, out padding))
             {
                 if (reverse) return seed;
-                return alphabetic ? seed + IncrementLetters("A", offset) : seed + (offset + 1).ToString(CultureInfo.InvariantCulture);
+                prefix = seed;
+                initial = 1;
+                padding = 0;
             }
-            var prefix = seed.Substring(0, match.Index);
-            var token = match.Value;
-            if (alphabetic) return prefix + IncrementLetters(token, offset);
-            return prefix + IncrementNumber(token, offset);
+            var value = initial + offset;
+            if (value < 1) value = 1;
+            return prefix + FormatNumberingValue(value, style, padding);
+        }
+
+        public static string BuildComposedValue(string fixedContent, string prefix, string suffix, int index,
+            bool increment, bool prefixIncrement, bool suffixIncrement, AttributeNumberingStyle style, int step = 1, bool reverse = false)
+        {
+            var prefixValue = BuildValue(prefix, index, increment && prefixIncrement, style, step, reverse);
+            var suffixValue = BuildValue(suffix, index, increment && suffixIncrement, style, step, reverse);
+            return prefixValue + (fixedContent ?? string.Empty) + suffixValue;
         }
 
         public static IList<string> RunRegressionChecks()
@@ -250,6 +302,16 @@ namespace BatchPdfPublisher.Services
             Check(failures, "字母进位", BuildValue("Z", 1, true, true) == "AA");
             Check(failures, "字母反向", BuildValue("D", 3, true, true, 1, true) == "A");
             Check(failures, "大整数", BuildValue("999999999999999999", 1, true, false) == "1000000000000000000");
+            Check(failures, "罗马数字", BuildValue("III", 1, true, AttributeNumberingStyle.RomanUpper) == "IV");
+            Check(failures, "中文数字", BuildValue("十", 1, true, AttributeNumberingStyle.ChineseLower) == "十一");
+            Check(failures, "中文大写", BuildValue("贰", 1, true, AttributeNumberingStyle.ChineseFinancial) == "叁");
+            Check(failures, "带圈数字", BuildValue("⑳", 1, true, AttributeNumberingStyle.CircledNumber) == "㉑");
+            Check(failures, "带圈字母进位", BuildValue("Ⓩ", 1, true, AttributeNumberingStyle.CircledLatinUpper) == "ⒶⒶ");
+            Check(failures, "括号数字", BuildValue("(9)", 1, true, AttributeNumberingStyle.AsciiParenthesizedNumber) == "(10)");
+            Check(failures, "默认后缀递增", BuildComposedValue("图纸", "", "", 1, true, false, true, AttributeNumberingStyle.Arabic) == "图纸2");
+            Check(failures, "前缀递增", BuildComposedValue("图纸", "", "", 1, true, true, false, AttributeNumberingStyle.Arabic) == "2图纸");
+            Check(failures, "前后缀递增", BuildComposedValue("图纸", "1", "1", 1, true, true, true, AttributeNumberingStyle.Arabic) == "2图纸2");
+            Check(failures, "关闭递增", BuildComposedValue("图纸", "前", "后", 1, false, false, true, AttributeNumberingStyle.Arabic) == "前图纸后");
 
             var points = new[]
             {
@@ -338,6 +400,363 @@ namespace BatchPdfPublisher.Services
             var result = new StringBuilder();
             while (number > 0) { number--; result.Insert(0, (char)((upper ? 'A' : 'a') + (int)(number % 26))); number /= 26; }
             return result.ToString();
+        }
+
+        private static bool TryExtractNumberingToken(string seed, AttributeNumberingStyle style, out string prefix, out long value, out int padding)
+        {
+            prefix = seed ?? string.Empty;
+            value = 1;
+            padding = 0;
+            Match match;
+            switch (style)
+            {
+                case AttributeNumberingStyle.Arabic:
+                    match = Regex.Match(prefix, "\\d+$");
+                    if (!match.Success || !long.TryParse(match.Value, NumberStyles.None, CultureInfo.InvariantCulture, out value)) return false;
+                    padding = match.Value.Length;
+                    prefix = prefix.Substring(0, match.Index);
+                    return true;
+                case AttributeNumberingStyle.LatinUpper:
+                case AttributeNumberingStyle.LatinLower:
+                    match = Regex.Match(prefix, "[A-Za-z]+$");
+                    if (!match.Success) return false;
+                    value = BijectiveToNumber(match.Value, "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+                    prefix = prefix.Substring(0, match.Index);
+                    return value > 0;
+                case AttributeNumberingStyle.RomanUpper:
+                case AttributeNumberingStyle.RomanLower:
+                    match = Regex.Match(prefix, "[IVXLCDMivxlcdm]+$");
+                    if (!match.Success || !TryParseRoman(match.Value, out value)) return false;
+                    prefix = prefix.Substring(0, match.Index);
+                    return true;
+                case AttributeNumberingStyle.ChineseLower:
+                case AttributeNumberingStyle.ChineseFinancial:
+                    match = Regex.Match(prefix, "[零〇一二三四五六七八九十百千万亿壹贰叁肆伍陆柒捌玖拾佰仟萬億]+$");
+                    if (!match.Success || !TryParseChinese(match.Value, out value)) return false;
+                    prefix = prefix.Substring(0, match.Index);
+                    return true;
+                case AttributeNumberingStyle.CircledNumber:
+                case AttributeNumberingStyle.ParenthesizedNumber:
+                case AttributeNumberingStyle.BlackCircledNumber:
+                case AttributeNumberingStyle.DoubleCircledNumber:
+                case AttributeNumberingStyle.DingbatCircledNumber:
+                    if (!TryParseEnclosedNumberSuffix(prefix, style, out match, out value)) return false;
+                    prefix = prefix.Substring(0, match.Index);
+                    return true;
+                case AttributeNumberingStyle.AsciiParenthesizedNumber:
+                    return TryParseWrappedNumber(seed, "\\((\\d+)\\)$", out prefix, out value);
+                case AttributeNumberingStyle.FullWidthParenthesizedNumber:
+                    return TryParseWrappedNumber(seed, "（(\\d+)）$", out prefix, out value);
+                case AttributeNumberingStyle.SquareBracketNumber:
+                    return TryParseWrappedNumber(seed, "\\[(\\d+)\\]$", out prefix, out value);
+                case AttributeNumberingStyle.FullWidthChineseNumber:
+                    match = Regex.Match(prefix, "（([零〇一二三四五六七八九十百千万亿]+)）$");
+                    if (!match.Success || !TryParseChinese(match.Groups[1].Value, out value)) return false;
+                    prefix = prefix.Substring(0, match.Index);
+                    return true;
+                case AttributeNumberingStyle.CircledLatinUpper:
+                    return TryParseEnclosedLetters(seed, 'Ⓐ', 'Ⓩ', out prefix, out value);
+                case AttributeNumberingStyle.CircledLatinLower:
+                    return TryParseEnclosedLetters(seed, 'ⓐ', 'ⓩ', out prefix, out value);
+                case AttributeNumberingStyle.ParenthesizedLatinLower:
+                    return TryParseEnclosedLetters(seed, '⒜', '⒵', out prefix, out value);
+                case AttributeNumberingStyle.AsciiParenthesizedLatinUpper:
+                    match = Regex.Match(prefix, "\\(([A-Za-z]+)\\)$");
+                    if (!match.Success) return false;
+                    value = BijectiveToNumber(match.Groups[1].Value, "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+                    prefix = prefix.Substring(0, match.Index);
+                    return value > 0;
+                case AttributeNumberingStyle.HeavenlyStems:
+                    return TryParseAlphabetSuffix(seed, "甲乙丙丁戊己庚辛壬癸", out prefix, out value);
+                case AttributeNumberingStyle.EarthlyBranches:
+                    return TryParseAlphabetSuffix(seed, "子丑寅卯辰巳午未申酉戌亥", out prefix, out value);
+                case AttributeNumberingStyle.ChineseOrdinal:
+                    match = Regex.Match(prefix, "第([零〇一二三四五六七八九十百千万亿]+)$");
+                    if (!match.Success || !TryParseChinese(match.Groups[1].Value, out value)) return false;
+                    prefix = prefix.Substring(0, match.Index);
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private static string FormatNumberingValue(long value, AttributeNumberingStyle style, int padding)
+        {
+            switch (style)
+            {
+                case AttributeNumberingStyle.Arabic:
+                    return value.ToString(padding > 1 ? new string('0', padding) : "0", CultureInfo.InvariantCulture);
+                case AttributeNumberingStyle.LatinUpper:
+                    return NumberToBijective(value, "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+                case AttributeNumberingStyle.LatinLower:
+                    return NumberToBijective(value, "abcdefghijklmnopqrstuvwxyz");
+                case AttributeNumberingStyle.RomanUpper:
+                    return ToRoman(value);
+                case AttributeNumberingStyle.RomanLower:
+                    return ToRoman(value).ToLowerInvariant();
+                case AttributeNumberingStyle.ChineseLower:
+                    return ToChinese(value, false);
+                case AttributeNumberingStyle.ChineseFinancial:
+                    return ToChinese(value, true);
+                case AttributeNumberingStyle.CircledNumber:
+                    return FormatCircledNumber(value);
+                case AttributeNumberingStyle.ParenthesizedNumber:
+                    return value <= 20 ? char.ConvertFromUtf32(0x2473 + (int)value) : "(" + value.ToString(CultureInfo.InvariantCulture) + ")";
+                case AttributeNumberingStyle.BlackCircledNumber:
+                    return value <= 10 ? char.ConvertFromUtf32(0x2775 + (int)value) : "●" + value.ToString(CultureInfo.InvariantCulture);
+                case AttributeNumberingStyle.DoubleCircledNumber:
+                    return value <= 10 ? char.ConvertFromUtf32(0x24F4 + (int)value) : "◎" + value.ToString(CultureInfo.InvariantCulture);
+                case AttributeNumberingStyle.DingbatCircledNumber:
+                    return value <= 10 ? char.ConvertFromUtf32(0x2789 + (int)value) : "➊" + value.ToString(CultureInfo.InvariantCulture);
+                case AttributeNumberingStyle.AsciiParenthesizedNumber:
+                    return "(" + value.ToString(CultureInfo.InvariantCulture) + ")";
+                case AttributeNumberingStyle.FullWidthParenthesizedNumber:
+                    return "（" + value.ToString(CultureInfo.InvariantCulture) + "）";
+                case AttributeNumberingStyle.SquareBracketNumber:
+                    return "[" + value.ToString(CultureInfo.InvariantCulture) + "]";
+                case AttributeNumberingStyle.FullWidthChineseNumber:
+                    return "（" + ToChinese(value, false) + "）";
+                case AttributeNumberingStyle.CircledLatinUpper:
+                    return ConvertBijectiveToEnclosed(value, 'Ⓐ');
+                case AttributeNumberingStyle.CircledLatinLower:
+                    return ConvertBijectiveToEnclosed(value, 'ⓐ');
+                case AttributeNumberingStyle.ParenthesizedLatinLower:
+                    return ConvertBijectiveToEnclosed(value, '⒜');
+                case AttributeNumberingStyle.AsciiParenthesizedLatinUpper:
+                    return "(" + NumberToBijective(value, "ABCDEFGHIJKLMNOPQRSTUVWXYZ") + ")";
+                case AttributeNumberingStyle.HeavenlyStems:
+                    return NumberToBijective(value, "甲乙丙丁戊己庚辛壬癸");
+                case AttributeNumberingStyle.EarthlyBranches:
+                    return NumberToBijective(value, "子丑寅卯辰巳午未申酉戌亥");
+                case AttributeNumberingStyle.ChineseOrdinal:
+                    return "第" + ToChinese(value, false);
+                default:
+                    return value.ToString(CultureInfo.InvariantCulture);
+            }
+        }
+
+        private static string FormatCircledNumber(long value)
+        {
+            if (value >= 1 && value <= 20) return char.ConvertFromUtf32(0x245F + (int)value);
+            if (value >= 21 && value <= 35) return char.ConvertFromUtf32(0x323C + (int)value);
+            if (value >= 36 && value <= 50) return char.ConvertFromUtf32(0x328D + (int)value);
+            return "○" + value.ToString(CultureInfo.InvariantCulture);
+        }
+
+        private static bool TryParseEnclosedNumberSuffix(string seed, AttributeNumberingStyle style, out Match match, out long value)
+        {
+            var fallbackPattern = style == AttributeNumberingStyle.CircledNumber ? "○(\\d+)$"
+                : style == AttributeNumberingStyle.ParenthesizedNumber ? "\\((\\d+)\\)$"
+                : style == AttributeNumberingStyle.BlackCircledNumber ? "●(\\d+)$"
+                : style == AttributeNumberingStyle.DoubleCircledNumber ? "◎(\\d+)$"
+                : "➊(\\d+)$";
+            match = Regex.Match(seed ?? string.Empty, fallbackPattern);
+            if (match.Success && long.TryParse(match.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out value) && value > 0)
+                return true;
+            match = Regex.Match(seed ?? string.Empty, ".$");
+            value = 0;
+            if (!match.Success) return false;
+            var code = char.ConvertToUtf32(match.Value, 0);
+            if (style == AttributeNumberingStyle.CircledNumber)
+            {
+                if (code >= 0x2460 && code <= 0x2473) value = code - 0x245F;
+                else if (code >= 0x3251 && code <= 0x325F) value = code - 0x323C;
+                else if (code >= 0x32B1 && code <= 0x32BF) value = code - 0x328D;
+            }
+            else if (style == AttributeNumberingStyle.ParenthesizedNumber && code >= 0x2474 && code <= 0x2487) value = code - 0x2473;
+            else if (style == AttributeNumberingStyle.BlackCircledNumber && code >= 0x2776 && code <= 0x277F) value = code - 0x2775;
+            else if (style == AttributeNumberingStyle.DoubleCircledNumber && code >= 0x24F5 && code <= 0x24FE) value = code - 0x24F4;
+            else if (style == AttributeNumberingStyle.DingbatCircledNumber && code >= 0x278A && code <= 0x2793) value = code - 0x2789;
+            return value > 0;
+        }
+
+        private static bool TryParseWrappedNumber(string seed, string pattern, out string prefix, out long value)
+        {
+            prefix = seed ?? string.Empty;
+            value = 0;
+            var match = Regex.Match(prefix, pattern);
+            if (!match.Success || !long.TryParse(match.Groups[1].Value, out value)) return false;
+            prefix = prefix.Substring(0, match.Index);
+            return value > 0;
+        }
+
+        private static bool TryParseEnclosedLetters(string seed, char first, char last, out string prefix, out long value)
+        {
+            prefix = seed ?? string.Empty;
+            value = 0;
+            var match = Regex.Match(prefix, "[" + first + "-" + last + "]+$");
+            if (!match.Success) return false;
+            foreach (var ch in match.Value) value = value * 26 + ch - first + 1;
+            prefix = prefix.Substring(0, match.Index);
+            return value > 0;
+        }
+
+        private static string ConvertBijectiveToEnclosed(long value, char first)
+        {
+            var plain = NumberToBijective(value, "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+            return new string(plain.Select(ch => (char)(first + ch - 'A')).ToArray());
+        }
+
+        private static bool TryParseAlphabetSuffix(string seed, string alphabet, out string prefix, out long value)
+        {
+            prefix = seed ?? string.Empty;
+            value = 0;
+            var match = Regex.Match(prefix, "[" + alphabet + "]+$");
+            if (!match.Success) return false;
+            value = BijectiveToNumber(match.Value, alphabet);
+            prefix = prefix.Substring(0, match.Index);
+            return value > 0;
+        }
+
+        private static long BijectiveToNumber(string text, string alphabet)
+        {
+            long value = 0;
+            foreach (var raw in text)
+            {
+                var ch = alphabet.Length == 26 ? char.ToUpperInvariant(raw) : raw;
+                var index = alphabet.IndexOf(ch);
+                if (index < 0) return 0;
+                checked { value = value * alphabet.Length + index + 1; }
+            }
+            return value;
+        }
+
+        private static string NumberToBijective(long value, string alphabet)
+        {
+            if (value < 1) value = 1;
+            var result = new StringBuilder();
+            while (value > 0)
+            {
+                value--;
+                result.Insert(0, alphabet[(int)(value % alphabet.Length)]);
+                value /= alphabet.Length;
+            }
+            return result.ToString();
+        }
+
+        private static string ToRoman(long value)
+        {
+            if (value < 1) value = 1;
+            var values = new[] { 1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1 };
+            var symbols = new[] { "M", "CM", "D", "CD", "C", "XC", "L", "XL", "X", "IX", "V", "IV", "I" };
+            var result = new StringBuilder();
+            for (var i = 0; i < values.Length; i++)
+                while (value >= values[i]) { result.Append(symbols[i]); value -= values[i]; }
+            return result.ToString();
+        }
+
+        private static bool TryParseRoman(string text, out long value)
+        {
+            value = 0;
+            var previous = 0;
+            for (var i = text.Length - 1; i >= 0; i--)
+            {
+                var current = RomanDigit(char.ToUpperInvariant(text[i]));
+                if (current == 0) return false;
+                value += current < previous ? -current : current;
+                if (current > previous) previous = current;
+            }
+            return value > 0;
+        }
+
+        private static int RomanDigit(char ch)
+        {
+            switch (ch)
+            {
+                case 'I': return 1; case 'V': return 5; case 'X': return 10; case 'L': return 50;
+                case 'C': return 100; case 'D': return 500; case 'M': return 1000; default: return 0;
+            }
+        }
+
+        private static string ToChinese(long value, bool financial)
+        {
+            if (value <= 0) return financial ? "零" : "零";
+            var digits = financial ? "零壹贰叁肆伍陆柒捌玖" : "零一二三四五六七八九";
+            var smallUnits = financial ? new[] { "", "拾", "佰", "仟" } : new[] { "", "十", "百", "千" };
+            var groups = new[] { "", "万", "亿", "万亿" };
+            var parts = new List<int>();
+            while (value > 0) { parts.Add((int)(value % 10000)); value /= 10000; }
+            var result = new StringBuilder();
+            var pendingZero = false;
+            for (var group = parts.Count - 1; group >= 0; group--)
+            {
+                var part = parts[group];
+                if (part == 0) { pendingZero = result.Length > 0; continue; }
+                if (result.Length > 0 && (pendingZero || part < 1000)) result.Append(digits[0]);
+                result.Append(FormatChineseGroup(part, digits, smallUnits));
+                if (group < groups.Length) result.Append(groups[group]);
+                pendingZero = false;
+            }
+            var text = result.ToString();
+            if (!financial && text.StartsWith("一十", StringComparison.Ordinal)) text = text.Substring(1);
+            return text;
+        }
+
+        private static string FormatChineseGroup(int value, string digits, string[] units)
+        {
+            var result = new StringBuilder();
+            var zeroPending = false;
+            for (var position = 3; position >= 0; position--)
+            {
+                var divisor = (int)Math.Pow(10, position);
+                var digit = value / divisor % 10;
+                if (digit == 0) { if (result.Length > 0) zeroPending = true; continue; }
+                if (zeroPending) { result.Append(digits[0]); zeroPending = false; }
+                result.Append(digits[digit]).Append(units[position]);
+            }
+            return result.ToString();
+        }
+
+        private static bool TryParseChinese(string text, out long value)
+        {
+            value = 0;
+            if (string.IsNullOrWhiteSpace(text)) return false;
+            long section = 0;
+            long number = 0;
+            foreach (var ch in text)
+            {
+                var digit = ChineseDigit(ch);
+                if (digit >= 0) { number = digit; continue; }
+                var unit = ChineseUnit(ch);
+                if (unit == 0) return false;
+                if (unit < 10000)
+                {
+                    if (number == 0) number = 1;
+                    section += number * unit;
+                }
+                else
+                {
+                    section += number;
+                    value += section * unit;
+                    section = 0;
+                }
+                number = 0;
+            }
+            value += section + number;
+            return value > 0;
+        }
+
+        private static int ChineseDigit(char ch)
+        {
+            const string lower = "零一二三四五六七八九";
+            const string financial = "零壹贰叁肆伍陆柒捌玖";
+            if (ch == '〇') return 0;
+            var index = lower.IndexOf(ch);
+            if (index >= 0) return index;
+            return financial.IndexOf(ch);
+        }
+
+        private static long ChineseUnit(char ch)
+        {
+            switch (ch)
+            {
+                case '十': case '拾': return 10;
+                case '百': case '佰': return 100;
+                case '千': case '仟': return 1000;
+                case '万': case '萬': return 10000;
+                case '亿': case '億': return 100000000;
+                default: return 0;
+            }
         }
     }
 }

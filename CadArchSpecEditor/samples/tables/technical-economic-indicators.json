@@ -1,0 +1,61 @@
+{
+  "tableId": "30000000-0000-0000-0000-000000000001",
+  "schemaVersion": 1,
+  "tableType": "technicalEconomicIndicators",
+  "tableNumber": "表1",
+  "title": "主要技术经济指标表",
+  "repeatHeader": true,
+  "allowSplitAcrossPages": true,
+  "columns": [
+    { "key": "item", "title": "指标名称", "unit": "", "widthMillimeters": 45, "decimalPlaces": 0, "required": true },
+    { "key": "planning", "title": "规划值", "unit": "", "widthMillimeters": 30, "decimalPlaces": 2, "required": false },
+    { "key": "design", "title": "设计值", "unit": "", "widthMillimeters": 30, "decimalPlaces": 2, "required": true },
+    { "key": "approved", "title": "核准值", "unit": "", "widthMillimeters": 30, "decimalPlaces": 2, "required": false },
+    { "key": "source", "title": "数据来源", "unit": "", "widthMillimeters": 48, "decimalPlaces": 0, "required": true },
+    { "key": "difference", "title": "差异", "unit": "", "widthMillimeters": 25, "decimalPlaces": 2, "required": false }
+  ],
+  "rows": [
+    {
+      "rowId": "31000000-0000-0000-0000-000000000001",
+      "rowType": "Data",
+      "keepTogether": true,
+      "cells": [
+        { "cellId": "31100000-0000-0000-0000-000000000001", "columnKey": "item", "displayValue": "总建筑面积", "numericValue": null, "unit": "", "fieldPath": "", "formula": "", "state": "confirmed", "source": "指标定义", "rowSpan": 1, "columnSpan": 1 },
+        { "cellId": "31100000-0000-0000-0000-000000000002", "columnKey": "planning", "displayValue": "36000.00", "numericValue": 36000.00, "unit": "m²", "fieldPath": "", "formula": "", "state": "confirmed", "source": "示例规划条件", "rowSpan": 1, "columnSpan": 1 },
+        { "cellId": "31100000-0000-0000-0000-000000000003", "columnKey": "design", "displayValue": "36000.00", "numericValue": 36000.00, "unit": "m²", "fieldPath": "building.totalFloorAreaSquareMeters", "formula": "building.aboveGroundAreaSquareMeters + building.undergroundAreaSquareMeters", "state": "confirmed", "source": "示例面积统计", "rowSpan": 1, "columnSpan": 1 },
+        { "cellId": "31100000-0000-0000-0000-000000000004", "columnKey": "approved", "displayValue": "", "numericValue": null, "unit": "m²", "fieldPath": "", "formula": "", "state": "pending", "source": "", "rowSpan": 1, "columnSpan": 1 },
+        { "cellId": "31100000-0000-0000-0000-000000000005", "columnKey": "source", "displayValue": "示例面积统计", "numericValue": null, "unit": "", "fieldPath": "", "formula": "", "state": "confirmed", "source": "示例面积统计", "rowSpan": 1, "columnSpan": 1 },
+        { "cellId": "31100000-0000-0000-0000-000000000006", "columnKey": "difference", "displayValue": "0.00", "numericValue": 0.00, "unit": "m²", "fieldPath": "", "formula": "design - planning", "state": "confirmed", "source": "公式", "rowSpan": 1, "columnSpan": 1 }
+      ]
+    },
+    {
+      "rowId": "31000000-0000-0000-0000-000000000002",
+      "rowType": "Data",
+      "keepTogether": true,
+      "cells": [
+        { "cellId": "31200000-0000-0000-0000-000000000001", "columnKey": "item", "displayValue": "容积率", "numericValue": null, "unit": "", "fieldPath": "", "formula": "", "state": "confirmed", "source": "指标定义", "rowSpan": 1, "columnSpan": 1 },
+        { "cellId": "31200000-0000-0000-0000-000000000002", "columnKey": "planning", "displayValue": "2.50", "numericValue": 2.50, "unit": "", "fieldPath": "planning.plotRatio", "formula": "", "state": "confirmed", "source": "示例规划条件", "rowSpan": 1, "columnSpan": 1 },
+        { "cellId": "31200000-0000-0000-0000-000000000003", "columnKey": "design", "displayValue": "2.50", "numericValue": 2.50, "unit": "", "fieldPath": "", "formula": "ROUND(building.aboveGroundAreaSquareMeters / planning.siteAreaSquareMeters, 2)", "state": "confirmed", "source": "公式", "rowSpan": 1, "columnSpan": 1 },
+        { "cellId": "31200000-0000-0000-0000-000000000004", "columnKey": "approved", "displayValue": "", "numericValue": null, "unit": "", "fieldPath": "", "formula": "", "state": "pending", "source": "", "rowSpan": 1, "columnSpan": 1 },
+        { "cellId": "31200000-0000-0000-0000-000000000005", "columnKey": "source", "displayValue": "面积统计/用地面积", "numericValue": null, "unit": "", "fieldPath": "", "formula": "", "state": "confirmed", "source": "示例指标表", "rowSpan": 1, "columnSpan": 1 },
+        { "cellId": "31200000-0000-0000-0000-000000000006", "columnKey": "difference", "displayValue": "0.00", "numericValue": 0.00, "unit": "", "fieldPath": "", "formula": "design - planning", "state": "confirmed", "source": "公式", "rowSpan": 1, "columnSpan": 1 }
+      ]
+    }
+  ],
+  "formulaAudits": [
+    {
+      "auditId": "31900000-0000-0000-0000-000000000001",
+      "cellId": "31200000-0000-0000-0000-000000000003",
+      "formula": "ROUND(building.aboveGroundAreaSquareMeters / planning.siteAreaSquareMeters, 2)",
+      "formulaVersion": "1",
+      "inputs": {
+        "building.aboveGroundAreaSquareMeters": 30000.00,
+        "planning.siteAreaSquareMeters": 12000.00
+      },
+      "result": 2.50,
+      "calculatedAt": "2026-07-28T09:10:00+08:00",
+      "isManuallyOverridden": false,
+      "overrideReason": ""
+    }
+  ]
+}

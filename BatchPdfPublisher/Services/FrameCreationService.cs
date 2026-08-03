@@ -13,7 +13,13 @@ namespace BatchPdfPublisher.Services
         { return FindTextStyle(database, transaction, name); }
         public static string[] GetTextStyleNames(Document document)
         {
-            var names = new System.Collections.Generic.List<string> { "黑体", "宋体", "微软雅黑", "Arial" };
+            var names = new System.Collections.Generic.List<string>
+            {
+                DraftingStandardService.GetTextStyleName(DraftingStandardProfile.BodyTextKey),
+                DraftingStandardService.GetTextStyleName(DraftingStandardProfile.TitleTextKey),
+                DraftingStandardService.GetTextStyleName(DraftingStandardProfile.AnnotationTextKey),
+                "黑体", "宋体", "微软雅黑", "Arial"
+            };
             if (document == null) return names.ToArray();
             using (var tr = document.Database.TransactionManager.StartOpenCloseTransaction())
             {
@@ -34,8 +40,9 @@ namespace BatchPdfPublisher.Services
             if (point.Status != PromptStatus.OK) return false;
             using (document.LockDocument()) using (var tr = document.Database.TransactionManager.StartTransaction())
             {
+                DraftingStandardService.EnsureAll(document.Database, tr);
                 var space = (BlockTableRecord)tr.GetObject(document.Database.CurrentSpaceId, OpenMode.ForWrite);
-                var poly = Rectangle(point.Value, width, height); space.AppendEntity(poly); tr.AddNewlyCreatedDBObject(poly, true); tr.Commit();
+                var poly = Rectangle(point.Value, width, height); poly.Layer = DraftingStandardService.GetLayerName(DraftingStandardProfile.FrameKey); space.AppendEntity(poly); tr.AddNewlyCreatedDBObject(poly, true); tr.Commit();
             }
             return true;
         }
@@ -51,7 +58,7 @@ namespace BatchPdfPublisher.Services
             using (document.LockDocument()) using (var tr = document.Database.TransactionManager.StartTransaction())
             {
                 var style = FindTextStyle(document.Database, tr, font);
-                var text = new AttributeDefinition { Position = center, Height = height, WidthFactor = widthFactor, TextString = property, Tag = property, Prompt = property, Layer = "0", TextStyleId = style, HorizontalMode = TextHorizontalMode.TextCenter, VerticalMode = TextVerticalMode.TextVerticalMid, AlignmentPoint = center, Constant = false, Verifiable = false };
+                var text = new AttributeDefinition { Position = center, Height = height, WidthFactor = widthFactor, TextString = property, Tag = property, Prompt = property, Layer = DraftingStandardService.GetLayerName(DraftingStandardProfile.AnnotationTextLayerKey), TextStyleId = style, HorizontalMode = TextHorizontalMode.TextCenter, VerticalMode = TextVerticalMode.TextVerticalMid, AlignmentPoint = center, Constant = false, Verifiable = false };
                 if (color == null) text.ColorIndex = 7;
                 else if (color.ColorMethod == Autodesk.AutoCAD.Colors.ColorMethod.ByAci) text.ColorIndex = color.ColorIndex;
                 else text.Color = color;
@@ -78,11 +85,11 @@ namespace BatchPdfPublisher.Services
                     var att = new AttributeDefinition { Position = new Point3d(width / 2d, height / 2d, 0), Height = textHeight, TextString = "<" + tag + ">", Tag = tag, Prompt = tag, Verifiable = false, Constant = false, Invisible = false, TextStyleId = style, HorizontalMode = TextHorizontalMode.TextCenter, VerticalMode = TextVerticalMode.TextVerticalMid, AlignmentPoint = new Point3d(width / 2d, height / 2d, 0) };
                     record.AppendEntity(att); tr.AddNewlyCreatedDBObject(att, true); att.AdjustAlignment(document.Database);
                 }
-                var space = (BlockTableRecord)tr.GetObject(document.Database.CurrentSpaceId, OpenMode.ForWrite); var reference = new BlockReference(point.Value, recordId); space.AppendEntity(reference); tr.AddNewlyCreatedDBObject(reference, true);
+                var space = (BlockTableRecord)tr.GetObject(document.Database.CurrentSpaceId, OpenMode.ForWrite); var reference = new BlockReference(point.Value, recordId) { Layer = DraftingStandardService.GetLayerName(DraftingStandardProfile.FrameKey) }; space.AppendEntity(reference); tr.AddNewlyCreatedDBObject(reference, true);
                 foreach (ObjectId id in record)
                 {
                     var definition = tr.GetObject(id, OpenMode.ForRead) as AttributeDefinition; if (definition == null || definition.Constant) continue;
-                    var attribute = new AttributeReference(); attribute.SetAttributeFromBlock(definition, reference.BlockTransform); attribute.TextString = string.IsNullOrWhiteSpace(definition.TextString) || definition.TextString.StartsWith("<", StringComparison.Ordinal) ? definition.Tag : definition.TextString; reference.AttributeCollection.AppendAttribute(attribute); tr.AddNewlyCreatedDBObject(attribute, true);
+                    var attribute = new AttributeReference(); attribute.SetAttributeFromBlock(definition, reference.BlockTransform); attribute.Layer = DraftingStandardService.GetLayerName(DraftingStandardProfile.FrameKey); attribute.TextString = string.IsNullOrWhiteSpace(definition.TextString) || definition.TextString.StartsWith("<", StringComparison.Ordinal) ? definition.Tag : definition.TextString; reference.AttributeCollection.AppendAttribute(attribute); tr.AddNewlyCreatedDBObject(attribute, true);
                 }
                 tr.Commit(); return name;
             }
@@ -119,18 +126,32 @@ namespace BatchPdfPublisher.Services
             {
                 var blocks = (BlockTable)tr.GetObject(document.Database.BlockTableId, OpenMode.ForWrite);
                 var paperDisplay = detectedPaper + (string.IsNullOrWhiteSpace(detectedExtension) ? string.Empty : "+" + detectedExtension);
-                var baseName = paperDisplay + "_BPP_" + SafeName(remark);
+                // AutoCAD symbol names cannot contain '/', although the user-facing
+                // extension notation intentionally uses values such as "1/4".
+                // Keep the readable notation in FrameDefinition, but encode it as
+                // "1_4" in the block table record name.
+                var baseName = SafeBlockName(paperDisplay + "_BPP_" + SafeName(remark));
                 var name = baseName; var index = 2; while (blocks.Has(name)) name = baseName + "_" + index++;
+                try
+                {
+                    SymbolUtilityServices.ValidateSymbolName(name, false);
+                }
+                catch (Exception exception)
+                {
+                    error = "生成的图块名称无效：" + name + "。\r\n请修改用户备注后重试。\r\n" + exception.Message;
+                    return null;
+                }
                 var record = new BlockTableRecord { Name = name, Origin = Point3d.Origin }; var recordId = blocks.Add(record); tr.AddNewlyCreatedDBObject(record, true);
                 var ids = new ObjectIdCollection(); foreach (SelectedObject selected in selection.Value) if (selected != null) ids.Add(selected.ObjectId);
                 var mapping = new IdMapping(); document.Database.DeepCloneObjects(ids, recordId, mapping, false);
                 var move = Matrix3d.Displacement(new Vector3d(-extents.MinPoint.X, -extents.MinPoint.Y, -extents.MinPoint.Z));
                 foreach (ObjectId id in record) { var entity = tr.GetObject(id, OpenMode.ForWrite) as Entity; if (entity != null) entity.TransformBy(move); }
-                var space = (BlockTableRecord)tr.GetObject(document.Database.CurrentSpaceId, OpenMode.ForWrite); var reference = new BlockReference(extents.MinPoint, recordId); space.AppendEntity(reference); tr.AddNewlyCreatedDBObject(reference, true);
+                DraftingStandardService.EnsureAll(document.Database, tr);
+                var space = (BlockTableRecord)tr.GetObject(document.Database.CurrentSpaceId, OpenMode.ForWrite); var reference = new BlockReference(extents.MinPoint, recordId) { Layer = DraftingStandardService.GetLayerName(DraftingStandardProfile.FrameKey) }; space.AppendEntity(reference); tr.AddNewlyCreatedDBObject(reference, true);
                 foreach (ObjectId id in record)
                 {
                     var definition = tr.GetObject(id, OpenMode.ForRead) as AttributeDefinition; if (definition == null || definition.Constant) continue;
-                    var attribute = new AttributeReference(); attribute.SetAttributeFromBlock(definition, reference.BlockTransform); attribute.TextString = string.IsNullOrWhiteSpace(definition.TextString) || definition.TextString.StartsWith("<", StringComparison.Ordinal) ? definition.Tag : definition.TextString; reference.AttributeCollection.AppendAttribute(attribute); tr.AddNewlyCreatedDBObject(attribute, true);
+                    var attribute = new AttributeReference(); attribute.SetAttributeFromBlock(definition, reference.BlockTransform); attribute.Layer = DraftingStandardService.GetLayerName(DraftingStandardProfile.FrameKey); attribute.TextString = string.IsNullOrWhiteSpace(definition.TextString) || definition.TextString.StartsWith("<", StringComparison.Ordinal) ? definition.Tag : definition.TextString; reference.AttributeCollection.AppendAttribute(attribute); tr.AddNewlyCreatedDBObject(attribute, true);
                 }
                 foreach (SelectedObject selected in selection.Value)
                 {
@@ -146,16 +167,17 @@ namespace BatchPdfPublisher.Services
         { var p = new Polyline(4); p.AddVertexAt(0, new Point2d(origin.X, origin.Y), 0, 0, 0); p.AddVertexAt(1, new Point2d(origin.X + width, origin.Y), 0, 0, 0); p.AddVertexAt(2, new Point2d(origin.X + width, origin.Y + height), 0, 0, 0); p.AddVertexAt(3, new Point2d(origin.X, origin.Y + height), 0, 0, 0); p.Closed = true; return p; }
         private static ObjectId FindTextStyle(Database database, Transaction tr, string name)
         {
-            var table = (TextStyleTable)tr.GetObject(database.TextStyleTableId, OpenMode.ForRead);
-            foreach (ObjectId id in table) { var style = (TextStyleTableRecord)tr.GetObject(id, OpenMode.ForRead); if (string.Equals(style.Name, "BPP_" + name, StringComparison.OrdinalIgnoreCase)) return id; }
-            table.UpgradeOpen();
-            var created = new TextStyleTableRecord { Name = "BPP_" + name };
-            var fonts = new System.Collections.Generic.Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { { "黑体", "simhei.ttf" }, { "宋体", "simsun.ttc" }, { "微软雅黑", "msyh.ttc" }, { "Arial", "arial.ttf" } };
-            created.FileName = fonts.ContainsKey(name ?? string.Empty) ? fonts[name] : "simhei.ttf";
-            var idCreated = table.Add(created); tr.AddNewlyCreatedDBObject(created, true); return idCreated;
+            return DraftingStandardService.ResolveTextStyle(database, tr, name, false);
         }
 
         private static string SafeName(string value)
         { var clean = string.IsNullOrWhiteSpace(value) ? "自建图框" : value.Trim(); foreach (var character in System.IO.Path.GetInvalidFileNameChars()) clean = clean.Replace(character, '_'); return clean; }
+        private static string SafeBlockName(string value)
+        {
+            var clean = SafeName(value);
+            foreach (var character in new[] { '<', '>', '/', '\\', '"', ':', ';', '?', '*', '|', ',', '=', '`' })
+                clean = clean.Replace(character, '_');
+            return clean.Trim();
+        }
     }
 }

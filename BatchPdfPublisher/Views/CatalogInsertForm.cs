@@ -67,7 +67,7 @@ namespace BatchPdfPublisher.Views
             LoadSettings();
             root.Controls.Add(FieldLabel("字体样式 / 颜色"), 0, 7);
             var styleLine = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = false };
-            _font.DropDownStyle = ComboBoxStyle.DropDownList; _font.Width = 210; _font.Items.AddRange(FrameCreationService.GetTextStyleNames(_document)); _font.SelectedItem = "黑体"; if (_font.SelectedIndex < 0 && _font.Items.Count > 0) _font.SelectedIndex = 0;
+            _font.DropDownStyle = ComboBoxStyle.DropDownList; _font.Width = 210; _font.Items.AddRange(FrameCreationService.GetTextStyleNames(_document)); _font.SelectedItem = DraftingStandardService.GetTextStyleName(DraftingStandardProfile.BodyTextKey); if (_font.SelectedIndex < 0 && _font.Items.Count > 0) _font.SelectedIndex = 0;
             _color.Text = string.Empty; _color.Width = 32; _color.Height = 30; _color.MinimumSize = new Size(32, 30); _color.Margin = new Padding(3, 0, 3, 0); _color.FlatStyle = FlatStyle.Flat; _color.BackColor = DisplayColor(_acColor); _color.Click += (s, e) => ChooseColor(); styleLine.Controls.Add(_font); styleLine.Controls.Add(_color);
             root.Controls.Add(styleLine, 1, 7);
             var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(0, 10, 0, 0) };

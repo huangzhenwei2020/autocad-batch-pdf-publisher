@@ -34,21 +34,22 @@ namespace BatchPdfPublisher.Services
             // 再次 LockDocument 会在部分 AutoCAD/T20 环境抛出 eNotApplicable。
             using (var tr = document.Database.TransactionManager.StartTransaction())
             {
-                var space = (BlockTableRecord)tr.GetObject(document.Database.CurrentSpaceId, OpenMode.ForWrite); var style = FrameCreationService.EnsureTextStyle(document.Database, tr, settings.Font);
+                DraftingStandardService.EnsureAll(document.Database, tr);
+                var space = (BlockTableRecord)tr.GetObject(document.Database.CurrentSpaceId, OpenMode.ForWrite); var style = DraftingStandardService.ResolveTextStyle(document.Database, tr, settings.Font, false); var catalogLayer = DraftingStandardService.GetLayerName(DraftingStandardProfile.CatalogKey);
                 var verticalOffset = 0d;
                 foreach (var group in sheets.GroupBy(s => string.IsNullOrWhiteSpace(s.Building) ? "未分组" : s.Building))
                 {
                     var groupSheets = group.ToList();
-                    AddText(space, tr, group.Key + " 图纸目录", new Point3d(point.Value.X + tableWidth / 2, point.Value.Y - verticalOffset - rowHeight / 2, 0), textHeight, style, settings.Color);
+                    AddText(space, tr, group.Key + " 图纸目录", new Point3d(point.Value.X + tableWidth / 2, point.Value.Y - verticalOffset - rowHeight / 2, 0), textHeight, style, settings.Color, catalogLayer);
                     verticalOffset += rowHeight * 1.5;
                     for (var start = 0; start < groupSheets.Count; start += Math.Max(1, settings.RowsPerPage))
                     {
                     var count = Math.Min(Math.Max(1, settings.RowsPerPage), groupSheets.Count - start); var top = point.Value.Y - verticalOffset; var left = point.Value.X;
-                    AddLine(space, tr, new Point3d(left, top, 0), new Point3d(left + tableWidth, top, 0)); AddLine(space, tr, new Point3d(left, top - headerHeight - count * rowHeight, 0), new Point3d(left + tableWidth, top - headerHeight - count * rowHeight, 0));
-                    var x = left; for (var c = 0; c <= widths.Count; c++) { AddLine(space, tr, new Point3d(x, top, 0), new Point3d(x, top - headerHeight - count * rowHeight, 0)); if (c < widths.Count) x += widths[c]; }
-                    for (var row = 0; row < count; row++) { var y = top - headerHeight - row * rowHeight; AddLine(space, tr, new Point3d(left, y, 0), new Point3d(left + tableWidth, y, 0)); }
-                    var currentX = left; for (var c = 0; c < columns.Count; c++) { AddText(space, tr, columns[c], new Point3d(currentX + widths[c] / 2, top - headerHeight / 2, 0), textHeight, style, settings.Color); currentX += widths[c]; }
-                    for (var row = 0; row < count; row++) { var sheet = groupSheets[start + row]; var values = Values(sheet, settings, start + row + 1); currentX = left; for (var c = 0; c < values.Length; c++) { AddText(space, tr, values[c], new Point3d(currentX + widths[c] / 2, top - headerHeight - row * rowHeight - rowHeight / 2, 0), textHeight, style, settings.Color); currentX += widths[c]; } }
+                    AddLine(space, tr, new Point3d(left, top, 0), new Point3d(left + tableWidth, top, 0), catalogLayer); AddLine(space, tr, new Point3d(left, top - headerHeight - count * rowHeight, 0), new Point3d(left + tableWidth, top - headerHeight - count * rowHeight, 0), catalogLayer);
+                    var x = left; for (var c = 0; c <= widths.Count; c++) { AddLine(space, tr, new Point3d(x, top, 0), new Point3d(x, top - headerHeight - count * rowHeight, 0), catalogLayer); if (c < widths.Count) x += widths[c]; }
+                    for (var row = 0; row < count; row++) { var y = top - headerHeight - row * rowHeight; AddLine(space, tr, new Point3d(left, y, 0), new Point3d(left + tableWidth, y, 0), catalogLayer); }
+                    var currentX = left; for (var c = 0; c < columns.Count; c++) { AddText(space, tr, columns[c], new Point3d(currentX + widths[c] / 2, top - headerHeight / 2, 0), textHeight, style, settings.Color, catalogLayer); currentX += widths[c]; }
+                    for (var row = 0; row < count; row++) { var sheet = groupSheets[start + row]; var values = Values(sheet, settings, start + row + 1); currentX = left; for (var c = 0; c < values.Length; c++) { AddText(space, tr, values[c], new Point3d(currentX + widths[c] / 2, top - headerHeight - row * rowHeight - rowHeight / 2, 0), textHeight, style, settings.Color, catalogLayer); currentX += widths[c]; } }
                     verticalOffset += headerHeight + count * rowHeight + rowHeight;
                     }
                     verticalOffset += rowHeight;
@@ -60,8 +61,8 @@ namespace BatchPdfPublisher.Services
         }
         private static string[] Values(SheetItem sheet, CatalogSettings s, int number) { var all = new[] { number.ToString(), sheet.SheetNumber, sheet.SheetName, sheet.FrameDisplay, sheet.PrintScale }; var enabled = new[] { s.IncludeBuilding, s.IncludeNumber, s.IncludeName, s.IncludePaper, s.IncludeScale }; return all.Where((value, index) => enabled[index]).ToArray(); }
         private static double Sum(IList<double> values) { var result = 0d; foreach (var value in values) result += value; return result; }
-        private static void AddLine(BlockTableRecord space, Transaction tr, Point3d a, Point3d b) { var line = new Line(a, b); space.AppendEntity(line); tr.AddNewlyCreatedDBObject(line, true); }
-        private static void AddText(BlockTableRecord space, Transaction tr, string value, Point3d center, double height, ObjectId style, Autodesk.AutoCAD.Colors.Color color)
+        private static void AddLine(BlockTableRecord space, Transaction tr, Point3d a, Point3d b, string layer) { var line = new Line(a, b) { Layer = layer }; space.AppendEntity(line); tr.AddNewlyCreatedDBObject(line, true); }
+        private static void AddText(BlockTableRecord space, Transaction tr, string value, Point3d center, double height, ObjectId style, Autodesk.AutoCAD.Colors.Color color, string layer)
         {
             // AutoCAD/T20 要求先设置对齐模式，再设置 AlignmentPoint，否则会抛出 eNotApplicable。
             var text = new DBText();
@@ -69,6 +70,7 @@ namespace BatchPdfPublisher.Services
             text.Height = height;
             text.Position = center;
             text.TextStyleId = style;
+            text.Layer = layer;
             text.HorizontalMode = TextHorizontalMode.TextCenter;
             text.VerticalMode = TextVerticalMode.TextVerticalMid;
             text.AlignmentPoint = center;

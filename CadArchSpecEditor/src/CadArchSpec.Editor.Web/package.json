@@ -1,0 +1,30 @@
+{
+  "name": "cad-arch-spec-editor-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit && vite build",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "prosemirror-commands": "1.7.1",
+    "prosemirror-history": "1.4.1",
+    "prosemirror-keymap": "1.2.3",
+    "prosemirror-model": "1.25.4",
+    "prosemirror-schema-basic": "1.2.4",
+    "prosemirror-schema-list": "1.5.1",
+    "prosemirror-state": "1.4.3",
+    "prosemirror-view": "1.41.3",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.18",
+    "@types/react-dom": "18.3.5",
+    "@vitejs/plugin-react": "6.0.4",
+    "typescript": "5.7.3",
+    "vite": "8.1.5",
+    "vitest": "4.1.10"
+  }
+}

@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using BatchPdfPublisher.Models;
 using BatchPdfPublisher.ViewModels;
@@ -25,7 +26,7 @@ namespace BatchPdfPublisher.Views
         private readonly ListBox _buildings = new ListBox();
         private readonly CheckedListBox _cadFiles = new CheckedListBox();
         private readonly ListBox _frames = new ListBox();
-        private readonly DataGridView _sheets = new DataGridView();
+        private readonly DataGridView _sheets = new BufferedDataGridView();
         private readonly ComboBox _plotStyle = new ComboBox();
         private readonly ComboBox _marginMode = new ComboBox();
         private readonly TextBox _outputDirectory = new TextBox();
@@ -44,10 +45,14 @@ namespace BatchPdfPublisher.Views
         private readonly ToolTip _toolTip = new ToolTip();
         private bool _refreshing;
         private bool _gridCommitPending;
+        private SplitContainer _leftSplitter;
+        private SplitContainer _rightSplitter;
+        private int _savedLeftPanelWidth = 330;
+        private int _savedRightPanelWidth = 300;
 
         public PublisherForm()
         {
-            Text = "批量 PDF 发布  v0.8.2";
+            Text = "万落建筑工具 · 批量 PDF 发布  v0.8.6";
             Width = 1240;
             Height = 760;
             MinimumSize = new System.Drawing.Size(840, 540);
@@ -56,6 +61,7 @@ namespace BatchPdfPublisher.Views
             SizeGripStyle = SizeGripStyle.Show;
             Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
 
+            LoadUiLayoutSettings();
             BuildInterface();
             WireEvents();
             RefreshAll();
@@ -69,7 +75,7 @@ namespace BatchPdfPublisher.Views
             ApplyInputStyle(_plotStyle);
             ApplyInputStyle(_marginMode);
             ApplyInputStyle(_outputDirectory);
-            var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(0), RowCount = 4, ColumnCount = 1 };
+            var root = new BufferedTableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(0), RowCount = 4, ColumnCount = 1 };
             // The native window title bar is the app title.  The approved
             // design keeps the project actions in a white row directly below
             // it; the internal decorative header therefore remains collapsed.
@@ -101,10 +107,10 @@ namespace BatchPdfPublisher.Views
             var projectManagerButton = ProjectManagerButton(); projectManagerButton.Margin = new Padding(0, 1, 0, 0); projectBar.Controls.Add(projectManagerButton);
             root.Controls.Add(projectBar, 0, 1);
 
-            var body = new Panel { Dock = DockStyle.Fill, Padding = new Padding(14, 12, 14, 10) };
+            var body = new BufferedPanel { Dock = DockStyle.Fill, Padding = new Padding(14, 12, 14, 10) };
             root.Controls.Add(body, 0, 2);
 
-            var leftSplitter = new SplitContainer
+            var leftSplitter = _leftSplitter = new BufferedSplitContainer
             {
                 Dock = DockStyle.Fill,
                 Orientation = Orientation.Vertical,
@@ -114,7 +120,7 @@ namespace BatchPdfPublisher.Views
             };
             body.Controls.Add(leftSplitter);
 
-            var rightSplitter = new SplitContainer
+            var rightSplitter = _rightSplitter = new BufferedSplitContainer
             {
                 Dock = DockStyle.Fill,
                 Orientation = Orientation.Vertical,
@@ -240,12 +246,15 @@ namespace BatchPdfPublisher.Views
             _includeBuildingName.Text = "文件名包含子项目名"; _includeBuildingName.AutoSize = true; right.Controls.Add(_includeBuildingName);
             _overwriteExisting.Text = "同名 PDF 直接覆盖"; _overwriteExisting.AutoSize = true; right.Controls.Add(_overwriteExisting);
             rightSplitter.Panel2.Controls.Add(right);
+            ConfigureSmoothSplitter(leftSplitter);
+            ConfigureSmoothSplitter(rightSplitter);
 
             Shown += (sender, args) =>
             {
                 leftSplitter.Panel1MinSize = Math.Min(320, Math.Max(240, leftSplitter.Width - 470 - leftSplitter.SplitterWidth));
                 leftSplitter.Panel2MinSize = Math.Min(470, Math.Max(320, leftSplitter.Width - leftSplitter.Panel1MinSize - leftSplitter.SplitterWidth));
-                leftSplitter.SplitterDistance = Math.Min(330, Math.Max(leftSplitter.Panel1MinSize, leftSplitter.Width / 4));
+                var leftMaximum = leftSplitter.Width - leftSplitter.Panel2MinSize - leftSplitter.SplitterWidth;
+                leftSplitter.SplitterDistance = Clamp(_savedLeftPanelWidth, leftSplitter.Panel1MinSize, leftMaximum);
                 // CAD file list keeps a practical default height; the project
                 // list receives all remaining height while frame registration
                 // is collapsed. Both dividers remain user-draggable.
@@ -255,7 +264,9 @@ namespace BatchPdfPublisher.Views
 
                 rightSplitter.Panel1MinSize = Math.Min(420, Math.Max(180, rightSplitter.Width - 300 - rightSplitter.SplitterWidth));
                 rightSplitter.Panel2MinSize = Math.Min(300, Math.Max(210, rightSplitter.Width - rightSplitter.Panel1MinSize - rightSplitter.SplitterWidth));
-                rightSplitter.SplitterDistance = Math.Max(rightSplitter.Panel1MinSize, rightSplitter.Width - rightSplitter.Panel2MinSize - rightSplitter.SplitterWidth);
+                var rightMaximum = rightSplitter.Width - rightSplitter.Panel1MinSize - rightSplitter.SplitterWidth;
+                var rightPanelWidth = Clamp(_savedRightPanelWidth, rightSplitter.Panel2MinSize, rightMaximum);
+                rightSplitter.SplitterDistance = rightSplitter.Width - rightPanelWidth - rightSplitter.SplitterWidth;
             };
 
             var footer = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = System.Drawing.Color.White, Padding = new Padding(16, 8, 16, 8), ColumnCount = 3, RowCount = 1 };
@@ -385,7 +396,7 @@ namespace BatchPdfPublisher.Views
             _previewEnabled.CheckedChanged += (s, e) => { if (!_refreshing) _viewModel.PreviewEnabled = _previewEnabled.Checked; };
             _viewModel.PropertyChanged += ViewModelPropertyChanged;
             _viewModel.Frames.CollectionChanged += (s, e) => BeginInvoke(new Action(RefreshFrames));
-            FormClosed += (s, e) => _viewModel.Dispose();
+            FormClosed += (s, e) => { SaveUiLayoutSettings(); _viewModel.Dispose(); };
         }
 
         private void ViewModelPropertyChanged(object sender, PropertyChangedEventArgs e)
@@ -398,7 +409,7 @@ namespace BatchPdfPublisher.Views
                 try { _buildings.SelectedItem = _viewModel.SelectedBuilding; RefreshSheetsCore(); }
                 finally { _refreshing = false; }
             }
-            if (e.PropertyName == "SelectedSheet") RefreshSheets();
+            if (e.PropertyName == "SelectedSheet") SelectCurrentSheetRow();
             if (e.PropertyName == "PublishProgressValue" || e.PropertyName == "PublishProgressMaximum" || e.PropertyName == "IsPublishing" || e.PropertyName == "ScanProgressValue" || e.PropertyName == "ScanProgressMaximum" || e.PropertyName == "IsScanning") RefreshPublishProgress();
         }
 
@@ -507,6 +518,18 @@ namespace BatchPdfPublisher.Views
             _sheets.DataSource = new BindingList<SheetItem>(visible);
             if (_viewModel.SelectedSheet != null)
                 foreach (DataGridViewRow row in _sheets.Rows) if (ReferenceEquals(row.DataBoundItem, _viewModel.SelectedSheet)) { row.Selected = true; break; }
+        }
+
+        private void SelectCurrentSheetRow()
+        {
+            if (_refreshing || _sheets.IsDisposed) return;
+            foreach (DataGridViewRow row in _sheets.Rows)
+            {
+                var selected = ReferenceEquals(row.DataBoundItem, _viewModel.SelectedSheet);
+                if (row.Selected != selected) row.Selected = selected;
+                if (selected && !ReferenceEquals(_sheets.CurrentRow, row))
+                    _sheets.CurrentCell = row.Cells.Cast<DataGridViewCell>().FirstOrDefault(cell => cell.Visible);
+            }
         }
 
         private void RefreshPlotStyles()
@@ -960,9 +983,98 @@ namespace BatchPdfPublisher.Views
             };
         }
 
+        private void ConfigureSmoothSplitter(SplitContainer splitter)
+        {
+            var dragging = false;
+            var redrawTargets = new Control[] { splitter.Panel1, splitter.Panel2 };
+
+            Action beginDrag = () =>
+            {
+                if (dragging) return;
+                dragging = true;
+                foreach (var target in redrawTargets)
+                {
+                    target.SuspendLayout();
+                    SetRedraw(target, false);
+                }
+            };
+
+            Action endDrag = () =>
+            {
+                if (!dragging) return;
+                dragging = false;
+                foreach (var target in redrawTargets)
+                {
+                    if (target == null || target.IsDisposed) continue;
+                    target.ResumeLayout(true);
+                    SetRedraw(target, true);
+                    target.Invalidate(true);
+                }
+                splitter.Invalidate(true);
+                splitter.Update();
+                SaveUiLayoutSettings();
+            };
+
+            splitter.MouseDown += (sender, args) =>
+            {
+                if (args.Button == MouseButtons.Left && splitter.SplitterRectangle.Contains(args.Location))
+                    beginDrag();
+            };
+            splitter.MouseUp += (sender, args) => endDrag();
+            splitter.MouseCaptureChanged += (sender, args) =>
+            {
+                if (dragging && Control.MouseButtons == MouseButtons.None) endDrag();
+            };
+            splitter.Disposed += (sender, args) => endDrag();
+        }
+
+        private static void SetRedraw(Control control, bool enabled)
+        {
+            if (control == null || control.IsDisposed || !control.IsHandleCreated) return;
+            SendMessage(control.Handle, WmSetRedraw, enabled ? new IntPtr(1) : IntPtr.Zero, IntPtr.Zero);
+        }
+
+        private void LoadUiLayoutSettings()
+        {
+            try
+            {
+                var path = UiLayoutSettingsPath();
+                if (!File.Exists(path)) return;
+                var values = File.ReadAllLines(path);
+                int width;
+                if (values.Length > 0 && int.TryParse(values[0], out width) && width > 0) _savedLeftPanelWidth = width;
+                if (values.Length > 1 && int.TryParse(values[1], out width) && width > 0) _savedRightPanelWidth = width;
+            }
+            catch { }
+        }
+
+        private void SaveUiLayoutSettings()
+        {
+            try
+            {
+                if (_leftSplitter != null && !_leftSplitter.IsDisposed && _leftSplitter.Width > 0)
+                    _savedLeftPanelWidth = _leftSplitter.SplitterDistance;
+                if (_rightSplitter != null && !_rightSplitter.IsDisposed && _rightSplitter.Width > 0)
+                    _savedRightPanelWidth = _rightSplitter.Width - _rightSplitter.SplitterDistance - _rightSplitter.SplitterWidth;
+                File.WriteAllLines(UiLayoutSettingsPath(), new[] { _savedLeftPanelWidth.ToString(), _savedRightPanelWidth.ToString() });
+            }
+            catch { }
+        }
+
+        private static string UiLayoutSettingsPath()
+        {
+            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "BatchPdfPublisher.ui-layout.settings");
+        }
+
+        private static int Clamp(int value, int minimum, int maximum)
+        {
+            if (maximum < minimum) return minimum;
+            return Math.Max(minimum, Math.Min(maximum, value));
+        }
+
         private static TableLayoutPanel Card(int rows, Padding padding)
         {
-            var card = new TableLayoutPanel
+            var card = new BufferedTableLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 RowCount = rows,
@@ -1015,6 +1127,51 @@ namespace BatchPdfPublisher.Views
         {
             // Intentionally left square: the publisher uses a compact, native
             // WinForms layout and avoids clipped corners at different DPI scales.
+        }
+
+        private const int WmSetRedraw = 0x000B;
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wordParameter, IntPtr longParameter);
+
+        private sealed class BufferedDataGridView : DataGridView
+        {
+            public BufferedDataGridView()
+            {
+                DoubleBuffered = true;
+                SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+                UpdateStyles();
+            }
+        }
+
+        private sealed class BufferedPanel : Panel
+        {
+            public BufferedPanel()
+            {
+                DoubleBuffered = true;
+                SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+                UpdateStyles();
+            }
+        }
+
+        private sealed class BufferedTableLayoutPanel : TableLayoutPanel
+        {
+            public BufferedTableLayoutPanel()
+            {
+                DoubleBuffered = true;
+                SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+                UpdateStyles();
+            }
+        }
+
+        private sealed class BufferedSplitContainer : SplitContainer
+        {
+            public BufferedSplitContainer()
+            {
+                DoubleBuffered = true;
+                SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+                UpdateStyles();
+            }
         }
     }
 }

@@ -5,6 +5,7 @@ using BatchPdfPublisher.Services;
 using System;
 using System.IO;
 using System.Collections.Generic;
+using System.Linq;
 using BatchPdfPublisher.Models;
 using BatchPdfPublisher.Views;
 
@@ -28,6 +29,34 @@ namespace BatchPdfPublisher
         [CommandMethod("BPP")]
         public void BppCommand() => OpenPublisher();
 
+        [CommandMethod("WLJZSM", CommandFlags.Session)]
+        public void OpenArchitectureAssistant()
+        {
+            var loaded = System.AppDomain.CurrentDomain.GetAssemblies().Any(x =>
+                x.GetName().Name.StartsWith("CadArchSpec.Host.AutoCAD", System.StringComparison.OrdinalIgnoreCase));
+            if (!loaded)
+            {
+                Application.ShowAlertDialog("建筑设计说明助手尚未加载。\r\n\r\n请使用最新版“万落建筑工具启动器”安装完整组件。建筑说明功能当前支持 AutoCAD 2021–2026；AutoCAD 2014 仍可使用批量打印、图框和目录功能。");
+                return;
+            }
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document != null) document.SendStringToExecute("JZSM ", true, false, false);
+        }
+
+        [CommandMethod("WLLTDY", CommandFlags.Session)]
+        public void OpenStairDetailAssistant()
+        {
+            var loaded = System.AppDomain.CurrentDomain.GetAssemblies().Any(x =>
+                x.GetName().Name.StartsWith("WL.Stair.Cad", System.StringComparison.OrdinalIgnoreCase));
+            if (!loaded)
+            {
+                Application.ShowAlertDialog("一键楼梯大样组件尚未加载。\r\n\r\n请使用最新版“万落建筑工具启动器”安装完整组件。该功能当前支持 AutoCAD 2021–2026；旧版 CAD 仍可使用批量打印、图框和目录功能。");
+                return;
+            }
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document != null) document.SendStringToExecute("LTDY ", true, false, false);
+        }
+
         [CommandMethod("TKK")]
         public void CreateFrameCommand()
         {
@@ -38,6 +67,40 @@ namespace BatchPdfPublisher
 
         [CommandMethod("ML1")]
         public void InsertCatalogShortcut() => ShowPublisher(form => form.OpenCatalogInsertForCommand(), false);
+
+        [CommandMethod("BZS")]
+        [CommandMethod("WLSTANDARDS")]
+        public void InitializeDraftingStandards()
+        {
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document == null) return;
+            try
+            {
+                Application.ShowModalDialog(new DraftingStandardForm(document));
+            }
+            catch (System.Exception exception)
+            {
+                Application.ShowAlertDialog("初始化制图标准失败：\r\n" + exception.Message);
+            }
+        }
+
+        [CommandMethod("BZSAPPLY")]
+        public void ApplyDraftingStandards()
+        {
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document == null) return;
+            try
+            {
+                using (var transaction = document.Database.TransactionManager.StartTransaction())
+                {
+                    var profile = DraftingStandardService.LoadProfile();
+                    DraftingStandardService.EnsureAll(document.Database, transaction, profile, profile.UpdateExisting);
+                    transaction.Commit();
+                    document.Editor.WriteMessage("\n万落制图标准已应用：" + profile.Layers.Count + " 个图层、" + profile.TextStyles.Count + " 个文字样式、" + profile.DimensionScales.Count + " 个标注样式。\n");
+                }
+            }
+            catch (System.Exception exception) { Application.ShowAlertDialog("应用制图标准失败：\r\n" + exception.Message); }
+        }
 
         [CommandMethod("BPPUI")]
         public void RefreshPluginUi()

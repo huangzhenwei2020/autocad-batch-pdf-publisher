@@ -71,7 +71,11 @@ namespace BatchPdfPublisher.ViewModels
             NewProjectCommand = new RelayCommand(CreateProject);
             RefreshPlotStylesCommand = new RelayCommand(RefreshPlotStyles);
             SaveFavoritePlotStyleCommand = new RelayCommand(SaveFavoritePlotStyle, () => !string.IsNullOrWhiteSpace(PlotStyle));
+#if ACAD_R19
             PublishCommand = new RelayCommand(PublishPdf, () => Sheets.Count > 0);
+#else
+            PublishCommand = new RelayCommand(async () => await PublishPdfAsync(), () => Sheets.Count > 0);
+#endif
             PublishPlanStore.FramesChanged += ReloadFrames;
 
             var activeName = _store.LoadActiveProjectName();
@@ -744,12 +748,18 @@ namespace BatchPdfPublisher.ViewModels
 #if ACAD_R19
         private void PublishPdf()
 #else
-        private async void PublishPdf()
+        private async System.Threading.Tasks.Task PublishPdfAsync()
 #endif
         {
             var initialDocument = Application.DocumentManager.MdiActiveDocument;
             var preparedPages = new System.Collections.Generic.List<PreparedPdfPage>();
-            if (IsPublishing) return;
+
+            // 防止并发发布
+            if (IsPublishing)
+            {
+                Status = "发布任务正在进行中，请等待完成后再试。";
+                return;
+            }
             IsPublishing = true;
             var selectedNames = PublishBuildings.Where(x => x.IsSelected).Select(x => x.Name).ToList();
             var sheetsForPublish = Sheets.Where(x => selectedNames.Contains(x.Building)).ToList();
@@ -840,9 +850,16 @@ namespace BatchPdfPublisher.ViewModels
                     // switching DWGs inside one callback leaves the callback bound
                     // to the original document, so PlotInfoValidator reports
                     // eLayoutNotCurrent even when the layout ObjectId is correct.
+
+                        // 【修复】验证文档切换前状态，避免并发冲突
+                        var previousDocument = Application.DocumentManager.MdiActiveDocument;
                         Application.DocumentManager.MdiActiveDocument = sourceDocument;
                         if (!ReferenceEquals(Application.DocumentManager.MdiActiveDocument, sourceDocument))
+                        {
+                            WritePublishStage("文档切换失败，尝试恢复：prev=" + SafeDocumentPath(previousDocument) + ", target=" + sourcePath);
                             throw new System.InvalidOperationException("AutoCAD 无法把图纸切换为当前文档：" + sourcePath);
+                        }
+                        WritePublishStage("文档切换成功：" + sourcePath);
                         var baseProgress = completedBeforeGroup;
                         System.Collections.Generic.List<PreparedPdfPage> groupPages = null;
                         System.Exception groupException = null;
@@ -902,7 +919,7 @@ namespace BatchPdfPublisher.ViewModels
                         // AutoCAD documents carry large native databases. Give
                         // their managed wrappers a chance to release between
                         // files during projects containing hundreds of DWGs.
-                        if (openedForPublish) GC.Collect(1, GCCollectionMode.Optimized, false);
+                        if (openedForPublish) GC.Collect(1, GCCollectionMode.Optimized);
                     }
                 }
                 PublishProgressValue = 0;
@@ -1109,7 +1126,13 @@ namespace BatchPdfPublisher.ViewModels
         private static string NormalizeCadPath(string path)
         {
             if (string.IsNullOrWhiteSpace(path)) return string.Empty;
-            try { return System.IO.Path.GetFullPath(path.Trim()); }
+            try
+            {
+                // 【修复】统一路径规范化，处理相对路径和路径分隔符
+                var normalizedPath = System.IO.Path.GetFullPath(path.Trim());
+                // 确保使用标准路径分隔符
+                return normalizedPath.Replace(System.IO.Path.AltDirectorySeparatorChar, System.IO.Path.DirectorySeparatorChar);
+            }
             catch { return path.Trim(); }
         }
 

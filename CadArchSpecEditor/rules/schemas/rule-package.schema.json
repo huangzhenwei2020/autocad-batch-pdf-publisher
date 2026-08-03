@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://batchpdfpublisher.local/schemas/cad-arch-spec/rule-package-v1.json",
+  "title": "建筑设计说明助手规则包",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "packageId", "version", "jurisdictionCode", "displayName", "status", "rules"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "packageId": { "type": "string", "minLength": 1 },
+    "version": { "type": "string", "minLength": 1 },
+    "jurisdictionCode": { "type": "string", "pattern": "^[A-Z]{2}(-[A-Z0-9]+)*$" },
+    "displayName": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["Draft", "Active", "Superseded", "Disabled"] },
+    "effectiveFrom": { "type": ["string", "null"], "format": "date" },
+    "effectiveTo": { "type": ["string", "null"], "format": "date" },
+    "verifiedAt": { "type": ["string", "null"], "format": "date-time" },
+    "signature": { "type": "string" },
+    "rules": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/rule" }
+    }
+  },
+  "$defs": {
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ruleId", "version", "title", "jurisdictionCode", "buildingTypes", "severity", "checkType", "target", "parameters", "message", "requiresProfessionalConfirmation", "references"],
+      "properties": {
+        "ruleId": { "type": "string", "pattern": "^[A-Z0-9-]+$" },
+        "version": { "type": "integer", "minimum": 1 },
+        "title": { "type": "string", "minLength": 1 },
+        "jurisdictionCode": { "type": "string" },
+        "buildingTypes": {
+          "type": "array",
+          "items": {
+            "enum": ["common", "residential", "office", "transportation", "education", "commercial", "cultureAndSports", "medical", "industrial", "other"]
+          }
+        },
+        "effectiveFrom": { "type": ["string", "null"], "format": "date" },
+        "effectiveTo": { "type": ["string", "null"], "format": "date" },
+        "severity": { "enum": ["blocker", "error", "warning", "info"] },
+        "checkType": {
+          "enum": ["requiredSection", "requiredField", "fieldConsistency", "standardStatus", "tableRequired", "formula", "dateApplicability"]
+        },
+        "target": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "sectionType": { "type": "string" },
+            "fieldPath": { "type": "string" },
+            "tableType": { "type": "string" },
+            "columnKey": { "type": "string" }
+          }
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "message": { "type": "string", "minLength": 1 },
+        "requiresProfessionalConfirmation": { "type": "boolean" },
+        "references": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["standardCode", "clause", "officialSourceUrl"],
+            "properties": {
+              "standardCode": { "type": "string", "minLength": 1 },
+              "clause": { "type": "string" },
+              "officialSourceUrl": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -84,6 +84,25 @@ namespace BatchPdfPublisher.Services
         public string CreateEngineeringOutputFolder(ProjectProfile project)
         {
             var outputRoot = string.IsNullOrWhiteSpace(project?.OutputDirectory) ? @"D:\PDF输出" : project.OutputDirectory;
+
+            // 【修复】检查输出目录的磁盘空间
+            try
+            {
+                var outputDrive = Path.GetPathRoot(outputRoot);
+                if (!string.IsNullOrWhiteSpace(outputDrive))
+                {
+                    var driveInfo = new DriveInfo(outputDrive);
+                    if (driveInfo.IsReady && driveInfo.AvailableFreeSpace < MinimumFreeSpaceBytes)
+                    {
+                        WritePublishDiagnostic($"警告：输出目录 {outputRoot} 所在磁盘剩余空间不足 512 MB（当前：{driveInfo.AvailableFreeSpace / 1024 / 1024} MB）");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                WritePublishDiagnostic($"检查输出目录磁盘空间时出错：{ex.Message}");
+            }
+
             var requestedEngineeringFolder = Path.Combine(outputRoot, SafeName(project?.Name ?? "默认工程"));
             var engineeringFolder = UniqueDirectory(requestedEngineeringFolder);
             Directory.CreateDirectory(engineeringFolder);
@@ -171,7 +190,7 @@ namespace BatchPdfPublisher.Services
                             result.Failures.Add("子项目“" + (string.IsNullOrWhiteSpace(group.Key) ? "未分组" : group.Key) + "”合并失败：" + exception.Message);
                             CompleteFailedProgress(groupPages, completedBeforeGroup, ref completed, pages.Count, progress);
                         }
-                        GC.Collect(1, GCCollectionMode.Optimized, false);
+                        GC.Collect(1, GCCollectionMode.Optimized);
                     }
                 }
                 else
@@ -196,7 +215,7 @@ namespace BatchPdfPublisher.Services
                             result.Failures.Add(SheetLabel(page.Sheet) + "整理失败：" + exception.Message);
                             if (completed == completedBeforePage) { completed++; progress?.Invoke(completed, pages.Count, page.Sheet); }
                         }
-                        if (result.SheetCount % 100 == 0) GC.Collect(1, GCCollectionMode.Optimized, false);
+                        if (result.SheetCount % 100 == 0) GC.Collect(1, GCCollectionMode.Optimized);
                     }
                 }
                 return result;
@@ -409,7 +428,11 @@ namespace BatchPdfPublisher.Services
                     // MDI batch. SetCurrentLayoutId synchronizes the native layout
                     // object used by PlotInfoValidator and prevents
                     // eLayoutNotCurrent.
+#if ACAD_R19
+                    layoutManager.CurrentLayout = requestedLayout;
+#else
                     layoutManager.SetCurrentLayoutId(requestedLayoutId);
+#endif
                     var currentLayoutId = layoutManager.GetLayoutId(layoutManager.CurrentLayout);
                     var layout = transaction.GetObject(currentLayoutId, OpenMode.ForRead) as Layout;
                     if (layout == null)

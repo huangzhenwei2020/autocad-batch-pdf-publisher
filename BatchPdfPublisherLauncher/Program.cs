@@ -23,7 +23,7 @@ namespace BatchPdfPublisherLauncher
         private const string PlotterConfigName = "BatchPdfPublisher.pc3";
         private const string PlotterMediaName = "BatchPdfPublisher.pmp";
         private const string LastPlatformFileName = "BatchPdfPublisher.last-platform.txt";
-        private static readonly string LaunchLogPath = Path.Combine(Path.GetTempPath(), "BatchPdfPublisher.launcher.log");
+        private static readonly string LaunchLogPath = Path.Combine(Path.GetTempPath(), "WanluoArchitectureTools.launcher.log");
 
         [STAThread]
         private static void Main()
@@ -40,7 +40,7 @@ namespace BatchPdfPublisherLauncher
                     if (picker.UninstallRequested)
                     {
                         UninstallPlugin();
-                        MessageBox.Show("批量打印插件及永久自动加载配置已卸载。工程文件和 CAD 图纸不会删除。", "卸载完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        MessageBox.Show("“万落建筑工具”及永久自动加载配置已卸载。工程文件和 CAD 图纸不会删除。", "卸载完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
                         return;
                     }
                     if (picker.Options.Platform == null) throw new FileNotFoundException("未找到可用的 AutoCAD 安装。请先安装 AutoCAD，或检查安装权限。");
@@ -54,19 +54,31 @@ namespace BatchPdfPublisherLauncher
 
                 File.WriteAllText(LastPlatformPath(), options.Platform.Id);
                 InstallPlotterProfiles(sourcePlotterConfig, sourcePlotterMedia);
-                var installedAssembly = InstallPlugin(payload, options.InstallPermanently);
+                // A previous standalone BPP/spec installation may still be configured
+                // for LoadOnStartup. Loading the same commands again from the suite
+                // path creates two assembly instances and can terminate AutoCAD/T20
+                // in native UI code. Always remove legacy/unified autoload bundles
+                // first; permanent installation recreates one clean unified bundle.
+                RemoveAutoLoadBundles();
+                var installedAssembly = InstallPlugin(payload, false);
+                var architectureAssembly = InstallArchitectureAssistant(launcherDirectory, payload.Band);
+                var stairAssembly = InstallStairDetail(launcherDirectory, payload.Band);
+                if (options.InstallPermanently) InstallAutoLoadBundle(installedAssembly, payload.PdfDependencyPath, payload.Band, architectureAssembly, stairAssembly);
                 Log("已安装插件: " + installedAssembly);
+                if (!string.IsNullOrWhiteSpace(architectureAssembly)) Log("已安装建筑说明助手: " + architectureAssembly);
+                if (!string.IsNullOrWhiteSpace(stairAssembly)) Log("已安装一键楼梯大样: " + stairAssembly);
+                var assemblies = new[] { installedAssembly, architectureAssembly, stairAssembly }.Where(x => !string.IsNullOrWhiteSpace(x)).ToArray();
                 if (options.LoadIntoRunningCad)
                 {
-                    if (!TrySendLoad(options.Platform.ProgId, installedAssembly))
+                    if (!TrySendLoad(options.Platform.ProgId, assemblies))
                         throw new InvalidOperationException("没有连接到已启动的 CAD。请确认目标 CAD 已完全打开，或取消“加载到已启动 CAD”后重新运行启动器。");
                 }
-                else StartPlatform(options.Platform, installedAssembly);
+                else StartPlatform(options.Platform, options.InstallPermanently ? new string[0] : assemblies);
             }
             catch (Exception exception)
             {
                 Log("启动失败: " + exception);
-                MessageBox.Show(exception.Message, "批量打印插件启动失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(exception.Message, "万落建筑工具启动失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -105,13 +117,14 @@ namespace BatchPdfPublisherLauncher
                         {
                             if (releaseKey == null) continue;
                             foreach (var product in releaseKey.GetSubKeyNames())
-                            using (var install = releaseKey.OpenSubKey(product + "\\Install"))
+                            using (var productKey = releaseKey.OpenSubKey(product))
+                            using (var install = productKey?.OpenSubKey("Install"))
                             {
-                                var dir = install?.GetValue("INSTALLDIR") as string;
+                                var dir = ReadAcadInstallDirectory(productKey, install);
                                 var exe = string.IsNullOrWhiteSpace(dir) ? null : Path.Combine(dir, "acad.exe");
                                 if (!File.Exists(exe)) continue;
                                 var progId = "AutoCAD.Application." + release.Substring(1);
-                                var display = ReadCadDisplayName(install, release);
+                                var display = ReadCadDisplayName(productKey, install, release);
                                 if (!result.Any(x => string.Equals(x.Executable, exe, StringComparison.OrdinalIgnoreCase)))
                                     result.Add(new AcadInstallation(display, release.Substring(1), exe, dir, progId));
                             }
@@ -123,9 +136,10 @@ namespace BatchPdfPublisherLauncher
             return result.OrderBy(x => x.DisplayName, StringComparer.OrdinalIgnoreCase).ToList();
         }
 
-        private static string ReadCadDisplayName(RegistryKey install, string release)
+        private static string ReadCadDisplayName(RegistryKey productKey, RegistryKey install, string release)
         {
-            var name = install?.GetValue("ProductName") as string ?? install?.GetValue("ProductNameForDisplay") as string;
+            var name = ReadRegistryString(productKey, "ProductName", "ProductNameGlob", "ProductNameForDisplay")
+                ?? ReadRegistryString(install, "ProductName", "ProductNameForDisplay");
             var yearMatch = Regex.Match((name ?? string.Empty) + " " + release, @"(?:20)(2[0-9])");
             if (yearMatch.Success) return "AutoCAD " + yearMatch.Value;
             var releaseNumber = release.StartsWith("R", StringComparison.OrdinalIgnoreCase) ? release.Substring(1) : release;
@@ -140,6 +154,27 @@ namespace BatchPdfPublisherLauncher
             };
             if (knownYears.TryGetValue(releaseNumber, out var year)) return "AutoCAD " + year;
             return string.IsNullOrWhiteSpace(name) ? "AutoCAD" : name.Trim();
+        }
+
+        private static string ReadAcadInstallDirectory(RegistryKey productKey, RegistryKey install)
+        {
+            // AutoCAD 2014 stores the directory directly on the localized
+            // product key (AcadLocation/Location), while newer releases
+            // normally use the nested Install\\INSTALLDIR value.
+            var value = ReadRegistryString(install, "INSTALLDIR", "InstallLocation", "Location", "AcadLocation")
+                ?? ReadRegistryString(productKey, "INSTALLDIR", "InstallLocation", "AcadLocation", "Location");
+            return string.IsNullOrWhiteSpace(value) ? null : value.Trim().TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        }
+
+        private static string ReadRegistryString(RegistryKey key, params string[] names)
+        {
+            if (key == null) return null;
+            foreach (var name in names)
+            {
+                var value = key.GetValue(name) as string;
+                if (!string.IsNullOrWhiteSpace(value)) return value;
+            }
+            return null;
         }
 
         private static PluginPayload ResolvePluginPayload(string launcherDirectory, string release)
@@ -177,27 +212,24 @@ namespace BatchPdfPublisherLauncher
 
         private static string FormatRelease(string release)
         {
-            var display = ReadCadDisplayName(null, "R" + (release ?? string.Empty).TrimStart('R', 'r'));
+            var display = ReadCadDisplayName(null, null, "R" + (release ?? string.Empty).TrimStart('R', 'r'));
             return display + "（R" + (release ?? string.Empty).TrimStart('R', 'r') + "）";
         }
 
         private static List<TianzhengInstallation> FindTianzhengInstallations()
         {
             var result = new List<TianzhengInstallation>();
-            var roots = new[] { @"C:\Tangent", @"D:\Tangent", @"E:\Tangent", @"C:\Program Files\Tangent", @"D:\Program Files\Tangent", @"C:\Program Files (x86)\Tangent", @"D:\Program Files (x86)\Tangent" };
+            var roots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var drive in DriveInfo.GetDrives().Where(x => x.DriveType == DriveType.Fixed && x.IsReady))
+            {
+                roots.Add(Path.Combine(drive.RootDirectory.FullName, "Tangent"));
+                roots.Add(Path.Combine(drive.RootDirectory.FullName, "Program Files", "Tangent"));
+                roots.Add(Path.Combine(drive.RootDirectory.FullName, "Program Files (x86)", "Tangent"));
+            }
+            foreach (var root in FindTianzhengUninstallLocations()) roots.Add(root);
             foreach (var root in roots)
             {
-                if (!Directory.Exists(root)) continue;
-                try
-                {
-                    foreach (var file in Directory.GetFiles(root, "*.exe", SearchOption.AllDirectories))
-                    {
-                        var name = Path.GetFileNameWithoutExtension(file).ToLowerInvariant();
-                        if (!(name.Contains("tgstart") || name.Contains("telec") || name.Contains("tmelec") || name.Contains("tarch"))) continue;
-                        AddTianzheng(result, file, file);
-                    }
-                }
-                catch { }
+                ScanTianzhengDirectory(result, root, root);
             }
             // Installed Tianzheng products publish their real launcher in the
             // Start Menu. Reading shortcuts also covers custom drives and
@@ -217,6 +249,66 @@ namespace BatchPdfPublisherLauncher
                 catch { }
             }
             return result;
+        }
+
+        private static IEnumerable<string> FindTianzhengUninstallLocations()
+        {
+            var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var hive in new[] { RegistryHive.LocalMachine, RegistryHive.CurrentUser })
+            foreach (var view in new[] { RegistryView.Registry64, RegistryView.Registry32 })
+            {
+                try
+                {
+                    using (var baseKey = RegistryKey.OpenBaseKey(hive, view))
+                    using (var uninstall = baseKey.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall"))
+                    {
+                        if (uninstall == null) continue;
+                        foreach (var name in uninstall.GetSubKeyNames())
+                        using (var product = uninstall.OpenSubKey(name))
+                        {
+                            var displayName = ReadRegistryString(product, "DisplayName") ?? string.Empty;
+                            var publisher = ReadRegistryString(product, "Publisher") ?? string.Empty;
+                            if (!Regex.IsMatch(displayName + " " + publisher, "天正|T20|T30|Tangent", RegexOptions.IgnoreCase)) continue;
+                            var location = ReadRegistryString(product, "InstallLocation", "InstallPath", "Path");
+                            if (!string.IsNullOrWhiteSpace(location)) result.Add(location.Trim().Trim('"'));
+                            var icon = ReadRegistryString(product, "DisplayIcon");
+                            if (!string.IsNullOrWhiteSpace(icon))
+                            {
+                                var executable = icon.Trim().Trim('"').Split(',')[0].Trim().Trim('"');
+                                if (File.Exists(executable)) result.Add(Path.GetDirectoryName(executable));
+                            }
+                        }
+                    }
+                }
+                catch { }
+            }
+            return result;
+        }
+
+        private static void ScanTianzhengDirectory(List<TianzhengInstallation> result, string root, string hint)
+        {
+            if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root)) return;
+            try
+            {
+                foreach (var file in Directory.GetFiles(root, "*.exe", SearchOption.AllDirectories))
+                {
+                    var name = Path.GetFileNameWithoutExtension(file).ToLowerInvariant();
+                    if (!(name.Contains("tgstart") || name.Contains("t20start") || name.Contains("t30start") || name.Contains("telec") || name.Contains("tmelec") || name.Contains("tarch"))) continue;
+                    var version = FileVersionInfo.GetVersionInfo(file);
+                    AddTianzheng(result, file, hint + " " + version.ProductName + " " + version.FileDescription);
+                }
+            }
+            catch { }
+        }
+
+        internal static TianzhengInstallation CreateTianzhengInstallation(string executable)
+        {
+            var result = new List<TianzhengInstallation>();
+            var version = FileVersionInfo.GetVersionInfo(executable);
+            AddTianzheng(result, executable, executable + " " + version.ProductName + " " + version.FileDescription);
+            if (result.Count == 0 && Path.GetFileNameWithoutExtension(executable).IndexOf("start", StringComparison.OrdinalIgnoreCase) >= 0)
+                result.Add(new TianzhengInstallation("天正 建筑", "manual-" + GetFileHash(executable).Substring(0, 8), executable));
+            return result.FirstOrDefault();
         }
 
         private static void AddTianzheng(List<TianzhengInstallation> result, string executable, string hint)
@@ -259,9 +351,10 @@ namespace BatchPdfPublisherLauncher
                     {
                         if (releaseKey == null) continue;
                         foreach (var product in releaseKey.GetSubKeyNames())
-                        using (var install = releaseKey.OpenSubKey(product + "\\Install"))
+                        using (var productKey = releaseKey.OpenSubKey(product))
+                        using (var install = productKey?.OpenSubKey("Install"))
                         {
-                            var value = install?.GetValue("INSTALLDIR") as string;
+                            var value = ReadAcadInstallDirectory(productKey, install);
                             if (!string.IsNullOrWhiteSpace(value) && File.Exists(Path.Combine(value, "acad.exe"))) return value;
                         }
                     }
@@ -276,15 +369,18 @@ namespace BatchPdfPublisherLauncher
             if (File.Exists(option.Executable)) platforms.Add(option);
         }
 
-        private static void StartPlatform(PlatformOption platform, string installedAssembly)
+        private static void StartPlatform(PlatformOption platform, IList<string> installedAssemblies)
         {
             Log("启动平台: " + platform.DisplayName);
             var startupScript = Path.Combine(Path.GetTempPath(), "BatchPdfPublisher." + Guid.NewGuid().ToString("N") + ".scr");
-            var trustedDirectory = Path.GetDirectoryName(installedAssembly).Replace('\\', '/');
-            var assemblyPath = installedAssembly.Replace('\\', '/');
+            var loadableAssemblies = installedAssemblies.Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var trustedDirectories = string.Join(";", loadableAssemblies.Select(Path.GetDirectoryName).Distinct(StringComparer.OrdinalIgnoreCase).Select(x => x.Replace('\\', '/')));
+            var loadCommands = string.Join(" ", loadableAssemblies.Select(x =>
+                "(vl-catch-all-apply 'command (list \"_.NETLOAD\" \"" + EscapeLispString(x.Replace('\\', '/')) + "\"))"));
             File.WriteAllText(startupScript,
-                "(setvar \"TRUSTEDPATHS\" (strcat (getvar \"TRUSTEDPATHS\") \";" + trustedDirectory + "\"))\r\n" +
-                "_.NETLOAD\r\n\"" + assemblyPath + "\"\r\nBPPUBLISH065\r\n", Encoding.Default);
+                "(progn (setq bpp_old_filedia (getvar \"FILEDIA\")) (setvar \"FILEDIA\" 0) " +
+                "(setvar \"TRUSTEDPATHS\" (strcat (getvar \"TRUSTEDPATHS\") \";" + EscapeLispString(trustedDirectories) + "\")) " +
+                loadCommands + " (setvar \"FILEDIA\" bpp_old_filedia) (princ))\r\n", Encoding.Default);
             Process.Start(new ProcessStartInfo
             {
                 FileName = platform.Executable,
@@ -296,16 +392,17 @@ namespace BatchPdfPublisherLauncher
             if (!WaitForCadProcess(45))
                 throw new InvalidOperationException(platform.DisplayName + " 启动后没有检测到 AutoCAD 进程。请确认平台可以单独正常启动。\r\n\r\n插件文件已经安装，进入 CAD 后仍可手工执行 BPPUBLISH。\r\n\r\n如使用天正，请从选择列表中选择“T20 天正建筑”，不要选择普通 AutoCAD 2022。 ");
 
-            Log("已通过启动脚本安排 NETLOAD + BPPUBLISH065");
+            Log(loadableAssemblies.Length > 0 ? "已通过无对话框启动脚本安排 NETLOAD" : "已通过统一 Bundle 安排自动加载");
         }
 
         private static void UninstallPlugin()
         {
             var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-            var bundle = Path.Combine(appData, "Autodesk", "ApplicationPlugins", "BatchPdfPublisher.bundle");
-            if (Directory.Exists(bundle)) Directory.Delete(bundle, true);
+            RemoveAutoLoadBundles();
             var releases = Path.Combine(appData, "BatchPdfPublisher", "releases");
             if (Directory.Exists(releases)) Directory.Delete(releases, true);
+            var suiteFiles = Path.Combine(appData, "WanluoArchitectureTools");
+            if (Directory.Exists(suiteFiles)) Directory.Delete(suiteFiles, true);
             var autodeskRoot = Path.Combine(appData, "Autodesk");
             if (Directory.Exists(autodeskRoot))
                 foreach (var plotters in Directory.GetDirectories(autodeskRoot, "Plotters", SearchOption.AllDirectories))
@@ -314,6 +411,16 @@ namespace BatchPdfPublisherLauncher
                     TryDelete(Path.Combine(plotters, "PMP Files", PlotterMediaName));
                 }
             TryDelete(LastPlatformPath());
+        }
+
+        private static void RemoveAutoLoadBundles()
+        {
+            var pluginRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Autodesk", "ApplicationPlugins");
+            foreach (var name in new[] { "WanluoArchitectureTools.bundle", "BatchPdfPublisher.bundle", "CadArchSpecEditor.bundle", "WanLuoArchitecture2022.bundle" })
+            {
+                var bundle = Path.Combine(pluginRoot, name);
+                if (Directory.Exists(bundle)) Directory.Delete(bundle, true);
+            }
         }
 
         private static void TryDelete(string path) { try { if (File.Exists(path)) File.Delete(path); } catch { } }
@@ -336,7 +443,7 @@ namespace BatchPdfPublisherLauncher
             return false;
         }
 
-        private static bool TrySendLoad(string progId, string installedAssembly)
+        private static bool TrySendLoad(string progId, IList<string> installedAssemblies)
         {
             var progIds = new[] { progId }.Concat(KnownProgIds())
                 .Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
@@ -353,17 +460,17 @@ namespace BatchPdfPublisherLauncher
                     }
                     if (application == null) throw last ?? new InvalidOperationException("AutoCAD COM 服务尚未注册");
                     var document = application.GetType().InvokeMember("ActiveDocument", BindingFlags.GetProperty, null, application, null);
-                    var directory = Path.GetDirectoryName(installedAssembly).Replace('\\', '/');
+                    var loadableAssemblies = installedAssemblies.Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+                    var directories = string.Join(";", loadableAssemblies.Select(Path.GetDirectoryName).Distinct(StringComparer.OrdinalIgnoreCase).Select(x => x.Replace('\\', '/')));
                     // Queue the commands in a single command stream. AutoCAD
-                    // executes NETLOAD fully before BPPUBLISH, avoiding the
-                    // startup race that previously caused fatal errors while
-                    // still giving the user a true double-click experience.
-                    var assemblyPath = installedAssembly.Replace('\\', '/').Replace("\\\"", "\\\\\"");
+                    // executes NETLOAD in sequence. The publisher UI is not
+                    // opened automatically; users open it from Ribbon or BPP.
+                    var loadCommands = string.Join(" ", loadableAssemblies.Select(x => "(vl-catch-all-apply 'command (list \"_.NETLOAD\" \"" + EscapeLispString(x.Replace('\\', '/')) + "\"))"));
                     SendCommand(document,
-                        "(setvar \"TRUSTEDPATHS\" (strcat (getvar \"TRUSTEDPATHS\") \";" + directory + "\")) " +
-                        "(command \"_.NETLOAD\" \"" + assemblyPath + "\") " +
-                        "(command \"BPPUBLISH065\") \r\n");
-                    Log("已向 AutoCAD 发送 NETLOAD + BPPUBLISH");
+                        "(progn (setq bpp_old_filedia (getvar \"FILEDIA\")) (setvar \"FILEDIA\" 0) " +
+                        "(setvar \"TRUSTEDPATHS\" (strcat (getvar \"TRUSTEDPATHS\") \";" + EscapeLispString(directories) + "\")) " +
+                        loadCommands + " (setvar \"FILEDIA\" bpp_old_filedia) (princ))\r\n");
+                    Log("已向 AutoCAD 发送 NETLOAD；未自动打开 BPP 面板");
                     return true;
                 }
                 catch (Exception exception) { Log("COM 尝试 " + (attempt + 1) + " 失败: " + exception.Message); Thread.Sleep(1000); }
@@ -550,7 +657,7 @@ namespace BatchPdfPublisherLauncher
 
         private static string InstallPlugin(PluginPayload payload, bool installPermanently)
         {
-            var contentsDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "BatchPdfPublisher", "releases", payload.Band);
+            var contentsDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WanluoArchitectureTools", "releases", payload.Band);
             Directory.CreateDirectory(contentsDirectory);
             var hash = GetFileHash(payload.AssemblyPath).Substring(0, 12);
             var installedFileName = "BatchPdfPublisher." + hash + ".dll";
@@ -558,17 +665,69 @@ namespace BatchPdfPublisherLauncher
             if (!File.Exists(installedAssembly) || new FileInfo(installedAssembly).Length != new FileInfo(payload.AssemblyPath).Length)
                 File.Copy(payload.AssemblyPath, installedAssembly, true);
             File.Copy(payload.PdfDependencyPath, Path.Combine(contentsDirectory, PdfDependencyName), true);
-            if (installPermanently) InstallAutoLoadBundle(installedAssembly, payload.PdfDependencyPath, payload.Band);
             return installedAssembly;
         }
 
-        private static void InstallAutoLoadBundle(string installedAssembly, string sourcePdfDependency, string band)
+        private static string EscapeLispString(string value)
         {
-            var bundle = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Autodesk", "ApplicationPlugins", "BatchPdfPublisher.bundle");
+            return (value ?? string.Empty).Replace("\\", "/").Replace("\"", "\\\"");
+        }
+
+        private static string InstallArchitectureAssistant(string launcherDirectory, string band)
+        {
+            var hostName = string.Equals(band, "R24", StringComparison.OrdinalIgnoreCase) ? "CadArchSpec.Host.AutoCAD2022.dll" :
+                string.Equals(band, "R25", StringComparison.OrdinalIgnoreCase) ? "CadArchSpec.Host.AutoCAD2026.dll" : null;
+            if (hostName == null) return null;
+            var source = Path.Combine(launcherDirectory, "ArchitectureAssistant", band);
+            var sourceHost = Path.Combine(source, hostName);
+            if (!File.Exists(sourceHost)) throw new FileNotFoundException("安装包缺少建筑设计说明助手的 " + band + " 组件。", sourceHost);
+            var target = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WanluoArchitectureTools", "ArchitectureAssistant", band);
+            CopyDirectory(source, target);
+            return Path.Combine(target, hostName);
+        }
+
+        private static string InstallStairDetail(string launcherDirectory, string band)
+        {
+            var hostName = string.Equals(band, "R24", StringComparison.OrdinalIgnoreCase) ? "WL.Stair.Cad2022.dll" :
+                string.Equals(band, "R25", StringComparison.OrdinalIgnoreCase) ? "WL.Stair.Cad2026.dll" : null;
+            if (hostName == null) return null;
+            var source = Path.Combine(launcherDirectory, "StairDetail", band);
+            var sourceHost = Path.Combine(source, hostName);
+            if (!File.Exists(sourceHost)) throw new FileNotFoundException("安装包缺少一键楼梯大样的 " + band + " 组件。", sourceHost);
+            var target = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WanluoArchitectureTools", "StairDetail", band);
+            CopyDirectory(source, target);
+            return Path.Combine(target, hostName);
+        }
+
+        private static void CopyDirectory(string source, string target)
+        {
+            Directory.CreateDirectory(target);
+            foreach (var directory in Directory.GetDirectories(source, "*", SearchOption.AllDirectories))
+                Directory.CreateDirectory(Path.Combine(target, directory.Substring(source.Length).TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)));
+            foreach (var file in Directory.GetFiles(source, "*", SearchOption.AllDirectories))
+            {
+                var destination = Path.Combine(target, file.Substring(source.Length).TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(destination));
+                File.Copy(file, destination, true);
+            }
+        }
+
+        private static void InstallAutoLoadBundle(string installedAssembly, string sourcePdfDependency, string band, string architectureAssembly, string stairAssembly)
+        {
+            var applicationPlugins = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Autodesk", "ApplicationPlugins");
+            var bundle = Path.Combine(applicationPlugins, "WanluoArchitectureTools.bundle");
             var contents = Path.Combine(bundle, "Contents", band);
             Directory.CreateDirectory(contents);
             File.Copy(installedAssembly, Path.Combine(contents, PluginAssemblyName), true);
             File.Copy(sourcePdfDependency, Path.Combine(contents, PdfDependencyName), true);
+            if (!string.IsNullOrWhiteSpace(architectureAssembly))
+                CopyDirectory(Path.GetDirectoryName(architectureAssembly), Path.Combine(contents, "ArchitectureAssistant"));
+            if (!string.IsNullOrWhiteSpace(stairAssembly))
+                CopyDirectory(Path.GetDirectoryName(stairAssembly), Path.Combine(contents, "StairDetail"));
+            var oldBatchBundle = Path.Combine(applicationPlugins, "BatchPdfPublisher.bundle");
+            var oldArchitectureBundle = Path.Combine(applicationPlugins, "CadArchSpecEditor.bundle");
+            if (Directory.Exists(oldBatchBundle)) Directory.Delete(oldBatchBundle, true);
+            if (Directory.Exists(oldArchitectureBundle)) Directory.Delete(oldArchitectureBundle, true);
             var installedBands = Directory.GetDirectories(Path.Combine(bundle, "Contents"))
                 .Select(Path.GetFileName)
                 .Where(x => File.Exists(Path.Combine(bundle, "Contents", x, PluginAssemblyName)))
@@ -577,14 +736,24 @@ namespace BatchPdfPublisherLauncher
                 .ToList();
             var package = new StringBuilder();
             package.AppendLine("<?xml version=\"1.0\" encoding=\"utf-8\"?>");
-            package.AppendLine("<ApplicationPackage SchemaVersion=\"1.0\" AutodeskProduct=\"AutoCAD\" Name=\"BatchPdfPublisher\" AppVersion=\"0.8.2\" ProductCode=\"{7B9E2D72-1C3E-4F3D-9C0C-7D5D3E5A0A01}\">");
-            package.AppendLine("  <CompanyDetails Name=\"BatchPdfPublisher\" />");
+            package.AppendLine("<ApplicationPackage SchemaVersion=\"1.0\" AutodeskProduct=\"AutoCAD\" Name=\"WanluoArchitectureTools\" AppVersion=\"1.1.1\" ProductCode=\"{7B9E2D72-1C3E-4F3D-9C0C-7D5D3E5A0A01}\">");
+            package.AppendLine("  <CompanyDetails Name=\"万落建筑工具\" />");
             foreach (var installedBand in installedBands)
             {
                 var range = GetSeriesRangeForBand(installedBand);
                 package.AppendLine("  <Components>");
                 package.AppendLine("    <RuntimeRequirements OS=\"Win64\" Platform=\"AutoCAD*\" SeriesMin=\"" + range.Item1 + "\" SeriesMax=\"" + range.Item2 + "\" />");
-                package.AppendLine("    <ComponentEntry AppName=\"BatchPdfPublisher-" + installedBand + "\" ModuleName=\"Contents\\" + installedBand + "\\BatchPdfPublisher.dll\" AppDescription=\"批量 PDF 发布\" LoadReasons=\"LoadOnStartup\" />");
+                package.AppendLine("    <ComponentEntry AppName=\"WanluoArchitectureTools-PDF-" + installedBand + "\" ModuleName=\"Contents\\" + installedBand + "\\BatchPdfPublisher.dll\" AppDescription=\"万落建筑工具·批量 PDF 发布\" LoadReasons=\"LoadOnStartup\" />");
+                var architectureDirectory = Path.Combine(bundle, "Contents", installedBand, "ArchitectureAssistant");
+                var architectureHost = string.Equals(installedBand, "R24", StringComparison.OrdinalIgnoreCase) ? "CadArchSpec.Host.AutoCAD2022.dll" :
+                    string.Equals(installedBand, "R25", StringComparison.OrdinalIgnoreCase) ? "CadArchSpec.Host.AutoCAD2026.dll" : null;
+                if (architectureHost != null && File.Exists(Path.Combine(architectureDirectory, architectureHost)))
+                    package.AppendLine("    <ComponentEntry AppName=\"WanluoArchitectureTools-Spec-" + installedBand + "\" ModuleName=\"Contents\\" + installedBand + "\\ArchitectureAssistant\\" + architectureHost + "\" AppDescription=\"万落建筑工具·建筑设计说明\" LoadReasons=\"LoadOnStartup\" />");
+                var stairDirectory = Path.Combine(bundle, "Contents", installedBand, "StairDetail");
+                var stairHost = string.Equals(installedBand, "R24", StringComparison.OrdinalIgnoreCase) ? "WL.Stair.Cad2022.dll" :
+                    string.Equals(installedBand, "R25", StringComparison.OrdinalIgnoreCase) ? "WL.Stair.Cad2026.dll" : null;
+                if (stairHost != null && File.Exists(Path.Combine(stairDirectory, stairHost)))
+                    package.AppendLine("    <ComponentEntry AppName=\"WanluoArchitectureTools-Stair-" + installedBand + "\" ModuleName=\"Contents\\" + installedBand + "\\StairDetail\\" + stairHost + "\" AppDescription=\"万落建筑工具·一键楼梯大样\" LoadReasons=\"LoadOnStartup\" />");
                 package.AppendLine("  </Components>");
             }
             package.AppendLine("</ApplicationPackage>");
@@ -688,6 +857,7 @@ namespace BatchPdfPublisherLauncher
         private readonly CheckBox _runningCad;
         private readonly CheckBox _permanentInstall;
         private readonly Button _uninstallButton;
+        private readonly Button _startButton;
         public bool UninstallRequested { get; private set; }
         public LauncherOptions Options => new LauncherOptions
         {
@@ -699,7 +869,7 @@ namespace BatchPdfPublisherLauncher
         public PlatformPicker(IList<PlatformOption> platforms, string lastPlatform, bool hasRunningCad)
         {
             _platforms = platforms;
-            Text = "批量 PDF 发布 · 启动器";
+            Text = "万落建筑工具 · 启动器";
             Icon = LoadIcon();
             AutoScaleMode = AutoScaleMode.Dpi;
             ClientSize = new Size(660, 488); MinimumSize = new Size(660, 488);
@@ -725,7 +895,7 @@ namespace BatchPdfPublisherLauncher
             {
                 Location = new Point(126, 24),
                 AutoSize = true,
-                Text = "批量 PDF 发布",
+                Text = "万落建筑工具",
                 Font = new Font("Microsoft YaHei UI", 20F, FontStyle.Bold),
                 ForeColor = Color.White
             };
@@ -733,7 +903,7 @@ namespace BatchPdfPublisherLauncher
             {
                 Location = new Point(129, 69),
                 AutoSize = true,
-                Text = "选择天正产品与 AutoCAD 版本，然后安全加载插件",
+                Text = "图纸发布、图框工具与建筑设计说明的一体化 CAD 插件",
                 Font = new Font("Microsoft YaHei UI", 9.5F),
                 ForeColor = Color.FromArgb(197, 222, 236)
             };
@@ -802,20 +972,24 @@ namespace BatchPdfPublisherLauncher
             bodyHost.Controls.Add(card);
             root.Controls.Add(bodyHost, 0, 1);
 
-            var footer = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(28, 14, 28, 14), ColumnCount = 4, BackColor = Color.White };
+            var footer = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(28, 14, 28, 14), ColumnCount = 5, BackColor = Color.White };
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            var startButton = CreateButton("启动并加载", 124, Cyan, Color.White);
-            startButton.DialogResult = DialogResult.OK;
-            startButton.Enabled = platforms.Count > 0;
+            _startButton = CreateButton("启动并加载", 124, Cyan, Color.White);
+            _startButton.DialogResult = DialogResult.OK;
+            _startButton.Enabled = platforms.Count > 0;
+            var browseButton = CreateButton("手动选择程序", 112, Color.White, Navy);
+            browseButton.Margin = new Padding(10, 0, 0, 0);
+            browseButton.Click += (s, e) => AddManualProgram();
             var cancelButton = CreateButton("取消", 88, Color.White, Navy);
             cancelButton.DialogResult = DialogResult.Cancel;
             cancelButton.Margin = new Padding(10, 0, 0, 0);
             _uninstallButton = CreateButton("卸载插件", 102, Color.White, Color.FromArgb(157, 66, 61));
             _uninstallButton.Click += (s, e) => { UninstallRequested = true; DialogResult = DialogResult.OK; };
-            footer.Controls.Add(_uninstallButton, 0, 0); footer.Controls.Add(startButton, 2, 0); footer.Controls.Add(cancelButton, 3, 0); root.Controls.Add(footer, 0, 2); Controls.Add(root);
+            footer.Controls.Add(_uninstallButton, 0, 0); footer.Controls.Add(browseButton, 1, 0); footer.Controls.Add(_startButton, 3, 0); footer.Controls.Add(cancelButton, 4, 0); root.Controls.Add(footer, 0, 2); Controls.Add(root);
 
             var toolTip = new ToolTip { AutoPopDelay = 10000, InitialDelay = 350, ReshowDelay = 150, ShowAlways = true };
             toolTip.SetToolTip(_tianzhengBox, "选择要启动的天正专业和版本；不使用天正时选择“无天正”。");
@@ -823,7 +997,77 @@ namespace BatchPdfPublisherLauncher
             toolTip.SetToolTip(_runningCad, "将插件直接载入已经打开的本机 AutoCAD，不再启动新的 CAD 进程。");
             toolTip.SetToolTip(_permanentInstall, "写入 Autodesk ApplicationPlugins 自动加载配置，以后启动 CAD 时自动加载本插件。");
             toolTip.SetToolTip(_uninstallButton, "删除本插件的自动加载配置和安装副本，不会删除工程文件或 DWG 图纸。");
-            AcceptButton = startButton; CancelButton = cancelButton;
+            toolTip.SetToolTip(browseButton, "自动识别失败时，手动选择 acad.exe 或天正启动程序；安装盘符和目录不受限制。");
+            AcceptButton = _startButton; CancelButton = cancelButton;
+        }
+
+        private void AddManualProgram()
+        {
+            using (var dialog = new OpenFileDialog { Filter = "CAD/天正启动程序 (*.exe)|*.exe", Title = "选择 acad.exe 或天正启动程序" })
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                var executable = dialog.FileName;
+                if (string.Equals(Path.GetFileName(executable), "acad.exe", StringComparison.OrdinalIgnoreCase))
+                {
+                    var version = FileVersionInfo.GetVersionInfo(executable);
+                    var release = version.FileMajorPart + "." + version.FileMinorPart;
+                    var cadName = AutoCadNameFromRelease(release);
+                    if (cadName == null)
+                    {
+                        MessageBox.Show(this, "无法从所选 acad.exe 判断受支持的 AutoCAD 2014–2026 版本。", "手动选择程序", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+                    AddManualCad(executable, release, cadName);
+                    _tianzhengBox.SelectedItem = "无天正";
+                    RefreshCadOptions(cadName);
+                }
+                else
+                {
+                    var tianzheng = Program.CreateTianzhengInstallation(executable);
+                    if (tianzheng == null)
+                    {
+                        MessageBox.Show(this, "所选文件不像可识别的 T20/T30 天正启动程序。", "手动选择程序", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+                    AddManualTianzheng(tianzheng);
+                    if (!_tianzhengBox.Items.Cast<object>().Any(x => string.Equals(x as string, tianzheng.Name, StringComparison.OrdinalIgnoreCase)))
+                        _tianzhengBox.Items.Add(tianzheng.Name);
+                    _tianzhengBox.SelectedItem = tianzheng.Name;
+                }
+                _startButton.Enabled = _platforms.Count > 0;
+            }
+        }
+
+        private void AddManualCad(string executable, string release, string cadName)
+        {
+            var progId = "AutoCAD.Application." + release;
+            var directory = Path.GetDirectoryName(executable);
+            var cadOptions = _platforms.Where(x => string.Equals(x.TianzhengName, "无天正", StringComparison.OrdinalIgnoreCase)).ToList();
+            if (!cadOptions.Any(x => string.Equals(x.Executable, executable, StringComparison.OrdinalIgnoreCase)))
+                _platforms.Add(new PlatformOption(cadName, "acad-" + release, executable, "/nologo /p \"<<Unnamed Profile>>\"", directory, progId, "无天正", cadName, release));
+            foreach (var tianzheng in _platforms.Where(x => !string.Equals(x.TianzhengName, "无天正", StringComparison.OrdinalIgnoreCase)).GroupBy(x => x.TianzhengName, StringComparer.OrdinalIgnoreCase).Select(x => x.First()).ToList())
+                if (!_platforms.Any(x => string.Equals(x.TianzhengName, tianzheng.TianzhengName, StringComparison.OrdinalIgnoreCase) && string.Equals(x.CadName, cadName, StringComparison.OrdinalIgnoreCase)))
+                    _platforms.Add(new PlatformOption(tianzheng.TianzhengName + " + " + cadName, tianzheng.Id + "-acad-" + release, tianzheng.Executable, "", Path.GetDirectoryName(tianzheng.Executable), progId, tianzheng.TianzhengName, cadName, release));
+            if (!_tianzhengBox.Items.Cast<object>().Any(x => string.Equals(x as string, "无天正", StringComparison.OrdinalIgnoreCase))) _tianzhengBox.Items.Insert(0, "无天正");
+        }
+
+        private void AddManualTianzheng(TianzhengInstallation tianzheng)
+        {
+            foreach (var cad in _platforms.Where(x => string.Equals(x.TianzhengName, "无天正", StringComparison.OrdinalIgnoreCase)).ToList())
+                if (!_platforms.Any(x => string.Equals(x.TianzhengName, tianzheng.Name, StringComparison.OrdinalIgnoreCase) && string.Equals(x.CadName, cad.CadName, StringComparison.OrdinalIgnoreCase)))
+                    _platforms.Add(new PlatformOption(tianzheng.Name + " + " + cad.CadName, tianzheng.Id + "-" + cad.Id, tianzheng.Executable, "", Path.GetDirectoryName(tianzheng.Executable), cad.ProgId, tianzheng.Name, cad.CadName, cad.Release));
+        }
+
+        private static string AutoCadNameFromRelease(string release)
+        {
+            var years = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["19.1"] = 2014, ["20.0"] = 2015, ["20.1"] = 2016, ["21.0"] = 2017, ["22.0"] = 2018,
+                ["23.0"] = 2019, ["23.1"] = 2020, ["24.0"] = 2021, ["24.1"] = 2022, ["24.2"] = 2023,
+                ["24.3"] = 2024, ["25.0"] = 2025, ["25.1"] = 2026
+            };
+            int year;
+            return years.TryGetValue(release, out year) ? "AutoCAD " + year : null;
         }
 
         private static Label CreateFieldLabel(string text)

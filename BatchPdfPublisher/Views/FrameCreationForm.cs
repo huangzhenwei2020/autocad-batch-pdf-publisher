@@ -60,7 +60,7 @@ namespace BatchPdfPublisher.Views
             _register.Text = "创建后登记为图框"; _register.AutoSize = true; _register.Checked = true; _register.Margin = new Padding(0, 7, 0, 3); root.Controls.Add(_register, 1, 6);
             root.Controls.Add(new Label { Text = "字体 / 字高", AutoSize = true, Margin = new Padding(0, 7, 0, 3) }, 0, 5);
             var fontLine = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = false };
-            _font.DropDownStyle = ComboBoxStyle.DropDownList; _font.Width = 150; _font.Items.AddRange(FrameCreationService.GetTextStyleNames(_document)); _font.SelectedItem = "黑体"; if (_font.SelectedIndex < 0) _font.SelectedIndex = 0;
+            _font.DropDownStyle = ComboBoxStyle.DropDownList; _font.Width = 150; _font.Items.AddRange(FrameCreationService.GetTextStyleNames(_document)); _font.SelectedItem = DraftingStandardService.GetTextStyleName(DraftingStandardProfile.BodyTextKey); if (_font.SelectedIndex < 0) _font.SelectedIndex = 0;
             _height.DropDownStyle = ComboBoxStyle.DropDown; _height.Width = 70; _height.Items.AddRange(new object[] { "1.5", "2.5", "3.5", "5", "7", "10", "14", "20" }); _height.Text = "3.5";
             _widthFactor.DropDownStyle = ComboBoxStyle.DropDownList; _widthFactor.Width = 65; _widthFactor.Items.AddRange(new object[] { "0.5", "0.7", "1" }); _widthFactor.SelectedItem = "1";
             _colorButton.Text = string.Empty; _colorButton.Width = 32; _colorButton.Height = 30; _colorButton.BackColor = Color.White; _colorButton.ForeColor = Color.Black; _colorButton.FlatStyle = FlatStyle.Flat; _colorButton.Click += (s, e) => ChooseColor(); _toolTip.SetToolTip(_colorButton, "选择 AutoCAD 文字颜色");

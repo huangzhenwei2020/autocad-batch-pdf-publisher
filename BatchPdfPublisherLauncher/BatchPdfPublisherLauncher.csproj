@@ -5,7 +5,7 @@
     <ProjectGuid>{F90B754C-92EF-4748-B724-641900DAB8D0}</ProjectGuid>
     <OutputType>WinExe</OutputType>
     <RootNamespace>BatchPdfPublisherLauncher</RootNamespace>
-    <AssemblyName>批量PDF发布启动器</AssemblyName>
+    <AssemblyName>万落建筑工具启动器</AssemblyName>
     <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
     <PlatformTarget>x64</PlatformTarget>
     <FileAlignment>512</FileAlignment>

@@ -1,0 +1,515 @@
+{
+  "projectId": "10000000-0000-0000-0000-000000000001",
+  "schemaVersion": 1,
+  "projectName": "建筑设计说明助手示例办公项目",
+  "location": {
+    "countryCode": "CN",
+    "provinceCode": "CN-GX",
+    "provinceName": "广西壮族自治区",
+    "cityCode": "CN-GX-NN",
+    "cityName": "南宁市",
+    "districtName": "示例区",
+    "address": {
+      "value": "示例大道1号（仅用于软件测试）",
+      "state": "confirmed",
+      "source": "示例项目任务书",
+      "sourceDocumentId": "SAMPLE-BRIEF-001",
+      "enteredBy": "测试用户",
+      "confirmedAt": "2026-07-28T08:00:00+08:00",
+      "isManuallyOverridden": false,
+      "overrideReason": "",
+      "hasConfirmedValue": true
+    }
+  },
+  "lifecycle": {
+    "nature": "newConstruction",
+    "designStage": "constructionDocuments",
+    "submissionDate": {
+      "value": "2026-08-01T00:00:00",
+      "state": "pending",
+      "source": "示例进度计划",
+      "sourceDocumentId": "SAMPLE-SCHEDULE-001",
+      "enteredBy": "测试用户",
+      "confirmedAt": null,
+      "isManuallyOverridden": false,
+      "overrideReason": "",
+      "hasConfirmedValue": false
+    },
+    "planningApprovalNumber": {
+      "value": "示例批复〔2026〕001号",
+      "state": "confirmed",
+      "source": "示例规划批复",
+      "sourceDocumentId": "SAMPLE-PLANNING-001",
+      "enteredBy": "测试用户",
+      "confirmedAt": "2026-07-28T08:05:00+08:00",
+      "isManuallyOverridden": false,
+      "overrideReason": "",
+      "hasConfirmedValue": true
+    },
+    "fireSubmissionCategory": {
+      "value": "待消防专业确认",
+      "state": "providedByOtherDiscipline",
+      "source": "消防专业",
+      "sourceDocumentId": "",
+      "enteredBy": "",
+      "confirmedAt": null,
+      "isManuallyOverridden": false,
+      "overrideReason": "",
+      "hasConfirmedValue": false
+    }
+  },
+  "classification": {
+    "buildingType": "office",
+    "isSpecialConstructionProject": false,
+    "requiresFireDesignReview": true,
+    "hasCivilDefense": true,
+    "hasBasement": true,
+    "hasCurtainWall": true,
+    "hasElevator": true,
+    "requiresGreenBuilding": true,
+    "requiresPrefabrication": false,
+    "hasSpecialistDesign": true,
+    "isHighRiseOrSpecial": false
+  },
+  "planning": {
+    "siteAreaSquareMeters": {
+      "value": 12000.00,
+      "state": "confirmed",
+      "source": "示例规划条件",
+      "sourceDocumentId": "SAMPLE-PLANNING-001",
+      "enteredBy": "测试用户",
+      "confirmedAt": "2026-07-28T08:10:00+08:00",
+      "isManuallyOverridden": false,
+      "overrideReason": "",
+      "hasConfirmedValue": true
+    },
+    "plotRatio": {
+      "value": 2.50,
+      "state": "confirmed",
+      "source": "示例指标表",
+      "sourceDocumentId": "SAMPLE-INDEX-001",
+      "enteredBy": "测试用户",
+      "confirmedAt": "2026-07-28T08:10:00+08:00",
+      "isManuallyOverridden": false,
+      "overrideReason": "",
+      "hasConfirmedValue": true
+    },
+    "buildingDensityPercent": {
+      "value": 28.50,
+      "state": "confirmed",
+      "source": "示例指标表",
+      "sourceDocumentId": "SAMPLE-INDEX-001",
+      "enteredBy": "测试用户",
+      "confirmedAt": "2026-07-28T08:10:00+08:00",
+      "isManuallyOverridden": false,
+      "overrideReason": "",
+      "hasConfirmedValue": true
+    },
+    "greenRatePercent": {
+      "value": 30.00,
+      "state": "pending",
+      "source": "示例景观指标",
+      "sourceDocumentId": "SAMPLE-LANDSCAPE-001",
+      "enteredBy": "测试用户",
+      "confirmedAt": null,
+      "isManuallyOverridden": false,
+      "overrideReason": "",
+      "hasConfirmedValue": false
+    },
+    "motorParkingSpaces": {
+      "value": 180,
+      "state": "confirmed",
+      "source": "示例总图",
+      "sourceDocumentId": "SAMPLE-SITE-001",
+      "enteredBy": "测试用户",
+      "confirmedAt": "2026-07-28T08:15:00+08:00",
+      "isManuallyOverridden": false,
+      "overrideReason": "",
+      "hasConfirmedValue": true
+    },
+    "nonMotorParkingSpaces": {
+      "value": 300,
+      "state": "pending",
+      "source": "示例总图",
+      "sourceDocumentId": "SAMPLE-SITE-001",
+      "enteredBy": "测试用户",
+      "confirmedAt": null,
+      "isManuallyOverridden": false,
+      "overrideReason": "",
+      "hasConfirmedValue": false
+    }
+  },
+  "building": {
+    "ownerName": {
+      "value": "示例建设单位",
+      "state": "confirmed",
+      "source": "示例项目任务书",
+      "sourceDocumentId": "SAMPLE-BRIEF-001",
+      "enteredBy": "测试用户",
+      "confirmedAt": "2026-07-28T08:00:00+08:00",
+      "isManuallyOverridden": false,
+      "overrideReason": "",
+      "hasConfirmedValue": true
+    },
+    "designOrganization": {
+      "value": "示例设计单位",
+      "state": "confirmed",
+      "source": "项目立项信息",
+      "sourceDocumentId": "SAMPLE-PROJECT-001",
+      "enteredBy": "测试用户",
+      "confirmedAt": "2026-07-28T08:00:00+08:00",
+      "isManuallyOverridden": false,
+      "overrideReason": "",
+      "hasConfirmedValue": true
+    },
+    "totalFloorAreaSquareMeters": {
+      "value": 36000.00,
+      "state": "confirmed",
+      "source": "示例面积统计",
+      "sourceDocumentId": "SAMPLE-AREA-001",
+      "enteredBy": "测试用户",
+      "confirmedAt": "2026-07-28T08:20:00+08:00",
+      "isManuallyOverridden": false,
+      "overrideReason": "",
+      "hasConfirmedValue": true
+    },
+    "aboveGroundAreaSquareMeters": {
+      "value": 30000.00,
+      "state": "confirmed",
+      "source": "示例面积统计",
+      "sourceDocumentId": "SAMPLE-AREA-001",
+      "enteredBy": "测试用户",
+      "confirmedAt": "2026-07-28T08:20:00+08:00",
+      "isManuallyOverridden": false,
+      "overrideReason": "",
+      "hasConfirmedValue": true
+    },
+    "undergroundAreaSquareMeters": {
+      "value": 6000.00,
+      "state": "confirmed",
+      "source": "示例面积统计",
+      "sourceDocumentId": "SAMPLE-AREA-001",
+      "enteredBy": "测试用户",
+      "confirmedAt": "2026-07-28T08:20:00+08:00",
+      "isManuallyOverridden": false,
+      "overrideReason": "",
+      "hasConfirmedValue": true
+    },
+    "buildingHeightMeters": {
+      "value": 49.80,
+      "state": "confirmed",
+      "source": "示例立面图",
+      "sourceDocumentId": "SAMPLE-ELEVATION-001",
+      "enteredBy": "测试用户",
+      "confirmedAt": "2026-07-28T08:25:00+08:00",
+      "isManuallyOverridden": false,
+      "overrideReason": "",
+      "hasConfirmedValue": true
+    },
+    "aboveGroundFloors": {
+      "value": 12,
+      "state": "confirmed",
+      "source": "示例剖面图",
+      "sourceDocumentId": "SAMPLE-SECTION-001",
+      "enteredBy": "测试用户",
+      "confirmedAt": "2026-07-28T08:25:00+08:00",
+      "isManuallyOverridden": false,
+      "overrideReason": "",
+      "hasConfirmedValue": true
+    },
+    "undergroundFloors": {
+      "value": 1,
+      "state": "confirmed",
+      "source": "示例剖面图",
+      "sourceDocumentId": "SAMPLE-SECTION-001",
+      "enteredBy": "测试用户",
+      "confirmedAt": "2026-07-28T08:25:00+08:00",
+      "isManuallyOverridden": false,
+      "overrideReason": "",
+      "hasConfirmedValue": true
+    },
+    "designServiceLifeYears": {
+      "value": 50,
+      "state": "confirmed",
+      "source": "示例设计任务书",
+      "sourceDocumentId": "SAMPLE-BRIEF-001",
+      "enteredBy": "测试用户",
+      "confirmedAt": "2026-07-28T08:30:00+08:00",
+      "isManuallyOverridden": false,
+      "overrideReason": "",
+      "hasConfirmedValue": true
+    },
+    "mainStructuralType": {
+      "value": "钢筋混凝土框架-剪力墙结构（示例）",
+      "state": "providedByOtherDiscipline",
+      "source": "结构专业",
+      "sourceDocumentId": "",
+      "enteredBy": "",
+      "confirmedAt": null,
+      "isManuallyOverridden": false,
+      "overrideReason": "",
+      "hasConfirmedValue": false
+    },
+    "seismicFortificationIntensity": {
+      "value": "待结构专业确认",
+      "state": "providedByOtherDiscipline",
+      "source": "结构专业",
+      "sourceDocumentId": "",
+      "enteredBy": "",
+      "confirmedAt": null,
+      "isManuallyOverridden": false,
+      "overrideReason": "",
+      "hasConfirmedValue": false
+    },
+    "relativeZeroElevation": {
+      "value": 0.000,
+      "state": "confirmed",
+      "source": "示例总图",
+      "sourceDocumentId": "SAMPLE-SITE-001",
+      "enteredBy": "测试用户",
+      "confirmedAt": "2026-07-28T08:35:00+08:00",
+      "isManuallyOverridden": false,
+      "overrideReason": "",
+      "hasConfirmedValue": true
+    },
+    "absoluteZeroElevation": {
+      "value": 88.500,
+      "state": "pending",
+      "source": "示例竖向设计",
+      "sourceDocumentId": "SAMPLE-SITE-001",
+      "enteredBy": "测试用户",
+      "confirmedAt": null,
+      "isManuallyOverridden": false,
+      "overrideReason": "",
+      "hasConfirmedValue": false
+    }
+  },
+  "fire": {
+    "fireClassification": {
+      "value": "一类高层公共建筑（示例待复核）",
+      "state": "pending",
+      "source": "示例消防专篇",
+      "sourceDocumentId": "SAMPLE-FIRE-001",
+      "enteredBy": "测试用户",
+      "confirmedAt": null,
+      "isManuallyOverridden": false,
+      "overrideReason": "",
+      "hasConfirmedValue": false
+    },
+    "fireResistanceRating": {
+      "value": "一级（示例待复核）",
+      "state": "pending",
+      "source": "示例消防专篇",
+      "sourceDocumentId": "SAMPLE-FIRE-001",
+      "enteredBy": "测试用户",
+      "confirmedAt": null,
+      "isManuallyOverridden": false,
+      "overrideReason": "",
+      "hasConfirmedValue": false
+    },
+    "fireHazardCategory": {
+      "value": "不适用",
+      "state": "notApplicable",
+      "source": "建筑类型判断",
+      "sourceDocumentId": "",
+      "enteredBy": "测试用户",
+      "confirmedAt": null,
+      "isManuallyOverridden": false,
+      "overrideReason": "",
+      "hasConfirmedValue": false
+    }
+  },
+  "accessibility": {
+    "applicableStandard": {
+      "value": "GB 55019-2021",
+      "state": "confirmed",
+      "source": "国家基础规范索引",
+      "sourceDocumentId": "STD-GB55019-2021",
+      "enteredBy": "测试用户",
+      "confirmedAt": "2026-07-28T08:40:00+08:00",
+      "isManuallyOverridden": false,
+      "overrideReason": "",
+      "hasConfirmedValue": true
+    },
+    "accessibleRouteSummary": {
+      "value": "由场地主入口连续到达首层无障碍入口及无障碍电梯（示例）",
+      "state": "pending",
+      "source": "示例无障碍设计",
+      "sourceDocumentId": "SAMPLE-ACCESS-001",
+      "enteredBy": "测试用户",
+      "confirmedAt": null,
+      "isManuallyOverridden": false,
+      "overrideReason": "",
+      "hasConfirmedValue": false
+    }
+  },
+  "waterproof": {
+    "roofGrade": {
+      "value": "一级（示例待复核）",
+      "state": "pending",
+      "source": "示例防水表",
+      "sourceDocumentId": "SAMPLE-WATERPROOF-001",
+      "enteredBy": "测试用户",
+      "confirmedAt": null,
+      "isManuallyOverridden": false,
+      "overrideReason": "",
+      "hasConfirmedValue": false
+    },
+    "basementGrade": {
+      "value": "一级（示例待复核）",
+      "state": "pending",
+      "source": "示例防水表",
+      "sourceDocumentId": "SAMPLE-WATERPROOF-001",
+      "enteredBy": "测试用户",
+      "confirmedAt": null,
+      "isManuallyOverridden": false,
+      "overrideReason": "",
+      "hasConfirmedValue": false
+    }
+  },
+  "energy": {
+    "climateZone": {
+      "value": "夏热冬暖地区（示例待地方规则核实）",
+      "state": "pending",
+      "source": "示例节能计算条件",
+      "sourceDocumentId": "SAMPLE-ENERGY-001",
+      "enteredBy": "测试用户",
+      "confirmedAt": null,
+      "isManuallyOverridden": false,
+      "overrideReason": "",
+      "hasConfirmedValue": false
+    },
+    "calculationReportVersion": {
+      "value": "V0.1",
+      "state": "pending",
+      "source": "示例节能计算书",
+      "sourceDocumentId": "SAMPLE-ENERGY-001",
+      "enteredBy": "测试用户",
+      "confirmedAt": null,
+      "isManuallyOverridden": false,
+      "overrideReason": "",
+      "hasConfirmedValue": false
+    }
+  },
+  "greenBuilding": {
+    "targetRating": {
+      "value": "待建设单位确认",
+      "state": "pending",
+      "source": "示例设计任务书",
+      "sourceDocumentId": "SAMPLE-BRIEF-001",
+      "enteredBy": "",
+      "confirmedAt": null,
+      "isManuallyOverridden": false,
+      "overrideReason": "",
+      "hasConfirmedValue": false
+    },
+    "applicableLocalStandard": {
+      "value": "",
+      "state": "unknown",
+      "source": "",
+      "sourceDocumentId": "",
+      "enteredBy": "",
+      "confirmedAt": null,
+      "isManuallyOverridden": false,
+      "overrideReason": "",
+      "hasConfirmedValue": false
+    }
+  },
+  "buildingUnits": [
+    {
+      "buildingUnitId": "11000000-0000-0000-0000-000000000001",
+      "name": "1号办公楼",
+      "function": "办公",
+      "floorAreaSquareMeters": {
+        "value": 36000.00,
+        "state": "confirmed",
+        "source": "示例面积统计",
+        "sourceDocumentId": "SAMPLE-AREA-001",
+        "enteredBy": "测试用户",
+        "confirmedAt": "2026-07-28T08:20:00+08:00",
+        "isManuallyOverridden": false,
+        "overrideReason": "",
+        "hasConfirmedValue": true
+      },
+      "heightMeters": {
+        "value": 49.80,
+        "state": "confirmed",
+        "source": "示例立面图",
+        "sourceDocumentId": "SAMPLE-ELEVATION-001",
+        "enteredBy": "测试用户",
+        "confirmedAt": "2026-07-28T08:25:00+08:00",
+        "isManuallyOverridden": false,
+        "overrideReason": "",
+        "hasConfirmedValue": true
+      },
+      "aboveGroundFloors": {
+        "value": 12,
+        "state": "confirmed",
+        "source": "示例剖面图",
+        "sourceDocumentId": "SAMPLE-SECTION-001",
+        "enteredBy": "测试用户",
+        "confirmedAt": "2026-07-28T08:25:00+08:00",
+        "isManuallyOverridden": false,
+        "overrideReason": "",
+        "hasConfirmedValue": true
+      },
+      "undergroundFloors": {
+        "value": 1,
+        "state": "confirmed",
+        "source": "示例剖面图",
+        "sourceDocumentId": "SAMPLE-SECTION-001",
+        "enteredBy": "测试用户",
+        "confirmedAt": "2026-07-28T08:25:00+08:00",
+        "isManuallyOverridden": false,
+        "overrideReason": "",
+        "hasConfirmedValue": true
+      }
+    }
+  ],
+  "approvalDocuments": [
+    {
+      "approvalDocumentId": "12000000-0000-0000-0000-000000000001",
+      "name": "示例规划批复",
+      "number": "示例批复〔2026〕001号",
+      "documentDate": "2026-06-30T00:00:00",
+      "issuingAuthority": "示例主管部门",
+      "source": "用户导入",
+      "isApplicable": true,
+      "notes": "仅用于软件测试，不代表真实批复。"
+    }
+  ],
+  "standards": [
+    {
+      "standardId": "STD-GB55031-2022",
+      "code": "GB 55031-2022",
+      "name": "民用建筑通用规范",
+      "publishedDate": null,
+      "effectiveDate": "2023-03-01T00:00:00",
+      "repealedDate": null,
+      "status": "active",
+      "jurisdictionCode": "CN",
+      "issuingAuthority": "住房和城乡建设部",
+      "applicableBuildingTypes": ["common", "office"],
+      "supersedes": [],
+      "supersededBy": [],
+      "officialSourceUrl": "",
+      "lastVerifiedAt": null
+    },
+    {
+      "standardId": "STD-GB55019-2021",
+      "code": "GB 55019-2021",
+      "name": "建筑与市政工程无障碍通用规范",
+      "publishedDate": null,
+      "effectiveDate": "2022-04-01T00:00:00",
+      "repealedDate": null,
+      "status": "active",
+      "jurisdictionCode": "CN",
+      "issuingAuthority": "住房和城乡建设部",
+      "applicableBuildingTypes": ["common", "office"],
+      "supersedes": [],
+      "supersededBy": [],
+      "officialSourceUrl": "",
+      "lastVerifiedAt": null
+    }
+  ]
+}

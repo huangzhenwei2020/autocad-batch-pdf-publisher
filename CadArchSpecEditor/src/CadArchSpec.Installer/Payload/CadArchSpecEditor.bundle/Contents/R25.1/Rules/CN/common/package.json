@@ -1,0 +1,188 @@
+{
+  "schemaVersion": 1,
+  "packageId": "CN-ARCH-FOUNDATION-PREVIEW",
+  "version": "0.2.0",
+  "jurisdictionCode": "CN",
+  "displayName": "国家建筑专业基础完整性规则（试运行第一批）",
+  "status": "Draft",
+  "effectiveFrom": "2017-01-01",
+  "effectiveTo": null,
+  "verifiedAt": "2026-07-30T00:00:00+08:00",
+  "signature": "",
+  "rules": [
+    {
+      "ruleId": "CN-ARCH-SECTION-001",
+      "version": 1,
+      "title": "设计依据章节完整性",
+      "jurisdictionCode": "CN",
+      "buildingTypes": ["common"],
+      "effectiveFrom": "2017-01-01",
+      "effectiveTo": null,
+      "severity": "blocker",
+      "checkType": "requiredSection",
+      "target": { "sectionType": "design-basis", "fieldPath": "", "tableType": "", "columnKey": "" },
+      "parameters": {},
+      "message": "建筑专业设计说明缺少有效的“设计依据”章节。",
+      "requiresProfessionalConfirmation": true,
+      "references": [
+        {
+          "standardCode": "建质函〔2016〕247号",
+          "clause": "建筑专业施工图设计说明编制内容；具体定位须由建筑专业人员复核",
+          "officialSourceUrl": "https://zjt.hubei.gov.cn/zfxxgk/zc/qtzdgkwj/202011/t20201103_2996965.shtml"
+        }
+      ]
+    },
+    {
+      "ruleId": "CN-ARCH-SECTION-002",
+      "version": 1,
+      "title": "项目概况章节完整性",
+      "jurisdictionCode": "CN",
+      "buildingTypes": ["common"],
+      "effectiveFrom": "2017-01-01",
+      "effectiveTo": null,
+      "severity": "blocker",
+      "checkType": "requiredSection",
+      "target": { "sectionType": "project-overview", "fieldPath": "", "tableType": "", "columnKey": "" },
+      "parameters": {},
+      "message": "建筑专业设计说明缺少有效的“项目概况”章节。",
+      "requiresProfessionalConfirmation": true,
+      "references": [
+        {
+          "standardCode": "建质函〔2016〕247号",
+          "clause": "建筑专业施工图设计说明编制内容；具体定位须由建筑专业人员复核",
+          "officialSourceUrl": "https://zjt.hubei.gov.cn/zfxxgk/zc/qtzdgkwj/202011/t20201103_2996965.shtml"
+        }
+      ]
+    },
+    {
+      "ruleId": "CN-ARCH-SECTION-003",
+      "version": 1,
+      "title": "主要技术经济指标章节完整性",
+      "jurisdictionCode": "CN",
+      "buildingTypes": ["common"],
+      "effectiveFrom": "2017-01-01",
+      "effectiveTo": null,
+      "severity": "error",
+      "checkType": "requiredSection",
+      "target": { "sectionType": "technical-indicators", "fieldPath": "", "tableType": "", "columnKey": "" },
+      "parameters": {},
+      "message": "建筑专业设计说明缺少有效的“主要技术经济指标”章节。",
+      "requiresProfessionalConfirmation": true,
+      "references": [
+        {
+          "standardCode": "建质函〔2016〕247号",
+          "clause": "建筑专业施工图设计说明编制内容；具体定位须由建筑专业人员复核",
+          "officialSourceUrl": "https://zjt.hubei.gov.cn/zfxxgk/zc/qtzdgkwj/202011/t20201103_2996965.shtml"
+        }
+      ]
+    },
+    {
+      "ruleId": "CN-ARCH-SECTION-004",
+      "version": 1,
+      "title": "无障碍设计章节完整性",
+      "jurisdictionCode": "CN",
+      "buildingTypes": ["common"],
+      "effectiveFrom": "2022-04-01",
+      "effectiveTo": null,
+      "severity": "error",
+      "checkType": "requiredSection",
+      "target": { "sectionType": "accessibility", "fieldPath": "", "tableType": "", "columnKey": "" },
+      "parameters": {},
+      "message": "建筑专业设计说明缺少有效的“无障碍设计”章节。",
+      "requiresProfessionalConfirmation": true,
+      "references": [
+        {
+          "standardCode": "GB 55019-2021",
+          "clause": "仅作标准适用性索引，不作条文符合性判定",
+          "officialSourceUrl": "https://www.mohurd.gov.cn/api-gateway/jpaas-web-server/front/document/download?fileName=2021%E5%B9%B4.pdf"
+        }
+      ]
+    },
+    {
+      "ruleId": "CN-ARCH-SECTION-005",
+      "version": 1,
+      "title": "建筑防火设计章节完整性",
+      "jurisdictionCode": "CN",
+      "buildingTypes": ["common"],
+      "effectiveFrom": "2023-06-01",
+      "effectiveTo": null,
+      "severity": "error",
+      "checkType": "requiredSection",
+      "target": { "sectionType": "fire", "fieldPath": "", "tableType": "", "columnKey": "" },
+      "parameters": {},
+      "message": "建筑专业设计说明缺少有效的“建筑防火设计”章节。",
+      "requiresProfessionalConfirmation": true,
+      "references": [
+        {
+          "standardCode": "GB 55037-2022",
+          "clause": "仅作标准适用性索引，不作条文符合性判定",
+          "officialSourceUrl": "https://www.mohurd.gov.cn/api-gateway/jpaas-web-server/front/document/download?fileName=2022%E5%B9%B4.pdf"
+        }
+      ]
+    },
+    {
+      "ruleId": "CN-ARCH-FIELD-001",
+      "version": 1,
+      "title": "项目名称必须确认",
+      "jurisdictionCode": "CN",
+      "buildingTypes": ["common"],
+      "effectiveFrom": "2017-01-01",
+      "effectiveTo": null,
+      "severity": "blocker",
+      "checkType": "requiredField",
+      "target": { "sectionType": "", "fieldPath": "project.projectName", "tableType": "", "columnKey": "" },
+      "parameters": { "allowedStates": "confirmed,overridden" },
+      "message": "项目名称为空或尚未确认。",
+      "requiresProfessionalConfirmation": false,
+      "references": []
+    },
+    {
+      "ruleId": "CN-ARCH-FIELD-002",
+      "version": 1,
+      "title": "建设地点必须确认",
+      "jurisdictionCode": "CN",
+      "buildingTypes": ["common"],
+      "effectiveFrom": "2017-01-01",
+      "effectiveTo": null,
+      "severity": "blocker",
+      "checkType": "requiredField",
+      "target": { "sectionType": "", "fieldPath": "project.location", "tableType": "", "columnKey": "" },
+      "parameters": { "allowedStates": "confirmed,overridden" },
+      "message": "建设地点为空或尚未确认。",
+      "requiresProfessionalConfirmation": false,
+      "references": []
+    },
+    {
+      "ruleId": "CN-ARCH-FIELD-003",
+      "version": 1,
+      "title": "建筑高度必须确认",
+      "jurisdictionCode": "CN",
+      "buildingTypes": ["common"],
+      "effectiveFrom": "2017-01-01",
+      "effectiveTo": null,
+      "severity": "error",
+      "checkType": "requiredField",
+      "target": { "sectionType": "", "fieldPath": "building.height", "tableType": "", "columnKey": "" },
+      "parameters": { "allowedStates": "confirmed,overridden" },
+      "message": "建筑高度为空或尚未确认。",
+      "requiresProfessionalConfirmation": false,
+      "references": []
+    },
+    {
+      "ruleId": "CN-ARCH-FIELD-004",
+      "version": 1,
+      "title": "耐火等级必须确认",
+      "jurisdictionCode": "CN",
+      "buildingTypes": ["common"],
+      "effectiveFrom": "2017-01-01",
+      "effectiveTo": null,
+      "severity": "error",
+      "checkType": "requiredField",
+      "target": { "sectionType": "", "fieldPath": "fire.resistanceRating", "tableType": "", "columnKey": "" },
+      "parameters": { "allowedStates": "confirmed,overridden" },
+      "message": "耐火等级为空或尚未确认。",
+      "requiresProfessionalConfirmation": false,
+      "references": []
+    }
+  ]
+}

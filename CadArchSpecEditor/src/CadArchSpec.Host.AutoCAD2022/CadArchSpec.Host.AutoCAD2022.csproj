@@ -1,0 +1,53 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <OutputType>Library</OutputType>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <AutoCadSdkPath Condition="'$(AutoCadSdkPath)' == ''">C:\Program Files\Autodesk\AutoCAD 2022</AutoCadSdkPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Web.WebView2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CadArchSpec.Host.Contracts\CadArchSpec.Host.Contracts.csproj" />
+    <ProjectReference Include="..\CadArchSpec.EditorBridge\CadArchSpec.EditorBridge.csproj" />
+    <ProjectReference Include="..\CadArchSpec.RuleEngine\CadArchSpec.RuleEngine.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="acmgd">
+      <HintPath>$(AutoCadSdkPath)\acmgd.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="acdbmgd">
+      <HintPath>$(AutoCadSdkPath)\acdbmgd.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="accoremgd">
+      <HintPath>$(AutoCadSdkPath)\accoremgd.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="..\CadArchSpec.Editor.Web\dist\**\*">
+      <Link>Web\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\..\rules\CN\common\package.json">
+      <Link>Rules\CN\common\package.json</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <Target Name="ValidateAutoCadSdk" BeforeTargets="ResolveReferences">
+    <Error
+      Condition="!Exists('$(AutoCadSdkPath)\acmgd.dll') Or !Exists('$(AutoCadSdkPath)\acdbmgd.dll') Or !Exists('$(AutoCadSdkPath)\accoremgd.dll')"
+      Text="未找到 AutoCAD 2022 托管 SDK。请通过 /p:AutoCadSdkPath=&quot;...\AutoCAD 2022&quot; 指定包含 acmgd.dll、acdbmgd.dll、accoremgd.dll 的目录。" />
+  </Target>
+</Project>

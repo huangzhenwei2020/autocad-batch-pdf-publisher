@@ -1,0 +1,468 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cadarchspec.local/schemas/editor-workspace.schema.json",
+  "title": "建筑设计说明助手项目工作区",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "projectName",
+    "location",
+    "buildingType",
+    "designStage",
+    "fields",
+    "sections"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "projectName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "location": {
+      "type": "string"
+    },
+    "buildingType": {
+      "enum": [
+        "通用建筑",
+        "住宅建筑",
+        "办公建筑",
+        "商业建筑",
+        "教育建筑",
+        "医疗建筑",
+        "交通建筑",
+        "文体建筑",
+        "工业建筑",
+        "其他建筑"
+      ]
+    },
+    "designStage": {
+      "enum": [
+        "方案设计",
+        "初步设计",
+        "施工图设计"
+      ]
+    },
+    "projectNature": {
+      "enum": [
+        "新建",
+        "改建",
+        "扩建"
+      ]
+    },
+    "jurisdiction": {
+      "$ref": "#/$defs/projectJurisdiction"
+    },
+    "submissionDate": {
+      "type": "string",
+      "format": "date"
+    },
+    "reviewProfile": {
+      "$ref": "#/$defs/projectReviewProfile"
+    },
+    "reviewSignoff": {
+      "$ref": "#/$defs/projectReviewSignoff"
+    },
+    "features": {
+      "$ref": "#/$defs/projectFeatures"
+    },
+    "lastSavedAt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "fieldChanges": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": {
+        "$ref": "#/$defs/fieldChangeEntry"
+      }
+    },
+    "reviewRecords": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "$ref": "#/$defs/reviewArchiveRecord"
+      }
+    },
+    "tables": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/architectureTable"
+      }
+    },
+    "fields": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/projectField"
+      }
+    },
+    "sections": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/editorSection"
+      }
+    }
+  },
+  "$defs": {
+    "architectureTable": {
+      "type": "object",
+      "required": ["tableId", "schemaVersion", "tableType", "tableNumber", "title", "repeatHeader", "allowSplitAcrossPages", "columns", "rows", "formulaAudits"],
+      "additionalProperties": false,
+      "properties": {
+        "tableId": { "type": "string", "minLength": 1 },
+        "schemaVersion": { "const": 1 },
+        "tableType": {
+          "enum": [
+            "technicalEconomicIndicators",
+            "waterproofDesign",
+            "interiorFinish",
+            "buildingSafetyMeasures",
+            "accessibilityFacilities"
+          ]
+        },
+        "tableNumber": { "type": "string" },
+        "title": { "type": "string" },
+        "repeatHeader": { "type": "boolean" },
+        "allowSplitAcrossPages": { "type": "boolean" },
+        "columns": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "$ref": "#/$defs/architectureTableColumn" }
+        },
+        "rows": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/architectureTableRow" }
+        },
+        "formulaAudits": {
+          "type": "array",
+          "maxItems": 500,
+          "items": { "$ref": "#/$defs/tableFormulaAudit" }
+        }
+      }
+    },
+    "architectureTableColumn": {
+      "type": "object",
+      "required": ["key", "title", "unit", "widthMillimeters", "decimalPlaces", "required"],
+      "additionalProperties": false,
+      "properties": {
+        "key": { "type": "string", "minLength": 1 },
+        "title": { "type": "string", "minLength": 1 },
+        "unit": { "type": "string" },
+        "widthMillimeters": { "type": "number", "minimum": 10, "maximum": 200 },
+        "decimalPlaces": { "type": "integer", "minimum": 0, "maximum": 6 },
+        "required": { "type": "boolean" }
+      }
+    },
+    "architectureTableRow": {
+      "type": "object",
+      "required": ["rowId", "rowType", "keepTogether", "cells"],
+      "additionalProperties": false,
+      "properties": {
+        "rowId": { "type": "string", "minLength": 1 },
+        "rowType": { "enum": ["Data", "Subtotal", "Note"] },
+        "keepTogether": { "type": "boolean" },
+        "cells": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/architectureTableCell" }
+        }
+      }
+    },
+    "architectureTableCell": {
+      "type": "object",
+      "required": ["cellId", "columnKey", "displayValue", "numericValue", "unit", "fieldPath", "formula", "state", "source", "rowSpan", "columnSpan"],
+      "additionalProperties": false,
+      "properties": {
+        "cellId": { "type": "string", "minLength": 1 },
+        "columnKey": { "type": "string", "minLength": 1 },
+        "displayValue": { "type": "string" },
+        "numericValue": { "type": ["number", "null"] },
+        "unit": { "type": "string" },
+        "fieldPath": { "type": "string" },
+        "formula": { "type": "string" },
+        "state": { "enum": ["confirmed", "pending", "unknown", "notApplicable", "providedByOtherDiscipline", "providedBySpecialist", "overridden"] },
+        "source": { "type": "string" },
+        "rowSpan": { "type": "integer", "minimum": 0 },
+        "columnSpan": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "tableFormulaAudit": {
+      "type": "object",
+      "required": ["auditId", "cellId", "formula", "formulaVersion", "inputs", "result", "calculatedAt", "isManuallyOverridden", "overrideReason"],
+      "additionalProperties": false,
+      "properties": {
+        "auditId": { "type": "string", "minLength": 1 },
+        "cellId": { "type": "string", "minLength": 1 },
+        "formula": { "type": "string", "minLength": 1 },
+        "formulaVersion": { "const": "1" },
+        "inputs": {
+          "type": "object",
+          "additionalProperties": { "type": "number" }
+        },
+        "result": { "type": "number" },
+        "calculatedAt": { "type": "string", "format": "date-time" },
+        "isManuallyOverridden": { "type": "boolean" },
+        "overrideReason": { "type": "string" }
+      }
+    },
+    "reviewArchiveRecord": {
+      "type": "object",
+      "required": ["recordId", "projectName", "projectFingerprint", "archivedAt", "projectInfo", "reviewSignoff", "result", "issueActions"],
+      "additionalProperties": false,
+      "properties": {
+        "recordId": { "type": "string", "minLength": 1 },
+        "projectName": { "type": "string" },
+        "projectFingerprint": { "type": "string", "pattern": "^fnv1a32-[0-9a-f]{8}$" },
+        "archivedAt": { "type": "string", "format": "date-time" },
+        "projectInfo": { "$ref": "#/$defs/reviewProjectSnapshot" },
+        "reviewSignoff": { "$ref": "#/$defs/projectReviewSignoff" },
+        "result": { "$ref": "#/$defs/ruleReviewResult" },
+        "issueActions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/reviewIssueAction" }
+        }
+      }
+    },
+    "reviewProjectSnapshot": {
+      "type": "object",
+      "required": ["location", "buildingType", "designStage", "submissionDate"],
+      "additionalProperties": false,
+      "properties": {
+        "location": { "type": "string" },
+        "buildingType": { "type": "string" },
+        "designStage": { "type": "string" },
+        "submissionDate": { "type": "string" }
+      }
+    },
+    "projectReviewSignoff": {
+      "type": "object",
+      "required": ["organization", "projectManager", "preparedBy", "checkedBy", "approvedBy", "reportNumber"],
+      "additionalProperties": false,
+      "properties": {
+        "organization": { "type": "string" },
+        "projectManager": { "type": "string" },
+        "preparedBy": { "type": "string" },
+        "checkedBy": { "type": "string" },
+        "approvedBy": { "type": "string" },
+        "reportNumber": { "type": "string" }
+      }
+    },
+    "reviewIssueAction": {
+      "type": "object",
+      "required": ["issueId", "status", "owner", "comment", "reviewer", "updatedAt"],
+      "additionalProperties": false,
+      "properties": {
+        "issueId": { "type": "string" },
+        "status": { "enum": ["open", "inProgress", "resolved", "acceptedRisk", "notApplicable"] },
+        "owner": { "type": "string" },
+        "comment": { "type": "string" },
+        "reviewer": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "ruleReviewResult": {
+      "type": "object",
+      "required": [
+        "packageId",
+        "packageVersion",
+        "packageDisplayName",
+        "packageStatus",
+        "packageVerifiedAt",
+        "executedAt",
+        "localRulesLoaded",
+        "scopeNotice",
+        "issues"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "packageId": { "type": "string" },
+        "packageVersion": { "type": "string" },
+        "packageDisplayName": { "type": "string" },
+        "packageStatus": { "type": "string" },
+        "packageVerifiedAt": { "type": "string" },
+        "executedAt": { "type": "string", "format": "date-time" },
+        "localRulesLoaded": { "type": "boolean" },
+        "scopeNotice": { "type": "string" },
+        "issues": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ruleReviewIssue" }
+        }
+      }
+    },
+    "ruleReviewIssue": {
+      "type": "object",
+      "required": [
+        "issueId",
+        "ruleId",
+        "severity",
+        "title",
+        "message",
+        "standardCode",
+        "clauseReference",
+        "targetNodeId",
+        "targetFieldPath",
+        "evidence",
+        "suggestedAction",
+        "requiresProfessionalConfirmation"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "issueId": { "type": "string" },
+        "ruleId": { "type": "string" },
+        "severity": { "enum": ["blocker", "error", "warning", "info"] },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "standardCode": { "type": "string" },
+        "clauseReference": { "type": "string" },
+        "targetNodeId": { "type": "string" },
+        "targetFieldPath": { "type": "string" },
+        "evidence": { "type": "string" },
+        "suggestedAction": { "type": "string" },
+        "requiresProfessionalConfirmation": { "type": "boolean" }
+      }
+    },
+    "fieldChangeEntry": {
+      "type": "object",
+      "required": ["id", "fieldPath", "fieldLabel", "kind", "oldValue", "newValue", "changedAt", "note"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "fieldPath": { "type": "string", "minLength": 1 },
+        "fieldLabel": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["value", "state", "lock", "source"] },
+        "oldValue": { "type": "string" },
+        "newValue": { "type": "string" },
+        "changedAt": { "type": "string", "format": "date-time" },
+        "note": { "type": "string" }
+      }
+    },
+    "projectJurisdiction": {
+      "type": "object",
+      "required": ["country", "province", "city", "district"],
+      "additionalProperties": false,
+      "properties": {
+        "country": { "type": "string" },
+        "province": { "type": "string" },
+        "city": { "type": "string" },
+        "district": { "type": "string" }
+      }
+    },
+    "projectReviewProfile": {
+      "type": "object",
+      "required": ["isSpecialConstruction", "requiresFireReview", "isHighRiseOrSpecial"],
+      "additionalProperties": false,
+      "properties": {
+        "isSpecialConstruction": { "type": "boolean" },
+        "requiresFireReview": { "type": "boolean" },
+        "isHighRiseOrSpecial": { "type": "boolean" }
+      }
+    },
+    "projectFeatures": {
+      "type": "object",
+      "required": [
+        "hasBasement",
+        "hasCurtainWall",
+        "hasElevator",
+        "hasCivilDefense",
+        "isGreenBuilding",
+        "isPrefabricated",
+        "hasSpecialistDesign"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "hasBasement": { "type": "boolean" },
+        "hasCurtainWall": { "type": "boolean" },
+        "hasElevator": { "type": "boolean" },
+        "hasCivilDefense": { "type": "boolean" },
+        "isGreenBuilding": { "type": "boolean" },
+        "isPrefabricated": { "type": "boolean" },
+        "hasSpecialistDesign": { "type": "boolean" }
+      }
+    },
+    "projectField": {
+      "type": "object",
+      "required": [
+        "path",
+        "label",
+        "value",
+        "state",
+        "source",
+        "locked",
+        "required"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9]*(\\.[A-Za-z][A-Za-z0-9]*)+$"
+        },
+        "label": { "type": "string", "minLength": 1 },
+        "value": { "type": "string" },
+        "unit": { "type": "string" },
+        "state": {
+          "enum": [
+            "confirmed",
+            "pending",
+            "unknown",
+            "notApplicable",
+            "providedByOtherDiscipline",
+            "providedBySpecialist",
+            "overridden"
+          ]
+        },
+        "source": { "type": "string" },
+        "sourceType": {
+          "enum": [
+            "projectApproval",
+            "designBrief",
+            "drawing",
+            "calculation",
+            "otherDiscipline",
+            "specialist",
+            "manual"
+          ]
+        },
+        "sourceDocumentId": { "type": "string" },
+        "enteredBy": { "type": "string" },
+        "confirmedAt": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "locked": { "type": "boolean" },
+        "required": { "type": "boolean" },
+        "isManuallyOverridden": { "type": "boolean" },
+        "overrideReason": { "type": "string" }
+      }
+    },
+    "editorSection": {
+      "type": "object",
+      "required": [
+        "id",
+        "number",
+        "title",
+        "requirement",
+        "reviewState",
+        "content"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "number": { "type": "string" },
+        "title": { "type": "string", "minLength": 1 },
+        "requirement": {
+          "enum": ["required", "conditional", "optional"]
+        },
+        "enabled": { "type": "boolean" },
+        "activationReason": { "type": "string" },
+        "reviewState": {
+          "enum": ["notReviewed", "needsAttention", "ready"]
+        },
+        "content": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

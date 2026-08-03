@@ -24,22 +24,25 @@ namespace BatchPdfPublisher.Services
                     var ribbon = ComponentManager.Ribbon;
                     if (ribbon == null) return;
                     var existing = ribbon.FindTab(TabId);
-                    if (existing != null && existing.Panels.Count > 0 && existing.Panels[0].Source.Items.Count == 5
+                    if (existing != null && existing.Panels.Count > 0 && existing.Panels[0].Source.Items.Count == 8
                         && existing.Panels[0].Source.Items[0].Text.IndexOf("BPP", StringComparison.OrdinalIgnoreCase) >= 0
-                        && existing.Panels[0].Source.Items[4].Text.IndexOf("BPA", StringComparison.OrdinalIgnoreCase) >= 0)
+                        && existing.Panels[0].Source.Items[7].Text.IndexOf("BZS", StringComparison.OrdinalIgnoreCase) >= 0)
                     {
                         existing.IsVisible = true;
                         return;
                     }
                     if (existing != null) ribbon.Tabs.Remove(existing);
-                    var tab = new RibbonTab { Id = TabId, Title = "BPP_批量打印" };
-                    var source = new RibbonPanelSource { Title = "批量打印" };
+                    var tab = new RibbonTab { Id = TabId, Title = "万落建筑工具" };
+                    var source = new RibbonPanelSource { Title = "图纸与说明" };
                     var panel = new RibbonPanel { Source = source };
                     source.Items.Add(CreateButton("打开面板（BPP）", "BPP ", "panel"));
                     source.Items.Add(CreateButton("创建图框（TKK）", "TKK ", "frame"));
                     source.Items.Add(CreateButton("插入目录（ML1）", "ML1 ", "catalog"));
                     source.Items.Add(CreateButton("批量改属性（SBB）", "SBB ", "attribute"));
                     source.Items.Add(CreateButton("属性定义编辑（BPA）", "BPA ", "attribute"));
+                    source.Items.Add(CreateButton("建筑说明（JZSM）", "WLJZSM ", "spec"));
+                    source.Items.Add(CreateButton("楼梯大样（LTDY）", "WLLTDY ", "stair"));
+                    source.Items.Add(CreateButton("制图标准（BZS）", "BZS ", "standard"));
                     tab.Panels.Add(panel);
                     ribbon.Tabs.Add(tab);
                 }
@@ -79,7 +82,13 @@ namespace BatchPdfPublisher.Services
                     ? "按纸张、方向和比例在当前图纸中创建标准图框。"
                     : command.Trim().Equals("ML1", StringComparison.OrdinalIgnoreCase)
                         ? "根据当前工程图纸顺序生成目录表并插入 CAD。"
-                        : "打开工程 DWG 管理、图框扫描和批量 PDF 发布面板。";
+                        : command.Trim().Equals("WLJZSM", StringComparison.OrdinalIgnoreCase)
+                            ? "打开万落建筑工具中的建筑设计说明助手。"
+                        : command.Trim().Equals("WLLTDY", StringComparison.OrdinalIgnoreCase)
+                            ? "打开楼梯构件编辑器，按楼层、梯段和构造参数一键生成楼梯大样。"
+                        : command.Trim().Equals("BZS", StringComparison.OrdinalIgnoreCase)
+                            ? "检查并补齐万落工具共用的图层、文字样式和标注样式。"
+                            : "打开工程 DWG 管理、图框扫描和批量 PDF 发布面板。";
             return new RibbonButton
             {
                 Text = text,
@@ -100,7 +109,25 @@ namespace BatchPdfPublisher.Services
             var group = new DrawingGroup();
             var pen = new Pen(Brushes.DarkSlateBlue, 1.6);
             var brush = new SolidColorBrush(Color.FromRgb(45, 112, 190));
-            if (kind == "frame")
+            if (kind == "stair")
+            {
+                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(2, 13), new WpfPoint(14, 13))));
+                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(2, 13), new WpfPoint(2, 10))));
+                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(2, 10), new WpfPoint(5, 10))));
+                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(5, 10), new WpfPoint(5, 7))));
+                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(5, 7), new WpfPoint(8, 7))));
+                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(8, 7), new WpfPoint(8, 4))));
+                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(8, 4), new WpfPoint(13, 4))));
+                group.Children.Add(new GeometryDrawing(brush, null, new EllipseGeometry(new WpfPoint(13, 4), 1.6, 1.6)));
+            }
+            else if (kind == "spec")
+            {
+                group.Children.Add(new GeometryDrawing(Brushes.White, pen, new RectangleGeometry(new WpfRect(3, 2, 10, 12))));
+                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(5, 5), new WpfPoint(11, 5))));
+                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(5, 8), new WpfPoint(11, 8))));
+                group.Children.Add(new GeometryDrawing(brush, null, new EllipseGeometry(new WpfPoint(11.5, 11.5), 2.5, 2.5)));
+            }
+            else if (kind == "frame")
             {
                 group.Children.Add(new GeometryDrawing(null, pen, new RectangleGeometry(new WpfRect(2, 2, 12, 12))));
                 group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(5, 5), new WpfPoint(11, 11))));
@@ -117,6 +144,14 @@ namespace BatchPdfPublisher.Services
                 group.Children.Add(new GeometryDrawing(brush, pen, new RectangleGeometry(new WpfRect(2, 2, 12, 12))));
                 group.Children.Add(new GeometryDrawing(Brushes.White, null, new LineGeometry(new WpfPoint(5, 6), new WpfPoint(11, 6))));
                 group.Children.Add(new GeometryDrawing(Brushes.White, null, new LineGeometry(new WpfPoint(5, 9), new WpfPoint(11, 9))));
+            }
+            else if (kind == "standard")
+            {
+                group.Children.Add(new GeometryDrawing(null, pen, new RectangleGeometry(new WpfRect(2, 2, 12, 12))));
+                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(2, 6), new WpfPoint(14, 6))));
+                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(2, 10), new WpfPoint(14, 10))));
+                group.Children.Add(new GeometryDrawing(brush, null, new EllipseGeometry(new WpfPoint(6, 6), 1.4, 1.4)));
+                group.Children.Add(new GeometryDrawing(brush, null, new EllipseGeometry(new WpfPoint(10, 10), 1.4, 1.4)));
             }
             else
             {
