@@ -115,22 +115,20 @@ namespace BatchPdfPublisher.Views
             var paper = _paper.Text; var extension = _extension.Text == "无加长" ? string.Empty : _extension.Text;
             var size = PaperSizeCatalog.GetSize(paper, extension, _orientation.Text);
             var remark = string.IsNullOrWhiteSpace(_remark.Text) ? "自建图框" : _remark.Text.Trim();
-            var blockName = FrameCreationService.CreateFrameBlockFromSelection(_document, "", size[0], size[1], _font.Text, double.Parse(_height.Text), remark, out var error, out var detectedPaper, out var detectedExtension, out var detectedOrientation);
+            var blockName = FrameCreationService.CreateFrameBlockFromSelection(_document, "", size[0], size[1], _font.Text, double.Parse(_height.Text), remark, out var error, out var detectedPaper, out var detectedExtension, out var detectedOrientation, out var createdReferenceId);
             if (string.IsNullOrWhiteSpace(blockName)) { if (!string.IsNullOrWhiteSpace(error)) MessageBox.Show(this, error, "创建图框", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
             if (!string.IsNullOrWhiteSpace(blockName))
             {
-                var definition = new FrameDefinition
-                {
-                    BlockName = blockName, PaperSize = detectedPaper, Extension = detectedExtension, PaperOrientation = detectedOrientation, Note = remark,
-                    BuildingAttributeTag = "子项目名称", SheetNumberAttributeTag = "图号", SheetNameAttributeTag = "图纸名称", PrintScaleAttributeTag = "比例"
-                };
+                var registered = false;
                 if (_register.Checked)
                 {
-                    var store = new PublishPlanStore(); var frames = store.LoadFrames();
-                    frames.RemoveAll(x => string.Equals(x.BlockName, blockName, StringComparison.OrdinalIgnoreCase)); frames.Add(definition); store.SaveFrames(frames);
+                    registered = new FrameRegistrationService().RegisterCreated(_document, createdReferenceId, remark, out var registrationError);
+                    if (!registered)
+                        MessageBox.Show(this, "图框块已创建，但自动登记失败：\r\n" + registrationError, "创建图框", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 }
                 _refresh?.Invoke();
-                MessageBox.Show(this, "图框块已创建并登记：\r\n" + blockName, "创建图框", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                if (!_register.Checked || registered)
+                    MessageBox.Show(this, registered ? "图框块已创建并登记：\r\n" + blockName : "图框块已创建：\r\n" + blockName, "创建图框", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
         }
 
@@ -151,7 +149,7 @@ namespace BatchPdfPublisher.Views
             finally { }
         }
 
-        private static string SettingsPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "BatchPdfPublisher.frame-creation.settings");
+        private static string SettingsPath => UserDataPaths.SettingsFile("frame-creation.settings", "BatchPdfPublisher.frame-creation.settings");
         private static Color DisplayColor(AcColor color)
         {
             if (color == null) return Color.White;

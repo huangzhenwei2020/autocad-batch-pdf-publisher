@@ -10,7 +10,7 @@ namespace BatchPdfPublisher.Models
         public List<FrameDefinition> Frames { get; set; } = new List<FrameDefinition>();
         public string PlotStyle { get; set; } = "monochrome.ctb";
         public string MarginMode { get; set; } = "自动适配";
-        public string OutputDirectory { get; set; } = "D:\\PDF输出";
+        public string OutputDirectory { get; set; }
         public bool OutputNextToCadFile { get; set; }
         public bool IncludeProjectNameInFileName { get; set; } = true;
         public bool IncludeBuildingNameInFileName { get; set; } = true;

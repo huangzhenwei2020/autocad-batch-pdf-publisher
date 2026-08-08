@@ -48,10 +48,15 @@
     <Compile Include="Commands.cs" />
     <Compile Include="Models\BuildingPublishItem.cs" /><Compile Include="Models\CadFileItem.cs" /><Compile Include="Models\FrameDefinition.cs" /><Compile Include="Models\ProjectProfile.cs" /><Compile Include="Models\SheetCatalogItem.cs" /><Compile Include="Models\SheetItem.cs" />
     <Compile Include="Services\CadCompatibilityService.cs" /><Compile Include="Services\DraftingStandardService.cs" /><Compile Include="Services\DrawingScanner.cs" /><Compile Include="Services\FrameSizeDetector.cs" /><Compile Include="Services\FrameIdentityService.cs" /><Compile Include="Services\FrameRegistrationService.cs" /><Compile Include="Services\FrameCreationService.cs" /><Compile Include="Services\CatalogInsertionService.cs" /><Compile Include="Services\PaperSizeCatalog.cs" /><Compile Include="Services\PrintRangePreviewService.cs" /><Compile Include="Services\PdfPublisherService.cs" /><Compile Include="Services\PublishPlanStore.cs" /><Compile Include="Services\ProjectAutoSaveService.cs" /><Compile Include="Services\RibbonService.cs" /><Compile Include="Services\MenuService.cs" /><Compile Include="Services\AttributeBatchService.cs" /><Compile Include="Services\AttributeDefinitionEditorService.cs" /><Compile Include="Services\AttributeMarkerService.cs" /><Compile Include="Services\CsvExportService.cs" />
+    <Compile Include="Services\UserDataPaths.cs" />
+    <Compile Include="Services\DrawingScaleService.cs" />
+    <Compile Include="Services\AutoLayerSettings.cs" />
     <Compile Include="ViewModels\PublisherViewModel.cs" />
     <Compile Include="Views\PublisherControl.xaml.cs"><DependentUpon>PublisherControl.xaml</DependentUpon></Compile>
     <Compile Include="Views\PublisherForm.cs" />
     <Compile Include="Views\ProjectManagerForm.cs" />
+    <Compile Include="Views\DrawingScaleForm.cs" />
+    <Compile Include="Views\AutoLayerSettingsForm.cs" />
     <Compile Include="Views\DraftingStandardForm.cs" />
     <Compile Include="Views\FrameCreationForm.cs" />
     <Compile Include="Views\CatalogInsertForm.cs" />

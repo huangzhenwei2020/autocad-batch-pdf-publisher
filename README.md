@@ -57,7 +57,29 @@ Ribbon“万落建筑工具”或经典菜单中点击“楼梯大样（LTDY）�
 5. 图号、图名、楼栋、比例等字段可分别选择图框块中的属性标签，也可填写手工默认值。
 6. 保存当前图框库，供以后项目重复使用。
 
-支持标准纸张和常用加长纸张：A0、A1、A2、A3、A4，以及各规格 `+1/4`、`+1/2`。加长尺寸是真实纸张尺寸，不会用基础 A 系列替代。内置 `BatchPdfPublisher.pc3` / `.pmp` 用于加长介质。
+支持标准纸张和常用加长纸张：A0、A1、A2、A3、A4，以及各规格 `+1/4`、`+1/2`。加长尺寸是真实纸张尺寸，不会用基础 A 系列替代。`Resources/Plotters` 中的 `BatchPdfPublisher.pc3` / `.pmp` 用于加长介质。
+
+## 发布目录结构
+
+插件发布文件按类型存放，不要把 DWG、PC3、PMP 与程序 DLL 混放：
+
+```text
+万落建筑工具启动器.exe
+CadApi/
+  R19/、R24/、R25/       AutoCAD 分代程序组件
+Resources/
+  Blocks/                插件图块资源
+    WanLuoArrowSymbols.dwg
+  Plotters/              PDF 绘图仪与纸张资源
+    BatchPdfPublisher.pc3
+    BatchPdfPublisher.pmp
+ArchitectureAssistant/   建筑设计说明助手组件
+StairDetail/             一键楼梯大样组件
+```
+
+启动器会把图块库安装到对应版本组件下的 `Resources/Blocks`。旧版本将资源直接放在 DLL 旁边的方式仍可读取，但新的发布包统一使用上述结构。
+
+默认启动方式为便携运行：插件 DLL、建筑说明组件、楼梯组件和图块库直接从启动器所在目录读取，不复制到用户插件目录。因此整个文件夹可以移动到其他磁盘或电脑，移动后重新运行启动器即可。只有勾选“永久安装”时，才会部署到 AutoCAD 的 `ApplicationPlugins` 自动加载目录。用户设置、工程参数和日志仍保存在当前 Windows 用户的应用数据目录；PDF 绘图仪文件仍需按 AutoCAD 规则复制到该用户的 Plotters 目录。
 
 ### 创建图框块
 

@@ -20,8 +20,10 @@ namespace BatchPdfPublisher
         private static readonly string DiagnosticLog = Path.Combine(Path.GetTempPath(), "BatchPdfPublisher.trace.log");
         public void Initialize()
         {
+            WriteStartupReceipt("Initialize");
             try { Application.SetSystemVariable("RIBBONSTATE", 1); } catch { }
             RibbonService.InstallWhenReady();
+            MenuService.InstallWhenReady();
             ProjectAutoSaveService.Install();
         }
         public void Terminate() { ProjectAutoSaveService.Remove(); RibbonService.Remove(); }
@@ -94,19 +96,96 @@ namespace BatchPdfPublisher
                 using (var transaction = document.Database.TransactionManager.StartTransaction())
                 {
                     var profile = DraftingStandardService.LoadProfile();
-                    DraftingStandardService.EnsureAll(document.Database, transaction, profile, profile.UpdateExisting);
+                    DraftingStandardService.ApplyConfiguredResources(document.Database, transaction, profile, profile.UpdateExisting);
                     transaction.Commit();
-                    document.Editor.WriteMessage("\n万落制图标准已应用：" + profile.Layers.Count + " 个图层、" + profile.TextStyles.Count + " 个文字样式、" + profile.DimensionScales.Count + " 个标注样式。\n");
+                    document.Editor.WriteMessage("\n已按制图标注设置创建勾选的图层、文字样式、标注样式和引线样式。\n");
                 }
             }
             catch (System.Exception exception) { Application.ShowAlertDialog("应用制图标准失败：\r\n" + exception.Message); }
         }
 
+        [CommandMethod("BZSINITARROWLIB")]
+        public void InitializeArrowLibrary()
+        {
+            try
+            {
+                var path = DraftingStandardService.ArrowLibraryPath;
+                if (File.Exists(path)) { Application.ShowAlertDialog("箭头图块库已经存在：\r\n" + path); return; }
+                DraftingStandardService.CreateDefaultArrowLibrary(path);
+                Application.ShowAlertDialog("已创建默认箭头图块库：\r\n" + path);
+            }
+            catch (System.Exception exception) { Application.ShowAlertDialog("创建箭头图块库失败：\r\n" + exception.Message); }
+        }
+
+        [CommandMethod("BL1")]
+        [CommandMethod("WLSCALE")]
+        public void ManageDrawingScale()
+        {
+            try
+            {
+                var document = Application.DocumentManager.MdiActiveDocument;
+                if (document == null) return;
+                using (var form = new DrawingScaleForm(document))
+                {
+                    if (Application.ShowModalDialog(form) != System.Windows.Forms.DialogResult.OK) return;
+                    if (form.SelectedAction == DrawingScaleAction.Selection) ApplyScaleToSelection(document, form.TargetScale);
+                }
+            }
+            catch (System.Exception exception) { try { File.AppendAllText(Path.Combine(UserDataPaths.LogsDirectory, "scale-manager.log"), DateTime.Now.ToString("O") + " " + exception + Environment.NewLine); } catch { } Application.ShowAlertDialog("比例管理失败：\r\n" + exception.Message); }
+        }
+
+        private static void ApplyScaleToSelection(Document document, int targetScale)
+        {
+            var editor = document.Editor;
+            var selection = editor.GetSelection(new PromptSelectionOptions { MessageForAdding = "\n选择要修改为 1:" + targetScale + " 的对象：" });
+            if (selection.Status != PromptStatus.OK) return;
+            var changed = 0; var failed = 0;
+            using (document.LockDocument())
+            using (var transaction = document.Database.TransactionManager.StartTransaction())
+            {
+                var profile = DraftingStandardService.LoadProfile();
+                var resources = DraftingStandardService.EnsureAll(document.Database, transaction, profile, profile.UpdateExisting);
+                var dimensionStyle = DraftingStandardService.EnsureDimensionStyleForScale(document.Database, transaction, targetScale);
+                var autoLayers = AutoLayerSettings.Load();
+                foreach (var id in selection.Value.GetObjectIds())
+                {
+                    try { var entity = transaction.GetObject(id, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForWrite, false) as Autodesk.AutoCAD.DatabaseServices.Entity; if (entity == null) continue; if (DrawingScaleService.ApplyStandardizedScale(document.Database, transaction, entity, targetScale, resources, dimensionStyle, autoLayers)) changed++; }
+                    catch { failed++; }
+                }
+                transaction.Commit();
+            }
+            editor.WriteMessage("\n比例修改完成：" + changed + " 个对象已转换为 1:" + targetScale + (failed > 0 ? "，" + failed + " 个对象不支持缩放。" : "。"));
+        }
+
+
         [CommandMethod("BPPUI")]
         public void RefreshPluginUi()
         {
-            RibbonService.InstallWhenReady();
-            Application.ShowAlertDialog("BPP Ribbon 已请求刷新。若仍未显示，请执行 RIBBON 命令后再执行 BPPUI。");
+            var ribbonReady = RibbonService.RefreshNow();
+            MenuService.InstallWhenReady();
+            WriteStartupReceipt("BPPUI");
+            Application.ShowAlertDialog(ribbonReady
+                ? "“万落建筑工具”Ribbon 已加载。"
+                : "当前工作空间尚未创建 Ribbon。请先执行 RIBBON 命令，再执行 BPPUI。");
+        }
+
+        [CommandMethod("BPPSTARTUP", CommandFlags.Session)]
+        public void CompleteStartup()
+        {
+            RibbonService.RefreshNow();
+            MenuService.InstallWhenReady();
+            WriteStartupReceipt("BPPSTARTUP");
+        }
+
+        private static void WriteStartupReceipt(string stage)
+        {
+            try
+            {
+                var assembly = typeof(Commands).Assembly.Location;
+                File.AppendAllText(Path.Combine(Path.GetTempPath(), "WanluoArchitectureTools.loaded.log"),
+                    DateTime.Now.ToString("O") + " | " + stage + " | PID=" + System.Diagnostics.Process.GetCurrentProcess().Id + " | " + assembly + Environment.NewLine);
+            }
+            catch { }
         }
 
         [CommandMethod("BPPUBLISH")]

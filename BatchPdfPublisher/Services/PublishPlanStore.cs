@@ -132,24 +132,24 @@ namespace BatchPdfPublisher.Services
             projects.RemoveAll(x => x == null || string.IsNullOrWhiteSpace(x.Name));
             foreach (var project in projects)
             {
+                if (string.IsNullOrWhiteSpace(project.ProjectFolder)) project.ProjectFolder = DefaultProjectFolder(project.Name);
                 if (project.Frames == null) project.Frames = new List<FrameDefinition>();
                 if (string.IsNullOrWhiteSpace(project.PlotStyle)) project.PlotStyle = "monochrome.ctb";
                 if (string.IsNullOrWhiteSpace(project.MarginMode)) project.MarginMode = "自动适配";
-                if (string.IsNullOrWhiteSpace(project.OutputDirectory)) project.OutputDirectory = "D:\\PDF输出";
+                if (string.IsNullOrWhiteSpace(project.OutputDirectory)) project.OutputDirectory = Path.Combine(project.ProjectFolder, "PDF输出");
                 if (project.FavoritePlotStyles == null) project.FavoritePlotStyles = new List<string>();
                 if (project.SavedSheets == null) project.SavedSheets = new List<SheetCatalogItem>();
                 if (project.CadFiles == null) project.CadFiles = new List<string>();
                 if (project.SelectedCadFiles == null) project.SelectedCadFiles = new List<string>();
-            if (project.SelectedPublishBuildings == null) project.SelectedPublishBuildings = new List<string>();
+                if (project.SelectedPublishBuildings == null) project.SelectedPublishBuildings = new List<string>();
                 if (project.SelectedLayouts == null) project.SelectedLayouts = new List<string>();
-                if (string.IsNullOrWhiteSpace(project.ProjectFolder)) project.ProjectFolder = DefaultProjectFolder(project.Name);
             }
             if (projects.Count == 0) projects.Add(new ProjectProfile { Name = "默认项目" });
         }
 
         private static List<FrameDefinition> LoadLegacyFrames()
         {
-            var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), LegacyFramesFileName);
+            var path = UserDataPaths.SettingsFile(LegacyFramesFileName, LegacyFramesFileName);
             if (!File.Exists(path)) return new List<FrameDefinition>();
             try
             {
@@ -159,13 +159,13 @@ namespace BatchPdfPublisher.Services
             catch { return new List<FrameDefinition>(); }
         }
 
-        private static string ProjectsPath() => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), ProjectsFileName);
-        private static string ActiveProjectPath() => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), ActiveProjectFileName);
+        private static string ProjectsPath() => UserDataPaths.SettingsFile(ProjectsFileName, ProjectsFileName);
+        private static string ActiveProjectPath() => UserDataPaths.SettingsFile(ActiveProjectFileName, ActiveProjectFileName);
         private static string DefaultProjectFolder(string projectName)
         {
             var name = string.IsNullOrWhiteSpace(projectName) ? "默认项目" : projectName.Trim();
             foreach (var invalid in Path.GetInvalidFileNameChars()) name = name.Replace(invalid, '_');
-            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "BatchPdfPublisher", "Projects", name);
+            return Path.Combine(UserDataPaths.ProjectsDirectory, name);
         }
     }
 }

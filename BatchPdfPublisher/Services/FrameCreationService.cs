@@ -95,9 +95,9 @@ namespace BatchPdfPublisher.Services
             }
         }
 
-        public static string CreateFrameBlockFromSelection(Document document, string requestedName, double expectedWidth, double expectedHeight, string font, double textHeight, string remark, out string error, out string detectedPaper, out string detectedExtension, out string detectedOrientation)
+        public static string CreateFrameBlockFromSelection(Document document, string requestedName, double expectedWidth, double expectedHeight, string font, double textHeight, string remark, out string error, out string detectedPaper, out string detectedExtension, out string detectedOrientation, out ObjectId createdReferenceId)
         {
-            error = null; detectedPaper = string.Empty; detectedExtension = string.Empty; detectedOrientation = string.Empty;
+            error = null; detectedPaper = string.Empty; detectedExtension = string.Empty; detectedOrientation = string.Empty; createdReferenceId = ObjectId.Null;
             if (document == null) { error = "没有当前 CAD 文档。"; return null; }
             var editor = document.Editor;
             var selection = editor.GetSelection(new PromptSelectionOptions { MessageForAdding = "\n请选择用于生成图框的对象: " });
@@ -159,6 +159,7 @@ namespace BatchPdfPublisher.Services
                     var original = tr.GetObject(selected.ObjectId, OpenMode.ForWrite, false) as Entity;
                     if (original != null && !original.IsErased) original.Erase();
                 }
+                createdReferenceId = reference.ObjectId;
                 tr.Commit(); return name;
             }
         }

@@ -20,10 +20,15 @@ namespace BatchPdfPublisherLauncher
     {
         private const string PluginAssemblyName = "BatchPdfPublisher.dll";
         private const string PdfDependencyName = "PdfSharp.dll";
+        private const string ArrowLibraryName = "WanLuoArrowSymbols.dwg";
+        private static readonly string ArrowLibraryRelativePath = Path.Combine("Resources", "Blocks", ArrowLibraryName);
+        private static readonly string PlotterResourceDirectory = Path.Combine("Resources", "Plotters");
         private const string PlotterConfigName = "BatchPdfPublisher.pc3";
         private const string PlotterMediaName = "BatchPdfPublisher.pmp";
         private const string LastPlatformFileName = "BatchPdfPublisher.last-platform.txt";
-        private static readonly string LaunchLogPath = Path.Combine(Path.GetTempPath(), "WanluoArchitectureTools.launcher.log");
+        private static readonly string UserDataRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WanluoArchitectureTools");
+        private static readonly string LaunchLogPath = Path.Combine(EnsureDirectory(Path.Combine(UserDataRoot, "Logs")), "launcher.log");
+        private static readonly string LoadReceiptPath = Path.Combine(Path.GetTempPath(), "WanluoArchitectureTools.loaded.log");
 
         [STAThread]
         private static void Main()
@@ -47,10 +52,10 @@ namespace BatchPdfPublisherLauncher
                     options = picker.Options;
                 }
                 var payload = ResolvePluginPayload(launcherDirectory, options.Platform.Release);
-                var sourcePlotterConfig = Path.Combine(launcherDirectory, PlotterConfigName);
-                var sourcePlotterMedia = Path.Combine(launcherDirectory, PlotterMediaName);
+                var sourcePlotterConfig = ResolveResourceFile(launcherDirectory, PlotterResourceDirectory, PlotterConfigName);
+                var sourcePlotterMedia = ResolveResourceFile(launcherDirectory, PlotterResourceDirectory, PlotterMediaName);
                 if (!File.Exists(sourcePlotterConfig) || !File.Exists(sourcePlotterMedia))
-                    throw new FileNotFoundException("启动器旁边缺少 BatchPdfPublisher.pc3/pmp 毫米纸张库，请使用完整发布包。");
+                    throw new FileNotFoundException("发布包的 Resources\\Plotters 中缺少 BatchPdfPublisher.pc3/pmp 毫米纸张库，请使用完整发布包。");
 
                 File.WriteAllText(LastPlatformPath(), options.Platform.Id);
                 InstallPlotterProfiles(sourcePlotterConfig, sourcePlotterMedia);
@@ -60,14 +65,14 @@ namespace BatchPdfPublisherLauncher
                 // in native UI code. Always remove legacy/unified autoload bundles
                 // first; permanent installation recreates one clean unified bundle.
                 RemoveAutoLoadBundles();
-                var installedAssembly = InstallPlugin(payload, false);
-                var architectureAssembly = InstallArchitectureAssistant(launcherDirectory, payload.Band);
-                var stairAssembly = InstallStairDetail(launcherDirectory, payload.Band);
-                if (options.InstallPermanently) InstallAutoLoadBundle(installedAssembly, payload.PdfDependencyPath, payload.Band, architectureAssembly, stairAssembly);
-                Log("已安装插件: " + installedAssembly);
-                if (!string.IsNullOrWhiteSpace(architectureAssembly)) Log("已安装建筑说明助手: " + architectureAssembly);
-                if (!string.IsNullOrWhiteSpace(stairAssembly)) Log("已安装一键楼梯大样: " + stairAssembly);
-                var assemblies = new[] { installedAssembly, architectureAssembly, stairAssembly }.Where(x => !string.IsNullOrWhiteSpace(x)).ToArray();
+                var pluginAssembly = InstallPlugin(payload, options.InstallPermanently);
+                var architectureAssembly = InstallArchitectureAssistant(launcherDirectory, payload.Band, options.InstallPermanently);
+                var stairAssembly = InstallStairDetail(launcherDirectory, payload.Band, options.InstallPermanently);
+                if (options.InstallPermanently) InstallAutoLoadBundle(pluginAssembly, payload.PdfDependencyPath, payload.Band, architectureAssembly, stairAssembly);
+                Log((options.InstallPermanently ? "已部署插件: " : "便携加载插件: ") + pluginAssembly);
+                if (!string.IsNullOrWhiteSpace(architectureAssembly)) Log((options.InstallPermanently ? "已部署建筑说明助手: " : "便携加载建筑说明助手: ") + architectureAssembly);
+                if (!string.IsNullOrWhiteSpace(stairAssembly)) Log((options.InstallPermanently ? "已部署一键楼梯大样: " : "便携加载一键楼梯大样: ") + stairAssembly);
+                var assemblies = new[] { pluginAssembly, architectureAssembly, stairAssembly }.Where(x => !string.IsNullOrWhiteSpace(x)).ToArray();
                 if (options.LoadIntoRunningCad)
                 {
                     if (!TrySendLoad(options.Platform.ProgId, assemblies))
@@ -182,18 +187,38 @@ namespace BatchPdfPublisherLauncher
             var band = GetApiBand(release);
             var bandDirectory = Path.Combine(launcherDirectory, "CadApi", band);
             var assembly = Path.Combine(bandDirectory, PluginAssemblyName);
+            // CAD locks a loaded managed assembly until the process exits. During
+            // development/update, allow a freshly compiled side-by-side payload
+            // to take precedence without trying to overwrite that locked file.
+            var sideBySideAssembly = Directory.Exists(bandDirectory)
+                ? Directory.GetFiles(bandDirectory, "BatchPdfPublisher*.dll")
+                    .Where(x => !string.Equals(Path.GetFileName(x), PluginAssemblyName, StringComparison.OrdinalIgnoreCase))
+                    .OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault()
+                : null;
+            if (!string.IsNullOrWhiteSpace(sideBySideAssembly) && (!File.Exists(assembly)
+                || File.GetLastWriteTimeUtc(sideBySideAssembly) > File.GetLastWriteTimeUtc(assembly)))
+                assembly = sideBySideAssembly;
             var dependency = Path.Combine(bandDirectory, PdfDependencyName);
+            var arrowLibrary = ResolveResourceFile(launcherDirectory, Path.Combine("Resources", "Blocks"), ArrowLibraryName);
             if (string.Equals(band, "R24", StringComparison.OrdinalIgnoreCase) && !File.Exists(assembly))
             {
                 assembly = Path.Combine(launcherDirectory, PluginAssemblyName);
                 dependency = Path.Combine(launcherDirectory, PdfDependencyName);
             }
-            if (!File.Exists(assembly) || !File.Exists(dependency))
+            if (!File.Exists(assembly) || !File.Exists(dependency) || !File.Exists(arrowLibrary))
                 throw new FileNotFoundException(
                     "已识别 " + FormatRelease(release) + "，但发布包中缺少对应的 " + band + " 插件组件。\r\n\r\n"
                     + "预期目录：" + bandDirectory + "\r\n"
                     + "请使用包含 AutoCAD 2014–2026 分代 DLL 的完整发布包。");
-            return new PluginPayload(band, assembly, dependency);
+            return new PluginPayload(band, assembly, dependency, arrowLibrary);
+        }
+
+        private static string ResolveResourceFile(string launcherDirectory, string resourceDirectory, string fileName)
+        {
+            var organized = Path.Combine(launcherDirectory, resourceDirectory, fileName);
+            if (File.Exists(organized)) return organized;
+            // Compatibility with packages created before resources were grouped.
+            return Path.Combine(launcherDirectory, fileName);
         }
 
         private static string GetApiBand(string release)
@@ -372,15 +397,18 @@ namespace BatchPdfPublisherLauncher
         private static void StartPlatform(PlatformOption platform, IList<string> installedAssemblies)
         {
             Log("启动平台: " + platform.DisplayName);
+            TryDelete(LoadReceiptPath);
             var startupScript = Path.Combine(Path.GetTempPath(), "BatchPdfPublisher." + Guid.NewGuid().ToString("N") + ".scr");
             var loadableAssemblies = installedAssemblies.Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             var trustedDirectories = string.Join(";", loadableAssemblies.Select(Path.GetDirectoryName).Distinct(StringComparer.OrdinalIgnoreCase).Select(x => x.Replace('\\', '/')));
-            var loadCommands = string.Join(" ", loadableAssemblies.Select(x =>
-                "(vl-catch-all-apply 'command (list \"_.NETLOAD\" \"" + EscapeLispString(x.Replace('\\', '/')) + "\"))"));
+            var loadCommands = BuildNetloadCommandStream(loadableAssemblies);
             File.WriteAllText(startupScript,
-                "(progn (setq bpp_old_filedia (getvar \"FILEDIA\")) (setvar \"FILEDIA\" 0) " +
-                "(setvar \"TRUSTEDPATHS\" (strcat (getvar \"TRUSTEDPATHS\") \";" + EscapeLispString(trustedDirectories) + "\")) " +
-                loadCommands + " (setvar \"FILEDIA\" bpp_old_filedia) (princ))\r\n", Encoding.Default);
+                "(setq bpp_old_filedia (getvar \"FILEDIA\"))\r\n" +
+                "(setvar \"FILEDIA\" 0)\r\n" +
+                "(setvar \"TRUSTEDPATHS\" (strcat (getvar \"TRUSTEDPATHS\") \";" + EscapeLispString(trustedDirectories) + "\"))\r\n" +
+                loadCommands +
+                "BPPSTARTUP\r\n" +
+                "(setvar \"FILEDIA\" bpp_old_filedia)\r\n", Encoding.Default);
             Process.Start(new ProcessStartInfo
             {
                 FileName = platform.Executable,
@@ -392,7 +420,9 @@ namespace BatchPdfPublisherLauncher
             if (!WaitForCadProcess(45))
                 throw new InvalidOperationException(platform.DisplayName + " 启动后没有检测到 AutoCAD 进程。请确认平台可以单独正常启动。\r\n\r\n插件文件已经安装，进入 CAD 后仍可手工执行 BPPUBLISH。\r\n\r\n如使用天正，请从选择列表中选择“T20 天正建筑”，不要选择普通 AutoCAD 2022。 ");
 
-            Log(loadableAssemblies.Length > 0 ? "已通过无对话框启动脚本安排 NETLOAD" : "已通过统一 Bundle 安排自动加载");
+            if (!WaitForLoadReceipt(60))
+                throw new InvalidOperationException(platform.DisplayName + " 已启动，但插件在 60 秒内没有返回加载成功信息。\r\n\r\n请关闭 CAD 后重试；日志：" + LaunchLogPath);
+            Log(loadableAssemblies.Length > 0 ? "插件已通过启动脚本确认加载成功" : "插件已通过统一 Bundle 确认加载成功");
         }
 
         private static void UninstallPlugin()
@@ -401,6 +431,7 @@ namespace BatchPdfPublisherLauncher
             RemoveAutoLoadBundles();
             var releases = Path.Combine(appData, "BatchPdfPublisher", "releases");
             if (Directory.Exists(releases)) Directory.Delete(releases, true);
+            TryDelete(LastPlatformPath());
             var suiteFiles = Path.Combine(appData, "WanluoArchitectureTools");
             if (Directory.Exists(suiteFiles)) Directory.Delete(suiteFiles, true);
             var autodeskRoot = Path.Combine(appData, "Autodesk");
@@ -410,7 +441,6 @@ namespace BatchPdfPublisherLauncher
                     TryDelete(Path.Combine(plotters, PlotterConfigName));
                     TryDelete(Path.Combine(plotters, "PMP Files", PlotterMediaName));
                 }
-            TryDelete(LastPlatformPath());
         }
 
         private static void RemoveAutoLoadBundles()
@@ -445,6 +475,7 @@ namespace BatchPdfPublisherLauncher
 
         private static bool TrySendLoad(string progId, IList<string> installedAssemblies)
         {
+            TryDelete(LoadReceiptPath);
             var progIds = new[] { progId }.Concat(KnownProgIds())
                 .Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             for (var attempt = 0; attempt < 15; attempt++)
@@ -462,15 +493,15 @@ namespace BatchPdfPublisherLauncher
                     var document = application.GetType().InvokeMember("ActiveDocument", BindingFlags.GetProperty, null, application, null);
                     var loadableAssemblies = installedAssemblies.Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
                     var directories = string.Join(";", loadableAssemblies.Select(Path.GetDirectoryName).Distinct(StringComparer.OrdinalIgnoreCase).Select(x => x.Replace('\\', '/')));
-                    // Queue the commands in a single command stream. AutoCAD
-                    // executes NETLOAD in sequence. The publisher UI is not
-                    // opened automatically; users open it from Ribbon or BPP.
-                    var loadCommands = string.Join(" ", loadableAssemblies.Select(x => "(vl-catch-all-apply 'command (list \"_.NETLOAD\" \"" + EscapeLispString(x.Replace('\\', '/')) + "\"))"));
                     SendCommand(document,
-                        "(progn (setq bpp_old_filedia (getvar \"FILEDIA\")) (setvar \"FILEDIA\" 0) " +
-                        "(setvar \"TRUSTEDPATHS\" (strcat (getvar \"TRUSTEDPATHS\") \";" + EscapeLispString(directories) + "\")) " +
-                        loadCommands + " (setvar \"FILEDIA\" bpp_old_filedia) (princ))\r\n");
-                    Log("已向 AutoCAD 发送 NETLOAD；未自动打开 BPP 面板");
+                        "(setq bpp_old_filedia (getvar \"FILEDIA\"))\r\n" +
+                        "(setvar \"FILEDIA\" 0)\r\n" +
+                        "(setvar \"TRUSTEDPATHS\" (strcat (getvar \"TRUSTEDPATHS\") \";" + EscapeLispString(directories) + "\"))\r\n" +
+                        BuildNetloadCommandStream(loadableAssemblies) +
+                        "BPPSTARTUP\r\n" +
+                        "(setvar \"FILEDIA\" bpp_old_filedia)\r\n");
+                    if (!WaitForLoadReceipt(30)) throw new InvalidOperationException("已发送 NETLOAD，但目标 CAD 没有返回加载成功信息");
+                    Log("已向运行中的 AutoCAD 加载插件并收到成功回执；未自动打开 BPP 面板");
                     return true;
                 }
                 catch (Exception exception) { Log("COM 尝试 " + (attempt + 1) + " 失败: " + exception.Message); Thread.Sleep(1000); }
@@ -500,7 +531,15 @@ namespace BatchPdfPublisherLauncher
             return File.Exists(path) ? File.ReadAllText(path).Trim() : string.Empty;
         }
 
-        private static string LastPlatformPath() => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), LastPlatformFileName);
+        private static string LastPlatformPath()
+        {
+            var target = Path.Combine(EnsureDirectory(Path.Combine(UserDataRoot, "Settings")), "last-platform.txt");
+            var legacy = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), LastPlatformFileName);
+            try { if (!File.Exists(target) && File.Exists(legacy)) File.Copy(legacy, target, false); } catch { }
+            return target;
+        }
+
+        private static string EnsureDirectory(string path) { Directory.CreateDirectory(path); return path; }
 
         private static void InstallPlotterProfiles(string sourcePlotterConfig, string sourcePlotterMedia)
         {
@@ -657,6 +696,7 @@ namespace BatchPdfPublisherLauncher
 
         private static string InstallPlugin(PluginPayload payload, bool installPermanently)
         {
+            if (!installPermanently) return payload.AssemblyPath;
             var contentsDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WanluoArchitectureTools", "releases", payload.Band);
             Directory.CreateDirectory(contentsDirectory);
             var hash = GetFileHash(payload.AssemblyPath).Substring(0, 12);
@@ -665,6 +705,11 @@ namespace BatchPdfPublisherLauncher
             if (!File.Exists(installedAssembly) || new FileInfo(installedAssembly).Length != new FileInfo(payload.AssemblyPath).Length)
                 File.Copy(payload.AssemblyPath, installedAssembly, true);
             File.Copy(payload.PdfDependencyPath, Path.Combine(contentsDirectory, PdfDependencyName), true);
+            var resourceDirectory = Path.Combine(contentsDirectory, "Resources", "Blocks");
+            Directory.CreateDirectory(resourceDirectory);
+            File.Copy(payload.ArrowLibraryPath, Path.Combine(resourceDirectory, ArrowLibraryName), true);
+            var legacyArrowLibrary = Path.Combine(contentsDirectory, ArrowLibraryName);
+            if (File.Exists(legacyArrowLibrary)) File.Delete(legacyArrowLibrary);
             return installedAssembly;
         }
 
@@ -673,7 +718,27 @@ namespace BatchPdfPublisherLauncher
             return (value ?? string.Empty).Replace("\\", "/").Replace("\"", "\\\"");
         }
 
-        private static string InstallArchitectureAssistant(string launcherDirectory, string band)
+        private static string BuildNetloadCommandStream(IEnumerable<string> assemblies)
+        {
+            return string.Join(string.Empty, assemblies.Select(x =>
+                "_.NETLOAD\r\n\"" + x.Replace('\\', '/') + "\"\r\n"));
+        }
+
+        private static bool WaitForLoadReceipt(int seconds)
+        {
+            for (var i = 0; i < seconds * 2; i++)
+            {
+                try
+                {
+                    if (File.Exists(LoadReceiptPath) && new FileInfo(LoadReceiptPath).Length > 0) return true;
+                }
+                catch { }
+                Thread.Sleep(500);
+            }
+            return false;
+        }
+
+        private static string InstallArchitectureAssistant(string launcherDirectory, string band, bool installPermanently)
         {
             var hostName = string.Equals(band, "R24", StringComparison.OrdinalIgnoreCase) ? "CadArchSpec.Host.AutoCAD2022.dll" :
                 string.Equals(band, "R25", StringComparison.OrdinalIgnoreCase) ? "CadArchSpec.Host.AutoCAD2026.dll" : null;
@@ -681,12 +746,13 @@ namespace BatchPdfPublisherLauncher
             var source = Path.Combine(launcherDirectory, "ArchitectureAssistant", band);
             var sourceHost = Path.Combine(source, hostName);
             if (!File.Exists(sourceHost)) throw new FileNotFoundException("安装包缺少建筑设计说明助手的 " + band + " 组件。", sourceHost);
+            if (!installPermanently) return sourceHost;
             var target = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WanluoArchitectureTools", "ArchitectureAssistant", band);
             CopyDirectory(source, target);
             return Path.Combine(target, hostName);
         }
 
-        private static string InstallStairDetail(string launcherDirectory, string band)
+        private static string InstallStairDetail(string launcherDirectory, string band, bool installPermanently)
         {
             var hostName = string.Equals(band, "R24", StringComparison.OrdinalIgnoreCase) ? "WL.Stair.Cad2022.dll" :
                 string.Equals(band, "R25", StringComparison.OrdinalIgnoreCase) ? "WL.Stair.Cad2026.dll" : null;
@@ -694,6 +760,7 @@ namespace BatchPdfPublisherLauncher
             var source = Path.Combine(launcherDirectory, "StairDetail", band);
             var sourceHost = Path.Combine(source, hostName);
             if (!File.Exists(sourceHost)) throw new FileNotFoundException("安装包缺少一键楼梯大样的 " + band + " 组件。", sourceHost);
+            if (!installPermanently) return sourceHost;
             var target = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WanluoArchitectureTools", "StairDetail", band);
             CopyDirectory(source, target);
             return Path.Combine(target, hostName);
@@ -720,6 +787,14 @@ namespace BatchPdfPublisherLauncher
             Directory.CreateDirectory(contents);
             File.Copy(installedAssembly, Path.Combine(contents, PluginAssemblyName), true);
             File.Copy(sourcePdfDependency, Path.Combine(contents, PdfDependencyName), true);
+            var installedArrowLibrary = Path.Combine(Path.GetDirectoryName(installedAssembly), ArrowLibraryRelativePath);
+            if (!File.Exists(installedArrowLibrary)) installedArrowLibrary = Path.Combine(Path.GetDirectoryName(installedAssembly), ArrowLibraryName);
+            if (File.Exists(installedArrowLibrary))
+            {
+                var resourceDirectory = Path.Combine(contents, "Resources", "Blocks");
+                Directory.CreateDirectory(resourceDirectory);
+                File.Copy(installedArrowLibrary, Path.Combine(resourceDirectory, ArrowLibraryName), true);
+            }
             if (!string.IsNullOrWhiteSpace(architectureAssembly))
                 CopyDirectory(Path.GetDirectoryName(architectureAssembly), Path.Combine(contents, "ArchitectureAssistant"));
             if (!string.IsNullOrWhiteSpace(stairAssembly))
@@ -811,13 +886,14 @@ namespace BatchPdfPublisherLauncher
 
     internal sealed class PluginPayload
     {
-        public PluginPayload(string band, string assemblyPath, string pdfDependencyPath)
+        public PluginPayload(string band, string assemblyPath, string pdfDependencyPath, string arrowLibraryPath)
         {
-            Band = band; AssemblyPath = assemblyPath; PdfDependencyPath = pdfDependencyPath;
+            Band = band; AssemblyPath = assemblyPath; PdfDependencyPath = pdfDependencyPath; ArrowLibraryPath = arrowLibraryPath;
         }
         public string Band { get; }
         public string AssemblyPath { get; }
         public string PdfDependencyPath { get; }
+        public string ArrowLibraryPath { get; }
     }
 
     internal sealed class TianzhengInstallation
@@ -952,7 +1028,7 @@ namespace BatchPdfPublisherLauncher
             _tianzhengBox.SelectedIndexChanged += (s, e) => RefreshCadOptions(last?.CadName);
             if (_tianzhengBox.Items.Count > 0) _tianzhengBox.SelectedItem = last?.TianzhengName ?? _tianzhengBox.Items[0];
             _runningCad = CreateOptionCheckBox(hasRunningCad ? "加载到当前已启动的 CAD" : "加载到当前已启动的 CAD（当前未检测到）", hasRunningCad, hasRunningCad);
-            _permanentInstall = CreateOptionCheckBox("以后每次启动 CAD 时自动加载插件", false, true);
+            _permanentInstall = CreateOptionCheckBox("永久安装（不勾选则直接从当前目录便携运行）", false, true);
             card.Controls.Add(tzLabel, 0, 0); card.Controls.Add(_tianzhengBox, 1, 0);
             card.Controls.Add(cadLabel, 0, 1); card.Controls.Add(_cadBox, 1, 1);
             card.Controls.Add(_runningCad, 1, 2); card.Controls.Add(_permanentInstall, 1, 3);
@@ -995,7 +1071,7 @@ namespace BatchPdfPublisherLauncher
             toolTip.SetToolTip(_tianzhengBox, "选择要启动的天正专业和版本；不使用天正时选择“无天正”。");
             toolTip.SetToolTip(_cadBox, "选择插件要加载到的 AutoCAD 产品年份。");
             toolTip.SetToolTip(_runningCad, "将插件直接载入已经打开的本机 AutoCAD，不再启动新的 CAD 进程。");
-            toolTip.SetToolTip(_permanentInstall, "写入 Autodesk ApplicationPlugins 自动加载配置，以后启动 CAD 时自动加载本插件。");
+            toolTip.SetToolTip(_permanentInstall, "默认不安装程序文件，直接从启动器所在目录加载；勾选后写入 Autodesk ApplicationPlugins，以后启动 CAD 时自动加载。");
             toolTip.SetToolTip(_uninstallButton, "删除本插件的自动加载配置和安装副本，不会删除工程文件或 DWG 图纸。");
             toolTip.SetToolTip(browseButton, "自动识别失败时，手动选择 acad.exe 或天正启动程序；安装盘符和目录不受限制。");
             AcceptButton = _startButton; CancelButton = cancelButton;

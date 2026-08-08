@@ -106,7 +106,7 @@ namespace BatchPdfPublisher.Services
                         if (!System.IO.File.Exists(path)) { report.Failures.Add(System.IO.Path.GetFileName(path) + "：文件不存在"); continue; }
                         using (var database = new Database(false, true))
                         {
-                            database.ReadDwgFile(path, System.IO.FileShare.Read, true, string.Empty);
+                            database.ReadDwgFile(path, FileOpenMode.OpenForReadAndAllShare, true, string.Empty);
                             scan = ScanDatabase(database, path, blockName);
                         }
                     }
@@ -176,9 +176,18 @@ namespace BatchPdfPublisher.Services
         private static Document FindOpenDocument(string path)
         {
             var full = NormalizePath(path);
+            var documents = new List<Document>();
             foreach (Document document in Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager)
+            {
+                documents.Add(document);
                 if (string.Equals(NormalizePath(SafeDocumentPath(document)), full, StringComparison.OrdinalIgnoreCase)) return document;
-            return null;
+            }
+            // Some vertical products report a document name while the project
+            // remembers its resolved path. A unique file-name match still refers
+            // to the already open database and avoids a second ReadDwgFile call.
+            var fileName = System.IO.Path.GetFileName(path ?? string.Empty);
+            var sameNames = documents.Where(x => string.Equals(System.IO.Path.GetFileName(SafeDocumentPath(x)), fileName, StringComparison.OrdinalIgnoreCase)).ToList();
+            return sameNames.Count == 1 ? sameNames[0] : null;
         }
 
         private static string SafeDocumentPath(Document document)
@@ -290,7 +299,7 @@ namespace BatchPdfPublisher.Services
             return new FrameContext
             {
                 BlockName = blockName,
-                Guess = FrameSizeDetector.Guess(reference.GeometricExtents, knownScale),
+                Guess = FrameSizeDetector.Guess(reference.GeometricExtents, knownScale, blockName),
                 Attributes = attributes,
                 AttributeTagSignature = FrameIdentityService.AttributeSignature(attributes.Keys),
                 DefinitionSignature = FrameIdentityService.DefinitionSignature(reference, transaction),
@@ -312,6 +321,46 @@ namespace BatchPdfPublisher.Services
                 document.SendStringToExecute("_.BEDIT \"" + name + "\" ", true, false, false);
             }
             return false;
+        }
+
+        public bool RegisterCreated(Document document, ObjectId objectId, string note, out string error)
+        {
+            error = null;
+            try
+            {
+                var context = ReadReference(document, objectId);
+                if (context == null) { error = "无法读取刚创建的图框块实例。"; return false; }
+                if (context.DuplicateAttributeTags.Count > 0)
+                {
+                    error = "图框中存在重复属性 TAG：" + string.Join("、", context.DuplicateAttributeTags);
+                    return false;
+                }
+                var definition = new FrameDefinition
+                {
+                    RegistrationId = Guid.NewGuid().ToString("N"),
+                    BlockName = context.BlockName,
+                    AttributeTagSignature = context.AttributeTagSignature,
+                    DefinitionSignature = context.DefinitionSignature,
+                    ReferenceAspectRatio = context.AspectRatio,
+                    PaperSize = context.Guess.PaperSize,
+                    Extension = context.Guess.Extension,
+                    PaperOrientation = context.Guess.PaperOrientation,
+                    Note = note,
+                    BuildingAttributeTag = "子项目名称",
+                    SheetNumberAttributeTag = "图号",
+                    SheetNameAttributeTag = "图纸名称",
+                    PrintScaleAttributeTag = "比例",
+                    DefaultPrintScale = context.Guess.PrintScale
+                };
+                var store = new PublishPlanStore();
+                var frames = store.LoadFrames();
+                frames.RemoveAll(x => string.Equals(x.BlockName, definition.BlockName, StringComparison.OrdinalIgnoreCase)
+                    && FrameIdentityService.IsSameVariant(x, definition.AttributeTagSignature, definition.DefinitionSignature, definition.ReferenceAspectRatio));
+                frames.Add(definition);
+                store.SaveFrames(frames);
+                return true;
+            }
+            catch (Exception exception) { error = exception.Message; return false; }
         }
 
         private static bool ReferenceMatchesLegacy(FrameDefinition left, FrameDefinition right) =>

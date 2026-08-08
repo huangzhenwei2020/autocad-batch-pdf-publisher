@@ -90,7 +90,7 @@ namespace BatchPdfPublisher.Services
             try { using (var stream = File.Create(SettingsPath())) new DataContractJsonSerializer(typeof(AttributeBatchSettings)).WriteObject(stream, this); } catch { }
         }
 
-        private static string SettingsPath() => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "BatchPdfPublisher.attribute-settings.json");
+        private static string SettingsPath() => UserDataPaths.SettingsFile("attribute-settings.json", "BatchPdfPublisher.attribute-settings.json");
     }
 
     [DataContract]
@@ -122,7 +122,7 @@ namespace BatchPdfPublisher.Services
         {
             try { using (var stream = File.Create(PresetsPath())) new DataContractJsonSerializer(typeof(List<AttributeBatchPreset>)).WriteObject(stream, presets ?? new List<AttributeBatchPreset>()); } catch { }
         }
-        private static string PresetsPath() => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "BatchPdfPublisher.attribute-presets.json");
+        private static string PresetsPath() => UserDataPaths.SettingsFile("attribute-presets.json", "BatchPdfPublisher.attribute-presets.json");
     }
 
     public sealed class AttributeApplyResult

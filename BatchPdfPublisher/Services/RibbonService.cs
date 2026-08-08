@@ -13,50 +13,99 @@ namespace BatchPdfPublisher.Services
     {
         private const string TabId = "BPP_BATCH_PDF_TAB";
         private static EventHandler _idleHandler;
+        private static bool _installed;
 
         public static void InstallWhenReady()
         {
-            if (_idleHandler != null) return;
-            _idleHandler = (sender, args) =>
+            if (_idleHandler == null)
             {
-                try
+                _idleHandler = (sender, args) =>
                 {
-                    var ribbon = ComponentManager.Ribbon;
-                    if (ribbon == null) return;
-                    var existing = ribbon.FindTab(TabId);
-                    if (existing != null && existing.Panels.Count > 0 && existing.Panels[0].Source.Items.Count == 8
-                        && existing.Panels[0].Source.Items[0].Text.IndexOf("BPP", StringComparison.OrdinalIgnoreCase) >= 0
-                        && existing.Panels[0].Source.Items[7].Text.IndexOf("BZS", StringComparison.OrdinalIgnoreCase) >= 0)
-                    {
-                        existing.IsVisible = true;
-                        return;
-                    }
-                    if (existing != null) ribbon.Tabs.Remove(existing);
-                    var tab = new RibbonTab { Id = TabId, Title = "万落建筑工具" };
-                    var source = new RibbonPanelSource { Title = "图纸与说明" };
-                    var panel = new RibbonPanel { Source = source };
-                    source.Items.Add(CreateButton("打开面板（BPP）", "BPP ", "panel"));
-                    source.Items.Add(CreateButton("创建图框（TKK）", "TKK ", "frame"));
-                    source.Items.Add(CreateButton("插入目录（ML1）", "ML1 ", "catalog"));
-                    source.Items.Add(CreateButton("批量改属性（SBB）", "SBB ", "attribute"));
-                    source.Items.Add(CreateButton("属性定义编辑（BPA）", "BPA ", "attribute"));
-                    source.Items.Add(CreateButton("建筑说明（JZSM）", "WLJZSM ", "spec"));
-                    source.Items.Add(CreateButton("楼梯大样（LTDY）", "WLLTDY ", "stair"));
-                    source.Items.Add(CreateButton("制图标准（BZS）", "BZS ", "standard"));
-                    tab.Panels.Add(panel);
-                    ribbon.Tabs.Add(tab);
-                }
-                catch (Exception exception) { Trace(exception); }
-            };
-            Application.Idle += _idleHandler;
+                    // Workspaces and vertical products (such as T20) can rebuild
+                    // the Ribbon after our assembly has loaded.  Keep this cheap
+                    // check on Idle so the tab is restored when that happens.
+                    TryInstallRibbon(false);
+                };
+                Application.Idle += _idleHandler;
+            }
             // A freshly started AutoCAD may already have a Ribbon when NETLOAD
             // completes; install immediately as well as on subsequent idle ticks.
-            _idleHandler(null, EventArgs.Empty);
+            TryInstallRibbon(true);
+        }
+
+        public static bool RefreshNow()
+        {
+            InstallWhenReady();
+            return TryInstallRibbon(true);
+        }
+
+        private static bool TryInstallRibbon(bool traceNotReady)
+        {
+            try
+            {
+                var ribbon = ComponentManager.Ribbon;
+                if (ribbon == null)
+                {
+                    _installed = false;
+                    if (traceNotReady) Trace("Ribbon 容器尚未创建，已进入等待状态");
+                    return false;
+                }
+
+                var existing = ribbon.FindTab(TabId);
+                if (IsCurrentTab(existing))
+                {
+                    existing.IsVisible = true;
+                    if (!_installed) Trace("Ribbon 标签已恢复并设为可见");
+                    _installed = true;
+                    return true;
+                }
+
+                if (existing != null) ribbon.Tabs.Remove(existing);
+                var tab = new RibbonTab { Id = TabId, Title = "万落建筑工具", IsVisible = true };
+                var source = new RibbonPanelSource { Title = "图纸与说明" };
+                var panel = new RibbonPanel { Source = source };
+                source.Items.Add(CreateButton("打开面板（BPP）", "BPP ", "panel"));
+                source.Items.Add(CreateButton("创建图框（TKK）", "TKK ", "frame"));
+                source.Items.Add(CreateButton("插入目录（ML1）", "ML1 ", "catalog"));
+                source.Items.Add(CreateButton("批量改属性（SBB）", "SBB ", "attribute"));
+                source.Items.Add(CreateButton("属性定义编辑（BPA）", "BPA ", "attribute"));
+                source.Items.Add(CreateButton("建筑说明（JZSM）", "WLJZSM ", "spec"));
+                source.Items.Add(CreateButton("楼梯大样（LTDY）", "WLLTDY ", "stair"));
+                source.Items.Add(CreateButton("制图标准（BZS）", "BZS ", "standard"));
+                source.Items.Add(CreateButton("比例管理（BL1）", "BL1 ", "scale"));
+                tab.Panels.Add(panel);
+                ribbon.Tabs.Add(tab);
+                _installed = true;
+                Trace("Ribbon 标签已创建：万落建筑工具，按钮数=" + source.Items.Count);
+                return true;
+            }
+            catch (Exception exception)
+            {
+                _installed = false;
+                Trace(exception);
+                return false;
+            }
+        }
+
+        private static bool IsCurrentTab(RibbonTab tab)
+        {
+            return tab != null
+                && tab.Panels.Count > 0
+                && tab.Panels[0].Source != null
+                && tab.Panels[0].Source.Items.Count == 9
+                && tab.Panels[0].Source.Items[0].Text.IndexOf("BPP", StringComparison.OrdinalIgnoreCase) >= 0
+                && tab.Panels[0].Source.Items[7].Text.IndexOf("BZS", StringComparison.OrdinalIgnoreCase) >= 0
+                && tab.Panels[0].Source.Items[8].Text.IndexOf("BL1", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private static void Trace(Exception exception)
         {
-            try { System.IO.File.AppendAllText(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "BatchPdfPublisher.ui.log"), DateTime.Now.ToString("O") + " Ribbon: " + exception + Environment.NewLine); } catch { }
+            Trace("Ribbon 异常：" + exception);
+        }
+
+        private static void Trace(string message)
+        {
+            try { System.IO.File.AppendAllText(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "BatchPdfPublisher.ui.log"), DateTime.Now.ToString("O") + " " + message + Environment.NewLine); } catch { }
         }
 
         public static void Remove()
@@ -66,6 +115,7 @@ namespace BatchPdfPublisher.Services
                 Application.Idle -= _idleHandler;
                 _idleHandler = null;
             }
+            _installed = false;
             var ribbon = ComponentManager.Ribbon;
             var tab = ribbon?.FindTab(TabId);
             if (tab != null) ribbon.Tabs.Remove(tab);
@@ -88,6 +138,8 @@ namespace BatchPdfPublisher.Services
                             ? "打开楼梯构件编辑器，按楼层、梯段和构造参数一键生成楼梯大样。"
                         : command.Trim().Equals("BZS", StringComparison.OrdinalIgnoreCase)
                             ? "检查并补齐万落工具共用的图层、文字样式和标注样式。"
+                        : command.Trim().Equals("BL1", StringComparison.OrdinalIgnoreCase)
+                            ? "把所选对象转换到指定图纸比例，或按目标比例连续刷对象。"
                             : "打开工程 DWG 管理、图框扫描和批量 PDF 发布面板。";
             return new RibbonButton
             {
@@ -152,6 +204,14 @@ namespace BatchPdfPublisher.Services
                 group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(2, 10), new WpfPoint(14, 10))));
                 group.Children.Add(new GeometryDrawing(brush, null, new EllipseGeometry(new WpfPoint(6, 6), 1.4, 1.4)));
                 group.Children.Add(new GeometryDrawing(brush, null, new EllipseGeometry(new WpfPoint(10, 10), 1.4, 1.4)));
+            }
+            else if (kind == "scale")
+            {
+                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(2, 12), new WpfPoint(14, 4))));
+                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(2, 9), new WpfPoint(2, 12))));
+                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(2, 12), new WpfPoint(5, 12))));
+                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(11, 4), new WpfPoint(14, 4))));
+                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(14, 4), new WpfPoint(14, 7))));
             }
             else
             {

@@ -7,6 +7,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using BatchPdfPublisher.Models;
+using BatchPdfPublisher.Services;
 using BatchPdfPublisher.ViewModels;
 
 namespace BatchPdfPublisher.Views
@@ -1063,7 +1064,7 @@ namespace BatchPdfPublisher.Views
 
         private static string UiLayoutSettingsPath()
         {
-            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "BatchPdfPublisher.ui-layout.settings");
+            return UserDataPaths.SettingsFile("ui-layout.settings", "BatchPdfPublisher.ui-layout.settings");
         }
 
         private static int Clamp(int value, int minimum, int maximum)

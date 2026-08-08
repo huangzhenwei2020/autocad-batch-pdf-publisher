@@ -13,8 +13,8 @@
     <Grid.ColumnDefinitions><ColumnDefinition Width="110"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
 
     <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="图框登记信息" FontWeight="SemiBold" FontSize="16"/>
-    <TextBlock Grid.Row="1" Text="图块名称" Margin="0,14,0,0"/>
-    <TextBox Grid.Row="1" Grid.Column="1" x:Name="BlockNameBox" Margin="0,10,0,0" IsReadOnly="True" Background="#E7EDF4"/>
+    <TextBlock Grid.Row="1" Text="图块名（块定义名称）" Margin="0,14,0,0"/>
+    <TextBox Grid.Row="1" Grid.Column="1" x:Name="BlockNameBox" Margin="0,10,0,0" IsReadOnly="True" Background="#E7EDF4" ToolTip="这是 CAD 图块定义名称，不是用户备注。"/>
     <TextBlock Grid.Row="2" Text="用户备注" Margin="0,10,0,0"/>
     <TextBox Grid.Row="2" Grid.Column="1" x:Name="NoteBox" Margin="0,6,0,0" ToolTip="例如：建筑施工图标准图框"/>
     <TextBlock Grid.Row="3" Text="智能检测" Margin="0,10,0,0"/>
