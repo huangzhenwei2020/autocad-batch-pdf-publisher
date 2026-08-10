@@ -73,6 +73,7 @@ namespace BatchPdfPublisher.Services
                 source.Items.Add(CreateButton("楼梯大样（LTDY）", "WLLTDY ", "stair"));
                 source.Items.Add(CreateButton("制图标准（BZS）", "BZS ", "standard"));
                 source.Items.Add(CreateButton("比例管理（BL1）", "BL1 ", "scale"));
+                source.Items.Add(CreateButton("房间改名（FJGM）", "FJGM ", "room"));
                 tab.Panels.Add(panel);
                 ribbon.Tabs.Add(tab);
                 _installed = true;
@@ -92,10 +93,11 @@ namespace BatchPdfPublisher.Services
             return tab != null
                 && tab.Panels.Count > 0
                 && tab.Panels[0].Source != null
-                && tab.Panels[0].Source.Items.Count == 9
+                && tab.Panels[0].Source.Items.Count == 10
                 && tab.Panels[0].Source.Items[0].Text.IndexOf("BPP", StringComparison.OrdinalIgnoreCase) >= 0
                 && tab.Panels[0].Source.Items[7].Text.IndexOf("BZS", StringComparison.OrdinalIgnoreCase) >= 0
-                && tab.Panels[0].Source.Items[8].Text.IndexOf("BL1", StringComparison.OrdinalIgnoreCase) >= 0;
+                && tab.Panels[0].Source.Items[8].Text.IndexOf("BL1", StringComparison.OrdinalIgnoreCase) >= 0
+                && tab.Panels[0].Source.Items[9].Text.IndexOf("FJGM", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private static void Trace(Exception exception)
@@ -140,6 +142,8 @@ namespace BatchPdfPublisher.Services
                             ? "检查并补齐万落工具共用的图层、文字样式和标注样式。"
                         : command.Trim().Equals("BL1", StringComparison.OrdinalIgnoreCase)
                             ? "把所选对象转换到指定图纸比例，或按目标比例连续刷对象。"
+                        : command.Trim().Equals("FJGM", StringComparison.OrdinalIgnoreCase)
+                            ? "以一个天正房间为样板，仅批量修改原名称和使用面积都相同的房间。"
                             : "打开工程 DWG 管理、图框扫描和批量 PDF 发布面板。";
             return new RibbonButton
             {
@@ -171,6 +175,12 @@ namespace BatchPdfPublisher.Services
                 group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(8, 7), new WpfPoint(8, 4))));
                 group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(8, 4), new WpfPoint(13, 4))));
                 group.Children.Add(new GeometryDrawing(brush, null, new EllipseGeometry(new WpfPoint(13, 4), 1.6, 1.6)));
+            }
+            else if (kind == "room")
+            {
+                group.Children.Add(new GeometryDrawing(null, pen, new RectangleGeometry(new WpfRect(2, 3, 12, 10))));
+                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(8, 3), new WpfPoint(8, 8))));
+                group.Children.Add(new GeometryDrawing(brush, null, new EllipseGeometry(new WpfPoint(8, 10), 2.2, 2.2)));
             }
             else if (kind == "spec")
             {

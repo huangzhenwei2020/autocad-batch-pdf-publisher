@@ -80,7 +80,7 @@ namespace BatchPdfPublisher.Services
             try
             {
                 var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "BPP_批量打印.mnu");
-                var content = "***MENUGROUP=BPP\r\n***POP16\r\n万落建筑工具\r\n[批量 PDF 面板（BPP）]^C^C_BPP \r\n[创建图框（TKK）]^C^C_TKK \r\n[插入目录（ML1）]^C^C_ML1 \r\n[批量改属性（SBB）]^C^C_SBB \r\n[图块属性定义编辑器（BPA）]^C^C_BPA \r\n[建筑设计说明助手（JZSM）]^C^C_WLJZSM \r\n[一键楼梯大样（LTDY）]^C^C_WLLTDY \r\n[制图标准设置（BZS）]^C^C_BZS \r\n[比例管理（BL1）]^C^C_BL1 \r\n";
+                var content = "***MENUGROUP=BPP\r\n***POP16\r\n万落建筑工具\r\n[批量 PDF 面板（BPP）]^C^C_BPP \r\n[创建图框（TKK）]^C^C_TKK \r\n[插入目录（ML1）]^C^C_ML1 \r\n[批量改属性（SBB）]^C^C_SBB \r\n[图块属性定义编辑器（BPA）]^C^C_BPA \r\n[建筑设计说明助手（JZSM）]^C^C_WLJZSM \r\n[一键楼梯大样（LTDY）]^C^C_WLLTDY \r\n[制图标准设置（BZS）]^C^C_BZS \r\n[比例管理（BL1）]^C^C_BL1 \r\n[批量修改房间名称（FJGM）]^C^C_FJGM \r\n";
                 // MNU is an ANSI file; AutoCAD on Chinese installations expects the
                 // system GBK code page rather than UTF-8/default .NET encoding.
                 System.IO.File.WriteAllText(path, content, System.Text.Encoding.GetEncoding(936));

@@ -1,6 +1,7 @@
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Runtime;
+using Autodesk.AutoCAD.DatabaseServices;
 using BatchPdfPublisher.Services;
 using System;
 using System.IO;
@@ -14,6 +15,7 @@ namespace BatchPdfPublisher
     public sealed class Commands : IExtensionApplication
     {
         private static PublisherForm _publisherForm;
+        private static TianzhengRoomRenameForm _roomRenameForm;
         private static IList<SheetItem> _catalogSheets;
         private static CatalogSettings _catalogSettings;
         private static Action _catalogDone;
@@ -65,6 +67,43 @@ namespace BatchPdfPublisher
             var document = Application.DocumentManager.MdiActiveDocument;
             if (document == null) return;
             Application.ShowModelessDialog(new FrameCreationForm(document, null));
+        }
+
+        [CommandMethod("FJGM")]
+        [CommandMethod("WLROOMNAME")]
+        public void BatchRenameTianzhengRooms()
+        {
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document == null) return;
+            var editor = document.Editor;
+            try
+            {
+                var pickOptions = new PromptEntityOptions("\n请选择一个天正房间作为匹配样板：");
+                var picked = editor.GetEntity(pickOptions);
+                if (picked.Status != PromptStatus.OK) return;
+
+                TianzhengRoomInfo sample;
+                using (var transaction = document.Database.TransactionManager.StartTransaction())
+                {
+                    var selectedObject = transaction.GetObject(picked.ObjectId, OpenMode.ForRead, false);
+                    if (!TianzhengRoomService.IsRoom(selectedObject))
+                    {
+                        Application.ShowAlertDialog("所选对象不是原生天正房间。\r\n\r\n请点选由天正“房间面积”功能创建的房间对象；已炸开或导出为普通文字的对象暂不支持。");
+                        return;
+                    }
+                    sample = TianzhengRoomService.Read(selectedObject);
+                }
+
+                if (_roomRenameForm != null && !_roomRenameForm.IsDisposed) _roomRenameForm.Close();
+                _roomRenameForm = new TianzhengRoomRenameForm(document, sample);
+                _roomRenameForm.FormClosed += (sender, args) => _roomRenameForm = null;
+                Application.ShowModelessDialog(_roomRenameForm);
+            }
+            catch (System.Exception exception)
+            {
+                try { File.AppendAllText(Path.Combine(UserDataPaths.LogsDirectory, "tianzheng-room.log"), DateTime.Now.ToString("O") + " " + exception + Environment.NewLine); } catch { }
+                Application.ShowAlertDialog("批量修改房间名称失败：\r\n" + exception.Message + "\r\n\r\n请确认当前使用天正打开的是包含原生房间对象的图纸。");
+            }
         }
 
         [CommandMethod("ML1")]

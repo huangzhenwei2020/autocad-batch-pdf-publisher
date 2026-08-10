@@ -27,8 +27,11 @@ namespace BatchPdfPublisher.Models
         {
             get
             {
-                var parts = new[] { PaperDisplay, Note, BlockName };
-                return string.Join("_", System.Linq.Enumerable.Where(parts, x => !string.IsNullOrWhiteSpace(x)));
+                var paper = PaperDisplay ?? string.Empty;
+                var block = BlockName ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(paper)) return block;
+                if (string.IsNullOrWhiteSpace(block)) return paper;
+                return paper + "（" + block + "）";
             }
         }
     }
