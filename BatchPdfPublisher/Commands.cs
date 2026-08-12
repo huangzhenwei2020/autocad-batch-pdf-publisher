@@ -178,7 +178,19 @@ namespace BatchPdfPublisher
             var editor = document.Editor;
             var selection = editor.GetSelection(new PromptSelectionOptions { MessageForAdding = "\n选择要修改为 1:" + targetScale + " 的对象：" });
             if (selection.Status != PromptStatus.OK) return;
-            var changed = 0; var failed = 0;
+            var changed = 0; var failed = 0; var tianzhengChanged = 0;
+            var tianzhengIds = new System.Collections.Generic.List<Autodesk.AutoCAD.DatabaseServices.ObjectId>();
+            var tianzhengSettings = TianzhengDimensionSettings.Load();
+            System.Collections.Generic.Dictionary<Autodesk.AutoCAD.DatabaseServices.ObjectId, TianzhengScaleService.DimensionGeometryTarget> dimensionGeometryPlan;
+            using (var read = document.Database.TransactionManager.StartOpenCloseTransaction())
+            {
+                foreach (var id in selection.Value.GetObjectIds())
+                {
+                    var value = read.GetObject(id, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForRead, false);
+                    if (TianzhengScaleService.IsTianzhengDimension(value) || TianzhengScaleService.IsAxisLabel(value)) tianzhengIds.Add(id);
+                }
+                dimensionGeometryPlan = TianzhengScaleService.BuildDimensionGeometryPlan(read, tianzhengIds.ToArray(), targetScale, tianzhengSettings);
+            }
             using (document.LockDocument())
             using (var transaction = document.Database.TransactionManager.StartTransaction())
             {
@@ -188,12 +200,38 @@ namespace BatchPdfPublisher
                 var autoLayers = AutoLayerSettings.Load();
                 foreach (var id in selection.Value.GetObjectIds())
                 {
-                    try { var entity = transaction.GetObject(id, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForWrite, false) as Autodesk.AutoCAD.DatabaseServices.Entity; if (entity == null) continue; if (DrawingScaleService.ApplyStandardizedScale(document.Database, transaction, entity, targetScale, resources, dimensionStyle, autoLayers)) changed++; }
+                    try { var entity = transaction.GetObject(id, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForWrite, false) as Autodesk.AutoCAD.DatabaseServices.Entity; if (entity == null) continue; if (TianzhengScaleService.IsTianzhengDimension(entity) || TianzhengScaleService.IsAxisLabel(entity)) { if (TianzhengScaleService.Apply(entity, targetScale, tianzhengSettings)) changed++; else failed++; tianzhengChanged++; continue; } if (DrawingScaleService.ApplyStandardizedScale(document.Database, transaction, entity, targetScale, resources, dimensionStyle, autoLayers)) changed++; }
                     catch { failed++; }
                 }
                 transaction.Commit();
             }
-            editor.WriteMessage("\n比例修改完成：" + changed + " 个对象已转换为 1:" + targetScale + (failed > 0 ? "，" + failed + " 个对象不支持缩放。" : "。"));
+            // Tianzheng rebuilds its grips when Scale is committed. Geometry must
+            // therefore be adjusted in a second transaction; doing both in the
+            // first transaction lets Tianzheng overwrite the new dimension rows.
+            var geometryChanged = 0;
+            if (tianzhengSettings.ApplyDimensionGeometry && tianzhengIds.Count > 0)
+            {
+                using (document.LockDocument())
+                using (var geometryTransaction = document.Database.TransactionManager.StartTransaction())
+                {
+                    foreach (var id in tianzhengIds)
+                    {
+                        try
+                        {
+                            var entity = geometryTransaction.GetObject(id, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForWrite, false) as Autodesk.AutoCAD.DatabaseServices.Entity;
+                            if (entity == null || !TianzhengScaleService.IsTianzhengDimension(entity)) continue;
+                            TianzhengScaleService.DimensionGeometryTarget geometryTarget; if (!dimensionGeometryPlan.TryGetValue(id, out geometryTarget)) { failed++; continue; }
+                            string geometryError;
+                            if (TianzhengScaleService.ApplyCommittedDimensionGeometry(entity, geometryTarget, out geometryError)) geometryChanged++;
+                            else if (!string.IsNullOrEmpty(geometryError)) { failed++; try { File.AppendAllText(Path.Combine(UserDataPaths.LogsDirectory, "tianzheng-scale.log"), DateTime.Now.ToString("O") + " " + entity.Handle + " geometry failed: " + geometryError + Environment.NewLine); } catch { } }
+                        }
+                        catch (System.Exception geometryException) { failed++; try { File.AppendAllText(Path.Combine(UserDataPaths.LogsDirectory, "tianzheng-scale.log"), DateTime.Now.ToString("O") + " geometry exception: " + geometryException + Environment.NewLine); } catch { } }
+                    }
+                    geometryTransaction.Commit();
+                }
+                document.Editor.Regen();
+            }
+            editor.WriteMessage("\n比例修改完成：" + changed + " 个对象已转换为 1:" + targetScale + (tianzhengChanged > 0 ? "，其中天正对象 " + tianzhengChanged + " 个、尺寸线已调整 " + geometryChanged + " 个" : string.Empty) + (failed > 0 ? "，" + failed + " 项更新失败（详见 tianzheng-scale.log）。" : "。"));
         }
 
 
