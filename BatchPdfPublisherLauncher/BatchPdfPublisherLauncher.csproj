@@ -39,6 +39,9 @@
       <Link>CadArchSpecEditor.bundle.zip</Link>
       <LogicalName>WanluoArchitectureTools.CadArchSpecEditor.bundle.zip</LogicalName>
     </EmbeddedResource>
+    <EmbeddedResource Include="Payload\StairDetail.R24.zip">
+      <LogicalName>WanluoArchitectureTools.StairDetail.R24.zip</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

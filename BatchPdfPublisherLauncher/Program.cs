@@ -27,6 +27,7 @@ namespace BatchPdfPublisherLauncher
         private const string PlotterMediaName = "BatchPdfPublisher.pmp";
         private const string LastPlatformFileName = "BatchPdfPublisher.last-platform.txt";
         private const string ArchitecturePayloadResourceName = "WanluoArchitectureTools.CadArchSpecEditor.bundle.zip";
+        private const string StairPayloadR24ResourceName = "WanluoArchitectureTools.StairDetail.R24.zip";
         private static readonly string UserDataRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WanluoArchitectureTools");
         private static readonly string LaunchLogPath = Path.Combine(EnsureDirectory(Path.Combine(UserDataRoot, "Logs")), "launcher.log");
         private static readonly string LoadReceiptPath = Path.Combine(Path.GetTempPath(), "WanluoArchitectureTools.loaded.log");
@@ -772,13 +773,75 @@ namespace BatchPdfPublisherLauncher
             var sourceHost = Path.Combine(source, hostName);
             if (!File.Exists(sourceHost))
             {
-                Log("发布包未包含一键楼梯大样的 " + band + " 组件，跳过该可选功能。");
-                return null;
+                source = ExtractEmbeddedStairDetail(band, hostName);
+                sourceHost = Path.Combine(source, hostName);
             }
+            if (!File.Exists(sourceHost))
+                throw new FileNotFoundException("未能准备一键楼梯大样的 " + band + " 组件。", sourceHost);
             if (!installPermanently) return sourceHost;
             var target = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WanluoArchitectureTools", "StairDetail", band);
             CopyDirectory(source, target);
             return Path.Combine(target, hostName);
+        }
+
+        private static string ExtractEmbeddedStairDetail(string band, string hostName)
+        {
+            if (!string.Equals(band, "R24", StringComparison.OrdinalIgnoreCase))
+                throw new NotSupportedException("一键楼梯大样当前没有 " + band + " 专用运行组件。R24 组件不能跨运行时替代使用。");
+            return ExtractFlatPayload(StairPayloadR24ResourceName, "StairDetail", band, hostName);
+        }
+
+        private static string ExtractFlatPayload(string resourceName, string componentName, string band, string hostName)
+        {
+            var assembly = Assembly.GetExecutingAssembly();
+            using (var resource = assembly.GetManifestResourceStream(resourceName))
+            {
+                if (resource == null) throw new FileNotFoundException("启动器内未找到 " + componentName + " 资源。");
+                string payloadHash;
+                using (var sha256 = SHA256.Create())
+                {
+                    payloadHash = string.Concat(sha256.ComputeHash(resource).Take(8).Select(x => x.ToString("x2")));
+                    resource.Position = 0;
+                }
+                var cacheRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "WanluoArchitectureTools", "PayloadCache", componentName, payloadHash, band);
+                var cachedHost = Path.Combine(cacheRoot, hostName);
+                var completionMarker = Path.Combine(cacheRoot, ".complete");
+                var mutexName = "Local\\WanluoPayload_" + componentName + "_" + payloadHash + "_" + band;
+                using (var extractionMutex = new Mutex(false, mutexName))
+                {
+                    var lockTaken = false;
+                    try
+                    {
+                        try { lockTaken = extractionMutex.WaitOne(TimeSpan.FromSeconds(30)); }
+                        catch (AbandonedMutexException) { lockTaken = true; }
+                        if (!lockTaken) throw new TimeoutException("等待 " + componentName + " 资源准备超时，请稍后重试。");
+                        if (File.Exists(cachedHost) && File.Exists(completionMarker)) return cacheRoot;
+                        if (Directory.Exists(cacheRoot)) Directory.Delete(cacheRoot, true);
+                        Directory.CreateDirectory(cacheRoot);
+                        var normalizedRoot = Path.GetFullPath(cacheRoot).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                        using (var archive = new ZipArchive(resource, ZipArchiveMode.Read, false))
+                        {
+                            foreach (var entry in archive.Entries)
+                            {
+                                var relativePath = entry.FullName.Replace('/', Path.DirectorySeparatorChar);
+                                if (string.IsNullOrWhiteSpace(relativePath)) continue;
+                                var destination = Path.GetFullPath(Path.Combine(cacheRoot, relativePath));
+                                if (!destination.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase))
+                                    throw new InvalidDataException(componentName + " 资源包含不安全路径：" + entry.FullName);
+                                if (entry.FullName.EndsWith("/", StringComparison.Ordinal)) { Directory.CreateDirectory(destination); continue; }
+                                Directory.CreateDirectory(Path.GetDirectoryName(destination));
+                                using (var input = entry.Open())
+                                using (var output = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None)) input.CopyTo(output);
+                            }
+                        }
+                        if (!File.Exists(cachedHost)) throw new InvalidDataException("内置资源中缺少 " + hostName + "。");
+                        File.WriteAllText(completionMarker, payloadHash, Encoding.ASCII);
+                        return cacheRoot;
+                    }
+                    finally { if (lockTaken) extractionMutex.ReleaseMutex(); }
+                }
+            }
         }
 
         private static string InstallOptionalComponent(string displayName, Func<string> install)
