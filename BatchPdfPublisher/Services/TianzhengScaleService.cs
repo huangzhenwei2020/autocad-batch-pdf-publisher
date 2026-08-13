@@ -4,6 +4,7 @@ using System;
 using System.Globalization;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.ComTypes;
 using System.Collections.Generic;
 using System.Linq;
 using Autodesk.AutoCAD.Geometry;
@@ -49,6 +50,7 @@ namespace BatchPdfPublisher.Services
 
     internal static class TianzhengScaleService
     {
+        private const int ScaleDispatchId = 30;
         public sealed class DimensionGeometryTarget
         {
             public double Distance;
@@ -87,12 +89,37 @@ namespace BatchPdfPublisher.Services
                    (dxf.IndexOf("TEXT", StringComparison.OrdinalIgnoreCase) >= 0 || dxf.IndexOf("WORD", StringComparison.OrdinalIgnoreCase) >= 0);
         }
         public static bool IsTianzhengObject(DBObject value) { return DxfName(value).StartsWith("TCH_", StringComparison.OrdinalIgnoreCase); }
+        private static bool IsDrawingName(DBObject value)
+        {
+            if (value == null) return false;
+            try
+            {
+                var rx = value.GetRXClass();
+                var className = rx == null ? string.Empty : rx.Name ?? string.Empty;
+                var dxf = rx == null ? string.Empty : rx.DxfName ?? string.Empty;
+                return className.IndexOf("DrawingName", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                       className.IndexOf("SymbDrawingIndex", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                       dxf.IndexOf("DRAWINGNAME", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                       dxf.IndexOf("DRAWING_NAME", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                       dxf.IndexOf("DWGNAME", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                       dxf.IndexOf("DRAWING_INDEX", StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+            catch { return false; }
+        }
 
         public static bool Apply(DBObject value, int scale, TianzhengDimensionSettings settings)
         {
             if (!IsTianzhengObject(value)) return false;
             var com = value.AcadObject;
-            var changed = TrySet(com, "Scale", Convert.ToDouble(scale, CultureInfo.InvariantCulture));
+            var changed = TrySetScale(com, Convert.ToDouble(scale, CultureInfo.InvariantCulture));
+            if (IsDrawingName(value))
+            {
+                // TDbDrawingName stores the visible ratio separately from its
+                // common output scale. Update both so 1:50 becomes 1:100 rather
+                // than merely enlarging the complete annotation.
+                changed |= TrySet(com, "DrawScale", true);
+                changed |= TrySet(com, "ScaleText", "1:" + scale.ToString(CultureInfo.InvariantCulture));
+            }
             if (IsTianzhengDimension(value) && settings.ApplyDimensionGeometry)
             {
                 // Different T20 products expose these optional fields under
@@ -529,7 +556,72 @@ namespace BatchPdfPublisher.Services
             // large selection that doubled the number of Tianzheng COM calls.
             try { Set(value, name, data); return true; } catch { return false; }
         }
+        private static bool TrySetScale(object value, double scale)
+        {
+            if (value == null) return false;
+            try
+            {
+                // Tianzheng registers “出图比例” as COM DISPID 30 for walls,
+                // openings, columns and its other custom entities. Invoking the
+                // known property directly avoids an IDispatch name lookup and
+                // reflection binder allocation for every selected object.
+                var dispatch = value as IDispatchNative;
+                if (dispatch != null)
+                {
+                    var argument = new VariantArg { VariantType = 5, DoubleValue = scale }; // VT_R8
+                    var namedArgument = -3; // DISPID_PROPERTYPUT
+                    var arguments = new DispatchParameters
+                    {
+                        Arguments = Marshal.AllocCoTaskMem(Marshal.SizeOf(typeof(VariantArg))),
+                        NamedArguments = Marshal.AllocCoTaskMem(sizeof(int)),
+                        ArgumentCount = 1,
+                        NamedArgumentCount = 1
+                    };
+                    try
+                    {
+                        Marshal.StructureToPtr(argument, arguments.Arguments, false);
+                        Marshal.WriteInt32(arguments.NamedArguments, namedArgument);
+                        var iid = Guid.Empty;
+                        var result = dispatch.Invoke(ScaleDispatchId, ref iid, CultureInfo.CurrentCulture.LCID, 4, ref arguments, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero); // DISPATCH_PROPERTYPUT
+                        if (result < 0) Marshal.ThrowExceptionForHR(result);
+                        return true;
+                    }
+                    finally
+                    {
+                        Marshal.FreeCoTaskMem(arguments.Arguments);
+                        Marshal.FreeCoTaskMem(arguments.NamedArguments);
+                    }
+                }
+            }
+            catch { }
+            return TrySet(value, "Scale", scale);
+        }
         private static void Set(object value, string name, object data) { value.GetType().InvokeMember(name, BindingFlags.SetProperty, null, value, new[] { data }, CultureInfo.CurrentCulture); }
+
+        [ComImport, Guid("00020400-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        private interface IDispatchNative
+        {
+            [PreserveSig] int GetTypeInfoCount(out uint count);
+            [PreserveSig] int GetTypeInfo(uint index, int localeId, out IntPtr typeInfo);
+            [PreserveSig] int GetIdsOfNames(ref Guid iid, IntPtr names, uint count, int localeId, IntPtr dispatchIds);
+            [PreserveSig] int Invoke(int dispatchId, ref Guid iid, int localeId, ushort flags, ref DispatchParameters parameters, IntPtr result, IntPtr exceptionInfo, IntPtr argumentError);
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct DispatchParameters
+        {
+            public IntPtr Arguments;
+            public IntPtr NamedArguments;
+            public uint ArgumentCount;
+            public uint NamedArgumentCount;
+        }
+
+        [StructLayout(LayoutKind.Explicit, Size = 16)]
+        private struct VariantArg
+        {
+            [FieldOffset(0)] public ushort VariantType;
+            [FieldOffset(8)] public double DoubleValue;
+        }
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate double GetPaperScale();

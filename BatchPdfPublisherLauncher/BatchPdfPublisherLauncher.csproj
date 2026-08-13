@@ -32,8 +32,13 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Program.cs" />
+    <Compile Include="Properties\AssemblyInfo.cs" />
     <Content Include="BatchPdfPublisher.ico" />
     <EmbeddedResource Include="BatchPdfPublisherIcon.png" />
+    <EmbeddedResource Include="..\CadArchSpecEditor\src\CadArchSpec.Installer\Payload\CadArchSpecEditor.bundle.zip">
+      <Link>CadArchSpecEditor.bundle.zip</Link>
+      <LogicalName>WanluoArchitectureTools.CadArchSpecEditor.bundle.zip</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

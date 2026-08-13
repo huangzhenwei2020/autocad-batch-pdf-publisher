@@ -47,6 +47,10 @@ namespace BatchPdfPublisher.Services
         public static bool ApplyStandardizedScale(Database database, Transaction transaction, Entity entity, int fallbackSourceScale, int targetScale, DraftingStandardResources resources, ObjectId dimensionStyle, AutoLayerSettings autoLayers)
         {
             if (entity == null) return false;
+            if (!(entity is Dimension) && !(entity is DBText) && !(entity is MText) &&
+                !(entity is AttributeReference) && !(entity is AttributeDefinition) && !(entity is BlockReference))
+                return false;
+            if (resources == null) throw new ArgumentNullException("resources");
             var dimension = entity as Dimension;
             if (dimension != null)
             {

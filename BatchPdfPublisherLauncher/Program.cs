@@ -26,6 +26,7 @@ namespace BatchPdfPublisherLauncher
         private const string PlotterConfigName = "BatchPdfPublisher.pc3";
         private const string PlotterMediaName = "BatchPdfPublisher.pmp";
         private const string LastPlatformFileName = "BatchPdfPublisher.last-platform.txt";
+        private const string ArchitecturePayloadResourceName = "WanluoArchitectureTools.CadArchSpecEditor.bundle.zip";
         private static readonly string UserDataRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WanluoArchitectureTools");
         private static readonly string LaunchLogPath = Path.Combine(EnsureDirectory(Path.Combine(UserDataRoot, "Logs")), "launcher.log");
         private static readonly string LoadReceiptPath = Path.Combine(Path.GetTempPath(), "WanluoArchitectureTools.loaded.log");
@@ -66,8 +67,12 @@ namespace BatchPdfPublisherLauncher
                 // first; permanent installation recreates one clean unified bundle.
                 RemoveAutoLoadBundles();
                 var pluginAssembly = InstallPlugin(payload, options.InstallPermanently);
-                var architectureAssembly = InstallArchitectureAssistant(launcherDirectory, payload.Band, options.InstallPermanently);
-                var stairAssembly = InstallStairDetail(launcherDirectory, payload.Band, options.InstallPermanently);
+                var architectureAssembly = InstallOptionalComponent(
+                    "建筑设计说明助手",
+                    () => InstallArchitectureAssistant(launcherDirectory, payload.Band, options.InstallPermanently));
+                var stairAssembly = InstallOptionalComponent(
+                    "一键楼梯大样",
+                    () => InstallStairDetail(launcherDirectory, payload.Band, options.InstallPermanently));
                 if (options.InstallPermanently) InstallAutoLoadBundle(pluginAssembly, payload.PdfDependencyPath, payload.Band, architectureAssembly, stairAssembly);
                 Log((options.InstallPermanently ? "已部署插件: " : "便携加载插件: ") + pluginAssembly);
                 if (!string.IsNullOrWhiteSpace(architectureAssembly)) Log((options.InstallPermanently ? "已部署建筑说明助手: " : "便携加载建筑说明助手: ") + architectureAssembly);
@@ -745,7 +750,13 @@ namespace BatchPdfPublisherLauncher
             if (hostName == null) return null;
             var source = Path.Combine(launcherDirectory, "ArchitectureAssistant", band);
             var sourceHost = Path.Combine(source, hostName);
-            if (!File.Exists(sourceHost)) throw new FileNotFoundException("安装包缺少建筑设计说明助手的 " + band + " 组件。", sourceHost);
+            if (!File.Exists(sourceHost))
+            {
+                source = ExtractEmbeddedArchitectureAssistant(band, hostName);
+                sourceHost = Path.Combine(source, hostName);
+            }
+            if (!File.Exists(sourceHost))
+                throw new FileNotFoundException("未能准备建筑设计说明助手的 " + band + " 组件。", sourceHost);
             if (!installPermanently) return sourceHost;
             var target = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WanluoArchitectureTools", "ArchitectureAssistant", band);
             CopyDirectory(source, target);
@@ -759,11 +770,100 @@ namespace BatchPdfPublisherLauncher
             if (hostName == null) return null;
             var source = Path.Combine(launcherDirectory, "StairDetail", band);
             var sourceHost = Path.Combine(source, hostName);
-            if (!File.Exists(sourceHost)) throw new FileNotFoundException("安装包缺少一键楼梯大样的 " + band + " 组件。", sourceHost);
+            if (!File.Exists(sourceHost))
+            {
+                Log("发布包未包含一键楼梯大样的 " + band + " 组件，跳过该可选功能。");
+                return null;
+            }
             if (!installPermanently) return sourceHost;
             var target = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WanluoArchitectureTools", "StairDetail", band);
             CopyDirectory(source, target);
             return Path.Combine(target, hostName);
+        }
+
+        private static string InstallOptionalComponent(string displayName, Func<string> install)
+        {
+            try
+            {
+                return install();
+            }
+            catch (Exception exception)
+            {
+                // Optional tools must never prevent the PDF publisher from starting.
+                // Their Ribbon commands provide a focused message if the user opens
+                // a feature whose component is unavailable.
+                Log(displayName + "加载准备失败，已跳过: " + exception);
+                return null;
+            }
+        }
+
+        private static string ExtractEmbeddedArchitectureAssistant(string band, string hostName)
+        {
+            var assembly = Assembly.GetExecutingAssembly();
+            using (var resource = assembly.GetManifestResourceStream(ArchitecturePayloadResourceName))
+            {
+                if (resource == null)
+                    throw new FileNotFoundException("启动器内未找到建筑设计说明助手资源。");
+
+                string payloadHash;
+                using (var sha256 = SHA256.Create())
+                {
+                    payloadHash = string.Concat(sha256.ComputeHash(resource).Take(8).Select(x => x.ToString("x2")));
+                    resource.Position = 0;
+                }
+
+                var cacheRoot = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "WanluoArchitectureTools", "PayloadCache", "ArchitectureAssistant", payloadHash, band);
+                var cachedHost = Path.Combine(cacheRoot, hostName);
+                var completionMarker = Path.Combine(cacheRoot, ".complete");
+                var mutexName = "Local\\WanluoArchitecturePayload_" + payloadHash + "_" + band;
+                using (var extractionMutex = new Mutex(false, mutexName))
+                {
+                    var lockTaken = false;
+                    try
+                    {
+                        try { lockTaken = extractionMutex.WaitOne(TimeSpan.FromSeconds(30)); }
+                        catch (AbandonedMutexException) { lockTaken = true; }
+                        if (!lockTaken) throw new TimeoutException("等待建筑设计说明助手资源准备超时，请稍后重试。");
+                        if (File.Exists(cachedHost) && File.Exists(completionMarker)) return cacheRoot;
+
+                        if (Directory.Exists(cacheRoot)) Directory.Delete(cacheRoot, true);
+                        Directory.CreateDirectory(cacheRoot);
+                        var versionDirectory = string.Equals(band, "R24", StringComparison.OrdinalIgnoreCase) ? "R24.1" : "R25.1";
+                        var prefix = "Contents/" + versionDirectory + "/";
+                        var normalizedRoot = Path.GetFullPath(cacheRoot).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                        using (var archive = new ZipArchive(resource, ZipArchiveMode.Read, false))
+                        {
+                            foreach (var entry in archive.Entries.Where(x => x.FullName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
+                            {
+                                var relativePath = entry.FullName.Substring(prefix.Length).Replace('/', Path.DirectorySeparatorChar);
+                                if (string.IsNullOrWhiteSpace(relativePath)) continue;
+                                var destination = Path.GetFullPath(Path.Combine(cacheRoot, relativePath));
+                                if (!destination.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase))
+                                    throw new InvalidDataException("建筑设计说明助手资源包含不安全路径：" + entry.FullName);
+                                if (entry.FullName.EndsWith("/", StringComparison.Ordinal))
+                                {
+                                    Directory.CreateDirectory(destination);
+                                    continue;
+                                }
+                                Directory.CreateDirectory(Path.GetDirectoryName(destination));
+                                using (var input = entry.Open())
+                                using (var output = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None))
+                                    input.CopyTo(output);
+                            }
+                        }
+                        if (!File.Exists(cachedHost))
+                            throw new InvalidDataException("内置资源中缺少 " + hostName + "。");
+                        File.WriteAllText(completionMarker, payloadHash, Encoding.ASCII);
+                        return cacheRoot;
+                    }
+                    finally
+                    {
+                        if (lockTaken) extractionMutex.ReleaseMutex();
+                    }
+                }
+            }
         }
 
         private static void CopyDirectory(string source, string target)
