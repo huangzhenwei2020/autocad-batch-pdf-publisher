@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Globalization;
 using System.Diagnostics;
+using System.IO;
+using System.Drawing.Text;
 using System.Linq;
 using System.Windows.Forms;
 using Autodesk.AutoCAD.ApplicationServices;
@@ -78,36 +80,42 @@ namespace BatchPdfPublisher.Views
 
         private TabPage MakeLayersTab()
         {
-            var page = Page("图层标准"); _layers.Dock = DockStyle.Fill; _layers.Columns.Add(ReadOnly("类型 / 用途", 125)); _layers.Columns.Add(TextColumn("图层名称", 250));
+            var page = Page("图层标准"); _layers.Dock = DockStyle.Fill; _layers.Columns.Add(TextColumn("图层名称", 250));
             _layers.Columns.Add(new DataGridViewButtonColumn { HeaderText = "颜色", Width = 112, FlatStyle = FlatStyle.Flat, UseColumnTextForButtonValue = false });
             var weights = new DataGridViewComboBoxColumn { HeaderText = "线宽", Width = 110, FlatStyle = FlatStyle.Flat, DisplayStyle = DataGridViewComboBoxDisplayStyle.ComboBox }; foreach (var x in LineWeightChoices()) weights.Items.Add(x); _layers.Columns.Add(weights);
             var types = new DataGridViewComboBoxColumn { HeaderText = "线型", Width = 125, FlatStyle = FlatStyle.Flat }; types.Items.AddRange("Continuous", "HIDDEN", "CENTER", "DASHED"); _layers.Columns.Add(types);
             _layers.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "打印", Width = 62 });
             _layers.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "创建", Width = 62 });
             _layers.Columns.Add(ReadOnly("当前图纸", 90));
+            _layers.Columns.Add(TextColumn("备注", 210));
             _layers.CellContentClick += LayerCellContentClick;
             _layers.CellPainting += LayerCellPainting;
             _layers.DataError += delegate(object sender, DataGridViewDataErrorEventArgs e) { e.ThrowException = false; };
             var footer = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 48, Padding = new Padding(0, 7, 0, 0), WrapContents = false };
-            var all = Button("全选创建", 90); all.Click += delegate { SetChecked(_layers, 6, true); };
-            var none = Button("取消全选", 90); none.Click += delegate { SetChecked(_layers, 6, false); };
+            var all = Button("全选创建", 90); all.Click += delegate { SetChecked(_layers, 5, true); };
+            var none = Button("取消全选", 90); none.Click += delegate { SetChecked(_layers, 5, false); };
             var add = Button("添加图层", 90); add.Click += delegate { AddLayerRow(); };
             var remove = Button("删除所选", 90); remove.Click += delegate { RemoveLayerRow(); };
             var create = Button("创建勾选图层", 120); create.Click += delegate { Save(true, ApplyScope.Layers); };
-            footer.Controls.Add(add); footer.Controls.Add(remove); footer.Controls.Add(all); footer.Controls.Add(none); footer.Controls.Add(create);
+            var update = Button("更新当前图纸图层", 145); update.Click += delegate { Save(true, ApplyScope.LayersForceUpdate); };
+            footer.Controls.Add(add); footer.Controls.Add(remove); footer.Controls.Add(all); footer.Controls.Add(none); footer.Controls.Add(create); footer.Controls.Add(update);
             page.Controls.Add(_layers); page.Controls.Add(footer); return page;
         }
         private TabPage MakeTextTab()
         {
-            var page = Page("文字样式"); _texts.Dock = DockStyle.Fill; _texts.Columns.Add(TextColumn("用途", 120)); _texts.Columns.Add(TextColumn("样式名称", 215));
-            var fonts = new DataGridViewComboBoxColumn { HeaderText = "字体文件", Width = 170, FlatStyle = FlatStyle.Flat }; fonts.Items.AddRange("simsun.ttc", "simhei.ttf", "msyh.ttc", "arial.ttf", "txt.shx", "simplex.shx", "tssdeng.shx"); _texts.Columns.Add(fonts);
-            var bigFonts = new DataGridViewComboBoxColumn { HeaderText = "大字体（可空）", Width = 150, FlatStyle = FlatStyle.Flat }; bigFonts.Items.AddRange("", "hztxt.shx", "hzfs.shx", "gbcbig.shx"); _texts.Columns.Add(bigFonts);
-            var width = new DataGridViewComboBoxColumn { HeaderText = "宽度因子", Width = 105, FlatStyle = FlatStyle.Flat }; width.Items.AddRange("0.5", "0.7", "0.8", "1"); _texts.Columns.Add(width); _texts.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "创建", Width = 62 }); _texts.Columns.Add(ReadOnly("当前图纸", 95));
+            var page = Page("文字样式"); _texts.Dock = DockStyle.Fill; _texts.Columns.Add(TextColumn("样式名称", 190));
+            var fontTypes = new DataGridViewComboBoxColumn { HeaderText = "字体类型", Width = 135, FlatStyle = FlatStyle.Flat }; fontTypes.Items.AddRange("Windows 字体", "CAD 字体（SHX）"); _texts.Columns.Add(fontTypes);
+            var availableFonts = GetAvailableFontFiles();
+            var fonts = new DataGridViewComboBoxColumn { HeaderText = "字体文件", Width = 175, FlatStyle = FlatStyle.Flat }; foreach (var font in availableFonts) fonts.Items.Add(font); _texts.Columns.Add(fonts);
+            var bigFonts = new DataGridViewComboBoxColumn { HeaderText = "大字体（可空）", Width = 135, FlatStyle = FlatStyle.Flat }; bigFonts.Items.Add(""); foreach (var font in availableFonts.Where(x => x.EndsWith(".shx", StringComparison.OrdinalIgnoreCase))) bigFonts.Items.Add(font); _texts.Columns.Add(bigFonts);
+            var heights = new DataGridViewComboBoxColumn { HeaderText = "字高（1:1）", Width = 100, FlatStyle = FlatStyle.Flat }; heights.Items.AddRange("0", "1.5", "2.5", "3.5", "5", "7", "10", "14", "20"); _texts.Columns.Add(heights);
+            var width = new DataGridViewComboBoxColumn { HeaderText = "宽度因子", Width = 95, FlatStyle = FlatStyle.Flat }; width.Items.AddRange("0.5", "0.7", "0.8", "1"); _texts.Columns.Add(width); _texts.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "创建", Width = 58 }); _texts.Columns.Add(ReadOnly("当前图纸", 82)); _texts.Columns.Add(TextColumn("备注", 170));
+            _texts.CellValueChanged += delegate(object sender, DataGridViewCellEventArgs e) { if (e.RowIndex >= 0 && e.ColumnIndex == 2) { var font = Cell(_texts.Rows[e.RowIndex], 2); _texts.Rows[e.RowIndex].Cells[1].Value = FontType(font); } };
             var footer = new Panel { Dock = DockStyle.Bottom, Height = 72 };
             var add = Button("添加文字样式", 112); add.Location = new Point(0, 7); add.Click += delegate { AddTextStyleRow(); };
             var remove = Button("删除所选", 96); remove.Location = new Point(120, 7); remove.Click += delegate { RemoveTextStyleRow(); };
             var create = Button("创建勾选样式", 120); create.Location = new Point(224, 7); create.Click += delegate { Save(true, ApplyScope.TextStyles); };
-            var tip = new Label { Location = new Point(354, 11), Size = new Size(520, 48), Text = "样式均按 1:1 创建。常用字体可直接选择，也可继续添加自定义用途。", ForeColor = Color.FromArgb(75, 85, 100) };
+            var tip = new Label { Location = new Point(354, 11), Size = new Size(650, 48), Text = "字高 0 表示可变字高。字体列表来自 Windows Fonts 和 AutoCAD 支持路径；备注可自由修改。", ForeColor = Color.FromArgb(75, 85, 100) };
             footer.Controls.Add(add); footer.Controls.Add(remove); footer.Controls.Add(create); footer.Controls.Add(tip); page.Controls.Add(_texts); page.Controls.Add(footer); return page;
         }
         private TabPage MakeDimensionTab()
@@ -134,9 +142,9 @@ namespace BatchPdfPublisher.Views
         private void LoadProfile(DraftingStandardProfile profile)
         {
             _profile = profile; _layers.Rows.Clear(); _texts.Rows.Clear();
-            var layerNames = ExistingNames(true); foreach (var x in profile.Layers) { var row = _layers.Rows[_layers.Rows.Add(x.Purpose, x.Name, ColorCaption(x), WeightChoice(x.LineWeight), x.LineType, x.IsPlottable, x.CreateOnApply, layerNames.Contains(x.Name) ? "已存在" : "待创建")]; row.Cells[2].Tag = x; }
-            var fonts = (DataGridViewComboBoxColumn)_texts.Columns[2]; var bigFonts = (DataGridViewComboBoxColumn)_texts.Columns[3]; foreach (var x in profile.TextStyles) { AddComboValue(fonts, x.FontFile); AddComboValue(bigFonts, x.BigFontFile ?? ""); }
-            var textNames = ExistingNames(false); foreach (var x in profile.TextStyles) { var row = _texts.Rows[_texts.Rows.Add(x.Purpose, x.Name, x.FontFile, x.BigFontFile ?? "", x.WidthFactor.ToString(CultureInfo.InvariantCulture), x.CreateOnApply, textNames.Contains(x.Name) ? "已存在" : "待创建")]; row.Tag = x.Key; }
+            var layerNames = ExistingNames(true); foreach (var x in profile.Layers) { var row = _layers.Rows[_layers.Rows.Add(x.Name, ColorCaption(x), WeightChoice(x.LineWeight), x.LineType, x.IsPlottable, x.CreateOnApply, layerNames.Contains(x.Name) ? "已存在" : "待创建", x.Purpose)]; row.Cells[1].Tag = x; }
+            var fonts = (DataGridViewComboBoxColumn)_texts.Columns[2]; var bigFonts = (DataGridViewComboBoxColumn)_texts.Columns[3]; var heights = (DataGridViewComboBoxColumn)_texts.Columns[4]; foreach (var x in profile.TextStyles) { AddComboValue(fonts, x.FontFile); AddComboValue(bigFonts, x.BigFontFile ?? ""); AddComboValue(heights, x.TextHeight.ToString(CultureInfo.InvariantCulture)); }
+            var textNames = ExistingNames(false); foreach (var x in profile.TextStyles) { var row = _texts.Rows[_texts.Rows.Add(x.Name, string.IsNullOrWhiteSpace(x.FontType) ? FontType(x.FontFile) : x.FontType, x.FontFile, x.BigFontFile ?? "", x.TextHeight.ToString(CultureInfo.InvariantCulture), x.WidthFactor.ToString(CultureInfo.InvariantCulture), x.CreateOnApply, textNames.Contains(x.Name) ? "已存在" : "待创建", x.Purpose)]; row.Tag = x.Key; }
             _dimensionStylePrefix.Text = profile.DimensionStylePrefix; _createDimension.Checked = profile.DimensionCreateOnApply; _dimTextHeight.Text = profile.DimensionTextHeight.ToString(CultureInfo.InvariantCulture); _arrowSize.Text = profile.DimensionArrowSize.ToString(CultureInfo.InvariantCulture); _dimensionLineExtension.Text = profile.DimensionLineExtension.ToString(CultureInfo.InvariantCulture); _baselineSpacing.Text = profile.BaselineSpacing.ToString(CultureInfo.InvariantCulture); _extensionBeyond.Text = profile.ExtensionBeyond.ToString(CultureInfo.InvariantCulture); _extensionOriginOffset.Text = profile.ExtensionOriginOffset.ToString(CultureInfo.InvariantCulture); _useFixedExtensionLength.Checked = profile.UseFixedExtensionLength; _fixedExtensionLength.Text = profile.FixedExtensionLength.ToString(CultureInfo.InvariantCulture); _dimensionTextGap.Text = profile.DimensionTextGap.ToString(CultureInfo.InvariantCulture); _dimensionPrecision.Text = profile.DimensionPrecision.ToString(CultureInfo.InvariantCulture); _dimensionRounding.Text = profile.DimensionRounding.ToString(CultureInfo.InvariantCulture); SetColorButton(_dimensionLineColor, profile.DimensionLineColor); SetColorButton(_extensionLineColor, profile.ExtensionLineColor); SetColorButton(_dimensionTextColor, profile.DimensionTextColor); _updateExisting.Checked = profile.UpdateExisting;
             _dimensionArrowStyle.Text = profile.DimensionArrowStyle; _centerMarkStyle.Text = profile.CenterMarkStyle; _centerMarkSize.Text = profile.CenterMarkSize.ToString(CultureInfo.InvariantCulture); _arcLengthSymbol.Text = profile.ArcLengthSymbol; _jogAngle.Text = profile.JogAngle.ToString(CultureInfo.InvariantCulture);
             _leaderStyleName.Text = profile.LeaderStyleName; _createLeader.Checked = profile.LeaderCreateOnApply; _leaderLineType.Text = profile.LeaderLineType; _leaderArrowStyle.Text = profile.LeaderArrowStyle; _leaderArrowSize.Text = profile.LeaderArrowSize.ToString(CultureInfo.InvariantCulture); _leaderTextHeight.Text = profile.LeaderTextHeight.ToString(CultureInfo.InvariantCulture); _leaderLandingGap.Text = profile.LeaderLandingGap.ToString(CultureInfo.InvariantCulture); _leaderDoglegLength.Text = profile.LeaderDoglegLength.ToString(CultureInfo.InvariantCulture); _leaderLineWeight.SelectedItem = WeightChoice(profile.LeaderLineWeight); _leaderLanding.Checked = profile.LeaderEnableLanding; _leaderDogleg.Checked = profile.LeaderEnableDogleg; _leaderFrameText.Checked = profile.LeaderFrameText; SetColorButton(_leaderLineColor, profile.LeaderLineColor); SetColorButton(_leaderTextColor, profile.LeaderTextColor);
@@ -147,12 +155,12 @@ namespace BatchPdfPublisher.Views
             try
             {
                 _layers.EndEdit(); _texts.EndEdit();
-                for (var i = 0; i < _profile.Layers.Count; i++) { var row = _layers.Rows[i]; var x = _profile.Layers[i]; x.Name = Cell(row,1); Autodesk.AutoCAD.DatabaseServices.SymbolUtilityServices.ValidateSymbolName(x.Name, false); x.LineWeight = ResolveLineWeight(row.Cells[3]); x.LineType = Cell(row,4); x.IsPlottable = Convert.ToBoolean(row.Cells[5].Value); x.CreateOnApply = Convert.ToBoolean(row.Cells[6].Value); }
-                var textStyles = new List<DraftingTextStyleSetting>(); for (var i = 0; i < _texts.Rows.Count; i++) { var row = _texts.Rows[i]; var name = Cell(row,1); Autodesk.AutoCAD.DatabaseServices.SymbolUtilityServices.ValidateSymbolName(name, false); textStyles.Add(new DraftingTextStyleSetting { Key = Convert.ToString(row.Tag), Purpose = Cell(row,0), Name = name, FontFile = Cell(row,2), BigFontFile = Convert.ToString(row.Cells[3].Value).Trim(), WidthFactor = ParsePositive(Cell(row,4), "文字宽度因子"), CreateOnApply = Convert.ToBoolean(row.Cells[5].Value) }); } _profile.TextStyles = textStyles;
+                for (var i = 0; i < _profile.Layers.Count; i++) { var row = _layers.Rows[i]; var x = _profile.Layers[i]; x.Name = Cell(row,0); Autodesk.AutoCAD.DatabaseServices.SymbolUtilityServices.ValidateSymbolName(x.Name, false); x.LineWeight = ResolveLineWeight(row.Cells[2]); x.LineType = Cell(row,3); x.IsPlottable = Convert.ToBoolean(row.Cells[4].Value); x.CreateOnApply = Convert.ToBoolean(row.Cells[5].Value); x.Purpose = Cell(row,7); }
+                var textStyles = new List<DraftingTextStyleSetting>(); for (var i = 0; i < _texts.Rows.Count; i++) { var row = _texts.Rows[i]; var name = Cell(row,0); Autodesk.AutoCAD.DatabaseServices.SymbolUtilityServices.ValidateSymbolName(name, false); var font = Cell(row,2); var fontType = FontType(font); textStyles.Add(new DraftingTextStyleSetting { Key = Convert.ToString(row.Tag), Purpose = Cell(row,8), Name = name, FontType = fontType, FontFile = font, BigFontFile = fontType == "Windows 字体" ? string.Empty : Convert.ToString(row.Cells[3].Value).Trim(), TextHeight = ParseNonNegative(Cell(row,4), "文字字高"), WidthFactor = ParsePositive(Cell(row,5), "文字宽度因子"), CreateOnApply = Convert.ToBoolean(row.Cells[6].Value) }); } _profile.TextStyles = textStyles;
                 _profile.DimensionScales = new List<int> { 1 }; _profile.DimensionStylePrefix = _dimensionStylePrefix.Text.Trim(); if (_profile.DimensionStylePrefix.Length == 0) throw new InvalidOperationException("标注样式名称前缀不能为空。"); _profile.DimensionCreateOnApply = _createDimension.Checked; _profile.DimensionTextHeight = ParsePositive(_dimTextHeight.Text, "标注文字高度"); _profile.DimensionArrowSize = ParsePositive(_arrowSize.Text, "箭头大小"); _profile.DimensionLineExtension = ParseNonNegative(_dimensionLineExtension.Text, "尺寸线超出"); _profile.BaselineSpacing = ParsePositive(_baselineSpacing.Text, "基线间距"); _profile.ExtensionBeyond = ParseNonNegative(_extensionBeyond.Text, "界线超出尺寸线"); _profile.ExtensionOriginOffset = ParseNonNegative(_extensionOriginOffset.Text, "起点偏移量"); _profile.UseFixedExtensionLength = _useFixedExtensionLength.Checked; _profile.FixedExtensionLength = ParsePositive(_fixedExtensionLength.Text, "固定界线长度"); _profile.DimensionTextGap = ParseNonNegative(_dimensionTextGap.Text, "文字间距"); _profile.DimensionPrecision = ParseInteger(_dimensionPrecision.Text, "数值精度", 0, 8); _profile.DimensionRounding = ParseNonNegative(_dimensionRounding.Text, "四舍五入"); _profile.DimensionLineColor = ColorIndex(_dimensionLineColor); _profile.ExtensionLineColor = ColorIndex(_extensionLineColor); _profile.DimensionTextColor = ColorIndex(_dimensionTextColor); _profile.UpdateExisting = _updateExisting.Checked;
                 _profile.DimensionArrowStyle = _dimensionArrowStyle.Text; _profile.CenterMarkStyle = _centerMarkStyle.Text; _profile.CenterMarkSize = ParseNonNegative(_centerMarkSize.Text, "圆心标记大小"); _profile.ArcLengthSymbol = _arcLengthSymbol.Text; _profile.JogAngle = ParsePositive(_jogAngle.Text, "折弯角度");
                 _profile.LeaderStyleName = _leaderStyleName.Text.Trim(); Autodesk.AutoCAD.DatabaseServices.SymbolUtilityServices.ValidateSymbolName(_profile.LeaderStyleName, false); _profile.LeaderCreateOnApply = _createLeader.Checked; _profile.LeaderLineType = _leaderLineType.Text; _profile.LeaderArrowStyle = _leaderArrowStyle.Text; _profile.LeaderArrowSize = ParsePositive(_leaderArrowSize.Text, "引线箭头大小"); _profile.LeaderTextHeight = ParsePositive(_leaderTextHeight.Text, "引线文字高度"); _profile.LeaderLandingGap = ParseNonNegative(_leaderLandingGap.Text, "引线基线间隙"); _profile.LeaderDoglegLength = ParseNonNegative(_leaderDoglegLength.Text, "引线折线段长度"); var leaderWeight = _leaderLineWeight.SelectedItem as LineWeightChoice; if (leaderWeight == null) throw new InvalidOperationException("请选择有效的引线线宽。"); _profile.LeaderLineWeight = leaderWeight.Value; _profile.LeaderEnableLanding = _leaderLanding.Checked; _profile.LeaderEnableDogleg = _leaderDogleg.Checked; _profile.LeaderFrameText = _leaderFrameText.Checked; _profile.LeaderLineColor = ColorIndex(_leaderLineColor); _profile.LeaderTextColor = ColorIndex(_leaderTextColor); DraftingStandardService.SaveProfile(_profile);
-                if (apply && _document != null) using (_document.LockDocument()) using (var tr = _document.Database.TransactionManager.StartTransaction()) { if (scope == ApplyScope.Layers) DraftingStandardService.ApplyConfiguredLayers(_document.Database, tr, _profile, _profile.UpdateExisting); else if (scope == ApplyScope.TextStyles) DraftingStandardService.ApplyConfiguredTextStyles(_document.Database, tr, _profile, _profile.UpdateExisting); else if (scope == ApplyScope.Dimension) DraftingStandardService.ApplyConfiguredDimensionStyle(_document.Database, tr, _profile, _profile.UpdateExisting); else if (scope == ApplyScope.Leader) DraftingStandardService.ApplyConfiguredLeaderStyle(_document.Database, tr, _profile, _profile.UpdateExisting); else DraftingStandardService.ApplyConfiguredResources(_document.Database, tr, _profile, _profile.UpdateExisting); tr.Commit(); }
+                if (apply && _document != null) using (_document.LockDocument()) using (var tr = _document.Database.TransactionManager.StartTransaction()) { if (scope == ApplyScope.LayersForceUpdate) DraftingStandardService.ApplyAllConfiguredLayersToCurrentDrawing(_document.Database, tr, _profile); else if (scope == ApplyScope.Layers) DraftingStandardService.ApplyConfiguredLayers(_document.Database, tr, _profile, _profile.UpdateExisting); else if (scope == ApplyScope.TextStyles) DraftingStandardService.ApplyConfiguredTextStyles(_document.Database, tr, _profile, _profile.UpdateExisting); else if (scope == ApplyScope.Dimension) DraftingStandardService.ApplyConfiguredDimensionStyle(_document.Database, tr, _profile, _profile.UpdateExisting); else if (scope == ApplyScope.Leader) DraftingStandardService.ApplyConfiguredLeaderStyle(_document.Database, tr, _profile, _profile.UpdateExisting); else DraftingStandardService.ApplyConfiguredResources(_document.Database, tr, _profile, _profile.UpdateExisting); tr.Commit(); }
                 _status.Text = apply ? "已保存，并已在当前图纸创建勾选资源。" : "已保存，后续万落工具将使用此标准。"; LoadProfile(DraftingStandardService.LoadProfile());
             }
             catch (Exception ex) { MessageBox.Show(this, "保存制图标准失败：\r\n" + ex.Message, "制图标准", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
@@ -165,17 +173,17 @@ namespace BatchPdfPublisher.Views
         }
         private void AddTextStyleRow()
         {
-            var index = _texts.Rows.Add("自定义文字", "WL-文字-新样式", "simsun.ttc", "", "1", true, "待创建");
+            var index = _texts.Rows.Add("WL-文字-新样式", "Windows 字体", "simsun.ttc", "", "0", "1", true, "待创建", "自定义文字");
             _texts.Rows[index].Tag = "Custom_" + Guid.NewGuid().ToString("N"); _texts.CurrentCell = _texts.Rows[index].Cells[0]; _texts.BeginEdit(true);
         }
         private void AddLayerRow()
         {
             var setting = new DraftingLayerSetting { Key = "CustomLayer_" + Guid.NewGuid().ToString("N"), Purpose = "自定义图层", Name = "WL-自定义-新图层", ColorIndex = 7, TrueColorRgb = -1, LineWeight = 18, LineType = "Continuous", IsPlottable = true, CreateOnApply = true }; _profile.Layers.Add(setting);
-            var index = _layers.Rows.Add(setting.Purpose, setting.Name, ColorCaption(setting), WeightChoice(setting.LineWeight), setting.LineType, true, true, "待创建"); _layers.Rows[index].Cells[2].Tag = setting; _layers.CurrentCell = _layers.Rows[index].Cells[0]; _layers.BeginEdit(true);
+            var index = _layers.Rows.Add(setting.Name, ColorCaption(setting), WeightChoice(setting.LineWeight), setting.LineType, true, true, "待创建", setting.Purpose); _layers.Rows[index].Cells[1].Tag = setting; _layers.CurrentCell = _layers.Rows[index].Cells[0]; _layers.BeginEdit(true);
         }
         private void RemoveLayerRow()
         {
-            if (_layers.CurrentRow == null) return; var setting = _layers.CurrentRow.Cells[2].Tag as DraftingLayerSetting; if (setting == null) return;
+            if (_layers.CurrentRow == null) return; var setting = _layers.CurrentRow.Cells[1].Tag as DraftingLayerSetting; if (setting == null) return;
             if (!setting.Key.StartsWith("CustomLayer_", StringComparison.OrdinalIgnoreCase)) { MessageBox.Show(this, "插件预设图层不能从标准中删除；如果不想一键创建，可以取消勾选“创建”。", "图层管理"); return; }
             _profile.Layers.Remove(setting); _layers.Rows.Remove(_layers.CurrentRow);
         }
@@ -186,10 +194,55 @@ namespace BatchPdfPublisher.Views
             if (key == DraftingStandardProfile.BodyTextKey || key == DraftingStandardProfile.TitleTextKey || key == DraftingStandardProfile.AnnotationTextKey) { MessageBox.Show(this, "正文、标题和标注文字样式是插件必需资源，不能删除。", "文字样式"); return; }
             _texts.Rows.Remove(_texts.CurrentRow);
         }
+
+        private static string FontType(string fontFile)
+        {
+            return string.Equals(Path.GetExtension(fontFile ?? string.Empty), ".shx", StringComparison.OrdinalIgnoreCase)
+                ? "CAD 字体（SHX）"
+                : "Windows 字体";
+        }
+
+        private static List<string> GetAvailableFontFiles()
+        {
+            var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "宋体", "黑体", "微软雅黑", "仿宋", "楷体", "Arial",
+                "simsun.ttc", "simhei.ttf", "msyh.ttc", "arial.ttf",
+                "txt.shx", "simplex.shx", "tssdeng.shx", "hztxt.shx", "hzfs.shx", "gbcbig.shx"
+            };
+            try
+            {
+                using (var installed = new InstalledFontCollection())
+                    foreach (var family in installed.Families) result.Add(family.Name);
+            }
+            catch { }
+            var folders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            try { folders.Add(Environment.GetFolderPath(Environment.SpecialFolder.Fonts)); } catch { }
+            try
+            {
+                var supportPaths = Convert.ToString(Autodesk.AutoCAD.ApplicationServices.Application.GetSystemVariable("ACADPREFIX"));
+                foreach (var folder in (supportPaths ?? string.Empty).Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries)) folders.Add(folder.Trim());
+            }
+            catch { }
+            foreach (var folder in folders)
+            {
+                try
+                {
+                    if (!Directory.Exists(folder)) continue;
+                    foreach (var file in Directory.EnumerateFiles(folder, "*.*", SearchOption.TopDirectoryOnly))
+                    {
+                        var extension = Path.GetExtension(file);
+                        if (string.Equals(extension, ".shx", StringComparison.OrdinalIgnoreCase)) result.Add(Path.GetFileName(file));
+                    }
+                }
+                catch { }
+            }
+            return result.OrderBy(x => FontType(x)).ThenBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+        }
         private void LayerCellContentClick(object sender, DataGridViewCellEventArgs e)
         {
-            if (e.RowIndex < 0 || e.ColumnIndex != 2) return;
-            var setting = _layers.Rows[e.RowIndex].Cells[2].Tag as DraftingLayerSetting;
+            if (e.RowIndex < 0 || e.ColumnIndex != 1) return;
+            var setting = _layers.Rows[e.RowIndex].Cells[1].Tag as DraftingLayerSetting;
             if (setting == null) return;
             var dialog = new CadColorDialog();
             {
@@ -212,15 +265,15 @@ namespace BatchPdfPublisher.Views
                 {
                     setting.TrueColorRgb = (selected.Red << 16) | (selected.Green << 8) | selected.Blue;
                 }
-                _layers.Rows[e.RowIndex].Cells[2].Value = ColorCaption(setting);
-                _layers.InvalidateCell(2, e.RowIndex);
+                _layers.Rows[e.RowIndex].Cells[1].Value = ColorCaption(setting);
+                _layers.InvalidateCell(1, e.RowIndex);
             }
         }
         private void LayerCellPainting(object sender, DataGridViewCellPaintingEventArgs e)
         {
-            if (e.RowIndex < 0 || e.ColumnIndex != 2 || (e.PaintParts & DataGridViewPaintParts.ContentForeground) == 0) return;
+            if (e.RowIndex < 0 || e.ColumnIndex != 1 || (e.PaintParts & DataGridViewPaintParts.ContentForeground) == 0) return;
             e.Paint(e.ClipBounds, e.PaintParts & ~DataGridViewPaintParts.ContentForeground);
-            var setting = _layers.Rows[e.RowIndex].Cells[2].Tag as DraftingLayerSetting;
+            var setting = _layers.Rows[e.RowIndex].Cells[1].Tag as DraftingLayerSetting;
             if (setting != null)
             {
                 var swatch = new Rectangle(e.CellBounds.Left + 7, e.CellBounds.Top + 7, 18, Math.Max(10, e.CellBounds.Height - 14));
@@ -304,6 +357,6 @@ namespace BatchPdfPublisher.Views
         private static Button Button(string text,int width) { return new Button { Text=text,Width=width,Height=32,Margin=new Padding(6,3,0,3),FlatStyle=FlatStyle.Standard }; }
         private static void AddRow(TableLayoutPanel p,int row,string label,Control control) { p.RowStyles.Add(new RowStyle(SizeType.Absolute,row==4?72:40)); p.Controls.Add(new Label { Text=label,AutoSize=true,Anchor=AnchorStyles.Left },0,row); control.Anchor=AnchorStyles.Left|AnchorStyles.Right; p.Controls.Add(control,1,row); }
         private static void AddPair(TableLayoutPanel panel, int row, string leftLabel, Control left, string rightLabel, Control right) { panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 46)); panel.Controls.Add(new Label { Text = leftLabel, AutoSize = true, Anchor = AnchorStyles.Left }, 0, row); left.Anchor = AnchorStyles.Left | AnchorStyles.Right; panel.Controls.Add(left, 1, row); panel.Controls.Add(new Label { Text = rightLabel, AutoSize = true, Anchor = AnchorStyles.Left }, 2, row); right.Anchor = AnchorStyles.Left | AnchorStyles.Right; panel.Controls.Add(right, 3, row); }
-        private enum ApplyScope { All, Layers, TextStyles, Dimension, Leader }
+        private enum ApplyScope { All, Layers, LayersForceUpdate, TextStyles, Dimension, Leader }
     }
 }

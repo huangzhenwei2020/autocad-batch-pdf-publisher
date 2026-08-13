@@ -7,6 +7,8 @@ using System.Runtime.InteropServices;
 using System.Collections.Generic;
 using System.Linq;
 using Autodesk.AutoCAD.Geometry;
+using Autodesk.AutoCAD.Runtime;
+using Autodesk.AutoCAD.ApplicationServices;
 
 namespace BatchPdfPublisher.Services
 {
@@ -51,6 +53,26 @@ namespace BatchPdfPublisher.Services
         {
             public double Distance;
             public int Direction;
+            public Point3d OriginalSource1;
+            public Point3d OriginalSource2;
+            public bool UseSharedSourceBaseline;
+            public Point3d SharedSourcePoint;
+            public bool UseAxisSourceBaseline;
+            public double AxisSourceCoordinate;
+        }
+        private sealed class MeasuredDimension
+        {
+            public ObjectId Id;
+            public double Distance;
+            public int Direction;
+            public int Side;
+            public Point3d Source1;
+            public Point3d Source2;
+        }
+        public sealed class AxisFreeEndpoint
+        {
+            public Point3d Free;
+            public Point3d CircleCenter;
         }
         public static bool IsTianzhengDimension(DBObject value)
         {
@@ -58,6 +80,12 @@ namespace BatchPdfPublisher.Services
             return dxf == "TCH_DIMENSION" || dxf == "TCH_DIMENSION2" || dxf == "TCH_RADIUSDIM" || dxf == "TCH_RADUSDIM";
         }
         public static bool IsAxisLabel(DBObject value) { return DxfName(value) == "TCH_AXIS_LABEL"; }
+        public static bool IsTianzhengText(DBObject value)
+        {
+            var dxf = DxfName(value);
+            return dxf.StartsWith("TCH_", StringComparison.OrdinalIgnoreCase) &&
+                   (dxf.IndexOf("TEXT", StringComparison.OrdinalIgnoreCase) >= 0 || dxf.IndexOf("WORD", StringComparison.OrdinalIgnoreCase) >= 0);
+        }
         public static bool IsTianzhengObject(DBObject value) { return DxfName(value).StartsWith("TCH_", StringComparison.OrdinalIgnoreCase); }
 
         public static bool Apply(DBObject value, int scale, TianzhengDimensionSettings settings)
@@ -89,38 +117,101 @@ namespace BatchPdfPublisher.Services
             return changed;
         }
 
-        public static Dictionary<ObjectId, DimensionGeometryTarget> BuildDimensionGeometryPlan(Transaction transaction, ObjectId[] ids, int targetScale, TianzhengDimensionSettings settings)
+        public static Dictionary<ObjectId, DimensionGeometryTarget> BuildDimensionGeometryPlan(Transaction transaction, ObjectId[] ids, int targetScale, TianzhengDimensionSettings settings, IList<AxisFreeEndpoint> axisFreeEndpoints)
         {
-            var measured = new List<Tuple<ObjectId, double, int>>();
+            var measured = new List<MeasuredDimension>();
             foreach (var id in ids ?? new ObjectId[0])
             {
                 try
                 {
                     var entity = transaction.GetObject(id, OpenMode.ForRead, false) as Entity;
-                    double distance; int direction;
-                    if (entity != null && IsTianzhengDimension(entity) && TryMeasureDimensionGeometry(entity, out distance, out direction)) measured.Add(Tuple.Create(id, distance, direction));
+                    double distance; int direction; int side; Point3d source1; Point3d source2;
+                    if (entity != null && IsTianzhengDimension(entity) && TryMeasureDimensionGeometry(entity, out distance, out direction, out side, out source1, out source2))
+                    {
+                        // Preserve the side encoded by the original dimension
+                        // itself. Axis labels on all four sides share the same
+                        // grid coordinates, so trying to infer the side again
+                        // from nearby labels can reassign top/left dimensions to
+                        // the right/bottom sets.
+                        measured.Add(new MeasuredDimension { Id = id, Distance = distance, Direction = direction, Side = side, Source1 = source1, Source2 = source2 });
+                    }
                 }
                 catch { }
             }
-            var tolerance = Math.Max(0.1d, measured.Count == 0 ? 0.1d : measured.Max(x => x.Item2) * 0.02d);
-            var levels = new List<double>();
-            foreach (var distance in measured.Select(x => x.Item2).OrderBy(x => x))
-                if (levels.Count == 0 || Math.Abs(distance - levels[levels.Count - 1]) > tolerance) levels.Add(distance);
             var result = new Dictionary<ObjectId, DimensionGeometryTarget>();
-            foreach (var item in measured)
+            foreach (var sideGroup in measured.GroupBy(x => x.Side))
             {
-                var level = 0; var best = double.MaxValue;
-                for (var i = 0; i < levels.Count; i++) { var delta = Math.Abs(item.Item2 - levels[i]); if (delta < best) { best = delta; level = i; } }
-                result[item.Item1] = new DimensionGeometryTarget { Distance = Math.Max(0d, settings.InnerExtensionLength + level * settings.DimensionSpacing) * targetScale, Direction = item.Item3 };
+                var group = sideGroup.ToList();
+                var innermost = group.OrderBy(x => x.Distance).First();
+                var sharedSourcePoint = MidPoint(innermost.Source1, innermost.Source2);
+                var tolerance = Math.Max(0.1d, group.Max(x => x.Distance) * 0.02d);
+                var levels = new List<double>();
+                foreach (var distance in group.Select(x => x.Distance).OrderBy(x => x))
+                    if (levels.Count == 0 || Math.Abs(distance - levels[levels.Count - 1]) > tolerance) levels.Add(distance);
+                foreach (var item in group)
+                {
+                    var level = 0; var best = double.MaxValue;
+                    for (var i = 0; i < levels.Count; i++) { var difference = Math.Abs(item.Distance - levels[i]); if (difference < best) { best = difference; level = i; } }
+                    double axisCoordinate;
+                    var hasAxisReference = TryResolveAxisSourceCoordinate(item.Source1, item.Source2, item.Direction, axisFreeEndpoints, out axisCoordinate);
+                    result[item.Id] = new DimensionGeometryTarget { Distance = Math.Max(0d, settings.InnerExtensionLength + level * settings.DimensionSpacing) * targetScale, Direction = item.Direction, OriginalSource1 = item.Source1, OriginalSource2 = item.Source2, UseAxisSourceBaseline = hasAxisReference, AxisSourceCoordinate = axisCoordinate, UseSharedSourceBaseline = !hasAxisReference, SharedSourcePoint = sharedSourcePoint };
+                }
             }
             return result;
         }
 
-        public static bool ApplyCommittedDimensionGeometry(Entity entity, DimensionGeometryTarget target, out string error)
+        public static List<AxisFreeEndpoint> CollectAxisFreeEndpoints(Transaction transaction, ObjectId spaceId)
+        {
+            var result = new List<AxisFreeEndpoint>();
+            try
+            {
+                var space = transaction.GetObject(spaceId, OpenMode.ForRead, false) as BlockTableRecord;
+                if (space == null) return result;
+                foreach (ObjectId id in space)
+                {
+                    Entity entity = null;
+                    try { entity = transaction.GetObject(id, OpenMode.ForRead, false) as Entity; }
+                    catch { }
+                    if (entity == null || !IsAxisLabel(entity)) continue;
+                    try
+                    {
+                        var grips = new Point3dCollection(); var osnap = new IntegerCollection(); var geometry = new IntegerCollection();
+                        entity.GetGripPoints(grips, osnap, geometry);
+                        // TCH_AXIS_LABEL exposes one triplet per axis: free end,
+                        // circle centre and circle tangent.  A final grip (when
+                        // present) controls the complete axis set and is ignored.
+                        for (var i = 0; i + 2 < grips.Count; i += 3) AddUnique(result, grips[i], grips[i + 1]);
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+            return result;
+        }
+
+        public static List<AxisFreeEndpoint> CollectAxisFreeEndpoints(Transaction transaction, IEnumerable<ObjectId> ids)
+        {
+            var result = new List<AxisFreeEndpoint>();
+            foreach (var id in ids ?? Enumerable.Empty<ObjectId>())
+            {
+                try
+                {
+                    var entity = transaction.GetObject(id, OpenMode.ForRead, false) as Entity;
+                    if (entity == null || !IsAxisLabel(entity)) continue;
+                    var grips = new Point3dCollection(); var osnap = new IntegerCollection(); var geometry = new IntegerCollection();
+                    entity.GetGripPoints(grips, osnap, geometry);
+                    for (var index = 0; index + 2 < grips.Count; index += 3) AddUnique(result, grips[index], grips[index + 1]);
+                }
+                catch { }
+            }
+            return result;
+        }
+
+        public static bool ApplyCommittedDimensionGeometry(Entity entity, DimensionGeometryTarget target, IList<AxisFreeEndpoint> axisFreeEndpoints, out string error)
         {
             error = string.Empty;
             if (entity == null || !IsTianzhengDimension(entity) || target == null) return false;
-            try { return ApplyDimensionGripGeometry(entity, target.Distance, target.Direction); }
+            try { return ApplyDimensionGripGeometry(entity, target.Distance, target.Direction, target.OriginalSource1, target.OriginalSource2, target.UseAxisSourceBaseline, target.AxisSourceCoordinate, target.UseSharedSourceBaseline, target.SharedSourcePoint, axisFreeEndpoints); }
             catch (System.Exception exception) { error = exception.Message; return false; }
         }
 
@@ -151,27 +242,96 @@ namespace BatchPdfPublisher.Services
             }
         }
 
-        private static bool TryMeasureDimensionGeometry(Entity entity, out double distance, out int direction)
+        public static bool TrySetCurrentScale(int scale, out string error)
         {
-            distance = 0d; direction = 1;
+            error = string.Empty;
+            if (!IsLoaded()) return false;
+            try
+            {
+                // Tianzheng exposes this Lisp API itself and uses it in PAPER.lsp.
+                // Application.Invoke executes synchronously on the CAD command
+                // thread, so the status-bar scale is updated before object work.
+                using (var arguments = new ResultBuffer(
+                    new TypedValue((int)LispDataType.Text, "TSetPScale"),
+                    new TypedValue((int)LispDataType.Double, Convert.ToDouble(scale, CultureInfo.InvariantCulture))))
+                using (var result = Autodesk.AutoCAD.ApplicationServices.Application.Invoke(arguments)) { }
+                return true;
+            }
+            catch (System.Exception exception) { error = exception.Message; return false; }
+        }
+
+        public static void QueueDimensionAutoAdjust(Document document, IList<ObjectId> dimensionIds)
+        {
+            if (document == null || dimensionIds == null || dimensionIds.Count == 0 || !IsLoaded()) return;
+            try
+            {
+                // TDimAdjust is Tianzheng's documented “尺寸自调” command. Keep
+                // the current command fast and stable: preselect only the dims
+                // changed above, then queue the Tianzheng command so it runs as
+                // soon as WLSCALE returns to AutoCAD's command loop.
+                QueueCommandForObjects(document, "TDimAdjust", dimensionIds);
+            }
+            catch (System.Exception exception)
+            {
+                try { System.IO.File.AppendAllText(System.IO.Path.Combine(UserDataPaths.LogsDirectory, "tianzheng-scale.log"), DateTime.Now.ToString("O") + " queue TDimAdjust failed: " + exception + Environment.NewLine); } catch { }
+            }
+        }
+
+        public static void QueueTextAutoAdjust(Document document, IList<ObjectId> textIds)
+        {
+            if (document == null || textIds == null || textIds.Count == 0 || !IsLoaded()) return;
+            try
+            {
+                QueueCommandForObjects(document, "TTextAdjust", textIds);
+            }
+            catch (System.Exception exception)
+            {
+                try { System.IO.File.AppendAllText(System.IO.Path.Combine(UserDataPaths.LogsDirectory, "tianzheng-scale.log"), DateTime.Now.ToString("O") + " queue TTextAdjust failed: " + exception + Environment.NewLine); } catch { }
+            }
+        }
+
+        private static void QueueCommandForObjects(Document document, string command, IList<ObjectId> ids)
+        {
+            // Build the selection set from stable handles at execution time.
+            // Using SetImpliedSelection for two queued Tianzheng commands makes
+            // the second selection overwrite the first before either runs.
+            var expression = new System.Text.StringBuilder("(progn(setq WLSS(ssadd))");
+            foreach (var id in ids.Where(value => !value.IsNull && value.IsValid))
+                expression.Append("(if(setq WLE(handent \"").Append(id.Handle.ToString()).Append("\"))(ssadd WLE WLSS))");
+            expression.Append("(if(> (sslength WLSS) 0)(command \"").Append(command).Append("\" WLSS \"\"))(princ))\n");
+            document.SendStringToExecute(expression.ToString(), true, false, false);
+        }
+
+        private static bool TryMeasureDimensionGeometry(Entity entity, out double distance, out int direction, out int side, out Point3d source1, out Point3d source2)
+        {
+            distance = 0d; direction = 1; side = 0; source1 = Point3d.Origin; source2 = Point3d.Origin;
             try
             {
                 var grips = new Point3dCollection(); var osnap = new IntegerCollection(); var geometry = new IntegerCollection();
                 entity.GetGripPoints(grips, osnap, geometry);
                 if (grips.Count < 4) return false;
-                var tangent = grips[1] - grips[0]; if (tangent.Length < 1e-8) return false; tangent = tangent.GetNormal();
+                var tangent = grips[1] - grips[0]; if (tangent.Length < 1e-8) return false; tangent = CanonicalTangent(tangent.GetNormal());
                 var normal = new Vector3d(-tangent.Y, tangent.X, 0d).GetNormal();
                 Func<Point3d, double> project = p => p.X * normal.X + p.Y * normal.Y + p.Z * normal.Z;
+                var sourceIndices = GetDimensionSourceGripIndices(grips, normal);
+                if (sourceIndices.Count < 2) return false;
                 var dimensionCoordinate = (project(grips[0]) + project(grips[1])) * 0.5d;
-                var sourceCoordinate = (project(grips[2]) + project(grips[3])) * 0.5d;
+                var sourceCoordinate = sourceIndices.Average(index => project(grips[index]));
                 distance = Math.Abs(sourceCoordinate - dimensionCoordinate);
                 direction = Math.Sign(dimensionCoordinate - sourceCoordinate); if (direction == 0) direction = 1;
+                side = (Math.Abs(tangent.X) >= Math.Abs(tangent.Y) ? 10 : 20) + (direction > 0 ? 1 : 2);
+                // A continuous Tianzheng dimension exposes every measured axis
+                // point as a grip on the same source baseline.  Keep the two
+                // extreme points for axis-label matching, rather than assuming
+                // that grip 2 and grip 3 are the complete measured span.
+                var orderedSources = sourceIndices.Select(index => grips[index]).OrderBy(point => Dot(point, tangent)).ToList();
+                source1 = orderedSources[0]; source2 = orderedSources[orderedSources.Count - 1];
                 return distance > 1e-8;
             }
             catch { return false; }
         }
 
-        private static bool ApplyDimensionGripGeometry(Entity entity, double targetDistance, int originalDirection)
+        private static bool ApplyDimensionGripGeometry(Entity entity, double targetDistance, int originalDirection, Point3d originalSource1, Point3d originalSource2, bool useAxisSourceBaseline, double plannedAxisSourceCoordinate, bool useSharedSourceBaseline, Point3d sharedSourcePoint, IList<AxisFreeEndpoint> axisFreeEndpoints)
         {
             if (entity == null) return false;
             try
@@ -181,21 +341,156 @@ namespace BatchPdfPublisher.Services
                 if (grips.Count < 4) return false;
                 var tangent = grips[1] - grips[0];
                 if (tangent.Length < 1e-8) return false;
-                tangent = tangent.GetNormal();
+                tangent = CanonicalTangent(tangent.GetNormal());
                 var normal = new Vector3d(-tangent.Y, tangent.X, 0d).GetNormal();
                 Func<Point3d, double> project = p => p.X * normal.X + p.Y * normal.Y + p.Z * normal.Z;
+                var sourceGripIndices = GetDimensionSourceGripIndices(grips, normal);
+                if (sourceGripIndices.Count < 2) return false;
                 var dimensionCoordinate = (project(grips[0]) + project(grips[1])) * 0.5d;
-                var source = (project(grips[2]) + project(grips[3])) * 0.5d;
+                var source = sourceGripIndices.Average(index => project(grips[index]));
                 var direction = originalDirection == 0 ? Math.Sign(dimensionCoordinate - source) : originalDirection;
                 if (direction == 0) direction = 1;
+
+                var aligned = false;
+                double currentAxisSourceCoordinate = plannedAxisSourceCoordinate;
+                var axisResolved = useAxisSourceBaseline && TryResolveAxisSourceCoordinate(originalSource1, originalSource2, direction, axisFreeEndpoints, out currentAxisSourceCoordinate);
+                if (useAxisSourceBaseline)
+                {
+                    // When matching axis labels exist, their free endpoints are
+                    // the authoritative extension-line origins. Both inner and
+                    // outer dimensions move to this same baseline. The stored
+                    // coordinate is a fallback for Tianzheng versions that
+                    // rebuild axis grips after their Scale property changes.
+                    var desiredSource = axisResolved ? currentAxisSourceCoordinate : plannedAxisSourceCoordinate;
+                    var sourceDelta = desiredSource - source;
+                    if (Math.Abs(sourceDelta) > 0.01d)
+                    {
+                        var sourceIndices = new IntegerCollection();
+                        foreach (var sourceIndex in sourceGripIndices) sourceIndices.Add(sourceIndex);
+                        entity.MoveGripPointsAt(sourceIndices, normal * sourceDelta);
+                        aligned = true;
+                        grips = new Point3dCollection(); osnap = new IntegerCollection(); geometry = new IntegerCollection();
+                        entity.GetGripPoints(grips, osnap, geometry);
+                        sourceGripIndices = GetDimensionSourceGripIndices(grips, normal);
+                        if (sourceGripIndices.Count < 2) return aligned;
+                        dimensionCoordinate = (project(grips[0]) + project(grips[1])) * 0.5d;
+                        source = sourceGripIndices.Average(index => project(grips[index]));
+                    }
+                }
+                else if (useSharedSourceBaseline)
+                {
+                    // Dimension-only fallback: use the innermost dimension's
+                    // extension origin as the common datum. Move the complete
+                    // source-grip run together, never individual source points.
+                    var desiredSource = project(sharedSourcePoint);
+                    var sourceDelta = desiredSource - source;
+                    if (Math.Abs(sourceDelta) > 0.01d)
+                    {
+                        var sourceIndices = new IntegerCollection();
+                        foreach (var sourceIndex in sourceGripIndices) sourceIndices.Add(sourceIndex);
+                        entity.MoveGripPointsAt(sourceIndices, normal * sourceDelta);
+                        aligned = true;
+                        grips = new Point3dCollection(); osnap = new IntegerCollection(); geometry = new IntegerCollection();
+                        entity.GetGripPoints(grips, osnap, geometry);
+                        sourceGripIndices = GetDimensionSourceGripIndices(grips, normal);
+                        if (sourceGripIndices.Count < 2) return aligned;
+                        dimensionCoordinate = (project(grips[0]) + project(grips[1])) * 0.5d;
+                        source = sourceGripIndices.Average(index => project(grips[index]));
+                    }
+                }
+                // The source grips already retain the correct axis locations
+                // after Tianzheng changes Scale. Never rematch or move them.
+                // Only relocate the dimension-line grips (0/1) along the normal;
+                // this keeps the measured span, extension origins and original
+                // top/bottom/left/right ownership unchanged.
                 var desired = source + direction * Math.Max(0d, targetDistance);
                 var delta = desired - dimensionCoordinate;
-                if (Math.Abs(delta) <= Math.Max(0.01d, targetDistance * 0.001d)) return false;
+                if (Math.Abs(delta) <= Math.Max(0.01d, targetDistance * 0.001d)) return aligned;
                 var indices = new IntegerCollection(); indices.Add(0); indices.Add(1);
                 entity.MoveGripPointsAt(indices, normal * delta);
                 return true;
             }
             catch { return false; }
+        }
+
+        private static double Dot(Point3d point, Vector3d vector) { return point.X * vector.X + point.Y * vector.Y + point.Z * vector.Z; }
+        private static Point3d MidPoint(Point3d first, Point3d second) { return new Point3d((first.X + second.X) * 0.5d, (first.Y + second.Y) * 0.5d, (first.Z + second.Z) * 0.5d); }
+        private static bool TryResolveAxisSourceCoordinate(Point3d source1, Point3d source2, int direction, IList<AxisFreeEndpoint> endpoints, out double coordinate)
+        {
+            coordinate = 0d;
+            if (endpoints == null || endpoints.Count == 0) return false;
+            var tangentValue = source2 - source1;
+            if (tangentValue.Length < 1e-8) return false;
+            var tangent = CanonicalTangent(tangentValue.GetNormal());
+            var normal = new Vector3d(-tangent.Y, tangent.X, 0d).GetNormal();
+            var tolerance = Math.Max(1d, source1.DistanceTo(source2) * 0.002d);
+            var matched = new List<AxisFreeEndpoint>();
+            foreach (var source in new[] { source1, source2 })
+            {
+                AxisFreeEndpoint bestEndpoint = null; var best = double.MaxValue;
+                foreach (var endpoint in endpoints)
+                {
+                    var leader = endpoint.CircleCenter - endpoint.Free;
+                    if (leader.Length < 1e-8 || Math.Abs(leader.GetNormal().DotProduct(normal)) < 0.9d) continue;
+                    var endpointDirection = Math.Sign(leader.DotProduct(normal));
+                    if (direction != 0 && endpointDirection != direction) continue;
+                    var tangentDelta = Math.Abs(Dot(endpoint.Free, tangent) - Dot(source, tangent));
+                    if (tangentDelta <= tolerance && tangentDelta < best) { best = tangentDelta; bestEndpoint = endpoint; }
+                }
+                if (bestEndpoint == null) return false;
+                matched.Add(bestEndpoint);
+            }
+            coordinate = matched.Average(endpoint => Dot(endpoint.Free, normal));
+            return true;
+        }
+        private static List<int> GetDimensionSourceGripIndices(Point3dCollection grips, Vector3d normal)
+        {
+            var result = new List<int>();
+            if (grips == null || grips.Count < 4) return result;
+
+            // Grip 0/1 define the dimension-line tangent.  Tianzheng then emits
+            // a consecutive run beginning at grip 2 for all measured/source
+            // points. These points share one normal coordinate. Text grips and
+            // auxiliary controls follow and leave that baseline, which gives us
+            // a stable boundary for both simple and continuous dimensions.
+            var sourceCoordinate = Dot(grips[2], normal);
+            var dimensionSpan = grips[0].DistanceTo(grips[1]);
+            var tolerance = Math.Max(0.05d, dimensionSpan * 0.00001d);
+            for (var index = 2; index < grips.Count; index++)
+            {
+                if (Math.Abs(Dot(grips[index], normal) - sourceCoordinate) > tolerance) break;
+                result.Add(index);
+            }
+            return result;
+        }
+        private static Vector3d CanonicalTangent(Vector3d value)
+        {
+            if (value.X < -1e-9 || (Math.Abs(value.X) <= 1e-9 && value.Y < 0d)) return -value;
+            return value;
+        }
+        private static int ResolveAxisDirection(Point3d source1, Point3d source2, IList<AxisFreeEndpoint> endpoints)
+        {
+            if (endpoints == null || endpoints.Count == 0) return 0;
+            var tangentValue = source2 - source1; if (tangentValue.Length < 1e-8) return 0;
+            var tangent = CanonicalTangent(tangentValue.GetNormal());
+            var normal = new Vector3d(-tangent.Y, tangent.X, 0d).GetNormal();
+            var tolerance = Math.Max(1d, source1.DistanceTo(source2) * 0.002d);
+            var best = double.MaxValue; var result = 0;
+            foreach (var endpoint in endpoints)
+            {
+                var tangentDelta = Math.Abs(Dot(endpoint.Free, tangent) - Dot(source1, tangent));
+                if (tangentDelta > tolerance) continue;
+                var towardAxisBubble = endpoint.CircleCenter - endpoint.Free;
+                var side = Math.Sign(towardAxisBubble.DotProduct(normal)); if (side == 0) continue;
+                var score = tangentDelta * 20d + endpoint.Free.DistanceTo(source1);
+                if (score < best) { best = score; result = side; }
+            }
+            return result;
+        }
+        private static void AddUnique(List<AxisFreeEndpoint> points, Point3d value, Point3d circleCenter)
+        {
+            foreach (var point in points) if (point.Free.DistanceTo(value) <= 0.01d) return;
+            points.Add(new AxisFreeEndpoint { Free = value, CircleCenter = circleCenter });
         }
 
         private static string DxfName(DBObject value) { try { return (value == null ? string.Empty : value.GetRXClass().DxfName ?? string.Empty).ToUpperInvariant(); } catch { return string.Empty; } }
@@ -229,7 +524,9 @@ namespace BatchPdfPublisher.Services
         }
         private static bool TrySet(object value, string name, object data)
         {
-            if (!HasProperty(value, name)) return false;
+            // Setting through IDispatch already reports a missing property.
+            // Avoid probing with a separate COM get before every write; on a
+            // large selection that doubled the number of Tianzheng COM calls.
             try { Set(value, name, data); return true; } catch { return false; }
         }
         private static void Set(object value, string name, object data) { value.GetType().InvokeMember(name, BindingFlags.SetProperty, null, value, new[] { data }, CultureInfo.CurrentCulture); }

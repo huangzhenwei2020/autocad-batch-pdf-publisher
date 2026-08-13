@@ -62,10 +62,11 @@ namespace BatchPdfPublisher.Services
                     for (var i = 0; i < textCount; i++)
                     {
                         var prefix = "Text." + i + ".";
-                        profile.TextStyles.Add(new DraftingTextStyleSetting { Key = Read(data, prefix + "Key", "Custom_" + i), Purpose = Read(data, prefix + "Purpose", "自定义文字"), Name = Read(data, prefix + "Name", "WL-文字-" + (i + 1)), FontFile = Read(data, prefix + "Font", "simsun.ttc"), BigFontFile = Read(data, prefix + "BigFont", ""), WidthFactor = ReadDouble(data, prefix + "Width", 1), CreateOnApply = Read(data, prefix + "Create", "1") == "1" });
+                        var font = Read(data, prefix + "Font", "simsun.ttc");
+                        profile.TextStyles.Add(new DraftingTextStyleSetting { Key = Read(data, prefix + "Key", "Custom_" + i), Purpose = Read(data, prefix + "Purpose", "自定义文字"), Name = Read(data, prefix + "Name", "WL-文字-" + (i + 1)), FontType = Read(data, prefix + "FontType", InferFontType(font)), FontFile = font, BigFontFile = Read(data, prefix + "BigFont", ""), TextHeight = ReadDouble(data, prefix + "Height", 0), WidthFactor = ReadDouble(data, prefix + "Width", 1), CreateOnApply = Read(data, prefix + "Create", "1") == "1" });
                     }
                 }
-                else foreach (var x in profile.TextStyles) { x.Name = Read(data, "Text." + x.Key + ".Name", x.Name); x.FontFile = Read(data, "Text." + x.Key + ".Font", x.FontFile); x.BigFontFile = Read(data, "Text." + x.Key + ".BigFont", x.BigFontFile); x.WidthFactor = ReadDouble(data, "Text." + x.Key + ".Width", x.WidthFactor); x.CreateOnApply = Read(data, "Text." + x.Key + ".Create", "1") == "1"; }
+                else foreach (var x in profile.TextStyles) { x.Purpose = Read(data, "Text." + x.Key + ".Purpose", x.Purpose); x.Name = Read(data, "Text." + x.Key + ".Name", x.Name); x.FontFile = Read(data, "Text." + x.Key + ".Font", x.FontFile); x.FontType = Read(data, "Text." + x.Key + ".FontType", InferFontType(x.FontFile)); x.BigFontFile = Read(data, "Text." + x.Key + ".BigFont", x.BigFontFile); x.TextHeight = ReadDouble(data, "Text." + x.Key + ".Height", x.TextHeight); x.WidthFactor = ReadDouble(data, "Text." + x.Key + ".Width", x.WidthFactor); x.CreateOnApply = Read(data, "Text." + x.Key + ".Create", "1") == "1"; }
                 // Drawing resources are always authored at 1:1.  Actual display
                 // scale is controlled by the separate scale manager.
                 profile.DimensionScales = new List<int> { 1 };
@@ -87,7 +88,7 @@ namespace BatchPdfPublisher.Services
             var lines = new List<string> { "# 万落建筑工具制图标准 v1", "General.UpdateExisting=" + (profile.UpdateExisting ? "1" : "0") };
             lines.Add("Layer.Count=" + profile.Layers.Count); for (var i = 0; i < profile.Layers.Count; i++) { var x = profile.Layers[i]; var prefix = "LayerItem." + i + "."; lines.Add(prefix + "Key=" + x.Key); lines.Add(prefix + "Purpose=" + x.Purpose); lines.Add(prefix + "Name=" + x.Name); lines.Add(prefix + "Color=" + x.ColorIndex); lines.Add(prefix + "ColorRgb=" + x.TrueColorRgb); lines.Add(prefix + "LineWeight=" + x.LineWeight); lines.Add(prefix + "LineType=" + x.LineType); lines.Add(prefix + "Plottable=" + (x.IsPlottable ? "1" : "0")); lines.Add(prefix + "Create=" + (x.CreateOnApply ? "1" : "0")); }
             lines.Add("Text.Count=" + profile.TextStyles.Count);
-            for (var i = 0; i < profile.TextStyles.Count; i++) { var x = profile.TextStyles[i]; var prefix = "Text." + i + "."; lines.Add(prefix + "Key=" + x.Key); lines.Add(prefix + "Purpose=" + x.Purpose); lines.Add(prefix + "Name=" + x.Name); lines.Add(prefix + "Font=" + x.FontFile); lines.Add(prefix + "BigFont=" + (x.BigFontFile ?? "")); lines.Add(prefix + "Width=" + x.WidthFactor.ToString(CultureInfo.InvariantCulture)); lines.Add(prefix + "Create=" + (x.CreateOnApply ? "1" : "0")); }
+            for (var i = 0; i < profile.TextStyles.Count; i++) { var x = profile.TextStyles[i]; var prefix = "Text." + i + "."; lines.Add(prefix + "Key=" + x.Key); lines.Add(prefix + "Purpose=" + x.Purpose); lines.Add(prefix + "Name=" + x.Name); lines.Add(prefix + "FontType=" + x.FontType); lines.Add(prefix + "Font=" + x.FontFile); lines.Add(prefix + "BigFont=" + (x.BigFontFile ?? "")); lines.Add(prefix + "Height=" + x.TextHeight.ToString(CultureInfo.InvariantCulture)); lines.Add(prefix + "Width=" + x.WidthFactor.ToString(CultureInfo.InvariantCulture)); lines.Add(prefix + "Create=" + (x.CreateOnApply ? "1" : "0")); }
             lines.Add("Dimension.Scales=" + string.Join(",", profile.DimensionScales.Select(x => x.ToString(CultureInfo.InvariantCulture)))); lines.Add("Dimension.Create=" + (profile.DimensionCreateOnApply ? "1" : "0")); lines.Add("Dimension.StylePrefix=" + profile.DimensionStylePrefix); lines.Add("Dimension.TextHeight=" + profile.DimensionTextHeight.ToString(CultureInfo.InvariantCulture)); lines.Add("Dimension.ArrowSize=" + profile.DimensionArrowSize.ToString(CultureInfo.InvariantCulture)); lines.Add("Dimension.LineColor=" + profile.DimensionLineColor); lines.Add("Dimension.ExtensionColor=" + profile.ExtensionLineColor); lines.Add("Dimension.TextColor=" + profile.DimensionTextColor); lines.Add("Dimension.LineExtension=" + profile.DimensionLineExtension.ToString(CultureInfo.InvariantCulture)); lines.Add("Dimension.BaselineSpacing=" + profile.BaselineSpacing.ToString(CultureInfo.InvariantCulture)); lines.Add("Dimension.ExtensionBeyond=" + profile.ExtensionBeyond.ToString(CultureInfo.InvariantCulture)); lines.Add("Dimension.ExtensionOriginOffset=" + profile.ExtensionOriginOffset.ToString(CultureInfo.InvariantCulture)); lines.Add("Dimension.UseFixedExtensionLength=" + (profile.UseFixedExtensionLength ? "1" : "0")); lines.Add("Dimension.FixedExtensionLength=" + profile.FixedExtensionLength.ToString(CultureInfo.InvariantCulture)); lines.Add("Dimension.TextGap=" + profile.DimensionTextGap.ToString(CultureInfo.InvariantCulture)); lines.Add("Dimension.Precision=" + profile.DimensionPrecision); lines.Add("Dimension.Rounding=" + profile.DimensionRounding.ToString(CultureInfo.InvariantCulture));
             lines.Add("Dimension.ArrowStyle=" + profile.DimensionArrowStyle); lines.Add("Dimension.CenterMarkStyle=" + profile.CenterMarkStyle); lines.Add("Dimension.CenterMarkSize=" + profile.CenterMarkSize.ToString(CultureInfo.InvariantCulture)); lines.Add("Dimension.ArcLengthSymbol=" + profile.ArcLengthSymbol); lines.Add("Dimension.JogAngle=" + profile.JogAngle.ToString(CultureInfo.InvariantCulture));
             lines.Add("Leader.Create=" + (profile.LeaderCreateOnApply ? "1" : "0")); lines.Add("Leader.Name=" + profile.LeaderStyleName); lines.Add("Leader.LineType=" + profile.LeaderLineType); lines.Add("Leader.LineColor=" + profile.LeaderLineColor); lines.Add("Leader.TextColor=" + profile.LeaderTextColor); lines.Add("Leader.LineWeight=" + profile.LeaderLineWeight); lines.Add("Leader.ArrowStyle=" + profile.LeaderArrowStyle); lines.Add("Leader.ArrowSize=" + profile.LeaderArrowSize.ToString(CultureInfo.InvariantCulture)); lines.Add("Leader.TextHeight=" + profile.LeaderTextHeight.ToString(CultureInfo.InvariantCulture)); lines.Add("Leader.LandingGap=" + profile.LeaderLandingGap.ToString(CultureInfo.InvariantCulture)); lines.Add("Leader.DoglegLength=" + profile.LeaderDoglegLength.ToString(CultureInfo.InvariantCulture)); lines.Add("Leader.EnableLanding=" + (profile.LeaderEnableLanding ? "1" : "0")); lines.Add("Leader.EnableDogleg=" + (profile.LeaderEnableDogleg ? "1" : "0")); lines.Add("Leader.FrameText=" + (profile.LeaderFrameText ? "1" : "0"));
@@ -100,7 +101,7 @@ namespace BatchPdfPublisher.Services
             if (db == null) throw new ArgumentNullException("db"); if (tr == null) throw new ArgumentNullException("tr"); profile = profile ?? DraftingStandardProfile.CreateDefault();
             var result = new DraftingStandardResources { Profile = profile };
             foreach (var x in profile.Layers) { var lt = string.Equals(x.LineType, "Continuous", StringComparison.OrdinalIgnoreCase) ? ObjectId.Null : EnsureLineType(db, tr, x.LineType); result.LayerIds[x.Key] = EnsureLayer(db, tr, x.Name, LayerColor(x), (LineWeight)x.LineWeight, lt, x.IsPlottable, updateExisting); }
-            foreach (var x in profile.TextStyles.Where(x => x.CreateOnApply || x.Key == DraftingStandardProfile.BodyTextKey || x.Key == DraftingStandardProfile.TitleTextKey || x.Key == DraftingStandardProfile.AnnotationTextKey)) result.TextStyleIds[x.Key] = EnsureTextStyle(db, tr, x.Name, x.FontFile, x.BigFontFile, x.WidthFactor, updateExisting);
+            foreach (var x in profile.TextStyles.Where(x => x.CreateOnApply || x.Key == DraftingStandardProfile.BodyTextKey || x.Key == DraftingStandardProfile.TitleTextKey || x.Key == DraftingStandardProfile.AnnotationTextKey)) result.TextStyleIds[x.Key] = EnsureTextStyle(db, tr, x.Name, x.FontFile, x.BigFontFile, x.TextHeight, x.WidthFactor, updateExisting);
             var dimensionStyle = EnsureDimStyle(db, tr, profile.DimensionStyleName(1), 1, result.TextStyleIds[DraftingStandardProfile.AnnotationTextKey], profile, updateExisting);
             result.DimensionStyleIds[1] = dimensionStyle;
             // Compatibility aliases for older callers; every alias points to
@@ -114,7 +115,7 @@ namespace BatchPdfPublisher.Services
             var r = EnsureAll(db, tr); if (string.IsNullOrWhiteSpace(requestedName)) return title ? r.TitleTextStyleId : r.BodyTextStyleId;
             var table = (TextStyleTable)tr.GetObject(db.TextStyleTableId, OpenMode.ForRead); if (table.Has(requestedName)) return table[requestedName];
             var file = string.Equals(requestedName, "黑体", StringComparison.OrdinalIgnoreCase) ? "simhei.ttf" : string.Equals(requestedName, "宋体", StringComparison.OrdinalIgnoreCase) ? "simsun.ttc" : string.Equals(requestedName, "微软雅黑", StringComparison.OrdinalIgnoreCase) ? "msyh.ttc" : string.Equals(requestedName, "Arial", StringComparison.OrdinalIgnoreCase) ? "arial.ttf" : null;
-            return file == null ? (title ? r.TitleTextStyleId : r.BodyTextStyleId) : EnsureTextStyle(db, tr, "WL-文字-" + requestedName, file, "", 1, false);
+            return file == null ? (title ? r.TitleTextStyleId : r.BodyTextStyleId) : EnsureTextStyle(db, tr, "WL-文字-" + requestedName, file, "", 0, 1, false);
         }
 
         public static ObjectId EnsureDimensionStyleForScale(Database db, Transaction tr, int scale)
@@ -141,9 +142,21 @@ namespace BatchPdfPublisher.Services
             }
         }
 
+        public static void ApplyAllConfiguredLayersToCurrentDrawing(Database db, Transaction tr, DraftingStandardProfile profile)
+        {
+            foreach (var x in profile.Layers)
+            {
+                // Unlike “create checked layers”, this command deliberately
+                // updates every configured row and also resolves Continuous to
+                // a real linetype id so an old dashed layer can become solid.
+                var lineType = EnsureLineType(db, tr, string.IsNullOrWhiteSpace(x.LineType) ? "Continuous" : x.LineType);
+                EnsureLayer(db, tr, x.Name, LayerColor(x), (LineWeight)x.LineWeight, lineType, x.IsPlottable, true);
+            }
+        }
+
         public static void ApplyConfiguredTextStyles(Database db, Transaction tr, DraftingStandardProfile profile, bool updateExisting)
         {
-            foreach (var x in profile.TextStyles.Where(x => x.CreateOnApply)) EnsureTextStyle(db, tr, x.Name, x.FontFile, x.BigFontFile, x.WidthFactor, updateExisting);
+            foreach (var x in profile.TextStyles.Where(x => x.CreateOnApply)) EnsureTextStyle(db, tr, x.Name, x.FontFile, x.BigFontFile, x.TextHeight, x.WidthFactor, updateExisting);
         }
 
         public static void ApplyConfiguredDimensionStyle(Database db, Transaction tr, DraftingStandardProfile profile, bool updateExisting)
@@ -151,7 +164,7 @@ namespace BatchPdfPublisher.Services
             if (!profile.DimensionCreateOnApply) return;
             var annotation = profile.Text(DraftingStandardProfile.AnnotationTextKey);
             var table = (TextStyleTable)tr.GetObject(db.TextStyleTableId, OpenMode.ForRead);
-            var textStyle = table.Has(annotation.Name) ? table[annotation.Name] : annotation.CreateOnApply ? EnsureTextStyle(db, tr, annotation.Name, annotation.FontFile, annotation.BigFontFile, annotation.WidthFactor, updateExisting) : db.Textstyle;
+            var textStyle = table.Has(annotation.Name) ? table[annotation.Name] : annotation.CreateOnApply ? EnsureTextStyle(db, tr, annotation.Name, annotation.FontFile, annotation.BigFontFile, annotation.TextHeight, annotation.WidthFactor, updateExisting) : db.Textstyle;
             EnsureDimStyle(db, tr, profile.DimensionStyleName(1), 1, textStyle, profile, updateExisting);
         }
 
@@ -160,7 +173,7 @@ namespace BatchPdfPublisher.Services
             if (!profile.LeaderCreateOnApply) return;
             SymbolUtilityServices.ValidateSymbolName(profile.LeaderStyleName, false);
             var annotation = profile.Text(DraftingStandardProfile.AnnotationTextKey); var textTable = (TextStyleTable)tr.GetObject(db.TextStyleTableId, OpenMode.ForRead);
-            var textStyle = textTable.Has(annotation.Name) ? textTable[annotation.Name] : EnsureTextStyle(db, tr, annotation.Name, annotation.FontFile, annotation.BigFontFile, annotation.WidthFactor, updateExisting);
+            var textStyle = textTable.Has(annotation.Name) ? textTable[annotation.Name] : EnsureTextStyle(db, tr, annotation.Name, annotation.FontFile, annotation.BigFontFile, annotation.TextHeight, annotation.WidthFactor, updateExisting);
             var dictionary = (DBDictionary)tr.GetObject(db.MLeaderStyleDictionaryId, OpenMode.ForRead); MLeaderStyle style;
             if (dictionary.Contains(profile.LeaderStyleName)) { if (!updateExisting) return; style = (MLeaderStyle)tr.GetObject(dictionary.GetAt(profile.LeaderStyleName), OpenMode.ForWrite); }
             else { style = new MLeaderStyle(); style.PostMLeaderStyleToDb(db, profile.LeaderStyleName); tr.AddNewlyCreatedDBObject(style, true); }
@@ -179,10 +192,20 @@ namespace BatchPdfPublisher.Services
             table.UpgradeOpen(); var record = new LayerTableRecord { Name = name, Color = color, LineWeight = weight, IsPlottable = plottable }; if (!lt.IsNull) record.LinetypeObjectId = lt; var id = table.Add(record); tr.AddNewlyCreatedDBObject(record, true); return id;
         }
         private static ObjectId EnsureLineType(Database db, Transaction tr, string name) { var t = (LinetypeTable)tr.GetObject(db.LinetypeTableId, OpenMode.ForRead); if (!t.Has(name)) { try { db.LoadLineTypeFile(name, "acadiso.lin"); } catch { return ObjectId.Null; } t = (LinetypeTable)tr.GetObject(db.LinetypeTableId, OpenMode.ForRead); } return t.Has(name) ? t[name] : ObjectId.Null; }
-        private static ObjectId EnsureTextStyle(Database db, Transaction tr, string name, string font, string bigFont, double width, bool update)
+        private static ObjectId EnsureTextStyle(Database db, Transaction tr, string name, string font, string bigFont, double height, double width, bool update)
         {
-            var table = (TextStyleTable)tr.GetObject(db.TextStyleTableId, OpenMode.ForRead); if (table.Has(name)) { if (update) { var x = (TextStyleTableRecord)tr.GetObject(table[name], OpenMode.ForWrite); x.FileName = font; x.BigFontFileName = bigFont ?? ""; x.XScale = width; x.TextSize = 0; } return table[name]; }
-            table.UpgradeOpen(); var record = new TextStyleTableRecord { Name = name, FileName = font, BigFontFileName = bigFont ?? "", TextSize = 0, XScale = width }; var id = table.Add(record); tr.AddNewlyCreatedDBObject(record, true); return id;
+            var table = (TextStyleTable)tr.GetObject(db.TextStyleTableId, OpenMode.ForRead); if (table.Has(name)) { if (update) { var x = (TextStyleTableRecord)tr.GetObject(table[name], OpenMode.ForWrite); ApplyFont(x, font, bigFont); x.XScale = width; x.TextSize = Math.Max(0, height); } return table[name]; }
+            table.UpgradeOpen(); var record = new TextStyleTableRecord { Name = name, TextSize = Math.Max(0, height), XScale = width }; ApplyFont(record, font, bigFont); var id = table.Add(record); tr.AddNewlyCreatedDBObject(record, true); return id;
+        }
+        private static void ApplyFont(TextStyleTableRecord record, string font, string bigFont)
+        {
+            var value = (font ?? string.Empty).Trim();
+            if (string.Equals(Path.GetExtension(value), ".shx", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(Path.GetExtension(value), ".ttf", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(Path.GetExtension(value), ".ttc", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(Path.GetExtension(value), ".otf", StringComparison.OrdinalIgnoreCase)) record.FileName = value;
+            else record.Font = new Autodesk.AutoCAD.GraphicsInterface.FontDescriptor(value, false, false, 134, 0);
+            record.BigFontFileName = string.IsNullOrEmpty(Path.GetExtension(value)) ? string.Empty : bigFont ?? string.Empty;
         }
         private static ObjectId EnsureDimStyle(Database db, Transaction tr, string name, int scale, ObjectId textStyle, DraftingStandardProfile profile, bool update)
         {
@@ -224,6 +247,7 @@ namespace BatchPdfPublisher.Services
         private static int ReadInt(IDictionary<string, string> d, string k, int v) { int x; return int.TryParse(Read(d, k, ""), NumberStyles.Integer, CultureInfo.InvariantCulture, out x) ? x : v; }
         private static short ReadShort(IDictionary<string, string> d, string k, short v) { short x; return short.TryParse(Read(d, k, ""), NumberStyles.Integer, CultureInfo.InvariantCulture, out x) ? x : v; }
         private static double ReadDouble(IDictionary<string, string> d, string k, double v) { double x; return double.TryParse(Read(d, k, ""), NumberStyles.Float, CultureInfo.InvariantCulture, out x) ? x : v; }
+        private static string InferFontType(string font) { return string.Equals(Path.GetExtension(font ?? ""), ".shx", StringComparison.OrdinalIgnoreCase) ? "CAD 字体（SHX）" : "Windows 字体"; }
         public static List<int> ParseScales(string value) { var r = (value ?? "").Split(new[] { ',', '，', ';', '；', ' ' }, StringSplitOptions.RemoveEmptyEntries).Select(x => { int n; return int.TryParse(x.Trim().Replace("1:", "").Replace("1：", ""), out n) ? n : 0; }).Where(x => x > 0).Distinct().OrderBy(x => x).ToList(); return r.Count == 0 ? new List<int> { 50 } : r; }
     }
 
@@ -233,11 +257,11 @@ namespace BatchPdfPublisher.Services
         public List<DraftingLayerSetting> Layers = new List<DraftingLayerSetting>(); public List<DraftingTextStyleSetting> TextStyles = new List<DraftingTextStyleSetting>(); public List<int> DimensionScales = new List<int>(); public double DimensionTextHeight = 2.5, DimensionArrowSize = 2.5, DimensionLineExtension = 0, BaselineSpacing = 3.75, ExtensionBeyond = 1.25, ExtensionOriginOffset = .625, FixedExtensionLength = 5, DimensionTextGap = .625, DimensionRounding = 0, CenterMarkSize = 2.5, JogAngle = 45; public short DimensionLineColor = 0, ExtensionLineColor = 0, DimensionTextColor = 2; public int DimensionPrecision = 0; public bool UseFixedExtensionLength, DimensionCreateOnApply = true, UpdateExisting; public string DimensionStylePrefix = "WL-标注-1_", DimensionArrowStyle = "实心闭合", CenterMarkStyle = "中心标记", ArcLengthSymbol = "前置";
         public bool LeaderCreateOnApply = true, LeaderEnableLanding = true, LeaderEnableDogleg = true, LeaderFrameText; public string LeaderStyleName = "WL-引线-1_1", LeaderLineType = "直线", LeaderArrowStyle = "实心闭合"; public short LeaderLineColor = 0, LeaderTextColor = 2; public int LeaderLineWeight = (int)LineWeight.ByLineWeightDefault; public double LeaderArrowSize = 2.5, LeaderTextHeight = 2.5, LeaderLandingGap = .625, LeaderDoglegLength = 3.75;
         public static DraftingStandardProfile CreateDefault() { var p = new DraftingStandardProfile(); p.Layers.AddRange(new[] { L(FrameKey,"图框",DraftingStandardService.FrameLayer,7,30,"Continuous"), L(CatalogKey,"图纸目录",DraftingStandardService.CatalogLayer,7,18,"Continuous"), L(OutlineKey,"建筑轮廓",DraftingStandardService.ArchitectureOutlineLayer,7,30,"Continuous"), L(FineKey,"建筑细线",DraftingStandardService.ArchitectureFineLayer,2,13,"Continuous"), L(StructureKey,"建筑结构",DraftingStandardService.ArchitectureStructureLayer,1,35,"Continuous"), L(HiddenKey,"建筑隐藏",DraftingStandardService.ArchitectureHiddenLayer,8,13,"HIDDEN"), L(HatchKey,"建筑填充",DraftingStandardService.ArchitectureHatchLayer,8,9,"Continuous"), L(AnnotationTextLayerKey,"注释文字",DraftingStandardService.AnnotationTextLayer,7,18,"Continuous"), L(AnnotationDimensionLayerKey,"注释标注",DraftingStandardService.AnnotationDimensionLayer,3,13,"Continuous") }); p.TextStyles.AddRange(new[] { T(BodyTextKey,"正文",DraftingStandardService.BodyTextStyle,"simsun.ttc",.7), T(TitleTextKey,"标题",DraftingStandardService.TitleTextStyle,"simhei.ttf",1), T(AnnotationTextKey,"标注",DraftingStandardService.AnnotationTextStyle,"simsun.ttc",.7) }); p.DimensionScales.Add(1); return p; }
-        private static DraftingLayerSetting L(string k,string purpose,string name,short color,int weight,string lt) { return new DraftingLayerSetting { Key=k,Purpose=purpose,Name=name,ColorIndex=color,TrueColorRgb=-1,LineWeight=weight,LineType=lt,IsPlottable=true,CreateOnApply=true }; } private static DraftingTextStyleSetting T(string k,string purpose,string name,string font,double width) { return new DraftingTextStyleSetting { Key=k,Purpose=purpose,Name=name,FontFile=font,BigFontFile="",WidthFactor=width,CreateOnApply=true }; }
+        private static DraftingLayerSetting L(string k,string purpose,string name,short color,int weight,string lt) { return new DraftingLayerSetting { Key=k,Purpose=purpose,Name=name,ColorIndex=color,TrueColorRgb=-1,LineWeight=weight,LineType=lt,IsPlottable=true,CreateOnApply=true }; } private static DraftingTextStyleSetting T(string k,string purpose,string name,string font,double width) { return new DraftingTextStyleSetting { Key=k,Purpose=purpose,Name=name,FontType=string.Equals(Path.GetExtension(font),".shx",StringComparison.OrdinalIgnoreCase)?"CAD 字体（SHX）":"Windows 字体",FontFile=font,BigFontFile="",TextHeight=0,WidthFactor=width,CreateOnApply=true }; }
         public DraftingLayerSetting Layer(string key) { return Layers.First(x => x.Key == key); } public DraftingTextStyleSetting Text(string key) { return TextStyles.First(x => x.Key == key); } public string DimensionStyleName(int scale) { return (string.IsNullOrWhiteSpace(DimensionStylePrefix) ? "WL-标注-1_" : DimensionStylePrefix) + Math.Max(1, scale); }
     }
     public sealed class DraftingLayerSetting { public string Key, Purpose, Name, LineType; public short ColorIndex; public int TrueColorRgb = -1; public int LineWeight; public bool IsPlottable = true, CreateOnApply = true; }
-    public sealed class DraftingTextStyleSetting { public string Key, Purpose, Name, FontFile, BigFontFile; public double WidthFactor; public bool CreateOnApply = true; }
+    public sealed class DraftingTextStyleSetting { public string Key, Purpose, Name, FontType, FontFile, BigFontFile; public double TextHeight, WidthFactor; public bool CreateOnApply = true; }
     public sealed class DraftingStandardResources
     {
         public DraftingStandardProfile Profile; public readonly Dictionary<string,ObjectId> LayerIds = new Dictionary<string,ObjectId>(); public readonly Dictionary<string,ObjectId> TextStyleIds = new Dictionary<string,ObjectId>(); public readonly Dictionary<int,ObjectId> DimensionStyleIds = new Dictionary<int,ObjectId>();

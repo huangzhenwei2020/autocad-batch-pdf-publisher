@@ -58,6 +58,7 @@
     <Compile Include="Views\PublisherForm.cs" />
     <Compile Include="Views\ProjectManagerForm.cs" />
     <Compile Include="Views\DrawingScaleForm.cs" />
+    <Compile Include="Views\ScaleProgressForm.cs" />
     <Compile Include="Views\TianzhengDimensionSettingsForm.cs" />
     <Compile Include="Views\TianzhengRoomRenameForm.cs" />
     <Compile Include="Views\TianzhengRoomStatisticsForm.cs" />
