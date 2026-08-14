@@ -42,6 +42,9 @@
     <EmbeddedResource Include="Payload\StairDetail.R24.zip">
       <LogicalName>WanluoArchitectureTools.StairDetail.R24.zip</LogicalName>
     </EmbeddedResource>
+    <EmbeddedResource Include="Payload\StairDetail.R25.zip">
+      <LogicalName>WanluoArchitectureTools.StairDetail.R25.zip</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

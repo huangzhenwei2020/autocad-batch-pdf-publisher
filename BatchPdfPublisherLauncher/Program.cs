@@ -28,6 +28,7 @@ namespace BatchPdfPublisherLauncher
         private const string LastPlatformFileName = "BatchPdfPublisher.last-platform.txt";
         private const string ArchitecturePayloadResourceName = "WanluoArchitectureTools.CadArchSpecEditor.bundle.zip";
         private const string StairPayloadR24ResourceName = "WanluoArchitectureTools.StairDetail.R24.zip";
+        private const string StairPayloadR25ResourceName = "WanluoArchitectureTools.StairDetail.R25.zip";
         private static readonly string UserDataRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WanluoArchitectureTools");
         private static readonly string LaunchLogPath = Path.Combine(EnsureDirectory(Path.Combine(UserDataRoot, "Logs")), "launcher.log");
         private static readonly string LoadReceiptPath = Path.Combine(Path.GetTempPath(), "WanluoArchitectureTools.loaded.log");
@@ -786,9 +787,11 @@ namespace BatchPdfPublisherLauncher
 
         private static string ExtractEmbeddedStairDetail(string band, string hostName)
         {
-            if (!string.Equals(band, "R24", StringComparison.OrdinalIgnoreCase))
-                throw new NotSupportedException("一键楼梯大样当前没有 " + band + " 专用运行组件。R24 组件不能跨运行时替代使用。");
-            return ExtractFlatPayload(StairPayloadR24ResourceName, "StairDetail", band, hostName);
+            var resourceName = string.Equals(band, "R24", StringComparison.OrdinalIgnoreCase) ? StairPayloadR24ResourceName :
+                string.Equals(band, "R25", StringComparison.OrdinalIgnoreCase) ? StairPayloadR25ResourceName : null;
+            if (resourceName == null)
+                throw new NotSupportedException("一键楼梯大样当前没有 " + band + " 专用运行组件。");
+            return ExtractFlatPayload(resourceName, "StairDetail", band, hostName);
         }
 
         private static string ExtractFlatPayload(string resourceName, string componentName, string band, string hostName)

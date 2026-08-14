@@ -4,6 +4,17 @@
 
 统一入口为“万落建筑工具启动器.exe”，加载后在 AutoCAD Ribbon 中显示“万落建筑工具”标签。
 
+## 唯一正确的编译与安装入口
+
+从 GitHub 拉取后，不要运行仓库根目录或旧安装包中的 DLL/EXE。执行：
+
+```powershell
+git pull --ff-only
+powershell -ExecutionPolicy Bypass -File .\build\Build-Release.ps1
+```
+
+然后只运行 `dist\WanLuoArchitectureTools\万落建筑工具启动器.exe`。脚本每次都会清空旧发布目录并从当前提交重新编译，同时用 `build-info.json` 记录提交号和文件哈希。环境要求、版本分组、验证及清理方法见 [从 GitHub 构建与安装最新版本](docs/BUILD_AND_INSTALL.md)。
+
 ## 2026-08-14 更新
 
 - 比例管理严格限定在本次框选对象内处理，取消复杂图纸中的全图重生成，并补充各阶段耗时日志。
@@ -16,7 +27,7 @@
 ## 一、安装与启动
 
 1. 关闭正在运行的插件窗口（AutoCAD 可以保持打开）。
-2. 双击根目录的 `万落建筑工具启动器.exe`。
+2. 双击干净发布目录 `dist\WanLuoArchitectureTools` 中的 `万落建筑工具启动器.exe`。
 3. 选择实际使用的 CAD 平台：启动器可识别 AutoCAD 2014–2026 以及本机检测到的 T20/T30 天正产品，并显示完整产品名和年份。发布包仍须包含相应的 `CadApi\R19`–`R25` 分代组件；缺少时启动器会明确提示，不会用不兼容的 DLL 代替。
 4. 如果 CAD 已经启动，启动器会连接并加载到已有 CAD；不会重复打开同一份 DWG。
 5. 选择 T20 时必须使用 T20 启动项，不要用普通 AutoCAD 打开天正对象，否则天正代理对象可能无法正确发布。

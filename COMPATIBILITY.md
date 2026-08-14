@@ -14,6 +14,16 @@
 
 ## 构建
 
+日常开发和安装使用统一发布脚本。它会检测本机已安装的 AutoCAD（包括非默认路径），从当前 Git 提交重新生成干净的 `dist/WanLuoArchitectureTools`：
+
+```powershell
+.\build\Build-Release.ps1
+```
+
+需要明确分组时可执行 `./build/Build-Release.ps1 -Bands R19,R24,R25`。完整步骤、环境要求和版本校验见 [构建与安装说明](docs/BUILD_AND_INSTALL.md)。
+
+下面的兼容矩阵脚本用于具备全套 Autodesk SDK 的集中发布环境：
+
 1. 将每代 SDK 的 `acmgd.dll`、`acdbmgd.dll`、`accoremgd.dll`、`AdWindows.dll` 放入 `build/AutodeskSdk/Rxx`。
 2. 安装对应 .NET Framework Targeting Pack；R25 另需 .NET 8 SDK。
 3. 执行：

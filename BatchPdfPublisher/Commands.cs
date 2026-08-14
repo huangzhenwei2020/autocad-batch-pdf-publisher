@@ -190,6 +190,7 @@ namespace BatchPdfPublisher
             var tianzhengDimensionIds = new System.Collections.Generic.List<Autodesk.AutoCAD.DatabaseServices.ObjectId>();
             var tianzhengTextIds = new System.Collections.Generic.List<Autodesk.AutoCAD.DatabaseServices.ObjectId>();
             var registeredFrames = new System.Collections.Generic.Dictionary<Autodesk.AutoCAD.DatabaseServices.ObjectId, BatchPdfPublisher.Models.FrameDefinition>();
+            var frameBlocksToSynchronize = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var frameDefinitions = new PublishPlanStore().LoadFrames();
             var tianzhengSettings = TianzhengDimensionSettings.Load();
             var geometryChanged = 0;
@@ -266,6 +267,7 @@ namespace BatchPdfPublisher
                             {
                                 var frameReference = entity as Autodesk.AutoCAD.DatabaseServices.BlockReference;
                                 if (RegisteredFrameScaleService.UpdateScaleAttribute(frameReference, transaction, registeredFrame, targetScale)) changed++;
+                                if (!string.IsNullOrWhiteSpace(registeredFrame.BlockName)) frameBlocksToSynchronize.Add(registeredFrame.BlockName.Trim());
                                 continue;
                             }
                             if (TianzhengScaleService.IsTianzhengObject(entity))
@@ -322,10 +324,26 @@ namespace BatchPdfPublisher
             }
             // Commands are queued in reverse execution order: the last queued
             // command starts first after WLSCALE returns to AutoCAD.
+            QueueFrameAttributeSync(document, frameBlocksToSynchronize);
             if (tianzhengTextIds.Count > 0) TianzhengScaleService.QueueTextAutoAdjust(document, tianzhengTextIds);
             if (tianzhengDimensionIds.Count > 0) TianzhengScaleService.QueueDimensionAutoAdjust(document, tianzhengDimensionIds);
             try { File.AppendAllText(Path.Combine(UserDataPaths.LogsDirectory, "scale-manager.log"), DateTime.Now.ToString("O") + " selection=" + selectedIds.Length + " registeredFrames=" + registeredFrames.Count + " tianzheng=" + tianzhengIds.Count + " dimensions=" + tianzhengDimensionIds.Count + " recognitionMs=" + recognitionMilliseconds + " updateMs=" + objectUpdateMilliseconds + " geometryMs=" + geometryMilliseconds + " totalMs=" + scaleTiming.ElapsedMilliseconds + Environment.NewLine); } catch { }
             editor.WriteMessage("\n比例修改完成：" + changed + " 个对象已转换为 1:" + targetScale + (tianzhengChanged > 0 ? "，其中天正对象 " + tianzhengChanged + " 个、尺寸线已调整 " + geometryChanged + " 个" : string.Empty) + (failed > 0 ? "，" + failed + " 项更新失败（详见 tianzheng-scale.log）。" : "。"));
+        }
+
+        private static void QueueFrameAttributeSync(Document document, System.Collections.Generic.IEnumerable<string> blockNames)
+        {
+            if (document == null || blockNames == null) return;
+            var commands = new System.Text.StringBuilder();
+            foreach (var blockName in blockNames.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                // Attribute synchronization is intentionally queued after the
+                // transaction. ATTSYNC preserves instance values while restoring
+                // positions, visibility and newly changed attribute definitions.
+                commands.Append("_.-ATTSYNC _Name \"").Append(blockName.Replace("\"", string.Empty)).Append("\" ");
+            }
+            if (commands.Length == 0) return;
+            document.SendStringToExecute(commands.ToString(), false, false, false);
         }
 
 
