@@ -36,6 +36,18 @@ namespace CadArchSpec.Stage0.Tests
         }
 
         [Fact]
+        public void LayoutSupportsExtendedAndA4Frames()
+        {
+            var service = new PaperLayoutService();
+            var extended = service.CreateDefault("A1+1/4", true);
+            var a4 = service.CreateDefault("A4", false);
+            Assert.Equal(1051m, extended.PaperWidthMillimeters);
+            Assert.Equal(594m, extended.PaperHeightMillimeters);
+            Assert.Equal(210m, a4.PaperWidthMillimeters);
+            Assert.Equal(297m, a4.PaperHeightMillimeters);
+        }
+
+        [Fact]
         public void RegistryDoesNotTreatUnknownStandardAsApplicable()
         {
             var registry = new InMemoryStandardRegistry();

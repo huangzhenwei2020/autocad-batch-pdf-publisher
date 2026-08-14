@@ -16,6 +16,7 @@ namespace BatchPdfPublisher
     {
         private static PublisherForm _publisherForm;
         private static TianzhengRoomRenameForm _roomRenameForm;
+        private static DoorWindowElevationForm _doorWindowElevationForm;
         private static IList<SheetItem> _catalogSheets;
         private static CatalogSettings _catalogSettings;
         private static Action _catalogDone;
@@ -329,6 +330,45 @@ namespace BatchPdfPublisher
             if (tianzhengDimensionIds.Count > 0) TianzhengScaleService.QueueDimensionAutoAdjust(document, tianzhengDimensionIds);
             try { File.AppendAllText(Path.Combine(UserDataPaths.LogsDirectory, "scale-manager.log"), DateTime.Now.ToString("O") + " selection=" + selectedIds.Length + " registeredFrames=" + registeredFrames.Count + " tianzheng=" + tianzhengIds.Count + " dimensions=" + tianzhengDimensionIds.Count + " recognitionMs=" + recognitionMilliseconds + " updateMs=" + objectUpdateMilliseconds + " geometryMs=" + geometryMilliseconds + " totalMs=" + scaleTiming.ElapsedMilliseconds + Environment.NewLine); } catch { }
             editor.WriteMessage("\n比例修改完成：" + changed + " 个对象已转换为 1:" + targetScale + (tianzhengChanged > 0 ? "，其中天正对象 " + tianzhengChanged + " 个、尺寸线已调整 " + geometryChanged + " 个" : string.Empty) + (failed > 0 ? "，" + failed + " 项更新失败（详见 tianzheng-scale.log）。" : "。"));
+        }
+
+        [CommandMethod("MCLM")]
+        [CommandMethod("WLMCLM")]
+        public void BatchDoorWindowElevations()
+        {
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document == null) return;
+            if (!CadCompatibilityService.IsTianzhengHostLoaded())
+            {
+                Application.ShowAlertDialog("批量门窗立面需要在已加载天正建筑的 AutoCAD 中使用。\r\n\r\n请通过“万落建筑工具启动器”选择天正建筑 + 对应 CAD 版本后重新打开图纸。");
+                return;
+            }
+            var picked = document.Editor.GetEntity(new PromptEntityOptions("\n请选择天正门窗表："));
+            if (picked.Status != PromptStatus.OK) return;
+            DoorWindowScheduleReadResult source;
+            try
+            {
+                using (var transaction = document.Database.TransactionManager.StartTransaction())
+                    source = TianzhengDoorWindowService.Read(transaction.GetObject(picked.ObjectId, OpenMode.ForRead, false));
+            }
+            catch (System.Exception exception)
+            {
+                try { File.AppendAllText(Path.Combine(UserDataPaths.LogsDirectory, "door-window-elevation.log"), DateTime.Now.ToString("O") + " read: " + exception + Environment.NewLine); } catch { }
+                Application.ShowAlertDialog("读取天正门窗表失败：\r\n" + exception.Message + "\r\n\r\n请确认所选对象是由天正“门窗表”命令生成的表格。可把诊断日志发给我继续适配当前天正版本。");
+                return;
+            }
+            try
+            {
+                if (_doorWindowElevationForm != null && !_doorWindowElevationForm.IsDisposed) _doorWindowElevationForm.Close();
+                _doorWindowElevationForm = new DoorWindowElevationForm(document, source);
+                _doorWindowElevationForm.FormClosed += (sender, args) => _doorWindowElevationForm = null;
+                Application.ShowModelessDialog(_doorWindowElevationForm);
+            }
+            catch (System.Exception exception)
+            {
+                try { File.AppendAllText(Path.Combine(UserDataPaths.LogsDirectory, "door-window-elevation.log"), DateTime.Now.ToString("O") + " window: " + exception + Environment.NewLine); } catch { }
+                Application.ShowAlertDialog("门窗表已经读取，但打开门窗立面窗口失败：\r\n" + exception.Message + "\r\n\r\n详细信息已写入 door-window-elevation.log。");
+            }
         }
 
         private static void QueueFrameAttributeSync(Document document, System.Collections.Generic.IEnumerable<string> blockNames)

@@ -143,7 +143,10 @@ foreach ($installation in $installations) {
     }
 }
 
-if (-not $Bands -or $Bands.Count -eq 0) { $Bands = @($available.Keys | Sort-Object) }
+# AutoCAD 2014 (R19) is legacy-only from 2026-08 onward. Keep explicit R19
+# builds possible for source archaeology, but never place it in a normal
+# release unless a maintainer deliberately passes -Bands R19.
+if (-not $Bands -or $Bands.Count -eq 0) { $Bands = @($available.Keys | Where-Object { $_ -ne 'R19' } | Sort-Object) }
 $Bands = @($Bands | ForEach-Object { $_.Trim().ToUpperInvariant() } | Select-Object -Unique)
 foreach ($band in $Bands) {
     if ($band -notin @('R19','R20','R21','R22','R23','R24','R25')) { throw "不支持的 API 组：$band" }

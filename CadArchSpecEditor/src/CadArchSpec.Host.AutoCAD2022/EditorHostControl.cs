@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using CadArchSpec.EditorBridge;
 using CadArchSpec.Host.Contracts;
+using CadArchSpec.Host.Shared;
 using CadArchSpec.RuleEngine;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
@@ -156,7 +157,7 @@ namespace CadArchSpec.Host.AutoCAD2022
                 ShowFailure(new InvalidOperationException("WebView2 进程异常：" + e.ProcessFailedKind))));
         }
 
-        private void OnWebMessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs e)
+        private async void OnWebMessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs e)
         {
             try
             {
@@ -193,6 +194,15 @@ namespace CadArchSpec.Host.AutoCAD2022
                         break;
                     case "review.run":
                         RunNationalFoundationReview(message.Payload);
+                        break;
+                    case "cad.frame.pick":
+                        PostMessage("cad.framePicked", await CadDrawingExchange.PickFrameAndTextAreaAsync());
+                        break;
+                    case "cad.text.read":
+                        PostMessage("cad.textRead", await CadDrawingExchange.ReadSelectedTextAsync((string)message.Payload["sectionId"]));
+                        break;
+                    case "cad.section.insert":
+                        PostMessage("cad.sectionInserted", await CadDrawingExchange.InsertSectionAsync(message.Payload));
                         break;
                 }
             }

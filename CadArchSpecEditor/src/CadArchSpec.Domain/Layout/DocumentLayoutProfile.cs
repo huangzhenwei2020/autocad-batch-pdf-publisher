@@ -9,6 +9,10 @@ namespace CadArchSpec.Domain.Layout
         public bool Landscape { get; set; } = true;
         public decimal PaperWidthMillimeters { get; set; } = 841m;
         public decimal PaperHeightMillimeters { get; set; } = 594m;
+        public decimal DrawingScale { get; set; } = 100m;
+        public string FrameBlockName { get; set; } = string.Empty;
+        public string FrameHandle { get; set; } = string.Empty;
+        public string DrawingPath { get; set; } = string.Empty;
         public decimal MarginLeftMillimeters { get; set; } = 25m;
         public decimal MarginTopMillimeters { get; set; } = 20m;
         public decimal MarginRightMillimeters { get; set; } = 190m;

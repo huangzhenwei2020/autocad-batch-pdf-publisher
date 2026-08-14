@@ -4,7 +4,7 @@
 
 | 插件目录 | AutoCAD | 运行时 | 编译 SDK |
 |---|---:|---|---|
-| `CadApi/R19` | 2014 | .NET Framework 4.0 | ObjectARX 2014 |
+| `CadApi/R19` | 2014 | .NET Framework 4.0 | ObjectARX 2014（停止更新，仅保留历史构建入口） |
 | `CadApi/R20` | 2015–2016 | .NET Framework 4.5 | ObjectARX 2015 |
 | `CadApi/R21` | 2017 | .NET Framework 4.6 | ObjectARX 2017 |
 | `CadApi/R22` | 2018 | .NET Framework 4.6 | ObjectARX 2018 |
@@ -20,7 +20,7 @@
 .\build\Build-Release.ps1
 ```
 
-需要明确分组时可执行 `./build/Build-Release.ps1 -Bands R19,R24,R25`。完整步骤、环境要求和版本校验见 [构建与安装说明](docs/BUILD_AND_INSTALL.md)。
+常规发布不再自动构建 R19。需要明确分组时可执行 `./build/Build-Release.ps1 -Bands R24,R25`。完整步骤、环境要求和版本校验见 [构建与安装说明](docs/BUILD_AND_INSTALL.md)。
 
 下面的兼容矩阵脚本用于具备全套 Autodesk SDK 的集中发布环境：
 

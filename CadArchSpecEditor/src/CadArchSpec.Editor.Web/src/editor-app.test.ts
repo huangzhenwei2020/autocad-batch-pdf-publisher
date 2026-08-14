@@ -4,10 +4,15 @@ import {
   applyBuildingTemplate,
   archiveReviewResult,
   createBlankWorkspace,
+  defaultDesignStandards,
   createInitialWorkspace,
   getReviewFingerprint,
   getWorkspaceIssues,
+  mergeDesignStandards,
+  normalizeWorkspace,
+  plainTextToSectionDocument,
   recordFieldChange,
+  sectionDocumentToPlainText,
   updateReviewIssueAction,
 } from "./editor-model";
 import {
@@ -295,6 +300,60 @@ describe("architecture specification editor", () => {
     const message = createProjectMessage("review.run", { workspace });
     expect(message.type).toBe("review.run");
     expect(message.payload.workspace).toBe(workspace);
+  });
+
+  it("persists the CAD frame and text editing regions", () => {
+    const workspace = createInitialWorkspace();
+    const restored = normalizeWorkspace({
+      ...workspace,
+      cadLayout: {
+        ...workspace.cadLayout!,
+        paperName: "A1+1/4",
+        paperWidthMillimeters: 1051,
+        frameBlockName: "A1_BPP_说明",
+        frameHandle: "2AF",
+        textMarginsMillimeters: { left: 25, top: 20, right: 190, bottom: 20 },
+      },
+    });
+    expect(restored.cadLayout?.paperName).toBe("A1+1/4");
+    expect(restored.cadLayout?.frameHandle).toBe("2AF");
+    expect(restored.cadLayout?.textMarginsMillimeters.right).toBe(190);
+    expect(restored.cadLayout?.columnCount).toBe(2);
+  });
+
+  it("provides editable national and local standard presets", () => {
+    const standards = defaultDesignStandards();
+    expect(standards.some((item) => item.level === "国家" && item.code === "GB 55031-2022")).toBe(true);
+    expect(standards.some((item) => item.level === "地方" && item.region === "广西")).toBe(true);
+    expect(standards.some((item) => item.buildingTypes.includes("医疗建筑") && item.code === "GB 51039-2014")).toBe(true);
+    expect(standards.some((item) => item.buildingTypes.includes("宿舍建筑") && item.code === "GB 55025-2022")).toBe(true);
+    expect(standards.some((item) => item.buildingTypes.includes("既有建筑改造") && item.code === "GB 55022-2021")).toBe(true);
+  });
+
+  it("merges new presets into existing projects without losing user standards", () => {
+    const existing = defaultDesignStandards()[0];
+    const merged = mergeDesignStandards([
+      { ...existing, enabled: false, note: "用户备注" },
+      { id: "custom-1", code: "Q/WL 1", name: "企业标准", level: "自定义", region: "", buildingTypes: ["办公建筑"], enabled: true, isPreset: false, note: "", sourceUrl: "" },
+    ]);
+    expect(merged.find((item) => item.id === existing.id)?.enabled).toBe(false);
+    expect(merged.find((item) => item.id === existing.id)?.note).toBe("用户备注");
+    expect(merged.some((item) => item.id === "gb-55025-2022")).toBe(true);
+    expect(merged.some((item) => item.id === "custom-1")).toBe(true);
+  });
+
+  it("converts CAD plain text to editable paragraphs and back", () => {
+    const document = plainTextToSectionDocument("设计依据", "第一段\n第二段");
+    const text = sectionDocumentToPlainText(document);
+    expect(text).toContain("设计依据");
+    expect(text).toContain("第一段");
+    expect(text).toContain("第二段");
+  });
+
+  it("creates CAD frame, read and insert bridge messages", () => {
+    expect(createProjectMessage("cad.frame.pick").type).toBe("cad.frame.pick");
+    expect(createProjectMessage("cad.text.read", { sectionId: "fire" }).payload.sectionId).toBe("fire");
+    expect(createProjectMessage("cad.section.insert", { plainText: "说明" }).type).toBe("cad.section.insert");
   });
 
   it("archives review results without changing the project data fingerprint", () => {

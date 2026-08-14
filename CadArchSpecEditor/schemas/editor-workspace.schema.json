@@ -34,6 +34,11 @@
         "交通建筑",
         "文体建筑",
         "工业建筑",
+        "宿舍建筑",
+        "旅馆建筑",
+        "养老建筑",
+        "停车建筑",
+        "既有建筑改造",
         "其他建筑"
       ]
     },
@@ -94,6 +99,13 @@
         "$ref": "#/$defs/architectureTable"
       }
     },
+    "cadLayout": {
+      "$ref": "#/$defs/cadLayout"
+    },
+    "standards": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/designStandard" }
+    },
     "fields": {
       "type": "array",
       "items": {
@@ -108,6 +120,66 @@
     }
   },
   "$defs": {
+    "designStandard": {
+      "type": "object",
+      "required": ["id", "code", "name", "level", "region", "buildingTypes", "enabled", "isPreset", "note", "sourceUrl"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "code": { "type": "string" },
+        "name": { "type": "string", "minLength": 1 },
+        "level": { "enum": ["国家", "地方", "自定义"] },
+        "region": { "type": "string" },
+        "buildingTypes": { "type": "array", "items": { "type": "string" } },
+        "enabled": { "type": "boolean" },
+        "isPreset": { "type": "boolean" },
+        "note": { "type": "string" },
+        "sourceUrl": { "type": "string" }
+      }
+    },
+    "cadLayout": {
+      "type": "object",
+      "required": ["paperName", "landscape", "paperWidthMillimeters", "paperHeightMillimeters", "drawingScale", "bodyTextHeightMillimeters", "columnCount", "columnGapMillimeters", "frameBlockName", "frameHandle", "drawingPath", "frameArea", "textArea", "textMarginsMillimeters"],
+      "additionalProperties": false,
+      "properties": {
+        "paperName": { "type": "string", "minLength": 1 },
+        "landscape": { "type": "boolean" },
+        "paperWidthMillimeters": { "type": "number", "exclusiveMinimum": 0 },
+        "paperHeightMillimeters": { "type": "number", "exclusiveMinimum": 0 },
+        "drawingScale": { "type": "number", "exclusiveMinimum": 0 },
+        "bodyTextHeightMillimeters": { "type": "number", "exclusiveMinimum": 0 },
+        "columnCount": { "type": "integer", "minimum": 1, "maximum": 3 },
+        "columnGapMillimeters": { "type": "number", "minimum": 0 },
+        "frameBlockName": { "type": "string" },
+        "frameHandle": { "type": "string" },
+        "drawingPath": { "type": "string" },
+        "frameArea": { "$ref": "#/$defs/cadRectangle" },
+        "textArea": { "$ref": "#/$defs/cadRectangle" },
+        "textMarginsMillimeters": { "$ref": "#/$defs/cadMargins" }
+      }
+    },
+    "cadRectangle": {
+      "type": "object",
+      "required": ["minX", "minY", "maxX", "maxY"],
+      "additionalProperties": false,
+      "properties": {
+        "minX": { "type": "number" },
+        "minY": { "type": "number" },
+        "maxX": { "type": "number" },
+        "maxY": { "type": "number" }
+      }
+    },
+    "cadMargins": {
+      "type": "object",
+      "required": ["left", "top", "right", "bottom"],
+      "additionalProperties": false,
+      "properties": {
+        "left": { "type": "number", "minimum": 0 },
+        "top": { "type": "number", "minimum": 0 },
+        "right": { "type": "number", "minimum": 0 },
+        "bottom": { "type": "number", "minimum": 0 }
+      }
+    },
     "architectureTable": {
       "type": "object",
       "required": ["tableId", "schemaVersion", "tableType", "tableNumber", "title", "repeatHeader", "allowSplitAcrossPages", "columns", "rows", "formulaAudits"],

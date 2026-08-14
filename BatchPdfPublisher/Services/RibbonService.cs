@@ -73,6 +73,7 @@ namespace BatchPdfPublisher.Services
                 source.Items.Add(CreateButton("楼梯大样（LTDY）", "WLLTDY ", "stair"));
                 source.Items.Add(CreateButton("制图标准（BZS）", "BZS ", "standard"));
                 source.Items.Add(CreateButton("比例管理（BL1）", "BL1 ", "scale"));
+                source.Items.Add(CreateButton("门窗立面（MCLM）", "MCLM ", "doorwindow"));
                 source.Items.Add(CreateButton("房间改名（FJGM）", "FJGM ", "room"));
                 tab.Panels.Add(panel);
                 ribbon.Tabs.Add(tab);
@@ -93,11 +94,12 @@ namespace BatchPdfPublisher.Services
             return tab != null
                 && tab.Panels.Count > 0
                 && tab.Panels[0].Source != null
-                && tab.Panels[0].Source.Items.Count == 10
+                && tab.Panels[0].Source.Items.Count == 11
                 && tab.Panels[0].Source.Items[0].Text.IndexOf("BPP", StringComparison.OrdinalIgnoreCase) >= 0
                 && tab.Panels[0].Source.Items[7].Text.IndexOf("BZS", StringComparison.OrdinalIgnoreCase) >= 0
                 && tab.Panels[0].Source.Items[8].Text.IndexOf("BL1", StringComparison.OrdinalIgnoreCase) >= 0
-                && tab.Panels[0].Source.Items[9].Text.IndexOf("FJGM", StringComparison.OrdinalIgnoreCase) >= 0;
+                && tab.Panels[0].Source.Items[9].Text.IndexOf("MCLM", StringComparison.OrdinalIgnoreCase) >= 0
+                && tab.Panels[0].Source.Items[10].Text.IndexOf("FJGM", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private static void Trace(Exception exception)
@@ -144,6 +146,8 @@ namespace BatchPdfPublisher.Services
                             ? "把所选对象转换到指定图纸比例，或按目标比例连续刷对象。"
                         : command.Trim().Equals("FJGM", StringComparison.OrdinalIgnoreCase)
                             ? "以一个天正房间为样板，仅批量修改原名称和使用面积都相同的房间。"
+                        : command.Trim().Equals("MCLM", StringComparison.OrdinalIgnoreCase)
+                            ? "读取天正门窗表，校验编号和洞口尺寸，并批量设置门窗立面分格与开启参数。"
                             : "打开工程 DWG 管理、图框扫描和批量 PDF 发布面板。";
             return new RibbonButton
             {
@@ -181,6 +185,14 @@ namespace BatchPdfPublisher.Services
                 group.Children.Add(new GeometryDrawing(null, pen, new RectangleGeometry(new WpfRect(2, 3, 12, 10))));
                 group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(8, 3), new WpfPoint(8, 8))));
                 group.Children.Add(new GeometryDrawing(brush, null, new EllipseGeometry(new WpfPoint(8, 10), 2.2, 2.2)));
+            }
+            else if (kind == "doorwindow")
+            {
+                group.Children.Add(new GeometryDrawing(null, pen, new RectangleGeometry(new WpfRect(2, 2, 12, 12))));
+                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(8, 2), new WpfPoint(8, 14))));
+                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(2, 8), new WpfPoint(14, 8))));
+                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(2, 14), new WpfPoint(8, 8))));
+                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(14, 14), new WpfPoint(8, 8))));
             }
             else if (kind == "spec")
             {

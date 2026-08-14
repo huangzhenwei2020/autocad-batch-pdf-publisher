@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from "react";
 import {
   applyBuildingTemplate,
   createReviewArchiveRecord,
@@ -6,9 +6,12 @@ import {
   getReviewFingerprint,
   getWorkspaceIssues,
   normalizeWorkspace,
+  plainTextToSectionDocument,
   recordFieldChange,
+  sectionDocumentToPlainText,
   updateReviewIssueAction,
   type EditorWorkspace,
+  type CadLayoutProfile,
   type FieldChangeEntry,
   type FieldSourceType,
   type ProjectField,
@@ -39,6 +42,8 @@ import {
 } from "./review-comparison";
 import { ReviewSignoffSettings } from "./review-signoff";
 import { ProfessionalTableEditor } from "./professional-table-editor";
+import { createProfessionalTableTemplate } from "./professional-tables";
+import { StandardLibraryDialog } from "./standard-library-dialog";
 
 export const protocolVersion = 1;
 const storageKey = "cad-arch-spec-editor.workspace.v1";
@@ -95,7 +100,10 @@ export function createProjectMessage(
     | "project.historyList"
     | "project.historyLoad"
     | "project.historyRestore"
-    | "review.run",
+    | "review.run"
+    | "cad.frame.pick"
+    | "cad.text.read"
+    | "cad.section.insert",
   payload: Record<string, unknown> = {},
 ) {
   return { protocolVersion, messageId: createMessageId(), type, payload };
@@ -262,11 +270,20 @@ export function ArchitectureSpecEditor() {
   const [reviewComparison, setReviewComparison] = useState<ReviewComparisonResult | null>(null);
   const [signoffOpen, setSignoffOpen] = useState(false);
   const [tablesOpen, setTablesOpen] = useState(false);
+  const [tableEditTargetId, setTableEditTargetId] = useState("");
+  const [standardsOpen, setStandardsOpen] = useState(false);
+  const [cadLayoutOpen, setCadLayoutOpen] = useState(false);
+  const [cadBusy, setCadBusy] = useState(false);
+  const [previewZoomPercent, setPreviewZoomPercent] = useState(100);
+  const [isCanvasPanning, setIsCanvasPanning] = useState(false);
+  const [tableToInsert, setTableToInsert] = useState("");
   const [reviewRunning, setReviewRunning] = useState(false);
   const [editingFieldPath, setEditingFieldPath] = useState<string | null>(null);
   const autoSaveTimer = useRef<number | null>(null);
   const workspaceRef = useRef(workspace);
   const pendingReviewWorkspace = useRef<EditorWorkspace | null>(null);
+  const canvasRef = useRef<HTMLDivElement | null>(null);
+  const panRef = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
 
   useEffect(() => {
     workspaceRef.current = workspace;
@@ -289,6 +306,92 @@ export function ArchitectureSpecEditor() {
   }, [workspace, ruleReview]);
   const confirmedCount = workspace.fields.filter((field) => field.state === "confirmed").length;
   const completeness = Math.round((confirmedCount / workspace.fields.length) * 100);
+  const cadLayout = workspace.cadLayout;
+  const paperWidth = Math.max(1, cadLayout?.paperWidthMillimeters ?? 841);
+  const paperHeight = Math.max(1, cadLayout?.paperHeightMillimeters ?? 594);
+  const margins = cadLayout?.textMarginsMillimeters ?? { left: 25, top: 20, right: 190, bottom: 20 };
+  const previewPixelsPerMillimeter = Math.max(0.05, previewZoomPercent / 100);
+  const bodyTextHeight = Math.max(1, cadLayout?.bodyTextHeightMillimeters ?? 3.5);
+  const columnCount = Math.max(1, Math.min(3, Math.round(cadLayout?.columnCount ?? 2)));
+  const columnGap = Math.max(0, cadLayout?.columnGapMillimeters ?? 12);
+  const paperStyle = {
+    width: `${paperWidth * previewPixelsPerMillimeter}px`,
+    height: `${paperHeight * previewPixelsPerMillimeter}px`,
+    minWidth: `${paperWidth * previewPixelsPerMillimeter}px`,
+    minHeight: `${paperHeight * previewPixelsPerMillimeter}px`,
+    "--paper-mm": `${previewPixelsPerMillimeter}px`,
+    "--body-text-mm": bodyTextHeight,
+    "--column-count": columnCount,
+    "--column-gap-mm": columnGap,
+  } as CSSProperties;
+  const canvasStageStyle = {
+    width: `${paperWidth * previewPixelsPerMillimeter + 800}px`,
+    height: `${paperHeight * previewPixelsPerMillimeter + 600}px`,
+  } as CSSProperties;
+  const textAreaStyle = {
+    left: `${Math.max(0, margins.left) * previewPixelsPerMillimeter}px`,
+    top: `${Math.max(0, margins.top) * previewPixelsPerMillimeter}px`,
+    right: `${Math.max(0, margins.right) * previewPixelsPerMillimeter}px`,
+    bottom: `${Math.max(0, margins.bottom) * previewPixelsPerMillimeter}px`,
+  } as CSSProperties;
+
+  const fitPaperInView = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const availableWidth = Math.max(1, canvas.clientWidth - 48);
+    const availableHeight = Math.max(1, canvas.clientHeight - 48);
+    const next = Math.max(5, Math.min(2000, Math.floor(Math.min(availableWidth / paperWidth, availableHeight / paperHeight) * 100)));
+    setPreviewZoomPercent(next);
+    requestAnimationFrame(() => {
+      canvas.scrollLeft = Math.max(0, (canvas.scrollWidth - canvas.clientWidth) / 2);
+      canvas.scrollTop = Math.max(0, (canvas.scrollHeight - canvas.clientHeight) / 2);
+    });
+  };
+
+  const handleCanvasWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const paper = canvas.querySelector<HTMLElement>(".cad-paper-frame");
+    if (!paper) return;
+    const oldScale = previewZoomPercent / 100;
+    const factor = Math.exp(-event.deltaY * 0.0025);
+    const nextPercent = Math.max(5, Math.min(2000, previewZoomPercent * factor));
+    const nextScale = nextPercent / 100;
+    const paperRect = paper.getBoundingClientRect();
+    const localX = (event.clientX - paperRect.left) / oldScale;
+    const localY = (event.clientY - paperRect.top) / oldScale;
+    setPreviewZoomPercent(nextPercent);
+    requestAnimationFrame(() => {
+      canvas.scrollLeft += localX * (nextScale - oldScale);
+      canvas.scrollTop += localY * (nextScale - oldScale);
+    });
+  };
+
+  const handleCanvasPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 1) return;
+    event.preventDefault();
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    canvas.setPointerCapture(event.pointerId);
+    panRef.current = { x: event.clientX, y: event.clientY, left: canvas.scrollLeft, top: canvas.scrollTop };
+    setIsCanvasPanning(true);
+  };
+
+  const handleCanvasPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const canvas = canvasRef.current;
+    const pan = panRef.current;
+    if (!canvas || !pan) return;
+    canvas.scrollLeft = pan.left - (event.clientX - pan.x);
+    canvas.scrollTop = pan.top - (event.clientY - pan.y);
+  };
+
+  const stopCanvasPan = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!panRef.current) return;
+    panRef.current = null;
+    setIsCanvasPanning(false);
+    try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* capture may already be released */ }
+  };
 
   useEffect(() => {
     const bridge = window.chrome?.webview;
@@ -363,9 +466,43 @@ export function ArchitectureSpecEditor() {
         setReviewRunning(false);
         setRuleReportOpen(true);
         setProjectNotice("预审完成，记录已加入项目；请保存项目文件");
+      } else if (event.data.type === "cad.framePicked") {
+        const layout = payload as unknown as CadLayoutProfile;
+        setWorkspace((current) => ({ ...current, cadLayout: layout }));
+        setSaveState("dirty");
+        setCadBusy(false);
+        setCadLayoutOpen(true);
+        setProjectNotice(`已采用 ${layout.paperName} 图框和 CAD 文字编辑区`);
+      } else if (event.data.type === "cad.textRead") {
+        const sectionId = String(payload.sectionId ?? "");
+        const importedText = String(payload.text ?? "").trim();
+        setWorkspace((current) => ({
+          ...current,
+          sections: current.sections.map((section) => {
+            if (section.id !== sectionId || !importedText) return section;
+            const imported = plainTextToSectionDocument(section.title, importedText);
+            const existingContent = Array.isArray(section.content.content) ? section.content.content : [];
+            const importedContent = Array.isArray(imported.content) ? imported.content.slice(1) : [];
+            return {
+              ...section,
+              content: { ...section.content, content: [...existingContent, ...importedContent] },
+              reviewState: "ready",
+            };
+          }),
+        }));
+        setEditorRevision((revision) => revision + 1);
+        setSaveState("dirty");
+        setCadBusy(false);
+        setProjectNotice(`已从 CAD 读取 ${Number(payload.count ?? 0)} 个文字对象`);
+      } else if (event.data.type === "cad.sectionInserted") {
+        setCadBusy(false);
+        const overflow = payload.overflow === true;
+        setProjectNotice(overflow ? "已插入 CAD，但文字高度超出编辑区，请调整或分页" : "当前章节已插入 CAD 文字编辑区");
+        if (overflow) window.alert("文字已插入，但内容超过当前图框的文字编辑区，请缩减内容或后续分页。");
       } else if (event.data.type === "project.error") {
         setSnapshotLoading(false);
         setReviewRunning(false);
+        setCadBusy(false);
         window.alert(`项目操作失败：${String(payload.message ?? "未知错误")}`);
       }
     };
@@ -455,7 +592,10 @@ export function ArchitectureSpecEditor() {
       | "project.historyList"
       | "project.historyLoad"
       | "project.historyRestore"
-      | "review.run",
+      | "review.run"
+      | "cad.frame.pick"
+      | "cad.text.read"
+      | "cad.section.insert",
     payload: Record<string, unknown> = {},
   ) => window.chrome?.webview?.postMessage(createProjectMessage(type, payload));
 
@@ -502,6 +642,44 @@ export function ArchitectureSpecEditor() {
     pendingReviewWorkspace.current = workspace;
     setReviewRunning(true);
     postProjectMessage("review.run", { workspace });
+  };
+
+  const requireCadHost = () => {
+    if (window.chrome?.webview) return true;
+    window.alert("此功能需要在 AutoCAD 的建筑设计说明助手面板中使用。");
+    return false;
+  };
+
+  const pickCadFrame = () => {
+    if (!requireCadHost() || cadBusy) return;
+    setCadBusy(true);
+    setProjectNotice("请在 CAD 中拾取图框，并框定说明文字编辑区…");
+    postProjectMessage("cad.frame.pick");
+  };
+
+  const readTextFromCad = () => {
+    if (!requireCadHost() || cadBusy) return;
+    setCadBusy(true);
+    setProjectNotice("请在 CAD 中框选需要导入的文字…");
+    postProjectMessage("cad.text.read", { sectionId: selectedSectionId });
+  };
+
+  const insertCurrentSectionToCad = () => {
+    if (!requireCadHost() || cadBusy) return;
+    const layout = workspace.cadLayout;
+    if (!layout?.frameHandle) {
+      setCadLayoutOpen(true);
+      window.alert("请先打开 CAD 版面并拾取图框、框定文字编辑区。");
+      return;
+    }
+    setCadBusy(true);
+    setProjectNotice("正在把当前章节插入 CAD…");
+    postProjectMessage("cad.section.insert", {
+      sectionId: selectedSection.id,
+      sectionTitle: selectedSection.title,
+      plainText: sectionDocumentToPlainText(selectedSection.content),
+      cadLayout: layout,
+    });
   };
 
   const openArchivedReview = (record: ReviewArchiveRecord) => {
@@ -634,6 +812,27 @@ export function ArchitectureSpecEditor() {
     }
   };
 
+  const insertSelectedOrDefaultTable = () => {
+    let table = (workspace.tables ?? []).find((item) => item.tableId === tableToInsert)
+      ?? (workspace.tables ?? [])[0];
+    if (!table) {
+      table = createProfessionalTableTemplate("technicalEconomicIndicators", "表1");
+      changeWorkspace((current) => ({ ...current, tables: [...(current.tables ?? []), table!] }));
+      setTableToInsert(table.tableId);
+    }
+    editorHandle?.insertTable(table);
+    setProjectNotice(`已插入“${table.title}”`);
+  };
+
+  const requireSelectedTable = (action: () => boolean, message: string) => {
+    if (!action()) window.alert(message);
+  };
+
+  const openSelectedTableEditor = (tableId = editorHandle?.selectedTableId() ?? "") => {
+    setTableEditTargetId(tableId || tableToInsert || (workspace.tables ?? [])[0]?.tableId || "");
+    setTablesOpen(true);
+  };
+
   const handleReplaceAll = () => {
     const count = editorHandle?.replaceAll(searchText, replacementText) ?? 0;
     if (count === 0 && searchText) {
@@ -670,9 +869,13 @@ export function ArchitectureSpecEditor() {
           <button className="button" onClick={handleNewProject}>新建</button>
           <button className="button" onClick={() => window.chrome?.webview ? postProjectMessage("project.open") : handleReset()}>打开</button>
           <button className="button" onClick={() => setConditionsOpen(true)}>项目条件</button>
+          <button className="button" onClick={() => setCadLayoutOpen(true)}>CAD 版面</button>
+          <button className="button" disabled={cadBusy} onClick={readTextFromCad}>从 CAD 获取文字</button>
+          <button className="button" disabled={cadBusy} onClick={insertCurrentSectionToCad}>插入当前章节</button>
           <button className="button" onClick={() => setTablesOpen(true)}>
             专业表格{workspace.tables?.length ? ` (${workspace.tables.length})` : ""}
           </button>
+          <button className="button" onClick={() => setStandardsOpen(true)}>规范库</button>
           <button className="button" onClick={() => setHistoryOpen(true)}>变更记录</button>
           <button className="button" onClick={openVersionHistory}>版本历史</button>
           <button className="button" disabled={reviewRunning} onClick={runFoundationReview}>
@@ -732,6 +935,11 @@ export function ArchitectureSpecEditor() {
             <option>交通建筑</option>
             <option>文体建筑</option>
             <option>工业建筑</option>
+            <option>宿舍建筑</option>
+            <option>旅馆建筑</option>
+            <option>养老建筑</option>
+            <option>停车建筑</option>
+            <option>既有建筑改造</option>
           </select>
         </label>
         <label>
@@ -806,7 +1014,9 @@ export function ArchitectureSpecEditor() {
             </div>
             <div className="toolbar-group">
               <button onClick={() => editorHandle?.command(editorCommands.paragraph)}>正文</button>
-              <button onClick={() => editorHandle?.command(editorCommands.heading2)}>标题</button>
+              <button title="章标题" onClick={() => editorHandle?.command(editorCommands.heading1)}>章标题</button>
+              <button title="一级条目标题" onClick={() => editorHandle?.command(editorCommands.heading2)}>一级标题</button>
+              <button title="二级条目标题" onClick={() => editorHandle?.command(editorCommands.heading3)}>二级标题</button>
               <button className="bold-button" onClick={() => editorHandle?.command(editorCommands.bold)}>B</button>
               <button onClick={() => editorHandle?.command(editorCommands.orderedList)}>1.</button>
               <button onClick={() => editorHandle?.command(editorCommands.bulletList)}>•</button>
@@ -819,13 +1029,19 @@ export function ArchitectureSpecEditor() {
                 ))}
               </select>
               <button onClick={insertSelectedField}>插入字段</button>
-              <button
-                onClick={() =>
-                  editorHandle?.insertStandard("GB 55031-2022", "民用建筑通用规范")
-                }
-              >
-                插入规范
-              </button>
+            </div>
+            <div className="toolbar-group insert-group">
+              <select value={tableToInsert} onChange={(event) => setTableToInsert(event.target.value)}>
+                <option value="">选择专业表格</option>
+                {(workspace.tables ?? []).map((table) => <option key={table.tableId} value={table.tableId}>{table.tableNumber} {table.title}</option>)}
+              </select>
+              <button onClick={insertSelectedOrDefaultTable}>插入表格</button>
+              <button title="先单击正文中的表格" onClick={() => requireSelectedTable(() => editorHandle?.resizeSelectedTable(-10) ?? false, "请先单击选中正文中的表格。")}>缩小表格</button>
+              <button title="先单击正文中的表格" onClick={() => requireSelectedTable(() => editorHandle?.resizeSelectedTable(10) ?? false, "请先单击选中正文中的表格。")}>放大表格</button>
+              <button title="也可双击正文表格" onClick={() => openSelectedTableEditor()}>编辑表格</button>
+              <button title="先单击正文中的表格" onClick={() => requireSelectedTable(() => editorHandle?.deleteSelectedTable() ?? false, "请先单击选中正文中的表格。")}>删除表格</button>
+              <button onClick={() => openSelectedTableEditor("")}>表格库</button>
+              <button onClick={() => setStandardsOpen(true)}>插入/编辑规范</button>
             </div>
           </div>
 
@@ -850,29 +1066,49 @@ export function ArchitectureSpecEditor() {
             </span>
           </div>
 
-          <div className="document-scroll">
-            <article className="paper">
-              <div className="paper-heading">
-                <span>第 {selectedSection.number} 章</span>
-                <strong>{selectedSection.title}</strong>
+          <div
+            ref={canvasRef}
+            className={`document-scroll cad-canvas ${isCanvasPanning ? "is-panning" : ""}`}
+            onWheel={handleCanvasWheel}
+            onPointerDown={handleCanvasPointerDown}
+            onPointerMove={handleCanvasPointerMove}
+            onPointerUp={stopCanvasPan}
+            onPointerCancel={stopCanvasPan}
+            onAuxClick={(event) => event.preventDefault()}
+          >
+            <div className="canvas-navigation">
+              <button className="button compact" onClick={fitPaperInView}>范围缩放</button>
+              <span>滚轮缩放 · 中键平移</span>
+            </div>
+            <div className="canvas-stage" style={canvasStageStyle}>
+              <div className="cad-paper-frame" style={paperStyle}>
+                <span className="frame-zone-label">图框区 · {cadLayout?.paperName ?? "A1"}</span>
+                <article className="paper" style={textAreaStyle}>
+                  <span className="text-zone-label">文字编辑区</span>
+                  <div className="paper-heading">
+                    <span>第 {selectedSection.number} 章</span>
+                    <strong>{selectedSection.title}</strong>
+                  </div>
+                  <ProseMirrorEditor
+                    key={`${selectedSection.id}:${editorRevision}`}
+                    sectionId={`${selectedSection.id}:${editorRevision}`}
+                    content={selectedSection.content}
+                    onReady={setEditorHandle}
+                    onEditTable={(tableId) => openSelectedTableEditor(tableId)}
+                    onChange={(content) =>
+                      changeWorkspace((current) => ({
+                        ...current,
+                        sections: current.sections.map((section) =>
+                          section.id === selectedSection.id
+                            ? { ...section, content, reviewState: "ready" }
+                            : section,
+                        ),
+                      }))
+                    }
+                  />
+                </article>
               </div>
-              <ProseMirrorEditor
-                key={`${selectedSection.id}:${editorRevision}`}
-                sectionId={`${selectedSection.id}:${editorRevision}`}
-                content={selectedSection.content}
-                onReady={setEditorHandle}
-                onChange={(content) =>
-                  changeWorkspace((current) => ({
-                    ...current,
-                    sections: current.sections.map((section) =>
-                      section.id === selectedSection.id
-                        ? { ...section, content, reviewState: "ready" }
-                        : section,
-                    ),
-                  }))
-                }
-              />
-            </article>
+            </div>
           </div>
         </section>
 
@@ -1098,13 +1334,123 @@ export function ArchitectureSpecEditor() {
         <ProfessionalTableEditor
           value={workspace.tables ?? []}
           fields={workspace.fields}
+          selectedTableId={tableEditTargetId}
           onSave={(tables) => {
+            const synchronized = editorHandle?.synchronizeTables(tables) ?? 0;
             changeWorkspace((current) => ({ ...current, tables }));
-            setProjectNotice(`已保存 ${tables.length} 张专业表格，请保存项目文件`);
+            setProjectNotice(`已保存 ${tables.length} 张专业表格${synchronized ? `，并更新正文中 ${synchronized} 处` : ""}，请保存项目文件`);
             setTablesOpen(false);
+            setTableEditTargetId("");
           }}
-          onClose={() => setTablesOpen(false)}
+          onClose={() => { setTablesOpen(false); setTableEditTargetId(""); }}
         />
+      )}
+
+      {standardsOpen && (
+        <StandardLibraryDialog
+          value={workspace.standards ?? []}
+          buildingType={workspace.buildingType}
+          location={workspace.location}
+          onInsert={(selectedStandards, standards) => {
+            changeWorkspace((current) => ({ ...current, standards }));
+            editorHandle?.insertStandards(selectedStandards.map((standard) => ({ code: standard.code, name: standard.name })));
+            setStandardsOpen(false);
+          }}
+          onSave={(standards) => {
+            changeWorkspace((current) => ({ ...current, standards }));
+            setProjectNotice(`规范库已保存，共 ${standards.length} 条`);
+            setStandardsOpen(false);
+          }}
+          onClose={() => setStandardsOpen(false)}
+        />
+      )}
+
+      {cadLayoutOpen && (
+        <div className="dialog-backdrop" onMouseDown={() => setCadLayoutOpen(false)}>
+          <section className="settings-dialog cad-layout-dialog" onMouseDown={(event) => event.stopPropagation()}>
+            <header>
+              <div>
+                <span className="eyebrow">DWG 双向排版</span>
+                <h2>CAD 图框与文字编辑区</h2>
+              </div>
+              <button className="dialog-close" onClick={() => setCadLayoutOpen(false)}>×</button>
+            </header>
+            <div className="cad-layout-summary">
+              <div><span>纸张</span><strong>{cadLayout?.paperName ?? "未拾取"}</strong></div>
+              <div><span>实际尺寸</span><strong>{paperWidth} × {paperHeight} mm</strong></div>
+              <div><span>图框块</span><strong>{cadLayout?.frameBlockName || "未拾取"}</strong></div>
+              <div><span>图框 Handle</span><strong>{cadLayout?.frameHandle || "—"}</strong></div>
+              <div><span>正文</span><strong>{bodyTextHeight} mm</strong></div>
+              <div><span>分栏</span><strong>{columnCount} 栏 / 栏间 {columnGap} mm</strong></div>
+            </div>
+            <div className="form-grid cad-layout-fields">
+              <label>
+                <span>出图比例（1:N）</span>
+                <input
+                  type="number"
+                  min="0.001"
+                  step="1"
+                  value={cadLayout?.drawingScale ?? 100}
+                  onChange={(event) => changeWorkspace((current) => ({
+                    ...current,
+                    cadLayout: { ...current.cadLayout!, drawingScale: Math.max(0.001, Number(event.target.value) || 1) },
+                  }))}
+                />
+              </label>
+              <label>
+                <span>正文纸面字高（mm）</span>
+                <input
+                  type="number"
+                  min="1"
+                  step="0.5"
+                  value={cadLayout?.bodyTextHeightMillimeters ?? 3.5}
+                  onChange={(event) => changeWorkspace((current) => ({
+                    ...current,
+                    cadLayout: { ...current.cadLayout!, bodyTextHeightMillimeters: Math.max(1, Number(event.target.value) || 3.5) },
+                  }))}
+                />
+              </label>
+              <label>
+                <span>文字分栏</span>
+                <select
+                  value={columnCount}
+                  onChange={(event) => changeWorkspace((current) => ({
+                    ...current,
+                    cadLayout: { ...current.cadLayout!, columnCount: Math.max(1, Math.min(3, Number(event.target.value) || 1)) },
+                  }))}
+                >
+                  <option value={1}>1 栏</option>
+                  <option value={2}>2 栏</option>
+                  <option value={3}>3 栏</option>
+                </select>
+              </label>
+              <label>
+                <span>栏间距（mm）</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={columnGap}
+                  onChange={(event) => changeWorkspace((current) => ({
+                    ...current,
+                    cadLayout: { ...current.cadLayout!, columnGapMillimeters: Math.max(0, Number(event.target.value) || 0) },
+                  }))}
+                />
+              </label>
+            </div>
+            <div className="cad-zone-explanation">
+              <strong>图框区</strong>采用图框块的真实外包范围；<strong>文字编辑区</strong>由用户在 CAD 中框定。
+              网页预览、文字字高、分栏、文字宽度和 CAD 插入位置都使用同一组纸面毫米参数。
+              预览 100% 表示 1 屏幕像素对应 1 纸面毫米；调整预览倍率不会改变出图尺寸。
+            </div>
+            <footer>
+              <button className="button" disabled={cadBusy} onClick={pickCadFrame}>
+                {cadBusy ? "等待 CAD 操作…" : "在 CAD 拾取图框并框定文字区"}
+              </button>
+              <button className="button primary" onClick={() => setCadLayoutOpen(false)}>确定</button>
+            </footer>
+          </section>
+        </div>
       )}
 
       {conditionsOpen && (
@@ -1124,7 +1470,7 @@ export function ArchitectureSpecEditor() {
                   value={workspace.buildingType}
                   onChange={(event) => updateProjectMetadata("buildingType", event.target.value)}
                 >
-                  {["通用建筑", "住宅建筑", "办公建筑", "商业建筑", "教育建筑", "医疗建筑", "交通建筑", "文体建筑", "工业建筑", "其他建筑"].map((type) => (
+                  {["通用建筑", "住宅建筑", "办公建筑", "商业建筑", "教育建筑", "医疗建筑", "交通建筑", "文体建筑", "工业建筑", "宿舍建筑", "旅馆建筑", "养老建筑", "停车建筑", "既有建筑改造", "其他建筑"].map((type) => (
                     <option key={type}>{type}</option>
                   ))}
                 </select>

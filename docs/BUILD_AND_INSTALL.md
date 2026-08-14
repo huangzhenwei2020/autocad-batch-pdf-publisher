@@ -33,14 +33,14 @@ powershell -ExecutionPolicy Bypass -File .\build\Build-Release.ps1
 脚本默认编译本机能提供 SDK 的全部 AutoCAD API 代际。也可以明确指定：
 
 ```powershell
-.\build\Build-Release.ps1 -Bands R19,R24,R25
+.\build\Build-Release.ps1 -Bands R24,R25
 ```
 
 版本分组为：
 
 | 目录 | AutoCAD 版本 |
 |---|---|
-| R19 | 2014 |
+| R19 | 2014（停止更新；常规发布不再生成） |
 | R20 | 2015–2016 |
 | R21 | 2017 |
 | R22 | 2018 |

@@ -29,6 +29,7 @@ import {
 type Props = {
   value: ArchitectureTable[];
   fields: ProjectField[];
+  selectedTableId?: string;
   onSave(value: ArchitectureTable[]): void;
   onClose(): void;
 };
@@ -50,10 +51,14 @@ const newColumnKey = (table: ArchitectureTable) => {
   return `column${index}`;
 };
 
-export function ProfessionalTableEditor({ value, fields, onSave, onClose }: Props) {
+export function ProfessionalTableEditor({ value, fields, selectedTableId, onSave, onClose }: Props) {
   const initial = value.map(normalizeProfessionalTable);
   const [tables, setTables] = useState<ArchitectureTable[]>(initial);
-  const [selectedId, setSelectedId] = useState(initial[0]?.tableId ?? "");
+  const [selectedId, setSelectedId] = useState(
+    initial.some((table) => table.tableId === selectedTableId)
+      ? selectedTableId!
+      : initial[0]?.tableId ?? "",
+  );
   const [selectedCell, setSelectedCell] = useState({ row: 0, column: 0 });
   const [selection, setSelection] = useState<TableSelection>({
     startRow: 0,

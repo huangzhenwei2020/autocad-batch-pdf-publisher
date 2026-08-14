@@ -14,6 +14,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\CadArchSpec.Host.Shared\CadDrawingExchange.cs" Link="CadDrawingExchange.cs" />
     <ProjectReference Include="..\CadArchSpec.Host.Contracts\CadArchSpec.Host.Contracts.csproj" />
     <ProjectReference Include="..\CadArchSpec.EditorBridge\CadArchSpec.EditorBridge.csproj" />
     <ProjectReference Include="..\CadArchSpec.RuleEngine\CadArchSpec.RuleEngine.csproj" />

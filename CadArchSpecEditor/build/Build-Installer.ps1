@@ -7,12 +7,15 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 $workspaceRoot = Split-Path -Parent $projectRoot
 $dotnet = Join-Path $workspaceRoot "tmp\dotnet-sdk-8\dotnet.exe"
 if (-not (Test-Path -LiteralPath $dotnet)) {
+    $dotnet = Join-Path $workspaceRoot ".tools\dotnet\dotnet.exe"
+}
+if (-not (Test-Path -LiteralPath $dotnet)) {
     $dotnet = "dotnet"
 }
 
 $webRoot = Join-Path $projectRoot "src\CadArchSpec.Editor.Web"
-$host2022 = Join-Path $projectRoot "src\CadArchSpec.Host.AutoCAD2022\bin\x64\$Configuration\net48"
-$host2026 = Join-Path $projectRoot "src\CadArchSpec.Host.AutoCAD2026\bin\x64\$Configuration\net8.0-windows"
+$host2022 = Join-Path $projectRoot "src\CadArchSpec.Host.AutoCAD2022\bin\$Configuration\net48"
+$host2026 = Join-Path $projectRoot "src\CadArchSpec.Host.AutoCAD2026\bin\$Configuration\net8.0-windows"
 $installerRoot = Join-Path $projectRoot "src\CadArchSpec.Installer"
 $payloadRoot = Join-Path $installerRoot "Payload"
 $bundleRoot = Join-Path $payloadRoot "CadArchSpecEditor.bundle"
@@ -27,8 +30,14 @@ finally {
     Pop-Location
 }
 
-& $dotnet build (Join-Path $projectRoot "CadArchSpecEditor.sln") -c $Configuration --no-restore
-if ($LASTEXITCODE -ne 0) { throw "宿主编译失败。" }
+$hostProjects = @(
+    (Join-Path $projectRoot "src\CadArchSpec.Host.AutoCAD2022\CadArchSpec.Host.AutoCAD2022.csproj")
+    (Join-Path $projectRoot "src\CadArchSpec.Host.AutoCAD2026\CadArchSpec.Host.AutoCAD2026.csproj")
+)
+foreach ($hostProject in $hostProjects) {
+    & $dotnet build $hostProject -c $Configuration --nologo
+    if ($LASTEXITCODE -ne 0) { throw "宿主编译失败：$hostProject" }
+}
 
 if (Test-Path -LiteralPath $bundleRoot) {
     Remove-Item -LiteralPath $bundleRoot -Recurse -Force
@@ -71,7 +80,7 @@ if ((Test-Path -LiteralPath $newtonsoft2022) -and -not (Test-Path -LiteralPath $
 
 $packageContents = @'
 <?xml version="1.0" encoding="utf-8"?>
-<ApplicationPackage SchemaVersion="1.0" AutodeskProduct="AutoCAD" Name="CadArchSpecEditor" AppVersion="0.14.0" ProductCode="{1E296FC4-E75B-4B8B-80B7-CA2376D71D32}">
+<ApplicationPackage SchemaVersion="1.0" AutodeskProduct="AutoCAD" Name="CadArchSpecEditor" AppVersion="0.15.0" ProductCode="{1E296FC4-E75B-4B8B-80B7-CA2376D71D32}">
   <CompanyDetails Name="CadArchSpecEditor" />
   <Components>
     <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R24.1" SeriesMax="R24.1" />

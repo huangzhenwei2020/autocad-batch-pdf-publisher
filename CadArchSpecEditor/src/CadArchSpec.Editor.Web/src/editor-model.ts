@@ -63,9 +63,171 @@ export type EditorWorkspace = {
   fieldChanges?: FieldChangeEntry[];
   reviewRecords?: ReviewArchiveRecord[];
   tables?: ArchitectureTable[];
+  cadLayout?: CadLayoutProfile;
+  standards?: DesignStandard[];
   fields: ProjectField[];
   sections: EditorSection[];
 };
+
+export type DesignStandard = {
+  id: string;
+  code: string;
+  name: string;
+  level: "国家" | "地方" | "自定义";
+  region: string;
+  buildingTypes: string[];
+  enabled: boolean;
+  isPreset: boolean;
+  note: string;
+  sourceUrl: string;
+};
+
+const residentialNationalPreset = (id: string, code: string, name: string, enabled = true, note = "住宅项目常用国家/行业预设，使用前核对现行性"): DesignStandard => ({
+  id, code, name, level: "国家", region: "全国", buildingTypes: ["住宅建筑"], enabled, isPreset: true, note, sourceUrl: "",
+});
+
+const nationalPreset = (
+  id: string,
+  code: string,
+  name: string,
+  buildingTypes: string[],
+  enabled = true,
+  note = "国家/行业预设，使用前应按项目报审日期复核现行性",
+  sourceUrl = "https://www.mohurd.gov.cn/cms_files/filemanager/1150240553/attach/202411/d843924393711cc7abd4e4a2f030504a.pdf",
+): DesignStandard => ({
+  id, code, name, level: "国家", region: "全国", buildingTypes,
+  enabled, isPreset: true, note, sourceUrl,
+});
+
+export const defaultDesignStandards = (): DesignStandard[] => [
+  { id: "gb-55031-2022", code: "GB 55031-2022", name: "民用建筑通用规范", level: "国家", region: "全国", buildingTypes: ["通用建筑", "住宅建筑", "办公建筑", "商业建筑", "教育建筑", "医疗建筑", "交通建筑", "文体建筑"], enabled: true, isPreset: true, note: "民用建筑基础预设", sourceUrl: "https://zjj.sm.gov.cn/xxgk/fgwj/jsbz/202209/t20220909_1827378.htm" },
+  { id: "gb-55037-2022", code: "GB 55037-2022", name: "建筑防火通用规范", level: "国家", region: "全国", buildingTypes: ["通用建筑", "住宅建筑", "办公建筑", "商业建筑", "教育建筑", "医疗建筑", "交通建筑", "文体建筑", "工业建筑"], enabled: true, isPreset: true, note: "建筑防火基础预设", sourceUrl: "https://zjj.sm.gov.cn/ztzl/xfzt/202401/t20240111_1993450.htm" },
+  { id: "gb-55019-2021", code: "GB 55019-2021", name: "建筑与市政工程无障碍通用规范", level: "国家", region: "全国", buildingTypes: ["通用建筑", "住宅建筑", "办公建筑", "商业建筑", "教育建筑", "医疗建筑", "交通建筑", "文体建筑"], enabled: true, isPreset: true, note: "无障碍设计预设", sourceUrl: "https://www.beijing.gov.cn/gate/big5/www.beijing.gov.cn/zhengce/zhengcefagui/qtwj/202204/t20220412_2674451.html" },
+  { id: "gb-55030-2022", code: "GB 55030-2022", name: "建筑与市政工程防水通用规范", level: "国家", region: "全国", buildingTypes: ["通用建筑", "住宅建筑", "办公建筑", "商业建筑", "教育建筑", "医疗建筑", "交通建筑", "文体建筑", "工业建筑"], enabled: true, isPreset: true, note: "防水设计预设", sourceUrl: "https://www.gsjn.gov.cn/zfxxgk/zfbmxxgk/zjj/fdzdgknr/lzyj/art/2022/art_0f0b3ad7fa304c0b961a009b0d8319ca.html" },
+  { id: "db11-1950-2021", code: "DB11/1950-2021", name: "公共建筑无障碍设计标准", level: "地方", region: "北京", buildingTypes: ["办公建筑", "商业建筑", "教育建筑", "医疗建筑", "交通建筑", "文体建筑"], enabled: false, isPreset: true, note: "北京市地方预设", sourceUrl: "https://ghzrzyw.beijing.gov.cn/biaozhunguanli/bz/jzsj/202203/t20220316_2632078.html" },
+  { id: "dbj-t45-020-2016", code: "DBJ/T45-020-2016", name: "绿色建筑评价标准", level: "地方", region: "广西", buildingTypes: ["通用建筑", "住宅建筑", "办公建筑", "商业建筑", "教育建筑", "医疗建筑"], enabled: false, isPreset: true, note: "广西地方预设，使用前应按项目报审日期复核现行性", sourceUrl: "https://zjt.gxzf.gov.cn/zfxxgk/fdzdgknr/wjtz/t6187953.shtml" },
+  residentialNationalPreset("gb-55038-2025", "GB 55038-2025", "住宅项目规范", true, "2025年5月1日起实施的住宅项目强制性工程建设规范"),
+  residentialNationalPreset("gb-50096-2011", "GB 50096-2011", "住宅设计规范"),
+  residentialNationalPreset("gb-50180-2018", "GB 50180-2018", "城市居住区规划设计标准"),
+  residentialNationalPreset("gb-50352-2019", "GB 50352-2019", "民用建筑设计统一标准"),
+  residentialNationalPreset("gb-50368-2005", "GB 50368-2005", "住宅建筑规范", false, "已由GB 55038-2025公告废止，仅保留作历史项目识别"),
+  residentialNationalPreset("gb-50118-2010", "GB 50118-2010", "民用建筑隔声设计规范"),
+  residentialNationalPreset("gb-50325-2020", "GB 50325-2020", "民用建筑工程室内环境污染控制标准"),
+  residentialNationalPreset("gbt-50353-2013", "GB/T 50353-2013", "建筑工程建筑面积计算规范"),
+  residentialNationalPreset("design-depth-2016", "2016年版", "建筑工程设计文件编制深度规定"),
+  residentialNationalPreset("gb-50016-2014", "GB 50016-2014（2018年版）", "建筑设计防火规范"),
+  residentialNationalPreset("gb-50222-2017", "GB 50222-2017", "建筑内部装修设计防火规范"),
+  residentialNationalPreset("gb-50037-2013", "GB 50037-2013", "建筑地面设计规范"),
+  residentialNationalPreset("gb-50345-2012", "GB 50345-2012", "屋面工程技术规范"),
+  residentialNationalPreset("gb-55008-2021", "GB 55008-2021", "混凝土结构通用规范"),
+  residentialNationalPreset("jgj-230-2010", "JGJ 230-2010", "倒置式屋面工程技术规程"),
+  residentialNationalPreset("jgj-214-2010", "JGJ 214-2010", "铝合金门窗工程技术规范"),
+  residentialNationalPreset("gbt-8478-2020", "GB/T 8478-2020", "铝合金门窗"),
+  residentialNationalPreset("gbt-11976-2002", "GB/T 11976-2002", "建筑外窗采光性能分级及检测方法", false),
+  residentialNationalPreset("gbt-8484-2008", "GB/T 8484-2008", "建筑外门窗保温性能分级及检测方法", false),
+  residentialNationalPreset("gbt-8485-2008", "GB/T 8485-2008", "建筑门窗空气声隔声性能分级及检测方法", false),
+  residentialNationalPreset("gb-51251-2017", "GB 51251-2017", "建筑防烟排烟系统技术标准"),
+  residentialNationalPreset("gbt-7106-2008", "GB/T 7106-2008", "建筑外门窗气密、水密、抗风压性能分级及检测方法", false),
+  residentialNationalPreset("gb-55015-2021", "GB 55015-2021", "建筑节能与可再生能源利用通用规范"),
+  residentialNationalPreset("jgj-t342-2014", "JGJ/T 342-2014", "建筑玻璃与金属护栏"),
+  residentialNationalPreset("gb-55016-2021", "GB 55016-2021", "建筑环境通用规范"),
+  residentialNationalPreset("jgj-t235-2011", "JGJ/T 235-2011", "建筑外墙防水工程技术规程"),
+  residentialNationalPreset("gbt-50378-2019", "GB/T 50378-2019", "绿色建筑评价标准"),
+  residentialNationalPreset("jgj-t261-2011", "JGJ/T 261-2011", "外墙内保温工程技术规程"),
+  residentialNationalPreset("gb-55007-2021", "GB 55007-2021", "砌体结构通用规范"),
+  residentialNationalPreset("gbt-50104-2010", "GB/T 50104-2010", "建筑制图标准"),
+  residentialNationalPreset("gbt-50001-2017", "GB/T 50001-2017", "房屋建筑制图统一标准"),
+  residentialNationalPreset("gbt-50103-2010", "GB/T 50103-2010", "总图制图标准"),
+  residentialNationalPreset("gb-50176-2016", "GB 50176-2016", "民用建筑热工设计规范"),
+  residentialNationalPreset("jgj-t331-2014", "JGJ/T 331-2014", "建筑地面工程防滑技术规程"),
+  nationalPreset("gb-55036-2022", "GB 55036-2022", "消防设施通用规范", ["通用建筑"], true, "各类建筑消防设施基础规范"),
+  residentialNationalPreset("gb-50763-2012", "GB 50763-2012", "无障碍设计规范"),
+  { id: "dbj-t45-095-2019", code: "DBJ/T45-095-2019", name: "居住建筑节能65%设计标准", level: "地方", region: "广西", buildingTypes: ["住宅建筑"], enabled: true, isPreset: true, note: "广西住宅项目地方预设，使用前按报审日期复核", sourceUrl: "" },
+  nationalPreset("gb-55002-2021", "GB 55002-2021", "建筑与市政工程抗震通用规范", ["通用建筑"], true, "各类建筑常用强制性工程建设规范"),
+  nationalPreset("gb-55020-2021", "GB 55020-2021", "建筑给水排水与节水通用规范", ["通用建筑"], true, "各类建筑给排水与节水基础规范"),
+  nationalPreset("gb-55024-2022", "GB 55024-2022", "建筑电气与智能化通用规范", ["通用建筑"], true, "各类建筑电气与智能化基础规范"),
+  nationalPreset("gb-55029-2022", "GB 55029-2022", "安全防范工程通用规范", ["通用建筑"], true, "各类公共与居住建筑安全防范基础规范"),
+  nationalPreset("gb-55021-2021", "GB 55021-2021", "既有建筑鉴定与加固通用规范", ["既有建筑改造"], true),
+  nationalPreset("gb-55022-2021", "GB 55022-2021", "既有建筑维护与改造通用规范", ["既有建筑改造"], true, "2022年4月1日起实施的既有建筑维护改造通用规范", "https://www.beijing.gov.cn/zhengce/zhengcefagui/qtwj/202204/t20220408_2669617.html"),
+  nationalPreset("jgj-t67-2019", "JGJ/T 67-2019", "办公建筑设计标准", ["办公建筑"]),
+  nationalPreset("jgj-48-2014", "JGJ 48-2014", "商店建筑设计规范", ["商业建筑"]),
+  nationalPreset("gb-50099-2011", "GB 50099-2011", "中小学校设计规范", ["教育建筑"]),
+  nationalPreset("jgj-39-2016", "JGJ 39-2016", "托儿所、幼儿园建筑设计规范", ["教育建筑"]),
+  nationalPreset("gb-51039-2014", "GB 51039-2014", "综合医院建筑设计规范", ["医疗建筑"]),
+  nationalPreset("gbt-51457-2024", "GB/T 51457-2024", "医院洁净护理与隔离单元建筑技术标准", ["医疗建筑"], true, "2024年9月1日起实施", "https://www.mohurd.gov.cn/file/2024/20240822/a015dc08-eaf2-474a-81c1-c4454e3b220c.pdf"),
+  nationalPreset("gb-55025-2022", "GB 55025-2022", "宿舍、旅馆建筑项目规范", ["宿舍建筑", "旅馆建筑"], true, "2022年10月1日起实施的强制性工程建设规范", "https://www.mohurd.gov.cn/api-gateway/jpaas-web-server/front/document/download?fileName=2022%E5%B9%B4.pdf&fileUrl=YW5UzzlvCwcM%2FNHHX%2FtT6BJ6yM%2FAU1LVtmOVIvNjcuodKrYMbtEVykYUOoISn7rd1liJ3Xbku8CKj9rcuDHUCZSLTa80GxurpQoI49HVPRGjNZiCY1eAVyAKG8ipZL1CRnt22UAfsm96KZLwQjNf0g%3D%3D"),
+  nationalPreset("jgj-62-2014", "JGJ 62-2014", "旅馆建筑设计规范", ["旅馆建筑"]),
+  nationalPreset("gb-50867-2013", "GB 50867-2013", "养老设施建筑设计规范", ["养老建筑"]),
+  nationalPreset("jgj-450-2018", "JGJ 450-2018", "老年人照料设施建筑设计标准", ["养老建筑"]),
+  nationalPreset("jgj-100-2015", "JGJ 100-2015", "车库建筑设计规范", ["停车建筑"], true, "住房城乡建设部公告第788号发布"),
+  nationalPreset("gb-50067-2014", "GB 50067-2014", "汽车库、修车库、停车场设计防火规范", ["停车建筑"]),
+  nationalPreset("jgj-31-2003", "JGJ 31-2003", "体育建筑设计规范", ["文体建筑"], false, "文体项目参考预设，使用前重点核对现行性"),
+  nationalPreset("jgj-66-2015", "JGJ 66-2015", "博物馆建筑设计规范", ["文体建筑"]),
+  nationalPreset("jgj-57-2016", "JGJ 57-2016", "剧场建筑设计规范", ["文体建筑"]),
+  nationalPreset("gb-50187-2012", "GB 50187-2012", "工业企业总平面设计规范", ["工业建筑"]),
+  nationalPreset("gb-50073-2013", "GB 50073-2013", "洁净厂房设计规范", ["工业建筑"], false, "仅洁净厂房项目启用"),
+  nationalPreset("gb-50072-2021", "GB 50072-2021", "冷库设计标准", ["工业建筑"], false, "仅冷库项目启用"),
+];
+
+export const mergeDesignStandards = (saved?: DesignStandard[]): DesignStandard[] => {
+  const presets = defaultDesignStandards();
+  if (!saved?.length) return presets;
+  const savedById = new Map(saved.map((item) => [item.id, item]));
+  const merged = presets.map((preset) => {
+    const existing = savedById.get(preset.id);
+    return existing ? { ...preset, ...existing, isPreset: true } : preset;
+  });
+  const presetIds = new Set(presets.map((item) => item.id));
+  return [...merged, ...saved.filter((item) => !presetIds.has(item.id))];
+};
+
+export type CadLayoutProfile = {
+  paperName: string;
+  landscape: boolean;
+  paperWidthMillimeters: number;
+  paperHeightMillimeters: number;
+  drawingScale: number;
+  bodyTextHeightMillimeters: number;
+  columnCount: number;
+  columnGapMillimeters: number;
+  frameBlockName: string;
+  frameHandle: string;
+  drawingPath: string;
+  frameArea: CadRectangle;
+  textArea: CadRectangle;
+  textMarginsMillimeters: CadMargins;
+};
+
+export type CadRectangle = {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+};
+
+export type CadMargins = {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+};
+
+export const defaultCadLayout = (): CadLayoutProfile => ({
+  paperName: "A1",
+  landscape: true,
+  paperWidthMillimeters: 841,
+  paperHeightMillimeters: 594,
+  drawingScale: 100,
+  bodyTextHeightMillimeters: 3.5,
+  columnCount: 2,
+  columnGapMillimeters: 12,
+  frameBlockName: "",
+  frameHandle: "",
+  drawingPath: "",
+  frameArea: { minX: 0, minY: 0, maxX: 84100, maxY: 59400 },
+  textArea: { minX: 2500, minY: 2000, maxX: 65100, maxY: 57400 },
+  textMarginsMillimeters: { left: 25, top: 20, right: 190, bottom: 20 },
+});
 
 export type ProfessionalTableType =
   | "technicalEconomicIndicators"
@@ -248,6 +410,57 @@ function sectionDoc(
   };
 }
 
+export function plainTextToSectionDocument(title: string, value: string): Record<string, unknown> {
+  const paragraphs = value
+    .replace(/\r\n/g, "\n")
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map(paragraph);
+  return sectionDoc(title, paragraphs.length > 0 ? paragraphs : [paragraph("")]);
+}
+
+export function sectionDocumentToPlainText(value: unknown): string {
+  const lines: string[] = [];
+  const visit = (node: unknown) => {
+    if (!node || typeof node !== "object") return;
+    const item = node as Record<string, unknown>;
+    if (item.type === "text" && typeof item.text === "string") {
+      lines.push(item.text);
+      return;
+    }
+    if (item.type === "projectField") {
+      const attrs = item.attrs as Record<string, unknown> | undefined;
+      lines.push(String(attrs?.value ?? attrs?.label ?? ""));
+      return;
+    }
+    if (item.type === "standardCitation") {
+      const attrs = item.attrs as Record<string, unknown> | undefined;
+      lines.push(`${String(attrs?.name ?? "")}（${String(attrs?.code ?? "")}）`);
+      return;
+    }
+    if (item.type === "professionalTable") {
+      const table = (item.attrs as Record<string, unknown> | undefined)?.table as ArchitectureTable | undefined;
+      if (table) {
+        lines.push(`${table.tableNumber || ""} ${table.title}`.trim(), "\n");
+        lines.push(table.columns.map((column) => column.title).join("\t"), "\n");
+        table.rows.forEach((row) => {
+          lines.push(table.columns.map((column) => row.cells.find((cell) => cell.columnKey === column.key)?.displayValue ?? "").join("\t"), "\n");
+        });
+      }
+      return;
+    }
+    const content = Array.isArray(item.content) ? item.content : [];
+    const start = lines.length;
+    content.forEach(visit);
+    if (["paragraph", "heading", "blockquote", "listItem", "list_item"].includes(String(item.type)) && lines.length > start) {
+      lines.push("\n");
+    }
+  };
+  visit(value);
+  return lines.join("").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 export function createInitialWorkspace(): EditorWorkspace {
   const fields: ProjectField[] = [
     {
@@ -412,6 +625,8 @@ export function createInitialWorkspace(): EditorWorkspace {
     fieldChanges: [],
     reviewRecords: [],
     tables: [],
+    standards: defaultDesignStandards(),
+    cadLayout: defaultCadLayout(),
     reviewSignoff: {
       organization: "",
       projectManager: "",
@@ -496,6 +711,7 @@ export function createBlankWorkspace(): EditorWorkspace {
     fieldChanges: [],
     reviewRecords: [],
     tables: [],
+    standards: defaultDesignStandards(),
     reviewSignoff: {
       organization: "",
       projectManager: "",
@@ -532,6 +748,8 @@ export function synchronizeWorkspaceFieldNodes(workspace: EditorWorkspace): Edit
 }
 
 export function normalizeWorkspace(workspace: EditorWorkspace): EditorWorkspace {
+  const fallbackLayout = defaultCadLayout();
+  const savedLayout = workspace.cadLayout;
   return applyBuildingTemplate({
     ...workspace,
     projectNature: workspace.projectNature ?? "新建",
@@ -569,6 +787,17 @@ export function normalizeWorkspace(workspace: EditorWorkspace): EditorWorkspace 
       })),
     })),
     tables: workspace.tables ?? [],
+    standards: mergeDesignStandards(workspace.standards),
+    cadLayout: {
+      ...fallbackLayout,
+      ...(savedLayout ?? {}),
+      frameArea: { ...fallbackLayout.frameArea, ...(savedLayout?.frameArea ?? {}) },
+      textArea: { ...fallbackLayout.textArea, ...(savedLayout?.textArea ?? {}) },
+      textMarginsMillimeters: {
+        ...fallbackLayout.textMarginsMillimeters,
+        ...(savedLayout?.textMarginsMillimeters ?? {}),
+      },
+    },
     reviewSignoff: workspace.reviewSignoff ?? {
       organization: "",
       projectManager: "",
