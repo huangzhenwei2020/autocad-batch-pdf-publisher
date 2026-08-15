@@ -34,11 +34,22 @@ namespace BatchPdfPublisher.Services
                     ElevationType = item.ElevationType,
                     DivisionPreset = item.DivisionPreset,
                     OpeningMode = item.OpeningMode,
+                    HasInstallationGap = item.HasInstallationGap,
                     InstallationGap = item.InstallationGap,
+                    HasOuterFrame = item.HasOuterFrame,
+                    OuterFrameWidth = item.OuterFrameWidth,
+                    HasMullion = item.HasMullion,
+                    MullionWidth = item.MullionWidth,
+                    DoorFrameType = item.DoorFrameType,
                     DrawingScale = Math.Max(1, drawingScale),
                     CustomColumnRatios = item.CustomColumnRatios,
                     CustomRowRatios = item.CustomRowRatios,
-                    CellOpeningModes = item.CellOpeningModes
+                    CustomColumnWidths = item.CustomColumnWidths,
+                    CustomRowHeights = item.CustomRowHeights,
+                    CustomCellLayout = item.CustomCellLayout,
+                    CellOpeningModes = item.CellOpeningModes,
+                    DoorPlacement = item.DoorPlacement,
+                    DoorEdgeDistance = item.DoorEdgeDistance
                 });
             }
             using (var stream = File.Create(PathName))

@@ -71,6 +71,9 @@
     <Compile Include="Views\DoorWindowElevationForm.cs" />
     <Compile Include="Views\DoorWindowElevationPreviewControl.cs" />
     <Compile Include="Views\CustomDoorWindowDivisionForm.cs" />
+    <Compile Include="Views\DoorWindowLayoutEditorControl.cs" />
+    <Compile Include="Views\DoorWindowElevationProgressForm.cs" />
+    <Compile Include="Views\DoorWindowBatchConstructionForm.cs" />
     <Compile Include="Views\AutoLayerSettingsForm.cs" />
     <Compile Include="Views\DraftingStandardForm.cs" />
     <Compile Include="Views\FrameCreationForm.cs" />

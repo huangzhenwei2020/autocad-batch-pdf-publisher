@@ -20,9 +20,10 @@ namespace BatchPdfPublisher.Services
                 {
                     var defaults = CreateDefaults(); Save(defaults); return defaults;
                 }
-                using (var stream = File.OpenRead(PathName))
-                    return ((List<DoorWindowElevationTemplate>)new DataContractJsonSerializer(typeof(List<DoorWindowElevationTemplate>)).ReadObject(stream) ?? new List<DoorWindowElevationTemplate>())
-                        .OrderBy(x => x.Name).ToList();
+                List<DoorWindowElevationTemplate> loaded;
+                using (var stream = File.OpenRead(PathName)) loaded = (List<DoorWindowElevationTemplate>)new DataContractJsonSerializer(typeof(List<DoorWindowElevationTemplate>)).ReadObject(stream) ?? new List<DoorWindowElevationTemplate>();
+                var changed = false; foreach (var builtIn in CreateDefaults()) if (!loaded.Any(x => string.Equals(x.Name, builtIn.Name, StringComparison.OrdinalIgnoreCase))) { loaded.Add(builtIn); changed = true; }
+                if (changed) Save(loaded); return loaded.OrderBy(x => x.Name).ToList();
             }
             catch { return CreateDefaults(); }
         }
@@ -56,6 +57,7 @@ namespace BatchPdfPublisher.Services
                 Template("普通单扇窗（左平开）", "窗", "单扇", "左平开"),
                 Template("普通单扇窗（右平开）", "窗", "单扇", "右平开"),
                 Template("普通双扇平开窗", "窗", "双扇等分", "双扇平开"),
+                Template("普通双扇推拉窗", "窗", "双扇等分", "双向推拉"),
                 Template("普通三扇窗", "窗", "三扇等分", "双扇平开"),
                 Template("上亮双扇窗", "窗", "上亮", "双扇平开"),
                 Template("普通单扇门", "门", "单扇", "左平开"),

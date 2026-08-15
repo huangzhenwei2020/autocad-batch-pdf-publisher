@@ -18,12 +18,13 @@ namespace BatchPdfPublisher.Services
             public double DimensionGap, LowerExtent;
         }
 
-        public static int Insert(Document document, IList<DoorWindowScheduleItem> source, int drawingScale, FrameDefinition frame)
+        public static int Insert(Document document, IList<DoorWindowScheduleItem> source, int drawingScale, FrameDefinition frame, Action<int, int, string> progress = null)
         {
             if (document == null) throw new ArgumentNullException("document");
             var items = (source ?? new List<DoorWindowScheduleItem>()).Where(x => x.Selected && (x.Status ?? string.Empty).Contains("可生成")).ToList();
             if (items.Count == 0) throw new InvalidOperationException("没有勾选参数完整的门窗。");
             drawingScale = Math.Max(1, drawingScale);
+            if (progress != null) progress(0, items.Count, "等待指定插入点…");
             var pointResult = document.Editor.GetPoint(frame == null ? "\n指定批量门窗立面左下角插入点: " : "\n指定第一张门窗立面图框左下角插入点: ");
             if (pointResult.Status != PromptStatus.OK) return 0;
 
@@ -38,8 +39,8 @@ namespace BatchPdfPublisher.Services
                 var blocks = (BlockTable)transaction.GetObject(database.BlockTableId, OpenMode.ForWrite);
                 var space = (BlockTableRecord)transaction.GetObject(database.CurrentSpaceId, OpenMode.ForWrite);
                 var elevations = items.Select(item => CreatePlacement(item, drawingScale)).ToList();
-                if (frame == null) InsertContinuous(elevations, pointResult.Value, drawingScale, space, transaction, resources, dimensionStyle);
-                else pageCount = InsertPaged(elevations, pointResult.Value, drawingScale, frame, blocks, space, transaction, resources, dimensionStyle);
+                if (frame == null) InsertContinuous(elevations, pointResult.Value, drawingScale, space, transaction, resources, dimensionStyle, progress);
+                else pageCount = InsertPaged(elevations, pointResult.Value, drawingScale, frame, blocks, space, transaction, resources, dimensionStyle, progress);
                 transaction.Commit();
             }
             document.Editor.Regen();
@@ -91,34 +92,75 @@ namespace BatchPdfPublisher.Services
         {
             var item = elevation.Item; var geometry = DoorWindowElevationGeometryBuilder.Build(item);
             var metadata = DoorWindowElevationMetadata.Create(item, origin, drawingScale, existingGroupId);
-            foreach (var segment in geometry.Lines)
-            {
-                var line = new Line(new Point3d(origin.X + segment.X1, origin.Y + segment.Y1, origin.Z), new Point3d(origin.X + segment.X2, origin.Y + segment.Y2, origin.Z));
-                if (segment.Role == DoorWindowLineRole.Hole) line.LayerId = resources.ArchitectureHiddenLayerId;
-                else if (segment.Role == DoorWindowLineRole.Frame) line.LayerId = resources.ArchitectureOutlineLayerId;
-                else line.LayerId = resources.ArchitectureFineLayerId;
-                AppendTagged(space, transaction, line, metadata);
-            }
+            AppendGeometry(geometry, origin, space, transaction, resources, metadata);
             var dimensionGap = elevation.DimensionGap;
             AppendTagged(space, transaction, new AlignedDimension(origin, new Point3d(origin.X + item.Width, origin.Y, origin.Z), new Point3d(origin.X + item.Width / 2d, origin.Y - dimensionGap, origin.Z), string.Empty, dimensionStyle) { LayerId = resources.AnnotationDimensionLayerId }, metadata);
             AppendTagged(space, transaction, new AlignedDimension(origin, new Point3d(origin.X, origin.Y + item.Height, origin.Z), new Point3d(origin.X - dimensionGap, origin.Y + item.Height / 2d, origin.Z), string.Empty, dimensionStyle) { LayerId = resources.AnnotationDimensionLayerId }, metadata);
+            AddSegmentDimensions(geometry, origin, dimensionGap, space, transaction, resources.AnnotationDimensionLayerId, dimensionStyle, metadata);
             var titleHeight = Math.Max(3.5d * drawingScale, 70d); var noteHeight = Math.Max(2.5d * drawingScale, 50d);
             var titleY = origin.Y - dimensionGap - 5d * drawingScale;
             AddCenteredText(space, transaction, (item.Code ?? "未编号") + " 立面", new Point3d(origin.X + item.Width / 2d, titleY, origin.Z), titleHeight, resources.TitleTextStyleId, resources.AnnotationTextLayerId, metadata);
             AddCenteredText(space, transaction, "1:" + drawingScale.ToString(CultureInfo.InvariantCulture), new Point3d(origin.X + item.Width / 2d, titleY - 3.6d * drawingScale, origin.Z), noteHeight, resources.AnnotationTextStyleId, resources.AnnotationTextLayerId, metadata);
         }
 
-        private static void InsertContinuous(IList<ElevationPlacement> elevations, Point3d origin, int scale, BlockTableRecord space, Transaction transaction, DraftingStandardResources resources, ObjectId dimensionStyle)
+        private static void AppendGeometry(DoorWindowElevationGeometry geometry, Point3d origin, BlockTableRecord space, Transaction transaction, DraftingStandardResources resources, DoorWindowElevationMetadata metadata)
         {
-            var x = origin.X;
+            const double tolerance = .01d;
+            foreach (var roleGroup in geometry.Lines.GroupBy(x => x.Role))
+            {
+                var segments = roleGroup.ToList(); var used = new bool[segments.Count];
+                for (var seed = 0; seed < segments.Count; seed++)
+                {
+                    if (used[seed]) continue; used[seed] = true;
+                    var points = new List<Point2d> { new Point2d(segments[seed].X1, segments[seed].Y1), new Point2d(segments[seed].X2, segments[seed].Y2) };
+                    bool extended;
+                    do
+                    {
+                        extended = false;
+                        for (var index = 0; index < segments.Count; index++)
+                        {
+                            if (used[index]) continue; var segment = segments[index];
+                            var a = new Point2d(segment.X1, segment.Y1); var b = new Point2d(segment.X2, segment.Y2);
+                            if (Near(points[points.Count - 1], a)) { points.Add(b); used[index] = true; extended = true; break; }
+                            if (Near(points[points.Count - 1], b)) { points.Add(a); used[index] = true; extended = true; break; }
+                            if (Near(points[0], b)) { points.Insert(0, a); used[index] = true; extended = true; break; }
+                            if (Near(points[0], a)) { points.Insert(0, b); used[index] = true; extended = true; break; }
+                        }
+                    } while (extended);
+
+                    var layer = roleGroup.Key == DoorWindowLineRole.Hole || roleGroup.Key == DoorWindowLineRole.Opening
+                        ? resources.ArchitectureHiddenLayerId
+                        : roleGroup.Key == DoorWindowLineRole.Frame ? resources.ArchitectureOutlineLayerId : resources.ArchitectureFineLayerId;
+                    var closed = points.Count > 2 && Near(points[0], points[points.Count - 1]);
+                    if (closed) points.RemoveAt(points.Count - 1);
+                    if (points.Count > 2)
+                    {
+                        var polyline = new Polyline(points.Count) { LayerId = layer, Closed = closed };
+                        for (var index = 0; index < points.Count; index++) polyline.AddVertexAt(index, new Point2d(origin.X + points[index].X, origin.Y + points[index].Y), 0d, 0d, 0d);
+                        AppendTagged(space, transaction, polyline, metadata);
+                    }
+                    else
+                    {
+                        var line = new Line(new Point3d(origin.X + points[0].X, origin.Y + points[0].Y, origin.Z), new Point3d(origin.X + points[1].X, origin.Y + points[1].Y, origin.Z)) { LayerId = layer };
+                        AppendTagged(space, transaction, line, metadata);
+                    }
+                }
+            }
+            bool Near(Point2d first, Point2d second) { return first.GetDistanceTo(second) <= tolerance; }
+        }
+
+        private static void InsertContinuous(IList<ElevationPlacement> elevations, Point3d origin, int scale, BlockTableRecord space, Transaction transaction, DraftingStandardResources resources, ObjectId dimensionStyle, Action<int, int, string> progress)
+        {
+            var x = origin.X; var completed = 0;
             foreach (var elevation in elevations)
             {
                 InsertElevation(elevation, new Point3d(x, origin.Y, origin.Z), scale, space, transaction, resources, dimensionStyle);
                 x += elevation.Item.Width + Math.Max(16d * scale, 800d);
+                completed++; if (progress != null) progress(completed, elevations.Count, elevation.Item.Code);
             }
         }
 
-        private static int InsertPaged(IList<ElevationPlacement> elevations, Point3d origin, int scale, FrameDefinition frame, BlockTable blockTable, BlockTableRecord space, Transaction transaction, DraftingStandardResources resources, ObjectId dimensionStyle)
+        private static int InsertPaged(IList<ElevationPlacement> elevations, Point3d origin, int scale, FrameDefinition frame, BlockTable blockTable, BlockTableRecord space, Transaction transaction, DraftingStandardResources resources, ObjectId dimensionStyle, Action<int, int, string> progress)
         {
             if (frame == null || string.IsNullOrWhiteSpace(frame.BlockName)) throw new InvalidOperationException("请选择有效的登记图框。");
             if (!blockTable.Has(frame.BlockName)) throw new InvalidOperationException("当前图纸不存在已登记图框块“" + frame.BlockName + "”。请先把该图框插入当前图纸，或重新登记当前图纸中的图框。");
@@ -135,6 +177,7 @@ namespace BatchPdfPublisher.Services
             if (contentRight <= contentLeft || contentTop <= contentBottom) throw new InvalidOperationException("登记图框的可排版区域无效。");
 
             var pageGap = 30d * scale; var page = -1; var cursorX = 0d; var cursorY = 0d; var rowHeight = 0d;
+            var completed = 0;
             foreach (var elevation in elevations)
             {
                 var footprintWidth = elevation.DimensionGap + elevation.Item.Width + 8d * scale;
@@ -163,8 +206,28 @@ namespace BatchPdfPublisher.Services
                 var insertion = new Point3d(currentPageOrigin.X + cursorX + elevation.DimensionGap, currentPageOrigin.Y + cursorY + elevation.LowerExtent, origin.Z);
                 InsertElevation(elevation, insertion, scale, space, transaction, resources, dimensionStyle);
                 cursorX += footprintWidth + 8d * scale; rowHeight = Math.Max(rowHeight, footprintHeight);
+                completed++; if (progress != null) progress(completed, elevations.Count, elevation.Item.Code);
             }
             return page + 1;
+        }
+
+        private static void AddSegmentDimensions(DoorWindowElevationGeometry geometry, Point3d origin, double dimensionGap, BlockTableRecord space, Transaction transaction, ObjectId layer, ObjectId style, DoorWindowElevationMetadata metadata)
+        {
+            const double tolerance = .05d; var horizontalY = origin.Y - dimensionGap * .56d; var verticalX = origin.X - dimensionGap * .56d;
+            var xs = geometry.Cells.SelectMany(x => new[] { x.Left, x.Right }).Select(x => Math.Round(x, 3)).Distinct().OrderBy(x => x).ToList();
+            for (var index = 0; index + 1 < xs.Count; index++)
+            {
+                var first = xs[index]; var second = xs[index + 1];
+                if (!geometry.Cells.Any(x => x.Left <= first + tolerance && x.Right >= second - tolerance)) continue;
+                AppendTagged(space, transaction, new AlignedDimension(new Point3d(origin.X + first, origin.Y + geometry.FrameBottom, origin.Z), new Point3d(origin.X + second, origin.Y + geometry.FrameBottom, origin.Z), new Point3d(origin.X + (first + second) / 2d, horizontalY, origin.Z), string.Empty, style) { LayerId = layer }, metadata);
+            }
+            var ys = geometry.Cells.SelectMany(x => new[] { x.Bottom, x.Top }).Select(x => Math.Round(x, 3)).Distinct().OrderBy(x => x).ToList();
+            for (var index = 0; index + 1 < ys.Count; index++)
+            {
+                var first = ys[index]; var second = ys[index + 1];
+                if (!geometry.Cells.Any(x => x.Bottom <= first + tolerance && x.Top >= second - tolerance)) continue;
+                AppendTagged(space, transaction, new AlignedDimension(new Point3d(origin.X + geometry.FrameLeft, origin.Y + first, origin.Z), new Point3d(origin.X + geometry.FrameLeft, origin.Y + second, origin.Z), new Point3d(verticalX, origin.Y + (first + second) / 2d, origin.Z), string.Empty, style) { LayerId = layer }, metadata);
+            }
         }
 
         private static void AddFrameReference(BlockTableRecord space, Transaction transaction, BlockTableRecord definition, ObjectId definitionId, FrameDefinition frame, Point3d pageOrigin, Point3d definitionMin, double factor, int scale, int pageNumber, ObjectId layer)

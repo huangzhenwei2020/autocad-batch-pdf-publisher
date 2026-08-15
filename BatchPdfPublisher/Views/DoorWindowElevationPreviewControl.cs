@@ -32,16 +32,26 @@ namespace BatchPdfPublisher.Views
             using (var holePen = new Pen(Color.FromArgb(155, 165, 176), 1f) { DashStyle = DashStyle.Dash })
             using (var framePen = new Pen(Color.FromArgb(28, 40, 52), 2.2f))
             using (var mullionPen = new Pen(Color.FromArgb(28, 40, 52), 1.5f))
-            using (var openingPen = new Pen(Color.FromArgb(23, 116, 178), 1.25f))
+            using (var openingPen = new Pen(Color.FromArgb(23, 116, 178), 1.25f) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dash })
+            using (var materialPen = new Pen(Color.FromArgb(0, 165, 185), 1.15f))
             {
                 foreach (var line in geometry.Lines)
                 {
-                    var pen = line.Role == DoorWindowLineRole.Hole ? holePen : line.Role == DoorWindowLineRole.Frame ? framePen : line.Role == DoorWindowLineRole.Mullion ? mullionPen : openingPen;
+                    var pen = line.Role == DoorWindowLineRole.Hole ? holePen : line.Role == DoorWindowLineRole.Frame ? framePen : line.Role == DoorWindowLineRole.Mullion ? mullionPen : line.Role == DoorWindowLineRole.Material ? materialPen : openingPen;
                     e.Graphics.DrawLine(pen, X(line.X1), Y(line.Y1), X(line.X2), Y(line.Y2));
                 }
             }
             DrawDimensions(e.Graphics, originX, originY, drawWidth, drawHeight);
+            using (var doorFont = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold))
+            using (var doorBrush = new SolidBrush(Color.FromArgb(185, 120, 55)))
+                foreach (var cell in geometry.Cells)
+                    if (cell.IsDoor)
+                    {
+                        var centerX = (X(cell.Left) + X(cell.Right)) / 2f; var centerY = (Y(cell.Bottom) + Y(cell.Top)) / 2f;
+                        var size = e.Graphics.MeasureString("门", doorFont); e.Graphics.DrawString("门", doorFont, doorBrush, centerX - size.Width / 2f, centerY - size.Height / 2f);
+                    }
             var caption = (_item.Code ?? "未编号") + "  " + _item.SizeText + "  " + (_item.DivisionPreset ?? "") + " / " + (_item.OpeningMode ?? "");
+            if (_item.ElevationType == "门联窗") caption += "  门" + (_item.DoorPlacement ?? "靠左") + (_item.DoorPlacement == "居中" ? string.Empty : "，距边 " + _item.DoorEdgeDistance.ToString("0.##") + " mm");
             DrawCentered(e.Graphics, caption, new RectangleF(8, Height - titleBand + 8, Width - 16, 24), Color.FromArgb(25, 36, 48), 10F);
             DrawCentered(e.Graphics, "预览按窗口自适应；插入 CAD 时按洞口实际毫米 1:1 绘制", new RectangleF(8, Height - 27, Width - 16, 20), Color.DimGray, 8.5F);
 

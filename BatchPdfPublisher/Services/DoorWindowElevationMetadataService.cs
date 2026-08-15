@@ -32,12 +32,34 @@ namespace BatchPdfPublisher.Services
         public string OpeningMode { get; set; }
         [DataMember]
         public double InstallationGap { get; set; }
+        [DataMember(EmitDefaultValue = false)]
+        public bool? HasInstallationGap { get; set; }
+        [DataMember]
+        public double OuterFrameWidth { get; set; }
+        [DataMember(EmitDefaultValue = false)]
+        public bool? HasOuterFrame { get; set; }
+        [DataMember]
+        public double MullionWidth { get; set; }
+        [DataMember(EmitDefaultValue = false)]
+        public bool? HasMullion { get; set; }
+        [DataMember(EmitDefaultValue = false)]
+        public string DoorFrameType { get; set; }
         [DataMember]
         public string CustomColumnRatios { get; set; }
         [DataMember]
         public string CustomRowRatios { get; set; }
         [DataMember]
+        public string CustomColumnWidths { get; set; }
+        [DataMember]
+        public string CustomRowHeights { get; set; }
+        [DataMember]
+        public string CustomCellLayout { get; set; }
+        [DataMember]
         public string CellOpeningModes { get; set; }
+        [DataMember]
+        public string DoorPlacement { get; set; }
+        [DataMember]
+        public double DoorEdgeDistance { get; set; }
         [DataMember]
         public int DrawingScale { get; set; }
         [DataMember]
@@ -60,10 +82,21 @@ namespace BatchPdfPublisher.Services
                 ElevationType = item.ElevationType,
                 DivisionPreset = item.DivisionPreset,
                 OpeningMode = item.OpeningMode,
+                HasInstallationGap = item.HasInstallationGap,
                 InstallationGap = item.InstallationGap,
+                HasOuterFrame = item.HasOuterFrame,
+                OuterFrameWidth = item.OuterFrameWidth,
+                HasMullion = item.HasMullion,
+                MullionWidth = item.MullionWidth,
+                DoorFrameType = item.DoorFrameType,
                 CustomColumnRatios = item.CustomColumnRatios,
                 CustomRowRatios = item.CustomRowRatios,
+                CustomColumnWidths = item.CustomColumnWidths,
+                CustomRowHeights = item.CustomRowHeights,
+                CustomCellLayout = item.CustomCellLayout,
                 CellOpeningModes = item.CellOpeningModes,
+                DoorPlacement = item.DoorPlacement,
+                DoorEdgeDistance = item.DoorEdgeDistance,
                 DrawingScale = scale,
                 OriginX = origin.X,
                 OriginY = origin.Y,
@@ -83,10 +116,21 @@ namespace BatchPdfPublisher.Services
                 ElevationType = ElevationType,
                 DivisionPreset = DivisionPreset,
                 OpeningMode = OpeningMode,
+                HasInstallationGap = HasInstallationGap ?? true,
                 InstallationGap = InstallationGap,
+                HasOuterFrame = HasOuterFrame ?? true,
+                OuterFrameWidth = OuterFrameWidth,
+                HasMullion = HasMullion ?? true,
+                MullionWidth = MullionWidth,
+                DoorFrameType = string.IsNullOrWhiteSpace(DoorFrameType) ? "N型" : DoorFrameType,
                 CustomColumnRatios = CustomColumnRatios,
                 CustomRowRatios = CustomRowRatios,
+                CustomColumnWidths = CustomColumnWidths,
+                CustomRowHeights = CustomRowHeights,
+                CustomCellLayout = CustomCellLayout,
                 CellOpeningModes = CellOpeningModes,
+                DoorPlacement = DoorPlacement,
+                DoorEdgeDistance = DoorEdgeDistance,
                 DrawingScale = DrawingScale,
                 Status = "参数完整，可生成"
             };
