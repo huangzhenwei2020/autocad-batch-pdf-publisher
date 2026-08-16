@@ -41,7 +41,7 @@ namespace BatchPdfPublisher.Services
             else throw new InvalidOperationException("无法读取所选对象的表格单元格。已记录对象诊断，请确认选择的是天正门窗表，而不是普通线条或门窗对象。");
 
             result.RawRows.AddRange(rows);
-            result.Items.AddRange(Consolidate(ParseRows(rows)));
+            result.Items.AddRange(AssignSizeSuffixes(Consolidate(ParseRows(rows))));
             Validate(result.Items);
             result.Diagnostic = BuildDiagnostic(result);
             AppendLog(result);
@@ -300,11 +300,31 @@ namespace BatchPdfPublisher.Services
         {
             foreach (var item in items)
                 item.Status = item.Width <= 0 || item.Height <= 0 ? "缺少洞口尺寸" : item.Width <= item.InstallationGap * 2 || item.Height <= item.InstallationGap * 2 ? "尺寸小于安装缝" : "待设置分格";
-            foreach (var group in items.GroupBy(x => x.Code, StringComparer.OrdinalIgnoreCase))
+        }
+
+        private static List<DoorWindowScheduleItem> AssignSizeSuffixes(List<DoorWindowScheduleItem> items)
+        {
+            foreach (var group in items.GroupBy(x => (x.Code ?? string.Empty).Trim(), StringComparer.OrdinalIgnoreCase).Where(x => x.Count() > 1))
             {
-                var sizes = group.Where(x => x.Width > 0 && x.Height > 0).Select(x => x.Width.ToString("0.###", CultureInfo.InvariantCulture) + "x" + x.Height.ToString("0.###", CultureInfo.InvariantCulture)).Distinct().ToList();
-                if (sizes.Count > 1) foreach (var item in group) { item.Status = "同编号存在不同尺寸"; item.Selected = false; }
+                var ordered = group.OrderBy(x => x.SourceRow).ToList();
+                for (var index = 0; index < ordered.Count; index++)
+                {
+                    var suffix = ToAlphabeticSuffix(index);
+                    ordered[index].Code = (group.Key ?? string.Empty) + suffix;
+                    ordered[index].SourceNote = string.IsNullOrWhiteSpace(ordered[index].SourceNote)
+                        ? "原编号 " + group.Key + " 存在不同洞口尺寸，已自动增加后缀"
+                        : ordered[index].SourceNote + "；原编号 " + group.Key + " 存在不同洞口尺寸，已自动增加后缀";
+                }
             }
+            for (var index = 0; index < items.Count; index++) items[index].Sequence = index + 1;
+            return items;
+        }
+
+        private static string ToAlphabeticSuffix(int index)
+        {
+            var value = index + 1; var result = string.Empty;
+            while (value > 0) { value--; result = (char)('A' + value % 26) + result; value /= 26; }
+            return result;
         }
 
         private static List<DoorWindowScheduleItem> Consolidate(List<DoorWindowScheduleItem> items)
@@ -359,13 +379,16 @@ namespace BatchPdfPublisher.Services
 
         private static string InferType(string code, string category)
         {
-            var value = (category + " " + code).ToUpperInvariant();
-            if (value.Contains("门联窗") || value.Contains("MLC")) return "门联窗";
-            if (value.Contains("百叶")) return "百叶";
-            if (value.Contains("防火窗") || value.Contains("FC")) return "防火窗";
-            if (value.Contains("防火门") || value.Contains("FHM") || value.Contains("FM")) return "防火门";
-            if (value.Contains("窗") || Regex.IsMatch(value, @"(^|\s)C\d")) return "窗";
-            if (value.Contains("门") || Regex.IsMatch(value, @"(^|\s)M\d")) return "门";
+            var inferred = DoorWindowElevationSuggestionService.InferTypeFromCode(code, null);
+            if (inferred != "待确认") return inferred;
+            var value = (category ?? string.Empty).ToUpperInvariant();
+            if (value.Contains("门联窗")) return "门联窗";
+            if (value.Contains("百叶窗")) return "百叶窗";
+            if (value.Contains("百叶门")) return "百叶门";
+            if (value.Contains("防火窗")) return "防火窗（等级待确认）";
+            if (value.Contains("防火门")) return "防火门（等级待确认）";
+            if (value.Contains("窗")) return "普通窗";
+            if (value.Contains("门")) return "普通门";
             return "待确认";
         }
 

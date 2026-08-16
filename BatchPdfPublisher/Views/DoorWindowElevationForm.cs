@@ -32,7 +32,9 @@ namespace BatchPdfPublisher.Views
         private readonly DoorWindowElevationPreviewControl _preview = new DoorWindowElevationPreviewControl();
         private readonly Label _sourceLabel = new Label();
         private readonly Label _status = new Label();
-        private readonly ComboBox _batchType = Combo(new[] { "不修改", "窗", "凸窗", "门", "门联窗", "百叶", "防火门", "防火窗", "洞口", "待确认" });
+        private static readonly string[] DoorWindowTypes = { "普通窗", "高窗", "凸窗", "百叶窗", "甲级防火窗", "乙级防火窗", "丙级防火窗", "防火窗（等级待确认）", "普通门", "甲级防火门", "乙级防火门", "丙级防火门", "防火门（等级待确认）", "人防门", "百叶门", "门联窗", "洞口", "待确认" };
+        private readonly ComboBox _batchType = Combo(new[] { "不修改" }.Concat(DoorWindowTypes).ToArray());
+        private readonly ComboBox _filterType = Combo(new[] { "全部类型" }.Concat(DoorWindowTypes).ToArray());
         private readonly ComboBox _batchDivision = Combo(new[] { "不修改", "未设置", "单扇", "双扇等分", "三扇等分", "上亮", "侧亮", "上亮+侧亮", "门联窗", "自定义" });
         private readonly ComboBox _batchOpening = Combo(new[] { "不修改", "未设置", "固定", "左平开", "右平开", "双扇平开", "左推拉", "右推拉", "双向推拉", "上悬", "下悬", "百叶", "自定义" });
         private readonly ComboBox _drawingScale = ScaleCombo();
@@ -57,7 +59,7 @@ namespace BatchPdfPublisher.Views
         {
             var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, BackColor = Color.White };
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 108));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 140));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));
 
@@ -74,6 +76,8 @@ namespace BatchPdfPublisher.Views
 
             var batch = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = true, Padding = new Padding(12, 7, 8, 5), BackColor = Color.FromArgb(250, 251, 252) };
             batch.Controls.Add(LabelFor("批量设置")); batch.Controls.Add(_batchType); batch.Controls.Add(_batchDivision); batch.Controls.Add(_batchOpening);
+            batch.Controls.Add(LabelFor("按类型选择")); batch.Controls.Add(_filterType);
+            var selectType = ButtonFor("勾选该类型"); selectType.Click += (s, e) => SelectByType(); batch.Controls.Add(selectType);
             var applyBatch = ButtonFor("应用到多选/勾选"); applyBatch.Click += (s, e) => ApplyBatch(); batch.Controls.Add(applyBatch);
             var constructionBatch = ButtonFor("批量构造设置"); constructionBatch.Click += (s, e) => ApplyBatchConstruction(); batch.Controls.Add(constructionBatch);
             var auto = ButtonFor("按尺寸自动判断"); auto.Click += (s, e) => ApplyAutomaticSuggestions(); batch.Controls.Add(auto);
@@ -108,6 +112,7 @@ namespace BatchPdfPublisher.Views
             var save = ButtonFor("保存门窗设置"); save.Click += (s, e) => SavePreferences(true); actions.Controls.Add(save);
             var insert = ButtonFor("插入所选立面"); insert.Click += (s, e) => InsertElevations(); actions.Controls.Add(insert);
             var update = ButtonFor("更新已生成立面"); update.Click += (s, e) => UpdateGeneratedElevation(); actions.Controls.Add(update);
+            var insertSchedule = ButtonFor("插入门窗表"); insertSchedule.Click += (s, e) => InsertDoorWindowSchedule(); actions.Controls.Add(insertSchedule);
             var close = ButtonFor("关闭"); close.Click += (s, e) => Close(); actions.Controls.Add(close);
             var none = ButtonFor("取消全选"); none.Click += (s, e) => SelectAll(false); actions.Controls.Add(none);
             var all = ButtonFor("全选可生成项"); all.Click += (s, e) => SelectAll(true); actions.Controls.Add(all);
@@ -134,10 +139,10 @@ namespace BatchPdfPublisher.Views
             _grid.EnableHeadersVisualStyles = false; _grid.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(225, 232, 240); _grid.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(248, 250, 252);
             _grid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "生成", DataPropertyName = "Selected", Width = 52 });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "序", DataPropertyName = "Sequence", Width = 44, ReadOnly = true });
-            _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "编号", DataPropertyName = "Code", Width = 95, ReadOnly = true });
+            _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "编号", DataPropertyName = "Code", Width = 95 });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "洞口尺寸", DataPropertyName = "SizeText", Width = 116, ReadOnly = true });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "数量", DataPropertyName = "Quantity", Width = 58, ReadOnly = true });
-            _grid.Columns.Add(ComboColumn("门窗类型", "ElevationType", 100, new[] { "窗", "凸窗", "门", "门联窗", "百叶", "防火门", "防火窗", "洞口", "待确认" }));
+            _grid.Columns.Add(ComboColumn("门窗类型", "ElevationType", 100, DoorWindowTypes));
             _grid.Columns.Add(ComboColumn("分格模板", "DivisionPreset", 118, new[] { "未设置", "单扇", "双扇等分", "三扇等分", "上亮", "侧亮", "上亮+侧亮", "门联窗", "自定义" }));
             _grid.Columns.Add(ComboColumn("开启方式", "OpeningMode", 110, new[] { "未设置", "固定", "左平开", "右平开", "双扇平开", "左推拉", "右推拉", "双向推拉", "上悬", "下悬", "百叶", "自定义" }));
             _grid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "安装缝", DataPropertyName = "HasInstallationGap", Width = 65 });
@@ -147,6 +152,10 @@ namespace BatchPdfPublisher.Views
             _grid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "分隔框", DataPropertyName = "HasMullion", Width = 68 });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "分隔框宽(mm)", DataPropertyName = "MullionWidth", Width = 100 });
             _grid.Columns.Add(ComboColumn("门套", "DoorFrameType", 72, new[] { "N型", "口型" }));
+            _grid.Columns.Add(ComboColumn("材质", "Material", 78, new[] { "无", "玻璃", "实板", "百叶" }));
+            _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "离地高度(mm)", DataPropertyName = "SillHeight", Width = 104 });
+            _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "图集名称", DataPropertyName = "AtlasName", Width = 90 });
+            _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "备注", DataPropertyName = "Remarks", Width = 140 });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "窗框外包", DataPropertyName = "FrameSizeText", Width = 116, ReadOnly = true });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "来源备注", DataPropertyName = "SourceNote", Width = 160, ReadOnly = true });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "状态", DataPropertyName = "Status", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, MinimumWidth = 150, ReadOnly = true });
@@ -157,6 +166,8 @@ namespace BatchPdfPublisher.Views
             _grid.CellDoubleClick += (s, e) => { if (e.RowIndex >= 0) EditCurrentDivision(); };
             _grid.ColumnHeaderMouseClick += (s, e) => { if (e.ColumnIndex == 0) SelectAll(!_rows.Where(IsSelectable).All(x => x.Selected)); };
             _grid.CellFormatting += (s, e) => { if (e.RowIndex < 0) return; var status = _rows[e.RowIndex].Status ?? string.Empty; if (status.Contains("冲突") || status.Contains("缺少") || status.Contains("小于")) e.CellStyle.ForeColor = Color.Firebrick; else if (status.Contains("可生成")) e.CellStyle.ForeColor = Color.FromArgb(20, 112, 65); };
+            _grid.CellFormatting += (s, e) => { if (e.RowIndex < 0 || _grid.Columns[e.ColumnIndex].DataPropertyName != "SillHeight") return; if (!(_rows[e.RowIndex].ElevationType ?? string.Empty).Contains("窗")) { e.Value = "—"; e.FormattingApplied = true; } };
+            _grid.CellBeginEdit += (s, e) => { if (e.RowIndex >= 0 && _grid.Columns[e.ColumnIndex].DataPropertyName == "SillHeight" && !(_rows[e.RowIndex].ElevationType ?? string.Empty).Contains("窗")) e.Cancel = true; };
             _grid.DataError += (s, e) => { e.ThrowException = false; };
         }
 
@@ -172,6 +183,10 @@ namespace BatchPdfPublisher.Views
                 if (preference != null)
                 {
                     item.ElevationType = preference.ElevationType; item.DivisionPreset = preference.DivisionPreset; item.OpeningMode = preference.OpeningMode;
+                    if (item.ElevationType == "门") item.ElevationType = "普通门";
+                    else if (item.ElevationType == "窗") item.ElevationType = "普通窗";
+                    else if (item.ElevationType == "防火门") item.ElevationType = "防火门（等级待确认）";
+                    else if (item.ElevationType == "防火窗") item.ElevationType = "防火窗（等级待确认）";
                     if (item.OpeningMode == "推拉") item.OpeningMode = "右推拉";
                     item.HasInstallationGap = preference.HasInstallationGap;
                     item.InstallationGap = preference.InstallationGap > 0 ? preference.InstallationGap : 20d;
@@ -181,6 +196,9 @@ namespace BatchPdfPublisher.Views
                     item.CustomColumnWidths = preference.CustomColumnWidths; item.CustomRowHeights = preference.CustomRowHeights; item.CellOpeningModes = preference.CellOpeningModes;
                     item.CustomCellLayout = preference.CustomCellLayout;
                     item.DoorPlacement = preference.DoorPlacement; item.DoorEdgeDistance = preference.DoorEdgeDistance;
+                    item.Material = string.IsNullOrWhiteSpace(preference.Material) ? item.Material : preference.Material;
+                    item.AtlasName = string.IsNullOrWhiteSpace(preference.AtlasName) ? item.AtlasName : DoorWindowElevationSuggestionService.NormalizeAtlasName(preference.AtlasName); item.Remarks = preference.Remarks;
+                    if (preference.HasSillHeight) item.SillHeight = preference.SillHeight;
                 }
                 UpdateStatus(item); _rows.Add(item);
             }
@@ -198,9 +216,17 @@ namespace BatchPdfPublisher.Views
                 if (Convert.ToString(_batchType.SelectedItem) != "不修改") item.ElevationType = Convert.ToString(_batchType.SelectedItem);
                 if (Convert.ToString(_batchDivision.SelectedItem) != "不修改") item.DivisionPreset = Convert.ToString(_batchDivision.SelectedItem);
                 if (Convert.ToString(_batchOpening.SelectedItem) != "不修改") item.OpeningMode = Convert.ToString(_batchOpening.SelectedItem);
+                if ((item.ElevationType ?? string.Empty).Contains("窗") && item.SillHeight <= 0d) item.SillHeight = 900d; NormalizeSillHeight(item);
                 UpdateStatus(item);
             }
             _grid.Refresh(); UpdateSummary(); UpdatePreview(); _status.Text = "已批量修改 " + targets.Count + " 项（蓝色多选行优先，否则使用勾选项）。";
+        }
+
+        private void SelectByType()
+        {
+            _grid.EndEdit(); var type = Convert.ToString(_filterType.SelectedItem);
+            foreach (var item in _rows) item.Selected = IsSelectable(item) && (type == "全部类型" || string.Equals(item.ElevationType, type, StringComparison.Ordinal));
+            _grid.Refresh(); UpdateSummary();
         }
 
         private void ApplyBatchConstruction()
@@ -441,6 +467,27 @@ namespace BatchPdfPublisher.Views
         }
 
 #if ACAD_R19
+        private void InsertDoorWindowSchedule()
+#else
+        private async void InsertDoorWindowSchedule()
+#endif
+        {
+            _grid.EndEdit(); SavePreferences(false); Hide();
+            try
+            {
+                _document.Window.Focus(); var inserted = 0;
+#if ACAD_R19
+                using (_document.LockDocument()) inserted = DoorWindowElevationInsertionService.InsertSchedule(_document, _rows.ToList(), ParseDrawingScale());
+#else
+                await CadCommandContext.ExecuteAsync(() => inserted = DoorWindowElevationInsertionService.InsertSchedule(_document, _rows.ToList(), ParseDrawingScale()));
+#endif
+                if (inserted > 0) MessageBox.Show(this, "已插入 " + inserted + " 行门窗表数据。图集名称和备注可在表格中预先修改。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception exception) { MessageBox.Show(this, "插入门窗表失败：" + exception.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+            finally { Show(); Activate(); }
+        }
+
+#if ACAD_R19
         private void UpdateGeneratedElevation()
 #else
         private async void UpdateGeneratedElevation()
@@ -494,7 +541,7 @@ namespace BatchPdfPublisher.Views
         {
             if (e.RowIndex < 0 || e.RowIndex >= _rows.Count || _propagatingGridEdit) return;
             var property = _grid.Columns[e.ColumnIndex].DataPropertyName;
-            var editableBatchProperty = property == "ElevationType" || property == "DivisionPreset" || property == "OpeningMode" || property == "HasInstallationGap" || property == "InstallationGap" || property == "HasOuterFrame" || property == "OuterFrameWidth" || property == "HasMullion" || property == "MullionWidth" || property == "DoorFrameType";
+            var editableBatchProperty = property == "ElevationType" || property == "DivisionPreset" || property == "OpeningMode" || property == "HasInstallationGap" || property == "InstallationGap" || property == "HasOuterFrame" || property == "OuterFrameWidth" || property == "HasMullion" || property == "MullionWidth" || property == "DoorFrameType" || property == "Material" || property == "SillHeight" || property == "AtlasName" || property == "Remarks";
             if (editableBatchProperty && _grid.SelectedRows.Count > 1)
             {
                 _propagatingGridEdit = true;
@@ -515,6 +562,12 @@ namespace BatchPdfPublisher.Views
                         else if (property == "HasMullion") target.HasMullion = source.HasMullion;
                         else if (property == "MullionWidth") target.MullionWidth = source.MullionWidth;
                         else if (property == "DoorFrameType") target.DoorFrameType = source.DoorFrameType;
+                        else if (property == "Material") target.Material = source.Material;
+                        else if (property == "SillHeight") target.SillHeight = source.SillHeight;
+                        else if (property == "AtlasName") target.AtlasName = source.AtlasName;
+                        else if (property == "Remarks") target.Remarks = source.Remarks;
+                        if (property == "ElevationType" && (target.ElevationType ?? string.Empty).Contains("窗") && target.SillHeight <= 0d) target.SillHeight = 900d;
+                        NormalizeSillHeight(target);
                         if (property == "InstallationGap" || property == "HasInstallationGap") NormalizeActualSizes(target);
                         UpdateStatus(target);
                     }
@@ -522,7 +575,16 @@ namespace BatchPdfPublisher.Views
                 finally { _propagatingGridEdit = false; }
             }
             if (property == "InstallationGap" || property == "HasInstallationGap") NormalizeActualSizes(_rows[e.RowIndex]);
+            if (property == "ElevationType" && (_rows[e.RowIndex].ElevationType ?? string.Empty).Contains("窗") && _rows[e.RowIndex].SillHeight <= 0d) _rows[e.RowIndex].SillHeight = 900d;
+            NormalizeSillHeight(_rows[e.RowIndex]);
             UpdateStatus(_rows[e.RowIndex]); _grid.Invalidate(); UpdateSummary(); UpdatePreview();
+        }
+
+        private static void NormalizeSillHeight(DoorWindowScheduleItem item)
+        {
+            if (item == null) return;
+            if ((item.ElevationType ?? string.Empty).Contains("窗")) { if (item.SillHeight < 0d) item.SillHeight = 0d; }
+            else item.SillHeight = 0d;
         }
 
         private static void NormalizeActualSizes(DoorWindowScheduleItem item)

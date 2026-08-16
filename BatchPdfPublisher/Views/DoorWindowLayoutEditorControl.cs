@@ -78,19 +78,41 @@ namespace BatchPdfPublisher.Views
 
         public bool MergeSelected()
         {
-            var cell = SelectedCell; if (cell == null) return false;
+            var selected = _selectedIndices.OrderBy(x => x).Where(x => x >= 0 && x < _cells.Count).Select(x => _cells[x]).ToList();
+            if (selected.Count < 2 || selected.Any(x => x.IsDeleted)) return false;
             const double tolerance = .05d;
-            for (var index = 0; index < _cells.Count; index++)
+            var left = selected.Min(x => x.Left); var right = selected.Max(x => x.Right); var bottom = selected.Min(x => x.Bottom); var top = selected.Max(x => x.Top);
+            var area = selected.Sum(x => (x.Right - x.Left) * (x.Top - x.Bottom));
+            if (Math.Abs(area - (right - left) * (top - bottom)) > tolerance * Math.Max(1d, (right - left) + (top - bottom))) return false;
+            var merged = Copy(SelectedCell ?? selected[0]); merged.Left = left; merged.Right = right; merged.Bottom = bottom; merged.Top = top;
+            foreach (var cell in selected) MergeValues(merged, cell);
+            _cells.RemoveAll(x => selected.Contains(x)); _cells.Add(merged); _selected = _cells.IndexOf(merged); _selectedIndices.Clear(); _selectedIndices.Add(_selected); OnLayoutChanged(); return true;
+        }
+
+        public bool CenterSelected()
+        {
+            var selected = SelectedCells.Where(x => !x.IsDeleted).ToList(); if (selected.Count == 0) return false;
+            const double tolerance = .05d;
+            var bottom = selected.Min(x => x.Bottom); var top = selected.Max(x => x.Top);
+            if (selected.All(x => Math.Abs(x.Bottom - bottom) < tolerance && Math.Abs(x.Top - top) < tolerance))
             {
-                if (index == _selected) continue; var other = _cells[index];
-                var sameHeight = Math.Abs(cell.Bottom - other.Bottom) < tolerance && Math.Abs(cell.Top - other.Top) < tolerance;
-                var sameWidth = Math.Abs(cell.Left - other.Left) < tolerance && Math.Abs(cell.Right - other.Right) < tolerance;
-                if (sameHeight && (Math.Abs(cell.Right - other.Left) < tolerance || Math.Abs(other.Right - cell.Left) < tolerance))
-                { cell.Left = Math.Min(cell.Left, other.Left); cell.Right = Math.Max(cell.Right, other.Right); MergeValues(cell, other); _cells.RemoveAt(index); if (index < _selected) _selected--; OnLayoutChanged(); return true; }
-                if (sameWidth && (Math.Abs(cell.Top - other.Bottom) < tolerance || Math.Abs(other.Top - cell.Bottom) < tolerance))
-                { cell.Bottom = Math.Min(cell.Bottom, other.Bottom); cell.Top = Math.Max(cell.Top, other.Top); MergeValues(cell, other); _cells.RemoveAt(index); if (index < _selected) _selected--; OnLayoutChanged(); return true; }
+                var ordered = selected.OrderBy(x => x.Left).ToList();
+                for (var i = 1; i < ordered.Count; i++) if (Math.Abs(ordered[i - 1].Right - ordered[i].Left) > tolerance) return false;
+                var selectedWidth = ordered.Last().Right - ordered.First().Left; var side = (_frameWidth - selectedWidth) / 2d;
+                if (side < 50d) return false;
+                ScaleBand(bottom, top, 0d, ordered.First().Left, 0d, side);
+                var shift = side - ordered.First().Left; foreach (var cell in selected) { cell.Left += shift; cell.Right += shift; }
+                ScaleBand(bottom, top, ordered.Last().Right - shift, _frameWidth, side + selectedWidth, _frameWidth);
+                OnLayoutChanged(); return true;
             }
             return false;
+        }
+
+        private void ScaleBand(double bottom, double top, double oldLeft, double oldRight, double newLeft, double newRight)
+        {
+            const double tolerance = .05d; if (oldRight - oldLeft < tolerance) return;
+            foreach (var cell in _cells.Where(x => !_selectedIndices.Contains(_cells.IndexOf(x)) && Math.Abs(x.Bottom - bottom) < tolerance && Math.Abs(x.Top - top) < tolerance && x.Left >= oldLeft - tolerance && x.Right <= oldRight + tolerance))
+            { cell.Left = newLeft + (cell.Left - oldLeft) / (oldRight - oldLeft) * (newRight - newLeft); cell.Right = newLeft + (cell.Right - oldLeft) / (oldRight - oldLeft) * (newRight - newLeft); }
         }
 
         public bool ToggleSelectedDeleted()
@@ -337,10 +359,16 @@ namespace BatchPdfPublisher.Views
         {
             var rect = ToPixels(cell); if (cell.IsDeleted) { graphics.DrawRectangle(pen, rect.X, rect.Y, rect.Width, rect.Height); return; }
             var leftNeighbor = ActiveNeighbor(cell, true, cell.Left); var rightNeighbor = ActiveNeighbor(cell, true, cell.Right); var bottomNeighbor = ActiveNeighbor(cell, false, cell.Bottom); var topNeighbor = ActiveNeighbor(cell, false, cell.Top);
-            if (leftNeighbor == null || IsOperable(cell.Opening) || IsOperable(leftNeighbor.Opening)) graphics.DrawLine(pen, rect.Left, rect.Top, rect.Left, rect.Bottom);
-            if (rightNeighbor == null || IsOperable(cell.Opening) || IsOperable(rightNeighbor.Opening)) graphics.DrawLine(pen, rect.Right, rect.Top, rect.Right, rect.Bottom);
-            if (topNeighbor == null || IsOperable(cell.Opening) || IsOperable(topNeighbor.Opening)) graphics.DrawLine(pen, rect.Left, rect.Top, rect.Right, rect.Top);
-            if (bottomNeighbor == null || IsOperable(cell.Opening) || IsOperable(bottomNeighbor.Opening)) graphics.DrawLine(pen, rect.Left, rect.Bottom, rect.Right, rect.Bottom);
+            Draw(rect.Left, rect.Top, rect.Left, rect.Bottom, leftNeighbor);
+            Draw(rect.Right, rect.Top, rect.Right, rect.Bottom, rightNeighbor);
+            Draw(rect.Left, rect.Top, rect.Right, rect.Top, topNeighbor);
+            Draw(rect.Left, rect.Bottom, rect.Right, rect.Bottom, bottomNeighbor);
+            void Draw(float x1, float y1, float x2, float y2, DoorWindowLayoutCell neighbor)
+            {
+                if (neighbor != null && _hasMullion && !IsOperable(cell.Opening) && !IsOperable(neighbor.Opening)) return;
+                var old = pen.DashStyle; if (neighbor != null && !_hasMullion) pen.DashStyle = DashStyle.Dash;
+                graphics.DrawLine(pen, x1, y1, x2, y2); pen.DashStyle = old;
+            }
         }
 
         private static void DrawSlidingArrow(Graphics graphics, Pen pen, float left, float right, float y, bool pointsRight)

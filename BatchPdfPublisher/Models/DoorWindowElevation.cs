@@ -15,6 +15,10 @@ namespace BatchPdfPublisher.Models
         public double Height { get; set; }
         public int Quantity { get; set; }
         public string SourceNote { get; set; }
+        public string Material { get; set; } = "无";
+        public string AtlasName { get; set; }
+        public string Remarks { get; set; }
+        public double SillHeight { get; set; }
         public string ElevationType { get; set; }
         public string DivisionPreset { get; set; }
         public string OpeningMode { get; set; }
@@ -82,6 +86,11 @@ namespace BatchPdfPublisher.Models
         public string CellOpeningModes { get; set; }
         public string DoorPlacement { get; set; } = "靠左";
         public double DoorEdgeDistance { get; set; }
+        public string Material { get; set; }
+        public string AtlasName { get; set; }
+        public string Remarks { get; set; }
+        public double SillHeight { get; set; }
+        public bool HasSillHeight { get; set; }
     }
 
     public sealed class DoorWindowElevationTemplate

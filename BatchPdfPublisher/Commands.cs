@@ -250,11 +250,20 @@ namespace BatchPdfPublisher
                     if (hasStandardScalableObjects)
                     {
                         var profile = DraftingStandardService.LoadProfile();
+                        if (tianzhengSettings.ApplyCadDimensionGeometry)
+                        {
+                            profile.UseFixedExtensionLength = true;
+                            profile.FixedExtensionLength = Math.Max(0.001d, tianzhengSettings.InnerExtensionLength);
+                            profile.BaselineSpacing = Math.Max(0.001d, tianzhengSettings.DimensionSpacing);
+                        }
                         // Do not rewrite existing global styles here. A complex
                         // drawing can have thousands of references to one style;
                         // modifying that shared record causes a drawing-wide rebuild.
                         resources = DraftingStandardService.EnsureAll(document.Database, transaction, profile, false);
-                        dimensionStyle = DraftingStandardService.EnsureDimensionStyleForScale(document.Database, transaction, targetScale, profile, resources, false);
+                        // Only the target dimension style is refreshed so the
+                        // saved text position, arrow and ordinary-CAD geometry
+                        // settings take effect without rebuilding unrelated resources.
+                        dimensionStyle = DraftingStandardService.EnsureDimensionStyleForScale(document.Database, transaction, targetScale, profile, resources, true);
                     }
                     var updated = 0;
                     foreach (var id in selectedIds)
@@ -280,6 +289,7 @@ namespace BatchPdfPublisher
                                 continue;
                             }
                             entity.UpgradeOpen();
+                            if (entity is Autodesk.AutoCAD.DatabaseServices.Dimension && !tianzhengSettings.ApplyCadDimensionGeometry) continue;
                             if (DrawingScaleService.ApplyStandardizedScale(document.Database, transaction, entity, sourceScale, targetScale, resources, dimensionStyle, autoLayers)) { changed++; entity.RecordGraphicsModified(true); }
                         }
                         catch { failed++; }

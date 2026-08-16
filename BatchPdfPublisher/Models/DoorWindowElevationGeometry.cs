@@ -146,7 +146,7 @@ namespace BatchPdfPublisher.Models
                 {
                     ValidateCellLayout(layout, width, height);
                     foreach (var cell in layout.Where(x => !x.IsDeleted))
-                        cells.Add(new DoorWindowCell(left + cell.Left, bottom + cell.Bottom, left + cell.Right, bottom + cell.Top) { Opening = cell.Opening, Material = string.IsNullOrWhiteSpace(cell.Material) ? "无" : cell.Material, IsDoor = cell.IsDoor, IsDeleted = false });
+                        cells.Add(new DoorWindowCell(left + cell.Left, bottom + cell.Bottom, left + cell.Right, bottom + cell.Top) { Opening = cell.Opening, Material = string.IsNullOrWhiteSpace(cell.Material) ? (string.IsNullOrWhiteSpace(item.Material) ? "无" : item.Material) : cell.Material, IsDoor = cell.IsDoor, IsDeleted = false });
                     if (cells.Count == 0) throw new InvalidOperationException("至少要保留一个门窗面板。");
                     return cells;
                 }
@@ -164,6 +164,7 @@ namespace BatchPdfPublisher.Models
                     }
                     y = nextY;
                 }
+                foreach (var cell in cells) cell.Material = string.IsNullOrWhiteSpace(item.Material) ? "无" : item.Material;
                 return cells;
             }
             switch (preset)
@@ -198,7 +199,7 @@ namespace BatchPdfPublisher.Models
                     cells.Add(new DoorWindowCell(left, bottom, right, top));
                     break;
             }
-            foreach (var cell in cells) if (string.IsNullOrWhiteSpace(cell.Material)) cell.Material = "无";
+            foreach (var cell in cells) cell.Material = string.IsNullOrWhiteSpace(item.Material) ? "无" : item.Material;
             return cells;
         }
 
@@ -253,7 +254,17 @@ namespace BatchPdfPublisher.Models
             }
             void Add(double x1, double y1, double x2, double y2, bool shared, bool omit)
             {
-                if (shared || omit) return; // 固定格之间省略中心线；任一侧可开启时保留中心线。
+                if (shared)
+                {
+                    // 关闭实体分隔框时仍保留跳线，保证立面图能识别分格。
+                    if (!item.HasMullion)
+                    {
+                        var jump = x1.ToString("0.###") + ":" + y1.ToString("0.###") + ":" + x2.ToString("0.###") + ":" + y2.ToString("0.###") + ":J";
+                        if (keys.Add(jump)) geometry.Lines.Add(new DoorWindowLineSegment(x1, y1, x2, y2, DoorWindowLineRole.Opening));
+                    }
+                    return;
+                }
+                if (omit) return;
                 var forward = x1.ToString("0.###") + ":" + y1.ToString("0.###") + ":" + x2.ToString("0.###") + ":" + y2.ToString("0.###");
                 var reverse = x2.ToString("0.###") + ":" + y2.ToString("0.###") + ":" + x1.ToString("0.###") + ":" + y1.ToString("0.###");
                 if (keys.Contains(forward) || keys.Contains(reverse)) return; keys.Add(forward);

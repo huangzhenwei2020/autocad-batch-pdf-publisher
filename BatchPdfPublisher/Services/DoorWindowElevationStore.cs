@@ -49,7 +49,12 @@ namespace BatchPdfPublisher.Services
                     CustomCellLayout = item.CustomCellLayout,
                     CellOpeningModes = item.CellOpeningModes,
                     DoorPlacement = item.DoorPlacement,
-                    DoorEdgeDistance = item.DoorEdgeDistance
+                    DoorEdgeDistance = item.DoorEdgeDistance,
+                    Material = item.Material,
+                    AtlasName = item.AtlasName,
+                    Remarks = item.Remarks,
+                    SillHeight = item.SillHeight,
+                    HasSillHeight = true
                 });
             }
             using (var stream = File.Create(PathName))

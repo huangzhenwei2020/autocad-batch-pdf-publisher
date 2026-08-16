@@ -47,6 +47,44 @@ namespace BatchPdfPublisher.Services
             document.Editor.WriteMessage("\n已插入 " + items.Count + " 个可独立编辑的门窗立面" + (frame == null ? string.Empty : "，自动排入 " + pageCount + " 张 " + frame.PaperDisplay + " 图框") + "。几何按实际毫米 1:1 绘制，标注采用万落建筑工具 1:" + drawingScale + " 标注样式。\n");
             return items.Count;
         }
+        private sealed class DoorWindowLayers { public ObjectId Window, Door, OpeningHole; }
+
+        public static int InsertSchedule(Document document, IList<DoorWindowScheduleItem> source, int drawingScale)
+        {
+            if (document == null) throw new ArgumentNullException("document");
+            var items = (source ?? new List<DoorWindowScheduleItem>()).Where(x => x.Selected).OrderBy(x => x.Sequence).ToList();
+            if (items.Count == 0) throw new InvalidOperationException("没有勾选要写入门窗表的数据。 ");
+            var point = document.Editor.GetPoint("\n指定门窗表左上角插入点: ");
+            if (point.Status != PromptStatus.OK) return 0;
+            var scale = Math.Max(1, drawingScale);
+            using (var transaction = document.Database.TransactionManager.StartTransaction())
+            {
+                var table = new Table { TableStyle = document.Database.Tablestyle, Position = point.Value };
+                table.SetSize(items.Count + 2, 8); table.SetRowHeight(7d * scale);
+                var widths = new[] { 12d, 25d, 22d, 34d, 20d, 16d, 42d, 50d };
+                for (var column = 0; column < widths.Length; column++) table.Columns[column].Width = widths[column] * scale;
+                table.MergeCells(CellRange.Create(table, 0, 0, 0, 7)); table.Cells[0, 0].TextString = "门窗表";
+                var headers = new[] { "序号", "类型", "编号", "洞口尺寸", "离地高度", "数量", "图集名称", "备注" };
+                for (var column = 0; column < headers.Length; column++) table.Cells[1, column].TextString = headers[column];
+                for (var index = 0; index < items.Count; index++)
+                {
+                    var item = items[index]; var row = index + 2;
+                    table.Cells[row, 0].TextString = (index + 1).ToString(CultureInfo.InvariantCulture);
+                    table.Cells[row, 1].TextString = item.ElevationType ?? string.Empty;
+                    table.Cells[row, 2].TextString = item.Code ?? string.Empty;
+                    table.Cells[row, 3].TextString = item.SizeText;
+                    table.Cells[row, 4].TextString = (item.ElevationType ?? string.Empty).Contains("窗") ? item.SillHeight.ToString("0.##", CultureInfo.InvariantCulture) : "—";
+                    table.Cells[row, 5].TextString = Math.Max(1, item.Quantity).ToString(CultureInfo.InvariantCulture);
+                    table.Cells[row, 6].TextString = string.IsNullOrWhiteSpace(item.AtlasName) ? DoorWindowElevationSuggestionService.InferAtlas(item.Code, item.ElevationType, item.SourceNote) : DoorWindowElevationSuggestionService.NormalizeAtlasName(item.AtlasName);
+                    table.Cells[row, 7].TextString = item.Remarks ?? item.SourceNote ?? string.Empty;
+                }
+                for (var row = 0; row < items.Count + 2; row++) for (var column = 0; column < 8; column++)
+                { table.Cells[row, column].TextHeight = 2.5d * scale; table.Cells[row, column].Alignment = CellAlignment.MiddleCenter; }
+                var space = (BlockTableRecord)transaction.GetObject(document.Database.CurrentSpaceId, OpenMode.ForWrite);
+                space.AppendEntity(table); transaction.AddNewlyCreatedDBObject(table, true); table.GenerateLayout(); transaction.Commit();
+            }
+            document.Editor.Regen(); return items.Count;
+        }
 
         public static int Update(Document document, DoorWindowElevationMetadata metadata, IList<DoorWindowScheduleItem> source, int drawingScale)
         {
@@ -92,7 +130,7 @@ namespace BatchPdfPublisher.Services
         {
             var item = elevation.Item; var geometry = DoorWindowElevationGeometryBuilder.Build(item);
             var metadata = DoorWindowElevationMetadata.Create(item, origin, drawingScale, existingGroupId);
-            AppendGeometry(geometry, origin, space, transaction, resources, metadata);
+            AppendGeometry(geometry, origin, space, transaction, resources, metadata, item);
             var dimensionGap = elevation.DimensionGap;
             AppendTagged(space, transaction, new AlignedDimension(origin, new Point3d(origin.X + item.Width, origin.Y, origin.Z), new Point3d(origin.X + item.Width / 2d, origin.Y - dimensionGap, origin.Z), string.Empty, dimensionStyle) { LayerId = resources.AnnotationDimensionLayerId }, metadata);
             AppendTagged(space, transaction, new AlignedDimension(origin, new Point3d(origin.X, origin.Y + item.Height, origin.Z), new Point3d(origin.X - dimensionGap, origin.Y + item.Height / 2d, origin.Z), string.Empty, dimensionStyle) { LayerId = resources.AnnotationDimensionLayerId }, metadata);
@@ -103,9 +141,11 @@ namespace BatchPdfPublisher.Services
             AddCenteredText(space, transaction, "1:" + drawingScale.ToString(CultureInfo.InvariantCulture), new Point3d(origin.X + item.Width / 2d, titleY - 3.6d * drawingScale, origin.Z), noteHeight, resources.AnnotationTextStyleId, resources.AnnotationTextLayerId, metadata);
         }
 
-        private static void AppendGeometry(DoorWindowElevationGeometry geometry, Point3d origin, BlockTableRecord space, Transaction transaction, DraftingStandardResources resources, DoorWindowElevationMetadata metadata)
+        private static void AppendGeometry(DoorWindowElevationGeometry geometry, Point3d origin, BlockTableRecord space, Transaction transaction, DraftingStandardResources resources, DoorWindowElevationMetadata metadata, DoorWindowScheduleItem item)
         {
             const double tolerance = .01d;
+            var doorWindowLayers = EnsureDoorWindowLayers(space.Database, transaction);
+            var mainLayer = (item.ElevationType ?? string.Empty).Contains("窗") ? doorWindowLayers.Window : doorWindowLayers.Door;
             foreach (var roleGroup in geometry.Lines.GroupBy(x => x.Role))
             {
                 var segments = roleGroup.ToList(); var used = new bool[segments.Count];
@@ -128,9 +168,7 @@ namespace BatchPdfPublisher.Services
                         }
                     } while (extended);
 
-                    var layer = roleGroup.Key == DoorWindowLineRole.Hole || roleGroup.Key == DoorWindowLineRole.Opening
-                        ? resources.ArchitectureHiddenLayerId
-                        : roleGroup.Key == DoorWindowLineRole.Frame ? resources.ArchitectureOutlineLayerId : resources.ArchitectureFineLayerId;
+                    var layer = roleGroup.Key == DoorWindowLineRole.Hole || roleGroup.Key == DoorWindowLineRole.Opening ? doorWindowLayers.OpeningHole : mainLayer;
                     var closed = points.Count > 2 && Near(points[0], points[points.Count - 1]);
                     if (closed) points.RemoveAt(points.Count - 1);
                     if (points.Count > 2)
@@ -147,6 +185,40 @@ namespace BatchPdfPublisher.Services
                 }
             }
             bool Near(Point2d first, Point2d second) { return first.GetDistanceTo(second) <= tolerance; }
+        }
+
+        private static DoorWindowLayers EnsureDoorWindowLayers(Database database, Transaction transaction)
+        {
+            var dash = EnsureDashLineType(database, transaction);
+            return new DoorWindowLayers
+            {
+                Window = EnsureLayer(database, transaction, "WL-门窗-窗", 4, ObjectId.Null, LineWeight.LineWeight025),
+                Door = EnsureLayer(database, transaction, "WL-门窗-门", 7, ObjectId.Null, LineWeight.LineWeight025),
+                OpeningHole = EnsureLayer(database, transaction, "WL-门窗-开启洞口", 8, dash, LineWeight.LineWeight013)
+            };
+        }
+
+        private static ObjectId EnsureDashLineType(Database database, Transaction transaction)
+        {
+            var table = (LinetypeTable)transaction.GetObject(database.LinetypeTableId, OpenMode.ForRead);
+            foreach (var name in new[] { "DASH", "DASHED" })
+            {
+                if (table.Has(name)) return table[name];
+                try { database.LoadLineTypeFile(name, "acadiso.lin"); } catch { try { database.LoadLineTypeFile(name, "acad.lin"); } catch { } }
+                table = (LinetypeTable)transaction.GetObject(database.LinetypeTableId, OpenMode.ForRead);
+                if (table.Has(name)) return table[name];
+            }
+            return ObjectId.Null;
+        }
+
+        private static ObjectId EnsureLayer(Database database, Transaction transaction, string name, short colorIndex, ObjectId lineType, LineWeight lineWeight)
+        {
+            var table = (LayerTable)transaction.GetObject(database.LayerTableId, OpenMode.ForRead); LayerTableRecord record;
+            if (table.Has(name)) record = (LayerTableRecord)transaction.GetObject(table[name], OpenMode.ForWrite);
+            else { table.UpgradeOpen(); record = new LayerTableRecord { Name = name }; table.Add(record); transaction.AddNewlyCreatedDBObject(record, true); }
+            record.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, colorIndex); record.LineWeight = lineWeight;
+            if (!lineType.IsNull) record.LinetypeObjectId = lineType;
+            return record.ObjectId;
         }
 
         private static void InsertContinuous(IList<ElevationPlacement> elevations, Point3d origin, int scale, BlockTableRecord space, Transaction transaction, DraftingStandardResources resources, ObjectId dimensionStyle, Action<int, int, string> progress)

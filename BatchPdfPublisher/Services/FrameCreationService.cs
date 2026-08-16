@@ -67,34 +67,6 @@ namespace BatchPdfPublisher.Services
             return true;
         }
 
-        public static string CreateFrameBlock(Document document, string requestedName, double width, double height, string font, double textHeight)
-        {
-            if (document == null) return null;
-            var editor = document.Editor; var point = editor.GetPoint("\n指定图框块左下角插入点: ");
-            if (point.Status != PromptStatus.OK) return null;
-            using (document.LockDocument()) using (var tr = document.Database.TransactionManager.StartTransaction())
-            {
-                var blocks = (BlockTable)tr.GetObject(document.Database.BlockTableId, OpenMode.ForRead);
-                var name = requestedName; var index = 2; while (blocks.Has(name)) name = requestedName + "_" + index++;
-                var record = new BlockTableRecord { Name = name, Origin = Point3d.Origin };
-                blocks.UpgradeOpen(); var recordId = blocks.Add(record); tr.AddNewlyCreatedDBObject(record, true);
-                var poly = Rectangle(Point3d.Origin, width, height); record.AppendEntity(poly); tr.AddNewlyCreatedDBObject(poly, true);
-                var style = FindTextStyle(document.Database, tr, font);
-                foreach (var tag in new[] { "工程名称", "子项目名称", "图纸名称", "设计编号", "设计阶段", "图号", "序号", "纸张", "比例", "日期", "版本" })
-                {
-                    var att = new AttributeDefinition { Position = new Point3d(width / 2d, height / 2d, 0), Height = textHeight, TextString = "<" + tag + ">", Tag = tag, Prompt = tag, Verifiable = false, Constant = false, Invisible = false, TextStyleId = style, HorizontalMode = TextHorizontalMode.TextCenter, VerticalMode = TextVerticalMode.TextVerticalMid, AlignmentPoint = new Point3d(width / 2d, height / 2d, 0) };
-                    record.AppendEntity(att); tr.AddNewlyCreatedDBObject(att, true); att.AdjustAlignment(document.Database);
-                }
-                var space = (BlockTableRecord)tr.GetObject(document.Database.CurrentSpaceId, OpenMode.ForWrite); var reference = new BlockReference(point.Value, recordId) { Layer = DraftingStandardService.GetLayerName(DraftingStandardProfile.FrameKey) }; space.AppendEntity(reference); tr.AddNewlyCreatedDBObject(reference, true);
-                foreach (ObjectId id in record)
-                {
-                    var definition = tr.GetObject(id, OpenMode.ForRead) as AttributeDefinition; if (definition == null || definition.Constant) continue;
-                    var attribute = new AttributeReference(); attribute.SetAttributeFromBlock(definition, reference.BlockTransform); attribute.Layer = DraftingStandardService.GetLayerName(DraftingStandardProfile.FrameKey); attribute.TextString = string.IsNullOrWhiteSpace(definition.TextString) || definition.TextString.StartsWith("<", StringComparison.Ordinal) ? definition.Tag : definition.TextString; reference.AttributeCollection.AppendAttribute(attribute); tr.AddNewlyCreatedDBObject(attribute, true);
-                }
-                tr.Commit(); return name;
-            }
-        }
-
         public static string CreateFrameBlockFromSelection(Document document, string requestedName, double expectedWidth, double expectedHeight, string font, double textHeight, string remark, out string error, out string detectedPaper, out string detectedExtension, out string detectedOrientation, out ObjectId createdReferenceId)
         {
             error = null; detectedPaper = string.Empty; detectedExtension = string.Empty; detectedOrientation = string.Empty; createdReferenceId = ObjectId.Null;

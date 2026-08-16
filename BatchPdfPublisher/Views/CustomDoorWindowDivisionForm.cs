@@ -45,16 +45,17 @@ namespace BatchPdfPublisher.Views
             var tools = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
             var splitVertical = ButtonFor("竖向分隔当前框"); splitVertical.Click += (s, e) => _editor.SplitSelected(true); tools.Controls.Add(splitVertical);
             var splitHorizontal = ButtonFor("横向分隔当前框"); splitHorizontal.Click += (s, e) => _editor.SplitSelected(false); tools.Controls.Add(splitHorizontal);
-            var merge = ButtonFor("合并相邻框"); merge.Click += (s, e) => { if (!_editor.MergeSelected()) MessageBox.Show(this, "当前框没有可直接合并的完整相邻框。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information); }; tools.Controls.Add(merge);
+            var merge = ButtonFor("合并所选框"); merge.Click += (s, e) => { if (!_editor.MergeSelected()) MessageBox.Show(this, "请用 Shift 选择能组成完整矩形的相邻框；程序会按所选范围判断上下或左右合并。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information); }; tools.Controls.Add(merge);
             var remove = ButtonFor("删除/恢复当前框"); remove.Click += (s, e) => { if (!_editor.ToggleSelectedDeleted()) MessageBox.Show(this, "至少要保留一个未删除的门窗面板。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information); }; tools.Controls.Add(remove);
             var equalWidth = ButtonFor("所选同行等宽"); equalWidth.Click += (s, e) => { if (!_editor.EqualizeSelectedWidths()) ShowEqualizeHint(); }; tools.Controls.Add(equalWidth);
             var equalHeight = ButtonFor("所选同列等高"); equalHeight.Click += (s, e) => { if (!_editor.EqualizeSelectedHeights()) ShowEqualizeHint(); }; tools.Controls.Add(equalHeight);
+            var center = ButtonFor("所选居中"); center.Click += (s, e) => { if (!_editor.CenterSelected()) MessageBox.Show(this, "请选择同一行连续面板后再居中。居中后左右余量会自动保持相等。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information); }; tools.Controls.Add(center);
             var reset = ButtonFor("恢复完整外框"); reset.Click += (s, e) => { if (MessageBox.Show(this, "恢复后现有分格会被清除，是否继续？", Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) == DialogResult.Yes) _editor.ResetToFullFrame(); }; tools.Controls.Add(reset); header.Controls.Add(tools, 0, 0);
             var properties = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
             properties.Controls.Add(LabelFor("当前框宽")); properties.Controls.Add(_selectedWidth); properties.Controls.Add(LabelFor("高")); properties.Controls.Add(_selectedHeight);
             _opening.Items.AddRange(Openings.Cast<object>().ToArray()); properties.Controls.Add(LabelFor("开启")); properties.Controls.Add(_opening);
             _material.Items.AddRange(Materials.Cast<object>().ToArray()); properties.Controls.Add(LabelFor("材质")); properties.Controls.Add(_material);
-            _isDoor.Enabled = _source.ElevationType == "门联窗"; properties.Controls.Add(_isDoor);
+            _isDoor.Enabled = (_source.ElevationType ?? string.Empty).Contains("门"); properties.Controls.Add(_isDoor);
             properties.Controls.Add(LabelFor("门套")); _doorFrameType.Items.AddRange(new object[] { "N型", "口型" }); properties.Controls.Add(_doorFrameType); header.Controls.Add(properties, 0, 1);
             var construction = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
             construction.Controls.Add(_hasInstallationGap); construction.Controls.Add(_installationGap); construction.Controls.Add(LabelFor("mm"));
@@ -124,7 +125,7 @@ namespace BatchPdfPublisher.Views
             try
             {
                 if (cell == null) { _selectedWidth.Enabled = _selectedHeight.Enabled = _opening.Enabled = _material.Enabled = _isDoor.Enabled = false; return; }
-                _selectedWidth.Enabled = _selectedHeight.Enabled = true; _opening.Enabled = _material.Enabled = !cell.IsDeleted; _isDoor.Enabled = (_source.ElevationType == "门联窗" || _source.ElevationType == "门") && !cell.IsDeleted;
+                _selectedWidth.Enabled = _selectedHeight.Enabled = true; _opening.Enabled = _material.Enabled = !cell.IsDeleted; _isDoor.Enabled = ((_source.ElevationType ?? string.Empty).Contains("门")) && !cell.IsDeleted;
                 _selectedWidth.Value = ClampDecimal(cell.Right - cell.Left, _selectedWidth); _selectedHeight.Value = ClampDecimal(cell.Top - cell.Bottom, _selectedHeight);
                 _opening.SelectedItem = Openings.Contains(cell.Opening) ? cell.Opening : cell.Opening == "推拉" ? "右推拉" : "固定"; _material.SelectedItem = Materials.Contains(cell.Material) ? cell.Material : "无"; _isDoor.Checked = cell.IsDoor;
             }
