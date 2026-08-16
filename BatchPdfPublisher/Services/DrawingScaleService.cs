@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.Geometry;
 using Autodesk.AutoCAD.Colors;
@@ -182,6 +184,110 @@ namespace BatchPdfPublisher.Services
             var record = new RegAppTableRecord { Name = RegAppName };
             table.Add(record);
             transaction.AddNewlyCreatedDBObject(record, true);
+        }
+
+        /// <summary>
+        /// 普通 CAD 标注分层调整：同一行的尺寸线视为同一层，最内层界线长为
+        /// innerExtensionLength，每向外一层增加 dimensionSpacing。通过移动尺寸线
+        /// 位置改变界线总长（尺寸线到测量基线的垂直距离），不动测量点。
+        /// </summary>
+        /// <returns>实际移动的标注数量。</returns>
+        public static int ApplyCadDimensionLayering(Transaction transaction, IEnumerable<ObjectId> ids, double innerExtensionLength, double dimensionSpacing, int targetScale)
+        {
+            if (transaction == null || ids == null) return 0;
+            var inner = Math.Max(0d, innerExtensionLength);
+            var spacing = Math.Max(0d, dimensionSpacing);
+            var scale = Math.Max(1, targetScale);
+            var measured = new System.Collections.Generic.List<CadDimensionLayerMeasure>();
+            foreach (var id in ids)
+            {
+                if (id.IsNull || !id.IsValid) continue;
+                Entity entity;
+                try { entity = transaction.GetObject(id, OpenMode.ForRead, false) as Entity; } catch { continue; }
+                if (entity == null) continue;
+                Point3d x1, x2, dimLine;
+                if (!TryGetDimensionGeometry(entity, out x1, out x2, out dimLine)) continue;
+                var tangentValue = x2 - x1;
+                if (tangentValue.Length < 1e-8) continue;
+                var tangent = tangentValue.GetNormal();
+                var normal = new Vector3d(-tangent.Y, tangent.X, 0d).GetNormal();
+                var baseline = x1.X * normal.X + x1.Y * normal.Y;
+                var dimCoordinate = dimLine.X * normal.X + dimLine.Y * normal.Y;
+                var distance = Math.Abs(dimCoordinate - baseline);
+                var direction = dimCoordinate >= baseline ? 1 : -1;
+                measured.Add(new CadDimensionLayerMeasure { Id = id, Distance = distance, Direction = direction, Normal = normal });
+            }
+            if (measured.Count == 0) return 0;
+
+            var levels = new System.Collections.Generic.List<double>();
+            var tolerance = Math.Max(0.1d, measured.Max(x => x.Distance) * 0.02d);
+            foreach (var item in measured.OrderBy(x => x.Distance))
+                if (levels.Count == 0 || Math.Abs(item.Distance - levels[levels.Count - 1]) > tolerance) levels.Add(item.Distance);
+
+            var changed = 0;
+            foreach (var item in measured)
+            {
+                var level = 0; var best = double.MaxValue;
+                for (var i = 0; i < levels.Count; i++) { var difference = Math.Abs(item.Distance - levels[i]); if (difference < best) { best = difference; level = i; } }
+                // 设置值是 1:1 纸面值，乘出图比例换算为模型单位，与天正分层一致。
+                var targetDistance = (inner + level * spacing) * scale;
+                var delta = item.Direction * (targetDistance - item.Distance);
+                if (Math.Abs(delta) <= Math.Max(0.01d, targetDistance * 0.001d)) continue;
+                Entity entity;
+                try { entity = transaction.GetObject(item.Id, OpenMode.ForWrite, false) as Entity; } catch { continue; }
+                var dimension = entity as Dimension;
+                if (dimension == null) continue;
+                var linePoint = GetDimLinePoint(dimension);
+                if (linePoint == null) continue;
+                try
+                {
+                    var current = linePoint.Value;
+                    SetDimLinePoint(dimension, new Point3d(current.X + item.Normal.X * delta, current.Y + item.Normal.Y * delta, current.Z));
+                }
+                catch { continue; }
+                try { dimension.RecordGraphicsModified(true); } catch { }
+                changed++;
+            }
+            return changed;
+        }
+
+        private static bool TryGetDimensionGeometry(Entity entity, out Point3d x1, out Point3d x2, out Point3d dimLine)
+        {
+            x1 = x2 = dimLine = Point3d.Origin;
+            try
+            {
+                var aligned = entity as AlignedDimension;
+                if (aligned != null) { x1 = aligned.XLine1Point; x2 = aligned.XLine2Point; dimLine = aligned.DimLinePoint; return true; }
+                var rotated = entity as RotatedDimension;
+                if (rotated != null) { x1 = rotated.XLine1Point; x2 = rotated.XLine2Point; dimLine = rotated.DimLinePoint; return true; }
+            }
+            catch { }
+            return false;
+        }
+
+        private static Point3d? GetDimLinePoint(Dimension dimension)
+        {
+            var aligned = dimension as AlignedDimension;
+            if (aligned != null) return aligned.DimLinePoint;
+            var rotated = dimension as RotatedDimension;
+            if (rotated != null) return rotated.DimLinePoint;
+            return null;
+        }
+
+        private static void SetDimLinePoint(Dimension dimension, Point3d value)
+        {
+            var aligned = dimension as AlignedDimension;
+            if (aligned != null) { aligned.DimLinePoint = value; return; }
+            var rotated = dimension as RotatedDimension;
+            if (rotated != null) rotated.DimLinePoint = value;
+        }
+
+        private sealed class CadDimensionLayerMeasure
+        {
+            public ObjectId Id;
+            public double Distance;
+            public int Direction;
+            public Vector3d Normal;
         }
     }
 }

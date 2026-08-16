@@ -20,6 +20,7 @@ namespace BatchPdfPublisher.Services
         public double DimensionSpacing = 8d;
         public double AxisLeaderLength = 40d;
         public bool ApplyDimensionGeometry = true;
+        public bool ApplyCadDimensionGeometry = true;
         public bool ApplyAxisLeader = true;
 
         private static string PathName { get { return UserDataPaths.SettingsFile("tianzheng-dimension-scale.ini"); } }
@@ -36,6 +37,7 @@ namespace BatchPdfPublisher.Services
                     else if (key == "Spacing" && double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out d)) x.DimensionSpacing = d;
                     else if (key == "AxisLeader" && double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out d)) x.AxisLeaderLength = d;
                     else if (key == "ApplyDimension") x.ApplyDimensionGeometry = value == "1";
+                    else if (key == "ApplyCadDimension") x.ApplyCadDimensionGeometry = value == "1";
                     else if (key == "ApplyAxis") x.ApplyAxisLeader = value == "1";
                 }
             }
@@ -44,7 +46,7 @@ namespace BatchPdfPublisher.Services
         }
         public void Save()
         {
-            System.IO.File.WriteAllLines(PathName, new[] { "Outer=" + OuterExtensionLength.ToString(CultureInfo.InvariantCulture), "Inner=" + InnerExtensionLength.ToString(CultureInfo.InvariantCulture), "Spacing=" + DimensionSpacing.ToString(CultureInfo.InvariantCulture), "AxisLeader=" + AxisLeaderLength.ToString(CultureInfo.InvariantCulture), "ApplyDimension=" + (ApplyDimensionGeometry ? "1" : "0"), "ApplyAxis=" + (ApplyAxisLeader ? "1" : "0") });
+            System.IO.File.WriteAllLines(PathName, new[] { "Outer=" + OuterExtensionLength.ToString(CultureInfo.InvariantCulture), "Inner=" + InnerExtensionLength.ToString(CultureInfo.InvariantCulture), "Spacing=" + DimensionSpacing.ToString(CultureInfo.InvariantCulture), "AxisLeader=" + AxisLeaderLength.ToString(CultureInfo.InvariantCulture), "ApplyDimension=" + (ApplyDimensionGeometry ? "1" : "0"), "ApplyCadDimension=" + (ApplyCadDimensionGeometry ? "1" : "0"), "ApplyAxis=" + (ApplyAxisLeader ? "1" : "0") });
         }
     }
 

@@ -53,8 +53,12 @@ namespace BatchPdfPublisher.Models
         public static DoorWindowElevationGeometry Build(DoorWindowScheduleItem item)
         {
             if (item == null) throw new ArgumentNullException("item");
-            if (item.Width <= 0 || item.Height <= 0) throw new InvalidOperationException("门窗洞口尺寸无效。");
-            var gap = item.HasInstallationGap ? Math.Max(0d, item.InstallationGap) : 0d;
+            // NaN/Infinity 会让 <=0 判断恒为 false，必须显式拦截，否则几何坐标
+            // 携带 NaN 一路传染到 GDI+ 绘制，抛出"参数无效"。
+            if (double.IsNaN(item.Width) || double.IsInfinity(item.Width)
+                || double.IsNaN(item.Height) || double.IsInfinity(item.Height)
+                || item.Width <= 0 || item.Height <= 0) throw new InvalidOperationException("门窗洞口尺寸无效。");
+            var gap = item.HasInstallationGap ? (double.IsNaN(item.InstallationGap) || double.IsInfinity(item.InstallationGap) ? 0d : Math.Max(0d, item.InstallationGap)) : 0d;
             var left = gap; var bottom = gap; var right = item.Width - gap; var top = item.Height - gap;
             if (right <= left || top <= bottom) throw new InvalidOperationException("安装缝大于门窗洞口尺寸。");
 
@@ -72,7 +76,30 @@ namespace BatchPdfPublisher.Models
             AddProfileWidthLines(result, cells, item.HasOuterFrame ? Math.Max(0d, item.OuterFrameWidth) : 0d, item.HasMullion ? Math.Max(0d, item.MullionWidth) : 0d, item);
             AddMaterialSymbols(result, cells, item);
             AddOpeningSymbols(result, item);
+            AddArchTopLine(result, item);
             return result;
+        }
+
+        /// <summary>拱形窗：在顶部亮子内画一条圆弧分格线，表示拱形轮廓（折线逼近，便于预览与 CAD 统一绘制）。</summary>
+        private static void AddArchTopLine(DoorWindowElevationGeometry geometry, DoorWindowScheduleItem item)
+        {
+            if (item == null || geometry == null) return;
+            var isArch = string.Equals(item.ElevationType, "拱形窗", StringComparison.Ordinal) || (item.DivisionPreset ?? string.Empty) == "拱形亮子";
+            if (!isArch) return;
+            var topCell = geometry.Cells.OrderByDescending(x => x.Top).FirstOrDefault();
+            if (topCell == null) return;
+            var left = topCell.Left; var right = topCell.Right; var bottom = topCell.Bottom; var top = topCell.Top;
+            var centerX = (left + right) / 2d; var width = right - left;
+            var radius = Math.Min(width / 2d, Math.Max(0d, top - bottom));
+            if (radius <= 0.5d) return;
+            const int segments = 16;
+            for (var index = 0; index < segments; index++)
+            {
+                var angle1 = Math.PI - Math.PI * index / segments; var angle2 = Math.PI - Math.PI * (index + 1) / segments;
+                var x1 = centerX + Math.Cos(angle1) * radius; var y1 = bottom + Math.Sin(angle1) * radius;
+                var x2 = centerX + Math.Cos(angle2) * radius; var y2 = bottom + Math.Sin(angle2) * radius;
+                geometry.Lines.Add(new DoorWindowLineSegment(x1, y1, x2, y2, DoorWindowLineRole.Mullion));
+            }
         }
 
         public static List<DoorWindowLineSegment> BuildInstallationGapOutline(IList<DoorWindowCell> cells, double gap)
@@ -146,7 +173,7 @@ namespace BatchPdfPublisher.Models
                 {
                     ValidateCellLayout(layout, width, height);
                     foreach (var cell in layout.Where(x => !x.IsDeleted))
-                        cells.Add(new DoorWindowCell(left + cell.Left, bottom + cell.Bottom, left + cell.Right, bottom + cell.Top) { Opening = cell.Opening, Material = string.IsNullOrWhiteSpace(cell.Material) ? "无" : cell.Material, IsDoor = cell.IsDoor, IsDeleted = false });
+                        cells.Add(new DoorWindowCell(left + cell.Left, bottom + cell.Bottom, left + cell.Right, bottom + cell.Top) { Opening = cell.Opening, Material = string.IsNullOrWhiteSpace(cell.Material) ? (string.IsNullOrWhiteSpace(item.Material) ? "无" : item.Material) : cell.Material, IsDoor = cell.IsDoor, IsDeleted = false });
                     if (cells.Count == 0) throw new InvalidOperationException("至少要保留一个门窗面板。");
                     return cells;
                 }
@@ -164,6 +191,7 @@ namespace BatchPdfPublisher.Models
                     }
                     y = nextY;
                 }
+                foreach (var cell in cells) cell.Material = string.IsNullOrWhiteSpace(item.Material) ? "无" : item.Material;
                 return cells;
             }
             switch (preset)
@@ -174,6 +202,27 @@ namespace BatchPdfPublisher.Models
                     break;
                 case "三扇等分":
                     for (var index = 0; index < 3; index++) cells.Add(new DoorWindowCell(left + width * index / 3d, bottom, left + width * (index + 1) / 3d, top));
+                    break;
+                case "四扇等分":
+                    for (var index = 0; index < 4; index++) cells.Add(new DoorWindowCell(left + width * index / 4d, bottom, left + width * (index + 1) / 4d, top));
+                    break;
+                case "五扇等分":
+                    for (var index = 0; index < 5; index++) cells.Add(new DoorWindowCell(left + width * index / 5d, bottom, left + width * (index + 1) / 5d, top));
+                    break;
+                case "拱形亮子":
+                    // 下方矩形分格 + 顶部拱形亮子（亮子内横向一至两扇）。
+                    var archBottom = bottom + height * .68d;
+                    if (width > 1500d)
+                    {
+                        cells.Add(new DoorWindowCell(left, bottom, left + width / 2d, archBottom));
+                        cells.Add(new DoorWindowCell(left + width / 2d, bottom, right, archBottom));
+                        cells.Add(new DoorWindowCell(left, archBottom, right, top));
+                    }
+                    else
+                    {
+                        cells.Add(new DoorWindowCell(left, bottom, right, archBottom));
+                        cells.Add(new DoorWindowCell(left, archBottom, right, top));
+                    }
                     break;
                 case "上亮":
                     cells.Add(new DoorWindowCell(left, bottom, right, bottom + height * .72d));
@@ -198,7 +247,7 @@ namespace BatchPdfPublisher.Models
                     cells.Add(new DoorWindowCell(left, bottom, right, top));
                     break;
             }
-            foreach (var cell in cells) if (string.IsNullOrWhiteSpace(cell.Material)) cell.Material = "无";
+            foreach (var cell in cells) cell.Material = string.IsNullOrWhiteSpace(item.Material) ? "无" : item.Material;
             return cells;
         }
 
@@ -253,7 +302,17 @@ namespace BatchPdfPublisher.Models
             }
             void Add(double x1, double y1, double x2, double y2, bool shared, bool omit)
             {
-                if (shared || omit) return; // 固定格之间省略中心线；任一侧可开启时保留中心线。
+                if (shared)
+                {
+                    // 关闭实体分隔框时仍保留跳线，保证立面图能识别分格。
+                    if (!item.HasMullion)
+                    {
+                        var jump = x1.ToString("0.###") + ":" + y1.ToString("0.###") + ":" + x2.ToString("0.###") + ":" + y2.ToString("0.###") + ":J";
+                        if (keys.Add(jump)) geometry.Lines.Add(new DoorWindowLineSegment(x1, y1, x2, y2, DoorWindowLineRole.Opening));
+                    }
+                    return;
+                }
+                if (omit) return;
                 var forward = x1.ToString("0.###") + ":" + y1.ToString("0.###") + ":" + x2.ToString("0.###") + ":" + y2.ToString("0.###");
                 var reverse = x2.ToString("0.###") + ":" + y2.ToString("0.###") + ":" + x1.ToString("0.###") + ":" + y1.ToString("0.###");
                 if (keys.Contains(forward) || keys.Contains(reverse)) return; keys.Add(forward);
@@ -423,6 +482,16 @@ namespace BatchPdfPublisher.Models
             else if (mode == "右平开") AddSideHung(geometry.Lines, cell, false);
             else if (mode == "上悬") AddHung(geometry.Lines, cell, true);
             else if (mode == "下悬") AddHung(geometry.Lines, cell, false);
+            else if (mode == "中悬")
+            {
+                // 中悬窗：窗扇绕水平中轴旋转，画成顶边铰接 + 中部轴线的双三角示意。
+                var middleY = (cell.Bottom + cell.Top) / 2d;
+                geometry.Lines.Add(new DoorWindowLineSegment(cell.Left, middleY, cell.Right, middleY, DoorWindowLineRole.Opening));
+                geometry.Lines.Add(new DoorWindowLineSegment(cell.Left, middleY, (cell.Left + cell.Right) / 2d, cell.Top, DoorWindowLineRole.Opening));
+                geometry.Lines.Add(new DoorWindowLineSegment(cell.Right, middleY, (cell.Left + cell.Right) / 2d, cell.Top, DoorWindowLineRole.Opening));
+                geometry.Lines.Add(new DoorWindowLineSegment(cell.Left, middleY, (cell.Left + cell.Right) / 2d, cell.Bottom, DoorWindowLineRole.Opening));
+                geometry.Lines.Add(new DoorWindowLineSegment(cell.Right, middleY, (cell.Left + cell.Right) / 2d, cell.Bottom, DoorWindowLineRole.Opening));
+            }
             else if (mode == "百叶")
                 for (var index = 1; index < 7; index++) { var y = cell.Bottom + (cell.Top - cell.Bottom) * index / 7d; geometry.Lines.Add(new DoorWindowLineSegment(cell.Left, y, cell.Right, y, DoorWindowLineRole.Opening)); }
             else if (mode == "推拉" || mode == "右推拉")

@@ -140,6 +140,8 @@ namespace BatchPdfPublisher.Services
     internal static class DoorWindowElevationMetadataService
     {
         internal const string RegAppName = "WL_MCLM";
+        // DataContractJsonSerializer 构造开销大，复用静态实例避免每个实体重复创建。
+        private static readonly DataContractJsonSerializer Serializer = new DataContractJsonSerializer(typeof(DoorWindowElevationMetadata));
 
         public static void EnsureRegistered(Database database, Transaction transaction)
         {
@@ -222,7 +224,7 @@ namespace BatchPdfPublisher.Services
         {
             using (var stream = new MemoryStream())
             {
-                new DataContractJsonSerializer(typeof(DoorWindowElevationMetadata)).WriteObject(stream, metadata);
+                Serializer.WriteObject(stream, metadata);
                 return Convert.ToBase64String(stream.ToArray());
             }
         }
@@ -230,7 +232,7 @@ namespace BatchPdfPublisher.Services
         private static DoorWindowElevationMetadata Deserialize(string payload)
         {
             using (var stream = new MemoryStream(Convert.FromBase64String(payload)))
-                return (DoorWindowElevationMetadata)new DataContractJsonSerializer(typeof(DoorWindowElevationMetadata)).ReadObject(stream);
+                return (DoorWindowElevationMetadata)Serializer.ReadObject(stream);
         }
     }
 }

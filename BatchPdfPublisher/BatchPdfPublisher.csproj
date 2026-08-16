@@ -18,7 +18,7 @@
     <DebugType>pdbonly</DebugType><Optimize>true</Optimize><OutputPath>bin\Release\</OutputPath>
   </PropertyGroup>
   <ItemGroup>
-    <Reference Include="System" /><Reference Include="System.Core" /><Reference Include="System.Numerics" /><Reference Include="System.Xaml" /><Reference Include="System.Runtime.Serialization" /><Reference Include="System.Xml" /><Reference Include="System.Drawing" /><Reference Include="System.Windows.Forms" /><Reference Include="Microsoft.VisualBasic" />
+    <Reference Include="System" /><Reference Include="System.Core" /><Reference Include="System.Numerics" /><Reference Include="System.Xaml" /><Reference Include="System.Runtime.Serialization" /><Reference Include="System.Xml" /><Reference Include="System.Xml.Linq" /><Reference Include="System.IO.Compression" /><Reference Include="System.IO.Compression.FileSystem" /><Reference Include="System.Drawing" /><Reference Include="System.Windows.Forms" /><Reference Include="Microsoft.VisualBasic" />
     <Reference Include="WindowsBase" /><Reference Include="PresentationCore" /><Reference Include="PresentationFramework" />
     <Reference Include="acmgd">
       <HintPath>$(AutoCadApiPath)\acmgd.dll</HintPath>
@@ -53,6 +53,9 @@
     <Compile Include="Services\TianzhengScaleService.cs" />
     <Compile Include="Services\TianzhengRoomService.cs" />
     <Compile Include="Services\TianzhengDoorWindowService.cs" />
+    <Compile Include="Services\TianzhengTitleProbeService.cs" />
+    <Compile Include="Services\TianzhengTitleService.cs" />
+    <Compile Include="Services\CsvDoorWindowImportService.cs" />
     <Compile Include="Services\DoorWindowElevationStore.cs" />
     <Compile Include="Services\DoorWindowElevationTemplateStore.cs" />
     <Compile Include="Services\DoorWindowElevationInsertionService.cs" />
@@ -60,7 +63,6 @@
     <Compile Include="Services\DoorWindowElevationSuggestionService.cs" />
     <Compile Include="Services\AutoLayerSettings.cs" />
     <Compile Include="ViewModels\PublisherViewModel.cs" />
-    <Compile Include="Views\PublisherControl.xaml.cs"><DependentUpon>PublisherControl.xaml</DependentUpon></Compile>
     <Compile Include="Views\PublisherForm.cs" />
     <Compile Include="Views\ProjectManagerForm.cs" />
     <Compile Include="Views\DrawingScaleForm.cs" />
@@ -73,6 +75,8 @@
     <Compile Include="Views\CustomDoorWindowDivisionForm.cs" />
     <Compile Include="Views\DoorWindowLayoutEditorControl.cs" />
     <Compile Include="Views\DoorWindowElevationProgressForm.cs" />
+    <Compile Include="Views\DoorWindowLayoutPreviewControl.cs" />
+    <Compile Include="Views\DoorWindowLayoutPreviewForm.cs" />
     <Compile Include="Views\DoorWindowBatchConstructionForm.cs" />
     <Compile Include="Views\AutoLayerSettingsForm.cs" />
     <Compile Include="Views\DraftingStandardForm.cs" />
@@ -80,7 +84,6 @@
     <Compile Include="Views\CatalogInsertForm.cs" />
     <Compile Include="Views\CurrentSelectionPublishForm.cs" /><Compile Include="Views\AttributeBatchForm.cs" /><Compile Include="Views\AttributeDefinitionEditorForm.cs" /><Compile Include="Views\AttributeResultForm.cs" /><Compile Include="Views\SheetValidationIssueForm.cs" />
     <Compile Include="Views\FrameRegistrationWindow.xaml.cs"><DependentUpon>FrameRegistrationWindow.xaml</DependentUpon></Compile>
-    <Page Include="Views\PublisherControl.xaml" />
     <Page Include="Views\FrameRegistrationWindow.xaml" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />

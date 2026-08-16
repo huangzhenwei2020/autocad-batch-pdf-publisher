@@ -190,11 +190,13 @@ namespace BatchPdfPublisher
             var tianzhengIds = new System.Collections.Generic.List<Autodesk.AutoCAD.DatabaseServices.ObjectId>();
             var tianzhengDimensionIds = new System.Collections.Generic.List<Autodesk.AutoCAD.DatabaseServices.ObjectId>();
             var tianzhengTextIds = new System.Collections.Generic.List<Autodesk.AutoCAD.DatabaseServices.ObjectId>();
+            var cadDimensionIds = new System.Collections.Generic.List<Autodesk.AutoCAD.DatabaseServices.ObjectId>();
             var registeredFrames = new System.Collections.Generic.Dictionary<Autodesk.AutoCAD.DatabaseServices.ObjectId, BatchPdfPublisher.Models.FrameDefinition>();
             var frameBlocksToSynchronize = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var frameDefinitions = new PublishPlanStore().LoadFrames();
             var tianzhengSettings = TianzhengDimensionSettings.Load();
             var geometryChanged = 0;
+            var cadLayered = 0;
             var hasStandardScalableObjects = false;
             var scaleTiming = System.Diagnostics.Stopwatch.StartNew();
             long recognitionMilliseconds = 0, objectUpdateMilliseconds = 0, geometryMilliseconds = 0;
@@ -228,8 +230,13 @@ namespace BatchPdfPublisher
                             else if (TianzhengScaleService.IsAxisLabel(value)) tianzhengIds.Add(id);
                             if (TianzhengScaleService.IsTianzhengText(value)) tianzhengTextIds.Add(id);
                         }
-                        else if (value is Autodesk.AutoCAD.DatabaseServices.Dimension ||
-                                 value is Autodesk.AutoCAD.DatabaseServices.DBText ||
+                        else if (value is Autodesk.AutoCAD.DatabaseServices.Dimension)
+                        {
+                            // 普通 CAD 标注（非天正）：记录用于分层界线调整。
+                            hasStandardScalableObjects = true;
+                            cadDimensionIds.Add(id);
+                        }
+                        else if (value is Autodesk.AutoCAD.DatabaseServices.DBText ||
                                  value is Autodesk.AutoCAD.DatabaseServices.MText ||
                                  value is Autodesk.AutoCAD.DatabaseServices.AttributeReference ||
                                  value is Autodesk.AutoCAD.DatabaseServices.AttributeDefinition ||
@@ -250,11 +257,22 @@ namespace BatchPdfPublisher
                     if (hasStandardScalableObjects)
                     {
                         var profile = DraftingStandardService.LoadProfile();
+                        if (tianzhengSettings.ApplyCadDimensionGeometry)
+                        {
+                            // 普通 CAD 标注的界线长由分层几何控制（最内层 +
+                            // 每层间距），不再用样式固定界线锁死；基线间距仍
+                            // 写入样式，作为连续标注的相邻尺寸线间距。
+                            profile.UseFixedExtensionLength = false;
+                            profile.BaselineSpacing = Math.Max(0.001d, tianzhengSettings.DimensionSpacing);
+                        }
                         // Do not rewrite existing global styles here. A complex
                         // drawing can have thousands of references to one style;
                         // modifying that shared record causes a drawing-wide rebuild.
                         resources = DraftingStandardService.EnsureAll(document.Database, transaction, profile, false);
-                        dimensionStyle = DraftingStandardService.EnsureDimensionStyleForScale(document.Database, transaction, targetScale, profile, resources, false);
+                        // Only the target dimension style is refreshed so the
+                        // saved text position, arrow and ordinary-CAD geometry
+                        // settings take effect without rebuilding unrelated resources.
+                        dimensionStyle = DraftingStandardService.EnsureDimensionStyleForScale(document.Database, transaction, targetScale, profile, resources, true);
                     }
                     var updated = 0;
                     foreach (var id in selectedIds)
@@ -280,11 +298,20 @@ namespace BatchPdfPublisher
                                 continue;
                             }
                             entity.UpgradeOpen();
+                            if (entity is Autodesk.AutoCAD.DatabaseServices.Dimension && !tianzhengSettings.ApplyCadDimensionGeometry) continue;
                             if (DrawingScaleService.ApplyStandardizedScale(document.Database, transaction, entity, sourceScale, targetScale, resources, dimensionStyle, autoLayers)) { changed++; entity.RecordGraphicsModified(true); }
                         }
                         catch { failed++; }
                         finally { progress.ReportRange("正在更新对象比例……", ++updated, selectedIds.Length, 30, 70); }
                     }
+                    var cadLayeredInTransaction = 0;
+                    if (tianzhengSettings.ApplyCadDimensionGeometry && cadDimensionIds.Count > 0)
+                    {
+                        progress.ReportStage("正在分层调整普通标注界线……", 70);
+                        cadLayeredInTransaction = DrawingScaleService.ApplyCadDimensionLayering(transaction, cadDimensionIds,
+                            tianzhengSettings.InnerExtensionLength, tianzhengSettings.DimensionSpacing, targetScale);
+                    }
+                    cadLayered = cadLayeredInTransaction;
                     transaction.Commit();
                 }
                 objectUpdateMilliseconds = scaleTiming.ElapsedMilliseconds - recognitionMilliseconds;
@@ -328,8 +355,8 @@ namespace BatchPdfPublisher
             QueueFrameAttributeSync(document, frameBlocksToSynchronize);
             if (tianzhengTextIds.Count > 0) TianzhengScaleService.QueueTextAutoAdjust(document, tianzhengTextIds);
             if (tianzhengDimensionIds.Count > 0) TianzhengScaleService.QueueDimensionAutoAdjust(document, tianzhengDimensionIds);
-            try { File.AppendAllText(Path.Combine(UserDataPaths.LogsDirectory, "scale-manager.log"), DateTime.Now.ToString("O") + " selection=" + selectedIds.Length + " registeredFrames=" + registeredFrames.Count + " tianzheng=" + tianzhengIds.Count + " dimensions=" + tianzhengDimensionIds.Count + " recognitionMs=" + recognitionMilliseconds + " updateMs=" + objectUpdateMilliseconds + " geometryMs=" + geometryMilliseconds + " totalMs=" + scaleTiming.ElapsedMilliseconds + Environment.NewLine); } catch { }
-            editor.WriteMessage("\n比例修改完成：" + changed + " 个对象已转换为 1:" + targetScale + (tianzhengChanged > 0 ? "，其中天正对象 " + tianzhengChanged + " 个、尺寸线已调整 " + geometryChanged + " 个" : string.Empty) + (failed > 0 ? "，" + failed + " 项更新失败（详见 tianzheng-scale.log）。" : "。"));
+            try { File.AppendAllText(Path.Combine(UserDataPaths.LogsDirectory, "scale-manager.log"), DateTime.Now.ToString("O") + " selection=" + selectedIds.Length + " registeredFrames=" + registeredFrames.Count + " tianzheng=" + tianzhengIds.Count + " dimensions=" + tianzhengDimensionIds.Count + " cadLayered=" + cadLayered + " recognitionMs=" + recognitionMilliseconds + " updateMs=" + objectUpdateMilliseconds + " geometryMs=" + geometryMilliseconds + " totalMs=" + scaleTiming.ElapsedMilliseconds + Environment.NewLine); } catch { }
+            editor.WriteMessage("\n比例修改完成：" + changed + " 个对象已转换为 1:" + targetScale + (tianzhengChanged > 0 ? "，其中天正对象 " + tianzhengChanged + " 个、尺寸线已调整 " + geometryChanged + " 个" : string.Empty) + (cadLayered > 0 ? "，普通标注界线按层调整 " + cadLayered + " 个" : string.Empty) + (failed > 0 ? "，" + failed + " 项更新失败（详见 tianzheng-scale.log）。" : "。"));
         }
 
         [CommandMethod("MCLM")]
@@ -369,6 +396,62 @@ namespace BatchPdfPublisher
                 try { File.AppendAllText(Path.Combine(UserDataPaths.LogsDirectory, "door-window-elevation.log"), DateTime.Now.ToString("O") + " window: " + exception + Environment.NewLine); } catch { }
                 Application.ShowAlertDialog("门窗表已经读取，但打开门窗立面窗口失败：\r\n" + exception.Message + "\r\n\r\n详细信息已写入 door-window-elevation.log。");
             }
+        }
+
+        /// <summary>天正图名（TMBZ）只读探针：选择图纸中的图名标注对象，输出其 DXF 名称、
+        /// COM 属性、XData、扩展词典和爆炸文字到 tianzheng-title-probe.log，用于适配当前天正版本。
+        /// 回车跳过选择时自动扫描全图所有天正对象。</summary>
+        [CommandMethod("MCLMTM")]
+        [CommandMethod("WLTBZPROBE")]
+        public void ProbeTianzhengTitle()
+        {
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document == null) return;
+            var editor = document.Editor;
+            var options = new PromptEntityOptions("\n请选择天正图名标注对象（回车自动扫描全图天正对象）：");
+            options.AllowNone = true;
+            var picked = editor.GetEntity(options);
+            try
+            {
+                if (picked.Status == PromptStatus.OK)
+                {
+                    string text;
+                    using (var transaction = document.Database.TransactionManager.StartTransaction())
+                    {
+                        var source = transaction.GetObject(picked.ObjectId, OpenMode.ForRead, false);
+                        text = TianzhengTitleProbeService.Probe(source);
+                    }
+                    editor.WriteMessage("\n天正图名探针完成，共 " + text.Split('\n').Length + " 行。\n");
+                }
+                else if (picked.Status == PromptStatus.None)
+                {
+                    int count;
+                    using (document.LockDocument()) count = TianzhengTitleProbeService.ProbeAllTianzheng(document.Database);
+                    editor.WriteMessage("\n全图扫描完成，共找到 " + count + " 个天正对象。\n");
+                }
+                else return;
+                editor.WriteMessage("\n结果已写入：\n" + TianzhengTitleProbeService.LogPath + "\n");
+            }
+            catch (System.Exception exception)
+            {
+                try { File.AppendAllText(Path.Combine(UserDataPaths.LogsDirectory, "tianzheng-title-probe.log"), DateTime.Now.ToString("O") + " probe: " + exception + Environment.NewLine); } catch { }
+                editor.WriteMessage("\n探针失败：" + exception.Message + "\n");
+            }
+        }
+
+        /// <summary>打开天正图名探针日志所在文件夹并选中日志文件，方便用户查看/发送结果。</summary>
+        [CommandMethod("WLTBZLOG")]
+        public void OpenTianzhengTitleProbeLog()
+        {
+            var path = TianzhengTitleProbeService.LogPath;
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (!System.IO.File.Exists(path))
+            {
+                if (document != null) document.Editor.WriteMessage("\n探针日志尚未生成。请先运行 MCLMTM（可回车自动扫描全图）。\n");
+                return;
+            }
+            try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", "/select,\"" + path + "\"") { UseShellExecute = true }); }
+            catch { }
         }
 
         private static void QueueFrameAttributeSync(Document document, System.Collections.Generic.IEnumerable<string> blockNames)

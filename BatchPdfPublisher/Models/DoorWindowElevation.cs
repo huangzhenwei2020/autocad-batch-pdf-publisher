@@ -15,6 +15,12 @@ namespace BatchPdfPublisher.Models
         public double Height { get; set; }
         public int Quantity { get; set; }
         public string SourceNote { get; set; }
+        public string Material { get; set; } = "无";
+        public string AtlasName { get; set; }
+        public string Remarks { get; set; }
+        public double SillHeight { get; set; }
+        /// <summary>用户把离地高度设为"—"时置 true，表示不标注离地高度。</summary>
+        public bool SillHeightSuppressed { get; set; }
         public string ElevationType { get; set; }
         public string DivisionPreset { get; set; }
         public string OpeningMode { get; set; }
@@ -36,9 +42,29 @@ namespace BatchPdfPublisher.Models
         public double DoorEdgeDistance { get; set; }
         public string Status { get; set; }
         public int SourceRow { get; set; }
+        /// <summary>排版时锁定到第几页（1 起）；0 表示未锁定，按流式排版自动分页。</summary>
+        public int LockedPage { get; set; }
 
         public string SizeText { get { return Width > 0 && Height > 0 ? Width.ToString("0.##") + " × " + Height.ToString("0.##") : "未识别"; } }
         public string FrameSizeText { get { var gap = HasInstallationGap ? InstallationGap : 0d; return Width > gap * 2 && Height > gap * 2 ? (Width - gap * 2).ToString("0.##") + " × " + (Height - gap * 2).ToString("0.##") : "—"; } }
+
+        /// <summary>离地高度列显示值：非窗或用户选择"—"时显示"—"；否则显示数值。</summary>
+        public string SillHeightDisplay
+        {
+            get
+            {
+                if (SillHeightSuppressed || string.IsNullOrEmpty(ElevationType) || !ElevationType.Contains("窗")) return "—";
+                return SillHeight.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+            }
+            set
+            {
+                var text = (value ?? string.Empty).Trim();
+                if (text == "—" || text == "-" || text == "--" || text.Length == 0) { SillHeightSuppressed = true; return; }
+                double parsed;
+                if (double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out parsed))
+                { SillHeight = Math.Max(0d, parsed); SillHeightSuppressed = false; }
+            }
+        }
     }
 
     public sealed class DoorWindowScheduleReadResult
@@ -82,6 +108,12 @@ namespace BatchPdfPublisher.Models
         public string CellOpeningModes { get; set; }
         public string DoorPlacement { get; set; } = "靠左";
         public double DoorEdgeDistance { get; set; }
+        public string Material { get; set; }
+        public string AtlasName { get; set; }
+        public string Remarks { get; set; }
+        public double SillHeight { get; set; }
+        public bool HasSillHeight { get; set; }
+        public bool SillHeightSuppressed { get; set; }
     }
 
     public sealed class DoorWindowElevationTemplate
