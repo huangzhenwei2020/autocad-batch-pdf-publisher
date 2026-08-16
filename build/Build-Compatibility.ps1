@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$SdkRoot = (Join-Path $PSScriptRoot 'AutodeskSdk'),
     [string]$OutputRoot = (Join-Path (Split-Path $PSScriptRoot -Parent) 'CadApi'),
