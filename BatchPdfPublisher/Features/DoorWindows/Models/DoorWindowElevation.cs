@@ -11,10 +11,11 @@ namespace BatchPdfPublisher.Models
     {
         private static readonly string[] OrderedTypes =
         {
+            "普通门", "甲级防火门", "乙级防火门", "丙级防火门", "防火门（等级待确认）",
+            "人防门", "百叶门", "门联窗",
             "普通窗", "高窗", "带形窗", "转角窗", "拱形窗", "凸窗", "百叶窗",
             "甲级防火窗", "乙级防火窗", "丙级防火窗", "防火窗（等级待确认）",
-            "普通门", "甲级防火门", "乙级防火门", "丙级防火门", "防火门（等级待确认）",
-            "人防门", "百叶门", "门联窗", "洞口", "待确认"
+            "洞口", "待确认"
         };
 
         public static int TypeRank(string type)
@@ -22,6 +23,9 @@ namespace BatchPdfPublisher.Models
             var value = (type ?? string.Empty).Trim();
             for (var index = 0; index < OrderedTypes.Length; index++)
                 if (string.Equals(OrderedTypes[index], value, StringComparison.Ordinal)) return index;
+            // 未列入固定名称的新门型仍须排在所有窗型之前。
+            if (value.Contains("门")) return Array.FindIndex(OrderedTypes, x => x == "门联窗");
+            if (value.Contains("窗")) return Array.FindLastIndex(OrderedTypes, x => x.Contains("窗"));
             return OrderedTypes.Length;
         }
 
@@ -52,6 +56,12 @@ namespace BatchPdfPublisher.Models
         public double Width { get; set; }
         public double Height { get; set; }
         public int Quantity { get; set; }
+        /// <summary>开启按楼层统计时，各楼层/标准层的单层数量、层数与合计。</summary>
+        public List<DoorWindowFloorQuantity> FloorQuantities { get; private set; } = new List<DoorWindowFloorQuantity>();
+        public string FloorQuantitySummary
+        {
+            get { return string.Join("；", FloorQuantities.Select(x => x.FloorName + "=" + x.DisplayText)); }
+        }
         public string SourceNote { get; set; }
         public string Material { get; set; } = "无";
         public string AtlasName { get; set; }
@@ -83,6 +93,8 @@ namespace BatchPdfPublisher.Models
         public string BayRightSide { get; set; } = "墙";
         public double BayLeftDepth { get; set; } = 600d;
         public double BayRightDepth { get; set; } = 600d;
+        public string BayLeftCellLayout { get; set; }
+        public string BayRightCellLayout { get; set; }
         public string Status { get; set; }
         public int SourceRow { get; set; }
         /// <summary>排版时锁定到第几页（1 起）；0 表示未锁定，按流式排版自动分页。</summary>
@@ -110,9 +122,21 @@ namespace BatchPdfPublisher.Models
         }
     }
 
+    public sealed class DoorWindowFloorQuantity
+    {
+        public string FloorName { get; set; }
+        public int PerFloorQuantity { get; set; }
+        public int FloorCount { get; set; } = 1;
+        public int TotalQuantity { get { return Math.Max(0, PerFloorQuantity) * Math.Max(1, FloorCount); } }
+        public string DisplayText
+        {
+            get { return FloorCount > 1 ? PerFloorQuantity + "×" + FloorCount + "=" + TotalQuantity : PerFloorQuantity.ToString(); }
+        }
+    }
+
     public sealed class DoorWindowScheduleReadResult
     {
-        public DoorWindowScheduleReadResult() { Items = new List<DoorWindowScheduleItem>(); RawRows = new List<List<string>>(); }
+        public DoorWindowScheduleReadResult() { Items = new List<DoorWindowScheduleItem>(); RawRows = new List<List<string>>(); FloorColumns = new List<DoorWindowFloorColumn>(); }
         public ObjectId SourceId { get; set; } = ObjectId.Null;
         public string SourceHandle { get; set; }
         public string SourceDxfName { get; set; }
@@ -124,6 +148,15 @@ namespace BatchPdfPublisher.Models
         public Point3d MaxPoint { get; set; }
         public List<DoorWindowScheduleItem> Items { get; private set; }
         public List<List<string>> RawRows { get; private set; }
+        public List<DoorWindowFloorColumn> FloorColumns { get; private set; }
+        public bool HasFloorStatistics { get { return FloorColumns != null && FloorColumns.Count > 0; } }
+    }
+
+    public sealed class DoorWindowFloorColumn
+    {
+        public string FloorName { get; set; }
+        public int ColumnIndex { get; set; }
+        public int FloorCount { get; set; } = 1;
     }
 
     public sealed class DoorWindowElevationPreference
@@ -155,12 +188,29 @@ namespace BatchPdfPublisher.Models
         public string BayRightSide { get; set; } = "墙";
         public double BayLeftDepth { get; set; } = 600d;
         public double BayRightDepth { get; set; } = 600d;
+        public string BayLeftCellLayout { get; set; }
+        public string BayRightCellLayout { get; set; }
         public string Material { get; set; }
         public string AtlasName { get; set; }
         public string Remarks { get; set; }
         public double SillHeight { get; set; }
         public bool HasSillHeight { get; set; }
         public bool SillHeightSuppressed { get; set; }
+    }
+
+    public sealed class DoorWindowElevationSession
+    {
+        public string ProjectName { get; set; }
+        public bool FloorStatistics { get; set; }
+        public string BaseSourceHandle { get; set; }
+        public List<DoorWindowFloorSourcePreference> FloorSources { get; set; } = new List<DoorWindowFloorSourcePreference>();
+    }
+
+    public sealed class DoorWindowFloorSourcePreference
+    {
+        public string FloorName { get; set; }
+        public int FloorCount { get; set; } = 1;
+        public string SourceHandle { get; set; }
     }
 
     public sealed class DoorWindowElevationTemplate
@@ -189,6 +239,8 @@ namespace BatchPdfPublisher.Models
         public string BayRightSide { get; set; } = "墙";
         public double BayLeftDepth { get; set; } = 600d;
         public double BayRightDepth { get; set; } = 600d;
+        public string BayLeftCellLayout { get; set; }
+        public string BayRightCellLayout { get; set; }
         public DateTime UpdatedAt { get; set; }
 
         public void ApplyTo(DoorWindowScheduleItem item)
@@ -225,6 +277,8 @@ namespace BatchPdfPublisher.Models
             item.BayRightSide = BayRightSide;
             item.BayLeftDepth = BayLeftDepth;
             item.BayRightDepth = BayRightDepth;
+            item.BayLeftCellLayout = ScaleBayLayout(BayLeftCellLayout, BayLeftDepth, item.BayLeftDepth, item.Height);
+            item.BayRightCellLayout = ScaleBayLayout(BayRightCellLayout, BayRightDepth, item.BayRightDepth, item.Height);
         }
 
         public static DoorWindowElevationTemplate FromItem(string name, DoorWindowScheduleItem item)
@@ -255,8 +309,25 @@ namespace BatchPdfPublisher.Models
                 BayRightSide = item.BayRightSide,
                 BayLeftDepth = item.BayLeftDepth,
                 BayRightDepth = item.BayRightDepth,
+                BayLeftCellLayout = item.BayLeftCellLayout,
+                BayRightCellLayout = item.BayRightCellLayout,
                 UpdatedAt = DateTime.Now
             };
+        }
+
+        private static string ScaleBayLayout(string value, double oldWidth, double newWidth, double height)
+        {
+            var cells = DoorWindowElevationGeometryBuilder.ParseCellLayout(value);
+            if (cells.Count == 0) return value;
+            var sourceWidth = oldWidth > 0d ? oldWidth : cells.Max(x => x.Right);
+            var sourceHeight = cells.Max(x => x.Top);
+            if (sourceWidth <= 0d || sourceHeight <= 0d || newWidth <= 0d || height <= 0d) return value;
+            foreach (var cell in cells)
+            {
+                cell.Left *= newWidth / sourceWidth; cell.Right *= newWidth / sourceWidth;
+                cell.Bottom *= height / sourceHeight; cell.Top *= height / sourceHeight;
+            }
+            return DoorWindowElevationGeometryBuilder.SerializeCellLayout(cells);
         }
 
         public override string ToString()

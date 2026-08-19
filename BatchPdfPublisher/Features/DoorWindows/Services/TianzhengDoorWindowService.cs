@@ -41,7 +41,11 @@ namespace BatchPdfPublisher.Services
             else throw new InvalidOperationException("无法读取所选对象的表格单元格。已记录对象诊断，请确认选择的是天正门窗表，而不是普通线条或门窗对象。");
 
             result.RawRows.AddRange(rows);
-            result.Items.AddRange(AssignSizeSuffixes(Consolidate(ParseRows(rows))));
+            result.FloorColumns.AddRange(DetectFloorColumns(rows));
+            var parsed = ParseRows(rows);
+            var consolidated = Consolidate(parsed);
+            ApplyFloorQuantities(consolidated, parsed, rows, result.FloorColumns);
+            result.Items.AddRange(AssignSizeSuffixes(consolidated));
             Validate(result.Items);
             result.Diagnostic = BuildDiagnostic(result);
             AppendLog(result);
@@ -294,6 +298,56 @@ namespace BatchPdfPublisher.Services
                 result.Add(item);
             }
             return result;
+        }
+
+        private static List<DoorWindowFloorColumn> DetectFloorColumns(IList<List<string>> rows)
+        {
+            var result = new List<DoorWindowFloorColumn>();
+            if (rows == null) return result;
+            for (var r = 0; r < Math.Min(rows.Count, 20); r++)
+            {
+                var row = rows[r];
+                if (row == null || !row.Any(x => Regex.IsMatch(Clean(x), @"层|顶层|首层", RegexOptions.IgnoreCase))) continue;
+                foreach (var cell in row.Select((value, index) => new { value, index }))
+                {
+                    var name = Clean(cell.value);
+                    int count;
+                    if (!TryParseFloorCount(name, out count)) continue;
+                    if (name.Contains("总") || name.Contains("数量")) continue;
+                    result.Add(new DoorWindowFloorColumn { FloorName = name, ColumnIndex = cell.index, FloorCount = count });
+                }
+                if (result.Count > 0) break;
+            }
+            return result.GroupBy(x => x.ColumnIndex).Select(x => x.First()).ToList();
+        }
+
+        internal static bool TryParseFloorCount(string text, out int count)
+        {
+            count = 1; var value = Clean(text);
+            var match = Regex.Match(value, @"(\d+)\s*[~～至\-—]\s*(\d+)");
+            if (match.Success)
+            {
+                int first, last;
+                if (int.TryParse(match.Groups[1].Value, out first) && int.TryParse(match.Groups[2].Value, out last)) { count = Math.Abs(last - first) + 1; return true; }
+            }
+            if (Regex.IsMatch(value, @"^\s*(?:\d+\s*层|顶层|首层|屋面层|标准层)\s*$", RegexOptions.IgnoreCase)) return true;
+            return false;
+        }
+
+        private static void ApplyFloorQuantities(List<DoorWindowScheduleItem> items, List<DoorWindowScheduleItem> parsed, IList<List<string>> rows, List<DoorWindowFloorColumn> columns)
+        {
+            if (columns == null || columns.Count == 0) return;
+            foreach (var item in items)
+            {
+                item.FloorQuantities.Clear();
+                foreach (var column in columns)
+                {
+                    var quantity = parsed.Where(x => string.Equals(x.Code, item.Code, StringComparison.OrdinalIgnoreCase) && Math.Abs(x.Width - item.Width) < .01d && Math.Abs(x.Height - item.Height) < .01d)
+                        .Sum(x => x.SourceRow > 0 && x.SourceRow - 1 < rows.Count ? (int)Math.Round(ParseNumber(Cell(rows[x.SourceRow - 1], column.ColumnIndex))) : 0);
+                    item.FloorQuantities.Add(new DoorWindowFloorQuantity { FloorName = column.FloorName, FloorCount = column.FloorCount, PerFloorQuantity = Math.Max(0, quantity) });
+                }
+                item.Quantity = item.FloorQuantities.Sum(x => x.TotalQuantity);
+            }
         }
 
         internal static void Validate(List<DoorWindowScheduleItem> items)

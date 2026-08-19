@@ -21,6 +21,7 @@ namespace BatchPdfPublisher.Views
     {
         private readonly Document _document;
         private DoorWindowScheduleReadResult _source;
+        private DoorWindowScheduleReadResult _baseSource;
         private readonly BindingList<DoorWindowScheduleItem> _rows = new BindingList<DoorWindowScheduleItem>();
         private readonly DataGridView _grid = new DataGridView();
         private readonly DoorWindowElevationPreviewControl _preview = new DoorWindowElevationPreviewControl();
@@ -34,19 +35,34 @@ namespace BatchPdfPublisher.Views
         private readonly ComboBox _drawingScale = ScaleCombo();
         private readonly CheckBox _insertFrame = new CheckBox { Text = "插入图框排版", AutoSize = true, Margin = new Padding(4, 7, 4, 0) };
         private readonly CheckBox _useTianzhengTitle = new CheckBox { Text = "使用天正图名标注", AutoSize = true, Margin = new Padding(4, 7, 4, 0), Checked = true };
+        private readonly CheckBox _floorStatistics = new CheckBox { Text = "每层单独统计", AutoSize = true, Margin = new Padding(10, 7, 4, 0) };
+        private readonly Button _addCurrentFloor = ButtonFor("分层统计设置");
+        private readonly Button _pickFloorTable = ButtonFor("拾取楼层门窗表");
+        private readonly Button _clearFloorTables = ButtonFor("清空分层统计");
+        private readonly List<FloorScheduleSource> _floorSources = new List<FloorScheduleSource>();
         private readonly ComboBox _templateChoice = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 250, Height = 28, Margin = new Padding(4, 3, 4, 0) };
         private readonly DoorWindowElevationStore _store = new DoorWindowElevationStore();
         private readonly DoorWindowElevationTemplateStore _templateStore = new DoorWindowElevationTemplateStore();
         private bool _propagatingGridEdit;
+        private bool _changingFloorMode;
+
+        private sealed class FloorScheduleSource
+        {
+            public string FloorName;
+            public int FloorCount;
+            public string SourceHandle;
+            public List<DoorWindowScheduleItem> Items = new List<DoorWindowScheduleItem>();
+        }
 
         public DoorWindowElevationForm(Document document, DoorWindowScheduleReadResult source)
         {
-            _document = document; _source = source;
+            _document = document; _source = source; _baseSource = source;
             Text = "批量门窗立面";
             StartPosition = FormStartPosition.CenterParent;
             Width = 1240; Height = 720; MinimumSize = new Size(980, 560);
             Font = new DrawingFont("Microsoft YaHei UI", 9F);
             Build(); LoadSource(source);
+            Shown += (s, e) => RestoreSavedSession();
             FormClosed += (s, e) => SavePreferences(false);
         }
 
@@ -84,6 +100,12 @@ namespace BatchPdfPublisher.Views
             var deleteTemplate = ButtonFor("删除模板"); deleteTemplate.Click += (s, e) => DeleteSelectedTemplate(); batch.Controls.Add(deleteTemplate);
             batch.Controls.Add(LabelFor("出图比例")); batch.Controls.Add(_drawingScale);
             batch.Controls.Add(_insertFrame); batch.Controls.Add(_useTianzhengTitle);
+            batch.Controls.Add(_floorStatistics); batch.Controls.Add(_addCurrentFloor); batch.Controls.Add(_pickFloorTable); batch.Controls.Add(_clearFloorTables);
+            _addCurrentFloor.Enabled = _floorStatistics.Checked; _pickFloorTable.Visible = _clearFloorTables.Visible = false;
+            _floorStatistics.CheckedChanged += (s, e) => ChangeFloorStatisticsMode();
+            _addCurrentFloor.Click += (s, e) => OpenFloorSettings();
+            _pickFloorTable.Click += (s, e) => PickFloorTable();
+            _clearFloorTables.Click += (s, e) => ClearFloorStatistics();
             try
             {
                 var saved = DoorWindowLayoutPreviewForm.LoadSavedMargins();
@@ -144,6 +166,7 @@ namespace BatchPdfPublisher.Views
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "编号", DataPropertyName = "Code", Width = 95 });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "洞口尺寸", DataPropertyName = "SizeText", Width = 116, ReadOnly = true });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "数量", DataPropertyName = "Quantity", Width = 58, ReadOnly = true });
+            _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "分层数量", DataPropertyName = "FloorQuantitySummary", Width = 210, ReadOnly = true });
             _grid.Columns.Add(ComboColumn("门窗类型", "ElevationType", 100, DoorWindowTypes));
             _grid.Columns.Add(ComboColumn("分格模板", "DivisionPreset", 118, new[] { "未设置", "单扇", "双扇等分", "三扇等分", "四扇等分", "五扇等分", "拱形亮子", "上亮", "侧亮", "上亮+侧亮", "门联窗", "自定义" }));
             _grid.Columns.Add(ComboColumn("开启方式", "OpeningMode", 110, new[] { "未设置", "固定", "左平开", "右平开", "双扇平开", "左推拉", "右推拉", "双向推拉", "上悬", "下悬", "中悬", "百叶", "自定义" }));
@@ -174,6 +197,7 @@ namespace BatchPdfPublisher.Views
 
         private void LoadSource(DoorWindowScheduleReadResult source)
         {
+            if (source != null && source.HasFloorStatistics && LoadFloorStatisticsSource(source)) return;
             _source = source; _rows.RaiseListChangedEvents = false; _rows.Clear();
             var prepared = new List<DoorWindowScheduleItem>();
             var preferences = _store.LoadForActiveProject();
@@ -181,7 +205,7 @@ namespace BatchPdfPublisher.Views
             foreach (var item in source.Items)
             {
                 var preference = preferences.FirstOrDefault(x => string.Equals(x.Code, item.Code, StringComparison.OrdinalIgnoreCase) && Math.Abs(x.Width - item.Width) < 0.01 && Math.Abs(x.Height - item.Height) < 0.01)
-                    ?? preferences.FirstOrDefault(x => string.Equals(x.Code, item.Code, StringComparison.OrdinalIgnoreCase));
+                    ;
                 if (preference != null)
                 {
                     item.ElevationType = preference.ElevationType; item.DivisionPreset = preference.DivisionPreset; item.OpeningMode = preference.OpeningMode;
@@ -202,6 +226,8 @@ namespace BatchPdfPublisher.Views
                     item.BayRightSide = string.IsNullOrWhiteSpace(preference.BayRightSide) ? "墙" : preference.BayRightSide;
                     item.BayLeftDepth = preference.BayLeftDepth > 0d ? preference.BayLeftDepth : 600d;
                     item.BayRightDepth = preference.BayRightDepth > 0d ? preference.BayRightDepth : 600d;
+                    item.BayLeftCellLayout = preference.BayLeftCellLayout;
+                    item.BayRightCellLayout = preference.BayRightCellLayout;
                     item.Material = string.IsNullOrWhiteSpace(preference.Material) ? item.Material : preference.Material;
                     item.AtlasName = string.IsNullOrWhiteSpace(preference.AtlasName) ? item.AtlasName : DoorWindowElevationSuggestionService.NormalizeAtlasName(preference.AtlasName); item.Remarks = preference.Remarks;
                     if (preference.HasSillHeight) { item.SillHeight = preference.SillHeight; item.SillHeightSuppressed = preference.SillHeightSuppressed; }
@@ -214,6 +240,222 @@ namespace BatchPdfPublisher.Views
             _sourceLabel.Text = source.SourceDxfName + " · Handle " + source.SourceHandle + " · " + source.Adapter + " · " + CadCompatibilityService.DescribeTianzhengHost();
             UpdateSummary(); _preview.ShowItem(_rows.FirstOrDefault());
             if (IsHandleCreated) BeginInvoke(new Action(SelectFirstRow));
+        }
+
+        private bool LoadFloorStatisticsSource(DoorWindowScheduleReadResult source)
+        {
+            if (source == null || !source.HasFloorStatistics) return false;
+            _baseSource = source; _floorSources.Clear();
+            foreach (var column in source.FloorColumns)
+            {
+                var items = new List<DoorWindowScheduleItem>();
+                foreach (var original in source.Items)
+                {
+                    var item = CloneScheduleItem(original);
+                    var quantity = original.FloorQuantities.FirstOrDefault(x => string.Equals(x.FloorName, column.FloorName, StringComparison.CurrentCultureIgnoreCase));
+                    item.Quantity = quantity == null ? 0 : quantity.PerFloorQuantity;
+                    item.FloorQuantities.Clear();
+                    ApplyPreferences(item); UpdateStatus(item); items.Add(item);
+                }
+                _floorSources.Add(new FloorScheduleSource { FloorName = column.FloorName, FloorCount = column.FloorCount, SourceHandle = source.SourceHandle, Items = items });
+            }
+            _changingFloorMode = true; _floorStatistics.Checked = true; _changingFloorMode = false; _addCurrentFloor.Enabled = true;
+            RebuildFloorStatistics();
+            SaveSession();
+            _status.Text = "已识别该表包含分层统计，已自动开启每层单独统计。";
+            return true;
+        }
+
+        private void ApplyPreferences(DoorWindowScheduleItem item)
+        {
+            var preferences = _store.LoadForActiveProject();
+            var preference = preferences.FirstOrDefault(x => string.Equals(x.Code, item.Code, StringComparison.OrdinalIgnoreCase) && Math.Abs(x.Width - item.Width) < 0.01 && Math.Abs(x.Height - item.Height) < 0.01)
+                ;
+            if (preference == null) return;
+            item.ElevationType = preference.ElevationType; item.DivisionPreset = preference.DivisionPreset; item.OpeningMode = preference.OpeningMode;
+            item.HasInstallationGap = preference.HasInstallationGap; item.InstallationGap = preference.InstallationGap > 0 ? preference.InstallationGap : 20d;
+            item.HasOuterFrame = preference.HasOuterFrame; item.OuterFrameWidth = preference.OuterFrameWidth > 0 ? preference.OuterFrameWidth : 50d;
+            item.HasMullion = preference.HasMullion; item.MullionWidth = preference.MullionWidth > 0 ? preference.MullionWidth : 50d; item.DoorFrameType = string.IsNullOrWhiteSpace(preference.DoorFrameType) ? "N型" : preference.DoorFrameType;
+            item.CustomColumnRatios = preference.CustomColumnRatios; item.CustomRowRatios = preference.CustomRowRatios; item.CustomColumnWidths = preference.CustomColumnWidths; item.CustomRowHeights = preference.CustomRowHeights;
+            item.CellOpeningModes = preference.CellOpeningModes; item.CustomCellLayout = preference.CustomCellLayout; item.DoorPlacement = preference.DoorPlacement; item.DoorEdgeDistance = preference.DoorEdgeDistance;
+            item.BayLeftSide = string.IsNullOrWhiteSpace(preference.BayLeftSide) ? "墙" : preference.BayLeftSide; item.BayRightSide = string.IsNullOrWhiteSpace(preference.BayRightSide) ? "墙" : preference.BayRightSide;
+            item.BayLeftDepth = preference.BayLeftDepth > 0d ? preference.BayLeftDepth : 600d; item.BayRightDepth = preference.BayRightDepth > 0d ? preference.BayRightDepth : 600d;
+            item.BayLeftCellLayout = preference.BayLeftCellLayout; item.BayRightCellLayout = preference.BayRightCellLayout;
+            item.Material = string.IsNullOrWhiteSpace(preference.Material) ? item.Material : preference.Material; item.AtlasName = string.IsNullOrWhiteSpace(preference.AtlasName) ? item.AtlasName : DoorWindowElevationSuggestionService.NormalizeAtlasName(preference.AtlasName); item.Remarks = preference.Remarks;
+            if (preference.HasSillHeight) { item.SillHeight = preference.SillHeight; item.SillHeightSuppressed = preference.SillHeightSuppressed; }
+        }
+
+        private void ChangeFloorStatisticsMode()
+        {
+            if (_changingFloorMode) return;
+            _addCurrentFloor.Enabled = _floorStatistics.Checked;
+            if (_floorStatistics.Checked)
+            {
+                if (_floorSources.Count > 0) RebuildFloorStatistics();
+                SaveSession();
+            }
+            else if (_baseSource != null)
+            {
+                _floorSources.Clear();
+                LoadSource(_baseSource);
+                SaveSession();
+            }
+        }
+
+        private void AddCurrentSourceAsFloor()
+        {
+            if (_baseSource == null || _baseSource.Items.Count == 0) return;
+            FloorScheduleSource floor;
+            if (!TryCreateFloorSource(_baseSource, out floor))
+            {
+                if (_floorSources.Count == 0)
+                {
+                    _changingFloorMode = true; _floorStatistics.Checked = false; _changingFloorMode = false;
+                    _addCurrentFloor.Enabled = false;
+                }
+                return;
+            }
+            AddOrReplaceFloorSource(floor);
+        }
+
+        private void OpenFloorSettings()
+        {
+            var dialog = new DoorWindowFloorStatisticsForm(_document);
+            dialog.FormClosed += (sender, args) =>
+            {
+                if (dialog.DialogResult != DialogResult.OK) return;
+                _floorSources.Clear();
+                for (var index = 0; index < dialog.Results.Count; index++)
+                    _floorSources.Add(new FloorScheduleSource { FloorName = dialog.FloorNames[index], FloorCount = dialog.FloorCounts[index], SourceHandle = dialog.Results[index].SourceHandle, Items = dialog.Results[index].Items.ToList() });
+                if (_floorSources.Count > 0) RebuildFloorStatistics();
+            };
+            Autodesk.AutoCAD.ApplicationServices.Application.ShowModelessDialog(dialog);
+        }
+
+#if ACAD_R19
+        private void PickFloorTable()
+#else
+        private async void PickFloorTable()
+#endif
+        {
+            Hide();
+            try
+            {
+                _document.Window.Focus(); ObjectId id = ObjectId.Null;
+#if ACAD_R19
+                id = PromptForFloorTable();
+#else
+                await CadCommandContext.ExecuteAsync(() => id = PromptForFloorTable());
+#endif
+                if (id.IsNull) return;
+                DoorWindowScheduleReadResult result;
+                using (_document.LockDocument()) using (var transaction = _document.Database.TransactionManager.StartTransaction())
+                    result = TianzhengDoorWindowService.Read(transaction.GetObject(id, OpenMode.ForRead, false));
+                FloorScheduleSource floor;
+                if (TryCreateFloorSource(result, out floor)) AddOrReplaceFloorSource(floor);
+            }
+            catch (Exception exception) { MessageBox.Show(this, "读取楼层门窗表失败：" + exception.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+            finally { Show(); Activate(); }
+        }
+
+        private ObjectId PromptForFloorTable()
+        {
+            var prompt = new PromptEntityOptions("\n请选择该楼层的天正门窗表：");
+            var result = _document.Editor.GetEntity(prompt);
+            return result.Status == PromptStatus.OK ? result.ObjectId : ObjectId.Null;
+        }
+
+        private bool TryCreateFloorSource(DoorWindowScheduleReadResult source, out FloorScheduleSource floor)
+        {
+            floor = null;
+            var suggested = _floorSources.Count == 0 ? "1层" : (_floorSources.Count + 1) + "层";
+            var name = Microsoft.VisualBasic.Interaction.InputBox("请输入该门窗表对应的楼层名称。标准层可以填写“3~10层”或“标准层”：", "设置楼层", suggested).Trim();
+            if (string.IsNullOrWhiteSpace(name)) return false;
+            var countText = Microsoft.VisualBasic.Interaction.InputBox("请输入该门窗表代表的层数。普通层填 1；标准层填重复层数：", "设置标准层数量", "1").Trim();
+            int count;
+            if (!int.TryParse(countText, out count) || count < 1 || count > 999)
+            {
+                MessageBox.Show(this, "层数必须是 1～999 的整数。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information); return false;
+            }
+            floor = new FloorScheduleSource { FloorName = name, FloorCount = count, SourceHandle = source.SourceHandle, Items = source.Items.ToList() };
+            return true;
+        }
+
+        private void AddOrReplaceFloorSource(FloorScheduleSource floor)
+        {
+            var existing = _floorSources.FirstOrDefault(x => string.Equals(x.FloorName, floor.FloorName, StringComparison.CurrentCultureIgnoreCase));
+            if (existing != null)
+            {
+                if (MessageBox.Show(this, "楼层“" + floor.FloorName + "”已经存在，是否替换？", Text, MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
+                _floorSources.Remove(existing);
+            }
+                _floorSources.Add(floor); RebuildFloorStatistics(); SaveSession();
+        }
+
+        private void ClearFloorStatistics()
+        {
+            if (_floorSources.Count > 0 && MessageBox.Show(this, "确定清空已经拾取的全部楼层门窗表？", Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
+            _floorSources.Clear();
+            if (_baseSource != null) LoadSource(_baseSource);
+            _status.Text = "已清空分层统计；可继续把当前表加入楼层或拾取其他楼层门窗表。";
+        }
+
+        private void RebuildFloorStatistics()
+        {
+            if (_floorSources.Count == 0) return;
+            var merged = new DoorWindowScheduleReadResult
+            {
+                SourceDxfName = "分层门窗统计", SourceHandle = string.Join(",", _floorSources.Select(x => x.SourceHandle).Where(x => !string.IsNullOrWhiteSpace(x))),
+                Adapter = _floorSources.Count + " 个楼层表"
+            };
+            var conflicts = new List<string>();
+            foreach (var codeGroup in _floorSources.SelectMany(floor => floor.Items.Select(item => new { floor, item }))
+                .GroupBy(x => (x.item.Code ?? string.Empty).Trim(), StringComparer.OrdinalIgnoreCase))
+            {
+                var variants = codeGroup.GroupBy(x => x.item.Width.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + "×" + x.item.Height.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + "|" + (x.item.ElevationType ?? string.Empty)).ToList();
+                if (variants.Count > 1) conflicts.Add(codeGroup.Key);
+                foreach (var variant in variants)
+                {
+                    var first = variant.First().item;
+                    var combined = CloneScheduleItem(first); ApplyPreferences(combined);
+                    combined.FloorQuantities.Clear();
+                    foreach (var floor in _floorSources)
+                    {
+                        var quantity = floor.Items.Where(x => string.Equals(x.Code, first.Code, StringComparison.OrdinalIgnoreCase) && Math.Abs(x.Width - first.Width) < .01d && Math.Abs(x.Height - first.Height) < .01d && string.Equals(x.ElevationType, first.ElevationType, StringComparison.Ordinal)).Sum(x => Math.Max(0, x.Quantity));
+                        combined.FloorQuantities.Add(new DoorWindowFloorQuantity { FloorName = floor.FloorName, PerFloorQuantity = quantity, FloorCount = floor.FloorCount });
+                    }
+                    combined.Quantity = combined.FloorQuantities.Sum(x => x.TotalQuantity);
+                    if (variants.Count > 1) { combined.SourceNote = string.Join("；", new[] { combined.SourceNote, "同编号类型或尺寸冲突" }.Where(x => !string.IsNullOrWhiteSpace(x))); }
+                    merged.Items.Add(combined);
+                }
+            }
+            // 分层汇总行直接作为当前网格数据载入，不能再次按普通门窗表流程重建并覆盖楼层明细。
+            _source = merged; _rows.RaiseListChangedEvents = false; _rows.Clear();
+            foreach (var item in DoorWindowTypeOrdering.Sort(merged.Items)) _rows.Add(item);
+            DoorWindowTypeOrdering.Renumber(_rows); _rows.RaiseListChangedEvents = true; _rows.ResetBindings();
+            _sourceLabel.Text = merged.SourceDxfName + " · " + merged.Adapter + " · 分层统计";
+            _preview.ShowItem(_rows.FirstOrDefault());
+            // LoadSource 会按当前项目偏好重新构造行对象，补回本次分层统计的楼层数量明细。
+            if (conflicts.Count > 0)
+                foreach (var item in _rows.Where(x => conflicts.Contains((x.Code ?? string.Empty).Trim(), StringComparer.OrdinalIgnoreCase))) { item.Status = "同编号类型或尺寸冲突"; item.Selected = false; }
+            _grid.Refresh(); UpdateSummary();
+            if (conflicts.Count > 0) MessageBox.Show(this, "以下编号在不同楼层出现了类型或尺寸冲突，已经分行显示并阻止直接生成：\r\n" + string.Join("、", conflicts.Distinct()), Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            _status.Text = "已统计 " + _floorSources.Count + " 个楼层表；总数量已按普通层直接相加、标准层按单层数量×层数计算。";
+        }
+
+        private static DoorWindowScheduleItem CloneScheduleItem(DoorWindowScheduleItem x)
+        {
+            return new DoorWindowScheduleItem
+            {
+                Selected = x.Selected, Sequence = x.Sequence, Code = x.Code, SourceCategory = x.SourceCategory, Width = x.Width, Height = x.Height, Quantity = x.Quantity,
+                SourceNote = x.SourceNote, Material = x.Material, AtlasName = x.AtlasName, Remarks = x.Remarks, SillHeight = x.SillHeight, SillHeightSuppressed = x.SillHeightSuppressed,
+                ElevationType = x.ElevationType, DivisionPreset = x.DivisionPreset, OpeningMode = x.OpeningMode, HasInstallationGap = x.HasInstallationGap, InstallationGap = x.InstallationGap,
+                HasOuterFrame = x.HasOuterFrame, OuterFrameWidth = x.OuterFrameWidth, HasMullion = x.HasMullion, MullionWidth = x.MullionWidth, DoorFrameType = x.DoorFrameType,
+                DrawingScale = x.DrawingScale, CustomColumnRatios = x.CustomColumnRatios, CustomRowRatios = x.CustomRowRatios, CustomColumnWidths = x.CustomColumnWidths,
+                CustomRowHeights = x.CustomRowHeights, CustomCellLayout = x.CustomCellLayout, CellOpeningModes = x.CellOpeningModes, DoorPlacement = x.DoorPlacement, DoorEdgeDistance = x.DoorEdgeDistance,
+                BayLeftSide = x.BayLeftSide, BayRightSide = x.BayRightSide, BayLeftDepth = x.BayLeftDepth, BayRightDepth = x.BayRightDepth, BayLeftCellLayout = x.BayLeftCellLayout,
+                BayRightCellLayout = x.BayRightCellLayout, Status = x.Status, SourceRow = x.SourceRow, LockedPage = x.LockedPage
+            };
         }
 
         private void ApplyBatch()
@@ -356,8 +598,69 @@ namespace BatchPdfPublisher.Views
 
         private void SavePreferences(bool notify)
         {
-            try { _grid.EndEdit(); _store.SaveForActiveProject(_rows, ParseDrawingScale()); if (notify) MessageBox.Show(this, "门窗类型、分格、开启、安装缝和出图比例已保存到当前项目。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information); }
+            try { _grid.EndEdit(); _store.SaveForActiveProject(_rows, ParseDrawingScale()); SaveSession(); if (notify) MessageBox.Show(this, "门窗类型、分格、开启、安装缝和出图比例已保存到当前项目。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information); }
             catch (Exception exception) { if (notify) MessageBox.Show(this, "保存失败：" + exception.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+        }
+
+        private void SaveSession()
+        {
+            _store.SaveSession(_floorStatistics.Checked, _baseSource == null ? null : _baseSource.SourceHandle,
+                _floorSources.Select(x => new DoorWindowFloorSourcePreference { FloorName = x.FloorName, FloorCount = x.FloorCount, SourceHandle = x.SourceHandle }));
+        }
+
+        private async void RestoreSavedSession()
+        {
+            var session = _store.LoadSession();
+            if (session == null) return;
+            try
+            {
+                if (session.FloorStatistics && session.FloorSources != null && session.FloorSources.Count > 0)
+                {
+                    var restored = new List<FloorScheduleSource>();
+                    foreach (var source in session.FloorSources)
+                    {
+                        DoorWindowScheduleReadResult result;
+                        if (!TryReadSourceByHandle(source.SourceHandle, out result)) continue;
+                        restored.Add(new FloorScheduleSource { FloorName = source.FloorName, FloorCount = Math.Max(1, source.FloorCount), SourceHandle = source.SourceHandle, Items = result.Items.ToList() });
+                    }
+                    if (restored.Count > 0)
+                    {
+                        var floorTable = restored.Select(x => x.SourceHandle).Distinct(StringComparer.OrdinalIgnoreCase).Count() == 1 ? restored.FirstOrDefault() : null;
+                        if (floorTable != null)
+                        {
+                            DoorWindowScheduleReadResult detected;
+                            if (TryReadSourceByHandle(floorTable.SourceHandle, out detected) && detected.HasFloorStatistics && LoadFloorStatisticsSource(detected)) return;
+                        }
+                        _floorSources.Clear(); _floorSources.AddRange(restored);
+                        _changingFloorMode = true; _floorStatistics.Checked = true; _changingFloorMode = false;
+                        _addCurrentFloor.Enabled = true; RebuildFloorStatistics();
+                        return;
+                    }
+                }
+                if (!string.IsNullOrWhiteSpace(session.BaseSourceHandle))
+                {
+                    DoorWindowScheduleReadResult result;
+                    if (TryReadSourceByHandle(session.BaseSourceHandle, out result))
+                    {
+                        _baseSource = result; _changingFloorMode = true; _floorStatistics.Checked = false; _changingFloorMode = false; _addCurrentFloor.Enabled = false; LoadSource(result);
+                    }
+                }
+            }
+            catch (Exception exception) { try { File.AppendAllText(Path.Combine(UserDataPaths.LogsDirectory, "door-window-elevation.log"), DateTime.Now.ToString("O") + " restore session: " + exception + Environment.NewLine); } catch { } }
+        }
+
+        private bool TryReadSourceByHandle(string text, out DoorWindowScheduleReadResult result)
+        {
+            result = null; if (string.IsNullOrWhiteSpace(text)) return false;
+            long value; if (!long.TryParse(text, System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out value)) return false;
+            try
+            {
+                var id = _document.Database.GetObjectId(false, new Handle(value), 0);
+                if (id.IsNull || !id.IsValid) return false;
+                using (_document.LockDocument()) using (var transaction = _document.Database.TransactionManager.StartTransaction()) result = TianzhengDoorWindowService.Read(transaction.GetObject(id, OpenMode.ForRead, false));
+                return result != null;
+            }
+            catch { return false; }
         }
 
 #if ACAD_R19
@@ -379,7 +682,13 @@ namespace BatchPdfPublisher.Views
                 DoorWindowScheduleReadResult result;
                 using (_document.LockDocument()) using (var transaction = _document.Database.TransactionManager.StartTransaction())
                     result = TianzhengDoorWindowService.Read(transaction.GetObject(id, OpenMode.ForRead, false));
-                LoadSource(result);
+                _baseSource = result; _floorSources.Clear();
+                if (!LoadFloorStatisticsSource(result))
+                {
+                    _changingFloorMode = true; _floorStatistics.Checked = false; _changingFloorMode = false;
+                    _addCurrentFloor.Enabled = false;
+                    LoadSource(result);
+                }
             }
             catch (Exception exception) { MessageBox.Show(this, "读取门窗表失败：" + exception.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); }
             finally { Show(); Activate(); }
@@ -401,6 +710,9 @@ namespace BatchPdfPublisher.Views
                 try
                 {
                     var result = Services.CsvDoorWindowImportService.Read(dialog.FileName);
+                    _baseSource = result; _floorSources.Clear();
+                    _changingFloorMode = true; _floorStatistics.Checked = false; _changingFloorMode = false;
+                    _addCurrentFloor.Enabled = false;
                     LoadSource(result);
                     MessageBox.Show(this, "已从文件导入 " + result.Items.Count + " 个门窗（" + result.Adapter + "）。表头需包含“编号”与“洞口尺寸/宽×高”列；类型/分格可在下方列表调整。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }

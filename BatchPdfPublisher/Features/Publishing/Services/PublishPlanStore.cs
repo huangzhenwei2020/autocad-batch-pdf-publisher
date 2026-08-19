@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.Serialization.Json;
-using System.Text;
 using BatchPdfPublisher.Models;
 
 namespace BatchPdfPublisher.Services
@@ -134,12 +133,10 @@ namespace BatchPdfPublisher.Services
         {
             WriteAtomically(path, stream =>
             {
-                // The caller owns the stream and flushes it durably before replacing
-                // the destination file.  Keep it open after the text writer is disposed.
-                using (var writer = new StreamWriter(stream, new UTF8Encoding(false), 1024, true))
-                {
-                    writer.Write(value ?? string.Empty);
-                }
+                // leaveOpen=true：WriteAtomically 需要在委托返回后对同一个流 Flush(true)。
+                // 默认 StreamWriter 会连底层 FileStream 一起关闭，导致 BPP 构造阶段报
+                // “无法访问已关闭的文件”。
+                using (var writer = new StreamWriter(stream, System.Text.Encoding.UTF8, 1024, true)) writer.Write(value ?? string.Empty);
             });
         }
 

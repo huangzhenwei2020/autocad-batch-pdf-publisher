@@ -28,9 +28,16 @@ namespace BatchPdfPublisher.Views
         private bool _hasInstallationGap = true;
         private bool _hasOuterFrame = true, _hasMullion = true;
         private string _doorFrameType = "N型";
+        private bool _hasBayReturns;
+        private string _bayLeftSide = "墙", _bayRightSide = "墙";
+        private double _bayLeftDepth = 600d, _bayRightDepth = 600d;
+        private int _selectedBayReturn; // -1 左转折，1 右转折，0 主窗格
+        private double _drawMinX, _drawMaxX;
+        private RectangleF _leftBayRect, _rightBayRect;
 
         public event EventHandler LayoutChanged;
         public event EventHandler SelectedCellChanged;
+        public event EventHandler BayReturnSelected;
 
         public DoorWindowLayoutEditorControl()
         {
@@ -54,6 +61,16 @@ namespace BatchPdfPublisher.Views
         public void SetProfileWidths(double outerWidth, double mullionWidth) { _outerProfileWidth = Math.Max(0d, outerWidth); _mullionProfileWidth = Math.Max(0d, mullionWidth); Invalidate(); }
         public void SetInstallationGap(bool enabled, double gap) { _hasInstallationGap = enabled; _installationGap = Math.Max(0d, gap); Invalidate(); }
         public void SetConstruction(bool hasOuterFrame, bool hasMullion, string doorFrameType) { _hasOuterFrame = hasOuterFrame; _hasMullion = hasMullion; _doorFrameType = string.IsNullOrWhiteSpace(doorFrameType) ? "N型" : doorFrameType; Invalidate(); }
+        public int SelectedBayReturn { get { return _selectedBayReturn; } }
+        public void ConfigureBayReturns(bool enabled, string leftSide, double leftDepth, string rightSide, double rightDepth)
+        {
+            _hasBayReturns = enabled;
+            _bayLeftSide = string.Equals(leftSide, "窗", StringComparison.Ordinal) ? "窗" : "墙";
+            _bayRightSide = string.Equals(rightSide, "窗", StringComparison.Ordinal) ? "窗" : "墙";
+            _bayLeftDepth = SafeBayDepth(leftDepth); _bayRightDepth = SafeBayDepth(rightDepth);
+            if (!enabled) _selectedBayReturn = 0;
+            Invalidate();
+        }
         public void ResizeLayout(double width, double height)
         {
             width = Math.Max(1d, width); height = Math.Max(1d, height); var sx = width / _frameWidth; var sy = height / _frameHeight;
@@ -160,9 +177,15 @@ namespace BatchPdfPublisher.Views
         {
             base.OnPaint(e); e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
             var margin = 54f; var footer = 34f; var usable = new RectangleF(margin, 18, Math.Max(10, Width - margin * 2), Math.Max(10, Height - margin - footer));
-            var scale = Math.Min(usable.Width / (float)_frameWidth, usable.Height / (float)_frameHeight);
-            var drawWidth = (float)_frameWidth * scale; var drawHeight = (float)_frameHeight * scale;
+            var visibleLeft = _hasBayReturns ? Math.Min(_bayLeftDepth, _frameWidth * .45d) : 0d;
+            var visibleRight = _hasBayReturns ? Math.Min(_bayRightDepth, _frameWidth * .45d) : 0d;
+            _drawMinX = -visibleLeft; _drawMaxX = _frameWidth + visibleRight;
+            var drawingWidth = Math.Max(1d, _drawMaxX - _drawMinX);
+            var scale = Math.Min(usable.Width / (float)drawingWidth, usable.Height / (float)_frameHeight);
+            var drawWidth = (float)drawingWidth * scale; var drawHeight = (float)_frameHeight * scale;
             _drawingArea = new RectangleF(usable.Left + (usable.Width - drawWidth) / 2f, usable.Top + (usable.Height - drawHeight) / 2f, drawWidth, drawHeight);
+            _leftBayRect = _hasBayReturns ? new RectangleF(ToPixelX(-visibleLeft), ToPixelY(_frameHeight), ToPixelX(0d) - ToPixelX(-visibleLeft), drawHeight) : RectangleF.Empty;
+            _rightBayRect = _hasBayReturns ? new RectangleF(ToPixelX(_frameWidth), ToPixelY(_frameHeight), ToPixelX(_frameWidth + visibleRight) - ToPixelX(_frameWidth), drawHeight) : RectangleF.Empty;
             using (var selectedBrush = new SolidBrush(Color.FromArgb(30, 34, 128, 190)))
             using (var pen = new Pen(Color.FromArgb(35, 49, 64), 1.6f))
             using (var selectedPen = new Pen(Color.FromArgb(22, 112, 180), 2.5f))
@@ -172,6 +195,8 @@ namespace BatchPdfPublisher.Views
             using (var openingPen = new Pen(Color.FromArgb(35, 125, 190), 1.5f) { DashStyle = DashStyle.Dash })
             {
                 var displayOrder = OrderedCells.Select((cell, index) => new { cell, number = index + 1 }).ToDictionary(x => x.cell, x => x.number);
+                DrawBayReturn(e.Graphics, _leftBayRect, true, _bayLeftSide, _bayLeftDepth, selectedPen, pen, openingPen, font);
+                DrawBayReturn(e.Graphics, _rightBayRect, false, _bayRightSide, _bayRightDepth, selectedPen, pen, openingPen, font);
                 for (var index = 0; index < _cells.Count; index++)
                 {
                     var rect = ToPixels(_cells[index]); if (_selectedIndices.Contains(index)) e.Graphics.FillRectangle(selectedBrush, rect);
@@ -192,13 +217,21 @@ namespace BatchPdfPublisher.Views
                     foreach (var segment in DoorWindowElevationGeometryBuilder.BuildInstallationGapOutline(active, _installationGap))
                         e.Graphics.DrawLine(outerPen, ToPixelX(segment.X1), ToPixelY(segment.Y1), ToPixelX(segment.X2), ToPixelY(segment.Y2));
                 }
-                TextRenderer.DrawText(e.Graphics, "拖动分隔线调整；蓝色框为当前面板", font, new Rectangle(0, Height - 28, Width, 22), Color.DimGray, TextFormatFlags.HorizontalCenter);
+                TextRenderer.DrawText(e.Graphics, _hasBayReturns ? "点击左右转折面即可选择；双击可切换墙/窗，顶部可修改深度。主窗格仍按普通窗方式分格。" : "拖动分隔线调整；蓝色框为当前面板", font, new Rectangle(0, Height - 28, Width, 22), Color.DimGray, TextFormatFlags.HorizontalCenter);
             }
         }
 
         protected override void OnMouseDown(MouseEventArgs e)
         {
-            base.OnMouseDown(e); Focus(); _dragDivider = HitDivider(e.Location);
+            base.OnMouseDown(e); Focus();
+            var bay = HitBayReturn(e.Location);
+            if (bay != 0)
+            {
+                _selectedBayReturn = bay;
+                if (e.Clicks >= 2) { if (bay < 0) _bayLeftSide = _bayLeftSide == "窗" ? "墙" : "窗"; else _bayRightSide = _bayRightSide == "窗" ? "墙" : "窗"; }
+                Invalidate(); if (BayReturnSelected != null) BayReturnSelected(this, EventArgs.Empty); return;
+            }
+            _selectedBayReturn = 0; _dragDivider = HitDivider(e.Location);
             if (_dragDivider != null) { Capture = true; return; }
             var hit = HitCell(e.Location);
             if ((ModifierKeys & Keys.Shift) == Keys.Shift)
@@ -269,12 +302,20 @@ namespace BatchPdfPublisher.Views
             divider.Coordinate = coordinate; Invalidate(); if (_dragDivider == null) OnLayoutChanged(); else RaiseSelectionChanged(); return true;
         }
 
+        private int HitBayReturn(Point point)
+        {
+            if (!_hasBayReturns) return 0;
+            if (_leftBayRect.Contains(point)) return -1;
+            if (_rightBayRect.Contains(point)) return 1;
+            return 0;
+        }
+
         private int HitCell(Point point)
         { for (var index = _cells.Count - 1; index >= 0; index--) if (ToPixels(_cells[index]).Contains(point)) return index; return -1; }
         private RectangleF ToPixels(DoorWindowLayoutCell cell) { return new RectangleF(ToPixelX(cell.Left), ToPixelY(cell.Top), ToPixelX(cell.Right) - ToPixelX(cell.Left), ToPixelY(cell.Bottom) - ToPixelY(cell.Top)); }
-        private float ToPixelX(double value) { return _drawingArea.Left + (float)(value / _frameWidth) * _drawingArea.Width; }
+        private float ToPixelX(double value) { return _drawingArea.Left + (float)((value - _drawMinX) / Math.Max(1d, _drawMaxX - _drawMinX)) * _drawingArea.Width; }
         private float ToPixelY(double value) { return _drawingArea.Bottom - (float)(value / _frameHeight) * _drawingArea.Height; }
-        private double FromPixelX(float value) { return (value - _drawingArea.Left) / Math.Max(1f, _drawingArea.Width) * _frameWidth; }
+        private double FromPixelX(float value) { return _drawMinX + (value - _drawingArea.Left) / Math.Max(1f, _drawingArea.Width) * (_drawMaxX - _drawMinX); }
         private double FromPixelY(float value) { return (_drawingArea.Bottom - value) / Math.Max(1f, _drawingArea.Height) * _frameHeight; }
         private void OnLayoutChanged() { Invalidate(); if (LayoutChanged != null) LayoutChanged(this, EventArgs.Empty); RaiseSelectionChanged(); }
         private void RaiseSelectionChanged() { if (SelectedCellChanged != null) SelectedCellChanged(this, EventArgs.Empty); }
@@ -296,6 +337,35 @@ namespace BatchPdfPublisher.Views
 
         private static DoorWindowLayoutCell Copy(DoorWindowLayoutCell cell) { return new DoorWindowLayoutCell { Left = cell.Left, Bottom = cell.Bottom, Right = cell.Right, Top = cell.Top, Opening = cell.Opening, Material = string.IsNullOrWhiteSpace(cell.Material) ? "无" : cell.Material, IsDoor = cell.IsDoor, IsDeleted = cell.IsDeleted }; }
         private static void MergeValues(DoorWindowLayoutCell target, DoorWindowLayoutCell source) { target.IsDoor = target.IsDoor || source.IsDoor; if (string.IsNullOrWhiteSpace(target.Opening)) target.Opening = source.Opening; if (string.IsNullOrWhiteSpace(target.Material)) target.Material = source.Material; }
+
+        private void DrawBayReturn(Graphics graphics, RectangleF rect, bool left, string side, double depth, Pen selectedPen, Pen normalPen, Pen symbolPen, Font font)
+        {
+            if (rect.Width < 2f || rect.Height < 2f) return;
+            var pen = (left ? _selectedBayReturn < 0 : _selectedBayReturn > 0) ? selectedPen : normalPen;
+            graphics.DrawRectangle(pen, rect.X, rect.Y, rect.Width, rect.Height);
+            var joinX = left ? rect.Right : rect.Left;
+            var outsideX = left ? rect.Left : rect.Right;
+            graphics.DrawLine(pen, joinX, rect.Top, outsideX, rect.Top + rect.Height * .10f);
+            graphics.DrawLine(pen, joinX, rect.Bottom, outsideX, rect.Bottom - rect.Height * .10f);
+            if (side == "窗")
+            {
+                var inner = RectangleF.Inflate(rect, -Math.Max(3f, rect.Width * .17f), -Math.Max(5f, rect.Height * .10f));
+                if (inner.Width > 2f && inner.Height > 2f)
+                {
+                    graphics.DrawRectangle(symbolPen, inner.X, inner.Y, inner.Width, inner.Height);
+                    graphics.DrawLine(symbolPen, inner.Left, inner.Top + inner.Height * .40f, inner.Right, inner.Top + inner.Height * .60f);
+                }
+            }
+            else
+            {
+                graphics.DrawLine(symbolPen, outsideX, rect.Top + rect.Height * .34f, joinX, rect.Top + rect.Height * .46f);
+                graphics.DrawLine(symbolPen, outsideX, rect.Top + rect.Height * .66f, joinX, rect.Top + rect.Height * .54f);
+            }
+            var text = (left ? "左转折" : "右转折") + "\n" + side + " / " + depth.ToString("0") + "mm";
+            TextRenderer.DrawText(graphics, text, font, Rectangle.Round(rect), Color.FromArgb(45, 55, 65), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
+        }
+
+        private static double SafeBayDepth(double value) { return double.IsNaN(value) || double.IsInfinity(value) || value <= 0d ? 600d : Math.Min(5000d, value); }
 
         private static void DrawOpeningSymbol(Graphics graphics, Pen pen, RectangleF rect, string opening, bool leftHalf)
         {

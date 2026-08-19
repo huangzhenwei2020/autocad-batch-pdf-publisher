@@ -15,6 +15,7 @@ namespace BatchPdfPublisher.Services
 {
     public sealed class TianzhengDimensionSettings
     {
+        public sealed class Preset { public string Name; public double Inner; public double Spacing; public double AxisLeader; public override string ToString() { return Name; } }
         public double OuterExtensionLength = 8d;
         public double InnerExtensionLength = 5d;
         public double DimensionSpacing = 8d;
@@ -48,6 +49,10 @@ namespace BatchPdfPublisher.Services
         {
             System.IO.File.WriteAllLines(PathName, new[] { "Outer=" + OuterExtensionLength.ToString(CultureInfo.InvariantCulture), "Inner=" + InnerExtensionLength.ToString(CultureInfo.InvariantCulture), "Spacing=" + DimensionSpacing.ToString(CultureInfo.InvariantCulture), "AxisLeader=" + AxisLeaderLength.ToString(CultureInfo.InvariantCulture), "ApplyDimension=" + (ApplyDimensionGeometry ? "1" : "0"), "ApplyCadDimension=" + (ApplyCadDimensionGeometry ? "1" : "0"), "ApplyAxis=" + (ApplyAxisLeader ? "1" : "0") });
         }
+        private static string PresetPath { get { return UserDataPaths.SettingsFile("tianzheng-dimension-presets.ini"); } }
+        public static List<Preset> LoadPresets() { var list = new List<Preset>(); try { foreach (var line in System.IO.File.ReadAllLines(PresetPath)) { var p=line.Split('|'); double a,b,c; if(p.Length>=4&&double.TryParse(p[1],NumberStyles.Float,CultureInfo.InvariantCulture,out a)&&double.TryParse(p[2],NumberStyles.Float,CultureInfo.InvariantCulture,out b)&&double.TryParse(p[3],NumberStyles.Float,CultureInfo.InvariantCulture,out c)) list.Add(new Preset{Name=p[0],Inner=a,Spacing=b,AxisLeader=c}); } } catch { } return list; }
+        public static void SavePreset(Preset preset) { var list=LoadPresets(); list.RemoveAll(x=>string.Equals(x.Name,preset.Name,StringComparison.OrdinalIgnoreCase)); list.Add(preset); System.IO.File.WriteAllLines(PresetPath,list.Select(x=>x.Name.Replace("|","")+"|"+x.Inner.ToString(CultureInfo.InvariantCulture)+"|"+x.Spacing.ToString(CultureInfo.InvariantCulture)+"|"+x.AxisLeader.ToString(CultureInfo.InvariantCulture)).ToArray()); }
+        public static void DeletePreset(string name) { var list=LoadPresets(); list.RemoveAll(x=>string.Equals(x.Name,name,StringComparison.OrdinalIgnoreCase)); try { System.IO.File.WriteAllLines(PresetPath,list.Select(x=>x.Name.Replace("|","")+"|"+x.Inner.ToString(CultureInfo.InvariantCulture)+"|"+x.Spacing.ToString(CultureInfo.InvariantCulture)+"|"+x.AxisLeader.ToString(CultureInfo.InvariantCulture)).ToArray()); } catch { } }
     }
 
     internal static class TianzhengScaleService
