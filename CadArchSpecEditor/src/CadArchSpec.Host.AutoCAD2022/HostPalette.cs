@@ -1,5 +1,7 @@
 using System;
 using System.Drawing;
+using System.IO;
+using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.Windows;
 
 namespace CadArchSpec.Host.AutoCAD2022
@@ -12,24 +14,44 @@ namespace CadArchSpec.Host.AutoCAD2022
 
         public static void Show()
         {
-            if (_paletteSet == null)
+            try
             {
-                _hostControl = new EditorHostControl();
-                _paletteSet = new PaletteSet("万落建筑工具 · 建筑设计说明", PaletteId)
+                WriteDiagnostic("JZSM entered");
+                if (_paletteSet == null)
                 {
-                    DockEnabled = DockSides.Left | DockSides.Right,
-                    MinimumSize = new Size(420, 520),
-                    Size = new Size(720, 820),
-                    Style = PaletteSetStyles.ShowAutoHideButton |
-                            PaletteSetStyles.ShowCloseButton |
-                            PaletteSetStyles.ShowPropertiesMenu
-                };
-                _paletteSet.Add("建筑设计说明", _hostControl);
-                _paletteSet.PaletteSetDestroy += OnPaletteSetDestroy;
-            }
+                    WriteDiagnostic("Creating editor control");
+                    _hostControl = new EditorHostControl();
+                    _paletteSet = new PaletteSet("万落建筑工具 · 建筑设计说明", PaletteId)
+                    {
+                        DockEnabled = DockSides.Left | DockSides.Right,
+                        MinimumSize = new Size(420, 520),
+                        Size = new Size(720, 820),
+                        Style = PaletteSetStyles.ShowAutoHideButton |
+                                PaletteSetStyles.ShowCloseButton |
+                                PaletteSetStyles.ShowPropertiesMenu
+                    };
+                    _paletteSet.Add("建筑设计说明", _hostControl);
+                    _paletteSet.PaletteSetDestroy += OnPaletteSetDestroy;
+                }
 
-            _paletteSet.Visible = true;
-            _paletteSet.Activate(0);
+                _paletteSet.Visible = true;
+                // AutoCAD persists palette geometry by GUID. A palette previously
+                // floated on a disconnected monitor can therefore be running but
+                // completely invisible. Dock it after making it visible so the
+                // persisted floating geometry cannot override recovery.
+                _paletteSet.Dock = DockSides.Right;
+                _paletteSet.Size = new Size(720, 820);
+                _paletteSet.Activate(0);
+                WriteDiagnostic("Palette visible and docked right");
+            }
+            catch (Exception exception)
+            {
+                WriteDiagnostic("Palette open failed", exception);
+                Close();
+                Application.ShowAlertDialog(
+                    "建筑设计说明助手打开失败：\r\n" + exception.Message +
+                    "\r\n\r\n诊断日志已保存到：\r\n" + DiagnosticLogPath());
+            }
         }
 
         public static void Close()
@@ -51,6 +73,33 @@ namespace CadArchSpec.Host.AutoCAD2022
             _hostControl?.Dispose();
             _hostControl = null;
             _paletteSet = null;
+        }
+
+        private static string DiagnosticLogPath()
+        {
+            return Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "CadArchSpecEditor",
+                "Logs",
+                "palette-" + DateTime.Now.ToString("yyyyMMdd") + ".log");
+        }
+
+        private static void WriteDiagnostic(string message, Exception exception = null)
+        {
+            try
+            {
+                var path = DiagnosticLogPath();
+                Directory.CreateDirectory(Path.GetDirectoryName(path));
+                File.AppendAllText(
+                    path,
+                    DateTime.Now.ToString("O") + " | AutoCAD 2022 | " + message +
+                    (exception == null ? string.Empty : Environment.NewLine + exception) +
+                    Environment.NewLine);
+            }
+            catch
+            {
+                // Diagnostics must never prevent the CAD command from returning.
+            }
         }
     }
 }
