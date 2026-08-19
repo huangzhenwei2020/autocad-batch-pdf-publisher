@@ -304,8 +304,9 @@ namespace BatchPdfPublisher.Views
             DoorWindowElevationGeometry geometry;
             try { geometry = DoorWindowElevationGeometryBuilder.Build(item); }
             catch { return; }
-            var holeW = Safe((float)geometry.HoleWidth, 1f); var holeH = Safe((float)geometry.HoleHeight, 1f);
-            if (holeW <= 0f || holeH <= 0f) return;
+            var minX = -geometry.BayLeftExtent; var maxX = geometry.HoleWidth + geometry.BayRightExtent;
+            var drawGeometryWidth = Safe((float)(maxX - minX), 1f); var holeH = Safe((float)geometry.HoleHeight, 1f);
+            if (drawGeometryWidth <= 0f || holeH <= 0f) return;
 
             // 分区：顶部序号条(13px)，底部图名+比例(16px)，中间画门窗+标注。
             var topBand = 13f;
@@ -314,11 +315,11 @@ namespace BatchPdfPublisher.Views
             // 标注带：门窗图底部与 mid 底部之间留 dimBand+2px 画标注线/数字。
             var dimBand = 9f;
             var availH = Math.Max(1f, mid.Height - dimBand - 2f);
-            var scale = Math.Min(mid.Width / holeW, availH / holeH);
+            var scale = Math.Min(mid.Width / drawGeometryWidth, availH / holeH);
             if (float.IsNaN(scale) || float.IsInfinity(scale) || scale <= 0f) scale = 0.05f;
 
             // 门窗图顶对齐 mid.Top，向下画完整 holeH*scale 高；底部=originY，其下为标注带（屏幕 y 向下）。
-            var originX = mid.Left + (mid.Width - holeW * scale) / 2f;
+            var originX = mid.Left + (mid.Width - drawGeometryWidth * scale) / 2f - (float)minX * scale;
             var originY = mid.Top + holeH * scale;
 
             using (var framePen = new Pen(Color.FromArgb(40, 60, 80), Math.Max(1f, scale * 1.5f)))
@@ -350,13 +351,14 @@ namespace BatchPdfPublisher.Views
                 var dimBottom = originY + 3f;
                 if (dimBottom + 2f <= mid.Bottom)
                 {
-                    graphics.DrawLine(dimPen, originX, dimBottom, originX + holeW * scale, dimBottom);
-                    graphics.DrawLine(dimPen, originX, originY, originX, dimBottom + 2f);
-                    graphics.DrawLine(dimPen, originX + holeW * scale, originY, originX + holeW * scale, dimBottom + 2f);
+                    var mainLeft = originX; var mainRight = originX + (float)geometry.HoleWidth * scale;
+                    graphics.DrawLine(dimPen, mainLeft, dimBottom, mainRight, dimBottom);
+                    graphics.DrawLine(dimPen, mainLeft, originY, mainLeft, dimBottom + 2f);
+                    graphics.DrawLine(dimPen, mainRight, originY, mainRight, dimBottom + 2f);
                     var wText = item.Width.ToString("0.##");
                     var wSize = graphics.MeasureString(wText, smallFont);
-                    graphics.FillRectangle(Brushes.White, originX + holeW * scale / 2f - wSize.Width / 2f, dimBottom - wSize.Height / 2f, wSize.Width, wSize.Height);
-                    graphics.DrawString(wText, smallFont, dimBrush, originX + holeW * scale / 2f - wSize.Width / 2f, dimBottom - wSize.Height / 2f);
+                    graphics.FillRectangle(Brushes.White, mainLeft + (mainRight - mainLeft) / 2f - wSize.Width / 2f, dimBottom - wSize.Height / 2f, wSize.Width, wSize.Height);
+                    graphics.DrawString(wText, smallFont, dimBrush, mainLeft + (mainRight - mainLeft) / 2f - wSize.Width / 2f, dimBottom - wSize.Height / 2f);
                 }
 
                 // 底部：图名 + 比例。

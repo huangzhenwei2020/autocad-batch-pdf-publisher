@@ -48,11 +48,13 @@ namespace BatchPdfPublisher.Views
 
             var titleBand = 62f; var margin = 34f;
             var area = new RectangleF(margin, margin, Math.Max(1, Width - margin * 2), Math.Max(1, Height - margin * 2 - titleBand));
-            var holeW = Safe((float)geometry.HoleWidth, 1f); var holeH = Safe((float)geometry.HoleHeight, 1f);
-            var scale = Math.Min(area.Width / holeW, area.Height / holeH);
+            var minX = -geometry.BayLeftExtent; var maxX = geometry.HoleWidth + geometry.BayRightExtent;
+            var drawGeometryWidth = Safe((float)(maxX - minX), 1f);
+            var holeH = Safe((float)geometry.HoleHeight, 1f);
+            var scale = Math.Min(area.Width / drawGeometryWidth, area.Height / holeH);
             scale = Safe(scale, 1f);
-            var drawWidth = holeW * scale; var drawHeight = holeH * scale;
-            var originX = area.Left + (area.Width - drawWidth) / 2f; var originY = area.Top + (area.Height - drawHeight) / 2f + drawHeight;
+            var drawWidth = drawGeometryWidth * scale; var drawHeight = holeH * scale;
+            var originX = area.Left + (area.Width - drawWidth) / 2f - (float)minX * scale; var originY = area.Top + (area.Height - drawHeight) / 2f + drawHeight;
             using (var holePen = new Pen(Color.FromArgb(155, 165, 176), 1f) { DashStyle = DashStyle.Dash })
             using (var framePen = new Pen(Color.FromArgb(28, 40, 52), 2.2f))
             using (var mullionPen = new Pen(Color.FromArgb(28, 40, 52), 1.5f))
@@ -79,6 +81,7 @@ namespace BatchPdfPublisher.Views
                     }
             var caption = (_item.Code ?? "未编号") + "  " + _item.SizeText + "  " + (_item.DivisionPreset ?? "") + " / " + (_item.OpeningMode ?? "");
             if (_item.ElevationType == "门联窗") caption += "  门" + (_item.DoorPlacement ?? "靠左") + (_item.DoorPlacement == "居中" ? string.Empty : "，距边 " + _item.DoorEdgeDistance.ToString("0.##") + " mm");
+            if (_item.ElevationType == "凸窗") caption += "  左" + (_item.BayLeftSide ?? "墙") + " " + _item.BayLeftDepth.ToString("0.##") + " mm / 右" + (_item.BayRightSide ?? "墙") + " " + _item.BayRightDepth.ToString("0.##") + " mm";
             DrawCentered(graphics, caption, new RectangleF(8, Height - titleBand + 8, Math.Max(0, Width - 16), 24), Color.FromArgb(25, 36, 48), 10F);
             DrawCentered(graphics, "预览按窗口自适应；插入 CAD 时按洞口实际毫米 1:1 绘制", new RectangleF(8, Height - 27, Math.Max(0, Width - 16), 20), Color.DimGray, 8.5F);
 
