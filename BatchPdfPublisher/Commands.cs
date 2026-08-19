@@ -491,6 +491,10 @@ namespace BatchPdfPublisher
         [CommandMethod("BPPSTARTUP", CommandFlags.Session)]
         public void CompleteStartup()
         {
+            // The launcher temporarily disables file dialogs while NETLOAD paths
+            // are supplied non-interactively. Recover the normal AutoCAD UI even
+            // if an earlier launcher run was interrupted before restoring FILEDIA.
+            try { Application.SetSystemVariable("FILEDIA", 1); } catch { }
             RibbonService.RefreshNow();
             MenuService.InstallWhenReady();
             ShortcutAliasService.Install(null, true);

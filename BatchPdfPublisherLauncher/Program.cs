@@ -411,8 +411,8 @@ namespace BatchPdfPublisherLauncher
                 "(setvar \"FILEDIA\" 0)\r\n" +
                 "(setvar \"TRUSTEDPATHS\" (strcat (getvar \"TRUSTEDPATHS\") \";" + EscapeLispString(trustedDirectories) + "\"))\r\n" +
                 loadCommands +
-                "BPPSTARTUP\r\n" +
-                "(setvar \"FILEDIA\" bpp_old_filedia)\r\n", Encoding.Default);
+                "(setvar \"FILEDIA\" bpp_old_filedia)\r\n" +
+                "BPPSTARTUP\r\n", Encoding.Default);
             Process.Start(new ProcessStartInfo
             {
                 FileName = platform.Executable,
@@ -502,8 +502,8 @@ namespace BatchPdfPublisherLauncher
                         "(setvar \"FILEDIA\" 0)\r\n" +
                         "(setvar \"TRUSTEDPATHS\" (strcat (getvar \"TRUSTEDPATHS\") \";" + EscapeLispString(directories) + "\"))\r\n" +
                         BuildNetloadCommandStream(loadableAssemblies) +
-                        "BPPSTARTUP\r\n" +
-                        "(setvar \"FILEDIA\" bpp_old_filedia)\r\n");
+                        "(setvar \"FILEDIA\" bpp_old_filedia)\r\n" +
+                        "BPPSTARTUP\r\n");
                     if (!WaitForLoadReceipt(30)) throw new InvalidOperationException("已发送 NETLOAD，但目标 CAD 没有返回加载成功信息");
                     Log("已向运行中的 AutoCAD 加载插件并收到成功回执；未自动打开 BPP 面板");
                     return true;
@@ -725,7 +725,7 @@ namespace BatchPdfPublisherLauncher
         private static string BuildNetloadCommandStream(IEnumerable<string> assemblies)
         {
             return string.Join(string.Empty, assemblies.Select(x =>
-                "_.NETLOAD\r\n\"" + x.Replace('\\', '/') + "\"\r\n"));
+                "(vl-catch-all-apply 'command (list \"_.NETLOAD\" \"" + EscapeLispString(x) + "\"))\r\n"));
         }
 
         private static bool WaitForLoadReceipt(int seconds)
