@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.Serialization.Json;
+using System.Text;
 using BatchPdfPublisher.Models;
 
 namespace BatchPdfPublisher.Services
@@ -133,7 +134,12 @@ namespace BatchPdfPublisher.Services
         {
             WriteAtomically(path, stream =>
             {
-                using (var writer = new StreamWriter(stream)) writer.Write(value ?? string.Empty);
+                // The caller owns the stream and flushes it durably before replacing
+                // the destination file.  Keep it open after the text writer is disposed.
+                using (var writer = new StreamWriter(stream, new UTF8Encoding(false), 1024, true))
+                {
+                    writer.Write(value ?? string.Empty);
+                }
             });
         }
 
