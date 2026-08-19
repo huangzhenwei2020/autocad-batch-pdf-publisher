@@ -407,11 +407,10 @@ namespace BatchPdfPublisherLauncher
             var trustedDirectories = string.Join(";", loadableAssemblies.Select(Path.GetDirectoryName).Distinct(StringComparer.OrdinalIgnoreCase).Select(x => x.Replace('\\', '/')));
             var loadCommands = BuildNetloadCommandStream(loadableAssemblies);
             File.WriteAllText(startupScript,
-                "(setq bpp_old_filedia (getvar \"FILEDIA\"))\r\n" +
                 "(setvar \"FILEDIA\" 0)\r\n" +
                 "(setvar \"TRUSTEDPATHS\" (strcat (getvar \"TRUSTEDPATHS\") \";" + EscapeLispString(trustedDirectories) + "\"))\r\n" +
                 loadCommands +
-                "(setvar \"FILEDIA\" bpp_old_filedia)\r\n" +
+                "(setvar \"FILEDIA\" 1)\r\n" +
                 "BPPSTARTUP\r\n", Encoding.Default);
             Process.Start(new ProcessStartInfo
             {
@@ -498,11 +497,10 @@ namespace BatchPdfPublisherLauncher
                     var loadableAssemblies = installedAssemblies.Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
                     var directories = string.Join(";", loadableAssemblies.Select(Path.GetDirectoryName).Distinct(StringComparer.OrdinalIgnoreCase).Select(x => x.Replace('\\', '/')));
                     SendCommand(document,
-                        "(setq bpp_old_filedia (getvar \"FILEDIA\"))\r\n" +
                         "(setvar \"FILEDIA\" 0)\r\n" +
                         "(setvar \"TRUSTEDPATHS\" (strcat (getvar \"TRUSTEDPATHS\") \";" + EscapeLispString(directories) + "\"))\r\n" +
                         BuildNetloadCommandStream(loadableAssemblies) +
-                        "(setvar \"FILEDIA\" bpp_old_filedia)\r\n" +
+                        "(setvar \"FILEDIA\" 1)\r\n" +
                         "BPPSTARTUP\r\n");
                     if (!WaitForLoadReceipt(30)) throw new InvalidOperationException("已发送 NETLOAD，但目标 CAD 没有返回加载成功信息");
                     Log("已向运行中的 AutoCAD 加载插件并收到成功回执；未自动打开 BPP 面板");
@@ -725,7 +723,7 @@ namespace BatchPdfPublisherLauncher
         private static string BuildNetloadCommandStream(IEnumerable<string> assemblies)
         {
             return string.Join(string.Empty, assemblies.Select(x =>
-                "(vl-catch-all-apply 'command (list \"_.NETLOAD\" \"" + EscapeLispString(x) + "\"))\r\n"));
+                "_.NETLOAD\r\n\"" + x.Replace('\\', '/') + "\"\r\n"));
         }
 
         private static bool WaitForLoadReceipt(int seconds)
