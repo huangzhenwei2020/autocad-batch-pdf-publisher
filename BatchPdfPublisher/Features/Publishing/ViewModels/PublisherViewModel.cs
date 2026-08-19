@@ -646,7 +646,7 @@ namespace BatchPdfPublisher.ViewModels
         {
             return new SheetCatalogItem
             {
-                Order = sheet.Order, BlockHandle = sheet.BlockHandle, Building = sheet.Building, SheetNumber = sheet.SheetNumber, SheetName = sheet.SheetName,
+                Order = sheet.Order, BlockHandle = sheet.BlockHandle, BlockName = sheet.BlockName, Building = sheet.Building, SheetNumber = sheet.SheetNumber, SheetName = sheet.SheetName,
                 Frame = sheet.Frame, Extension = sheet.Extension, FrameNote = sheet.FrameNote, PaperOrientation = sheet.PaperOrientation,
                 PrintScale = sheet.PrintScale, PlotStyle = sheet.PlotStyle, SourceFile = sheet.SourceFile, SourceLayout = sheet.SourceLayout,
                 MinX = sheet.MinX, MinY = sheet.MinY, MaxX = sheet.MaxX, MaxY = sheet.MaxY
@@ -657,7 +657,7 @@ namespace BatchPdfPublisher.ViewModels
         {
             return new SheetItem
             {
-                Order = sheet.Order, BlockHandle = sheet.BlockHandle, Building = sheet.Building, SheetNumber = sheet.SheetNumber, SheetName = sheet.SheetName,
+                Order = sheet.Order, BlockHandle = sheet.BlockHandle, BlockName = sheet.BlockName, Building = sheet.Building, SheetNumber = sheet.SheetNumber, SheetName = sheet.SheetName,
                 Frame = sheet.Frame, Extension = sheet.Extension, FrameNote = sheet.FrameNote, PaperOrientation = sheet.PaperOrientation,
                 PrintScale = sheet.PrintScale, PlotStyle = sheet.PlotStyle, SourceFile = sheet.SourceFile, SourceLayout = sheet.SourceLayout,
                 MinX = sheet.MinX, MinY = sheet.MinY, MaxX = sheet.MaxX, MaxY = sheet.MaxY
@@ -795,6 +795,7 @@ namespace BatchPdfPublisher.ViewModels
                     PlotStyle = PlotStyle,
                     MarginMode = MarginMode,
                     OutputDirectory = OutputDirectory,
+                    OutputNextToCadFile = OutputNextToCadFile,
                     MergeByBuilding = MergeByBuilding
                 };
                 var engineeringFolder = _publisher.CreateEngineeringOutputFolder(project);
@@ -998,8 +999,13 @@ namespace BatchPdfPublisher.ViewModels
         {
             var sheet = issue?.Sheet;
             if (sheet == null) return;
-            var frame = Frames.FirstOrDefault(x => string.Equals(x.BlockName, sheet.Frame, StringComparison.OrdinalIgnoreCase));
-            if (frame == null) { Application.ShowAlertDialog("当前工程没有找到图框登记：" + sheet.Frame); return; }
+            // Match by the actual block name first (reliable), then fall back to
+            // paper size for entries restored from an older project file that did
+            // not record the block name.
+            var frame = Frames.FirstOrDefault(x => !string.IsNullOrWhiteSpace(sheet.BlockName)
+                && string.Equals(x.BlockName, sheet.BlockName, StringComparison.OrdinalIgnoreCase))
+                ?? Frames.FirstOrDefault(x => string.Equals(x.BlockName, sheet.Frame, StringComparison.OrdinalIgnoreCase));
+            if (frame == null) { Application.ShowAlertDialog("当前工程没有找到图框登记：" + (string.IsNullOrWhiteSpace(sheet.BlockName) ? sheet.Frame : sheet.BlockName)); return; }
             SelectedFrame = frame;
             var document = FindOpenDocument(sheet.SourceFile);
             if (document == null && !string.IsNullOrWhiteSpace(sheet.SourceFile) && System.IO.File.Exists(sheet.SourceFile)) document = Application.DocumentManager.Open(sheet.SourceFile, false);

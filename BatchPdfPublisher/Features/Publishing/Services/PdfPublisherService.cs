@@ -166,15 +166,28 @@ namespace BatchPdfPublisher.Services
             var completed = 0;
             try
             {
+                // "输出到各 CAD 文件同级目录": each DWG's sheets are finalized next
+                // to that CAD file instead of the shared engineering folder.
+                Func<SheetItem, string> outputRoot = sheet =>
+                {
+                    if (project?.OutputNextToCadFile == true && !string.IsNullOrWhiteSpace(sheet?.SourceFile))
+                    {
+                        var directory = Path.GetDirectoryName(sheet.SourceFile);
+                        if (!string.IsNullOrWhiteSpace(directory)) return directory;
+                    }
+                    return engineeringFolder;
+                };
                 if (project?.MergeByBuilding ?? true)
                 {
-                    foreach (var group in pages.GroupBy(x => x.Sheet.Building))
+                    foreach (var group in pages.GroupBy(x => new { x.Sheet.Building, Root = outputRoot(x.Sheet) }))
                     {
+                        var root = group.Key.Root;
+                        Directory.CreateDirectory(root);
                         var parts = new List<string>();
                         if (project?.IncludeProjectNameInFileName != false) parts.Add(SafeName(project?.Name ?? "默认工程"));
-                        if (project?.IncludeBuildingNameInFileName != false) parts.Add(SafeName(group.Key));
+                        if (project?.IncludeBuildingNameInFileName != false) parts.Add(SafeName(group.Key.Building));
                         if (parts.Count == 0) parts.Add("图纸");
-                        var requestedPath = Path.Combine(engineeringFolder, string.Join("_", parts) + ".pdf");
+                        var requestedPath = Path.Combine(root, string.Join("_", parts) + ".pdf");
                         var outputPath = ResolveOutputPath(requestedPath, project?.OverwriteExistingPdf == true);
                         var groupPages = group.ToList();
                         var completedBeforeGroup = completed;
@@ -187,7 +200,7 @@ namespace BatchPdfPublisher.Services
                         }
                         catch (Exception exception)
                         {
-                            result.Failures.Add("子项目“" + (string.IsNullOrWhiteSpace(group.Key) ? "未分组" : group.Key) + "”合并失败：" + exception.Message);
+                            result.Failures.Add("子项目“" + (string.IsNullOrWhiteSpace(group.Key.Building) ? "未分组" : group.Key.Building) + "”合并失败：" + exception.Message);
                             CompleteFailedProgress(groupPages, completedBeforeGroup, ref completed, pages.Count, progress);
                         }
                         GC.Collect(1, GCCollectionMode.Optimized);
@@ -197,7 +210,8 @@ namespace BatchPdfPublisher.Services
                 {
                     foreach (var page in pages)
                     {
-                        var folder = Path.Combine(engineeringFolder, SafeName(page.Sheet.Building));
+                        var root = outputRoot(page.Sheet);
+                        var folder = Path.Combine(root, SafeName(page.Sheet.Building));
                         Directory.CreateDirectory(folder);
                         var title = string.IsNullOrWhiteSpace(page.Sheet.SheetName) ? page.Sheet.SheetNumber : page.Sheet.SheetName;
                         var fileName = (page.Sheet.Order.ToString("D3") + "_" + (string.IsNullOrWhiteSpace(title) ? "图纸" : SafeName(title))).Trim('_');
@@ -253,50 +267,6 @@ namespace BatchPdfPublisher.Services
             try { if (!string.IsNullOrWhiteSpace(path) && File.Exists(path)) File.Delete(path); } catch { }
         }
 
-        public PdfPublishResult Publish(Document document, IEnumerable<SheetItem> sourceSheets, ProjectProfile project,
-            string engineeringFolder, Action<PdfPublishProgress> progress = null)
-        {
-            if (document == null) throw new InvalidOperationException("没有打开的图纸。");
-            var sheets = sourceSheets?.Where(x => x != null).OrderBy(x => x.Building).ThenBy(PublishPriority).ThenBy(x => x.Order).ToList() ?? new List<SheetItem>();
-            if (sheets.Count == 0) throw new InvalidOperationException("图纸列表为空，请先扫描当前图纸。");
-            if (PlotFactory.ProcessPlotState != ProcessPlotState.NotPlotting)
-                throw new InvalidOperationException("AutoCAD 正在执行其他打印任务，请稍后再试。");
-
-            if (string.IsNullOrWhiteSpace(engineeringFolder))
-                throw new InvalidOperationException("本次发布的工程输出目录无效。");
-            Directory.CreateDirectory(engineeringFolder);
-            var result = new PdfPublishResult();
-            var jobs = BuildJobs(sheets, project, engineeringFolder);
-            var completed = 0;
-            var previousBackgroundPlot = Autodesk.AutoCAD.ApplicationServices.Application.GetSystemVariable("BACKGROUNDPLOT");
-            Autodesk.AutoCAD.ApplicationServices.Application.SetSystemVariable("BACKGROUNDPLOT", 0);
-            try
-            {
-                foreach (var job in jobs)
-                {
-                    var jobDirectory = Path.GetDirectoryName(job.Key);
-                    if (!string.IsNullOrWhiteSpace(jobDirectory)) Directory.CreateDirectory(jobDirectory);
-                    PlotGroup(document, job.Value, job.Key, project?.PlotStyle, project?.MarginMode, sheet =>
-                    {
-                        completed++;
-                        progress?.Invoke(new PdfPublishProgress
-                        {
-                            Current = completed,
-                            Total = sheets.Count,
-                            SheetLabel = string.Join(" · ", new[] { sheet.Building, sheet.SheetNumber, sheet.SheetName }.Where(x => !string.IsNullOrWhiteSpace(x)))
-                        });
-                    });
-                    result.Files.Add(job.Key);
-                    result.SheetCount += job.Value.Count;
-                }
-            }
-            finally
-            {
-                try { Autodesk.AutoCAD.ApplicationServices.Application.SetSystemVariable("BACKGROUNDPLOT", previousBackgroundPlot); } catch { }
-            }
-            return result;
-        }
-
         public PdfPublishResult PublishMerged(Document document, IEnumerable<SheetItem> sourceSheets, string requestedOutputPath,
             string defaultPlotStyle, string marginMode, bool overwrite, Action<PdfPublishProgress> progress = null)
         {
@@ -334,41 +304,6 @@ namespace BatchPdfPublisher.Services
             var result = new PdfPublishResult { SheetCount = sheets.Count };
             result.Files.Add(outputPath);
             return result;
-        }
-
-        private static List<KeyValuePair<string, List<SheetItem>>> BuildJobs(List<SheetItem> sheets, ProjectProfile project, string outputRoot)
-        {
-            var jobs = new List<KeyValuePair<string, List<SheetItem>>>();
-            var mergeByBuilding = project?.MergeByBuilding ?? true;
-            var projectName = project?.Name ?? "默认工程";
-            if (mergeByBuilding)
-            {
-                foreach (var group in sheets.GroupBy(x => x.Building))
-                {
-                    var parts = new List<string>();
-                    if (project?.IncludeProjectNameInFileName != false) parts.Add(SafeName(projectName));
-                    if (project?.IncludeBuildingNameInFileName != false) parts.Add(SafeName(group.Key));
-                    if (parts.Count == 0) parts.Add("图纸");
-                    var path = Path.Combine(outputRoot, string.Join("_", parts) + ".pdf");
-                    jobs.Add(new KeyValuePair<string, List<SheetItem>>(ResolveOutputPath(path, project?.OverwriteExistingPdf == true), group.OrderBy(PublishPriority).ThenBy(x => x.Order).ToList()));
-                }
-            }
-            else
-            {
-                foreach (var sheet in sheets)
-                {
-                    // Non-merged output is organized by sub-project, with the
-                    // drawing title as the PDF filename.  A numbered fallback
-                    // keeps unnamed drawings usable while UniquePath handles
-                    // duplicate titles safely.
-                    var folder = Path.Combine(outputRoot, SafeName(sheet.Building));
-                    var title = string.IsNullOrWhiteSpace(sheet.SheetName) ? sheet.SheetNumber : sheet.SheetName;
-                    var fileName = (sheet.Order.ToString("D3") + "_" + (string.IsNullOrWhiteSpace(title) ? "图纸" : SafeName(title))).Trim('_');
-                    var path = Path.Combine(folder, fileName + ".pdf");
-                    jobs.Add(new KeyValuePair<string, List<SheetItem>>(ResolveOutputPath(path, project?.OverwriteExistingPdf == true), new List<SheetItem> { sheet }));
-                }
-            }
-            return jobs;
         }
 
         private static void PlotGroup(Document document, IList<SheetItem> sheets, string outputPath, string defaultPlotStyle, string marginMode, Action<SheetItem> pagePublished)
