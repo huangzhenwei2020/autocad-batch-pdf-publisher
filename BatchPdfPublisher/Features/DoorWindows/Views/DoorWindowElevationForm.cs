@@ -175,6 +175,7 @@ namespace BatchPdfPublisher.Views
         private void LoadSource(DoorWindowScheduleReadResult source)
         {
             _source = source; _rows.RaiseListChangedEvents = false; _rows.Clear();
+            var prepared = new List<DoorWindowScheduleItem>();
             var preferences = _store.LoadForActiveProject();
             var savedScale = preferences.Select(x => x.DrawingScale).FirstOrDefault(x => x > 0); if (savedScale > 0) _drawingScale.Text = "1:" + savedScale;
             foreach (var item in source.Items)
@@ -197,12 +198,18 @@ namespace BatchPdfPublisher.Views
                     item.CustomColumnWidths = preference.CustomColumnWidths; item.CustomRowHeights = preference.CustomRowHeights; item.CellOpeningModes = preference.CellOpeningModes;
                     item.CustomCellLayout = preference.CustomCellLayout;
                     item.DoorPlacement = preference.DoorPlacement; item.DoorEdgeDistance = preference.DoorEdgeDistance;
+                    item.BayLeftSide = string.IsNullOrWhiteSpace(preference.BayLeftSide) ? "墙" : preference.BayLeftSide;
+                    item.BayRightSide = string.IsNullOrWhiteSpace(preference.BayRightSide) ? "墙" : preference.BayRightSide;
+                    item.BayLeftDepth = preference.BayLeftDepth > 0d ? preference.BayLeftDepth : 600d;
+                    item.BayRightDepth = preference.BayRightDepth > 0d ? preference.BayRightDepth : 600d;
                     item.Material = string.IsNullOrWhiteSpace(preference.Material) ? item.Material : preference.Material;
                     item.AtlasName = string.IsNullOrWhiteSpace(preference.AtlasName) ? item.AtlasName : DoorWindowElevationSuggestionService.NormalizeAtlasName(preference.AtlasName); item.Remarks = preference.Remarks;
                     if (preference.HasSillHeight) { item.SillHeight = preference.SillHeight; item.SillHeightSuppressed = preference.SillHeightSuppressed; }
                 }
-                UpdateStatus(item); _rows.Add(item);
+                UpdateStatus(item); prepared.Add(item);
             }
+            foreach (var item in DoorWindowTypeOrdering.Sort(prepared)) _rows.Add(item);
+            DoorWindowTypeOrdering.Renumber(_rows);
             _rows.RaiseListChangedEvents = true; _rows.ResetBindings();
             _sourceLabel.Text = source.SourceDxfName + " · Handle " + source.SourceHandle + " · " + source.Adapter + " · " + CadCompatibilityService.DescribeTianzhengHost();
             UpdateSummary(); _preview.ShowItem(_rows.FirstOrDefault());
@@ -604,7 +611,25 @@ namespace BatchPdfPublisher.Views
             if (property == "InstallationGap" || property == "HasInstallationGap") NormalizeActualSizes(_rows[e.RowIndex]);
             if (property == "ElevationType" && (_rows[e.RowIndex].ElevationType ?? string.Empty).Contains("窗") && _rows[e.RowIndex].SillHeight <= 0d && !_rows[e.RowIndex].SillHeightSuppressed) _rows[e.RowIndex].SillHeight = 900d;
             NormalizeSillHeight(_rows[e.RowIndex]);
-            UpdateStatus(_rows[e.RowIndex]); _grid.Invalidate(); UpdateSummary(); UpdatePreview();
+            var typeChanged = property == "ElevationType";
+            UpdateStatus(_rows[e.RowIndex]);
+            if (typeChanged) ResortRows(_rows[e.RowIndex]);
+            _grid.Invalidate(); UpdateSummary(); UpdatePreview();
+        }
+
+        /// <summary>类型一旦变更即重新归组，保证防火门、防火窗等不会散落在表中。</summary>
+        private void ResortRows(DoorWindowScheduleItem current = null)
+        {
+            _rows.RaiseListChangedEvents = false;
+            var ordered = DoorWindowTypeOrdering.Sort(_rows).ToList();
+            _rows.Clear(); foreach (var item in ordered) _rows.Add(item);
+            DoorWindowTypeOrdering.Renumber(_rows);
+            _rows.RaiseListChangedEvents = true; _rows.ResetBindings();
+            var index = current == null ? -1 : _rows.IndexOf(current);
+            if (index >= 0 && _grid.Rows.Count > index && _grid.Columns.Count > 1)
+            {
+                _grid.ClearSelection(); _grid.Rows[index].Selected = true; _grid.CurrentCell = _grid.Rows[index].Cells[1];
+            }
         }
 
         private static void NormalizeSillHeight(DoorWindowScheduleItem item)

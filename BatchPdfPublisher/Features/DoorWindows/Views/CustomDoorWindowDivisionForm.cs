@@ -25,6 +25,10 @@ namespace BatchPdfPublisher.Views
         private readonly CheckBox _hasMullion = OptionBox("分隔框");
         private readonly NumericUpDown _mullionWidth = ProfileBox();
         private readonly ComboBox _doorFrameType = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 72, Height = 28 };
+        private readonly ComboBox _bayLeftSide = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 56, Height = 28 };
+        private readonly NumericUpDown _bayLeftDepth = DepthBox();
+        private readonly ComboBox _bayRightSide = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 56, Height = 28 };
+        private readonly NumericUpDown _bayRightDepth = DepthBox();
         private readonly Label _message = new Label { AutoSize = true, ForeColor = Color.DimGray };
         private bool _updating;
 
@@ -39,9 +43,10 @@ namespace BatchPdfPublisher.Views
         private void Build()
         {
             var root = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1, Padding = new Padding(10), BackColor = Color.White };
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 148)); root.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
-            var header = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 4, ColumnCount = 1 };
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 184)); root.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
+            var header = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 5, ColumnCount = 1 };
             header.RowStyles.Add(new RowStyle(SizeType.Absolute, 36)); header.RowStyles.Add(new RowStyle(SizeType.Absolute, 36)); header.RowStyles.Add(new RowStyle(SizeType.Absolute, 36)); header.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+            header.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
             var tools = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
             var splitVertical = ButtonFor("竖向分隔当前框"); splitVertical.Click += (s, e) => _editor.SplitSelected(true); tools.Controls.Add(splitVertical);
             var splitHorizontal = ButtonFor("横向分隔当前框"); splitHorizontal.Click += (s, e) => _editor.SplitSelected(false); tools.Controls.Add(splitHorizontal);
@@ -61,7 +66,11 @@ namespace BatchPdfPublisher.Views
             construction.Controls.Add(_hasInstallationGap); construction.Controls.Add(_installationGap); construction.Controls.Add(LabelFor("mm"));
             construction.Controls.Add(_hasOuterFrame); construction.Controls.Add(_outerFrameWidth); construction.Controls.Add(LabelFor("mm"));
             construction.Controls.Add(_hasMullion); construction.Controls.Add(_mullionWidth); construction.Controls.Add(LabelFor("mm（开启/推拉相邻处自动按 2 倍处理）")); header.Controls.Add(construction, 0, 2);
-            header.Controls.Add(new Label { Text = "单击选择；Shift+单击增加或取消选择；拖动分隔线调整。宽度从左到右、高度从上到下确定，右下角面板承接最终剩余尺寸。", Dock = DockStyle.Fill, ForeColor = Color.DimGray, TextAlign = ContentAlignment.MiddleLeft }, 0, 3);
+            var bay = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
+            _bayLeftSide.Items.AddRange(new object[] { "墙", "窗" }); _bayRightSide.Items.AddRange(new object[] { "墙", "窗" });
+            bay.Controls.Add(LabelFor("凸窗左转折")); bay.Controls.Add(_bayLeftSide); bay.Controls.Add(_bayLeftDepth); bay.Controls.Add(LabelFor("mm"));
+            bay.Controls.Add(LabelFor("右转折")); bay.Controls.Add(_bayRightSide); bay.Controls.Add(_bayRightDepth); bay.Controls.Add(LabelFor("mm（可设：墙+窗、窗+窗、窗+墙）")); header.Controls.Add(bay, 0, 3);
+            header.Controls.Add(new Label { Text = "单击选择；Shift+单击增加或取消选择；拖动分隔线调整。宽度从左到右、高度从上到下确定，右下角面板承接最终剩余尺寸。", Dock = DockStyle.Fill, ForeColor = Color.DimGray, TextAlign = ContentAlignment.MiddleLeft }, 0, 4);
             root.Controls.Add(header, 0, 0); root.Controls.Add(_editor, 0, 1);
 
             var footer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2 }; footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -83,6 +92,10 @@ namespace BatchPdfPublisher.Views
             _outerFrameWidth.ValueChanged += (s, e) => { if (!_updating) UpdateConstructionPreview(); };
             _mullionWidth.ValueChanged += (s, e) => { if (!_updating) UpdateConstructionPreview(); };
             _doorFrameType.SelectedIndexChanged += (s, e) => { if (!_updating) UpdateConstructionPreview(); };
+            _bayLeftSide.SelectedIndexChanged += (s, e) => { if (!_updating) UpdateConstructionPreview(); };
+            _bayRightSide.SelectedIndexChanged += (s, e) => { if (!_updating) UpdateConstructionPreview(); };
+            _bayLeftDepth.ValueChanged += (s, e) => { if (!_updating) UpdateConstructionPreview(); };
+            _bayRightDepth.ValueChanged += (s, e) => { if (!_updating) UpdateConstructionPreview(); };
         }
 
         private void LoadLayout()
@@ -90,6 +103,12 @@ namespace BatchPdfPublisher.Views
             _updating = true;
             _hasInstallationGap.Checked = _source.HasInstallationGap; _installationGap.Value = ClampDecimal(_source.InstallationGap, _installationGap); _installationGap.Enabled = _hasInstallationGap.Checked;
             _hasOuterFrame.Checked = _source.HasOuterFrame; _hasMullion.Checked = _source.HasMullion;
+            var bayEnabled = string.Equals(_source.ElevationType, "凸窗", StringComparison.Ordinal);
+            _bayLeftSide.SelectedItem = string.Equals(_source.BayLeftSide, "窗", StringComparison.Ordinal) ? "窗" : "墙";
+            _bayRightSide.SelectedItem = string.Equals(_source.BayRightSide, "窗", StringComparison.Ordinal) ? "窗" : "墙";
+            _bayLeftDepth.Value = ClampDecimal(_source.BayLeftDepth > 0d ? _source.BayLeftDepth : 600d, _bayLeftDepth);
+            _bayRightDepth.Value = ClampDecimal(_source.BayRightDepth > 0d ? _source.BayRightDepth : 600d, _bayRightDepth);
+            _bayLeftSide.Enabled = _bayRightSide.Enabled = _bayLeftDepth.Enabled = _bayRightDepth.Enabled = bayEnabled;
             _doorFrameType.SelectedItem = string.IsNullOrWhiteSpace(_source.DoorFrameType) ? "N型" : _source.DoorFrameType; if (_doorFrameType.SelectedIndex < 0) _doorFrameType.SelectedIndex = 0;
             var gap = _hasInstallationGap.Checked ? (double)_installationGap.Value : 0d;
             var width = Math.Max(1d, _source.Width - gap * 2d); var height = Math.Max(1d, _source.Height - gap * 2d);
@@ -161,6 +180,10 @@ namespace BatchPdfPublisher.Views
             _source.HasInstallationGap = _hasInstallationGap.Checked; _source.InstallationGap = (double)_installationGap.Value;
             _source.HasOuterFrame = _hasOuterFrame.Checked; _source.OuterFrameWidth = (double)_outerFrameWidth.Value;
             _source.HasMullion = _hasMullion.Checked; _source.MullionWidth = (double)_mullionWidth.Value; _source.DoorFrameType = Convert.ToString(_doorFrameType.SelectedItem) ?? "N型";
+            _source.BayLeftSide = Convert.ToString(_bayLeftSide.SelectedItem) ?? "墙";
+            _source.BayRightSide = Convert.ToString(_bayRightSide.SelectedItem) ?? "墙";
+            _source.BayLeftDepth = (double)_bayLeftDepth.Value;
+            _source.BayRightDepth = (double)_bayRightDepth.Value;
             var gap = _source.HasInstallationGap ? _source.InstallationGap : 0d; var clearWidth = _source.Width - gap * 2d; var door = _editor.Cells.FirstOrDefault(x => x.IsDoor && !x.IsDeleted);
             if (door != null) { _source.DoorPlacement = Math.Abs((door.Left + door.Right) / 2d - clearWidth / 2d) < 1d ? "居中" : door.Left < clearWidth / 2d ? "靠左" : "靠右"; _source.DoorEdgeDistance = _source.DoorPlacement == "靠右" ? Math.Max(0d, clearWidth - door.Right) : door.Left; }
             DialogResult = DialogResult.OK; Close();
@@ -168,7 +191,7 @@ namespace BatchPdfPublisher.Views
 
         private static DoorWindowScheduleItem Copy(DoorWindowScheduleItem x)
         {
-            return new DoorWindowScheduleItem { Code = x.Code, Width = x.Width, Height = x.Height, HasInstallationGap = x.HasInstallationGap, InstallationGap = x.InstallationGap, HasOuterFrame = x.HasOuterFrame, OuterFrameWidth = x.OuterFrameWidth, HasMullion = x.HasMullion, MullionWidth = x.MullionWidth, DoorFrameType = x.DoorFrameType, ElevationType = x.ElevationType, DivisionPreset = x.DivisionPreset, OpeningMode = x.OpeningMode, CustomColumnRatios = x.CustomColumnRatios, CustomRowRatios = x.CustomRowRatios, CustomColumnWidths = x.CustomColumnWidths, CustomRowHeights = x.CustomRowHeights, CustomCellLayout = null, CellOpeningModes = x.CellOpeningModes, DoorPlacement = x.DoorPlacement, DoorEdgeDistance = x.DoorEdgeDistance };
+            return new DoorWindowScheduleItem { Code = x.Code, Width = x.Width, Height = x.Height, HasInstallationGap = x.HasInstallationGap, InstallationGap = x.InstallationGap, HasOuterFrame = x.HasOuterFrame, OuterFrameWidth = x.OuterFrameWidth, HasMullion = x.HasMullion, MullionWidth = x.MullionWidth, DoorFrameType = x.DoorFrameType, ElevationType = x.ElevationType, DivisionPreset = x.DivisionPreset, OpeningMode = x.OpeningMode, CustomColumnRatios = x.CustomColumnRatios, CustomRowRatios = x.CustomRowRatios, CustomColumnWidths = x.CustomColumnWidths, CustomRowHeights = x.CustomRowHeights, CustomCellLayout = null, CellOpeningModes = x.CellOpeningModes, DoorPlacement = x.DoorPlacement, DoorEdgeDistance = x.DoorEdgeDistance, BayLeftSide = x.BayLeftSide, BayRightSide = x.BayRightSide, BayLeftDepth = x.BayLeftDepth, BayRightDepth = x.BayRightDepth };
         }
 
         private void ResizeForConstructionChange()
@@ -187,6 +210,7 @@ namespace BatchPdfPublisher.Views
 
         private static NumericUpDown SizeBox() { return new NumericUpDown { Minimum = 1, Maximum = 100000, DecimalPlaces = 1, Increment = 10, Width = 82, Height = 28 }; }
         private static NumericUpDown ProfileBox() { return new NumericUpDown { Minimum = 0, Maximum = 500, DecimalPlaces = 1, Increment = 5, Width = 68, Height = 28, Value = 50 }; }
+        private static NumericUpDown DepthBox() { return new NumericUpDown { Minimum = 50, Maximum = 5000, DecimalPlaces = 1, Increment = 50, Width = 78, Height = 28, Value = 600 }; }
         private static CheckBox OptionBox(string text) { return new CheckBox { Text = text, Checked = true, AutoSize = true, Margin = new Padding(10, 7, 2, 0) }; }
         private static decimal ClampDecimal(double value, NumericUpDown box) { return Math.Max(box.Minimum, Math.Min(box.Maximum, (decimal)value)); }
         private static Label LabelFor(string text) { return new Label { Text = text, AutoSize = true, Margin = new Padding(10, 7, 3, 0) }; }

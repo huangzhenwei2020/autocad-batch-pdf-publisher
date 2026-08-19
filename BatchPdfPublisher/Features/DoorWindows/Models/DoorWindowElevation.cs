@@ -2,9 +2,47 @@ using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.Geometry;
 using System.Collections.Generic;
 using System;
+using System.Linq;
 
 namespace BatchPdfPublisher.Models
 {
+    /// <summary>门窗类型的统一排序。所有清单和写入 CAD 的门窗表均通过此规则归组。</summary>
+    public static class DoorWindowTypeOrdering
+    {
+        private static readonly string[] OrderedTypes =
+        {
+            "普通窗", "高窗", "带形窗", "转角窗", "拱形窗", "凸窗", "百叶窗",
+            "甲级防火窗", "乙级防火窗", "丙级防火窗", "防火窗（等级待确认）",
+            "普通门", "甲级防火门", "乙级防火门", "丙级防火门", "防火门（等级待确认）",
+            "人防门", "百叶门", "门联窗", "洞口", "待确认"
+        };
+
+        public static int TypeRank(string type)
+        {
+            var value = (type ?? string.Empty).Trim();
+            for (var index = 0; index < OrderedTypes.Length; index++)
+                if (string.Equals(OrderedTypes[index], value, StringComparison.Ordinal)) return index;
+            return OrderedTypes.Length;
+        }
+
+        public static List<DoorWindowScheduleItem> Sort(IEnumerable<DoorWindowScheduleItem> items)
+        {
+            return (items ?? Enumerable.Empty<DoorWindowScheduleItem>())
+                .Where(x => x != null)
+                .OrderBy(x => TypeRank(x.ElevationType))
+                .ThenBy(x => x.ElevationType ?? string.Empty, StringComparer.CurrentCulture)
+                .ThenBy(x => x.Sequence)
+                .ThenBy(x => x.Code ?? string.Empty, StringComparer.CurrentCulture)
+                .ToList();
+        }
+
+        public static void Renumber(IList<DoorWindowScheduleItem> items)
+        {
+            if (items == null) return;
+            for (var index = 0; index < items.Count; index++) items[index].Sequence = index + 1;
+        }
+    }
+
     public sealed class DoorWindowScheduleItem
     {
         public bool Selected { get; set; } = true;
@@ -40,6 +78,11 @@ namespace BatchPdfPublisher.Models
         public string CellOpeningModes { get; set; }
         public string DoorPlacement { get; set; } = "靠左";
         public double DoorEdgeDistance { get; set; }
+        /// <summary>凸窗左、右转折面的做法（墙/窗）及其实际进深，单位 mm。</summary>
+        public string BayLeftSide { get; set; } = "墙";
+        public string BayRightSide { get; set; } = "墙";
+        public double BayLeftDepth { get; set; } = 600d;
+        public double BayRightDepth { get; set; } = 600d;
         public string Status { get; set; }
         public int SourceRow { get; set; }
         /// <summary>排版时锁定到第几页（1 起）；0 表示未锁定，按流式排版自动分页。</summary>
@@ -108,6 +151,10 @@ namespace BatchPdfPublisher.Models
         public string CellOpeningModes { get; set; }
         public string DoorPlacement { get; set; } = "靠左";
         public double DoorEdgeDistance { get; set; }
+        public string BayLeftSide { get; set; } = "墙";
+        public string BayRightSide { get; set; } = "墙";
+        public double BayLeftDepth { get; set; } = 600d;
+        public double BayRightDepth { get; set; } = 600d;
         public string Material { get; set; }
         public string AtlasName { get; set; }
         public string Remarks { get; set; }
@@ -138,6 +185,10 @@ namespace BatchPdfPublisher.Models
         public string CellOpeningModes { get; set; }
         public string DoorPlacement { get; set; } = "靠左";
         public double DoorEdgeDistance { get; set; }
+        public string BayLeftSide { get; set; } = "墙";
+        public string BayRightSide { get; set; } = "墙";
+        public double BayLeftDepth { get; set; } = 600d;
+        public double BayRightDepth { get; set; } = 600d;
         public DateTime UpdatedAt { get; set; }
 
         public void ApplyTo(DoorWindowScheduleItem item)
@@ -170,6 +221,10 @@ namespace BatchPdfPublisher.Models
             item.CellOpeningModes = CellOpeningModes;
             item.DoorPlacement = DoorPlacement;
             item.DoorEdgeDistance = DoorEdgeDistance;
+            item.BayLeftSide = BayLeftSide;
+            item.BayRightSide = BayRightSide;
+            item.BayLeftDepth = BayLeftDepth;
+            item.BayRightDepth = BayRightDepth;
         }
 
         public static DoorWindowElevationTemplate FromItem(string name, DoorWindowScheduleItem item)
@@ -196,6 +251,10 @@ namespace BatchPdfPublisher.Models
                 CellOpeningModes = item.CellOpeningModes,
                 DoorPlacement = item.DoorPlacement,
                 DoorEdgeDistance = item.DoorEdgeDistance,
+                BayLeftSide = item.BayLeftSide,
+                BayRightSide = item.BayRightSide,
+                BayLeftDepth = item.BayLeftDepth,
+                BayRightDepth = item.BayRightDepth,
                 UpdatedAt = DateTime.Now
             };
         }

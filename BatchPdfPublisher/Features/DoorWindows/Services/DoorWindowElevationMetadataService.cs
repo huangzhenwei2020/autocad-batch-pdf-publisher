@@ -60,6 +60,14 @@ namespace BatchPdfPublisher.Services
         public string DoorPlacement { get; set; }
         [DataMember]
         public double DoorEdgeDistance { get; set; }
+        [DataMember(EmitDefaultValue = false)]
+        public string BayLeftSide { get; set; }
+        [DataMember(EmitDefaultValue = false)]
+        public string BayRightSide { get; set; }
+        [DataMember(EmitDefaultValue = false)]
+        public double? BayLeftDepth { get; set; }
+        [DataMember(EmitDefaultValue = false)]
+        public double? BayRightDepth { get; set; }
         [DataMember]
         public int DrawingScale { get; set; }
         [DataMember]
@@ -97,6 +105,10 @@ namespace BatchPdfPublisher.Services
                 CellOpeningModes = item.CellOpeningModes,
                 DoorPlacement = item.DoorPlacement,
                 DoorEdgeDistance = item.DoorEdgeDistance,
+                BayLeftSide = item.BayLeftSide,
+                BayRightSide = item.BayRightSide,
+                BayLeftDepth = item.BayLeftDepth,
+                BayRightDepth = item.BayRightDepth,
                 DrawingScale = scale,
                 OriginX = origin.X,
                 OriginY = origin.Y,
@@ -131,6 +143,10 @@ namespace BatchPdfPublisher.Services
                 CellOpeningModes = CellOpeningModes,
                 DoorPlacement = DoorPlacement,
                 DoorEdgeDistance = DoorEdgeDistance,
+                BayLeftSide = string.IsNullOrWhiteSpace(BayLeftSide) ? "墙" : BayLeftSide,
+                BayRightSide = string.IsNullOrWhiteSpace(BayRightSide) ? "墙" : BayRightSide,
+                BayLeftDepth = BayLeftDepth ?? 600d,
+                BayRightDepth = BayRightDepth ?? 600d,
                 DrawingScale = DrawingScale,
                 Status = "参数完整，可生成"
             };

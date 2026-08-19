@@ -51,7 +51,8 @@ namespace BatchPdfPublisher.Services
         private sealed class ElevationPlacement
         {
             public DoorWindowScheduleItem Item;
-            public double InnerGap, OuterGap, LowerExtent;
+            public double InnerGap, OuterGap, LowerExtent, BayLeftExtent, BayRightExtent;
+            public double TotalWidth { get { return BayLeftExtent + Item.Width + BayRightExtent; } }
         }
 
         /// <summary>排版参数（纸面毫米，插入时按出图比例换算）。</summary>
@@ -114,7 +115,7 @@ namespace BatchPdfPublisher.Services
             var contentLeft = leftMargin; var contentRight = pageWidth - rightMargin; var contentBottom = bottomMargin; var contentTop = pageHeight - topMargin;
             if (contentRight <= contentLeft || contentTop <= contentBottom) throw new InvalidOperationException("登记图框的可排版区域无效。");
             var plan = new DoorWindowLayoutPlan { PageWidth = pageWidth, PageHeight = pageHeight, ContentLeft = contentLeft, ContentRight = contentRight, ContentBottom = contentBottom, ContentTop = contentTop };
-            var items = (source ?? new List<DoorWindowScheduleItem>()).Where(x => x != null).ToList();
+            var items = DoorWindowTypeOrdering.Sort(source);
             var itemGap = Math.Max(0d, opts.ItemGap) * scale;
             // 门窗表和设计说明是独立、可移动的 CAD 对象，不参与图框内的门窗排版占位。
             plan.ScheduleHeight = 0d;
@@ -136,7 +137,7 @@ namespace BatchPdfPublisher.Services
                 if (double.IsNaN(item.Width) || double.IsInfinity(item.Width) || double.IsNaN(item.Height) || double.IsInfinity(item.Height) || item.Width <= 0d || item.Height <= 0d)
                     throw new InvalidOperationException("门窗“" + (item.Code ?? "未编号") + "”的洞口尺寸无效，请重新读取门窗表。");
                 var placement = CreatePlacement(item, drawingScale);
-                var footprintWidth = placement.OuterGap + item.Width + itemGap;
+                var footprintWidth = placement.OuterGap + placement.TotalWidth + itemGap;
                 var footprintHeight = placement.LowerExtent + item.Height + itemGap;
                 // 任何一页都放不下（含未锁定项换页到后续页）才报错；锁定项在指定页放不下由下方页内检查专门提示。
                 if (footprintWidth > contentRight - contentLeft || footprintHeight > contentTop - contentBottom)
@@ -152,7 +153,7 @@ namespace BatchPdfPublisher.Services
                     if (locked) throw new InvalidOperationException("门窗“" + item.Code + "”锁定在第 " + (page + 1) + " 页，但该页剩余空间放不下。请解锁该门窗或调整顺序。");
                     return false;
                 }
-                plan.Slots.Add(new DoorWindowLayoutSlot { Item = item, Page = page, X = cursor.X + placement.OuterGap, Y = cursor.Y - item.Height, FootprintWidth = footprintWidth, FootprintHeight = footprintHeight });
+                plan.Slots.Add(new DoorWindowLayoutSlot { Item = item, Page = page, X = cursor.X + placement.OuterGap + placement.BayLeftExtent, Y = cursor.Y - item.Height, FootprintWidth = footprintWidth, FootprintHeight = footprintHeight });
                 cursor.X += footprintWidth + itemGap; cursor.RowHeight = Math.Max(cursor.RowHeight, footprintHeight);
                 if (page > maxPage) maxPage = page;
                 return true;
@@ -213,7 +214,7 @@ namespace BatchPdfPublisher.Services
         public static int Insert(Document document, IList<DoorWindowScheduleItem> source, int drawingScale, FrameDefinition frame, Action<int, int, string> progress = null, DoorWindowLayoutOptions layoutOptions = null)
         {
             if (document == null) throw new ArgumentNullException("document");
-            var items = (source ?? new List<DoorWindowScheduleItem>()).Where(x => x.Selected && (x.Status ?? string.Empty).Contains("可生成")).ToList();
+            var items = DoorWindowTypeOrdering.Sort((source ?? new List<DoorWindowScheduleItem>()).Where(x => x.Selected && (x.Status ?? string.Empty).Contains("可生成")));
             if (items.Count == 0) throw new InvalidOperationException("没有勾选参数完整的门窗。");
             drawingScale = Math.Max(1, drawingScale);
             var useTianzhengTitle = layoutOptions == null || layoutOptions.UseTianzhengTitle;
@@ -282,7 +283,7 @@ namespace BatchPdfPublisher.Services
         public static int InsertSchedule(Document document, IList<DoorWindowScheduleItem> source, int drawingScale)
         {
             if (document == null) throw new ArgumentNullException("document");
-            var items = (source ?? new List<DoorWindowScheduleItem>()).Where(x => x.Selected).OrderBy(x => x.Sequence).ToList();
+            var items = DoorWindowTypeOrdering.Sort((source ?? new List<DoorWindowScheduleItem>()).Where(x => x.Selected));
             if (items.Count == 0) throw new InvalidOperationException("没有勾选要写入门窗表的数据。 ");
             var point = document.Editor.GetPoint("\n指定门窗表左上角插入点: ");
             if (point.Status != PromptStatus.OK) return 0;
@@ -387,12 +388,12 @@ namespace BatchPdfPublisher.Services
 
         private static ElevationPlacement CreatePlacement(DoorWindowScheduleItem item, int drawingScale)
         {
-            DoorWindowElevationGeometryBuilder.Build(item);
+            var geometry = DoorWindowElevationGeometryBuilder.Build(item);
             // 标注分两层：内层为安装缝+全部分段的连续标注，外层为总尺寸。
             // 内层尺寸界线长 4、相邻尺寸线间距 4（1:1 纸面值 × 出图比例）。
             var innerGap = Math.Max(4d * drawingScale, 2d * drawingScale);
             var outerGap = innerGap + 4d * drawingScale;
-            return new ElevationPlacement { Item = item, InnerGap = innerGap, OuterGap = outerGap, LowerExtent = outerGap + 12d * drawingScale };
+            return new ElevationPlacement { Item = item, InnerGap = innerGap, OuterGap = outerGap, LowerExtent = outerGap + 12d * drawingScale, BayLeftExtent = geometry.BayLeftExtent, BayRightExtent = geometry.BayRightExtent };
         }
 
         private static void InsertElevation(ElevationPlacement elevation, Point3d origin, int drawingScale, BlockTableRecord space, Transaction transaction, DraftingStandardResources resources, ObjectId dimensionStyle, string existingGroupId = null, bool useTianzhengTitle = true)
@@ -563,9 +564,9 @@ namespace BatchPdfPublisher.Services
             var x = origin.X; var completed = 0;
             foreach (var elevation in elevations)
             {
-                InsertElevation(elevation, new Point3d(x, origin.Y, origin.Z), scale, space, transaction, resources, dimensionStyle, null, useTianzhengTitle);
+                InsertElevation(elevation, new Point3d(x + elevation.BayLeftExtent, origin.Y, origin.Z), scale, space, transaction, resources, dimensionStyle, null, useTianzhengTitle);
                 // 连续排列间距按标注外框算：左侧尺寸标注 OuterGap + 洞口宽 + 间距。
-                x += elevation.OuterGap + elevation.Item.Width + Math.Max(16d * scale, 800d);
+                x += elevation.OuterGap + elevation.TotalWidth + Math.Max(16d * scale, 800d);
                 completed++; if (progress != null) progress(completed, elevations.Count, elevation.Item.Code);
             }
         }

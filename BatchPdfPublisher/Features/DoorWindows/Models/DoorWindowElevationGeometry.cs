@@ -40,6 +40,8 @@ namespace BatchPdfPublisher.Models
         public readonly List<DoorWindowLineSegment> Lines = new List<DoorWindowLineSegment>();
         public readonly List<DoorWindowCell> Cells = new List<DoorWindowCell>();
         public double HoleWidth, HoleHeight, FrameLeft, FrameBottom, FrameRight, FrameTop;
+        /// <summary>凸窗转折面在主立面左右的投影范围；非凸窗均为 0。</summary>
+        public double BayLeftExtent, BayRightExtent;
     }
 
     public static class DoorWindowElevationGeometryBuilder
@@ -77,7 +79,67 @@ namespace BatchPdfPublisher.Models
             AddMaterialSymbols(result, cells, item);
             AddOpeningSymbols(result, item);
             AddArchTopLine(result, item);
+            AddBayWindowReturnFaces(result, item);
             return result;
+        }
+
+        /// <summary>
+        /// 凸窗的左右转折面。深度按 45°投影为立面宽度：既能在正立面中清楚表达折角，
+        /// 又不会改变从门窗表读取的主洞口宽高。转折面可各自设为墙或窗。
+        /// </summary>
+        private static void AddBayWindowReturnFaces(DoorWindowElevationGeometry geometry, DoorWindowScheduleItem item)
+        {
+            if (geometry == null || item == null || !string.Equals(item.ElevationType, "凸窗", StringComparison.Ordinal)) return;
+            var leftDepth = NormalizeBayDepth(item.BayLeftDepth);
+            var rightDepth = NormalizeBayDepth(item.BayRightDepth);
+            var leftIsWindow = string.Equals((item.BayLeftSide ?? "墙").Trim(), "窗", StringComparison.Ordinal);
+            var rightIsWindow = string.Equals((item.BayRightSide ?? "墙").Trim(), "窗", StringComparison.Ordinal);
+            // 墙面也应有实体厚度感；没有设置深度时用默认 600mm。投影上限避免盖过主立面。
+            geometry.BayLeftExtent = Math.Min(leftDepth, Math.Max(80d, geometry.HoleWidth * .45d));
+            geometry.BayRightExtent = Math.Min(rightDepth, Math.Max(80d, geometry.HoleWidth * .45d));
+            AddReturn(true, geometry.BayLeftExtent, leftIsWindow);
+            AddReturn(false, geometry.BayRightExtent, rightIsWindow);
+
+            void AddReturn(bool onLeft, double depth, bool isWindow)
+            {
+                if (depth <= .01d) return;
+                var x = onLeft ? 0d : geometry.HoleWidth;
+                var outerX = onLeft ? x - depth : x + depth;
+                var bottom = 0d; var top = geometry.HoleHeight;
+                // 左右轮廓：主立面与转折面均以 45°折线接合。
+                geometry.Lines.Add(new DoorWindowLineSegment(x, bottom, outerX, bottom + depth * .18d, DoorWindowLineRole.Frame));
+                geometry.Lines.Add(new DoorWindowLineSegment(outerX, bottom + depth * .18d, outerX, top - depth * .18d, DoorWindowLineRole.Frame));
+                geometry.Lines.Add(new DoorWindowLineSegment(outerX, top - depth * .18d, x, top, DoorWindowLineRole.Frame));
+                if (isWindow)
+                {
+                    var inset = Math.Min(Math.Max(12d, item.HasOuterFrame ? item.OuterFrameWidth : 30d), depth * .35d);
+                    var innerX = onLeft ? outerX + inset : outerX - inset;
+                    var innerBottom = bottom + Math.Max(inset, depth * .18d);
+                    var innerTop = top - Math.Max(inset, depth * .18d);
+                    if (innerTop > innerBottom + 5d)
+                    {
+                        geometry.Lines.Add(new DoorWindowLineSegment(innerX, innerBottom, innerX, innerTop, DoorWindowLineRole.Mullion));
+                        geometry.Lines.Add(new DoorWindowLineSegment(innerX, innerBottom, x, bottom + depth * .18d, DoorWindowLineRole.Mullion));
+                        geometry.Lines.Add(new DoorWindowLineSegment(innerX, innerTop, x, top - depth * .18d, DoorWindowLineRole.Mullion));
+                        // 转折窗默认固定，仅用玻璃符号表达，不额外叠加开启线。
+                        var middleY = (innerBottom + innerTop) / 2d;
+                        geometry.Lines.Add(new DoorWindowLineSegment(innerX, middleY, x, middleY, DoorWindowLineRole.Material));
+                    }
+                }
+                else
+                {
+                    // 墙面用两条斜线表达实体转折，与窗面图例区分。
+                    var y1 = bottom + (top - bottom) * .33d; var y2 = bottom + (top - bottom) * .67d;
+                    geometry.Lines.Add(new DoorWindowLineSegment(outerX, y1, x, y1 + depth * .18d, DoorWindowLineRole.Material));
+                    geometry.Lines.Add(new DoorWindowLineSegment(outerX, y2, x, y2 - depth * .18d, DoorWindowLineRole.Material));
+                }
+            }
+        }
+
+        private static double NormalizeBayDepth(double value)
+        {
+            if (double.IsNaN(value) || double.IsInfinity(value) || value <= 0d) return 600d;
+            return Math.Min(5000d, value);
         }
 
         /// <summary>拱形窗：在顶部亮子内画一条圆弧分格线，表示拱形轮廓（折线逼近，便于预览与 CAD 统一绘制）。</summary>
