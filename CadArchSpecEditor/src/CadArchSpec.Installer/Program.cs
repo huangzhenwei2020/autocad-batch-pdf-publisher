@@ -34,9 +34,12 @@ namespace CadArchSpec.Installer
         {
             Text = "建筑设计说明助手安装程序 v0.3";
             StartPosition = FormStartPosition.CenterScreen;
-            AutoScaleMode = AutoScaleMode.None;
-            FormBorderStyle = FormBorderStyle.FixedDialog;
+            AutoScaleMode = AutoScaleMode.Dpi;
+            AutoScaleDimensions = new SizeF(96F, 96F);
+            FormBorderStyle = FormBorderStyle.Sizable;
             ClientSize = new Size(650, 405);
+            MinimumSize = new Size(560, 400);
+            AutoScroll = true;
             Font = new Font("Microsoft YaHei UI", 9F);
             BackColor = Color.White;
             MaximizeBox = false;

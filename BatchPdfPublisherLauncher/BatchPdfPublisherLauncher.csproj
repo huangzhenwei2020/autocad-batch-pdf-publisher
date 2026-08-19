@@ -10,6 +10,7 @@
     <PlatformTarget>x64</PlatformTarget>
     <FileAlignment>512</FileAlignment>
     <ApplicationIcon>BatchPdfPublisher.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <DebugSymbols>true</DebugSymbols>
@@ -35,14 +36,14 @@
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Content Include="BatchPdfPublisher.ico" />
     <EmbeddedResource Include="BatchPdfPublisherIcon.png" />
-    <EmbeddedResource Include="..\CadArchSpecEditor\src\CadArchSpec.Installer\Payload\CadArchSpecEditor.bundle.zip">
+    <EmbeddedResource Include="Modules\ArchitectureAssistant\CadArchSpecEditor.bundle.zip">
       <Link>CadArchSpecEditor.bundle.zip</Link>
       <LogicalName>WanluoArchitectureTools.CadArchSpecEditor.bundle.zip</LogicalName>
     </EmbeddedResource>
-    <EmbeddedResource Include="Payload\StairDetail.R24.zip">
+    <EmbeddedResource Include="Modules\StairDetail\StairDetail.R24.zip">
       <LogicalName>WanluoArchitectureTools.StairDetail.R24.zip</LogicalName>
     </EmbeddedResource>
-    <EmbeddedResource Include="Payload\StairDetail.R25.zip">
+    <EmbeddedResource Include="Modules\StairDetail\StairDetail.R25.zip">
       <LogicalName>WanluoArchitectureTools.StairDetail.R25.zip</LogicalName>
     </EmbeddedResource>
   </ItemGroup>

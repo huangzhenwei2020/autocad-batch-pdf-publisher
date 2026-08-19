@@ -1,50 +1,5 @@
 [
   {
-    "Band": "R19",
-    "AutoCad": "2014",
-    "ReleaseMin": "19.1",
-    "ReleaseMax": "19.1",
-    "Framework": "v4.0",
-    "Project": "BatchPdfPublisher\\BatchPdfPublisher.csproj",
-    "DefineConstants": "CAD_NET40;ACAD_R19"
-  },
-  {
-    "Band": "R20",
-    "AutoCad": "2015-2016",
-    "ReleaseMin": "20.0",
-    "ReleaseMax": "20.1",
-    "Framework": "v4.5",
-    "Project": "BatchPdfPublisher\\BatchPdfPublisher.csproj",
-    "DefineConstants": ""
-  },
-  {
-    "Band": "R21",
-    "AutoCad": "2017",
-    "ReleaseMin": "21.0",
-    "ReleaseMax": "21.0",
-    "Framework": "v4.6",
-    "Project": "BatchPdfPublisher\\BatchPdfPublisher.csproj",
-    "DefineConstants": ""
-  },
-  {
-    "Band": "R22",
-    "AutoCad": "2018",
-    "ReleaseMin": "22.0",
-    "ReleaseMax": "22.0",
-    "Framework": "v4.6",
-    "Project": "BatchPdfPublisher\\BatchPdfPublisher.csproj",
-    "DefineConstants": ""
-  },
-  {
-    "Band": "R23",
-    "AutoCad": "2019-2020",
-    "ReleaseMin": "23.0",
-    "ReleaseMax": "23.1",
-    "Framework": "v4.7",
-    "Project": "BatchPdfPublisher\\BatchPdfPublisher.csproj",
-    "DefineConstants": ""
-  },
-  {
     "Band": "R24",
     "AutoCad": "2021-2024",
     "ReleaseMin": "24.0",

@@ -1,39 +1,20 @@
-# AutoCAD 2014–2026 兼容方案
+# AutoCAD 2021–2026 兼容方案
 
-插件不能用一份 AutoCAD 托管 DLL 覆盖 2014–2026。发布包按 Autodesk 的运行时/SDK 代际保存七份插件，启动器识别已安装产品后选择对应目录。
+插件从当前版本起只支持 AutoCAD 2021–2026，按 Autodesk 托管 API 运行时代际提供两套组件：
 
-| 插件目录 | AutoCAD | 运行时 | 编译 SDK |
-|---|---:|---|---|
-| `CadApi/R19` | 2014 | .NET Framework 4.0 | ObjectARX 2014（停止更新，仅保留历史构建入口） |
-| `CadApi/R20` | 2015–2016 | .NET Framework 4.5 | ObjectARX 2015 |
-| `CadApi/R21` | 2017 | .NET Framework 4.6 | ObjectARX 2017 |
-| `CadApi/R22` | 2018 | .NET Framework 4.6 | ObjectARX 2018 |
-| `CadApi/R23` | 2019–2020 | .NET Framework 4.7 | ObjectARX 2019 |
-| `CadApi/R24` | 2021–2024 | .NET Framework 4.8 | ObjectARX 2021 |
-| `CadApi/R25` | 2025–2026 | .NET 8 | ObjectARX 2025 |
+| 发布目录 | AutoCAD 年份 | 运行时 |
+|---|---:|---|
+| `CadApi/R24` | 2021–2024 | .NET Framework 4.8 |
+| `CadApi/R25` | 2025–2026 | .NET 8 Windows |
 
-## 构建
+启动器识别实际 AutoCAD 年份并只加载匹配代际的 DLL，不会用 R24 DLL 代替 R25，也不会尝试加载 AutoCAD 2020 及更早版本。
 
-日常开发和安装使用统一发布脚本。它会检测本机已安装的 AutoCAD（包括非默认路径），从当前 Git 提交重新生成干净的 `dist/WanLuoArchitectureTools`：
+R24/R25 安装均会检查主插件、PDF 依赖、箭头库、建筑设计说明助手和楼梯大样组件。任何必需组件缺失都会停止安装并明确提示。
+
+构建命令：
 
 ```powershell
-.\build\Build-Release.ps1
+./build/Build-Release.ps1 -Bands R24,R25
 ```
 
-常规发布不再自动构建 R19。需要明确分组时可执行 `./build/Build-Release.ps1 -Bands R24,R25`。完整步骤、环境要求和版本校验见 [构建与安装说明](docs/BUILD_AND_INSTALL.md)。
-
-下面的兼容矩阵脚本用于具备全套 Autodesk SDK 的集中发布环境：
-
-1. 将每代 SDK 的 `acmgd.dll`、`acdbmgd.dll`、`accoremgd.dll`、`AdWindows.dll` 放入 `build/AutodeskSdk/Rxx`。
-2. 安装对应 .NET Framework Targeting Pack；R25 另需 .NET 8 SDK。
-3. 执行：
-
-```powershell
-.\build\Build-Compatibility.ps1
-```
-
-脚本只会将真实编译成功的文件写入 `CadApi/Rxx`；缺少 SDK 或 Targeting Pack 时会明确列出，不会用其他版本 DLL 冒充。
-
-## 发布前验证
-
-每个 AutoCAD 主版本至少完成：启动器识别、NETLOAD/自动加载、Ribbon、DWG 打开与激活、模型/布局扫描、单页打印、合并 PDF、SBB 属性修改、天正样图显示与发布。天正兼容性必须按实际天正版本和其支持的 AutoCAD 组合另测，不能仅凭 AutoCAD DLL 编译通过认定。
+本机缺少某一代 AutoCAD SDK 时，可以只构建已安装的代际；正式发布前应在具备两套 SDK 的构建环境生成完整包。

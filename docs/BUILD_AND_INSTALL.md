@@ -20,7 +20,7 @@ git status --short
 - Visual Studio Build Tools（含 MSBuild）。
 - .NET Framework 4.8 或 4.8.1 Targeting Pack。
 - 编译 AutoCAD 2025–2026（R25）时需要 .NET 8 SDK。
-- 本机至少安装一个 AutoCAD 2014–2026，脚本会从固定磁盘及 Autodesk 注册表查找，包括非默认安装目录。
+- 本机至少安装一个 AutoCAD 2021–2026，脚本会从固定磁盘及 Autodesk 注册表查找，包括非默认安装目录。
 
 推荐把 .NET 8 安装为系统 SDK。也可以把便携 SDK 放在仓库的 `.tools\dotnet`；该目录不会提交到 GitHub。
 
@@ -40,11 +40,6 @@ powershell -ExecutionPolicy Bypass -File .\build\Build-Release.ps1
 
 | 目录 | AutoCAD 版本 |
 |---|---|
-| R19 | 2014（停止更新；常规发布不再生成） |
-| R20 | 2015–2016 |
-| R21 | 2017 |
-| R22 | 2018 |
-| R23 | 2019–2020 |
 | R24 | 2021–2024 |
 | R25 | 2025–2026 |
 

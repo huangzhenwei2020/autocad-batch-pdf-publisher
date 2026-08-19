@@ -19,7 +19,7 @@ $host2026 = Join-Path $projectRoot "src\CadArchSpec.Host.AutoCAD2026\bin\$Config
 $installerRoot = Join-Path $projectRoot "src\CadArchSpec.Installer"
 $payloadRoot = Join-Path $installerRoot "Payload"
 $bundleRoot = Join-Path $payloadRoot "CadArchSpecEditor.bundle"
-$payloadZip = Join-Path $payloadRoot "CadArchSpecEditor.bundle.zip"
+$payloadZip = Join-Path $workspaceRoot "BatchPdfPublisherLauncher\Modules\ArchitectureAssistant\CadArchSpecEditor.bundle.zip"
 $releaseRoot = Join-Path $projectRoot "release"
 
 Push-Location $webRoot

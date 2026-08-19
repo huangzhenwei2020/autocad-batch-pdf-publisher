@@ -62,7 +62,7 @@ function Find-AutoCadInstallations {
     $fixedRoots = Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' -ErrorAction SilentlyContinue |
         ForEach-Object { $_.DeviceID + '\' }
     foreach ($driveRoot in $fixedRoots) {
-        foreach ($year in 2014..2026) {
+        foreach ($year in 2021..2026) {
             Add-AutoCadCandidate $result (Join-Path $driveRoot "Program Files\Autodesk\AutoCAD $year")
             Add-AutoCadCandidate $result (Join-Path $driveRoot "Autodesk\AutoCAD $year")
         }
@@ -93,11 +93,6 @@ function Find-AutoCadInstallations {
 }
 
 function Get-Band([int]$Year) {
-    if ($Year -eq 2014) { return 'R19' }
-    if ($Year -le 2016) { return 'R20' }
-    if ($Year -eq 2017) { return 'R21' }
-    if ($Year -eq 2018) { return 'R22' }
-    if ($Year -le 2020) { return 'R23' }
     if ($Year -le 2024) { return 'R24' }
     return 'R25'
 }
@@ -121,7 +116,7 @@ function Find-DotNet8 {
         $sdks = & $legacy --list-sdks 2>$null
         if ($sdks -match '^8\.') { return $legacy }
     }
-    throw '编译 R25（AutoCAD 2025-2026）需要 .NET 8 SDK。请安装 SDK 后重试，或暂时使用 -Bands R19,R24。'
+    throw '编译 R25（AutoCAD 2025-2026）需要 .NET 8 SDK。请安装 SDK 后重试，或暂时使用 -Bands R24。'
 }
 
 function Invoke-Checked([scriptblock]$Command, [string]$Description) {
@@ -133,7 +128,7 @@ Assert-ChildPath $OutputRoot $distRoot '发布输出目录'
 Assert-ChildPath $artifactRoot (Join-Path $repositoryRoot '.artifacts') '中间目录'
 
 $installations = @(Find-AutoCadInstallations)
-if ($installations.Count -eq 0) { throw '未找到安装了 .NET API 的 AutoCAD 2014-2026。' }
+if ($installations.Count -eq 0) { throw '未找到安装了 .NET API 的 AutoCAD 2021-2026。' }
 
 $available = @{}
 foreach ($installation in $installations) {
@@ -143,13 +138,10 @@ foreach ($installation in $installations) {
     }
 }
 
-# AutoCAD 2014 (R19) is legacy-only from 2026-08 onward. Keep explicit R19
-# builds possible for source archaeology, but never place it in a normal
-# release unless a maintainer deliberately passes -Bands R19.
-if (-not $Bands -or $Bands.Count -eq 0) { $Bands = @($available.Keys | Where-Object { $_ -ne 'R19' } | Sort-Object) }
+if (-not $Bands -or $Bands.Count -eq 0) { $Bands = @($available.Keys | Sort-Object) }
 $Bands = @($Bands | ForEach-Object { $_.Trim().ToUpperInvariant() } | Select-Object -Unique)
 foreach ($band in $Bands) {
-    if ($band -notin @('R19','R20','R21','R22','R23','R24','R25')) { throw "不支持的 API 组：$band" }
+    if ($band -notin @('R24','R25')) { throw "不支持的 API 组：$band。当前仅支持 AutoCAD 2021-2026。" }
     if (-not $available.ContainsKey($band)) { throw "本机没有可用于 $band 的 AutoCAD API。请安装对应 CAD，或使用 build\AutodeskSdk 方案。" }
 }
 
@@ -182,10 +174,7 @@ foreach ($band in $Bands) {
     }
     else {
         $project = Join-Path $repositoryRoot 'BatchPdfPublisher\BatchPdfPublisher.csproj'
-        # The local release build targets the installed .NET 4.8.x reference
-        # assemblies. R19 still needs its AutoCAD API compatibility branches,
-        # but the old .NET 4.0 LINQ polyfills must not be enabled on 4.8.x.
-        $defineConstants = if ($band -eq 'R19') { 'ACAD_R19' } else { '' }
+        $defineConstants = ''
         Invoke-Checked {
             & $msbuild $project /t:Rebuild /p:Configuration=Release `
                 "/p:TargetFrameworkVersion=$framework" `
@@ -248,6 +237,30 @@ $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $Outpu
 $unexpected = Get-ChildItem (Join-Path $OutputRoot 'CadApi') -Recurse -Filter 'BatchPdfPublisher*.dll' |
     Where-Object { $_.Name -ne 'BatchPdfPublisher.dll' }
 if ($unexpected) { throw "发布目录含历史后缀 DLL：$($unexpected.FullName -join ', ')" }
+
+# 发布前核对启动器必需的嵌入模块，避免主 DLL 能运行但建筑说明或楼梯漏装。
+$launcherAssembly = [System.Reflection.Assembly]::LoadFrom($launcher)
+$embeddedNames = @($launcherAssembly.GetManifestResourceNames())
+foreach ($requiredResource in @(
+    'WanluoArchitectureTools.CadArchSpecEditor.bundle.zip',
+    'WanluoArchitectureTools.StairDetail.R24.zip',
+    'WanluoArchitectureTools.StairDetail.R25.zip')) {
+    if ($embeddedNames -notcontains $requiredResource) { throw "启动器缺少嵌入功能模块：$requiredResource" }
+}
+
+$featureSource = Join-Path $repositoryRoot 'BatchPdfPublisher\Features\Shortcuts\FeatureRegistry.cs'
+$commandSource = Join-Path $repositoryRoot 'BatchPdfPublisher\Commands.cs'
+if (-not (Test-Path -LiteralPath $featureSource) -or -not (Test-Path -LiteralPath $commandSource)) { throw '缺少统一功能登记表或命令入口。' }
+$featureText = Get-Content -LiteralPath $featureSource -Raw
+$commandText = Get-Content -LiteralPath $commandSource -Raw
+$registeredCommands = [regex]::Matches($featureText, 'F\("[^"]+",\s*"[^"]+",\s*"([A-Z0-9_]+)"') | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique
+$externalCommands = @('WLJZSM','WLLTDY')
+foreach ($registeredCommand in $registeredCommands) {
+    if ($externalCommands -contains $registeredCommand) { continue }
+    if ($commandText -notmatch ('CommandMethod\("' + [regex]::Escape($registeredCommand) + '"')) {
+        throw "统一功能登记表中的命令未在主插件注册：$registeredCommand"
+    }
+}
 
 Write-Host ''
 Write-Host '干净发布完成：' -ForegroundColor Green

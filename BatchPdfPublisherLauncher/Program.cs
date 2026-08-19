@@ -38,6 +38,8 @@ namespace BatchPdfPublisherLauncher
         {
             try
             {
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
                 Log("启动器开始运行");
                 var launcherDirectory = AppDomain.CurrentDomain.BaseDirectory;
                 var platforms = FindPlatforms();
@@ -69,12 +71,9 @@ namespace BatchPdfPublisherLauncher
                 // first; permanent installation recreates one clean unified bundle.
                 RemoveAutoLoadBundles();
                 var pluginAssembly = InstallPlugin(payload, options.InstallPermanently);
-                var architectureAssembly = InstallOptionalComponent(
-                    "建筑设计说明助手",
-                    () => InstallArchitectureAssistant(launcherDirectory, payload.Band, options.InstallPermanently));
-                var stairAssembly = InstallOptionalComponent(
-                    "一键楼梯大样",
-                    () => InstallStairDetail(launcherDirectory, payload.Band, options.InstallPermanently));
+                var architectureAssembly = InstallArchitectureAssistant(launcherDirectory, payload.Band, options.InstallPermanently);
+                var stairAssembly = InstallStairDetail(launcherDirectory, payload.Band, options.InstallPermanently);
+                ValidateInstalledComponents(payload.Band, pluginAssembly, architectureAssembly, stairAssembly);
                 if (options.InstallPermanently) InstallAutoLoadBundle(pluginAssembly, payload.PdfDependencyPath, payload.Band, architectureAssembly, stairAssembly);
                 Log((options.InstallPermanently ? "已部署插件: " : "便携加载插件: ") + pluginAssembly);
                 if (!string.IsNullOrWhiteSpace(architectureAssembly)) Log((options.InstallPermanently ? "已部署建筑说明助手: " : "便携加载建筑说明助手: ") + architectureAssembly);
@@ -127,6 +126,7 @@ namespace BatchPdfPublisherLauncher
                         foreach (var release in root.GetSubKeyNames().Where(x => x.StartsWith("R", StringComparison.OrdinalIgnoreCase)))
                         using (var releaseKey = root.OpenSubKey(release))
                         {
+                            if (!IsSupportedRelease(release)) continue;
                             if (releaseKey == null) continue;
                             foreach (var product in releaseKey.GetSubKeyNames())
                             using (var productKey = releaseKey.OpenSubKey(product))
@@ -148,6 +148,13 @@ namespace BatchPdfPublisherLauncher
             return result.OrderBy(x => x.DisplayName, StringComparer.OrdinalIgnoreCase).ToList();
         }
 
+        private static bool IsSupportedRelease(string release)
+        {
+            Version version;
+            return Version.TryParse((release ?? string.Empty).TrimStart('R', 'r'), out version)
+                && (version.Major == 24 || version.Major == 25);
+        }
+
         private static string ReadCadDisplayName(RegistryKey productKey, RegistryKey install, string release)
         {
             var name = ReadRegistryString(productKey, "ProductName", "ProductNameGlob", "ProductNameForDisplay")
@@ -157,10 +164,6 @@ namespace BatchPdfPublisherLauncher
             var releaseNumber = release.StartsWith("R", StringComparison.OrdinalIgnoreCase) ? release.Substring(1) : release;
             var knownYears = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
             {
-                ["19.1"] = 2014,
-                ["20.0"] = 2015, ["20.1"] = 2016,
-                ["21.0"] = 2017, ["22.0"] = 2018,
-                ["23.0"] = 2019, ["23.1"] = 2020,
                 ["24.0"] = 2021, ["24.1"] = 2022, ["24.2"] = 2023, ["24.3"] = 2024,
                 ["25.0"] = 2025, ["25.1"] = 2026
             };
@@ -170,9 +173,8 @@ namespace BatchPdfPublisherLauncher
 
         private static string ReadAcadInstallDirectory(RegistryKey productKey, RegistryKey install)
         {
-            // AutoCAD 2014 stores the directory directly on the localized
-            // product key (AcadLocation/Location), while newer releases
-            // normally use the nested Install\\INSTALLDIR value.
+            // Different AutoCAD/Tianzheng installers store the directory on
+            // either the localized product key or the nested Install key.
             var value = ReadRegistryString(install, "INSTALLDIR", "InstallLocation", "Location", "AcadLocation")
                 ?? ReadRegistryString(productKey, "INSTALLDIR", "InstallLocation", "AcadLocation", "Location");
             return string.IsNullOrWhiteSpace(value) ? null : value.Trim().TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
@@ -216,7 +218,7 @@ namespace BatchPdfPublisherLauncher
                 throw new FileNotFoundException(
                     "已识别 " + FormatRelease(release) + "，但发布包中缺少对应的 " + band + " 插件组件。\r\n\r\n"
                     + "预期目录：" + bandDirectory + "\r\n"
-                    + "请使用包含 AutoCAD 2014–2026 分代 DLL 的完整发布包。");
+                    + "请使用包含 AutoCAD 2021–2026 分代 DLL 的完整发布包。");
             return new PluginPayload(band, assembly, dependency, arrowLibrary);
         }
 
@@ -232,14 +234,9 @@ namespace BatchPdfPublisherLauncher
         {
             if (!Version.TryParse((release ?? string.Empty).TrimStart('R', 'r'), out var version))
                 throw new InvalidOperationException("无法识别 AutoCAD 内部版本号：" + release);
-            if (version.Major == 19 && version.Minor >= 1) return "R19";
-            if (version.Major == 20) return "R20";
-            if (version.Major == 21) return "R21";
-            if (version.Major == 22) return "R22";
-            if (version.Major == 23) return "R23";
             if (version.Major == 24) return "R24";
             if (version.Major == 25) return "R25";
-            throw new NotSupportedException("当前启动器只支持 AutoCAD 2014–2026，检测到内部版本：" + release);
+            throw new NotSupportedException("当前启动器只支持 AutoCAD 2021–2026，检测到内部版本：" + release);
         }
 
         private static string FormatRelease(string release)
@@ -847,20 +844,18 @@ namespace BatchPdfPublisherLauncher
             }
         }
 
-        private static string InstallOptionalComponent(string displayName, Func<string> install)
+        private static void ValidateInstalledComponents(string band, string pluginAssembly, string architectureAssembly, string stairAssembly)
         {
-            try
+            var missing = new List<string>();
+            if (string.IsNullOrWhiteSpace(pluginAssembly) || !File.Exists(pluginAssembly)) missing.Add("批量 PDF / 图框 / 目录 / 属性 / 制图 / 门窗 / 房间主模块");
+            if (string.Equals(band, "R24", StringComparison.OrdinalIgnoreCase) || string.Equals(band, "R25", StringComparison.OrdinalIgnoreCase))
             {
-                return install();
+                if (string.IsNullOrWhiteSpace(architectureAssembly) || !File.Exists(architectureAssembly)) missing.Add("建筑设计说明助手");
+                if (string.IsNullOrWhiteSpace(stairAssembly) || !File.Exists(stairAssembly)) missing.Add("一键楼梯大样");
             }
-            catch (Exception exception)
-            {
-                // Optional tools must never prevent the PDF publisher from starting.
-                // Their Ribbon commands provide a focused message if the user opens
-                // a feature whose component is unavailable.
-                Log(displayName + "加载准备失败，已跳过: " + exception);
-                return null;
-            }
+            if (missing.Count > 0)
+                throw new InvalidDataException("安装包组件不完整，以下功能没有成功部署：\r\n\r\n- " + string.Join("\r\n- ", missing) + "\r\n\r\n安装已停止，请重新取得完整发布包。");
+            Log("组件完整性检查通过: " + band);
         }
 
         private static string ExtractEmbeddedArchitectureAssistant(string band, string hostName)
@@ -965,6 +960,7 @@ namespace BatchPdfPublisherLauncher
                 CopyDirectory(Path.GetDirectoryName(architectureAssembly), Path.Combine(contents, "ArchitectureAssistant"));
             if (!string.IsNullOrWhiteSpace(stairAssembly))
                 CopyDirectory(Path.GetDirectoryName(stairAssembly), Path.Combine(contents, "StairDetail"));
+            ValidateBundleContents(contents, band);
             var oldBatchBundle = Path.Combine(applicationPlugins, "BatchPdfPublisher.bundle");
             var oldArchitectureBundle = Path.Combine(applicationPlugins, "CadArchSpecEditor.bundle");
             if (Directory.Exists(oldBatchBundle)) Directory.Delete(oldBatchBundle, true);
@@ -972,7 +968,7 @@ namespace BatchPdfPublisherLauncher
             var installedBands = Directory.GetDirectories(Path.Combine(bundle, "Contents"))
                 .Select(Path.GetFileName)
                 .Where(x => File.Exists(Path.Combine(bundle, "Contents", x, PluginAssemblyName)))
-                .Where(x => new[] { "R19", "R20", "R21", "R22", "R23", "R24", "R25" }.Contains(x, StringComparer.OrdinalIgnoreCase))
+                .Where(x => new[] { "R24", "R25" }.Contains(x, StringComparer.OrdinalIgnoreCase))
                 .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
                 .ToList();
             var package = new StringBuilder();
@@ -1001,15 +997,28 @@ namespace BatchPdfPublisherLauncher
             File.WriteAllText(Path.Combine(bundle, "PackageContents.xml"), package.ToString(), Encoding.UTF8);
         }
 
+        private static void ValidateBundleContents(string contents, string band)
+        {
+            var missing = new List<string>();
+            foreach (var file in new[] { PluginAssemblyName, PdfDependencyName, ArrowLibraryRelativePath })
+                if (!File.Exists(Path.Combine(contents, file))) missing.Add(file);
+            if (string.Equals(band, "R24", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!File.Exists(Path.Combine(contents, "ArchitectureAssistant", "CadArchSpec.Host.AutoCAD2022.dll"))) missing.Add("ArchitectureAssistant\\CadArchSpec.Host.AutoCAD2022.dll");
+                if (!File.Exists(Path.Combine(contents, "StairDetail", "WL.Stair.Cad2022.dll"))) missing.Add("StairDetail\\WL.Stair.Cad2022.dll");
+            }
+            if (string.Equals(band, "R25", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!File.Exists(Path.Combine(contents, "ArchitectureAssistant", "CadArchSpec.Host.AutoCAD2026.dll"))) missing.Add("ArchitectureAssistant\\CadArchSpec.Host.AutoCAD2026.dll");
+                if (!File.Exists(Path.Combine(contents, "StairDetail", "WL.Stair.Cad2026.dll"))) missing.Add("StairDetail\\WL.Stair.Cad2026.dll");
+            }
+            if (missing.Count > 0) throw new InvalidDataException("自动加载目录组件校验失败：" + string.Join("、", missing));
+        }
+
         private static Tuple<string, string> GetSeriesRangeForBand(string band)
         {
             switch (band)
             {
-                case "R19": return Tuple.Create("R19.1", "R19.1");
-                case "R20": return Tuple.Create("R20.0", "R20.1");
-                case "R21": return Tuple.Create("R21.0", "R21.0");
-                case "R22": return Tuple.Create("R22.0", "R22.0");
-                case "R23": return Tuple.Create("R23.0", "R23.1");
                 case "R24": return Tuple.Create("R24.0", "R24.3");
                 case "R25": return Tuple.Create("R25.0", "R25.1");
                 default: throw new NotSupportedException("不支持的 AutoCAD API 分代：" + band);
@@ -1114,8 +1123,8 @@ namespace BatchPdfPublisherLauncher
             Text = "万落建筑工具 · 启动器";
             Icon = LoadIcon();
             AutoScaleMode = AutoScaleMode.Dpi;
-            ClientSize = new Size(660, 488); MinimumSize = new Size(660, 488);
-            FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = false; MinimizeBox = false; StartPosition = FormStartPosition.CenterScreen;
+            ClientSize = new Size(660, 488); MinimumSize = new Size(600, 460);
+            FormBorderStyle = FormBorderStyle.Sizable; MaximizeBox = false; MinimizeBox = false; StartPosition = FormStartPosition.CenterScreen;
             BackColor = Canvas; Font = new Font("Microsoft YaHei UI", 9F);
             Padding = new Padding(0);
 
@@ -1256,7 +1265,7 @@ namespace BatchPdfPublisherLauncher
                     var cadName = AutoCadNameFromRelease(release);
                     if (cadName == null)
                     {
-                        MessageBox.Show(this, "无法从所选 acad.exe 判断受支持的 AutoCAD 2014–2026 版本。", "手动选择程序", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        MessageBox.Show(this, "无法从所选 acad.exe 判断受支持的 AutoCAD 2021–2026 版本。", "手动选择程序", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                         return;
                     }
                     AddManualCad(executable, release, cadName);
@@ -1304,8 +1313,7 @@ namespace BatchPdfPublisherLauncher
         {
             var years = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
             {
-                ["19.1"] = 2014, ["20.0"] = 2015, ["20.1"] = 2016, ["21.0"] = 2017, ["22.0"] = 2018,
-                ["23.0"] = 2019, ["23.1"] = 2020, ["24.0"] = 2021, ["24.1"] = 2022, ["24.2"] = 2023,
+                ["24.0"] = 2021, ["24.1"] = 2022, ["24.2"] = 2023,
                 ["24.3"] = 2024, ["25.0"] = 2025, ["25.1"] = 2026
             };
             int year;

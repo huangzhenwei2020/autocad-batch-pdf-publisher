@@ -27,12 +27,19 @@ namespace BatchPdfPublisher
             try { Application.SetSystemVariable("RIBBONSTATE", 1); } catch { }
             RibbonService.InstallWhenReady();
             MenuService.InstallWhenReady();
+            ShortcutAliasService.InstallWhenReady();
             ProjectAutoSaveService.Install();
         }
-        public void Terminate() { ProjectAutoSaveService.Remove(); RibbonService.Remove(); }
+        public void Terminate() { ProjectAutoSaveService.Remove(); ShortcutAliasService.Remove(); RibbonService.Remove(); MenuService.Remove(); }
 
         [CommandMethod("BPP")]
         public void BppCommand() => OpenPublisher();
+
+        [CommandMethod("WLHOTKEYS")]
+        public void ConfigureShortcuts()
+        {
+            Application.ShowModalDialog(new ShortcutSettingsForm());
+        }
 
         [CommandMethod("WLJZSM", CommandFlags.Session)]
         public void OpenArchitectureAssistant()
@@ -41,7 +48,7 @@ namespace BatchPdfPublisher
                 x.GetName().Name.StartsWith("CadArchSpec.Host.AutoCAD", System.StringComparison.OrdinalIgnoreCase));
             if (!loaded)
             {
-                Application.ShowAlertDialog("建筑设计说明助手尚未加载。\r\n\r\n请使用最新版“万落建筑工具启动器”安装完整组件。建筑说明功能当前支持 AutoCAD 2021–2026；AutoCAD 2014 仍可使用批量打印、图框和目录功能。");
+                Application.ShowAlertDialog("建筑设计说明助手尚未加载。\r\n\r\n请使用最新版“万落建筑工具启动器”重新安装完整组件。当前支持 AutoCAD 2021–2026。");
                 return;
             }
             var document = Application.DocumentManager.MdiActiveDocument;
@@ -55,7 +62,7 @@ namespace BatchPdfPublisher
                 x.GetName().Name.StartsWith("WL.Stair.Cad", System.StringComparison.OrdinalIgnoreCase));
             if (!loaded)
             {
-                Application.ShowAlertDialog("一键楼梯大样组件尚未加载。\r\n\r\n请使用最新版“万落建筑工具启动器”安装完整组件。该功能当前支持 AutoCAD 2021–2026；旧版 CAD 仍可使用批量打印、图框和目录功能。");
+                Application.ShowAlertDialog("一键楼梯大样组件尚未加载。\r\n\r\n请使用最新版“万落建筑工具启动器”重新安装完整组件。当前支持 AutoCAD 2021–2026。");
                 return;
             }
             var document = Application.DocumentManager.MdiActiveDocument;
@@ -486,6 +493,7 @@ namespace BatchPdfPublisher
         {
             RibbonService.RefreshNow();
             MenuService.InstallWhenReady();
+            ShortcutAliasService.Install(null, true);
             WriteStartupReceipt("BPPSTARTUP");
         }
 
