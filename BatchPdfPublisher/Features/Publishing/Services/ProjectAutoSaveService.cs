@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.PlottingServices;
@@ -107,8 +109,12 @@ namespace BatchPdfPublisher.Services
                     var sourceName = Path.GetFileNameWithoutExtension(sourcePath);
                     if (string.IsNullOrWhiteSpace(sourceName)) sourceName = Path.GetFileNameWithoutExtension(document.Name);
                     if (string.IsNullOrWhiteSpace(sourceName)) sourceName = "未命名图纸";
-                    var destination = Path.Combine(folder, SafeFileName(sourceName) + "_自动保存.dwg");
-                    var temporary = Path.Combine(folder, "." + SafeFileName(sourceName) + "_" + Guid.NewGuid().ToString("N") + ".tmp.dwg");
+                    // Different project folders often contain drawings with the
+                    // same file name. Keep a stable short path identity in the
+                    // snapshot name so they can never overwrite one another.
+                    var snapshotName = SafeFileName(sourceName) + "_" + ShortPathHash(sourcePath) + "_自动保存";
+                    var destination = Path.Combine(folder, snapshotName + ".dwg");
+                    var temporary = Path.Combine(folder, "." + snapshotName + "_" + Guid.NewGuid().ToString("N") + ".tmp.dwg");
                     try
                     {
                         using (document.LockDocument())
@@ -168,6 +174,16 @@ namespace BatchPdfPublisher.Services
         {
             var invalid = Path.GetInvalidFileNameChars();
             return new string((value ?? string.Empty).Select(x => invalid.Contains(x) ? '_' : x).ToArray());
+        }
+
+        private static string ShortPathHash(string path)
+        {
+            var normalized = NormalizePath(path);
+            using (var sha256 = SHA256.Create())
+            {
+                var bytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(normalized));
+                return string.Concat(bytes.Take(4).Select(x => x.ToString("x2")));
+            }
         }
     }
 }

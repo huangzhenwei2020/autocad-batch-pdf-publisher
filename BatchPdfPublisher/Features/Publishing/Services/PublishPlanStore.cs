@@ -10,6 +10,7 @@ namespace BatchPdfPublisher.Services
     public sealed class PublishPlanStore
     {
         public static event Action FramesChanged;
+        private static readonly object FileWriteSync = new object();
         private const string ProjectsFileName = "BatchPdfPublisher.projects.json";
         private const string ActiveProjectFileName = "BatchPdfPublisher.active-project.txt";
         private const string LegacyFramesFileName = "BatchPdfPublisher.frames.json";
@@ -44,13 +45,14 @@ namespace BatchPdfPublisher.Services
         public string LoadActiveProjectName()
         {
             var path = ActiveProjectPath();
-            return File.Exists(path) ? File.ReadAllText(path).Trim() : string.Empty;
+            try { return File.Exists(path) ? File.ReadAllText(path).Trim() : string.Empty; }
+            catch { return string.Empty; }
         }
 
         public void SetActiveProject(string name)
         {
             if (string.IsNullOrWhiteSpace(name)) return;
-            File.WriteAllText(ActiveProjectPath(), name.Trim());
+            WriteTextAtomically(ActiveProjectPath(), name.Trim());
         }
 
         public ProjectProfile GetActiveProject()
@@ -122,8 +124,83 @@ namespace BatchPdfPublisher.Services
         private void SaveProjects(List<ProjectProfile> projects)
         {
             Normalize(projects);
-            using (var stream = File.Create(ProjectsPath()))
-                new DataContractJsonSerializer(typeof(List<ProjectProfile>)).WriteObject(stream, projects);
+            var path = ProjectsPath();
+            WriteAtomically(path, stream =>
+                new DataContractJsonSerializer(typeof(List<ProjectProfile>)).WriteObject(stream, projects));
+        }
+
+        private static void WriteTextAtomically(string path, string value)
+        {
+            WriteAtomically(path, stream =>
+            {
+                using (var writer = new StreamWriter(stream)) writer.Write(value ?? string.Empty);
+            });
+        }
+
+        private static void WriteAtomically(string path, Action<Stream> write)
+        {
+            if (string.IsNullOrWhiteSpace(path)) throw new IOException("项目配置文件路径无效。");
+            var directory = Path.GetDirectoryName(path);
+            if (string.IsNullOrWhiteSpace(directory)) throw new IOException("项目配置文件目录无效。");
+            Directory.CreateDirectory(directory);
+
+            lock (FileWriteSync)
+            {
+                var temporary = Path.Combine(directory, "." + Path.GetFileName(path) + "." + Guid.NewGuid().ToString("N") + ".tmp");
+                try
+                {
+                    using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                    {
+                        write(stream);
+                        stream.Flush(true);
+                    }
+                    if (new FileInfo(temporary).Length == 0) throw new IOException("项目配置暂存文件为空。");
+
+                    if (!File.Exists(path))
+                    {
+                        File.Move(temporary, path);
+                        return;
+                    }
+
+                    var backup = path + ".bak";
+                    try
+                    {
+                        File.Replace(temporary, path, backup, true);
+                    }
+                    catch (PlatformNotSupportedException)
+                    {
+                        ReplaceWithRollback(temporary, path, backup);
+                    }
+                    catch (IOException)
+                    {
+                        ReplaceWithRollback(temporary, path, backup);
+                    }
+                }
+                finally
+                {
+                    try { if (File.Exists(temporary)) File.Delete(temporary); } catch { }
+                }
+            }
+        }
+
+        private static void ReplaceWithRollback(string temporary, string path, string backup)
+        {
+            var rollback = backup + "." + Guid.NewGuid().ToString("N") + ".rollback";
+            File.Copy(path, rollback, true);
+            try
+            {
+                File.Copy(temporary, path, true);
+                File.Copy(path, backup, true);
+            }
+            catch
+            {
+                try { if (File.Exists(rollback)) File.Copy(rollback, path, true); } catch { }
+                throw;
+            }
+            finally
+            {
+                try { if (File.Exists(rollback)) File.Delete(rollback); } catch { }
+            }
         }
 
         private static void Normalize(List<ProjectProfile> projects)

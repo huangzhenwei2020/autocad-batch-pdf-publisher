@@ -369,6 +369,8 @@ namespace BatchPdfPublisher.Services
                     layoutManager.SetCurrentLayoutId(requestedLayoutId);
 #endif
                     var currentLayoutId = layoutManager.GetLayoutId(layoutManager.CurrentLayout);
+                    if (!currentLayoutId.Equals(requestedLayoutId))
+                        throw new InvalidOperationException("AutoCAD 未能激活扫描记录对应的空间：" + requestedLayout);
                     var layout = transaction.GetObject(currentLayoutId, OpenMode.ForRead) as Layout;
                     if (layout == null)
                         throw new InvalidOperationException("当前空间没有有效的打印布局。");
@@ -624,7 +626,7 @@ namespace BatchPdfPublisher.Services
             // SetPlotType(Window) is called before the window has a valid
             // value. The native API accepts the reverse order. Coordinates
             // must be expressed in DCS rather than the scanned WCS extents.
-            var plotWindow = GetPlotWindowInDcs(sheet);
+            var plotWindow = GetPlotWindowInDcs(sheet, Application.DocumentManager.MdiActiveDocument);
             ApplyPlotStep("预设图框范围", () => validator.SetPlotWindowArea(settings, plotWindow));
             ApplyPlotStep("设置窗口打印类型", () => validator.SetPlotType(settings, Autodesk.AutoCAD.DatabaseServices.PlotType.Window));
             ApplyPlotStep("居中打印", () => validator.SetPlotCentered(settings, true));
@@ -705,13 +707,13 @@ namespace BatchPdfPublisher.Services
             }
         }
 
-        private static Extents2d GetPlotWindowInDcs(SheetItem sheet)
+        private static Extents2d GetPlotWindowInDcs(SheetItem sheet, Document document)
         {
             var extents = new Extents3d(
                 new Point3d(sheet.MinX, sheet.MinY, 0d),
                 new Point3d(sheet.MaxX, sheet.MaxY, 0d));
-            var document = Application.DocumentManager.MdiActiveDocument;
-            if (document == null) return new Extents2d(sheet.MinX, sheet.MinY, sheet.MaxX, sheet.MaxY);
+            if (document == null || document.Database == null)
+                throw new InvalidOperationException("无法取得当前 CAD 文档，不能换算打印窗口。");
             using (var view = document.Editor.GetCurrentView())
             {
                 var wcsToDcs = Matrix3d.PlaneToWorld(view.ViewDirection);
@@ -986,7 +988,9 @@ namespace BatchPdfPublisher.Services
 
         private static string ResolveOutputPath(string path, bool overwrite)
         {
-            if (overwrite && File.Exists(path)) File.Delete(path);
+            // Never delete an existing PDF before the replacement has been fully
+            // generated. SavePdfAtomically/CommitStagedFile replaces it only after
+            // the staged PDF is valid, so a failed publish keeps the old result.
             return overwrite ? path : UniquePath(path);
         }
     }

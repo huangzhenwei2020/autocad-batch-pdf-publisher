@@ -396,12 +396,31 @@ namespace BatchPdfPublisher.Views
             };
             _previewEnabled.CheckedChanged += (s, e) => { if (!_refreshing) _viewModel.PreviewEnabled = _previewEnabled.Checked; };
             _viewModel.PropertyChanged += ViewModelPropertyChanged;
-            _viewModel.Frames.CollectionChanged += (s, e) => BeginInvoke(new Action(RefreshFrames));
-            FormClosed += (s, e) => { SaveUiLayoutSettings(); _viewModel.Dispose(); };
+            _viewModel.Frames.CollectionChanged += (s, e) => RefreshFramesSafely();
+            FormClosing += (s, e) =>
+            {
+                if (_viewModel.IsPublishing && e.CloseReason == CloseReason.UserClosing)
+                {
+                    e.Cancel = true;
+                    MessageBox.Show(this, "PDF 正在发布。为避免中断 CAD 打印和 PDF 合并，请等待任务结束后再关闭窗口。", "正在发布", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+            };
+            FormClosed += (s, e) =>
+            {
+                _viewModel.PropertyChanged -= ViewModelPropertyChanged;
+                SaveUiLayoutSettings();
+                _viewModel.Dispose();
+            };
         }
 
         private void ViewModelPropertyChanged(object sender, PropertyChangedEventArgs e)
         {
+            if (IsDisposed || Disposing || !IsHandleCreated) return;
+            if (InvokeRequired)
+            {
+                try { BeginInvoke(new Action(() => ViewModelPropertyChanged(sender, e))); } catch (ObjectDisposedException) { }
+                return;
+            }
             if (e.PropertyName == "Status") _status.Text = _viewModel.Status;
             if (e.PropertyName == "Sheets") RefreshSheets();
             if (e.PropertyName == "SelectedBuilding")
@@ -412,6 +431,18 @@ namespace BatchPdfPublisher.Views
             }
             if (e.PropertyName == "SelectedSheet") SelectCurrentSheetRow();
             if (e.PropertyName == "PublishProgressValue" || e.PropertyName == "PublishProgressMaximum" || e.PropertyName == "IsPublishing" || e.PropertyName == "ScanProgressValue" || e.PropertyName == "ScanProgressMaximum" || e.PropertyName == "IsScanning") RefreshPublishProgress();
+        }
+
+        private void RefreshFramesSafely()
+        {
+            if (IsDisposed || Disposing || !IsHandleCreated) return;
+            try
+            {
+                if (InvokeRequired) BeginInvoke(new Action(RefreshFrames));
+                else RefreshFrames();
+            }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
         }
 
         private void RefreshPublishProgress()
