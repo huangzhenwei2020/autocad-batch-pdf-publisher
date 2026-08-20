@@ -12,12 +12,19 @@ namespace BatchPdfPublisher.Services
             var code = Regex.Replace((item.Code ?? string.Empty).Trim().ToUpperInvariant(), @"\s+", string.Empty);
             var type = InferTypeFromCode(code, item.ElevationType);
             item.ElevationType = type;
+            ApplyConstructionDefaults(item);
             item.Material = IsWindowType(type) ? "玻璃" : "无";
             if (IsWindowType(type) && item.SillHeight <= 0d && !item.SillHeightSuppressed) item.SillHeight = 900d;
             if (!IsWindowType(type)) { item.SillHeight = 0d; item.SillHeightSuppressed = false; }
             item.AtlasName = string.IsNullOrWhiteSpace(item.AtlasName) ? InferAtlas(code, type, item.SourceNote) : NormalizeAtlasName(item.AtlasName);
             if (string.IsNullOrWhiteSpace(item.Remarks)) item.Remarks = InferFireRating(code);
 
+            if (type == "推拉门")
+            {
+                item.DivisionPreset = "双扇等分";
+                item.OpeningMode = "双向推拉";
+                return;
+            }
             if (type.Contains("门") && type != "门联窗")
             {
                 item.DivisionPreset = item.Width > 1100d ? "双扇等分" : "单扇";
@@ -60,6 +67,7 @@ namespace BatchPdfPublisher.Services
             var value = Regex.Replace((code ?? string.Empty).Trim().ToUpperInvariant(), @"\s+", string.Empty);
             if (value.StartsWith("RFM")) return "人防门";
             if (value.StartsWith("FM") || value.StartsWith("FHM")) return FireType(value, "防火门");
+            if (value.StartsWith("TLM")) return "推拉门";
             if (value.StartsWith("BM")) return "百叶门";
             if (value.StartsWith("MLC")) return "门联窗";
             if (value.StartsWith("DXC")) return "带形窗";
@@ -74,6 +82,26 @@ namespace BatchPdfPublisher.Services
             if (fallback == "门") return "普通门";
             if (fallback == "窗") return "普通窗";
             return string.IsNullOrWhiteSpace(fallback) ? "待确认" : fallback;
+        }
+
+        public static void ApplyConstructionDefaults(DoorWindowScheduleItem item)
+        {
+            if (item == null) return;
+            var type = (item.ElevationType ?? string.Empty).Trim();
+            if (type.Contains("门"))
+            {
+                item.HasOuterFrame = false;
+                item.HasMullion = false;
+                item.DoorFrameType = "N型";
+                item.DoorFrameWidth = 0d;
+            }
+            else if (IsWindowType(type))
+            {
+                item.HasOuterFrame = false;
+                item.HasMullion = true;
+                item.DoorFrameType = "口型";
+                item.DoorFrameWidth = 50d;
+            }
         }
 
         public static string InferAtlas(string code, string type, string note)

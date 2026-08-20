@@ -51,7 +51,8 @@ function Add-AutoCadCandidate([System.Collections.Generic.List[object]]$Target, 
     if (-not $match.Success) { return }
     $year = [int]$match.Groups[1].Value
     if ($Target | Where-Object { [string]::Equals($_.Path, $Path, [System.StringComparison]::OrdinalIgnoreCase) }) { return }
-    $Target.Add([pscustomobject]@{ Year = $year; Path = [System.IO.Path]::GetFullPath($Path) })
+    $normalizedPath = [System.IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
+    $Target.Add([pscustomobject]@{ Year = $year; Path = $normalizedPath })
 }
 
 function Find-AutoCadInstallations {
@@ -220,9 +221,15 @@ if (Test-Path -LiteralPath (Join-Path $repositoryRoot 'docs\BUILD_AND_INSTALL.md
     Copy-Item -LiteralPath (Join-Path $repositoryRoot 'docs\BUILD_AND_INSTALL.md') -Destination (Join-Path $OutputRoot '构建与安装说明.md') -Force
 }
 
-$gitCommit = (& git -C $repositoryRoot rev-parse HEAD 2>$null | Select-Object -First 1)
-$gitBranch = (& git -C $repositoryRoot branch --show-current 2>$null | Select-Object -First 1)
-$gitDirty = [bool](& git -C $repositoryRoot status --porcelain 2>$null | Select-Object -First 1)
+# 源码发布目录可不携带 .git（便于用户只保留可编辑源码）。无 Git 时仍必须能完整构建。
+$gitCommit = ''
+$gitBranch = ''
+$gitDirty = $false
+if (Test-Path -LiteralPath (Join-Path $repositoryRoot '.git')) {
+    $gitCommit = (& git -C $repositoryRoot rev-parse HEAD 2>$null | Select-Object -First 1)
+    $gitBranch = (& git -C $repositoryRoot branch --show-current 2>$null | Select-Object -First 1)
+    $gitDirty = [bool](& git -C $repositoryRoot status --porcelain 2>$null | Select-Object -First 1)
+}
 $manifest = [ordered]@{
     Product = '万落建筑工具'
     BuiltAt = (Get-Date).ToString('o')

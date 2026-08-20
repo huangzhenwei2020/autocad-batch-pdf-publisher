@@ -23,7 +23,7 @@ namespace BatchPdfPublisher.Views
         private Divider _dragDivider;
         private RectangleF _drawingArea;
         private double _frameWidth = 1d, _frameHeight = 1d;
-        private double _outerProfileWidth = 50d, _mullionProfileWidth = 50d;
+        private double _outerProfileWidth = 50d, _mullionProfileWidth = 50d, _doorFrameWidth = 50d;
         private double _installationGap = 20d;
         private bool _hasInstallationGap = true;
         private bool _hasOuterFrame = true, _hasMullion = true;
@@ -49,6 +49,10 @@ namespace BatchPdfPublisher.Views
         public DoorWindowLayoutCell SelectedCell { get { return _selected >= 0 && _selected < _cells.Count ? _cells[_selected] : null; } }
         public IEnumerable<DoorWindowLayoutCell> SelectedCells { get { return _selectedIndices.Where(x => x >= 0 && x < _cells.Count).Select(x => _cells[x]); } }
         public int SelectionCount { get { return _selectedIndices.Count; } }
+        public string BayLeftSide { get { return _bayLeftSide; } }
+        public string BayRightSide { get { return _bayRightSide; } }
+        public double BayLeftDepth { get { return _bayLeftDepth; } }
+        public double BayRightDepth { get { return _bayRightDepth; } }
 
         public void LoadLayout(double width, double height, IEnumerable<DoorWindowLayoutCell> cells)
         {
@@ -60,7 +64,7 @@ namespace BatchPdfPublisher.Views
 
         public void SetProfileWidths(double outerWidth, double mullionWidth) { _outerProfileWidth = Math.Max(0d, outerWidth); _mullionProfileWidth = Math.Max(0d, mullionWidth); Invalidate(); }
         public void SetInstallationGap(bool enabled, double gap) { _hasInstallationGap = enabled; _installationGap = Math.Max(0d, gap); Invalidate(); }
-        public void SetConstruction(bool hasOuterFrame, bool hasMullion, string doorFrameType) { _hasOuterFrame = hasOuterFrame; _hasMullion = hasMullion; _doorFrameType = string.IsNullOrWhiteSpace(doorFrameType) ? "N型" : doorFrameType; Invalidate(); }
+        public void SetConstruction(bool hasOuterFrame, bool hasMullion, string doorFrameType, double doorFrameWidth) { _hasOuterFrame = hasOuterFrame; _hasMullion = hasMullion; _doorFrameType = string.IsNullOrWhiteSpace(doorFrameType) ? "N型" : doorFrameType; _doorFrameWidth = Math.Max(0d, doorFrameWidth); Invalidate(); }
         public int SelectedBayReturn { get { return _selectedBayReturn; } }
         public void ConfigureBayReturns(bool enabled, string leftSide, double leftDepth, string rightSide, double rightDepth)
         {
@@ -193,6 +197,7 @@ namespace BatchPdfPublisher.Views
             using (var font = new Font("Microsoft YaHei UI", 8.5f))
             using (var doorFont = new Font("Microsoft YaHei UI", 9f, FontStyle.Bold))
             using (var openingPen = new Pen(Color.FromArgb(35, 125, 190), 1.5f) { DashStyle = DashStyle.Dash })
+            using (var sashPen = new Pen(Color.FromArgb(150, 150, 150), 1.25f))
             {
                 var displayOrder = OrderedCells.Select((cell, index) => new { cell, number = index + 1 }).ToDictionary(x => x.cell, x => x.number);
                 DrawBayReturn(e.Graphics, _leftBayRect, true, _bayLeftSide, _bayLeftDepth, selectedPen, pen, openingPen, font);
@@ -204,7 +209,12 @@ namespace BatchPdfPublisher.Views
                     DrawCellBoundary(e.Graphics, drawPen, _cells[index]); drawPen.DashStyle = DashStyle.Solid;
                     if (!_cells[index].IsDeleted) DrawProfileRectangle(e.Graphics, pen, _cells[index]);
                     if (!_cells[index].IsDeleted) DrawMaterialSymbol(e.Graphics, openingPen, _cells[index]);
-                    if (!_cells[index].IsDeleted) DrawOpeningSymbol(e.Graphics, openingPen, OpeningRectangle(_cells[index]), _cells[index].Opening, (_cells[index].Left + _cells[index].Right) / 2d <= _frameWidth / 2d);
+                    if (!_cells[index].IsDeleted)
+                    {
+                        var openingRect = OpeningRectangle(_cells[index]);
+                        if (IsOperable(_cells[index].Opening) && _doorFrameWidth > 0d && openingRect.Width > 2f && openingRect.Height > 2f) e.Graphics.DrawRectangle(sashPen, openingRect.X, openingRect.Y, openingRect.Width, openingRect.Height);
+                        DrawOpeningSymbol(e.Graphics, openingPen, openingRect, _cells[index].Opening, (_cells[index].Left + _cells[index].Right) / 2d <= _frameWidth / 2d);
+                    }
                     var text = displayOrder[_cells[index]] + "  " + (_cells[index].Right - _cells[index].Left).ToString("0.##") + "×" + (_cells[index].Top - _cells[index].Bottom).ToString("0.##") + "\n" + (_cells[index].Opening ?? "固定") + " / " + (string.IsNullOrWhiteSpace(_cells[index].Material) ? "无" : _cells[index].Material);
                     if (_cells[index].IsDeleted) text = displayOrder[_cells[index]] + "  已删除（可恢复）";
                     TextRenderer.DrawText(e.Graphics, text, font, Rectangle.Round(rect), Color.FromArgb(45, 55, 65), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
@@ -296,7 +306,11 @@ namespace BatchPdfPublisher.Views
             if (divider == null) return false; const double minimum = 50d;
             var lower = divider.Before.Select(i => divider.Vertical ? _cells[i].Left : _cells[i].Bottom).Max() + minimum;
             var upper = divider.After.Select(i => divider.Vertical ? _cells[i].Right : _cells[i].Top).Min() - minimum;
-            coordinate = Math.Max(lower, Math.Min(upper, coordinate));
+            // 鼠标拖动按 5 mm 模数吸附；上下限也取 5 的整数倍，保证最终分格尺寸便于直接施工使用。
+            var snappedLower = Math.Ceiling(lower / 5d) * 5d;
+            var snappedUpper = Math.Floor(upper / 5d) * 5d;
+            coordinate = Math.Round(coordinate / 5d, MidpointRounding.AwayFromZero) * 5d;
+            coordinate = snappedLower <= snappedUpper ? Math.Max(snappedLower, Math.Min(snappedUpper, coordinate)) : Math.Max(lower, Math.Min(upper, coordinate));
             foreach (var index in divider.Before) { if (divider.Vertical) _cells[index].Right = coordinate; else _cells[index].Top = coordinate; }
             foreach (var index in divider.After) { if (divider.Vertical) _cells[index].Left = coordinate; else _cells[index].Bottom = coordinate; }
             divider.Coordinate = coordinate; Invalidate(); if (_dragDivider == null) OnLayoutChanged(); else RaiseSelectionChanged(); return true;
@@ -345,8 +359,8 @@ namespace BatchPdfPublisher.Views
             graphics.DrawRectangle(pen, rect.X, rect.Y, rect.Width, rect.Height);
             var joinX = left ? rect.Right : rect.Left;
             var outsideX = left ? rect.Left : rect.Right;
-            graphics.DrawLine(pen, joinX, rect.Top, outsideX, rect.Top + rect.Height * .10f);
-            graphics.DrawLine(pen, joinX, rect.Bottom, outsideX, rect.Bottom - rect.Height * .10f);
+            // 凸窗按三面展开画法表达，接缝是垂直分隔线，不绘制任何透视斜线。
+            graphics.DrawLine(pen, joinX, rect.Top, joinX, rect.Bottom);
             if (side == "窗")
             {
                 var inner = RectangleF.Inflate(rect, -Math.Max(3f, rect.Width * .17f), -Math.Max(5f, rect.Height * .10f));
@@ -358,8 +372,8 @@ namespace BatchPdfPublisher.Views
             }
             else
             {
-                graphics.DrawLine(symbolPen, outsideX, rect.Top + rect.Height * .34f, joinX, rect.Top + rect.Height * .46f);
-                graphics.DrawLine(symbolPen, outsideX, rect.Top + rect.Height * .66f, joinX, rect.Top + rect.Height * .54f);
+                graphics.DrawLine(symbolPen, outsideX, rect.Top + rect.Height * .34f, joinX, rect.Top + rect.Height * .34f);
+                graphics.DrawLine(symbolPen, outsideX, rect.Top + rect.Height * .66f, joinX, rect.Top + rect.Height * .66f);
             }
             var text = (left ? "左转折" : "右转折") + "\n" + side + " / " + depth.ToString("0") + "mm";
             TextRenderer.DrawText(graphics, text, font, Rectangle.Round(rect), Color.FromArgb(45, 55, 65), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
@@ -385,17 +399,18 @@ namespace BatchPdfPublisher.Views
         {
             var leftNeighbor = ActiveNeighbor(cell, true, cell.Left); var rightNeighbor = ActiveNeighbor(cell, true, cell.Right);
             var bottomNeighbor = ActiveNeighbor(cell, false, cell.Bottom); var topNeighbor = ActiveNeighbor(cell, false, cell.Top);
-            var leftInset = leftNeighbor == null ? (_hasOuterFrame ? _outerProfileWidth : 0d) : (_hasMullion ? SharedInset(cell, leftNeighbor) : 0d);
-            var rightInset = rightNeighbor == null ? (_hasOuterFrame ? _outerProfileWidth : 0d) : (_hasMullion ? SharedInset(cell, rightNeighbor) : 0d);
-            var bottomInset = bottomNeighbor == null ? (_hasOuterFrame ? _outerProfileWidth : 0d) : (_hasMullion ? SharedInset(cell, bottomNeighbor) : 0d);
+            var nShapedBottom = bottomNeighbor == null && cell.IsDoor && string.Equals(_doorFrameType, "N型", StringComparison.Ordinal);
+            var leftInset = leftNeighbor == null ? (_hasOuterFrame ? _outerProfileWidth : 0d) : (_hasMullion && !MergeDoorDivider(cell, leftNeighbor) ? SharedInset(cell, leftNeighbor) : 0d);
+            var rightInset = rightNeighbor == null ? (_hasOuterFrame ? _outerProfileWidth : 0d) : (_hasMullion && !MergeDoorDivider(cell, rightNeighbor) ? SharedInset(cell, rightNeighbor) : 0d);
+            var bottomInset = nShapedBottom ? 0d : bottomNeighbor == null ? (_hasOuterFrame ? _outerProfileWidth : 0d) : (_hasMullion ? SharedInset(cell, bottomNeighbor) : 0d);
             var topInset = topNeighbor == null ? (_hasOuterFrame ? _outerProfileWidth : 0d) : (_hasMullion ? SharedInset(cell, topNeighbor) : 0d);
             leftInset = Math.Min(leftInset, (cell.Right - cell.Left) * .45d); rightInset = Math.Min(rightInset, (cell.Right - cell.Left) * .45d);
             bottomInset = Math.Min(bottomInset, (cell.Top - cell.Bottom) * .45d); topInset = Math.Min(topInset, (cell.Top - cell.Bottom) * .45d);
-            var nDoorBottom = cell.IsDoor && bottomNeighbor == null && _doorFrameType == "N型"; var inner = ToPixels(new DoorWindowLayoutCell { Left = cell.Left + leftInset, Bottom = nDoorBottom ? cell.Bottom : cell.Bottom + bottomInset, Right = cell.Right - rightInset, Top = cell.Top - topInset });
-            if (bottomNeighbor != null && _hasMullion || bottomNeighbor == null && _hasOuterFrame) if (!nDoorBottom) graphics.DrawLine(pen, inner.Left, inner.Bottom, inner.Right, inner.Bottom);
-            if (rightNeighbor != null && _hasMullion || rightNeighbor == null && _hasOuterFrame) graphics.DrawLine(pen, inner.Right, inner.Bottom, inner.Right, inner.Top);
+            var inner = ToPixels(new DoorWindowLayoutCell { Left = cell.Left + leftInset, Bottom = cell.Bottom + bottomInset, Right = cell.Right - rightInset, Top = cell.Top - topInset });
+            if (!nShapedBottom && (bottomNeighbor != null && _hasMullion || bottomNeighbor == null && _hasOuterFrame)) graphics.DrawLine(pen, inner.Left, inner.Bottom, inner.Right, inner.Bottom);
+            if (rightNeighbor != null && _hasMullion && !MergeDoorDivider(cell, rightNeighbor) || rightNeighbor == null && _hasOuterFrame) graphics.DrawLine(pen, inner.Right, inner.Bottom, inner.Right, inner.Top);
             if (topNeighbor != null && _hasMullion || topNeighbor == null && _hasOuterFrame) graphics.DrawLine(pen, inner.Right, inner.Top, inner.Left, inner.Top);
-            if (leftNeighbor != null && _hasMullion || leftNeighbor == null && _hasOuterFrame) graphics.DrawLine(pen, inner.Left, inner.Top, inner.Left, inner.Bottom);
+            if (leftNeighbor != null && _hasMullion && !MergeDoorDivider(cell, leftNeighbor) || leftNeighbor == null && _hasOuterFrame) graphics.DrawLine(pen, inner.Left, inner.Top, inner.Left, inner.Bottom);
         }
 
         private DoorWindowLayoutCell ActiveNeighbor(DoorWindowLayoutCell owner, bool vertical, double coordinate)
@@ -409,17 +424,18 @@ namespace BatchPdfPublisher.Views
             return null;
         }
 
-        private double SharedInset(DoorWindowLayoutCell first, DoorWindowLayoutCell second) { return IsOperable(first.Opening) || IsOperable(second.Opening) ? _mullionProfileWidth : _mullionProfileWidth / 2d; }
+        private double SharedInset(DoorWindowLayoutCell first, DoorWindowLayoutCell second) { return _mullionProfileWidth / 2d; }
         private static bool IsOperable(string value) { var mode = (value ?? string.Empty).Trim(); return mode != "" && mode != "固定" && mode != "未设置" && mode != "百叶"; }
 
         private RectangleF OpeningRectangle(DoorWindowLayoutCell cell)
         {
             var leftNeighbor = ActiveNeighbor(cell, true, cell.Left); var rightNeighbor = ActiveNeighbor(cell, true, cell.Right); var bottomNeighbor = ActiveNeighbor(cell, false, cell.Bottom); var topNeighbor = ActiveNeighbor(cell, false, cell.Top);
-            var leftInset = leftNeighbor == null ? (_hasOuterFrame ? _outerProfileWidth : 0d) : (_hasMullion ? SharedInset(cell, leftNeighbor) : 0d);
-            var rightInset = rightNeighbor == null ? (_hasOuterFrame ? _outerProfileWidth : 0d) : (_hasMullion ? SharedInset(cell, rightNeighbor) : 0d);
+            var leftInset = leftNeighbor == null ? (_hasOuterFrame ? _outerProfileWidth : 0d) : (_hasMullion && !MergeDoorDivider(cell, leftNeighbor) ? SharedInset(cell, leftNeighbor) : 0d);
+            var rightInset = rightNeighbor == null ? (_hasOuterFrame ? _outerProfileWidth : 0d) : (_hasMullion && !MergeDoorDivider(cell, rightNeighbor) ? SharedInset(cell, rightNeighbor) : 0d);
             var bottomInset = bottomNeighbor == null ? (_hasOuterFrame ? _outerProfileWidth : 0d) : (_hasMullion ? SharedInset(cell, bottomNeighbor) : 0d);
             var topInset = topNeighbor == null ? (_hasOuterFrame ? _outerProfileWidth : 0d) : (_hasMullion ? SharedInset(cell, topNeighbor) : 0d);
-            if (cell.IsDoor && bottomNeighbor == null && _doorFrameType == "N型") bottomInset = 0d;
+            if (bottomNeighbor == null && cell.IsDoor && string.Equals(_doorFrameType, "N型", StringComparison.Ordinal)) bottomInset = 0d;
+            if (IsOperable(cell.Opening)) { leftInset += _doorFrameWidth; rightInset += _doorFrameWidth; bottomInset += _doorFrameWidth; topInset += _doorFrameWidth; }
             var clearance = Math.Min(6d, Math.Min(cell.Right - cell.Left, cell.Top - cell.Bottom) * .01d);
             var inset = new DoorWindowLayoutCell { Left = cell.Left + leftInset + clearance, Right = cell.Right - rightInset - clearance, Bottom = cell.Bottom + bottomInset + clearance, Top = cell.Top - topInset - clearance };
             return inset.Right > inset.Left && inset.Top > inset.Bottom ? ToPixels(inset) : ToPixels(cell);
@@ -435,10 +451,29 @@ namespace BatchPdfPublisher.Views
             Draw(rect.Left, rect.Bottom, rect.Right, rect.Bottom, bottomNeighbor);
             void Draw(float x1, float y1, float x2, float y2, DoorWindowLayoutCell neighbor)
             {
-                if (neighbor != null && _hasMullion && !IsOperable(cell.Opening) && !IsOperable(neighbor.Opening)) return;
-                var old = pen.DashStyle; if (neighbor != null && !_hasMullion) pen.DashStyle = DashStyle.Dash;
-                graphics.DrawLine(pen, x1, y1, x2, y2); pen.DashStyle = old;
+                var mergedVertical = neighbor != null && Math.Abs(x1 - x2) < .1f && MergeDoorDivider(cell, neighbor);
+                if (neighbor != null && _hasMullion && !mergedVertical) return;
+                if (_hasMullion && mergedVertical)
+                {
+                    var bottomInset = bottomNeighbor != null ? _mullionProfileWidth / 2d : cell.IsDoor && string.Equals(_doorFrameType, "N型", StringComparison.Ordinal) ? 0d : _hasOuterFrame ? _outerProfileWidth : 0d;
+                    var topInset = topNeighbor != null ? _mullionProfileWidth / 2d : _hasOuterFrame ? _outerProfileWidth : 0d;
+                    var trimmed = ToPixels(new DoorWindowLayoutCell { Left = cell.Left, Bottom = cell.Bottom + bottomInset, Right = cell.Right, Top = cell.Top - topInset });
+                    y1 = trimmed.Top; y2 = trimmed.Bottom;
+                }
+                graphics.DrawLine(pen, x1, y1, x2, y2);
             }
+        }
+
+        private static bool MergeDoorDivider(DoorWindowLayoutCell first, DoorWindowLayoutCell second)
+        {
+            return first != null && second != null
+                && (first.IsDoor && second.IsDoor || IsOperable(first.Opening) && IsOperable(second.Opening))
+                && !IsSuspended(first.Opening) && !IsSuspended(second.Opening);
+        }
+
+        private static bool IsSuspended(string opening)
+        {
+            var value = (opening ?? string.Empty).Trim(); return value == "上悬" || value == "下悬";
         }
 
         private static void DrawSlidingArrow(Graphics graphics, Pen pen, float left, float right, float y, bool pointsRight)
@@ -451,7 +486,7 @@ namespace BatchPdfPublisher.Views
         {
             var value = string.IsNullOrWhiteSpace(cell.Material) ? "无" : cell.Material; if (value == "无") return;
             var leftNeighbor = ActiveNeighbor(cell, true, cell.Left); var rightNeighbor = ActiveNeighbor(cell, true, cell.Right); var bottomNeighbor = ActiveNeighbor(cell, false, cell.Bottom); var topNeighbor = ActiveNeighbor(cell, false, cell.Top);
-            var outer = _hasOuterFrame ? _outerProfileWidth : 0d; var leftInset = leftNeighbor == null ? outer : (_hasMullion ? SharedInset(cell, leftNeighbor) : 0d); var rightInset = rightNeighbor == null ? outer : (_hasMullion ? SharedInset(cell, rightNeighbor) : 0d);
+            var outer = _hasOuterFrame ? _outerProfileWidth : 0d; var leftInset = leftNeighbor == null ? outer : (_hasMullion && !MergeDoorDivider(cell, leftNeighbor) ? SharedInset(cell, leftNeighbor) : 0d); var rightInset = rightNeighbor == null ? outer : (_hasMullion && !MergeDoorDivider(cell, rightNeighbor) ? SharedInset(cell, rightNeighbor) : 0d);
             var bottomInset = bottomNeighbor == null ? outer : (_hasMullion ? SharedInset(cell, bottomNeighbor) : 0d); var topInset = topNeighbor == null ? outer : (_hasMullion ? SharedInset(cell, topNeighbor) : 0d); var extra = Math.Min(12d, Math.Min(cell.Right - cell.Left, cell.Top - cell.Bottom) * .04d);
             var inner = ToPixels(new DoorWindowLayoutCell { Left = cell.Left + leftInset + extra, Right = cell.Right - rightInset - extra, Bottom = cell.Bottom + bottomInset + extra, Top = cell.Top - topInset - extra }); if (inner.Width < 10 || inner.Height < 10) return;
             if (value == "玻璃")

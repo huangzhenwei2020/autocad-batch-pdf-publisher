@@ -377,20 +377,8 @@ namespace BatchPdfPublisher
                 Application.ShowAlertDialog("批量门窗立面需要在已加载天正建筑的 AutoCAD 中使用。\r\n\r\n请通过“万落建筑工具启动器”选择天正建筑 + 对应 CAD 版本后重新打开图纸。");
                 return;
             }
-            var picked = document.Editor.GetEntity(new PromptEntityOptions("\n请选择天正门窗表："));
-            if (picked.Status != PromptStatus.OK) return;
-            DoorWindowScheduleReadResult source;
-            try
-            {
-                using (var transaction = document.Database.TransactionManager.StartTransaction())
-                    source = TianzhengDoorWindowService.Read(transaction.GetObject(picked.ObjectId, OpenMode.ForRead, false));
-            }
-            catch (System.Exception exception)
-            {
-                try { File.AppendAllText(Path.Combine(UserDataPaths.LogsDirectory, "door-window-elevation.log"), DateTime.Now.ToString("O") + " read: " + exception + Environment.NewLine); } catch { }
-                Application.ShowAlertDialog("读取天正门窗表失败：\r\n" + exception.Message + "\r\n\r\n请确认所选对象是由天正“门窗表”命令生成的表格。可把诊断日志发给我继续适配当前天正版本。");
-                return;
-            }
+            // MCLM 先打开主窗口，是否使用默认表或分层统计由窗口内设置；不再强制命令行先拾取。
+            DoorWindowScheduleReadResult source = new DoorWindowScheduleReadResult { SourceDxfName = "尚未拾取门窗表", Adapter = "等待用户选择" };
             try
             {
                 if (_doorWindowElevationForm != null && !_doorWindowElevationForm.IsDisposed) _doorWindowElevationForm.Close();

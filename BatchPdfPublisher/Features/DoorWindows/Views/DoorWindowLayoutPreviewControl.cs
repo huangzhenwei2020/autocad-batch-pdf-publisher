@@ -325,6 +325,7 @@ namespace BatchPdfPublisher.Views
             using (var framePen = new Pen(Color.FromArgb(40, 60, 80), Math.Max(1f, scale * 1.5f)))
             using (var mullionPen = new Pen(Color.FromArgb(60, 90, 120), Math.Max(0.8f, scale)))
             using (var holePen = new Pen(Color.FromArgb(160, 170, 180), Math.Max(0.7f, scale * 0.8f)) { DashStyle = DashStyle.Dash })
+            using (var sashPen = new Pen(Color.FromArgb(150, 150, 150), Math.Max(0.8f, scale)))
             using (var openingPen = new Pen(Color.FromArgb(0, 120, 180), Math.Max(0.7f, scale * 0.8f)) { DashStyle = DashStyle.Dash })
             using (var dimPen = new Pen(Color.FromArgb(80, 130, 80), Math.Max(0.7f, scale * 0.7f)))
             using (var smallFont = new Font("Microsoft YaHei UI", Math.Max(5.5f, Math.Min(7.5f, scale * 1.8f))))
@@ -343,7 +344,7 @@ namespace BatchPdfPublisher.Views
                     var x2 = originX + (float)line.X2 * scale;
                     var y2 = originY - (float)line.Y2 * scale;
                     if (!AllFinite(x1, y1, x2, y2)) continue;
-                    var pen = line.Role == DoorWindowLineRole.Hole ? holePen : line.Role == DoorWindowLineRole.Frame ? framePen : line.Role == DoorWindowLineRole.Mullion ? mullionPen : openingPen;
+                    var pen = line.Role == DoorWindowLineRole.Hole ? holePen : line.Role == DoorWindowLineRole.Frame ? framePen : line.Role == DoorWindowLineRole.Mullion ? mullionPen : line.Role == DoorWindowLineRole.SashFrame ? sashPen : openingPen;
                     graphics.DrawLine(pen, x1, y1, x2, y2);
                 }
 

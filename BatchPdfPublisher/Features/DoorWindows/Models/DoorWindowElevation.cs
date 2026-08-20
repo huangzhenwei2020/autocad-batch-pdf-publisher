@@ -11,7 +11,7 @@ namespace BatchPdfPublisher.Models
     {
         private static readonly string[] OrderedTypes =
         {
-            "普通门", "甲级防火门", "乙级防火门", "丙级防火门", "防火门（等级待确认）",
+            "普通门", "推拉门", "甲级防火门", "乙级防火门", "丙级防火门", "防火门（等级待确认）",
             "人防门", "百叶门", "门联窗",
             "普通窗", "高窗", "带形窗", "转角窗", "拱形窗", "凸窗", "百叶窗",
             "甲级防火窗", "乙级防火窗", "丙级防火窗", "防火窗（等级待确认）",
@@ -79,6 +79,18 @@ namespace BatchPdfPublisher.Models
         public bool HasMullion { get; set; } = true;
         public double MullionWidth { get; set; } = 50d;
         public string DoorFrameType { get; set; } = "N型";
+        public double DoorFrameWidth { get; set; } = 50d;
+        public string DoorFrameWidthDisplay
+        {
+            get { return DoorFrameWidth <= 0d ? "无" : DoorFrameWidth.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture); }
+            set
+            {
+                var text = (value ?? string.Empty).Trim();
+                if (text == "无" || text == "-" || text == "--" || text == "0") { DoorFrameWidth = 0d; return; }
+                double parsed;
+                if (double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out parsed)) DoorFrameWidth = Math.Max(0d, parsed);
+            }
+        }
         public int DrawingScale { get; set; } = 50;
         public string CustomColumnRatios { get; set; }
         public string CustomRowRatios { get; set; }
@@ -175,6 +187,7 @@ namespace BatchPdfPublisher.Models
         public bool HasMullion { get; set; } = true;
         public double MullionWidth { get; set; } = 50d;
         public string DoorFrameType { get; set; } = "N型";
+        public double DoorFrameWidth { get; set; } = 50d;
         public int DrawingScale { get; set; } = 50;
         public string CustomColumnRatios { get; set; }
         public string CustomRowRatios { get; set; }
@@ -227,6 +240,7 @@ namespace BatchPdfPublisher.Models
         public bool HasMullion { get; set; } = true;
         public double MullionWidth { get; set; } = 50d;
         public string DoorFrameType { get; set; } = "N型";
+        public double DoorFrameWidth { get; set; } = 50d;
         public string CustomColumnRatios { get; set; }
         public string CustomRowRatios { get; set; }
         public string CustomColumnWidths { get; set; }
@@ -256,6 +270,7 @@ namespace BatchPdfPublisher.Models
             item.HasMullion = HasMullion;
             item.MullionWidth = MullionWidth;
             item.DoorFrameType = string.IsNullOrWhiteSpace(DoorFrameType) ? "N型" : DoorFrameType;
+            item.DoorFrameWidth = Math.Max(0d, DoorFrameWidth);
             item.CustomColumnRatios = CustomColumnRatios;
             item.CustomRowRatios = CustomRowRatios;
             item.CustomColumnWidths = CustomColumnWidths;
@@ -297,6 +312,7 @@ namespace BatchPdfPublisher.Models
                 HasMullion = item.HasMullion,
                 MullionWidth = item.MullionWidth,
                 DoorFrameType = item.DoorFrameType,
+                DoorFrameWidth = item.DoorFrameWidth,
                 CustomColumnRatios = item.CustomColumnRatios,
                 CustomRowRatios = item.CustomRowRatios,
                 CustomColumnWidths = item.CustomColumnWidths,

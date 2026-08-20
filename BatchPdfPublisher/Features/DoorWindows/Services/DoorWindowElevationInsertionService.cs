@@ -51,7 +51,7 @@ namespace BatchPdfPublisher.Services
         private sealed class ElevationPlacement
         {
             public DoorWindowScheduleItem Item;
-            public double InnerGap, OuterGap, LowerExtent, BayLeftExtent, BayRightExtent;
+            public double InnerGap, OuterGap, LowerExtent, UpperExtent, BayLeftExtent, BayRightExtent;
             public double TotalWidth { get { return BayLeftExtent + Item.Width + BayRightExtent; } }
         }
 
@@ -137,8 +137,8 @@ namespace BatchPdfPublisher.Services
                 if (double.IsNaN(item.Width) || double.IsInfinity(item.Width) || double.IsNaN(item.Height) || double.IsInfinity(item.Height) || item.Width <= 0d || item.Height <= 0d)
                     throw new InvalidOperationException("门窗“" + (item.Code ?? "未编号") + "”的洞口尺寸无效，请重新读取门窗表。");
                 var placement = CreatePlacement(item, drawingScale);
-                var footprintWidth = placement.OuterGap + placement.TotalWidth + itemGap;
-                var footprintHeight = placement.LowerExtent + item.Height + itemGap;
+                var footprintWidth = placement.OuterGap * 2d + placement.TotalWidth + itemGap;
+                var footprintHeight = placement.UpperExtent + placement.LowerExtent + item.Height + itemGap;
                 // 任何一页都放不下（含未锁定项换页到后续页）才报错；锁定项在指定页放不下由下方页内检查专门提示。
                 if (footprintWidth > contentRight - contentLeft || footprintHeight > contentTop - contentBottom)
                     throw new InvalidOperationException("门窗“" + item.Code + "”在 1:" + scale + " 时放不进所选 " + frame.PaperDisplay + " 图框，请选择更大或加长图框。");
@@ -153,7 +153,7 @@ namespace BatchPdfPublisher.Services
                     if (locked) throw new InvalidOperationException("门窗“" + item.Code + "”锁定在第 " + (page + 1) + " 页，但该页剩余空间放不下。请解锁该门窗或调整顺序。");
                     return false;
                 }
-                plan.Slots.Add(new DoorWindowLayoutSlot { Item = item, Page = page, X = cursor.X + placement.OuterGap + placement.BayLeftExtent, Y = cursor.Y - item.Height, FootprintWidth = footprintWidth, FootprintHeight = footprintHeight });
+                plan.Slots.Add(new DoorWindowLayoutSlot { Item = item, Page = page, X = cursor.X + placement.OuterGap + placement.BayLeftExtent, Y = cursor.Y - placement.UpperExtent - item.Height, FootprintWidth = footprintWidth, FootprintHeight = footprintHeight });
                 cursor.X += footprintWidth + itemGap; cursor.RowHeight = Math.Max(cursor.RowHeight, footprintHeight);
                 if (page > maxPage) maxPage = page;
                 return true;
@@ -300,34 +300,39 @@ namespace BatchPdfPublisher.Services
         /// <summary>构建紧凑门窗表 Table（未加入图形）。Position 为表格左上角；插入后可直接 MOVE。</summary>
         private static Table BuildScheduleTable(Database database, IList<DoorWindowScheduleItem> items, int scale, Point3d position)
         {
+            var floorNames = items.SelectMany(x => x.FloorQuantities).Select(x => x.FloorName).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.CurrentCultureIgnoreCase).ToList();
+            var floorMode = floorNames.Count > 0;
+            var columnCount = 8 + floorNames.Count;
             var table = new Table { TableStyle = database.Tablestyle, Position = position };
-            table.SetSize(items.Count + 2, 8);
+            table.SetSize(items.Count + 2, columnCount);
             var rowHeight = 5.5d * scale;
             table.SetRowHeight(rowHeight);
             // 按实际内容估算列宽，同时设置上下限，避免短内容浪费空间、长内容把表格撑满图纸。
-            var widths = new[]
+            var widths = new List<double>
             {
                 8d,
                 ContentWidth(items.Select(x => x.ElevationType), 16d, 25d),
                 ContentWidth(items.Select(x => x.Code), 15d, 25d),
                 ContentWidth(items.Select(x => x.SizeText), 22d, 30d),
-                16d,
-                10d,
-                ContentWidth(items.Select(x => string.IsNullOrWhiteSpace(x.AtlasName) ? DoorWindowElevationSuggestionService.InferAtlas(x.Code, x.ElevationType, x.SourceNote) : x.AtlasName), 30d, 42d),
-                ContentWidth(items.Select(x => x.Remarks ?? x.SourceNote), 20d, 34d)
+                16d
             };
+            foreach (var floorName in floorNames) widths.Add(Math.Max(13d, Math.Min(24d, 5d + floorName.Length * 2.2d)));
+            widths.Add(floorMode ? 14d : 10d);
+            widths.Add(ContentWidth(items.Select(x => string.IsNullOrWhiteSpace(x.AtlasName) ? DoorWindowElevationSuggestionService.InferAtlas(x.Code, x.ElevationType, x.SourceNote) : x.AtlasName), 30d, 42d));
+            widths.Add(ContentWidth(items.Select(x => x.Remarks ?? x.SourceNote), 20d, 34d));
             var total = widths.Sum();
-            const double maximumPaperWidth = 165d;
+            var maximumPaperWidth = floorMode ? Math.Max(165d, 145d + floorNames.Count * 15d) : 165d;
             if (total > maximumPaperWidth)
             {
-                var fixedWidth = widths[0] + widths[4] + widths[5];
+                var fixedWidth = widths[0] + widths[4] + widths.Skip(5).Take(floorNames.Count + 1).Sum();
                 var factor = (maximumPaperWidth - fixedWidth) / Math.Max(1d, total - fixedWidth);
-                foreach (var column in new[] { 1, 2, 3, 6, 7 }) widths[column] *= factor;
+                foreach (var column in new[] { 1, 2, 3, columnCount - 2, columnCount - 1 }) widths[column] *= factor;
             }
-            for (var column = 0; column < widths.Length; column++) table.Columns[column].Width = widths[column] * scale;
-            table.MergeCells(CellRange.Create(table, 0, 0, 0, 7)); table.Cells[0, 0].TextString = "门窗表";
-            var headers = new[] { "序号", "类型", "编号", "洞口尺寸", "离地高度", "数量", "图集名称", "备注" };
-            for (var column = 0; column < headers.Length; column++) table.Cells[1, column].TextString = headers[column];
+            for (var column = 0; column < widths.Count; column++) table.Columns[column].Width = widths[column] * scale;
+            table.MergeCells(CellRange.Create(table, 0, 0, 0, columnCount - 1)); table.Cells[0, 0].TextString = "门窗表";
+            var headers = new List<string> { "序号", "类型", "编号", "洞口尺寸", "离地高度" };
+            headers.AddRange(floorNames); headers.Add(floorMode ? "总数量" : "数量"); headers.Add("图集名称"); headers.Add("备注");
+            for (var column = 0; column < headers.Count; column++) table.Cells[1, column].TextString = headers[column];
             for (var index = 0; index < items.Count; index++)
             {
                 var item = items[index]; var row = index + 2;
@@ -336,11 +341,17 @@ namespace BatchPdfPublisher.Services
                 table.Cells[row, 2].TextString = item.Code ?? string.Empty;
                 table.Cells[row, 3].TextString = item.SizeText;
                 table.Cells[row, 4].TextString = item.SillHeightSuppressed || !(item.ElevationType ?? string.Empty).Contains("窗") ? "—" : item.SillHeight.ToString("0.##", CultureInfo.InvariantCulture);
-                table.Cells[row, 5].TextString = Math.Max(1, item.Quantity).ToString(CultureInfo.InvariantCulture);
-                table.Cells[row, 6].TextString = string.IsNullOrWhiteSpace(item.AtlasName) ? DoorWindowElevationSuggestionService.InferAtlas(item.Code, item.ElevationType, item.SourceNote) : DoorWindowElevationSuggestionService.NormalizeAtlasName(item.AtlasName);
-                table.Cells[row, 7].TextString = item.Remarks ?? item.SourceNote ?? string.Empty;
+                var column = 5;
+                foreach (var floorName in floorNames)
+                {
+                    var quantity = item.FloorQuantities.FirstOrDefault(x => string.Equals(x.FloorName, floorName, StringComparison.CurrentCultureIgnoreCase));
+                    table.Cells[row, column++].TextString = quantity == null || quantity.PerFloorQuantity <= 0 ? "—" : quantity.DisplayText;
+                }
+                table.Cells[row, column++].TextString = (floorMode ? Math.Max(0, item.Quantity) : Math.Max(1, item.Quantity)).ToString(CultureInfo.InvariantCulture);
+                table.Cells[row, column++].TextString = string.IsNullOrWhiteSpace(item.AtlasName) ? DoorWindowElevationSuggestionService.InferAtlas(item.Code, item.ElevationType, item.SourceNote) : DoorWindowElevationSuggestionService.NormalizeAtlasName(item.AtlasName);
+                table.Cells[row, column].TextString = item.Remarks ?? item.SourceNote ?? string.Empty;
             }
-            for (var row = 0; row < items.Count + 2; row++) for (var column = 0; column < 8; column++)
+            for (var row = 0; row < items.Count + 2; row++) for (var column = 0; column < columnCount; column++)
             { table.Cells[row, column].TextHeight = 2.2d * scale; table.Cells[row, column].Alignment = CellAlignment.MiddleCenter; }
             table.Rows[0].Height = 6.5d * scale;
             table.Rows[1].Height = 6d * scale;
@@ -389,11 +400,11 @@ namespace BatchPdfPublisher.Services
         private static ElevationPlacement CreatePlacement(DoorWindowScheduleItem item, int drawingScale)
         {
             var geometry = DoorWindowElevationGeometryBuilder.Build(item);
-            // 标注分两层：内层为安装缝+全部分段的连续标注，外层为总尺寸。
-            // 内层尺寸界线长 4、相邻尺寸线间距 4（1:1 纸面值 × 出图比例）。
-            var innerGap = Math.Max(4d * drawingScale, 2d * drawingScale);
-            var outerGap = innerGap + 4d * drawingScale;
-            return new ElevationPlacement { Item = item, InnerGap = innerGap, OuterGap = outerGap, LowerExtent = outerGap + 12d * drawingScale, BayLeftExtent = geometry.BayLeftExtent, BayRightExtent = geometry.BayRightExtent };
+            // 尺寸线保持原有纸面距离：内层 4 mm、外层 8 mm。
+            var innerGap = 4d * drawingScale;
+            var outerGap = 8d * drawingScale;
+            var upperExtent = geometry.BayLeftExtent > 0d || geometry.BayRightExtent > 0d ? 11d * drawingScale : 0d;
+            return new ElevationPlacement { Item = item, InnerGap = innerGap, OuterGap = outerGap, LowerExtent = outerGap + 18d * drawingScale, UpperExtent = upperExtent, BayLeftExtent = geometry.BayLeftExtent, BayRightExtent = geometry.BayRightExtent };
         }
 
         private static void InsertElevation(ElevationPlacement elevation, Point3d origin, int drawingScale, BlockTableRecord space, Transaction transaction, DraftingStandardResources resources, ObjectId dimensionStyle, string existingGroupId = null, bool useTianzhengTitle = true)
@@ -404,14 +415,17 @@ namespace BatchPdfPublisher.Services
             var innerGap = elevation.InnerGap; var outerGap = elevation.OuterGap;
             // 内层：安装缝与全部分段连成一条连续标注直线；外层：总宽/总高。
             AddLayerDimensions(geometry, origin, innerGap, outerGap, space, transaction, resources.AnnotationDimensionLayerId, dimensionStyle, metadata, item);
-            var titleCenter = new Point3d(origin.X + item.Width / 2d, origin.Y - outerGap - 5d * drawingScale, origin.Z);
+            AddBayFoldLeaders(geometry, origin, drawingScale, space, transaction, resources, metadata);
+            var overallLeft = origin.X - geometry.BayLeftExtent; var overallRight = origin.X + item.Width + geometry.BayRightExtent;
+            // 只下移图名，尺寸线位置不变，避免图名与最外层尺寸文字打架。
+            var titleCenter = new Point3d((overallLeft + overallRight) / 2d, origin.Y - outerGap - 11d * drawingScale, origin.Z);
             // 图名只写编号（不附加" 立面"）：与天正图名标注模板（如 MLC7427 / 1:50）一致。
             var titleText = item.Code ?? "未编号";
             if (useTianzhengTitle)
             {
                 // 天正图名标注：优先克隆图纸中已有的 TCH_DRAWINGNAME 模板并写入文字/比例
                 // （更新比例功能已验证的 COM 写法），无模板或写入失败时回退"天正图名样式"。
-                var insertedNative = TianzhengTitleService.TryInsertNativeTitle(space.Database, space, transaction, titleCenter, titleText, drawingScale, item.Width, metadata);
+                var insertedNative = TianzhengTitleService.TryInsertNativeTitle(space.Database, space, transaction, titleCenter, titleText, drawingScale, overallRight - overallLeft, metadata);
                 if (!insertedNative)
                 {
                     TianzhengTitleService.InsertTitle(space, transaction, titleCenter, titleText, drawingScale, resources.TitleTextStyleId, resources.AnnotationTextStyleId, resources.AnnotationTextLayerId, metadata);
@@ -484,12 +498,14 @@ namespace BatchPdfPublisher.Services
                     if (head.Count > 2)
                     {
                         var polyline = new Polyline(head.Count) { LayerId = layer, Closed = closed };
+                        if (roleGroup.Key == DoorWindowLineRole.SashFrame) polyline.ColorIndex = 8;
                         for (var index = 0; index < head.Count; index++) polyline.AddVertexAt(index, new Point2d(origin.X + head[index].X, origin.Y + head[index].Y), 0d, 0d, 0d);
                         AppendTagged(space, transaction, polyline, metadata);
                     }
                     else if (head.Count == 2)
                     {
                         var line = new Line(new Point3d(origin.X + head[0].X, origin.Y + head[0].Y, origin.Z), new Point3d(origin.X + head[1].X, origin.Y + head[1].Y, origin.Z)) { LayerId = layer };
+                        if (roleGroup.Key == DoorWindowLineRole.SashFrame) line.ColorIndex = 8;
                         AppendTagged(space, transaction, line, metadata);
                     }
                 }
@@ -565,8 +581,8 @@ namespace BatchPdfPublisher.Services
             foreach (var elevation in elevations)
             {
                 InsertElevation(elevation, new Point3d(x + elevation.BayLeftExtent, origin.Y, origin.Z), scale, space, transaction, resources, dimensionStyle, null, useTianzhengTitle);
-                // 连续排列间距按标注外框算：左侧尺寸标注 OuterGap + 洞口宽 + 间距。
-                x += elevation.OuterGap + elevation.TotalWidth + Math.Max(16d * scale, 800d);
+                // 连续排列按左右两侧标注外框共同占位。
+                x += elevation.OuterGap * 2d + elevation.TotalWidth + Math.Max(16d * scale, 800d);
                 completed++; if (progress != null) progress(completed, elevations.Count, elevation.Item.Code);
             }
         }
@@ -679,36 +695,85 @@ namespace BatchPdfPublisher.Services
             const double tolerance = .05d;
             var gap = item.HasInstallationGap ? Math.Max(0d, item.InstallationGap) : 0d;
             var innerY = origin.Y - innerGap; var outerY = origin.Y - outerGap;
-            var innerX = origin.X - innerGap; var outerX = origin.X - outerGap;
+            var overallLeft = -geometry.BayLeftExtent;
+            var overallRight = item.Width + geometry.BayRightExtent;
+            var innerX = origin.X + overallLeft - innerGap; var outerX = origin.X + overallLeft - outerGap;
 
-            // 内层水平：0 → 安装缝 → 窗框左 → 分格边界 → 窗框右 → 安装缝 → 总宽。
-            var xs = new List<double> { 0d, gap, item.Width - gap, item.Width };
+            // 水平连续标注把左右转折面与正面作为同一个凸窗整体处理。
+            var xs = new List<double> { overallLeft, 0d, gap, item.Width - gap, item.Width, overallRight };
             foreach (var cell in geometry.Cells) { xs.Add(cell.Left); xs.Add(cell.Right); }
-            AddContinuousRun(space, transaction, origin, xs, true, innerY, layer, style, metadata, tolerance);
+            AddContinuousRun(space, transaction, origin, xs, true, innerY, 0d, layer, style, metadata, tolerance);
 
-            // 内层垂直：0 → 安装缝 → 窗框下 → 分格边界 → 窗框上 → 安装缝 → 总高。
-            var ys = new List<double> { 0d, gap, item.Height - gap, item.Height };
-            foreach (var cell in geometry.Cells) { ys.Add(cell.Bottom); ys.Add(cell.Top); }
-            AddContinuousRun(space, transaction, origin, ys, false, innerX, layer, style, metadata, tolerance);
+            // 普通门窗在左侧标注；凸窗左右展开面各自标注竖向分格，避免不同面的分格尺寸混在一条链里。
+            if (geometry.BayLeftExtent <= tolerance && geometry.BayRightExtent <= tolerance)
+            {
+                var ys = new List<double> { 0d, gap, item.Height - gap, item.Height };
+                foreach (var cell in geometry.Cells) { ys.Add(cell.Bottom); ys.Add(cell.Top); }
+                AddContinuousRun(space, transaction, origin, ys, false, innerX, 0d, layer, style, metadata, tolerance);
+            }
+            else
+            {
+                var leftYs = new List<double> { 0d, item.Height };
+                foreach (var cell in geometry.Cells.Where(cell => cell.Right <= tolerance)) { leftYs.Add(cell.Bottom); leftYs.Add(cell.Top); }
+                AddContinuousRun(space, transaction, origin, leftYs, false, innerX, overallLeft, layer, style, metadata, tolerance);
 
-            // 外层：总宽、总高。
-            AppendTagged(space, transaction, new AlignedDimension(origin, new Point3d(origin.X + item.Width, origin.Y, origin.Z), new Point3d(origin.X + item.Width / 2d, outerY, origin.Z), string.Empty, style) { LayerId = layer }, metadata);
-            AppendTagged(space, transaction, new AlignedDimension(origin, new Point3d(origin.X, origin.Y + item.Height, origin.Z), new Point3d(outerX, origin.Y + item.Height / 2d, origin.Z), string.Empty, style) { LayerId = layer }, metadata);
+                var rightYs = new List<double> { 0d, item.Height };
+                foreach (var cell in geometry.Cells.Where(cell => cell.Left >= item.Width - tolerance)) { rightYs.Add(cell.Bottom); rightYs.Add(cell.Top); }
+                var rightDimensionX = origin.X + overallRight + innerGap;
+                AddContinuousRun(space, transaction, origin, rightYs, false, rightDimensionX, overallRight, layer, style, metadata, tolerance);
+            }
+
+            // 外层：总宽取左右展开面的总和，总高以整体最左边为尺寸基准。
+            var overallStart = new Point3d(origin.X + overallLeft, origin.Y, origin.Z);
+            var overallEnd = new Point3d(origin.X + overallRight, origin.Y, origin.Z);
+            AppendTagged(space, transaction, new RotatedDimension(0d, overallStart, overallEnd, new Point3d((overallStart.X + overallEnd.X) / 2d, outerY, origin.Z), string.Empty, style) { LayerId = layer }, metadata);
+            AppendTagged(space, transaction, new RotatedDimension(Math.PI / 2d, overallStart, new Point3d(overallStart.X, origin.Y + item.Height, origin.Z), new Point3d(outerX, origin.Y + item.Height / 2d, origin.Z), string.Empty, style) { LayerId = layer }, metadata);
         }
 
-        private static void AddContinuousRun(BlockTableRecord space, Transaction transaction, Point3d origin, IEnumerable<double> coordinates, bool horizontal, double lineCoordinate, ObjectId layer, ObjectId style, DoorWindowElevationMetadata metadata, double tolerance)
+        /// <summary>在凸窗正面与两侧展开面的分界线上分别用引线注明“展开线”。</summary>
+        private static void AddBayFoldLeaders(DoorWindowElevationGeometry geometry, Point3d origin, int scale, BlockTableRecord space, Transaction transaction, DraftingStandardResources resources, DoorWindowElevationMetadata metadata)
+        {
+            if (geometry.BayLeftExtent <= .01d && geometry.BayRightExtent <= .01d) return;
+            var textHeight = 2.5d * scale;
+            var elbowRise = 5d * scale;
+            var horizontal = 7d * scale;
+            Add(0d, true);
+            Add(geometry.HoleWidth, false);
+
+            void Add(double localX, bool toLeft)
+            {
+                if (toLeft && geometry.BayLeftExtent <= .01d || !toLeft && geometry.BayRightExtent <= .01d) return;
+                var target = new Point3d(origin.X + localX, origin.Y + geometry.HoleHeight * .82d, origin.Z);
+                var elbow = new Point3d(target.X + (toLeft ? -horizontal : horizontal), origin.Y + geometry.HoleHeight + elbowRise, origin.Z);
+                var textPoint = new Point3d(elbow.X + (toLeft ? -horizontal * .55d : horizontal * .55d), elbow.Y, origin.Z);
+                var leader = new Leader { LayerId = resources.AnnotationTextLayerId, HasArrowHead = true };
+                leader.AppendVertex(target); leader.AppendVertex(elbow); leader.AppendVertex(textPoint);
+                AppendTagged(space, transaction, leader, metadata);
+                var note = new MText
+                {
+                    Contents = "展开线", Location = textPoint,
+                    Attachment = toLeft ? AttachmentPoint.MiddleRight : AttachmentPoint.MiddleLeft,
+                    TextHeight = textHeight, TextStyleId = resources.AnnotationTextStyleId,
+                    LayerId = resources.AnnotationTextLayerId
+                };
+                AppendTagged(space, transaction, note, metadata);
+            }
+        }
+
+        private static void AddContinuousRun(BlockTableRecord space, Transaction transaction, Point3d origin, IEnumerable<double> coordinates, bool horizontal, double lineCoordinate, double extensionBase, ObjectId layer, ObjectId style, DoorWindowElevationMetadata metadata, double tolerance)
         {
             var points = coordinates.Select(x => Math.Round(x, 3)).Distinct().OrderBy(x => x).ToList();
             for (var index = 0; index + 1 < points.Count; index++)
             {
                 var first = points[index]; var second = points[index + 1];
                 if (Math.Abs(second - first) <= tolerance) continue;
-                var start = horizontal ? new Point3d(origin.X + first, origin.Y, origin.Z) : new Point3d(origin.X, origin.Y + first, origin.Z);
-                var end = horizontal ? new Point3d(origin.X + second, origin.Y, origin.Z) : new Point3d(origin.X, origin.Y + second, origin.Z);
+                var start = horizontal ? new Point3d(origin.X + first, origin.Y + extensionBase, origin.Z) : new Point3d(origin.X + extensionBase, origin.Y + first, origin.Z);
+                var end = horizontal ? new Point3d(origin.X + second, origin.Y + extensionBase, origin.Z) : new Point3d(origin.X + extensionBase, origin.Y + second, origin.Z);
                 var textPoint = horizontal
                     ? new Point3d(origin.X + (first + second) / 2d, lineCoordinate, origin.Z)
                     : new Point3d(lineCoordinate, origin.Y + (first + second) / 2d, origin.Z);
-                AppendTagged(space, transaction, new AlignedDimension(start, end, textPoint, string.Empty, style) { LayerId = layer }, metadata);
+                var rotation = horizontal ? 0d : Math.PI / 2d;
+                AppendTagged(space, transaction, new RotatedDimension(rotation, start, end, textPoint, string.Empty, style) { LayerId = layer }, metadata);
             }
         }
 

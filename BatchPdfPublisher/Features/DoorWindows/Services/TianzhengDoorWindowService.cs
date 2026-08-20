@@ -445,6 +445,7 @@ namespace BatchPdfPublisher.Services
             if (value.Contains("百叶门")) return "百叶门";
             if (value.Contains("防火窗")) return "防火窗（等级待确认）";
             if (value.Contains("防火门")) return "防火门（等级待确认）";
+            if (value.Contains("推拉门")) return "推拉门";
             if (value.Contains("窗")) return "普通窗";
             if (value.Contains("门")) return "普通门";
             return "待确认";
@@ -453,7 +454,7 @@ namespace BatchPdfPublisher.Services
         private static bool IsCategoryText(string value)
         {
             var text = Clean(value);
-            return text.Contains("普通门") || text.Contains("普通窗") || text.Contains("防火门") || text.Contains("防火窗") || text.Contains("门联窗") || text.Contains("凸窗") || text.Contains("百叶");
+            return text.Contains("普通门") || text.Contains("推拉门") || text.Contains("普通窗") || text.Contains("防火门") || text.Contains("防火窗") || text.Contains("门联窗") || text.Contains("凸窗") || text.Contains("百叶");
         }
 
         private static string InferCompactCode(IEnumerable<string> prefixCells)

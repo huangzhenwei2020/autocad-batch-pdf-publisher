@@ -44,6 +44,8 @@ namespace BatchPdfPublisher.Services
         public bool? HasMullion { get; set; }
         [DataMember(EmitDefaultValue = false)]
         public string DoorFrameType { get; set; }
+        [DataMember(EmitDefaultValue = false)]
+        public double? DoorFrameWidth { get; set; }
         [DataMember]
         public string CustomColumnRatios { get; set; }
         [DataMember]
@@ -68,6 +70,10 @@ namespace BatchPdfPublisher.Services
         public double? BayLeftDepth { get; set; }
         [DataMember(EmitDefaultValue = false)]
         public double? BayRightDepth { get; set; }
+        [DataMember(EmitDefaultValue = false)]
+        public string BayLeftCellLayout { get; set; }
+        [DataMember(EmitDefaultValue = false)]
+        public string BayRightCellLayout { get; set; }
         [DataMember]
         public int DrawingScale { get; set; }
         [DataMember]
@@ -97,6 +103,7 @@ namespace BatchPdfPublisher.Services
                 HasMullion = item.HasMullion,
                 MullionWidth = item.MullionWidth,
                 DoorFrameType = item.DoorFrameType,
+                DoorFrameWidth = item.DoorFrameWidth,
                 CustomColumnRatios = item.CustomColumnRatios,
                 CustomRowRatios = item.CustomRowRatios,
                 CustomColumnWidths = item.CustomColumnWidths,
@@ -109,6 +116,8 @@ namespace BatchPdfPublisher.Services
                 BayRightSide = item.BayRightSide,
                 BayLeftDepth = item.BayLeftDepth,
                 BayRightDepth = item.BayRightDepth,
+                BayLeftCellLayout = item.BayLeftCellLayout,
+                BayRightCellLayout = item.BayRightCellLayout,
                 DrawingScale = scale,
                 OriginX = origin.X,
                 OriginY = origin.Y,
@@ -135,6 +144,7 @@ namespace BatchPdfPublisher.Services
                 HasMullion = HasMullion ?? true,
                 MullionWidth = MullionWidth,
                 DoorFrameType = string.IsNullOrWhiteSpace(DoorFrameType) ? "N型" : DoorFrameType,
+                DoorFrameWidth = DoorFrameWidth ?? 50d,
                 CustomColumnRatios = CustomColumnRatios,
                 CustomRowRatios = CustomRowRatios,
                 CustomColumnWidths = CustomColumnWidths,
@@ -147,6 +157,8 @@ namespace BatchPdfPublisher.Services
                 BayRightSide = string.IsNullOrWhiteSpace(BayRightSide) ? "墙" : BayRightSide,
                 BayLeftDepth = BayLeftDepth ?? 600d,
                 BayRightDepth = BayRightDepth ?? 600d,
+                BayLeftCellLayout = BayLeftCellLayout,
+                BayRightCellLayout = BayRightCellLayout,
                 DrawingScale = DrawingScale,
                 Status = "参数完整，可生成"
             };

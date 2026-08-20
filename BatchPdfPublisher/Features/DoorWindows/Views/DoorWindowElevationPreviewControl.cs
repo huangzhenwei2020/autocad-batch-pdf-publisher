@@ -58,12 +58,13 @@ namespace BatchPdfPublisher.Views
             using (var holePen = new Pen(Color.FromArgb(155, 165, 176), 1f) { DashStyle = DashStyle.Dash })
             using (var framePen = new Pen(Color.FromArgb(28, 40, 52), 2.2f))
             using (var mullionPen = new Pen(Color.FromArgb(28, 40, 52), 1.5f))
+            using (var sashPen = new Pen(Color.FromArgb(150, 150, 150), 1.25f))
             using (var openingPen = new Pen(Color.FromArgb(23, 116, 178), 1.25f) { DashStyle = DashStyle.Dash })
             using (var materialPen = new Pen(Color.FromArgb(0, 165, 185), 1.15f))
             {
                 foreach (var line in geometry.Lines)
                 {
-                    var pen = line.Role == DoorWindowLineRole.Hole ? holePen : line.Role == DoorWindowLineRole.Frame ? framePen : line.Role == DoorWindowLineRole.Mullion ? mullionPen : line.Role == DoorWindowLineRole.Material ? materialPen : openingPen;
+                    var pen = line.Role == DoorWindowLineRole.Hole ? holePen : line.Role == DoorWindowLineRole.Frame ? framePen : line.Role == DoorWindowLineRole.Mullion ? mullionPen : line.Role == DoorWindowLineRole.SashFrame ? sashPen : line.Role == DoorWindowLineRole.Material ? materialPen : openingPen;
                     var x1 = X(line.X1); var y1 = Y(line.Y1); var x2 = X(line.X2); var y2 = Y(line.Y2);
                     if (!AllFinite(x1, y1, x2, y2)) continue;
                     graphics.DrawLine(pen, x1, y1, x2, y2);
