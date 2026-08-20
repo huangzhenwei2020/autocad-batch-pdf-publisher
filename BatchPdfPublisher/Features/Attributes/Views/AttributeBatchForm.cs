@@ -469,7 +469,7 @@ namespace BatchPdfPublisher.Views
         }
         private void OpenFailureLog()
         {
-            var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "BatchPdfPublisher.attribute.log");
+            var path = System.IO.Path.Combine(UserDataPaths.LogsDirectory, "BatchPdfPublisher.attribute.log");
             if (!System.IO.File.Exists(path)) { MessageBox.Show(this, "当前没有属性修改失败日志。", "批量属性", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
             try { Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); }
             catch (Exception ex) { MessageBox.Show(this, "无法打开日志：" + ex.Message, "批量属性", MessageBoxButtons.OK, MessageBoxIcon.Warning); }

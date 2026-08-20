@@ -6,6 +6,8 @@ namespace BatchPdfPublisher.Models
     {
         public string RegistrationId { get; set; }
         public string BlockName { get; set; }
+        /// <summary>相对于“用户配置文件”的便携图框模板路径。</summary>
+        public string TemplateRelativePath { get; set; }
         public string AttributeTagSignature { get; set; }
         public string DefinitionSignature { get; set; }
         public double ReferenceAspectRatio { get; set; }

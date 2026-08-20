@@ -128,11 +128,7 @@ namespace CadArchSpec.Host.AutoCAD2026
         private async Task InitializeWebViewAsync()
         {
             var webAssetsPath = WebAssetLocator.Find(Assembly.GetExecutingAssembly().Location);
-            var userDataPath = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "CadArchSpecEditor",
-                "WebView2",
-                "AutoCAD2026");
+            var userDataPath = Path.Combine(PortableDataPaths.DirectoryFor("WebView2"), "AutoCAD2026");
             Directory.CreateDirectory(userDataPath);
 
             var environment = await CoreWebView2Environment.CreateAsync(null, userDataPath);
@@ -424,10 +420,7 @@ namespace CadArchSpec.Host.AutoCAD2026
         {
             try
             {
-                var logDirectory = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "CadArchSpecEditor",
-                    "Logs");
+                var logDirectory = PortableDataPaths.DirectoryFor("Logs");
                 Directory.CreateDirectory(logDirectory);
                 var logPath = Path.Combine(logDirectory, "host-" + DateTime.Now.ToString("yyyyMMdd") + ".log");
                 File.AppendAllText(

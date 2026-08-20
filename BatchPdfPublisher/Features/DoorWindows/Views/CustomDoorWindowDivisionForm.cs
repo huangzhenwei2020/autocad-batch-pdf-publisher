@@ -1,7 +1,10 @@
 using BatchPdfPublisher.Models;
+using BatchPdfPublisher.Services;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Windows.Forms;
 
@@ -19,6 +22,7 @@ namespace BatchPdfPublisher.Views
         private DoorWindowLayoutEditorControl _activeEditor;
         private readonly NumericUpDown _selectedWidth = SizeBox();
         private readonly NumericUpDown _selectedHeight = SizeBox();
+        private readonly NumericUpDown _mouseSnapStep = SnapStepBox();
         private readonly ComboBox _opening = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 100, Height = 28 };
         private readonly ComboBox _material = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 82, Height = 28 };
         private readonly CheckBox _isDoor = new CheckBox { Text = "当前面板为门", AutoSize = true, Margin = new Padding(10, 7, 4, 0) };
@@ -72,11 +76,12 @@ namespace BatchPdfPublisher.Views
             construction.Controls.Add(_hasInstallationGap); construction.Controls.Add(_installationGap); construction.Controls.Add(LabelFor("mm"));
             construction.Controls.Add(_hasOuterFrame); construction.Controls.Add(_outerFrameWidth); construction.Controls.Add(LabelFor("mm"));
             construction.Controls.Add(_hasMullion); construction.Controls.Add(_mullionWidth); construction.Controls.Add(LabelFor("mm（开启/推拉相邻处自动按 2 倍处理）")); header.Controls.Add(construction, 0, 2);
+            construction.Controls.Add(LabelFor("鼠标移动步长")); construction.Controls.Add(_mouseSnapStep); construction.Controls.Add(LabelFor("mm（0=不吸附）"));
             var bay = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
             _bayLeftSide.Items.AddRange(new object[] { "墙", "窗" }); _bayRightSide.Items.AddRange(new object[] { "墙", "窗" });
             bay.Controls.Add(LabelFor("凸窗左转折")); bay.Controls.Add(_bayLeftSide); bay.Controls.Add(_bayLeftDepth); bay.Controls.Add(LabelFor("mm"));
             bay.Controls.Add(LabelFor("右转折")); bay.Controls.Add(_bayRightSide); bay.Controls.Add(_bayRightDepth); bay.Controls.Add(LabelFor("mm（可设：墙+窗、窗+窗、窗+墙）")); header.Controls.Add(bay, 0, 3);
-            header.Controls.Add(new Label { Text = "单击选择；Shift+单击增加或取消选择；拖动分隔线调整。宽度从左到右、高度从上到下确定，右下角面板承接最终剩余尺寸。", Dock = DockStyle.Fill, ForeColor = Color.DimGray, TextAlign = ContentAlignment.MiddleLeft }, 0, 4);
+            header.Controls.Add(new Label { Text = "单击选择；Shift+单击增加或取消选择；拖动分隔线按自定义步长调整。宽度从左到右、高度从上到下确定，右下角面板承接最终剩余尺寸。", Dock = DockStyle.Fill, ForeColor = Color.DimGray, TextAlign = ContentAlignment.MiddleLeft }, 0, 4);
             root.Controls.Add(header, 0, 0);
             _faces.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25)); _faces.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50)); _faces.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
             _faces.Controls.Add(FaceGroup("左转折面", _leftEditor), 0, 0); _faces.Controls.Add(FaceGroup("正面", _editor), 1, 0); _faces.Controls.Add(FaceGroup("右转折面", _rightEditor), 2, 0);
@@ -89,6 +94,8 @@ namespace BatchPdfPublisher.Views
             var cancel = ButtonFor("取消"); cancel.Click += (s, e) => Close(); actions.Controls.Add(cancel); footer.Controls.Add(actions, 1, 0); root.Controls.Add(footer, 0, 2); Controls.Add(root);
 
             WireEditor(_leftEditor); WireEditor(_editor); WireEditor(_rightEditor);
+            _mouseSnapStep.Value = ClampDecimal(LoadMouseSnapStep(), _mouseSnapStep); ApplyMouseSnapStep();
+            _mouseSnapStep.ValueChanged += (s, e) => { ApplyMouseSnapStep(); SaveMouseSnapStep((double)_mouseSnapStep.Value); };
             _selectedWidth.ValueChanged += (s, e) => { if (_updating) return; if (!ActiveEditor().SetSelectedWidth((double)_selectedWidth.Value)) ShowRemainderHint("宽度"); };
             _selectedHeight.ValueChanged += (s, e) => { if (_updating) return; if (!ActiveEditor().SetSelectedHeight((double)_selectedHeight.Value)) ShowRemainderHint("高度"); };
             _opening.SelectedIndexChanged += (s, e) => { if (!_updating) ActiveEditor().SetSelectedOpening(Convert.ToString(_opening.SelectedItem)); };
@@ -237,6 +244,7 @@ namespace BatchPdfPublisher.Views
         }
 
         private DoorWindowLayoutEditorControl ActiveEditor() { return _activeEditor ?? _editor; }
+        private void ApplyMouseSnapStep() { var step = (double)_mouseSnapStep.Value; _editor.SetSnapStep(step); _leftEditor.SetSnapStep(step); _rightEditor.SetSnapStep(step); }
         private void WireEditor(DoorWindowLayoutEditorControl editor)
         {
             editor.LayoutChanged += (s, e) => { _activeEditor = editor; ValidateLayout(); };
@@ -285,11 +293,19 @@ namespace BatchPdfPublisher.Views
         }
 
         private static NumericUpDown SizeBox() { return new NumericUpDown { Minimum = 1, Maximum = 100000, DecimalPlaces = 1, Increment = 10, Width = 82, Height = 28 }; }
+        private static NumericUpDown SnapStepBox() { return new NumericUpDown { Minimum = 0, Maximum = 1000, DecimalPlaces = 2, Increment = 1, Width = 68, Height = 28, Value = 5 }; }
         private static NumericUpDown ProfileBox() { return new NumericUpDown { Minimum = 0, Maximum = 500, DecimalPlaces = 1, Increment = 5, Width = 68, Height = 28, Value = 50 }; }
         private static NumericUpDown DepthBox() { return new NumericUpDown { Minimum = 50, Maximum = 5000, DecimalPlaces = 1, Increment = 50, Width = 78, Height = 28, Value = 600 }; }
         private static CheckBox OptionBox(string text) { return new CheckBox { Text = text, Checked = true, AutoSize = true, Margin = new Padding(10, 7, 2, 0) }; }
         private static decimal ClampDecimal(double value, NumericUpDown box) { return Math.Max(box.Minimum, Math.Min(box.Maximum, (decimal)value)); }
         private static Label LabelFor(string text) { return new Label { Text = text, AutoSize = true, Margin = new Padding(10, 7, 3, 0) }; }
         private static Button ButtonFor(string text) { return new Button { Text = text, AutoSize = true, Height = 29, Padding = new Padding(8, 0, 8, 0) }; }
+        private static string SnapSettingsPath { get { return UserDataPaths.SettingsFile("门窗分格编辑.ini", "door-window-editor.ini"); } }
+        private static double LoadMouseSnapStep()
+        {
+            try { if (File.Exists(SnapSettingsPath)) { var text = File.ReadAllText(SnapSettingsPath); var index = text.IndexOf('='); if (index >= 0) text = text.Substring(index + 1); double value; if (double.TryParse(text.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out value) && value >= 0d && value <= 1000d) return value; } } catch { }
+            return 5d;
+        }
+        private static void SaveMouseSnapStep(double value) { try { File.WriteAllText(SnapSettingsPath, "鼠标拖动步长毫米=" + value.ToString("0.##", CultureInfo.InvariantCulture)); } catch { } }
     }
 }

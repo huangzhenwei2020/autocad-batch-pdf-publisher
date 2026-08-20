@@ -40,7 +40,7 @@ namespace BatchPdfPublisher.Services
 
     public sealed class PdfPublisherService
     {
-        private static readonly string DiagnosticLogPath = Path.Combine(Path.GetTempPath(), "BatchPdfPublisher.publish.log");
+        private static readonly string DiagnosticLogPath = Path.Combine(UserDataPaths.LogsDirectory, "BatchPdfPublisher.publish.log");
         private static readonly object DiagnosticLogSync = new object();
         private const long MinimumFreeSpaceBytes = 512L * 1024L * 1024L;
 
@@ -125,7 +125,7 @@ namespace BatchPdfPublisher.Services
                 for (var index = 0; index < sheets.Count; index++)
                 {
                     var sheet = sheets[index];
-                    var temporaryPath = Path.Combine(Path.GetTempPath(), "BatchPdfPublisher_" + Guid.NewGuid().ToString("N") + ".pdf");
+                    var temporaryPath = Path.Combine(UserDataPaths.TemporaryDirectory, "BatchPdfPublisher_" + Guid.NewGuid().ToString("N") + ".pdf");
                     var freeSpace = AvailableFreeSpace(temporaryPath);
                     if (freeSpace >= 0 && freeSpace < MinimumFreeSpaceBytes)
                     {
@@ -313,7 +313,7 @@ namespace BatchPdfPublisher.Services
             {
                 for (var index = 0; index < sheets.Count; index++)
                 {
-                    var temporaryPath = Path.Combine(Path.GetTempPath(), "BatchPdfPublisher_" + Guid.NewGuid().ToString("N") + ".pdf");
+                    var temporaryPath = Path.Combine(UserDataPaths.TemporaryDirectory, "BatchPdfPublisher_" + Guid.NewGuid().ToString("N") + ".pdf");
                     temporaryFiles.Add(temporaryPath);
                     PlotSinglePage(document, sheets[index], temporaryPath, defaultPlotStyle, marginMode, index);
                     pagePublished?.Invoke(sheets[index]);

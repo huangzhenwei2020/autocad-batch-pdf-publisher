@@ -34,6 +34,7 @@ namespace BatchPdfPublisher.Views
         private int _selectedBayReturn; // -1 左转折，1 右转折，0 主窗格
         private double _drawMinX, _drawMaxX;
         private RectangleF _leftBayRect, _rightBayRect;
+        private double _snapStep = 5d;
 
         public event EventHandler LayoutChanged;
         public event EventHandler SelectedCellChanged;
@@ -53,6 +54,8 @@ namespace BatchPdfPublisher.Views
         public string BayRightSide { get { return _bayRightSide; } }
         public double BayLeftDepth { get { return _bayLeftDepth; } }
         public double BayRightDepth { get { return _bayRightDepth; } }
+        public double SnapStep { get { return _snapStep; } }
+        public void SetSnapStep(double value) { _snapStep = double.IsNaN(value) || double.IsInfinity(value) ? 5d : Math.Max(0d, value); }
 
         public void LoadLayout(double width, double height, IEnumerable<DoorWindowLayoutCell> cells)
         {
@@ -155,7 +158,7 @@ namespace BatchPdfPublisher.Views
             var cell = SelectedCell; if (cell == null || width < 1d) return false;
             var divider = DividerAt(true, cell.Right, (cell.Bottom + cell.Top) / 2d);
             if (divider == null) return false;
-            return MoveDivider(divider, cell.Left + width);
+            return MoveDivider(divider, cell.Left + width, false);
         }
 
         public bool SetSelectedHeight(double height)
@@ -163,7 +166,7 @@ namespace BatchPdfPublisher.Views
             var cell = SelectedCell; if (cell == null || height < 1d) return false;
             var divider = DividerAt(false, cell.Bottom, (cell.Left + cell.Right) / 2d);
             if (divider == null) return false;
-            return MoveDivider(divider, cell.Top - height);
+            return MoveDivider(divider, cell.Top - height, false);
         }
 
         public void SetSelectedOpening(string opening) { var selected = SelectedCells.ToList(); if (selected.Count == 0) return; foreach (var cell in selected.Where(x => !x.IsDeleted)) cell.Opening = string.IsNullOrWhiteSpace(opening) ? "固定" : opening; OnLayoutChanged(); }
@@ -257,7 +260,7 @@ namespace BatchPdfPublisher.Views
             base.OnMouseMove(e);
             if (_dragDivider != null && e.Button == MouseButtons.Left)
             {
-                var coordinate = _dragDivider.Vertical ? FromPixelX(e.X) : FromPixelY(e.Y); MoveDivider(_dragDivider, coordinate); return;
+                var coordinate = _dragDivider.Vertical ? FromPixelX(e.X) : FromPixelY(e.Y); MoveDivider(_dragDivider, coordinate, true); return;
             }
             var divider = HitDivider(e.Location); Cursor = divider == null ? Cursors.Default : divider.Vertical ? Cursors.VSplit : Cursors.HSplit;
         }
@@ -301,16 +304,19 @@ namespace BatchPdfPublisher.Views
             return result.Before.Count > 0 && result.After.Count > 0 ? result : null;
         }
 
-        private bool MoveDivider(Divider divider, double coordinate)
+        private bool MoveDivider(Divider divider, double coordinate, bool applyMouseSnap)
         {
             if (divider == null) return false; const double minimum = 50d;
             var lower = divider.Before.Select(i => divider.Vertical ? _cells[i].Left : _cells[i].Bottom).Max() + minimum;
             var upper = divider.After.Select(i => divider.Vertical ? _cells[i].Right : _cells[i].Top).Min() - minimum;
-            // 鼠标拖动按 5 mm 模数吸附；上下限也取 5 的整数倍，保证最终分格尺寸便于直接施工使用。
-            var snappedLower = Math.Ceiling(lower / 5d) * 5d;
-            var snappedUpper = Math.Floor(upper / 5d) * 5d;
-            coordinate = Math.Round(coordinate / 5d, MidpointRounding.AwayFromZero) * 5d;
-            coordinate = snappedLower <= snappedUpper ? Math.Max(snappedLower, Math.Min(snappedUpper, coordinate)) : Math.Max(lower, Math.Min(upper, coordinate));
+            if (applyMouseSnap && _snapStep > 1e-9)
+            {
+                var snappedLower = Math.Ceiling(lower / _snapStep) * _snapStep;
+                var snappedUpper = Math.Floor(upper / _snapStep) * _snapStep;
+                coordinate = Math.Round(coordinate / _snapStep, MidpointRounding.AwayFromZero) * _snapStep;
+                coordinate = snappedLower <= snappedUpper ? Math.Max(snappedLower, Math.Min(snappedUpper, coordinate)) : Math.Max(lower, Math.Min(upper, coordinate));
+            }
+            else coordinate = Math.Max(lower, Math.Min(upper, coordinate));
             foreach (var index in divider.Before) { if (divider.Vertical) _cells[index].Right = coordinate; else _cells[index].Top = coordinate; }
             foreach (var index in divider.After) { if (divider.Vertical) _cells[index].Left = coordinate; else _cells[index].Bottom = coordinate; }
             divider.Coordinate = coordinate; Invalidate(); if (_dragDivider == null) OnLayoutChanged(); else RaiseSelectionChanged(); return true;

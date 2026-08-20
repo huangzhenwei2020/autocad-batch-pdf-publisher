@@ -70,8 +70,6 @@ namespace BatchPdfPublisher.Services
             public bool IncludeSchedule = false;
             /// <summary>是否插入独立门窗设计说明；不占用图框排版范围。</summary>
             public bool IncludeScheduleNotes = false;
-            public Point3d? SchedulePosition;
-            public Point3d? NotesPosition;
             /// <summary>图名是否使用天正图名标注样式（图名+下划线+比例）；false 时用普通两行文字。</summary>
             public bool UseTianzhengTitle = true;
         }
@@ -242,23 +240,9 @@ namespace BatchPdfPublisher.Services
             }
 
             // 有图框：指定第一张图框左下角插入点，门窗按图框纸张分页排版并插入图框块。
+            FrameTemplateStore.EnsureAvailable(document.Database, frame);
             var framePoint = document.Editor.GetPoint("\n指定第一张门窗立面图框左下角插入点: ");
             if (framePoint.Status != PromptStatus.OK) return 0;
-            var paper = PaperSizeCatalog.GetSize(frame.PaperSize, frame.Extension, string.IsNullOrWhiteSpace(frame.PaperOrientation) ? "横向" : frame.PaperOrientation);
-            var pageWidth = paper[0] * drawingScale;
-            var layoutPageCount = ComputeLayout(items, drawingScale, frame, layoutOptions).PageCount;
-            var pageGap = Math.Max(20d, layoutOptions == null ? 30d : layoutOptions.PageGap) * drawingScale;
-            var defaultAccessoryX = framePoint.Value.X + Math.Max(1, layoutPageCount) * (pageWidth + pageGap);
-            if (layoutOptions != null && layoutOptions.IncludeSchedule)
-            {
-                var schedulePoint = document.Editor.GetPoint(new PromptPointOptions("\n指定独立门窗表左上角插入点（回车放在图框右侧）: ") { AllowNone = true });
-                layoutOptions.SchedulePosition = schedulePoint.Status == PromptStatus.OK ? schedulePoint.Value : new Point3d(defaultAccessoryX, framePoint.Value.Y + 200d * drawingScale, framePoint.Value.Z);
-            }
-            if (layoutOptions != null && layoutOptions.IncludeScheduleNotes)
-            {
-                var notesPoint = document.Editor.GetPoint(new PromptPointOptions("\n指定独立门窗设计说明左上角插入点（回车放在图框右侧）: ") { AllowNone = true });
-                layoutOptions.NotesPosition = notesPoint.Status == PromptStatus.OK ? notesPoint.Value : new Point3d(defaultAccessoryX, framePoint.Value.Y, framePoint.Value.Z);
-            }
             var pageCount = 0;
             using (var transaction = document.Database.TransactionManager.StartTransaction())
             {
@@ -616,24 +600,27 @@ namespace BatchPdfPublisher.Services
                     completed++; if (progress != null) progress(completed, elevations.Count, elevation.Item.Code);
                 }
             }
-            InsertIndependentScheduleAndNotes(space.Database, space, transaction, elevations.Select(x => x.Item).ToList(), scale, layoutOptions, resources, origin, pageWidth, plan.PageCount, pageGap);
+            InsertIndependentScheduleAndNotes(space.Database, space, transaction, elevations.Select(x => x.Item).ToList(), scale, layoutOptions, resources, origin, pageWidth, pageHeight, plan.PageCount, pageGap);
             return plan.PageCount;
         }
 
-        private static void InsertIndependentScheduleAndNotes(Database database, BlockTableRecord space, Transaction transaction, IList<DoorWindowScheduleItem> items, int scale, DoorWindowLayoutOptions options, DraftingStandardResources resources, Point3d frameOrigin, double pageWidth, int pageCount, double pageGap)
+        private static void InsertIndependentScheduleAndNotes(Database database, BlockTableRecord space, Transaction transaction, IList<DoorWindowScheduleItem> items, int scale, DoorWindowLayoutOptions options, DraftingStandardResources resources, Point3d frameOrigin, double pageWidth, double pageHeight, int pageCount, double pageGap)
         {
             if (options == null || (!options.IncludeSchedule && !options.IncludeScheduleNotes)) return;
             var suggestedX = frameOrigin.X + Math.Max(1, pageCount) * (pageWidth + pageGap);
+            var suggestedTop = frameOrigin.Y + pageHeight;
+            var notesTop = suggestedTop;
             if (options.IncludeSchedule)
             {
-                var position = options.SchedulePosition ?? new Point3d(suggestedX, frameOrigin.Y + 200d * scale, frameOrigin.Z);
+                var position = new Point3d(suggestedX, suggestedTop, frameOrigin.Z);
                 var table = BuildScheduleTable(database, items, scale, position);
                 space.AppendEntity(table); transaction.AddNewlyCreatedDBObject(table, true); table.GenerateLayout();
-                suggestedX = position.X;
+                // 门窗表与设计说明按同一附件区自动纵向排版，不再要求用户分别指定插入点。
+                notesTop = suggestedTop - (12.5d + items.Count * 5.5d + 15d) * scale;
             }
             if (options.IncludeScheduleNotes)
             {
-                var position = options.NotesPosition ?? new Point3d(suggestedX, frameOrigin.Y, frameOrigin.Z);
+                var position = new Point3d(suggestedX, notesTop, frameOrigin.Z);
                 var notes = new MText
                 {
                     Contents = string.Join("\\P", ScheduleNotes), Location = position, Attachment = AttachmentPoint.TopLeft,

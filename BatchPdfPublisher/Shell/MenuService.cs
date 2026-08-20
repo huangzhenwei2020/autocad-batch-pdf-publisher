@@ -55,7 +55,7 @@ namespace BatchPdfPublisher.Services
             if (_mnuRequested) return;
             try
             {
-                var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "BPP_批量打印.mnu");
+                var path = System.IO.Path.Combine(UserDataPaths.TemporaryDirectory, "BPP_批量打印.mnu");
                 var shortcuts = ShortcutSettingsService.Load();
                 var builder = new StringBuilder("***MENUGROUP=BPP\r\n***POP16\r\n万落建筑工具\r\n");
                 foreach (var feature in FeatureRegistry.All)
@@ -84,7 +84,7 @@ namespace BatchPdfPublisher.Services
 
         private static void Trace(Exception exception)
         {
-            try { System.IO.File.AppendAllText(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "BatchPdfPublisher.ui.log"), DateTime.Now.ToString("O") + " Menu: " + exception + Environment.NewLine); } catch { }
+            try { System.IO.File.AppendAllText(System.IO.Path.Combine(UserDataPaths.LogsDirectory, "BatchPdfPublisher.ui.log"), DateTime.Now.ToString("O") + " Menu: " + exception + Environment.NewLine); } catch { }
         }
     }
 }

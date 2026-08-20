@@ -47,7 +47,7 @@ namespace BatchPdfPublisher.Views
             var document = AcApplication.DocumentManager.MdiActiveDocument;
             var drawingPath = SafeDocumentPath(document);
             var hasSavedDrawing = IsSavedDrawingPath(drawingPath);
-            _folder.Text = hasSavedDrawing ? Path.GetDirectoryName(drawingPath) : Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+            _folder.Text = hasSavedDrawing ? Path.GetDirectoryName(drawingPath) : UserDataPaths.OutputDirectory;
             var defaultDrawingName = hasSavedDrawing ? Path.GetFileNameWithoutExtension(drawingPath) : Path.GetFileNameWithoutExtension(document?.Name ?? "当前文件");
             _fileName.Text = (string.IsNullOrWhiteSpace(defaultDrawingName) ? "当前文件" : defaultDrawingName) + "_框选图纸.pdf";
             _plotStyle.Text = plotStyle ?? string.Empty;

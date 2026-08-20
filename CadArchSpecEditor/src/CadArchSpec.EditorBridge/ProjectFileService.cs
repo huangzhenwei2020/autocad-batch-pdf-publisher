@@ -57,9 +57,7 @@ namespace CadArchSpec.EditorBridge
         public ProjectFileService(string applicationDataDirectory = null)
         {
             var root = string.IsNullOrWhiteSpace(applicationDataDirectory)
-                ? Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "CadArchSpecEditor")
+                ? PortableDataPaths.Root
                 : applicationDataDirectory;
             Directory.CreateDirectory(root);
             _recentProjectsPath = Path.Combine(root, "recent-projects.json");

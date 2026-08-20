@@ -29,15 +29,17 @@ namespace BatchPdfPublisherLauncher
         private const string ArchitecturePayloadResourceName = "WanluoArchitectureTools.CadArchSpecEditor.bundle.zip";
         private const string StairPayloadR24ResourceName = "WanluoArchitectureTools.StairDetail.R24.zip";
         private const string StairPayloadR25ResourceName = "WanluoArchitectureTools.StairDetail.R25.zip";
-        private static readonly string UserDataRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WanluoArchitectureTools");
+        private static readonly string PackageRoot = Path.GetFullPath(AppDomain.CurrentDomain.BaseDirectory);
+        private static readonly string UserDataRoot = Path.Combine(PackageRoot, "用户配置文件");
         private static readonly string LaunchLogPath = Path.Combine(EnsureDirectory(Path.Combine(UserDataRoot, "Logs")), "launcher.log");
-        private static readonly string LoadReceiptPath = Path.Combine(Path.GetTempPath(), "WanluoArchitectureTools.loaded.log");
+        private static readonly string LoadReceiptPath = Path.Combine(EnsureDirectory(Path.Combine(UserDataRoot, "Temp")), "WanluoArchitectureTools.loaded.log");
 
         [STAThread]
         private static void Main()
         {
             try
             {
+                Environment.SetEnvironmentVariable("WANLUO_ARCHITECTURE_TOOLS_ROOT", PackageRoot, EnvironmentVariableTarget.Process);
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
                 Log("启动器开始运行");
@@ -402,7 +404,7 @@ namespace BatchPdfPublisherLauncher
         {
             Log("启动平台: " + platform.DisplayName);
             TryDelete(LoadReceiptPath);
-            var startupScript = Path.Combine(Path.GetTempPath(), "BatchPdfPublisher." + Guid.NewGuid().ToString("N") + ".scr");
+            var startupScript = Path.Combine(EnsureDirectory(Path.Combine(UserDataRoot, "Temp")), "BatchPdfPublisher." + Guid.NewGuid().ToString("N") + ".scr");
             var loadableAssemblies = installedAssemblies.Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             var trustedDirectories = string.Join(";", loadableAssemblies.Select(Path.GetDirectoryName).Distinct(StringComparer.OrdinalIgnoreCase).Select(x => x.Replace('\\', '/')));
             var loadCommands = BuildNetloadCommandStream(loadableAssemblies);
@@ -699,7 +701,7 @@ namespace BatchPdfPublisherLauncher
         private static string InstallPlugin(PluginPayload payload, bool installPermanently)
         {
             if (!installPermanently) return payload.AssemblyPath;
-            var contentsDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WanluoArchitectureTools", "releases", payload.Band);
+            var contentsDirectory = Path.Combine(UserDataRoot, "运行文件", "releases", payload.Band);
             Directory.CreateDirectory(contentsDirectory);
             var hash = GetFileHash(payload.AssemblyPath).Substring(0, 12);
             var installedFileName = "BatchPdfPublisher." + hash + ".dll";
@@ -707,6 +709,7 @@ namespace BatchPdfPublisherLauncher
             if (!File.Exists(installedAssembly) || new FileInfo(installedAssembly).Length != new FileInfo(payload.AssemblyPath).Length)
                 File.Copy(payload.AssemblyPath, installedAssembly, true);
             File.Copy(payload.PdfDependencyPath, Path.Combine(contentsDirectory, PdfDependencyName), true);
+            File.WriteAllText(Path.Combine(contentsDirectory, "portable-root.txt"), PackageRoot, Encoding.UTF8);
             var resourceDirectory = Path.Combine(contentsDirectory, "Resources", "Blocks");
             Directory.CreateDirectory(resourceDirectory);
             File.Copy(payload.ArrowLibraryPath, Path.Combine(resourceDirectory, ArrowLibraryName), true);
@@ -755,7 +758,7 @@ namespace BatchPdfPublisherLauncher
             if (!File.Exists(sourceHost))
                 throw new FileNotFoundException("未能准备建筑设计说明助手的 " + band + " 组件。", sourceHost);
             if (!installPermanently) return sourceHost;
-            var target = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WanluoArchitectureTools", "ArchitectureAssistant", band);
+            var target = Path.Combine(UserDataRoot, "运行文件", "ArchitectureAssistant", band);
             CopyDirectory(source, target);
             return Path.Combine(target, hostName);
         }
@@ -775,7 +778,7 @@ namespace BatchPdfPublisherLauncher
             if (!File.Exists(sourceHost))
                 throw new FileNotFoundException("未能准备一键楼梯大样的 " + band + " 组件。", sourceHost);
             if (!installPermanently) return sourceHost;
-            var target = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WanluoArchitectureTools", "StairDetail", band);
+            var target = Path.Combine(UserDataRoot, "运行文件", "StairDetail", band);
             CopyDirectory(source, target);
             return Path.Combine(target, hostName);
         }
@@ -801,8 +804,7 @@ namespace BatchPdfPublisherLauncher
                     payloadHash = string.Concat(sha256.ComputeHash(resource).Take(8).Select(x => x.ToString("x2")));
                     resource.Position = 0;
                 }
-                var cacheRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "WanluoArchitectureTools", "PayloadCache", componentName, payloadHash, band);
+                var cacheRoot = Path.Combine(UserDataRoot, "运行缓存", componentName, payloadHash, band);
                 var cachedHost = Path.Combine(cacheRoot, hostName);
                 var completionMarker = Path.Combine(cacheRoot, ".complete");
                 var mutexName = "Local\\WanluoPayload_" + componentName + "_" + payloadHash + "_" + band;
@@ -871,9 +873,7 @@ namespace BatchPdfPublisherLauncher
                     resource.Position = 0;
                 }
 
-                var cacheRoot = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "WanluoArchitectureTools", "PayloadCache", "ArchitectureAssistant", payloadHash, band);
+                var cacheRoot = Path.Combine(UserDataRoot, "运行缓存", "ArchitectureAssistant", payloadHash, band);
                 var cachedHost = Path.Combine(cacheRoot, hostName);
                 var completionMarker = Path.Combine(cacheRoot, ".complete");
                 var mutexName = "Local\\WanluoArchitecturePayload_" + payloadHash + "_" + band;
@@ -946,6 +946,7 @@ namespace BatchPdfPublisherLauncher
             Directory.CreateDirectory(contents);
             File.Copy(installedAssembly, Path.Combine(contents, PluginAssemblyName), true);
             File.Copy(sourcePdfDependency, Path.Combine(contents, PdfDependencyName), true);
+            File.WriteAllText(Path.Combine(contents, "portable-root.txt"), PackageRoot, Encoding.UTF8);
             var installedArrowLibrary = Path.Combine(Path.GetDirectoryName(installedAssembly), ArrowLibraryRelativePath);
             if (!File.Exists(installedArrowLibrary)) installedArrowLibrary = Path.Combine(Path.GetDirectoryName(installedAssembly), ArrowLibraryName);
             if (File.Exists(installedArrowLibrary))

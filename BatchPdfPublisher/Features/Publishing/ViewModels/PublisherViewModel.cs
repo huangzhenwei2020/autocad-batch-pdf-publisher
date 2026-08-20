@@ -425,10 +425,14 @@ namespace BatchPdfPublisher.ViewModels
 
         private void RemoveSelectedFrame()
         {
-            Frames.Remove(SelectedFrame);
+            var removed = SelectedFrame;
+            Frames.Remove(removed);
             SelectedFrame = null;
             _store.SaveFrames(Frames.ToList());
-            Status = "已删除选中的图框登记。";
+            string templateError;
+            Status = FrameTemplateStore.DeleteIfUnused(removed, Frames, out templateError)
+                ? "已删除选中的图框登记及其便携模板文件。"
+                : "图框登记已删除，但模板文件删除失败：" + templateError;
         }
 
         private void CreateProject()

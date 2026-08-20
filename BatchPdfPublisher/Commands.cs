@@ -20,7 +20,7 @@ namespace BatchPdfPublisher
         private static IList<SheetItem> _catalogSheets;
         private static CatalogSettings _catalogSettings;
         private static Action _catalogDone;
-        private static readonly string DiagnosticLog = Path.Combine(Path.GetTempPath(), "BatchPdfPublisher.trace.log");
+        private static readonly string DiagnosticLog = Path.Combine(UserDataPaths.LogsDirectory, "BatchPdfPublisher.trace.log");
         public void Initialize()
         {
             WriteStartupReceipt("Initialize");
@@ -494,7 +494,7 @@ namespace BatchPdfPublisher
             try
             {
                 var assembly = typeof(Commands).Assembly.Location;
-                File.AppendAllText(Path.Combine(Path.GetTempPath(), "WanluoArchitectureTools.loaded.log"),
+                File.AppendAllText(Path.Combine(UserDataPaths.TemporaryDirectory, "WanluoArchitectureTools.loaded.log"),
                     DateTime.Now.ToString("O") + " | " + stage + " | PID=" + System.Diagnostics.Process.GetCurrentProcess().Id + " | " + assembly + Environment.NewLine);
             }
             catch { }
@@ -629,7 +629,7 @@ namespace BatchPdfPublisher
                 }
                 catch (System.Exception exception)
                 {
-                    try { File.WriteAllText(Path.Combine(Path.GetTempPath(), "BatchPdfPublisher.error.log"), exception.ToString()); } catch { }
+                    try { File.WriteAllText(Path.Combine(UserDataPaths.LogsDirectory, "BatchPdfPublisher.error.log"), exception.ToString()); } catch { }
                     Application.ShowAlertDialog("批量打印面板加载失败：" + exception.Message);
                 }
             };

@@ -361,7 +361,7 @@ namespace BatchPdfPublisher.Services
                             result.Failed++;
                             result.Errors.Add(target.BlockHandle + " / " + target.Tag + "：" + ex.Message);
                             result.Details.Add(new AttributeApplyDetail { Target = target, Status = "失败", Message = ex.Message, OldValue = oldValue, NewValue = newValue });
-                            try { System.IO.File.AppendAllText(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "BatchPdfPublisher.attribute.log"), DateTime.Now.ToString("s") + " | " + target.BlockHandle + " | " + target.Tag + " | " + ex.Message + Environment.NewLine); } catch { }
+                            try { System.IO.File.AppendAllText(System.IO.Path.Combine(UserDataPaths.LogsDirectory, "BatchPdfPublisher.attribute.log"), DateTime.Now.ToString("s") + " | " + target.BlockHandle + " | " + target.Tag + " | " + ex.Message + Environment.NewLine); } catch { }
                         }
                     }
                     tr.Commit();

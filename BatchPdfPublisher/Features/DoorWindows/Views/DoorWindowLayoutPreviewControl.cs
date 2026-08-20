@@ -204,7 +204,7 @@ namespace BatchPdfPublisher.Views
         {
             try
             {
-                var log = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "door-window-preview.log");
+                var log = System.IO.Path.Combine(UserDataPaths.LogsDirectory, "door-window-preview.log");
                 var info = "frame=" + (_frame == null ? "null" : _frame.PaperDisplay + "/" + _frame.BlockName)
                     + " scale=" + _scale + " zoom=" + _zoom
                     + " items=" + _items.Count
@@ -389,7 +389,7 @@ namespace BatchPdfPublisher.Views
             {
                 try
                 {
-                    var log = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "door-window-preview.log");
+                    var log = System.IO.Path.Combine(UserDataPaths.LogsDirectory, "door-window-preview.log");
                     System.IO.File.AppendAllText(log, DateTime.Now.ToString("O") + " " + tag + " rect x=" + x + " y=" + y + " w=" + w + " h=" + h + " zoom=" + _zoom + "\r\n" + exception + "\r\n");
                 }
                 catch { }

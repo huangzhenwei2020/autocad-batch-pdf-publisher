@@ -3,6 +3,7 @@ using System.Drawing;
 using System.IO;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.Windows;
+using CadArchSpec.EditorBridge;
 
 namespace CadArchSpec.Host.AutoCAD2022
 {
@@ -77,10 +78,7 @@ namespace CadArchSpec.Host.AutoCAD2022
 
         private static string DiagnosticLogPath()
         {
-            return Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "CadArchSpecEditor",
-                "Logs",
+            return Path.Combine(PortableDataPaths.DirectoryFor("Logs"),
                 "palette-" + DateTime.Now.ToString("yyyyMMdd") + ".log");
         }
 

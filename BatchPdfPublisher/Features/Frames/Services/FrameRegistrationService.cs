@@ -40,8 +40,19 @@ namespace BatchPdfPublisher.Services
             var store = new PublishPlanStore();
             var frames = store.LoadFrames();
             var sameName = frames.Where(x => string.Equals(x.BlockName, context.BlockName, StringComparison.OrdinalIgnoreCase)).ToList();
-            if (sameName.Any(x => FrameIdentityService.IsSameVariant(x, context.AttributeTagSignature, context.DefinitionSignature, context.AspectRatio)))
+            var sameVariant = sameName.FirstOrDefault(x => FrameIdentityService.IsSameVariant(x, context.AttributeTagSignature, context.DefinitionSignature, context.AspectRatio));
+            if (sameVariant != null)
             {
+                var templatePath = UserDataPaths.ResolveFromRoot(sameVariant.TemplateRelativePath);
+                if (string.IsNullOrWhiteSpace(templatePath) || !System.IO.File.Exists(templatePath))
+                {
+                    string legacyTemplateError;
+                    if (!FrameTemplateStore.TrySave(document, objectId, sameVariant, out legacyTemplateError))
+                    { MessageBox.Show("无法为旧登记补建便携图框模板。\r\n" + legacyTemplateError, "登记图框", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
+                    store.SaveFrames(frames);
+                    MessageBox.Show("旧登记已保留，并已补建便携图框模板。以后复制整个插件文件夹即可使用。", "登记图框", MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
                 MessageBox.Show("图块“" + context.BlockName + "”的这个版本已经登记。请在图框库中双击对应项进行修改。", "重复图框", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
@@ -49,6 +60,11 @@ namespace BatchPdfPublisher.Services
 
             var definition = ShowDialog(document, context, null);
             if (definition == null) return;
+            string templateError;
+            if (!FrameTemplateStore.TrySave(document, objectId, definition, out templateError))
+            {
+                MessageBox.Show("图框登记未保存：无法生成便携图框模板。\r\n" + templateError, "登记图框", MessageBoxButton.OK, MessageBoxImage.Warning); return;
+            }
             frames.Add(definition);
             store.SaveFrames(frames);
         }
@@ -61,6 +77,13 @@ namespace BatchPdfPublisher.Services
             if (!ConfirmUniqueAttributeTags(document, context)) return;
             var definition = ShowDialog(document, context, existing);
             if (definition == null) return;
+            definition.TemplateRelativePath = existing.TemplateRelativePath;
+            if (!context.ReferenceId.IsNull)
+            {
+                string templateError;
+                if (!FrameTemplateStore.TrySave(document, context.ReferenceId, definition, out templateError))
+                { MessageBox.Show("图框修改未保存：无法更新便携图框模板。\r\n" + templateError, "登记图框", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
+            }
 
             var store = new PublishPlanStore();
             var frames = store.LoadFrames();
@@ -251,7 +274,7 @@ namespace BatchPdfPublisher.Services
                     if (reference == null) continue;
                     var record = (BlockTableRecord)transaction.GetObject(reference.DynamicBlockTableRecord, OpenMode.ForRead);
                     if (!string.Equals(record.Name, existing.BlockName, StringComparison.OrdinalIgnoreCase)) continue;
-                    var candidate = CreateContext(reference, record.Name, transaction);
+                    var candidate = CreateContext(reference, record.Name, transaction); candidate.ReferenceId = reference.ObjectId;
                     if (FrameIdentityService.IsSameVariant(existing, candidate.AttributeTagSignature, candidate.DefinitionSignature, candidate.AspectRatio)) return candidate;
                 }
             }
@@ -278,7 +301,7 @@ namespace BatchPdfPublisher.Services
                 var reference = transaction.GetObject(objectId, OpenMode.ForRead) as BlockReference;
                 if (reference == null) return null;
                 var record = (BlockTableRecord)transaction.GetObject(reference.DynamicBlockTableRecord, OpenMode.ForRead);
-                return CreateContext(reference, record.Name, transaction);
+                var context = CreateContext(reference, record.Name, transaction); context.ReferenceId = reference.ObjectId; return context;
             }
         }
 
@@ -353,6 +376,7 @@ namespace BatchPdfPublisher.Services
                     DefaultPrintScale = context.Guess.PrintScale
                 };
                 var store = new PublishPlanStore();
+                if (!FrameTemplateStore.TrySave(document, objectId, definition, out error)) return false;
                 var frames = store.LoadFrames();
                 frames.RemoveAll(x => string.Equals(x.BlockName, definition.BlockName, StringComparison.OrdinalIgnoreCase)
                     && FrameIdentityService.IsSameVariant(x, definition.AttributeTagSignature, definition.DefinitionSignature, definition.ReferenceAspectRatio));
@@ -371,6 +395,7 @@ namespace BatchPdfPublisher.Services
 
         private sealed class FrameContext
         {
+            public ObjectId ReferenceId { get; set; } = ObjectId.Null;
             public string BlockName { get; set; }
             public FrameSizeGuess Guess { get; set; }
             public IDictionary<string, string> Attributes { get; set; }

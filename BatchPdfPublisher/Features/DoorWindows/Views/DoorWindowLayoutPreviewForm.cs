@@ -72,7 +72,7 @@ namespace BatchPdfPublisher.Views
             var unlockButton = ButtonFor("解锁"); unlockButton.Click += (s, e) => { _preview.UnlockSelected(); RefreshSummary(); }; toolbar.Controls.Add(unlockButton);
             var apply = ButtonFor("应用排版范围"); apply.Click += (s, e) => RefreshLayout(); toolbar.Controls.Add(apply);
             var reset = ButtonFor("恢复默认"); reset.Click += (s, e) => { SetMargins(new DoorWindowElevationInsertionService.DoorWindowLayoutOptions()); RefreshLayout(); }; toolbar.Controls.Add(reset);
-            var hint = new Label { Text = "边距与页间距为纸面毫米；门窗表和设计说明作为独立对象插入，不占用门窗排版区域，可在 CAD 中自由移动。", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(10, 6, 0, 0) };
+            var hint = new Label { Text = "边距与页间距为纸面毫米；门窗表和设计说明自动排在整组图框右侧，只需指定一次整组插入点，插入后仍可独立移动。", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(10, 6, 0, 0) };
             toolbar.Controls.Add(hint);
             root.Controls.Add(toolbar, 0, 0);
 
