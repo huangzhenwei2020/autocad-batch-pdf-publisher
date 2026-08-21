@@ -4,6 +4,7 @@ using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Geometry;
+using BatchPdfPublisher.Models;
 
 namespace BatchPdfPublisher.Services
 {
@@ -44,6 +45,66 @@ namespace BatchPdfPublisher.Services
                 var space = (BlockTableRecord)tr.GetObject(document.Database.CurrentSpaceId, OpenMode.ForWrite);
                 var poly = Rectangle(point.Value, width, height); poly.Layer = DraftingStandardService.GetLayerName(DraftingStandardProfile.FrameKey); space.AppendEntity(poly); tr.AddNewlyCreatedDBObject(poly, true); tr.Commit();
             }
+            return true;
+        }
+
+        public static bool InsertRegisteredFrame(Document document, FrameDefinition frame, int drawingScale)
+        {
+            if (document == null) return false;
+            if (frame == null || string.IsNullOrWhiteSpace(frame.BlockName))
+                throw new InvalidOperationException("请选择已登记的图框。");
+            if (drawingScale <= 0) throw new InvalidOperationException("图框比例必须是大于 0 的整数。");
+
+            var templateTiming = System.Diagnostics.Stopwatch.StartNew();
+            FrameTemplateStore.EnsureAvailable(document.Database, frame);
+            var templateMilliseconds = templateTiming.ElapsedMilliseconds;
+            var point = document.Editor.GetPoint("\n指定登记图框左下角插入点: ");
+            if (point.Status != PromptStatus.OK) return false;
+
+            var insertionTiming = System.Diagnostics.Stopwatch.StartNew();
+            using (document.LockDocument())
+            using (var transaction = document.Database.TransactionManager.StartTransaction())
+            {
+                var database = document.Database;
+                var frameLayerId = DraftingStandardService.EnsureFrameLayer(database, transaction);
+                var blocks = (BlockTable)transaction.GetObject(database.BlockTableId, OpenMode.ForRead);
+                if (!blocks.Has(frame.BlockName))
+                    throw new InvalidOperationException("无法加载登记图框块“" + frame.BlockName + "”。");
+
+                var definitionId = blocks[frame.BlockName];
+                var definition = (BlockTableRecord)transaction.GetObject(definitionId, OpenMode.ForRead);
+                // 与 CAD 的 INSERT 一致：插入点就是块基点，所选出图比例就是统一块比例。
+                var reference = new BlockReference(point.Value, definitionId)
+                {
+                    ScaleFactors = new Scale3d(drawingScale),
+                    LayerId = frameLayerId
+                };
+                var space = (BlockTableRecord)transaction.GetObject(database.CurrentSpaceId, OpenMode.ForWrite);
+                space.AppendEntity(reference);
+                transaction.AddNewlyCreatedDBObject(reference, true);
+
+                foreach (ObjectId id in definition)
+                {
+                    var attributeDefinition = transaction.GetObject(id, OpenMode.ForRead, false) as AttributeDefinition;
+                    if (attributeDefinition == null || attributeDefinition.Constant) continue;
+                    var attribute = new AttributeReference();
+                    attribute.SetAttributeFromBlock(attributeDefinition, reference.BlockTransform);
+                    attribute.LayerId = frameLayerId;
+                    var tag = (attributeDefinition.Tag ?? string.Empty).Trim();
+                    var value = attributeDefinition.TextString;
+                    if (TagMatches(tag, frame.PrintScaleAttributeTag, "比例", "SCALE", "PRINTSCALE", "PRINT_SCALE")) value = "1:" + drawingScale;
+                    else if (TagMatches(tag, frame.BuildingAttributeTag, "子项目名称")) value = PreferDefault(frame.DefaultBuilding, value);
+                    else if (TagMatches(tag, frame.SheetNumberAttributeTag, "图号")) value = PreferDefault(frame.DefaultSheetNumber, value);
+                    else if (TagMatches(tag, frame.SheetNameAttributeTag, "图纸名称", "图名")) value = PreferDefault(frame.DefaultSheetName, value);
+                    attribute.TextString = string.IsNullOrWhiteSpace(value) || value.StartsWith("<", StringComparison.Ordinal) ? tag : value;
+                    reference.AttributeCollection.AppendAttribute(attribute);
+                    transaction.AddNewlyCreatedDBObject(attribute, true);
+                }
+
+                transaction.Commit();
+            }
+            LogInsertion("frame=" + frame.BlockName + " scale=1:" + drawingScale + " templateMs=" + templateMilliseconds + " insertMs=" + insertionTiming.ElapsedMilliseconds + " drawing=" + (document.Database.Filename ?? string.Empty));
+            document.Editor.WriteMessage("\n已插入登记图框“" + frame.DisplayName + "”，比例 1:" + drawingScale + "。\n");
             return true;
         }
 
@@ -141,6 +202,25 @@ namespace BatchPdfPublisher.Services
         private static ObjectId FindTextStyle(Database database, Transaction tr, string name)
         {
             return DraftingStandardService.ResolveTextStyle(database, tr, name, false);
+        }
+
+        private static string PreferDefault(string configured, string fallback)
+        { return string.IsNullOrWhiteSpace(configured) ? fallback : configured; }
+
+        private static bool TagMatches(string tag, string configured, params string[] aliases)
+        {
+            if (!string.IsNullOrWhiteSpace(configured) && string.Equals(tag, configured.Trim(), StringComparison.OrdinalIgnoreCase)) return true;
+            return aliases.Any(alias => string.Equals(tag, alias, StringComparison.OrdinalIgnoreCase) || tag.IndexOf(alias, StringComparison.OrdinalIgnoreCase) >= 0);
+        }
+
+        private static void LogInsertion(string message)
+        {
+            try
+            {
+                System.IO.File.AppendAllText(System.IO.Path.Combine(UserDataPaths.LogsDirectory, "frame-insertion.log"),
+                    DateTime.Now.ToString("O") + " " + message + Environment.NewLine);
+            }
+            catch { }
         }
 
         private static string SafeName(string value)

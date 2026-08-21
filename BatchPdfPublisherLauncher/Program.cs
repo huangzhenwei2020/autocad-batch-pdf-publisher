@@ -30,7 +30,7 @@ namespace BatchPdfPublisherLauncher
         private const string StairPayloadR24ResourceName = "WanluoArchitectureTools.StairDetail.R24.zip";
         private const string StairPayloadR25ResourceName = "WanluoArchitectureTools.StairDetail.R25.zip";
         private static readonly string PackageRoot = Path.GetFullPath(AppDomain.CurrentDomain.BaseDirectory);
-        private static readonly string UserDataRoot = Path.Combine(PackageRoot, "用户配置文件");
+        private static readonly string UserDataRoot = ResolveUserDataRoot();
         private static readonly string LaunchLogPath = Path.Combine(EnsureDirectory(Path.Combine(UserDataRoot, "Logs")), "launcher.log");
         private static readonly string LoadReceiptPath = Path.Combine(EnsureDirectory(Path.Combine(UserDataRoot, "Temp")), "WanluoArchitectureTools.loaded.log");
 
@@ -438,7 +438,8 @@ namespace BatchPdfPublisherLauncher
             if (Directory.Exists(releases)) Directory.Delete(releases, true);
             TryDelete(LastPlatformPath());
             var suiteFiles = Path.Combine(appData, "WanluoArchitectureTools");
-            if (Directory.Exists(suiteFiles)) Directory.Delete(suiteFiles, true);
+            var runtimeFiles = Path.Combine(suiteFiles, "用户配置文件", "运行文件");
+            if (Directory.Exists(runtimeFiles)) Directory.Delete(runtimeFiles, true);
             var autodeskRoot = Path.Combine(appData, "Autodesk");
             if (Directory.Exists(autodeskRoot))
                 foreach (var plotters in Directory.GetDirectories(autodeskRoot, "Plotters", SearchOption.AllDirectories))
@@ -459,6 +460,42 @@ namespace BatchPdfPublisherLauncher
         }
 
         private static void TryDelete(string path) { try { if (File.Exists(path)) File.Delete(path); } catch { } }
+
+        private static string ResolveUserDataRoot()
+        {
+            var stableRoot = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "WanluoArchitectureTools",
+                "用户配置文件");
+            Directory.CreateDirectory(stableRoot);
+            MergePortableUserData(Path.Combine(PackageRoot, "用户配置文件"), stableRoot);
+            return stableRoot;
+        }
+
+        private static void MergePortableUserData(string sourceRoot, string targetRoot)
+        {
+            if (!Directory.Exists(sourceRoot) || PathsEqual(sourceRoot, targetRoot)) return;
+            foreach (var sourceFile in Directory.GetFiles(sourceRoot, "*", SearchOption.AllDirectories))
+            {
+                var relative = sourceFile.Substring(sourceRoot.TrimEnd(Path.DirectorySeparatorChar).Length).TrimStart(Path.DirectorySeparatorChar);
+                var topLevel = relative.Split(Path.DirectorySeparatorChar)[0];
+                if (new[] { "运行文件", "Logs", "Temp" }.Contains(topLevel, StringComparer.OrdinalIgnoreCase)) continue;
+                var targetFile = Path.Combine(targetRoot, relative);
+                try
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(targetFile));
+                    if (!File.Exists(targetFile)) File.Copy(sourceFile, targetFile, false);
+                }
+                catch { }
+            }
+        }
+
+        private static bool PathsEqual(string left, string right)
+        {
+            return string.Equals(Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar),
+                Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar),
+                StringComparison.OrdinalIgnoreCase);
+        }
 
         private static bool WaitForCadProcess(int seconds)
         {

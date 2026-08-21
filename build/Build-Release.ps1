@@ -146,7 +146,14 @@ foreach ($band in $Bands) {
     if (-not $available.ContainsKey($band)) { throw "本机没有可用于 $band 的 AutoCAD API。请安装对应 CAD，或使用 build\AutodeskSdk 方案。" }
 }
 
-if (Test-Path -LiteralPath $OutputRoot) { Remove-Item -LiteralPath $OutputRoot -Recurse -Force }
+if (Test-Path -LiteralPath $OutputRoot) {
+    # User projects, registrations and settings must survive an in-place update.
+    # Clean only generated payloads and leave the legacy portable data available
+    # for the new version's one-time migration to the stable AppData location.
+    Get-ChildItem -LiteralPath $OutputRoot -Force |
+        Where-Object { $_.Name -ne '用户配置文件' } |
+        Remove-Item -Recurse -Force
+}
 if (-not $KeepIntermediate -and (Test-Path -LiteralPath $artifactRoot)) { Remove-Item -LiteralPath $artifactRoot -Recurse -Force }
 New-Item -ItemType Directory -Path $OutputRoot, $artifactRoot -Force | Out-Null
 

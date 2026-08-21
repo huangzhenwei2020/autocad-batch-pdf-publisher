@@ -446,7 +446,7 @@ namespace BatchPdfPublisher.Views
 
         private static DoorWindowScheduleItem CloneScheduleItem(DoorWindowScheduleItem x)
         {
-            return new DoorWindowScheduleItem
+            var clone = new DoorWindowScheduleItem
             {
                 Selected = x.Selected, Sequence = x.Sequence, Code = x.Code, SourceCategory = x.SourceCategory, Width = x.Width, Height = x.Height, Quantity = x.Quantity,
                 SourceNote = x.SourceNote, Material = x.Material, AtlasName = x.AtlasName, Remarks = x.Remarks, SillHeight = x.SillHeight, SillHeightSuppressed = x.SillHeightSuppressed,
@@ -457,6 +457,9 @@ namespace BatchPdfPublisher.Views
                 BayLeftSide = x.BayLeftSide, BayRightSide = x.BayRightSide, BayLeftDepth = x.BayLeftDepth, BayRightDepth = x.BayRightDepth, BayLeftCellLayout = x.BayLeftCellLayout,
                 BayRightCellLayout = x.BayRightCellLayout, Status = x.Status, SourceRow = x.SourceRow, LockedPage = x.LockedPage
             };
+            foreach (var quantity in x.FloorQuantities)
+                clone.FloorQuantities.Add(new DoorWindowFloorQuantity { FloorName = quantity.FloorName, PerFloorQuantity = quantity.PerFloorQuantity, FloorCount = quantity.FloorCount });
+            return clone;
         }
 
         private void ApplyBatch()
@@ -608,8 +611,18 @@ namespace BatchPdfPublisher.Views
 
         private void SaveSession()
         {
+            var baseItems = _baseSource != null && _baseSource.Items != null && _baseSource.Items.Count > 0
+                ? _baseSource.Items
+                : _rows.ToList();
             _store.SaveSession(_floorStatistics.Checked, _baseSource == null ? null : _baseSource.SourceHandle,
-                _floorSources.Select(x => new DoorWindowFloorSourcePreference { FloorName = x.FloorName, FloorCount = x.FloorCount, SourceHandle = x.SourceHandle }));
+                baseItems.Select(CloneScheduleItem),
+                _floorSources.Select(x => new DoorWindowFloorSourcePreference
+                {
+                    FloorName = x.FloorName,
+                    FloorCount = x.FloorCount,
+                    SourceHandle = x.SourceHandle,
+                    Items = x.Items.Select(CloneScheduleItem).ToList()
+                }));
         }
 
         private void RestoreSavedSession()
@@ -624,8 +637,11 @@ namespace BatchPdfPublisher.Views
                     foreach (var source in session.FloorSources)
                     {
                         DoorWindowScheduleReadResult result;
-                        if (!TryReadSourceByHandle(source.SourceHandle, out result)) continue;
-                        restored.Add(new FloorScheduleSource { FloorName = source.FloorName, FloorCount = Math.Max(1, source.FloorCount), SourceHandle = source.SourceHandle, Items = result.Items.ToList() });
+                        var items = TryReadSourceByHandle(source.SourceHandle, out result)
+                            ? result.Items.Select(CloneScheduleItem).ToList()
+                            : (source.Items ?? new List<DoorWindowScheduleItem>()).Select(CloneScheduleItem).ToList();
+                        if (items.Count == 0) continue;
+                        restored.Add(new FloorScheduleSource { FloorName = source.FloorName, FloorCount = Math.Max(1, source.FloorCount), SourceHandle = source.SourceHandle, Items = items });
                     }
                     if (restored.Count > 0)
                     {
@@ -641,10 +657,15 @@ namespace BatchPdfPublisher.Views
                         return;
                     }
                 }
-                if (!string.IsNullOrWhiteSpace(session.BaseSourceHandle))
+                if (!string.IsNullOrWhiteSpace(session.BaseSourceHandle) || (session.BaseItems != null && session.BaseItems.Count > 0))
                 {
                     DoorWindowScheduleReadResult result;
-                    if (TryReadSourceByHandle(session.BaseSourceHandle, out result))
+                    if (!TryReadSourceByHandle(session.BaseSourceHandle, out result) && session.BaseItems != null && session.BaseItems.Count > 0)
+                    {
+                        result = new DoorWindowScheduleReadResult { SourceHandle = session.BaseSourceHandle, SourceDxfName = "已保存门窗表", Adapter = "项目快照" };
+                        result.Items.AddRange(session.BaseItems.Select(CloneScheduleItem));
+                    }
+                    if (result != null && result.Items.Count > 0)
                     {
                         _baseSource = result; _changingFloorMode = true; _floorStatistics.Checked = false; _changingFloorMode = false; _addCurrentFloor.Enabled = false; LoadSource(result);
                     }
@@ -804,7 +825,7 @@ namespace BatchPdfPublisher.Views
             if (_insertFrame.Checked)
             {
                 var saved = DoorWindowLayoutPreviewForm.LoadSavedMargins();
-                using (var preview = new DoorWindowLayoutPreviewForm(ready, scale, null, saved.IncludeSchedule, saved.IncludeScheduleNotes, _useTianzhengTitle.Checked))
+                using (var preview = new DoorWindowLayoutPreviewForm(_document, ready, scale, null, saved.IncludeSchedule, saved.IncludeScheduleNotes, _useTianzhengTitle.Checked))
                 {
                     if (preview.ShowDialog(this) != DialogResult.OK) return;
                     ready = preview.OrderedItems.ToList();
