@@ -65,6 +65,14 @@ namespace WL.Stair.Core.Calculation
             {
                 project.SchemaVersion = 6;
             }
+            if (project.SchemaVersion < 7)
+            {
+                // Existing projects keep direct upper-floor connections unless
+                // the user explicitly enables a per-storey closure gap.
+                foreach (var storey in project.Storeys ?? new List<StairStoreyDefinition>())
+                    if (storey != null) storey.AllowUpperClosureGap = false;
+                project.SchemaVersion = 7;
+            }
             project.Construction.Wall.Enabled = true;
         }
 
@@ -165,12 +173,16 @@ namespace WL.Stair.Core.Calculation
                     var boundaries = new List<object> { lowerFloor };
                     boundaries.AddRange(storey.Landings.Cast<object>());
                     boundaries.Add(upperFloor);
+                    var connectedFlightCount = AllowsFinalClosure(storey)
+                        ? Math.Max(0, storey.Flights.Count - 1)
+                        : storey.Flights.Count;
+                    boundaries = boundaries.Take(connectedFlightCount + 1).ToList();
                     var currentWidths = boundaries.Select(PlatformWidth).ToArray();
                     var locked = boundaries.Select(IsPlatformWidthLocked).ToArray();
                     var signs = new double[boundaries.Count];
                     var constants = new double[boundaries.Count];
                     signs[0] = 1.0;
-                    for (var index = 0; index < storey.Flights.Count; index++)
+                    for (var index = 0; index < connectedFlightCount; index++)
                     {
                         var requiredPairWidth = project.Construction.StairwellDepth
                             - linkedTreadDepth * Math.Max(0, storey.Flights[index].RiserCount - 1);
@@ -230,19 +242,20 @@ namespace WL.Stair.Core.Calculation
                 localBoundaries.AddRange(storey.Landings.Cast<object>());
                 localBoundaries.Add(upperFloor);
 
-                // A three-flight storey only breaks the continuous chain at its
-                // final run. Its first two runs must still terminate directly at
-                // their landings; otherwise the section can visibly separate at
-                // those interfaces when tread depth is not linked.
-                if (storey.Flights.Count == 3)
+                // Three-flight storeys always allow the designed final closure.
+                // Other storeys do so only when explicitly enabled. The chain
+                // then stops before the last run, so edits below cannot rewrite
+                // the upper floor or any platform above it.
+                if (AllowsFinalClosure(storey))
                 {
                     solveSegment();
                     boundaries.Clear();
                     flights.Clear();
+                    var directFlightCount = Math.Max(0, storey.Flights.Count - 1);
                     SolveDirectConnectionSegment(
                         project,
-                        localBoundaries.Take(3).ToList(),
-                        storey.Flights.Take(2).ToList());
+                        localBoundaries.Take(directFlightCount + 1).ToList(),
+                        storey.Flights.Take(directFlightCount).ToList());
                     continue;
                 }
 
@@ -254,6 +267,13 @@ namespace WL.Stair.Core.Calculation
                 }
             }
             solveSegment();
+        }
+
+        private static bool AllowsFinalClosure(StairStoreyDefinition storey)
+        {
+            return storey != null
+                && storey.Flights != null
+                && (storey.Flights.Count == 3 || storey.AllowUpperClosureGap);
         }
 
         private static void SolveDirectConnectionSegment(
@@ -333,7 +353,11 @@ namespace WL.Stair.Core.Calculation
                     0.0,
                     pairWidth - PlatformWidth(boundaries[index + 1])));
             }
-            for (var index = anchorIndex; index < storey.Flights.Count; index++)
+            var directFlightCount = storey.AllowUpperClosureGap
+                && storey.Flights.Count != 3
+                ? Math.Max(0, storey.Flights.Count - 1)
+                : storey.Flights.Count;
+            for (var index = anchorIndex; index < directFlightCount; index++)
             {
                 var flight = storey.Flights[index];
                 var pairWidth = project.Construction.StairwellDepth

@@ -7,7 +7,7 @@ namespace WL.Stair.Core.Domain
     {
         public StairProjectDefinition()
         {
-            SchemaVersion = 6;
+            SchemaVersion = 7;
             Name = "楼梯大样";
             ProjectName = "未命名项目";
             SubprojectName = string.Empty;
@@ -205,6 +205,8 @@ namespace WL.Stair.Core.Domain
 
         public bool PlatformWidthsEqual { get; set; }
 
+        public bool AllowUpperClosureGap { get; set; }
+
         public IList<StairFlightDefinition> Flights { get; set; }
 
         public IList<StairLandingDefinition> Landings { get; set; }
@@ -227,7 +229,8 @@ namespace WL.Stair.Core.Domain
                 TotalRiserCount = 18,
                 StairwellConstraintLocked = true,
                 TreadDepthLinked = true
-                ,PlatformWidthsEqual = false
+                ,PlatformWidthsEqual = false,
+                AllowUpperClosureGap = false
             };
             storey.Flights.Add(StairFlightDefinition.CreateDefault(
                 "TD-" + index + "-1", "第" + index + "层第一跑", 9, StairFlightDirection.Right, StairSectionRepresentation.Rear));

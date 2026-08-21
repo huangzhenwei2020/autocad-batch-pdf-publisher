@@ -109,7 +109,8 @@ namespace WL.Stair.Core.Geometry
                     // Only the final run of a three-flight storey may
                     // deliberately end short and use the designed bridge.
                     var flightEndX = currentX + (direction * flightResult.HorizontalRun);
-                    var allowBridgeClosure = storey.Flights.Count == 3
+                    var allowBridgeClosure = (storey.Flights.Count == 3
+                            || storey.AllowUpperClosureGap)
                         && index == storey.Flights.Count - 1;
                     if (!allowBridgeClosure
                         && Math.Abs(flightEndX - boundaryConnectionX) > 0.01)

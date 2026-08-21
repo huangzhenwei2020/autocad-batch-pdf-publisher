@@ -36,6 +36,7 @@ namespace WL.Stair.Tests
             SupportsThreeFlightsPerStorey,
             KeepsLinkedTreadDepthWhenFinalFlightDoesNotReachFloor,
             ConnectsMixedTwoThreeTwoFlightStoreys,
+            AllowsTwoFlightFinalClosureWithoutChangingUpperStorey,
             ConnectsEveryNonThreeFlightStoreyDirectly,
             SynchronizesDisplayedTotalRiserCount,
             AlternatesUnifiedFloorAndLandingDirections,
@@ -688,6 +689,54 @@ namespace WL.Stair.Tests
                     && Math.Abs(line.End.Y - upperElevation) < 0.001
                     && Math.Abs(line.End.X - line.Start.X) > 0.001),
                 "The final run of the three-flight storey must close continuously to the upper floor.");
+        }
+
+        private static void AllowsTwoFlightFinalClosureWithoutChangingUpperStorey()
+        {
+            var project = StairProjectDefinition.CreateDefault();
+            var lower = project.Storeys[0];
+            TestAssert.True(!lower.AllowUpperClosureGap,
+                "The per-storey final-closure switch must be disabled by default.");
+            lower.AllowUpperClosureGap = true;
+            lower.StairwellConstraintLocked = false;
+            lower.TreadDepthLinked = false;
+            lower.Flights[0].TreadDepth = 280.0;
+            lower.Flights[1].TreadDepth = 280.0;
+            lower.Flights[1].RiserCount = 7;
+            lower.TotalRiserCount = 16;
+            project.Floors[1].PlatformWidth = 1350.0;
+
+            var constraints = new StairProjectConstraintService();
+            constraints.Apply(project);
+            var sharedFloorWidth = project.Floors[1].PlatformWidth;
+            var upperLandingWidth = project.Storeys[1].Landings[0].PlatformWidth;
+            var upperFloorWidth = project.Floors[2].PlatformWidth;
+            var treadDepths = lower.Flights.Select(item => item.TreadDepth).ToArray();
+
+            constraints.SetPlatformWidth(project, lower.Landings[0].Id, 1300.0);
+            constraints.Apply(project);
+
+            TestAssert.NearlyEqual(1300.0, lower.Landings[0].PlatformWidth, 0.001,
+                "The edited lower-storey landing width must be retained.");
+            TestAssert.NearlyEqual(sharedFloorWidth, project.Floors[1].PlatformWidth, 0.001,
+                "A lower-storey closure gap must not change the shared upper floor width.");
+            TestAssert.NearlyEqual(upperLandingWidth, project.Storeys[1].Landings[0].PlatformWidth, 0.001,
+                "A lower-storey edit must not propagate into the upper-storey landing.");
+            TestAssert.NearlyEqual(upperFloorWidth, project.Floors[2].PlatformWidth, 0.001,
+                "A lower-storey edit must not propagate into the next upper floor.");
+            TestAssert.True(lower.Flights.Select((item, index) =>
+                    Math.Abs(item.TreadDepth - treadDepths[index]) < 0.001).All(value => value),
+                "Allowing a final closure must not change user-selected tread depths.");
+
+            var outcome = new StairProjectCalculator().Calculate(project);
+            TestAssert.True(outcome.IsSuccess, "A two-flight storey with final closure must calculate.");
+            var section = new StairProjectGeometryBuilder().BuildSection(project, outcome.Result);
+            var upperElevation = outcome.Result.Storeys[0].UpperElevation;
+            TestAssert.True(section.Lines.Any(line => line.ComponentId == lower.Flights[1].Id
+                    && Math.Abs(line.Start.Y - upperElevation) < 0.001
+                    && Math.Abs(line.End.Y - upperElevation) < 0.001
+                    && Math.Abs(line.End.X - line.Start.X) > 0.001),
+                "The two-flight final run must bridge continuously to its unchanged upper floor.");
         }
 
         private static void ConnectsEveryNonThreeFlightStoreyDirectly()
