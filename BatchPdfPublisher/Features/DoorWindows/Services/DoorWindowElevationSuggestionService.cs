@@ -84,7 +84,7 @@ namespace BatchPdfPublisher.Services
                 if (item.OuterFrameWidth <= 0d) item.OuterFrameWidth = 50d;
                 if (item.MullionWidth <= 0d) item.MullionWidth = 50d;
                 item.DoorFrameType = "N型";
-                item.DoorFrameWidth = 50d;
+                item.DoorFrameWidth = 0d;
             }
             else if (IsWindowType(type))
             {
@@ -126,6 +126,12 @@ namespace BatchPdfPublisher.Services
             item.BayRightSide = "窗";
             if (item.BayLeftDepth <= 0d) item.BayLeftDepth = 600d;
             if (item.BayRightDepth <= 0d) item.BayRightDepth = 600d;
+            // 凸窗默认窗台高为 700；旧版在未识别窗台高时统一套的 900 也一并迁正。
+            if (!item.SillHeightSuppressed && (item.SillHeight <= 0d || Math.Abs(item.SillHeight - 900d) < .01d))
+            {
+                item.SillHeight = 700d;
+                item.SillHeightSuppressed = false;
+            }
 
             var width = ClearWidth(item); var height = ClearHeight(item); var lowerHeight = height > 500d ? 500d : height;
             var cells = new List<DoorWindowLayoutCell>();
@@ -144,6 +150,8 @@ namespace BatchPdfPublisher.Services
             var width = ClearWidth(item); var height = ClearHeight(item);
             var hasTopLight = item.Height > 2400d && height > 2200d;
             var doorHeight = hasTopLight ? 2200d : height;
+            // 无亮子的门不画门扇内边框；带亮子门按窗的做法保留 50 mm 边框。
+            item.DoorFrameWidth = hasTopLight ? 50d : 0d;
             var doors = PanelCount(width, 1200d);
             var cells = new List<DoorWindowLayoutCell>();
             AddRow(cells, width, doors, 0d, doorHeight, index => DoorLeafOpening(type, index, doors), hasTopLight ? "玻璃" : "无", true);
@@ -198,7 +206,7 @@ namespace BatchPdfPublisher.Services
         private static string WindowLeafOpening(int index, int count)
         {
             if (count <= 1) return "左平开";
-            return index * 2 < count ? "左平开" : "右平开";
+            return index * 2 < count ? "右平开" : "左平开";
         }
 
         private static string DoorLeafOpening(string type, int index, int count)
