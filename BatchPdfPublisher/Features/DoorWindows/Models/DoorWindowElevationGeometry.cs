@@ -558,9 +558,10 @@ namespace BatchPdfPublisher.Models
         {
             var fixedArea = FixedFrameArea(geometry, item, cell);
             var doorFrame = IsOperable(cell.Opening) ? Math.Max(0d, item.DoorFrameWidth) : 0d;
-            var clearance = Math.Min(6d, Math.Min(cell.Right - cell.Left, cell.Top - cell.Bottom) * .01d);
-            var left = fixedArea.Left + doorFrame + clearance; var right = fixedArea.Right - doorFrame - clearance;
-            var bottom = fixedArea.Bottom + doorFrame + clearance; var top = fixedArea.Top - doorFrame - clearance;
+            // 开启线应直接接到门窗扇边框。原先附加的 6 mm 内缩会把扇框画成独立矩形，
+            // 使开启部分看起来没有包含门边框。
+            var left = fixedArea.Left + doorFrame; var right = fixedArea.Right - doorFrame;
+            var bottom = fixedArea.Bottom + doorFrame; var top = fixedArea.Top - doorFrame;
             if (right <= left || top <= bottom) return cell;
             return new DoorWindowCell(left, bottom, right, top) { Opening = cell.Opening, Material = cell.Material, IsDoor = cell.IsDoor };
         }
