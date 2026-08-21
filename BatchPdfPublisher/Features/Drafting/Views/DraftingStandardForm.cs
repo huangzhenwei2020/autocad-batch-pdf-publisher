@@ -354,7 +354,20 @@ namespace BatchPdfPublisher.Views
         private static double ParsePositive(string value, string name) { double x; if (!double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out x) && !double.TryParse(value, out x) || x <= 0) throw new InvalidOperationException(name + "必须是大于 0 的数值。"); return x; }
         private static double ParseNonNegative(string value, string name) { double x; if (!double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out x) && !double.TryParse(value, out x) || x < 0) throw new InvalidOperationException(name + "必须是大于或等于 0 的数值。"); return x; }
         private static int ParseInteger(string value, string name, int min, int max) { int x; if (!int.TryParse(value, out x) || x < min || x > max) throw new InvalidOperationException(name + "必须是 " + min + " 到 " + max + " 之间的整数。"); return x; }
-        private static DataGridView Grid() { return new DataGridView { AllowUserToAddRows = false, AllowUserToDeleteRows = false, AllowUserToResizeRows = false, AutoGenerateColumns = false, BackgroundColor = Color.White, BorderStyle = BorderStyle.FixedSingle, RowHeadersVisible = false, SelectionMode = DataGridViewSelectionMode.CellSelect, ColumnHeadersHeight = 32, RowTemplate = { Height = 30 } }; }
+        private static DataGridView Grid()
+        {
+            var grid = new DataGridView
+            {
+                AllowUserToAddRows = false, AllowUserToDeleteRows = false, AllowUserToResizeRows = false,
+                AutoGenerateColumns = false, BackgroundColor = Color.White, BorderStyle = BorderStyle.FixedSingle,
+                RowHeadersVisible = false, SelectionMode = DataGridViewSelectionMode.CellSelect, MultiSelect = false,
+                ColumnHeadersHeight = 32, RowTemplate = { Height = 30 }
+            };
+            // 颜色按钮弹出 AutoCAD 色板时，表格不再保留大片系统蓝色选区；当前单元格仍有焦点框。
+            grid.DefaultCellStyle.SelectionBackColor = Color.White;
+            grid.DefaultCellStyle.SelectionForeColor = Color.FromArgb(35, 35, 35);
+            return grid;
+        }
         private static DataGridViewTextBoxColumn ReadOnly(string name,int width) { return new DataGridViewTextBoxColumn { HeaderText=name,Width=width,ReadOnly=true }; } private static DataGridViewTextBoxColumn TextColumn(string name,int width) { return new DataGridViewTextBoxColumn { HeaderText=name,Width=width }; }
         private static TabPage Page(string text) { return new TabPage(text) { BackColor=Color.White,Padding=new Padding(14) }; } private static ComboBox Combo(string[] values) { var x=new ComboBox { DropDownStyle=ComboBoxStyle.DropDown,Width=160 }; x.Items.AddRange(values); return x; }
         private static TabPage SubPage(string text) { return new TabPage(text) { BackColor = Color.White, Padding = new Padding(8) }; }
