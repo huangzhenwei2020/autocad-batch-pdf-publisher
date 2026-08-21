@@ -1,0 +1,362 @@
+using System;
+using System.Collections.Generic;
+
+namespace WL.Stair.Core.Domain
+{
+    public sealed class StairProjectDefinition
+    {
+        public StairProjectDefinition()
+        {
+            SchemaVersion = 6;
+            Name = "楼梯大样";
+            ProjectName = "未命名项目";
+            SubprojectName = string.Empty;
+            BuildingNumber = "1#";
+            StairNumber = "LT-01";
+            Construction = StairConstructionDefaults.CreateDefault();
+            Floors = new List<StairFloorDefinition>();
+            Storeys = new List<StairStoreyDefinition>();
+        }
+
+        public int SchemaVersion { get; set; }
+
+        public string Name { get; set; }
+
+        public string ProjectName { get; set; }
+
+        public string SubprojectName { get; set; }
+
+        public string BuildingNumber { get; set; }
+
+        public string StairNumber { get; set; }
+
+        public double BaseElevation { get; set; }
+
+        public int BasementStoreyCount { get; set; }
+
+        public StairConstructionDefaults Construction { get; set; }
+
+        public IList<StairFloorDefinition> Floors { get; set; }
+
+        public IList<StairStoreyDefinition> Storeys { get; set; }
+
+        public static StairProjectDefinition CreateDefault()
+        {
+            var project = new StairProjectDefinition();
+            project.Floors.Add(StairFloorDefinition.CreateDefault("LB-01", "一层楼板"));
+            project.Floors.Add(StairFloorDefinition.CreateDefault("LB-02", "二层楼板"));
+            project.Floors.Add(StairFloorDefinition.CreateDefault("LB-03", "三层楼板"));
+            project.Storeys.Add(StairStoreyDefinition.CreateDoubleFlight(
+                "LC-01", "一至二层", "LB-01", "LB-02", 3000.0, 1));
+            project.Storeys.Add(StairStoreyDefinition.CreateDoubleFlight(
+                "LC-02", "二至三层", "LB-02", "LB-03", 3200.0, 2));
+            return project;
+        }
+    }
+
+    public sealed class StairConstructionDefaults
+    {
+        public double StairwellWidth { get; set; }
+
+        public double StairwellDepth { get; set; }
+
+        public double FlightSlabThickness { get; set; }
+
+        public double LandingSlabThickness { get; set; }
+
+        public double FloorSlabThickness { get; set; }
+
+        public BeamDefaults FloorBeam { get; set; }
+
+        public BeamDefaults LandingBeam { get; set; }
+
+        public RailingDefaults Railing { get; set; }
+
+        public WallDefaults Wall { get; set; }
+
+        public OpeningDefaults Door { get; set; }
+
+        public OpeningDefaults Window { get; set; }
+
+        public static StairConstructionDefaults CreateDefault()
+        {
+            return new StairConstructionDefaults
+            {
+                StairwellWidth = 2500.0,
+                StairwellDepth = 4640.0,
+                FlightSlabThickness = 120.0,
+                LandingSlabThickness = 100.0,
+                FloorSlabThickness = 100.0,
+                FloorBeam = new BeamDefaults { Width = 200.0, Depth = 400.0 },
+                LandingBeam = new BeamDefaults { Width = 200.0, Depth = 400.0 },
+                Railing = new RailingDefaults { Enabled = true, Height = 1050.0, EdgeOffset = 50.0 },
+                Wall = new WallDefaults { Enabled = true, Thickness = 200.0 },
+                Door = new OpeningDefaults { Enabled = false, Width = 900.0, Height = 2100.0, SillHeight = 0.0 },
+                Window = new OpeningDefaults { Enabled = false, Width = 1200.0, Height = 1500.0, SillHeight = 900.0 }
+            };
+        }
+    }
+
+    public sealed class BeamDefaults
+    {
+        public double Width { get; set; }
+
+        public double Depth { get; set; }
+    }
+
+    public sealed class RailingDefaults
+    {
+        public bool Enabled { get; set; }
+
+        public double Height { get; set; }
+
+        public double EdgeOffset { get; set; }
+    }
+
+    public sealed class WallDefaults
+    {
+        public bool Enabled { get; set; }
+
+        public double Thickness { get; set; }
+    }
+
+    public sealed class OpeningDefaults
+    {
+        public bool Enabled { get; set; }
+
+        public double Width { get; set; }
+
+        public double Height { get; set; }
+
+        public double SillHeight { get; set; }
+    }
+
+    public sealed class StairFloorDefinition
+    {
+        public string Id { get; set; }
+
+        public string Name { get; set; }
+
+        public double DepthToUpFlight { get; set; }
+
+        public double DepthToDownFlight { get; set; }
+
+        public PlatformLayoutType PlatformType { get; set; }
+
+        public double PlatformWidth { get; set; }
+
+        public bool PlatformWidthLocked { get; set; }
+
+        public int ProjectionDirection { get; set; }
+
+        public bool DirectionLinked { get; set; }
+
+        public double? SlabThicknessOverride { get; set; }
+
+        public double? BeamWidthOverride { get; set; }
+
+        public double? BeamDepthOverride { get; set; }
+
+        public string BeamId { get; set; }
+
+        public static StairFloorDefinition CreateDefault(string id, string name)
+        {
+            return new StairFloorDefinition
+            {
+                Id = id,
+                Name = name,
+                BeamId = id.StartsWith("LB-", StringComparison.OrdinalIgnoreCase)
+                    ? "LL-" + id.Substring(3)
+                    : id + "-L",
+                DepthToUpFlight = 1200.0,
+                DepthToDownFlight = 1200.0,
+                PlatformType = PlatformLayoutType.Platform3,
+                PlatformWidth = 1200.0,
+                PlatformWidthLocked = false,
+                ProjectionDirection = -1,
+                DirectionLinked = true
+            };
+        }
+    }
+
+    public sealed class StairStoreyDefinition
+    {
+        public StairStoreyDefinition()
+        {
+            Flights = new List<StairFlightDefinition>();
+            Landings = new List<StairLandingDefinition>();
+        }
+
+        public string Id { get; set; }
+
+        public string Name { get; set; }
+
+        public string LowerFloorId { get; set; }
+
+        public string UpperFloorId { get; set; }
+
+        public double Height { get; set; }
+
+        public int TotalRiserCount { get; set; }
+
+        public bool StairwellConstraintLocked { get; set; }
+
+        public bool TreadDepthLinked { get; set; }
+
+        public bool PlatformWidthsEqual { get; set; }
+
+        public IList<StairFlightDefinition> Flights { get; set; }
+
+        public IList<StairLandingDefinition> Landings { get; set; }
+
+        public static StairStoreyDefinition CreateDoubleFlight(
+            string id,
+            string name,
+            string lowerFloorId,
+            string upperFloorId,
+            double height,
+            int index)
+        {
+            var storey = new StairStoreyDefinition
+            {
+                Id = id,
+                Name = name,
+                LowerFloorId = lowerFloorId,
+                UpperFloorId = upperFloorId,
+                Height = height,
+                TotalRiserCount = 18,
+                StairwellConstraintLocked = true,
+                TreadDepthLinked = true
+                ,PlatformWidthsEqual = false
+            };
+            storey.Flights.Add(StairFlightDefinition.CreateDefault(
+                "TD-" + index + "-1", "第" + index + "层第一跑", 9, StairFlightDirection.Right, StairSectionRepresentation.Rear));
+            storey.Flights.Add(StairFlightDefinition.CreateDefault(
+                "TD-" + index + "-2", "第" + index + "层第二跑", 9, StairFlightDirection.Left, StairSectionRepresentation.Cut));
+            storey.Landings.Add(StairLandingDefinition.CreateDefault(
+                "PT-" + index + "-1", "第" + index + "层休息平台", storey.Flights[0].Id, storey.Flights[1].Id));
+            return storey;
+        }
+    }
+
+    public sealed class StairFlightDefinition
+    {
+        public string Id { get; set; }
+
+        public string Name { get; set; }
+
+        public int RiserCount { get; set; }
+
+        public double TreadDepth { get; set; }
+
+        public double Width { get; set; }
+
+        public double? SlabThicknessOverride { get; set; }
+
+        public StairFlightDirection Direction { get; set; }
+
+        public bool DirectionLinked { get; set; }
+
+        public StairSectionRepresentation SectionRepresentation { get; set; }
+
+        public bool SectionRepresentationLinked { get; set; }
+
+        public static StairFlightDefinition CreateDefault(
+            string id,
+            string name,
+            int riserCount,
+            StairFlightDirection direction,
+            StairSectionRepresentation representation)
+        {
+            return new StairFlightDefinition
+            {
+                Id = id,
+                Name = name,
+                RiserCount = riserCount,
+                TreadDepth = 280.0,
+                Width = 1150.0,
+                Direction = direction,
+                DirectionLinked = true,
+                SectionRepresentation = representation,
+                SectionRepresentationLinked = true
+            };
+        }
+    }
+
+    public sealed class StairLandingDefinition
+    {
+        public string Id { get; set; }
+
+        public string Name { get; set; }
+
+        public string IncomingFlightId { get; set; }
+
+        public string OutgoingFlightId { get; set; }
+
+        public double DepthToIncomingFlight { get; set; }
+
+        public double DepthToOutgoingFlight { get; set; }
+
+        public PlatformLayoutType PlatformType { get; set; }
+
+        public double PlatformWidth { get; set; }
+
+        public bool PlatformWidthLocked { get; set; }
+
+        public int ProjectionDirection { get; set; }
+
+        public bool DirectionLinked { get; set; }
+
+        public double? SlabThicknessOverride { get; set; }
+
+        public double? BeamWidthOverride { get; set; }
+
+        public double? BeamDepthOverride { get; set; }
+
+        public string BeamId { get; set; }
+
+        public static StairLandingDefinition CreateDefault(
+            string id,
+            string name,
+            string incomingFlightId,
+            string outgoingFlightId)
+        {
+            return new StairLandingDefinition
+            {
+                Id = id,
+                Name = name,
+                IncomingFlightId = incomingFlightId,
+                OutgoingFlightId = outgoingFlightId,
+                BeamId = id.StartsWith("PT-", StringComparison.OrdinalIgnoreCase)
+                    ? "PTL-" + id.Substring(3)
+                    : id + "-L",
+                DepthToIncomingFlight = 1200.0,
+                DepthToOutgoingFlight = 1200.0,
+                PlatformType = PlatformLayoutType.Platform2,
+                PlatformWidth = 1200.0,
+                PlatformWidthLocked = false,
+                ProjectionDirection = 1,
+                DirectionLinked = true
+            };
+        }
+    }
+
+    public enum PlatformLayoutType
+    {
+        Platform1 = 1,
+        Platform2 = 2,
+        Platform3 = 3
+    }
+
+    public enum StairFlightDirection
+    {
+        Left = -1,
+        Right = 1
+    }
+
+    public enum StairSectionRepresentation
+    {
+        Cut = 0,
+        Rear = 1
+    }
+}

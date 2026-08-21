@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ApplicationPackage
+  SchemaVersion="1.0"
+  AppVersion="0.1.0"
+  ProductCode="{FA3BCA88-F990-48E3-A5D0-98C1B1744354}"
+  Name="WanLuo Architecture 2022"
+  Description="WanLuo Architecture stair detail prototype for AutoCAD 2022"
+  Author="WanLuo Architecture">
+  <CompanyDetails Name="WanLuo Architecture" />
+  <Components Description="AutoCAD 2022 component">
+    <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R24.1" SeriesMax="R24.1" />
+    <ComponentEntry
+      AppName="WL.Stair.Cad2022"
+      ModuleName="./Contents/Windows/2022/WL.Stair.Cad2022.dll"
+      AppDescription="One-click stair detail prototype"
+      LoadOnCommandInvocation="True">
+      <Commands GroupName="WL_STAIRS">
+        <Command Global="LTDY" Local="LTDY" />
+      </Commands>
+    </ComponentEntry>
+  </Components>
+</ApplicationPackage>
