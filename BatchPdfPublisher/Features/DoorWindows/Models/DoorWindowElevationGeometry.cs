@@ -556,9 +556,10 @@ namespace BatchPdfPublisher.Models
 
         private static DoorWindowCell OpeningArea(DoorWindowElevationGeometry geometry, DoorWindowScheduleItem item, DoorWindowCell cell)
         {
-            // 开启线必须接到门窗最外层扇框（分格单元边界），而不是落在灰色的 50 mm 内边框上。
-            // 内边框仍用于表达型材，但它不能缩小开启扇的轮廓。
-            return new DoorWindowCell(cell.Left, cell.Bottom, cell.Right, cell.Top)
+            // 开启线取门扇边框的外轮廓：先扣除固定外框/分隔框，再不扣 50 mm 门扇内框。
+            // 因而两条开启线只连接可动门扇的上点、下点与对侧中点，不会落到固定框或内框上。
+            var sashOuter = FixedFrameArea(geometry, item, cell);
+            return new DoorWindowCell(sashOuter.Left, sashOuter.Bottom, sashOuter.Right, sashOuter.Top)
             {
                 Opening = cell.Opening,
                 Material = cell.Material,
