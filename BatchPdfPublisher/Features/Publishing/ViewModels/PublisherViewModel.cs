@@ -440,13 +440,23 @@ namespace BatchPdfPublisher.ViewModels
             CreateOrSelectProject(NewProjectName);
         }
 
-        public bool CreateOrSelectProject(string requestedName)
+        public bool CreateOrSelectProject(string requestedName, string projectFolder = null)
         {
             var name = (requestedName ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(name)) { Status = "请输入工程名称。"; return false; }
             var existing = Projects.FirstOrDefault(x => string.Equals(x.Name, name, StringComparison.OrdinalIgnoreCase));
             if (existing != null) { SelectedProject = existing; Status = "已切换到已有工程：" + name; return true; }
-            var project = _store.CreateProject(name);
+            ProjectProfile project;
+            try
+            {
+                project = _store.CreateProject(name, projectFolder);
+                System.IO.Directory.CreateDirectory(_store.GetProjectFolder(project));
+            }
+            catch (System.Exception exception)
+            {
+                Status = "创建工程失败：" + exception.Message;
+                return false;
+            }
             Projects.Add(project);
             SelectedProject = project;
             NewProjectName = "新工程";
@@ -489,12 +499,31 @@ namespace BatchPdfPublisher.ViewModels
             return _store.GetProjectFolder(project ?? SelectedProject);
         }
 
-        public void SetProjectFolder(string folder)
+        public bool SetProjectFolder(string folder)
         {
-            if (SelectedProject == null || string.IsNullOrWhiteSpace(folder)) return;
-            SelectedProject.ProjectFolder = folder.Trim();
-            SaveCurrentProject();
-            Status = "项目文件夹已更新。";
+            if (SelectedProject == null) { Status = "请先选择工程。"; return false; }
+            if (string.IsNullOrWhiteSpace(folder)) { Status = "项目文件夹不能为空。"; return false; }
+            try
+            {
+                var requested = folder.Trim();
+                if (!System.IO.Path.IsPathRooted(requested)) { Status = "项目文件夹必须使用绝对路径。"; return false; }
+                var previous = GetProjectFolder();
+                var resolved = System.IO.Path.GetFullPath(requested).TrimEnd(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar);
+                System.IO.Directory.CreateDirectory(resolved);
+                var previousDefaultOutput = System.IO.Path.Combine(previous, "PDF输出");
+                var followsProjectFolder = string.IsNullOrWhiteSpace(SelectedProject.OutputDirectory)
+                    || string.Equals(System.IO.Path.GetFullPath(SelectedProject.OutputDirectory), System.IO.Path.GetFullPath(previousDefaultOutput), StringComparison.OrdinalIgnoreCase);
+                SelectedProject.ProjectFolder = resolved;
+                if (followsProjectFolder) OutputDirectory = System.IO.Path.Combine(resolved, "PDF输出");
+                SaveCurrentProject();
+                Status = "项目文件夹已更新：" + resolved;
+                return true;
+            }
+            catch (System.Exception exception)
+            {
+                Status = "项目文件夹更新失败：" + exception.Message;
+                return false;
+            }
         }
 
         public bool SaveCurrentCadToProjectFolder(out string destination, out string error)

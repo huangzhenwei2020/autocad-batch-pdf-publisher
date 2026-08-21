@@ -5,6 +5,8 @@ using System.Windows;
 using System.Windows.Interop;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
+using Autodesk.AutoCAD.EditorInput;
+using Autodesk.AutoCAD.Geometry;
 using BatchPdfPublisher.Models;
 using BatchPdfPublisher.Views;
 
@@ -67,6 +69,7 @@ namespace BatchPdfPublisher.Services
             }
             frames.Add(definition);
             store.SaveFrames(frames);
+            MessageBox.Show(FrameLayoutRangeService.HasValidRange(definition) ? "图框及排版范围登记成功。" : "图框登记成功；排版范围尚未写入。", "登记图框", MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
         public void Edit(Document document, FrameDefinition existing)
@@ -92,6 +95,7 @@ namespace BatchPdfPublisher.Services
             if (index < 0) frames.Add(definition);
             else frames[index] = definition;
             store.SaveFrames(frames);
+            MessageBox.Show(FrameLayoutRangeService.HasValidRange(definition) ? "图框排版范围已重新登记成功。" : "图框登记已更新；排版范围尚未写入。", "修改图框登记", MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
         private static FrameDefinition ShowDialog(Document document, FrameContext context, FrameDefinition existing)
@@ -102,7 +106,25 @@ namespace BatchPdfPublisher.Services
             new WindowInteropHelper(dialog).Owner = Autodesk.AutoCAD.ApplicationServices.Application.MainWindow.Handle;
             var accepted = dialog.ShowDialog() == true;
             if (dialog.RequestedIssues.Count > 0) ScheduleIssueAction(dialog.RequestedIssues, dialog.OpenAllRequested);
-            return accepted ? dialog.Definition : null;
+            if (!accepted) return null;
+            if (dialog.PickLayoutRangeRequested)
+            {
+                try { PromptLayoutRange(document, dialog.Definition); }
+                catch (Exception exception) { MessageBox.Show("排版范围未写入：" + exception.Message, "登记图框", MessageBoxButton.OK, MessageBoxImage.Warning); }
+            }
+            return dialog.Definition;
+        }
+
+        private static bool PromptLayoutRange(Document document, FrameDefinition definition)
+        {
+            if (document == null || definition == null) return false;
+            var anchor = DetailLayoutService.InsertFrameForRange(document, definition, 1);
+            if (anchor == null) return false;
+            var selected = DetailLayoutService.PromptLayoutRange(document, definition, 1, anchor, new DetailLayoutOptions());
+            if (selected == null) return false;
+            FrameLayoutRangeService.SetRange(definition, selected.LeftMargin, selected.RightMargin, selected.TopMargin, selected.BottomMargin);
+            document.Editor.WriteMessage("\n已记录图框排版范围：" + FrameLayoutRangeService.Describe(definition) + "。\n");
+            return true;
         }
 
         private static FrameProjectScanReport ScanProjectCadFiles(Document currentDocument, string blockName)
@@ -317,6 +339,19 @@ namespace BatchPdfPublisher.Services
                 tagCounts[tag] = tagCounts.TryGetValue(tag, out var count) ? count + 1 : 1;
                 if (!attributes.ContainsKey(tag)) attributes[tag] = attribute.TextString;
             }
+            var definitionCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var definition = transaction.GetObject(reference.IsDynamicBlock ? reference.DynamicBlockTableRecord : reference.BlockTableRecord, OpenMode.ForRead) as BlockTableRecord;
+            if (definition != null)
+            {
+                foreach (ObjectId id in definition)
+                {
+                    var attribute = transaction.GetObject(id, OpenMode.ForRead, false) as AttributeDefinition;
+                    if (attribute == null || string.IsNullOrWhiteSpace(attribute.Tag)) continue;
+                    var tag = attribute.Tag.Trim();
+                    definitionCounts[tag] = definitionCounts.TryGetValue(tag, out var count) ? count + 1 : 1;
+                    if (!attributes.ContainsKey(tag)) attributes[tag] = attribute.TextString;
+                }
+            }
             var scaleTags = new[] { "比例", "SCALE", "PRINTSCALE" };
             var knownScale = attributes.FirstOrDefault(x => scaleTags.Any(tag => string.Equals(tag, x.Key, StringComparison.OrdinalIgnoreCase))).Value;
             return new FrameContext
@@ -327,7 +362,9 @@ namespace BatchPdfPublisher.Services
                 AttributeTagSignature = FrameIdentityService.AttributeSignature(attributes.Keys),
                 DefinitionSignature = FrameIdentityService.DefinitionSignature(reference, transaction),
                 AspectRatio = FrameIdentityService.AspectRatio(reference.GeometricExtents),
-                DuplicateAttributeTags = tagCounts.Where(x => x.Value > 1).Select(x => x.Key).OrderBy(x => x).ToList()
+                DuplicateAttributeTags = tagCounts.Where(x => x.Value > 1).Select(x => x.Key)
+                    .Concat(definitionCounts.Where(x => x.Value > 1).Select(x => x.Key))
+                    .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList()
             };
         }
 
@@ -369,10 +406,10 @@ namespace BatchPdfPublisher.Services
                     Extension = context.Guess.Extension,
                     PaperOrientation = context.Guess.PaperOrientation,
                     Note = note,
-                    BuildingAttributeTag = "子项目名称",
-                    SheetNumberAttributeTag = "图号",
-                    SheetNameAttributeTag = "图纸名称",
-                    PrintScaleAttributeTag = "比例",
+                    BuildingAttributeTag = MatchAttributeTag(context.Attributes.Keys, "子项目名称", "楼栋", "BUILDING", "栋号", "SUBPROJECT", "SUBPROJECTNAME") ?? "子项目名称",
+                    SheetNumberAttributeTag = MatchAttributeTag(context.Attributes.Keys, "图号", "SHEETNO", "SHEET_NO", "DRAWINGNO", "DRAWING_NO") ?? "图号",
+                    SheetNameAttributeTag = MatchAttributeTag(context.Attributes.Keys, "图名", "图纸名称", "SHEETNAME", "SHEET_NAME", "DRAWINGNAME", "DRAWING_NAME") ?? "图名",
+                    PrintScaleAttributeTag = MatchAttributeTag(context.Attributes.Keys, "比例", "SCALE", "PRINTSCALE", "PRINT_SCALE") ?? "比例",
                     DefaultPrintScale = context.Guess.PrintScale
                 };
                 var store = new PublishPlanStore();
@@ -392,6 +429,28 @@ namespace BatchPdfPublisher.Services
             && string.Equals(left.PaperSize, right.PaperSize, StringComparison.OrdinalIgnoreCase)
             && string.Equals(left.Extension, right.Extension, StringComparison.OrdinalIgnoreCase)
             && string.Equals(left.Note, right.Note, StringComparison.OrdinalIgnoreCase);
+
+        private static string MatchAttributeTag(IEnumerable<string> tags, params string[] aliases)
+        {
+            var available = (tags ?? Enumerable.Empty<string>()).Where(x => !string.IsNullOrWhiteSpace(x)).ToList();
+            foreach (var alias in aliases)
+            {
+                var exact = available.FirstOrDefault(tag => string.Equals(alias, tag, StringComparison.OrdinalIgnoreCase));
+                if (exact != null) return exact;
+            }
+            foreach (var alias in aliases)
+            {
+                var normalizedAlias = NormalizeAttributeTag(alias);
+                var normalized = available.FirstOrDefault(tag => string.Equals(normalizedAlias, NormalizeAttributeTag(tag), StringComparison.OrdinalIgnoreCase));
+                if (normalized != null) return normalized;
+            }
+            return null;
+        }
+
+        private static string NormalizeAttributeTag(string value)
+        {
+            return new string((value ?? string.Empty).Where(char.IsLetterOrDigit).ToArray()).ToUpperInvariant();
+        }
 
         private sealed class FrameContext
         {

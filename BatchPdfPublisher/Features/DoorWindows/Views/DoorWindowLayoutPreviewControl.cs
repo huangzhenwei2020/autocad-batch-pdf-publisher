@@ -27,6 +27,7 @@ namespace BatchPdfPublisher.Views
         private DoorWindowElevationInsertionService.DoorWindowLayoutSlot _hoverSlot;
         private DoorWindowElevationInsertionService.DoorWindowLayoutSlot _selectedSlot;
         private string _statusText;
+        private DateTime _lastDrawErrorLogUtc = DateTime.MinValue;
 
         public DoorWindowLayoutPreviewControl()
         {
@@ -80,7 +81,7 @@ namespace BatchPdfPublisher.Views
         {
             if (Width <= 0 || Height <= 0) { _zoom = 1f; return; }
             if (_plan == null || _plan.PageWidth <= 0 || _plan.PageHeight <= 0) { _zoom = 1f; return; }
-            var totalWidth = _plan.PageCount * _plan.PageWidth + (_plan.PageCount - 1) * Math.Max(0d, _options.PageGap);
+            var totalWidth = _plan.PageCount * _plan.PageWidth + (_plan.PageCount - 1) * Math.Max(0d, _options.PageGap) * _scale;
             if (totalWidth <= 0d) { _zoom = 1f; return; }
             var availableHeight = Math.Max(1f, Height - 26f - 24f);
             _zoom = Math.Min(Math.Max(0.02f, (Width - 28f) / (float)totalWidth), Math.Max(0.02f, availableHeight / (float)_plan.PageHeight));
@@ -89,7 +90,8 @@ namespace BatchPdfPublisher.Views
 
         private RectangleF PageRect(int page)
         {
-            var x = _pageOffset.X + page * ((float)_plan.PageWidth + (float)_options.PageGap) * _zoom;
+            var pageGap = (float)(Math.Max(0d, _options.PageGap) * _scale);
+            var x = _pageOffset.X + page * ((float)_plan.PageWidth + pageGap) * _zoom;
             var w = (float)_plan.PageWidth * _zoom; var h = (float)_plan.PageHeight * _zoom;
             return new RectangleF(Safe(x, _pageOffset.X), Safe(_pageOffset.Y, 0f), Safe(w, 0f), Safe(h, 0f));
         }
@@ -99,7 +101,8 @@ namespace BatchPdfPublisher.Views
             // slot.X/slot.Y 是立面插入原点（相对页左下角，模型单位）。
             // 立面顶边 = slot.Y + 洞口高；占位框高 = FootprintHeight（含下方标注与标题）。
             var topY = slot.Y + Math.Max(0d, slot.Item == null ? 0d : slot.Item.Height);
-            var x = _pageOffset.X + slot.Page * ((float)_plan.PageWidth + (float)_options.PageGap) * _zoom + (float)slot.X * _zoom;
+            var pageGap = (float)(Math.Max(0d, _options.PageGap) * _scale);
+            var x = _pageOffset.X + slot.Page * ((float)_plan.PageWidth + pageGap) * _zoom + (float)slot.X * _zoom;
             var y = _pageOffset.Y + (float)(_plan.PageHeight - topY) * _zoom;
             var w = (float)slot.FootprintWidth * _zoom; var h = (float)slot.FootprintHeight * _zoom;
             return new RectangleF(Safe(x, _pageOffset.X), Safe(y, _pageOffset.Y), Safe(w, 0f), Safe(h, 0f));
@@ -140,7 +143,7 @@ namespace BatchPdfPublisher.Views
                 var targetIndex = _items.IndexOf(target.Item);
                 var list = _items.ToList();
                 list.RemoveAt(_draggingIndex);
-                var insertAt = targetIndex > _draggingIndex ? targetIndex - 1 : targetIndex;
+                var insertAt = targetIndex;
                 if (insertAt < 0) insertAt = 0;
                 list.Insert(insertAt, dragItem);
                 _items = list;
@@ -204,6 +207,9 @@ namespace BatchPdfPublisher.Views
         {
             try
             {
+                var now = DateTime.UtcNow;
+                if ((now - _lastDrawErrorLogUtc).TotalSeconds < 10d) return;
+                _lastDrawErrorLogUtc = now;
                 var log = System.IO.Path.Combine(UserDataPaths.LogsDirectory, "door-window-preview.log");
                 var info = "frame=" + (_frame == null ? "null" : _frame.PaperDisplay + "/" + _frame.BlockName)
                     + " scale=" + _scale + " zoom=" + _zoom
@@ -224,6 +230,8 @@ namespace BatchPdfPublisher.Views
             using (var contentPen = new Pen(Color.FromArgb(150, 160, 175), 1f) { DashStyle = DashStyle.Dash })
             using (var slotPen = new Pen(Color.FromArgb(30, 110, 175), 1.3f))
             using (var dragPen = new Pen(Color.FromArgb(200, 90, 60), 1.6f))
+            using (var selectedPen = new Pen(Color.FromArgb(220, 120, 30), 2f))
+            using (var dragFill = new SolidBrush(Color.FromArgb(40, 245, 180, 160)))
             using (var font = new Font("Microsoft YaHei UI", 8.5f))
             using (var brush = new SolidBrush(Color.FromArgb(25, 36, 48)))
             {
@@ -248,28 +256,28 @@ namespace BatchPdfPublisher.Views
                     var isDragging = index == _draggingIndex;
                     var isSelected = _selectedSlot != null && ReferenceEquals(_selectedSlot.Item, slot.Item);
                     var isLocked = slot.Item != null && slot.Item.LockedPage > 0;
-                    using (var pen = isDragging ? dragPen : isSelected ? new Pen(Color.FromArgb(220, 120, 30), 2f) : slotPen)
-                    {
-                        DrawRectSafe(graphics, pen, rect.X, rect.Y, rect.Width, rect.Height, "slot");
-                        if (isDragging) graphics.FillRectangle(new SolidBrush(Color.FromArgb(40, 245, 180, 160)), rect);
-                    }
+                    var pen = isDragging ? dragPen : isSelected ? selectedPen : slotPen;
+                    DrawRectSafe(graphics, pen, rect.X, rect.Y, rect.Width, rect.Height, "slot");
+                    if (isDragging) graphics.FillRectangle(dragFill, rect);
                     // 锁定标记：槽位左上角显示小锁+所在页号。
                     if (isLocked)
                     {
                         using (var lockBrush = new SolidBrush(Color.FromArgb(170, 80, 20)))
+                        using (var lockBackground = new SolidBrush(Color.FromArgb(235, 250, 240)))
                         using (var lockFont = new Font("Microsoft YaHei UI", 7.5f))
                         {
                             var lockText = "锁定" + slot.Item.LockedPage;
                             var lockSize = graphics.MeasureString(lockText, lockFont);
                             var lx = Math.Max(rect.X + 2f, rect.X + 2f);
                             var ly = Math.Max(rect.Y + 1f, rect.Y + 1f);
-                            graphics.FillRectangle(new SolidBrush(Color.FromArgb(235, 250, 240)), lx, ly, lockSize.Width + 4f, lockSize.Height + 2f);
+                            graphics.FillRectangle(lockBackground, lx, ly, lockSize.Width + 4f, lockSize.Height + 2f);
                             graphics.DrawString(lockText, lockFont, lockBrush, lx + 2f, ly + 1f);
                         }
                     }
                     // 槽位内绘制该门窗的实际立面图（含图名/比例/标注，分区布局避免重叠）。
                     DrawItemElevation(graphics, slot.Item, rect, index + 1);
                 }
+                DrawAttachmentPreviews(graphics, pagePen, contentPen);
                 // 目标插入位置高亮框：拖动时指示门窗将被移动到的槽位。
                 if (_hoverSlot != null && _draggingIndex >= 0)
                 {
@@ -288,6 +296,42 @@ namespace BatchPdfPublisher.Views
             var hintY = Math.Max(2f, Height - 22);
             var hintW = Math.Max(0f, Width - 12);
             if (hintW > 0f) DrawCentered(graphics, "提示：单击选中门窗，工具栏“锁定到本页/解锁”固定其所在页；拖动调整顺序（跨页拖动自动锁定到目标页）；滚轮缩放。", new RectangleF(6, hintY, hintW, 18), Color.DimGray, 8.5F);
+        }
+
+        private void DrawAttachmentPreviews(Graphics graphics, Pen outlinePen, Pen gridPen)
+        {
+            foreach (var attachment in _plan.Attachments)
+            {
+                var pageGap = (float)(Math.Max(0d, _options.PageGap) * _scale);
+                var pageX = _pageOffset.X + attachment.Page * ((float)_plan.PageWidth + pageGap) * _zoom;
+                var rect = new RectangleF(
+                    pageX + (float)attachment.X * _zoom,
+                    _pageOffset.Y + (float)(_plan.PageHeight - attachment.Top) * _zoom,
+                    (float)attachment.Width * _zoom,
+                    Math.Max(1f, (float)attachment.Height * _zoom));
+                graphics.FillRectangle(Brushes.White, rect);
+                DrawRectSafe(graphics, outlinePen, rect.X, rect.Y, rect.Width, rect.Height, attachment.Kind);
+                if (string.Equals(attachment.Kind, "Schedule", StringComparison.Ordinal))
+                {
+                    DrawCentered(graphics, "门窗表", new RectangleF(rect.X, rect.Y, rect.Width, Math.Min(22f, rect.Height)), Color.FromArgb(35, 55, 75), 9F);
+                    var headerY = rect.Y + Math.Min(22f, rect.Height * 0.2f);
+                    graphics.DrawLine(gridPen, rect.Left, headerY, rect.Right, headerY);
+                    for (var column = 1; column < 5; column++) graphics.DrawLine(gridPen, rect.Left + rect.Width * column / 5f, headerY, rect.Left + rect.Width * column / 5f, rect.Bottom);
+                    var visibleRows = Math.Min(8, Math.Max(1, _items.Count));
+                    for (var row = 1; row <= visibleRows; row++) graphics.DrawLine(gridPen, rect.Left, headerY + (rect.Bottom - headerY) * row / visibleRows, rect.Right, headerY + (rect.Bottom - headerY) * row / visibleRows);
+                }
+                else
+                {
+                    DrawCentered(graphics, "门窗设计说明", new RectangleF(rect.X, rect.Y, rect.Width, Math.Min(24f, rect.Height)), Color.FromArgb(35, 55, 75), 9F);
+                    var startY = rect.Y + Math.Min(26f, rect.Height * 0.18f);
+                    for (var row = 0; row < 8; row++)
+                    {
+                        var lineY = startY + row * Math.Max(5f, (rect.Bottom - startY) / 9f);
+                        if (lineY >= rect.Bottom - 2f) break;
+                        graphics.DrawLine(gridPen, rect.Left + 7f, lineY, rect.Right - 7f, lineY);
+                    }
+                }
+            }
         }
 
         /// <summary>把 NaN/Infinity/负值替换为 fallback，保证传给 GDI+ 的都是有限非负值。</summary>
@@ -375,25 +419,13 @@ namespace BatchPdfPublisher.Views
             return true;
         }
 
-        /// <summary>带参数日志的 DrawRectangle：失败时把 x/y/w/h 写入日志，便于定位 GDI+ 范围限制。</summary>
+        /// <summary>绘制前过滤无效坐标；GDI+ 异常交给 OnPaint 统一记录和隔离。</summary>
         private void DrawRectSafe(Graphics graphics, Pen pen, float x, float y, float w, float h, string tag)
         {
             if (float.IsNaN(x) || float.IsInfinity(x) || float.IsNaN(y) || float.IsInfinity(y)
                 || float.IsNaN(w) || float.IsInfinity(w) || float.IsNaN(h) || float.IsInfinity(h)
                 || w <= 0f || h <= 0f) return;
-            try
-            {
-                graphics.DrawRectangle(pen, x, y, w, h);
-            }
-            catch (Exception exception)
-            {
-                try
-                {
-                    var log = System.IO.Path.Combine(UserDataPaths.LogsDirectory, "door-window-preview.log");
-                    System.IO.File.AppendAllText(log, DateTime.Now.ToString("O") + " " + tag + " rect x=" + x + " y=" + y + " w=" + w + " h=" + h + " zoom=" + _zoom + "\r\n" + exception + "\r\n");
-                }
-                catch { }
-            }
+            graphics.DrawRectangle(pen, x, y, w, h);
         }
 
         private static void DrawCentered(Graphics graphics, string text, RectangleF rectangle, Color color, float size)

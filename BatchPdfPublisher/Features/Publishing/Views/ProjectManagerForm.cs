@@ -18,6 +18,8 @@ namespace BatchPdfPublisher.Views
         private readonly TextBox _folder = new TextBox();
         private readonly NumericUpDown _autoSaveMinutes = new NumericUpDown();
         private readonly ToolTip _toolTip = new ToolTip();
+        private bool _updatingSelection;
+        private bool _folderChosenForNewProject;
 
         public ProjectManagerForm(PublisherViewModel viewModel, Action refreshPublisher, Action configureScan)
         {
@@ -88,6 +90,7 @@ namespace BatchPdfPublisher.Views
             bottom.Controls.Add(close); outer.Controls.Add(bottom, 0, 1);
             _projects.SelectedIndexChanged += (sender, args) => UpdateSelection();
             _projects.DoubleClick += (sender, args) => SwitchSelected();
+            _folder.TextChanged += (sender, args) => { if (!_updatingSelection) _folderChosenForNewProject = true; };
         }
 
         private void RefreshProjects()
@@ -103,14 +106,23 @@ namespace BatchPdfPublisher.Views
         {
             var project = _projects.SelectedItem as ProjectProfile ?? _viewModel.SelectedProject;
             if (project == null) return;
-            _name.Text = project.Name;
-            _folder.Text = _viewModel.GetProjectFolder(project);
-            _autoSaveMinutes.Value = Math.Max(_autoSaveMinutes.Minimum, Math.Min(_autoSaveMinutes.Maximum, _viewModel.GetProjectAutoSaveMinutes(project)));
+            _updatingSelection = true;
+            try
+            {
+                _name.Text = project.Name;
+                _folder.Text = _viewModel.GetProjectFolder(project);
+                _autoSaveMinutes.Value = Math.Max(_autoSaveMinutes.Minimum, Math.Min(_autoSaveMinutes.Maximum, _viewModel.GetProjectAutoSaveMinutes(project)));
+                _folderChosenForNewProject = false;
+            }
+            finally { _updatingSelection = false; }
         }
 
         private void CreateOrSwitch()
         {
-            if (_viewModel.CreateOrSelectProject(_name.Text)) { _refreshPublisher(); RefreshProjects(); }
+            var existing = _viewModel.Projects.FirstOrDefault(project => string.Equals(project.Name, (_name.Text ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase));
+            var requestedFolder = existing == null && _folderChosenForNewProject ? _folder.Text : null;
+            if (_viewModel.CreateOrSelectProject(_name.Text, requestedFolder)) { _refreshPublisher(); RefreshProjects(); }
+            else MessageBox.Show(this, _viewModel.Status, "新建工程", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
 
         private void SwitchSelected()
@@ -132,7 +144,7 @@ namespace BatchPdfPublisher.Views
         {
             var selected = _projects.SelectedItem as ProjectProfile;
             if (selected != null && !ReferenceEquals(selected, _viewModel.SelectedProject)) _viewModel.SelectedProject = selected;
-            _viewModel.SetProjectFolder(_folder.Text);
+            if (!_viewModel.SetProjectFolder(_folder.Text)) { MessageBox.Show(this, _viewModel.Status, "项目文件夹", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
             _viewModel.SetProjectAutoSaveMinutes((int)_autoSaveMinutes.Value);
             _viewModel.SaveProjectParameters(); _refreshPublisher();
         }
@@ -155,7 +167,7 @@ namespace BatchPdfPublisher.Views
         private void ChooseFolder()
         {
             using (var dialog = new FolderBrowserDialog { Description = "选择工程文件夹", SelectedPath = _folder.Text })
-                if (dialog.ShowDialog(this) == DialogResult.OK) _folder.Text = dialog.SelectedPath;
+                if (dialog.ShowDialog(this) == DialogResult.OK) { _folder.Text = dialog.SelectedPath; _folderChosenForNewProject = true; }
         }
 
         private void SaveCurrentCad()

@@ -25,9 +25,9 @@ namespace BatchPdfPublisher.Services
                     List<ProjectProfile> projects;
                     using (var stream = File.OpenRead(path))
                         projects = (List<ProjectProfile>)new DataContractJsonSerializer(typeof(List<ProjectProfile>)).ReadObject(stream);
-                    var migratedProjectFolders = projects != null && projects.Any(x => x != null && IsLegacyOwnedProjectFolder(x.ProjectFolder));
+                    var normalizedProjectFolders = projects != null && projects.Any(x => x != null && NeedsProjectFolderNormalization(x.ProjectFolder));
                     Normalize(projects);
-                    if (FrameTemplateStore.MakePathsReadable(projects) || migratedProjectFolders) SaveProjects(projects);
+                    if (FrameTemplateStore.MakePathsReadable(projects) || normalizedProjectFolders) SaveProjects(projects);
                     return projects;
                 }
                 catch
@@ -63,14 +63,15 @@ namespace BatchPdfPublisher.Services
             return projects.FirstOrDefault(x => string.Equals(x.Name, activeName, StringComparison.OrdinalIgnoreCase)) ?? projects[0];
         }
 
-        public ProjectProfile CreateProject(string name)
+        public ProjectProfile CreateProject(string name, string projectFolder = null)
         {
             var cleanName = (name ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(cleanName)) throw new ArgumentException("项目名称不能为空。", nameof(name));
             var projects = LoadProjects();
             var existing = projects.FirstOrDefault(x => string.Equals(x.Name, cleanName, StringComparison.OrdinalIgnoreCase));
             if (existing != null) return existing;
-            var project = new ProjectProfile { Name = cleanName, ProjectFolder = DefaultProjectFolder(cleanName) };
+            var project = new ProjectProfile { Name = cleanName, ProjectFolder = ResolveProjectFolder(projectFolder, cleanName) };
+            Directory.CreateDirectory(project.ProjectFolder);
             projects.Add(project);
             SaveProjects(projects);
             SetActiveProject(cleanName);
@@ -213,15 +214,11 @@ namespace BatchPdfPublisher.Services
             projects.RemoveAll(x => x == null || string.IsNullOrWhiteSpace(x.Name));
             foreach (var project in projects)
             {
-                if (string.IsNullOrWhiteSpace(project.ProjectFolder) || IsLegacyOwnedProjectFolder(project.ProjectFolder))
+                if (string.IsNullOrWhiteSpace(project.ProjectFolder))
                 {
-                    var previous = project.ProjectFolder; var portable = DefaultProjectFolder(project.Name);
-                    if (!string.IsNullOrWhiteSpace(previous) && Directory.Exists(previous) && !string.Equals(Path.GetFullPath(previous), Path.GetFullPath(portable), StringComparison.OrdinalIgnoreCase))
-                    {
-                        try { if (!Directory.Exists(portable)) Directory.Move(previous, portable); } catch { }
-                    }
-                    project.ProjectFolder = portable;
+                    project.ProjectFolder = DefaultProjectFolder(project.Name);
                 }
+                else if (!Path.IsPathRooted(project.ProjectFolder)) project.ProjectFolder = Path.GetFullPath(Path.Combine(UserDataPaths.RootDirectory, project.ProjectFolder));
                 if (project.Frames == null) project.Frames = new List<FrameDefinition>();
                 if (string.IsNullOrWhiteSpace(project.PlotStyle)) project.PlotStyle = "monochrome.ctb";
                 if (string.IsNullOrWhiteSpace(project.MarginMode)) project.MarginMode = "自动适配";
@@ -256,13 +253,16 @@ namespace BatchPdfPublisher.Services
             foreach (var invalid in Path.GetInvalidFileNameChars()) name = name.Replace(invalid, '_');
             return Path.Combine(UserDataPaths.ProjectsDirectory, name);
         }
-        private static bool IsLegacyOwnedProjectFolder(string path)
+        private static string ResolveProjectFolder(string requestedFolder, string projectName)
         {
-            if (string.IsNullOrWhiteSpace(path)) return false;
-            var normalized = path.Replace('/', '\\');
-            return normalized.IndexOf("\\BatchPdfPublisher\\Projects\\", StringComparison.OrdinalIgnoreCase) >= 0
-                || normalized.IndexOf("\\WanluoArchitectureTools\\Projects\\", StringComparison.OrdinalIgnoreCase) >= 0
-                || normalized.IndexOf("\\用户配置文件\\Projects\\", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (string.IsNullOrWhiteSpace(requestedFolder)) return DefaultProjectFolder(projectName);
+            var trimmed = requestedFolder.Trim();
+            if (!Path.IsPathRooted(trimmed)) throw new IOException("项目文件夹必须使用绝对路径。");
+            return Path.GetFullPath(trimmed).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        }
+        private static bool NeedsProjectFolderNormalization(string path)
+        {
+            return string.IsNullOrWhiteSpace(path) || !Path.IsPathRooted(path);
         }
     }
 }

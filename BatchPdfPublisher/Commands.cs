@@ -77,6 +77,15 @@ namespace BatchPdfPublisher
             Application.ShowModelessDialog(new FrameCreationForm(document, null));
         }
 
+        [CommandMethod("WLDYLayout")]
+        [CommandMethod("DYPB")]
+        public void OpenDetailLayout()
+        {
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document == null) return;
+            Application.ShowModelessDialog(new DetailLayoutForm(document));
+        }
+
         [CommandMethod("FJGM")]
         [CommandMethod("WLROOMNAME")]
         public void BatchRenameTianzhengRooms()

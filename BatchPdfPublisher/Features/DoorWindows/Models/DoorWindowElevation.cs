@@ -216,6 +216,7 @@ namespace BatchPdfPublisher.Models
         public string ProjectName { get; set; }
         public bool FloorStatistics { get; set; }
         public string BaseSourceHandle { get; set; }
+        public List<DoorWindowScheduleItem> BaseItems { get; set; } = new List<DoorWindowScheduleItem>();
         public List<DoorWindowFloorSourcePreference> FloorSources { get; set; } = new List<DoorWindowFloorSourcePreference>();
     }
 
@@ -224,6 +225,7 @@ namespace BatchPdfPublisher.Models
         public string FloorName { get; set; }
         public int FloorCount { get; set; } = 1;
         public string SourceHandle { get; set; }
+        public List<DoorWindowScheduleItem> Items { get; set; } = new List<DoorWindowScheduleItem>();
     }
 
     public sealed class DoorWindowElevationTemplate

@@ -1,3 +1,4 @@
+using Autodesk.AutoCAD.ApplicationServices;
 using BatchPdfPublisher.Models;
 using BatchPdfPublisher.Services;
 using System;
@@ -15,12 +16,13 @@ namespace BatchPdfPublisher.Views
     internal sealed class DoorWindowLayoutPreviewForm : DpiAwareForm
     {
         private readonly IList<DoorWindowScheduleItem> _source;
+        private readonly Document _document;
         private readonly int _scale;
         private readonly FrameDefinition _initialFrame;
         private readonly List<FrameDefinition> _frames;
         private readonly DoorWindowLayoutPreviewControl _preview = new DoorWindowLayoutPreviewControl();
         private readonly ComboBox _frameChoice = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 260, Height = 28 };
-        private readonly TextBox _leftMargin = new TextBox { Width = 52 }, _rightMargin = new TextBox { Width = 52 }, _topMargin = new TextBox { Width = 52 }, _bottomMargin = new TextBox { Width = 52 }, _pageGap = new TextBox { Width = 52 }, _itemGap = new TextBox { Width = 52 };
+        private readonly TextBox _leftMargin = new TextBox { Width = 52 }, _rightMargin = new TextBox { Width = 52 }, _topMargin = new TextBox { Width = 52 }, _bottomMargin = new TextBox { Width = 52 }, _pageGap = new TextBox { Width = 52 }, _itemGap = new TextBox { Width = 52 }, _boundaryGap = new TextBox { Width = 52 };
         private readonly CheckBox _includeSchedule = new CheckBox { Text = "同时插入门窗表", AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
         private readonly CheckBox _includeNotes = new CheckBox { Text = "门窗设计说明", AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
         private readonly CheckBox _autoFrame = new CheckBox { Text = "自动最小图框", AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
@@ -31,31 +33,35 @@ namespace BatchPdfPublisher.Views
         public IList<DoorWindowScheduleItem> OrderedItems => _preview.OrderedItems;
         public FrameDefinition SelectedLayoutFrame => SelectedFrame();
 
-        public DoorWindowLayoutPreviewForm(IList<DoorWindowScheduleItem> items, int drawingScale, FrameDefinition selectedFrame, bool includeSchedule, bool includeNotes, bool useTianzhengTitle)
+        public DoorWindowLayoutPreviewForm(Document document, IList<DoorWindowScheduleItem> items, int drawingScale, FrameDefinition selectedFrame, bool includeSchedule, bool includeNotes, bool useTianzhengTitle)
         {
+            _document = document;
             _source = (items ?? new List<DoorWindowScheduleItem>()).Where(x => x != null).ToList();
             _scale = Math.Max(1, drawingScale);
             _frames = new PublishPlanStore().LoadFrames().Where(x => !string.IsNullOrWhiteSpace(x.BlockName)).ToList();
-            _initialFrame = selectedFrame;
+            var saved = LoadSavedMargins();
+            _initialFrame = selectedFrame
+                ?? _frames.FirstOrDefault(x => !string.IsNullOrWhiteSpace(saved.LayoutFrameRegistrationId) && string.Equals(x.RegistrationId, saved.LayoutFrameRegistrationId, StringComparison.OrdinalIgnoreCase))
+                ?? _frames.FirstOrDefault(x => !string.IsNullOrWhiteSpace(saved.LayoutFrameBlockName) && string.Equals(x.BlockName, saved.LayoutFrameBlockName, StringComparison.OrdinalIgnoreCase));
             Text = "门窗立面排版预览"; StartPosition = FormStartPosition.CenterParent; FormBorderStyle = FormBorderStyle.Sizable; MinimizeBox = false;
             ClientSize = new Size(980, 640); MinimumSize = new Size(820, 520); Font = new Font("Microsoft YaHei UI", 9F); BackColor = Color.White;
 
             var root = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1, BackColor = Color.White };
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 120)); root.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 96)); root.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
 
             var toolbar = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = true, Padding = new Padding(12, 10, 8, 6), BackColor = Color.FromArgb(245, 247, 250) };
             toolbar.Controls.Add(LabelFor("排版图框"));
             foreach (var frame in _frames) _frameChoice.Items.Add(new FrameChoice { Frame = frame });
             if (_frameChoice.Items.Count == 0) _frameChoice.Items.Add(new FrameChoice());
-            var index = _frames.FindIndex(x => _initialFrame != null && string.Equals(x.RegistrationId, _initialFrame.RegistrationId, StringComparison.OrdinalIgnoreCase));
+            var index = _frames.FindIndex(x => _initialFrame != null
+                && ((!string.IsNullOrWhiteSpace(_initialFrame.RegistrationId) && string.Equals(x.RegistrationId, _initialFrame.RegistrationId, StringComparison.OrdinalIgnoreCase))
+                    || string.Equals(x.BlockName, _initialFrame.BlockName, StringComparison.OrdinalIgnoreCase)));
             _frameChoice.SelectedIndex = index >= 0 ? index : 0;
-            _frameChoice.SelectedIndexChanged += (s, e) => RefreshLayout();
+            _frameChoice.SelectedIndexChanged += (s, e) => { SaveMargins(); RefreshLayout(); };
             toolbar.Controls.Add(_frameChoice);
-            toolbar.Controls.Add(LabelFor("左"));
-            toolbar.Controls.Add(_leftMargin); toolbar.Controls.Add(LabelFor("右")); toolbar.Controls.Add(_rightMargin);
-            toolbar.Controls.Add(LabelFor("上")); toolbar.Controls.Add(_topMargin); toolbar.Controls.Add(LabelFor("下")); toolbar.Controls.Add(_bottomMargin);
             toolbar.Controls.Add(LabelFor("页间距")); toolbar.Controls.Add(_pageGap);
             toolbar.Controls.Add(LabelFor("门窗间距")); toolbar.Controls.Add(_itemGap);
+            toolbar.Controls.Add(LabelFor("边界间距")); toolbar.Controls.Add(_boundaryGap);
             _includeSchedule.Checked = includeSchedule;
             _includeSchedule.CheckedChanged += (s, e) => { _includeNotes.Enabled = _includeSchedule.Checked; RefreshLayout(); };
             toolbar.Controls.Add(_includeSchedule);
@@ -70,9 +76,8 @@ namespace BatchPdfPublisher.Views
             toolbar.Controls.Add(_useTianzhengTitle);
             var lockButton = ButtonFor("锁定到本页"); lockButton.Click += (s, e) => { _preview.LockSelectedToPage(); RefreshSummary(); }; toolbar.Controls.Add(lockButton);
             var unlockButton = ButtonFor("解锁"); unlockButton.Click += (s, e) => { _preview.UnlockSelected(); RefreshSummary(); }; toolbar.Controls.Add(unlockButton);
-            var apply = ButtonFor("应用排版范围"); apply.Click += (s, e) => RefreshLayout(); toolbar.Controls.Add(apply);
-            var reset = ButtonFor("恢复默认"); reset.Click += (s, e) => { SetMargins(new DoorWindowElevationInsertionService.DoorWindowLayoutOptions()); RefreshLayout(); }; toolbar.Controls.Add(reset);
-            var hint = new Label { Text = "边距与页间距为纸面毫米；门窗表和设计说明自动排在整组图框右侧，只需指定一次整组插入点，插入后仍可独立移动。", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(10, 6, 0, 0) };
+            var registerRange = ButtonFor("登记排版范围"); registerRange.Click += (s, e) => RegisterLayoutRange(); toolbar.Controls.Add(registerRange);
+            var hint = new Label { Text = "排版范围读取自图框登记；门窗表和设计说明排在门窗之后。", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(10, 6, 0, 0) };
             toolbar.Controls.Add(hint);
             root.Controls.Add(toolbar, 0, 0);
 
@@ -87,8 +92,9 @@ namespace BatchPdfPublisher.Views
             footer.Controls.Add(buttons, 1, 0); root.Controls.Add(footer, 0, 2);
             Controls.Add(root);
 
-            SetMargins(LoadSavedMargins());
-            Shown += (s, e) => RefreshLayout();
+            SetMargins(saved);
+            FormClosing += (s, e) => SaveMargins();
+            Shown += (s, e) => { RefreshLayout(); ShowMissingRangeReminder(); };
         }
 
         /// <summary>排版参数持久化路径：记录上次使用的边距/页间距，下次打开自动恢复。</summary>
@@ -113,6 +119,11 @@ namespace BatchPdfPublisher.Views
                     options.BottomMargin = ReadDouble(data, "Bottom", options.BottomMargin);
                     options.PageGap = ReadDouble(data, "PageGap", options.PageGap);
                     options.ItemGap = ReadDouble(data, "ItemGap", options.ItemGap);
+                    options.BoundaryGap = ReadDouble(data, "BoundaryGap", options.BoundaryGap);
+                    string frameRegistrationId;
+                    if (data.TryGetValue("FrameRegistrationId", out frameRegistrationId)) options.LayoutFrameRegistrationId = frameRegistrationId;
+                    string frameBlockName;
+                    if (data.TryGetValue("FrameBlockName", out frameBlockName)) options.LayoutFrameBlockName = frameBlockName;
                     string scheduleValue;
                     if (data.TryGetValue("IncludeSchedule", out scheduleValue)) options.IncludeSchedule = string.Equals(scheduleValue, "1", StringComparison.Ordinal) || string.Equals(scheduleValue, "true", StringComparison.OrdinalIgnoreCase);
                     string notesValue;
@@ -137,6 +148,7 @@ namespace BatchPdfPublisher.Views
             try
             {
                 var options = ReadOptions();
+                var frame = SelectedFrame();
                 var lines = new[]
                 {
                     "Left=" + options.LeftMargin.ToString(System.Globalization.CultureInfo.InvariantCulture),
@@ -145,6 +157,9 @@ namespace BatchPdfPublisher.Views
                     "Bottom=" + options.BottomMargin.ToString(System.Globalization.CultureInfo.InvariantCulture),
                     "PageGap=" + options.PageGap.ToString(System.Globalization.CultureInfo.InvariantCulture),
                     "ItemGap=" + options.ItemGap.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    "BoundaryGap=" + options.BoundaryGap.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    "FrameRegistrationId=" + (frame == null ? string.Empty : frame.RegistrationId ?? string.Empty),
+                    "FrameBlockName=" + (frame == null ? string.Empty : frame.BlockName ?? string.Empty),
                     "IncludeSchedule=" + (options.IncludeSchedule ? "1" : "0"),
                     "IncludeScheduleNotes=" + (options.IncludeScheduleNotes ? "1" : "0"),
                     "UseTianzhengTitle=" + (options.UseTianzhengTitle ? "1" : "0")
@@ -161,19 +176,45 @@ namespace BatchPdfPublisher.Views
             _leftMargin.Text = options.LeftMargin.ToString("0.##"); _rightMargin.Text = options.RightMargin.ToString("0.##");
             _topMargin.Text = options.TopMargin.ToString("0.##"); _bottomMargin.Text = options.BottomMargin.ToString("0.##"); _pageGap.Text = options.PageGap.ToString("0.##");
             _itemGap.Text = options.ItemGap.ToString("0.##");
+            _boundaryGap.Text = options.BoundaryGap.ToString("0.##");
         }
 
         private DoorWindowElevationInsertionService.DoorWindowLayoutOptions ReadOptions()
         {
+            var frame = SelectedFrame(); var hasRange = FrameLayoutRangeService.HasValidRange(frame);
             return new DoorWindowElevationInsertionService.DoorWindowLayoutOptions
             {
-                LeftMargin = Parse(_leftMargin.Text, 20d), RightMargin = Parse(_rightMargin.Text, 20d),
-                TopMargin = Parse(_topMargin.Text, 15d), BottomMargin = Parse(_bottomMargin.Text, 20d), PageGap = Parse(_pageGap.Text, 30d),
-                ItemGap = Parse(_itemGap.Text, 12d),
+                LeftMargin = hasRange ? frame.LayoutLeftMargin : 0d, RightMargin = hasRange ? frame.LayoutRightMargin : 0d,
+                TopMargin = hasRange ? frame.LayoutTopMargin : 0d, BottomMargin = hasRange ? frame.LayoutBottomMargin : 0d, PageGap = Parse(_pageGap.Text, 30d),
+                ItemGap = Parse(_itemGap.Text, 5d),
+                BoundaryGap = Parse(_boundaryGap.Text, 10d),
+                LayoutFrameRegistrationId = SelectedFrame() == null ? null : SelectedFrame().RegistrationId,
+                LayoutFrameBlockName = SelectedFrame() == null ? null : SelectedFrame().BlockName,
                 IncludeSchedule = _includeSchedule.Checked,
                 IncludeScheduleNotes = _includeSchedule.Checked && _includeNotes.Checked,
                 UseTianzhengTitle = _useTianzhengTitle.Checked
             };
+        }
+
+        private async void RegisterLayoutRange()
+        {
+            var frame = SelectedFrame();
+            if (frame == null) { MessageBox.Show(this, "请选择排版图框。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+            Hide(); DetailLayoutOptions selected = null; Exception failure = null;
+            try
+            {
+                var current = new DetailLayoutOptions { ItemGap = Parse(_itemGap.Text, 5d), PageGap = Parse(_pageGap.Text, 30d) };
+                await CadCommandContext.ExecuteAsync(() =>
+                {
+                    var anchor = DetailLayoutService.InsertFrameForRange(_document, frame, 1);
+                    if (anchor != null) selected = DetailLayoutService.PromptLayoutRange(_document, frame, 1, anchor, current);
+                    if (selected != null) FrameLayoutRangeService.SaveRange(frame, selected.LeftMargin, selected.RightMargin, selected.TopMargin, selected.BottomMargin);
+                });
+            }
+            catch (Exception exception) { failure = exception; }
+            finally { if (!IsDisposed) { Show(); Activate(); } }
+            if (failure != null) { MessageBox.Show(this, failure.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            if (selected != null) RefreshLayout();
         }
         private static double Parse(string text, double fallback) { double value; return double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out value) && value >= 0 ? value : fallback; }
 
@@ -213,6 +254,12 @@ namespace BatchPdfPublisher.Views
 
         private FrameDefinition SelectedFrame()
         { var choice = _frameChoice.SelectedItem as FrameChoice; return choice == null ? null : choice.Frame; }
+
+        private void ShowMissingRangeReminder()
+        {
+            var frame = SelectedFrame(); if (frame == null || FrameLayoutRangeService.HasValidRange(frame)) return;
+            MessageBox.Show(this, "当前图框尚未登记排版范围。\r\n\r\n请点击“登记排版范围”，程序将插入一个 1:1 图框供您框选，并把范围写入图框登记。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
 
         /// <summary>自动选择最小图框：比较页数与纸张面积，选出最省纸方案并切换到该图框。</summary>
         private void ApplyAutoFrame()
