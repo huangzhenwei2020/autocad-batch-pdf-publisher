@@ -106,14 +106,16 @@ namespace WL.Stair.Core.Geometry
                         ? storey.Landings[index].PlatformWidth
                         : upperFloor == null ? 0.0 : upperFloor.PlatformWidth;
                     var boundaryConnectionX = connectionForBoundary(destinationDirection, destinationWidth);
-                    // Only a three-flight storey may deliberately end short of
-                    // its destination and use the designed bridge closure.
+                    // Only the final run of a three-flight storey may
+                    // deliberately end short and use the designed bridge.
                     var flightEndX = currentX + (direction * flightResult.HorizontalRun);
-                    if (storey.Flights.Count != 3
+                    var allowBridgeClosure = storey.Flights.Count == 3
+                        && index == storey.Flights.Count - 1;
+                    if (!allowBridgeClosure
                         && Math.Abs(flightEndX - boundaryConnectionX) > 0.01)
                     {
                         throw new InvalidOperationException(
-                            storey.Id + " 非三跑层的梯段必须直接连接楼板或休息平台。");
+                            storey.Id + " 的梯段必须直接连接楼板或休息平台。");
                     }
                     var isHidden = flight.SectionRepresentation == StairSectionRepresentation.Rear;
                     var destinationSlabThickness = index < storey.Landings.Count
@@ -131,7 +133,7 @@ namespace WL.Stair.Core.Geometry
                         direction,
                         boundaryConnectionX,
                         destinationSlabThickness,
-                        storey.Flights.Count == 3,
+                        allowBridgeClosure,
                         isHidden,
                         Math.Abs(currentElevation - lowestElevation) < 0.001,
                         flight.Id);
@@ -413,6 +415,7 @@ namespace WL.Stair.Core.Geometry
             {
                 var destinationElevation = elevation + flight.RiserHeight;
                 var bridgeUndersideElevation = destinationElevation - destinationSlabThickness;
+                Point2D? soffitConnection = null;
                 var soffitRise = outlineEnd.Y - outlineStart.Y;
                 if (Math.Abs(soffitRise) > 0.001)
                 {
@@ -428,43 +431,68 @@ namespace WL.Stair.Core.Geometry
                     if (intersectionAfterFlightEnd > -0.001
                         && intersectionBeforeBoundary > -0.001)
                     {
-                        lines.Add(new DrawingLine(
-                            new Point2D(x, elevation),
-                            new Point2D(x, destinationElevation),
-                            role,
-                            isHidden,
-                            componentId));
-                        lines.Add(new DrawingLine(
-                            new Point2D(x, destinationElevation),
-                            new Point2D(destinationConnectionX, destinationElevation),
-                            role,
-                            isHidden,
-                            componentId));
-                        // Duplicate the shared interface with the destination
-                        // floor/landing. MergeConnectedCutOutlines removes the
-                        // two coincident copies, leaving one continuous outer
-                        // boundary that can be hatched as a single region.
-                        lines.Add(new DrawingLine(
-                            new Point2D(destinationConnectionX, destinationElevation),
-                            new Point2D(destinationConnectionX, bridgeUndersideElevation),
-                            role,
-                            isHidden,
-                            componentId));
-                        lines.Add(new DrawingLine(
-                            new Point2D(destinationConnectionX, bridgeUndersideElevation),
-                            new Point2D(soffitIntersectionX, bridgeUndersideElevation),
-                            role,
-                            isHidden,
-                            componentId));
-                        lines.Add(new DrawingLine(
-                            new Point2D(soffitIntersectionX, bridgeUndersideElevation),
-                            outlineStart,
-                            role,
-                            isHidden,
-                            componentId));
-                        return;
+                        soffitConnection = new Point2D(
+                            soffitIntersectionX,
+                            bridgeUndersideElevation);
                     }
                 }
+
+                lines.Add(new DrawingLine(
+                    new Point2D(x, elevation),
+                    new Point2D(x, destinationElevation),
+                    role,
+                    isHidden,
+                    componentId));
+                lines.Add(new DrawingLine(
+                    new Point2D(x, destinationElevation),
+                    new Point2D(destinationConnectionX, destinationElevation),
+                    role,
+                    isHidden,
+                    componentId));
+                // Duplicate the shared interface with the destination
+                // floor/landing. MergeConnectedCutOutlines removes the
+                // coincident copies, leaving one continuous outer boundary.
+                lines.Add(new DrawingLine(
+                    new Point2D(destinationConnectionX, destinationElevation),
+                    new Point2D(destinationConnectionX, bridgeUndersideElevation),
+                    role,
+                    isHidden,
+                    componentId));
+                if (soffitConnection.HasValue)
+                {
+                    lines.Add(new DrawingLine(
+                        new Point2D(destinationConnectionX, bridgeUndersideElevation),
+                        soffitConnection.Value,
+                        role,
+                        isHidden,
+                        componentId));
+                    lines.Add(new DrawingLine(
+                        soffitConnection.Value,
+                        outlineStart,
+                        role,
+                        isHidden,
+                        componentId));
+                }
+                else
+                {
+                    // Even when the offset underside cannot intersect the
+                    // existing soffit within its finite segment, keep a closed
+                    // structural outline instead of silently leaving the flight
+                    // detached from its destination platform.
+                    lines.Add(new DrawingLine(
+                        new Point2D(destinationConnectionX, bridgeUndersideElevation),
+                        outlineEnd,
+                        role,
+                        isHidden,
+                        componentId));
+                    lines.Add(new DrawingLine(
+                        outlineEnd,
+                        outlineStart,
+                        role,
+                        isHidden,
+                        componentId));
+                }
+                return;
             }
 
             lines.Add(new DrawingLine(

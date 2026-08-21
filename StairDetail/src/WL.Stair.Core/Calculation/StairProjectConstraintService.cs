@@ -217,37 +217,11 @@ namespace WL.Stair.Core.Calculation
             var flights = new List<StairFlightDefinition>();
             Action solveSegment = () =>
             {
-                if (flights.Count == 0 || boundaries.Count != flights.Count + 1) return;
-                var anchorIndex = boundaries.FindIndex(IsPlatformWidthLocked);
-                if (anchorIndex < 0) anchorIndex = 0;
-                for (var index = anchorIndex - 1; index >= 0; index--)
-                {
-                    var width = project.Construction.StairwellDepth
-                        - PlatformWidth(boundaries[index + 1])
-                        - flights[index].TreadDepth * Math.Max(0, flights[index].RiserCount - 1);
-                    SetPlatformWidth(boundaries[index], Math.Max(1.0, width));
-                }
-                for (var index = anchorIndex; index < flights.Count; index++)
-                {
-                    var width = project.Construction.StairwellDepth
-                        - PlatformWidth(boundaries[index])
-                        - flights[index].TreadDepth * Math.Max(0, flights[index].RiserCount - 1);
-                    SetPlatformWidth(boundaries[index + 1], Math.Max(1.0, width));
-                }
+                SolveDirectConnectionSegment(project, boundaries, flights);
             };
 
             foreach (var storey in project.Storeys.Where(item => item != null && item.Flights != null))
             {
-                // A three-flight storey is the deliberate break in the chain:
-                // its final run may use the designed bridge closure.
-                if (storey.Flights.Count == 3)
-                {
-                    solveSegment();
-                    boundaries.Clear();
-                    flights.Clear();
-                    continue;
-                }
-
                 StairFloorDefinition lowerFloor;
                 StairFloorDefinition upperFloor;
                 floors.TryGetValue(storey.LowerFloorId ?? string.Empty, out lowerFloor);
@@ -255,6 +229,23 @@ namespace WL.Stair.Core.Calculation
                 var localBoundaries = new List<object> { lowerFloor };
                 localBoundaries.AddRange(storey.Landings.Cast<object>());
                 localBoundaries.Add(upperFloor);
+
+                // A three-flight storey only breaks the continuous chain at its
+                // final run. Its first two runs must still terminate directly at
+                // their landings; otherwise the section can visibly separate at
+                // those interfaces when tread depth is not linked.
+                if (storey.Flights.Count == 3)
+                {
+                    solveSegment();
+                    boundaries.Clear();
+                    flights.Clear();
+                    SolveDirectConnectionSegment(
+                        project,
+                        localBoundaries.Take(3).ToList(),
+                        storey.Flights.Take(2).ToList());
+                    continue;
+                }
+
                 if (boundaries.Count == 0) boundaries.Add(localBoundaries[0]);
                 for (var index = 0; index < storey.Flights.Count; index++)
                 {
@@ -263,6 +254,38 @@ namespace WL.Stair.Core.Calculation
                 }
             }
             solveSegment();
+        }
+
+        private static void SolveDirectConnectionSegment(
+            StairProjectDefinition project,
+            IList<object> boundaries,
+            IList<StairFlightDefinition> flights)
+        {
+            if (project == null
+                || flights == null
+                || boundaries == null
+                || flights.Count == 0
+                || boundaries.Count != flights.Count + 1)
+            {
+                return;
+            }
+
+            var anchorIndex = boundaries.ToList().FindIndex(IsPlatformWidthLocked);
+            if (anchorIndex < 0) anchorIndex = 0;
+            for (var index = anchorIndex - 1; index >= 0; index--)
+            {
+                var width = project.Construction.StairwellDepth
+                    - PlatformWidth(boundaries[index + 1])
+                    - flights[index].TreadDepth * Math.Max(0, flights[index].RiserCount - 1);
+                SetPlatformWidth(boundaries[index], Math.Max(1.0, width));
+            }
+            for (var index = anchorIndex; index < flights.Count; index++)
+            {
+                var width = project.Construction.StairwellDepth
+                    - PlatformWidth(boundaries[index])
+                    - flights[index].TreadDepth * Math.Max(0, flights[index].RiserCount - 1);
+                SetPlatformWidth(boundaries[index + 1], Math.Max(1.0, width));
+            }
         }
 
         public void SetPlatformWidth(

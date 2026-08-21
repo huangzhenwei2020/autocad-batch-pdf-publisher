@@ -35,6 +35,7 @@ namespace WL.Stair.Tests
             CalculatesDifferentStoreyHeightsAndFlights,
             SupportsThreeFlightsPerStorey,
             KeepsLinkedTreadDepthWhenFinalFlightDoesNotReachFloor,
+            ConnectsMixedTwoThreeTwoFlightStoreys,
             ConnectsEveryNonThreeFlightStoreyDirectly,
             SynchronizesDisplayedTotalRiserCount,
             AlternatesUnifiedFloorAndLandingDirections,
@@ -623,6 +624,70 @@ namespace WL.Stair.Tests
                         || (Math.Abs(line.End.X - filletPoint.X) < 0.001
                             && Math.Abs(line.End.Y - filletPoint.Y) < 0.001))),
                 "The offset underside and flight soffit must meet at a zero-radius fillet point.");
+        }
+
+        private static void ConnectsMixedTwoThreeTwoFlightStoreys()
+        {
+            var project = StairProjectDefinition.CreateDefault();
+            project.BaseElevation = -3000.0;
+            project.BasementStoreyCount = 1;
+            var basementFloor = StairFloorDefinition.CreateDefault("LB-B1", "负一层楼板");
+            project.Floors.Insert(0, basementFloor);
+            var basement = StairStoreyDefinition.CreateDoubleFlight(
+                "LC-B1", "负一层", "LB-B1", "LB-01", 3000.0, 0);
+            project.Storeys.Insert(0, basement);
+
+            var threeFlight = project.Storeys[1];
+            threeFlight.Flights.Clear();
+            threeFlight.Landings.Clear();
+            threeFlight.Flights.Add(StairFlightDefinition.CreateDefault(
+                "TD-01-1", "第一跑", 6, StairFlightDirection.Right, StairSectionRepresentation.Rear));
+            threeFlight.Flights.Add(StairFlightDefinition.CreateDefault(
+                "TD-01-2", "第二跑", 6, StairFlightDirection.Left, StairSectionRepresentation.Cut));
+            threeFlight.Flights.Add(StairFlightDefinition.CreateDefault(
+                "TD-01-3", "第三跑", 6, StairFlightDirection.Right, StairSectionRepresentation.Cut));
+            threeFlight.Landings.Add(StairLandingDefinition.CreateDefault(
+                "PT-01-1", "第一平台", "TD-01-1", "TD-01-2"));
+            threeFlight.Landings.Add(StairLandingDefinition.CreateDefault(
+                "PT-01-2", "第二平台", "TD-01-2", "TD-01-3"));
+            threeFlight.TotalRiserCount = 18;
+
+            foreach (var storey in project.Storeys)
+            {
+                storey.StairwellConstraintLocked = false;
+                storey.TreadDepthLinked = false;
+                foreach (var flight in storey.Flights) flight.TreadDepth = 260.0;
+            }
+
+            new StairProjectConstraintService().Apply(project);
+
+            var directBoundaries = new[]
+            {
+                project.Floors[1].PlatformWidth,
+                threeFlight.Landings[0].PlatformWidth,
+                threeFlight.Landings[1].PlatformWidth
+            };
+            for (var index = 0; index < 2; index++)
+            {
+                var run = threeFlight.Flights[index].TreadDepth
+                    * Math.Max(0, threeFlight.Flights[index].RiserCount - 1);
+                TestAssert.NearlyEqual(
+                    project.Construction.StairwellDepth,
+                    directBoundaries[index] + run + directBoundaries[index + 1],
+                    0.001,
+                    "The first two runs of a three-flight storey must meet their landings directly.");
+            }
+
+            var outcome = new StairProjectCalculator().Calculate(project);
+            TestAssert.True(outcome.IsSuccess,
+                "A basement two-flight, middle three-flight and upper two-flight stair must calculate.");
+            var section = new StairProjectGeometryBuilder().BuildSection(project, outcome.Result);
+            var upperElevation = outcome.Result.Storeys[1].UpperElevation;
+            TestAssert.True(section.Lines.Any(line => line.ComponentId == "TD-01-3"
+                    && Math.Abs(line.Start.Y - upperElevation) < 0.001
+                    && Math.Abs(line.End.Y - upperElevation) < 0.001
+                    && Math.Abs(line.End.X - line.Start.X) > 0.001),
+                "The final run of the three-flight storey must close continuously to the upper floor.");
         }
 
         private static void ConnectsEveryNonThreeFlightStoreyDirectly()
