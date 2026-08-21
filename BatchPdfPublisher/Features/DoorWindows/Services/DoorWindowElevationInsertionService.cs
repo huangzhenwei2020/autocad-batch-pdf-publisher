@@ -276,7 +276,8 @@ namespace BatchPdfPublisher.Services
                     var database = document.Database;
                     DoorWindowElevationMetadataService.EnsureRegistered(database, transaction);
                     var profile = DraftingStandardService.LoadProfile();
-                    var resources = DraftingStandardService.EnsureAll(database, transaction, profile, profile.UpdateExisting);
+                    // 门窗立面必须使用插件统一标注资源；即使图纸中已有同名样式也按当前插件配置刷新。
+                    var resources = DraftingStandardService.EnsureAll(database, transaction, profile, true);
                     var dimensionStyle = DraftingStandardService.EnsureDimensionStyleForScale(database, transaction, drawingScale, profile, resources, true);
                     var doorWindowLayers = EnsureDoorWindowLayers(database, transaction);
                     preparationMilliseconds = insertionTiming.ElapsedMilliseconds;
@@ -302,7 +303,7 @@ namespace BatchPdfPublisher.Services
                 var database = document.Database;
                 DoorWindowElevationMetadataService.EnsureRegistered(database, transaction);
                 var profile = DraftingStandardService.LoadProfile();
-                var resources = DraftingStandardService.EnsureAll(database, transaction, profile, profile.UpdateExisting);
+                var resources = DraftingStandardService.EnsureAll(database, transaction, profile, true);
                 var dimensionStyle = DraftingStandardService.EnsureDimensionStyleForScale(database, transaction, drawingScale, profile, resources, true);
                 var doorWindowLayers = EnsureDoorWindowLayers(database, transaction);
                 pagedPreparationMilliseconds = pagedTiming.ElapsedMilliseconds;
@@ -417,7 +418,7 @@ namespace BatchPdfPublisher.Services
                 var database = document.Database;
                 DoorWindowElevationMetadataService.EnsureRegistered(database, transaction);
                 var profile = DraftingStandardService.LoadProfile();
-                var resources = DraftingStandardService.EnsureAll(database, transaction, profile, profile.UpdateExisting);
+                var resources = DraftingStandardService.EnsureAll(database, transaction, profile, true);
                 var dimensionStyle = DraftingStandardService.EnsureDimensionStyleForScale(database, transaction, drawingScale, profile, resources, true);
                 var doorWindowLayers = EnsureDoorWindowLayers(database, transaction);
                 var space = (BlockTableRecord)transaction.GetObject(database.CurrentSpaceId, OpenMode.ForWrite);
@@ -493,7 +494,8 @@ namespace BatchPdfPublisher.Services
         private static void AppendGeometry(DoorWindowElevationGeometry geometry, Point3d origin, BlockTableRecord space, Transaction transaction, DraftingStandardResources resources, DoorWindowLayers doorWindowLayers, DoorWindowElevationMetadata metadata, DoorWindowScheduleItem item)
         {
             const double tolerance = .01d;
-            var mainLayer = (item.ElevationType ?? string.Empty).Contains("窗") ? doorWindowLayers.Window : doorWindowLayers.Door;
+            // 门带玻璃亮子时整套沿用窗的青色图层与线型，避免门扇、亮子出现两种做法。
+            var mainLayer = UsesWindowAppearance(item) ? doorWindowLayers.Window : doorWindowLayers.Door;
             foreach (var roleGroup in geometry.Lines.GroupBy(x => x.Role))
             {
                 var segments = roleGroup.ToList(); var used = new bool[segments.Count];
@@ -588,6 +590,16 @@ namespace BatchPdfPublisher.Services
             }
             bool Near(Point2d first, Point2d second) { return first.GetDistanceTo(second) <= tolerance; }
             bool Matches(Point2d point, double x, double y) { return point.GetDistanceTo(new Point2d(x, y)) <= tolerance; }
+        }
+
+        private static bool UsesWindowAppearance(DoorWindowScheduleItem item)
+        {
+            var type = item == null ? string.Empty : item.ElevationType ?? string.Empty;
+            if (type.Contains("窗")) return true;
+            if (!type.Contains("门")) return false;
+            // 只有门上亮存在时才改用窗的做法；普通门仍保持原来的门图层表达。
+            return DoorWindowElevationGeometryBuilder.ParseCellLayout(item.CustomCellLayout)
+                .Any(x => !x.IsDoor && string.Equals(x.Material, "玻璃", StringComparison.Ordinal));
         }
 
         private static DoorWindowLayers EnsureDoorWindowLayers(Database database, Transaction transaction)

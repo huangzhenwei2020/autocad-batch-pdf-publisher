@@ -84,7 +84,7 @@ namespace BatchPdfPublisher.Services
                 if (item.OuterFrameWidth <= 0d) item.OuterFrameWidth = 50d;
                 if (item.MullionWidth <= 0d) item.MullionWidth = 50d;
                 item.DoorFrameType = "N型";
-                item.DoorFrameWidth = 0d;
+                item.DoorFrameWidth = 50d;
             }
             else if (IsWindowType(type))
             {
@@ -146,11 +146,11 @@ namespace BatchPdfPublisher.Services
             var doorHeight = hasTopLight ? 2200d : height;
             var doors = PanelCount(width, 1200d);
             var cells = new List<DoorWindowLayoutCell>();
-            AddRow(cells, width, doors, 0d, doorHeight, index => DoorLeafOpening(type, index, doors), "无", true);
+            AddRow(cells, width, doors, 0d, doorHeight, index => DoorLeafOpening(type, index, doors), hasTopLight ? "玻璃" : "无", true);
             if (hasTopLight)
             {
                 AddRow(cells, width, PanelCount(width, 1500d), doorHeight, height, index => "固定", "玻璃", false);
-                // 门上亮子为玻璃，表格材质也明确显示玻璃；下部门扇仍保留其原有实体材质表达。
+                // 带亮子的门整套按窗的做法表达：门扇和亮子均为玻璃，出图时使用窗图层。
                 item.Material = "玻璃";
             }
             else item.Material = "无";
@@ -205,7 +205,7 @@ namespace BatchPdfPublisher.Services
         {
             if (type == "推拉门") return count <= 1 ? "右推拉" : "双向推拉";
             if (count <= 1) return "左平开";
-            return index * 2 < count ? "左平开" : "右平开";
+            return index * 2 < count ? "右平开" : "左平开";
         }
 
         public static string InferAtlas(string code, string type, string note)
