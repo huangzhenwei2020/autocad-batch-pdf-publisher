@@ -93,6 +93,7 @@ namespace BatchPdfPublisher.Views
             var applyBatch = ButtonFor("应用到多选/勾选"); applyBatch.Click += (s, e) => ApplyBatch(); batch.Controls.Add(applyBatch);
             var constructionBatch = ButtonFor("批量构造设置"); constructionBatch.Click += (s, e) => ApplyBatchConstruction(); batch.Controls.Add(constructionBatch);
             var auto = ButtonFor("按尺寸自动判断"); auto.Click += (s, e) => ApplyAutomaticSuggestions(); batch.Controls.Add(auto);
+            var restoreDefault = ButtonFor("恢复默认样式"); restoreDefault.Click += (s, e) => RestoreDefaultStyles(); batch.Controls.Add(restoreDefault);
             var custom = ButtonFor("编辑当前分格"); custom.Click += (s, e) => EditCurrentDivision(); batch.Controls.Add(custom);
             batch.Controls.Add(LabelFor("参数模板")); LoadTemplateChoices(); batch.Controls.Add(_templateChoice);
             var applyTemplate = ButtonFor("应用到多选/勾选"); applyTemplate.Click += (s, e) => ApplySelectedTemplate(); batch.Controls.Add(applyTemplate);
@@ -508,6 +509,31 @@ namespace BatchPdfPublisher.Views
             var targets = OperationTargets();
             foreach (var item in targets) { DoorWindowElevationSuggestionService.Apply(item); UpdateStatus(item); }
             _grid.Refresh(); UpdateSummary(); UpdatePreview();
+        }
+
+        /// <summary>
+        /// 明确的回退入口：仅重置可编辑的立面做法，不改变编号、洞口尺寸、数量、来源、图集名称和备注。
+        /// 蓝色多选行优先；未多选时按“生成”勾选项处理，避免误把整张表恢复默认。
+        /// </summary>
+        private void RestoreDefaultStyles()
+        {
+            CommitGridEdits();
+            var targets = OperationTargets();
+            if (targets.Count == 0)
+            {
+                MessageBox.Show(this, "请先多选或勾选需要恢复默认样式的门窗。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            var message = "将按当前系统默认重新生成所选 " + targets.Count + " 项的外框、分隔、安装缝、材质和分格。\r\n"
+                + "编号、洞口尺寸、数量、来源、图集名称和备注不会改变。\r\n\r\n是否继续？";
+            if (MessageBox.Show(this, message, "恢复默认样式", MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
+            foreach (var item in targets)
+            {
+                DoorWindowElevationSuggestionService.Apply(item);
+                UpdateStatus(item);
+            }
+            _grid.Refresh(); UpdateSummary(); UpdatePreview();
+            _status.Text = "已将 " + targets.Count + " 项门窗恢复为当前默认样式；可继续双击编辑分格。";
         }
 
         private void LoadTemplateChoices(string selectedId = null)
