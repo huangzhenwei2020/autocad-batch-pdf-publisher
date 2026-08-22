@@ -59,8 +59,9 @@ namespace WL.Stair.Cad2024
                 if (string.Equals(drawingLine.ComponentId, "BASE-WALL-VISIBLE",
                     StringComparison.OrdinalIgnoreCase))
                 {
-                    RenderBaseWallLine(currentSpace, transaction, drawingLine, view.Scale,
-                        view.ShowBold, insertionPoint);
+                    if (!view.ShowBold)
+                        RenderBaseWallLine(currentSpace, transaction, drawingLine, view.Scale,
+                            false, insertionPoint);
                     continue;
                 }
                 var line = new Line(
@@ -237,8 +238,12 @@ namespace WL.Stair.Cad2024
             currentSpace.AppendEntity(boundary);
             transaction.AddNewlyCreatedDBObject(boundary, true);
 
-            if (showBold && !region.IsWall && !string.Equals(region.ComponentId, "BASE-WALL",
+            if (showBold && !region.IsWall && string.Equals(region.ComponentId, "BASE-WALL",
                 StringComparison.OrdinalIgnoreCase))
+            {
+                RenderBaseWallWide(currentSpace, transaction, region, drawingScale, insertionPoint);
+            }
+            else if (showBold && !region.IsWall)
             {
                 var offsetDistance = 0.2 * Math.Max(1, drawingScale);
                 var offset = FindInnerOffset(boundary, offsetDistance);
@@ -519,6 +524,27 @@ namespace WL.Stair.Cad2024
                 ToCadPoint(source.End, insertionPoint)) { Layer = StructuralLayer };
             currentSpace.AppendEntity(line);
             transaction.AddNewlyCreatedDBObject(line, true);
+        }
+
+        private static void RenderBaseWallWide(BlockTableRecord currentSpace, Transaction transaction,
+            DrawingHatchRegion region, int drawingScale, Point3d insertionPoint)
+        {
+            if (region.Boundary.Count != 4) return;
+            var offset = 0.2 * Math.Max(1, drawingScale);
+            var width = 0.4 * Math.Max(1, drawingScale);
+            var left = region.Boundary.Min(point => point.X);
+            var right = region.Boundary.Max(point => point.X);
+            var bottom = region.Boundary.Min(point => point.Y) + offset;
+            var top = region.Boundary.Max(point => point.Y) - offset;
+            foreach (var y in new[] { bottom, top })
+            {
+                var polyline = new Polyline(2) { Layer = StructuralLayer,
+                    ConstantWidth = width, Closed = false };
+                polyline.AddVertexAt(0, new Point2d(insertionPoint.X + left, insertionPoint.Y + y), 0, 0, 0);
+                polyline.AddVertexAt(1, new Point2d(insertionPoint.X + right, insertionPoint.Y + y), 0, 0, 0);
+                currentSpace.AppendEntity(polyline);
+                transaction.AddNewlyCreatedDBObject(polyline, true);
+            }
         }
 
 
