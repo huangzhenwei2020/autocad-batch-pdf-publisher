@@ -166,6 +166,10 @@ namespace WL.Stair.Cad2024
                     transaction.AddNewlyCreatedDBObject(offset, true);
                 }
             }
+            else
+            {
+                RenderWallFacesWide(currentSpace, transaction, region, drawingScale, insertionPoint);
+            }
 
             var hatch = new Hatch { Layer = CutHatchLayer, Associative = false };
             try
@@ -196,6 +200,29 @@ namespace WL.Stair.Cad2024
             }
             polyline.Closed = true;
             return polyline;
+        }
+
+        private static void RenderWallFacesWide(
+            BlockTableRecord currentSpace, Transaction transaction, DrawingHatchRegion region,
+            int drawingScale, Point3d insertionPoint)
+        {
+            if (region.Boundary.Count != 4) return;
+            var offset = 0.2 * Math.Max(1, drawingScale);
+            var width = 0.4 * Math.Max(1, drawingScale);
+            foreach (var x in new[]
+            {
+                region.Boundary[0].X + offset,
+                region.Boundary[1].X - offset
+            })
+            {
+                var face = new Polyline();
+                face.AddVertexAt(0, new Point2d(insertionPoint.X + x, insertionPoint.Y + region.Boundary[0].Y), 0, 0, 0);
+                face.AddVertexAt(1, new Point2d(insertionPoint.X + x, insertionPoint.Y + region.Boundary[2].Y), 0, 0, 0);
+                face.ConstantWidth = width;
+                face.Layer = AuxiliaryLayer;
+                currentSpace.AppendEntity(face);
+                transaction.AddNewlyCreatedDBObject(face, true);
+            }
         }
 
         private static Polyline FindInnerOffset(Polyline boundary, double distance)
