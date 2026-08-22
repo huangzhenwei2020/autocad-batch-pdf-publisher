@@ -409,7 +409,9 @@ namespace WL.Stair.Core.Geometry
                 placedAtElevation.TryGetValue(key, out row);
                 placedAtElevation[key] = row + 1;
                 var anchorElevation = Math.Min(spec.StartElevation, spec.EndElevation);
-                var dimensionElevation = anchorElevation - ((14.0 + row * 8.0) * Math.Max(1, scale));
+                // 除层高外，所有标注均以 1:1 下 6mm 的尺寸界线长度布置。
+                // 同一标高只保留一组横向尺寸链，因此不再额外外移分层。
+                var dimensionElevation = anchorElevation - (6.0 * Math.Max(1, scale));
                 var leftLength = spec.LeftEdge - firstAxisX;
                 var rightLength = secondAxisX - spec.RightEdge;
                 if (leftLength > 0.001)
@@ -462,9 +464,10 @@ namespace WL.Stair.Core.Geometry
             if (post == null) return;
             var bottom = post.Start.Y < post.End.Y ? post.Start : post.End;
             var top = post.Start.Y < post.End.Y ? post.End : post.Start;
+            // 扶手高度属于内层标注，尺寸界线长度与梯段、横向尺寸统一为 6mm。
             var lineX = bottom.X < center
-                ? bottom.X + (8.0 * Math.Max(1, scale))
-                : bottom.X - (8.0 * Math.Max(1, scale));
+                ? bottom.X + (6.0 * Math.Max(1, scale))
+                : bottom.X - (6.0 * Math.Max(1, scale));
             dimensions.Add(new DrawingDimension(
                 bottom,
                 top,

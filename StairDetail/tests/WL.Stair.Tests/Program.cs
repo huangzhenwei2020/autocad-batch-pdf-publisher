@@ -1547,10 +1547,21 @@ namespace WL.Stair.Tests
                     dimension.TextOverride.Contains("×")
                     && dimension.TextOverride.Contains("=")),
                 "A horizontal flight dimension must show tread depth multiplied by riser count minus one.");
+            TestAssert.True(horizontalDimensions.All(dimension =>
+                    Math.Abs(Math.Abs(dimension.FirstExtensionOrigin.Y - dimension.DimensionLinePoint.Y)
+                        - (6.0 * project.DrawingScale)) < 0.001),
+                "All horizontal dimensions must use the 6 drawing millimetre inner extension length.");
             TestAssert.Equal(1, section.Dimensions.Count(dimension =>
                     dimension.ComponentId == "RAILING"
                     && dimension.Orientation == DrawingDimensionOrientation.Vertical),
                 "Only one non-overlapping handrail height dimension may be inserted.");
+            var railingDimension = section.Dimensions.Single(dimension =>
+                dimension.ComponentId == "RAILING"
+                && dimension.Orientation == DrawingDimensionOrientation.Vertical);
+            TestAssert.NearlyEqual(6.0 * project.DrawingScale,
+                Math.Abs(railingDimension.DimensionLinePoint.X - railingDimension.FirstExtensionOrigin.X),
+                0.001,
+                "The handrail height dimension must use the 6 drawing millimetre inner extension length.");
             TestAssert.Equal(1, section.Tables.Count,
                 "The optional component schedule must create one table.");
             TestAssert.True(section.Tables[0].Rows.Any(row => row.Contains(firstFlight.Id)),
