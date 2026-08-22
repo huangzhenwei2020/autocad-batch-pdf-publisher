@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using Autodesk.AutoCAD.Colors;
 using Autodesk.AutoCAD.DatabaseServices;
@@ -52,6 +53,11 @@ namespace WL.Stair.Cad2022
 
                 currentSpace.AppendEntity(line);
                 transaction.AddNewlyCreatedDBObject(line, true);
+            }
+
+            foreach (var region in view.HatchRegions)
+            {
+                RenderSectionRegion(currentSpace, transaction, region, view.Scale, insertionPoint);
             }
 
             foreach (var drawingText in view.Texts)
@@ -132,6 +138,86 @@ namespace WL.Stair.Cad2022
             EnsureLayer(layerTable, transaction, AnnotationDimensionLayer, 3, ObjectId.Null);
             EnsureLayer(layerTable, transaction, CutHatchLayer, 1, ObjectId.Null);
             EnsureLayer(layerTable, transaction, AxisLayer, 1, axisLineTypeId);
+        }
+
+        private static void RenderSectionRegion(
+            BlockTableRecord currentSpace,
+            Transaction transaction,
+            DrawingHatchRegion region,
+            int drawingScale,
+            Point3d insertionPoint)
+        {
+            var boundary = CreateClosedPolyline(region.Boundary, insertionPoint);
+            boundary.Layer = region.IsWall ? AuxiliaryLayer : StructuralLayer;
+            boundary.Visible = !region.IsWall;
+            currentSpace.AppendEntity(boundary);
+            transaction.AddNewlyCreatedDBObject(boundary, true);
+
+            if (!region.IsWall)
+            {
+                var offset = FindInnerOffset(boundary, 0.2 * Math.Max(1, drawingScale));
+                if (offset != null)
+                {
+                    offset.Layer = StructuralLayer;
+                    offset.ConstantWidth = 0.4 * Math.Max(1, drawingScale);
+                    currentSpace.AppendEntity(offset);
+                    transaction.AddNewlyCreatedDBObject(offset, true);
+                }
+            }
+
+            var hatch = new Hatch { Layer = CutHatchLayer, Associative = false };
+            try
+            {
+                hatch.SetHatchPattern(HatchPatternType.PreDefined,
+                    string.IsNullOrWhiteSpace(region.PatternName) ? "ANSI31" : region.PatternName);
+            }
+            catch
+            {
+                hatch.SetHatchPattern(HatchPatternType.PreDefined, "ANSI31");
+            }
+            hatch.PatternScale = Math.Max(0.001, region.PatternScale * Math.Max(1, drawingScale));
+            currentSpace.AppendEntity(hatch);
+            transaction.AddNewlyCreatedDBObject(hatch, true);
+            hatch.AppendLoop(HatchLoopTypes.Outermost, new ObjectIdCollection { boundary.ObjectId });
+            hatch.EvaluateHatch(true);
+        }
+
+        private static Polyline CreateClosedPolyline(IEnumerable<Point2D> points, Point3d insertionPoint)
+        {
+            var polyline = new Polyline();
+            var index = 0;
+            foreach (var point in points)
+                polyline.AddVertexAt(index++, new Point2d(insertionPoint.X + point.X, insertionPoint.Y + point.Y), 0.0, 0.0, 0.0);
+            polyline.Closed = true;
+            return polyline;
+        }
+
+        private static Polyline FindInnerOffset(Polyline boundary, double distance)
+        {
+            var sourceArea = Math.Abs(boundary.Area);
+            Polyline best = null;
+            foreach (var signedDistance in new[] { distance, -distance })
+            {
+                DBObjectCollection curves;
+                try { curves = boundary.GetOffsetCurves(signedDistance); }
+                catch { continue; }
+                foreach (DBObject curve in curves)
+                {
+                    var candidate = curve as Polyline;
+                    if (candidate == null || !candidate.Closed || Math.Abs(candidate.Area) >= sourceArea)
+                    {
+                        curve.Dispose();
+                        continue;
+                    }
+                    if (best == null || Math.Abs(candidate.Area) < Math.Abs(best.Area))
+                    {
+                        if (best != null) best.Dispose();
+                        best = candidate;
+                    }
+                    else candidate.Dispose();
+                }
+            }
+            return best;
         }
 
         private static ObjectId EnsureDimensionStyle(Database database, Transaction transaction, int scale)

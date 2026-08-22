@@ -1564,6 +1564,14 @@ namespace WL.Stair.Tests
                 "The handrail height dimension must use the 6 drawing millimetre inner extension length.");
             TestAssert.Equal(1, section.Tables.Count,
                 "The optional component schedule must create one table.");
+            TestAssert.True(section.HatchRegions.Any(region => !region.IsWall
+                    && region.Boundary.Count >= 3
+                    && string.Equals(region.PatternName, "ANSI31", StringComparison.OrdinalIgnoreCase)),
+                "Visible cut flights and platforms must produce closed concrete hatch regions.");
+            TestAssert.True(section.HatchRegions.Any(region => region.IsWall
+                    && region.Boundary.Count == 4
+                    && string.Equals(region.PatternName, "AR-BRSTD", StringComparison.OrdinalIgnoreCase)),
+                "Wall faces must produce four-point brick hatch ranges without adding closure edges to wall linework.");
             TestAssert.True(section.Tables[0].Rows.Any(row => row.Contains(firstFlight.Id)),
                 "The component schedule must list detailed flight parameters.");
         }

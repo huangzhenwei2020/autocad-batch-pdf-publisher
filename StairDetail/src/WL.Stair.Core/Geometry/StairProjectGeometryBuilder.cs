@@ -54,6 +54,7 @@ namespace WL.Stair.Core.Geometry
             var texts = new List<DrawingText>();
             var dimensions = new List<DrawingDimension>();
             var tables = new List<DrawingTable>();
+            var hatchRegions = new List<DrawingHatchRegion>();
             var horizontalDimensionSpecs = new List<HorizontalDimensionSpec>();
             var floors = project.Floors.ToDictionary(floor => floor.Id, StringComparer.OrdinalIgnoreCase);
             var storeyResults = calculation.Storeys.ToDictionary(result => result.Id, StringComparer.OrdinalIgnoreCase);
@@ -336,6 +337,11 @@ namespace WL.Stair.Core.Geometry
                     calculation,
                     new Point2D(secondAxisX + (24.0 * drawingScale), highestElevation)));
             }
+            // Regions are derived before coincident cut edges are merged.  This
+            // preserves each component's complete closed boundary; the visible
+            // linework below is still merged to one line per shared edge.
+            hatchRegions.AddRange(BuildStructuralHatchRegions(lines, project.Construction.SectionHatch));
+            hatchRegions.AddRange(BuildWallHatchRegions(lines, project.Construction.WallHatch));
             var mergedLines = MergeConnectedCutOutlines(lines).ToArray();
             var alignedDimensions = AlignDimensionsToOuterOutline(
                 mergedLines,
@@ -346,6 +352,7 @@ namespace WL.Stair.Core.Geometry
                 texts,
                 alignedDimensions,
                 tables,
+                hatchRegions,
                 drawingScale,
                 firstAxisX,
                 lowestElevation);
@@ -510,6 +517,7 @@ namespace WL.Stair.Core.Geometry
             IEnumerable<DrawingText> texts,
             IEnumerable<DrawingDimension> dimensions,
             IEnumerable<DrawingTable> tables,
+            IEnumerable<DrawingHatchRegion> hatchRegions,
             int scale,
             double leftAxisX,
             double lowestElevation)
@@ -539,13 +547,108 @@ namespace WL.Stair.Core.Geometry
                 table.RowHeight,
                 table.ColumnWidths,
                 table.Rows));
+            var rebasedHatches = hatchRegions.Select(region => new DrawingHatchRegion(
+                region.Boundary.Select(translate),
+                region.ComponentId,
+                region.IsWall,
+                region.PatternName,
+                region.PatternScale));
             return new DrawingView(
                 "ProjectSection",
                 rebasedLines,
                 rebasedTexts,
                 rebasedDimensions,
                 rebasedTables,
-                scale);
+                scale,
+                rebasedHatches);
+        }
+
+        private static IEnumerable<DrawingHatchRegion> BuildStructuralHatchRegions(
+            IEnumerable<DrawingLine> source,
+            SectionHatchDefaults hatch)
+        {
+            if (hatch == null || !hatch.Enabled) return Enumerable.Empty<DrawingHatchRegion>();
+            return source
+                .Where(line => !line.IsHidden
+                    && (line.Role == StairLineRole.CutBoundary || line.Role == StairLineRole.CutFlightProfile)
+                    && !string.IsNullOrWhiteSpace(line.ComponentId))
+                .GroupBy(line => line.ComponentId, StringComparer.OrdinalIgnoreCase)
+                .SelectMany(group => TraceClosedLoops(group))
+                .Where(loop => Math.Abs(PolygonArea(loop.Points)) > 1.0)
+                .Select(loop => new DrawingHatchRegion(loop.Points, loop.ComponentId, false,
+                    hatch.PatternName, hatch.PatternScale));
+        }
+
+        private static IEnumerable<DrawingHatchRegion> BuildWallHatchRegions(
+            IEnumerable<DrawingLine> source,
+            SectionHatchDefaults hatch)
+        {
+            if (hatch == null || !hatch.Enabled) return Enumerable.Empty<DrawingHatchRegion>();
+            var walls = source.Where(line => line.Role == StairLineRole.WallBoundary && !line.IsHidden).ToArray();
+            var regions = new List<DrawingHatchRegion>();
+            foreach (var interval in walls.GroupBy(line => Math.Round(Math.Min(line.Start.Y, line.End.Y), 3)
+                    + ":" + Math.Round(Math.Max(line.Start.Y, line.End.Y), 3)))
+            {
+                var sides = interval.OrderBy(line => line.Start.X).ToArray();
+                for (var index = 0; index + 1 < sides.Length; index += 2)
+                {
+                    var left = sides[index];
+                    var right = sides[index + 1];
+                    var bottom = Math.Min(left.Start.Y, left.End.Y);
+                    var top = Math.Max(left.Start.Y, left.End.Y);
+                    if (right.Start.X - left.Start.X < 0.001 || top - bottom < 0.001) continue;
+                    regions.Add(new DrawingHatchRegion(new[]
+                    {
+                        new Point2D(left.Start.X, bottom), new Point2D(right.Start.X, bottom),
+                        new Point2D(right.Start.X, top), new Point2D(left.Start.X, top)
+                    }, "WALL", true, hatch.PatternName, hatch.PatternScale));
+                }
+            }
+            return regions;
+        }
+
+        private static IEnumerable<TracedLoop> TraceClosedLoops(IEnumerable<DrawingLine> source)
+        {
+            var remaining = source.ToList();
+            while (remaining.Count > 0)
+            {
+                var first = remaining[0];
+                remaining.RemoveAt(0);
+                var points = new List<Point2D> { first.Start, first.End };
+                var componentId = first.ComponentId;
+                var current = first.End;
+                while (!SamePoint(current, points[0]))
+                {
+                    var nextIndex = remaining.FindIndex(line => SamePoint(line.Start, current) || SamePoint(line.End, current));
+                    if (nextIndex < 0) break;
+                    var next = remaining[nextIndex];
+                    remaining.RemoveAt(nextIndex);
+                    current = SamePoint(next.Start, current) ? next.End : next.Start;
+                    points.Add(current);
+                    if (points.Count > 2048) break;
+                }
+                if (points.Count > 3 && SamePoint(points[0], points[points.Count - 1]))
+                {
+                    points.RemoveAt(points.Count - 1);
+                    yield return new TracedLoop(points, componentId);
+                }
+            }
+        }
+
+        private static double PolygonArea(IReadOnlyList<Point2D> points)
+        {
+            var area = 0.0;
+            for (var index = 0; index < points.Count; index++)
+            {
+                var next = points[(index + 1) % points.Count];
+                area += points[index].X * next.Y - next.X * points[index].Y;
+            }
+            return area / 2.0;
+        }
+
+        private static bool SamePoint(Point2D first, Point2D second)
+        {
+            return Math.Abs(first.X - second.X) < 0.001 && Math.Abs(first.Y - second.Y) < 0.001;
         }
 
 
@@ -1257,6 +1360,18 @@ namespace WL.Stair.Core.Geometry
             public double X { get; }
 
             public double Elevation { get; }
+        }
+
+        private sealed class TracedLoop
+        {
+            public TracedLoop(IEnumerable<Point2D> points, string componentId)
+            {
+                Points = points.ToArray();
+                ComponentId = componentId ?? string.Empty;
+            }
+
+            public IReadOnlyList<Point2D> Points { get; }
+            public string ComponentId { get; }
         }
 
         private sealed class HorizontalDimensionSpec

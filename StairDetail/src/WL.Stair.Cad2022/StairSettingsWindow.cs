@@ -357,6 +357,7 @@ namespace WL.Stair.Cad2022
 
             var selectedComponentId = state.SelectedComponentId;
             var xs = view.Lines.SelectMany(line => new[] { line.Start.X, line.End.X })
+                .Concat(view.HatchRegions.SelectMany(region => region.Boundary.Select(point => point.X)))
                 .Concat(view.Dimensions.SelectMany(dimension => new[]
                 {
                     dimension.FirstExtensionOrigin.X,
@@ -370,6 +371,7 @@ namespace WL.Stair.Cad2022
                 }))
                 .ToArray();
             var ys = view.Lines.SelectMany(line => new[] { line.Start.Y, line.End.Y })
+                .Concat(view.HatchRegions.SelectMany(region => region.Boundary.Select(point => point.Y)))
                 .Concat(view.Dimensions.SelectMany(dimension => new[]
                 {
                     dimension.FirstExtensionOrigin.Y,
@@ -394,6 +396,20 @@ namespace WL.Stair.Cad2022
                 -maxY,
                 Math.Max(1.0, maxX - minX),
                 Math.Max(1.0, maxY - minY));
+            builder.Append("<defs><pattern id='sectionHatch' width='12' height='12' patternUnits='userSpaceOnUse' patternTransform='rotate(45)'><line x1='0' y1='0' x2='0' y2='12' stroke='#d7b93e' stroke-width='1.2'/></pattern><pattern id='wallHatch' width='18' height='18' patternUnits='userSpaceOnUse'><path d='M0 4H18M0 14H18M4 0V4M13 4V14M4 14V18' stroke='#c7d0d9' stroke-width='1'/></pattern></defs>");
+            foreach (var region in view.HatchRegions)
+            {
+                var points = string.Join(" ", region.Boundary.Select(point => string.Format(
+                    CultureInfo.InvariantCulture, "{0},{1}", point.X, -point.Y)));
+                var css = region.IsWall ? "wall-hatch" : "section-hatch";
+                if (!string.IsNullOrEmpty(selectedComponentId)
+                    && string.Equals(region.ComponentId, selectedComponentId, StringComparison.OrdinalIgnoreCase))
+                    css += " selected";
+                builder.AppendFormat("<polygon class='{0}' data-component='{1}' points='{2}' style='fill:url(#{3});fill-opacity:{4};stroke:none;cursor:pointer'/>",
+                    css, Escape(region.ComponentId), points,
+                    region.IsWall ? "wallHatch" : "sectionHatch",
+                    region.IsWall ? "0.42" : "0.58");
+            }
             foreach (var line in view.Lines)
             {
                 var css = line.IsHidden ? "rear" : "cut";

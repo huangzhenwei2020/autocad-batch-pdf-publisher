@@ -7,7 +7,7 @@ namespace WL.Stair.Core.Domain
     {
         public StairProjectDefinition()
         {
-            SchemaVersion = 9;
+            SchemaVersion = 10;
             Name = "楼梯大样";
             ProjectName = "未命名项目";
             SubprojectName = string.Empty;
@@ -80,6 +80,10 @@ namespace WL.Stair.Core.Domain
 
         public WallDefaults Wall { get; set; }
 
+        public SectionHatchDefaults SectionHatch { get; set; }
+
+        public SectionHatchDefaults WallHatch { get; set; }
+
         public OpeningDefaults Door { get; set; }
 
         public OpeningDefaults Window { get; set; }
@@ -97,6 +101,8 @@ namespace WL.Stair.Core.Domain
                 LandingBeam = new BeamDefaults { Width = 200.0, Depth = 400.0 },
                 Railing = new RailingDefaults { Enabled = true, Height = 900.0, EdgeOffset = 50.0 },
                 Wall = new WallDefaults { Enabled = true, Thickness = 200.0 },
+                SectionHatch = new SectionHatchDefaults { Enabled = true, PatternName = "ANSI31", PatternScale = 10.0 },
+                WallHatch = new SectionHatchDefaults { Enabled = true, PatternName = "AR-BRSTD", PatternScale = 10.0 },
                 Door = new OpeningDefaults { Enabled = false, Width = 900.0, Height = 2100.0, SillHeight = 0.0 },
                 Window = new OpeningDefaults { Enabled = false, Width = 1200.0, Height = 1500.0, SillHeight = 900.0 }
             };
@@ -124,6 +130,15 @@ namespace WL.Stair.Core.Domain
         public bool Enabled { get; set; }
 
         public double Thickness { get; set; }
+    }
+
+    public sealed class SectionHatchDefaults
+    {
+        public bool Enabled { get; set; }
+
+        public string PatternName { get; set; }
+
+        public double PatternScale { get; set; }
     }
 
     public sealed class OpeningDefaults

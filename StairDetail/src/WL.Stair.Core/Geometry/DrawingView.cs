@@ -26,13 +26,15 @@ namespace WL.Stair.Core.Geometry
             IEnumerable<DrawingText> texts,
             IEnumerable<DrawingDimension> dimensions,
             IEnumerable<DrawingTable> tables,
-            int scale)
+            int scale,
+            IEnumerable<DrawingHatchRegion> hatchRegions = null)
         {
             Name = name;
             Lines = lines.ToArray();
             Texts = texts.ToArray();
             Dimensions = dimensions.ToArray();
             Tables = tables.ToArray();
+            HatchRegions = (hatchRegions ?? Enumerable.Empty<DrawingHatchRegion>()).ToArray();
             Scale = System.Math.Max(1, scale);
         }
 
@@ -45,6 +47,8 @@ namespace WL.Stair.Core.Geometry
         public IReadOnlyList<DrawingDimension> Dimensions { get; }
 
         public IReadOnlyList<DrawingTable> Tables { get; }
+
+        public IReadOnlyList<DrawingHatchRegion> HatchRegions { get; }
 
         public int Scale { get; }
     }
