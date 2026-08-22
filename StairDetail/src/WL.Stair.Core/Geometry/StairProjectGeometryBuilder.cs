@@ -319,14 +319,89 @@ namespace WL.Stair.Core.Geometry
                     calculation,
                     new Point2D(secondAxisX + (24.0 * drawingScale), highestElevation)));
             }
-            return RebaseSectionToLeftAxisLowerPoint(
-                MergeConnectedCutOutlines(lines),
-                texts,
+            var mergedLines = MergeConnectedCutOutlines(lines).ToArray();
+            var alignedDimensions = AlignDimensionsToOuterOutline(
+                mergedLines,
                 dimensions,
+                drawingScale);
+            return RebaseSectionToLeftAxisLowerPoint(
+                mergedLines,
+                texts,
+                alignedDimensions,
                 tables,
                 drawingScale,
                 firstAxisX,
                 lowestElevation);
+        }
+
+        private static IEnumerable<DrawingDimension> AlignDimensionsToOuterOutline(
+            IEnumerable<DrawingLine> sourceLines,
+            IEnumerable<DrawingDimension> sourceDimensions,
+            int scale)
+        {
+            var geometry = sourceLines
+                .Where(line => line.Role != StairLineRole.AxisLine
+                    && line.Role != StairLineRole.Handrail)
+                .ToArray();
+            if (geometry.Length == 0) return sourceDimensions.ToArray();
+            var leftOutline = geometry.SelectMany(line => new[] { line.Start.X, line.End.X }).Min();
+            var rightOutline = geometry.SelectMany(line => new[] { line.Start.X, line.End.X }).Max();
+            return sourceDimensions.Select(dimension =>
+            {
+                var isLeft = dimension.DimensionLinePoint.X
+                    < (dimension.FirstExtensionOrigin.X + dimension.SecondExtensionOrigin.X) / 2.0;
+                var paperOffset = Math.Abs(
+                    dimension.DimensionLinePoint.X - dimension.FirstExtensionOrigin.X)
+                    / Math.Max(1, scale);
+                var firstX = FindOuterOutlineAtElevation(
+                    geometry,
+                    dimension.FirstExtensionOrigin.Y,
+                    isLeft,
+                    isLeft ? leftOutline : rightOutline);
+                var secondX = FindOuterOutlineAtElevation(
+                    geometry,
+                    dimension.SecondExtensionOrigin.Y,
+                    isLeft,
+                    isLeft ? leftOutline : rightOutline);
+                var dimensionX = isLeft
+                    ? leftOutline - (paperOffset * Math.Max(1, scale))
+                    : rightOutline + (paperOffset * Math.Max(1, scale));
+                return new DrawingDimension(
+                    new Point2D(firstX, dimension.FirstExtensionOrigin.Y),
+                    new Point2D(secondX, dimension.SecondExtensionOrigin.Y),
+                    new Point2D(dimensionX, dimension.DimensionLinePoint.Y),
+                    dimension.TextOverride,
+                    dimension.ComponentId);
+            }).ToArray();
+        }
+
+        private static double FindOuterOutlineAtElevation(
+            IEnumerable<DrawingLine> lines,
+            double elevation,
+            bool findLeft,
+            double fallback)
+        {
+            const double tolerance = 0.001;
+            var intersections = new List<double>();
+            foreach (var line in lines)
+            {
+                var bottom = Math.Min(line.Start.Y, line.End.Y);
+                var top = Math.Max(line.Start.Y, line.End.Y);
+                if (elevation < bottom - tolerance || elevation > top + tolerance) continue;
+                var deltaY = line.End.Y - line.Start.Y;
+                if (Math.Abs(deltaY) < tolerance)
+                {
+                    if (Math.Abs(elevation - line.Start.Y) > tolerance) continue;
+                    intersections.Add(line.Start.X);
+                    intersections.Add(line.End.X);
+                    continue;
+                }
+                var factor = (elevation - line.Start.Y) / deltaY;
+                if (factor < -tolerance || factor > 1.0 + tolerance) continue;
+                intersections.Add(line.Start.X + factor * (line.End.X - line.Start.X));
+            }
+            if (intersections.Count == 0) return fallback;
+            return findLeft ? intersections.Min() : intersections.Max();
         }
 
         private static DrawingView RebaseSectionToLeftAxisLowerPoint(
@@ -518,11 +593,14 @@ namespace WL.Stair.Core.Geometry
         {
             if (railing == null || !railing.Enabled || railing.Height <= 0.0 || flight.TreadCount <= 0)
                 return;
-            // The rail posts are based on the two outer upper vertices of the
-            // complete flight: the source floor/platform edge and the arrival
-            // tread edge. This keeps the rail aligned with the whole flight,
-            // including the arrival face counted in the total riser count.
-            var firstNosing = new Point2D(flightStartX, startElevation);
+            // The sloping rail starts above the front upper corner of the first
+            // tread, not above the source floor. Together with the arrival
+            // vertex this produces the same rise/run pitch as the stair and
+            // therefore keeps at least the configured vertical clearance over
+            // every tread, even when adjacent flights are horizontally offset.
+            var firstNosing = new Point2D(
+                flightStartX,
+                startElevation + flight.RiserHeight);
             var lastNosing = new Point2D(flightEndX, endElevation);
             var firstRail = new Point2D(firstNosing.X, firstNosing.Y + railing.Height);
             var lastRail = new Point2D(lastNosing.X, lastNosing.Y + railing.Height);

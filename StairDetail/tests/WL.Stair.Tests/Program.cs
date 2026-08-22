@@ -1449,7 +1449,7 @@ namespace WL.Stair.Tests
             var firstFlightPostBases = handrails
                 .Where(line => Math.Abs(line.Start.X - line.End.X) < 0.001
                     && Math.Abs(line.End.Y - line.Start.Y - 900.0) < 0.001
-                    && (Math.Abs(line.Start.Y) < 0.001
+                    && (Math.Abs(line.Start.Y - firstFlightResult.RiserHeight) < 0.001
                         || Math.Abs(line.Start.Y - firstFlightResult.VerticalRise) < 0.001))
                 .Select(line => line.Start)
                 .GroupBy(point => point.X.ToString("0.000") + ":" + point.Y.ToString("0.000"))
@@ -1462,15 +1462,45 @@ namespace WL.Stair.Tests
                     && (AreSamePointForTest(line.Start, post)
                         || AreSamePointForTest(line.End, post)))),
                 "Each handrail post base must coincide with a flight boundary vertex.");
+            var railStart = firstFlightPostBases.OrderBy(point => point.Y).First();
+            var railEnd = firstFlightPostBases.OrderBy(point => point.Y).Last();
+            var railStartTop = new Point2D(railStart.X, railStart.Y + 900.0);
+            var railEndTop = new Point2D(railEnd.X, railEnd.Y + 900.0);
+            var slopingRail = handrails.FirstOrDefault(line =>
+                (AreSamePointForTest(line.Start, railStartTop)
+                    && AreSamePointForTest(line.End, railEndTop))
+                || (AreSamePointForTest(line.End, railStartTop)
+                    && AreSamePointForTest(line.Start, railEndTop)));
+            TestAssert.True(slopingRail != null,
+                "The sloping handrail must connect the 900 mm points above the first and arrival vertices.");
+            var flightTreadPoints = section.Lines
+                .Where(line => line.ComponentId == firstFlight.Id
+                    && Math.Abs(line.Start.Y - line.End.Y) < 0.001)
+                .SelectMany(line => new[] { line.Start, line.End })
+                .Where(point => point.X >= Math.Min(railStart.X, railEnd.X) - 0.001
+                    && point.X <= Math.Max(railStart.X, railEnd.X) + 0.001)
+                .ToArray();
+            TestAssert.True(flightTreadPoints.All(point =>
+                    VerticalClearance(slopingRail, point) >= 900.0 - 0.001),
+                "Every tread under the sloping handrail must retain at least 900 mm vertical clearance.");
 
             var flightDimension = section.Dimensions.FirstOrDefault(
                 dimension => dimension.ComponentId == firstFlight.Id);
             TestAssert.True(flightDimension != null,
                 "Each flight must have an inner vertical-rise dimension.");
-            TestAssert.NearlyEqual(12.0 * project.DrawingScale,
-                Math.Abs(flightDimension.DimensionLinePoint.X - flightDimension.FirstExtensionOrigin.X),
+            var outlineLines = section.Lines.Where(line =>
+                    line.Role != StairLineRole.AxisLine
+                    && line.Role != StairLineRole.Handrail)
+                .ToArray();
+            var leftOutline = outlineLines.SelectMany(line => new[] { line.Start.X, line.End.X }).Min();
+            var rightOutline = outlineLines.SelectMany(line => new[] { line.Start.X, line.End.X }).Max();
+            TestAssert.NearlyEqual(leftOutline - (12.0 * project.DrawingScale),
+                flightDimension.DimensionLinePoint.X,
                 0.001,
-                "The inner dimension offset must be 12 drawing millimetres at the output scale.");
+                "The inner dimension line must be 12 drawing millimetres beyond the outer profile.");
+            TestAssert.True(Math.Abs(flightDimension.FirstExtensionOrigin.X) > 0.001
+                    && Math.Abs(flightDimension.SecondExtensionOrigin.X) > 0.001,
+                "Flight dimensions must originate at the outer profile instead of the left axis.");
             TestAssert.Equal(
                 FormatExpected(firstFlightResult.RiserHeight) + "×" + firstFlight.RiserCount
                     + "=" + FormatExpected(firstFlightResult.VerticalRise),
@@ -1482,10 +1512,18 @@ namespace WL.Stair.Tests
                 .ToArray();
             TestAssert.Equal(2, storeyDimensions.Length,
                 "Each storey must have one outer height dimension on each axis side.");
-            TestAssert.True(storeyDimensions.All(dimension =>
-                    Math.Abs(dimension.DimensionLinePoint.X - dimension.FirstExtensionOrigin.X)
-                        >= (20.0 * project.DrawingScale) - 0.001),
-                "Storey dimensions must use the 20 drawing millimetre outer offset.");
+            var leftStoreyDimension = storeyDimensions.First(dimension => dimension.DimensionLinePoint.X < 0.0);
+            var rightStoreyDimension = storeyDimensions.First(dimension => dimension.DimensionLinePoint.X > 0.0);
+            TestAssert.NearlyEqual(leftOutline - (20.0 * project.DrawingScale),
+                leftStoreyDimension.DimensionLinePoint.X, 0.001,
+                "The left storey dimension must be 20 drawing millimetres beyond the outer profile.");
+            TestAssert.NearlyEqual(rightOutline + (20.0 * project.DrawingScale),
+                rightStoreyDimension.DimensionLinePoint.X, 0.001,
+                "The right storey dimension must be 20 drawing millimetres beyond the outer profile.");
+            TestAssert.True(Math.Abs(leftStoreyDimension.FirstExtensionOrigin.X) > 0.001
+                    && Math.Abs(rightStoreyDimension.FirstExtensionOrigin.X
+                        - project.Construction.StairwellDepth) > 0.001,
+                "Storey dimensions must originate at the outer profile instead of either axis.");
             TestAssert.Equal(1, section.Tables.Count,
                 "The optional component schedule must create one table.");
             TestAssert.True(section.Tables[0].Rows.Any(row => row.Contains(firstFlight.Id)),
@@ -1513,6 +1551,15 @@ namespace WL.Stair.Tests
         {
             return Math.Abs(first.X - second.X) < 0.001
                 && Math.Abs(first.Y - second.Y) < 0.001;
+        }
+
+        private static double VerticalClearance(DrawingLine rail, Point2D point)
+        {
+            var deltaX = rail.End.X - rail.Start.X;
+            if (Math.Abs(deltaX) < 0.001) return double.PositiveInfinity;
+            var factor = (point.X - rail.Start.X) / deltaX;
+            var railY = rail.Start.Y + factor * (rail.End.Y - rail.Start.Y);
+            return railY - point.Y;
         }
 
         private static void LabelsFlightsAndLandings()
