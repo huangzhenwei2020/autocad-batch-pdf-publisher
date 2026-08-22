@@ -54,15 +54,15 @@ namespace WL.Stair.Core.Geometry
             var floorPositions = new Dictionary<string, ComponentPosition>(StringComparer.OrdinalIgnoreCase);
             var wallAnchors = new List<WallAnchor>();
             var lowestElevation = calculation.Storeys.Min(result => result.LowerElevation);
-            var firstStorey = project.Storeys.First(storey => storey.Flights.Count > 0);
-            var firstFloor = floors[firstStorey.LowerFloorId];
-            var firstDirection = (int)firstStorey.Flights[0].Direction;
-            var firstAxisX = -(firstDirection * firstFloor.PlatformWidth);
-            var secondAxisX = firstAxisX
-                + (firstDirection * project.Construction.StairwellDepth);
+            // The section uses an immutable axis coordinate system. The left
+            // axis is always X=0 and the right axis is always the stairwell
+            // depth, regardless of the first flight direction or platform
+            // widths. Mirroring therefore moves only stair components.
+            var firstAxisX = 0.0;
+            var secondAxisX = project.Construction.StairwellDepth;
 
             Func<int, double> axisForDirection = direction =>
-                direction == firstDirection ? firstAxisX : secondAxisX;
+                direction > 0 ? firstAxisX : secondAxisX;
             Func<int, double, double> connectionForBoundary = (direction, width) =>
                 axisForDirection(direction) + (direction * width);
             var floorDirections = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -234,7 +234,33 @@ namespace WL.Stair.Core.Geometry
             }.Where(value => !string.IsNullOrWhiteSpace(value)));
             texts.Add(new DrawingText(new Point2D(titleX, titleY), title, 105.0));
             texts.Add(new DrawingText(new Point2D(titleX, titleY - 170.0), "1:30", 84.0));
-            return new DrawingView("ProjectSection", MergeConnectedCutOutlines(lines), texts);
+            return RebaseSectionToLeftAxisLowerPoint(
+                MergeConnectedCutOutlines(lines),
+                texts,
+                firstAxisX,
+                lowestElevation);
+        }
+
+        private static DrawingView RebaseSectionToLeftAxisLowerPoint(
+            IEnumerable<DrawingLine> lines,
+            IEnumerable<DrawingText> texts,
+            double leftAxisX,
+            double lowestElevation)
+        {
+            Func<Point2D, Point2D> translate = point => new Point2D(
+                point.X - leftAxisX,
+                point.Y - lowestElevation);
+            var rebasedLines = lines.Select(line => new DrawingLine(
+                translate(line.Start),
+                translate(line.End),
+                line.Role,
+                line.IsHidden,
+                line.ComponentId));
+            var rebasedTexts = texts.Select(text => new DrawingText(
+                translate(text.Position),
+                text.Content,
+                text.Height));
+            return new DrawingView("ProjectSection", rebasedLines, rebasedTexts);
         }
 
 

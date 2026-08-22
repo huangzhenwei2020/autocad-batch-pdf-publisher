@@ -54,6 +54,7 @@ namespace WL.Stair.Tests
             LocksStoreyTreadDepthAndBalancesPlatforms,
             PreservesLockedPlatformWidth,
             DrawsWallsFromBeamCenterAxes,
+            KeepsSectionAxesFixedDuringEditsAndMirroring,
             LabelsFlightsAndLandings,
             SupportsBasementBaseElevation
         };
@@ -463,11 +464,16 @@ namespace WL.Stair.Tests
             var firstFlight = firstStorey.Flights[0];
 
             var flightLines = section.Lines.Where(line => line.ComponentId == "TD-1-1").ToArray();
-            var finalTreadStartX = firstFlight.HorizontalRun - firstFlight.TreadDepth;
+            var direction = (int)project.Storeys[0].Flights[0].Direction;
+            var startAxisX = direction > 0 ? 0.0 : project.Construction.StairwellDepth;
+            var flightStartX = startAxisX + direction * project.Floors[0].PlatformWidth;
+            var finalTreadStartX = flightStartX
+                + direction * (firstFlight.HorizontalRun - firstFlight.TreadDepth);
+            var finalTreadEndX = flightStartX + direction * firstFlight.HorizontalRun;
 
             TestAssert.True(flightLines.Any(line =>
                 Math.Abs(line.Start.X - finalTreadStartX) < 0.001
-                && Math.Abs(line.End.X - firstFlight.HorizontalRun) < 0.001
+                && Math.Abs(line.End.X - finalTreadEndX) < 0.001
                 && Math.Abs(line.Start.Y - (firstFlight.VerticalRise - firstFlight.RiserHeight)) < 0.001
                 && Math.Abs(line.End.Y - (firstFlight.VerticalRise - firstFlight.RiserHeight)) < 0.001),
                 "The final visible tread must remain one riser below the landing.");
@@ -488,11 +494,14 @@ namespace WL.Stair.Tests
             var section = new StairProjectGeometryBuilder().BuildSection(project, outcome.Result);
             var flight = outcome.Result.Storeys[0].Flights[0];
             var flightLines = section.Lines.Where(line => line.ComponentId == flight.Id).ToArray();
+            var direction = (int)project.Storeys[0].Flights[0].Direction;
+            var startAxisX = direction > 0 ? 0.0 : project.Construction.StairwellDepth;
+            var flightStartX = startAxisX + direction * project.Floors[0].PlatformWidth;
 
             for (var index = 0; index < flight.TreadCount; index++)
             {
-                var treadStartX = index * flight.TreadDepth;
-                var treadEndX = (index + 1) * flight.TreadDepth;
+                var treadStartX = flightStartX + direction * index * flight.TreadDepth;
+                var treadEndX = flightStartX + direction * (index + 1) * flight.TreadDepth;
                 var riserBottom = index * flight.RiserHeight;
                 var riserTop = (index + 1) * flight.RiserHeight;
 
@@ -683,7 +692,8 @@ namespace WL.Stair.Tests
             TestAssert.True(outcome.IsSuccess,
                 "A basement two-flight, middle three-flight and upper two-flight stair must calculate.");
             var section = new StairProjectGeometryBuilder().BuildSection(project, outcome.Result);
-            var upperElevation = outcome.Result.Storeys[1].UpperElevation;
+            var upperElevation = outcome.Result.Storeys[1].UpperElevation
+                - outcome.Result.Storeys.Min(item => item.LowerElevation);
             TestAssert.True(section.Lines.Any(line => line.ComponentId == "TD-01-3"
                     && Math.Abs(line.Start.Y - upperElevation) < 0.001
                     && Math.Abs(line.End.Y - upperElevation) < 0.001
@@ -846,14 +856,13 @@ namespace WL.Stair.Tests
             TestAssert.True(outcome.IsSuccess, "The default project must calculate before geometry validation.");
             var section = new StairProjectGeometryBuilder().BuildSection(project, outcome.Result);
             var storey = project.Storeys[0];
-            var result = outcome.Result.Storeys[0];
-            var connectionX = 0.0;
-            for (var index = 0; index < storey.Flights.Count; index++)
-                connectionX += (int)storey.Flights[index].Direction * result.Flights[index].HorizontalRun;
             var floorLines = section.Lines.Where(line => line.ComponentId == storey.UpperFloorId).ToArray();
             var xs = floorLines.SelectMany(line => new[] { line.Start.X, line.End.X }).ToArray();
             TestAssert.True(xs.Length > 0, "The upper shared floor outline is missing.");
-            if (project.Floors[1].ProjectionDirection > 0)
+            var floorDirection = project.Floors[1].ProjectionDirection;
+            var floorAxisX = floorDirection > 0 ? 0.0 : project.Construction.StairwellDepth;
+            var connectionX = floorAxisX + floorDirection * project.Floors[1].PlatformWidth;
+            if (floorDirection > 0)
                 TestAssert.NearlyEqual(connectionX, xs.Max(), 0.001, "A positive logical direction must draw from the shared connection edge back toward its axis.");
             else
                 TestAssert.NearlyEqual(connectionX, xs.Min(), 0.001, "A negative logical direction must draw from the shared connection edge back toward its axis.");
@@ -1245,6 +1254,56 @@ namespace WL.Stair.Tests
             var overlapStart = Math.Max(Math.Min(firstStart, firstEnd), Math.Min(secondStart, secondEnd));
             var overlapEnd = Math.Min(Math.Max(firstStart, firstEnd), Math.Max(secondStart, secondEnd));
             return overlapEnd - overlapStart > 0.001;
+        }
+
+        private static void KeepsSectionAxesFixedDuringEditsAndMirroring()
+        {
+            var project = StairProjectDefinition.CreateDefault();
+            project.BaseElevation = -3000.0;
+            var constraints = new StairProjectConstraintService();
+            constraints.Apply(project);
+
+            Func<DrawingView, double[]> axisCoordinates = view => view.Lines
+                .Where(line => line.Role == StairLineRole.AxisLine)
+                .OrderBy(line => line.Start.X)
+                .SelectMany(line => new[]
+                {
+                    line.Start.X,
+                    Math.Min(line.Start.Y, line.End.Y),
+                    Math.Max(line.Start.Y, line.End.Y)
+                })
+                .ToArray();
+            Func<DrawingView> build = () =>
+            {
+                var outcome = new StairProjectCalculator().Calculate(project);
+                TestAssert.True(outcome.IsSuccess, "The fixed-axis project must calculate.");
+                return new StairProjectGeometryBuilder().BuildSection(project, outcome.Result);
+            };
+
+            var originalAxes = axisCoordinates(build());
+            TestAssert.Equal(6, originalAxes.Length, "The section must contain exactly two fixed axes.");
+            TestAssert.NearlyEqual(0.0, originalAxes[0], 0.001,
+                "The left axis must define insertion X=0.");
+            TestAssert.NearlyEqual(0.0, originalAxes[1], 0.001,
+                "The lower end of the left axis must define insertion Y=0.");
+            TestAssert.NearlyEqual(project.Construction.StairwellDepth, originalAxes[3], 0.001,
+                "The right axis must stay at the fixed stairwell depth.");
+
+            constraints.SetPlatformWidth(project, project.Storeys[0].Landings[0].Id, 1350.0);
+            constraints.Apply(project);
+            var editedAxes = axisCoordinates(build());
+            TestAssert.True(originalAxes.SequenceEqual(editedAxes),
+                "Editing floor or platform widths must not move either section axis.");
+
+            foreach (var storey in project.Storeys)
+                foreach (var flight in storey.Flights)
+                    flight.Direction = flight.Direction == StairFlightDirection.Right
+                        ? StairFlightDirection.Left
+                        : StairFlightDirection.Right;
+            constraints.Apply(project);
+            var mirroredAxes = axisCoordinates(build());
+            TestAssert.True(originalAxes.SequenceEqual(mirroredAxes),
+                "Left-right mirroring must not move or exchange the fixed section axes.");
         }
 
         private static void LabelsFlightsAndLandings()
