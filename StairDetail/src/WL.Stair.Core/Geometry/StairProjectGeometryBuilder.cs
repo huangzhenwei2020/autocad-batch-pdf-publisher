@@ -604,14 +604,24 @@ namespace WL.Stair.Core.Geometry
                         || line.Role == StairLineRole.HatchBoundary)
                     && !string.IsNullOrWhiteSpace(line.ComponentId))
                 .ToArray();
+            var baseWallLines = cutLines.Where(line => string.Equals(line.ComponentId,
+                "BASE-WALL", StringComparison.OrdinalIgnoreCase)).ToArray();
+            var structuralLines = cutLines.Where(line => !string.Equals(line.ComponentId,
+                "BASE-WALL", StringComparison.OrdinalIgnoreCase)).ToArray();
             // Treat every touching foreground flight, platform and floor as
             // one graph. Shared edges cancel before loop tracing, so both the
             // hatch and the inward bold offset use only the combined perimeter.
-            var unionBoundary = MergeConnectedCutOutlines(cutLines);
-            return TraceClosedLoops(unionBoundary)
+            var unionBoundary = MergeConnectedCutOutlines(structuralLines);
+            var regions = TraceClosedLoops(unionBoundary)
                 .Where(loop => Math.Abs(PolygonArea(loop.Points)) > 1.0)
                 .Select(loop => new DrawingHatchRegion(loop.Points, loop.ComponentId, false,
-                    hatch.PatternName, hatch.PatternScale));
+                    hatch.PatternName, hatch.PatternScale))
+                .ToList();
+            regions.AddRange(TraceClosedLoops(baseWallLines)
+                .Where(loop => Math.Abs(PolygonArea(loop.Points)) > 1.0)
+                .Select(loop => new DrawingHatchRegion(loop.Points, "BASE-WALL", false,
+                    hatch.PatternName, hatch.PatternScale)));
+            return regions;
         }
 
         private static IEnumerable<DrawingHatchRegion> BuildWallHatchRegions(
