@@ -106,6 +106,18 @@ namespace WL.Stair.Core.Calculation
                     project.Construction.Railing.Height = 900.0;
                 project.SchemaVersion = 9;
             }
+            if (project.SchemaVersion < 11)
+            {
+                if (project.Construction.SectionHatch == null)
+                    project.Construction.SectionHatch = defaults.SectionHatch;
+                else if (string.Equals(project.Construction.SectionHatch.PatternName, "ANSI31", StringComparison.OrdinalIgnoreCase))
+                    project.Construction.SectionHatch.PatternName = "WL_RC_CONCRETE";
+                if (project.Construction.WallHatch == null)
+                    project.Construction.WallHatch = defaults.WallHatch;
+                else if (string.Equals(project.Construction.WallHatch.PatternName, "AR-BRSTD", StringComparison.OrdinalIgnoreCase))
+                    project.Construction.WallHatch.PatternName = "ANSI311";
+                project.SchemaVersion = 11;
+            }
             if (project.DrawingScale <= 0) project.DrawingScale = 30;
             project.Construction.Wall.Enabled = true;
         }

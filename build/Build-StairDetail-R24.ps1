@@ -41,6 +41,12 @@ foreach ($file in $requiredFiles) {
     Copy-Item -LiteralPath $source -Destination (Join-Path $stagingRoot $file) -Force
 }
 
+$hatchPatternSource = Join-Path $sourceRoot 'HatchPatterns'
+if (-not (Test-Path -LiteralPath $hatchPatternSource)) {
+    throw "楼梯大样缺少填充素材：$hatchPatternSource"
+}
+Copy-Item -LiteralPath $hatchPatternSource -Destination (Join-Path $stagingRoot 'HatchPatterns') -Recurse -Force
+
 Compress-Archive -Path (Join-Path $stagingRoot '*') -DestinationPath $payload -CompressionLevel Optimal -Force
 Write-Host "楼梯大样 R24 模块已生成：$payload" -ForegroundColor Green
 Get-FileHash -LiteralPath $payload -Algorithm SHA256

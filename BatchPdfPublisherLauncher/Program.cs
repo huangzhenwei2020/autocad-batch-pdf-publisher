@@ -75,6 +75,7 @@ namespace BatchPdfPublisherLauncher
                 var pluginAssembly = InstallPlugin(payload, options.InstallPermanently);
                 var architectureAssembly = InstallArchitectureAssistant(launcherDirectory, payload.Band, options.InstallPermanently);
                 var stairAssembly = InstallStairDetail(launcherDirectory, payload.Band, options.InstallPermanently);
+                PrepareStairHatchPatterns(stairAssembly);
                 ValidateInstalledComponents(payload.Band, pluginAssembly, architectureAssembly, stairAssembly);
                 if (options.InstallPermanently) InstallAutoLoadBundle(pluginAssembly, payload.PdfDependencyPath, payload.Band, architectureAssembly, stairAssembly);
                 Log((options.InstallPermanently ? "已部署插件: " : "便携加载插件: ") + pluginAssembly);
@@ -418,7 +419,10 @@ namespace BatchPdfPublisherLauncher
             {
                 FileName = platform.Executable,
                 Arguments = platform.Arguments + " /b \"" + startupScript + "\"",
-                WorkingDirectory = platform.WorkingDirectory,
+                // AutoCAD resolves stand-alone custom PAT files from the process startup
+                // directory and caches that lookup. Start in the plugin's portable hatch
+                // asset folder; no AutoCAD support folder or registry profile is modified.
+                WorkingDirectory = EnsureDirectory(Path.Combine(PackageRoot, "用户配置文件", "填充素材")),
                 UseShellExecute = true
             });
 
@@ -818,6 +822,27 @@ namespace BatchPdfPublisherLauncher
             var target = Path.Combine(UserDataRoot, "运行文件", "StairDetail", band);
             CopyDirectory(source, target);
             return Path.Combine(target, hostName);
+        }
+
+        private static void PrepareStairHatchPatterns(string stairAssembly)
+        {
+            if (string.IsNullOrWhiteSpace(stairAssembly) || !File.Exists(stairAssembly)) return;
+            var source = Path.Combine(Path.GetDirectoryName(stairAssembly), "HatchPatterns");
+            var target = EnsureDirectory(Path.Combine(PackageRoot, "用户配置文件", "填充素材"));
+            if (Directory.Exists(source))
+            {
+                foreach (var file in Directory.GetFiles(source, "*.pat"))
+                    File.Copy(file, Path.Combine(target, Path.GetFileName(file)), true);
+            }
+            var supportPath = Environment.GetEnvironmentVariable("ACAD") ?? string.Empty;
+            if (!supportPath.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries)
+                .Any(path => string.Equals(path.Trim(), target, StringComparison.OrdinalIgnoreCase)))
+            {
+                Environment.SetEnvironmentVariable("ACAD",
+                    string.IsNullOrWhiteSpace(supportPath) ? target : supportPath.TrimEnd(';') + ";" + target,
+                    EnvironmentVariableTarget.Process);
+            }
+            Log("已部署楼梯填充素材并加入 CAD 支持路径: " + target);
         }
 
         private static string ExtractEmbeddedStairDetail(string band, string hostName)

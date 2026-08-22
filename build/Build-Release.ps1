@@ -205,6 +205,14 @@ foreach ($band in $Bands) {
 
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'Resources') -Destination (Join-Path $OutputRoot 'Resources') -Recurse -Force
 
+# Custom hatch definitions are user-visible, portable resources. Keep the
+# canonical copies under the plugin's user configuration folder so moving the
+# entire plugin directory to another computer preserves the stair materials.
+$hatchPatternSource = Join-Path $repositoryRoot 'StairDetail\assets\HatchPatterns'
+$hatchPatternTarget = Join-Path $OutputRoot '用户配置文件\填充素材'
+New-Item -ItemType Directory -Path $hatchPatternTarget -Force | Out-Null
+Copy-Item -Path (Join-Path $hatchPatternSource '*.pat') -Destination $hatchPatternTarget -Force
+
 $launcherProject = Join-Path $repositoryRoot 'BatchPdfPublisherLauncher\BatchPdfPublisherLauncher.csproj'
 $launcherObject = Join-Path $artifactRoot 'obj-launcher\'
 Invoke-Checked {

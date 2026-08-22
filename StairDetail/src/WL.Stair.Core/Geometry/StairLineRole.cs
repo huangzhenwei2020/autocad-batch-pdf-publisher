@@ -15,5 +15,6 @@ namespace WL.Stair.Core.Geometry
         WallBoundary = 10
         ,AxisLine = 11
         ,Handrail = 12
+        ,BreakLine = 13
     }
 }

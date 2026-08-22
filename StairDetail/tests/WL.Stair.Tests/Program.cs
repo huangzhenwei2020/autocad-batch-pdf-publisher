@@ -896,7 +896,7 @@ namespace WL.Stair.Tests
 
             new StairProjectConstraintService().Normalize(project);
 
-            TestAssert.Equal(9, project.SchemaVersion,
+            TestAssert.Equal(11, project.SchemaVersion,
                 "Legacy projects must migrate through the current drawing-output schema.");
             TestAssert.True(project.Floors[1].AllowLowerFlightClosure,
                 "The old final-flight switch must migrate to the destination floor.");
@@ -1566,7 +1566,7 @@ namespace WL.Stair.Tests
                 "The optional component schedule must create one table.");
             TestAssert.True(section.HatchRegions.Any(region => !region.IsWall
                     && region.Boundary.Count >= 3
-                    && string.Equals(region.PatternName, "ANSI31", StringComparison.OrdinalIgnoreCase)),
+                    && string.Equals(region.PatternName, "WL_RC_CONCRETE", StringComparison.OrdinalIgnoreCase)),
                 "Visible cut flights and platforms must produce closed concrete hatch regions.");
             var visibleCutComponents = section.Lines
                 .Where(line => !line.IsHidden
@@ -1581,8 +1581,21 @@ namespace WL.Stair.Tests
                 "Touching cut flights, platforms and floors must be unioned before hatching and inward bolding.");
             TestAssert.True(section.HatchRegions.Any(region => region.IsWall
                     && region.Boundary.Count == 4
-                    && string.Equals(region.PatternName, "AR-BRSTD", StringComparison.OrdinalIgnoreCase)),
-                "Wall faces must produce four-point brick hatch ranges without adding closure edges to wall linework.");
+                    && string.Equals(region.PatternName, "ANSI311", StringComparison.OrdinalIgnoreCase)),
+                "Wall faces must use the plugin-provided 45-degree single-line hatch.");
+            var baseWallLines = section.Lines.Where(line => line.ComponentId == "BASE-WALL").ToArray();
+            TestAssert.Equal(4, baseWallLines.Length,
+                "The section bottom must include one closed 100 millimetre base wall.");
+            TestAssert.NearlyEqual(100.0,
+                baseWallLines.SelectMany(line => new[] { line.Start.Y, line.End.Y }).Max()
+                    - baseWallLines.SelectMany(line => new[] { line.Start.Y, line.End.Y }).Min(),
+                0.001,
+                "The base wall must be 100 millimetres thick.");
+            var breakLines = section.Lines.Where(line => line.Role == StairLineRole.BreakLine).ToArray();
+            TestAssert.Equal(5, breakLines.Length,
+                "The wall top must include the five segments of the QZ-style six-vertex break line.");
+            TestAssert.True(breakLines.Any(line => Math.Abs(line.Start.Y - line.End.Y) > 0.001),
+                "The top break line must include visible folded segments.");
             TestAssert.True(section.Tables[0].Rows.Any(row => row.Contains(firstFlight.Id)),
                 "The component schedule must list detailed flight parameters.");
         }

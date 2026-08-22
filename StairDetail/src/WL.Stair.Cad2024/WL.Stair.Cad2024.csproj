@@ -47,6 +47,12 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
+    <Content Include="..\..\assets\HatchPatterns\*.pat">
+      <Link>HatchPatterns\%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+  <ItemGroup>
     <Compile Include="CadLineRenderer.cs" />
     <Compile Include="Commands.cs" />
     <Compile Include="PromptService.cs" />

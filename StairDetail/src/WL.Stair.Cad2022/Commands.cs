@@ -44,7 +44,11 @@ namespace WL.Stair.Cad2022
                 return;
             }
 
-            GenerateProject(document, StairProjectDefinition.CreateDefault(), null, Point3d.Origin);
+            var project = StairProjectDefinition.CreateDefault();
+            var constraints = new StairProjectConstraintService();
+            constraints.Normalize(project);
+            constraints.Apply(project);
+            GenerateProject(document, project, null, Point3d.Origin);
         }
 
         private static void GenerateProject(

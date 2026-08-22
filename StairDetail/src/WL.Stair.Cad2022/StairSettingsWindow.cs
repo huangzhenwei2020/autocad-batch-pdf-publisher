@@ -396,7 +396,7 @@ namespace WL.Stair.Cad2022
                 -maxY,
                 Math.Max(1.0, maxX - minX),
                 Math.Max(1.0, maxY - minY));
-            builder.Append("<defs><pattern id='sectionHatch' width='12' height='12' patternUnits='userSpaceOnUse' patternTransform='rotate(45)'><line x1='0' y1='0' x2='0' y2='12' stroke='#d7b93e' stroke-width='1.2'/></pattern><pattern id='wallHatch' width='18' height='18' patternUnits='userSpaceOnUse'><path d='M0 4H18M0 14H18M4 0V4M13 4V14M4 14V18' stroke='#c7d0d9' stroke-width='1'/></pattern></defs>");
+            builder.Append("<defs><pattern id='sectionHatch' width='20' height='20' patternUnits='userSpaceOnUse'><path d='M-4 18L18-4M3 24L24 3' stroke='#d7b93e' stroke-width='1'/><circle cx='5' cy='5' r='1.3' fill='#d7b93e'/><circle cx='15' cy='13' r='1' fill='#d7b93e'/></pattern><pattern id='wallHatch' width='12' height='12' patternUnits='userSpaceOnUse'><path d='M-3 12L12-3M3 15L15 3' stroke='#c7d0d9' stroke-width='1'/></pattern></defs>");
             foreach (var region in view.HatchRegions)
             {
                 var points = string.Join(" ", region.Boundary.Select(point => string.Format(
@@ -417,6 +417,7 @@ namespace WL.Stair.Cad2022
                 if (line.Role == StairLineRole.WallBoundary) css += " wall";
                 if (line.Role == StairLineRole.AxisLine) css = "axis";
                 if (line.Role == StairLineRole.Handrail) css = "handrail";
+                if (line.Role == StairLineRole.BreakLine) css = "breakline";
                 if (!string.IsNullOrEmpty(selectedComponentId)
                     && string.Equals(line.ComponentId, selectedComponentId, StringComparison.OrdinalIgnoreCase))
                 {

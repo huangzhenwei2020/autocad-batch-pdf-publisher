@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using Autodesk.AutoCAD.Colors;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.Geometry;
@@ -21,9 +22,11 @@ namespace WL.Stair.Cad2022
         private const string AnnotationTextLayer = "WL-注释-文字";
         private const string AnnotationDimensionLayer = "WL-注释-标注";
         private const string CutHatchLayer = "WL_楼梯_剖切填充";
+        private const string BreakLineLayer = "WL_折断线";
         private const string AxisLayer = "A_DOTE";
         private const string HiddenLineType = "HIDDEN";
         private const string AxisLineType = "DASHDOT2";
+        private static string _hatchPatternDirectory;
 
         public void Render(Database database, Transaction transaction, DrawingView view, Point3d insertionPoint)
         {
@@ -37,6 +40,7 @@ namespace WL.Stair.Cad2022
                 throw new ArgumentNullException(nameof(transaction));
             }
 
+            EnsureHatchPatternAssets();
             EnsureLayers(database, transaction);
             var dimensionStyleId = EnsureDimensionStyle(database, transaction, view.Scale);
 
@@ -139,6 +143,7 @@ namespace WL.Stair.Cad2022
             EnsureLayer(layerTable, transaction, AnnotationTextLayer, 2, ObjectId.Null);
             EnsureLayer(layerTable, transaction, AnnotationDimensionLayer, 3, ObjectId.Null);
             EnsureLayer(layerTable, transaction, CutHatchLayer, 8, ObjectId.Null);
+            EnsureLayer(layerTable, transaction, BreakLineLayer, 3, ObjectId.Null);
             MigrateHatchLayerColor(layerTable, transaction);
             EnsureLayer(layerTable, transaction, AxisLayer, 1, axisLineTypeId);
         }
@@ -179,14 +184,22 @@ namespace WL.Stair.Cad2022
             hatch.AppendLoop(HatchLoopTypes.Outermost, new ObjectIdCollection { boundary.ObjectId });
             var requestedPatternName = string.IsNullOrWhiteSpace(region.PatternName) ? "ANSI31" : region.PatternName;
             var appliedPatternName = requestedPatternName;
+            var appliedPatternType = ResolveHatchPatternType(appliedPatternName);
             try
             {
-                hatch.SetHatchPattern(HatchPatternType.PreDefined, appliedPatternName);
+                SetHatchPattern(hatch, appliedPatternType, appliedPatternName);
             }
-            catch
+            catch (System.Exception exception)
             {
+                WriteAssetTrace("pattern fallback requested=" + requestedPatternName
+                    + " type=" + appliedPatternType
+                    + " directory=" + (_hatchPatternDirectory ?? string.Empty)
+                    + " exists=" + File.Exists(Path.Combine(_hatchPatternDirectory ?? string.Empty,
+                        requestedPatternName + ".pat"))
+                    + " error=" + exception);
                 appliedPatternName = "ANSI31";
-                hatch.SetHatchPattern(HatchPatternType.PreDefined, appliedPatternName);
+                appliedPatternType = HatchPatternType.PreDefined;
+                SetHatchPattern(hatch, appliedPatternType, appliedPatternName);
             }
             var appliedPatternScale = Math.Max(0.001, region.PatternScale);
             hatch.PatternScale = appliedPatternScale;
@@ -194,11 +207,102 @@ namespace WL.Stair.Cad2022
             // It rebuilds the internal pattern definition using the final scale;
             // changing only PatternScale leaves the property value correct while
             // the initially generated hatch lines can still use the old density.
-            hatch.SetHatchPattern(HatchPatternType.PreDefined, appliedPatternName);
+            SetHatchPattern(hatch, appliedPatternType, appliedPatternName);
             hatch.EvaluateHatch(true);
             hatch.RecordGraphicsModified(true);
             WriteHatchTrace(region, drawingScale, requestedPatternName, appliedPatternName,
-                appliedPatternScale, hatch);
+                appliedPatternScale, appliedPatternType, hatch);
+        }
+
+        private static void EnsureHatchPatternAssets()
+        {
+            try
+            {
+                var packageRoot = Environment.GetEnvironmentVariable("WANLUO_ARCHITECTURE_TOOLS_ROOT");
+                var userRoot = !string.IsNullOrWhiteSpace(packageRoot) && Directory.Exists(packageRoot)
+                    ? Path.Combine(packageRoot, "用户配置文件")
+                    : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                        "WanluoArchitectureTools", "用户配置文件");
+                var target = Path.Combine(userRoot, "填充素材");
+                Directory.CreateDirectory(target);
+                var source = Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location),
+                    "HatchPatterns");
+                if (Directory.Exists(source))
+                    foreach (var file in Directory.GetFiles(source, "*.pat"))
+                        File.Copy(file, Path.Combine(target, Path.GetFileName(file)), true);
+                AddCadSupportPath(target);
+                _hatchPatternDirectory = target;
+                WriteAssetTrace("assets ready directory=" + target
+                    + " acad=" + (Environment.GetEnvironmentVariable("ACAD") ?? string.Empty)
+                    + " files=" + string.Join(",", Directory.GetFiles(target, "*.pat")
+                        .Select(Path.GetFileName)));
+            }
+            catch (System.Exception exception)
+            {
+                WriteAssetTrace("deploy failed: " + exception);
+            }
+        }
+
+        private static void AddCadSupportPath(string directory)
+        {
+            var supportPath = Environment.GetEnvironmentVariable("ACAD") ?? string.Empty;
+            if (supportPath.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries)
+                .Any(path => string.Equals(path.Trim(), directory, StringComparison.OrdinalIgnoreCase))) return;
+            var updated = string.IsNullOrWhiteSpace(supportPath) ? directory : supportPath.TrimEnd(';') + ";" + directory;
+            Environment.SetEnvironmentVariable("ACAD", updated, EnvironmentVariableTarget.Process);
+        }
+
+        private static HatchPatternType ResolveHatchPatternType(string patternName)
+        {
+            return !string.IsNullOrWhiteSpace(_hatchPatternDirectory)
+                && File.Exists(Path.Combine(_hatchPatternDirectory, patternName + ".pat"))
+                ? HatchPatternType.CustomDefined
+                : HatchPatternType.PreDefined;
+        }
+
+        private static readonly object HatchPatternDirectoryLock = new object();
+
+        private static void SetHatchPattern(Hatch hatch, HatchPatternType patternType, string patternName)
+        {
+            if (patternType != HatchPatternType.CustomDefined || string.IsNullOrWhiteSpace(_hatchPatternDirectory))
+            {
+                hatch.SetHatchPattern(patternType, patternName);
+                return;
+            }
+
+            // AutoCAD caches its support paths at process startup. Changing ACAD after the
+            // plugin is loaded does not refresh the custom PAT lookup in AutoCAD 2022.
+            // Custom PAT lookup does include the current directory, so use the portable
+            // user-config asset folder only for the duration of this API call.
+            lock (HatchPatternDirectoryLock)
+            {
+                var originalDirectory = Environment.CurrentDirectory;
+                try
+                {
+                    Environment.CurrentDirectory = _hatchPatternDirectory;
+                    hatch.SetHatchPattern(patternType, patternName);
+                }
+                finally
+                {
+                    Environment.CurrentDirectory = originalDirectory;
+                }
+            }
+        }
+
+        private static void WriteAssetTrace(string message)
+        {
+            try
+            {
+                var root = !string.IsNullOrWhiteSpace(_hatchPatternDirectory)
+                    ? Directory.GetParent(_hatchPatternDirectory).FullName
+                    : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                        "WanluoArchitectureTools", "用户配置文件");
+                var logs = Path.Combine(root, "Logs");
+                Directory.CreateDirectory(logs);
+                File.AppendAllText(Path.Combine(logs, "stair-hatch.log"),
+                    DateTime.Now.ToString("O") + " CAD2022 " + message + Environment.NewLine);
+            }
+            catch { }
         }
 
         private static void WriteHatchTrace(
@@ -207,6 +311,7 @@ namespace WL.Stair.Cad2022
             string requestedPatternName,
             string appliedPatternName,
             double appliedPatternScale,
+            HatchPatternType appliedPatternType,
             Hatch hatch)
         {
             try
@@ -219,11 +324,12 @@ namespace WL.Stair.Cad2022
                 var logDirectory = Path.Combine(root, "Logs");
                 Directory.CreateDirectory(logDirectory);
                 var line = string.Format(CultureInfo.InvariantCulture,
-                    "{0:O} CAD2022 kind={1} requestedPattern={2} appliedPattern={3} requestedScale={4:R} appliedScale={5:R} hatchScale={6:R} solid={7} loops={8} boundaryPoints={9} drawingScale={10}\r\n",
+                    "{0:O} CAD2022 kind={1} requestedPattern={2} appliedPattern={3} patternType={4} requestedScale={5:R} appliedScale={6:R} hatchScale={7:R} solid={8} loops={9} boundaryPoints={10} drawingScale={11}\r\n",
                     DateTime.Now,
                     region.IsWall ? "WALL" : "STRUCTURE",
                     requestedPatternName,
                     appliedPatternName,
+                    appliedPatternType,
                     region.PatternScale,
                     appliedPatternScale,
                     hatch.PatternScale,
@@ -472,6 +578,8 @@ namespace WL.Stair.Cad2022
                     return AxisLayer;
                 case StairLineRole.Handrail:
                     return HandrailLayer;
+                case StairLineRole.BreakLine:
+                    return BreakLineLayer;
                 case StairLineRole.WallBoundary:
                     return AuxiliaryLayer;
                 default:

@@ -11,6 +11,7 @@ namespace WL.Stair.Core.Geometry
     {
         private const double WallHeightAboveHighestFloor = 1800.0;
         private const double AxisExtensionBeyondWall = 200.0;
+        private const double BaseWallThickness = 100.0;
 
         public DrawingView BuildPlan(StairProjectDefinition project, StairProjectCalculationResult calculation, int storeyIndex)
         {
@@ -295,14 +296,18 @@ namespace WL.Stair.Core.Geometry
                     storeyResult.Id));
             }
 
+            var highestElevation = calculation.Storeys.Max(result => result.UpperElevation);
             AddStairwellWalls(
                 lines,
                 wallAnchors,
                 lowestElevation,
-                calculation.Storeys.Max(result => result.UpperElevation),
+                highestElevation,
                 project.Construction);
-
-            var highestElevation = calculation.Storeys.Max(result => result.UpperElevation);
+            AddBaseWall(lines, firstAxisX, secondAxisX, lowestElevation, project.Construction);
+            AddTopBreakLine(lines, firstAxisX, secondAxisX,
+                highestElevation + WallHeightAboveHighestFloor,
+                drawingScale,
+                project.Construction);
             AddStairwellAxisLines(
                 lines,
                 firstAxisX,
@@ -1344,6 +1349,60 @@ namespace WL.Stair.Core.Geometry
             return elevation > 0.0
                 ? "+" + (elevation / 1000.0).ToString("0.000", CultureInfo.InvariantCulture)
                 : (elevation / 1000.0).ToString("0.000", CultureInfo.InvariantCulture);
+        }
+
+        private static void AddBaseWall(
+            ICollection<DrawingLine> lines,
+            double firstAxisX,
+            double secondAxisX,
+            double lowestElevation,
+            StairConstructionDefaults defaults)
+        {
+            var wallThickness = defaults.Wall == null ? 0.0 : Math.Max(0.0, defaults.Wall.Thickness);
+            var halfWall = wallThickness / 2.0;
+            var left = Math.Min(firstAxisX, secondAxisX) - halfWall;
+            var right = Math.Max(firstAxisX, secondAxisX) + halfWall;
+            AddRectangleBoundary(lines, left, right, lowestElevation, BaseWallThickness,
+                StairLineRole.CutBoundary, false, "BASE-WALL");
+        }
+
+        private static void AddTopBreakLine(
+            ICollection<DrawingLine> lines,
+            double firstAxisX,
+            double secondAxisX,
+            double elevation,
+            int drawingScale,
+            StairConstructionDefaults defaults)
+        {
+            var wallThickness = defaults.Wall == null ? 0.0 : Math.Max(0.0, defaults.Wall.Thickness);
+            var halfWall = wallThickness / 2.0;
+            var start = new Point2D(Math.Min(firstAxisX, secondAxisX) - halfWall, elevation);
+            var end = new Point2D(Math.Max(firstAxisX, secondAxisX) + halfWall, elevation);
+            var middle = new Point2D((start.X + end.X) / 2.0, elevation);
+
+            // QZ折断线 uses a six-vertex polyline. Its four middle points are
+            // obtained from the midpoint with the paired -104/+104 and
+            // +76/-76 degree vectors. A fixed plotted seed length keeps the
+            // break symbol legible without making its height depend on the
+            // full stairwell span.
+            var seedLength = 30.0 * Math.Max(1, drawingScale);
+            var offset = seedLength * 0.115;
+            var p3 = Polar(middle, -104.0, offset);
+            var p2 = Polar(p3, 104.0, offset);
+            var p4 = Polar(middle, 76.0, offset);
+            var p5 = Polar(p4, -76.0, offset);
+            var points = new[] { start, p2, p3, p4, p5, end };
+            for (var index = 0; index + 1 < points.Length; index++)
+                lines.Add(new DrawingLine(points[index], points[index + 1],
+                    StairLineRole.BreakLine, false, "TOP-BREAK"));
+        }
+
+        private static Point2D Polar(Point2D origin, double angleDegrees, double distance)
+        {
+            var radians = angleDegrees * Math.PI / 180.0;
+            return new Point2D(
+                origin.X + Math.Cos(radians) * distance,
+                origin.Y + Math.Sin(radians) * distance);
         }
 
         private static string FormatMillimeter(double value)

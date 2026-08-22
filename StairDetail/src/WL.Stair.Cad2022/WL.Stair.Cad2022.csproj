@@ -56,6 +56,12 @@
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4078.44" />
   </ItemGroup>
   <ItemGroup>
+    <Content Include="..\..\assets\HatchPatterns\*.pat">
+      <Link>HatchPatterns\%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+  <ItemGroup>
     <Compile Include="CadLineRenderer.cs" />
     <Compile Include="Commands.cs" />
     <Compile Include="PromptService.cs" />
