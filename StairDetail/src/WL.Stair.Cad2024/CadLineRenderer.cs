@@ -535,12 +535,18 @@ namespace WL.Stair.Cad2024
             var topY = allBaseLines.Max(line => (line.Start.Y + line.End.Y) / 2.0);
             var sourceY = (source.Start.Y + source.End.Y) / 2.0;
             var shiftedY = sourceY >= topY - 0.001 ? sourceY - offset : sourceY + offset;
-            var polyline = new Polyline(2) { Layer = StructuralLayer,
-                ConstantWidth = width, Closed = false };
+            var polyline = new Polyline(2) { Layer = StructuralLayer, Closed = false };
             polyline.AddVertexAt(0, new Point2d(insertionPoint.X + source.Start.X,
-                insertionPoint.Y + shiftedY), 0, 0, 0);
+                insertionPoint.Y + shiftedY), 0, width, width);
             polyline.AddVertexAt(1, new Point2d(insertionPoint.X + source.End.X,
-                insertionPoint.Y + shiftedY), 0, 0, 0);
+                insertionPoint.Y + shiftedY), 0, width, width);
+            // AddVertexAt writes per-vertex segment widths.  Setting ConstantWidth
+            // before adding zero-width vertices makes AutoCAD display a thin line,
+            // even though the entity was intended to be wide.  Write both forms
+            // after the vertices exist so the open segment keeps its real width.
+            polyline.SetStartWidthAt(0, width);
+            polyline.SetEndWidthAt(0, width);
+            polyline.ConstantWidth = width;
             currentSpace.AppendEntity(polyline);
             transaction.AddNewlyCreatedDBObject(polyline, true);
         }
