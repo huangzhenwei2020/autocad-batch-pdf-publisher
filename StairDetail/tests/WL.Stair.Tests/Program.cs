@@ -737,6 +737,13 @@ namespace WL.Stair.Tests
                     && Math.Abs(line.End.Y - upperElevation) < 0.001
                     && Math.Abs(line.End.X - line.Start.X) > 0.001),
                 "The two-flight final run must bridge continuously to its unchanged upper floor.");
+            var undersideDiagonals = section.Lines.Where(line =>
+                    line.ComponentId == lower.Flights[1].Id
+                    && Math.Abs(line.Start.X - line.End.X) > 0.001
+                    && Math.Abs(line.Start.Y - line.End.Y) > 0.001)
+                .ToArray();
+            TestAssert.Equal(1, undersideDiagonals.Length,
+                "A nearby upper floor must be reached by one continuous stair soffit without a kink.");
         }
 
         private static void ConnectsEveryNonThreeFlightStoreyDirectly()

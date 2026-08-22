@@ -476,18 +476,13 @@ namespace WL.Stair.Core.Geometry
                 }
                 else
                 {
-                    // Even when the offset underside cannot intersect the
-                    // existing soffit within its finite segment, keep a closed
-                    // structural outline instead of silently leaving the flight
-                    // detached from its destination platform.
+                    // When the remaining distance is too short for a valid
+                    // horizontal soffit intersection, redraw the underside as
+                    // one continuous diagonal to the destination slab. A short
+                    // extra diagonal at the flight end creates an unrealistic
+                    // kink in the structural stair profile.
                     lines.Add(new DrawingLine(
                         new Point2D(destinationConnectionX, bridgeUndersideElevation),
-                        outlineEnd,
-                        role,
-                        isHidden,
-                        componentId));
-                    lines.Add(new DrawingLine(
-                        outlineEnd,
                         outlineStart,
                         role,
                         isHidden,
