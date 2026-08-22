@@ -68,9 +68,6 @@ namespace WL.Stair.Cad2024
                 transaction.AddNewlyCreatedDBObject(line, true);
             }
 
-            if (view.ShowBold)
-                RenderBaseWallVisibleLines(currentSpace, transaction, view.Lines, view.Scale, insertionPoint);
-
             foreach (var group in view.Lines.Where(line => line.Role == StairLineRole.BreakLine)
                 .GroupBy(line => line.ComponentId ?? string.Empty))
                 RenderConnectedPolyline(currentSpace, transaction, group, insertionPoint);
@@ -509,35 +506,15 @@ namespace WL.Stair.Cad2024
             var top = region.Boundary.Max(point => point.Y) - offset;
             foreach (var y in new[] { bottom, top })
             {
-                var line = new Polyline(2) { Layer = StructuralLayer, ConstantWidth = width };
-                line.AddVertexAt(0, new Point2d(insertionPoint.X + left, insertionPoint.Y + y), 0, 0, 0);
-                line.AddVertexAt(1, new Point2d(insertionPoint.X + right, insertionPoint.Y + y), 0, 0, 0);
-                currentSpace.AppendEntity(line);
-                transaction.AddNewlyCreatedDBObject(line, true);
+                var offsetPolyline = new Polyline(2) { Layer = StructuralLayer, ConstantWidth = width };
+                offsetPolyline.AddVertexAt(0, new Point2d(insertionPoint.X + left, insertionPoint.Y + y), 0, 0, 0);
+                offsetPolyline.AddVertexAt(1, new Point2d(insertionPoint.X + right, insertionPoint.Y + y), 0, 0, 0);
+                offsetPolyline.Closed = false;
+                currentSpace.AppendEntity(offsetPolyline);
+                transaction.AddNewlyCreatedDBObject(offsetPolyline, true);
             }
         }
 
-        private static void RenderBaseWallVisibleLines(BlockTableRecord currentSpace,
-            Transaction transaction, IEnumerable<DrawingLine> source, int drawingScale,
-            Point3d insertionPoint)
-        {
-            var width = 0.4 * Math.Max(1, drawingScale);
-            foreach (var sourceLine in source.Where(line =>
-                string.Equals(line.ComponentId, "BASE-WALL-VISIBLE", StringComparison.OrdinalIgnoreCase)))
-            {
-                var polyline = new Polyline(2)
-                {
-                    Layer = StructuralLayer,
-                    ConstantWidth = width
-                };
-                polyline.AddVertexAt(0, new Point2d(insertionPoint.X + sourceLine.Start.X,
-                    insertionPoint.Y + sourceLine.Start.Y), 0, 0, 0);
-                polyline.AddVertexAt(1, new Point2d(insertionPoint.X + sourceLine.End.X,
-                    insertionPoint.Y + sourceLine.End.Y), 0, 0, 0);
-                currentSpace.AppendEntity(polyline);
-                transaction.AddNewlyCreatedDBObject(polyline, true);
-            }
-        }
 
         private static Polyline FindInnerOffset(Polyline boundary, double distance)
         {
