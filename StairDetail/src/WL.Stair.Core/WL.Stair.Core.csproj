@@ -44,10 +44,12 @@
     <Compile Include="Domain\StairProjectDefinition.cs" />
     <Compile Include="Domain\StairRuleSet.cs" />
     <Compile Include="Geometry\DrawingLine.cs" />
+    <Compile Include="Geometry\DrawingLeader.cs" />
     <Compile Include="Geometry\DrawingDimension.cs" />
     <Compile Include="Geometry\DrawingHatchRegion.cs" />
     <Compile Include="Geometry\DrawingTable.cs" />
     <Compile Include="Geometry\DrawingText.cs" />
+    <Compile Include="Geometry\DrawingTitle.cs" />
     <Compile Include="Geometry\DrawingView.cs" />
     <Compile Include="Geometry\Point2D.cs" />
     <Compile Include="Geometry\StairGeometryBuilder.cs" />

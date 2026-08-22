@@ -56,6 +56,7 @@ namespace WL.Stair.Core.Geometry
             var dimensions = new List<DrawingDimension>();
             var tables = new List<DrawingTable>();
             var hatchRegions = new List<DrawingHatchRegion>();
+            var leaders = new List<DrawingLeader>();
             var horizontalDimensionSpecs = new List<HorizontalDimensionSpec>();
             var floors = project.Floors.ToDictionary(floor => floor.Id, StringComparer.OrdinalIgnoreCase);
             var storeyResults = calculation.Storeys.ToDictionary(result => result.Id, StringComparer.OrdinalIgnoreCase);
@@ -206,10 +207,11 @@ namespace WL.Stair.Core.Geometry
                         FormatMillimeter(flightResult.RiserHeight) + "×" + flight.RiserCount
                             + "=" + FormatMillimeter(flightResult.VerticalRise),
                         flight.Id));
-                    texts.Add(new DrawingText(
-                        new Point2D((flightStartX + flightEndX) / 2.0, (currentElevation + endElevation) / 2.0 + 180.0),
-                        flight.Id,
-                        90.0));
+                    if (project.InsertComponentSchedule)
+                        texts.Add(new DrawingText(
+                            new Point2D((flightStartX + flightEndX) / 2.0, (currentElevation + endElevation) / 2.0 + 180.0),
+                            flight.Id,
+                            90.0));
                     currentX = boundaryConnectionX;
                     currentElevation = endElevation;
 
@@ -226,7 +228,8 @@ namespace WL.Stair.Core.Geometry
                             currentX,
                             currentElevation,
                             project.Construction,
-                            -destinationDirection);
+                            -destinationDirection,
+                            project.InsertComponentSchedule);
                         var landingAxisX = axisForDirection(destinationDirection);
                         wallAnchors.Add(new WallAnchor(
                             landingAxisX,
@@ -262,10 +265,11 @@ namespace WL.Stair.Core.Geometry
                     var lowestFloorName = project.BaseElevation < -0.001
                         ? floor.Name
                         : "首层";
-                    texts.Add(new DrawingText(
-                        new Point2D(position.X, position.Elevation + 150.0),
-                        lowestFloorName + "  " + FormatElevation(position.Elevation),
-                        90.0));
+                    if (project.InsertComponentSchedule)
+                        texts.Add(new DrawingText(
+                            new Point2D(position.X, position.Elevation + 150.0),
+                            lowestFloorName + "  " + FormatElevation(position.Elevation),
+                            90.0));
                     continue;
                 }
                 var floorDirection = floorDirections.ContainsKey(floor.Id)
@@ -275,7 +279,8 @@ namespace WL.Stair.Core.Geometry
                     axisForDirection(floorDirection),
                     position.Elevation,
                     floor.BeamDepthOverride ?? project.Construction.FloorBeam.Depth));
-                AddFloor(lines, texts, floor, position, project.Construction, floorDirection);
+                AddFloor(lines, texts, floor, position, project.Construction, floorDirection,
+                    project.InsertComponentSchedule);
             }
 
             var drawingScale = Math.Max(1, project.DrawingScale);
@@ -303,7 +308,8 @@ namespace WL.Stair.Core.Geometry
                 lowestElevation,
                 highestElevation,
                 project.Construction);
-            AddBaseWall(lines, firstAxisX, secondAxisX, lowestElevation, project.Construction);
+            AddBaseWall(lines, firstAxisX, secondAxisX, lowestElevation, drawingScale,
+                project.Construction);
             AddTopBreakLine(lines, firstAxisX, secondAxisX,
                 highestElevation + WallHeightAboveHighestFloor,
                 drawingScale,
@@ -322,19 +328,17 @@ namespace WL.Stair.Core.Geometry
                 drawingScale);
             AddOneHandrailHeightDimension(dimensions, lines, project.Construction.Railing, drawingScale,
                 firstAxisX, secondAxisX);
+            AddTopGuardrail(lines, leaders, highestElevation, drawingScale,
+                project.Construction.Railing);
 
             var titleX = floorPositions.Count == 0 ? 0.0 : floorPositions.Values.Average(position => position.X);
             var titleY = lowestElevation - 650.0;
-            var title = string.Join(" · ", new[]
-            {
-                project.ProjectName,
-                project.SubprojectName,
-                project.BuildingNumber,
-                project.StairNumber,
-                project.Name
-            }.Where(value => !string.IsNullOrWhiteSpace(value)));
-            texts.Add(new DrawingText(new Point2D(titleX, titleY), title, 105.0));
-            texts.Add(new DrawingText(new Point2D(titleX, titleY - 170.0), "1:" + drawingScale, 84.0));
+            var drawingTitle = new DrawingTitle(
+                new Point2D(titleX, titleY),
+                (string.IsNullOrWhiteSpace(project.StairNumber) ? string.Empty : project.StairNumber + " ")
+                    + "楼梯大样",
+                drawingScale,
+                Math.Abs(secondAxisX - firstAxisX));
             if (project.InsertComponentSchedule)
             {
                 tables.Add(BuildComponentSchedule(
@@ -360,7 +364,9 @@ namespace WL.Stair.Core.Geometry
                 hatchRegions,
                 drawingScale,
                 firstAxisX,
-                lowestElevation);
+                lowestElevation,
+                drawingTitle,
+                leaders);
         }
 
         private static IEnumerable<DrawingDimension> AlignDimensionsToOuterOutline(
@@ -370,7 +376,9 @@ namespace WL.Stair.Core.Geometry
         {
             var geometry = sourceLines
                 .Where(line => line.Role != StairLineRole.AxisLine
-                    && line.Role != StairLineRole.Handrail)
+                    && line.Role != StairLineRole.Handrail
+                    && line.Role != StairLineRole.BreakLine
+                    && line.Role != StairLineRole.HatchBoundary)
                 .ToArray();
             if (geometry.Length == 0) return sourceDimensions.ToArray();
             var leftOutline = geometry.SelectMany(line => new[] { line.Start.X, line.End.X }).Min();
@@ -525,7 +533,9 @@ namespace WL.Stair.Core.Geometry
             IEnumerable<DrawingHatchRegion> hatchRegions,
             int scale,
             double leftAxisX,
-            double lowestElevation)
+            double lowestElevation,
+            DrawingTitle title,
+            IEnumerable<DrawingLeader> leaders)
         {
             Func<Point2D, Point2D> translate = point => new Point2D(
                 point.X - leftAxisX,
@@ -558,6 +568,10 @@ namespace WL.Stair.Core.Geometry
                 region.IsWall,
                 region.PatternName,
                 region.PatternScale));
+            var rebasedTitle = title == null ? null : new DrawingTitle(
+                translate(title.Position), title.Text, title.Scale, title.TargetWidth);
+            var rebasedLeaders = leaders.Select(leader => new DrawingLeader(
+                leader.Vertices.Select(translate), leader.Text, leader.TextHeight));
             return new DrawingView(
                 "ProjectSection",
                 rebasedLines,
@@ -565,7 +579,9 @@ namespace WL.Stair.Core.Geometry
                 rebasedDimensions,
                 rebasedTables,
                 scale,
-                rebasedHatches);
+                rebasedHatches,
+                rebasedTitle,
+                rebasedLeaders);
         }
 
         private static IEnumerable<DrawingHatchRegion> BuildStructuralHatchRegions(
@@ -575,7 +591,9 @@ namespace WL.Stair.Core.Geometry
             if (hatch == null || !hatch.Enabled) return Enumerable.Empty<DrawingHatchRegion>();
             var cutLines = source
                 .Where(line => !line.IsHidden
-                    && (line.Role == StairLineRole.CutBoundary || line.Role == StairLineRole.CutFlightProfile)
+                    && (line.Role == StairLineRole.CutBoundary
+                        || line.Role == StairLineRole.CutFlightProfile
+                        || line.Role == StairLineRole.HatchBoundary)
                     && !string.IsNullOrWhiteSpace(line.ComponentId))
                 .ToArray();
             // Treat every touching foreground flight, platform and floor as
@@ -737,7 +755,8 @@ namespace WL.Stair.Core.Geometry
         {
             return !line.IsHidden
                 && (line.Role == StairLineRole.CutBoundary
-                    || line.Role == StairLineRole.CutFlightProfile);
+                    || line.Role == StairLineRole.CutFlightProfile
+                    || line.Role == StairLineRole.HatchBoundary);
         }
 
         private static bool IsHorizontal(DrawingLine line)
@@ -1093,7 +1112,8 @@ namespace WL.Stair.Core.Geometry
             double connectionX,
             double elevation,
             StairConstructionDefaults defaults,
-            int drawingDirection)
+            int drawingDirection,
+            bool showText)
         {
             var projection = drawingDirection;
             var platformWidth = landing.PlatformWidth;
@@ -1112,10 +1132,11 @@ namespace WL.Stair.Core.Geometry
                 beamDepth,
                 StairLineRole.CutBoundary,
                 landing.Id);
-            texts.Add(new DrawingText(
-                new Point2D(connectionX + (projection * platformWidth / 2.0), elevation + 150.0),
-                landing.Id,
-                90.0));
+            if (showText)
+                texts.Add(new DrawingText(
+                    new Point2D(connectionX + (projection * platformWidth / 2.0), elevation + 150.0),
+                    landing.Id,
+                    90.0));
         }
 
         private static void AddFloor(
@@ -1124,7 +1145,8 @@ namespace WL.Stair.Core.Geometry
             StairFloorDefinition floor,
             ComponentPosition position,
             StairConstructionDefaults defaults,
-            int logicalDirection)
+            int logicalDirection,
+            bool showText)
         {
             var platformWidth = floor.PlatformWidth;
             var slabThickness = floor.SlabThicknessOverride ?? defaults.FloorSlabThickness;
@@ -1142,11 +1164,12 @@ namespace WL.Stair.Core.Geometry
                 beamDepth,
                 StairLineRole.CutBoundary,
                 floor.Id);
-            AddFloorText(
-                texts,
-                floor,
-                position,
-                position.X - (logicalDirection * platformWidth / 2.0));
+            if (showText)
+                AddFloorText(
+                    texts,
+                    floor,
+                    position,
+                    position.X - (logicalDirection * platformWidth / 2.0));
         }
 
         private static void AddPlatformOutline(
@@ -1356,14 +1379,58 @@ namespace WL.Stair.Core.Geometry
             double firstAxisX,
             double secondAxisX,
             double lowestElevation,
+            int drawingScale,
             StairConstructionDefaults defaults)
         {
             var wallThickness = defaults.Wall == null ? 0.0 : Math.Max(0.0, defaults.Wall.Thickness);
             var halfWall = wallThickness / 2.0;
-            var left = Math.Min(firstAxisX, secondAxisX) - halfWall;
-            var right = Math.Max(firstAxisX, secondAxisX) + halfWall;
+            var extension = 4.0 * Math.Max(1, drawingScale);
+            var left = Math.Min(firstAxisX, secondAxisX) - halfWall - extension;
+            var right = Math.Max(firstAxisX, secondAxisX) + halfWall + extension;
             AddRectangleBoundary(lines, left, right, lowestElevation, BaseWallThickness,
-                StairLineRole.CutBoundary, false, "BASE-WALL");
+                StairLineRole.HatchBoundary, false, "BASE-WALL");
+            lines.Add(new DrawingLine(new Point2D(left, lowestElevation),
+                new Point2D(right, lowestElevation), StairLineRole.StructuralEdge, false, "BASE-WALL-VISIBLE"));
+            lines.Add(new DrawingLine(new Point2D(left, lowestElevation - BaseWallThickness),
+                new Point2D(right, lowestElevation - BaseWallThickness), StairLineRole.StructuralEdge, false,
+                "BASE-WALL-VISIBLE"));
+        }
+
+        private static void AddTopGuardrail(
+            ICollection<DrawingLine> lines,
+            ICollection<DrawingLeader> leaders,
+            double highestElevation,
+            int drawingScale,
+            RailingDefaults railing)
+        {
+            if (railing == null || !railing.Enabled) return;
+            var handrailPoints = lines
+                .Where(line => line.Role == StairLineRole.Handrail)
+                .SelectMany(line => new[] { line.Start, line.End })
+                .ToArray();
+            if (handrailPoints.Length == 0) return;
+            var highestHandrailPoint = handrailPoints.OrderByDescending(point => point.Y).First();
+
+            const double guardrailHeight = 1100.0;
+            const double postWidth = 40.0;
+            var x = highestHandrailPoint.X;
+            var bottom = highestElevation;
+            var top = highestElevation + guardrailHeight;
+            var left = x - postWidth / 2.0;
+            var right = x + postWidth / 2.0;
+            lines.Add(new DrawingLine(new Point2D(left, bottom), new Point2D(left, top),
+                StairLineRole.Handrail, false, "TOP-GUARDRAIL"));
+            lines.Add(new DrawingLine(new Point2D(right, bottom), new Point2D(right, top),
+                StairLineRole.Handrail, false, "TOP-GUARDRAIL"));
+            lines.Add(new DrawingLine(new Point2D(left, top), new Point2D(right, top),
+                StairLineRole.Handrail, false, "TOP-GUARDRAIL"));
+
+            var scale = Math.Max(1, drawingScale);
+            var target = new Point2D(x, top);
+            var elbow = new Point2D(x - (6.0 * scale), top + (4.0 * scale));
+            var textPoint = new Point2D(x - (13.0 * scale), elbow.Y);
+            leaders.Add(new DrawingLeader(new[] { target, elbow, textPoint },
+                "栏杆 H=1.1m", 3.5 * scale));
         }
 
         private static void AddTopBreakLine(
@@ -1376,8 +1443,9 @@ namespace WL.Stair.Core.Geometry
         {
             var wallThickness = defaults.Wall == null ? 0.0 : Math.Max(0.0, defaults.Wall.Thickness);
             var halfWall = wallThickness / 2.0;
-            var start = new Point2D(Math.Min(firstAxisX, secondAxisX) - halfWall, elevation);
-            var end = new Point2D(Math.Max(firstAxisX, secondAxisX) + halfWall, elevation);
+            var extension = 4.0 * Math.Max(1, drawingScale);
+            var start = new Point2D(Math.Min(firstAxisX, secondAxisX) - halfWall - extension, elevation);
+            var end = new Point2D(Math.Max(firstAxisX, secondAxisX) + halfWall + extension, elevation);
             var middle = new Point2D((start.X + end.X) / 2.0, elevation);
 
             // QZ折断线 uses a six-vertex polyline. Its four middle points are

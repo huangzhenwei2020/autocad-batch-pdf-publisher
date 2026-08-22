@@ -8,6 +8,7 @@ using Autodesk.AutoCAD.Colors;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.Geometry;
 using WL.Stair.Core.Geometry;
+using WL.Stair.CadShared;
 
 namespace WL.Stair.Cad2022
 {
@@ -48,7 +49,8 @@ namespace WL.Stair.Cad2022
                 database.CurrentSpaceId,
                 OpenMode.ForWrite);
 
-            foreach (var drawingLine in view.Lines)
+            foreach (var drawingLine in view.Lines.Where(line =>
+                line.Role != StairLineRole.BreakLine && line.Role != StairLineRole.HatchBoundary))
             {
                 var line = new Line(
                     ToCadPoint(drawingLine.Start, insertionPoint),
@@ -60,6 +62,10 @@ namespace WL.Stair.Cad2022
                 currentSpace.AppendEntity(line);
                 transaction.AddNewlyCreatedDBObject(line, true);
             }
+
+            foreach (var group in view.Lines.Where(line => line.Role == StairLineRole.BreakLine)
+                .GroupBy(line => line.ComponentId ?? string.Empty))
+                RenderConnectedPolyline(currentSpace, transaction, group, insertionPoint);
 
             foreach (var region in view.HatchRegions)
             {
@@ -81,6 +87,20 @@ namespace WL.Stair.Cad2022
                 currentSpace.AppendEntity(text);
                 transaction.AddNewlyCreatedDBObject(text, true);
             }
+
+            foreach (var drawingLeader in view.Leaders)
+                RenderLeader(currentSpace, transaction, drawingLeader, insertionPoint);
+
+            if (view.Title != null)
+                StairTitleService.Insert(database, currentSpace, transaction,
+                    ToCadPoint(view.Title.Position, insertionPoint), view.Title.Text,
+                    view.Title.Scale, view.Title.TargetWidth, AnnotationTextLayer);
+
+            WriteAssetTrace("render breakPolylines="
+                + view.Lines.Where(line => line.Role == StairLineRole.BreakLine)
+                    .Select(line => line.ComponentId ?? string.Empty).Distinct().Count()
+                + " leaders=" + view.Leaders.Count
+                + " title=" + (view.Title != null));
 
             foreach (var drawingDimension in view.Dimensions)
             {
@@ -146,6 +166,44 @@ namespace WL.Stair.Cad2022
             EnsureLayer(layerTable, transaction, BreakLineLayer, 3, ObjectId.Null);
             MigrateHatchLayerColor(layerTable, transaction);
             EnsureLayer(layerTable, transaction, AxisLayer, 1, axisLineTypeId);
+        }
+
+        private static void RenderConnectedPolyline(BlockTableRecord space, Transaction transaction,
+            IEnumerable<DrawingLine> source, Point3d insertionPoint)
+        {
+            var lines = source.ToArray();
+            if (lines.Length == 0) return;
+            var polyline = new Polyline(lines.Length + 1) { Layer = BreakLineLayer };
+            var points = new List<Point2D> { lines[0].Start };
+            points.AddRange(lines.Select(line => line.End));
+            for (var index = 0; index < points.Count; index++)
+                polyline.AddVertexAt(index, new Point2d(points[index].X + insertionPoint.X,
+                    points[index].Y + insertionPoint.Y), 0.0, 0.0, 0.0);
+            space.AppendEntity(polyline);
+            transaction.AddNewlyCreatedDBObject(polyline, true);
+        }
+
+        private static void RenderLeader(BlockTableRecord space, Transaction transaction,
+            DrawingLeader source, Point3d insertionPoint)
+        {
+            var textPoint = ToCadPoint(source.Vertices[source.Vertices.Count - 1], insertionPoint);
+            var text = new MText
+            {
+                Contents = source.Text,
+                Location = textPoint,
+                Attachment = AttachmentPoint.BottomRight,
+                TextHeight = source.TextHeight,
+                Layer = AnnotationTextLayer
+            };
+            space.AppendEntity(text);
+            transaction.AddNewlyCreatedDBObject(text, true);
+            var leader = new Leader { Layer = AnnotationDimensionLayer, HasArrowHead = true };
+            foreach (var vertex in source.Vertices)
+                leader.AppendVertex(ToCadPoint(vertex, insertionPoint));
+            space.AppendEntity(leader);
+            transaction.AddNewlyCreatedDBObject(leader, true);
+            leader.Annotation = text.ObjectId;
+            leader.EvaluateLeader();
         }
 
         private static void RenderSectionRegion(

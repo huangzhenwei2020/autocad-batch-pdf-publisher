@@ -104,6 +104,7 @@ namespace WL.Stair.Tests
         {
             var project = StairProjectDefinition.CreateDefault();
             project.BaseElevation = -3000.0;
+            project.InsertComponentSchedule = true;
             var outcome = new StairProjectCalculator().Calculate(project);
             var section = new StairProjectGeometryBuilder().BuildSection(project, outcome.Result);
 
@@ -896,7 +897,7 @@ namespace WL.Stair.Tests
 
             new StairProjectConstraintService().Normalize(project);
 
-            TestAssert.Equal(11, project.SchemaVersion,
+            TestAssert.Equal(12, project.SchemaVersion,
                 "Legacy projects must migrate through the current drawing-output schema.");
             TestAssert.True(project.Floors[1].AllowLowerFlightClosure,
                 "The old final-flight switch must migrate to the destination floor.");
@@ -1144,6 +1145,7 @@ namespace WL.Stair.Tests
         private static void OmitsFirstFloorSlabAndBeam()
         {
             var project = StairProjectDefinition.CreateDefault();
+            project.InsertComponentSchedule = true;
             var outcome = new StairProjectCalculator().Calculate(project);
             var section = new StairProjectGeometryBuilder().BuildSection(project, outcome.Result);
 
@@ -1427,6 +1429,21 @@ namespace WL.Stair.Tests
 
         private static void BuildsHandrailsDimensionsAndOptionalComponentSchedule()
         {
+            var projectWithoutSchedule = StairProjectDefinition.CreateDefault();
+            new StairProjectConstraintService().Apply(projectWithoutSchedule);
+            var outcomeWithoutSchedule = new StairProjectCalculator().Calculate(projectWithoutSchedule);
+            TestAssert.True(outcomeWithoutSchedule.IsSuccess,
+                "The stair project without a component schedule must calculate.");
+            var sectionWithoutSchedule = new StairProjectGeometryBuilder().BuildSection(
+                projectWithoutSchedule, outcomeWithoutSchedule.Result);
+            TestAssert.Equal(0, sectionWithoutSchedule.Tables.Count,
+                "Disabling the component schedule must omit the table.");
+            TestAssert.True(!sectionWithoutSchedule.Texts.Any(text =>
+                    text.Content.StartsWith("TD-", StringComparison.OrdinalIgnoreCase)
+                    || text.Content.StartsWith("PT-", StringComparison.OrdinalIgnoreCase)
+                    || text.Content.StartsWith("LB-", StringComparison.OrdinalIgnoreCase)),
+                "Disabling the component schedule must also omit flight, platform and floor ID labels.");
+
             var project = StairProjectDefinition.CreateDefault();
             project.DrawingScale = 30;
             project.InsertComponentSchedule = true;
@@ -1490,7 +1507,9 @@ namespace WL.Stair.Tests
                 "Each flight must have an inner vertical-rise dimension.");
             var outlineLines = section.Lines.Where(line =>
                     line.Role != StairLineRole.AxisLine
-                    && line.Role != StairLineRole.Handrail)
+                    && line.Role != StairLineRole.Handrail
+                    && line.Role != StairLineRole.BreakLine
+                    && line.Role != StairLineRole.HatchBoundary)
                 .ToArray();
             var leftOutline = outlineLines.SelectMany(line => new[] { line.Start.X, line.End.X }).Min();
             var rightOutline = outlineLines.SelectMany(line => new[] { line.Start.X, line.End.X }).Max();
@@ -1566,7 +1585,7 @@ namespace WL.Stair.Tests
                 "The optional component schedule must create one table.");
             TestAssert.True(section.HatchRegions.Any(region => !region.IsWall
                     && region.Boundary.Count >= 3
-                    && string.Equals(region.PatternName, "WL_RC_CONCRETE", StringComparison.OrdinalIgnoreCase)),
+                    && string.Equals(region.PatternName, "WL_RC_CONCRETE_V2", StringComparison.OrdinalIgnoreCase)),
                 "Visible cut flights and platforms must produce closed concrete hatch regions.");
             var visibleCutComponents = section.Lines
                 .Where(line => !line.IsHidden
@@ -1585,17 +1604,59 @@ namespace WL.Stair.Tests
                 "Wall faces must use the plugin-provided 45-degree single-line hatch.");
             var baseWallLines = section.Lines.Where(line => line.ComponentId == "BASE-WALL").ToArray();
             TestAssert.Equal(4, baseWallLines.Length,
-                "The section bottom must include one closed 100 millimetre base wall.");
+                "The section bottom must retain one closed hatch-only boundary.");
+            TestAssert.True(baseWallLines.All(line => line.Role == StairLineRole.HatchBoundary),
+                "The base-wall end caps must be hatch boundaries rather than visible geometry.");
             TestAssert.NearlyEqual(100.0,
                 baseWallLines.SelectMany(line => new[] { line.Start.Y, line.End.Y }).Max()
                     - baseWallLines.SelectMany(line => new[] { line.Start.Y, line.End.Y }).Min(),
                 0.001,
                 "The base wall must be 100 millimetres thick.");
+            var expectedLeftExtension = -(project.Construction.Wall.Thickness / 2.0)
+                - (4.0 * project.DrawingScale);
+            var expectedRightExtension = project.Construction.StairwellDepth
+                + (project.Construction.Wall.Thickness / 2.0)
+                + (4.0 * project.DrawingScale);
+            var visibleBaseWallLines = section.Lines
+                .Where(line => line.ComponentId == "BASE-WALL-VISIBLE")
+                .ToArray();
+            TestAssert.Equal(2, visibleBaseWallLines.Length,
+                "The visible base wall must contain only its two open horizontal edges.");
+            TestAssert.True(visibleBaseWallLines.All(line =>
+                    Math.Abs(line.Start.Y - line.End.Y) < 0.001),
+                "The visible base wall must not contain closed vertical end caps.");
+            TestAssert.True(visibleBaseWallLines.All(line =>
+                    Math.Abs(Math.Min(line.Start.X, line.End.X) - expectedLeftExtension) < 0.001
+                    && Math.Abs(Math.Max(line.Start.X, line.End.X) - expectedRightExtension) < 0.001),
+                "Both base-wall edges must extend four drawing millimetres beyond the wall faces.");
             var breakLines = section.Lines.Where(line => line.Role == StairLineRole.BreakLine).ToArray();
             TestAssert.Equal(5, breakLines.Length,
                 "The wall top must include the five segments of the QZ-style six-vertex break line.");
             TestAssert.True(breakLines.Any(line => Math.Abs(line.Start.Y - line.End.Y) > 0.001),
                 "The top break line must include visible folded segments.");
+            TestAssert.NearlyEqual(expectedLeftExtension,
+                breakLines.SelectMany(line => new[] { line.Start.X, line.End.X }).Min(), 0.001,
+                "The break line must extend four drawing millimetres beyond the left wall face.");
+            TestAssert.NearlyEqual(expectedRightExtension,
+                breakLines.SelectMany(line => new[] { line.Start.X, line.End.X }).Max(), 0.001,
+                "The break line must extend four drawing millimetres beyond the right wall face.");
+            TestAssert.True(section.Title != null
+                    && section.Title.Text.Contains(project.StairNumber)
+                    && section.Title.Text.Contains("楼梯大样")
+                    && section.Title.Scale == project.DrawingScale,
+                "The section must provide a Tianzheng-compatible stair title and drawing scale.");
+            var topGuardrailLines = section.Lines
+                .Where(line => line.ComponentId == "TOP-GUARDRAIL")
+                .ToArray();
+            TestAssert.Equal(3, topGuardrailLines.Length,
+                "The uppermost floor must receive one two-post guardrail with a top rail.");
+            TestAssert.Equal(2, topGuardrailLines.Count(line =>
+                    Math.Abs(line.Start.X - line.End.X) < 0.001
+                    && Math.Abs(Math.Abs(line.Start.Y - line.End.Y) - 1100.0) < 0.001),
+                "Both top guardrail posts must be 1100 millimetres high.");
+            TestAssert.True(section.Leaders.Any(leader => leader.Text.Contains("栏杆")
+                    && leader.Text.Contains("1.1m")),
+                "The 1.1 metre top guardrail must receive a leader note.");
             TestAssert.True(section.Tables[0].Rows.Any(row => row.Contains(firstFlight.Id)),
                 "The component schedule must list detailed flight parameters.");
         }
@@ -1635,6 +1696,7 @@ namespace WL.Stair.Tests
         private static void LabelsFlightsAndLandings()
         {
             var project = StairProjectDefinition.CreateDefault();
+            project.InsertComponentSchedule = true;
             var outcome = new StairProjectCalculator().Calculate(project);
             var section = new StairProjectGeometryBuilder().BuildSection(project, outcome.Result);
 

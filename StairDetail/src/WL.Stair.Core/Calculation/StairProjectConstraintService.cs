@@ -118,6 +118,15 @@ namespace WL.Stair.Core.Calculation
                     project.Construction.WallHatch.PatternName = "ANSI311";
                 project.SchemaVersion = 11;
             }
+            if (project.SchemaVersion < 12)
+            {
+                if (project.Construction.SectionHatch == null)
+                    project.Construction.SectionHatch = defaults.SectionHatch;
+                else if (string.Equals(project.Construction.SectionHatch.PatternName,
+                    "WL_RC_CONCRETE", StringComparison.OrdinalIgnoreCase))
+                    project.Construction.SectionHatch.PatternName = "WL_RC_CONCRETE_V2";
+                project.SchemaVersion = 12;
+            }
             if (project.DrawingScale <= 0) project.DrawingScale = 30;
             project.Construction.Wall.Enabled = true;
         }
