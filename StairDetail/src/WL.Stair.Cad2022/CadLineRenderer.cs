@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
 using System.Linq;
 using Autodesk.AutoCAD.Colors;
 using Autodesk.AutoCAD.DatabaseServices;
@@ -175,22 +177,66 @@ namespace WL.Stair.Cad2022
             currentSpace.AppendEntity(hatch);
             transaction.AddNewlyCreatedDBObject(hatch, true);
             hatch.AppendLoop(HatchLoopTypes.Outermost, new ObjectIdCollection { boundary.ObjectId });
+            var requestedPatternName = string.IsNullOrWhiteSpace(region.PatternName) ? "ANSI31" : region.PatternName;
+            var appliedPatternName = requestedPatternName;
             try
             {
-                hatch.SetHatchPattern(HatchPatternType.PreDefined,
-                    string.IsNullOrWhiteSpace(region.PatternName) ? "ANSI31" : region.PatternName);
+                hatch.SetHatchPattern(HatchPatternType.PreDefined, appliedPatternName);
             }
             catch
             {
-                hatch.SetHatchPattern(HatchPatternType.PreDefined, "ANSI31");
+                appliedPatternName = "ANSI31";
+                hatch.SetHatchPattern(HatchPatternType.PreDefined, appliedPatternName);
             }
-            hatch.PatternScale = Math.Max(0.001, region.PatternScale);
-            // The loop must exist before the final pattern scale is assigned.
-            // Evaluate the exact final line set (false), then invalidate the
-            // graphics cache. Otherwise AutoCAD can display a complex hatch as
-            // a solid-looking preview until the user edits its scale manually.
-            hatch.EvaluateHatch(false);
+            var appliedPatternScale = Math.Max(0.001, region.PatternScale);
+            hatch.PatternScale = appliedPatternScale;
+            // Autodesk requires SetHatchPattern again after changing PatternScale.
+            // It rebuilds the internal pattern definition using the final scale;
+            // changing only PatternScale leaves the property value correct while
+            // the initially generated hatch lines can still use the old density.
+            hatch.SetHatchPattern(HatchPatternType.PreDefined, appliedPatternName);
+            hatch.EvaluateHatch(true);
             hatch.RecordGraphicsModified(true);
+            WriteHatchTrace(region, drawingScale, requestedPatternName, appliedPatternName,
+                appliedPatternScale, hatch);
+        }
+
+        private static void WriteHatchTrace(
+            DrawingHatchRegion region,
+            int drawingScale,
+            string requestedPatternName,
+            string appliedPatternName,
+            double appliedPatternScale,
+            Hatch hatch)
+        {
+            try
+            {
+                var packageRoot = Environment.GetEnvironmentVariable("WANLUO_ARCHITECTURE_TOOLS_ROOT");
+                var root = !string.IsNullOrWhiteSpace(packageRoot) && Directory.Exists(packageRoot)
+                    ? Path.Combine(packageRoot, "用户配置文件")
+                    : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                        "WanluoArchitectureTools", "用户配置文件");
+                var logDirectory = Path.Combine(root, "Logs");
+                Directory.CreateDirectory(logDirectory);
+                var line = string.Format(CultureInfo.InvariantCulture,
+                    "{0:O} CAD2022 kind={1} requestedPattern={2} appliedPattern={3} requestedScale={4:R} appliedScale={5:R} hatchScale={6:R} solid={7} loops={8} boundaryPoints={9} drawingScale={10}\r\n",
+                    DateTime.Now,
+                    region.IsWall ? "WALL" : "STRUCTURE",
+                    requestedPatternName,
+                    appliedPatternName,
+                    region.PatternScale,
+                    appliedPatternScale,
+                    hatch.PatternScale,
+                    hatch.IsSolidFill,
+                    hatch.NumberOfLoops,
+                    region.Boundary.Count,
+                    drawingScale);
+                File.AppendAllText(Path.Combine(logDirectory, "stair-hatch.log"), line);
+            }
+            catch
+            {
+                // Diagnostics must never interrupt drawing generation.
+            }
         }
 
         private static void MigrateHatchLayerColor(LayerTable layerTable, Transaction transaction)
