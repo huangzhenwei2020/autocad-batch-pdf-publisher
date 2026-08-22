@@ -7,7 +7,7 @@ namespace WL.Stair.Core.Domain
     {
         public StairProjectDefinition()
         {
-            SchemaVersion = 7;
+            SchemaVersion = 8;
             Name = "楼梯大样";
             ProjectName = "未命名项目";
             SubprojectName = string.Empty;
@@ -151,6 +151,10 @@ namespace WL.Stair.Core.Domain
 
         public bool DirectionLinked { get; set; }
 
+        public bool AllowLowerFlightClosure { get; set; }
+
+        public bool AllowUpperFlightClosure { get; set; }
+
         public double? SlabThicknessOverride { get; set; }
 
         public double? BeamWidthOverride { get; set; }
@@ -174,7 +178,9 @@ namespace WL.Stair.Core.Domain
                 PlatformWidth = 1200.0,
                 PlatformWidthLocked = false,
                 ProjectionDirection = -1,
-                DirectionLinked = true
+                DirectionLinked = true,
+                AllowLowerFlightClosure = false,
+                AllowUpperFlightClosure = false
             };
         }
     }
@@ -264,6 +270,8 @@ namespace WL.Stair.Core.Domain
 
         public bool SectionRepresentationLinked { get; set; }
 
+        public bool RiserCountLocked { get; set; }
+
         public static StairFlightDefinition CreateDefault(
             string id,
             string name,
@@ -281,7 +289,8 @@ namespace WL.Stair.Core.Domain
                 Direction = direction,
                 DirectionLinked = true,
                 SectionRepresentation = representation,
-                SectionRepresentationLinked = true
+                SectionRepresentationLinked = true,
+                RiserCountLocked = false
             };
         }
     }
@@ -309,6 +318,10 @@ namespace WL.Stair.Core.Domain
         public int ProjectionDirection { get; set; }
 
         public bool DirectionLinked { get; set; }
+
+        public bool AllowLowerFlightClosure { get; set; }
+
+        public bool AllowUpperFlightClosure { get; set; }
 
         public double? SlabThicknessOverride { get; set; }
 
@@ -339,7 +352,9 @@ namespace WL.Stair.Core.Domain
                 PlatformWidth = 1200.0,
                 PlatformWidthLocked = false,
                 ProjectionDirection = 1,
-                DirectionLinked = true
+                DirectionLinked = true,
+                AllowLowerFlightClosure = false,
+                AllowUpperFlightClosure = false
             };
         }
     }

@@ -101,18 +101,37 @@ namespace WL.Stair.Core.Geometry
                     var flight = storey.Flights[index];
                     var flightResult = storeyResult.Flights[index];
                     var direction = (double)flight.Direction;
+                    object sourceBoundary = index == 0
+                        ? (object)lowerFloor
+                        : storey.Landings[index - 1];
+                    object destinationBoundary = index < storey.Landings.Count
+                        ? (object)storey.Landings[index]
+                        : upperFloor;
                     var destinationDirection = -(int)flight.Direction;
                     var destinationWidth = index < storey.Landings.Count
                         ? storey.Landings[index].PlatformWidth
                         : upperFloor == null ? 0.0 : upperFloor.PlatformWidth;
                     var boundaryConnectionX = connectionForBoundary(destinationDirection, destinationWidth);
-                    // Only the final run of a three-flight storey may
-                    // deliberately end short and use the designed bridge.
-                    var flightEndX = currentX + (direction * flightResult.HorizontalRun);
-                    var allowBridgeClosure = (storey.Flights.Count == 3
-                            || storey.AllowUpperClosureGap)
-                        && index == storey.Flights.Count - 1;
-                    if (!allowBridgeClosure
+                    // If both sides of one flight permit closure, the lower
+                    // boundary wins: keep its position and close at the upper
+                    // destination. This makes bottom-up editing deterministic.
+                    var allowEndClosure = AllowsLowerFlightClosure(destinationBoundary);
+                    var allowStartClosure = !allowEndClosure
+                        && AllowsUpperFlightClosure(sourceBoundary);
+                    var flightStartX = allowStartClosure
+                        ? boundaryConnectionX - (direction * flightResult.HorizontalRun)
+                        : currentX;
+                    var flightEndX = flightStartX + (direction * flightResult.HorizontalRun);
+                    var startClosureGap = direction * (flightStartX - currentX);
+                    var endClosureGap = direction * (boundaryConnectionX - flightEndX);
+                    if ((allowStartClosure && startClosureGap < -0.01)
+                        || (allowEndClosure && endClosureGap < -0.01))
+                    {
+                        throw new InvalidOperationException(
+                            storey.Id + " 的梯段补齐距离不能为负，请调整踏步或平台宽度。");
+                    }
+                    if (!allowEndClosure
+                        && !allowStartClosure
                         && Math.Abs(flightEndX - boundaryConnectionX) > 0.01)
                     {
                         throw new InvalidOperationException(
@@ -126,22 +145,32 @@ namespace WL.Stair.Core.Geometry
                             ? project.Construction.FloorSlabThickness
                             : upperFloor.SlabThicknessOverride
                                 ?? project.Construction.FloorSlabThickness;
+                    var sourceSlabThickness = index > 0
+                        ? storey.Landings[index - 1].SlabThicknessOverride
+                            ?? project.Construction.LandingSlabThickness
+                        : lowerFloor == null
+                            ? project.Construction.FloorSlabThickness
+                            : lowerFloor.SlabThicknessOverride
+                                ?? project.Construction.FloorSlabThickness;
                     AddFlightBoundary(
                         lines,
-                        currentX,
+                        flightStartX,
                         currentElevation,
                         flightResult,
                         direction,
+                        currentX,
+                        sourceSlabThickness,
+                        allowStartClosure,
                         boundaryConnectionX,
                         destinationSlabThickness,
-                        allowBridgeClosure,
+                        allowEndClosure,
                         isHidden,
                         Math.Abs(currentElevation - lowestElevation) < 0.001,
                         flight.Id);
 
                     var endElevation = currentElevation + flightResult.VerticalRise;
                     texts.Add(new DrawingText(
-                        new Point2D((currentX + flightEndX) / 2.0, (currentElevation + endElevation) / 2.0 + 180.0),
+                        new Point2D((flightStartX + flightEndX) / 2.0, (currentElevation + endElevation) / 2.0 + 180.0),
                         flight.Id,
                         90.0));
                     currentX = boundaryConnectionX;
@@ -378,12 +407,31 @@ namespace WL.Stair.Core.Geometry
                 && value < AxisEnd(line, vertical) + 0.001;
         }
 
+        private static bool AllowsLowerFlightClosure(object boundary)
+        {
+            var floor = boundary as StairFloorDefinition;
+            if (floor != null) return floor.AllowLowerFlightClosure;
+            var landing = boundary as StairLandingDefinition;
+            return landing != null && landing.AllowLowerFlightClosure;
+        }
+
+        private static bool AllowsUpperFlightClosure(object boundary)
+        {
+            var floor = boundary as StairFloorDefinition;
+            if (floor != null) return floor.AllowUpperFlightClosure;
+            var landing = boundary as StairLandingDefinition;
+            return landing != null && landing.AllowUpperFlightClosure;
+        }
+
         private static void AddFlightBoundary(
             ICollection<DrawingLine> lines,
             double startX,
             double startElevation,
             StairProjectFlightResult flight,
             double direction,
+            double sourceConnectionX,
+            double sourceSlabThickness,
+            bool allowStartClosure,
             double destinationConnectionX,
             double destinationSlabThickness,
             bool allowBridgeClosure,
@@ -437,6 +485,29 @@ namespace WL.Stair.Core.Geometry
             }
 
             var outlineEnd = new Point2D(x, elevation - flight.RiserHeight);
+            var sourceGap = direction * (startX - sourceConnectionX);
+            if (allowStartClosure && sourceGap > 0.001)
+            {
+                var sourceUndersideElevation = startElevation - sourceSlabThickness;
+                lines.Add(new DrawingLine(
+                    new Point2D(sourceConnectionX, startElevation),
+                    new Point2D(startX, startElevation),
+                    role,
+                    isHidden,
+                    componentId));
+                lines.Add(new DrawingLine(
+                    new Point2D(sourceConnectionX, startElevation),
+                    new Point2D(sourceConnectionX, sourceUndersideElevation),
+                    role,
+                    isHidden,
+                    componentId));
+                lines.Add(new DrawingLine(
+                    new Point2D(sourceConnectionX, sourceUndersideElevation),
+                    outlineStart,
+                    role,
+                    isHidden,
+                    componentId));
+            }
             var horizontalGap = direction * (destinationConnectionX - x);
             if (allowBridgeClosure && horizontalGap > 0.001)
             {

@@ -73,6 +73,30 @@ namespace WL.Stair.Core.Calculation
                     if (storey != null) storey.AllowUpperClosureGap = false;
                 project.SchemaVersion = 7;
             }
+            if (project.SchemaVersion < 8)
+            {
+                var floorLookup = (project.Floors ?? new List<StairFloorDefinition>())
+                    .Where(floor => floor != null && !string.IsNullOrWhiteSpace(floor.Id))
+                    .ToDictionary(floor => floor.Id, StringComparer.OrdinalIgnoreCase);
+                foreach (var storey in project.Storeys ?? new List<StairStoreyDefinition>())
+                {
+                    if (storey == null) continue;
+                    // Preserve the old explicit per-storey switch and the old
+                    // implicit three-flight final closure on the destination
+                    // floor. New projects keep every boundary switch off.
+                    if (storey.AllowUpperClosureGap
+                        || (storey.Flights != null && storey.Flights.Count == 3))
+                    {
+                        StairFloorDefinition upperFloor;
+                        if (floorLookup.TryGetValue(storey.UpperFloorId ?? string.Empty, out upperFloor))
+                            upperFloor.AllowLowerFlightClosure = true;
+                    }
+                    storey.AllowUpperClosureGap = false;
+                    foreach (var flight in storey.Flights ?? new List<StairFlightDefinition>())
+                        if (flight != null) flight.RiserCountLocked = false;
+                }
+                project.SchemaVersion = 8;
+            }
             project.Construction.Wall.Enabled = true;
         }
 
@@ -96,13 +120,7 @@ namespace WL.Stair.Core.Calculation
             foreach (var storey in project.Storeys ?? new List<StairStoreyDefinition>())
             {
                 if (storey == null || storey.Flights == null) continue;
-
-                // TotalRiserCount is a UI constraint/input; the individual
-                // flights are the geometric source of truth after distribution.
-                // Never leave both representations with different totals.
-                storey.TotalRiserCount = storey.Flights
-                    .Where(flight => flight != null)
-                    .Sum(flight => flight.RiserCount);
+                DistributeRiserCountsIfNeeded(storey);
 
                 StairFloorDefinition lowerFloor;
                 StairFloorDefinition upperFloor;
@@ -144,64 +162,15 @@ namespace WL.Stair.Core.Calculation
                     && storey.Flights.Count > 0)
                 {
                     var linkedTreadDepth = storey.Flights[0].TreadDepth;
-                    var precedingWidth = PlatformWidth(lowerFloor);
-                    for (var index = 0; index < storey.Flights.Count; index++)
-                    {
-                        var flight = storey.Flights[index];
-                        if (flight == null || flight.RiserCount < 2) continue;
+                    foreach (var flight in storey.Flights.Where(item => item != null))
                         flight.TreadDepth = linkedTreadDepth;
-                        if (index < storey.Landings.Count)
-                        {
-                            var landing = storey.Landings[index];
-                            if (!landing.PlatformWidthLocked)
-                            {
-                                var requiredPairWidth = project.Construction.StairwellDepth
-                                    - linkedTreadDepth * (flight.RiserCount - 1);
-                                landing.PlatformWidth = Math.Max(
-                                    0.0,
-                                    requiredPairWidth - precedingWidth);
-                            }
-                            precedingWidth = landing.PlatformWidth;
-                        }
-                    }
                     continue;
                 }
 
                 if (storey.TreadDepthLinked && storey.Flights.Count > 0)
                 {
                     var linkedTreadDepth = storey.Flights[0].TreadDepth;
-                    var boundaries = new List<object> { lowerFloor };
-                    boundaries.AddRange(storey.Landings.Cast<object>());
-                    boundaries.Add(upperFloor);
-                    var connectedFlightCount = AllowsFinalClosure(storey)
-                        ? Math.Max(0, storey.Flights.Count - 1)
-                        : storey.Flights.Count;
-                    boundaries = boundaries.Take(connectedFlightCount + 1).ToList();
-                    var currentWidths = boundaries.Select(PlatformWidth).ToArray();
-                    var locked = boundaries.Select(IsPlatformWidthLocked).ToArray();
-                    var signs = new double[boundaries.Count];
-                    var constants = new double[boundaries.Count];
-                    signs[0] = 1.0;
-                    for (var index = 0; index < connectedFlightCount; index++)
-                    {
-                        var requiredPairWidth = project.Construction.StairwellDepth
-                            - linkedTreadDepth * Math.Max(0, storey.Flights[index].RiserCount - 1);
-                        signs[index + 1] = -signs[index];
-                        constants[index + 1] = requiredPairWidth - constants[index];
-                    }
-                    var anchor = Array.FindIndex(locked, value => value);
-                    var firstWidth = anchor >= 0
-                        ? signs[anchor] * (currentWidths[anchor] - constants[anchor])
-                        : signs.Select((sign, index) => sign * (currentWidths[index] - constants[index])).Average();
-                    for (var index = 0; index < boundaries.Count; index++)
-                    {
-                        var width = locked[index] ? currentWidths[index] : Math.Max(0.0, signs[index] * firstWidth + constants[index]);
-                        var floor = boundaries[index] as StairFloorDefinition;
-                        if (floor != null) floor.PlatformWidth = width;
-                        var landing = boundaries[index] as StairLandingDefinition;
-                        if (landing != null) landing.PlatformWidth = width;
-                    }
-                    foreach (var flight in storey.Flights)
+                    foreach (var flight in storey.Flights.Where(item => item != null))
                         flight.TreadDepth = linkedTreadDepth;
                 }
                 else if (storey.StairwellConstraintLocked)
@@ -212,6 +181,8 @@ namespace WL.Stair.Core.Calculation
                         if (flight == null || flight.RiserCount < 2) continue;
                         var startWidth = index == 0 ? PlatformWidth(lowerFloor) : PlatformWidth(storey.Landings[index - 1]);
                         var endWidth = index == storey.Flights.Count - 1 ? PlatformWidth(upperFloor) : PlatformWidth(storey.Landings[index]);
+                        if (AllowsClosureBetween(storeyBoundaries[index], storeyBoundaries[index + 1]))
+                            continue;
                         var horizontalRun = project.Construction.StairwellDepth - startWidth - endWidth;
                         if (horizontalRun > 0.0) flight.TreadDepth = horizontalRun / (flight.RiserCount - 1);
                     }
@@ -219,6 +190,60 @@ namespace WL.Stair.Core.Calculation
             }
 
             EnsureDirectConnections(project, floors);
+        }
+
+        private static void DistributeRiserCountsIfNeeded(StairStoreyDefinition storey)
+        {
+            var flights = (storey.Flights ?? new List<StairFlightDefinition>())
+                .Where(flight => flight != null)
+                .ToList();
+            if (flights.Count == 0)
+            {
+                storey.TotalRiserCount = 0;
+                return;
+            }
+
+            const int minimumRisers = 3;
+            var maximumLocks = Math.Max(0, flights.Count - 2);
+            var lockedCount = 0;
+            foreach (var flight in flights)
+            {
+                if (!flight.RiserCountLocked) continue;
+                if (lockedCount < maximumLocks)
+                {
+                    lockedCount++;
+                    flight.RiserCount = Math.Max(minimumRisers, flight.RiserCount);
+                }
+                else
+                {
+                    flight.RiserCountLocked = false;
+                }
+            }
+
+            var unlocked = flights.Where(flight => !flight.RiserCountLocked).ToList();
+            var lockedSum = flights.Where(flight => flight.RiserCountLocked)
+                .Sum(flight => flight.RiserCount);
+            var minimumTotal = lockedSum + minimumRisers * unlocked.Count;
+            var existingSum = flights.Sum(flight => Math.Max(minimumRisers, flight.RiserCount));
+            var requestedTotal = storey.TotalRiserCount > 0
+                ? storey.TotalRiserCount
+                : existingSum;
+            storey.TotalRiserCount = Math.Max(minimumTotal, requestedTotal);
+
+            if (flights.All(flight => flight.RiserCount >= minimumRisers)
+                && flights.Sum(flight => flight.RiserCount) == storey.TotalRiserCount)
+            {
+                return;
+            }
+
+            var remaining = storey.TotalRiserCount - lockedSum;
+            for (var index = 0; index < unlocked.Count; index++)
+            {
+                var slots = unlocked.Count - index;
+                var value = Math.Max(minimumRisers, (int)Math.Round((double)remaining / slots));
+                unlocked[index].RiserCount = value;
+                remaining -= value;
+            }
         }
 
         private static void EnsureDirectConnections(
@@ -242,26 +267,17 @@ namespace WL.Stair.Core.Calculation
                 localBoundaries.AddRange(storey.Landings.Cast<object>());
                 localBoundaries.Add(upperFloor);
 
-                // Three-flight storeys always allow the designed final closure.
-                // Other storeys do so only when explicitly enabled. The chain
-                // then stops before the last run, so edits below cannot rewrite
-                // the upper floor or any platform above it.
-                if (AllowsFinalClosure(storey))
-                {
-                    solveSegment();
-                    boundaries.Clear();
-                    flights.Clear();
-                    var directFlightCount = Math.Max(0, storey.Flights.Count - 1);
-                    SolveDirectConnectionSegment(
-                        project,
-                        localBoundaries.Take(directFlightCount + 1).ToList(),
-                        storey.Flights.Take(directFlightCount).ToList());
-                    continue;
-                }
-
                 if (boundaries.Count == 0) boundaries.Add(localBoundaries[0]);
                 for (var index = 0; index < storey.Flights.Count; index++)
                 {
+                    if (AllowsClosureBetween(localBoundaries[index], localBoundaries[index + 1]))
+                    {
+                        solveSegment();
+                        boundaries.Clear();
+                        flights.Clear();
+                        continue;
+                    }
+                    if (boundaries.Count == 0) boundaries.Add(localBoundaries[index]);
                     flights.Add(storey.Flights[index]);
                     boundaries.Add(localBoundaries[index + 1]);
                 }
@@ -269,11 +285,26 @@ namespace WL.Stair.Core.Calculation
             solveSegment();
         }
 
-        private static bool AllowsFinalClosure(StairStoreyDefinition storey)
+        private static bool AllowsClosureBetween(object lowerBoundary, object upperBoundary)
         {
-            return storey != null
-                && storey.Flights != null
-                && (storey.Flights.Count == 3 || storey.AllowUpperClosureGap);
+            return AllowsUpperFlightClosure(lowerBoundary)
+                || AllowsLowerFlightClosure(upperBoundary);
+        }
+
+        private static bool AllowsLowerFlightClosure(object boundary)
+        {
+            var floor = boundary as StairFloorDefinition;
+            if (floor != null) return floor.AllowLowerFlightClosure;
+            var landing = boundary as StairLandingDefinition;
+            return landing != null && landing.AllowLowerFlightClosure;
+        }
+
+        private static bool AllowsUpperFlightClosure(object boundary)
+        {
+            var floor = boundary as StairFloorDefinition;
+            if (floor != null) return floor.AllowUpperFlightClosure;
+            var landing = boundary as StairLandingDefinition;
+            return landing != null && landing.AllowUpperFlightClosure;
         }
 
         private static void SolveDirectConnectionSegment(
@@ -346,6 +377,7 @@ namespace WL.Stair.Core.Calculation
             // platform/floor instead of crossing through it.
             for (var index = anchorIndex - 1; index >= 0; index--)
             {
+                if (AllowsClosureBetween(boundaries[index], boundaries[index + 1])) break;
                 var flight = storey.Flights[index];
                 var pairWidth = project.Construction.StairwellDepth
                     - flight.TreadDepth * Math.Max(0, flight.RiserCount - 1);
@@ -353,12 +385,9 @@ namespace WL.Stair.Core.Calculation
                     0.0,
                     pairWidth - PlatformWidth(boundaries[index + 1])));
             }
-            var directFlightCount = storey.AllowUpperClosureGap
-                && storey.Flights.Count != 3
-                ? Math.Max(0, storey.Flights.Count - 1)
-                : storey.Flights.Count;
-            for (var index = anchorIndex; index < directFlightCount; index++)
+            for (var index = anchorIndex; index < storey.Flights.Count; index++)
             {
+                if (AllowsClosureBetween(boundaries[index], boundaries[index + 1])) break;
                 var flight = storey.Flights[index];
                 var pairWidth = project.Construction.StairwellDepth
                     - flight.TreadDepth * Math.Max(0, flight.RiserCount - 1);

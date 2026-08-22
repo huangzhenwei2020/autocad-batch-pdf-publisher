@@ -39,6 +39,9 @@ namespace WL.Stair.Tests
             AllowsTwoFlightFinalClosureWithoutChangingUpperStorey,
             ConnectsEveryNonThreeFlightStoreyDirectly,
             SynchronizesDisplayedTotalRiserCount,
+            KeepsTotalRiserCountWhileRespectingFlightLocks,
+            MigratesLegacyClosureSettingsToBoundaries,
+            AllowsUpperFlightClosureFromAPlatform,
             AlternatesUnifiedFloorAndLandingDirections,
             DrawsUnifiedBoundaryGeometryFromConnectionToAxis,
             KeepsPlatformBeamsCenteredOnFixedAxes,
@@ -574,6 +577,7 @@ namespace WL.Stair.Tests
             storey.Landings.Add(StairLandingDefinition.CreateDefault("PT-1-1", "第一平台", "TD-1-1", "TD-1-2"));
             storey.Landings.Add(StairLandingDefinition.CreateDefault("PT-1-2", "第二平台", "TD-1-2", "TD-1-3"));
             foreach (var flight in storey.Flights) flight.TreadDepth = 280.0;
+            project.Floors[1].AllowLowerFlightClosure = true;
 
             new StairProjectConstraintService().Apply(project);
             var outcome = new StairProjectCalculator().Calculate(project);
@@ -661,6 +665,7 @@ namespace WL.Stair.Tests
             threeFlight.Landings.Add(StairLandingDefinition.CreateDefault(
                 "PT-01-2", "第二平台", "TD-01-2", "TD-01-3"));
             threeFlight.TotalRiserCount = 18;
+            project.Floors[2].AllowLowerFlightClosure = true;
 
             foreach (var storey in project.Storeys)
             {
@@ -705,9 +710,10 @@ namespace WL.Stair.Tests
         {
             var project = StairProjectDefinition.CreateDefault();
             var lower = project.Storeys[0];
-            TestAssert.True(!lower.AllowUpperClosureGap,
-                "The per-storey final-closure switch must be disabled by default.");
-            lower.AllowUpperClosureGap = true;
+            TestAssert.True(!project.Floors[1].AllowLowerFlightClosure
+                    && !project.Floors[1].AllowUpperFlightClosure,
+                "Both per-boundary closure switches must be disabled by default.");
+            project.Floors[1].AllowLowerFlightClosure = true;
             lower.StairwellConstraintLocked = false;
             lower.TreadDepthLinked = false;
             lower.Flights[0].TreadDepth = 280.0;
@@ -785,6 +791,7 @@ namespace WL.Stair.Tests
                     }
                 }
                 storey.Height = storey.Flights.Sum(item => item.RiserCount) * 166.6666667;
+                storey.TotalRiserCount = storey.Flights.Sum(item => item.RiserCount);
 
                 var constraints = new StairProjectConstraintService();
                 constraints.Apply(project);
@@ -820,6 +827,89 @@ namespace WL.Stair.Tests
                 storey.Flights.Sum(item => item.RiserCount),
                 storey.TotalRiserCount,
                 "The displayed storey total must equal the sum of its flights.");
+        }
+
+        private static void KeepsTotalRiserCountWhileRespectingFlightLocks()
+        {
+            var project = StairProjectDefinition.CreateDefault();
+            var storey = project.Storeys[0];
+            storey.Flights.Add(StairFlightDefinition.CreateDefault(
+                "TD-01-3", "第三跑", 4, StairFlightDirection.Right, StairSectionRepresentation.Cut));
+            storey.Landings.Add(StairLandingDefinition.CreateDefault(
+                "PT-01-2", "第二平台", storey.Flights[1].Id, storey.Flights[2].Id));
+            storey.TotalRiserCount = 18;
+            storey.Flights[0].RiserCount = 7;
+            storey.Flights[0].RiserCountLocked = true;
+            storey.Flights[1].RiserCount = 4;
+            storey.Flights[2].RiserCount = 4;
+
+            new StairProjectConstraintService().Apply(project);
+
+            TestAssert.Equal(18, storey.TotalRiserCount,
+                "Changing per-flight risers must not change the storey total.");
+            TestAssert.Equal(7, storey.Flights[0].RiserCount,
+                "A locked flight riser count must be retained.");
+            TestAssert.Equal(11, storey.Flights[1].RiserCount + storey.Flights[2].RiserCount,
+                "Unlocked flights must absorb the remaining storey risers.");
+
+            storey.Flights[1].RiserCountLocked = true;
+            new StairProjectConstraintService().Apply(project);
+            TestAssert.True(storey.Flights.Count(item => item.RiserCountLocked) == 1,
+                "A three-flight storey may persistently lock at most one flight.");
+
+            storey.Flights.Add(StairFlightDefinition.CreateDefault(
+                "TD-01-4", "第四跑", 3, StairFlightDirection.Left, StairSectionRepresentation.Cut));
+            storey.Landings.Add(StairLandingDefinition.CreateDefault(
+                "PT-01-3", "第三平台", storey.Flights[2].Id, storey.Flights[3].Id));
+            storey.TotalRiserCount = 24;
+            storey.Flights[0].RiserCountLocked = true;
+            storey.Flights[1].RiserCountLocked = true;
+            new StairProjectConstraintService().Apply(project);
+            TestAssert.True(storey.Flights.Count(item => item.RiserCountLocked) == 2,
+                "A four-flight storey may lock two flights at the same time.");
+            TestAssert.Equal(24, storey.Flights.Sum(item => item.RiserCount),
+                "The four-flight distribution must retain the fixed storey total.");
+        }
+
+        private static void MigratesLegacyClosureSettingsToBoundaries()
+        {
+            var project = StairProjectDefinition.CreateDefault();
+            project.SchemaVersion = 7;
+            project.Storeys[0].AllowUpperClosureGap = true;
+            project.Floors[1].AllowLowerFlightClosure = false;
+
+            new StairProjectConstraintService().Normalize(project);
+
+            TestAssert.Equal(8, project.SchemaVersion,
+                "Legacy projects must migrate to the boundary-closure schema.");
+            TestAssert.True(project.Floors[1].AllowLowerFlightClosure,
+                "The old final-flight switch must migrate to the destination floor.");
+            TestAssert.True(!project.Storeys[0].AllowUpperClosureGap,
+                "The deprecated storey-level switch must be cleared after migration.");
+        }
+
+        private static void AllowsUpperFlightClosureFromAPlatform()
+        {
+            var project = StairProjectDefinition.CreateDefault();
+            var storey = project.Storeys[0];
+            project.Floors[0].AllowUpperFlightClosure = true;
+            storey.StairwellConstraintLocked = false;
+            storey.TreadDepthLinked = false;
+            storey.Flights[0].TreadDepth = 260.0;
+
+            new StairProjectConstraintService().Apply(project);
+            var outcome = new StairProjectCalculator().Calculate(project);
+            TestAssert.True(outcome.IsSuccess,
+                "An outgoing flight closure at a floor must remain calculable.");
+            var section = new StairProjectGeometryBuilder().BuildSection(project, outcome.Result);
+            var sourceConnection = project.Floors[0].PlatformWidth;
+            TestAssert.True(section.Lines.Any(line => line.ComponentId == storey.Flights[0].Id
+                    && Math.Abs(line.Start.Y) < 0.001
+                    && Math.Abs(line.End.Y) < 0.001
+                    && (Math.Abs(line.Start.X - sourceConnection) < 0.001
+                        || Math.Abs(line.End.X - sourceConnection) < 0.001)
+                    && Math.Abs(line.End.X - line.Start.X) > 0.001),
+                "The outgoing flight must connect back to the source floor with a horizontal closure.");
         }
 
         private static void AlternatesUnifiedFloorAndLandingDirections()
@@ -1101,6 +1191,7 @@ namespace WL.Stair.Tests
 
             project.Storeys[1].StairwellConstraintLocked = false;
             project.Storeys[1].Flights[0].RiserCount = 7;
+            project.Storeys[1].TotalRiserCount = 16;
             new StairProjectConstraintService().Apply(project);
             TestAssert.Equal(7, project.Storeys[1].Flights[0].RiserCount,
                 "An unlocked storey must retain its manual riser count.");
@@ -1144,6 +1235,7 @@ namespace WL.Stair.Tests
             project.Floors[0].PlatformWidth = 1200.0;
             project.Storeys[0].Landings[0].PlatformWidth = 1200.0;
             project.Storeys[0].Flights[0].RiserCount = 11;
+            project.Storeys[0].TotalRiserCount = 20;
             project.Storeys[0].TreadDepthLinked = false;
 
             new StairProjectConstraintService().Apply(project);
