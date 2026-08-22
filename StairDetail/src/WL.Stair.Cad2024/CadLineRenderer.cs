@@ -228,7 +228,8 @@ namespace WL.Stair.Cad2024
             currentSpace.AppendEntity(boundary);
             transaction.AddNewlyCreatedDBObject(boundary, true);
 
-            if (!region.IsWall)
+            if (!region.IsWall && !string.Equals(region.ComponentId, "BASE-WALL",
+                StringComparison.OrdinalIgnoreCase))
             {
                 var offsetDistance = 0.2 * Math.Max(1, drawingScale);
                 var offset = FindInnerOffset(boundary, offsetDistance);
@@ -243,7 +244,7 @@ namespace WL.Stair.Cad2024
                     transaction.AddNewlyCreatedDBObject(offset, true);
                 }
             }
-            else
+            else if (region.IsWall)
             {
                 RenderWallFacesWide(currentSpace, transaction, region, drawingScale, insertionPoint);
             }
