@@ -135,7 +135,8 @@ namespace WL.Stair.Cad2024
             EnsureLayer(layerTable, transaction, HandrailLayer, 4, ObjectId.Null);
             EnsureLayer(layerTable, transaction, AnnotationTextLayer, 2, ObjectId.Null);
             EnsureLayer(layerTable, transaction, AnnotationDimensionLayer, 3, ObjectId.Null);
-            EnsureLayer(layerTable, transaction, CutHatchLayer, 1, ObjectId.Null);
+            EnsureLayer(layerTable, transaction, CutHatchLayer, 8, ObjectId.Null);
+            MigrateHatchLayerColor(layerTable, transaction);
             EnsureLayer(layerTable, transaction, AxisLayer, 1, axisLineTypeId);
         }
 
@@ -181,11 +182,19 @@ namespace WL.Stair.Cad2024
             {
                 hatch.SetHatchPattern(HatchPatternType.PreDefined, "ANSI31");
             }
-            hatch.PatternScale = Math.Max(0.001, region.PatternScale * Math.Max(1, drawingScale));
+            hatch.PatternScale = Math.Max(0.001, region.PatternScale);
             currentSpace.AppendEntity(hatch);
             transaction.AddNewlyCreatedDBObject(hatch, true);
             hatch.AppendLoop(HatchLoopTypes.Outermost, new ObjectIdCollection { boundary.ObjectId });
             hatch.EvaluateHatch(true);
+        }
+
+        private static void MigrateHatchLayerColor(LayerTable layerTable, Transaction transaction)
+        {
+            if (!layerTable.Has(CutHatchLayer)) return;
+            var layer = (LayerTableRecord)transaction.GetObject(layerTable[CutHatchLayer], OpenMode.ForWrite);
+            if (layer.Color.ColorMethod == ColorMethod.ByAci && layer.Color.ColorIndex == 1)
+                layer.Color = Color.FromColorIndex(ColorMethod.ByAci, 8);
         }
 
         private static Polyline CreateClosedPolyline(IEnumerable<Point2D> points, Point3d insertionPoint)

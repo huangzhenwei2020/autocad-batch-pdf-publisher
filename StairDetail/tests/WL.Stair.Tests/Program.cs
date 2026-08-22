@@ -1568,6 +1568,17 @@ namespace WL.Stair.Tests
                     && region.Boundary.Count >= 3
                     && string.Equals(region.PatternName, "ANSI31", StringComparison.OrdinalIgnoreCase)),
                 "Visible cut flights and platforms must produce closed concrete hatch regions.");
+            var visibleCutComponents = section.Lines
+                .Where(line => !line.IsHidden
+                    && (line.Role == StairLineRole.CutBoundary
+                        || line.Role == StairLineRole.CutFlightProfile))
+                .Select(line => line.ComponentId)
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count();
+            var structuralRegions = section.HatchRegions.Count(region => !region.IsWall);
+            TestAssert.True(structuralRegions < visibleCutComponents,
+                "Touching cut flights, platforms and floors must be unioned before hatching and inward bolding.");
             TestAssert.True(section.HatchRegions.Any(region => region.IsWall
                     && region.Boundary.Count == 4
                     && string.Equals(region.PatternName, "AR-BRSTD", StringComparison.OrdinalIgnoreCase)),

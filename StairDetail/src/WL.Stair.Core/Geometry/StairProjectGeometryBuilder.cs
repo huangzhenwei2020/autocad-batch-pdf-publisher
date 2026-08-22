@@ -568,12 +568,16 @@ namespace WL.Stair.Core.Geometry
             SectionHatchDefaults hatch)
         {
             if (hatch == null || !hatch.Enabled) return Enumerable.Empty<DrawingHatchRegion>();
-            return source
+            var cutLines = source
                 .Where(line => !line.IsHidden
                     && (line.Role == StairLineRole.CutBoundary || line.Role == StairLineRole.CutFlightProfile)
                     && !string.IsNullOrWhiteSpace(line.ComponentId))
-                .GroupBy(line => line.ComponentId, StringComparer.OrdinalIgnoreCase)
-                .SelectMany(group => TraceClosedLoops(group))
+                .ToArray();
+            // Treat every touching foreground flight, platform and floor as
+            // one graph. Shared edges cancel before loop tracing, so both the
+            // hatch and the inward bold offset use only the combined perimeter.
+            var unionBoundary = MergeConnectedCutOutlines(cutLines);
+            return TraceClosedLoops(unionBoundary)
                 .Where(loop => Math.Abs(PolygonArea(loop.Points)) > 1.0)
                 .Select(loop => new DrawingHatchRegion(loop.Points, loop.ComponentId, false,
                     hatch.PatternName, hatch.PatternScale));
