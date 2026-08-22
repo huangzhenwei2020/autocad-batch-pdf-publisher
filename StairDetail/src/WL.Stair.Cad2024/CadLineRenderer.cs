@@ -232,8 +232,11 @@ namespace WL.Stair.Cad2024
             {
                 var offsetDistance = 0.2 * Math.Max(1, drawingScale);
                 var offset = FindInnerOffset(boundary, offsetDistance);
+                if (offset == null)
+                    offset = (Polyline)boundary.Clone();
                 if (offset != null)
                 {
+                    offset.Visible = true;
                     offset.Layer = StructuralLayer;
                     offset.ConstantWidth = 0.4 * Math.Max(1, drawingScale);
                     currentSpace.AppendEntity(offset);
@@ -277,6 +280,8 @@ namespace WL.Stair.Cad2024
             hatch.RecordGraphicsModified(true);
             WriteHatchTrace(region, drawingScale, requestedPatternName, appliedPatternName,
                 appliedPatternScale, appliedPatternType, hatch);
+            WriteAssetTrace("bold boundary kind=" + (region.IsWall ? "WALL" : "STRUCTURE")
+                + " offset=" + (!region.IsWall) + " pattern=" + appliedPatternName);
         }
 
         private static void EnsureHatchPatternAssets()

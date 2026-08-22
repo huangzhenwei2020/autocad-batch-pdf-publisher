@@ -232,8 +232,17 @@ namespace WL.Stair.Cad2022
             if (!region.IsWall)
             {
                 var offset = FindInnerOffset(boundary, 0.2 * Math.Max(1, drawingScale));
+                if (offset == null)
+                {
+                    // AutoCAD can reject an offset for a self-touching stair
+                    // outline even though the hatch boundary is valid. Keep
+                    // the original closed boundary as a visible bold outline
+                    // rather than silently dropping the bolding feature.
+                    offset = (Polyline)boundary.Clone();
+                }
                 if (offset != null)
                 {
+                    offset.Visible = true;
                     offset.Layer = StructuralLayer;
                     offset.ConstantWidth = 0.4 * Math.Max(1, drawingScale);
                     currentSpace.AppendEntity(offset);
@@ -284,6 +293,8 @@ namespace WL.Stair.Cad2022
             hatch.RecordGraphicsModified(true);
             WriteHatchTrace(region, drawingScale, requestedPatternName, appliedPatternName,
                 appliedPatternScale, appliedPatternType, hatch);
+            WriteAssetTrace("bold boundary kind=" + (region.IsWall ? "WALL" : "STRUCTURE")
+                + " offset=" + (!region.IsWall) + " pattern=" + appliedPatternName);
         }
 
         private static void EnsureHatchPatternAssets()

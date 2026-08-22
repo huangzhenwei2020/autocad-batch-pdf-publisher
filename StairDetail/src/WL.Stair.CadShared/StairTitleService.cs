@@ -29,7 +29,11 @@ namespace WL.Stair.CadShared
             try
             {
                 var template = FindTemplate(database, transaction);
-                if (template == null) return false;
+                if (template == null)
+                {
+                    WriteTitleTrace(database, "native template not found");
+                    return false;
+                }
                 var clone = template.Clone() as Entity;
                 if (clone == null) return false;
                 Point3d templateCenter;
@@ -66,9 +70,15 @@ namespace WL.Stair.CadShared
                     try { com.GetType().InvokeMember("Update", BindingFlags.InvokeMethod,
                         null, com, null, CultureInfo.CurrentCulture); } catch { }
                 }
+                WriteTitleTrace(database, "native title inserted text=" + (title ?? string.Empty)
+                    + " scale=1:" + drawingScale);
                 return true;
             }
-            catch { return false; }
+            catch (Exception exception)
+            {
+                WriteTitleTrace(database, "native title failed error=" + exception);
+                return false;
+            }
         }
 
         private static void InsertFallback(Database database, BlockTableRecord space,
@@ -108,6 +118,22 @@ namespace WL.Stair.CadShared
                 Layer = layerName
             };
             Append(space, transaction, ratio);
+            WriteTitleTrace(database, "fallback title inserted text=" + titleText
+                + " scale=1:" + scale);
+        }
+
+        private static void WriteTitleTrace(Database database, string message)
+        {
+            try
+            {
+                var root = Environment.GetEnvironmentVariable("WANLUO_ARCHITECTURE_TOOLS_ROOT");
+                if (string.IsNullOrWhiteSpace(root)) return;
+                var logs = System.IO.Path.Combine(root, "用户配置文件", "Logs");
+                System.IO.Directory.CreateDirectory(logs);
+                System.IO.File.AppendAllText(System.IO.Path.Combine(logs, "stair-title.log"),
+                    DateTime.Now.ToString("O") + " " + message + Environment.NewLine);
+            }
+            catch { }
         }
 
         private static ObjectId FindTextStyle(Database database, Transaction transaction, string name)
