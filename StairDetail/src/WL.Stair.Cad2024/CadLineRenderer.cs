@@ -173,6 +173,10 @@ namespace WL.Stair.Cad2024
             }
 
             var hatch = new Hatch { Layer = CutHatchLayer, Associative = false };
+            hatch.SetDatabaseDefaults(currentSpace.Database);
+            currentSpace.AppendEntity(hatch);
+            transaction.AddNewlyCreatedDBObject(hatch, true);
+            hatch.AppendLoop(HatchLoopTypes.Outermost, new ObjectIdCollection { boundary.ObjectId });
             try
             {
                 hatch.SetHatchPattern(HatchPatternType.PreDefined,
@@ -183,10 +187,8 @@ namespace WL.Stair.Cad2024
                 hatch.SetHatchPattern(HatchPatternType.PreDefined, "ANSI31");
             }
             hatch.PatternScale = Math.Max(0.001, region.PatternScale);
-            currentSpace.AppendEntity(hatch);
-            transaction.AddNewlyCreatedDBObject(hatch, true);
-            hatch.AppendLoop(HatchLoopTypes.Outermost, new ObjectIdCollection { boundary.ObjectId });
-            hatch.EvaluateHatch(true);
+            hatch.EvaluateHatch(false);
+            hatch.RecordGraphicsModified(true);
         }
 
         private static void MigrateHatchLayerColor(LayerTable layerTable, Transaction transaction)
