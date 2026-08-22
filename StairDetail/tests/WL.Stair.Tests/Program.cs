@@ -58,6 +58,7 @@ namespace WL.Stair.Tests
             PreservesLockedPlatformWidth,
             DrawsWallsFromBeamCenterAxes,
             KeepsSectionAxesFixedDuringEditsAndMirroring,
+            BuildsHandrailsDimensionsAndOptionalComponentSchedule,
             LabelsFlightsAndLandings,
             SupportsBasementBaseElevation
         };
@@ -880,8 +881,8 @@ namespace WL.Stair.Tests
 
             new StairProjectConstraintService().Normalize(project);
 
-            TestAssert.Equal(8, project.SchemaVersion,
-                "Legacy projects must migrate to the boundary-closure schema.");
+            TestAssert.Equal(9, project.SchemaVersion,
+                "Legacy projects must migrate through the current drawing-output schema.");
             TestAssert.True(project.Floors[1].AllowLowerFlightClosure,
                 "The old final-flight switch must migrate to the destination floor.");
             TestAssert.True(!project.Storeys[0].AllowUpperClosureGap,
@@ -1376,8 +1377,8 @@ namespace WL.Stair.Tests
             TestAssert.Equal(6, originalAxes.Length, "The section must contain exactly two fixed axes.");
             TestAssert.NearlyEqual(0.0, originalAxes[0], 0.001,
                 "The left axis must define insertion X=0.");
-            TestAssert.NearlyEqual(0.0, originalAxes[1], 0.001,
-                "The lower end of the left axis must define insertion Y=0.");
+            TestAssert.NearlyEqual(-200.0, originalAxes[1], 0.001,
+                "The left axis must extend 200 mm below the fixed insertion level.");
             TestAssert.NearlyEqual(project.Construction.StairwellDepth, originalAxes[3], 0.001,
                 "The right axis must stay at the fixed stairwell depth.");
 
@@ -1396,6 +1397,64 @@ namespace WL.Stair.Tests
             var mirroredAxes = axisCoordinates(build());
             TestAssert.True(originalAxes.SequenceEqual(mirroredAxes),
                 "Left-right mirroring must not move or exchange the fixed section axes.");
+        }
+
+        private static void BuildsHandrailsDimensionsAndOptionalComponentSchedule()
+        {
+            var project = StairProjectDefinition.CreateDefault();
+            project.DrawingScale = 30;
+            project.InsertComponentSchedule = true;
+            new StairProjectConstraintService().Apply(project);
+            var outcome = new StairProjectCalculator().Calculate(project);
+            TestAssert.True(outcome.IsSuccess, "The annotated stair project must calculate.");
+
+            var section = new StairProjectGeometryBuilder().BuildSection(project, outcome.Result);
+            var firstStorey = project.Storeys[0];
+            var firstFlight = firstStorey.Flights[0];
+            var firstFlightResult = outcome.Result.Storeys[0].Flights[0];
+            var handrails = section.Lines
+                .Where(line => line.Role == StairLineRole.Handrail)
+                .ToArray();
+            TestAssert.True(handrails.Length >= firstStorey.Flights.Count * 3,
+                "Every enabled stair flight must receive handrail geometry.");
+            TestAssert.True(handrails.Any(line => Math.Abs(line.Start.X - line.End.X) < 0.001
+                    && Math.Abs(Math.Abs(line.End.Y - line.Start.Y) - 900.0) < 0.001),
+                "The default handrail posts must use the 900 mm height.");
+
+            var flightDimension = section.Dimensions.FirstOrDefault(
+                dimension => dimension.ComponentId == firstFlight.Id);
+            TestAssert.True(flightDimension != null,
+                "Each flight must have an inner vertical-rise dimension.");
+            TestAssert.NearlyEqual(12.0 * project.DrawingScale,
+                Math.Abs(flightDimension.DimensionLinePoint.X - flightDimension.FirstExtensionOrigin.X),
+                0.001,
+                "The inner dimension offset must be 12 drawing millimetres at the output scale.");
+            TestAssert.Equal(
+                FormatExpected(firstFlightResult.RiserHeight) + "×" + firstFlight.RiserCount
+                    + "=" + FormatExpected(firstFlightResult.VerticalRise),
+                flightDimension.TextOverride,
+                "The flight-rise dimension must show riser height multiplied by riser count.");
+
+            var storeyDimensions = section.Dimensions
+                .Where(dimension => dimension.ComponentId == outcome.Result.Storeys[0].Id)
+                .ToArray();
+            TestAssert.Equal(2, storeyDimensions.Length,
+                "Each storey must have one outer height dimension on each axis side.");
+            TestAssert.True(storeyDimensions.All(dimension =>
+                    Math.Abs(dimension.DimensionLinePoint.X - dimension.FirstExtensionOrigin.X)
+                        >= (20.0 * project.DrawingScale) - 0.001),
+                "Storey dimensions must use the 20 drawing millimetre outer offset.");
+            TestAssert.Equal(1, section.Tables.Count,
+                "The optional component schedule must create one table.");
+            TestAssert.True(section.Tables[0].Rows.Any(row => row.Contains(firstFlight.Id)),
+                "The component schedule must list detailed flight parameters.");
+        }
+
+        private static string FormatExpected(double value)
+        {
+            return Math.Abs(value - Math.Round(value)) < 0.05
+                ? Math.Round(value).ToString("0")
+                : value.ToString("0.0");
         }
 
         private static void LabelsFlightsAndLandings()

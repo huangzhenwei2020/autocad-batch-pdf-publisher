@@ -356,8 +356,32 @@ namespace WL.Stair.Cad2022
                 return "<svg id='sectionSvg' viewBox='0 0 1 1'></svg>";
 
             var selectedComponentId = state.SelectedComponentId;
-            var xs = view.Lines.SelectMany(line => new[] { line.Start.X, line.End.X }).ToArray();
-            var ys = view.Lines.SelectMany(line => new[] { line.Start.Y, line.End.Y }).ToArray();
+            var xs = view.Lines.SelectMany(line => new[] { line.Start.X, line.End.X })
+                .Concat(view.Dimensions.SelectMany(dimension => new[]
+                {
+                    dimension.FirstExtensionOrigin.X,
+                    dimension.SecondExtensionOrigin.X,
+                    dimension.DimensionLinePoint.X
+                }))
+                .Concat(view.Tables.SelectMany(table => new[]
+                {
+                    table.Position.X,
+                    table.Position.X + table.ColumnWidths.Sum()
+                }))
+                .ToArray();
+            var ys = view.Lines.SelectMany(line => new[] { line.Start.Y, line.End.Y })
+                .Concat(view.Dimensions.SelectMany(dimension => new[]
+                {
+                    dimension.FirstExtensionOrigin.Y,
+                    dimension.SecondExtensionOrigin.Y,
+                    dimension.DimensionLinePoint.Y
+                }))
+                .Concat(view.Tables.SelectMany(table => new[]
+                {
+                    table.Position.Y,
+                    table.Position.Y - table.RowHeight * table.Rows.Count
+                }))
+                .ToArray();
             var minX = xs.Min() - 350.0;
             var maxX = xs.Max() + 350.0;
             var minY = ys.Min() - 350.0;
@@ -376,6 +400,7 @@ namespace WL.Stair.Cad2022
                 if (line.Role == StairLineRole.BeamBoundary) css += " beam";
                 if (line.Role == StairLineRole.WallBoundary) css += " wall";
                 if (line.Role == StairLineRole.AxisLine) css = "axis";
+                if (line.Role == StairLineRole.Handrail) css = "handrail";
                 if (!string.IsNullOrEmpty(selectedComponentId)
                     && string.Equals(line.ComponentId, selectedComponentId, StringComparison.OrdinalIgnoreCase))
                 {
@@ -399,6 +424,62 @@ namespace WL.Stair.Cad2022
                     drawingText.Position.X,
                     -drawingText.Position.Y,
                     Escape(drawingText.Content));
+            }
+            foreach (var dimension in view.Dimensions)
+            {
+                var x = dimension.DimensionLinePoint.X;
+                builder.AppendFormat(CultureInfo.InvariantCulture,
+                    "<line style='stroke:#58ef70;stroke-width:2' x1='{0}' y1='{1}' x2='{2}' y2='{3}'/>",
+                    dimension.FirstExtensionOrigin.X, -dimension.FirstExtensionOrigin.Y, x, -dimension.FirstExtensionOrigin.Y);
+                builder.AppendFormat(CultureInfo.InvariantCulture,
+                    "<line style='stroke:#58ef70;stroke-width:2' x1='{0}' y1='{1}' x2='{2}' y2='{3}'/>",
+                    dimension.SecondExtensionOrigin.X, -dimension.SecondExtensionOrigin.Y, x, -dimension.SecondExtensionOrigin.Y);
+                builder.AppendFormat(CultureInfo.InvariantCulture,
+                    "<line style='stroke:#58ef70;stroke-width:2' x1='{0}' y1='{1}' x2='{0}' y2='{2}'/>",
+                    x, -dimension.FirstExtensionOrigin.Y, -dimension.SecondExtensionOrigin.Y);
+                builder.AppendFormat(CultureInfo.InvariantCulture,
+                    "<text transform='translate({0} {1}) rotate(-90)'>{2}</text>",
+                    x - 25.0, -dimension.DimensionLinePoint.Y, Escape(dimension.TextOverride));
+            }
+            foreach (var table in view.Tables)
+            {
+                var x = table.Position.X;
+                var top = table.Position.Y;
+                var width = table.ColumnWidths.Sum();
+                var height = table.RowHeight * table.Rows.Count;
+                builder.AppendFormat(CultureInfo.InvariantCulture,
+                    "<rect x='{0}' y='{1}' width='{2}' height='{3}' fill='none' stroke='#f4e74f' stroke-width='2'/>",
+                    x, -top, width, height);
+                var columnX = x;
+                for (var column = 0; column < table.ColumnWidths.Count - 1; column++)
+                {
+                    columnX += table.ColumnWidths[column];
+                    builder.AppendFormat(CultureInfo.InvariantCulture,
+                        "<line style='stroke:#f4e74f;stroke-width:2' x1='{0}' y1='{1}' x2='{0}' y2='{2}'/>",
+                        columnX, -top, -top + height);
+                }
+                for (var row = 1; row < table.Rows.Count; row++)
+                {
+                    var y = -top + row * table.RowHeight;
+                    builder.AppendFormat(CultureInfo.InvariantCulture,
+                        "<line style='stroke:#f4e74f;stroke-width:2' x1='{0}' y1='{1}' x2='{2}' y2='{1}'/>",
+                        x, y, x + width);
+                }
+                for (var row = 0; row < table.Rows.Count; row++)
+                {
+                    columnX = x;
+                    for (var column = 0; column < table.ColumnWidths.Count; column++)
+                    {
+                        var content = column < table.Rows[row].Count ? table.Rows[row][column] : string.Empty;
+                        builder.AppendFormat(CultureInfo.InvariantCulture,
+                            "<text x='{0}' y='{1}' style='font-size:{2}px'>{3}</text>",
+                            columnX + table.ColumnWidths[column] / 2.0,
+                            -top + (row + 0.68) * table.RowHeight,
+                            2.5 * view.Scale,
+                            Escape(content));
+                        columnX += table.ColumnWidths[column];
+                    }
+                }
             }
             AppendDragHandle(builder, view, state);
             builder.Append("</svg>");

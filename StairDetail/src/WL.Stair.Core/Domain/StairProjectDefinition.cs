@@ -7,12 +7,14 @@ namespace WL.Stair.Core.Domain
     {
         public StairProjectDefinition()
         {
-            SchemaVersion = 8;
+            SchemaVersion = 9;
             Name = "楼梯大样";
             ProjectName = "未命名项目";
             SubprojectName = string.Empty;
             BuildingNumber = "1#";
             StairNumber = "LT-01";
+            DrawingScale = 30;
+            InsertComponentSchedule = false;
             Construction = StairConstructionDefaults.CreateDefault();
             Floors = new List<StairFloorDefinition>();
             Storeys = new List<StairStoreyDefinition>();
@@ -29,6 +31,10 @@ namespace WL.Stair.Core.Domain
         public string BuildingNumber { get; set; }
 
         public string StairNumber { get; set; }
+
+        public int DrawingScale { get; set; }
+
+        public bool InsertComponentSchedule { get; set; }
 
         public double BaseElevation { get; set; }
 
@@ -89,7 +95,7 @@ namespace WL.Stair.Core.Domain
                 FloorSlabThickness = 100.0,
                 FloorBeam = new BeamDefaults { Width = 200.0, Depth = 400.0 },
                 LandingBeam = new BeamDefaults { Width = 200.0, Depth = 400.0 },
-                Railing = new RailingDefaults { Enabled = true, Height = 1050.0, EdgeOffset = 50.0 },
+                Railing = new RailingDefaults { Enabled = true, Height = 900.0, EdgeOffset = 50.0 },
                 Wall = new WallDefaults { Enabled = true, Thickness = 200.0 },
                 Door = new OpeningDefaults { Enabled = false, Width = 900.0, Height = 2100.0, SillHeight = 0.0 },
                 Window = new OpeningDefaults { Enabled = false, Width = 1200.0, Height = 1500.0, SillHeight = 900.0 }

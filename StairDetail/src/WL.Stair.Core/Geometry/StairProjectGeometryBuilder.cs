@@ -49,6 +49,8 @@ namespace WL.Stair.Core.Geometry
 
             var lines = new List<DrawingLine>();
             var texts = new List<DrawingText>();
+            var dimensions = new List<DrawingDimension>();
+            var tables = new List<DrawingTable>();
             var floors = project.Floors.ToDictionary(floor => floor.Id, StringComparer.OrdinalIgnoreCase);
             var storeyResults = calculation.Storeys.ToDictionary(result => result.Id, StringComparer.OrdinalIgnoreCase);
             var floorPositions = new Dictionary<string, ComponentPosition>(StringComparer.OrdinalIgnoreCase);
@@ -169,6 +171,23 @@ namespace WL.Stair.Core.Geometry
                         flight.Id);
 
                     var endElevation = currentElevation + flightResult.VerticalRise;
+                    AddHandrail(
+                        lines,
+                        flightStartX,
+                        flightEndX,
+                        currentElevation,
+                        endElevation,
+                        flightResult,
+                        direction,
+                        project.Construction.Railing);
+                    var scale = Math.Max(1, project.DrawingScale);
+                    dimensions.Add(new DrawingDimension(
+                        new Point2D(firstAxisX, currentElevation),
+                        new Point2D(firstAxisX, endElevation),
+                        new Point2D(firstAxisX - (12.0 * scale), (currentElevation + endElevation) / 2.0),
+                        FormatMillimeter(flightResult.RiserHeight) + "×" + flight.RiserCount
+                            + "=" + FormatMillimeter(flightResult.VerticalRise),
+                        flight.Id));
                     texts.Add(new DrawingText(
                         new Point2D((flightStartX + flightEndX) / 2.0, (currentElevation + endElevation) / 2.0 + 180.0),
                         flight.Id,
@@ -241,6 +260,24 @@ namespace WL.Stair.Core.Geometry
                 AddFloor(lines, texts, floor, position, project.Construction, floorDirection);
             }
 
+            var drawingScale = Math.Max(1, project.DrawingScale);
+            foreach (var storeyResult in calculation.Storeys)
+            {
+                var middle = (storeyResult.LowerElevation + storeyResult.UpperElevation) / 2.0;
+                dimensions.Add(new DrawingDimension(
+                    new Point2D(firstAxisX, storeyResult.LowerElevation),
+                    new Point2D(firstAxisX, storeyResult.UpperElevation),
+                    new Point2D(firstAxisX - (20.0 * drawingScale), middle),
+                    FormatMillimeter(storeyResult.UpperElevation - storeyResult.LowerElevation),
+                    storeyResult.Id));
+                dimensions.Add(new DrawingDimension(
+                    new Point2D(secondAxisX, storeyResult.LowerElevation),
+                    new Point2D(secondAxisX, storeyResult.UpperElevation),
+                    new Point2D(secondAxisX + (20.0 * drawingScale), middle),
+                    FormatMillimeter(storeyResult.UpperElevation - storeyResult.LowerElevation),
+                    storeyResult.Id));
+            }
+
             AddStairwellWalls(
                 lines,
                 wallAnchors,
@@ -248,8 +285,9 @@ namespace WL.Stair.Core.Geometry
                 calculation.Storeys.Max(result => result.UpperElevation),
                 project.Construction);
 
-            AddStairwellAxisLines(lines, firstAxisX, secondAxisX, lowestElevation,
-                calculation.Storeys.Max(result => result.UpperElevation));
+            var highestElevation = calculation.Storeys.Max(result => result.UpperElevation);
+            AddStairwellAxisLines(lines, firstAxisX, secondAxisX, lowestElevation - 200.0,
+                highestElevation + 200.0);
 
             var titleX = floorPositions.Count == 0 ? 0.0 : floorPositions.Values.Average(position => position.X);
             var titleY = lowestElevation - 650.0;
@@ -262,10 +300,20 @@ namespace WL.Stair.Core.Geometry
                 project.Name
             }.Where(value => !string.IsNullOrWhiteSpace(value)));
             texts.Add(new DrawingText(new Point2D(titleX, titleY), title, 105.0));
-            texts.Add(new DrawingText(new Point2D(titleX, titleY - 170.0), "1:30", 84.0));
+            texts.Add(new DrawingText(new Point2D(titleX, titleY - 170.0), "1:" + drawingScale, 84.0));
+            if (project.InsertComponentSchedule)
+            {
+                tables.Add(BuildComponentSchedule(
+                    project,
+                    calculation,
+                    new Point2D(secondAxisX + (24.0 * drawingScale), highestElevation)));
+            }
             return RebaseSectionToLeftAxisLowerPoint(
                 MergeConnectedCutOutlines(lines),
                 texts,
+                dimensions,
+                tables,
+                drawingScale,
                 firstAxisX,
                 lowestElevation);
         }
@@ -273,6 +321,9 @@ namespace WL.Stair.Core.Geometry
         private static DrawingView RebaseSectionToLeftAxisLowerPoint(
             IEnumerable<DrawingLine> lines,
             IEnumerable<DrawingText> texts,
+            IEnumerable<DrawingDimension> dimensions,
+            IEnumerable<DrawingTable> tables,
+            int scale,
             double leftAxisX,
             double lowestElevation)
         {
@@ -289,7 +340,24 @@ namespace WL.Stair.Core.Geometry
                 translate(text.Position),
                 text.Content,
                 text.Height));
-            return new DrawingView("ProjectSection", rebasedLines, rebasedTexts);
+            var rebasedDimensions = dimensions.Select(dimension => new DrawingDimension(
+                translate(dimension.FirstExtensionOrigin),
+                translate(dimension.SecondExtensionOrigin),
+                translate(dimension.DimensionLinePoint),
+                dimension.TextOverride,
+                dimension.ComponentId));
+            var rebasedTables = tables.Select(table => new DrawingTable(
+                translate(table.Position),
+                table.RowHeight,
+                table.ColumnWidths,
+                table.Rows));
+            return new DrawingView(
+                "ProjectSection",
+                rebasedLines,
+                rebasedTexts,
+                rebasedDimensions,
+                rebasedTables,
+                scale);
         }
 
 
@@ -421,6 +489,95 @@ namespace WL.Stair.Core.Geometry
             if (floor != null) return floor.AllowUpperFlightClosure;
             var landing = boundary as StairLandingDefinition;
             return landing != null && landing.AllowUpperFlightClosure;
+        }
+
+        private static void AddHandrail(
+            ICollection<DrawingLine> lines,
+            double flightStartX,
+            double flightEndX,
+            double startElevation,
+            double endElevation,
+            StairProjectFlightResult flight,
+            double direction,
+            RailingDefaults railing)
+        {
+            if (railing == null || !railing.Enabled || railing.Height <= 0.0 || flight.TreadCount <= 0)
+                return;
+            var firstNosing = new Point2D(
+                flightStartX + (direction * flight.TreadDepth),
+                startElevation + flight.RiserHeight);
+            var lastNosing = new Point2D(
+                flightEndX,
+                endElevation - flight.RiserHeight);
+            var firstRail = new Point2D(firstNosing.X, firstNosing.Y + railing.Height);
+            var lastRail = new Point2D(lastNosing.X, lastNosing.Y + railing.Height);
+            lines.Add(new DrawingLine(firstNosing, firstRail, StairLineRole.Handrail, false, "RAILING"));
+            if (!firstRail.Equals(lastRail))
+                lines.Add(new DrawingLine(firstRail, lastRail, StairLineRole.Handrail, false, "RAILING"));
+            lines.Add(new DrawingLine(lastNosing, lastRail, StairLineRole.Handrail, false, "RAILING"));
+        }
+
+        private static DrawingTable BuildComponentSchedule(
+            StairProjectDefinition project,
+            StairProjectCalculationResult calculation,
+            Point2D position)
+        {
+            var scale = Math.Max(1, project.DrawingScale);
+            var rows = new List<IEnumerable<string>>
+            {
+                new[] { "编号", "构件", "主要尺寸", "数量", "板厚", "梁/备注" }
+            };
+            var resultLookup = calculation.Storeys.ToDictionary(item => item.Id, StringComparer.OrdinalIgnoreCase);
+            foreach (var storey in project.Storeys)
+            {
+                StairStoreyResult storeyResult;
+                if (!resultLookup.TryGetValue(storey.Id, out storeyResult)) continue;
+                for (var index = 0; index < storey.Flights.Count; index++)
+                {
+                    var flight = storey.Flights[index];
+                    var result = storeyResult.Flights[index];
+                    rows.Add(new[]
+                    {
+                        flight.Id,
+                        "梯段",
+                        FormatMillimeter(result.TreadDepth) + "×" + FormatMillimeter(result.RiserHeight),
+                        result.TreadCount + "踏步/" + result.RiserCount + "级",
+                        FormatMillimeter(flight.SlabThicknessOverride ?? project.Construction.FlightSlabThickness),
+                        "净宽 " + FormatMillimeter(result.Width)
+                    });
+                }
+                foreach (var landing in storey.Landings)
+                {
+                    rows.Add(new[]
+                    {
+                        landing.Id,
+                        "休息平台",
+                        "宽 " + FormatMillimeter(landing.PlatformWidth),
+                        "1",
+                        FormatMillimeter(landing.SlabThicknessOverride ?? project.Construction.LandingSlabThickness),
+                        FormatMillimeter(landing.BeamWidthOverride ?? project.Construction.LandingBeam.Width)
+                            + "×" + FormatMillimeter(landing.BeamDepthOverride ?? project.Construction.LandingBeam.Depth)
+                    });
+                }
+            }
+            foreach (var floor in project.Floors)
+            {
+                rows.Add(new[]
+                {
+                    floor.Id,
+                    "楼板",
+                    "宽 " + FormatMillimeter(floor.PlatformWidth),
+                    "1",
+                    FormatMillimeter(floor.SlabThicknessOverride ?? project.Construction.FloorSlabThickness),
+                    FormatMillimeter(floor.BeamWidthOverride ?? project.Construction.FloorBeam.Width)
+                        + "×" + FormatMillimeter(floor.BeamDepthOverride ?? project.Construction.FloorBeam.Depth)
+                });
+            }
+            return new DrawingTable(
+                position,
+                7.0 * scale,
+                new[] { 24.0, 24.0, 38.0, 30.0, 20.0, 34.0 }.Select(value => value * scale),
+                rows);
         }
 
         private static void AddFlightBoundary(
@@ -865,6 +1022,13 @@ namespace WL.Stair.Core.Geometry
             return elevation > 0.0
                 ? "+" + (elevation / 1000.0).ToString("0.000", CultureInfo.InvariantCulture)
                 : (elevation / 1000.0).ToString("0.000", CultureInfo.InvariantCulture);
+        }
+
+        private static string FormatMillimeter(double value)
+        {
+            return Math.Abs(value - Math.Round(value)) < 0.05
+                ? Math.Round(value).ToString("0", CultureInfo.InvariantCulture)
+                : value.ToString("0.0", CultureInfo.InvariantCulture);
         }
 
         private sealed class ComponentPosition

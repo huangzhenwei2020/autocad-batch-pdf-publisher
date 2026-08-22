@@ -97,6 +97,16 @@ namespace WL.Stair.Core.Calculation
                 }
                 project.SchemaVersion = 8;
             }
+            if (project.SchemaVersion < 9)
+            {
+                if (project.DrawingScale <= 0) project.DrawingScale = 30;
+                if (project.Construction.Railing == null)
+                    project.Construction.Railing = StairConstructionDefaults.CreateDefault().Railing;
+                else if (Math.Abs(project.Construction.Railing.Height - 1050.0) < 0.001)
+                    project.Construction.Railing.Height = 900.0;
+                project.SchemaVersion = 9;
+            }
+            if (project.DrawingScale <= 0) project.DrawingScale = 30;
             project.Construction.Wall.Enabled = true;
         }
 

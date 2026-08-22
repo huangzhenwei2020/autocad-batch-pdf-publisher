@@ -14,5 +14,6 @@ namespace WL.Stair.Core.Geometry
         BeamBoundary = 9,
         WallBoundary = 10
         ,AxisLine = 11
+        ,Handrail = 12
     }
 }
