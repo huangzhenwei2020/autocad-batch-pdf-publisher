@@ -9,6 +9,9 @@ namespace WL.Stair.Core.Geometry
 {
     public sealed class StairProjectGeometryBuilder
     {
+        private const double WallHeightAboveHighestFloor = 1800.0;
+        private const double AxisExtensionBeyondWall = 200.0;
+
         public DrawingView BuildPlan(StairProjectDefinition project, StairProjectCalculationResult calculation, int storeyIndex)
         {
             if (project == null) throw new ArgumentNullException(nameof(project));
@@ -179,6 +182,10 @@ namespace WL.Stair.Core.Geometry
                         endElevation,
                         flightResult,
                         direction,
+                        currentX,
+                        allowStartClosure,
+                        boundaryConnectionX,
+                        allowEndClosure,
                         project.Construction.Railing);
                     var scale = Math.Max(1, project.DrawingScale);
                     dimensions.Add(new DrawingDimension(
@@ -286,8 +293,12 @@ namespace WL.Stair.Core.Geometry
                 project.Construction);
 
             var highestElevation = calculation.Storeys.Max(result => result.UpperElevation);
-            AddStairwellAxisLines(lines, firstAxisX, secondAxisX, lowestElevation - 200.0,
-                highestElevation + 200.0);
+            AddStairwellAxisLines(
+                lines,
+                firstAxisX,
+                secondAxisX,
+                lowestElevation - AxisExtensionBeyondWall,
+                highestElevation + WallHeightAboveHighestFloor + AxisExtensionBeyondWall);
 
             var titleX = floorPositions.Count == 0 ? 0.0 : floorPositions.Values.Average(position => position.X);
             var titleY = lowestElevation - 650.0;
@@ -499,22 +510,46 @@ namespace WL.Stair.Core.Geometry
             double endElevation,
             StairProjectFlightResult flight,
             double direction,
+            double sourceConnectionX,
+            bool allowStartClosure,
+            double destinationConnectionX,
+            bool allowEndClosure,
             RailingDefaults railing)
         {
             if (railing == null || !railing.Enabled || railing.Height <= 0.0 || flight.TreadCount <= 0)
                 return;
-            var firstNosing = new Point2D(
-                flightStartX + (direction * flight.TreadDepth),
-                startElevation + flight.RiserHeight);
-            var lastNosing = new Point2D(
-                flightEndX,
-                endElevation - flight.RiserHeight);
+            // The rail posts are based on the two outer upper vertices of the
+            // complete flight: the source floor/platform edge and the arrival
+            // tread edge. This keeps the rail aligned with the whole flight,
+            // including the arrival face counted in the total riser count.
+            var firstNosing = new Point2D(flightStartX, startElevation);
+            var lastNosing = new Point2D(flightEndX, endElevation);
             var firstRail = new Point2D(firstNosing.X, firstNosing.Y + railing.Height);
             var lastRail = new Point2D(lastNosing.X, lastNosing.Y + railing.Height);
+            if (allowStartClosure
+                && direction * (flightStartX - sourceConnectionX) > 0.001)
+            {
+                lines.Add(new DrawingLine(
+                    new Point2D(sourceConnectionX, startElevation + railing.Height),
+                    firstRail,
+                    StairLineRole.Handrail,
+                    false,
+                    "RAILING"));
+            }
             lines.Add(new DrawingLine(firstNosing, firstRail, StairLineRole.Handrail, false, "RAILING"));
             if (!firstRail.Equals(lastRail))
                 lines.Add(new DrawingLine(firstRail, lastRail, StairLineRole.Handrail, false, "RAILING"));
             lines.Add(new DrawingLine(lastNosing, lastRail, StairLineRole.Handrail, false, "RAILING"));
+            if (allowEndClosure
+                && direction * (destinationConnectionX - flightEndX) > 0.001)
+            {
+                lines.Add(new DrawingLine(
+                    lastRail,
+                    new Point2D(destinationConnectionX, endElevation + railing.Height),
+                    StairLineRole.Handrail,
+                    false,
+                    "RAILING"));
+            }
         }
 
         private static DrawingTable BuildComponentSchedule(
@@ -902,7 +937,7 @@ namespace WL.Stair.Core.Geometry
 
             var halfThickness = defaults.Wall.Thickness / 2.0;
             var bottom = lowestElevation;
-            var top = highestElevation + 1800.0;
+            var top = highestElevation + WallHeightAboveHighestFloor;
             foreach (var axisGroup in positions.GroupBy(anchor => Math.Round(anchor.AxisX, 3)))
             {
                 var beamIntervals = MergeIntervals(axisGroup

@@ -134,6 +134,8 @@ namespace WL.Stair.Cad2022
 
         private static ObjectId EnsureDimensionStyle(Database database, Transaction transaction, int scale)
         {
+            var sharedStyle = TryEnsureSharedDimensionStyle(database, transaction, scale);
+            if (!sharedStyle.IsNull) return sharedStyle;
             var name = "WL-标注-1_" + Math.Max(1, scale);
             var table = (DimStyleTable)transaction.GetObject(database.DimStyleTableId, OpenMode.ForRead);
             if (table.Has(name)) return table[name];
@@ -149,7 +151,7 @@ namespace WL.Stair.Cad2022
                 Dimtxt = 2.5,
                 Dimasz = 2.5,
                 Dimtsz = 0.0,
-                Dimblk = EnsureArchitecturalTickBlock(database, transaction),
+                Dimblk = EnsureFallbackArrowBlock(database, transaction),
                 Dimexe = 1.25,
                 Dimexo = 0.625,
                 Dimdli = 3.75,
@@ -170,9 +172,38 @@ namespace WL.Stair.Cad2022
             return id;
         }
 
-        private static ObjectId EnsureArchitecturalTickBlock(Database database, Transaction transaction)
+        private static ObjectId TryEnsureSharedDimensionStyle(
+            Database database,
+            Transaction transaction,
+            int scale)
         {
-            const string blockName = "_ArchTick";
+            try
+            {
+                var serviceType = AppDomain.CurrentDomain.GetAssemblies()
+                    .Select(assembly => assembly.GetType(
+                        "BatchPdfPublisher.Services.DraftingStandardService",
+                        false))
+                    .FirstOrDefault(type => type != null);
+                var method = serviceType == null
+                    ? null
+                    : serviceType.GetMethod(
+                        "EnsureDimensionStyleForScale",
+                        new[] { typeof(Database), typeof(Transaction), typeof(int) });
+                if (method == null) return ObjectId.Null;
+                var result = method.Invoke(
+                    null,
+                    new object[] { database, transaction, Math.Max(1, scale) });
+                return result is ObjectId ? (ObjectId)result : ObjectId.Null;
+            }
+            catch
+            {
+                return ObjectId.Null;
+            }
+        }
+
+        private static ObjectId EnsureFallbackArrowBlock(Database database, Transaction transaction)
+        {
+            const string blockName = "WS-cj";
             var table = (BlockTable)transaction.GetObject(database.BlockTableId, OpenMode.ForRead);
             if (table.Has(blockName)) return table[blockName];
             table.UpgradeOpen();

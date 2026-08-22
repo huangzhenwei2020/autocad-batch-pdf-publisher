@@ -761,6 +761,21 @@ namespace WL.Stair.Tests
                 .ToArray();
             TestAssert.Equal(1, undersideDiagonals.Length,
                 "A nearby upper floor must be reached by one continuous stair soffit without a kink.");
+            var structuralClosure = section.Lines.First(line =>
+                line.ComponentId == lower.Flights[1].Id
+                && Math.Abs(line.Start.Y - upperElevation) < 0.001
+                && Math.Abs(line.End.Y - upperElevation) < 0.001
+                && Math.Abs(line.End.X - line.Start.X) > 0.001);
+            TestAssert.True(section.Lines.Any(line =>
+                    line.Role == StairLineRole.Handrail
+                    && Math.Abs(line.Start.Y - (upperElevation + project.Construction.Railing.Height)) < 0.001
+                    && Math.Abs(line.End.Y - line.Start.Y) < 0.001
+                    && SameUndirectedInterval(
+                        line.Start.X,
+                        line.End.X,
+                        structuralClosure.Start.X,
+                        structuralClosure.End.X)),
+                "A closing flight must continue its handrail horizontally over the closure segment.");
         }
 
         private static void ConnectsEveryNonThreeFlightStoreyDirectly()
@@ -1373,7 +1388,8 @@ namespace WL.Stair.Tests
                 return new StairProjectGeometryBuilder().BuildSection(project, outcome.Result);
             };
 
-            var originalAxes = axisCoordinates(build());
+            var originalView = build();
+            var originalAxes = axisCoordinates(originalView);
             TestAssert.Equal(6, originalAxes.Length, "The section must contain exactly two fixed axes.");
             TestAssert.NearlyEqual(0.0, originalAxes[0], 0.001,
                 "The left axis must define insertion X=0.");
@@ -1381,6 +1397,16 @@ namespace WL.Stair.Tests
                 "The left axis must extend 200 mm below the fixed insertion level.");
             TestAssert.NearlyEqual(project.Construction.StairwellDepth, originalAxes[3], 0.001,
                 "The right axis must stay at the fixed stairwell depth.");
+            var wallBottom = originalView.Lines
+                .Where(line => line.Role == StairLineRole.WallBoundary)
+                .Min(line => Math.Min(line.Start.Y, line.End.Y));
+            var wallTop = originalView.Lines
+                .Where(line => line.Role == StairLineRole.WallBoundary)
+                .Max(line => Math.Max(line.Start.Y, line.End.Y));
+            TestAssert.NearlyEqual(wallBottom - 200.0, originalAxes[1], 0.001,
+                "The axis must extend 200 mm below the wall rather than below a floor or landing.");
+            TestAssert.NearlyEqual(wallTop + 200.0, originalAxes[2], 0.001,
+                "The axis must extend 200 mm above the wall rather than above the highest floor.");
 
             constraints.SetPlatformWidth(project, project.Storeys[0].Landings[0].Id, 1350.0);
             constraints.Apply(project);
@@ -1420,6 +1446,22 @@ namespace WL.Stair.Tests
             TestAssert.True(handrails.Any(line => Math.Abs(line.Start.X - line.End.X) < 0.001
                     && Math.Abs(Math.Abs(line.End.Y - line.Start.Y) - 900.0) < 0.001),
                 "The default handrail posts must use the 900 mm height.");
+            var firstFlightPostBases = handrails
+                .Where(line => Math.Abs(line.Start.X - line.End.X) < 0.001
+                    && Math.Abs(line.End.Y - line.Start.Y - 900.0) < 0.001
+                    && (Math.Abs(line.Start.Y) < 0.001
+                        || Math.Abs(line.Start.Y - firstFlightResult.VerticalRise) < 0.001))
+                .Select(line => line.Start)
+                .GroupBy(point => point.X.ToString("0.000") + ":" + point.Y.ToString("0.000"))
+                .Select(group => group.First())
+                .ToArray();
+            TestAssert.Equal(2, firstFlightPostBases.Length,
+                "The first flight handrail must start and finish on its two outer upper vertices.");
+            TestAssert.True(firstFlightPostBases.All(post => section.Lines.Any(line =>
+                    line.Role != StairLineRole.Handrail
+                    && (AreSamePointForTest(line.Start, post)
+                        || AreSamePointForTest(line.End, post)))),
+                "Each handrail post base must coincide with a flight boundary vertex.");
 
             var flightDimension = section.Dimensions.FirstOrDefault(
                 dimension => dimension.ComponentId == firstFlight.Id);
@@ -1455,6 +1497,22 @@ namespace WL.Stair.Tests
             return Math.Abs(value - Math.Round(value)) < 0.05
                 ? Math.Round(value).ToString("0")
                 : value.ToString("0.0");
+        }
+
+        private static bool SameUndirectedInterval(
+            double firstStart,
+            double firstEnd,
+            double secondStart,
+            double secondEnd)
+        {
+            return Math.Abs(Math.Min(firstStart, firstEnd) - Math.Min(secondStart, secondEnd)) < 0.001
+                && Math.Abs(Math.Max(firstStart, firstEnd) - Math.Max(secondStart, secondEnd)) < 0.001;
+        }
+
+        private static bool AreSamePointForTest(Point2D first, Point2D second)
+        {
+            return Math.Abs(first.X - second.X) < 0.001
+                && Math.Abs(first.Y - second.Y) < 0.001;
         }
 
         private static void LabelsFlightsAndLandings()
