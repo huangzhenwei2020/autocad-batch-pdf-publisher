@@ -29,7 +29,9 @@ namespace WL.Stair.Core.Geometry
             int scale,
             IEnumerable<DrawingHatchRegion> hatchRegions = null,
             DrawingTitle title = null,
-            IEnumerable<DrawingLeader> leaders = null)
+            IEnumerable<DrawingLeader> leaders = null,
+            bool showBold = true,
+            bool showFill = true)
         {
             Name = name;
             Lines = lines.ToArray();
@@ -40,6 +42,8 @@ namespace WL.Stair.Core.Geometry
             Title = title;
             Leaders = (leaders ?? Enumerable.Empty<DrawingLeader>()).ToArray();
             Scale = System.Math.Max(1, scale);
+            ShowBold = showBold;
+            ShowFill = showFill;
         }
 
         public string Name { get; }
@@ -59,5 +63,9 @@ namespace WL.Stair.Core.Geometry
         public IReadOnlyList<DrawingLeader> Leaders { get; }
 
         public int Scale { get; }
+
+        public bool ShowBold { get; }
+
+        public bool ShowFill { get; }
     }
 }

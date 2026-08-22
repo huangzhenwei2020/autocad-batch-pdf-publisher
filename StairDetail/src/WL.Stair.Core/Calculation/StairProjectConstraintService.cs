@@ -127,6 +127,11 @@ namespace WL.Stair.Core.Calculation
                     project.Construction.SectionHatch.PatternName = "WL_RC_CONCRETE_V2";
                 project.SchemaVersion = 12;
             }
+            if (project.SchemaVersion < 13)
+            {
+                project.ShowBold = true;
+                project.ShowFill = true;
+            }
             if (project.DrawingScale <= 0) project.DrawingScale = 30;
             project.Construction.Wall.Enabled = true;
         }

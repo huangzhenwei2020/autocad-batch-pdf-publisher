@@ -16,7 +16,8 @@ namespace WL.Stair.Core.Geometry
             string componentId,
             bool isWall,
             string patternName,
-            double patternScale)
+            double patternScale,
+            bool bold = true)
         {
             var points = (boundary ?? Enumerable.Empty<Point2D>()).ToArray();
             if (points.Length < 3) throw new ArgumentException("A hatch region needs at least three vertices.");
@@ -25,6 +26,7 @@ namespace WL.Stair.Core.Geometry
             IsWall = isWall;
             PatternName = string.IsNullOrWhiteSpace(patternName) ? "ANSI31" : patternName.Trim();
             PatternScale = Math.Max(0.001, patternScale);
+            Bold = bold;
         }
 
         public IReadOnlyList<Point2D> Boundary { get; }
@@ -32,5 +34,6 @@ namespace WL.Stair.Core.Geometry
         public bool IsWall { get; }
         public string PatternName { get; }
         public double PatternScale { get; }
+        public bool Bold { get; }
     }
 }

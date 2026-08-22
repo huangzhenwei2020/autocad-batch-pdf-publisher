@@ -15,6 +15,8 @@ namespace WL.Stair.Core.Domain
             StairNumber = "LT-01";
             DrawingScale = 30;
             InsertComponentSchedule = false;
+            ShowBold = true;
+            ShowFill = true;
             Construction = StairConstructionDefaults.CreateDefault();
             Floors = new List<StairFloorDefinition>();
             Storeys = new List<StairStoreyDefinition>();
@@ -35,6 +37,10 @@ namespace WL.Stair.Core.Domain
         public int DrawingScale { get; set; }
 
         public bool InsertComponentSchedule { get; set; }
+
+        public bool ShowBold { get; set; }
+
+        public bool ShowFill { get; set; }
 
         public double BaseElevation { get; set; }
 

@@ -368,7 +368,9 @@ namespace WL.Stair.Core.Geometry
                 firstAxisX,
                 lowestElevation,
                 drawingTitle,
-                leaders);
+                leaders,
+                project.ShowBold,
+                project.ShowFill);
         }
 
         private static IEnumerable<DrawingDimension> AlignDimensionsToOuterOutline(
@@ -537,7 +539,9 @@ namespace WL.Stair.Core.Geometry
             double leftAxisX,
             double lowestElevation,
             DrawingTitle title,
-            IEnumerable<DrawingLeader> leaders)
+            IEnumerable<DrawingLeader> leaders,
+            bool showBold,
+            bool showFill)
         {
             Func<Point2D, Point2D> translate = point => new Point2D(
                 point.X - leftAxisX,
@@ -583,7 +587,9 @@ namespace WL.Stair.Core.Geometry
                 scale,
                 rebasedHatches,
                 rebasedTitle,
-                rebasedLeaders);
+                rebasedLeaders,
+                showBold,
+                showFill);
         }
 
         private static IEnumerable<DrawingHatchRegion> BuildStructuralHatchRegions(
