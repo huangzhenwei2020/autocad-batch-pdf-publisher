@@ -50,9 +50,15 @@ namespace WL.Stair.Cad2022
                 OpenMode.ForWrite);
 
             foreach (var drawingLine in view.Lines.Where(line =>
-                line.Role != StairLineRole.BreakLine && line.Role != StairLineRole.HatchBoundary
-                && !string.Equals(line.ComponentId, "BASE-WALL-VISIBLE", StringComparison.OrdinalIgnoreCase)))
+                line.Role != StairLineRole.BreakLine && line.Role != StairLineRole.HatchBoundary))
             {
+                if (string.Equals(drawingLine.ComponentId, "BASE-WALL-VISIBLE",
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    RenderBaseWallLine(currentSpace, transaction, drawingLine, view.Scale,
+                        view.ShowBold, insertionPoint);
+                    continue;
+                }
                 var line = new Line(
                     ToCadPoint(drawingLine.Start, insertionPoint),
                     ToCadPoint(drawingLine.End, insertionPoint))
@@ -232,12 +238,8 @@ namespace WL.Stair.Cad2022
             currentSpace.AppendEntity(boundary);
             transaction.AddNewlyCreatedDBObject(boundary, true);
 
-            if (showBold && string.Equals(region.ComponentId, "BASE-WALL",
+            if (showBold && !region.IsWall && !string.Equals(region.ComponentId, "BASE-WALL",
                 StringComparison.OrdinalIgnoreCase))
-            {
-                RenderBaseWallWide(currentSpace, transaction, region, drawingScale, insertionPoint);
-            }
-            else if (showBold && !region.IsWall)
             {
                 var offset = FindInnerOffset(boundary, 0.2 * Math.Max(1, drawingScale));
                 if (offset == null)
@@ -503,25 +505,29 @@ namespace WL.Stair.Cad2022
             }
         }
 
-        private static void RenderBaseWallWide(BlockTableRecord currentSpace, Transaction transaction,
-            DrawingHatchRegion region, int drawingScale, Point3d insertionPoint)
+        private static void RenderBaseWallLine(BlockTableRecord currentSpace, Transaction transaction,
+            DrawingLine source, int drawingScale, bool showBold, Point3d insertionPoint)
         {
-            if (region.Boundary.Count != 4) return;
-            var offset = 0.2 * Math.Max(1, drawingScale);
-            var width = 0.4 * Math.Max(1, drawingScale);
-            var left = region.Boundary.Min(point => point.X);
-            var right = region.Boundary.Max(point => point.X);
-            var bottom = region.Boundary.Min(point => point.Y) + offset;
-            var top = region.Boundary.Max(point => point.Y) - offset;
-            foreach (var y in new[] { bottom, top })
+            if (showBold)
             {
-                var offsetPolyline = new Polyline(2) { Layer = StructuralLayer, ConstantWidth = width };
-                offsetPolyline.AddVertexAt(0, new Point2d(insertionPoint.X + left, insertionPoint.Y + y), 0, 0, 0);
-                offsetPolyline.AddVertexAt(1, new Point2d(insertionPoint.X + right, insertionPoint.Y + y), 0, 0, 0);
-                offsetPolyline.Closed = false;
-                currentSpace.AppendEntity(offsetPolyline);
-                transaction.AddNewlyCreatedDBObject(offsetPolyline, true);
+                var polyline = new Polyline(2)
+                {
+                    Layer = StructuralLayer,
+                    ConstantWidth = 0.4 * Math.Max(1, drawingScale),
+                    Closed = false
+                };
+                polyline.AddVertexAt(0, new Point2d(insertionPoint.X + source.Start.X,
+                    insertionPoint.Y + source.Start.Y), 0, 0, 0);
+                polyline.AddVertexAt(1, new Point2d(insertionPoint.X + source.End.X,
+                    insertionPoint.Y + source.End.Y), 0, 0, 0);
+                currentSpace.AppendEntity(polyline);
+                transaction.AddNewlyCreatedDBObject(polyline, true);
+                return;
             }
+            var line = new Line(ToCadPoint(source.Start, insertionPoint),
+                ToCadPoint(source.End, insertionPoint)) { Layer = StructuralLayer };
+            currentSpace.AppendEntity(line);
+            transaction.AddNewlyCreatedDBObject(line, true);
         }
 
 
