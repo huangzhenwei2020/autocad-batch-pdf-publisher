@@ -332,7 +332,9 @@ namespace WL.Stair.Core.Geometry
                 project.Construction.Railing);
 
             var titleX = floorPositions.Count == 0 ? 0.0 : floorPositions.Values.Average(position => position.X);
-            var titleY = lowestElevation - 650.0;
+            // Match the door/window elevation title row: 8 paper mm for the
+            // outer annotation zone plus another 11 paper mm for the title.
+            var titleY = lowestElevation - (19.0 * Math.Max(1, drawingScale));
             var drawingTitle = new DrawingTitle(
                 new Point2D(titleX, titleY),
                 (string.IsNullOrWhiteSpace(project.StairNumber) ? string.Empty : project.StairNumber + " ")

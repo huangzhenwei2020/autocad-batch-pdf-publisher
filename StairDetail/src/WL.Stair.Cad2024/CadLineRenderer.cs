@@ -186,23 +186,28 @@ namespace WL.Stair.Cad2024
             DrawingLeader source, Point3d insertionPoint)
         {
             var textPoint = ToCadPoint(source.Vertices[source.Vertices.Count - 1], insertionPoint);
-            var text = new MText
-            {
-                Contents = source.Text,
-                Location = textPoint,
-                Attachment = AttachmentPoint.BottomRight,
-                TextHeight = source.TextHeight,
-                Layer = AnnotationTextLayer
-            };
-            space.AppendEntity(text);
-            transaction.AddNewlyCreatedDBObject(text, true);
-            var leader = new Leader { Layer = AnnotationDimensionLayer, HasArrowHead = true };
+            var leader = new Leader { Layer = AnnotationTextLayer, HasArrowHead = true };
             foreach (var vertex in source.Vertices)
                 leader.AppendVertex(ToCadPoint(vertex, insertionPoint));
             space.AppendEntity(leader);
             transaction.AddNewlyCreatedDBObject(leader, true);
-            leader.Annotation = text.ObjectId;
-            leader.EvaluateLeader();
+            var text = new MText
+            {
+                Contents = source.Text,
+                Location = textPoint,
+                Attachment = AttachmentPoint.MiddleRight,
+                TextHeight = source.TextHeight,
+                TextStyleId = FindTextStyle(space.Database, transaction, "WL-文字-标注"),
+                Layer = AnnotationTextLayer
+            };
+            space.AppendEntity(text);
+            transaction.AddNewlyCreatedDBObject(text, true);
+        }
+
+        private static ObjectId FindTextStyle(Database database, Transaction transaction, string name)
+        {
+            var table = (TextStyleTable)transaction.GetObject(database.TextStyleTableId, OpenMode.ForRead);
+            return table.Has(name) ? table[name] : database.Textstyle;
         }
 
         private static void RenderSectionRegion(
@@ -216,7 +221,10 @@ namespace WL.Stair.Cad2024
             boundary.Layer = region.IsWall ? AuxiliaryLayer : StructuralLayer;
             // Wall ranges are construction-only hatch loops; their horizontal
             // closure must not become a visible wall edge.
-            boundary.Visible = !region.IsWall;
+            // This closed polyline only supplies the hatch loop. Visible
+            // outlines are emitted separately, so the base wall stays as two
+            // open horizontal lines without vertical end caps.
+            boundary.Visible = false;
             currentSpace.AppendEntity(boundary);
             transaction.AddNewlyCreatedDBObject(boundary, true);
 
@@ -245,6 +253,8 @@ namespace WL.Stair.Cad2024
             var requestedPatternName = string.IsNullOrWhiteSpace(region.PatternName) ? "ANSI31" : region.PatternName;
             var appliedPatternName = requestedPatternName;
             var appliedPatternType = ResolveHatchPatternType(appliedPatternName);
+            var appliedPatternScale = Math.Max(0.001, region.PatternScale);
+            try { hatch.PatternScale = appliedPatternScale; } catch { }
             try
             {
                 SetHatchPattern(hatch, appliedPatternType, appliedPatternName);
@@ -261,7 +271,6 @@ namespace WL.Stair.Cad2024
                 appliedPatternType = HatchPatternType.PreDefined;
                 SetHatchPattern(hatch, appliedPatternType, appliedPatternName);
             }
-            var appliedPatternScale = Math.Max(0.001, region.PatternScale);
             hatch.PatternScale = appliedPatternScale;
             SetHatchPattern(hatch, appliedPatternType, appliedPatternName);
             hatch.EvaluateHatch(true);
@@ -302,10 +311,39 @@ namespace WL.Stair.Cad2024
         private static void AddCadSupportPath(string directory)
         {
             var supportPath = Environment.GetEnvironmentVariable("ACAD") ?? string.Empty;
-            if (supportPath.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries)
-                .Any(path => string.Equals(path.Trim(), directory, StringComparison.OrdinalIgnoreCase))) return;
-            var updated = string.IsNullOrWhiteSpace(supportPath) ? directory : supportPath.TrimEnd(';') + ";" + directory;
-            Environment.SetEnvironmentVariable("ACAD", updated, EnvironmentVariableTarget.Process);
+            if (!supportPath.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries)
+                .Any(path => string.Equals(path.Trim(), directory, StringComparison.OrdinalIgnoreCase)))
+            {
+                var updated = string.IsNullOrWhiteSpace(supportPath) ? directory : supportPath.TrimEnd(';') + ";" + directory;
+                Environment.SetEnvironmentVariable("ACAD", updated, EnvironmentVariableTarget.Process);
+            }
+            AddActiveCadSupportPath(directory);
+        }
+
+        private static void AddActiveCadSupportPath(string directory)
+        {
+            try
+            {
+                var application = Autodesk.AutoCAD.ApplicationServices.Application.AcadApplication;
+                var preferences = application.GetType().InvokeMember("Preferences",
+                    System.Reflection.BindingFlags.GetProperty, null, application, null,
+                    CultureInfo.CurrentCulture);
+                var files = preferences.GetType().InvokeMember("Files",
+                    System.Reflection.BindingFlags.GetProperty, null, preferences, null,
+                    CultureInfo.CurrentCulture);
+                var current = Convert.ToString(files.GetType().InvokeMember("SupportPath",
+                    System.Reflection.BindingFlags.GetProperty, null, files, null,
+                    CultureInfo.CurrentCulture), CultureInfo.CurrentCulture) ?? string.Empty;
+                if (current.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Any(path => string.Equals(path.Trim(), directory, StringComparison.OrdinalIgnoreCase))) return;
+                files.GetType().InvokeMember("SupportPath", System.Reflection.BindingFlags.SetProperty,
+                    null, files, new object[] { string.IsNullOrWhiteSpace(current)
+                        ? directory : current.TrimEnd(';') + ";" + directory }, CultureInfo.CurrentCulture);
+            }
+            catch (System.Exception exception)
+            {
+                WriteAssetTrace("active support path failed directory=" + directory + " error=" + exception);
+            }
         }
 
         private static HatchPatternType ResolveHatchPatternType(string patternName)

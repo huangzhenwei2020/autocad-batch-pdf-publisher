@@ -84,7 +84,7 @@ namespace WL.Stair.CadShared
                 Location = center,
                 Attachment = AttachmentPoint.MiddleCenter,
                 TextHeight = titleHeight,
-                TextStyleId = database.Textstyle,
+                TextStyleId = FindTextStyle(database, transaction, "WL-文字-标题"),
                 Layer = layerName
             };
             Append(space, transaction, text);
@@ -104,10 +104,21 @@ namespace WL.Stair.CadShared
                 Location = new Point3d(center.X, underlineY - titleHeight * 0.62, center.Z),
                 Attachment = AttachmentPoint.MiddleCenter,
                 TextHeight = noteHeight,
-                TextStyleId = database.Textstyle,
+                TextStyleId = FindTextStyle(database, transaction, "WL-文字-标注"),
                 Layer = layerName
             };
             Append(space, transaction, ratio);
+        }
+
+        private static ObjectId FindTextStyle(Database database, Transaction transaction, string name)
+        {
+            try
+            {
+                var table = (TextStyleTable)transaction.GetObject(database.TextStyleTableId, OpenMode.ForRead);
+                if (table.Has(name)) return table[name];
+            }
+            catch { }
+            return database.Textstyle;
         }
 
         private static Entity FindTemplate(Database database, Transaction transaction)
