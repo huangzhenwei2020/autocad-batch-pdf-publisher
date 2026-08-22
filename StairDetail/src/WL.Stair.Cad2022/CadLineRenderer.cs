@@ -50,7 +50,8 @@ namespace WL.Stair.Cad2022
                 OpenMode.ForWrite);
 
             foreach (var drawingLine in view.Lines.Where(line =>
-                line.Role != StairLineRole.BreakLine && line.Role != StairLineRole.HatchBoundary))
+                line.Role != StairLineRole.BreakLine && line.Role != StairLineRole.HatchBoundary
+                && !string.Equals(line.ComponentId, "BASE-WALL-VISIBLE", StringComparison.OrdinalIgnoreCase)))
             {
                 var line = new Line(
                     ToCadPoint(drawingLine.Start, insertionPoint),
@@ -62,6 +63,9 @@ namespace WL.Stair.Cad2022
                 currentSpace.AppendEntity(line);
                 transaction.AddNewlyCreatedDBObject(line, true);
             }
+
+            if (view.ShowBold)
+                RenderBaseWallVisibleLines(currentSpace, transaction, view.Lines, view.Scale, insertionPoint);
 
             foreach (var group in view.Lines.Where(line => line.Role == StairLineRole.BreakLine)
                 .GroupBy(line => line.ComponentId ?? string.Empty))
@@ -519,6 +523,28 @@ namespace WL.Stair.Cad2022
                 line.AddVertexAt(1, new Point2d(insertionPoint.X + right, insertionPoint.Y + y), 0, 0, 0);
                 currentSpace.AppendEntity(line);
                 transaction.AddNewlyCreatedDBObject(line, true);
+            }
+        }
+
+        private static void RenderBaseWallVisibleLines(BlockTableRecord currentSpace,
+            Transaction transaction, IEnumerable<DrawingLine> source, int drawingScale,
+            Point3d insertionPoint)
+        {
+            var width = 0.4 * Math.Max(1, drawingScale);
+            foreach (var sourceLine in source.Where(line =>
+                string.Equals(line.ComponentId, "BASE-WALL-VISIBLE", StringComparison.OrdinalIgnoreCase)))
+            {
+                var polyline = new Polyline(2)
+                {
+                    Layer = StructuralLayer,
+                    ConstantWidth = width
+                };
+                polyline.AddVertexAt(0, new Point2d(insertionPoint.X + sourceLine.Start.X,
+                    insertionPoint.Y + sourceLine.Start.Y), 0, 0, 0);
+                polyline.AddVertexAt(1, new Point2d(insertionPoint.X + sourceLine.End.X,
+                    insertionPoint.Y + sourceLine.End.Y), 0, 0, 0);
+                currentSpace.AppendEntity(polyline);
+                transaction.AddNewlyCreatedDBObject(polyline, true);
             }
         }
 

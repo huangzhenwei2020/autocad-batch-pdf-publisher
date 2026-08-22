@@ -596,7 +596,7 @@ namespace WL.Stair.Core.Geometry
             IEnumerable<DrawingLine> source,
             SectionHatchDefaults hatch)
         {
-            if (hatch == null || !hatch.Enabled) return Enumerable.Empty<DrawingHatchRegion>();
+            if (hatch == null) return Enumerable.Empty<DrawingHatchRegion>();
             var cutLines = source
                 .Where(line => !line.IsHidden
                     && (line.Role == StairLineRole.CutBoundary
@@ -618,7 +618,7 @@ namespace WL.Stair.Core.Geometry
             IEnumerable<DrawingLine> source,
             SectionHatchDefaults hatch)
         {
-            if (hatch == null || !hatch.Enabled) return Enumerable.Empty<DrawingHatchRegion>();
+            if (hatch == null) return Enumerable.Empty<DrawingHatchRegion>();
             var walls = source.Where(line => line.Role == StairLineRole.WallBoundary && !line.IsHidden).ToArray();
             var regions = new List<DrawingHatchRegion>();
             foreach (var interval in walls.GroupBy(line => Math.Round(Math.Min(line.Start.Y, line.End.Y), 3)
