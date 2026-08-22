@@ -2,6 +2,12 @@ using System;
 
 namespace WL.Stair.Core.Geometry
 {
+    public enum DrawingDimensionOrientation
+    {
+        Vertical = 0,
+        Horizontal = 1
+    }
+
     public sealed class DrawingDimension
     {
         public DrawingDimension(
@@ -9,7 +15,8 @@ namespace WL.Stair.Core.Geometry
             Point2D secondExtensionOrigin,
             Point2D dimensionLinePoint,
             string textOverride,
-            string componentId = null)
+            string componentId = null,
+            DrawingDimensionOrientation orientation = DrawingDimensionOrientation.Vertical)
         {
             if (firstExtensionOrigin.Equals(secondExtensionOrigin))
                 throw new ArgumentException("A dimension must measure a non-zero distance.");
@@ -18,6 +25,7 @@ namespace WL.Stair.Core.Geometry
             DimensionLinePoint = dimensionLinePoint;
             TextOverride = textOverride ?? string.Empty;
             ComponentId = componentId ?? string.Empty;
+            Orientation = orientation;
         }
 
         public Point2D FirstExtensionOrigin { get; }
@@ -25,5 +33,7 @@ namespace WL.Stair.Core.Geometry
         public Point2D DimensionLinePoint { get; }
         public string TextOverride { get; }
         public string ComponentId { get; }
+
+        public DrawingDimensionOrientation Orientation { get; }
     }
 }

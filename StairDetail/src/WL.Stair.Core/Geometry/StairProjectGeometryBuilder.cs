@@ -54,6 +54,7 @@ namespace WL.Stair.Core.Geometry
             var texts = new List<DrawingText>();
             var dimensions = new List<DrawingDimension>();
             var tables = new List<DrawingTable>();
+            var horizontalDimensionSpecs = new List<HorizontalDimensionSpec>();
             var floors = project.Floors.ToDictionary(floor => floor.Id, StringComparer.OrdinalIgnoreCase);
             var storeyResults = calculation.Storeys.ToDictionary(result => result.Id, StringComparer.OrdinalIgnoreCase);
             var floorPositions = new Dictionary<string, ComponentPosition>(StringComparer.OrdinalIgnoreCase);
@@ -187,11 +188,19 @@ namespace WL.Stair.Core.Geometry
                         boundaryConnectionX,
                         allowEndClosure,
                         project.Construction.Railing);
+                    horizontalDimensionSpecs.Add(new HorizontalDimensionSpec(
+                        flight.Id,
+                        Math.Min(flightStartX, flightEndX),
+                        Math.Max(flightStartX, flightEndX),
+                        currentElevation,
+                        endElevation,
+                        flightResult.TreadDepth,
+                        flight.RiserCount));
                     var scale = Math.Max(1, project.DrawingScale);
                     dimensions.Add(new DrawingDimension(
                         new Point2D(firstAxisX, currentElevation),
                         new Point2D(firstAxisX, endElevation),
-                        new Point2D(firstAxisX - (12.0 * scale), (currentElevation + endElevation) / 2.0),
+                        new Point2D(firstAxisX - (6.0 * scale), (currentElevation + endElevation) / 2.0),
                         FormatMillimeter(flightResult.RiserHeight) + "×" + flight.RiserCount
                             + "=" + FormatMillimeter(flightResult.VerticalRise),
                         flight.Id));
@@ -274,13 +283,13 @@ namespace WL.Stair.Core.Geometry
                 dimensions.Add(new DrawingDimension(
                     new Point2D(firstAxisX, storeyResult.LowerElevation),
                     new Point2D(firstAxisX, storeyResult.UpperElevation),
-                    new Point2D(firstAxisX - (20.0 * drawingScale), middle),
+                    new Point2D(firstAxisX - (11.0 * drawingScale), middle),
                     FormatMillimeter(storeyResult.UpperElevation - storeyResult.LowerElevation),
                     storeyResult.Id));
                 dimensions.Add(new DrawingDimension(
                     new Point2D(secondAxisX, storeyResult.LowerElevation),
                     new Point2D(secondAxisX, storeyResult.UpperElevation),
-                    new Point2D(secondAxisX + (20.0 * drawingScale), middle),
+                    new Point2D(secondAxisX + (11.0 * drawingScale), middle),
                     FormatMillimeter(storeyResult.UpperElevation - storeyResult.LowerElevation),
                     storeyResult.Id));
             }
@@ -299,6 +308,14 @@ namespace WL.Stair.Core.Geometry
                 secondAxisX,
                 lowestElevation - AxisExtensionBeyondWall,
                 highestElevation + WallHeightAboveHighestFloor + AxisExtensionBeyondWall);
+            AddHorizontalDimensions(
+                dimensions,
+                horizontalDimensionSpecs,
+                firstAxisX,
+                secondAxisX,
+                drawingScale);
+            AddOneHandrailHeightDimension(dimensions, lines, project.Construction.Railing, drawingScale,
+                firstAxisX, secondAxisX);
 
             var titleX = floorPositions.Count == 0 ? 0.0 : floorPositions.Values.Average(position => position.X);
             var titleY = lowestElevation - 650.0;
@@ -348,21 +365,19 @@ namespace WL.Stair.Core.Geometry
             var rightOutline = geometry.SelectMany(line => new[] { line.Start.X, line.End.X }).Max();
             return sourceDimensions.Select(dimension =>
             {
+                if (dimension.Orientation == DrawingDimensionOrientation.Horizontal
+                    || string.Equals(dimension.ComponentId, "RAILING", StringComparison.OrdinalIgnoreCase))
+                    return dimension;
                 var isLeft = dimension.DimensionLinePoint.X
                     < (dimension.FirstExtensionOrigin.X + dimension.SecondExtensionOrigin.X) / 2.0;
                 var paperOffset = Math.Abs(
                     dimension.DimensionLinePoint.X - dimension.FirstExtensionOrigin.X)
                     / Math.Max(1, scale);
-                var firstX = FindOuterOutlineAtElevation(
-                    geometry,
-                    dimension.FirstExtensionOrigin.Y,
-                    isLeft,
-                    isLeft ? leftOutline : rightOutline);
-                var secondX = FindOuterOutlineAtElevation(
-                    geometry,
-                    dimension.SecondExtensionOrigin.Y,
-                    isLeft,
-                    isLeft ? leftOutline : rightOutline);
+                // One side uses one fixed outermost profile baseline. This
+                // keeps every extension origin co-linear and gives the inner
+                // and outer dimension rows equal extension lengths.
+                var firstX = isLeft ? leftOutline : rightOutline;
+                var secondX = firstX;
                 var dimensionX = isLeft
                     ? leftOutline - (paperOffset * Math.Max(1, scale))
                     : rightOutline + (paperOffset * Math.Max(1, scale));
@@ -371,8 +386,91 @@ namespace WL.Stair.Core.Geometry
                     new Point2D(secondX, dimension.SecondExtensionOrigin.Y),
                     new Point2D(dimensionX, dimension.DimensionLinePoint.Y),
                     dimension.TextOverride,
-                    dimension.ComponentId);
+                    dimension.ComponentId,
+                    dimension.Orientation);
             }).ToArray();
+        }
+
+        private static void AddHorizontalDimensions(
+            ICollection<DrawingDimension> dimensions,
+            IEnumerable<HorizontalDimensionSpec> source,
+            double firstAxisX,
+            double secondAxisX,
+            int scale)
+        {
+            var placedAtElevation = new Dictionary<double, int>();
+            foreach (var spec in source
+                .GroupBy(item => item.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.First())
+                .OrderBy(item => Math.Min(item.StartElevation, item.EndElevation)))
+            {
+                var key = Math.Round(Math.Min(spec.StartElevation, spec.EndElevation), 3);
+                int row;
+                placedAtElevation.TryGetValue(key, out row);
+                placedAtElevation[key] = row + 1;
+                var anchorElevation = Math.Min(spec.StartElevation, spec.EndElevation);
+                var dimensionElevation = anchorElevation - ((14.0 + row * 8.0) * Math.Max(1, scale));
+                var leftLength = spec.LeftEdge - firstAxisX;
+                var rightLength = secondAxisX - spec.RightEdge;
+                if (leftLength > 0.001)
+                {
+                    dimensions.Add(new DrawingDimension(
+                        new Point2D(firstAxisX, anchorElevation),
+                        new Point2D(spec.LeftEdge, anchorElevation),
+                        new Point2D((firstAxisX + spec.LeftEdge) / 2.0, dimensionElevation),
+                        FormatMillimeter(leftLength),
+                        spec.ComponentId,
+                        DrawingDimensionOrientation.Horizontal));
+                }
+                dimensions.Add(new DrawingDimension(
+                    new Point2D(spec.LeftEdge, anchorElevation),
+                    new Point2D(spec.RightEdge, anchorElevation),
+                    new Point2D((spec.LeftEdge + spec.RightEdge) / 2.0, dimensionElevation),
+                    FormatMillimeter(spec.TreadDepth) + "×" + Math.Max(0, spec.RiserCount - 1)
+                        + "=" + FormatMillimeter(spec.RightEdge - spec.LeftEdge),
+                    spec.ComponentId,
+                    DrawingDimensionOrientation.Horizontal));
+                if (rightLength > 0.001)
+                {
+                    dimensions.Add(new DrawingDimension(
+                        new Point2D(spec.RightEdge, anchorElevation),
+                        new Point2D(secondAxisX, anchorElevation),
+                        new Point2D((spec.RightEdge + secondAxisX) / 2.0, dimensionElevation),
+                        FormatMillimeter(rightLength),
+                        spec.ComponentId,
+                        DrawingDimensionOrientation.Horizontal));
+                }
+            }
+        }
+
+        private static void AddOneHandrailHeightDimension(
+            ICollection<DrawingDimension> dimensions,
+            IEnumerable<DrawingLine> lines,
+            RailingDefaults railing,
+            int scale,
+            double firstAxisX,
+            double secondAxisX)
+        {
+            if (railing == null || !railing.Enabled || railing.Height <= 0.0) return;
+            var center = (firstAxisX + secondAxisX) / 2.0;
+            var post = lines
+                .Where(line => line.Role == StairLineRole.Handrail
+                    && Math.Abs(line.Start.X - line.End.X) < 0.001
+                    && Math.Abs(Math.Abs(line.End.Y - line.Start.Y) - railing.Height) < 0.001)
+                .OrderBy(line => Math.Abs(line.Start.X - center))
+                .FirstOrDefault();
+            if (post == null) return;
+            var bottom = post.Start.Y < post.End.Y ? post.Start : post.End;
+            var top = post.Start.Y < post.End.Y ? post.End : post.Start;
+            var lineX = bottom.X < center
+                ? bottom.X + (8.0 * Math.Max(1, scale))
+                : bottom.X - (8.0 * Math.Max(1, scale));
+            dimensions.Add(new DrawingDimension(
+                bottom,
+                top,
+                new Point2D(lineX, (bottom.Y + top.Y) / 2.0),
+                FormatMillimeter(railing.Height),
+                "RAILING"));
         }
 
         private static double FindOuterOutlineAtElevation(
@@ -431,7 +529,8 @@ namespace WL.Stair.Core.Geometry
                 translate(dimension.SecondExtensionOrigin),
                 translate(dimension.DimensionLinePoint),
                 dimension.TextOverride,
-                dimension.ComponentId));
+                dimension.ComponentId,
+                dimension.Orientation));
             var rebasedTables = tables.Select(table => new DrawingTable(
                 translate(table.Position),
                 table.RowHeight,
@@ -1155,6 +1254,50 @@ namespace WL.Stair.Core.Geometry
             public double X { get; }
 
             public double Elevation { get; }
+        }
+
+        private sealed class HorizontalDimensionSpec
+        {
+            public HorizontalDimensionSpec(
+                string componentId,
+                double leftEdge,
+                double rightEdge,
+                double startElevation,
+                double endElevation,
+                double treadDepth,
+                int riserCount)
+            {
+                ComponentId = componentId;
+                LeftEdge = leftEdge;
+                RightEdge = rightEdge;
+                StartElevation = startElevation;
+                EndElevation = endElevation;
+                TreadDepth = treadDepth;
+                RiserCount = riserCount;
+                Key = string.Join("|", new[]
+                {
+                    Math.Round(leftEdge, 3).ToString(CultureInfo.InvariantCulture),
+                    Math.Round(rightEdge - leftEdge, 3).ToString(CultureInfo.InvariantCulture),
+                    Math.Round(treadDepth, 3).ToString(CultureInfo.InvariantCulture),
+                    riserCount.ToString(CultureInfo.InvariantCulture)
+                });
+            }
+
+            public string ComponentId { get; }
+
+            public double LeftEdge { get; }
+
+            public double RightEdge { get; }
+
+            public double StartElevation { get; }
+
+            public double EndElevation { get; }
+
+            public double TreadDepth { get; }
+
+            public int RiserCount { get; }
+
+            public string Key { get; }
         }
 
         private sealed class WallAnchor

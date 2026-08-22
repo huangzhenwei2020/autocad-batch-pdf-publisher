@@ -1494,10 +1494,10 @@ namespace WL.Stair.Tests
                 .ToArray();
             var leftOutline = outlineLines.SelectMany(line => new[] { line.Start.X, line.End.X }).Min();
             var rightOutline = outlineLines.SelectMany(line => new[] { line.Start.X, line.End.X }).Max();
-            TestAssert.NearlyEqual(leftOutline - (12.0 * project.DrawingScale),
+            TestAssert.NearlyEqual(leftOutline - (6.0 * project.DrawingScale),
                 flightDimension.DimensionLinePoint.X,
                 0.001,
-                "The inner dimension line must be 12 drawing millimetres beyond the outer profile.");
+                "The inner dimension line must be 6 drawing millimetres beyond the outer profile.");
             TestAssert.True(Math.Abs(flightDimension.FirstExtensionOrigin.X) > 0.001
                     && Math.Abs(flightDimension.SecondExtensionOrigin.X) > 0.001,
                 "Flight dimensions must originate at the outer profile instead of the left axis.");
@@ -1514,16 +1514,43 @@ namespace WL.Stair.Tests
                 "Each storey must have one outer height dimension on each axis side.");
             var leftStoreyDimension = storeyDimensions.First(dimension => dimension.DimensionLinePoint.X < 0.0);
             var rightStoreyDimension = storeyDimensions.First(dimension => dimension.DimensionLinePoint.X > 0.0);
-            TestAssert.NearlyEqual(leftOutline - (20.0 * project.DrawingScale),
+            TestAssert.NearlyEqual(leftOutline - (11.0 * project.DrawingScale),
                 leftStoreyDimension.DimensionLinePoint.X, 0.001,
-                "The left storey dimension must be 20 drawing millimetres beyond the outer profile.");
-            TestAssert.NearlyEqual(rightOutline + (20.0 * project.DrawingScale),
+                "The left storey dimension must be 11 drawing millimetres beyond the outer profile.");
+            TestAssert.NearlyEqual(rightOutline + (11.0 * project.DrawingScale),
                 rightStoreyDimension.DimensionLinePoint.X, 0.001,
-                "The right storey dimension must be 20 drawing millimetres beyond the outer profile.");
+                "The right storey dimension must be 11 drawing millimetres beyond the outer profile.");
             TestAssert.True(Math.Abs(leftStoreyDimension.FirstExtensionOrigin.X) > 0.001
                     && Math.Abs(rightStoreyDimension.FirstExtensionOrigin.X
                         - project.Construction.StairwellDepth) > 0.001,
                 "Storey dimensions must originate at the outer profile instead of either axis.");
+            var leftVerticalDimensions = section.Dimensions
+                .Where(dimension => dimension.Orientation == DrawingDimensionOrientation.Vertical
+                    && dimension.ComponentId != "RAILING"
+                    && dimension.DimensionLinePoint.X < 0.0)
+                .ToArray();
+            TestAssert.True(leftVerticalDimensions.All(dimension =>
+                    Math.Abs(dimension.FirstExtensionOrigin.X - leftOutline) < 0.001
+                    && Math.Abs(dimension.SecondExtensionOrigin.X - leftOutline) < 0.001),
+                "All left-side vertical dimensions must share one outer-profile extension baseline.");
+            TestAssert.NearlyEqual(5.0 * project.DrawingScale,
+                Math.Abs(leftStoreyDimension.DimensionLinePoint.X - flightDimension.DimensionLinePoint.X),
+                0.001,
+                "The two vertical dimension rows must retain the 5 drawing millimetre spacing.");
+
+            var horizontalDimensions = section.Dimensions
+                .Where(dimension => dimension.Orientation == DrawingDimensionOrientation.Horizontal)
+                .ToArray();
+            TestAssert.True(horizontalDimensions.Length >= 3,
+                "At least one chain of left platform, flight run and right platform dimensions is required.");
+            TestAssert.True(horizontalDimensions.Any(dimension =>
+                    dimension.TextOverride.Contains("×")
+                    && dimension.TextOverride.Contains("=")),
+                "A horizontal flight dimension must show tread depth multiplied by riser count minus one.");
+            TestAssert.Equal(1, section.Dimensions.Count(dimension =>
+                    dimension.ComponentId == "RAILING"
+                    && dimension.Orientation == DrawingDimensionOrientation.Vertical),
+                "Only one non-overlapping handrail height dimension may be inserted.");
             TestAssert.Equal(1, section.Tables.Count,
                 "The optional component schedule must create one table.");
             TestAssert.True(section.Tables[0].Rows.Any(row => row.Contains(firstFlight.Id)),

@@ -427,6 +427,23 @@ namespace WL.Stair.Cad2022
             }
             foreach (var dimension in view.Dimensions)
             {
+                if (dimension.Orientation == DrawingDimensionOrientation.Horizontal)
+                {
+                    var y = dimension.DimensionLinePoint.Y;
+                    builder.AppendFormat(CultureInfo.InvariantCulture,
+                        "<line style='stroke:#58ef70;stroke-width:2' x1='{0}' y1='{1}' x2='{0}' y2='{2}'/>",
+                        dimension.FirstExtensionOrigin.X, -dimension.FirstExtensionOrigin.Y, -y);
+                    builder.AppendFormat(CultureInfo.InvariantCulture,
+                        "<line style='stroke:#58ef70;stroke-width:2' x1='{0}' y1='{1}' x2='{0}' y2='{2}'/>",
+                        dimension.SecondExtensionOrigin.X, -dimension.SecondExtensionOrigin.Y, -y);
+                    builder.AppendFormat(CultureInfo.InvariantCulture,
+                        "<line style='stroke:#58ef70;stroke-width:2' x1='{0}' y1='{1}' x2='{2}' y2='{1}'/>",
+                        dimension.FirstExtensionOrigin.X, -y, dimension.SecondExtensionOrigin.X);
+                    builder.AppendFormat(CultureInfo.InvariantCulture,
+                        "<text x='{0}' y='{1}'>{2}</text>",
+                        dimension.DimensionLinePoint.X, -y - 25.0, Escape(dimension.TextOverride));
+                    continue;
+                }
                 var x = dimension.DimensionLinePoint.X;
                 builder.AppendFormat(CultureInfo.InvariantCulture,
                     "<line style='stroke:#58ef70;stroke-width:2' x1='{0}' y1='{1}' x2='{2}' y2='{3}'/>",

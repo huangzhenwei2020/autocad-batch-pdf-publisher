@@ -78,7 +78,9 @@ namespace WL.Stair.Cad2024
             foreach (var drawingDimension in view.Dimensions)
             {
                 var dimension = new RotatedDimension(
-                    Math.PI / 2.0,
+                    drawingDimension.Orientation == DrawingDimensionOrientation.Horizontal
+                        ? 0.0
+                        : Math.PI / 2.0,
                     ToCadPoint(drawingDimension.FirstExtensionOrigin, insertionPoint),
                     ToCadPoint(drawingDimension.SecondExtensionOrigin, insertionPoint),
                     ToCadPoint(drawingDimension.DimensionLinePoint, insertionPoint),
