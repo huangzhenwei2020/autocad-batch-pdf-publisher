@@ -733,15 +733,21 @@ namespace WL.Stair.Tests
             floor.DoorWindowElevation.SillHeight = 800.0;
             floor.DoorWindowElevation.DistanceFromWall = 100.0;
             floor.DoorWindowElevation.GeometryLines =
-                "0,0,900,0,1|900,0,900,1200,1|900,1200,0,1200,1|0,1200,0,0,1";
+                "0,0,900,0,1|900,0,900,1200,3|900,1200,0,1200,4|0,1200,0,0,5";
 
             var outcome = new StairProjectCalculator().Calculate(project);
             TestAssert.True(outcome.IsSuccess, "The platform elevation test project must calculate.");
             var view = new StairProjectGeometryBuilder().BuildSection(project, outcome.Result);
             var elevationLines = view.Lines.Where(line => line.ComponentId == floor.Id
-                && line.Role == StairLineRole.OpeningBoundary).ToArray();
+                && (line.Role == StairLineRole.DoorWindowWindowMain
+                    || line.Role == StairLineRole.DoorWindowWindowSash
+                    || line.Role == StairLineRole.DoorWindowOpeningHole)).ToArray();
             TestAssert.Equal(4, elevationLines.Length,
                 "The shared division geometry must be placed above its floor as cyan linework.");
+            TestAssert.True(elevationLines.Any(line => line.Role == StairLineRole.DoorWindowWindowMain)
+                    && elevationLines.Any(line => line.Role == StairLineRole.DoorWindowWindowSash)
+                    && elevationLines.Any(line => line.Role == StairLineRole.DoorWindowOpeningHole),
+                "Shared MCLM geometry must preserve main, sash and opening line categories for CAD styling.");
             TestAssert.NearlyEqual(900.0,
                 elevationLines.SelectMany(line => new[] { line.Start.X, line.End.X }).Max()
                 - elevationLines.SelectMany(line => new[] { line.Start.X, line.End.X }).Min(), 0.001,

@@ -20,5 +20,10 @@ namespace WL.Stair.Core.Geometry
         ,OpeningBoundary = 15
         ,WallOpeningLowerEdge = 16
         ,WallOpeningUpperEdge = 17
+        ,DoorWindowWindowMain = 18
+        ,DoorWindowDoorMain = 19
+        ,DoorWindowWindowSash = 20
+        ,DoorWindowDoorSash = 21
+        ,DoorWindowOpeningHole = 22
     }
 }

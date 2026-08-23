@@ -1461,8 +1461,39 @@ namespace WL.Stair.Core.Geometry
                 lines.Add(new DrawingLine(
                     new Point2D(originX + direction * segment.X1, originY + segment.Y1),
                     new Point2D(originX + direction * segment.X2, originY + segment.Y2),
-                    StairLineRole.OpeningBoundary, false, componentId));
+                    GetDoorWindowLineRole(segment.Role, UsesWindowAppearance(opening)),
+                    false, componentId));
             }
+        }
+
+        private static StairLineRole GetDoorWindowLineRole(int sourceRole, bool windowAppearance)
+        {
+            // DoorWindowLineRole in the main plug-in:
+            // 0 Hole, 1 Frame, 2 Mullion, 3 SashFrame, 4 Opening, 5 Material.
+            if (sourceRole == 0 || sourceRole == 4)
+                return StairLineRole.DoorWindowOpeningHole;
+            if (sourceRole == 3)
+                return windowAppearance
+                    ? StairLineRole.DoorWindowWindowSash
+                    : StairLineRole.DoorWindowDoorSash;
+            return windowAppearance
+                ? StairLineRole.DoorWindowWindowMain
+                : StairLineRole.DoorWindowDoorMain;
+        }
+
+        private static bool UsesWindowAppearance(StairPlatformOpeningDefinition opening)
+        {
+            if (opening.Type == WallOpeningType.Window) return true;
+            if (opening.Type != WallOpeningType.Door) return false;
+            foreach (var record in (opening.CustomCellLayout ?? string.Empty).Split(
+                new[] { '|' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var parts = record.Split(',');
+                if (parts.Length > 7 && parts[5] != "1"
+                    && string.Equals(parts[7], "玻璃", StringComparison.Ordinal))
+                    return true;
+            }
+            return false;
         }
 
         private static void AddDefaultDoorWindowElevation(
@@ -1475,11 +1506,14 @@ namespace WL.Stair.Core.Geometry
             StairPlatformOpeningDefinition opening,
             string componentId)
         {
+            var mainRole = UsesWindowAppearance(opening)
+                ? StairLineRole.DoorWindowWindowMain
+                : StairLineRole.DoorWindowDoorMain;
             Action<double, double, double, double> add = (x1, y1, x2, y2) =>
                 lines.Add(new DrawingLine(
                     new Point2D(originX + direction * x1, originY + y1),
                     new Point2D(originX + direction * x2, originY + y2),
-                    StairLineRole.OpeningBoundary, false, componentId));
+                    mainRole, false, componentId));
             add(0, 0, width, 0); add(width, 0, width, height);
             add(width, height, 0, height); add(0, height, 0, 0);
             if (opening.HasOuterFrame)
@@ -1509,7 +1543,10 @@ namespace WL.Stair.Core.Geometry
                     || !double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out x2)
                     || !double.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out y2))
                     continue;
-                yield return new DoorWindowGeometrySegment(x1, y1, x2, y2);
+                int role;
+                if (!int.TryParse(parts[4], NumberStyles.Integer,
+                    CultureInfo.InvariantCulture, out role)) role = 1;
+                yield return new DoorWindowGeometrySegment(x1, y1, x2, y2, role);
             }
         }
 
@@ -1699,15 +1736,16 @@ namespace WL.Stair.Core.Geometry
 
         private sealed class DoorWindowGeometrySegment
         {
-            public DoorWindowGeometrySegment(double x1, double y1, double x2, double y2)
+            public DoorWindowGeometrySegment(double x1, double y1, double x2, double y2, int role)
             {
-                X1 = x1; Y1 = y1; X2 = x2; Y2 = y2;
+                X1 = x1; Y1 = y1; X2 = x2; Y2 = y2; Role = role;
             }
 
             public double X1 { get; }
             public double Y1 { get; }
             public double X2 { get; }
             public double Y2 { get; }
+            public int Role { get; }
         }
 
         private sealed class TracedLoop

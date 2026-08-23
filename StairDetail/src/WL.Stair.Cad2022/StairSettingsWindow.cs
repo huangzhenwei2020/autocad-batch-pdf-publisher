@@ -505,6 +505,11 @@ namespace WL.Stair.Cad2022
                 if (line.Role == StairLineRole.BeamBoundary) css += " beam";
                 if (line.Role == StairLineRole.WallBoundary) css += " wall";
                 if (line.Role == StairLineRole.OpeningBoundary) css = "opening";
+                if (line.Role == StairLineRole.DoorWindowWindowMain) css = "dw-window-main";
+                if (line.Role == StairLineRole.DoorWindowDoorMain) css = "dw-door-main";
+                if (line.Role == StairLineRole.DoorWindowWindowSash
+                    || line.Role == StairLineRole.DoorWindowDoorSash) css = "dw-sash";
+                if (line.Role == StairLineRole.DoorWindowOpeningHole) css = "dw-opening";
                 if (line.Role == StairLineRole.AxisLine) css = "axis";
                 if (line.Role == StairLineRole.Handrail) css = "handrail";
                 if (line.Role == StairLineRole.BreakLine) css = "breakline";

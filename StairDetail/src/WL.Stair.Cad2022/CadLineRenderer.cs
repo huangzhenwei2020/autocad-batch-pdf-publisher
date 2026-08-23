@@ -25,7 +25,9 @@ namespace WL.Stair.Cad2022
         private const string CutHatchLayer = "WL_楼梯_剖切填充";
         private const string BreakLineLayer = "WL_折断线";
         private const string AxisLayer = "A_DOTE";
-        private const string OpeningLayer = "WL-门窗-开启洞口";
+        private const string DoorWindowWindowLayer = "WL-门窗-窗";
+        private const string DoorWindowDoorLayer = "WL-门窗-门";
+        private const string DoorWindowOpeningLayer = "WL-门窗-开启洞口";
         private const string HiddenLineType = "HIDDEN";
         private const string AxisLineType = "DASHDOT2";
         private static string _hatchPatternDirectory;
@@ -71,6 +73,9 @@ namespace WL.Stair.Cad2022
                 {
                     Layer = GetLayerName(drawingLine)
                 };
+                if (drawingLine.Role == StairLineRole.DoorWindowWindowSash
+                    || drawingLine.Role == StairLineRole.DoorWindowDoorSash)
+                    line.ColorIndex = 8;
 
                 currentSpace.AppendEntity(line);
                 transaction.AddNewlyCreatedDBObject(line, true);
@@ -171,6 +176,9 @@ namespace WL.Stair.Cad2022
             var layerTable = (LayerTable)transaction.GetObject(database.LayerTableId, OpenMode.ForRead);
             var hiddenLineTypeId = EnsureLineType(database, transaction, HiddenLineType);
             var axisLineTypeId = EnsureLineType(database, transaction, AxisLineType);
+            var doorWindowDashId = EnsureLineType(database, transaction, "DASH");
+            if (doorWindowDashId.IsNull)
+                doorWindowDashId = EnsureLineType(database, transaction, "DASHED");
             EnsureLayer(layerTable, transaction, OutlineLayer, 7, ObjectId.Null);
             EnsureLayer(layerTable, transaction, TreadLayer, 2, ObjectId.Null);
             EnsureLayer(layerTable, transaction, StructuralLayer, 2, ObjectId.Null);
@@ -183,7 +191,28 @@ namespace WL.Stair.Cad2022
             EnsureLayer(layerTable, transaction, BreakLineLayer, 3, ObjectId.Null);
             MigrateHatchLayerColor(layerTable, transaction);
             EnsureLayer(layerTable, transaction, AxisLayer, 1, axisLineTypeId);
-            EnsureLayer(layerTable, transaction, OpeningLayer, 4, ObjectId.Null);
+            EnsureLayer(layerTable, transaction, DoorWindowWindowLayer, 4, ObjectId.Null,
+                LineWeight.LineWeight025);
+            EnsureLayer(layerTable, transaction, DoorWindowDoorLayer, 7, ObjectId.Null,
+                LineWeight.LineWeight025);
+            EnsureLayer(layerTable, transaction, DoorWindowOpeningLayer, 8, doorWindowDashId,
+                LineWeight.LineWeight013);
+            MigrateLegacyDoorWindowOpeningLayer(layerTable, transaction, doorWindowDashId);
+        }
+
+        private static void MigrateLegacyDoorWindowOpeningLayer(LayerTable layerTable,
+            Transaction transaction, ObjectId dashLineTypeId)
+        {
+            if (!layerTable.Has(DoorWindowOpeningLayer)) return;
+            var record = (LayerTableRecord)transaction.GetObject(
+                layerTable[DoorWindowOpeningLayer], OpenMode.ForWrite);
+            // Previous StairDetail builds accidentally created this MCLM layer
+            // as cyan/continuous. Only migrate that exact legacy signature;
+            // leave user-customised and drafting-standard layers untouched.
+            if (record.Color.ColorIndex != 4) return;
+            record.Color = Color.FromColorIndex(ColorMethod.ByAci, 8);
+            if (!dashLineTypeId.IsNull) record.LinetypeObjectId = dashLineTypeId;
+            record.LineWeight = LineWeight.LineWeight013;
         }
 
         private static void RenderConnectedPolyline(BlockTableRecord space, Transaction transaction,
@@ -733,7 +762,8 @@ namespace WL.Stair.Cad2022
             Transaction transaction,
             string layerName,
             short colorIndex,
-            ObjectId lineTypeId)
+            ObjectId lineTypeId,
+            LineWeight lineWeight = LineWeight.ByLayer)
         {
             if (layerTable.Has(layerName))
             {
@@ -750,6 +780,8 @@ namespace WL.Stair.Cad2022
             {
                 record.LinetypeObjectId = lineTypeId;
             }
+            if (lineWeight != LineWeight.ByLayer)
+                record.LineWeight = lineWeight;
             layerTable.Add(record);
             transaction.AddNewlyCreatedDBObject(record, true);
         }
@@ -791,7 +823,14 @@ namespace WL.Stair.Cad2022
                 case StairLineRole.WallBoundary:
                     return AuxiliaryLayer;
                 case StairLineRole.OpeningBoundary:
-                    return OpeningLayer;
+                case StairLineRole.DoorWindowWindowMain:
+                case StairLineRole.DoorWindowWindowSash:
+                    return DoorWindowWindowLayer;
+                case StairLineRole.DoorWindowDoorMain:
+                case StairLineRole.DoorWindowDoorSash:
+                    return DoorWindowDoorLayer;
+                case StairLineRole.DoorWindowOpeningHole:
+                    return DoorWindowOpeningLayer;
                 case StairLineRole.WallOpeningLowerEdge:
                 case StairLineRole.WallOpeningUpperEdge:
                     return AuxiliaryLayer;
