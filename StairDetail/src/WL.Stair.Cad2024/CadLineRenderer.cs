@@ -78,6 +78,10 @@ namespace WL.Stair.Cad2024
 
                 currentSpace.AppendEntity(line);
                 transaction.AddNewlyCreatedDBObject(line, true);
+                if (view.ShowBold && (drawingLine.Role == StairLineRole.WallOpeningLowerEdge
+                    || drawingLine.Role == StairLineRole.WallOpeningUpperEdge))
+                    RenderWallOpeningCrossEdge(currentSpace, transaction, drawingLine,
+                        view.Scale, insertionPoint);
             }
 
             foreach (var group in view.Lines.Where(line => line.Role == StairLineRole.BreakLine)
@@ -503,6 +507,28 @@ namespace WL.Stair.Cad2024
             }
         }
 
+        private static void RenderWallOpeningCrossEdge(
+            BlockTableRecord currentSpace,
+            Transaction transaction,
+            DrawingLine source,
+            int drawingScale,
+            Point3d insertionPoint)
+        {
+            var offset = 0.2 * Math.Max(1, drawingScale);
+            var width = 0.4 * Math.Max(1, drawingScale);
+            var shift = source.Role == StairLineRole.WallOpeningLowerEdge ? -offset : offset;
+            var polyline = new Polyline(2) { Layer = AuxiliaryLayer, Closed = false };
+            polyline.AddVertexAt(0, new Point2d(insertionPoint.X + source.Start.X,
+                insertionPoint.Y + source.Start.Y + shift), 0, width, width);
+            polyline.AddVertexAt(1, new Point2d(insertionPoint.X + source.End.X,
+                insertionPoint.Y + source.End.Y + shift), 0, width, width);
+            polyline.SetStartWidthAt(0, width);
+            polyline.SetEndWidthAt(0, width);
+            polyline.ConstantWidth = width;
+            currentSpace.AppendEntity(polyline);
+            transaction.AddNewlyCreatedDBObject(polyline, true);
+        }
+
         private static void RenderBaseWallLine(BlockTableRecord currentSpace, Transaction transaction,
             DrawingLine source, int drawingScale, bool showBold, Point3d insertionPoint)
         {
@@ -761,6 +787,9 @@ namespace WL.Stair.Cad2024
                     return AuxiliaryLayer;
                 case StairLineRole.OpeningBoundary:
                     return OpeningLayer;
+                case StairLineRole.WallOpeningLowerEdge:
+                case StairLineRole.WallOpeningUpperEdge:
+                    return AuxiliaryLayer;
 
                 default:
                     return AuxiliaryLayer;

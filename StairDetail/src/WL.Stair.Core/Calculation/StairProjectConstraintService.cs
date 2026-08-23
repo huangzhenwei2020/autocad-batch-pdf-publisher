@@ -143,6 +143,13 @@ namespace WL.Stair.Core.Calculation
                     project.WallOpenings = new List<StairWallOpeningDefinition>();
                 project.SchemaVersion = 14;
             }
+            if (project.SchemaVersion < 15)
+            {
+                // Platform/floor elevations are optional and live on their
+                // existing component records. Leaving them null reproduces
+                // every legacy drawing and preserves all old parameters.
+                project.SchemaVersion = 15;
+            }
             foreach (var opening in project.WallOpenings.Where(item => item != null))
             {
                 if (opening.Height <= 0.0)
@@ -151,8 +158,34 @@ namespace WL.Stair.Core.Calculation
                     ? Math.Max(0.0, opening.SillHeight)
                     : 0.0;
             }
+            foreach (var opening in project.Floors.Where(item => item != null)
+                .Select(item => item.DoorWindowElevation)
+                .Concat(project.Storeys.Where(item => item != null)
+                    .SelectMany(item => item.Landings ?? new List<StairLandingDefinition>())
+                    .Where(item => item != null)
+                    .Select(item => item.DoorWindowElevation))
+                .Where(item => item != null))
+            {
+                NormalizePlatformOpening(opening);
+            }
             if (project.DrawingScale <= 0) project.DrawingScale = 30;
             project.Construction.Wall.Enabled = true;
+        }
+
+        private static void NormalizePlatformOpening(StairPlatformOpeningDefinition opening)
+        {
+            opening.DistanceFromWall = Math.Max(0.0, opening.DistanceFromWall);
+            if (opening.Width <= 0.0) opening.Width = 900.0;
+            if (opening.Height <= 0.0)
+                opening.Height = opening.Type == WallOpeningType.Window ? 1500.0 : 2100.0;
+            opening.SillHeight = opening.Type == WallOpeningType.Window
+                ? Math.Max(0.0, opening.SillHeight)
+                : 0.0;
+            if (opening.InstallationGap < 0.0) opening.InstallationGap = 0.0;
+            if (opening.OuterFrameWidth <= 0.0) opening.OuterFrameWidth = 50.0;
+            if (opening.MullionWidth <= 0.0) opening.MullionWidth = 50.0;
+            if (string.IsNullOrWhiteSpace(opening.DoorFrameType)) opening.DoorFrameType = "N型";
+            if (string.IsNullOrWhiteSpace(opening.Material)) opening.Material = "玻璃";
         }
 
         public void Apply(StairProjectDefinition project)

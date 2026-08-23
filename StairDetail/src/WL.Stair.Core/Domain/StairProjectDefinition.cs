@@ -7,7 +7,7 @@ namespace WL.Stair.Core.Domain
     {
         public StairProjectDefinition()
         {
-            SchemaVersion = 14;
+            SchemaVersion = 15;
             Name = "楼梯大样";
             ProjectName = "未命名项目";
             SubprojectName = string.Empty;
@@ -221,6 +221,9 @@ namespace WL.Stair.Core.Domain
 
         public string BeamId { get; set; }
 
+        /// <summary>Optional door/window elevation placed above this floor.</summary>
+        public StairPlatformOpeningDefinition DoorWindowElevation { get; set; }
+
         public static StairFloorDefinition CreateDefault(string id, string name)
         {
             return new StairFloorDefinition
@@ -389,6 +392,9 @@ namespace WL.Stair.Core.Domain
 
         public string BeamId { get; set; }
 
+        /// <summary>Optional door/window elevation placed above this landing.</summary>
+        public StairPlatformOpeningDefinition DoorWindowElevation { get; set; }
+
         public static StairLandingDefinition CreateDefault(
             string id,
             string name,
@@ -434,5 +440,72 @@ namespace WL.Stair.Core.Domain
     {
         Cut = 0,
         Rear = 1
+    }
+
+    /// <summary>
+    /// Door/window elevation attached to a floor or landing.  It is deliberately
+    /// separate from the platform geometry parameters so old projects and their
+    /// platform widths, beams and closure settings remain untouched.
+    /// </summary>
+    public sealed class StairPlatformOpeningDefinition
+    {
+        public WallOpeningType Type { get; set; }
+
+        public double DistanceFromWall { get; set; }
+
+        public double Width { get; set; }
+
+        public double Height { get; set; }
+
+        public double SillHeight { get; set; }
+
+        public bool HasInstallationGap { get; set; }
+
+        public double InstallationGap { get; set; }
+
+        public bool HasOuterFrame { get; set; }
+
+        public double OuterFrameWidth { get; set; }
+
+        public bool HasMullion { get; set; }
+
+        public double MullionWidth { get; set; }
+
+        public string DoorFrameType { get; set; }
+
+        public double DoorFrameWidth { get; set; }
+
+        public string Material { get; set; }
+
+        public string CustomCellLayout { get; set; }
+
+        public string CellOpeningModes { get; set; }
+
+        /// <summary>
+        /// Exact line geometry returned by the shared door/window division
+        /// editor.  Coordinates are local to the elevation's lower-left corner.
+        /// </summary>
+        public string GeometryLines { get; set; }
+
+        public static StairPlatformOpeningDefinition CreateDefault()
+        {
+            return new StairPlatformOpeningDefinition
+            {
+                Type = WallOpeningType.None,
+                DistanceFromWall = 50.0,
+                Width = 900.0,
+                Height = 2100.0,
+                SillHeight = 0.0,
+                HasInstallationGap = false,
+                InstallationGap = 20.0,
+                HasOuterFrame = true,
+                OuterFrameWidth = 50.0,
+                HasMullion = true,
+                MullionWidth = 50.0,
+                DoorFrameType = "N型",
+                DoorFrameWidth = 50.0,
+                Material = "玻璃"
+            };
+        }
     }
 }

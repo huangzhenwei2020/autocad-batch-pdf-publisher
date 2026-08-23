@@ -333,8 +333,14 @@ namespace WL.Stair.Core.Geometry
                 drawingScale);
             AddOneHandrailHeightDimension(dimensions, lines, project.Construction.Railing, drawingScale,
                 firstAxisX, secondAxisX);
+            var highestFloor = floorPositions.OrderByDescending(pair => pair.Value.Elevation)
+                .Select(pair => pair.Key).FirstOrDefault();
+            var guardrailFloorDirection = !string.IsNullOrWhiteSpace(highestFloor)
+                && floorDirections.ContainsKey(highestFloor)
+                ? -floorDirections[highestFloor]
+                : 1;
             AddTopGuardrail(lines, leaders, highestElevation, drawingScale,
-                project.Construction.Railing);
+                project.Construction.Railing, guardrailFloorDirection);
 
             var titleX = floorPositions.Count == 0 ? 0.0 : floorPositions.Values.Average(position => position.X);
             // Match the door/window elevation title row: 8 paper mm for the
@@ -1155,6 +1161,8 @@ namespace WL.Stair.Core.Geometry
                 beamDepth,
                 StairLineRole.CutBoundary,
                 landing.Id);
+            AddPlatformDoorWindowElevation(lines, landing.DoorWindowElevation,
+                connectionX, elevation, projection, platformWidth, landing.Id);
             if (showText)
                 texts.Add(new DrawingText(
                     new Point2D(connectionX + (projection * platformWidth / 2.0), elevation + 150.0),
@@ -1187,6 +1195,8 @@ namespace WL.Stair.Core.Geometry
                 beamDepth,
                 StairLineRole.CutBoundary,
                 floor.Id);
+            AddPlatformDoorWindowElevation(lines, floor.DoorWindowElevation,
+                position.X, position.Elevation, -logicalDirection, platformWidth, floor.Id);
             if (showText)
                 AddFloorText(
                     texts,
@@ -1382,9 +1392,11 @@ namespace WL.Stair.Core.Geometry
                     AddWallFace(lines, faceX, openingTop, top, componentId);
             }
             if (opening.Type == WallOpeningType.Window && openingBottom > bottom + 0.001)
-                AddWallCrossLine(lines, firstFaceX, secondFaceX, openingBottom, componentId);
+                AddWallCrossLine(lines, firstFaceX, secondFaceX, openingBottom, componentId,
+                    StairLineRole.WallOpeningLowerEdge);
             if (openingTop < top - 0.001)
-                AddWallCrossLine(lines, firstFaceX, secondFaceX, openingTop, componentId);
+                AddWallCrossLine(lines, firstFaceX, secondFaceX, openingTop, componentId,
+                    StairLineRole.WallOpeningUpperEdge);
 
             AddOpeningSymbol(lines, firstFaceX, secondFaceX, openingBottom, openingTop,
                 componentId, opening.Type);
@@ -1399,10 +1411,10 @@ namespace WL.Stair.Core.Geometry
         }
 
         private static void AddWallCrossLine(ICollection<DrawingLine> lines, double firstX,
-            double secondX, double elevation, string componentId)
+            double secondX, double elevation, string componentId, StairLineRole role)
         {
             lines.Add(new DrawingLine(new Point2D(firstX, elevation),
-                new Point2D(secondX, elevation), StairLineRole.WallBoundary, false, componentId));
+                new Point2D(secondX, elevation), role, false, componentId));
         }
 
         private static void AddOpeningSymbol(ICollection<DrawingLine> lines, double firstX,
@@ -1410,19 +1422,94 @@ namespace WL.Stair.Core.Geometry
         {
             var left = Math.Min(firstX, secondX);
             var right = Math.Max(firstX, secondX);
-            if (type == WallOpeningType.Window)
+            // Doors and windows use the same four cyan elevation lines: the
+            // outer pair coincides exactly with the two wall faces, while the
+            // inner pair is centred and 50 mm apart.
+            var middle = (left + right) / 2.0;
+            var halfInnerGap = Math.Min(25.0, Math.Max(0.0, (right - left) / 2.0 - 0.5));
+            foreach (var x in new[] { left, middle - halfInnerGap, middle + halfInnerGap, right })
+                lines.Add(new DrawingLine(new Point2D(x, bottom),
+                    new Point2D(x, top), StairLineRole.OpeningBoundary, false, componentId));
+        }
+
+        private static void AddPlatformDoorWindowElevation(
+            ICollection<DrawingLine> lines,
+            StairPlatformOpeningDefinition opening,
+            double connectionX,
+            double platformElevation,
+            int direction,
+            double platformWidth,
+            string componentId)
+        {
+            if (opening == null || opening.Type == WallOpeningType.None) return;
+            var width = Math.Max(1.0, opening.Width);
+            var height = Math.Max(1.0, opening.Height);
+            var sill = opening.Type == WallOpeningType.Window ? Math.Max(0.0, opening.SillHeight) : 0.0;
+            var wallX = connectionX + direction * platformWidth;
+            var wallSide = wallX - direction * Math.Max(0.0, opening.DistanceFromWall);
+            var originX = wallSide - direction * width;
+            var originY = platformElevation + sill;
+            var parsed = ParseDoorWindowGeometry(opening.GeometryLines).ToArray();
+            if (parsed.Length == 0)
             {
-                var inset = (right - left) * 0.35;
-                lines.Add(new DrawingLine(new Point2D(left + inset, bottom),
-                    new Point2D(left + inset, top), StairLineRole.OpeningBoundary, false, componentId));
-                lines.Add(new DrawingLine(new Point2D(right - inset, bottom),
-                    new Point2D(right - inset, top), StairLineRole.OpeningBoundary, false, componentId));
+                AddDefaultDoorWindowElevation(lines, originX, originY, direction,
+                    width, height, opening, componentId);
+                return;
             }
-            else
+            foreach (var segment in parsed)
             {
-                var middle = (left + right) / 2.0;
-                lines.Add(new DrawingLine(new Point2D(middle, bottom),
-                    new Point2D(middle, top), StairLineRole.OpeningBoundary, false, componentId));
+                lines.Add(new DrawingLine(
+                    new Point2D(originX + direction * segment.X1, originY + segment.Y1),
+                    new Point2D(originX + direction * segment.X2, originY + segment.Y2),
+                    StairLineRole.OpeningBoundary, false, componentId));
+            }
+        }
+
+        private static void AddDefaultDoorWindowElevation(
+            ICollection<DrawingLine> lines,
+            double originX,
+            double originY,
+            int direction,
+            double width,
+            double height,
+            StairPlatformOpeningDefinition opening,
+            string componentId)
+        {
+            Action<double, double, double, double> add = (x1, y1, x2, y2) =>
+                lines.Add(new DrawingLine(
+                    new Point2D(originX + direction * x1, originY + y1),
+                    new Point2D(originX + direction * x2, originY + y2),
+                    StairLineRole.OpeningBoundary, false, componentId));
+            add(0, 0, width, 0); add(width, 0, width, height);
+            add(width, height, 0, height); add(0, height, 0, 0);
+            if (opening.HasOuterFrame)
+            {
+                var inset = Math.Min(Math.Max(0.0, opening.OuterFrameWidth),
+                    Math.Min(width, height) / 2.0);
+                if (inset > 0.001)
+                {
+                    add(inset, inset, width - inset, inset);
+                    add(width - inset, inset, width - inset, height - inset);
+                    add(width - inset, height - inset, inset, height - inset);
+                    add(inset, height - inset, inset, inset);
+                }
+            }
+        }
+
+        private static IEnumerable<DoorWindowGeometrySegment> ParseDoorWindowGeometry(string value)
+        {
+            foreach (var record in (value ?? string.Empty).Split(new[] { '|' },
+                StringSplitOptions.RemoveEmptyEntries))
+            {
+                var parts = record.Split(',');
+                double x1, y1, x2, y2;
+                if (parts.Length < 5
+                    || !double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out x1)
+                    || !double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out y1)
+                    || !double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out x2)
+                    || !double.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out y2))
+                    continue;
+                yield return new DoorWindowGeometrySegment(x1, y1, x2, y2);
             }
         }
 
@@ -1515,7 +1602,8 @@ namespace WL.Stair.Core.Geometry
             ICollection<DrawingLeader> leaders,
             double highestElevation,
             int drawingScale,
-            RailingDefaults railing)
+            RailingDefaults railing,
+            int floorDirection)
         {
             if (railing == null || !railing.Enabled) return;
             var handrailPoints = lines
@@ -1527,7 +1615,9 @@ namespace WL.Stair.Core.Geometry
 
             const double guardrailHeight = 1100.0;
             const double postWidth = 40.0;
-            var x = highestHandrailPoint.X;
+            // Move both the guardrail and its leader 50 mm into the highest
+            // floor, not merely the annotation text.
+            var x = highestHandrailPoint.X + Math.Sign(floorDirection) * 50.0;
             var bottom = highestElevation;
             var top = highestElevation + guardrailHeight;
             var left = x - postWidth / 2.0;
@@ -1605,6 +1695,19 @@ namespace WL.Stair.Core.Geometry
             public double X { get; }
 
             public double Elevation { get; }
+        }
+
+        private sealed class DoorWindowGeometrySegment
+        {
+            public DoorWindowGeometrySegment(double x1, double y1, double x2, double y2)
+            {
+                X1 = x1; Y1 = y1; X2 = x2; Y2 = y2;
+            }
+
+            public double X1 { get; }
+            public double Y1 { get; }
+            public double X2 { get; }
+            public double Y2 { get; }
         }
 
         private sealed class TracedLoop

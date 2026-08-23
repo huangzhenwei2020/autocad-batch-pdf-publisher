@@ -18,5 +18,7 @@ namespace WL.Stair.Core.Geometry
         ,BreakLine = 13
         ,HatchBoundary = 14
         ,OpeningBoundary = 15
+        ,WallOpeningLowerEdge = 16
+        ,WallOpeningUpperEdge = 17
     }
 }

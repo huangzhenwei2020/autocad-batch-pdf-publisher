@@ -112,6 +112,15 @@ namespace WL.Stair.Cad2022
                 return;
             }
 
+            if (message.Action == "edit-door-window-division")
+            {
+                _constraints.Normalize(_state.Project);
+                EditDoorWindowDivision(message.Target);
+                _constraints.Apply(_state.Project);
+                SendDoorWindowDivisionState(message.Target);
+                return;
+            }
+
             _constraints.Normalize(_state.Project);
             _constraints.Apply(_state.Project);
 
@@ -191,6 +200,86 @@ namespace WL.Stair.Cad2022
                 { "state", _state }
             };
             _webView.CoreWebView2.PostWebMessageAsJson(_serializer.Serialize(payload));
+        }
+
+        private void SendDoorWindowDivisionState(string target)
+        {
+            if (_isClosing || _webView.CoreWebView2 == null) return;
+            var payload = new Dictionary<string, object>
+            {
+                { "type", "door-window-division" },
+                { "target", target ?? string.Empty },
+                { "state", _state }
+            };
+            _webView.CoreWebView2.PostWebMessageAsJson(_serializer.Serialize(payload));
+        }
+
+        private void EditDoorWindowDivision(string componentId)
+        {
+            var opening = FindPlatformOpening(componentId);
+            if (opening == null || opening.Type == WallOpeningType.None) return;
+            var bridgeType = AppDomain.CurrentDomain.GetAssemblies()
+                .Select(assembly => assembly.GetType(
+                    "BatchPdfPublisher.Views.DoorWindowDivisionEditorBridge", false))
+                .FirstOrDefault(type => type != null);
+            if (bridgeType == null)
+                throw new InvalidOperationException("门窗立面的“编辑当前分格”组件尚未加载，请使用万落建筑工具启动器重新加载插件。");
+            var method = bridgeType.GetMethod("Edit", System.Reflection.BindingFlags.Public
+                | System.Reflection.BindingFlags.Static);
+            if (method == null)
+                throw new InvalidOperationException("当前门窗立面模块不支持共享分格编辑，请重新运行最新版启动器。");
+            var result = method.Invoke(null, new object[]
+            {
+                componentId,
+                (int)opening.Type,
+                opening.Width,
+                opening.Height,
+                opening.CustomCellLayout,
+                opening.CellOpeningModes,
+                opening.HasInstallationGap,
+                opening.InstallationGap,
+                opening.HasOuterFrame,
+                opening.OuterFrameWidth,
+                opening.HasMullion,
+                opening.MullionWidth,
+                opening.DoorFrameType,
+                opening.DoorFrameWidth,
+                opening.Material
+            });
+            if (result == null) return;
+            CopyBridgeProperty(result, "CustomCellLayout", value => opening.CustomCellLayout = value as string);
+            CopyBridgeProperty(result, "CellOpeningModes", value => opening.CellOpeningModes = value as string);
+            CopyBridgeProperty(result, "HasInstallationGap", value => opening.HasInstallationGap = Convert.ToBoolean(value));
+            CopyBridgeProperty(result, "InstallationGap", value => opening.InstallationGap = Convert.ToDouble(value));
+            CopyBridgeProperty(result, "HasOuterFrame", value => opening.HasOuterFrame = Convert.ToBoolean(value));
+            CopyBridgeProperty(result, "OuterFrameWidth", value => opening.OuterFrameWidth = Convert.ToDouble(value));
+            CopyBridgeProperty(result, "HasMullion", value => opening.HasMullion = Convert.ToBoolean(value));
+            CopyBridgeProperty(result, "MullionWidth", value => opening.MullionWidth = Convert.ToDouble(value));
+            CopyBridgeProperty(result, "DoorFrameType", value => opening.DoorFrameType = value as string);
+            CopyBridgeProperty(result, "DoorFrameWidth", value => opening.DoorFrameWidth = Convert.ToDouble(value));
+            CopyBridgeProperty(result, "Material", value => opening.Material = value as string);
+            CopyBridgeProperty(result, "GeometryLines", value => opening.GeometryLines = value as string);
+        }
+
+        private StairPlatformOpeningDefinition FindPlatformOpening(string componentId)
+        {
+            var floor = (_state.Project.Floors ?? new List<StairFloorDefinition>())
+                .FirstOrDefault(item => item != null && string.Equals(item.Id, componentId,
+                    StringComparison.OrdinalIgnoreCase));
+            if (floor != null) return floor.DoorWindowElevation;
+            return (_state.Project.Storeys ?? new List<StairStoreyDefinition>())
+                .Where(item => item != null)
+                .SelectMany(item => item.Landings ?? new List<StairLandingDefinition>())
+                .Where(item => item != null && string.Equals(item.Id, componentId,
+                    StringComparison.OrdinalIgnoreCase))
+                .Select(item => item.DoorWindowElevation)
+                .FirstOrDefault();
+        }
+
+        private static void CopyBridgeProperty(object source, string name, Action<object> assign)
+        {
+            var property = source.GetType().GetProperty(name);
+            if (property != null) assign(property.GetValue(source, null));
         }
 
         private void MeasureFromCad(string target)

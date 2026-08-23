@@ -58,6 +58,7 @@ namespace WL.Stair.Tests
             PreservesLockedPlatformWidth,
             DrawsWallsFromBeamCenterAxes,
             BuildsWallSegmentDoorAndWindowOpenings,
+            BuildsPlatformDoorWindowElevationWithoutChangingPlatform,
             KeepsSectionAxesFixedDuringEditsAndMirroring,
             BuildsHandrailsDimensionsAndOptionalComponentSchedule,
             LabelsFlightsAndLandings,
@@ -660,7 +661,9 @@ namespace WL.Stair.Tests
                 {
                     Id = group.Key,
                     Bottom = group.SelectMany(line => new[] { line.Start.Y, line.End.Y }).Min(),
-                    Top = group.SelectMany(line => new[] { line.Start.Y, line.End.Y }).Max()
+                    Top = group.SelectMany(line => new[] { line.Start.Y, line.End.Y }).Max(),
+                    LeftFace = group.Min(line => line.Start.X),
+                    RightFace = group.Max(line => line.Start.X)
                 })
                 .Where(item => item.Top - item.Bottom > 2300.0)
                 .OrderByDescending(item => item.Top - item.Bottom)
@@ -676,12 +679,24 @@ namespace WL.Stair.Tests
             var withWindow = builder.BuildSection(project, outcome.Result);
             var symbols = withWindow.Lines.Where(line => line.ComponentId == segment.Id
                 && line.Role == StairLineRole.OpeningBoundary).ToArray();
-            TestAssert.Equal(2, symbols.Length,
-                "A window must create two cyan frame/glazing lines in its selected wall segment.");
+            TestAssert.Equal(4, symbols.Length,
+                "A window must create four cyan vertical lines in its selected wall segment.");
             TestAssert.True(symbols.All(line =>
                     Math.Abs(Math.Min(line.Start.Y, line.End.Y) - (segment.Bottom + 800.0)) < 0.001
                     && Math.Abs(Math.Max(line.Start.Y, line.End.Y) - (segment.Bottom + 2000.0)) < 0.001),
                 "Window height and sill must be measured from the supporting floor or landing.");
+            var symbolXs = symbols.Select(line => line.Start.X).OrderBy(value => value).ToArray();
+            TestAssert.NearlyEqual(segment.LeftFace, symbolXs[0], 0.001,
+                "The first door/window elevation line must coincide with the first wall face.");
+            TestAssert.NearlyEqual(segment.RightFace, symbolXs[3], 0.001,
+                "The fourth door/window elevation line must coincide with the second wall face.");
+            TestAssert.NearlyEqual(50.0, symbolXs[2] - symbolXs[1], 0.001,
+                "The two inner door/window lines must be centred and 50 mm apart.");
+            TestAssert.True(withWindow.Lines.Any(line => line.ComponentId == segment.Id
+                    && line.Role == StairLineRole.WallOpeningLowerEdge)
+                && withWindow.Lines.Any(line => line.ComponentId == segment.Id
+                    && line.Role == StairLineRole.WallOpeningUpperEdge),
+                "Window sill and header must be explicit wall cut edges so CAD can bold them inward.");
             TestAssert.True(withWindow.HatchRegions.Where(region => region.IsWall
                     && region.ComponentId == segment.Id).All(region =>
                         region.Boundary.Max(point => point.Y) <= segment.Bottom + 800.001
@@ -692,14 +707,53 @@ namespace WL.Stair.Tests
             project.WallOpenings[0].Height = 2100.0;
             project.WallOpenings[0].SillHeight = 900.0;
             var withDoor = builder.BuildSection(project, outcome.Result);
-            var doorSymbol = withDoor.Lines.Single(line => line.ComponentId == segment.Id
-                && line.Role == StairLineRole.OpeningBoundary);
+            var doorSymbols = withDoor.Lines.Where(line => line.ComponentId == segment.Id
+                && line.Role == StairLineRole.OpeningBoundary).ToArray();
+            TestAssert.Equal(4, doorSymbols.Length,
+                "Doors and windows must use the same four cyan vertical-line convention.");
+            var doorSymbol = doorSymbols[0];
             TestAssert.NearlyEqual(segment.Bottom,
                 Math.Min(doorSymbol.Start.Y, doorSymbol.End.Y), 0.001,
                 "A door must start at the supporting floor or landing regardless of a stale sill value.");
             TestAssert.NearlyEqual(segment.Bottom + 2100.0,
                 Math.Max(doorSymbol.Start.Y, doorSymbol.End.Y), 0.001,
                 "The configured door height must be retained.");
+        }
+
+        private static void BuildsPlatformDoorWindowElevationWithoutChangingPlatform()
+        {
+            var project = StairProjectDefinition.CreateDefault();
+            var floor = project.Floors.Single(item => item.Id == "LB-02");
+            var originalWidth = floor.PlatformWidth;
+            var originalBeam = floor.BeamDepthOverride;
+            floor.DoorWindowElevation = StairPlatformOpeningDefinition.CreateDefault();
+            floor.DoorWindowElevation.Type = WallOpeningType.Window;
+            floor.DoorWindowElevation.Width = 900.0;
+            floor.DoorWindowElevation.Height = 1200.0;
+            floor.DoorWindowElevation.SillHeight = 800.0;
+            floor.DoorWindowElevation.DistanceFromWall = 100.0;
+            floor.DoorWindowElevation.GeometryLines =
+                "0,0,900,0,1|900,0,900,1200,1|900,1200,0,1200,1|0,1200,0,0,1";
+
+            var outcome = new StairProjectCalculator().Calculate(project);
+            TestAssert.True(outcome.IsSuccess, "The platform elevation test project must calculate.");
+            var view = new StairProjectGeometryBuilder().BuildSection(project, outcome.Result);
+            var elevationLines = view.Lines.Where(line => line.ComponentId == floor.Id
+                && line.Role == StairLineRole.OpeningBoundary).ToArray();
+            TestAssert.Equal(4, elevationLines.Length,
+                "The shared division geometry must be placed above its floor as cyan linework.");
+            TestAssert.NearlyEqual(900.0,
+                elevationLines.SelectMany(line => new[] { line.Start.X, line.End.X }).Max()
+                - elevationLines.SelectMany(line => new[] { line.Start.X, line.End.X }).Min(), 0.001,
+                "The configured door/window elevation width must be retained.");
+            TestAssert.NearlyEqual(1200.0,
+                elevationLines.SelectMany(line => new[] { line.Start.Y, line.End.Y }).Max()
+                - elevationLines.SelectMany(line => new[] { line.Start.Y, line.End.Y }).Min(), 0.001,
+                "The configured door/window elevation height must be retained.");
+            TestAssert.NearlyEqual(originalWidth, floor.PlatformWidth, 0.001,
+                "Adding an elevation must not change the existing platform width.");
+            TestAssert.True(floor.BeamDepthOverride == originalBeam,
+                "Adding an elevation must not change the existing beam override.");
         }
 
         private static void ConnectsMixedTwoThreeTwoFlightStoreys()
@@ -960,7 +1014,7 @@ namespace WL.Stair.Tests
 
             new StairProjectConstraintService().Normalize(project);
 
-            TestAssert.Equal(14, project.SchemaVersion,
+            TestAssert.Equal(15, project.SchemaVersion,
                 "Legacy projects must migrate through the current drawing-output schema.");
             TestAssert.True(project.Floors[1].AllowLowerFlightClosure,
                 "The old final-flight switch must migrate to the destination floor.");
@@ -1726,6 +1780,20 @@ namespace WL.Stair.Tests
             TestAssert.True(section.Leaders.Any(leader => leader.Text.Contains("栏杆")
                     && leader.Text.Contains("1.1m")),
                 "The 1.1 metre top guardrail must receive a leader note.");
+            var topGuardrailLeader = section.Leaders.Single(leader =>
+                leader.Text.Contains("栏杆") && leader.Text.Contains("1.1m"));
+            var guardrailCenterX = topGuardrailLines.Average(line =>
+                (line.Start.X + line.End.X) / 2.0);
+            TestAssert.NearlyEqual(guardrailCenterX, topGuardrailLeader.Vertices[0].X, 0.001,
+                "Moving the top guardrail 50 mm toward the floor must move its leader target together.");
+            var highestFlightHandrailX = section.Lines
+                .Where(line => line.Role == StairLineRole.Handrail
+                    && line.ComponentId != "TOP-GUARDRAIL")
+                .SelectMany(line => new[] { line.Start, line.End })
+                .OrderByDescending(point => point.Y)
+                .First().X;
+            TestAssert.NearlyEqual(50.0, Math.Abs(guardrailCenterX - highestFlightHandrailX), 0.001,
+                "The top guardrail and its annotation must move exactly 50 mm toward the floor.");
             TestAssert.True(section.Tables[0].Rows.Any(row => row.Contains(firstFlight.Id)),
                 "The component schedule must list detailed flight parameters.");
         }
