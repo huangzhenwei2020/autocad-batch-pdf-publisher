@@ -415,6 +415,7 @@ namespace WL.Stair.Cad2022
                 var css = line.IsHidden ? "rear" : "cut";
                 if (line.Role == StairLineRole.BeamBoundary) css += " beam";
                 if (line.Role == StairLineRole.WallBoundary) css += " wall";
+                if (line.Role == StairLineRole.OpeningBoundary) css = "opening";
                 if (line.Role == StairLineRole.AxisLine) css = "axis";
                 if (line.Role == StairLineRole.Handrail) css = "handrail";
                 if (line.Role == StairLineRole.BreakLine) css = "breakline";
@@ -524,7 +525,8 @@ namespace WL.Stair.Cad2022
         {
             var componentId = state.SelectedComponentId;
             if (string.IsNullOrWhiteSpace(componentId)) return;
-            if (string.Equals(componentId, "WALL", StringComparison.OrdinalIgnoreCase)) return;
+            if (string.Equals(componentId, "WALL", StringComparison.OrdinalIgnoreCase)
+                || componentId.StartsWith("WALL-", StringComparison.OrdinalIgnoreCase)) return;
             var componentLines = view.Lines
                 .Where(line => string.Equals(line.ComponentId, componentId, StringComparison.OrdinalIgnoreCase))
                 .ToArray();

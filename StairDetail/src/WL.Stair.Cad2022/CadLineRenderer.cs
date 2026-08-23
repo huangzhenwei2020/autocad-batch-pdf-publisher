@@ -25,6 +25,7 @@ namespace WL.Stair.Cad2022
         private const string CutHatchLayer = "WL_楼梯_剖切填充";
         private const string BreakLineLayer = "WL_折断线";
         private const string AxisLayer = "A_DOTE";
+        private const string OpeningLayer = "WL-门窗-开启洞口";
         private const string HiddenLineType = "HIDDEN";
         private const string AxisLineType = "DASHDOT2";
         private static string _hatchPatternDirectory;
@@ -178,6 +179,7 @@ namespace WL.Stair.Cad2022
             EnsureLayer(layerTable, transaction, BreakLineLayer, 3, ObjectId.Null);
             MigrateHatchLayerColor(layerTable, transaction);
             EnsureLayer(layerTable, transaction, AxisLayer, 1, axisLineTypeId);
+            EnsureLayer(layerTable, transaction, OpeningLayer, 4, ObjectId.Null);
         }
 
         private static void RenderConnectedPolyline(BlockTableRecord space, Transaction transaction,
@@ -761,6 +763,8 @@ namespace WL.Stair.Cad2022
                     return BreakLineLayer;
                 case StairLineRole.WallBoundary:
                     return AuxiliaryLayer;
+                case StairLineRole.OpeningBoundary:
+                    return OpeningLayer;
                 default:
                     return AuxiliaryLayer;
             }

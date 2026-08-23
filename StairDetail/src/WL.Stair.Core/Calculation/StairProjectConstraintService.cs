@@ -12,6 +12,7 @@ namespace WL.Stair.Core.Calculation
             if (project == null) return;
             if (project.Floors == null) project.Floors = new List<StairFloorDefinition>();
             if (project.Storeys == null) project.Storeys = new List<StairStoreyDefinition>();
+            if (project.WallOpenings == null) project.WallOpenings = new List<StairWallOpeningDefinition>();
             if (project.Construction == null) project.Construction = StairConstructionDefaults.CreateDefault();
             var defaults = StairConstructionDefaults.CreateDefault();
             if (project.Construction.StairwellWidth <= 0.0)
@@ -131,6 +132,24 @@ namespace WL.Stair.Core.Calculation
             {
                 project.ShowBold = true;
                 project.ShowFill = true;
+                project.SchemaVersion = 13;
+            }
+            if (project.SchemaVersion < 14)
+            {
+                // Wall openings are new optional records.  Do not synthesize
+                // entries for old projects: an empty list reproduces the exact
+                // former continuous-wall geometry.
+                if (project.WallOpenings == null)
+                    project.WallOpenings = new List<StairWallOpeningDefinition>();
+                project.SchemaVersion = 14;
+            }
+            foreach (var opening in project.WallOpenings.Where(item => item != null))
+            {
+                if (opening.Height <= 0.0)
+                    opening.Height = opening.Type == WallOpeningType.Window ? 1500.0 : 2100.0;
+                opening.SillHeight = opening.Type == WallOpeningType.Window
+                    ? Math.Max(0.0, opening.SillHeight)
+                    : 0.0;
             }
             if (project.DrawingScale <= 0) project.DrawingScale = 30;
             project.Construction.Wall.Enabled = true;

@@ -14,11 +14,22 @@ namespace WL.Stair.Cad2022
         {
             get
             {
-                var folder = Path.Combine(
+                var packageRoot = Environment.GetEnvironmentVariable("WANLUO_ARCHITECTURE_TOOLS_ROOT");
+                if (!string.IsNullOrWhiteSpace(packageRoot))
+                    return Path.Combine(packageRoot, "用户配置文件", "楼梯大样", "最近使用方案.json");
+                return LegacyFilePath;
+            }
+        }
+
+        private static string LegacyFilePath
+        {
+            get
+            {
+                return Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                     "WanLuoArchitecture",
-                    "StairDesigner");
-                return Path.Combine(folder, "last-project.json");
+                    "StairDesigner",
+                    "last-project.json");
             }
         }
 
@@ -32,6 +43,19 @@ namespace WL.Stair.Cad2022
                     {
                         var project = _serializer.Deserialize<StairProjectDefinition>(File.ReadAllText(FilePath));
                         if (project != null) return project;
+                    }
+                    // One-time, non-destructive migration from the historical
+                    // C-drive location. The old file remains as a recovery copy.
+                    if (!string.Equals(FilePath, LegacyFilePath, StringComparison.OrdinalIgnoreCase)
+                        && File.Exists(LegacyFilePath))
+                    {
+                        var project = _serializer.Deserialize<StairProjectDefinition>(
+                            File.ReadAllText(LegacyFilePath));
+                        if (project != null)
+                        {
+                            Save(project);
+                            return project;
+                        }
                     }
                 }
             }

@@ -17,5 +17,6 @@ namespace WL.Stair.Core.Geometry
         ,Handrail = 12
         ,BreakLine = 13
         ,HatchBoundary = 14
+        ,OpeningBoundary = 15
     }
 }

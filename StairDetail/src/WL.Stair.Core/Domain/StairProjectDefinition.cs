@@ -7,7 +7,7 @@ namespace WL.Stair.Core.Domain
     {
         public StairProjectDefinition()
         {
-            SchemaVersion = 12;
+            SchemaVersion = 14;
             Name = "楼梯大样";
             ProjectName = "未命名项目";
             SubprojectName = string.Empty;
@@ -20,6 +20,7 @@ namespace WL.Stair.Core.Domain
             Construction = StairConstructionDefaults.CreateDefault();
             Floors = new List<StairFloorDefinition>();
             Storeys = new List<StairStoreyDefinition>();
+            WallOpenings = new List<StairWallOpeningDefinition>();
         }
 
         public int SchemaVersion { get; set; }
@@ -51,6 +52,14 @@ namespace WL.Stair.Core.Domain
         public IList<StairFloorDefinition> Floors { get; set; }
 
         public IList<StairStoreyDefinition> Storeys { get; set; }
+
+        /// <summary>
+        /// Optional door/window settings keyed by the stable wall-segment id
+        /// emitted by the section geometry builder.  Keeping these records at
+        /// project level makes the feature additive: legacy floor, flight,
+        /// platform and construction parameters are not replaced or rewritten.
+        /// </summary>
+        public IList<StairWallOpeningDefinition> WallOpenings { get; set; }
 
         public static StairProjectDefinition CreateDefault()
         {
@@ -136,6 +145,28 @@ namespace WL.Stair.Core.Domain
         public bool Enabled { get; set; }
 
         public double Thickness { get; set; }
+    }
+
+    public sealed class StairWallOpeningDefinition
+    {
+        public string SegmentId { get; set; }
+
+        public WallOpeningType Type { get; set; }
+
+        public double Height { get; set; }
+
+        /// <summary>
+        /// Height above the supporting floor or landing at the bottom of this
+        /// wall segment. Doors always use zero; windows use the configured sill.
+        /// </summary>
+        public double SillHeight { get; set; }
+    }
+
+    public enum WallOpeningType
+    {
+        None = 0,
+        Door = 1,
+        Window = 2
     }
 
     public sealed class SectionHatchDefaults

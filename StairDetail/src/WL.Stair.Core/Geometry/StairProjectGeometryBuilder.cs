@@ -234,7 +234,8 @@ namespace WL.Stair.Core.Geometry
                         wallAnchors.Add(new WallAnchor(
                             landingAxisX,
                             currentElevation,
-                            landing.BeamDepthOverride ?? project.Construction.LandingBeam.Depth));
+                            landing.BeamDepthOverride ?? project.Construction.LandingBeam.Depth,
+                            landing.Id));
                     }
                 }
 
@@ -278,7 +279,8 @@ namespace WL.Stair.Core.Geometry
                 wallAnchors.Add(new WallAnchor(
                     axisForDirection(floorDirection),
                     position.Elevation,
-                    floor.BeamDepthOverride ?? project.Construction.FloorBeam.Depth));
+                    floor.BeamDepthOverride ?? project.Construction.FloorBeam.Depth,
+                    floor.Id));
                 AddFloor(lines, texts, floor, position, project.Construction, floorDirection,
                     project.InsertComponentSchedule);
             }
@@ -307,7 +309,10 @@ namespace WL.Stair.Core.Geometry
                 wallAnchors,
                 lowestElevation,
                 highestElevation,
-                project.Construction);
+                project.Construction,
+                project.WallOpenings,
+                floorPositions.OrderBy(pair => pair.Value.Elevation)
+                    .Select(pair => pair.Key).FirstOrDefault());
             AddBaseWall(lines, firstAxisX, secondAxisX, lowestElevation, drawingScale,
                 project.Construction);
             AddTopBreakLine(lines, firstAxisX, secondAxisX,
@@ -646,7 +651,7 @@ namespace WL.Stair.Core.Geometry
                     {
                         new Point2D(left.Start.X, bottom), new Point2D(right.Start.X, bottom),
                         new Point2D(right.Start.X, top), new Point2D(left.Start.X, top)
-                    }, "WALL", true, hatch.PatternName, hatch.PatternScale));
+                    }, left.ComponentId, true, hatch.PatternName, hatch.PatternScale));
                 }
             }
             return regions;
@@ -1260,7 +1265,9 @@ namespace WL.Stair.Core.Geometry
             IEnumerable<WallAnchor> anchors,
             double lowestElevation,
             double highestElevation,
-            StairConstructionDefaults defaults)
+            StairConstructionDefaults defaults,
+            IEnumerable<StairWallOpeningDefinition> openings,
+            string lowestSupportId)
         {
             if (defaults.Wall == null || defaults.Wall.Thickness <= 0.0)
                 return;
@@ -1271,30 +1278,41 @@ namespace WL.Stair.Core.Geometry
             var halfThickness = defaults.Wall.Thickness / 2.0;
             var bottom = lowestElevation;
             var top = highestElevation + WallHeightAboveHighestFloor;
-            foreach (var axisGroup in positions.GroupBy(anchor => Math.Round(anchor.AxisX, 3)))
+            var openingLookup = (openings ?? Enumerable.Empty<StairWallOpeningDefinition>())
+                .Where(item => item != null && !string.IsNullOrWhiteSpace(item.SegmentId))
+                .GroupBy(item => item.SegmentId, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.Last(), StringComparer.OrdinalIgnoreCase);
+            var axisGroups = positions.GroupBy(anchor => Math.Round(anchor.AxisX, 3))
+                .OrderBy(group => group.Key).ToArray();
+            for (var axisIndex = 0; axisIndex < axisGroups.Length; axisIndex++)
             {
+                var axisGroup = axisGroups[axisIndex];
                 var beamIntervals = MergeIntervals(axisGroup
                     .Select(anchor => new ElevationInterval(
                         anchor.TopElevation - anchor.BeamDepth,
-                        anchor.TopElevation))
+                        anchor.TopElevation,
+                        anchor.SupportId))
                     .OrderBy(interval => interval.Bottom));
                 var axisX = axisGroup.First().AxisX;
-                foreach (var faceX in new[] { axisX - halfThickness, axisX + halfThickness })
+                var side = axisIndex == 0 ? "L" : "R";
+                var cursor = bottom;
+                var supportId = string.IsNullOrWhiteSpace(lowestSupportId) ? "BASE" : lowestSupportId;
+                foreach (var interval in beamIntervals)
                 {
-                    var cursor = bottom;
-                    foreach (var interval in beamIntervals)
+                    if (interval.Bottom > cursor + 0.001)
                     {
-                        if (interval.Bottom > cursor + 0.001)
-                        {
-                            AddWallSegment(lines, faceX, cursor, interval.Bottom);
-                        }
-                        cursor = Math.Max(cursor, interval.Top);
+                        AddWallSegmentPair(lines, axisX - halfThickness, axisX + halfThickness,
+                            cursor, interval.Bottom, WallSegmentId(side, supportId), openingLookup);
                     }
-                    if (top > cursor + 0.001)
+                    if (interval.Top >= cursor - 0.001)
                     {
-                        AddWallSegment(lines, faceX, cursor, top);
+                        supportId = interval.SupportId;
                     }
+                    cursor = Math.Max(cursor, interval.Top);
                 }
+                if (top > cursor + 0.001)
+                    AddWallSegmentPair(lines, axisX - halfThickness, axisX + halfThickness,
+                        cursor, top, WallSegmentId(side, supportId), openingLookup);
             }
         }
 
@@ -1306,28 +1324,106 @@ namespace WL.Stair.Core.Geometry
                 var last = result.LastOrDefault();
                 if (last == null || interval.Bottom > last.Top + 0.001)
                 {
-                    result.Add(new ElevationInterval(interval.Bottom, interval.Top));
+                    result.Add(new ElevationInterval(interval.Bottom, interval.Top, interval.SupportId));
                 }
                 else
                 {
-                    last.Top = Math.Max(last.Top, interval.Top);
+                    if (interval.Top >= last.Top)
+                    {
+                        last.Top = interval.Top;
+                        last.SupportId = interval.SupportId;
+                    }
                 }
             }
             return result;
         }
 
-        private static void AddWallSegment(
-            ICollection<DrawingLine> lines,
-            double x,
-            double bottom,
-            double top)
+        private static string WallSegmentId(string side, string supportId)
         {
-            lines.Add(new DrawingLine(
-                new Point2D(x, bottom),
-                new Point2D(x, top),
-                StairLineRole.WallBoundary,
-                false,
-                "WALL"));
+            return "WALL-" + side + "-" + (string.IsNullOrWhiteSpace(supportId) ? "BASE" : supportId);
+        }
+
+        private static void AddWallSegmentPair(
+            ICollection<DrawingLine> lines,
+            double firstFaceX,
+            double secondFaceX,
+            double bottom,
+            double top,
+            string componentId,
+            IDictionary<string, StairWallOpeningDefinition> openingLookup)
+        {
+            StairWallOpeningDefinition opening;
+            if (!openingLookup.TryGetValue(componentId, out opening)
+                || opening == null || opening.Type == WallOpeningType.None)
+            {
+                AddWallFace(lines, firstFaceX, bottom, top, componentId);
+                AddWallFace(lines, secondFaceX, bottom, top, componentId);
+                return;
+            }
+
+            var openingBottom = opening.Type == WallOpeningType.Window
+                ? bottom + Math.Max(0.0, opening.SillHeight)
+                : bottom;
+            var openingTop = openingBottom + Math.Max(1.0, opening.Height);
+            openingBottom = Math.Max(bottom, Math.Min(top, openingBottom));
+            openingTop = Math.Max(openingBottom, Math.Min(top, openingTop));
+            if (openingTop - openingBottom < 1.0)
+            {
+                AddWallFace(lines, firstFaceX, bottom, top, componentId);
+                AddWallFace(lines, secondFaceX, bottom, top, componentId);
+                return;
+            }
+
+            foreach (var faceX in new[] { firstFaceX, secondFaceX })
+            {
+                if (openingBottom > bottom + 0.001)
+                    AddWallFace(lines, faceX, bottom, openingBottom, componentId);
+                if (top > openingTop + 0.001)
+                    AddWallFace(lines, faceX, openingTop, top, componentId);
+            }
+            if (opening.Type == WallOpeningType.Window && openingBottom > bottom + 0.001)
+                AddWallCrossLine(lines, firstFaceX, secondFaceX, openingBottom, componentId);
+            if (openingTop < top - 0.001)
+                AddWallCrossLine(lines, firstFaceX, secondFaceX, openingTop, componentId);
+
+            AddOpeningSymbol(lines, firstFaceX, secondFaceX, openingBottom, openingTop,
+                componentId, opening.Type);
+        }
+
+        private static void AddWallFace(ICollection<DrawingLine> lines, double x,
+            double bottom, double top, string componentId)
+        {
+            if (top <= bottom + 0.001) return;
+            lines.Add(new DrawingLine(new Point2D(x, bottom), new Point2D(x, top),
+                StairLineRole.WallBoundary, false, componentId));
+        }
+
+        private static void AddWallCrossLine(ICollection<DrawingLine> lines, double firstX,
+            double secondX, double elevation, string componentId)
+        {
+            lines.Add(new DrawingLine(new Point2D(firstX, elevation),
+                new Point2D(secondX, elevation), StairLineRole.WallBoundary, false, componentId));
+        }
+
+        private static void AddOpeningSymbol(ICollection<DrawingLine> lines, double firstX,
+            double secondX, double bottom, double top, string componentId, WallOpeningType type)
+        {
+            var left = Math.Min(firstX, secondX);
+            var right = Math.Max(firstX, secondX);
+            if (type == WallOpeningType.Window)
+            {
+                var inset = (right - left) * 0.35;
+                lines.Add(new DrawingLine(new Point2D(left + inset, bottom),
+                    new Point2D(left + inset, top), StairLineRole.OpeningBoundary, false, componentId));
+                lines.Add(new DrawingLine(new Point2D(right - inset, bottom),
+                    new Point2D(right - inset, top), StairLineRole.OpeningBoundary, false, componentId));
+            }
+            else
+            {
+                var middle = (left + right) / 2.0;
+                lines.Add(new DrawingLine(new Point2D(middle, bottom),
+                    new Point2D(middle, top), StairLineRole.OpeningBoundary, false, componentId));
+            }
         }
 
         private static void AddFloorText(
@@ -1569,11 +1665,12 @@ namespace WL.Stair.Core.Geometry
 
         private sealed class WallAnchor
         {
-            public WallAnchor(double axisX, double topElevation, double beamDepth)
+            public WallAnchor(double axisX, double topElevation, double beamDepth, string supportId)
             {
                 AxisX = axisX;
                 TopElevation = topElevation;
                 BeamDepth = beamDepth;
+                SupportId = supportId ?? string.Empty;
             }
 
             public double AxisX { get; }
@@ -1581,19 +1678,24 @@ namespace WL.Stair.Core.Geometry
             public double TopElevation { get; }
 
             public double BeamDepth { get; }
+
+            public string SupportId { get; }
         }
 
         private sealed class ElevationInterval
         {
-            public ElevationInterval(double bottom, double top)
+            public ElevationInterval(double bottom, double top, string supportId)
             {
                 Bottom = bottom;
                 Top = top;
+                SupportId = supportId ?? string.Empty;
             }
 
             public double Bottom { get; }
 
             public double Top { get; set; }
+
+            public string SupportId { get; set; }
         }
     }
 }

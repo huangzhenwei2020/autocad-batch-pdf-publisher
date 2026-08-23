@@ -57,6 +57,7 @@ namespace WL.Stair.Tests
             LocksStoreyTreadDepthAndBalancesPlatforms,
             PreservesLockedPlatformWidth,
             DrawsWallsFromBeamCenterAxes,
+            BuildsWallSegmentDoorAndWindowOpenings,
             KeepsSectionAxesFixedDuringEditsAndMirroring,
             BuildsHandrailsDimensionsAndOptionalComponentSchedule,
             LabelsFlightsAndLandings,
@@ -642,6 +643,65 @@ namespace WL.Stair.Tests
                 "The offset underside and flight soffit must meet at a zero-radius fillet point.");
         }
 
+        private static void BuildsWallSegmentDoorAndWindowOpenings()
+        {
+            var project = StairProjectDefinition.CreateDefault();
+            var calculator = new StairProjectCalculator();
+            var outcome = calculator.Calculate(project);
+            TestAssert.True(outcome.IsSuccess, "The opening test project must calculate.");
+            var builder = new StairProjectGeometryBuilder();
+            var original = builder.BuildSection(project, outcome.Result);
+            var segment = original.Lines
+                .Where(line => line.Role == StairLineRole.WallBoundary
+                    && line.ComponentId.StartsWith("WALL-", StringComparison.OrdinalIgnoreCase)
+                    && Math.Abs(line.Start.X - line.End.X) < 0.001)
+                .GroupBy(line => line.ComponentId, StringComparer.OrdinalIgnoreCase)
+                .Select(group => new
+                {
+                    Id = group.Key,
+                    Bottom = group.SelectMany(line => new[] { line.Start.Y, line.End.Y }).Min(),
+                    Top = group.SelectMany(line => new[] { line.Start.Y, line.End.Y }).Max()
+                })
+                .Where(item => item.Top - item.Bottom > 2300.0)
+                .OrderByDescending(item => item.Top - item.Bottom)
+                .First();
+
+            project.WallOpenings.Add(new StairWallOpeningDefinition
+            {
+                SegmentId = segment.Id,
+                Type = WallOpeningType.Window,
+                Height = 1200.0,
+                SillHeight = 800.0
+            });
+            var withWindow = builder.BuildSection(project, outcome.Result);
+            var symbols = withWindow.Lines.Where(line => line.ComponentId == segment.Id
+                && line.Role == StairLineRole.OpeningBoundary).ToArray();
+            TestAssert.Equal(2, symbols.Length,
+                "A window must create two cyan frame/glazing lines in its selected wall segment.");
+            TestAssert.True(symbols.All(line =>
+                    Math.Abs(Math.Min(line.Start.Y, line.End.Y) - (segment.Bottom + 800.0)) < 0.001
+                    && Math.Abs(Math.Max(line.Start.Y, line.End.Y) - (segment.Bottom + 2000.0)) < 0.001),
+                "Window height and sill must be measured from the supporting floor or landing.");
+            TestAssert.True(withWindow.HatchRegions.Where(region => region.IsWall
+                    && region.ComponentId == segment.Id).All(region =>
+                        region.Boundary.Max(point => point.Y) <= segment.Bottom + 800.001
+                        || region.Boundary.Min(point => point.Y) >= segment.Bottom + 1999.999),
+                "Wall hatch must leave the configured window opening empty.");
+
+            project.WallOpenings[0].Type = WallOpeningType.Door;
+            project.WallOpenings[0].Height = 2100.0;
+            project.WallOpenings[0].SillHeight = 900.0;
+            var withDoor = builder.BuildSection(project, outcome.Result);
+            var doorSymbol = withDoor.Lines.Single(line => line.ComponentId == segment.Id
+                && line.Role == StairLineRole.OpeningBoundary);
+            TestAssert.NearlyEqual(segment.Bottom,
+                Math.Min(doorSymbol.Start.Y, doorSymbol.End.Y), 0.001,
+                "A door must start at the supporting floor or landing regardless of a stale sill value.");
+            TestAssert.NearlyEqual(segment.Bottom + 2100.0,
+                Math.Max(doorSymbol.Start.Y, doorSymbol.End.Y), 0.001,
+                "The configured door height must be retained.");
+        }
+
         private static void ConnectsMixedTwoThreeTwoFlightStoreys()
         {
             var project = StairProjectDefinition.CreateDefault();
@@ -894,15 +954,24 @@ namespace WL.Stair.Tests
             project.SchemaVersion = 7;
             project.Storeys[0].AllowUpperClosureGap = true;
             project.Floors[1].AllowLowerFlightClosure = false;
+            project.Storeys[0].Height = 3150.0;
+            project.Floors[0].PlatformWidth = 1375.0;
+            project.WallOpenings = null;
 
             new StairProjectConstraintService().Normalize(project);
 
-            TestAssert.Equal(12, project.SchemaVersion,
+            TestAssert.Equal(14, project.SchemaVersion,
                 "Legacy projects must migrate through the current drawing-output schema.");
             TestAssert.True(project.Floors[1].AllowLowerFlightClosure,
                 "The old final-flight switch must migrate to the destination floor.");
             TestAssert.True(!project.Storeys[0].AllowUpperClosureGap,
                 "The deprecated storey-level switch must be cleared after migration.");
+            TestAssert.NearlyEqual(3150.0, project.Storeys[0].Height, 0.001,
+                "Adding wall-opening storage must not alter an existing storey height.");
+            TestAssert.NearlyEqual(1375.0, project.Floors[0].PlatformWidth, 0.001,
+                "Adding wall-opening storage must not alter an existing platform width.");
+            TestAssert.Equal(0, project.WallOpenings.Count,
+                "A legacy project must migrate to an empty optional wall-opening list.");
         }
 
         private static void AllowsUpperFlightClosureFromAPlatform()
