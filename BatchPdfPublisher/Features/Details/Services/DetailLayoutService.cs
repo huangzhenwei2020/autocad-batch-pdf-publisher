@@ -293,6 +293,48 @@ namespace BatchPdfPublisher.Services
             return plan.Slots.Count;
         }
 
+        internal static void InsertRegisteredFramesAt(
+            Document document,
+            FrameDefinition frame,
+            int scale,
+            Point3d insertionOrigin,
+            int pageCount,
+            double pageGap)
+        {
+            if (document == null) throw new ArgumentNullException("document");
+            if (frame == null || string.IsNullOrWhiteSpace(frame.BlockName))
+                throw new InvalidOperationException("请选择登记图框。");
+            if (!FrameLayoutRangeService.HasValidRange(frame))
+                throw new InvalidOperationException("当前图框尚未登记排版范围。");
+            scale = Math.Max(1, scale);
+            pageCount = Math.Max(1, pageCount);
+            FrameTemplateStore.EnsureAvailable(document.Database, frame);
+            var paper = PaperSizeCatalog.GetSize(frame.PaperSize, frame.Extension,
+                string.IsNullOrWhiteSpace(frame.PaperOrientation) ? "横向" : frame.PaperOrientation);
+            var pageWidth = paper[0] * scale;
+            using (var documentLock = AcquireWriteLock(document))
+            using (var transaction = document.Database.TransactionManager.StartTransaction())
+            {
+                var database = document.Database;
+                var frameLayer = DraftingStandardService.EnsureFrameLayer(database, transaction);
+                var blockTable = (BlockTable)transaction.GetObject(database.BlockTableId, OpenMode.ForRead);
+                if (!blockTable.Has(frame.BlockName))
+                    throw new InvalidOperationException("当前图纸无法加载登记图框块“" + frame.BlockName + "”。");
+                var definitionId = blockTable[frame.BlockName];
+                var definition = (BlockTableRecord)transaction.GetObject(definitionId, OpenMode.ForRead);
+                var space = (BlockTableRecord)transaction.GetObject(database.CurrentSpaceId, OpenMode.ForWrite);
+                for (var page = 0; page < pageCount; page++)
+                {
+                    var origin = new Point3d(
+                        insertionOrigin.X + page * (pageWidth + Math.Max(0d, pageGap) * scale),
+                        insertionOrigin.Y,
+                        insertionOrigin.Z);
+                    AddFrame(space, transaction, definition, definitionId, frame, origin, scale, frameLayer, page + 1);
+                }
+                transaction.Commit();
+            }
+        }
+
         private static ObjectId AddFrame(BlockTableRecord space, Transaction transaction, BlockTableRecord definition, ObjectId definitionId, FrameDefinition frame, Point3d origin, int scale, ObjectId layer, int page)
         {
             var reference = new BlockReference(origin, definitionId) { ScaleFactors = new Scale3d(scale), LayerId = layer };

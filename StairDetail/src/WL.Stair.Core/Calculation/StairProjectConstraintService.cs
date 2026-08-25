@@ -13,6 +13,7 @@ namespace WL.Stair.Core.Calculation
             if (project.Floors == null) project.Floors = new List<StairFloorDefinition>();
             if (project.Storeys == null) project.Storeys = new List<StairStoreyDefinition>();
             if (project.WallOpenings == null) project.WallOpenings = new List<StairWallOpeningDefinition>();
+            if (project.PlanSources == null) project.PlanSources = new List<StairPlanSourceDefinition>();
             if (project.Construction == null) project.Construction = StairConstructionDefaults.CreateDefault();
             var defaults = StairConstructionDefaults.CreateDefault();
             if (project.Construction.StairwellWidth <= 0.0)
@@ -150,6 +151,146 @@ namespace WL.Stair.Core.Calculation
                 // every legacy drawing and preserves all old parameters.
                 project.SchemaVersion = 15;
             }
+            if (project.SchemaVersion < 16)
+            {
+                // Plan capture is entirely optional. Do not synthesize source
+                // registrations for old projects, so their geometry is unchanged.
+                if (project.PlanSources == null)
+                    project.PlanSources = new List<StairPlanSourceDefinition>();
+                project.SchemaVersion = 16;
+            }
+            if (project.SchemaVersion < 17)
+            {
+                // Target scale is metadata for the copied plan only. Existing
+                // projects inherit the current stair-detail drawing scale and
+                // no source object is changed during migration.
+                foreach (var source in project.PlanSources.Where(item => item != null))
+                    if (source.TargetScale <= 0) source.TargetScale = project.DrawingScale > 0
+                        ? project.DrawingScale
+                        : 30;
+                project.SchemaVersion = 17;
+            }
+            if (project.SchemaVersion < 18)
+            {
+                // Standard-floor metadata is additive. A legacy source keeps
+                // representing exactly one storey unless the user explicitly
+                // assigns a floor range in the editor.
+                foreach (var source in project.PlanSources.Where(item => item != null))
+                {
+                    if (string.IsNullOrWhiteSpace(source.FloorLabel))
+                        source.FloorLabel = source.DisplayName ?? string.Empty;
+                    if (source.RepeatCount <= 0) source.RepeatCount = 1;
+                }
+                project.SchemaVersion = 18;
+            }
+            if (project.SchemaVersion < 19)
+            {
+                // Logical-floor metadata belongs to the storey, not to the
+                // optional plan capture.  Import any existing source label so
+                // upgrades preserve the user's standard-floor assignment.
+                for (var index = 0; index < project.Storeys.Count; index++)
+                {
+                    var storey = project.Storeys[index];
+                    if (storey == null) continue;
+                    var source = project.PlanSources.FirstOrDefault(item => item != null
+                        && string.Equals(item.StoreyId, storey.Id, StringComparison.OrdinalIgnoreCase));
+                    if (string.IsNullOrWhiteSpace(storey.PlanFloorLabel))
+                        storey.PlanFloorLabel = source != null && !string.IsNullOrWhiteSpace(source.FloorLabel)
+                            ? source.FloorLabel
+                            : DefaultPlanFloorLabel(index, project.BasementStoreyCount);
+                    storey.PlanRepeatCount = CalculatePlanRepeatCount(storey.PlanFloorLabel);
+                }
+                project.SchemaVersion = 19;
+            }
+            if (project.SchemaVersion < 20)
+            {
+                // A vertical storey is an interval between two floor datums;
+                // therefore N storeys have N+1 plan levels. Move the plan
+                // identity to StairFloorDefinition while preserving every
+                // legacy capture and its StoreyId compatibility key.
+                foreach (var storey in project.Storeys.Where(item => item != null))
+                {
+                    var lowerFloor = project.Floors.FirstOrDefault(item => item != null
+                        && string.Equals(item.Id, storey.LowerFloorId, StringComparison.OrdinalIgnoreCase));
+                    if (lowerFloor == null) continue;
+                    if (string.IsNullOrWhiteSpace(lowerFloor.PlanFloorLabel))
+                        lowerFloor.PlanFloorLabel = storey.PlanFloorLabel;
+                    lowerFloor.PlanRepeatCount = CalculatePlanRepeatCount(lowerFloor.PlanFloorLabel);
+                }
+                foreach (var source in project.PlanSources.Where(item => item != null))
+                {
+                    if (!string.IsNullOrWhiteSpace(source.FloorId)) continue;
+                    var storey = project.Storeys.FirstOrDefault(item => item != null
+                        && string.Equals(item.Id, source.StoreyId, StringComparison.OrdinalIgnoreCase));
+                    if (storey != null) source.FloorId = storey.LowerFloorId;
+                }
+                project.SchemaVersion = 20;
+            }
+            for (var index = 0; index < project.Storeys.Count; index++)
+            {
+                var storey = project.Storeys[index];
+                if (storey == null) continue;
+                var lowerFloor = project.Floors.FirstOrDefault(item => item != null
+                    && string.Equals(item.Id, storey.LowerFloorId, StringComparison.OrdinalIgnoreCase));
+                if (lowerFloor != null)
+                {
+                    if (string.IsNullOrWhiteSpace(lowerFloor.PlanFloorLabel))
+                        lowerFloor.PlanFloorLabel = !string.IsNullOrWhiteSpace(storey.PlanFloorLabel)
+                            ? storey.PlanFloorLabel
+                            : DefaultPlanFloorLabel(index, project.BasementStoreyCount);
+                    lowerFloor.PlanRepeatCount = CalculatePlanRepeatCount(lowerFloor.PlanFloorLabel);
+                    storey.PlanFloorLabel = lowerFloor.PlanFloorLabel;
+                    storey.PlanRepeatCount = lowerFloor.PlanRepeatCount;
+                }
+                else
+                {
+                    if (string.IsNullOrWhiteSpace(storey.PlanFloorLabel))
+                        storey.PlanFloorLabel = DefaultPlanFloorLabel(index, project.BasementStoreyCount);
+                    storey.PlanRepeatCount = CalculatePlanRepeatCount(storey.PlanFloorLabel);
+                }
+            }
+            var lastStorey = project.Storeys.LastOrDefault(item => item != null);
+            if (lastStorey != null)
+            {
+                var topFloor = project.Floors.FirstOrDefault(item => item != null
+                    && string.Equals(item.Id, lastStorey.UpperFloorId, StringComparison.OrdinalIgnoreCase));
+                if (topFloor != null)
+                {
+                    if (string.IsNullOrWhiteSpace(topFloor.PlanFloorLabel))
+                        topFloor.PlanFloorLabel = NextPlanFloorLabel(lastStorey.PlanFloorLabel,
+                            project.Storeys.Count, project.BasementStoreyCount);
+                    topFloor.PlanRepeatCount = CalculatePlanRepeatCount(topFloor.PlanFloorLabel);
+                }
+            }
+            foreach (var source in project.PlanSources.Where(item => item != null))
+            {
+                if (source.CropOffset <= 0.0) source.CropOffset = 300.0;
+                if (source.BoundaryPoints == null) source.BoundaryPoints = new List<StairPlanPointDefinition>();
+                if (source.CropBoundaryPoints == null) source.CropBoundaryPoints = new List<StairPlanPointDefinition>();
+                if (source.WallAxes == null) source.WallAxes = new List<StairPlanWallAxisDefinition>();
+                if (source.TargetScale <= 0) source.TargetScale = project.DrawingScale > 0
+                    ? project.DrawingScale
+                    : 30;
+                if (string.IsNullOrWhiteSpace(source.FloorId))
+                {
+                    var legacyStorey = project.Storeys.FirstOrDefault(item => item != null
+                        && string.Equals(item.Id, source.StoreyId, StringComparison.OrdinalIgnoreCase));
+                    if (legacyStorey != null) source.FloorId = legacyStorey.LowerFloorId;
+                }
+                var floor = project.Floors.FirstOrDefault(item => item != null
+                    && string.Equals(item.Id, source.FloorId, StringComparison.OrdinalIgnoreCase));
+                if (floor != null)
+                {
+                    source.FloorLabel = floor.PlanFloorLabel;
+                    source.RepeatCount = floor.PlanRepeatCount;
+                }
+                else
+                {
+                    if (string.IsNullOrWhiteSpace(source.FloorLabel))
+                        source.FloorLabel = source.DisplayName ?? string.Empty;
+                    source.RepeatCount = CalculatePlanRepeatCount(source.FloorLabel);
+                }
+            }
             foreach (var opening in project.WallOpenings.Where(item => item != null))
             {
                 if (opening.Height <= 0.0)
@@ -170,6 +311,47 @@ namespace WL.Stair.Core.Calculation
             }
             if (project.DrawingScale <= 0) project.DrawingScale = 30;
             project.Construction.Wall.Enabled = true;
+        }
+
+        private static string DefaultPlanFloorLabel(int storeyIndex, int basementStoreyCount)
+        {
+            var level = storeyIndex < basementStoreyCount
+                ? storeyIndex - basementStoreyCount
+                : storeyIndex - basementStoreyCount + 1;
+            return level.ToString(System.Globalization.CultureInfo.InvariantCulture) + "层";
+        }
+
+        private static int CalculatePlanRepeatCount(string label)
+        {
+            var text = (label ?? string.Empty).Replace(" ", string.Empty)
+                .Replace("～", "~").Replace("—", "~")
+                .Replace("至", "~").Replace("到", "~");
+            var separator = text.IndexOf('~');
+            if (separator <= 0 || separator >= text.Length - 1) return 1;
+            int first;
+            int last;
+            var left = new string(text.Substring(0, separator)
+                .TakeWhile(character => character == '-' || char.IsDigit(character)).ToArray());
+            var right = new string(text.Substring(separator + 1)
+                .TakeWhile(character => character == '-' || char.IsDigit(character)).ToArray());
+            return int.TryParse(left, out first) && int.TryParse(right, out last)
+                ? Math.Max(1, Math.Abs(last - first) + 1)
+                : 1;
+        }
+
+        private static string NextPlanFloorLabel(string label, int storeyCount, int basementStoreyCount)
+        {
+            var text = (label ?? string.Empty).Replace(" ", string.Empty)
+                .Replace("～", "~").Replace("—", "~")
+                .Replace("至", "~").Replace("到", "~");
+            var separator = text.IndexOf('~');
+            var candidate = separator >= 0 ? text.Substring(separator + 1) : text;
+            var numeric = new string(candidate
+                .TakeWhile(character => character == '-' || char.IsDigit(character)).ToArray());
+            int level;
+            if (int.TryParse(numeric, out level))
+                return (level + 1).ToString(System.Globalization.CultureInfo.InvariantCulture) + "层";
+            return DefaultPlanFloorLabel(storeyCount, basementStoreyCount);
         }
 
         private static void NormalizePlatformOpening(StairPlatformOpeningDefinition opening)

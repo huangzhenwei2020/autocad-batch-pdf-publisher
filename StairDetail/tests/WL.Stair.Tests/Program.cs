@@ -4,6 +4,7 @@ using System.Linq;
 using WL.Stair.Core.Calculation;
 using WL.Stair.Core.Domain;
 using WL.Stair.Core.Geometry;
+using WL.Stair.Core.Layout;
 using WL.Stair.Core.Validation;
 
 namespace WL.Stair.Tests
@@ -41,6 +42,9 @@ namespace WL.Stair.Tests
             SynchronizesDisplayedTotalRiserCount,
             KeepsTotalRiserCountWhileRespectingFlightLocks,
             MigratesLegacyClosureSettingsToBoundaries,
+            MigratesPlanSourceTargetScaleWithoutChangingSourceScale,
+            MigratesStandardFloorMetadataWithoutChangingCapturedGeometry,
+            MigratesLogicalFloorRangeToStorey,
             AllowsUpperFlightClosureFromAPlatform,
             AlternatesUnifiedFloorAndLandingDirections,
             DrawsUnifiedBoundaryGeometryFromConnectionToAxis,
@@ -59,10 +63,14 @@ namespace WL.Stair.Tests
             DrawsWallsFromBeamCenterAxes,
             BuildsWallSegmentDoorAndWindowOpenings,
             BuildsPlatformDoorWindowElevationWithoutChangingPlatform,
+            ClipsOrdinaryPlanSegmentsToCropBoundary,
+            SplitsSegmentsAcrossConcaveCropBoundary,
+            KeepsBoundaryAlignedSegmentsAndRejectsOutsideSegments,
             KeepsSectionAxesFixedDuringEditsAndMirroring,
             BuildsHandrailsDimensionsAndOptionalComponentSchedule,
             LabelsFlightsAndLandings,
             SupportsBasementBaseElevation
+            ,LaysOutPlansBeforeSectionAndRetainsEveryItem
         };
 
         private static int Main()
@@ -644,6 +652,97 @@ namespace WL.Stair.Tests
                 "The offset underside and flight soffit must meet at a zero-radius fillet point.");
         }
 
+        private static void LaysOutPlansBeforeSectionAndRetainsEveryItem()
+        {
+            var items = new[]
+            {
+                new StairLayoutItem { Key = "LB-01", Name = "1层楼梯平面", Width = 5200, Height = 4600 },
+                new StairLayoutItem { Key = "LB-02", Name = "2层楼梯平面", Width = 5200, Height = 4600 },
+                new StairLayoutItem { Key = "SECTION", Name = "LT-01 楼梯剖面", Width = 6000, Height = 9800, IsSection = true }
+            };
+            var plan = StairCombinedLayout.Compute(items, new StairLayoutOptions
+            {
+                PageWidth = 841 * 30,
+                PageHeight = 594 * 30,
+                LeftMargin = 30 * 30,
+                RightMargin = 60 * 30,
+                TopMargin = 20 * 30,
+                BottomMargin = 20 * 30,
+                ItemGap = 10 * 30
+            });
+
+            TestAssert.Equal(3, plan.Slots.Count, "Combined layout lost a plan or section view.");
+            TestAssert.Equal("LB-01", plan.Slots[0].Item.Key, "First plan order changed.");
+            TestAssert.Equal("LB-02", plan.Slots[1].Item.Key, "Second plan order changed.");
+            TestAssert.Equal("SECTION", plan.Slots[2].Item.Key, "The section must remain after all plans.");
+            TestAssert.True(plan.PageCount >= 1, "Combined layout must create at least one page.");
+        }
+
+        private static void ClipsOrdinaryPlanSegmentsToCropBoundary()
+        {
+            var polygon = Rectangle(0.0, 0.0, 10.0, 8.0);
+            var clipped = PlanPolygonClipper.ClipSegment(
+                new Point2D(-5.0, 4.0),
+                new Point2D(15.0, 4.0),
+                polygon);
+
+            TestAssert.Equal(1, clipped.Count, "A line crossing a rectangle must produce one inside segment.");
+            TestAssert.NearlyEqual(0.0, clipped[0].Start.X, 0.0001, "The clipped start is incorrect.");
+            TestAssert.NearlyEqual(10.0, clipped[0].End.X, 0.0001, "The clipped end is incorrect.");
+        }
+
+        private static void SplitsSegmentsAcrossConcaveCropBoundary()
+        {
+            var polygon = new List<Point2D>
+            {
+                new Point2D(0.0, 0.0),
+                new Point2D(10.0, 0.0),
+                new Point2D(10.0, 10.0),
+                new Point2D(6.0, 10.0),
+                new Point2D(6.0, 4.0),
+                new Point2D(4.0, 4.0),
+                new Point2D(4.0, 10.0),
+                new Point2D(0.0, 10.0)
+            };
+            var clipped = PlanPolygonClipper.ClipSegment(
+                new Point2D(-1.0, 6.0),
+                new Point2D(11.0, 6.0),
+                polygon);
+
+            TestAssert.Equal(2, clipped.Count, "A concave crop boundary must be able to split one line twice.");
+            TestAssert.NearlyEqual(0.0, clipped[0].Start.X, 0.0001, "The first concave segment start is incorrect.");
+            TestAssert.NearlyEqual(4.0, clipped[0].End.X, 0.0001, "The first concave segment end is incorrect.");
+            TestAssert.NearlyEqual(6.0, clipped[1].Start.X, 0.0001, "The second concave segment start is incorrect.");
+            TestAssert.NearlyEqual(10.0, clipped[1].End.X, 0.0001, "The second concave segment end is incorrect.");
+        }
+
+        private static void KeepsBoundaryAlignedSegmentsAndRejectsOutsideSegments()
+        {
+            var polygon = Rectangle(0.0, 0.0, 10.0, 8.0);
+            var boundary = PlanPolygonClipper.ClipSegment(
+                new Point2D(2.0, 0.0),
+                new Point2D(8.0, 0.0),
+                polygon);
+            var outside = PlanPolygonClipper.ClipSegment(
+                new Point2D(2.0, 9.0),
+                new Point2D(8.0, 9.0),
+                polygon);
+
+            TestAssert.Equal(1, boundary.Count, "A segment on the crop boundary must be preserved.");
+            TestAssert.Equal(0, outside.Count, "A segment outside the crop boundary must be rejected.");
+        }
+
+        private static IList<Point2D> Rectangle(double minX, double minY, double maxX, double maxY)
+        {
+            return new List<Point2D>
+            {
+                new Point2D(minX, minY),
+                new Point2D(maxX, minY),
+                new Point2D(maxX, maxY),
+                new Point2D(minX, maxY)
+            };
+        }
+
         private static void BuildsWallSegmentDoorAndWindowOpenings()
         {
             var project = StairProjectDefinition.CreateDefault();
@@ -1020,7 +1119,7 @@ namespace WL.Stair.Tests
 
             new StairProjectConstraintService().Normalize(project);
 
-            TestAssert.Equal(15, project.SchemaVersion,
+            TestAssert.Equal(20, project.SchemaVersion,
                 "Legacy projects must migrate through the current drawing-output schema.");
             TestAssert.True(project.Floors[1].AllowLowerFlightClosure,
                 "The old final-flight switch must migrate to the destination floor.");
@@ -1032,6 +1131,103 @@ namespace WL.Stair.Tests
                 "Adding wall-opening storage must not alter an existing platform width.");
             TestAssert.Equal(0, project.WallOpenings.Count,
                 "A legacy project must migrate to an empty optional wall-opening list.");
+            TestAssert.Equal(0, project.PlanSources.Count,
+                "A legacy project must migrate to an empty optional plan-source list without changing old geometry.");
+        }
+
+        private static void MigratesPlanSourceTargetScaleWithoutChangingSourceScale()
+        {
+            var project = StairProjectDefinition.CreateDefault();
+            project.SchemaVersion = 16;
+            project.DrawingScale = 50;
+            project.PlanSources.Add(new StairPlanSourceDefinition
+            {
+                StoreyId = project.Storeys[0].Id,
+                SourceScale = 100,
+                TargetScale = 0
+            });
+
+            new StairProjectConstraintService().Normalize(project);
+
+            TestAssert.Equal(20, project.SchemaVersion,
+                "Plan-source scale metadata must migrate to the current schema.");
+            TestAssert.Equal(100, project.PlanSources[0].SourceScale,
+                "Migration must not alter the scale read from the source Tianzheng plan.");
+            TestAssert.Equal(50, project.PlanSources[0].TargetScale,
+                "A copied plan must inherit the stair-detail drawing scale as its target scale.");
+        }
+
+        private static void MigratesStandardFloorMetadataWithoutChangingCapturedGeometry()
+        {
+            var project = StairProjectDefinition.CreateDefault();
+            project.SchemaVersion = 17;
+            project.Storeys[0].PlanFloorLabel = null;
+            project.Storeys[0].PlanRepeatCount = 0;
+            project.PlanSources.Add(new StairPlanSourceDefinition
+            {
+                StoreyId = project.Storeys[0].Id,
+                DisplayName = "二层",
+                FloorLabel = null,
+                RepeatCount = 0,
+                CropOffset = 360.0,
+                SourceHandle = "2A7"
+            });
+
+            new StairProjectConstraintService().Normalize(project);
+
+            var source = project.PlanSources[0];
+            TestAssert.Equal(20, project.SchemaVersion,
+                "Standard-floor metadata must migrate additively.");
+            TestAssert.Equal("二层", source.FloorLabel,
+                "A legacy source must inherit its existing display name.");
+            TestAssert.Equal(1, source.RepeatCount,
+                "A legacy source represents one floor by default.");
+            TestAssert.NearlyEqual(360.0, source.CropOffset, 0.001,
+                "Adding standard-floor metadata must not alter capture geometry settings.");
+            TestAssert.Equal("2A7", source.SourceHandle,
+                "Adding standard-floor metadata must preserve source identity.");
+            TestAssert.Equal("二层", project.Storeys[0].PlanFloorLabel,
+                "Logical-floor metadata must be available before or independently of plan capture.");
+        }
+
+        private static void MigratesLogicalFloorRangeToStorey()
+        {
+            var project = StairProjectDefinition.CreateDefault();
+            var removedUpperFloorId = project.Storeys[1].UpperFloorId;
+            project.Storeys.RemoveAt(1);
+            project.Floors = project.Floors
+                .Where(item => item.Id != removedUpperFloorId)
+                .ToList();
+            project.SchemaVersion = 18;
+            project.Storeys[0].PlanFloorLabel = null;
+            project.Storeys[0].PlanRepeatCount = 0;
+            project.PlanSources.Add(new StairPlanSourceDefinition
+            {
+                StoreyId = project.Storeys[0].Id,
+                FloorLabel = "4~18层",
+                RepeatCount = 15
+            });
+
+            new StairProjectConstraintService().Normalize(project);
+
+            TestAssert.Equal(20, project.SchemaVersion,
+                "Logical-floor metadata must migrate to the current schema.");
+            TestAssert.Equal("4~18层", project.Storeys[0].PlanFloorLabel,
+                "A captured standard-floor range must migrate to its storey record.");
+            TestAssert.Equal(15, project.Storeys[0].PlanRepeatCount,
+                "The inclusive physical-floor count must be derived from the range.");
+            TestAssert.Equal(15, project.PlanSources[0].RepeatCount,
+                "The plan-source compatibility mirror must stay synchronized.");
+            var lowerFloor = project.Floors.First(item => item.Id == project.Storeys[0].LowerFloorId);
+            var terminalFloor = project.Floors.First(item => item.Id == project.Storeys[project.Storeys.Count - 1].UpperFloorId);
+            TestAssert.Equal("4~18层", lowerFloor.PlanFloorLabel,
+                "The lower physical floor must own the migrated plan-level label.");
+            TestAssert.Equal(15, lowerFloor.PlanRepeatCount,
+                "The lower physical floor must own the migrated repeat count.");
+            TestAssert.Equal("19层", terminalFloor.PlanFloorLabel,
+                "The terminal upper plan must be derived after a standard-floor range.");
+            TestAssert.Equal(lowerFloor.Id, project.PlanSources[0].FloorId,
+                "A legacy captured plan must migrate to the interval's lower physical floor.");
         }
 
         private static void AllowsUpperFlightClosureFromAPlatform()

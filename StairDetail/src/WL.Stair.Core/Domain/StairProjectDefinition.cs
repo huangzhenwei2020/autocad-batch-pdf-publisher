@@ -7,7 +7,7 @@ namespace WL.Stair.Core.Domain
     {
         public StairProjectDefinition()
         {
-            SchemaVersion = 15;
+            SchemaVersion = 20;
             Name = "楼梯大样";
             ProjectName = "未命名项目";
             SubprojectName = string.Empty;
@@ -21,6 +21,7 @@ namespace WL.Stair.Core.Domain
             Floors = new List<StairFloorDefinition>();
             Storeys = new List<StairStoreyDefinition>();
             WallOpenings = new List<StairWallOpeningDefinition>();
+            PlanSources = new List<StairPlanSourceDefinition>();
         }
 
         public int SchemaVersion { get; set; }
@@ -60,6 +61,12 @@ namespace WL.Stair.Core.Domain
         /// platform and construction parameters are not replaced or rewritten.
         /// </summary>
         public IList<StairWallOpeningDefinition> WallOpenings { get; set; }
+
+        /// <summary>
+        /// Optional, additive plan-source registrations. An empty collection
+        /// preserves the complete pre-plan-capture LTDY behavior.
+        /// </summary>
+        public IList<StairPlanSourceDefinition> PlanSources { get; set; }
 
         public static StairProjectDefinition CreateDefault()
         {
@@ -147,6 +154,135 @@ namespace WL.Stair.Core.Domain
         public double Thickness { get; set; }
     }
 
+    public enum StairPlanSourceMode
+    {
+        None = 0,
+        TianzhengStair = 1,
+        ManualPolyline = 2,
+        TianzhengStairWithManualBoundary = 3
+    }
+
+    public sealed class StairPlanSourceDefinition
+    {
+        public StairPlanSourceDefinition()
+        {
+            CropOffset = 300.0;
+            FloorLabel = string.Empty;
+            RepeatCount = 1;
+            BoundaryPoints = new List<StairPlanPointDefinition>();
+            CropBoundaryPoints = new List<StairPlanPointDefinition>();
+            WallAxes = new List<StairPlanWallAxisDefinition>();
+        }
+
+        public string StoreyId { get; set; }
+
+        /// <summary>
+        /// Stable floor datum represented by this captured plan.  StoreyId is
+        /// retained as a compatibility mirror for projects saved before the
+        /// N-storeys/N+1-plans model was introduced.
+        /// </summary>
+        public string FloorId { get; set; }
+
+        public string DisplayName { get; set; }
+
+        public StairPlanSourceMode Mode { get; set; }
+
+        public string SourceDrawing { get; set; }
+
+        public string SourceDrawingFingerprint { get; set; }
+
+        public string SourceHandle { get; set; }
+
+        public string BoundarySourceHandle { get; set; }
+
+        public string SourceDxfName { get; set; }
+
+        public string SourceComType { get; set; }
+
+        public int SourceScale { get; set; }
+
+        public int TargetScale { get; set; }
+
+        /// <summary>
+        /// User-facing floor name or range represented by this source, for
+        /// example "首层" or "3~10层".  This is metadata only and never
+        /// changes the source drawing or the stair-section storey geometry.
+        /// </summary>
+        public string FloorLabel { get; set; }
+
+        /// <summary>
+        /// Number of physical floors represented by this source. Standard
+        /// floors share one captured plan and use a value greater than one.
+        /// </summary>
+        public int RepeatCount { get; set; }
+
+        public double StairWidth { get; set; }
+
+        public double CropOffset { get; set; }
+
+        public string RecognitionSummary { get; set; }
+
+        /// <summary>
+        /// Portable path below the plug-in's 用户配置文件 directory.  The DWG
+        /// contains the already cropped native plan used by preview/layout and
+        /// final insertion, so a combined insertion never scans the source
+        /// drawing or runs TRIM again.
+        /// </summary>
+        public string CacheRelativePath { get; set; }
+
+        public string CacheFingerprint { get; set; }
+
+        public double CacheWidth { get; set; }
+
+        public double CacheHeight { get; set; }
+
+        public int CacheObjectCount { get; set; }
+
+        public string CachedUtc { get; set; }
+
+        public IList<StairPlanPointDefinition> BoundaryPoints { get; set; }
+
+        public IList<StairPlanPointDefinition> CropBoundaryPoints { get; set; }
+
+        public IList<StairPlanWallAxisDefinition> WallAxes { get; set; }
+    }
+
+    public sealed class StairPlanPointDefinition
+    {
+        public StairPlanPointDefinition()
+        {
+        }
+
+        public StairPlanPointDefinition(double x, double y)
+        {
+            X = x;
+            Y = y;
+        }
+
+        public double X { get; set; }
+
+        public double Y { get; set; }
+    }
+
+    public sealed class StairPlanWallAxisDefinition
+    {
+        public string Handle { get; set; }
+
+        public double StartX { get; set; }
+
+        public double StartY { get; set; }
+
+        public double EndX { get; set; }
+
+        public double EndY { get; set; }
+
+        public double LeftWidth { get; set; }
+
+        public double RightWidth { get; set; }
+
+        public double Thickness { get; set; }
+    }
+
     public sealed class StairWallOpeningDefinition
     {
         public string SegmentId { get; set; }
@@ -191,9 +327,23 @@ namespace WL.Stair.Core.Domain
 
     public sealed class StairFloorDefinition
     {
+        public StairFloorDefinition()
+        {
+            PlanFloorLabel = string.Empty;
+            PlanRepeatCount = 1;
+        }
+
         public string Id { get; set; }
 
         public string Name { get; set; }
+
+        /// <summary>
+        /// User-facing logical floor or standard-floor range represented by
+        /// the plan at this physical slab elevation.
+        /// </summary>
+        public string PlanFloorLabel { get; set; }
+
+        public int PlanRepeatCount { get; set; }
 
         public double DepthToUpFlight { get; set; }
 
@@ -250,6 +400,8 @@ namespace WL.Stair.Core.Domain
     {
         public StairStoreyDefinition()
         {
+            PlanFloorLabel = string.Empty;
+            PlanRepeatCount = 1;
             Flights = new List<StairFlightDefinition>();
             Landings = new List<StairLandingDefinition>();
         }
@@ -257,6 +409,19 @@ namespace WL.Stair.Core.Domain
         public string Id { get; set; }
 
         public string Name { get; set; }
+
+        /// <summary>
+        /// User-facing logical floor or standard-floor range represented by
+        /// this storey record (for example "1层" or "4~18层").  It belongs
+        /// to the storey rather than to an optional captured plan, so it can
+        /// be edited before a plan source is registered.
+        /// </summary>
+        public string PlanFloorLabel { get; set; }
+
+        /// <summary>
+        /// Physical floor count derived from <see cref="PlanFloorLabel"/>.
+        /// </summary>
+        public int PlanRepeatCount { get; set; }
 
         public string LowerFloorId { get; set; }
 
@@ -290,6 +455,8 @@ namespace WL.Stair.Core.Domain
             {
                 Id = id,
                 Name = name,
+                PlanFloorLabel = index + "层",
+                PlanRepeatCount = 1,
                 LowerFloorId = lowerFloorId,
                 UpperFloorId = upperFloorId,
                 Height = height,

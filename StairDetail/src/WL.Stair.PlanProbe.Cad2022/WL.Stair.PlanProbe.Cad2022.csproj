@@ -3,16 +3,16 @@
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
-    <ProjectGuid>{A2CFBA2B-0699-4938-B5DE-BBD033348134}</ProjectGuid>
+    <ProjectGuid>{C24B5E2A-2D5E-4F39-A27C-77B5F3E06831}</ProjectGuid>
     <OutputType>Library</OutputType>
-    <RootNamespace>WL.Stair.Cad2022</RootNamespace>
-    <AssemblyName>WL.Stair.Cad2022</AssemblyName>
+    <RootNamespace>WL.Stair.PlanProbe.Cad2022</RootNamespace>
+    <AssemblyName>WL.Stair.PlanProbe.Cad2022</AssemblyName>
     <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <PlatformTarget>x64</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
     <LangVersion>latest</LangVersion>
     <Deterministic>true</Deterministic>
     <FileAlignment>512</FileAlignment>
-    <PlatformTarget>x64</PlatformTarget>
-    <Prefer32Bit>false</Prefer32Bit>
     <AutoCad2022Dir Condition=" '$(AutoCad2022Dir)' == '' ">C:\Program Files\Autodesk\AutoCAD 2022</AutoCad2022Dir>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
@@ -33,12 +33,6 @@
   <ItemGroup>
     <Reference Include="System" />
     <Reference Include="System.Core" />
-    <Reference Include="System.Drawing" />
-    <Reference Include="System.Web.Extensions" />
-    <Reference Include="System.Windows.Forms" />
-    <Reference Include="WindowsBase" />
-    <Reference Include="PresentationCore" />
-    <Reference Include="PresentationFramework" />
     <Reference Include="AcCoreMgd">
       <HintPath>$(AutoCad2022Dir)\AcCoreMgd.dll</HintPath>
       <Private>False</Private>
@@ -53,41 +47,14 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4078.44" />
-  </ItemGroup>
-  <ItemGroup>
-    <Content Include="..\..\assets\HatchPatterns\*.pat">
-      <Link>HatchPatterns\%(Filename)%(Extension)</Link>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-  </ItemGroup>
-  <ItemGroup>
-    <Compile Include="CadLineRenderer.cs" />
-    <Compile Include="..\WL.Stair.CadShared\StairTitleService.cs">
-      <Link>StairTitleService.cs</Link>
+    <Compile Include="ProbeCommands.cs" />
+    <Compile Include="..\WL.Stair.CadShared\PlanCapture\StairPlanObjectProbe.cs">
+      <Link>PlanCapture\StairPlanObjectProbe.cs</Link>
     </Compile>
-    <Compile Include="..\WL.Stair.CadShared\PlanCapture\StairPlanCaptureService.cs">
-      <Link>PlanCapture\StairPlanCaptureService.cs</Link>
-    </Compile>
-    <Compile Include="..\WL.Stair.CadShared\PlanCapture\StairPlanCacheService.cs">
-      <Link>PlanCapture\StairPlanCacheService.cs</Link>
-    </Compile>
-    <Compile Include="Commands.cs" />
-    <Compile Include="PromptService.cs" />
-    <Compile Include="StairSettingsForm.cs" />
-    <Compile Include="StairSettingsWindow.cs" />
-    <Compile Include="StairProjectStorage.cs" />
-    <Compile Include="StairEditorPage.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
-  <ItemGroup>
-    <ProjectReference Include="..\WL.Stair.Core\WL.Stair.Core.csproj">
-      <Project>{5BC1E851-65C2-4C62-9E9E-BD2B7045843A}</Project>
-      <Name>WL.Stair.Core</Name>
-    </ProjectReference>
-  </ItemGroup>
   <Target Name="CheckAutoCadReferences" BeforeTargets="ResolveAssemblyReferences">
-    <Error Condition="!Exists('$(AutoCad2022Dir)\AcMgd.dll')" Text="AutoCAD 2022 managed assemblies were not found at $(AutoCad2022Dir). Set AutoCad2022Dir to the installation directory." />
+    <Error Condition="!Exists('$(AutoCad2022Dir)\AcMgd.dll')" Text="AutoCAD 2022 managed assemblies were not found at $(AutoCad2022Dir)." />
   </Target>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

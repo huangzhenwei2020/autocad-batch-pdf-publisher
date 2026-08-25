@@ -52,10 +52,12 @@
     <Compile Include="Geometry\DrawingTitle.cs" />
     <Compile Include="Geometry\DrawingView.cs" />
     <Compile Include="Geometry\Point2D.cs" />
+    <Compile Include="Geometry\PlanPolygonClipper.cs" />
     <Compile Include="Geometry\StairGeometryBuilder.cs" />
     <Compile Include="Geometry\StairProjectGeometryBuilder.cs" />
     <Compile Include="Geometry\StairLineRole.cs" />
     <Compile Include="Geometry\StairPlanLevel.cs" />
+    <Compile Include="Layout\StairCombinedLayout.cs" />
     <Compile Include="Validation\ValidationIssue.cs" />
     <Compile Include="Validation\ValidationSeverity.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />

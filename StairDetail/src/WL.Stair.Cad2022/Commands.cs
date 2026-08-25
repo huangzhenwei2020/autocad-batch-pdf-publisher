@@ -1,11 +1,20 @@
 using Autodesk.AutoCAD.ApplicationServices;
+using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Geometry;
 using Autodesk.AutoCAD.Runtime;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Text;
 using WL.Stair.Core.Calculation;
 using WL.Stair.Core.Domain;
 using WL.Stair.Core.Geometry;
+using WL.Stair.Core.Layout;
 using WL.Stair.Core.Validation;
+using WL.Stair.CadShared.PlanCapture;
 
 namespace WL.Stair.Cad2022
 {
@@ -28,11 +37,271 @@ namespace WL.Stair.Cad2022
                 return;
             }
 
+            if (settingsWindow.GenerateCombinedLayout)
+            {
+                GenerateCombinedLayout(document, settingsWindow.Project,
+                    settingsWindow.ConfirmedCalculation, settingsWindow.SelectedLayoutFrame);
+                return;
+            }
+
             GenerateProject(
                 document,
                 settingsWindow.Project,
                 settingsWindow.ConfirmedCalculation,
                 null);
+        }
+
+        private static void GenerateCombinedLayout(
+            Document document,
+            StairProjectDefinition project,
+            StairProjectCalculationResult calculation,
+            StairSettingsWindow.LayoutFrameOption frame)
+        {
+            var editor = document.Editor;
+            if (frame == null) { editor.WriteMessage("\n没有选择可用的登记图框。\n"); return; }
+            var point = editor.GetPoint("\n指定整套楼梯大样第一张图框的左下角插入点: ");
+            if (point.Status != PromptStatus.OK) { editor.WriteMessage("\n已取消整套插入。\n"); return; }
+            var stage = "准备数据";
+            HashSet<ObjectId> objectsBeforeInsert = null;
+            try
+            {
+                WriteCombinedLayoutLog("开始", "图框=" + frame.DisplayName
+                    + "，比例=" + project.DrawingScale);
+                var scale = Math.Max(1, project.DrawingScale);
+                var entries = new List<CombinedEntry>();
+                var cache = new StairPlanCacheService();
+                foreach (var floor in project.Floors.Where(value => value != null))
+                {
+                    var source = FindPlanSource(project, floor.Id);
+                    if (source == null || source.CropBoundaryPoints == null
+                        || source.CropBoundaryPoints.Count < 3) continue;
+                    var label = !string.IsNullOrWhiteSpace(floor.PlanFloorLabel)
+                        ? floor.PlanFloorLabel
+                        : (!string.IsNullOrWhiteSpace(source.FloorLabel) ? source.FloorLabel : floor.Name);
+                    var title = (label ?? string.Empty) + "楼梯平面图";
+                    source.TargetScale = scale;
+                    if (!cache.IsValid(source, title))
+                        throw new InvalidOperationException(title
+                            + " 的小平面缓存不存在或参数已变化，请在楼层设置中重新拾取该层平面。"
+                            + "整套插入不会重新裁剪天正墙。" );
+                    entries.Add(new CombinedEntry
+                    {
+                        Source = source,
+                        FloorTitle = title,
+                        LayoutItem = new StairLayoutItem
+                        {
+                            Key = floor.Id,
+                            Name = title,
+                            Width = source.CacheWidth,
+                            Height = source.CacheHeight
+                        }
+                    });
+                }
+                var section = new StairProjectGeometryBuilder().BuildSection(project, calculation);
+                double minSectionX, minSectionY, maxSectionX, maxSectionY;
+                GetBounds(section, out minSectionX, out minSectionY, out maxSectionX, out maxSectionY);
+                var sectionEntry = new CombinedEntry
+                {
+                    Section = section,
+                    SectionMinX = minSectionX,
+                    SectionMinY = minSectionY,
+                    LayoutItem = new StairLayoutItem
+                    {
+                        Key = "SECTION",
+                        Name = (project.StairNumber ?? "LT") + " 楼梯剖面图",
+                        Width = Math.Max(1.0, maxSectionX - minSectionX),
+                        Height = Math.Max(1.0, maxSectionY - minSectionY),
+                        IsSection = true
+                    }
+                };
+                entries.Add(sectionEntry);
+                var layout = StairCombinedLayout.Compute(entries.Select(value => value.LayoutItem),
+                    new StairLayoutOptions
+                    {
+                        PageWidth = frame.PageWidth * scale,
+                        PageHeight = frame.PageHeight * scale,
+                        LeftMargin = frame.LeftMargin * scale,
+                        RightMargin = frame.RightMargin * scale,
+                        TopMargin = frame.TopMargin * scale,
+                        BottomMargin = frame.BottomMargin * scale,
+                        ItemGap = 10.0 * scale
+                    });
+                const double pageGapPaper = 25.0;
+                objectsBeforeInsert = SnapshotCurrentSpace(document.Database);
+                stage = "插入图框";
+                InsertRegisteredFrames(frame.RegistrationId, scale, point.Value,
+                    layout.PageCount, pageGapPaper);
+                WriteCombinedLayoutLog(stage, "成功，页数=" + layout.PageCount);
+                foreach (var slot in layout.Slots)
+                {
+                    var entry = entries.First(value => ReferenceEquals(value.LayoutItem, slot.Item));
+                    var pageOrigin = new Point3d(
+                        point.Value.X + slot.Page * (layout.PageWidth + pageGapPaper * scale),
+                        point.Value.Y, point.Value.Z);
+                    var target = new Point3d(pageOrigin.X + slot.X, pageOrigin.Y + slot.Y, pageOrigin.Z);
+                    if (entry.Source != null)
+                    {
+                        stage = "插入平面缓存：" + entry.FloorTitle;
+                        var inserted = cache.Insert(document, entry.Source, target);
+                        if (inserted <= 0)
+                            throw new InvalidOperationException(entry.FloorTitle
+                                + " 的缓存文件没有可插入对象。" );
+                        editor.WriteMessage("\n已插入 " + entry.FloorTitle
+                            + "：" + inserted + " 个对象。\n");
+                        WriteCombinedLayoutLog(stage, "成功，对象数=" + inserted);
+                    }
+                    else
+                    {
+                        stage = "插入楼梯剖面";
+                        using (var transaction = document.Database.TransactionManager.StartTransaction())
+                        {
+                            new CadLineRenderer().Render(document.Database, transaction, entry.Section,
+                                new Point3d(target.X - entry.SectionMinX,
+                                    target.Y - entry.SectionMinY, target.Z));
+                            transaction.Commit();
+                        }
+                        WriteCombinedLayoutLog(stage, "成功");
+                    }
+                }
+                editor.WriteMessage("\n整套楼梯大样已插入：" + (entries.Count - 1)
+                    + " 个平面、1 个剖面、" + layout.PageCount + " 张图框。\n");
+            }
+            catch (System.Exception exception)
+            {
+                if (objectsBeforeInsert != null)
+                    EraseObjectsCreatedAfter(document, objectsBeforeInsert);
+                WriteCombinedLayoutLog(stage + "失败", exception.ToString());
+                editor.WriteMessage("\n整套插入失败（" + stage + "）："
+                    + exception.Message + "\n已回滚本次插入产生的图框和构件。\n");
+            }
+        }
+
+        private static HashSet<ObjectId> SnapshotCurrentSpace(Database database)
+        {
+            var result = new HashSet<ObjectId>();
+            using (var transaction = database.TransactionManager.StartOpenCloseTransaction())
+            {
+                var space = transaction.GetObject(database.CurrentSpaceId,
+                    OpenMode.ForRead, false) as BlockTableRecord;
+                if (space != null)
+                    foreach (var id in space.Cast<ObjectId>())
+                    {
+                        try
+                        {
+                            var value = transaction.GetObject(id, OpenMode.ForRead, false);
+                            if (value != null && !value.IsErased) result.Add(id);
+                        }
+                        catch (Autodesk.AutoCAD.Runtime.Exception) { }
+                    }
+            }
+            return result;
+        }
+
+        private static void EraseObjectsCreatedAfter(Document document,
+            HashSet<ObjectId> before)
+        {
+            try
+            {
+                var created = SnapshotCurrentSpace(document.Database)
+                    .Where(id => !before.Contains(id)).ToList();
+                if (created.Count == 0) return;
+                using (document.LockDocument())
+                using (var transaction = document.Database.TransactionManager.StartTransaction())
+                {
+                    foreach (var id in created)
+                    {
+                        DBObject value;
+                        try { value = transaction.GetObject(id, OpenMode.ForWrite, true); }
+                        catch (Autodesk.AutoCAD.Runtime.Exception) { continue; }
+                        if (value != null && !value.IsErased) value.Erase();
+                    }
+                    transaction.Commit();
+                }
+            }
+            catch (System.Exception exception)
+            {
+                WriteCombinedLayoutLog("回滚警告", exception.ToString());
+            }
+        }
+
+        private static void WriteCombinedLayoutLog(string stage, string message)
+        {
+            try
+            {
+                var root = Environment.GetEnvironmentVariable("WANLUO_ARCHITECTURE_TOOLS_ROOT");
+                if (string.IsNullOrWhiteSpace(root))
+                {
+                    root = Path.GetDirectoryName(typeof(Commands).Assembly.Location);
+                    for (var index = 0; index < 2 && !string.IsNullOrWhiteSpace(root); index++)
+                        root = Path.GetDirectoryName(root);
+                }
+                if (string.IsNullOrWhiteSpace(root)) return;
+                var directory = Path.Combine(root, "用户配置文件", "Logs");
+                Directory.CreateDirectory(directory);
+                File.AppendAllText(Path.Combine(directory, "stair-combined-layout.log"),
+                    DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " [" + stage + "] "
+                    + (message ?? string.Empty) + Environment.NewLine, Encoding.UTF8);
+            }
+            catch { }
+        }
+
+        private static StairPlanSourceDefinition FindPlanSource(StairProjectDefinition project, string floorId)
+        {
+            var source = (project.PlanSources ?? new List<StairPlanSourceDefinition>())
+                .FirstOrDefault(value => value != null && string.Equals(value.FloorId, floorId,
+                    StringComparison.OrdinalIgnoreCase));
+            if (source != null) return source;
+            var storey = project.Storeys.FirstOrDefault(value => value != null
+                && string.Equals(value.LowerFloorId, floorId, StringComparison.OrdinalIgnoreCase));
+            return storey == null ? null : (project.PlanSources ?? new List<StairPlanSourceDefinition>())
+                .FirstOrDefault(value => value != null && string.IsNullOrWhiteSpace(value.FloorId)
+                    && string.Equals(value.StoreyId, storey.Id, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static void InsertRegisteredFrames(string registrationId, int scale,
+            Point3d origin, int pageCount, double pageGap)
+        {
+            var type = AppDomain.CurrentDomain.GetAssemblies()
+                .Select(assembly => assembly.GetType("BatchPdfPublisher.Views.StairLayoutFrameBridge", false))
+                .FirstOrDefault(value => value != null);
+            var method = type == null ? null : type.GetMethod("InsertFrames", BindingFlags.Public | BindingFlags.Static);
+            if (method == null) throw new InvalidOperationException("主插件尚未提供整套图框插入服务，请重新加载最新版插件。");
+            try
+            {
+                method.Invoke(null, new object[] { registrationId, scale, origin.X, origin.Y,
+                    origin.Z, pageCount, pageGap });
+            }
+            catch (TargetInvocationException exception)
+            {
+                throw exception.InnerException ?? exception;
+            }
+        }
+
+        private static void GetBounds(DrawingView view, out double minX, out double minY,
+            out double maxX, out double maxY)
+        {
+            var points = new List<Point2D>();
+            points.AddRange(view.Lines.SelectMany(line => new[] { line.Start, line.End }));
+            points.AddRange(view.HatchRegions.SelectMany(region => region.Boundary));
+            points.AddRange(view.Texts.Select(text => text.Position));
+            points.AddRange(view.Dimensions.SelectMany(value => new[] { value.FirstExtensionOrigin,
+                value.SecondExtensionOrigin, value.DimensionLinePoint }));
+            points.AddRange(view.Leaders.SelectMany(value => value.Vertices));
+            if (view.Title != null) { points.Add(view.Title.Position); points.Add(new Point2D(
+                view.Title.Position.X + view.Title.TargetWidth, view.Title.Position.Y)); }
+            if (points.Count == 0) points.Add(new Point2D(0, 0));
+            minX = points.Min(value => value.X); minY = points.Min(value => value.Y);
+            maxX = points.Max(value => value.X); maxY = points.Max(value => value.Y);
+        }
+
+        private sealed class CombinedEntry
+        {
+            public StairLayoutItem LayoutItem;
+            public StairPlanSourceDefinition Source;
+            public string FloorTitle;
+            public DrawingView Section;
+            public double SectionMinX;
+            public double SectionMinY;
         }
 
         [CommandMethod("WLSTAIRTEST", CommandFlags.Modal)]
@@ -49,6 +318,104 @@ namespace WL.Stair.Cad2022
             constraints.Normalize(project);
             constraints.Apply(project);
             GenerateProject(document, project, null, Point3d.Origin);
+        }
+
+        [CommandMethod("WLSTAIRCACHESELFTEST", CommandFlags.Modal)]
+        public void ValidateStairPlanCaches()
+        {
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document == null) return;
+
+            var editor = document.Editor;
+            var project = new StairProjectStorage().LoadOrDefault();
+            var cache = new StairPlanCacheService();
+            var sources = new List<Tuple<StairPlanSourceDefinition, string>>();
+            foreach (var floor in project.Floors.Where(value => value != null))
+            {
+                var source = FindPlanSource(project, floor.Id);
+                if (source == null || source.CropBoundaryPoints == null
+                    || source.CropBoundaryPoints.Count < 3) continue;
+                var label = !string.IsNullOrWhiteSpace(floor.PlanFloorLabel)
+                    ? floor.PlanFloorLabel
+                    : (!string.IsNullOrWhiteSpace(source.FloorLabel)
+                        ? source.FloorLabel : floor.Name);
+                var title = (label ?? string.Empty) + "楼梯平面图";
+                source.TargetScale = Math.Max(1, project.DrawingScale);
+                if (!cache.IsValid(source, title))
+                    throw new InvalidOperationException(title + " 的缓存无效，不能执行自检。");
+                sources.Add(Tuple.Create(source, title));
+            }
+
+            if (sources.Count == 0)
+            {
+                editor.WriteMessage("\nWLSTAIRCACHESELFTEST：没有找到可验证的楼梯平面缓存。\n");
+                return;
+            }
+
+            var allBefore = SnapshotCurrentSpace(document.Database);
+            try
+            {
+                for (var index = 0; index < sources.Count; index++)
+                {
+                    var item = sources[index];
+                    var target = new Point3d(index * 10000.0, -50000.0, 0.0);
+                    var before = SnapshotCurrentSpace(document.Database);
+                    var count = cache.Insert(document, item.Item1, target);
+                    var created = SnapshotCurrentSpace(document.Database)
+                        .Where(id => !before.Contains(id)).ToList();
+                    Extents3d extents;
+                    if (count <= 0 || !TryGetCurrentObjectExtents(document.Database,
+                        created, out extents))
+                        throw new InvalidOperationException(item.Item2
+                            + " 插入后没有可验证的几何范围。");
+
+                    const double tolerance = 2.0;
+                    if (Math.Abs(extents.MinPoint.X - target.X) > tolerance
+                        || Math.Abs(extents.MinPoint.Y - target.Y) > tolerance
+                        || extents.MaxPoint.X > target.X + item.Item1.CacheWidth + tolerance
+                        || extents.MaxPoint.Y > target.Y + item.Item1.CacheHeight + tolerance)
+                        throw new InvalidOperationException(string.Format(
+                            "{0} 坐标归一化失败：目标=({1:F3},{2:F3})，实际范围="
+                            + "({3:F3},{4:F3})~({5:F3},{6:F3})，记录尺寸={7:F3}×{8:F3}。",
+                            item.Item2, target.X, target.Y, extents.MinPoint.X,
+                            extents.MinPoint.Y, extents.MaxPoint.X, extents.MaxPoint.Y,
+                            item.Item1.CacheWidth, item.Item1.CacheHeight));
+                    editor.WriteMessage("\n[通过] {0}：{1} 个对象，范围 {2:F1}×{3:F1}。",
+                        item.Item2, count, extents.MaxPoint.X - extents.MinPoint.X,
+                        extents.MaxPoint.Y - extents.MinPoint.Y);
+                }
+                editor.WriteMessage("\nWLSTAIRCACHESELFTEST PASS：{0} 个楼层缓存坐标、尺寸和插入位置均正确。\n",
+                    sources.Count);
+            }
+            finally
+            {
+                EraseObjectsCreatedAfter(document, allBefore);
+            }
+        }
+
+        private static bool TryGetCurrentObjectExtents(Database database,
+            IEnumerable<ObjectId> ids, out Extents3d combined)
+        {
+            combined = new Extents3d();
+            var found = false;
+            using (var transaction = database.TransactionManager.StartOpenCloseTransaction())
+            {
+                foreach (var id in ids ?? Enumerable.Empty<ObjectId>())
+                {
+                    Entity entity;
+                    try { entity = transaction.GetObject(id, OpenMode.ForRead, false) as Entity; }
+                    catch (Autodesk.AutoCAD.Runtime.Exception) { continue; }
+                    if (entity == null || entity.IsErased) continue;
+                    try
+                    {
+                        var extents = entity.GeometricExtents;
+                        if (!found) { combined = extents; found = true; }
+                        else combined.AddExtents(extents);
+                    }
+                    catch (Autodesk.AutoCAD.Runtime.Exception) { }
+                }
+            }
+            return found;
         }
 
         private static void GenerateProject(
