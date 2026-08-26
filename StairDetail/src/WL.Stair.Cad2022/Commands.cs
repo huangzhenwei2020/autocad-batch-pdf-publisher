@@ -84,16 +84,21 @@ namespace WL.Stair.Cad2022
                         throw new InvalidOperationException(title
                             + " 的小平面缓存不存在或参数已变化，请在楼层设置中重新拾取该层平面。"
                             + "整套插入不会重新裁剪天正墙。" );
+                    double layoutOffsetX, layoutOffsetY, layoutWidth, layoutHeight;
+                    StairPlanCacheService.GetLayoutRange(source, out layoutOffsetX,
+                        out layoutOffsetY, out layoutWidth, out layoutHeight);
                     entries.Add(new CombinedEntry
                     {
                         Source = source,
                         FloorTitle = title,
+                        CacheLayoutOffsetX = layoutOffsetX,
+                        CacheLayoutOffsetY = layoutOffsetY,
                         LayoutItem = new StairLayoutItem
                         {
                             Key = floor.Id,
                             Name = title,
-                            Width = source.CacheWidth,
-                            Height = source.CacheHeight
+                            Width = layoutWidth,
+                            Height = layoutHeight
                         }
                     });
                 }
@@ -142,7 +147,9 @@ namespace WL.Stair.Cad2022
                     if (entry.Source != null)
                     {
                         stage = "插入平面缓存：" + entry.FloorTitle;
-                        var inserted = cache.Insert(document, entry.Source, target);
+                        var inserted = cache.Insert(document, entry.Source,
+                            new Point3d(target.X - entry.CacheLayoutOffsetX,
+                                target.Y - entry.CacheLayoutOffsetY, target.Z));
                         if (inserted <= 0)
                             throw new InvalidOperationException(entry.FloorTitle
                                 + " 的缓存文件没有可插入对象。" );
@@ -302,6 +309,8 @@ namespace WL.Stair.Cad2022
             public DrawingView Section;
             public double SectionMinX;
             public double SectionMinY;
+            public double CacheLayoutOffsetX;
+            public double CacheLayoutOffsetY;
         }
 
         [CommandMethod("WLSTAIRTEST", CommandFlags.Modal)]
@@ -358,6 +367,10 @@ namespace WL.Stair.Cad2022
                 for (var index = 0; index < sources.Count; index++)
                 {
                     var item = sources[index];
+                    var previewLines = cache.ReadPreviewLines(item.Item1, 1800);
+                    if (previewLines.Count < 4)
+                        throw new InvalidOperationException(item.Item2
+                            + " 的缓存无法提取平面预览线。" );
                     var target = new Point3d(index * 10000.0, -50000.0, 0.0);
                     var before = SnapshotCurrentSpace(document.Database);
                     var count = cache.Insert(document, item.Item1, target);
@@ -380,8 +393,8 @@ namespace WL.Stair.Cad2022
                             item.Item2, target.X, target.Y, extents.MinPoint.X,
                             extents.MinPoint.Y, extents.MaxPoint.X, extents.MaxPoint.Y,
                             item.Item1.CacheWidth, item.Item1.CacheHeight));
-                    editor.WriteMessage("\n[通过] {0}：{1} 个对象，范围 {2:F1}×{3:F1}。",
-                        item.Item2, count, extents.MaxPoint.X - extents.MinPoint.X,
+                    editor.WriteMessage("\n[通过] {0}：{1} 个对象，{2} 条预览线，范围 {3:F1}×{4:F1}。",
+                        item.Item2, count, previewLines.Count, extents.MaxPoint.X - extents.MinPoint.X,
                         extents.MaxPoint.Y - extents.MinPoint.Y);
                 }
                 editor.WriteMessage("\nWLSTAIRCACHESELFTEST PASS：{0} 个楼层缓存坐标、尺寸和插入位置均正确。\n",

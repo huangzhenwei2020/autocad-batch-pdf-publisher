@@ -10,6 +10,7 @@ using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Geometry;
 using WL.Stair.Core.Domain;
+using WL.Stair.Core.Layout;
 
 namespace WL.Stair.CadShared.PlanCapture
 {
@@ -89,6 +90,22 @@ namespace WL.Stair.CadShared.PlanCapture
                     extents.MaxPoint.X - extents.MinPoint.X);
                 definition.CacheHeight = Math.Max(1.0,
                     extents.MaxPoint.Y - extents.MinPoint.Y);
+                var layoutMargin = 25.0 * Math.Max(1, definition.TargetScale);
+                var cropMaxX = definition.CropBoundaryPoints.Max(point => point.X);
+                var cropMaxY = definition.CropBoundaryPoints.Max(point => point.Y);
+                var cropMinX = definition.CropBoundaryPoints.Min(point => point.X);
+                var cropMinY = definition.CropBoundaryPoints.Min(point => point.Y);
+                // CreateWorkingCopy maps the source crop minimum to
+                // temporaryPoint. Extents are therefore in temporary-copy
+                // coordinates, not in the original drawing coordinates.
+                definition.CacheLayoutOffsetX = temporaryPoint.X - layoutMargin
+                    - extents.MinPoint.X;
+                definition.CacheLayoutOffsetY = temporaryPoint.Y - layoutMargin
+                    - extents.MinPoint.Y;
+                definition.CacheLayoutWidth = Math.Max(1.0,
+                    cropMaxX - cropMinX + 2.0 * layoutMargin);
+                definition.CacheLayoutHeight = Math.Max(1.0,
+                    cropMaxY - cropMinY + 2.0 * layoutMargin);
                 definition.CacheObjectCount = generated.Count;
                 definition.CacheFingerprint = ComputeFingerprint(definition, title);
                 definition.CachedUtc = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
@@ -130,6 +147,195 @@ namespace WL.Stair.CadShared.PlanCapture
             var path = ResolveRelative(definition.CacheRelativePath);
             return File.Exists(path) && string.Equals(definition.CacheFingerprint,
                 ComputeFingerprint(definition, title), StringComparison.OrdinalIgnoreCase);
+        }
+
+        public static void GetLayoutRange(StairPlanSourceDefinition definition,
+            out double offsetX, out double offsetY, out double width, out double height)
+        {
+            if (definition == null) throw new ArgumentNullException("definition");
+            var margin = 25.0 * Math.Max(1, definition.TargetScale);
+            var cropWidth = definition.CropBoundaryPoints == null
+                || definition.CropBoundaryPoints.Count < 3 ? definition.CacheWidth
+                : definition.CropBoundaryPoints.Max(point => point.X)
+                    - definition.CropBoundaryPoints.Min(point => point.X);
+            var cropHeight = definition.CropBoundaryPoints == null
+                || definition.CropBoundaryPoints.Count < 3 ? definition.CacheHeight
+                : definition.CropBoundaryPoints.Max(point => point.Y)
+                    - definition.CropBoundaryPoints.Min(point => point.Y);
+            width = definition.CacheLayoutWidth > 0.01
+                ? definition.CacheLayoutWidth : Math.Max(1.0, cropWidth + 2.0 * margin);
+            height = definition.CacheLayoutHeight > 0.01
+                ? definition.CacheLayoutHeight : Math.Max(1.0, cropHeight + 2.0 * margin);
+            offsetX = definition.CacheLayoutWidth > 0.01
+                ? definition.CacheLayoutOffsetX
+                : Math.Min(0.0, (definition.CacheWidth - width) / 2.0);
+            offsetY = definition.CacheLayoutHeight > 0.01
+                ? definition.CacheLayoutOffsetY
+                : Math.Min(0.0, (definition.CacheHeight - height) / 2.0);
+        }
+
+        public IList<StairLayoutPreviewLine> ReadPreviewLines(
+            StairPlanSourceDefinition definition, int maximumLines)
+        {
+            var result = new List<StairLayoutPreviewLine>();
+            if (definition == null || maximumLines <= 0) return result;
+            var path = ResolveRelative(definition.CacheRelativePath);
+            if (!File.Exists(path)) return result;
+            double offsetX, offsetY, width, height;
+            GetLayoutRange(definition, out offsetX, out offsetY, out width, out height);
+            try
+            {
+                using (var source = new Database(false, true))
+                {
+                    source.ReadDwgFile(path, FileOpenMode.OpenForReadAndAllShare,
+                        true, string.Empty);
+                    source.CloseInput(true);
+                    var ids = new List<ObjectId>();
+                    using (var transaction = source.TransactionManager.StartOpenCloseTransaction())
+                    {
+                        var model = transaction.GetObject(
+                            SymbolUtilityServices.GetBlockModelSpaceId(source),
+                            OpenMode.ForRead, false) as BlockTableRecord;
+                        if (model != null) ids.AddRange(model.Cast<ObjectId>());
+                    }
+                    Extents3d all;
+                    if (!TryGetCombinedExtents(source, ids, out all)) return result;
+                    using (var transaction = source.TransactionManager.StartOpenCloseTransaction())
+                    {
+                        foreach (var id in ids)
+                        {
+                            if (result.Count >= maximumLines) break;
+                            Entity entity;
+                            try { entity = transaction.GetObject(id, OpenMode.ForRead, false) as Entity; }
+                            catch { continue; }
+                            if (entity == null) continue;
+                            var color = PreviewColor(entity.ColorIndex);
+                            var line = entity as Line;
+                            if (line != null)
+                            {
+                                AddPreviewLine(result, line.StartPoint, line.EndPoint,
+                                    all.MinPoint, offsetX, offsetY, width, height, color, false);
+                                continue;
+                            }
+                            var polyline = entity as Polyline;
+                            if (polyline != null && polyline.NumberOfVertices > 1)
+                            {
+                                for (var index = 1; index < polyline.NumberOfVertices
+                                    && result.Count < maximumLines; index++)
+                                {
+                                    var a = polyline.GetPoint3dAt(index - 1);
+                                    var b = polyline.GetPoint3dAt(index);
+                                    AddPreviewLine(result, a, b, all.MinPoint, offsetX,
+                                        offsetY, width, height, color, false);
+                                }
+                                if (polyline.Closed && result.Count < maximumLines)
+                                    AddPreviewLine(result, polyline.GetPoint3dAt(polyline.NumberOfVertices - 1),
+                                        polyline.GetPoint3dAt(0), all.MinPoint, offsetX, offsetY,
+                                        width, height, color, false);
+                                continue;
+                            }
+                            var circle = entity as Circle;
+                            var arc = entity as Arc;
+                            if (circle != null || arc != null)
+                            {
+                                var center = circle != null ? circle.Center : arc.Center;
+                                var radius = circle != null ? circle.Radius : arc.Radius;
+                                var start = circle != null ? 0.0 : arc.StartAngle;
+                                var sweep = circle != null ? Math.PI * 2.0 : arc.EndAngle - arc.StartAngle;
+                                if (sweep <= 0.0) sweep += Math.PI * 2.0;
+                                var count = Math.Max(8, Math.Min(32, (int)Math.Ceiling(sweep / (Math.PI / 12.0))));
+                                var previous = new Point3d(center.X + radius * Math.Cos(start),
+                                    center.Y + radius * Math.Sin(start), center.Z);
+                                for (var index = 1; index <= count && result.Count < maximumLines; index++)
+                                {
+                                    var angle = start + sweep * index / count;
+                                    var current = new Point3d(center.X + radius * Math.Cos(angle),
+                                        center.Y + radius * Math.Sin(angle), center.Z);
+                                    AddPreviewLine(result, previous, current, all.MinPoint,
+                                        offsetX, offsetY, width, height, color, false);
+                                    previous = current;
+                                }
+                                continue;
+                            }
+                            Extents3d extents;
+                            try { extents = entity.GeometricExtents; }
+                            catch { continue; }
+                            var p1 = new Point3d(extents.MinPoint.X, extents.MinPoint.Y, 0);
+                            var p2 = new Point3d(extents.MaxPoint.X, extents.MinPoint.Y, 0);
+                            var p3 = new Point3d(extents.MaxPoint.X, extents.MaxPoint.Y, 0);
+                            var p4 = new Point3d(extents.MinPoint.X, extents.MaxPoint.Y, 0);
+                            AddPreviewLine(result, p1, p2, all.MinPoint, offsetX, offsetY, width, height, color, false);
+                            AddPreviewLine(result, p2, p3, all.MinPoint, offsetX, offsetY, width, height, color, false);
+                            AddPreviewLine(result, p3, p4, all.MinPoint, offsetX, offsetY, width, height, color, false);
+                            AddPreviewLine(result, p4, p1, all.MinPoint, offsetX, offsetY, width, height, color, false);
+                        }
+                    }
+                }
+            }
+            catch (System.Exception exception)
+            {
+                WriteLog("预览线读取警告", definition, exception.Message);
+            }
+            return result;
+        }
+
+        private static void AddPreviewLine(ICollection<StairLayoutPreviewLine> lines,
+            Point3d sourceA, Point3d sourceB, Point3d cacheMin,
+            double offsetX, double offsetY, double width, double height,
+            string color, bool dashed)
+        {
+            var x1 = sourceA.X - cacheMin.X - offsetX;
+            var y1 = sourceA.Y - cacheMin.Y - offsetY;
+            var x2 = sourceB.X - cacheMin.X - offsetX;
+            var y2 = sourceB.Y - cacheMin.Y - offsetY;
+            if (!ClipLine(ref x1, ref y1, ref x2, ref y2, width, height)) return;
+            lines.Add(new StairLayoutPreviewLine
+            {
+                X1 = x1, Y1 = y1, X2 = x2, Y2 = y2,
+                Color = color, Dashed = dashed
+            });
+        }
+
+        private static bool ClipLine(ref double x1, ref double y1,
+            ref double x2, ref double y2, double width, double height)
+        {
+            var dx = x2 - x1;
+            var dy = y2 - y1;
+            var t0 = 0.0;
+            var t1 = 1.0;
+            var p = new[] { -dx, dx, -dy, dy };
+            var q = new[] { x1, width - x1, y1, height - y1 };
+            for (var index = 0; index < 4; index++)
+            {
+                if (Math.Abs(p[index]) < 0.0000001)
+                { if (q[index] < 0.0) return false; continue; }
+                var ratio = q[index] / p[index];
+                if (p[index] < 0.0) t0 = Math.Max(t0, ratio);
+                else t1 = Math.Min(t1, ratio);
+                if (t0 > t1) return false;
+            }
+            var originalX = x1;
+            var originalY = y1;
+            x1 = originalX + t0 * dx;
+            y1 = originalY + t0 * dy;
+            x2 = originalX + t1 * dx;
+            y2 = originalY + t1 * dy;
+            return true;
+        }
+
+        private static string PreviewColor(int colorIndex)
+        {
+            switch (colorIndex)
+            {
+                case 1: return "#ff5b5b";
+                case 2: return "#f4e74f";
+                case 3: return "#58ef70";
+                case 4: return "#26cbd0";
+                case 5: return "#6e8cff";
+                case 6: return "#e477ff";
+                case 8: return "#91999f";
+                default: return "#d8e0e6";
+            }
         }
 
         public int Insert(Document document, StairPlanSourceDefinition definition,
@@ -227,6 +433,10 @@ namespace WL.Stair.CadShared.PlanCapture
             definition.CacheFingerprint = null;
             definition.CacheWidth = 0.0;
             definition.CacheHeight = 0.0;
+            definition.CacheLayoutOffsetX = 0.0;
+            definition.CacheLayoutOffsetY = 0.0;
+            definition.CacheLayoutWidth = 0.0;
+            definition.CacheLayoutHeight = 0.0;
             definition.CacheObjectCount = 0;
             definition.CachedUtc = null;
         }

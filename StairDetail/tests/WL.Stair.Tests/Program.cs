@@ -71,6 +71,7 @@ namespace WL.Stair.Tests
             LabelsFlightsAndLandings,
             SupportsBasementBaseElevation
             ,LaysOutPlansBeforeSectionAndRetainsEveryItem
+            ,PacksFivePlansAndTallSectionIntoMergedGridCells
         };
 
         private static int Main()
@@ -676,6 +677,45 @@ namespace WL.Stair.Tests
             TestAssert.Equal("LB-02", plan.Slots[1].Item.Key, "Second plan order changed.");
             TestAssert.Equal("SECTION", plan.Slots[2].Item.Key, "The section must remain after all plans.");
             TestAssert.True(plan.PageCount >= 1, "Combined layout must create at least one page.");
+        }
+
+        private static void PacksFivePlansAndTallSectionIntoMergedGridCells()
+        {
+            var items = Enumerable.Range(1, 5).Select(index => new StairLayoutItem
+            {
+                Key = "PLAN-" + index,
+                Name = index + "层楼梯平面图",
+                Width = 6900,
+                Height = 4800
+            }).ToList();
+            items.Add(new StairLayoutItem
+            {
+                Key = "SECTION",
+                Name = "LT-01 楼梯剖面图",
+                Width = 7000,
+                Height = 15000,
+                IsSection = true
+            });
+            var plan = StairCombinedLayout.Compute(items, new StairLayoutOptions
+            {
+                PageWidth = 841 * 30,
+                PageHeight = 594 * 30,
+                LeftMargin = 30 * 30,
+                RightMargin = 60 * 30,
+                TopMargin = 20 * 30,
+                BottomMargin = 20 * 30,
+                ItemGap = 10 * 30
+            });
+            TestAssert.Equal(1, plan.PageCount,
+                "Five regular plan cells and one tall merged section cell should fit one A1 page.");
+            foreach (var a in plan.Slots)
+                foreach (var b in plan.Slots.Where(value => !ReferenceEquals(value, a)
+                    && value.Page == a.Page))
+                    TestAssert.True(a.X + a.Width <= b.X + 0.001
+                        || b.X + b.Width <= a.X + 0.001
+                        || a.Y + a.Height <= b.Y + 0.001
+                        || b.Y + b.Height <= a.Y + 0.001,
+                        "Merged-grid layout items must not overlap.");
         }
 
         private static void ClipsOrdinaryPlanSegmentsToCropBoundary()

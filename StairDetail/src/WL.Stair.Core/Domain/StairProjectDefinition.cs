@@ -236,6 +236,20 @@ namespace WL.Stair.Core.Domain
 
         public double CacheHeight { get; set; }
 
+        /// <summary>
+        /// The layout rectangle is the visible crop boundary expanded by
+        /// 25 paper millimetres. Offsets are measured from the normalized
+        /// cache extents to that rectangle, so preview and final insertion use
+        /// exactly the same occupied range.
+        /// </summary>
+        public double CacheLayoutOffsetX { get; set; }
+
+        public double CacheLayoutOffsetY { get; set; }
+
+        public double CacheLayoutWidth { get; set; }
+
+        public double CacheLayoutHeight { get; set; }
+
         public int CacheObjectCount { get; set; }
 
         public string CachedUtc { get; set; }

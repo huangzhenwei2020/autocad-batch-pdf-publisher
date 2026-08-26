@@ -29,6 +29,8 @@ namespace WL.Stair.Cad2022
         private readonly StairProjectGeometryBuilder _geometryBuilder = new StairProjectGeometryBuilder();
         private readonly StairProjectConstraintService _constraints = new StairProjectConstraintService();
         private readonly StairProjectStorage _storage = new StairProjectStorage();
+        private readonly IDictionary<string, IList<StairLayoutPreviewLine>> _planPreviewLines
+            = new Dictionary<string, IList<StairLayoutPreviewLine>>(StringComparer.OrdinalIgnoreCase);
         private UiState _state;
         private bool _isClosing;
 
@@ -309,14 +311,18 @@ namespace WL.Stair.Cad2022
                 var maxX = source.CropBoundaryPoints.Max(point => point.X);
                 var minY = source.CropBoundaryPoints.Min(point => point.Y);
                 var maxY = source.CropBoundaryPoints.Max(point => point.Y);
+                double layoutOffsetX, layoutOffsetY, layoutWidth, layoutHeight;
+                StairPlanCacheService.GetLayoutRange(source, out layoutOffsetX,
+                    out layoutOffsetY, out layoutWidth, out layoutHeight);
                 items.Add(new StairLayoutItem
                 {
                     Key = floor.Id,
                     Name = title,
-                    Width = hasCache ? source.CacheWidth : Math.Max(1.0, maxX - minX),
-                    Height = hasCache ? source.CacheHeight
-                        : Math.Max(1.0, maxY - minY) + 8.0 * scale,
-                    IsSection = false
+                    Width = hasCache ? layoutWidth : Math.Max(1.0, maxX - minX + 50.0 * scale),
+                    Height = hasCache ? layoutHeight
+                        : Math.Max(1.0, maxY - minY + 50.0 * scale),
+                    IsSection = false,
+                    PreviewLines = hasCache ? GetPlanPreviewLines(cache, source) : null
                 });
                 registeredFloorIds.Add(floor.Id ?? string.Empty);
             }
@@ -333,7 +339,16 @@ namespace WL.Stair.Cad2022
                 Name = (_state.Project.StairNumber ?? "LT") + " 楼梯剖面图",
                 Width = Math.Max(1.0, sectionMaxX - sectionMinX),
                 Height = Math.Max(1.0, sectionMaxY - sectionMinY),
-                IsSection = true
+                IsSection = true,
+                PreviewLines = section.Lines.Select(line => new StairLayoutPreviewLine
+                {
+                    X1 = line.Start.X - sectionMinX,
+                    Y1 = line.Start.Y - sectionMinY,
+                    X2 = line.End.X - sectionMinX,
+                    Y2 = line.End.Y - sectionMinY,
+                    Color = line.IsHidden ? "#26cbd0" : "#f0f3f5",
+                    Dashed = line.IsHidden
+                }).ToList()
             });
 
             var frame = SelectedLayoutFrame;
@@ -360,6 +375,20 @@ namespace WL.Stair.Cad2022
                     frame == null ? "A1 横向试排" : frame.DisplayName,
                     missing > 0 ? "；另有 " + missing + " 个平面层尚未登记" : string.Empty)
             };
+        }
+
+        private IList<StairLayoutPreviewLine> GetPlanPreviewLines(
+            StairPlanCacheService cache, StairPlanSourceDefinition source)
+        {
+            var key = (source.CacheRelativePath ?? string.Empty) + "|"
+                + (source.CacheFingerprint ?? string.Empty) + "|"
+                + source.CacheLayoutOffsetX.ToString("R", CultureInfo.InvariantCulture) + "|"
+                + source.CacheLayoutOffsetY.ToString("R", CultureInfo.InvariantCulture);
+            IList<StairLayoutPreviewLine> lines;
+            if (_planPreviewLines.TryGetValue(key, out lines)) return lines;
+            lines = cache.ReadPreviewLines(source, 1800);
+            _planPreviewLines[key] = lines;
+            return lines;
         }
 
         private void EnsurePlanCaches()
@@ -495,6 +524,10 @@ namespace WL.Stair.Cad2022
                 target.CacheFingerprint = source.CacheFingerprint;
                 target.CacheWidth = source.CacheWidth;
                 target.CacheHeight = source.CacheHeight;
+                target.CacheLayoutOffsetX = source.CacheLayoutOffsetX;
+                target.CacheLayoutOffsetY = source.CacheLayoutOffsetY;
+                target.CacheLayoutWidth = source.CacheLayoutWidth;
+                target.CacheLayoutHeight = source.CacheLayoutHeight;
                 target.CacheObjectCount = source.CacheObjectCount;
                 target.CachedUtc = source.CachedUtc;
             }
@@ -627,27 +660,27 @@ namespace WL.Stair.Cad2022
                 var pageX = slot.Page * (layout.PageWidth + pageGap);
                 var x = pageX + slot.X;
                 var y = layout.PageHeight - slot.Y - slot.Height;
-                var cellX = pageX + slot.CellX;
-                var cellY = layout.PageHeight - slot.CellY - slot.CellHeight;
                 builder.AppendFormat(CultureInfo.InvariantCulture,
-                    "<rect x='{0}' y='{1}' width='{2}' height='{3}' fill='none' stroke='#34495a' stroke-width='{4}' stroke-dasharray='{5} {6}'/>",
-                    cellX, cellY, slot.CellWidth, slot.CellHeight,
-                    Math.Max(1.0, scale * 0.05), 2 * scale, 2 * scale);
-                builder.AppendFormat(CultureInfo.InvariantCulture,
-                    "<rect x='{0}' y='{1}' width='{2}' height='{3}' rx='{4}' fill='{5}' fill-opacity='0.22' stroke='{6}' stroke-width='{7}'/>",
-                    x, y, slot.Width, slot.Height, 2 * scale,
+                    "<rect x='{0}' y='{1}' width='{2}' height='{3}' fill='none' stroke='{4}' stroke-width='{5}' stroke-dasharray='{6} {7}'/>",
+                    x, y, slot.Width, slot.Height,
                     slot.Item.IsSection ? "#f4e74f" : "#26cbd0",
-                    slot.Item.IsSection ? "#f4e74f" : "#26cbd0",
-                    Math.Max(2.0, scale * 0.1));
-                if (slot.Item.IsSection)
+                    Math.Max(1.0, scale * 0.06), 3 * scale, 2 * scale);
+                var previewLines = slot.Item.PreviewLines;
+                if (previewLines != null && previewLines.Count > 0)
                 {
-                    var left = x + slot.Width * 0.13;
-                    var right = x + slot.Width * 0.87;
-                    var top = y + slot.Height * 0.24;
-                    var bottom = y + slot.Height * 0.72;
                     builder.AppendFormat(CultureInfo.InvariantCulture,
-                        "<path d='M {0} {1} L {2} {3} L {0} {4} L {2} {5}' fill='none' stroke='#f0f3f5' stroke-width='{6}'/>",
-                        left, bottom, right, top, top, bottom, Math.Max(2.0, scale * 0.1));
+                        "<g stroke-width='{0}' fill='none'>", Math.Max(1.0, scale * 0.045));
+                    foreach (var line in previewLines)
+                    {
+                        builder.AppendFormat(CultureInfo.InvariantCulture,
+                            "<line x1='{0}' y1='{1}' x2='{2}' y2='{3}' stroke='{4}'{5}/>",
+                            x + line.X1, y + slot.Height - line.Y1,
+                            x + line.X2, y + slot.Height - line.Y2,
+                            string.IsNullOrWhiteSpace(line.Color) ? "#d8e0e6" : line.Color,
+                            line.Dashed ? " stroke-dasharray='" + (3 * scale).ToString(CultureInfo.InvariantCulture)
+                                + " " + (2 * scale).ToString(CultureInfo.InvariantCulture) + "'" : string.Empty);
+                    }
+                    builder.Append("</g>");
                 }
                 else
                 {

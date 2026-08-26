@@ -16,6 +16,17 @@ namespace WL.Stair.Core.Layout
         public double Width { get; set; }
         public double Height { get; set; }
         public bool IsSection { get; set; }
+        public IList<StairLayoutPreviewLine> PreviewLines { get; set; }
+    }
+
+    public sealed class StairLayoutPreviewLine
+    {
+        public double X1 { get; set; }
+        public double Y1 { get; set; }
+        public double X2 { get; set; }
+        public double Y2 { get; set; }
+        public string Color { get; set; }
+        public bool Dashed { get; set; }
     }
 
     public sealed class StairLayoutOptions
@@ -62,9 +73,9 @@ namespace WL.Stair.Core.Layout
     }
 
     /// <summary>
-    /// Grid selection follows the proven detail-layout rule: first minimise
-    /// pages, then maximise useful capacity and finally prefer the grid whose
-    /// natural aspect ratio is closest to the registered content range.
+    /// Fixed grids waste most of a sheet when a tall section is mixed with
+    /// several short floor plans. This packer uses free rectangles instead:
+    /// it first minimises page count, then minimises the occupied envelope.
     /// </summary>
     public static class StairCombinedLayout
     {
@@ -94,113 +105,261 @@ namespace WL.Stair.Core.Layout
 
             var contentWidth = plan.ContentRight - plan.ContentLeft;
             var contentHeight = plan.ContentTop - plan.ContentBottom;
-            var grid = FindBestGrid(items, contentWidth, contentHeight, Math.Max(0.0, options.ItemGap));
-            if (grid == null)
+            var packed = FindBestPacking(items, contentWidth, contentHeight,
+                Math.Max(0.0, options.ItemGap));
+            if (packed == null)
                 throw new InvalidOperationException("楼梯平面或剖面无法放入当前纸张，请使用更大图框或更小出图比例。");
-
-            plan.Columns = grid.Columns;
-            plan.Rows = grid.Rows;
-            var extraWidth = Math.Max(0.0, contentWidth - grid.ColumnWidths.Sum()) / grid.Columns;
-            var extraHeight = Math.Max(0.0, contentHeight - grid.RowHeights.Sum()) / grid.Rows;
-            foreach (var width in grid.ColumnWidths) plan.ColumnWidths.Add(width + extraWidth);
-            foreach (var height in grid.RowHeights) plan.RowHeights.Add(height + extraHeight);
-
-            var perPage = plan.Columns * plan.Rows;
-            for (var index = 0; index < items.Count; index++)
+            plan.Columns = 0;
+            plan.Rows = 0;
+            plan.PageCount = packed.Pages.Count;
+            foreach (var page in packed.Pages)
             {
-                var pageIndex = index % perPage;
-                var row = pageIndex / plan.Columns;
-                var column = pageIndex % plan.Columns;
-                var cellWidth = plan.ColumnWidths[column];
-                var cellHeight = plan.RowHeights[row];
-                var cellX = plan.ContentLeft + plan.ColumnWidths.Take(column).Sum();
-                var cellY = plan.ContentTop - plan.RowHeights.Take(row + 1).Sum();
-                var item = items[index];
-                plan.Slots.Add(new StairLayoutSlot
+                var minX = page.Placements.Min(value => value.X);
+                var minY = page.Placements.Min(value => value.Y);
+                var maxX = page.Placements.Max(value => value.X + value.Width);
+                var maxY = page.Placements.Max(value => value.Y + value.Height);
+                var shiftX = (contentWidth - (maxX - minX)) / 2.0 - minX;
+                var shiftY = (contentHeight - (maxY - minY)) / 2.0 - minY;
+                foreach (var value in page.Placements)
                 {
-                    Item = item,
-                    Page = index / perPage,
-                    Row = row,
-                    Column = column,
-                    X = cellX + (cellWidth - item.Width) / 2.0,
-                    Y = cellY + (cellHeight - item.Height) / 2.0,
-                    Width = item.Width,
-                    Height = item.Height,
-                    CellX = cellX,
-                    CellY = cellY,
-                    CellWidth = cellWidth,
-                    CellHeight = cellHeight
-                });
+                    plan.Slots.Add(new StairLayoutSlot
+                    {
+                        Item = value.Item,
+                        Page = page.Index,
+                        Row = 0,
+                        Column = 0,
+                        X = plan.ContentLeft + value.X + shiftX + value.ContentOffsetX,
+                        Y = plan.ContentBottom + value.Y + shiftY + value.ContentOffsetY,
+                        Width = value.Item.Width,
+                        Height = value.Item.Height,
+                        CellX = plan.ContentLeft + value.X + shiftX,
+                        CellY = plan.ContentBottom + value.Y + shiftY,
+                        CellWidth = value.Width,
+                        CellHeight = value.Height
+                    });
+                }
             }
-            plan.PageCount = (int)Math.Ceiling((double)items.Count / perPage);
+            var order = items.Select((item, index) => new { item, index })
+                .ToDictionary(value => value.item, value => value.index);
+            var sorted = plan.Slots.OrderBy(value => order[value.Item]).ToList();
+            plan.Slots.Clear();
+            foreach (var slot in sorted) plan.Slots.Add(slot);
             return plan;
         }
 
-        private static GridCandidate FindBestGrid(
+        private static PackingCandidate FindBestPacking(
             IList<StairLayoutItem> items,
             double contentWidth,
             double contentHeight,
             double gap)
         {
-            GridCandidate best = null;
-            var targetAspect = contentWidth / Math.Max(1.0, contentHeight);
-            for (var columns = 1; columns <= items.Count; columns++)
+            foreach (var item in items)
+                if (item.Width + gap > contentWidth + 0.01
+                    || item.Height + gap > contentHeight + 0.01)
+                    return null;
+
+            var orders = new List<IList<StairLayoutItem>>
             {
-                for (var rows = 1; rows <= items.Count; rows++)
+                items.ToList(),
+                items.OrderByDescending(value => value.Width * value.Height).ToList(),
+                items.OrderByDescending(value => value.Height).ThenByDescending(value => value.Width).ToList(),
+                items.OrderByDescending(value => value.Width).ThenByDescending(value => value.Height).ToList(),
+                items.OrderByDescending(value => value.IsSection).ThenByDescending(value => value.Height).ToList(),
+                items.OrderBy(value => value.IsSection).ThenByDescending(value => value.Width * value.Height).ToList()
+            };
+            PackingCandidate best = null;
+            foreach (var order in orders)
+            {
+                var candidates = new[]
                 {
-                    var capacity = columns * rows;
-                    var widths = new double[columns];
-                    var heights = new double[rows];
-                    for (var index = 0; index < items.Count; index++)
-                    {
-                        var position = index % capacity;
-                        var column = position % columns;
-                        var row = position / columns;
-                        widths[column] = Math.Max(widths[column], items[index].Width + gap);
-                        heights[row] = Math.Max(heights[row], items[index].Height + gap);
-                    }
-                    var requiredWidth = widths.Sum();
-                    var requiredHeight = heights.Sum();
-                    if (requiredWidth > contentWidth + 0.01 || requiredHeight > contentHeight + 0.01)
-                        continue;
-                    var pages = (int)Math.Ceiling((double)items.Count / capacity);
-                    var usefulCapacity = Math.Min(items.Count, capacity);
-                    var emptyCells = pages * capacity - items.Count;
-                    var naturalAspect = requiredWidth / Math.Max(1.0, requiredHeight);
-                    var aspectError = Math.Abs(Math.Log(Math.Max(0.000001, naturalAspect / targetAspect)));
-                    var candidate = new GridCandidate
-                    {
-                        Columns = columns,
-                        Rows = rows,
-                        Pages = pages,
-                        Capacity = usefulCapacity,
-                        EmptyCells = emptyCells,
-                        AspectError = aspectError,
-                        ColumnWidths = widths,
-                        RowHeights = heights
-                    };
-                    if (best == null || candidate.Pages < best.Pages
-                        || (candidate.Pages == best.Pages && candidate.Capacity > best.Capacity)
-                        || (candidate.Pages == best.Pages && candidate.Capacity == best.Capacity
-                            && candidate.EmptyCells < best.EmptyCells)
-                        || (candidate.Pages == best.Pages && candidate.Capacity == best.Capacity
-                            && candidate.EmptyCells == best.EmptyCells && candidate.AspectError < best.AspectError))
+                    PackGrid(order, contentWidth, contentHeight, gap),
+                    Pack(order, contentWidth, contentHeight, gap)
+                };
+                foreach (var candidate in candidates.Where(value => value != null))
+                    if (best == null || candidate.Pages.Count < best.Pages.Count
+                        || (candidate.Pages.Count == best.Pages.Count
+                            && candidate.IsGrid && !best.IsGrid)
+                        || (candidate.Pages.Count == best.Pages.Count
+                            && candidate.IsGrid == best.IsGrid
+                            && candidate.OccupiedArea < best.OccupiedArea))
                         best = candidate;
-                }
             }
             return best;
         }
 
-        private sealed class GridCandidate
+        private static PackingCandidate PackGrid(IList<StairLayoutItem> items,
+            double width, double height, double gap)
         {
-            public int Columns;
-            public int Rows;
-            public int Pages;
-            public int Capacity;
-            public int EmptyCells;
-            public double AspectError;
-            public double[] ColumnWidths;
-            public double[] RowHeights;
+            var ordinary = items.Where(value => !value.IsSection).ToList();
+            if (ordinary.Count == 0) return null;
+            var sortedWidths = ordinary.Select(value => value.Width + gap).OrderBy(value => value).ToList();
+            var sortedHeights = ordinary.Select(value => value.Height + gap).OrderBy(value => value).ToList();
+            var baseWidth = sortedWidths[sortedWidths.Count / 2];
+            var baseHeight = sortedHeights[sortedHeights.Count / 2];
+            var columns = Math.Max(1, (int)Math.Floor(width / Math.Max(1.0, baseWidth)));
+            var rows = Math.Max(1, (int)Math.Floor(height / Math.Max(1.0, baseHeight)));
+            if (columns * rows < 2) return null;
+            var cellWidth = width / columns;
+            var cellHeight = height / rows;
+            var result = new PackingCandidate { IsGrid = true };
+            foreach (var item in items)
+            {
+                var spanColumns = Math.Max(1, (int)Math.Ceiling((item.Width + gap) / cellWidth));
+                var spanRows = Math.Max(1, (int)Math.Ceiling((item.Height + gap) / cellHeight));
+                if (spanColumns > columns || spanRows > rows) return null;
+                PackingPage targetPage = null;
+                int targetColumn = 0, targetRow = 0;
+                foreach (var page in result.Pages)
+                {
+                    if (TryFindGridSpace(page.Grid, columns, rows, spanColumns,
+                        spanRows, out targetColumn, out targetRow))
+                    { targetPage = page; break; }
+                }
+                if (targetPage == null)
+                {
+                    targetPage = new PackingPage
+                    {
+                        Index = result.Pages.Count,
+                        Grid = new bool[columns, rows]
+                    };
+                    result.Pages.Add(targetPage);
+                    if (!TryFindGridSpace(targetPage.Grid, columns, rows,
+                        spanColumns, spanRows, out targetColumn, out targetRow)) return null;
+                }
+                for (var column = targetColumn; column < targetColumn + spanColumns; column++)
+                    for (var row = targetRow; row < targetRow + spanRows; row++)
+                        targetPage.Grid[column, row] = true;
+                var mergedWidth = spanColumns * cellWidth;
+                var mergedHeight = spanRows * cellHeight;
+                targetPage.Placements.Add(new PackedPlacement
+                {
+                    Item = item,
+                    X = targetColumn * cellWidth,
+                    Y = height - (targetRow + spanRows) * cellHeight,
+                    Width = mergedWidth,
+                    Height = mergedHeight,
+                    ContentOffsetX = (mergedWidth - item.Width) / 2.0,
+                    ContentOffsetY = (mergedHeight - item.Height) / 2.0
+                });
+            }
+            result.OccupiedArea = result.Pages.Count * width * height;
+            return result;
         }
+
+        private static bool TryFindGridSpace(bool[,] grid, int columns, int rows,
+            int spanColumns, int spanRows, out int resultColumn, out int resultRow)
+        {
+            for (var row = 0; row <= rows - spanRows; row++)
+                for (var column = 0; column <= columns - spanColumns; column++)
+                {
+                    var free = true;
+                    for (var x = column; x < column + spanColumns && free; x++)
+                        for (var y = row; y < row + spanRows; y++)
+                            if (grid[x, y]) { free = false; break; }
+                    if (!free) continue;
+                    resultColumn = column;
+                    resultRow = row;
+                    return true;
+                }
+            resultColumn = 0;
+            resultRow = 0;
+            return false;
+        }
+
+        private static PackingCandidate Pack(IList<StairLayoutItem> items,
+            double width, double height, double gap)
+        {
+            var result = new PackingCandidate();
+            foreach (var item in items)
+            {
+                PlacementChoice best = null;
+                foreach (var page in result.Pages)
+                    foreach (var free in page.Free)
+                    {
+                        var packedWidth = item.Width + gap;
+                        var packedHeight = item.Height + gap;
+                        if (packedWidth > free.Width + 0.01 || packedHeight > free.Height + 0.01)
+                            continue;
+                        var choice = new PlacementChoice
+                        {
+                            Page = page,
+                            Free = free,
+                            AreaWaste = free.Width * free.Height - packedWidth * packedHeight,
+                            ShortWaste = Math.Min(free.Width - packedWidth, free.Height - packedHeight)
+                        };
+                        if (best == null || choice.AreaWaste < best.AreaWaste
+                            || (Math.Abs(choice.AreaWaste - best.AreaWaste) < 0.01
+                                && choice.ShortWaste < best.ShortWaste)) best = choice;
+                    }
+                if (best == null)
+                {
+                    var page = new PackingPage { Index = result.Pages.Count };
+                    page.Free.Add(new PackedRect { X = 0, Y = 0, Width = width, Height = height });
+                    result.Pages.Add(page);
+                    best = new PlacementChoice { Page = page, Free = page.Free[0] };
+                }
+                var placed = new PackedPlacement
+                {
+                    Item = item,
+                    X = best.Free.X,
+                    Y = best.Free.Y,
+                    Width = item.Width + gap,
+                    Height = item.Height + gap,
+                    ContentOffsetX = gap / 2.0,
+                    ContentOffsetY = gap / 2.0
+                };
+                best.Page.Placements.Add(placed);
+                SplitFreeRectangles(best.Page, placed);
+            }
+            result.OccupiedArea = result.Pages.Sum(page =>
+            {
+                var minX = page.Placements.Min(value => value.X);
+                var minY = page.Placements.Min(value => value.Y);
+                var maxX = page.Placements.Max(value => value.X + value.Width);
+                var maxY = page.Placements.Max(value => value.Y + value.Height);
+                return (maxX - minX) * (maxY - minY);
+            });
+            return result;
+        }
+
+        private static void SplitFreeRectangles(PackingPage page, PackedPlacement used)
+        {
+            var next = new List<PackedRect>();
+            foreach (var free in page.Free)
+            {
+                if (used.X >= free.X + free.Width || used.X + used.Width <= free.X
+                    || used.Y >= free.Y + free.Height || used.Y + used.Height <= free.Y)
+                { next.Add(free); continue; }
+                if (used.X > free.X) next.Add(new PackedRect
+                    { X = free.X, Y = free.Y, Width = used.X - free.X, Height = free.Height });
+                if (used.X + used.Width < free.X + free.Width) next.Add(new PackedRect
+                    { X = used.X + used.Width, Y = free.Y,
+                        Width = free.X + free.Width - used.X - used.Width, Height = free.Height });
+                if (used.Y > free.Y) next.Add(new PackedRect
+                    { X = free.X, Y = free.Y, Width = free.Width, Height = used.Y - free.Y });
+                if (used.Y + used.Height < free.Y + free.Height) next.Add(new PackedRect
+                    { X = free.X, Y = used.Y + used.Height, Width = free.Width,
+                        Height = free.Y + free.Height - used.Y - used.Height });
+            }
+            page.Free.Clear();
+            for (var i = 0; i < next.Count; i++)
+            {
+                if (next[i].Width <= 0.01 || next[i].Height <= 0.01) continue;
+                var contained = false;
+                for (var j = 0; j < next.Count; j++)
+                    if (i != j && next[i].X >= next[j].X - 0.01
+                        && next[i].Y >= next[j].Y - 0.01
+                        && next[i].X + next[i].Width <= next[j].X + next[j].Width + 0.01
+                        && next[i].Y + next[i].Height <= next[j].Y + next[j].Height + 0.01)
+                    { contained = true; break; }
+                if (!contained) page.Free.Add(next[i]);
+            }
+        }
+
+        private sealed class PackingCandidate { public readonly List<PackingPage> Pages = new List<PackingPage>(); public double OccupiedArea; public bool IsGrid; }
+        private sealed class PackingPage { public int Index; public readonly List<PackedRect> Free = new List<PackedRect>(); public readonly List<PackedPlacement> Placements = new List<PackedPlacement>(); public bool[,] Grid; }
+        private class PackedRect { public double X; public double Y; public double Width; public double Height; }
+        private sealed class PackedPlacement : PackedRect { public StairLayoutItem Item; public double ContentOffsetX; public double ContentOffsetY; }
+        private sealed class PlacementChoice { public PackingPage Page; public PackedRect Free; public double AreaWaste; public double ShortWaste; }
     }
 }
