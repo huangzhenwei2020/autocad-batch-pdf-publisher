@@ -72,6 +72,7 @@ namespace WL.Stair.Tests
             SupportsBasementBaseElevation
             ,LaysOutPlansBeforeSectionAndRetainsEveryItem
             ,PacksFivePlansAndTallSectionIntoMergedGridCells
+            ,PersistsDraggedCombinedLayoutGridRatios
         };
 
         private static int Main()
@@ -716,6 +717,57 @@ namespace WL.Stair.Tests
                         || a.Y + a.Height <= b.Y + 0.001
                         || b.Y + b.Height <= a.Y + 0.001,
                         "Merged-grid layout items must not overlap.");
+        }
+
+        private static void PersistsDraggedCombinedLayoutGridRatios()
+        {
+            var items = Enumerable.Range(1, 5).Select(index => new StairLayoutItem
+            {
+                Key = "PLAN-" + index,
+                Name = index + "层楼梯平面图",
+                Width = 6200,
+                Height = 4300
+            }).ToList();
+            items.Add(new StairLayoutItem
+            {
+                Key = "SECTION",
+                Name = "LT-01 楼梯剖面图",
+                Width = 6500,
+                Height = 13800,
+                IsSection = true
+            });
+            var options = new StairLayoutOptions
+            {
+                PageWidth = 841 * 30,
+                PageHeight = 594 * 30,
+                LeftMargin = 30 * 30,
+                RightMargin = 60 * 30,
+                TopMargin = 20 * 30,
+                BottomMargin = 20 * 30,
+                ItemGap = 10 * 30
+            };
+            var automatic = StairCombinedLayout.Compute(items, options);
+            TestAssert.True(automatic.Columns > 1 && automatic.Rows > 1,
+                "The table layout must expose its real rows and columns.");
+            var section = automatic.Slots.Single(value => value.Item.IsSection);
+            TestAssert.True(section.ColumnSpan > 1 || section.RowSpan > 1,
+                "A large section must be represented as a merged grid cell.");
+            var ratios = automatic.ColumnWidths
+                .Select(value => value / automatic.ColumnWidths.Sum()).ToList();
+            var delta = Math.Min(0.02, ratios[1] * 0.2);
+            ratios[0] += delta;
+            ratios[1] -= delta;
+            options.GridColumns = automatic.Columns;
+            options.GridRows = automatic.Rows;
+            options.ColumnRatios = ratios;
+            options.RowRatios = automatic.RowHeights
+                .Select(value => value / automatic.RowHeights.Sum()).ToList();
+            var adjusted = StairCombinedLayout.Compute(items, options);
+            TestAssert.NearlyEqual(ratios[0],
+                adjusted.ColumnWidths[0] / adjusted.ColumnWidths.Sum(), 0.000001,
+                "A dragged divider ratio must survive the layout recomputation used by final insertion.");
+            TestAssert.Equal(automatic.Columns, adjusted.Columns,
+                "Dragging a divider must not change the automatic grid topology.");
         }
 
         private static void ClipsOrdinaryPlanSegmentsToCropBoundary()

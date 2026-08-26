@@ -38,6 +38,10 @@ namespace WL.Stair.Core.Layout
         public double TopMargin { get; set; }
         public double BottomMargin { get; set; }
         public double ItemGap { get; set; }
+        public int GridColumns { get; set; }
+        public int GridRows { get; set; }
+        public IList<double> ColumnRatios { get; set; }
+        public IList<double> RowRatios { get; set; }
     }
 
     public sealed class StairLayoutSlot
@@ -46,6 +50,8 @@ namespace WL.Stair.Core.Layout
         public int Page { get; set; }
         public int Row { get; set; }
         public int Column { get; set; }
+        public int ColumnSpan { get; set; }
+        public int RowSpan { get; set; }
         public double X { get; set; }
         public double Y { get; set; }
         public double Width { get; set; }
@@ -109,11 +115,51 @@ namespace WL.Stair.Core.Layout
                 Math.Max(0.0, options.ItemGap));
             if (packed == null)
                 throw new InvalidOperationException("楼梯平面或剖面无法放入当前纸张，请使用更大图框或更小出图比例。");
-            plan.Columns = 0;
-            plan.Rows = 0;
+            plan.Columns = packed.Columns;
+            plan.Rows = packed.Rows;
+            var columnWidths = ResolveSizes(contentWidth, packed.Columns,
+                options.GridColumns, options.ColumnRatios);
+            var rowHeights = ResolveSizes(contentHeight, packed.Rows,
+                options.GridRows, options.RowRatios);
+            if (packed.IsGrid && !GridFits(packed, columnWidths, rowHeights))
+            {
+                columnWidths = ResolveSizes(contentWidth, packed.Columns, 0, null);
+                rowHeights = ResolveSizes(contentHeight, packed.Rows, 0, null);
+            }
+            foreach (var value in columnWidths) plan.ColumnWidths.Add(value);
+            foreach (var value in rowHeights) plan.RowHeights.Add(value);
             plan.PageCount = packed.Pages.Count;
             foreach (var page in packed.Pages)
             {
+                if (packed.IsGrid)
+                {
+                    foreach (var value in page.Placements)
+                    {
+                        var cellX = Sum(columnWidths, 0, value.Column);
+                        var cellWidth = Sum(columnWidths, value.Column, value.ColumnSpan);
+                        var top = Sum(rowHeights, 0, value.Row);
+                        var cellHeight = Sum(rowHeights, value.Row, value.RowSpan);
+                        var cellY = contentHeight - top - cellHeight;
+                        plan.Slots.Add(new StairLayoutSlot
+                        {
+                            Item = value.Item,
+                            Page = page.Index,
+                            Row = value.Row,
+                            Column = value.Column,
+                            RowSpan = value.RowSpan,
+                            ColumnSpan = value.ColumnSpan,
+                            X = plan.ContentLeft + cellX + (cellWidth - value.Item.Width) / 2.0,
+                            Y = plan.ContentBottom + cellY + (cellHeight - value.Item.Height) / 2.0,
+                            Width = value.Item.Width,
+                            Height = value.Item.Height,
+                            CellX = plan.ContentLeft + cellX,
+                            CellY = plan.ContentBottom + cellY,
+                            CellWidth = cellWidth,
+                            CellHeight = cellHeight
+                        });
+                    }
+                    continue;
+                }
                 var minX = page.Placements.Min(value => value.X);
                 var minY = page.Placements.Min(value => value.Y);
                 var maxX = page.Placements.Max(value => value.X + value.Width);
@@ -128,6 +174,8 @@ namespace WL.Stair.Core.Layout
                         Page = page.Index,
                         Row = 0,
                         Column = 0,
+                        RowSpan = 1,
+                        ColumnSpan = 1,
                         X = plan.ContentLeft + value.X + shiftX + value.ContentOffsetX,
                         Y = plan.ContentBottom + value.Y + shiftY + value.ContentOffsetY,
                         Width = value.Item.Width,
@@ -145,6 +193,41 @@ namespace WL.Stair.Core.Layout
             plan.Slots.Clear();
             foreach (var slot in sorted) plan.Slots.Add(slot);
             return plan;
+        }
+
+        private static IList<double> ResolveSizes(double total, int count,
+            int requestedCount, IList<double> ratios)
+        {
+            var result = new List<double>();
+            if (count <= 0) return result;
+            if (requestedCount == count && ratios != null && ratios.Count == count
+                && ratios.All(value => value > 0.000001))
+            {
+                var sum = ratios.Sum();
+                foreach (var ratio in ratios) result.Add(total * ratio / sum);
+                return result;
+            }
+            for (var index = 0; index < count; index++) result.Add(total / count);
+            return result;
+        }
+
+        private static double Sum(IList<double> values, int start, int count)
+        {
+            var result = 0.0;
+            for (var index = start; index < start + count && index < values.Count; index++)
+                result += values[index];
+            return result;
+        }
+
+        private static bool GridFits(PackingCandidate packed,
+            IList<double> columnWidths, IList<double> rowHeights)
+        {
+            foreach (var page in packed.Pages)
+                foreach (var value in page.Placements)
+                    if (Sum(columnWidths, value.Column, value.ColumnSpan) + 0.01 < value.Item.Width
+                        || Sum(rowHeights, value.Row, value.RowSpan) + 0.01 < value.Item.Height)
+                        return false;
+            return true;
         }
 
         private static PackingCandidate FindBestPacking(
@@ -201,7 +284,12 @@ namespace WL.Stair.Core.Layout
             if (columns * rows < 2) return null;
             var cellWidth = width / columns;
             var cellHeight = height / rows;
-            var result = new PackingCandidate { IsGrid = true };
+            var result = new PackingCandidate
+            {
+                IsGrid = true,
+                Columns = columns,
+                Rows = rows
+            };
             foreach (var item in items)
             {
                 var spanColumns = Math.Max(1, (int)Math.Ceiling((item.Width + gap) / cellWidth));
@@ -239,7 +327,11 @@ namespace WL.Stair.Core.Layout
                     Width = mergedWidth,
                     Height = mergedHeight,
                     ContentOffsetX = (mergedWidth - item.Width) / 2.0,
-                    ContentOffsetY = (mergedHeight - item.Height) / 2.0
+                    ContentOffsetY = (mergedHeight - item.Height) / 2.0,
+                    Column = targetColumn,
+                    Row = targetRow,
+                    ColumnSpan = spanColumns,
+                    RowSpan = spanRows
                 });
             }
             result.OccupiedArea = result.Pages.Count * width * height;
@@ -356,10 +448,10 @@ namespace WL.Stair.Core.Layout
             }
         }
 
-        private sealed class PackingCandidate { public readonly List<PackingPage> Pages = new List<PackingPage>(); public double OccupiedArea; public bool IsGrid; }
+        private sealed class PackingCandidate { public readonly List<PackingPage> Pages = new List<PackingPage>(); public double OccupiedArea; public bool IsGrid; public int Columns; public int Rows; }
         private sealed class PackingPage { public int Index; public readonly List<PackedRect> Free = new List<PackedRect>(); public readonly List<PackedPlacement> Placements = new List<PackedPlacement>(); public bool[,] Grid; }
         private class PackedRect { public double X; public double Y; public double Width; public double Height; }
-        private sealed class PackedPlacement : PackedRect { public StairLayoutItem Item; public double ContentOffsetX; public double ContentOffsetY; }
+        private sealed class PackedPlacement : PackedRect { public StairLayoutItem Item; public double ContentOffsetX; public double ContentOffsetY; public int Column; public int Row; public int ColumnSpan = 1; public int RowSpan = 1; }
         private sealed class PlacementChoice { public PackingPage Page; public PackedRect Free; public double AreaWaste; public double ShortWaste; }
     }
 }

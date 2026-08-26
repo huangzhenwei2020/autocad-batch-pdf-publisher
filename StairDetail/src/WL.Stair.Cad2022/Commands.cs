@@ -129,7 +129,11 @@ namespace WL.Stair.Cad2022
                         RightMargin = frame.RightMargin * scale,
                         TopMargin = frame.TopMargin * scale,
                         BottomMargin = frame.BottomMargin * scale,
-                        ItemGap = 10.0 * scale
+                        ItemGap = 10.0 * scale,
+                        GridColumns = project.CombinedLayoutGridColumns,
+                        GridRows = project.CombinedLayoutGridRows,
+                        ColumnRatios = project.CombinedLayoutColumnRatios,
+                        RowRatios = project.CombinedLayoutRowRatios
                     });
                 const double pageGapPaper = 25.0;
                 objectsBeforeInsert = SnapshotCurrentSpace(document.Database);

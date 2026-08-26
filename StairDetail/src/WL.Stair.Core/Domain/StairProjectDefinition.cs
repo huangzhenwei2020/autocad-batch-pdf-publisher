@@ -22,6 +22,8 @@ namespace WL.Stair.Core.Domain
             Storeys = new List<StairStoreyDefinition>();
             WallOpenings = new List<StairWallOpeningDefinition>();
             PlanSources = new List<StairPlanSourceDefinition>();
+            CombinedLayoutColumnRatios = new List<double>();
+            CombinedLayoutRowRatios = new List<double>();
         }
 
         public int SchemaVersion { get; set; }
@@ -67,6 +69,19 @@ namespace WL.Stair.Core.Domain
         /// preserves the complete pre-plan-capture LTDY behavior.
         /// </summary>
         public IList<StairPlanSourceDefinition> PlanSources { get; set; }
+
+        /// <summary>
+        /// User-adjusted whole-sheet grid. Ratios are portable and therefore
+        /// remain valid when the complete plugin folder is moved to a new PC.
+        /// A changed automatic grid count safely ignores stale ratios.
+        /// </summary>
+        public int CombinedLayoutGridColumns { get; set; }
+
+        public int CombinedLayoutGridRows { get; set; }
+
+        public IList<double> CombinedLayoutColumnRatios { get; set; }
+
+        public IList<double> CombinedLayoutRowRatios { get; set; }
 
         public static StairProjectDefinition CreateDefault()
         {

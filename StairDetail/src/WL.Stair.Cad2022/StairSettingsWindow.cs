@@ -360,8 +360,22 @@ namespace WL.Stair.Cad2022
                 RightMargin = (frame == null ? 60.0 : frame.RightMargin) * scale,
                 TopMargin = (frame == null ? 20.0 : frame.TopMargin) * scale,
                 BottomMargin = (frame == null ? 20.0 : frame.BottomMargin) * scale,
-                ItemGap = 10.0 * scale
+                ItemGap = 10.0 * scale,
+                GridColumns = _state.Project.CombinedLayoutGridColumns,
+                GridRows = _state.Project.CombinedLayoutGridRows,
+                ColumnRatios = _state.Project.CombinedLayoutColumnRatios,
+                RowRatios = _state.Project.CombinedLayoutRowRatios
             });
+            _state.Project.CombinedLayoutGridColumns = layout.Columns;
+            _state.Project.CombinedLayoutGridRows = layout.Rows;
+            // Persist the dimensions actually accepted by the layout engine.  When a
+            // dragged divider would make a merged cell too small, Compute falls back
+            // to a valid grid; writing those values back keeps preview, subsequent
+            // drags and final insertion on the same topology.
+            _state.Project.CombinedLayoutColumnRatios = layout.ColumnWidths
+                .Select(value => value / Math.Max(1.0, layout.ContentRight - layout.ContentLeft)).ToList();
+            _state.Project.CombinedLayoutRowRatios = layout.RowHeights
+                .Select(value => value / Math.Max(1.0, layout.ContentTop - layout.ContentBottom)).ToList();
             var missing = _state.Project.Floors.Count(floor => floor != null
                 && !registeredFloorIds.Contains(floor.Id ?? string.Empty));
             return new LayoutPreviewResult
@@ -631,9 +645,15 @@ namespace WL.Stair.Cad2022
             var builder = new StringBuilder();
             builder.AppendFormat(
                 CultureInfo.InvariantCulture,
-                "<svg id='sectionSvg' viewBox='0 0 {0} {1}' preserveAspectRatio='xMidYMid meet'>",
+                "<svg id='sectionSvg' viewBox='0 0 {0} {1}' preserveAspectRatio='xMidYMid meet' data-layout-columns='{2}' data-layout-rows='{3}' data-column-ratios='{4}' data-row-ratios='{5}' data-content-width='{6}' data-content-height='{7}'>",
                 totalWidth,
-                layout.PageHeight);
+                layout.PageHeight,
+                layout.Columns,
+                layout.Rows,
+                string.Join(",", layout.ColumnWidths.Select(value => (value / Math.Max(1.0, layout.ContentRight - layout.ContentLeft)).ToString("R", CultureInfo.InvariantCulture))),
+                string.Join(",", layout.RowHeights.Select(value => (value / Math.Max(1.0, layout.ContentTop - layout.ContentBottom)).ToString("R", CultureInfo.InvariantCulture))),
+                layout.ContentRight - layout.ContentLeft,
+                layout.ContentTop - layout.ContentBottom);
             builder.Append("<rect width='100%' height='100%' fill='#10161d'/>");
             for (var page = 0; page < layout.PageCount; page++)
             {
@@ -653,6 +673,26 @@ namespace WL.Stair.Cad2022
                 builder.AppendFormat(CultureInfo.InvariantCulture,
                     "<text x='{0}' y='{1}' text-anchor='start' style='font-size:{2}px;fill:#dce5ed'>第 {3} 页 · A1 横向</text>",
                     pageX + 12 * scale, 15 * scale, 5 * scale, page + 1);
+                var gridX = pageX + layout.ContentLeft;
+                var gridTop = layout.PageHeight - layout.ContentTop;
+                var running = 0.0;
+                for (var column = 0; column < layout.ColumnWidths.Count - 1; column++)
+                {
+                    running += layout.ColumnWidths[column];
+                    builder.AppendFormat(CultureInfo.InvariantCulture,
+                        "<line x1='{0}' y1='{1}' x2='{0}' y2='{2}' stroke='#708191' stroke-width='{3}' stroke-dasharray='{4} {5}'/>",
+                        gridX + running, gridTop, layout.PageHeight - layout.ContentBottom,
+                        Math.Max(1.0, scale * 0.05), 3 * scale, 2 * scale);
+                }
+                running = 0.0;
+                for (var row = 0; row < layout.RowHeights.Count - 1; row++)
+                {
+                    running += layout.RowHeights[row];
+                    builder.AppendFormat(CultureInfo.InvariantCulture,
+                        "<line x1='{0}' y1='{1}' x2='{2}' y2='{1}' stroke='#708191' stroke-width='{3}' stroke-dasharray='{4} {5}'/>",
+                        gridX, gridTop + running, pageX + layout.ContentRight,
+                        Math.Max(1.0, scale * 0.05), 3 * scale, 2 * scale);
+                }
             }
 
             foreach (var slot in layout.Slots)
@@ -660,6 +700,12 @@ namespace WL.Stair.Cad2022
                 var pageX = slot.Page * (layout.PageWidth + pageGap);
                 var x = pageX + slot.X;
                 var y = layout.PageHeight - slot.Y - slot.Height;
+                var cellX = pageX + slot.CellX;
+                var cellY = layout.PageHeight - slot.CellY - slot.CellHeight;
+                builder.AppendFormat(CultureInfo.InvariantCulture,
+                    "<rect x='{0}' y='{1}' width='{2}' height='{3}' fill='#151e27' stroke='#708191' stroke-width='{4}' stroke-dasharray='{5} {6}'/>",
+                    cellX, cellY, slot.CellWidth, slot.CellHeight,
+                    Math.Max(1.0, scale * 0.055), 3 * scale, 2 * scale);
                 builder.AppendFormat(CultureInfo.InvariantCulture,
                     "<rect x='{0}' y='{1}' width='{2}' height='{3}' fill='none' stroke='{4}' stroke-width='{5}' stroke-dasharray='{6} {7}'/>",
                     x, y, slot.Width, slot.Height,
@@ -695,6 +741,33 @@ namespace WL.Stair.Cad2022
                     "<text x='{0}' y='{1}' text-anchor='middle' style='font-size:{2}px;font-weight:700;fill:#ffffff;stroke:#101820;stroke-width:{3};paint-order:stroke'>{4}</text>",
                     x + slot.Width / 2.0, y + slot.Height - 3 * scale,
                     5 * scale, Math.Max(1.0, scale * 0.08), Escape(slot.Item.Name));
+            }
+            if (layout.Columns > 1 || layout.Rows > 1)
+            {
+                for (var page = 0; page < layout.PageCount; page++)
+                {
+                    var pageX = page * (layout.PageWidth + pageGap);
+                    var gridX = pageX + layout.ContentLeft;
+                    var gridTop = layout.PageHeight - layout.ContentTop;
+                    var running = 0.0;
+                    for (var column = 0; column < layout.ColumnWidths.Count - 1; column++)
+                    {
+                        running += layout.ColumnWidths[column];
+                        builder.AppendFormat(CultureInfo.InvariantCulture,
+                            "<line class='layout-divider' data-layout-axis='x' data-layout-index='{0}' x1='{1}' y1='{2}' x2='{1}' y2='{3}' stroke='transparent' stroke-width='{4}' pointer-events='stroke' style='cursor:ew-resize'/>",
+                            column, gridX + running, gridTop,
+                            layout.PageHeight - layout.ContentBottom, Math.Max(12.0, scale * 0.6));
+                    }
+                    running = 0.0;
+                    for (var row = 0; row < layout.RowHeights.Count - 1; row++)
+                    {
+                        running += layout.RowHeights[row];
+                        builder.AppendFormat(CultureInfo.InvariantCulture,
+                            "<line class='layout-divider' data-layout-axis='y' data-layout-index='{0}' x1='{1}' y1='{2}' x2='{3}' y2='{2}' stroke='transparent' stroke-width='{4}' pointer-events='stroke' style='cursor:ns-resize'/>",
+                            row, gridX, gridTop + running,
+                            pageX + layout.ContentRight, Math.Max(12.0, scale * 0.6));
+                    }
+                }
             }
             builder.Append("</svg>");
             return builder.ToString();
