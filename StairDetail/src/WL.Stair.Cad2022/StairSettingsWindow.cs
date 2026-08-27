@@ -654,7 +654,7 @@ namespace WL.Stair.Cad2022
                 string.Join(",", layout.RowHeights.Select(value => (value / Math.Max(1.0, layout.ContentTop - layout.ContentBottom)).ToString("R", CultureInfo.InvariantCulture))),
                 layout.ContentRight - layout.ContentLeft,
                 layout.ContentTop - layout.ContentBottom);
-            builder.Append("<style>.layout-divider-guide{pointer-events:none;opacity:0;stroke:#54ef92;stroke-linecap:round}.layout-divider-handle{pointer-events:none;opacity:0;fill:#54ef92;stroke:#101820}.layout-divider.dragging+.layout-divider-guide,.layout-divider-guide.active{opacity:1}.layout-divider-handle.active{opacity:1}</style>");
+            builder.Append("<style>.layout-divider-guide{pointer-events:none;opacity:.58;stroke:#54ef92;stroke-linecap:round}.layout-divider-handle{pointer-events:none;opacity:.42;fill:#54ef92;stroke:#101820}.layout-divider-guide.active{opacity:1;stroke-width:8}.layout-divider-handle.active{opacity:1}</style>");
             builder.Append("<rect width='100%' height='100%' fill='#10161d'/>");
             for (var page = 0; page < layout.PageCount; page++)
             {
