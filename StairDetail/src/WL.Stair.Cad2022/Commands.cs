@@ -141,10 +141,8 @@ namespace WL.Stair.Cad2022
                 InsertRegisteredFrames(frame.RegistrationId, scale, point.Value,
                     layout.PageCount, pageGapPaper);
                 WriteCombinedLayoutLog(stage, "成功，页数=" + layout.PageCount);
-                var insertedBySlot = new Dictionary<StairLayoutSlot, IList<ObjectId>>();
                 foreach (var slot in layout.Slots)
                 {
-                    var beforeSlot = SnapshotCurrentSpace(document.Database);
                     var entry = entries.First(value => ReferenceEquals(value.LayoutItem, slot.Item));
                     var pageOrigin = new Point3d(
                         point.Value.X + slot.Page * (layout.PageWidth + pageGapPaper * scale),
@@ -175,17 +173,9 @@ namespace WL.Stair.Cad2022
                         }
                         WriteCombinedLayoutLog(stage, "成功");
                     }
-                    insertedBySlot[slot] = SnapshotCurrentSpace(document.Database)
-                        .Where(id => !beforeSlot.Contains(id)).ToList();
                 }
-                stage = "插入可编辑排版分格";
-                StairLayoutGridService.Insert(document, point.Value, layout,
-                    pageGapPaper * scale, insertedBySlot, scale);
-                WriteCombinedLayoutLog(stage, "成功，列=" + layout.Columns
-                    + "，行=" + layout.Rows);
                 editor.WriteMessage("\n整套楼梯大样已插入：" + (entries.Count - 1)
-                    + " 个平面、1 个剖面、" + layout.PageCount
-                    + " 张图框。可选择虚线分隔边的中点夹点直接调整格子。\n");
+                    + " 个平面、1 个剖面、" + layout.PageCount + " 张图框。\n");
             }
             catch (System.Exception exception)
             {
