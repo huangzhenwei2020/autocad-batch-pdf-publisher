@@ -1,4 +1,5 @@
 using Autodesk.AutoCAD.ApplicationServices;
+using Autodesk.AutoCAD.Colors;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Geometry;
@@ -174,6 +175,10 @@ namespace WL.Stair.Cad2022
                         WriteCombinedLayoutLog(stage, "成功");
                     }
                 }
+                stage = "插入排版分格";
+                DrawCombinedLayoutGrid(document.Database, layout, point.Value,
+                    pageGapPaper * scale, scale);
+                WriteCombinedLayoutLog(stage, "成功（普通虚线，不创建组和夹点编辑）");
                 editor.WriteMessage("\n整套楼梯大样已插入：" + (entries.Count - 1)
                     + " 个平面、1 个剖面、" + layout.PageCount + " 张图框。\n");
             }
@@ -185,6 +190,135 @@ namespace WL.Stair.Cad2022
                 editor.WriteMessage("\n整套插入失败（" + stage + "）："
                     + exception.Message + "\n已回滚本次插入产生的图框和构件。\n");
             }
+        }
+
+        private static void DrawCombinedLayoutGrid(Database database,
+            StairLayoutPlan layout, Point3d origin, double pageGap, int scale)
+        {
+            if (database == null || layout == null || layout.PageCount <= 0) return;
+            using (var transaction = database.TransactionManager.StartTransaction())
+            {
+                var layerId = EnsureLayoutGridLayer(database, transaction);
+                var lineTypeId = EnsureLayoutGridLineType(database, transaction);
+                var space = (BlockTableRecord)transaction.GetObject(
+                    database.CurrentSpaceId, OpenMode.ForWrite);
+                for (var page = 0; page < layout.PageCount; page++)
+                {
+                    var pageOffset = page * (layout.PageWidth + pageGap);
+                    var left = origin.X + pageOffset + layout.ContentLeft;
+                    var right = origin.X + pageOffset + layout.ContentRight;
+                    var bottom = origin.Y + layout.ContentBottom;
+                    var top = origin.Y + layout.ContentTop;
+                    AddLayoutGridSegment(space, transaction, layerId, lineTypeId,
+                        new Point3d(left, bottom, origin.Z), new Point3d(right, bottom, origin.Z), scale);
+                    AddLayoutGridSegment(space, transaction, layerId, lineTypeId,
+                        new Point3d(right, bottom, origin.Z), new Point3d(right, top, origin.Z), scale);
+                    AddLayoutGridSegment(space, transaction, layerId, lineTypeId,
+                        new Point3d(right, top, origin.Z), new Point3d(left, top, origin.Z), scale);
+                    AddLayoutGridSegment(space, transaction, layerId, lineTypeId,
+                        new Point3d(left, top, origin.Z), new Point3d(left, bottom, origin.Z), scale);
+
+                    var running = 0.0;
+                    for (var column = 0; column < layout.ColumnWidths.Count - 1; column++)
+                    {
+                        running += layout.ColumnWidths[column];
+                        var gaps = layout.Slots.Where(slot => slot.Page == page
+                                && slot.Column <= column
+                                && slot.Column + slot.ColumnSpan > column + 1)
+                            .Select(slot => Tuple.Create(origin.Y + slot.CellY,
+                                origin.Y + slot.CellY + slot.CellHeight));
+                        foreach (var interval in SubtractIntervals(bottom, top, gaps))
+                            AddLayoutGridSegment(space, transaction, layerId, lineTypeId,
+                                new Point3d(left + running, interval.Item1, origin.Z),
+                                new Point3d(left + running, interval.Item2, origin.Z), scale);
+                    }
+
+                    running = 0.0;
+                    for (var row = 0; row < layout.RowHeights.Count - 1; row++)
+                    {
+                        running += layout.RowHeights[row];
+                        var y = top - running;
+                        var gaps = layout.Slots.Where(slot => slot.Page == page
+                                && slot.Row <= row
+                                && slot.Row + slot.RowSpan > row + 1)
+                            .Select(slot => Tuple.Create(origin.X + pageOffset + slot.CellX,
+                                origin.X + pageOffset + slot.CellX + slot.CellWidth));
+                        foreach (var interval in SubtractIntervals(left, right, gaps))
+                            AddLayoutGridSegment(space, transaction, layerId, lineTypeId,
+                                new Point3d(interval.Item1, y, origin.Z),
+                                new Point3d(interval.Item2, y, origin.Z), scale);
+                    }
+                }
+                transaction.Commit();
+            }
+        }
+
+        private static IEnumerable<Tuple<double, double>> SubtractIntervals(
+            double start, double end, IEnumerable<Tuple<double, double>> exclusions)
+        {
+            var cursor = start;
+            foreach (var value in (exclusions ?? Enumerable.Empty<Tuple<double, double>>())
+                .Select(item => Tuple.Create(Math.Max(start, Math.Min(item.Item1, item.Item2)),
+                    Math.Min(end, Math.Max(item.Item1, item.Item2))))
+                .Where(item => item.Item2 > item.Item1 + 0.01)
+                .OrderBy(item => item.Item1))
+            {
+                if (value.Item1 > cursor + 0.01)
+                    yield return Tuple.Create(cursor, value.Item1);
+                cursor = Math.Max(cursor, value.Item2);
+                if (cursor >= end - 0.01) yield break;
+            }
+            if (cursor < end - 0.01) yield return Tuple.Create(cursor, end);
+        }
+
+        private static void AddLayoutGridSegment(BlockTableRecord space,
+            Transaction transaction, ObjectId layerId, ObjectId lineTypeId,
+            Point3d start, Point3d end, int scale)
+        {
+            if (start.DistanceTo(end) <= 0.01) return;
+            var line = new Line(start, end)
+            {
+                LayerId = layerId,
+                LinetypeScale = Math.Max(1.0, scale)
+            };
+            if (!lineTypeId.IsNull) line.LinetypeId = lineTypeId;
+            space.AppendEntity(line);
+            transaction.AddNewlyCreatedDBObject(line, true);
+        }
+
+        private static ObjectId EnsureLayoutGridLayer(Database database,
+            Transaction transaction)
+        {
+            const string name = "WL-图框";
+            var table = (LayerTable)transaction.GetObject(database.LayerTableId, OpenMode.ForRead);
+            if (table.Has(name)) return table[name];
+            table.UpgradeOpen();
+            var layer = new LayerTableRecord
+            {
+                Name = name,
+                Color = Color.FromColorIndex(ColorMethod.ByAci, 4)
+            };
+            var id = table.Add(layer);
+            transaction.AddNewlyCreatedDBObject(layer, true);
+            return id;
+        }
+
+        private static ObjectId EnsureLayoutGridLineType(Database database,
+            Transaction transaction)
+        {
+            const string name = "DASHED";
+            var table = (LinetypeTable)transaction.GetObject(database.LinetypeTableId, OpenMode.ForRead);
+            if (!table.Has(name))
+            {
+                try
+                {
+                    database.LoadLineTypeFile(name, "acad.lin");
+                    table = (LinetypeTable)transaction.GetObject(database.LinetypeTableId,
+                        OpenMode.ForRead);
+                }
+                catch (Autodesk.AutoCAD.Runtime.Exception) { }
+            }
+            return table.Has(name) ? table[name] : ObjectId.Null;
         }
 
         private static HashSet<ObjectId> SnapshotCurrentSpace(Database database)

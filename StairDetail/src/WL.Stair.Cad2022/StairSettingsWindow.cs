@@ -654,6 +654,7 @@ namespace WL.Stair.Cad2022
                 string.Join(",", layout.RowHeights.Select(value => (value / Math.Max(1.0, layout.ContentTop - layout.ContentBottom)).ToString("R", CultureInfo.InvariantCulture))),
                 layout.ContentRight - layout.ContentLeft,
                 layout.ContentTop - layout.ContentBottom);
+            builder.Append("<style>.layout-divider-guide{pointer-events:none;opacity:0;stroke:#54ef92;stroke-linecap:round}.layout-divider-handle{pointer-events:none;opacity:0;fill:#54ef92;stroke:#101820}.layout-divider.dragging+.layout-divider-guide,.layout-divider-guide.active{opacity:1}.layout-divider-handle.active{opacity:1}</style>");
             builder.Append("<rect width='100%' height='100%' fill='#10161d'/>");
             for (var page = 0; page < layout.PageCount; page++)
             {
@@ -754,18 +755,38 @@ namespace WL.Stair.Cad2022
                     {
                         running += layout.ColumnWidths[column];
                         builder.AppendFormat(CultureInfo.InvariantCulture,
+                            "<line class='layout-divider-guide' data-layout-axis='x' data-layout-index='{0}' x1='{1}' y1='{2}' x2='{1}' y2='{3}' stroke-width='{4}' stroke-dasharray='{5} {6}'/>",
+                            column, gridX + running, gridTop,
+                            layout.PageHeight - layout.ContentBottom, Math.Max(2.0, scale * 0.12),
+                            4 * scale, 2 * scale);
+                        builder.AppendFormat(CultureInfo.InvariantCulture,
+                            "<rect class='layout-divider-handle' data-layout-axis='x' data-layout-index='{0}' x='{1}' y='{2}' width='{3}' height='{4}' rx='{5}'/>",
+                            column, gridX + running - Math.Max(4.0, scale * 0.2),
+                            (gridTop + layout.PageHeight - layout.ContentBottom) / 2.0 - Math.Max(9.0, scale * 0.45),
+                            Math.Max(8.0, scale * 0.4), Math.Max(18.0, scale * 0.9), Math.Max(2.0, scale * 0.1));
+                        builder.AppendFormat(CultureInfo.InvariantCulture,
                             "<line class='layout-divider' data-layout-axis='x' data-layout-index='{0}' x1='{1}' y1='{2}' x2='{1}' y2='{3}' stroke='transparent' stroke-width='{4}' pointer-events='stroke' style='cursor:ew-resize'/>",
                             column, gridX + running, gridTop,
-                            layout.PageHeight - layout.ContentBottom, Math.Max(12.0, scale * 0.6));
+                            layout.PageHeight - layout.ContentBottom, Math.Max(18.0, scale * 0.9));
                     }
                     running = 0.0;
                     for (var row = 0; row < layout.RowHeights.Count - 1; row++)
                     {
                         running += layout.RowHeights[row];
                         builder.AppendFormat(CultureInfo.InvariantCulture,
+                            "<line class='layout-divider-guide' data-layout-axis='y' data-layout-index='{0}' x1='{1}' y1='{2}' x2='{3}' y2='{2}' stroke-width='{4}' stroke-dasharray='{5} {6}'/>",
+                            row, gridX, gridTop + running,
+                            pageX + layout.ContentRight, Math.Max(2.0, scale * 0.12),
+                            4 * scale, 2 * scale);
+                        builder.AppendFormat(CultureInfo.InvariantCulture,
+                            "<rect class='layout-divider-handle' data-layout-axis='y' data-layout-index='{0}' x='{1}' y='{2}' width='{3}' height='{4}' rx='{5}'/>",
+                            row, (gridX + pageX + layout.ContentRight) / 2.0 - Math.Max(9.0, scale * 0.45),
+                            gridTop + running - Math.Max(4.0, scale * 0.2),
+                            Math.Max(18.0, scale * 0.9), Math.Max(8.0, scale * 0.4), Math.Max(2.0, scale * 0.1));
+                        builder.AppendFormat(CultureInfo.InvariantCulture,
                             "<line class='layout-divider' data-layout-axis='y' data-layout-index='{0}' x1='{1}' y1='{2}' x2='{3}' y2='{2}' stroke='transparent' stroke-width='{4}' pointer-events='stroke' style='cursor:ns-resize'/>",
                             row, gridX, gridTop + running,
-                            pageX + layout.ContentRight, Math.Max(12.0, scale * 0.6));
+                            pageX + layout.ContentRight, Math.Max(18.0, scale * 0.9));
                     }
                 }
             }
