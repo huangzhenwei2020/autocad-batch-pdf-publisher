@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using WL.Stair.Core.Domain;
 
 namespace WL.Stair.Core.Layout
 {
@@ -193,6 +194,83 @@ namespace WL.Stair.Core.Layout
             plan.Slots.Clear();
             foreach (var slot in sorted) plan.Slots.Add(slot);
             return plan;
+        }
+
+        public static void ApplyPlacements(StairLayoutPlan plan,
+            IEnumerable<StairLayoutPlacementDefinition> source)
+        {
+            if (plan == null || plan.Columns <= 0 || plan.Rows <= 0
+                || plan.ColumnWidths.Count != plan.Columns
+                || plan.RowHeights.Count != plan.Rows) return;
+            foreach (var placement in (source
+                ?? Enumerable.Empty<StairLayoutPlacementDefinition>())
+                .Where(value => value != null && !string.IsNullOrWhiteSpace(value.Key)))
+            {
+                var slot = plan.Slots.FirstOrDefault(value => value.Item != null
+                    && string.Equals(value.Item.Key, placement.Key,
+                        StringComparison.OrdinalIgnoreCase));
+                if (slot == null || placement.Page < 0 || placement.Page >= plan.PageCount
+                    || placement.Column < 0 || placement.Row < 0
+                    || placement.Column + slot.ColumnSpan > plan.Columns
+                    || placement.Row + slot.RowSpan > plan.Rows) continue;
+                var overlaps = plan.Slots.Where(value => !ReferenceEquals(value, slot)
+                    && value.Page == placement.Page
+                    && RectanglesOverlap(value.Column, value.Row,
+                        value.ColumnSpan, value.RowSpan,
+                        placement.Column, placement.Row,
+                        slot.ColumnSpan, slot.RowSpan)).ToList();
+                if (overlaps.Count == 0)
+                {
+                    PlaceSlot(plan, slot, placement.Page,
+                        placement.Row, placement.Column);
+                    continue;
+                }
+                // Occupied targets retain the familiar swap behaviour when
+                // both items own the same cell shape. More complex overlaps
+                // are left unchanged to prevent drawings from colliding.
+                if (overlaps.Count != 1) continue;
+                var other = overlaps[0];
+                if (other.ColumnSpan != slot.ColumnSpan
+                    || other.RowSpan != slot.RowSpan
+                    || other.Column != placement.Column
+                    || other.Row != placement.Row) continue;
+                var oldPage = slot.Page;
+                var oldRow = slot.Row;
+                var oldColumn = slot.Column;
+                PlaceSlot(plan, slot, placement.Page,
+                    placement.Row, placement.Column);
+                PlaceSlot(plan, other, oldPage, oldRow, oldColumn);
+            }
+        }
+
+        private static bool RectanglesOverlap(int firstColumn, int firstRow,
+            int firstColumnSpan, int firstRowSpan, int secondColumn, int secondRow,
+            int secondColumnSpan, int secondRowSpan)
+        {
+            return firstColumn < secondColumn + secondColumnSpan
+                && secondColumn < firstColumn + firstColumnSpan
+                && firstRow < secondRow + secondRowSpan
+                && secondRow < firstRow + firstRowSpan;
+        }
+
+        private static void PlaceSlot(StairLayoutPlan plan, StairLayoutSlot slot,
+            int page, int row, int column)
+        {
+            var contentHeight = plan.ContentTop - plan.ContentBottom;
+            var cellX = Sum(plan.ColumnWidths, 0, column);
+            var cellWidth = Sum(plan.ColumnWidths, column, slot.ColumnSpan);
+            var top = Sum(plan.RowHeights, 0, row);
+            var cellHeight = Sum(plan.RowHeights, row, slot.RowSpan);
+            var cellY = contentHeight - top - cellHeight;
+            slot.Page = page;
+            slot.Row = row;
+            slot.Column = column;
+            slot.CellX = plan.ContentLeft + cellX;
+            slot.CellY = plan.ContentBottom + cellY;
+            slot.CellWidth = cellWidth;
+            slot.CellHeight = cellHeight;
+            slot.X = slot.CellX + (cellWidth - slot.Width) / 2.0;
+            slot.Y = slot.CellY + (cellHeight - slot.Height) / 2.0;
         }
 
         private static IList<double> ResolveSizes(double total, int count,

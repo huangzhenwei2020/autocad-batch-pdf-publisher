@@ -121,6 +121,8 @@ namespace WL.Stair.Cad2022
                     }
                 };
                 entries.Add(sectionEntry);
+                entries = ApplyCombinedLayoutOrder(entries,
+                    project.CombinedLayoutItemOrder);
                 var layout = StairCombinedLayout.Compute(entries.Select(value => value.LayoutItem),
                     new StairLayoutOptions
                     {
@@ -136,6 +138,8 @@ namespace WL.Stair.Cad2022
                         ColumnRatios = project.CombinedLayoutColumnRatios,
                         RowRatios = project.CombinedLayoutRowRatios
                     });
+                StairCombinedLayout.ApplyPlacements(layout,
+                    project.CombinedLayoutPlacements);
                 const double pageGapPaper = 25.0;
                 objectsBeforeInsert = SnapshotCurrentSpace(document.Database);
                 stage = "插入图框";
@@ -279,7 +283,8 @@ namespace WL.Stair.Cad2022
             var line = new Line(start, end)
             {
                 LayerId = layerId,
-                LinetypeScale = Math.Max(1.0, scale)
+                LinetypeScale = Math.Max(1.0, scale),
+                LineWeight = LineWeight.LineWeight013
             };
             if (!lineTypeId.IsNull) line.LinetypeId = lineTypeId;
             space.AppendEntity(line);
@@ -291,12 +296,17 @@ namespace WL.Stair.Cad2022
         {
             const string name = "WL-图框";
             var table = (LayerTable)transaction.GetObject(database.LayerTableId, OpenMode.ForRead);
-            if (table.Has(name)) return table[name];
+            if (table.Has(name))
+            {
+                var existing = (LayerTableRecord)transaction.GetObject(table[name], OpenMode.ForWrite);
+                existing.Color = Color.FromColorIndex(ColorMethod.ByAci, 250);
+                return existing.ObjectId;
+            }
             table.UpgradeOpen();
             var layer = new LayerTableRecord
             {
                 Name = name,
-                Color = Color.FromColorIndex(ColorMethod.ByAci, 4)
+                Color = Color.FromColorIndex(ColorMethod.ByAci, 250)
             };
             var id = table.Add(layer);
             transaction.AddNewlyCreatedDBObject(layer, true);
@@ -401,6 +411,20 @@ namespace WL.Stair.Cad2022
             return storey == null ? null : (project.PlanSources ?? new List<StairPlanSourceDefinition>())
                 .FirstOrDefault(value => value != null && string.IsNullOrWhiteSpace(value.FloorId)
                     && string.Equals(value.StoreyId, storey.Id, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static List<CombinedEntry> ApplyCombinedLayoutOrder(
+            IEnumerable<CombinedEntry> source, IEnumerable<string> savedOrder)
+        {
+            var entries = (source ?? Enumerable.Empty<CombinedEntry>()).ToList();
+            var keys = entries.Select(value => value.LayoutItem.Key).ToList();
+            var order = (savedOrder ?? Enumerable.Empty<string>())
+                .Where(value => keys.Contains(value, StringComparer.OrdinalIgnoreCase))
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            order.AddRange(keys.Where(value => !order.Contains(value,
+                StringComparer.OrdinalIgnoreCase)));
+            return order.Select(key => entries.First(value => string.Equals(
+                value.LayoutItem.Key, key, StringComparison.OrdinalIgnoreCase))).ToList();
         }
 
         private static void InsertRegisteredFrames(string registrationId, int scale,

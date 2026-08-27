@@ -319,6 +319,8 @@ namespace WL.Stair.Core.Geometry
                 highestElevation + WallHeightAboveHighestFloor,
                 drawingScale,
                 project.Construction);
+            AddStandardFloorBreakLines(lines, project, calculation,
+                firstAxisX, secondAxisX, drawingScale);
             AddStairwellAxisLines(
                 lines,
                 firstAxisX,
@@ -1704,6 +1706,54 @@ namespace WL.Stair.Core.Geometry
             for (var index = 0; index + 1 < points.Length; index++)
                 lines.Add(new DrawingLine(points[index], points[index + 1],
                     StairLineRole.BreakLine, false, "TOP-BREAK"));
+        }
+
+        private static void AddStandardFloorBreakLines(
+            ICollection<DrawingLine> lines,
+            StairProjectDefinition project,
+            StairProjectCalculationResult calculation,
+            double firstAxisX,
+            double secondAxisX,
+            int drawingScale)
+        {
+            if (project == null || calculation == null) return;
+            var results = calculation.Storeys.ToDictionary(value => value.Id,
+                StringComparer.OrdinalIgnoreCase);
+            var floors = (project.Floors ?? new List<StairFloorDefinition>())
+                .Where(value => value != null).ToDictionary(value => value.Id,
+                    StringComparer.OrdinalIgnoreCase);
+            foreach (var storey in project.Storeys.Where(value => value != null))
+            {
+                StairFloorDefinition lowerFloor;
+                floors.TryGetValue(storey.LowerFloorId ?? string.Empty, out lowerFloor);
+                if (storey.PlanRepeatCount <= 1
+                    && (lowerFloor == null || lowerFloor.PlanRepeatCount <= 1)) continue;
+                StairStoreyResult result;
+                if (!results.TryGetValue(storey.Id, out result)) continue;
+                AddHorizontalBreakLine(lines, firstAxisX, secondAxisX,
+                    result.LowerElevation + 1200.0, drawingScale,
+                    "STANDARD-BREAK-" + storey.Id + "-1");
+                AddHorizontalBreakLine(lines, firstAxisX, secondAxisX,
+                    result.LowerElevation + 1300.0, drawingScale,
+                    "STANDARD-BREAK-" + storey.Id + "-2");
+            }
+        }
+
+        private static void AddHorizontalBreakLine(ICollection<DrawingLine> lines,
+            double firstAxisX, double secondAxisX, double elevation,
+            int drawingScale, string componentId)
+        {
+            var extension = 4.0 * Math.Max(1, drawingScale);
+            var start = new Point2D(Math.Min(firstAxisX, secondAxisX) - extension, elevation);
+            var end = new Point2D(Math.Max(firstAxisX, secondAxisX) + extension, elevation);
+            var middle = new Point2D((start.X + end.X) / 2.0, elevation);
+            var offset = 30.0 * Math.Max(1, drawingScale) * 0.115;
+            var points = new[] { start, Polar(Polar(middle, -104.0, offset), 104.0, offset),
+                Polar(middle, -104.0, offset), Polar(middle, 76.0, offset),
+                Polar(Polar(middle, 76.0, offset), -76.0, offset), end };
+            for (var index = 0; index + 1 < points.Length; index++)
+                lines.Add(new DrawingLine(points[index], points[index + 1],
+                    StairLineRole.BreakLine, false, componentId));
         }
 
         private static Point2D Polar(Point2D origin, double angleDegrees, double distance)

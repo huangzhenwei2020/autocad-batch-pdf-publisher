@@ -14,6 +14,7 @@ namespace WL.Stair.Tests
         private static readonly IList<Action> Tests = new List<Action>
         {
             CalculatesStandardDoubleFlightStair,
+            UsesUpdatedHatchScaleDefaults,
             RecommendsBalancedEvenRiserCount,
             SplitsOddRiserCountAccordingToPreference,
             SupportsManualFlightSplit,
@@ -70,9 +71,11 @@ namespace WL.Stair.Tests
             BuildsHandrailsDimensionsAndOptionalComponentSchedule,
             LabelsFlightsAndLandings,
             SupportsBasementBaseElevation
+            ,DrawsTwoStandardFloorBreakLinesAtTwelveHundred
             ,LaysOutPlansBeforeSectionAndRetainsEveryItem
             ,PacksFivePlansAndTallSectionIntoMergedGridCells
             ,PersistsDraggedCombinedLayoutGridRatios
+            ,MovesCombinedLayoutItemIntoAnEmptyCell
         };
 
         private static int Main()
@@ -127,6 +130,43 @@ namespace WL.Stair.Tests
                 "Total height must measure from the lowest floor to the highest floor.");
             TestAssert.True(section.Texts.Any(text => text.Content.Contains("一层楼板  -3.000")),
                 "The lowest basement floor label must use its configured name and elevation.");
+        }
+
+        private static void UsesUpdatedHatchScaleDefaults()
+        {
+            var project = StairProjectDefinition.CreateDefault();
+            TestAssert.NearlyEqual(200.0, project.Construction.SectionHatch.PatternScale,
+                0.001, "Structure hatch default scale must be 200.");
+            TestAssert.NearlyEqual(20.0, project.Construction.WallHatch.PatternScale,
+                0.001, "Wall hatch default scale must be 20.");
+        }
+
+        private static void DrawsTwoStandardFloorBreakLinesAtTwelveHundred()
+        {
+            var project = StairProjectDefinition.CreateDefault();
+            project.Storeys[0].PlanFloorLabel = "2~13层";
+            project.Storeys[0].PlanRepeatCount = 12;
+            var lowerFloor = project.Floors.First(floor => floor.Id ==
+                project.Storeys[0].LowerFloorId);
+            lowerFloor.PlanFloorLabel = "2~13层";
+            lowerFloor.PlanRepeatCount = 12;
+            var outcome = new StairProjectCalculator().Calculate(project);
+            var section = new StairProjectGeometryBuilder().BuildSection(project, outcome.Result);
+            var first = section.Lines.Where(line => line.ComponentId ==
+                "STANDARD-BREAK-" + project.Storeys[0].Id + "-1").ToArray();
+            var second = section.Lines.Where(line => line.ComponentId ==
+                "STANDARD-BREAK-" + project.Storeys[0].Id + "-2").ToArray();
+
+            TestAssert.Equal(5, first.Length,
+                "The first standard-floor break symbol must contain five segments.");
+            TestAssert.Equal(5, second.Length,
+                "The second standard-floor break symbol must contain five segments.");
+            TestAssert.NearlyEqual(outcome.Result.Storeys[0].LowerElevation + 1200.0,
+                first.First().Start.Y, 0.001,
+                "The first break line must start 1200 mm above the current floor.");
+            TestAssert.NearlyEqual(100.0,
+                second.First().Start.Y - first.First().Start.Y, 0.001,
+                "The two standard-floor break lines must be 100 mm apart.");
         }
 
         private static void RecommendsBalancedEvenRiserCount()
@@ -768,6 +808,59 @@ namespace WL.Stair.Tests
                 "A dragged divider ratio must survive the layout recomputation used by final insertion.");
             TestAssert.Equal(automatic.Columns, adjusted.Columns,
                 "Dragging a divider must not change the automatic grid topology.");
+        }
+
+        private static void MovesCombinedLayoutItemIntoAnEmptyCell()
+        {
+            var items = Enumerable.Range(1, 3).Select(index => new StairLayoutItem
+            {
+                Key = "PLAN-" + index,
+                Name = index + "层楼梯平面图",
+                Width = 6900,
+                Height = 4800
+            }).ToList();
+            items.Add(new StairLayoutItem
+            {
+                Key = "SECTION",
+                Name = "楼梯剖面图",
+                Width = 7000,
+                Height = 15000,
+                IsSection = true
+            });
+            var plan = StairCombinedLayout.Compute(items, new StairLayoutOptions
+            {
+                PageWidth = 841 * 30,
+                PageHeight = 594 * 30,
+                LeftMargin = 30 * 30,
+                RightMargin = 60 * 30,
+                TopMargin = 20 * 30,
+                BottomMargin = 20 * 30,
+                ItemGap = 10 * 30
+            });
+            var item = plan.Slots.First(value => value.ColumnSpan == 1
+                && value.RowSpan == 1);
+            var empty = (from row in Enumerable.Range(0, plan.Rows)
+                         from column in Enumerable.Range(0, plan.Columns)
+                         where !plan.Slots.Any(slot => slot.Page == item.Page
+                             && slot.Column <= column
+                             && slot.Column + slot.ColumnSpan > column
+                             && slot.Row <= row
+                             && slot.Row + slot.RowSpan > row)
+                         select new { Row = row, Column = column }).First();
+
+            StairCombinedLayout.ApplyPlacements(plan,
+                new[] { new StairLayoutPlacementDefinition
+                {
+                    Key = item.Item.Key,
+                    Page = item.Page,
+                    Row = empty.Row,
+                    Column = empty.Column
+                }});
+
+            TestAssert.Equal(empty.Row, item.Row,
+                "A dragged layout item must move into an empty row.");
+            TestAssert.Equal(empty.Column, item.Column,
+                "A dragged layout item must move into an empty column.");
         }
 
         private static void ClipsOrdinaryPlanSegmentsToCropBoundary()

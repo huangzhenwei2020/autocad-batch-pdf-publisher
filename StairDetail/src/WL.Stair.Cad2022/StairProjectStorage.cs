@@ -21,6 +21,15 @@ namespace WL.Stair.Cad2022
             }
         }
 
+        private string LastLayoutFramePath
+        {
+            get
+            {
+                return Path.Combine(Path.GetDirectoryName(FilePath),
+                    "上次排版图框.txt");
+            }
+        }
+
         private static string LegacyFilePath
         {
             get
@@ -89,6 +98,29 @@ namespace WL.Stair.Cad2022
                 {
                     if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
                 }
+            }
+        }
+
+        public string LoadLastLayoutFrameId()
+        {
+            try
+            {
+                lock (FileSync)
+                    return File.Exists(LastLayoutFramePath)
+                        ? File.ReadAllText(LastLayoutFramePath).Trim()
+                        : string.Empty;
+            }
+            catch { return string.Empty; }
+        }
+
+        public void SaveLastLayoutFrameId(string registrationId)
+        {
+            if (string.IsNullOrWhiteSpace(registrationId)) return;
+            lock (FileSync)
+            {
+                var directory = Path.GetDirectoryName(LastLayoutFramePath);
+                if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
+                File.WriteAllText(LastLayoutFramePath, registrationId.Trim());
             }
         }
     }

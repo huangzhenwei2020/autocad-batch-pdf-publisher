@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -30,9 +31,9 @@ namespace WL.Stair.CadShared.PlanCapture
             if (definition == null) throw new ArgumentNullException("definition");
 
             var oldRelativePath = definition.CacheRelativePath;
-            var before = SnapshotCurrentSpace(document.Database);
             var generated = new List<ObjectId>();
             string cachePath = null;
+            var stopwatch = Stopwatch.StartNew();
             try
             {
                 Report(reportProgress, "正在准备裁切范围", 5);
@@ -41,9 +42,11 @@ namespace WL.Stair.CadShared.PlanCapture
                 Report(reportProgress, "正在生成裁切工作副本", 15);
                 new StairPlanCaptureService().CreateWorkingCopy(
                     document, definition, temporaryPoint, title);
+                WriteLog("工作副本完成", definition,
+                    "累计耗时=" + stopwatch.ElapsedMilliseconds + "ms");
                 Report(reportProgress, "正在核对裁切对象", 65);
-                generated = SnapshotCurrentSpace(document.Database)
-                    .Where(id => !before.Contains(id)).ToList();
+                generated = SelectGeneratedRegion(document, definition,
+                    temporaryPoint);
                 if (generated.Count == 0)
                     throw new InvalidOperationException("裁剪完成后没有生成可缓存的平面对象。");
 
@@ -58,9 +61,9 @@ namespace WL.Stair.CadShared.PlanCapture
                 // original ObjectIds. Re-enumerate current space instead of
                 // querying stale ids (ObjectId.IsErased itself can throw
                 // eWasErased for proxy objects).
-                generated = SnapshotCurrentSpace(document.Database)
-                    .Where(id => !before.Contains(id)).ToList();
-                WriteLog("清理后", definition, "存活对象=" + generated.Count);
+                generated = FilterLiveIds(document.Database, generated);
+                WriteLog("清理后", definition, "存活对象=" + generated.Count
+                    + "; 累计耗时=" + stopwatch.ElapsedMilliseconds + "ms");
 
                 Extents3d extents;
                 Report(reportProgress, "正在计算缓存范围", 75);
@@ -75,11 +78,15 @@ namespace WL.Stair.CadShared.PlanCapture
                 // supported by those objects, so normalize the complete working
                 // copy first and then Wblock it with an origin base point.
                 Report(reportProgress, "正在归零缓存坐标", 80);
-                NormalizeGeneratedObjects(document, generated, extents.MinPoint);
-                WriteLog("缓存归零", definition, string.Format(
-                    CultureInfo.InvariantCulture,
-                    "源最小点=({0:R},{1:R},{2:R})",
-                    extents.MinPoint.X, extents.MinPoint.Y, extents.MinPoint.Z));
+                string normalizationWarning;
+                var normalized = TryMoveObjects(document, generated,
+                    extents.MinPoint, Point3d.Origin, out normalizationWarning);
+                WriteLog(normalized ? "缓存归零" : "缓存归零降级", definition,
+                    string.Format(CultureInfo.InvariantCulture,
+                        "源最小点=({0:R},{1:R},{2:R}){3}",
+                        extents.MinPoint.X, extents.MinPoint.Y, extents.MinPoint.Z,
+                        string.IsNullOrWhiteSpace(normalizationWarning)
+                            ? string.Empty : "; " + normalizationWarning));
 
                 cachePath = GetCachePath(project, definition);
                 Report(reportProgress, "正在保存楼梯平面缓存", 85);
@@ -115,7 +122,8 @@ namespace WL.Stair.CadShared.PlanCapture
                         StringComparison.OrdinalIgnoreCase))
                     DeleteRelative(oldRelativePath);
                 Report(reportProgress, "本层缓存已完成", 100);
-                WriteLog("完成", definition, "对象=" + generated.Count + "; 文件=" + cachePath);
+                WriteLog("完成", definition, "对象=" + generated.Count + "; 文件=" + cachePath
+                    + "; 总耗时=" + stopwatch.ElapsedMilliseconds + "ms");
                 return string.Format(CultureInfo.CurrentCulture,
                     "已缓存裁剪成果 {0} 个对象，实际范围 {1:0.#}×{2:0.#}。",
                     definition.CacheObjectCount, definition.CacheWidth,
@@ -134,7 +142,6 @@ namespace WL.Stair.CadShared.PlanCapture
                     // Cleanup must never replace the real cache result/error.
                     WriteLog("临时对象清理警告", definition, exception.ToString());
                 }
-                try { document.Editor.Regen(); } catch { }
             }
         }
 
@@ -145,8 +152,16 @@ namespace WL.Stair.CadShared.PlanCapture
                 || string.IsNullOrWhiteSpace(definition.CacheRelativePath)
                 || string.IsNullOrWhiteSpace(definition.CacheFingerprint)) return false;
             var path = ResolveRelative(definition.CacheRelativePath);
-            return File.Exists(path) && string.Equals(definition.CacheFingerprint,
-                ComputeFingerprint(definition, title), StringComparison.OrdinalIgnoreCase);
+            if (!File.Exists(path)) return false;
+            var current = ComputeFingerprint(definition, title);
+            if (string.Equals(definition.CacheFingerprint, current,
+                StringComparison.OrdinalIgnoreCase)) return true;
+            // Builds before schema 21 included the editable floor title in the
+            // cache fingerprint. Accept that legacy value so renaming a floor
+            // never forces the user to capture the same geometry again.
+            return string.Equals(definition.CacheFingerprint,
+                ComputeLegacyFingerprint(definition, title),
+                StringComparison.OrdinalIgnoreCase);
         }
 
         public static void GetLayoutRange(StairPlanSourceDefinition definition,
@@ -369,7 +384,7 @@ namespace WL.Stair.CadShared.PlanCapture
                     throw new InvalidOperationException("无法取得楼梯平面缓存的实际范围。");
                 var sourceBasePoint = sourceExtents.MinPoint;
 
-                var before = SnapshotCurrentSpace(document.Database);
+                var clonedEntityIds = new List<ObjectId>();
                 try
                 {
                     using (document.LockDocument())
@@ -381,7 +396,8 @@ namespace WL.Stair.CadShared.PlanCapture
                         source.WblockCloneObjects(sourceIds,
                             document.Database.CurrentSpaceId, mapping,
                             DuplicateRecordCloning.Ignore, false);
-
+                        clonedEntityIds = GetMappedCurrentSpaceEntities(
+                            document.Database, mapping);
                     }
 
                     // IdMapping also contains entities cloned into block definitions and
@@ -389,9 +405,6 @@ namespace WL.Stair.CadShared.PlanCapture
                     // members of an Editor selection set and make MOVE fail with
                     // SelectionSet.GetAdsName/eInvalidInput.  Only move entities that were
                     // actually appended to the active current space.
-                    var clonedEntityIds = SnapshotCurrentSpace(document.Database)
-                        .Where(id => !before.Contains(id)).ToList();
-
                     if (clonedEntityIds.Count == 0) return 0;
 
                     // Do not call Entity.TransformBy here. Tianzheng custom entities may be
@@ -402,9 +415,11 @@ namespace WL.Stair.CadShared.PlanCapture
                     if (insertionPoint.DistanceTo(sourceBasePoint)
                         > Tolerance.Global.EqualPoint)
                     {
-                        var selection = SelectionSet.FromObjectIds(clonedEntityIds.ToArray());
-                        document.Editor.Command("_.MOVE", selection, string.Empty,
-                            sourceBasePoint, insertionPoint);
+                        string moveWarning;
+                        if (!TryMoveObjects(document, clonedEntityIds,
+                            sourceBasePoint, insertionPoint, out moveWarning))
+                            throw new InvalidOperationException(
+                                "楼梯平面缓存已插入，但无法移动到目标位置：" + moveWarning);
                     }
                     WriteLog("插入缓存", definition, string.Format(
                         CultureInfo.InvariantCulture,
@@ -418,8 +433,7 @@ namespace WL.Stair.CadShared.PlanCapture
                 {
                     // A failed combined insert must not leave a half-cloned floor plan.
                     using (document.LockDocument())
-                        EraseObjects(document.Database, SnapshotCurrentSpace(document.Database)
-                            .Where(id => !before.Contains(id)));
+                        EraseObjects(document.Database, clonedEntityIds);
                     throw;
                 }
             }
@@ -450,6 +464,25 @@ namespace WL.Stair.CadShared.PlanCapture
                 .Append(definition.SourceHandle).Append('|')
                 .Append(definition.BoundarySourceHandle).Append('|')
                 .Append(definition.TargetScale).Append('|')
+                .Append(definition.CropOffset.ToString("R", CultureInfo.InvariantCulture));
+            foreach (var point in definition.CropBoundaryPoints
+                ?? new List<StairPlanPointDefinition>())
+                builder.Append('|').Append(point.X.ToString("R", CultureInfo.InvariantCulture))
+                    .Append(',').Append(point.Y.ToString("R", CultureInfo.InvariantCulture));
+            using (var sha = SHA256.Create())
+                return BitConverter.ToString(sha.ComputeHash(
+                    Encoding.UTF8.GetBytes(builder.ToString()))).Replace("-", string.Empty);
+        }
+
+        private static string ComputeLegacyFingerprint(
+            StairPlanSourceDefinition definition, string title)
+        {
+            if (definition == null) return string.Empty;
+            var builder = new StringBuilder();
+            builder.Append(definition.SourceDrawingFingerprint).Append('|')
+                .Append(definition.SourceHandle).Append('|')
+                .Append(definition.BoundarySourceHandle).Append('|')
+                .Append(definition.TargetScale).Append('|')
                 .Append(definition.CropOffset.ToString("R", CultureInfo.InvariantCulture))
                 .Append('|').Append(title ?? string.Empty);
             foreach (var point in definition.CropBoundaryPoints
@@ -461,23 +494,84 @@ namespace WL.Stair.CadShared.PlanCapture
                     Encoding.UTF8.GetBytes(builder.ToString()))).Replace("-", string.Empty);
         }
 
-        private static HashSet<ObjectId> SnapshotCurrentSpace(Database database)
+        private static List<ObjectId> SelectGeneratedRegion(Document document,
+            StairPlanSourceDefinition definition, Point3d insertionPoint)
         {
-            var result = new HashSet<ObjectId>();
+            var result = new List<ObjectId>();
+            if (document == null || definition == null
+                || definition.CropBoundaryPoints == null
+                || definition.CropBoundaryPoints.Count < 3) return result;
+            var width = definition.CropBoundaryPoints.Max(point => point.X)
+                - definition.CropBoundaryPoints.Min(point => point.X);
+            var height = definition.CropBoundaryPoints.Max(point => point.Y)
+                - definition.CropBoundaryPoints.Min(point => point.Y);
+            var titleReserve = Math.Max(500.0, definition.TargetScale * 30.0);
+            try
+            {
+                var worldToUcs = document.Editor.CurrentUserCoordinateSystem.Inverse();
+                var points = new Point3dCollection
+                {
+                    new Point3d(insertionPoint.X, insertionPoint.Y - titleReserve, 0.0)
+                        .TransformBy(worldToUcs),
+                    new Point3d(insertionPoint.X + width,
+                        insertionPoint.Y - titleReserve, 0.0).TransformBy(worldToUcs),
+                    new Point3d(insertionPoint.X + width,
+                        insertionPoint.Y + height, 0.0).TransformBy(worldToUcs),
+                    new Point3d(insertionPoint.X, insertionPoint.Y + height, 0.0)
+                        .TransformBy(worldToUcs)
+                };
+                var selection = document.Editor.SelectCrossingPolygon(points);
+                if (selection.Status == PromptStatus.OK && selection.Value != null)
+                    result.AddRange(selection.Value.GetObjectIds()
+                        .Where(id => !id.IsNull && id.IsValid).Distinct());
+            }
+            catch (System.Exception exception)
+            {
+                WriteLog("区域对象选择失败", definition, exception.Message);
+            }
+            return result;
+        }
+
+        private static List<ObjectId> GetMappedCurrentSpaceEntities(
+            Database database, IdMapping mapping)
+        {
+            var result = new List<ObjectId>();
+            if (database == null || mapping == null) return result;
             using (var transaction = database.TransactionManager.StartOpenCloseTransaction())
             {
-                var space = transaction.GetObject(database.CurrentSpaceId,
-                    OpenMode.ForRead, false) as BlockTableRecord;
-                if (space != null)
-                    foreach (var id in space.Cast<ObjectId>())
+                foreach (IdPair pair in mapping)
+                {
+                    if (!pair.IsCloned || pair.Value.IsNull || !pair.Value.IsValid) continue;
+                    try
                     {
-                        try
-                        {
-                            var value = transaction.GetObject(id, OpenMode.ForRead, false);
-                            if (value != null && !value.IsErased) result.Add(id);
-                        }
-                        catch (Autodesk.AutoCAD.Runtime.Exception) { }
+                        var entity = transaction.GetObject(pair.Value,
+                            OpenMode.ForRead, false) as Entity;
+                        if (entity != null && !entity.IsErased
+                            && entity.OwnerId == database.CurrentSpaceId)
+                            result.Add(pair.Value);
                     }
+                    catch (Autodesk.AutoCAD.Runtime.Exception) { }
+                }
+            }
+            return result.Distinct().ToList();
+        }
+
+        private static List<ObjectId> FilterLiveIds(Database database,
+            IEnumerable<ObjectId> ids)
+        {
+            var result = new List<ObjectId>();
+            if (database == null || ids == null) return result;
+            using (var transaction = database.TransactionManager.StartOpenCloseTransaction())
+            {
+                foreach (var id in ids.Distinct())
+                {
+                    try
+                    {
+                        var value = transaction.GetObject(id, OpenMode.ForRead, false);
+                        if (value != null && !value.IsErased) result.Add(id);
+                    }
+                    catch (Autodesk.AutoCAD.Runtime.Exception) { }
+                }
             }
             return result;
         }
@@ -559,12 +653,14 @@ namespace WL.Stair.CadShared.PlanCapture
             return found;
         }
 
-        private static void NormalizeGeneratedObjects(Document document,
-            IList<ObjectId> ids, Point3d sourceBasePoint)
+        private static bool TryMoveObjects(Document document,
+            IList<ObjectId> ids, Point3d sourceBasePoint, Point3d targetPoint,
+            out string warning)
         {
-            if (document == null || ids == null || ids.Count == 0) return;
-            if (sourceBasePoint.DistanceTo(Point3d.Origin)
-                <= Tolerance.Global.EqualPoint) return;
+            warning = string.Empty;
+            if (document == null || ids == null || ids.Count == 0) return true;
+            if (sourceBasePoint.DistanceTo(targetPoint)
+                <= Tolerance.Global.EqualPoint) return true;
             var liveIds = new List<ObjectId>();
             using (var transaction = document.Database.TransactionManager
                 .StartOpenCloseTransaction())
@@ -580,10 +676,70 @@ namespace WL.Stair.CadShared.PlanCapture
                     catch (Autodesk.AutoCAD.Runtime.Exception) { }
                 }
             }
-            if (liveIds.Count == 0) return;
-            var selection = SelectionSet.FromObjectIds(liveIds.ToArray());
-            document.Editor.Command("_.MOVE", selection, string.Empty,
-                sourceBasePoint, Point3d.Origin);
+            if (liveIds.Count == 0) return true;
+
+            try
+            {
+                var selection = SelectionSet.FromObjectIds(liveIds.ToArray());
+                document.Editor.Command("_.MOVE", selection, string.Empty,
+                    sourceBasePoint, targetPoint);
+                return true;
+            }
+            catch (Autodesk.AutoCAD.Runtime.Exception commandException)
+            {
+                var commandError = commandException.ErrorStatus + ": "
+                    + commandException.Message;
+                try
+                {
+                    var displacement = Matrix3d.Displacement(targetPoint - sourceBasePoint);
+                    using (document.LockDocument())
+                    using (var transaction = document.Database.TransactionManager.StartTransaction())
+                    {
+                        foreach (var id in liveIds)
+                        {
+                            var entity = transaction.GetObject(id, OpenMode.ForWrite, false)
+                                as Entity;
+                            if (entity != null && !entity.IsErased)
+                                entity.TransformBy(displacement);
+                        }
+                        transaction.Commit();
+                    }
+                    warning = "原生 MOVE 失败后已改用事务移动（" + commandError + "）";
+                    return true;
+                }
+                catch (System.Exception fallbackException)
+                {
+                    warning = "原生 MOVE 与事务移动均失败；对象类型="
+                        + DescribeObjectTypes(document.Database, liveIds)
+                        + "；MOVE=" + commandError
+                        + "；事务=" + fallbackException.Message;
+                    return false;
+                }
+            }
+        }
+
+        private static string DescribeObjectTypes(Database database,
+            IEnumerable<ObjectId> ids)
+        {
+            var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            using (var transaction = database.TransactionManager.StartOpenCloseTransaction())
+            {
+                foreach (var id in ids)
+                {
+                    string name;
+                    try
+                    {
+                        var value = transaction.GetObject(id, OpenMode.ForRead, false);
+                        name = value == null || value.GetRXClass() == null
+                            ? "<unknown>" : value.GetRXClass().DxfName;
+                    }
+                    catch { name = "<unreadable>"; }
+                    int count;
+                    counts[name] = counts.TryGetValue(name, out count) ? count + 1 : 1;
+                }
+            }
+            return string.Join(",", counts.OrderBy(item => item.Key)
+                .Select(item => item.Key + "×" + item.Value));
         }
 
         private static void SaveObjects(Database database, IList<ObjectId> ids,

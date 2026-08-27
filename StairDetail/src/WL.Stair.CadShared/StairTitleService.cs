@@ -10,6 +10,9 @@ namespace WL.Stair.CadShared
     {
         private const string DrawingNameDxfName = "TCH_DRAWINGNAME";
         private const string DrawingNameComName = "TDbDrawingName";
+        private static readonly object TemplateSync = new object();
+        private static Database _templateDatabase;
+        private static ObjectId _templateId = ObjectId.Null;
         private static readonly string[] TitleTextCandidates =
         {
             "TitleText", "NameText", "TextString", "FigName", "FigNameText",
@@ -149,13 +152,35 @@ namespace WL.Stair.CadShared
 
         private static Entity FindTemplate(Database database, Transaction transaction)
         {
+            lock (TemplateSync)
+            {
+                if (ReferenceEquals(_templateDatabase, database)
+                    && !_templateId.IsNull && _templateId.IsValid)
+                {
+                    try
+                    {
+                        var cached = transaction.GetObject(_templateId,
+                            OpenMode.ForRead, false) as Entity;
+                        if (cached != null && !cached.IsErased) return cached;
+                    }
+                    catch { }
+                    _templateId = ObjectId.Null;
+                }
+            }
+
             var space = transaction.GetObject(database.CurrentSpaceId, OpenMode.ForRead, false)
                 as BlockTableRecord;
             if (space == null) return null;
             foreach (ObjectId id in space)
             {
                 var entity = transaction.GetObject(id, OpenMode.ForRead, false) as Entity;
-                if (IsDrawingName(entity)) return entity;
+                if (!IsDrawingName(entity)) continue;
+                lock (TemplateSync)
+                {
+                    _templateDatabase = database;
+                    _templateId = id;
+                }
+                return entity;
             }
             return null;
         }
@@ -163,12 +188,18 @@ namespace WL.Stair.CadShared
         private static bool IsDrawingName(Entity entity)
         {
             if (entity == null) return false;
+            var dxfName = string.Empty;
             try
             {
-                if (string.Equals(entity.GetRXClass().DxfName, DrawingNameDxfName,
+                dxfName = entity.GetRXClass().DxfName ?? string.Empty;
+                if (string.Equals(dxfName, DrawingNameDxfName,
                     StringComparison.OrdinalIgnoreCase)) return true;
             }
             catch { }
+            var upperName = dxfName.ToUpperInvariant();
+            if (!upperName.Contains("PROXY")
+                && !upperName.StartsWith("TCH_", StringComparison.Ordinal)
+                && !upperName.StartsWith("TDB", StringComparison.Ordinal)) return false;
             try
             {
                 var com = entity.AcadObject;

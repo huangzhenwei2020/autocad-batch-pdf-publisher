@@ -25,7 +25,8 @@ namespace WL.Stair.CadShared.PlanCapture
             Document document,
             string storeyId,
             string displayName,
-            double cropOffset)
+            double cropOffset,
+            Func<bool> confirmSelection)
         {
             if (document == null) return null;
             var editor = document.Editor;
@@ -105,7 +106,35 @@ namespace WL.Stair.CadShared.PlanCapture
                 }
             }
 
-            if (!ConfirmPreview(editor, definition)) return null;
+            if (!ConfirmPreview(editor, definition, confirmSelection)) return null;
+            AppendLog(definition);
+            return definition;
+        }
+
+        public StairPlanSourceDefinition CaptureFrame(
+            Document document,
+            string storeyId,
+            string displayName,
+            double cropOffset)
+        {
+            if (document == null) return null;
+            var first = document.Editor.GetPoint("\n指定楼梯平面范围第一个角点：");
+            if (first.Status != PromptStatus.OK) return null;
+            var second = document.Editor.GetCorner(new PromptCornerOptions(
+                "\n指定楼梯平面范围另一个角点：", first.Value));
+            if (second.Status != PromptStatus.OK) return null;
+            var minX = Math.Min(first.Value.X, second.Value.X);
+            var minY = Math.Min(first.Value.Y, second.Value.Y);
+            var maxX = Math.Max(first.Value.X, second.Value.X);
+            var maxY = Math.Max(first.Value.Y, second.Value.Y);
+            if (maxX - minX < 1.0 || maxY - minY < 1.0)
+                throw new InvalidOperationException("框选范围过小，请重新指定两个角点。");
+            var definition = BuildManualDefinition(document, null, new List<Point2d>
+            {
+                new Point2d(minX, minY), new Point2d(maxX, minY),
+                new Point2d(maxX, maxY), new Point2d(minX, maxY)
+            }, string.Empty, storeyId, displayName, cropOffset);
+            definition.RecognitionSummary = "使用用户框选范围登记；无需再次确认。";
             AppendLog(definition);
             return definition;
         }
@@ -515,7 +544,8 @@ namespace WL.Stair.CadShared.PlanCapture
                 definition.CropBoundaryPoints,
                 transform,
                 blockers);
-            RestoreDisplayCropBoundary(document, definition, displacement);
+            RestoreDisplayCropBoundary(document, definition, displacement,
+                cropBoundaryId);
 
             var summary = string.Format(CultureInfo.CurrentCulture,
                 "小平面工作副本已生成：天正关联对象 {0} 个、框内普通对象 {1} 个、裁剪普通线段 {2} 条、分解裁剪块内对象 {3} 个、TRIM 修剪天正墙外伸段 {4} 处；暂不支持的穿越对象 {5} 个。源平面未移动、未删除。",
@@ -606,7 +636,8 @@ namespace WL.Stair.CadShared.PlanCapture
         private static void RestoreDisplayCropBoundary(
             Document document,
             StairPlanSourceDefinition definition,
-            Vector3d displacement)
+            Vector3d displacement,
+            ObjectId temporaryBoundaryId)
         {
             if (document == null || definition == null
                 || definition.CropBoundaryPoints == null
@@ -619,17 +650,18 @@ namespace WL.Stair.CadShared.PlanCapture
                 if (space == null) return;
                 SetTemporaryTrimLayerLocked(document.Database, transaction, false);
 
-                // TRIM may replace/split the temporary cutting polyline. Remove
-                // every fragment on the dedicated non-plot layer, not only the
-                // original ObjectId.
-                foreach (var id in space.Cast<ObjectId>().ToList())
+                // Wall clipping works directly on copied curves and does not
+                // alter this temporary boundary. Avoid rescanning the full model.
+                if (!temporaryBoundaryId.IsNull && temporaryBoundaryId.IsValid)
                 {
-                    var entity = transaction.GetObject(id, OpenMode.ForRead, false) as Entity;
-                    if (entity == null || entity.IsErased
-                        || !string.Equals(entity.Layer, TemporaryTrimLayer,
-                            StringComparison.OrdinalIgnoreCase)) continue;
-                    entity.UpgradeOpen();
-                    entity.Erase();
+                    try
+                    {
+                        var temporaryBoundary = transaction.GetObject(
+                            temporaryBoundaryId, OpenMode.ForWrite, false) as Entity;
+                        if (temporaryBoundary != null && !temporaryBoundary.IsErased)
+                            temporaryBoundary.Erase();
+                    }
+                    catch (Autodesk.AutoCAD.Runtime.Exception) { }
                 }
 
                 // The visible crop frame is created only after TRIM. Therefore
@@ -652,7 +684,6 @@ namespace WL.Stair.CadShared.PlanCapture
                 transaction.AddNewlyCreatedDBObject(boundary, true);
                 transaction.Commit();
             }
-            document.Editor.Regen();
         }
 
         private static void CollectWallTrimPickPoints(
@@ -755,7 +786,6 @@ namespace WL.Stair.CadShared.PlanCapture
                 var trimmed = Math.Max(0, before - after);
                 if (after > 0 && result != null && result.Errors.Count < 12)
                     result.Errors.Add("天正墙数据库切段后仍有 " + after + " 个墙端点位于裁切线外");
-                document.Editor.Regen();
                 return trimmed;
             }
             catch (System.Exception exception)
@@ -1894,7 +1924,8 @@ namespace WL.Stair.CadShared.PlanCapture
             return definition;
         }
 
-        private static bool ConfirmPreview(Editor editor, StairPlanSourceDefinition definition)
+        private static bool ConfirmPreview(Editor editor, StairPlanSourceDefinition definition,
+            Func<bool> confirmSelection)
         {
             var transients = new List<Entity>();
             try
@@ -1917,6 +1948,7 @@ namespace WL.Stair.CadShared.PlanCapture
                 editor.WriteMessage(definition.WallAxes.Count > 0
                     ? "\n预览颜色：青色=采用的天正墙基线，绿色=墙轴线计算内边界，红色虚线=外偏裁剪边界。\n"
                     : "\n预览颜色：绿色=用户闭合多段线内边界，红色虚线=外偏裁剪边界。\n");
+                if (confirmSelection != null) return confirmSelection();
                 var keyword = new PromptKeywordOptions(
                     "\n确认采用当前墙轴线边界？ [接受(A)/取消(C)] <接受>: ");
                 keyword.AllowNone = true;

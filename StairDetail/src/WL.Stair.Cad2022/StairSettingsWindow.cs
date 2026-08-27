@@ -2,8 +2,10 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows;
 using System.Windows.Controls;
@@ -23,6 +25,8 @@ namespace WL.Stair.Cad2022
 {
     internal sealed class StairSettingsWindow : Window
     {
+        private static readonly object WebViewEnvironmentSync = new object();
+        private static Task<CoreWebView2Environment> _webViewEnvironmentTask;
         private readonly WebView2 _webView = new WebView2();
         private readonly JavaScriptSerializer _serializer = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
         private readonly StairProjectCalculator _calculator = new StairProjectCalculator();
@@ -33,13 +37,16 @@ namespace WL.Stair.Cad2022
             = new Dictionary<string, IList<StairLayoutPreviewLine>>(StringComparer.OrdinalIgnoreCase);
         private UiState _state;
         private bool _isClosing;
+        private bool _initializationStarted;
 
         public StairSettingsWindow()
         {
             _state = UiState.Create(_storage.LoadOrDefault());
+            _state.SelectedLayoutFrameId = _storage.LoadLastLayoutFrameId();
             LoadRegisteredLayoutFrames();
             _constraints.Normalize(_state.Project);
             _constraints.Apply(_state.Project);
+            MigrateLegacyPlanCacheFingerprints();
             Title = "万落建筑 - 楼梯构件设置";
             Width = 1380;
             Height = 850;
@@ -71,9 +78,13 @@ namespace WL.Stair.Cad2022
 
         private async void OnLoaded(object sender, RoutedEventArgs eventArgs)
         {
+            if (_initializationStarted) return;
+            _initializationStarted = true;
+
             try
             {
-                await _webView.EnsureCoreWebView2Async();
+                var environment = await GetWebViewEnvironmentAsync();
+                await _webView.EnsureCoreWebView2Async(environment);
                 if (_isClosing) return;
                 _webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
                 _webView.CoreWebView2.Settings.AreDevToolsEnabled = false;
@@ -88,6 +99,25 @@ namespace WL.Stair.Cad2022
             }
         }
 
+        private static Task<CoreWebView2Environment> GetWebViewEnvironmentAsync()
+        {
+            lock (WebViewEnvironmentSync)
+            {
+                if (_webViewEnvironmentTask == null)
+                {
+                    var userDataFolder = Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                        "WanluoArchitectureTools",
+                        "WebView2",
+                        "StairDetail-R24");
+                    Directory.CreateDirectory(userDataFolder);
+                    _webViewEnvironmentTask = CoreWebView2Environment.CreateAsync(null, userDataFolder);
+                }
+
+                return _webViewEnvironmentTask;
+            }
+        }
+
         private void OnWebMessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs eventArgs)
         {
             try
@@ -96,7 +126,12 @@ namespace WL.Stair.Cad2022
             }
             catch (Exception exception)
             {
-                if (!_isClosing) SendPreview(null, "操作失败：" + exception.Message, false);
+                if (!_isClosing)
+                {
+                    SendPreview(null, "操作失败：" + exception.Message, false);
+                    MessageBox.Show(this, exception.Message, "楼梯大样操作失败",
+                        MessageBoxButton.OK, MessageBoxImage.Error);
+                }
             }
         }
 
@@ -132,6 +167,7 @@ namespace WL.Stair.Cad2022
                     ? null : _state.Project.PlanSources,
                     message.State.Project == null ? null : message.State.Project.PlanSources);
                 _state = message.State;
+                _storage.SaveLastLayoutFrameId(_state.SelectedLayoutFrameId);
             }
 
             if (message.Action == "measure")
@@ -183,7 +219,11 @@ namespace WL.Stair.Cad2022
                 return;
             }
 
-            if (string.Equals(message.Action, "layout-preview", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(message.Action, "layout-move", StringComparison.OrdinalIgnoreCase))
+                MoveCombinedLayoutItem(message.Target);
+
+            if (string.Equals(message.Action, "layout-preview", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(message.Action, "layout-move", StringComparison.OrdinalIgnoreCase))
             {
                 ValidatePlanCaches();
                 var layoutPreview = BuildCombinedLayoutPreview(outcome.Result);
@@ -251,9 +291,27 @@ namespace WL.Stair.Cad2022
             {
                 isPlanPreview = true;
             }
-            var view = isPlanPreview
-                ? _geometryBuilder.BuildPlan(_state.Project, outcome.Result, planStoreyIndex)
-                : _geometryBuilder.BuildSection(_state.Project, outcome.Result);
+            DrawingView view;
+            if (isPlanPreview)
+            {
+                var source = previewFloor == null ? null
+                    : FindPlanSourceForFloor(previewFloor.Id);
+                var title = previewFloor == null ? string.Empty
+                    : (previewFloor.PlanFloorLabel ?? string.Empty) + "楼梯平面图";
+                var cache = new StairPlanCacheService();
+                if (source != null && cache.IsValid(source, title))
+                {
+                    var lines = GetPlanPreviewLines(cache, source).Select(line =>
+                        new DrawingLine(new Point2D(line.X1, line.Y1),
+                            new Point2D(line.X2, line.Y2),
+                            StairLineRole.CutFlightProfile, line.Dashed,
+                            previewFloor.Id));
+                    view = new DrawingView("CachedPlan-" + previewFloor.Id, lines);
+                }
+                else view = _geometryBuilder.BuildPlan(_state.Project,
+                    outcome.Result, planStoreyIndex);
+            }
+            else view = _geometryBuilder.BuildSection(_state.Project, outcome.Result);
             var summary = string.Join("；", outcome.Result.Storeys.Select(result => string.Format(
                 CultureInfo.CurrentCulture,
                 "{0}: {1}跑/{2}级/h={3:0.0}",
@@ -264,19 +322,22 @@ namespace WL.Stair.Cad2022
             var previewFloorLabel = isPlanPreview && previewFloor != null
                 ? previewFloor.PlanFloorLabel
                 : null;
-            SendPreview(view, summary, true, previewFloorLabel);
+            SendPreview(view, summary, true, previewFloorLabel, isPlanPreview);
         }
 
-        private void SendPreview(DrawingView view, string summary, bool success, string previewFloorLabel = null)
+        private void SendPreview(DrawingView view, string summary, bool success,
+            string previewFloorLabel = null, bool resetView = false)
         {
             SendPreviewSvg(
                 view == null ? string.Empty : BuildSvg(view, _state, previewFloorLabel),
                 summary,
                 success,
-                string.IsNullOrWhiteSpace(previewFloorLabel) ? "剖面预览" : previewFloorLabel + " · 平面预览");
+                string.IsNullOrWhiteSpace(previewFloorLabel) ? "剖面预览" : previewFloorLabel + " · 平面预览",
+                resetView);
         }
 
-        private void SendPreviewSvg(string svg, string summary, bool success, string toolbarTitle)
+        private void SendPreviewSvg(string svg, string summary, bool success,
+            string toolbarTitle, bool resetView = false)
         {
             if (_isClosing || _webView.CoreWebView2 == null) return;
             var payload = new Dictionary<string, object>
@@ -285,7 +346,8 @@ namespace WL.Stair.Cad2022
                 { "success", success },
                 { "summary", summary },
                 { "svg", svg ?? string.Empty },
-                { "toolbarTitle", toolbarTitle ?? "剖面预览" }
+                { "toolbarTitle", toolbarTitle ?? "剖面预览" },
+                { "resetView", resetView }
             };
             _webView.CoreWebView2.PostWebMessageAsJson(_serializer.Serialize(payload));
         }
@@ -351,6 +413,8 @@ namespace WL.Stair.Cad2022
                 }).ToList()
             });
 
+            items = ApplyCombinedLayoutOrder(items, _state.Project.CombinedLayoutItemOrder);
+
             var frame = SelectedLayoutFrame;
             var layout = StairCombinedLayout.Compute(items, new StairLayoutOptions
             {
@@ -366,6 +430,8 @@ namespace WL.Stair.Cad2022
                 ColumnRatios = _state.Project.CombinedLayoutColumnRatios,
                 RowRatios = _state.Project.CombinedLayoutRowRatios
             });
+            StairCombinedLayout.ApplyPlacements(layout,
+                _state.Project.CombinedLayoutPlacements);
             _state.Project.CombinedLayoutGridColumns = layout.Columns;
             _state.Project.CombinedLayoutGridRows = layout.Rows;
             // Persist the dimensions actually accepted by the layout engine.  When a
@@ -583,6 +649,28 @@ namespace WL.Stair.Cad2022
                 || !_state.LayoutFrames.Any(item => string.Equals(item.RegistrationId,
                     _state.SelectedLayoutFrameId, StringComparison.OrdinalIgnoreCase)))
                 _state.SelectedLayoutFrameId = _state.LayoutFrames.Select(item => item.RegistrationId).FirstOrDefault();
+            _storage.SaveLastLayoutFrameId(_state.SelectedLayoutFrameId);
+        }
+
+        private void MigrateLegacyPlanCacheFingerprints()
+        {
+            var changed = false;
+            var cache = new StairPlanCacheService();
+            foreach (var floor in (_state.Project.Floors
+                ?? new List<StairFloorDefinition>()).Where(value => value != null))
+            {
+                var source = FindPlanSourceForFloor(floor.Id);
+                if (source == null || string.IsNullOrWhiteSpace(source.CacheFingerprint)) continue;
+                var title = (!string.IsNullOrWhiteSpace(floor.PlanFloorLabel)
+                    ? floor.PlanFloorLabel : source.FloorLabel) + "楼梯平面图";
+                if (!cache.IsValid(source, title)) continue;
+                var current = StairPlanCacheService.ComputeFingerprint(source, title);
+                if (string.Equals(source.CacheFingerprint, current,
+                    StringComparison.OrdinalIgnoreCase)) continue;
+                source.CacheFingerprint = current;
+                changed = true;
+            }
+            if (changed) _storage.Save(_state.Project);
         }
 
         private StairPlanSourceDefinition FindPlanSourceForFloor(string floorId)
@@ -654,7 +742,7 @@ namespace WL.Stair.Cad2022
                 string.Join(",", layout.RowHeights.Select(value => (value / Math.Max(1.0, layout.ContentTop - layout.ContentBottom)).ToString("R", CultureInfo.InvariantCulture))),
                 layout.ContentRight - layout.ContentLeft,
                 layout.ContentTop - layout.ContentBottom);
-            builder.Append("<style>.layout-divider-guide{pointer-events:none;opacity:.58;stroke:#54ef92;stroke-linecap:round}.layout-divider-handle{pointer-events:none;opacity:.42;fill:#54ef92;stroke:#101820}.layout-divider-guide.active{opacity:1;stroke-width:8}.layout-divider-handle.active{opacity:1}</style>");
+            builder.Append("<style>.layout-divider-guide{pointer-events:none;opacity:.8;stroke:#63f39a;stroke-linecap:round}.layout-divider-handle{pointer-events:none;opacity:.55;fill:#63f39a;stroke:#101820}.layout-divider-guide.active{opacity:1;stroke-width:10}.layout-divider-handle.active{opacity:1}.layout-drop-cell{fill:transparent;pointer-events:all;stroke:transparent}.layout-drop-cell.target{fill:#54ef9222;stroke:#54ef92;stroke-width:6}.layout-item{cursor:move;pointer-events:all}.layout-item:hover{stroke:#54ef92!important}.layout-item.selected{stroke:#ff5b5b!important;stroke-width:9!important;stroke-dasharray:none!important}.layout-item.dragging{opacity:.55;stroke:#f4e74f!important;stroke-width:9!important}</style>");
             builder.Append("<rect width='100%' height='100%' fill='#10161d'/>");
             for (var page = 0; page < layout.PageCount; page++)
             {
@@ -683,7 +771,7 @@ namespace WL.Stair.Cad2022
                     builder.AppendFormat(CultureInfo.InvariantCulture,
                         "<line x1='{0}' y1='{1}' x2='{0}' y2='{2}' stroke='#708191' stroke-width='{3}' stroke-dasharray='{4} {5}'/>",
                         gridX + running, gridTop, layout.PageHeight - layout.ContentBottom,
-                        Math.Max(1.0, scale * 0.05), 3 * scale, 2 * scale);
+                        Math.Max(2.5, scale * 0.12), 4 * scale, 2 * scale);
                 }
                 running = 0.0;
                 for (var row = 0; row < layout.RowHeights.Count - 1; row++)
@@ -692,7 +780,21 @@ namespace WL.Stair.Cad2022
                     builder.AppendFormat(CultureInfo.InvariantCulture,
                         "<line x1='{0}' y1='{1}' x2='{2}' y2='{1}' stroke='#708191' stroke-width='{3}' stroke-dasharray='{4} {5}'/>",
                         gridX, gridTop + running, pageX + layout.ContentRight,
-                        Math.Max(1.0, scale * 0.05), 3 * scale, 2 * scale);
+                        Math.Max(2.5, scale * 0.12), 4 * scale, 2 * scale);
+                }
+                var rowTop = gridTop;
+                for (var row = 0; row < layout.RowHeights.Count; row++)
+                {
+                    var columnX = gridX;
+                    for (var column = 0; column < layout.ColumnWidths.Count; column++)
+                    {
+                        builder.AppendFormat(CultureInfo.InvariantCulture,
+                            "<rect class='layout-drop-cell' data-layout-page='{0}' data-layout-row='{1}' data-layout-column='{2}' x='{3}' y='{4}' width='{5}' height='{6}'/>",
+                            page, row, column, columnX, rowTop,
+                            layout.ColumnWidths[column], layout.RowHeights[row]);
+                        columnX += layout.ColumnWidths[column];
+                    }
+                    rowTop += layout.RowHeights[row];
                 }
             }
 
@@ -706,17 +808,18 @@ namespace WL.Stair.Cad2022
                 builder.AppendFormat(CultureInfo.InvariantCulture,
                     "<rect x='{0}' y='{1}' width='{2}' height='{3}' fill='#151e27' stroke='#708191' stroke-width='{4}' stroke-dasharray='{5} {6}'/>",
                     cellX, cellY, slot.CellWidth, slot.CellHeight,
-                    Math.Max(1.0, scale * 0.055), 3 * scale, 2 * scale);
+                    Math.Max(2.5, scale * 0.12), 4 * scale, 2 * scale);
                 builder.AppendFormat(CultureInfo.InvariantCulture,
-                    "<rect x='{0}' y='{1}' width='{2}' height='{3}' fill='none' stroke='{4}' stroke-width='{5}' stroke-dasharray='{6} {7}'/>",
+                    "<rect class='layout-item' data-layout-item='{8}' x='{0}' y='{1}' width='{2}' height='{3}' fill='transparent' stroke='{4}' stroke-width='{5}' stroke-dasharray='{6} {7}'/>",
                     x, y, slot.Width, slot.Height,
                     slot.Item.IsSection ? "#f4e74f" : "#26cbd0",
-                    Math.Max(1.0, scale * 0.06), 3 * scale, 2 * scale);
+                    Math.Max(1.0, scale * 0.06), 3 * scale, 2 * scale,
+                    Escape(slot.Item.Key));
                 var previewLines = slot.Item.PreviewLines;
                 if (previewLines != null && previewLines.Count > 0)
                 {
                     builder.AppendFormat(CultureInfo.InvariantCulture,
-                        "<g stroke-width='{0}' fill='none'>", Math.Max(1.0, scale * 0.045));
+                        "<g stroke-width='{0}' fill='none' pointer-events='none'>", Math.Max(1.0, scale * 0.045));
                     foreach (var line in previewLines)
                     {
                         builder.AppendFormat(CultureInfo.InvariantCulture,
@@ -895,11 +998,10 @@ namespace WL.Stair.Cad2022
         {
             var document = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
             if (document == null) return;
+            var editor = document.Editor;
 
-            try
+            using (editor.StartUserInteraction(this))
             {
-                Hide();
-                var editor = document.Editor;
                 var first = editor.GetPoint("\n指定测量框第一个角点: ");
                 if (first.Status != PromptStatus.OK) return;
                 PromptPointResult second;
@@ -917,11 +1019,6 @@ namespace WL.Stair.Cad2022
                 ApplyMeasurement(target, first.Value, second.Value);
                 _constraints.Apply(_state.Project);
                 SendMeasuredState(target);
-            }
-            finally
-            {
-                Show();
-                Activate();
             }
         }
 
@@ -945,15 +1042,26 @@ namespace WL.Stair.Cad2022
             var cropOffset = existing != null && existing.CropOffset > 0.0
                 ? existing.CropOffset
                 : 300.0;
+            if (existing != null && !string.IsNullOrWhiteSpace(existing.CacheRelativePath)
+                && MessageBox.Show(this,
+                    "本层已经保存过小平面。重新拾取会替换原缓存，是否继续？",
+                    "重新拾取平面", MessageBoxButton.YesNo,
+                    MessageBoxImage.Question) != MessageBoxResult.Yes) return;
 
-            try
+            var captureMode = ShowPlanCaptureMode();
+            if (captureMode == PlanCaptureMode.Cancel) return;
+
+            using (document.Editor.StartUserInteraction(this))
             {
-                Hide();
-                var captured = new StairPlanCaptureService().CaptureTianzhengStair(
-                    document,
-                    storey.Id,
-                    floor.PlanFloorLabel,
-                    cropOffset);
+                var capture = new StairPlanCaptureService();
+                var captured = captureMode == PlanCaptureMode.Frame
+                    ? capture.CaptureFrame(document, storey.Id,
+                        floor.PlanFloorLabel, cropOffset)
+                    : capture.CaptureTianzhengStair(document, storey.Id,
+                        floor.PlanFloorLabel, cropOffset, () =>
+                            MessageBox.Show("CAD 中已显示识别边界，是否接受当前楼梯平面？",
+                                "确认楼梯平面", MessageBoxButton.YesNo,
+                                MessageBoxImage.Question) == MessageBoxResult.Yes);
                 if (captured == null) return;
                 captured.TargetScale = _state.Project.DrawingScale > 0
                     ? _state.Project.DrawingScale
@@ -973,8 +1081,22 @@ namespace WL.Stair.Cad2022
                     : (existing != null && existing.RepeatCount > 0 ? existing.RepeatCount : 1);
                 var title = (captured.FloorLabel ?? string.Empty) + "楼梯平面图";
                 var cacheService = new StairPlanCacheService();
-                var cacheSummary = cacheService.Build(document, _state.Project,
-                    captured, title);
+                var progress = new CacheProgressWindow(1);
+                string cacheSummary;
+                try
+                {
+                    progress.Show();
+                    progress.UpdateProgress(1, 1, captured.FloorLabel,
+                        "正在准备楼梯平面缓存", 0);
+                    cacheSummary = cacheService.Build(document, _state.Project,
+                        captured, title, (stage, percent) =>
+                            progress.UpdateProgress(1, 1, captured.FloorLabel,
+                                stage, percent));
+                }
+                finally
+                {
+                    progress.Close();
+                }
                 if (existing != null
                     && !string.Equals(existing.CacheRelativePath,
                         captured.CacheRelativePath, StringComparison.OrdinalIgnoreCase))
@@ -987,11 +1109,90 @@ namespace WL.Stair.Cad2022
                 SendPlanSourceState(target,
                     "已登记并保存本层裁剪成果；源图未作任何修改。" + cacheSummary, true);
             }
-            finally
+        }
+
+        private PlanCaptureMode ShowPlanCaptureMode()
+        {
+            var dialog = new Window
             {
-                Show();
-                Activate();
-            }
+                Title = "拾取平面",
+                Width = 420,
+                Height = 190,
+                ResizeMode = ResizeMode.NoResize,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Owner = this
+            };
+            var result = PlanCaptureMode.Cancel;
+            var panel = new StackPanel { Margin = new Thickness(18) };
+            panel.Children.Add(new TextBlock
+            {
+                Text = "请选择本层小平面的取得方式：",
+                Margin = new Thickness(0, 0, 0, 16),
+                FontSize = 14
+            });
+            var buttons = new StackPanel { Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Center };
+            var pick = new Button { Content = "拾取楼梯平面", Width = 130,
+                Height = 36, Margin = new Thickness(5) };
+            var frame = new Button { Content = "框选范围", Width = 110,
+                Height = 36, Margin = new Thickness(5) };
+            var cancel = new Button { Content = "取消", Width = 80,
+                Height = 36, Margin = new Thickness(5) };
+            pick.Click += (sender, args) => { result = PlanCaptureMode.Stair; dialog.Close(); };
+            frame.Click += (sender, args) => { result = PlanCaptureMode.Frame; dialog.Close(); };
+            cancel.Click += (sender, args) => dialog.Close();
+            buttons.Children.Add(pick); buttons.Children.Add(frame); buttons.Children.Add(cancel);
+            panel.Children.Add(buttons); dialog.Content = panel;
+            dialog.ShowDialog();
+            return result;
+        }
+
+        private void MoveCombinedLayoutItem(string target)
+        {
+            var parts = (target ?? string.Empty).Split('|');
+            if (parts.Length != 2 || string.IsNullOrWhiteSpace(parts[0])
+                || string.IsNullOrWhiteSpace(parts[1])
+                || string.Equals(parts[0], parts[1], StringComparison.OrdinalIgnoreCase)) return;
+            var keys = (_state.Project.Floors ?? new List<StairFloorDefinition>())
+                .Where(floor => floor != null && FindPlanSourceForFloor(floor.Id) != null)
+                .Select(floor => floor.Id).Concat(new[] { "SECTION" }).ToList();
+            var order = ApplyOrderKeys(keys, _state.Project.CombinedLayoutItemOrder);
+            var first = order.FindIndex(value => string.Equals(value, parts[0],
+                StringComparison.OrdinalIgnoreCase));
+            var second = order.FindIndex(value => string.Equals(value, parts[1],
+                StringComparison.OrdinalIgnoreCase));
+            if (first < 0 || second < 0) return;
+            var value = order[first]; order[first] = order[second]; order[second] = value;
+            _state.Project.CombinedLayoutItemOrder = order;
+        }
+
+        private static List<StairLayoutItem> ApplyCombinedLayoutOrder(
+            IEnumerable<StairLayoutItem> source, IEnumerable<string> savedOrder)
+        {
+            var items = (source ?? Enumerable.Empty<StairLayoutItem>()).ToList();
+            var orderedKeys = ApplyOrderKeys(items.Select(value => value.Key), savedOrder);
+            return orderedKeys.Select(key => items.First(value => string.Equals(value.Key,
+                key, StringComparison.OrdinalIgnoreCase))).ToList();
+        }
+
+        private static List<string> ApplyOrderKeys(IEnumerable<string> current,
+            IEnumerable<string> savedOrder)
+        {
+            var keys = (current ?? Enumerable.Empty<string>()).Where(value =>
+                !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var result = (savedOrder ?? Enumerable.Empty<string>()).Where(value =>
+                keys.Contains(value, StringComparer.OrdinalIgnoreCase))
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            result.AddRange(keys.Where(value => !result.Contains(value,
+                StringComparer.OrdinalIgnoreCase)));
+            return result;
+        }
+
+        private enum PlanCaptureMode
+        {
+            Cancel,
+            Stair,
+            Frame
         }
 
         private void ClearPlanSource(string target)
@@ -1035,16 +1236,10 @@ namespace WL.Stair.Cad2022
             var document = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
             if (document == null) throw new InvalidOperationException("当前没有打开的 CAD 图纸。");
 
-            try
+            using (document.Editor.StartUserInteraction(this))
             {
-                Hide();
                 var summary = new StairPlanCaptureService().InspectRegisteredSource(document, source);
                 SendPlanSourceState(target, summary, true);
-            }
-            finally
-            {
-                Show();
-                Activate();
             }
         }
 
@@ -1065,9 +1260,8 @@ namespace WL.Stair.Cad2022
             var document = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
             if (document == null) throw new InvalidOperationException("当前没有打开的 CAD 图纸。");
 
-            try
+            using (document.Editor.StartUserInteraction(this))
             {
-                Hide();
                 var point = document.Editor.GetPoint("\n指定本层小平面工作副本左下角插入点：");
                 if (point.Status != PromptStatus.OK) return;
                 source.TargetScale = _state.Project.DrawingScale > 0
@@ -1082,11 +1276,6 @@ namespace WL.Stair.Cad2022
                 var summary = new StairPlanCaptureService().CreateWorkingCopy(
                     document, source, point.Value, title);
                 SendPlanSourceState(target, summary, true);
-            }
-            finally
-            {
-                Show();
-                Activate();
             }
         }
 

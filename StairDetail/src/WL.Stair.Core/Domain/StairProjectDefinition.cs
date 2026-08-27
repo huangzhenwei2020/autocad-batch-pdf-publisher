@@ -24,6 +24,8 @@ namespace WL.Stair.Core.Domain
             PlanSources = new List<StairPlanSourceDefinition>();
             CombinedLayoutColumnRatios = new List<double>();
             CombinedLayoutRowRatios = new List<double>();
+            CombinedLayoutItemOrder = new List<string>();
+            CombinedLayoutPlacements = new List<StairLayoutPlacementDefinition>();
         }
 
         public int SchemaVersion { get; set; }
@@ -83,6 +85,18 @@ namespace WL.Stair.Core.Domain
 
         public IList<double> CombinedLayoutRowRatios { get; set; }
 
+        /// <summary>
+        /// User-defined order of plan and section items in the whole-sheet
+        /// grid. Keys are stable floor ids plus the reserved SECTION key.
+        /// </summary>
+        public IList<string> CombinedLayoutItemOrder { get; set; }
+
+        /// <summary>
+        /// Explicit whole-sheet cell locations selected by the user. Missing
+        /// entries continue to use the automatic packer.
+        /// </summary>
+        public IList<StairLayoutPlacementDefinition> CombinedLayoutPlacements { get; set; }
+
         public static StairProjectDefinition CreateDefault()
         {
             var project = new StairProjectDefinition();
@@ -95,6 +109,17 @@ namespace WL.Stair.Core.Domain
                 "LC-02", "二至三层", "LB-02", "LB-03", 3200.0, 2));
             return project;
         }
+    }
+
+    public sealed class StairLayoutPlacementDefinition
+    {
+        public string Key { get; set; }
+
+        public int Page { get; set; }
+
+        public int Row { get; set; }
+
+        public int Column { get; set; }
     }
 
     public sealed class StairConstructionDefaults
@@ -138,8 +163,8 @@ namespace WL.Stair.Core.Domain
                 LandingBeam = new BeamDefaults { Width = 200.0, Depth = 400.0 },
                 Railing = new RailingDefaults { Enabled = true, Height = 900.0, EdgeOffset = 50.0 },
                 Wall = new WallDefaults { Enabled = true, Thickness = 200.0 },
-                SectionHatch = new SectionHatchDefaults { Enabled = true, PatternName = "WL_RC_CONCRETE_V2", PatternScale = 10.0 },
-                WallHatch = new SectionHatchDefaults { Enabled = true, PatternName = "ANSI311", PatternScale = 10.0 },
+                SectionHatch = new SectionHatchDefaults { Enabled = true, PatternName = "WL_RC_CONCRETE_V2", PatternScale = 200.0 },
+                WallHatch = new SectionHatchDefaults { Enabled = true, PatternName = "ANSI311", PatternScale = 20.0 },
                 Door = new OpeningDefaults { Enabled = false, Width = 900.0, Height = 2100.0, SillHeight = 0.0 },
                 Window = new OpeningDefaults { Enabled = false, Width = 1200.0, Height = 1500.0, SillHeight = 900.0 }
             };
