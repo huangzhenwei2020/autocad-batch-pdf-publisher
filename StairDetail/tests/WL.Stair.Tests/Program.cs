@@ -25,6 +25,7 @@ namespace WL.Stair.Tests
             SupportsManualFlightSplit,
             RejectsInvalidGeometry,
             ReportsLandingAndWidthWarnings,
+            UsesGb50352StairStepChecks,
             RejectsInvalidStructuralThickness,
             BuildsPlanGeometry,
             MarksUpperPlanFlightAsHidden,
@@ -207,6 +208,8 @@ namespace WL.Stair.Tests
         private static void UsesUpdatedHatchScaleDefaults()
         {
             var project = StairProjectDefinition.CreateDefault();
+            TestAssert.Equal(50, project.DrawingScale,
+                "A new stair detail must default to drawing scale 1:50.");
             TestAssert.NearlyEqual(200.0, project.Construction.SectionHatch.PatternScale,
                 0.001, "Structure hatch default scale must be 200.");
             TestAssert.NearlyEqual(20.0, project.Construction.WallHatch.PatternScale,
@@ -523,6 +526,30 @@ namespace WL.Stair.Tests
             TestAssert.True(outcome.Issues.Any(issue => issue.Code == "WL-ST-104"), "Flight-width warning is missing.");
             TestAssert.True(outcome.Issues.Any(issue => issue.Code == "WL-ST-105"), "Floor-landing warning is missing.");
             TestAssert.True(outcome.Issues.Any(issue => issue.Code == "WL-ST-106"), "Intermediate-landing warning is missing.");
+        }
+
+        private static void UsesGb50352StairStepChecks()
+        {
+            var project = StairProjectDefinition.CreateDefault();
+            var storey = project.Storeys[0];
+            storey.Height = 4500.0;
+            storey.Flights[0].RiserCount = 15;
+            storey.Flights[1].RiserCount = 15;
+            storey.Flights[0].TreadDepth = 280.0;
+            storey.Flights[1].TreadDepth = 280.0;
+
+            var compliant = new StairProjectCalculator().Calculate(project);
+            TestAssert.True(compliant.IsSuccess,
+                "A GB 50352-2019-compliant other-building stair must calculate.");
+            TestAssert.True(!compliant.Issues.Any(issue => issue.Code == "WL-PR-102"),
+                "2h+b alone must not mark a stair noncompliant when table 6.8.10 is satisfied.");
+
+            storey.Flights[0].TreadDepth = 250.0;
+            var narrowTread = new StairProjectCalculator().Calculate(project);
+            TestAssert.True(narrowTread.Issues.Any(issue => issue.Code == "WL-PR-102"
+                    && issue.Message.Contains("GB 50352-2019")
+                    && issue.Message.Contains("260mm")),
+                "A tread below 260 mm must report the GB 50352-2019 table 6.8.10 warning.");
         }
 
         private static void RejectsInvalidStructuralThickness()

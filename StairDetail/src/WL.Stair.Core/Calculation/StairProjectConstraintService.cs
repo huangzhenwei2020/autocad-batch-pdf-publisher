@@ -101,7 +101,7 @@ namespace WL.Stair.Core.Calculation
             }
             if (project.SchemaVersion < 9)
             {
-                if (project.DrawingScale <= 0) project.DrawingScale = 30;
+                if (project.DrawingScale <= 0) project.DrawingScale = 50;
                 if (project.Construction.Railing == null)
                     project.Construction.Railing = StairConstructionDefaults.CreateDefault().Railing;
                 else if (Math.Abs(project.Construction.Railing.Height - 1050.0) < 0.001)
@@ -167,7 +167,7 @@ namespace WL.Stair.Core.Calculation
                 foreach (var source in project.PlanSources.Where(item => item != null))
                     if (source.TargetScale <= 0) source.TargetScale = project.DrawingScale > 0
                         ? project.DrawingScale
-                        : 30;
+                        : 50;
                 project.SchemaVersion = 17;
             }
             if (project.SchemaVersion < 18)
@@ -289,7 +289,7 @@ namespace WL.Stair.Core.Calculation
                 if (source.WallAxes == null) source.WallAxes = new List<StairPlanWallAxisDefinition>();
                 if (source.TargetScale <= 0) source.TargetScale = project.DrawingScale > 0
                     ? project.DrawingScale
-                    : 30;
+                    : 50;
                 if (string.IsNullOrWhiteSpace(source.FloorId))
                 {
                     var legacyStorey = project.Storeys.FirstOrDefault(item => item != null
@@ -342,7 +342,7 @@ namespace WL.Stair.Core.Calculation
             {
                 NormalizePlatformOpening(opening);
             }
-            if (project.DrawingScale <= 0) project.DrawingScale = 30;
+            if (project.DrawingScale <= 0) project.DrawingScale = 50;
             project.Construction.Wall.Enabled = true;
         }
 

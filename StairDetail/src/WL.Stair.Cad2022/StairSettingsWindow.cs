@@ -455,7 +455,7 @@ namespace WL.Stair.Cad2022
                 .Where(issue => issue.Severity == ValidationSeverity.Warning)
                 .Select(issue => issue.ParameterName + ": " + issue.Message));
             if (!string.IsNullOrWhiteSpace(warningSummary))
-                summary += "；规范提示：" + warningSummary;
+                summary += "；GB 50352-2019 校核：" + warningSummary;
             var previewFloorLabel = isPlanPreview && previewFloor != null
                 ? previewFloor.PlanFloorLabel
                 : null;
@@ -1276,7 +1276,7 @@ namespace WL.Stair.Cad2022
                 if (captured == null) return;
                 captured.TargetScale = _state.Project.DrawingScale > 0
                     ? _state.Project.DrawingScale
-                    : 30;
+                    : 50;
                 // Re-picking geometry must not erase the user's standard-floor
                 // assignment. Only source identity and crop geometry are
                 // replaced by the new capture.
@@ -1786,7 +1786,7 @@ namespace WL.Stair.Cad2022
             var showsSectionFloorLabels = string.IsNullOrWhiteSpace(previewFloorLabel)
                 && state != null && state.Project != null
                 && state.Project.Storeys != null && state.Project.Storeys.Count > 0;
-            var maxX = geometryMaxX + (showsSectionFloorLabels ? 1080.0 : 350.0);
+            var maxX = geometryMaxX + (showsSectionFloorLabels ? 1800.0 : 350.0);
             var minY = ys.Min() - 350.0;
             var maxY = ys.Max() + 350.0;
             var builder = new StringBuilder();
@@ -1813,18 +1813,24 @@ namespace WL.Stair.Cad2022
                 // Therefore N storeys have N+1 plan levels. Put labels on the
                 // actual slab elevations instead of at storey mid-heights.
                 var elevation = state.Project.BaseElevation;
-                foreach (var storey in state.Project.Storeys.Where(item => item != null))
+                var physicalStoreys = state.Project.Storeys.Where(item => item != null).ToArray();
+                for (var storeyIndex = 0; storeyIndex < physicalStoreys.Length; storeyIndex++)
                 {
+                    var storey = physicalStoreys[storeyIndex];
                     var lowerFloor = state.Project.Floors == null
                         ? null
                         : state.Project.Floors.FirstOrDefault(item => item != null
                             && string.Equals(item.Id, storey.LowerFloorId, StringComparison.OrdinalIgnoreCase));
-                    var label = lowerFloor != null && !string.IsNullOrWhiteSpace(lowerFloor.PlanFloorLabel)
-                        ? lowerFloor.PlanFloorLabel
-                        : (!string.IsNullOrWhiteSpace(storey.PlanFloorLabel) ? storey.PlanFloorLabel : storey.Name);
+                    var label = storeyIndex < Math.Max(0, state.Project.BasementStoreyCount)
+                        ? (storeyIndex - state.Project.BasementStoreyCount).ToString(
+                            CultureInfo.InvariantCulture) + "层"
+                        : (lowerFloor != null && !string.IsNullOrWhiteSpace(lowerFloor.PlanFloorLabel)
+                            ? lowerFloor.PlanFloorLabel
+                            : (!string.IsNullOrWhiteSpace(storey.PlanFloorLabel)
+                                ? storey.PlanFloorLabel : storey.Name));
                     builder.AppendFormat(
                         CultureInfo.InvariantCulture,
-                        "<text x='{0}' y='{1}' text-anchor='start' dominant-baseline='middle' style='font-size:180px;font-weight:700;fill:#58ef70;stroke:#101820;stroke-width:4;paint-order:stroke'>{2}</text>",
+                        "<text x='{0}' y='{1}' text-anchor='start' style='font-size:360px;font-weight:700;fill:#58ef70;stroke:#101820;stroke-width:6;paint-order:stroke'>{2}</text>",
                         floorLabelX,
                         -elevation,
                         Escape(label));
@@ -1840,7 +1846,7 @@ namespace WL.Stair.Cad2022
                 {
                     builder.AppendFormat(
                         CultureInfo.InvariantCulture,
-                        "<text x='{0}' y='{1}' text-anchor='start' dominant-baseline='middle' style='font-size:180px;font-weight:700;fill:#58ef70;stroke:#101820;stroke-width:4;paint-order:stroke'>{2}</text>",
+                        "<text x='{0}' y='{1}' text-anchor='start' style='font-size:360px;font-weight:700;fill:#58ef70;stroke:#101820;stroke-width:6;paint-order:stroke'>{2}</text>",
                         floorLabelX,
                         -elevation,
                         Escape(topFloor.PlanFloorLabel));

@@ -91,6 +91,11 @@ namespace WL.Stair.Core.Calculation
                     {
                         issues.Add(Error("WL-PR-007", flight.Id, "梯段踏步级数过少。"));
                     }
+                    else if (flight.RiserCount < 3 || flight.RiserCount > 18)
+                    {
+                        issues.Add(Warning("WL-PR-103", flight.Id,
+                            "按《民用建筑设计统一标准》GB 50352-2019 第6.8.5条校核，每个梯段应为3～18级。"));
+                    }
                     RequirePositive(flight.TreadDepth, flight.Id + ".TreadDepth", "WL-PR-008", issues);
                     RequirePositive(flight.Width, flight.Id + ".Width", "WL-PR-009", issues);
                     totalRisers += Math.Max(0, flight.RiserCount);
@@ -150,18 +155,18 @@ namespace WL.Stair.Core.Calculation
             {
                 issues.Add(Error("WL-PR-010", storey.Id, "该层按各梯段级数计算出的踏步高度超出生成范围。"));
             }
-            else if (riserHeight < _rules.RecommendedMinimumRiserHeight
-                || riserHeight > _rules.RecommendedMaximumRiserHeight)
+            else if (riserHeight > _rules.RecommendedMaximumRiserHeight)
             {
-                issues.Add(Warning("WL-PR-101", storey.Id, "该层踏步高度超出建议范围。"));
+                issues.Add(Warning("WL-PR-101", storey.Id,
+                    "按《民用建筑设计统一标准》GB 50352-2019 表6.8.10“其他建筑楼梯”校核，踏步高度应不大于175mm。"));
             }
 
             foreach (var flight in storey.Flights.Where(item => item != null))
             {
-                var comfort = (2.0 * riserHeight) + flight.TreadDepth;
-                if (comfort < _rules.MinimumComfortValue || comfort > _rules.MaximumComfortValue)
+                if (flight.TreadDepth < _rules.RecommendedMinimumTreadDepth)
                 {
-                    issues.Add(Warning("WL-PR-102", flight.Id, "该梯段的 2h+b 舒适度超出建议范围。"));
+                    issues.Add(Warning("WL-PR-102", flight.Id,
+                        "按《民用建筑设计统一标准》GB 50352-2019 表6.8.10“其他建筑楼梯”校核，踏步宽度应不小于260mm。"));
                 }
             }
         }

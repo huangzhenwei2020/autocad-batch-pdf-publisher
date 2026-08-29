@@ -23,7 +23,7 @@ namespace WL.Stair.Core.Domain
             SubprojectName = string.Empty;
             BuildingNumber = "1#";
             StairNumber = "LT-01";
-            DrawingScale = 30;
+            DrawingScale = 50;
             InsertComponentSchedule = false;
             ShowBold = true;
             ShowFill = true;
