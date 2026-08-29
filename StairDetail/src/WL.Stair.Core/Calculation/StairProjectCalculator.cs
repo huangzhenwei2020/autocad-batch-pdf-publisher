@@ -183,6 +183,7 @@ namespace WL.Stair.Core.Calculation
             RequirePositive(construction.FloorSlabThickness, "FloorSlabThickness", "WL-PR-014", issues);
             ValidateBeam(construction.FloorBeam, "FloorBeam", issues);
             ValidateBeam(construction.LandingBeam, "LandingBeam", issues);
+            RequirePositive(construction.SlabOverhang, "SlabOverhang", "WL-PR-020", issues);
             if (construction.Railing != null && construction.Railing.Enabled)
             {
                 RequirePositive(construction.Railing.Height, "Railing.Height", "WL-PR-015", issues);
@@ -279,6 +280,11 @@ namespace WL.Stair.Core.Calculation
             ValidateOptionalPositive(floor.SlabThicknessOverride, floor.Id + ".SlabThicknessOverride", issues);
             ValidateOptionalPositive(floor.BeamWidthOverride, floor.Id + ".BeamWidthOverride", issues);
             ValidateOptionalPositive(floor.BeamDepthOverride, floor.Id + ".BeamDepthOverride", issues);
+            ValidateOppositeSupport(floor.OppositeSupportType, floor.Id, issues);
+            ValidateOptionalPositive(floor.OppositeSlabThicknessOverride, floor.Id + ".OppositeSlabThicknessOverride", issues);
+            ValidateOptionalPositive(floor.OppositeBeamWidthOverride, floor.Id + ".OppositeBeamWidthOverride", issues);
+            ValidateOptionalPositive(floor.OppositeBeamDepthOverride, floor.Id + ".OppositeBeamDepthOverride", issues);
+            ValidateOptionalPositive(floor.SlabOverhangOverride, floor.Id + ".SlabOverhangOverride", issues);
         }
 
         private static void ValidateLanding(
@@ -303,6 +309,18 @@ namespace WL.Stair.Core.Calculation
             ValidateOptionalPositive(landing.SlabThicknessOverride, landing.Id + ".SlabThicknessOverride", issues);
             ValidateOptionalPositive(landing.BeamWidthOverride, landing.Id + ".BeamWidthOverride", issues);
             ValidateOptionalPositive(landing.BeamDepthOverride, landing.Id + ".BeamDepthOverride", issues);
+            ValidateOptionalPositive(landing.SlabOverhangOverride, landing.Id + ".SlabOverhangOverride", issues);
+        }
+
+        private static void ValidateOppositeSupport(
+            OppositeSupportType supportType,
+            string parameter,
+            ICollection<ValidationIssue> issues)
+        {
+            if (supportType < OppositeSupportType.None
+                || supportType > OppositeSupportType.BeamWithSlab)
+                issues.Add(Error("WL-PR-035", parameter,
+                    "对面支承只能为无、仅梁或梁加楼板。"));
         }
 
         private static void ValidatePlatformType(

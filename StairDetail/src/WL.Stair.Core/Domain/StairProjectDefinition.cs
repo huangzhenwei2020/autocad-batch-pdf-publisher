@@ -3,11 +3,21 @@ using System.Collections.Generic;
 
 namespace WL.Stair.Core.Domain
 {
+    public static class StairOpeningDefaults
+    {
+        public const double DoorWidth = 900.0;
+        public const double DoorHeight = 2200.0;
+        public const double WindowWidth = 1200.0;
+        public const double WindowHeight = 1500.0;
+        public const double WindowSillHeight = 900.0;
+        public const double PlatformAxisOffset = 150.0;
+    }
+
     public sealed class StairProjectDefinition
     {
         public StairProjectDefinition()
         {
-            SchemaVersion = 20;
+            SchemaVersion = 21;
             Name = "楼梯大样";
             ProjectName = "未命名项目";
             SubprojectName = string.Empty;
@@ -138,6 +148,12 @@ namespace WL.Stair.Core.Domain
 
         public BeamDefaults LandingBeam { get; set; }
 
+        public bool OppositeSupportsEnabled { get; set; }
+
+        public double SlabOverhang { get; set; }
+
+        public bool CloseSlabOverhangEdge { get; set; }
+
         public RailingDefaults Railing { get; set; }
 
         public WallDefaults Wall { get; set; }
@@ -161,12 +177,27 @@ namespace WL.Stair.Core.Domain
                 FloorSlabThickness = 100.0,
                 FloorBeam = new BeamDefaults { Width = 200.0, Depth = 400.0 },
                 LandingBeam = new BeamDefaults { Width = 200.0, Depth = 400.0 },
+                OppositeSupportsEnabled = true,
+                SlabOverhang = 300.0,
+                CloseSlabOverhangEdge = false,
                 Railing = new RailingDefaults { Enabled = true, Height = 900.0, EdgeOffset = 50.0 },
                 Wall = new WallDefaults { Enabled = true, Thickness = 200.0 },
                 SectionHatch = new SectionHatchDefaults { Enabled = true, PatternName = "WL_RC_CONCRETE_V2", PatternScale = 200.0 },
                 WallHatch = new SectionHatchDefaults { Enabled = true, PatternName = "ANSI311", PatternScale = 20.0 },
-                Door = new OpeningDefaults { Enabled = false, Width = 900.0, Height = 2100.0, SillHeight = 0.0 },
-                Window = new OpeningDefaults { Enabled = false, Width = 1200.0, Height = 1500.0, SillHeight = 900.0 }
+                Door = new OpeningDefaults
+                {
+                    Enabled = false,
+                    Width = StairOpeningDefaults.DoorWidth,
+                    Height = StairOpeningDefaults.DoorHeight,
+                    SillHeight = 0.0
+                },
+                Window = new OpeningDefaults
+                {
+                    Enabled = false,
+                    Width = StairOpeningDefaults.WindowWidth,
+                    Height = StairOpeningDefaults.WindowHeight,
+                    SillHeight = StairOpeningDefaults.WindowSillHeight
+                }
             };
         }
     }
@@ -350,6 +381,17 @@ namespace WL.Stair.Core.Domain
         /// wall segment. Doors always use zero; windows use the configured sill.
         /// </summary>
         public double SillHeight { get; set; }
+
+        public static StairWallOpeningDefinition CreateDefault(string segmentId)
+        {
+            return new StairWallOpeningDefinition
+            {
+                SegmentId = segmentId,
+                Type = WallOpeningType.None,
+                Height = StairOpeningDefaults.DoorHeight,
+                SillHeight = StairOpeningDefaults.WindowSillHeight
+            };
+        }
     }
 
     public enum WallOpeningType
@@ -423,6 +465,18 @@ namespace WL.Stair.Core.Domain
 
         public double? BeamDepthOverride { get; set; }
 
+        public OppositeSupportType OppositeSupportType { get; set; }
+
+        public double? OppositeSlabThicknessOverride { get; set; }
+
+        public double? OppositeBeamWidthOverride { get; set; }
+
+        public double? OppositeBeamDepthOverride { get; set; }
+
+        public double? SlabOverhangOverride { get; set; }
+
+        public bool? CloseSlabOverhangEdgeOverride { get; set; }
+
         public string BeamId { get; set; }
 
         /// <summary>Optional door/window elevation placed above this floor.</summary>
@@ -445,7 +499,8 @@ namespace WL.Stair.Core.Domain
                 ProjectionDirection = -1,
                 DirectionLinked = true,
                 AllowLowerFlightClosure = false,
-                AllowUpperFlightClosure = false
+                AllowUpperFlightClosure = false,
+                OppositeSupportType = OppositeSupportType.Beam
             };
         }
     }
@@ -611,6 +666,18 @@ namespace WL.Stair.Core.Domain
 
         public double? BeamDepthOverride { get; set; }
 
+        public OppositeSupportType OppositeSupportType { get; set; }
+
+        public double? OppositeSlabThicknessOverride { get; set; }
+
+        public double? OppositeBeamWidthOverride { get; set; }
+
+        public double? OppositeBeamDepthOverride { get; set; }
+
+        public double? SlabOverhangOverride { get; set; }
+
+        public bool? CloseSlabOverhangEdgeOverride { get; set; }
+
         public string BeamId { get; set; }
 
         /// <summary>Optional door/window elevation placed above this landing.</summary>
@@ -639,7 +706,8 @@ namespace WL.Stair.Core.Domain
                 ProjectionDirection = 1,
                 DirectionLinked = true,
                 AllowLowerFlightClosure = false,
-                AllowUpperFlightClosure = false
+                AllowUpperFlightClosure = false,
+                OppositeSupportType = OppositeSupportType.None
             };
         }
     }
@@ -649,6 +717,13 @@ namespace WL.Stair.Core.Domain
         Platform1 = 1,
         Platform2 = 2,
         Platform3 = 3
+    }
+
+    public enum OppositeSupportType
+    {
+        None = 0,
+        Beam = 1,
+        BeamWithSlab = 2
     }
 
     public enum StairFlightDirection
@@ -710,12 +785,19 @@ namespace WL.Stair.Core.Domain
 
         public static StairPlatformOpeningDefinition CreateDefault()
         {
+            var opening = CreateDoorDefault();
+            opening.Type = WallOpeningType.None;
+            return opening;
+        }
+
+        public static StairPlatformOpeningDefinition CreateDoorDefault()
+        {
             return new StairPlatformOpeningDefinition
             {
-                Type = WallOpeningType.None,
-                DistanceFromWall = 50.0,
-                Width = 900.0,
-                Height = 2100.0,
+                Type = WallOpeningType.Door,
+                DistanceFromWall = StairOpeningDefaults.PlatformAxisOffset,
+                Width = StairOpeningDefaults.DoorWidth,
+                Height = StairOpeningDefaults.DoorHeight,
                 SillHeight = 0.0,
                 HasInstallationGap = false,
                 InstallationGap = 20.0,
@@ -724,8 +806,33 @@ namespace WL.Stair.Core.Domain
                 HasMullion = true,
                 MullionWidth = 50.0,
                 DoorFrameType = "N型",
-                DoorFrameWidth = 50.0,
-                Material = "玻璃"
+                DoorFrameWidth = 0.0,
+                Material = "无",
+                CustomCellLayout = "0,0,900,2200,左平开,1,0,无",
+                CellOpeningModes = "左平开"
+            };
+        }
+
+        public static StairPlatformOpeningDefinition CreateWindowDefault()
+        {
+            return new StairPlatformOpeningDefinition
+            {
+                Type = WallOpeningType.Window,
+                DistanceFromWall = StairOpeningDefaults.PlatformAxisOffset,
+                Width = StairOpeningDefaults.DoorWidth,
+                Height = StairOpeningDefaults.WindowHeight,
+                SillHeight = StairOpeningDefaults.WindowSillHeight,
+                HasInstallationGap = false,
+                InstallationGap = 20.0,
+                HasOuterFrame = true,
+                OuterFrameWidth = 50.0,
+                HasMullion = true,
+                MullionWidth = 50.0,
+                DoorFrameType = "N型",
+                DoorFrameWidth = 0.0,
+                Material = "玻璃",
+                CustomCellLayout = "0,0,450,1500,右平开,0,0,玻璃|450,0,900,1500,左平开,0,0,玻璃",
+                CellOpeningModes = "右平开|左平开"
             };
         }
     }

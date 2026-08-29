@@ -226,6 +226,25 @@ namespace WL.Stair.Core.Calculation
                 }
                 project.SchemaVersion = 20;
             }
+            if (project.SchemaVersion < 21)
+            {
+                project.Construction.OppositeSupportsEnabled = true;
+                project.Construction.SlabOverhang = 300.0;
+                project.Construction.CloseSlabOverhangEdge = false;
+                foreach (var floor in project.Floors.Where(item => item != null))
+                    floor.OppositeSupportType = OppositeSupportType.Beam;
+                foreach (var landing in project.Storeys.Where(item => item != null)
+                    .SelectMany(item => item.Landings ?? new List<StairLandingDefinition>())
+                    .Where(item => item != null))
+                    landing.OppositeSupportType = OppositeSupportType.None;
+                project.SchemaVersion = 21;
+            }
+            foreach (var landing in project.Storeys.Where(item => item != null)
+                .SelectMany(item => item.Landings ?? new List<StairLandingDefinition>())
+                .Where(item => item != null))
+                landing.OppositeSupportType = OppositeSupportType.None;
+            if (project.Construction.SlabOverhang <= 0.0)
+                project.Construction.SlabOverhang = defaults.SlabOverhang;
             for (var index = 0; index < project.Storeys.Count; index++)
             {
                 var storey = project.Storeys[index];
@@ -294,7 +313,9 @@ namespace WL.Stair.Core.Calculation
             foreach (var opening in project.WallOpenings.Where(item => item != null))
             {
                 if (opening.Height <= 0.0)
-                    opening.Height = opening.Type == WallOpeningType.Window ? 1500.0 : 2100.0;
+                    opening.Height = opening.Type == WallOpeningType.Window
+                        ? StairOpeningDefaults.WindowHeight
+                        : StairOpeningDefaults.DoorHeight;
                 opening.SillHeight = opening.Type == WallOpeningType.Window
                     ? Math.Max(0.0, opening.SillHeight)
                     : 0.0;
@@ -357,9 +378,11 @@ namespace WL.Stair.Core.Calculation
         private static void NormalizePlatformOpening(StairPlatformOpeningDefinition opening)
         {
             opening.DistanceFromWall = Math.Max(0.0, opening.DistanceFromWall);
-            if (opening.Width <= 0.0) opening.Width = 900.0;
+            if (opening.Width <= 0.0) opening.Width = StairOpeningDefaults.DoorWidth;
             if (opening.Height <= 0.0)
-                opening.Height = opening.Type == WallOpeningType.Window ? 1500.0 : 2100.0;
+                opening.Height = opening.Type == WallOpeningType.Window
+                    ? StairOpeningDefaults.WindowHeight
+                    : StairOpeningDefaults.DoorHeight;
             opening.SillHeight = opening.Type == WallOpeningType.Window
                 ? Math.Max(0.0, opening.SillHeight)
                 : 0.0;
@@ -367,7 +390,8 @@ namespace WL.Stair.Core.Calculation
             if (opening.OuterFrameWidth <= 0.0) opening.OuterFrameWidth = 50.0;
             if (opening.MullionWidth <= 0.0) opening.MullionWidth = 50.0;
             if (string.IsNullOrWhiteSpace(opening.DoorFrameType)) opening.DoorFrameType = "N型";
-            if (string.IsNullOrWhiteSpace(opening.Material)) opening.Material = "玻璃";
+            if (string.IsNullOrWhiteSpace(opening.Material))
+                opening.Material = opening.Type == WallOpeningType.Door ? "无" : "玻璃";
         }
 
         public void Apply(StairProjectDefinition project)

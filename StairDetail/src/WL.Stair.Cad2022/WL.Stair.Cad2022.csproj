@@ -63,6 +63,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="CadLineRenderer.cs" />
+    <Compile Include="DetailLayoutPlanBridge.cs" />
     <Compile Include="..\WL.Stair.CadShared\StairTitleService.cs">
       <Link>StairTitleService.cs</Link>
     </Compile>

@@ -221,27 +221,132 @@ namespace BatchPdfPublisher.Services
             FrameTemplateStore.EnsureAvailable(document.Database, frame);
             var point = document.Editor.GetPoint("\n指定正式大样排版第一张图框的左下角插入点: ");
             if (point.Status != PromptStatus.OK) return 0;
-            var insertionOrigin = point.Value;
+            return InsertPlan(document, plan, frame, scale, options, point.Value, true);
+        }
+
+        public static int InsertWithoutFrame(Document document,
+            IList<DetailLayoutItem> items, int scale, DetailLayoutOptions options)
+        {
+            if (document == null) throw new ArgumentNullException("document");
+            var first = document.Editor.GetPoint("\n指定无图框排版范围第一个角点: ");
+            if (first.Status != PromptStatus.OK) return 0;
+            var second = document.Editor.GetCorner(new PromptCornerOptions(
+                "\n指定无图框排版范围另一个角点: ", first.Value));
+            if (second.Status != PromptStatus.OK) return 0;
+            var min = new Point3d(Math.Min(first.Value.X, second.Value.X),
+                Math.Min(first.Value.Y, second.Value.Y), first.Value.Z);
+            var width = Math.Abs(second.Value.X - first.Value.X);
+            var height = Math.Abs(second.Value.Y - first.Value.Y);
+            if (width <= 1e-6 || height <= 1e-6)
+                throw new InvalidOperationException("框选的排版范围宽度或高度无效。");
+            var plan = ComputeLayoutInRange(items, Math.Max(1, scale), options,
+                width, height);
+            if (plan.PageCount != 1)
+                throw new InvalidOperationException(
+                    "所选内容无法全部放进框选范围，请扩大排版范围或缩小大样间距。");
+            return InsertPlan(document, plan, null, Math.Max(1, scale), options,
+                min, false);
+        }
+
+        private static DetailLayoutPlan ComputeLayoutInRange(
+            IList<DetailLayoutItem> source, int scale, DetailLayoutOptions options,
+            double width, double height)
+        {
+            var items = (source ?? new List<DetailLayoutItem>())
+                .Where(value => value != null).ToList();
+            if (items.Count == 0)
+                throw new InvalidOperationException("请先添加大样或框选平面。");
+            options = options ?? new DetailLayoutOptions();
+            var plan = new DetailLayoutPlan
+            {
+                Scale = scale,
+                PageWidth = width,
+                PageHeight = height,
+                ContentLeft = 0d,
+                ContentRight = width,
+                ContentBottom = 0d,
+                ContentTop = height
+            };
+            var gap = Math.Max(0d, options.ItemGap) * scale;
+            var numberReserve = Math.Max(8d * scale, 80d);
+            var grid = FindBestGrid(items, width, height, gap, numberReserve);
+            if (grid == null)
+                throw new InvalidOperationException(
+                    "所选内容无法放进框选范围，请扩大排版范围或缩小大样间距。");
+            plan.Columns = grid.Columns;
+            plan.Rows = grid.Rows;
+            var extraWidth = Math.Max(0d, width - grid.ColumnWidths.Sum()) / grid.Columns;
+            var extraHeight = Math.Max(0d, height - grid.RowHeights.Sum()) / grid.Rows;
+            plan.ColumnWidths.AddRange(grid.ColumnWidths.Select(value => value + extraWidth));
+            plan.RowHeights.AddRange(grid.RowHeights.Select(value => value + extraHeight));
+            var perPage = plan.Columns * plan.Rows;
+            for (var itemIndex = 0; itemIndex < items.Count; itemIndex++)
+            {
+                var item = items[itemIndex];
+                var page = itemIndex / perPage;
+                var pageIndex = itemIndex % perPage;
+                var row = pageIndex / plan.Columns;
+                var column = pageIndex % plan.Columns;
+                var cellWidth = plan.ColumnWidths[column];
+                var cellHeight = plan.RowHeights[row];
+                var cellX = plan.ColumnWidths.Take(column).Sum();
+                var cellY = height - plan.RowHeights.Take(row + 1).Sum();
+                var reserve = item.AddIndexNumber ? numberReserve : 0d;
+                var x = cellX + (cellWidth - item.Width - reserve) / 2d + reserve;
+                var y = cellY + (cellHeight - item.Height) / 2d;
+                plan.Slots.Add(new DetailLayoutSlot
+                {
+                    Item = item,
+                    Page = page,
+                    X = x,
+                    Y = y,
+                    Width = item.Width,
+                    Height = item.Height,
+                    CellX = cellX,
+                    CellY = cellY,
+                    CellWidth = cellWidth,
+                    CellHeight = cellHeight
+                });
+            }
+            plan.PageCount = (int)Math.Ceiling((double)items.Count / perPage);
+            return plan;
+        }
+
+        private static int InsertPlan(Document document, DetailLayoutPlan plan,
+            FrameDefinition frame, int scale, DetailLayoutOptions options,
+            Point3d insertionOrigin, bool includeFrame)
+        {
+            options = options ?? new DetailLayoutOptions();
 
             var copied = 0;
+            var cachedPlans = new List<CachedPlanInsertion>();
             using (var documentLock = AcquireWriteLock(document))
             using (var transaction = document.Database.TransactionManager.StartTransaction())
             {
                 var database = document.Database;
-                var frameLayer = DraftingStandardService.EnsureFrameLayer(database, transaction);
-                var blockTable = (BlockTable)transaction.GetObject(database.BlockTableId, OpenMode.ForRead);
-                if (!blockTable.Has(frame.BlockName)) throw new InvalidOperationException("当前图纸无法加载登记图框块“" + frame.BlockName + "”。");
-                var definitionId = blockTable[frame.BlockName];
-                var definition = (BlockTableRecord)transaction.GetObject(definitionId, OpenMode.ForRead);
+                var frameLayer = ObjectId.Null;
+                var definitionId = ObjectId.Null;
+                BlockTableRecord definition = null;
+                if (includeFrame)
+                {
+                    frameLayer = DraftingStandardService.EnsureFrameLayer(database, transaction);
+                    var blockTable = (BlockTable)transaction.GetObject(database.BlockTableId, OpenMode.ForRead);
+                    if (!blockTable.Has(frame.BlockName))
+                        throw new InvalidOperationException("当前图纸无法加载登记图框块“" + frame.BlockName + "”。");
+                    definitionId = blockTable[frame.BlockName];
+                    definition = (BlockTableRecord)transaction.GetObject(definitionId, OpenMode.ForRead);
+                }
                 var space = (BlockTableRecord)transaction.GetObject(database.CurrentSpaceId, OpenMode.ForWrite);
-                var pageGap = Math.Max(0d, options.PageGap) * scale;
+                var pageGap = includeFrame ? Math.Max(0d, options.PageGap) * scale : 0d;
                 var separatorLayer = EnsureSeparatorLayer(database, transaction);
                 var indexLayer = EnsureIndexLayer(database, transaction);
 
                 for (var page = 0; page < plan.PageCount; page++)
                 {
                     var pageOrigin = new Point3d(insertionOrigin.X + page * (plan.PageWidth + pageGap), insertionOrigin.Y, insertionOrigin.Z);
-                    AddFrame(space, transaction, definition, definitionId, frame, pageOrigin, scale, frameLayer, page + 1);
+                    if (includeFrame)
+                        AddFrame(space, transaction, definition, definitionId, frame,
+                            pageOrigin, scale, frameLayer, page + 1);
                     AddGrid(space, transaction, pageOrigin, plan, separatorLayer);
                 }
                 var detailNumber = 0;
@@ -250,23 +355,34 @@ namespace BatchPdfPublisher.Services
                     var pageOrigin = new Point3d(insertionOrigin.X + slot.Page * (plan.PageWidth + pageGap), insertionOrigin.Y, insertionOrigin.Z);
                     var targetMin = new Point3d(pageOrigin.X + slot.X, pageOrigin.Y + slot.Y, pageOrigin.Z);
                     var displacement = targetMin - slot.Item.MinPoint;
-                    foreach (var id in slot.Item.ObjectIds)
+                    if (slot.Item.IsCachedPlan)
                     {
-                        Entity source = null;
-                        try { source = transaction.GetObject(id, OpenMode.ForRead, false) as Entity; }
-                        catch { }
-                        if (source == null || source.IsErased) continue;
-                        Entity clone = null;
-                        try
+                        cachedPlans.Add(new CachedPlanInsertion
                         {
-                            clone = source.Clone() as Entity;
-                            if (clone == null) continue;
-                            clone.TransformBy(Matrix3d.Displacement(displacement));
-                            space.AppendEntity(clone);
-                            transaction.AddNewlyCreatedDBObject(clone, true);
-                            copied++;
+                            Item = slot.Item,
+                            Target = targetMin
+                        });
+                    }
+                    else
+                    {
+                        foreach (var id in slot.Item.ObjectIds)
+                        {
+                            Entity source = null;
+                            try { source = transaction.GetObject(id, OpenMode.ForRead, false) as Entity; }
+                            catch { }
+                            if (source == null || source.IsErased) continue;
+                            Entity clone = null;
+                            try
+                            {
+                                clone = source.Clone() as Entity;
+                                if (clone == null) continue;
+                                clone.TransformBy(Matrix3d.Displacement(displacement));
+                                space.AppendEntity(clone);
+                                transaction.AddNewlyCreatedDBObject(clone, true);
+                                copied++;
+                            }
+                            catch { if (clone != null) clone.Dispose(); }
                         }
-                        catch { if (clone != null) clone.Dispose(); }
                     }
                     if (slot.Item.AddIndexNumber)
                     {
@@ -289,8 +405,53 @@ namespace BatchPdfPublisher.Services
                 }
                 transaction.Commit();
             }
-            document.Editor.WriteMessage("\n已排版 " + plan.Slots.Count + " 个大样，共 " + plan.PageCount + " 页，复制 " + copied + " 个 CAD 对象。\n");
+            copied += InsertCachedPlans(document, cachedPlans);
+            document.Editor.WriteMessage("\n已排版 " + plan.Slots.Count
+                + " 个项目" + (includeFrame ? "，共 " + plan.PageCount + " 页" : "（无图框）")
+                + "，复制 " + copied + " 个 CAD 对象。\n");
             return plan.Slots.Count;
+        }
+
+        private static int InsertCachedPlans(Document document,
+            IEnumerable<CachedPlanInsertion> insertions)
+        {
+            var values = (insertions ?? Enumerable.Empty<CachedPlanInsertion>()).ToList();
+            if (values.Count == 0) return 0;
+            var bridge = AppDomain.CurrentDomain.GetAssemblies()
+                .Select(assembly => assembly.GetType(
+                    "WL.Stair.Cad2022.DetailLayoutPlanBridge", false))
+                .FirstOrDefault(type => type != null);
+            var method = bridge == null ? null : bridge.GetMethod("Insert");
+            if (method == null)
+                throw new InvalidOperationException("楼梯小平面模块尚未加载，不能插入小平面缓存。");
+            var count = 0;
+            foreach (var value in values)
+            {
+                try
+                {
+                    count += Convert.ToInt32(method.Invoke(null, new object[]
+                    {
+                        document,
+                        value.Item.CacheRelativePath,
+                        value.Target.X,
+                        value.Target.Y,
+                        value.Target.Z,
+                        value.Item.CacheLayoutOffsetX,
+                        value.Item.CacheLayoutOffsetY
+                    }), CultureInfo.InvariantCulture);
+                }
+                catch (System.Reflection.TargetInvocationException exception)
+                {
+                    throw exception.InnerException ?? exception;
+                }
+            }
+            return count;
+        }
+
+        private sealed class CachedPlanInsertion
+        {
+            public DetailLayoutItem Item;
+            public Point3d Target;
         }
 
         internal static void InsertRegisteredFramesAt(
@@ -337,7 +498,12 @@ namespace BatchPdfPublisher.Services
 
         private static ObjectId AddFrame(BlockTableRecord space, Transaction transaction, BlockTableRecord definition, ObjectId definitionId, FrameDefinition frame, Point3d origin, int scale, ObjectId layer, int page)
         {
-            var reference = new BlockReference(origin, definitionId) { ScaleFactors = new Scale3d(scale), LayerId = layer };
+            var placement = FrameBlockPlacementService.Measure(definition, transaction, frame, scale);
+            var reference = new BlockReference(placement.PositionForLowerLeft(origin), definitionId)
+            {
+                ScaleFactors = new Scale3d(placement.Factor),
+                LayerId = layer
+            };
             space.AppendEntity(reference);
             transaction.AddNewlyCreatedDBObject(reference, true);
             foreach (ObjectId id in definition)

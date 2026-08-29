@@ -1,4 +1,5 @@
 using Autodesk.AutoCAD.ApplicationServices;
+using Autodesk.AutoCAD.Geometry;
 using BatchPdfPublisher.Models;
 using BatchPdfPublisher.Services;
 using System;
@@ -22,7 +23,7 @@ namespace BatchPdfPublisher.Views
         private readonly ComboBox _scale = new ComboBox { DropDownStyle = ComboBoxStyle.DropDown, Width = 76 };
         private readonly TextBox _left = Box(), _right = Box(), _top = Box(), _bottom = Box(), _gap = Box(), _pageGap = Box();
         private readonly Label _summary = new Label { AutoSize = true, ForeColor = Color.FromArgb(55, 70, 88), Margin = new Padding(0, 8, 0, 0) };
-        private readonly CheckBox _deleteSources = new CheckBox { Text = "排版后删除源大样", AutoSize = true, Margin = new Padding(8, 6, 0, 0) };
+        private readonly CheckBox _deleteSources = new CheckBox { Text = "排版后删除源大样（不删除小平面）", AutoSize = true, Margin = new Padding(8, 6, 0, 0) };
         private DetailLayoutFrameAnchor _frameAnchor;
         private bool _hasExplicitRange;
         private string _rangeFrameId;
@@ -38,7 +39,6 @@ namespace BatchPdfPublisher.Views
             Text = "大样排版"; StartPosition = FormStartPosition.CenterScreen; ClientSize = new Size(1050, 690); MinimumSize = new Size(850, 540);
             Font = new Font("Microsoft YaHei UI", 9f); BackColor = Color.White;
             Build(); LoadSettings(); RefreshLayout(true);
-            Shown += (s, e) => ShowMissingRangeReminder();
             FormClosed += (s, e) => SaveSettings();
         }
 
@@ -53,10 +53,9 @@ namespace BatchPdfPublisher.Views
             _frame.SelectedIndexChanged += (s, e) => RefreshLayout(false); toolbar.Controls.Add(_frame);
             toolbar.Controls.Add(LabelFor("比例")); _scale.Items.AddRange(new object[] { "1:20", "1:25", "1:50", "1:100", "1:150", "1:200" }); _scale.Text = "1:50"; toolbar.Controls.Add(_scale);
             toolbar.Controls.Add(LabelFor("大样间距")); toolbar.Controls.Add(_gap); toolbar.Controls.Add(LabelFor("页间距")); toolbar.Controls.Add(_pageGap);
-            var pickRange = ButtonFor("登记排版范围"); pickRange.Click += (s, e) => RegisterLayoutRange(); toolbar.Controls.Add(pickRange);
             var apply = ButtonFor("更新预览"); apply.Click += (s, e) => RefreshLayout(false); toolbar.Controls.Add(apply);
             toolbar.Controls.Add(_deleteSources);
-            toolbar.Controls.Add(new Label { Text = "排版范围读取自图框登记；未登记时插入 1:1 图框进行框选", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(8, 7, 0, 0) });
+            toolbar.Controls.Add(new Label { Text = "带图框插入使用图框登记范围；也可在底部直接框选无图框排版范围", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(8, 7, 0, 0) });
             root.Controls.Add(toolbar, 0, 0);
 
             var split = new SplitContainer { Dock = DockStyle.Fill, FixedPanel = FixedPanel.Panel1, SplitterDistance = 230, BackColor = Color.FromArgb(225, 230, 236) };
@@ -64,6 +63,8 @@ namespace BatchPdfPublisher.Views
             leftPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize)); leftPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             var sourceButtons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true };
             var add = ButtonFor("添加大样"); add.Click += (s, e) => AddDetail(); sourceButtons.Controls.Add(add);
+            var addPlan = ButtonFor("框选平面"); addPlan.Click += (s, e) => AddSmallPlan(); sourceButtons.Controls.Add(addPlan);
+            var rename = ButtonFor("编辑名称"); rename.Click += (s, e) => EditSelectedName(); sourceButtons.Controls.Add(rename);
             var remove = ButtonFor("删除"); remove.Click += (s, e) => RemoveSelected(); sourceButtons.Controls.Add(remove);
             var clear = ButtonFor("清空"); clear.Click += (s, e) => { _items.Clear(); SyncList(-1); RefreshLayout(true); }; sourceButtons.Controls.Add(clear);
             var allNumbers = ButtonFor("全部编号"); allNumbers.Click += (s, e) => SetAllNumbering(true); sourceButtons.Controls.Add(allNumbers);
@@ -79,7 +80,8 @@ namespace BatchPdfPublisher.Views
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize)); footer.Controls.Add(_summary, 0, 0);
             var actions = new FlowLayoutPanel { AutoSize = true, WrapContents = false, FlowDirection = FlowDirection.RightToLeft };
             var close = ButtonFor("关闭"); close.Click += (s, e) => Close(); actions.Controls.Add(close);
-            var insert = ButtonFor("确认排版并插入"); insert.Click += (s, e) => InsertLayout(); actions.Controls.Add(insert);
+            var insert = ButtonFor("带图框插入"); insert.Click += (s, e) => InsertLayout(); actions.Controls.Add(insert);
+            var insertRange = ButtonFor("框选排版范围"); insertRange.Click += (s, e) => InsertWithoutFrame(); actions.Controls.Add(insertRange);
             footer.Controls.Add(actions, 1, 0); root.Controls.Add(footer, 0, 2);
             Controls.Add(root);
         }
@@ -95,6 +97,208 @@ namespace BatchPdfPublisher.Views
             if (failure != null) { MessageBox.Show(this, failure.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
             if (item == null) return;
             _items.Add(item); SyncList(_items.Count - 1); RefreshLayout(true);
+        }
+
+        private async void AddSmallPlan()
+        {
+            var options = PromptSmallPlanOptions(null);
+            if (options == null) return;
+            Hide(); DetailLayoutItem item = null; Exception failure = null;
+            try
+            {
+                await CadCommandContext.ExecuteAsync(() => item = CaptureSmallPlan(options));
+            }
+            catch (Exception exception) { failure = Unwrap(exception); }
+            finally { if (!IsDisposed) { Show(); Activate(); } }
+            if (failure != null)
+            {
+                MessageBox.Show(this, failure.Message, Text, MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return;
+            }
+            if (item == null) return;
+            _items.Add(item); SyncList(_items.Count - 1); RefreshLayout(true);
+        }
+
+        private DetailLayoutItem CaptureSmallPlan(SmallPlanOptions options)
+        {
+            var bridge = AppDomain.CurrentDomain.GetAssemblies()
+                .Select(assembly => assembly.GetType(
+                    "WL.Stair.Cad2022.DetailLayoutPlanBridge", false))
+                .FirstOrDefault(candidate => candidate != null);
+            if (bridge == null)
+                throw new InvalidOperationException("楼梯小平面模块尚未加载，请使用最新版启动器重新加载插件。");
+            object result;
+            try
+            {
+                result = bridge.GetMethod("Capture").Invoke(null, new object[]
+                {
+                    _document,
+                    new PublishPlanStore().GetActiveProject()?.Name ?? "默认项目",
+                    options.Name,
+                    options.Scale,
+                    options.CaptureMode
+                });
+            }
+            catch (System.Reflection.TargetInvocationException exception)
+            {
+                throw exception.InnerException ?? exception;
+            }
+            if (result == null) return null;
+            var type = result.GetType();
+            var item = new DetailLayoutItem
+            {
+                Name = Read<string>(result, type, "Name") ?? options.Name,
+                ScaleText = Read<string>(result, type, "ScaleText") ?? ("1:" + options.Scale),
+                AddIndexNumber = options.AddIndexNumber,
+                IsCachedPlan = true,
+                CacheRelativePath = Read<string>(result, type, "CacheRelativePath"),
+                CacheLayoutOffsetX = Read<double>(result, type, "CacheLayoutOffsetX"),
+                CacheLayoutOffsetY = Read<double>(result, type, "CacheLayoutOffsetY"),
+                MinPoint = Point3d.Origin,
+                MaxPoint = new Point3d(Read<double>(result, type, "Width"),
+                    Read<double>(result, type, "Height"), 0d)
+            };
+            var lines = type.GetProperty("PreviewLines").GetValue(result, null)
+                as System.Collections.IEnumerable;
+            if (lines != null)
+            {
+                foreach (var line in lines)
+                {
+                    var lineType = line.GetType();
+                    item.Preview.Add(new DetailPreviewPrimitive
+                    {
+                        Kind = DetailPreviewPrimitiveKind.Line,
+                        X1 = Read<double>(line, lineType, "X1"),
+                        Y1 = Read<double>(line, lineType, "Y1"),
+                        X2 = Read<double>(line, lineType, "X2"),
+                        Y2 = Read<double>(line, lineType, "Y2")
+                    });
+                }
+            }
+            if (string.IsNullOrWhiteSpace(item.CacheRelativePath)
+                || item.Width <= 1e-6 || item.Height <= 1e-6)
+                throw new InvalidOperationException("小平面缓存没有生成有效的排版范围。");
+            return item;
+        }
+
+        private void EditSelectedName()
+        {
+            var index = _list.SelectedIndex;
+            if (index < 0 || index >= _items.Count) return;
+            var item = _items[index];
+            var options = PromptSmallPlanOptions(item);
+            if (options == null) return;
+            item.Name = options.Name;
+            item.ScaleText = "1:" + options.Scale;
+            item.AddIndexNumber = options.AddIndexNumber;
+            SyncList(index); RefreshLayout(false);
+        }
+
+        private SmallPlanOptions PromptSmallPlanOptions(DetailLayoutItem item)
+        {
+            using (var dialog = new Form
+            {
+                Text = item == null ? "框选平面" : "编辑名称与编号",
+                StartPosition = FormStartPosition.CenterParent,
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                MinimizeBox = false,
+                MaximizeBox = false,
+                ClientSize = new Size(360, item == null ? 205 : 165),
+                Font = Font
+            })
+            {
+                var table = new TableLayoutPanel { Dock = DockStyle.Fill,
+                    Padding = new Padding(14), ColumnCount = 2, RowCount = 5 };
+                table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 85));
+                table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+                var name = new TextBox { Dock = DockStyle.Fill,
+                    Text = item?.Name ?? ("小平面" + (_items.Count(x => x.IsCachedPlan) + 1)) };
+                var scale = new ComboBox { Dock = DockStyle.Fill,
+                    DropDownStyle = ComboBoxStyle.DropDown };
+                scale.Items.AddRange(new object[] { "1:20", "1:25", "1:30", "1:50", "1:100" });
+                scale.Text = item?.ScaleText ?? _scale.Text;
+                var number = new CheckBox { Text = "在图外增加圆圈编号", AutoSize = true,
+                    Checked = item != null && item.AddIndexNumber };
+                table.Controls.Add(LabelFor("名称"), 0, 0); table.Controls.Add(name, 1, 0);
+                table.Controls.Add(LabelFor("比例"), 0, 1); table.Controls.Add(scale, 1, 1);
+                table.Controls.Add(number, 1, 2);
+                var captureHint = new Label
+                {
+                    Text = "在 CAD 中框选任意平面范围；不会修改或删除源图。",
+                    AutoSize = true,
+                    ForeColor = Color.DimGray
+                };
+                table.Controls.Add(captureHint, 0, 3);
+                table.SetColumnSpan(captureHint, 2);
+                var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill,
+                    FlowDirection = FlowDirection.RightToLeft, AutoSize = true };
+                var ok = ButtonFor("确定"); ok.DialogResult = DialogResult.OK;
+                var cancel = ButtonFor("取消"); cancel.DialogResult = DialogResult.Cancel;
+                buttons.Controls.Add(ok); buttons.Controls.Add(cancel);
+                table.Controls.Add(buttons, 0, 4); table.SetColumnSpan(buttons, 2);
+                dialog.Controls.Add(table); dialog.AcceptButton = ok; dialog.CancelButton = cancel;
+                while (dialog.ShowDialog(this) == DialogResult.OK)
+                {
+                    if (string.IsNullOrWhiteSpace(name.Text))
+                    {
+                        MessageBox.Show(dialog, "请输入小平面名称。", Text,
+                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        dialog.DialogResult = DialogResult.None;
+                        continue;
+                    }
+                    try
+                    {
+                        var scaleValue = ParseSmallPlanScale(scale.Text);
+                        return new SmallPlanOptions
+                        {
+                            Name = name.Text.Trim(), Scale = scaleValue,
+                            AddIndexNumber = number.Checked,
+                            CaptureMode = 2
+                        };
+                    }
+                    catch (Exception exception)
+                    {
+                        MessageBox.Show(dialog, exception.Message, Text,
+                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        dialog.DialogResult = DialogResult.None;
+                    }
+                }
+                return null;
+            }
+        }
+
+        private static int ParseSmallPlanScale(string value)
+        {
+            var text = (value ?? string.Empty).Trim();
+            var separator = text.LastIndexOf(':');
+            if (separator >= 0) text = text.Substring(separator + 1);
+            int result;
+            if (!int.TryParse(text, out result) || result <= 0)
+                throw new InvalidOperationException("小平面比例必须是有效正整数。");
+            return result;
+        }
+
+        private static T Read<T>(object source, Type type, string propertyName)
+        {
+            var value = type.GetProperty(propertyName).GetValue(source, null);
+            return value == null ? default(T) : (T)Convert.ChangeType(value,
+                typeof(T), CultureInfo.InvariantCulture);
+        }
+
+        private static Exception Unwrap(Exception exception)
+        {
+            while (exception is System.Reflection.TargetInvocationException
+                && exception.InnerException != null) exception = exception.InnerException;
+            return exception;
+        }
+
+        private sealed class SmallPlanOptions
+        {
+            public string Name;
+            public int Scale;
+            public bool AddIndexNumber;
+            public int CaptureMode;
         }
 
         private async void InsertLayout()
@@ -113,6 +317,37 @@ namespace BatchPdfPublisher.Views
             catch (Exception exception) { failure = exception; }
             finally { if (!IsDisposed) { Show(); Activate(); } }
             if (failure != null) MessageBox.Show(this, failure.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+
+        private async void InsertWithoutFrame()
+        {
+            int scale;
+            DetailLayoutOptions options;
+            try
+            {
+                scale = ParseScale();
+                options = ReadOptions();
+                if (_items.Count == 0)
+                    throw new InvalidOperationException("请先添加大样或框选平面。");
+            }
+            catch (Exception exception)
+            {
+                MessageBox.Show(this, exception.Message, Text, MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return;
+            }
+            SaveSettings(); Hide(); Exception failure = null;
+            try
+            {
+                await CadCommandContext.ExecuteAsync(() =>
+                    DetailLayoutService.InsertWithoutFrame(_document, _items,
+                        scale, options));
+            }
+            catch (Exception exception) { failure = exception; }
+            finally { if (!IsDisposed) { Show(); Activate(); } }
+            if (failure != null)
+                MessageBox.Show(this, failure.Message, Text, MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
         }
 
         private async void InsertFrame()
@@ -210,7 +445,7 @@ namespace BatchPdfPublisher.Views
         private void ShowMissingRangeReminder()
         {
             var frame = SelectedFrame(); if (frame == null || FrameLayoutRangeService.HasValidRange(frame)) return;
-            MessageBox.Show(this, "当前图框尚未登记排版范围。\r\n\r\n请点击“登记排版范围”，程序将插入一个 1:1 图框供您框选，并把范围写入图框登记。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this, "当前图框尚未登记排版范围。\r\n\r\n带图框插入前请到图框登记中补写排版范围；也可以直接使用窗口底部的“框选排版范围”进行无图框排版。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         private int ParseScale()
         {

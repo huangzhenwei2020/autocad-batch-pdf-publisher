@@ -73,10 +73,10 @@ namespace BatchPdfPublisher.Services
 
                 var definitionId = blocks[frame.BlockName];
                 var definition = (BlockTableRecord)transaction.GetObject(definitionId, OpenMode.ForRead);
-                // 与 CAD 的 INSERT 一致：插入点就是块基点，所选出图比例就是统一块比例。
-                var reference = new BlockReference(point.Value, definitionId)
+                var placement = FrameBlockPlacementService.Measure(definition, transaction, frame, drawingScale);
+                var reference = new BlockReference(placement.PositionForLowerLeft(point.Value), definitionId)
                 {
-                    ScaleFactors = new Scale3d(drawingScale),
+                    ScaleFactors = new Scale3d(placement.Factor),
                     LayerId = frameLayerId
                 };
                 var space = (BlockTableRecord)transaction.GetObject(database.CurrentSpaceId, OpenMode.ForWrite);

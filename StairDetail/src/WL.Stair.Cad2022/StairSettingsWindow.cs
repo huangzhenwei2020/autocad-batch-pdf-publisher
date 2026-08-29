@@ -38,6 +38,9 @@ namespace WL.Stair.Cad2022
         private UiState _state;
         private bool _isClosing;
         private bool _initializationStarted;
+        private bool _cadInteractionActive;
+        private string _lastSuccessfulPreviewSvg = string.Empty;
+        private string _lastOpeningPreviewTrace = string.Empty;
 
         public StairSettingsWindow()
         {
@@ -64,6 +67,10 @@ namespace WL.Stair.Cad2022
         public StairProjectCalculationResult ConfirmedCalculation { get; private set; }
 
         public bool GenerateCombinedLayout { get; private set; }
+
+        public bool IsConfirmed { get; private set; }
+
+        public event EventHandler Completed;
 
         public LayoutFrameOption SelectedLayoutFrame
         {
@@ -95,7 +102,7 @@ namespace WL.Stair.Cad2022
             {
                 if (_isClosing) return;
                 MessageBox.Show(this, exception.Message, Title, MessageBoxButton.OK, MessageBoxImage.Error);
-                DialogResult = false;
+                Close();
             }
         }
 
@@ -128,11 +135,112 @@ namespace WL.Stair.Cad2022
             {
                 if (!_isClosing)
                 {
-                    SendPreview(null, "操作失败：" + exception.Message, false);
-                    MessageBox.Show(this, exception.Message, "楼梯大样操作失败",
-                        MessageBoxButton.OK, MessageBoxImage.Error);
+                    var actual = UnwrapException(exception);
+                    WriteEditorLog(actual);
+                    SendPreview(null, "操作失败：" + actual.Message, false);
                 }
             }
+        }
+
+        private static Exception UnwrapException(Exception exception)
+        {
+            var current = exception;
+            while (current != null && current.InnerException != null
+                && (current is System.Reflection.TargetInvocationException
+                    || current is AggregateException))
+                current = current.InnerException;
+            return current ?? exception;
+        }
+
+        private static void WriteEditorLog(Exception exception)
+        {
+            try
+            {
+                var root = Environment.GetEnvironmentVariable(
+                    "WANLUO_ARCHITECTURE_TOOLS_ROOT");
+                if (string.IsNullOrWhiteSpace(root)) return;
+                var directory = Path.Combine(root, "用户配置文件", "Logs");
+                Directory.CreateDirectory(directory);
+                File.AppendAllText(Path.Combine(directory, "stair-editor.log"),
+                    DateTime.Now.ToString("O", CultureInfo.InvariantCulture)
+                    + Environment.NewLine + exception + Environment.NewLine,
+                    Encoding.UTF8);
+            }
+            catch { }
+        }
+
+        private void TracePlatformOpeningPreview(string action)
+        {
+            if (!string.Equals(action, "preview", StringComparison.OrdinalIgnoreCase)
+                || _state == null || _state.Project == null) return;
+            var openings = (_state.Project.Floors ?? new List<StairFloorDefinition>())
+                .Where(item => item != null && item.DoorWindowElevation != null
+                    && item.DoorWindowElevation.Type != WallOpeningType.None)
+                .Select(item => new { item.Id, Opening = item.DoorWindowElevation })
+                .Concat((_state.Project.Storeys ?? new List<StairStoreyDefinition>())
+                    .Where(item => item != null)
+                    .SelectMany(item => item.Landings ?? new List<StairLandingDefinition>())
+                    .Where(item => item != null && item.DoorWindowElevation != null
+                        && item.DoorWindowElevation.Type != WallOpeningType.None)
+                    .Select(item => new { item.Id, Opening = item.DoorWindowElevation }))
+                .Select(item => string.Format(CultureInfo.InvariantCulture,
+                    "{0}:type={1},offset={2:0.###},width={3:0.###},height={4:0.###},sill={5:0.###}",
+                    item.Id, (int)item.Opening.Type, item.Opening.DistanceFromWall,
+                    item.Opening.Width, item.Opening.Height, item.Opening.SillHeight))
+                .ToArray();
+            var signature = string.Join(";", openings);
+            if (signature.Length == 0 || string.Equals(signature, _lastOpeningPreviewTrace,
+                StringComparison.Ordinal)) return;
+            _lastOpeningPreviewTrace = signature;
+            try
+            {
+                var root = Environment.GetEnvironmentVariable("WANLUO_ARCHITECTURE_TOOLS_ROOT");
+                if (string.IsNullOrWhiteSpace(root)) return;
+                var directory = Path.Combine(root, "用户配置文件", "Logs");
+                Directory.CreateDirectory(directory);
+                File.AppendAllText(Path.Combine(directory, "stair-opening-preview.log"),
+                    DateTime.Now.ToString("O", CultureInfo.InvariantCulture) + " "
+                    + signature + Environment.NewLine, Encoding.UTF8);
+            }
+            catch { }
+        }
+
+        private async void RunCadInteraction(Action action)
+        {
+            if (_isClosing || action == null) return;
+            if (_cadInteractionActive)
+            {
+                SendPreview(null, "请先完成当前 CAD 拾取操作。", false);
+                return;
+            }
+
+            _cadInteractionActive = true;
+            Exception captured = null;
+            try
+            {
+                await Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager
+                    .ExecuteInCommandContextAsync(
+                    unused =>
+                    {
+                        try { action(); }
+                        catch (Exception exception) { captured = exception; }
+                        return Task.FromResult(0);
+                    },
+                    null);
+            }
+            catch (Exception exception)
+            {
+                captured = exception;
+            }
+            finally
+            {
+                _cadInteractionActive = false;
+            }
+
+            if (captured == null || _isClosing) return;
+            var actual = UnwrapException(captured);
+            WriteEditorLog(actual);
+            SendPreview(null, "操作失败：" + actual.Message, false);
         }
 
         private void ProcessWebMessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs eventArgs)
@@ -152,8 +260,7 @@ namespace WL.Stair.Cad2022
             if (message == null) return;
             if (message.Action == "cancel")
             {
-                _isClosing = true;
-                DialogResult = false;
+                Close();
                 return;
             }
             if (message.State != null)
@@ -170,9 +277,11 @@ namespace WL.Stair.Cad2022
                 _storage.SaveLastLayoutFrameId(_state.SelectedLayoutFrameId);
             }
 
+            TracePlatformOpeningPreview(message.Action);
+
             if (message.Action == "measure")
             {
-                MeasureFromCad(message.Target);
+                RunCadInteraction(() => MeasureFromCad(message.Target));
                 return;
             }
 
@@ -187,7 +296,7 @@ namespace WL.Stair.Cad2022
 
             if (message.Action == "pick-plan-source")
             {
-                PickPlanSourceFromCad(message.Target);
+                RunCadInteraction(() => PickPlanSourceFromCad(message.Target));
                 return;
             }
 
@@ -199,18 +308,19 @@ namespace WL.Stair.Cad2022
 
             if (message.Action == "inspect-plan-source")
             {
-                InspectPlanSource(message.Target);
+                RunCadInteraction(() => InspectPlanSource(message.Target));
                 return;
             }
 
             if (message.Action == "create-plan-working-copy")
             {
-                CreatePlanWorkingCopy(message.Target);
+                RunCadInteraction(() => CreatePlanWorkingCopy(message.Target));
                 return;
             }
 
             _constraints.Normalize(_state.Project);
             _constraints.Apply(_state.Project);
+            RefreshPlatformOpeningGeometry();
 
             var outcome = _calculator.Calculate(_state.Project);
             if (!outcome.IsSuccess)
@@ -257,7 +367,8 @@ namespace WL.Stair.Cad2022
                     try { _storage.Save(projectToSave); }
                     catch { /* Auto-save failure must not cancel CAD generation. */ }
                 });
-                DialogResult = true;
+                IsConfirmed = true;
+                Close();
                 return;
             }
 
@@ -328,8 +439,13 @@ namespace WL.Stair.Cad2022
         private void SendPreview(DrawingView view, string summary, bool success,
             string previewFloorLabel = null, bool resetView = false)
         {
+            var svg = view == null ? string.Empty : BuildSvg(view, _state, previewFloorLabel);
+            if (success && !string.IsNullOrWhiteSpace(svg))
+                _lastSuccessfulPreviewSvg = svg;
+            else if (!success && string.IsNullOrWhiteSpace(svg))
+                svg = _lastSuccessfulPreviewSvg;
             SendPreviewSvg(
-                view == null ? string.Empty : BuildSvg(view, _state, previewFloorLabel),
+                svg,
                 summary,
                 success,
                 string.IsNullOrWhiteSpace(previewFloorLabel) ? "剖面预览" : previewFloorLabel + " · 平面预览",
@@ -973,6 +1089,59 @@ namespace WL.Stair.Cad2022
             CopyBridgeProperty(result, "GeometryLines", value => opening.GeometryLines = value as string);
         }
 
+        private void RefreshPlatformOpeningGeometry()
+        {
+            var openings = (_state.Project.Floors ?? new List<StairFloorDefinition>())
+                .Where(item => item != null)
+                .Select(item => new { item.Id, Opening = item.DoorWindowElevation })
+                .Concat((_state.Project.Storeys ?? new List<StairStoreyDefinition>())
+                    .Where(item => item != null)
+                    .SelectMany(item => item.Landings ?? new List<StairLandingDefinition>())
+                    .Where(item => item != null)
+                    .Select(item => new { item.Id, Opening = item.DoorWindowElevation }));
+            foreach (var item in openings)
+            {
+                var opening = item.Opening;
+                if (opening == null || opening.Type == WallOpeningType.None) continue;
+                BuildDoorWindowGeometry(item.Id, opening);
+            }
+        }
+
+        private static void BuildDoorWindowGeometry(
+            string componentId,
+            StairPlatformOpeningDefinition opening)
+        {
+            var bridgeType = AppDomain.CurrentDomain.GetAssemblies()
+                .Select(assembly => assembly.GetType(
+                    "BatchPdfPublisher.Views.DoorWindowDivisionEditorBridge", false))
+                .FirstOrDefault(type => type != null);
+            var method = bridgeType == null ? null : bridgeType.GetMethod("Build",
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+            if (method == null) return;
+            var result = method.Invoke(null, new object[]
+            {
+                componentId,
+                (int)opening.Type,
+                opening.Width,
+                opening.Height,
+                opening.CustomCellLayout,
+                opening.CellOpeningModes,
+                opening.HasInstallationGap,
+                opening.InstallationGap,
+                opening.HasOuterFrame,
+                opening.OuterFrameWidth,
+                opening.HasMullion,
+                opening.MullionWidth,
+                opening.DoorFrameType,
+                opening.DoorFrameWidth,
+                opening.Material
+            });
+            if (result == null) return;
+            CopyBridgeProperty(result, "CustomCellLayout", value => opening.CustomCellLayout = value as string);
+            CopyBridgeProperty(result, "CellOpeningModes", value => opening.CellOpeningModes = value as string);
+            CopyBridgeProperty(result, "GeometryLines", value => opening.GeometryLines = value as string);
+        }
+
         private StairPlatformOpeningDefinition FindPlatformOpening(string componentId)
         {
             var floor = (_state.Project.Floors ?? new List<StairFloorDefinition>())
@@ -1427,9 +1596,11 @@ namespace WL.Stair.Cad2022
 
         private void OnClosed(object sender, EventArgs eventArgs)
         {
-            // Even ApplicationIdle can run before AutoCAD has returned from
-            // its modal window callback. Give the host time to restore its
-            // command loop, then release the detached browser at low priority.
+            var completed = Completed;
+            if (completed != null) completed(this, EventArgs.Empty);
+
+            // Release the detached browser after AutoCAD has resumed its
+            // command loop; WebView2 can otherwise hold a host resource busy.
             var dispatcher = Dispatcher;
             System.Threading.Tasks.Task.Delay(1500).ContinueWith(_ =>
             {
@@ -1546,21 +1717,9 @@ namespace WL.Stair.Cad2022
                         Escape(topFloor.PlanFloorLabel));
                 }
             }
-            foreach (var region in view.HatchRegions)
-            {
-                var points = string.Join(" ", region.Boundary.Select(point => string.Format(
-                    CultureInfo.InvariantCulture, "{0},{1}", point.X, -point.Y)));
-                var css = region.IsWall ? "wall-hatch" : "section-hatch";
-                if (!string.IsNullOrEmpty(selectedComponentId)
-                    && string.Equals(region.ComponentId, selectedComponentId, StringComparison.OrdinalIgnoreCase))
-                    css += " selected";
-                builder.AppendFormat("<polygon class='{0}' data-component='{1}' points='{2}' style='fill:url(#{3});fill-opacity:{4};stroke:none;cursor:pointer'/>",
-                    css, Escape(region.ComponentId), points,
-                    region.IsWall ? "wallHatch" : "sectionHatch",
-                    region.IsWall ? "0.42" : "0.58");
-            }
             foreach (var line in view.Lines)
             {
+                if (line.Role == StairLineRole.HatchBoundary) continue;
                 var css = line.IsHidden ? "rear" : "cut";
                 if (line.Role == StairLineRole.BeamBoundary) css += " beam";
                 if (line.Role == StairLineRole.WallBoundary) css += " wall";

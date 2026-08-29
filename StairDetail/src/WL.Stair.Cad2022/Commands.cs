@@ -10,6 +10,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using System.Threading.Tasks;
 using WL.Stair.Core.Calculation;
 using WL.Stair.Core.Domain;
 using WL.Stair.Core.Geometry;
@@ -21,6 +22,8 @@ namespace WL.Stair.Cad2022
 {
     public sealed class Commands
     {
+        private static StairSettingsWindow _settingsWindow;
+
         [CommandMethod("LTDY", CommandFlags.Modal)]
         public void GenerateStairDetail()
         {
@@ -30,26 +33,73 @@ namespace WL.Stair.Cad2022
                 return;
             }
 
-            var editor = document.Editor;
+            if (_settingsWindow != null)
+            {
+                if (_settingsWindow.WindowState == System.Windows.WindowState.Minimized)
+                    _settingsWindow.WindowState = System.Windows.WindowState.Normal;
+                _settingsWindow.Activate();
+                return;
+            }
+
             var settingsWindow = new StairSettingsWindow();
-            if (Application.ShowModalWindow(settingsWindow) != true)
+            _settingsWindow = settingsWindow;
+            settingsWindow.Completed += OnSettingsWindowCompleted;
+            Application.ShowModelessWindow(settingsWindow);
+        }
+
+        private static async void OnSettingsWindowCompleted(object sender, EventArgs eventArgs)
+        {
+            var settingsWindow = sender as StairSettingsWindow;
+            if (settingsWindow == null) return;
+            settingsWindow.Completed -= OnSettingsWindowCompleted;
+            if (ReferenceEquals(_settingsWindow, settingsWindow)) _settingsWindow = null;
+
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (!settingsWindow.IsConfirmed)
             {
-                editor.WriteMessage("\n已取消生成楼梯大样。\n");
+                if (document != null) document.Editor.WriteMessage("\n已取消生成楼梯大样。\n");
                 return;
             }
 
-            if (settingsWindow.GenerateCombinedLayout)
+            var project = settingsWindow.Project;
+            var calculation = settingsWindow.ConfirmedCalculation;
+            var generateCombinedLayout = settingsWindow.GenerateCombinedLayout;
+            var selectedLayoutFrame = settingsWindow.SelectedLayoutFrame;
+            System.Exception captured = null;
+            try
             {
-                GenerateCombinedLayout(document, settingsWindow.Project,
-                    settingsWindow.ConfirmedCalculation, settingsWindow.SelectedLayoutFrame);
-                return;
+                await Application.DocumentManager.ExecuteInCommandContextAsync(
+                    unused =>
+                    {
+                        try
+                        {
+                            var activeDocument = Application.DocumentManager.MdiActiveDocument;
+                            if (activeDocument == null)
+                                throw new InvalidOperationException("当前没有打开的 CAD 图纸。");
+                            if (generateCombinedLayout)
+                                GenerateCombinedLayout(activeDocument, project, calculation,
+                                    selectedLayoutFrame);
+                            else
+                                GenerateProject(activeDocument, project, calculation, null);
+                        }
+                        catch (System.Exception exception)
+                        {
+                            captured = exception;
+                        }
+                        return Task.FromResult(0);
+                    },
+                    null);
+            }
+            catch (System.Exception exception)
+            {
+                captured = exception;
             }
 
-            GenerateProject(
-                document,
-                settingsWindow.Project,
-                settingsWindow.ConfirmedCalculation,
-                null);
+            if (captured == null) return;
+            document = Application.DocumentManager.MdiActiveDocument;
+            if (document != null)
+                document.Editor.WriteMessage("\n楼梯大样操作失败: " + captured.Message + "\n");
+            Application.ShowAlertDialog("楼梯大样操作失败：" + captured.Message);
         }
 
         private static void GenerateCombinedLayout(

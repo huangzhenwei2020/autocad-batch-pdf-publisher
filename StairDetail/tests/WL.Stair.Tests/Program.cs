@@ -15,6 +15,11 @@ namespace WL.Stair.Tests
         {
             CalculatesStandardDoubleFlightStair,
             UsesUpdatedHatchScaleDefaults,
+            UsesUpdatedPlatformDoorWindowDefaults,
+            UsesOppositeSupportAndSlabOverhangDefaults,
+            BuildsOppositeBeamSlabWithConfigurableOpenEnd,
+            IgnoresLegacyLandingOppositeSupports,
+            ExtendsTopWallsAboveTopFloorOpening,
             RecommendsBalancedEvenRiserCount,
             SplitsOddRiserCountAccordingToPreference,
             SupportsManualFlightSplit,
@@ -128,8 +133,8 @@ namespace WL.Stair.Tests
                 "The basement base elevation was lost.");
             TestAssert.NearlyEqual(6200.0, outcome.Result.TotalHeight, 0.001,
                 "Total height must measure from the lowest floor to the highest floor.");
-            TestAssert.True(section.Texts.Any(text => text.Content.Contains("一层楼板  -3.000")),
-                "The lowest basement floor label must use its configured name and elevation.");
+            TestAssert.True(section.Texts.Any(text => text.Content.Contains("1层  -3.000")),
+                "The lowest floor label must use its logical floor name and elevation.");
         }
 
         private static void UsesUpdatedHatchScaleDefaults()
@@ -139,6 +144,223 @@ namespace WL.Stair.Tests
                 0.001, "Structure hatch default scale must be 200.");
             TestAssert.NearlyEqual(20.0, project.Construction.WallHatch.PatternScale,
                 0.001, "Wall hatch default scale must be 20.");
+        }
+
+        private static void UsesUpdatedPlatformDoorWindowDefaults()
+        {
+            var project = StairProjectDefinition.CreateDefault();
+            TestAssert.NearlyEqual(2200.0, project.Construction.Door.Height, 0.001,
+                "Wall doors must default to 2200 mm high.");
+
+            var wallOpening = StairWallOpeningDefinition.CreateDefault("WALL-L-LB-01");
+            TestAssert.NearlyEqual(2200.0, wallOpening.Height, 0.001,
+                "A newly registered wall opening must carry the 2200 mm door default.");
+
+            var door = StairPlatformOpeningDefinition.CreateDoorDefault();
+            TestAssert.NearlyEqual(150.0, door.DistanceFromWall, 0.001,
+                "Door offset must default to 150 mm from the axis.");
+            TestAssert.NearlyEqual(2200.0, door.Height, 0.001,
+                "Platform doors must default to 2200 mm high.");
+            TestAssert.NearlyEqual(0.0, door.DoorFrameWidth, 0.001,
+                "Platform doors must default to no door frame.");
+            TestAssert.Equal("左平开", door.CellOpeningModes,
+                "The default platform door must be left side-hung.");
+            TestAssert.True(door.CustomCellLayout.Contains(",左平开,1,0,"),
+                "The default door panel must be marked as a door.");
+            TestAssert.Equal("无", door.Material,
+                "The default platform door material must be none.");
+            TestAssert.True(door.CustomCellLayout.EndsWith(",无", StringComparison.Ordinal),
+                "The default door cell material must be none.");
+
+            var window = StairPlatformOpeningDefinition.CreateWindowDefault();
+            TestAssert.NearlyEqual(150.0, window.DistanceFromWall, 0.001,
+                "Window offset must default to 150 mm from the axis.");
+            TestAssert.NearlyEqual(1500.0, window.Height, 0.001,
+                "Platform windows must default to 1500 mm high.");
+            TestAssert.NearlyEqual(900.0, window.SillHeight, 0.001,
+                "Platform windows must default to a 900 mm sill.");
+            TestAssert.True(window.HasMullion,
+                "The default platform window must enable its central mullion.");
+            TestAssert.Equal("右平开|左平开", window.CellOpeningModes,
+                "The two default window leaves must open right and left respectively.");
+            TestAssert.Equal(2, window.CustomCellLayout.Split('|').Length,
+                "The default platform window must contain two leaves.");
+            TestAssert.True(window.CustomCellLayout.Split('|').All(cell =>
+                    cell.EndsWith(",玻璃", StringComparison.Ordinal)
+                    && cell.Contains(",0,0,玻璃")),
+                "Both default window leaves must be glass and must not be marked as doors.");
+
+            project.WallOpenings.Add(new StairWallOpeningDefinition
+            {
+                SegmentId = "WALL-R-LB-01",
+                Type = WallOpeningType.Door,
+                Height = 0.0
+            });
+            project.Floors[0].DoorWindowElevation = new StairPlatformOpeningDefinition
+            {
+                Type = WallOpeningType.Door,
+                Width = 900.0,
+                Height = 0.0
+            };
+            new StairProjectConstraintService().Normalize(project);
+            TestAssert.NearlyEqual(2200.0, project.WallOpenings[0].Height, 0.001,
+                "Normalization must not restore the obsolete 2100 mm wall-door default.");
+            TestAssert.NearlyEqual(2200.0, project.Floors[0].DoorWindowElevation.Height, 0.001,
+                "Normalization must not restore the obsolete 2100 mm platform-door default.");
+            TestAssert.Equal("无", project.Floors[0].DoorWindowElevation.Material,
+                "Normalization must use no material for a door with missing material data.");
+        }
+
+        private static void UsesOppositeSupportAndSlabOverhangDefaults()
+        {
+            var project = StairProjectDefinition.CreateDefault();
+            TestAssert.Equal(21, project.SchemaVersion,
+                "New stair projects must use the opposite-support schema.");
+            TestAssert.True(project.Construction.OppositeSupportsEnabled,
+                "Opposite-wall supports must be enabled by default.");
+            TestAssert.NearlyEqual(300.0, project.Construction.SlabOverhang, 0.001,
+                "The unified slab overhang must default to 300 mm.");
+            TestAssert.True(!project.Construction.CloseSlabOverhangEdge,
+                "The slab overhang end must be visibly open by default.");
+            TestAssert.True(project.Floors.All(item =>
+                    item.OppositeSupportType == OppositeSupportType.Beam),
+                "Every new floor must inherit a beam at the opposite wall.");
+            TestAssert.True(project.Storeys.SelectMany(item => item.Landings).All(item =>
+                    item.OppositeSupportType == OppositeSupportType.None),
+                "Rest landings must not create opposite-wall supports.");
+
+            project.SchemaVersion = 20;
+            project.Construction.OppositeSupportsEnabled = false;
+            project.Construction.SlabOverhang = 0.0;
+            project.Construction.CloseSlabOverhangEdge = true;
+            foreach (var item in project.Floors)
+                item.OppositeSupportType = OppositeSupportType.None;
+            project.Storeys.SelectMany(item => item.Landings).ToList()
+                .ForEach(item => item.OppositeSupportType = OppositeSupportType.None);
+            new StairProjectConstraintService().Normalize(project);
+            TestAssert.Equal(21, project.SchemaVersion,
+                "Schema 20 projects must migrate to the opposite-support schema.");
+            TestAssert.True(project.Construction.OppositeSupportsEnabled,
+                "Migrated projects must receive the enabled unified switch.");
+            TestAssert.NearlyEqual(300.0, project.Construction.SlabOverhang, 0.001,
+                "Migrated projects must receive the 300 mm overhang.");
+            TestAssert.True(!project.Construction.CloseSlabOverhangEdge,
+                "Migrated projects must retain the open-end drawing convention.");
+            TestAssert.True(project.Storeys.SelectMany(item => item.Landings).All(item =>
+                    item.OppositeSupportType == OppositeSupportType.None),
+                "Migration must remove opposite supports from rest landings.");
+        }
+
+        private static void BuildsOppositeBeamSlabWithConfigurableOpenEnd()
+        {
+            var project = StairProjectDefinition.CreateDefault();
+            foreach (var item in project.Floors)
+                item.OppositeSupportType = OppositeSupportType.None;
+            foreach (var landing in project.Storeys.SelectMany(item => item.Landings))
+                landing.OppositeSupportType = OppositeSupportType.None;
+
+            var floor = project.Floors[1];
+            floor.PlatformType = PlatformLayoutType.Platform2;
+            floor.OppositeSupportType = OppositeSupportType.BeamWithSlab;
+            floor.OppositeBeamWidthOverride = 240.0;
+            floor.OppositeBeamDepthOverride = 500.0;
+            floor.OppositeSlabThicknessOverride = 130.0;
+            floor.SlabOverhangOverride = 360.0;
+            floor.CloseSlabOverhangEdgeOverride = false;
+
+            new StairProjectConstraintService().Apply(project);
+            var outcome = new StairProjectCalculator().Calculate(project);
+            TestAssert.True(outcome.IsSuccess,
+                "An opposite beam-and-slab override must calculate successfully.");
+            var section = new StairProjectGeometryBuilder().BuildSection(project, outcome.Result);
+            var direction = floor.ProjectionDirection;
+            var oppositeAxis = direction > 0 ? project.Construction.StairwellDepth : 0.0;
+            var outsideDirection = oppositeAxis < project.Construction.StairwellDepth / 2.0 ? -1.0 : 1.0;
+            var slabEndX = oppositeAxis + outsideDirection * (120.0 + 360.0);
+            var openEdges = section.Lines.Where(line =>
+                    line.ComponentId == floor.Id
+                    && line.Role == StairLineRole.HatchBoundary)
+                .ToArray();
+            TestAssert.True(openEdges.Any(line =>
+                    Math.Abs(line.Start.X - slabEndX) < 0.001
+                    && Math.Abs(line.End.X - slabEndX) < 0.001),
+                "An unclosed overhang must omit its visible end while retaining a hatch boundary.");
+            TestAssert.True(section.HatchRegions.Any(region => region.OpenEdges.Any(line =>
+                    Math.Abs(line.Start.X - slabEndX) < 0.001
+                    && Math.Abs(line.End.X - slabEndX) < 0.001)),
+                "The hatch region must preserve which terminal edge is forbidden from bolding.");
+
+            var floorElevation = outcome.Result.Storeys[0].UpperElevation;
+            var oppositeWallFaces = new[]
+            {
+                oppositeAxis - project.Construction.Wall.Thickness / 2.0,
+                oppositeAxis + project.Construction.Wall.Thickness / 2.0
+            };
+            TestAssert.True(!section.Lines.Any(line =>
+                    line.Role == StairLineRole.WallBoundary
+                    && Math.Abs(line.Start.X - line.End.X) < 0.001
+                    && oppositeWallFaces.Any(x => Math.Abs(line.Start.X - x) < 0.001)
+                    && Math.Min(line.Start.Y, line.End.Y) < floorElevation - 250.0
+                    && Math.Max(line.Start.Y, line.End.Y) > floorElevation - 250.0),
+                "The opposite wall must break around the added beam instead of crossing it.");
+
+            floor.CloseSlabOverhangEdgeOverride = true;
+            section = new StairProjectGeometryBuilder().BuildSection(project, outcome.Result);
+            TestAssert.True(!section.Lines.Any(line =>
+                    line.ComponentId == floor.Id
+                    && line.Role == StairLineRole.HatchBoundary),
+                "A closed overhang must not need a hidden hatch-only terminal edge.");
+            TestAssert.True(!section.HatchRegions.Any(region => region.OpenEdges.Any(line =>
+                    Math.Abs(line.Start.X - slabEndX) < 0.001
+                    && Math.Abs(line.End.X - slabEndX) < 0.001)),
+                "A closed overhang must not carry no-bold metadata for its terminal edge.");
+            TestAssert.True(section.Lines.Any(line =>
+                    line.ComponentId == floor.Id
+                    && line.Role == StairLineRole.CutBoundary
+                    && Math.Abs(line.Start.X - slabEndX) < 0.001
+                    && Math.Abs(line.End.X - slabEndX) < 0.001),
+                "Selecting a closed overhang must draw its terminal edge.");
+        }
+
+        private static void IgnoresLegacyLandingOppositeSupports()
+        {
+            var project = StairProjectDefinition.CreateDefault();
+            var landing = project.Storeys[0].Landings[0];
+            landing.PlatformType = PlatformLayoutType.Platform2;
+            landing.OppositeSupportType = OppositeSupportType.BeamWithSlab;
+            landing.OppositeBeamWidthOverride = 260.0;
+            landing.OppositeBeamDepthOverride = 520.0;
+            landing.OppositeSlabThicknessOverride = 140.0;
+            var outcome = new StairProjectCalculator().Calculate(project);
+            TestAssert.True(outcome.IsSuccess,
+                "Legacy landing support data must not prevent calculation.");
+            var builder = new StairProjectGeometryBuilder();
+            var staleCount = builder.BuildSection(project, outcome.Result).Lines
+                .Count(line => line.ComponentId == landing.Id);
+            landing.OppositeSupportType = OppositeSupportType.None;
+            var cleanCount = builder.BuildSection(project, outcome.Result).Lines
+                .Count(line => line.ComponentId == landing.Id);
+            TestAssert.Equal(cleanCount, staleCount,
+                "Rest landings must never draw opposite-wall support geometry.");
+        }
+
+        private static void ExtendsTopWallsAboveTopFloorOpening()
+        {
+            var project = StairProjectDefinition.CreateDefault();
+            var topFloor = project.Floors.Last();
+            topFloor.DoorWindowElevation = StairPlatformOpeningDefinition.CreateWindowDefault();
+            var outcome = new StairProjectCalculator().Calculate(project);
+            TestAssert.True(outcome.IsSuccess, "The top-window project must calculate.");
+            var section = new StairProjectGeometryBuilder().BuildSection(project, outcome.Result);
+            var highestFloorElevation = outcome.Result.Storeys.Max(item => item.UpperElevation);
+            var openingTop = highestFloorElevation
+                + topFloor.DoorWindowElevation.SillHeight
+                + topFloor.DoorWindowElevation.Height;
+            var wallTop = section.Lines
+                .Where(line => line.Role == StairLineRole.WallBoundary)
+                .Max(line => Math.Max(line.Start.Y, line.End.Y));
+            TestAssert.True(wallTop >= openingTop + 300.0 - 0.001,
+                "Top walls must extend at least 300 mm above the top-floor opening.");
         }
 
         private static void DrawsTwoStandardFloorBreakLinesAtTwelveHundred()
@@ -931,6 +1153,7 @@ namespace WL.Stair.Tests
         private static void BuildsWallSegmentDoorAndWindowOpenings()
         {
             var project = StairProjectDefinition.CreateDefault();
+            project.Construction.OppositeSupportsEnabled = false;
             var calculator = new StairProjectCalculator();
             var outcome = calculator.Calculate(project);
             TestAssert.True(outcome.IsSuccess, "The opening test project must calculate.");
@@ -1079,6 +1302,10 @@ namespace WL.Stair.Tests
                 storey.TreadDepthLinked = false;
                 foreach (var flight in storey.Flights) flight.TreadDepth = 260.0;
             }
+            project.Floors[0].PlanFloorLabel = "-1层";
+            project.Floors[1].PlanFloorLabel = "1~3层";
+            project.Floors[2].PlanFloorLabel = "4层";
+            project.Floors[3].PlanFloorLabel = "5层";
 
             new StairProjectConstraintService().Apply(project);
 
@@ -1110,6 +1337,28 @@ namespace WL.Stair.Tests
                     && Math.Abs(line.End.Y - upperElevation) < 0.001
                     && Math.Abs(line.End.X - line.Start.X) > 0.001),
                 "The final run of the three-flight storey must close continuously to the upper floor.");
+
+            var lowest = outcome.Result.Storeys.Min(item => item.LowerElevation);
+            var expectedElevations = new Dictionary<string, double>
+            {
+                { "-1层", outcome.Result.Storeys[0].LowerElevation - lowest },
+                { "1~3层", outcome.Result.Storeys[0].UpperElevation - lowest },
+                { "4层", outcome.Result.Storeys[1].UpperElevation - lowest },
+                { "5层", outcome.Result.Storeys[2].UpperElevation - lowest }
+            };
+            var levelTexts = expectedElevations.Select(pair => section.Texts.Single(text =>
+                text.Content.StartsWith(pair.Key + "  ", StringComparison.Ordinal))).ToArray();
+            foreach (var pair in expectedElevations)
+            {
+                var text = section.Texts.Single(item => item.Content.StartsWith(
+                    pair.Key + "  ", StringComparison.Ordinal));
+                TestAssert.NearlyEqual(pair.Value, text.Position.Y, 0.001,
+                    "Every floor label must sit on its physical slab elevation, including multi-flight storeys.");
+            }
+            TestAssert.Equal(1, levelTexts.Select(text => Math.Round(text.Position.X, 3)).Distinct().Count(),
+                "All floor labels must share one fixed column outside the right axis.");
+            TestAssert.True(levelTexts[0].Position.X > project.Construction.StairwellDepth,
+                "Floor labels must be placed outside the right stairwell axis.");
         }
 
         private static void AllowsTwoFlightFinalClosureWithoutChangingUpperStorey()
@@ -1304,7 +1553,7 @@ namespace WL.Stair.Tests
 
             new StairProjectConstraintService().Normalize(project);
 
-            TestAssert.Equal(20, project.SchemaVersion,
+            TestAssert.Equal(21, project.SchemaVersion,
                 "Legacy projects must migrate through the current drawing-output schema.");
             TestAssert.True(project.Floors[1].AllowLowerFlightClosure,
                 "The old final-flight switch must migrate to the destination floor.");
@@ -1334,7 +1583,7 @@ namespace WL.Stair.Tests
 
             new StairProjectConstraintService().Normalize(project);
 
-            TestAssert.Equal(20, project.SchemaVersion,
+            TestAssert.Equal(21, project.SchemaVersion,
                 "Plan-source scale metadata must migrate to the current schema.");
             TestAssert.Equal(100, project.PlanSources[0].SourceScale,
                 "Migration must not alter the scale read from the source Tianzheng plan.");
@@ -1361,7 +1610,7 @@ namespace WL.Stair.Tests
             new StairProjectConstraintService().Normalize(project);
 
             var source = project.PlanSources[0];
-            TestAssert.Equal(20, project.SchemaVersion,
+            TestAssert.Equal(21, project.SchemaVersion,
                 "Standard-floor metadata must migrate additively.");
             TestAssert.Equal("二层", source.FloorLabel,
                 "A legacy source must inherit its existing display name.");
@@ -1395,7 +1644,7 @@ namespace WL.Stair.Tests
 
             new StairProjectConstraintService().Normalize(project);
 
-            TestAssert.Equal(20, project.SchemaVersion,
+            TestAssert.Equal(21, project.SchemaVersion,
                 "Logical-floor metadata must migrate to the current schema.");
             TestAssert.Equal("4~18层", project.Storeys[0].PlanFloorLabel,
                 "A captured standard-floor range must migrate to its storey record.");
@@ -1430,13 +1679,52 @@ namespace WL.Stair.Tests
                 "An outgoing flight closure at a floor must remain calculable.");
             var section = new StairProjectGeometryBuilder().BuildSection(project, outcome.Result);
             var sourceConnection = project.Floors[0].PlatformWidth;
-            TestAssert.True(section.Lines.Any(line => line.ComponentId == storey.Flights[0].Id
+            var topClosure = section.Lines.FirstOrDefault(line => line.ComponentId == storey.Flights[0].Id
                     && Math.Abs(line.Start.Y) < 0.001
                     && Math.Abs(line.End.Y) < 0.001
                     && (Math.Abs(line.Start.X - sourceConnection) < 0.001
                         || Math.Abs(line.End.X - sourceConnection) < 0.001)
-                    && Math.Abs(line.End.X - line.Start.X) > 0.001),
+                    && Math.Abs(line.End.X - line.Start.X) > 0.001);
+            TestAssert.True(topClosure != null,
                 "The outgoing flight must connect back to the source floor with a horizontal closure.");
+            var closureStartX = Math.Abs(topClosure.Start.X - sourceConnection) < 0.001
+                ? topClosure.End.X
+                : topClosure.Start.X;
+            var closureUnderside = -project.Construction.FlightSlabThickness;
+            var undersideClosure = section.Lines.FirstOrDefault(line => line.ComponentId == storey.Flights[0].Id
+                    && Math.Abs(line.Start.Y - closureUnderside) < 0.001
+                    && Math.Abs(line.End.Y - closureUnderside) < 0.001
+                    && (Math.Abs(line.Start.X - sourceConnection) < 0.001
+                        || Math.Abs(line.End.X - sourceConnection) < 0.001));
+            TestAssert.True(undersideClosure != null
+                    && Math.Abs(undersideClosure.End.X - undersideClosure.Start.X) > 0.001,
+                "The outgoing closure underside must stay horizontal and use the flight slab thickness.");
+            TestAssert.True(!section.Lines.Any(line => line.ComponentId == storey.Flights[0].Id
+                    && Math.Abs(line.Start.X - closureStartX) < 0.001
+                    && Math.Abs(line.End.X - closureStartX) < 0.001
+                    && Math.Min(line.Start.Y, line.End.Y) < -0.001),
+                "The closure-to-flight joint must not leave a visible internal divider or pointed underside.");
+            var expectedRailElevation = project.Construction.Railing.Height;
+            var horizontalRail = section.Lines.FirstOrDefault(line => line.ComponentId == "RAILING"
+                    && line.Role == StairLineRole.Handrail
+                    && Math.Abs(line.Start.Y - expectedRailElevation) < 0.001
+                    && Math.Abs(line.End.Y - expectedRailElevation) < 0.001
+                    && (Math.Abs(line.Start.X - sourceConnection) < 0.001
+                        || Math.Abs(line.End.X - sourceConnection) < 0.001));
+            TestAssert.True(horizontalRail != null,
+                "The outgoing closure handrail must remain horizontal at the platform handrail height.");
+            var horizontalRailEnd = Math.Abs(horizontalRail.Start.X - sourceConnection) < 0.001
+                ? horizontalRail.End
+                : horizontalRail.Start;
+            var firstRail = new Point2D(
+                closureStartX,
+                outcome.Result.Storeys[0].RiserHeight + project.Construction.Railing.Height);
+            TestAssert.NearlyEqual(closureStartX, horizontalRailEnd.X, 0.001,
+                "The platform handrail must remain horizontal all the way to the flight start.");
+            TestAssert.NearlyEqual(outcome.Result.Storeys[0].RiserHeight,
+                firstRail.Y - horizontalRailEnd.Y,
+                0.001,
+                "The sloping handrail must start exactly one riser above the horizontal platform handrail.");
         }
 
         private static void AlternatesUnifiedFloorAndLandingDirections()
@@ -1467,6 +1755,7 @@ namespace WL.Stair.Tests
         private static void DrawsUnifiedBoundaryGeometryFromConnectionToAxis()
         {
             var project = StairProjectDefinition.CreateDefault();
+            project.Construction.OppositeSupportsEnabled = false;
             var constraints = new StairProjectConstraintService();
             constraints.Apply(project);
             var outcome = new StairProjectCalculator().Calculate(project);
@@ -1663,8 +1952,8 @@ namespace WL.Stair.Tests
                 "The first level must not generate a floor slab.");
             TestAssert.Equal(0, section.Lines.Count(line => line.ComponentId == "LL-01"),
                 "The first level must not generate a floor beam.");
-            TestAssert.True(section.Texts.Any(text => text.Content.StartsWith("首层")),
-                "The first-level elevation label must remain visible.");
+            TestAssert.True(section.Texts.Any(text => text.Content.StartsWith("1层  ")),
+                "The first-level elevation label must remain visible at the slab datum.");
         }
 
         private static void BuildsThreePlatformOutlinesWithoutOverlaps()
@@ -1672,6 +1961,7 @@ namespace WL.Stair.Tests
             for (var type = PlatformLayoutType.Platform1; type <= PlatformLayoutType.Platform3; type++)
             {
                 var project = StairProjectDefinition.CreateDefault();
+                project.Construction.OppositeSupportsEnabled = false;
                 project.Storeys[0].Landings[0].PlatformType = type;
                 var outcome = new StairProjectCalculator().Calculate(project);
                 var section = new StairProjectGeometryBuilder().BuildSection(project, outcome.Result);
@@ -1940,6 +2230,7 @@ namespace WL.Stair.Tests
         private static void BuildsHandrailsDimensionsAndOptionalComponentSchedule()
         {
             var projectWithoutSchedule = StairProjectDefinition.CreateDefault();
+            projectWithoutSchedule.Construction.OppositeSupportsEnabled = false;
             new StairProjectConstraintService().Apply(projectWithoutSchedule);
             var outcomeWithoutSchedule = new StairProjectCalculator().Calculate(projectWithoutSchedule);
             TestAssert.True(outcomeWithoutSchedule.IsSuccess,
@@ -1955,6 +2246,7 @@ namespace WL.Stair.Tests
                 "Disabling the component schedule must also omit flight, platform and floor ID labels.");
 
             var project = StairProjectDefinition.CreateDefault();
+            project.Construction.OppositeSupportsEnabled = false;
             project.DrawingScale = 30;
             project.InsertComponentSchedule = true;
             new StairProjectConstraintService().Apply(project);
@@ -2122,11 +2414,11 @@ namespace WL.Stair.Tests
                     - baseWallLines.SelectMany(line => new[] { line.Start.Y, line.End.Y }).Min(),
                 0.001,
                 "The base wall must be 100 millimetres thick.");
-            var expectedLeftExtension = -(project.Construction.Wall.Thickness / 2.0)
-                - (4.0 * project.DrawingScale);
+            var baseOutsideAxis = project.Construction.FloorBeam.Width / 2.0
+                + project.Construction.SlabOverhang;
+            var expectedLeftExtension = -baseOutsideAxis;
             var expectedRightExtension = project.Construction.StairwellDepth
-                + (project.Construction.Wall.Thickness / 2.0)
-                + (4.0 * project.DrawingScale);
+                + baseOutsideAxis;
             var visibleBaseWallLines = section.Lines
                 .Where(line => line.ComponentId == "BASE-WALL-VISIBLE")
                 .ToArray();
@@ -2138,16 +2430,21 @@ namespace WL.Stair.Tests
             TestAssert.True(visibleBaseWallLines.All(line =>
                     Math.Abs(Math.Min(line.Start.X, line.End.X) - expectedLeftExtension) < 0.001
                     && Math.Abs(Math.Max(line.Start.X, line.End.X) - expectedRightExtension) < 0.001),
-                "Both base-wall edges must extend four drawing millimetres beyond the wall faces.");
+                "Both base-wall edges must align with the unified upper-floor overhang.");
             var breakLines = section.Lines.Where(line => line.Role == StairLineRole.BreakLine).ToArray();
             TestAssert.Equal(5, breakLines.Length,
                 "The wall top must include the five segments of the QZ-style six-vertex break line.");
             TestAssert.True(breakLines.Any(line => Math.Abs(line.Start.Y - line.End.Y) > 0.001),
                 "The top break line must include visible folded segments.");
-            TestAssert.NearlyEqual(expectedLeftExtension,
+            var expectedBreakLeft = -(project.Construction.Wall.Thickness / 2.0)
+                - (4.0 * project.DrawingScale);
+            var expectedBreakRight = project.Construction.StairwellDepth
+                + (project.Construction.Wall.Thickness / 2.0)
+                + (4.0 * project.DrawingScale);
+            TestAssert.NearlyEqual(expectedBreakLeft,
                 breakLines.SelectMany(line => new[] { line.Start.X, line.End.X }).Min(), 0.001,
                 "The break line must extend four drawing millimetres beyond the left wall face.");
-            TestAssert.NearlyEqual(expectedRightExtension,
+            TestAssert.NearlyEqual(expectedBreakRight,
                 breakLines.SelectMany(line => new[] { line.Start.X, line.End.X }).Max(), 0.001,
                 "The break line must extend four drawing millimetres beyond the right wall face.");
             TestAssert.True(section.Title != null
@@ -2226,7 +2523,8 @@ namespace WL.Stair.Tests
 
             TestAssert.True(section.Texts.Any(text => text.Content == "TD-1-1"), "Flight ID label is missing.");
             TestAssert.True(section.Texts.Any(text => text.Content == "PT-1-1"), "Landing ID label is missing.");
-            TestAssert.True(section.Texts.Any(text => text.Content.StartsWith("LB-02")), "Floor ID label is missing.");
+            TestAssert.True(section.Texts.Any(text => text.Content.StartsWith("2层  ")),
+                "The physical-floor level label is missing.");
         }
 
         private static double DistanceBetweenParallelLines(Point2D lineStart, Point2D lineEnd, Point2D point)

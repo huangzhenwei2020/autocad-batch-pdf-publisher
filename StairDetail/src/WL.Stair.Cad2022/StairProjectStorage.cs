@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Web.Script.Serialization;
 using WL.Stair.Core.Domain;
 
@@ -14,11 +15,14 @@ namespace WL.Stair.Cad2022
         {
             get
             {
-                var packageRoot = Environment.GetEnvironmentVariable("WANLUO_ARCHITECTURE_TOOLS_ROOT");
-                if (!string.IsNullOrWhiteSpace(packageRoot))
-                    return Path.Combine(packageRoot, "用户配置文件", "楼梯大样", "最近使用方案.json");
-                return LegacyFilePath;
+                return Path.Combine(PortableRoot, "项目", SafeName(ActiveProjectName),
+                    "最近使用方案.json");
             }
+        }
+
+        public string ActiveProjectName
+        {
+            get { return TryGetActiveProjectName() ?? "默认项目"; }
         }
 
         private string LastLayoutFramePath
@@ -51,17 +55,25 @@ namespace WL.Stair.Cad2022
                     if (File.Exists(FilePath))
                     {
                         var project = _serializer.Deserialize<StairProjectDefinition>(File.ReadAllText(FilePath));
-                        if (project != null) return project;
+                        if (project != null) return BindToActiveProject(project);
                     }
                     // One-time, non-destructive migration from the historical
                     // C-drive location. The old file remains as a recovery copy.
-                    if (!string.Equals(FilePath, LegacyFilePath, StringComparison.OrdinalIgnoreCase)
-                        && File.Exists(LegacyFilePath))
+                    var projectRoot = Path.Combine(PortableRoot, "项目");
+                    var hasMigratedProject = Directory.Exists(projectRoot)
+                        && Directory.GetFiles(projectRoot, "最近使用方案.json",
+                            SearchOption.AllDirectories).Length > 0;
+                    var legacyPath = hasMigratedProject ? null
+                        : new[] { LegacyPortableFilePath, LegacyFilePath }
+                            .FirstOrDefault(path => !string.Equals(FilePath, path,
+                                StringComparison.OrdinalIgnoreCase) && File.Exists(path));
+                    if (!string.IsNullOrWhiteSpace(legacyPath))
                     {
                         var project = _serializer.Deserialize<StairProjectDefinition>(
-                            File.ReadAllText(LegacyFilePath));
+                            File.ReadAllText(legacyPath));
                         if (project != null)
                         {
+                            BindToActiveProject(project);
                             Save(project);
                             return project;
                         }
@@ -72,12 +84,13 @@ namespace WL.Stair.Cad2022
             {
                 // A damaged local preset must not prevent the editor from opening.
             }
-            return StairProjectDefinition.CreateDefault();
+            return BindToActiveProject(StairProjectDefinition.CreateDefault());
         }
 
         public void Save(StairProjectDefinition project)
         {
             if (project == null) return;
+            BindToActiveProject(project);
             lock (FileSync)
             {
                 var directory = Path.GetDirectoryName(FilePath);
@@ -101,6 +114,23 @@ namespace WL.Stair.Cad2022
             }
         }
 
+        private static string PortableRoot
+        {
+            get
+            {
+                var packageRoot = Environment.GetEnvironmentVariable(
+                    "WANLUO_ARCHITECTURE_TOOLS_ROOT");
+                if (!string.IsNullOrWhiteSpace(packageRoot))
+                    return Path.Combine(packageRoot, "用户配置文件", "楼梯大样");
+                return Path.GetDirectoryName(LegacyFilePath);
+            }
+        }
+
+        private static string LegacyPortableFilePath
+        {
+            get { return Path.Combine(PortableRoot, "最近使用方案.json"); }
+        }
+
         public string LoadLastLayoutFrameId()
         {
             try
@@ -122,6 +152,38 @@ namespace WL.Stair.Cad2022
                 if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
                 File.WriteAllText(LastLayoutFramePath, registrationId.Trim());
             }
+        }
+
+        private StairProjectDefinition BindToActiveProject(StairProjectDefinition project)
+        {
+            if (project != null) project.ProjectName = ActiveProjectName;
+            return project;
+        }
+
+        private static string TryGetActiveProjectName()
+        {
+            try
+            {
+                var type = AppDomain.CurrentDomain.GetAssemblies()
+                    .Select(assembly => assembly.GetType(
+                        "BatchPdfPublisher.Services.PublishPlanStore", false))
+                    .FirstOrDefault(value => value != null);
+                if (type == null) return null;
+                var store = Activator.CreateInstance(type);
+                var project = type.GetMethod("GetActiveProject").Invoke(store, null);
+                var property = project == null ? null : project.GetType().GetProperty("Name");
+                var name = property == null ? null : property.GetValue(project, null) as string;
+                return string.IsNullOrWhiteSpace(name) ? null : name.Trim();
+            }
+            catch { return null; }
+        }
+
+        private static string SafeName(string value)
+        {
+            var result = string.IsNullOrWhiteSpace(value) ? "默认项目" : value.Trim();
+            foreach (var character in Path.GetInvalidFileNameChars())
+                result = result.Replace(character, '_');
+            return result.Length > 60 ? result.Substring(0, 60) : result;
         }
     }
 }

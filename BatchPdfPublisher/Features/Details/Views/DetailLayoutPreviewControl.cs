@@ -141,7 +141,7 @@ namespace BatchPdfPublisher.Views
             graphics.SmoothingMode = SmoothingMode.AntiAlias;
             if (_plan == null)
             {
-                DrawCentered(graphics, string.IsNullOrWhiteSpace(_error) ? "点击“添加大样”开始框选" : _error, ClientRectangle, Color.FromArgb(90, 100, 112), 10f);
+                DrawCentered(graphics, string.IsNullOrWhiteSpace(_error) ? "点击“添加大样”或“框选平面”开始" : _error, ClientRectangle, Color.FromArgb(90, 100, 112), 10f);
                 return;
             }
             using (var pagePen = new Pen(Color.FromArgb(80, 92, 108), 1.4f))

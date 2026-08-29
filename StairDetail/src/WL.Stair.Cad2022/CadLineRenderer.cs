@@ -292,11 +292,20 @@ namespace WL.Stair.Cad2022
                 }
                 if (offset != null)
                 {
-                    offset.Visible = true;
-                    offset.Layer = StructuralLayer;
-                    offset.ConstantWidth = 0.4 * Math.Max(1, drawingScale);
-                    currentSpace.AppendEntity(offset);
-                    transaction.AddNewlyCreatedDBObject(offset, true);
+                    if (region.OpenEdges.Count > 0)
+                    {
+                        RenderOpenBoldOffset(currentSpace, transaction, offset,
+                            region.OpenEdges, drawingScale, insertionPoint);
+                        offset.Dispose();
+                    }
+                    else
+                    {
+                        offset.Visible = true;
+                        offset.Layer = StructuralLayer;
+                        offset.ConstantWidth = 0.4 * Math.Max(1, drawingScale);
+                        currentSpace.AppendEntity(offset);
+                        transaction.AddNewlyCreatedDBObject(offset, true);
+                    }
                 }
             }
             else if (showBold && region.IsWall)
@@ -645,6 +654,81 @@ namespace WL.Stair.Cad2022
                 }
             }
             return best;
+        }
+
+        private static void RenderOpenBoldOffset(
+            BlockTableRecord currentSpace,
+            Transaction transaction,
+            Polyline offset,
+            IEnumerable<DrawingLine> openEdges,
+            int drawingScale,
+            Point3d insertionPoint)
+        {
+            var edges = openEdges.Select(line => new[]
+            {
+                new Point2d(insertionPoint.X + line.Start.X, insertionPoint.Y + line.Start.Y),
+                new Point2d(insertionPoint.X + line.End.X, insertionPoint.Y + line.End.Y)
+            }).ToArray();
+            var width = 0.4 * Math.Max(1, drawingScale);
+            var count = offset.NumberOfVertices;
+            for (var index = 0; index < count; index++)
+            {
+                var next = (index + 1) % count;
+                if (!offset.Closed && next == 0) break;
+                var start = offset.GetPoint2dAt(index);
+                var end = offset.GetPoint2dAt(next);
+                var middle = new Point2d((start.X + end.X) / 2.0, (start.Y + end.Y) / 2.0);
+                if (edges.Length > 0)
+                {
+                    var nearest = edges
+                        .Select(edge => DistanceToSegment(middle, edge[0], edge[1]))
+                        .Min();
+                    var nearestOpen = nearest <= 0.5 * Math.Max(1, drawingScale) + 1.0
+                        && edges.Any(edge =>
+                            Math.Abs(DistanceToSegment(middle, edge[0], edge[1]) - nearest) < 0.001
+                            && AreParallel(start, end, edge[0], edge[1]));
+                    if (nearestOpen) continue;
+                }
+                var segment = new Polyline(2)
+                {
+                    Layer = StructuralLayer,
+                    Closed = false
+                };
+                segment.AddVertexAt(0, start, 0, width, width);
+                segment.AddVertexAt(1, end, 0, width, width);
+                segment.SetStartWidthAt(0, width);
+                segment.SetEndWidthAt(0, width);
+                segment.ConstantWidth = width;
+                currentSpace.AppendEntity(segment);
+                transaction.AddNewlyCreatedDBObject(segment, true);
+            }
+        }
+
+        private static bool AreParallel(Point2d firstStart, Point2d firstEnd,
+            Point2d secondStart, Point2d secondEnd)
+        {
+            var firstX = firstEnd.X - firstStart.X;
+            var firstY = firstEnd.Y - firstStart.Y;
+            var secondX = secondEnd.X - secondStart.X;
+            var secondY = secondEnd.Y - secondStart.Y;
+            var lengths = Math.Sqrt(firstX * firstX + firstY * firstY)
+                * Math.Sqrt(secondX * secondX + secondY * secondY);
+            if (lengths < 0.001) return false;
+            return Math.Abs(firstX * secondY - firstY * secondX) / lengths < 0.001;
+        }
+
+        private static double DistanceToSegment(Point2d point, Point2d start, Point2d end)
+        {
+            var dx = end.X - start.X;
+            var dy = end.Y - start.Y;
+            var lengthSquared = dx * dx + dy * dy;
+            if (lengthSquared < 0.001)
+                return Math.Sqrt(Math.Pow(point.X - start.X, 2) + Math.Pow(point.Y - start.Y, 2));
+            var factor = ((point.X - start.X) * dx + (point.Y - start.Y) * dy) / lengthSquared;
+            factor = Math.Max(0.0, Math.Min(1.0, factor));
+            var x = start.X + factor * dx;
+            var y = start.Y + factor * dy;
+            return Math.Sqrt(Math.Pow(point.X - x, 2) + Math.Pow(point.Y - y, 2));
         }
 
         private static ObjectId EnsureDimensionStyle(Database database, Transaction transaction, int scale)

@@ -10,13 +10,21 @@ namespace BatchPdfPublisher.Models
         public string Name;
         public string ScaleText;
         public bool AddIndexNumber;
+        public bool IsCachedPlan;
+        public string CacheRelativePath;
+        public double CacheLayoutOffsetX;
+        public double CacheLayoutOffsetY;
         public readonly List<ObjectId> ObjectIds = new List<ObjectId>();
         public readonly List<DetailPreviewPrimitive> Preview = new List<DetailPreviewPrimitive>();
         public Point3d MinPoint;
         public Point3d MaxPoint;
         public double Width { get { return MaxPoint.X - MinPoint.X; } }
         public double Height { get { return MaxPoint.Y - MinPoint.Y; } }
-        public override string ToString() { return Name + "  " + (string.IsNullOrWhiteSpace(ScaleText) ? "比例未识别" : ScaleText); }
+        public override string ToString()
+        {
+            return (IsCachedPlan ? "[小平面] " : string.Empty) + Name + "  "
+                + (string.IsNullOrWhiteSpace(ScaleText) ? "比例未识别" : ScaleText);
+        }
     }
 
     internal enum DetailPreviewPrimitiveKind { Line, Ellipse, Text, Box }
