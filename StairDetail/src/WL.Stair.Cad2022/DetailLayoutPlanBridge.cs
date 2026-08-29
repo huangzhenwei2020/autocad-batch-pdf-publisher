@@ -37,7 +37,8 @@ namespace WL.Stair.Cad2022
     public static class DetailLayoutPlanBridge
     {
         public static DetailLayoutPlanResult Capture(Document document,
-            string projectName, string name, int targetScale, int captureMode)
+            string projectName, string name, int targetScale, int captureMode,
+            Func<double, double, double, double, string> resolveRoomName)
         {
             if (document == null) throw new ArgumentNullException("document");
             name = string.IsNullOrWhiteSpace(name) ? "小平面" : name.Trim();
@@ -53,6 +54,23 @@ namespace WL.Stair.Cad2022
                         System.Windows.MessageBoxImage.Question)
                         == System.Windows.MessageBoxResult.Yes);
             if (source == null) return null;
+
+            var boundary = source.BoundaryPoints ?? new List<StairPlanPointDefinition>();
+            var hasBoundary = boundary.Count >= 3;
+            if (hasBoundary && resolveRoomName != null)
+            {
+                var roomName = resolveRoomName(
+                    boundary.Min(point => point.X),
+                    boundary.Min(point => point.Y),
+                    boundary.Max(point => point.X),
+                    boundary.Max(point => point.Y));
+                if (!string.IsNullOrWhiteSpace(roomName))
+                {
+                    roomName = roomName.Trim();
+                    name = roomName.EndsWith("平面图", StringComparison.Ordinal)
+                        ? roomName : roomName + "平面图";
+                }
+            }
 
             source.FloorId = key;
             source.StoreyId = key;
@@ -71,8 +89,6 @@ namespace WL.Stair.Cad2022
             double offsetX, offsetY, width, height;
             StairPlanCacheService.GetLayoutRange(source, out offsetX, out offsetY,
                 out width, out height);
-            var boundary = source.BoundaryPoints ?? new List<StairPlanPointDefinition>();
-            var hasBoundary = boundary.Count >= 3;
             return new DetailLayoutPlanResult
             {
                 Name = name,

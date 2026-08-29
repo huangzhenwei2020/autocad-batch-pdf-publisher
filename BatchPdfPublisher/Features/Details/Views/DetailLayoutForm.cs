@@ -151,14 +151,26 @@ namespace BatchPdfPublisher.Views
             object result;
             try
             {
-                result = bridge.GetMethod("Capture").Invoke(null, new object[]
+                var captureMethod = bridge.GetMethods()
+                    .Where(method => string.Equals(method.Name, "Capture",
+                        StringComparison.Ordinal))
+                    .OrderByDescending(method => method.GetParameters().Length)
+                    .FirstOrDefault();
+                if (captureMethod == null)
+                    throw new InvalidOperationException("楼梯小平面模块缺少框选接口，请使用最新版启动器重新加载插件。");
+                var arguments = new List<object>
                 {
                     _document,
                     new PublishPlanStore().GetActiveProject()?.Name ?? "默认项目",
                     options.Name,
                     options.Scale,
                     options.CaptureMode
-                });
+                };
+                if (captureMethod.GetParameters().Length >= 6)
+                    arguments.Add(new Func<double, double, double, double, string>(
+                        (minX, minY, maxX, maxY) => ToPlanTitle(
+                            DetectRoomNameInRange(minX, minY, maxX, maxY))));
+                result = captureMethod.Invoke(null, arguments.ToArray());
             }
             catch (System.Reflection.TargetInvocationException exception)
             {
@@ -171,7 +183,7 @@ namespace BatchPdfPublisher.Views
             {
                 Name = string.IsNullOrWhiteSpace(detectedRoomName)
                     ? (Read<string>(result, type, "Name") ?? options.Name)
-                    : detectedRoomName + "平面图",
+                    : ToPlanTitle(detectedRoomName),
                 ScaleText = Read<string>(result, type, "ScaleText") ?? ("1:" + options.Scale),
                 AddIndexNumber = options.AddIndexNumber,
                 IsCachedPlan = true,
@@ -214,20 +226,36 @@ namespace BatchPdfPublisher.Views
             if (!minX.HasValue || !minY.HasValue || !maxX.HasValue || !maxY.HasValue
                 || maxX.Value - minX.Value <= 1e-6 || maxY.Value - minY.Value <= 1e-6)
                 return null;
+            return DetectRoomNameInRange(minX.Value, minY.Value,
+                maxX.Value, maxY.Value);
+        }
 
-            var lowerLeft = new Point3d(minX.Value, minY.Value, 0d);
-            var upperRight = new Point3d(maxX.Value, maxY.Value, 0d);
+        private string DetectRoomNameInRange(double minX, double minY,
+            double maxX, double maxY)
+        {
+            if (maxX - minX <= 1e-6 || maxY - minY <= 1e-6) return null;
             var filter = new SelectionFilter(new[]
             {
                 new CadTypedValue((int)CadDxfCode.Start, TianzhengRoomService.RoomDxfName)
             });
             PromptSelectionResult selected;
-            try { selected = _document.Editor.SelectCrossingWindow(lowerLeft, upperRight, filter); }
+            try
+            {
+                var worldToUcs = _document.Editor.CurrentUserCoordinateSystem.Inverse();
+                var polygon = new Point3dCollection
+                {
+                    new Point3d(minX, minY, 0d).TransformBy(worldToUcs),
+                    new Point3d(maxX, minY, 0d).TransformBy(worldToUcs),
+                    new Point3d(maxX, maxY, 0d).TransformBy(worldToUcs),
+                    new Point3d(minX, maxY, 0d).TransformBy(worldToUcs)
+                };
+                selected = _document.Editor.SelectCrossingPolygon(polygon, filter);
+            }
             catch { return null; }
             if (selected.Status != PromptStatus.OK || selected.Value == null) return null;
 
-            var center = new Point3d((minX.Value + maxX.Value) * 0.5d,
-                (minY.Value + maxY.Value) * 0.5d, 0d);
+            var center = new Point3d((minX + maxX) * 0.5d,
+                (minY + maxY) * 0.5d, 0d);
             var rooms = new List<KeyValuePair<string, double>>();
             using (var transaction = _document.Database.TransactionManager.StartOpenCloseTransaction())
             {
@@ -242,8 +270,8 @@ namespace BatchPdfPublisher.Views
                         var extents = entity.GeometricExtents;
                         var roomCenter = new Point3d((extents.MinPoint.X + extents.MaxPoint.X) * 0.5d,
                             (extents.MinPoint.Y + extents.MaxPoint.Y) * 0.5d, 0d);
-                        if (roomCenter.X < minX.Value || roomCenter.X > maxX.Value
-                            || roomCenter.Y < minY.Value || roomCenter.Y > maxY.Value) continue;
+                        if (roomCenter.X < minX || roomCenter.X > maxX
+                            || roomCenter.Y < minY || roomCenter.Y > maxY) continue;
                         rooms.Add(new KeyValuePair<string, double>(info.Name.Trim(),
                             roomCenter.DistanceTo(center)));
                     }
@@ -253,6 +281,16 @@ namespace BatchPdfPublisher.Views
             return rooms.OrderBy(room => room.Value)
                 .Select(room => room.Key)
                 .FirstOrDefault();
+        }
+
+        private static string ToPlanTitle(string roomName)
+        {
+            var value = (roomName ?? string.Empty).Trim();
+            if (value.Length == 0) return null;
+            if (string.Equals(value, "卫生间", StringComparison.Ordinal))
+                value = "卫生";
+            return value.EndsWith("平面图", StringComparison.Ordinal)
+                ? value : value + "平面图";
         }
 
         private void EditSelectedName()
