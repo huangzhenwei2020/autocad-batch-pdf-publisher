@@ -60,6 +60,7 @@
     <Compile Include="Layout\StairCombinedLayout.cs" />
     <Compile Include="Validation\ValidationIssue.cs" />
     <Compile Include="Validation\ValidationSeverity.cs" />
+    <Compile Include="Validation\StairClearanceValidator.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />

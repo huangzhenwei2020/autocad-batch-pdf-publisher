@@ -32,6 +32,7 @@ namespace WL.Stair.Cad2022
         private readonly JavaScriptSerializer _serializer = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
         private readonly StairProjectCalculator _calculator = new StairProjectCalculator();
         private readonly StairProjectGeometryBuilder _geometryBuilder = new StairProjectGeometryBuilder();
+        private readonly StairClearanceValidator _clearanceValidator = new StairClearanceValidator();
         private readonly StairProjectConstraintService _constraints = new StairProjectConstraintService();
         private readonly StairProjectStorage _storage = new StairProjectStorage();
         private readonly IDictionary<string, IList<StairLayoutPreviewLine>> _planPreviewLines
@@ -444,6 +445,9 @@ namespace WL.Stair.Cad2022
                     outcome.Result, planStoreyIndex);
             }
             else view = _geometryBuilder.BuildSection(_state.Project, outcome.Result);
+            var issues = outcome.Issues.ToList();
+            if (!isPlanPreview)
+                issues.AddRange(_clearanceValidator.Validate(_state.Project, view));
             var summary = string.Join("；", outcome.Result.Storeys.Select(result => string.Format(
                 CultureInfo.CurrentCulture,
                 "{0}: {1}跑/{2}级/h={3:0.0}",
@@ -451,16 +455,16 @@ namespace WL.Stair.Cad2022
                 result.Flights.Count,
                 result.TotalRiserCount,
                 result.RiserHeight)));
-            var warningSummary = string.Join("；", outcome.Issues
+            var warningSummary = string.Join("；", issues
                 .Where(issue => issue.Severity == ValidationSeverity.Warning)
                 .Select(issue => issue.ParameterName + ": " + issue.Message));
             if (!string.IsNullOrWhiteSpace(warningSummary))
-                summary += "；GB 50352-2019 校核：" + warningSummary;
+                summary += "；GB 55031-2022 / GB 50352-2019 校核：" + warningSummary;
             var previewFloorLabel = isPlanPreview && previewFloor != null
                 ? previewFloor.PlanFloorLabel
                 : null;
             SendPreview(view, summary, true, previewFloorLabel, isPlanPreview,
-                outcome.Issues);
+                issues);
         }
 
         private void SendPreview(DrawingView view, string summary, bool success,

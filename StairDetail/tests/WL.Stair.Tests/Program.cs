@@ -26,6 +26,10 @@ namespace WL.Stair.Tests
             RejectsInvalidGeometry,
             ReportsLandingAndWidthWarnings,
             UsesGb50352StairStepChecks,
+            DetectsInsufficientFlightClearance,
+            DetectsInsufficientPlatformClearance,
+            AcceptsCompliantStairClearance,
+            DefaultProjectHasNoFalseClearanceWarning,
             RejectsInvalidStructuralThickness,
             BuildsPlanGeometry,
             MarksUpperPlanFlightAsHidden,
@@ -140,6 +144,86 @@ namespace WL.Stair.Tests
                 "Total height must measure from the lowest floor to the highest floor.");
             TestAssert.True(section.Texts.Any(text => text.Content.Contains("-3.000 (1F)")),
                 "The lowest floor label must use its logical floor name and elevation.");
+        }
+
+        private static void DetectsInsufficientFlightClearance()
+        {
+            var project = StairProjectDefinition.CreateDefault();
+            var flightId = project.Storeys[0].Flights[0].Id;
+            var view = new DrawingView("Clearance", new[]
+            {
+                new DrawingLine(new Point2D(0, 0), new Point2D(260, 0),
+                    StairLineRole.CutFlightProfile, false, flightId),
+                new DrawingLine(new Point2D(0, -160), new Point2D(0, 0),
+                    StairLineRole.CutFlightProfile, false, flightId),
+                new DrawingLine(new Point2D(-100, 2100), new Point2D(400, 2100),
+                    StairLineRole.CutBoundary, false, "OVERHEAD")
+            });
+
+            var issues = new StairClearanceValidator().Validate(project, view);
+
+            TestAssert.True(issues.Any(issue => issue.Code == "WL-GB-CLR-2200"
+                && issue.ParameterName == flightId
+                && issue.Message.Contains("2100mm")),
+                "A flight with only 2100mm clear height must be reported against 2200mm.");
+        }
+
+        private static void DetectsInsufficientPlatformClearance()
+        {
+            var project = StairProjectDefinition.CreateDefault();
+            var landingId = project.Storeys[0].Landings[0].Id;
+            var view = new DrawingView("Clearance", new[]
+            {
+                new DrawingLine(new Point2D(0, 0), new Point2D(1200, 0),
+                    StairLineRole.CutBoundary, false, landingId),
+                new DrawingLine(new Point2D(-100, 1950), new Point2D(1300, 1950),
+                    StairLineRole.CutBoundary, false, "PT-OVERHEAD")
+            });
+
+            var issues = new StairClearanceValidator().Validate(project, view);
+
+            TestAssert.True(issues.Any(issue => issue.Code == "WL-GB-CLR-2000"
+                && issue.ParameterName == landingId
+                && issue.Message.Contains("1950mm")),
+                "A platform with only 1950mm clear height must be reported against 2000mm.");
+        }
+
+        private static void AcceptsCompliantStairClearance()
+        {
+            var project = StairProjectDefinition.CreateDefault();
+            var flightId = project.Storeys[0].Flights[0].Id;
+            var landingId = project.Storeys[0].Landings[0].Id;
+            var view = new DrawingView("Clearance", new[]
+            {
+                new DrawingLine(new Point2D(0, 0), new Point2D(260, 0),
+                    StairLineRole.CutFlightProfile, false, flightId),
+                new DrawingLine(new Point2D(0, -160), new Point2D(0, 0),
+                    StairLineRole.CutFlightProfile, false, flightId),
+                new DrawingLine(new Point2D(1000, 0), new Point2D(2200, 0),
+                    StairLineRole.CutBoundary, false, landingId),
+                new DrawingLine(new Point2D(-400, 2200), new Point2D(700, 2200),
+                    StairLineRole.CutBoundary, false, "OVERHEAD-FLIGHT"),
+                new DrawingLine(new Point2D(900, 2000), new Point2D(2300, 2000),
+                    StairLineRole.CutBoundary, false, "PT-OVERHEAD")
+            });
+
+            var issues = new StairClearanceValidator().Validate(project, view);
+
+            TestAssert.True(!issues.Any(issue => issue.Code.StartsWith("WL-GB-CLR-")),
+                "Clear heights exactly at 2200mm and 2000mm must comply.");
+        }
+
+        private static void DefaultProjectHasNoFalseClearanceWarning()
+        {
+            var project = StairProjectDefinition.CreateDefault();
+            var outcome = new StairProjectCalculator().Calculate(project);
+            TestAssert.True(outcome.IsSuccess, "The default project must calculate before clearance validation.");
+            var section = new StairProjectGeometryBuilder().BuildSection(project, outcome.Result);
+
+            var issues = new StairClearanceValidator().Validate(project, section);
+
+            TestAssert.True(!issues.Any(), "The default section must not produce false clear-height warnings: "
+                + string.Join("; ", issues.Select(issue => issue.ParameterName + " " + issue.Message)));
         }
 
         private static void DerivesLowestElevationFromBasementStoreys()
