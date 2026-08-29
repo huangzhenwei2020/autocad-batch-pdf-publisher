@@ -1,4 +1,5 @@
 using Autodesk.AutoCAD.ApplicationServices;
+using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Geometry;
 using BatchPdfPublisher.Models;
 using BatchPdfPublisher.Services;
@@ -9,6 +10,10 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Windows.Forms;
+using CadDxfCode = Autodesk.AutoCAD.DatabaseServices.DxfCode;
+using CadEntity = Autodesk.AutoCAD.DatabaseServices.Entity;
+using CadOpenMode = Autodesk.AutoCAD.DatabaseServices.OpenMode;
+using CadTypedValue = Autodesk.AutoCAD.DatabaseServices.TypedValue;
 
 namespace BatchPdfPublisher.Views
 {
@@ -101,8 +106,23 @@ namespace BatchPdfPublisher.Views
 
         private async void AddSmallPlan()
         {
-            var options = PromptSmallPlanOptions(null);
-            if (options == null) return;
+            SmallPlanOptions options;
+            try
+            {
+                options = new SmallPlanOptions
+                {
+                    Name = "小平面" + (_items.Count(value => value.IsCachedPlan) + 1),
+                    Scale = ParseScale(),
+                    AddIndexNumber = false,
+                    CaptureMode = 2
+                };
+            }
+            catch (Exception exception)
+            {
+                MessageBox.Show(this, exception.Message, Text,
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
             Hide(); DetailLayoutItem item = null; Exception failure = null;
             try
             {
@@ -146,9 +166,12 @@ namespace BatchPdfPublisher.Views
             }
             if (result == null) return null;
             var type = result.GetType();
+            var detectedRoomName = DetectRoomPlanName(result, type);
             var item = new DetailLayoutItem
             {
-                Name = Read<string>(result, type, "Name") ?? options.Name,
+                Name = string.IsNullOrWhiteSpace(detectedRoomName)
+                    ? (Read<string>(result, type, "Name") ?? options.Name)
+                    : detectedRoomName + "平面图",
                 ScaleText = Read<string>(result, type, "ScaleText") ?? ("1:" + options.Scale),
                 AddIndexNumber = options.AddIndexNumber,
                 IsCachedPlan = true,
@@ -182,6 +205,56 @@ namespace BatchPdfPublisher.Views
             return item;
         }
 
+        private string DetectRoomPlanName(object result, Type resultType)
+        {
+            var minX = TryReadDouble(result, resultType, "SelectionMinX");
+            var minY = TryReadDouble(result, resultType, "SelectionMinY");
+            var maxX = TryReadDouble(result, resultType, "SelectionMaxX");
+            var maxY = TryReadDouble(result, resultType, "SelectionMaxY");
+            if (!minX.HasValue || !minY.HasValue || !maxX.HasValue || !maxY.HasValue
+                || maxX.Value - minX.Value <= 1e-6 || maxY.Value - minY.Value <= 1e-6)
+                return null;
+
+            var lowerLeft = new Point3d(minX.Value, minY.Value, 0d);
+            var upperRight = new Point3d(maxX.Value, maxY.Value, 0d);
+            var filter = new SelectionFilter(new[]
+            {
+                new CadTypedValue((int)CadDxfCode.Start, TianzhengRoomService.RoomDxfName)
+            });
+            PromptSelectionResult selected;
+            try { selected = _document.Editor.SelectCrossingWindow(lowerLeft, upperRight, filter); }
+            catch { return null; }
+            if (selected.Status != PromptStatus.OK || selected.Value == null) return null;
+
+            var center = new Point3d((minX.Value + maxX.Value) * 0.5d,
+                (minY.Value + maxY.Value) * 0.5d, 0d);
+            var rooms = new List<KeyValuePair<string, double>>();
+            using (var transaction = _document.Database.TransactionManager.StartOpenCloseTransaction())
+            {
+                foreach (var id in selected.Value.GetObjectIds().Distinct())
+                {
+                    try
+                    {
+                        var entity = transaction.GetObject(id, CadOpenMode.ForRead, false) as CadEntity;
+                        if (entity == null || entity.IsErased || !TianzhengRoomService.IsRoom(entity)) continue;
+                        var info = TianzhengRoomService.Read(entity);
+                        if (info == null || string.IsNullOrWhiteSpace(info.Name)) continue;
+                        var extents = entity.GeometricExtents;
+                        var roomCenter = new Point3d((extents.MinPoint.X + extents.MaxPoint.X) * 0.5d,
+                            (extents.MinPoint.Y + extents.MaxPoint.Y) * 0.5d, 0d);
+                        if (roomCenter.X < minX.Value || roomCenter.X > maxX.Value
+                            || roomCenter.Y < minY.Value || roomCenter.Y > maxY.Value) continue;
+                        rooms.Add(new KeyValuePair<string, double>(info.Name.Trim(),
+                            roomCenter.DistanceTo(center)));
+                    }
+                    catch { }
+                }
+            }
+            return rooms.OrderBy(room => room.Value)
+                .Select(room => room.Key)
+                .FirstOrDefault();
+        }
+
         private void EditSelectedName()
         {
             var index = _list.SelectedIndex;
@@ -199,7 +272,7 @@ namespace BatchPdfPublisher.Views
         {
             using (var dialog = new Form
             {
-                Text = item == null ? "框选平面" : "编辑名称与编号",
+                Text = "编辑名称与编号",
                 StartPosition = FormStartPosition.CenterParent,
                 FormBorderStyle = FormBorderStyle.FixedDialog,
                 MinimizeBox = false,
@@ -213,13 +286,13 @@ namespace BatchPdfPublisher.Views
                 table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 85));
                 table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
                 var name = new TextBox { Dock = DockStyle.Fill,
-                    Text = item?.Name ?? ("小平面" + (_items.Count(x => x.IsCachedPlan) + 1)) };
+                    Text = item.Name };
                 var scale = new ComboBox { Dock = DockStyle.Fill,
                     DropDownStyle = ComboBoxStyle.DropDown };
                 scale.Items.AddRange(new object[] { "1:20", "1:25", "1:30", "1:50", "1:100" });
-                scale.Text = item?.ScaleText ?? _scale.Text;
+                scale.Text = item.ScaleText ?? _scale.Text;
                 var number = new CheckBox { Text = "在图外增加圆圈编号", AutoSize = true,
-                    Checked = item != null && item.AddIndexNumber };
+                    Checked = item.AddIndexNumber };
                 table.Controls.Add(LabelFor("名称"), 0, 0); table.Controls.Add(name, 1, 0);
                 table.Controls.Add(LabelFor("比例"), 0, 1); table.Controls.Add(scale, 1, 1);
                 table.Controls.Add(number, 1, 2);
@@ -284,6 +357,16 @@ namespace BatchPdfPublisher.Views
             var value = type.GetProperty(propertyName).GetValue(source, null);
             return value == null ? default(T) : (T)Convert.ChangeType(value,
                 typeof(T), CultureInfo.InvariantCulture);
+        }
+
+        private static double? TryReadDouble(object source, Type type, string propertyName)
+        {
+            var property = type.GetProperty(propertyName);
+            if (property == null) return null;
+            var value = property.GetValue(source, null);
+            if (value == null) return null;
+            try { return Convert.ToDouble(value, CultureInfo.InvariantCulture); }
+            catch { return null; }
         }
 
         private static Exception Unwrap(Exception exception)

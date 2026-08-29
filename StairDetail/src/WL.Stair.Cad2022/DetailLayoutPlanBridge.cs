@@ -17,6 +17,12 @@ namespace WL.Stair.Cad2022
         public double Height { get; set; }
         public double CacheLayoutOffsetX { get; set; }
         public double CacheLayoutOffsetY { get; set; }
+        // The unexpanded user frame.  The detail-layout host uses this range
+        // to obtain a Tianzheng room name without changing the cached plan.
+        public double SelectionMinX { get; set; }
+        public double SelectionMinY { get; set; }
+        public double SelectionMaxX { get; set; }
+        public double SelectionMaxY { get; set; }
         public IList<DetailLayoutPlanPreviewLine> PreviewLines { get; set; }
     }
 
@@ -65,6 +71,8 @@ namespace WL.Stair.Cad2022
             double offsetX, offsetY, width, height;
             StairPlanCacheService.GetLayoutRange(source, out offsetX, out offsetY,
                 out width, out height);
+            var boundary = source.BoundaryPoints ?? new List<StairPlanPointDefinition>();
+            var hasBoundary = boundary.Count >= 3;
             return new DetailLayoutPlanResult
             {
                 Name = name,
@@ -74,6 +82,10 @@ namespace WL.Stair.Cad2022
                 Height = height,
                 CacheLayoutOffsetX = offsetX,
                 CacheLayoutOffsetY = offsetY,
+                SelectionMinX = hasBoundary ? boundary.Min(point => point.X) : 0.0,
+                SelectionMinY = hasBoundary ? boundary.Min(point => point.Y) : 0.0,
+                SelectionMaxX = hasBoundary ? boundary.Max(point => point.X) : 0.0,
+                SelectionMaxY = hasBoundary ? boundary.Max(point => point.Y) : 0.0,
                 PreviewLines = cache.ReadPreviewLines(source, 2500)
                     .Select(line => new DetailLayoutPlanPreviewLine
                     {
