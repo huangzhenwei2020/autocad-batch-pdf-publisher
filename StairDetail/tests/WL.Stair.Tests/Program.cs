@@ -2384,15 +2384,23 @@ namespace WL.Stair.Tests
             foreach (var axis in new[] { 0.0, 4000.0, 300.0, 4940.0 })
                 TestAssert.True(axisXs.Any(x => Math.Abs(x - axis) < 0.001),
                     "Every storey-local wall axis must be visible in the section.");
-            TestAssert.True(section.Lines.Any(line =>
-                    line.ComponentId == "LB-02-SHIFT-L"
-                    || line.ComponentId == "LB-02-SHIFT-R"),
-                "The shared floor must add slab infill between shifted beam axes.");
-            TestAssert.True(section.Lines.Any(line =>
-                    line.ComponentId == "LB-02-SHIFT-L"
-                    && Math.Abs(line.Start.X - 400.0) < 0.001
-                    && Math.Abs(line.End.X - 400.0) < 0.001),
-                "The transition slab must extend through the shifted beam face instead of ending on its axis.");
+            var transitionLines = section.Lines.Where(line =>
+                line.ComponentId.IndexOf("LB-02-SHIFT-", StringComparison.OrdinalIgnoreCase) >= 0).ToArray();
+            TestAssert.True(!transitionLines.Any(line =>
+                    Math.Abs(line.Start.X - line.End.X) < 0.001),
+                "Beam/slab shared edges must be removed so only the combined external outline remains.");
+            var transitionTop = outcome.Result.Storeys[0].UpperElevation;
+            var transitionBottom = transitionTop - project.Construction.FloorSlabThickness;
+            foreach (var gap in new[] { new[] { 0.0, 300.0 }, new[] { 4000.0, 4940.0 } })
+            {
+                TestAssert.True(!section.Lines.Any(line =>
+                        Math.Abs(line.Start.X - line.End.X) < 0.001
+                        && line.Start.X > gap[0] + 0.001
+                        && line.Start.X < gap[1] - 0.001
+                        && Math.Max(line.Start.Y, line.End.Y) > transitionBottom + 0.001
+                        && Math.Min(line.Start.Y, line.End.Y) < transitionTop - 0.001),
+                    "No beam, floor or infill seam may remain inside the connected slab thickness.");
+            }
             TestAssert.True(section.Lines.Any(line =>
                     line.ComponentId == "LB-02-RAILING-CONNECTION"
                     && line.Role == StairLineRole.Handrail

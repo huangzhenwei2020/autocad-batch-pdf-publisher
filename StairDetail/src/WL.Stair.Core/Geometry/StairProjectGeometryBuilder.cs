@@ -447,7 +447,9 @@ namespace WL.Stair.Core.Geometry
             // linework below is still merged to one line per shared edge.
             hatchRegions.AddRange(BuildStructuralHatchRegions(lines, project.Construction.SectionHatch));
             hatchRegions.AddRange(BuildWallHatchRegions(lines, project.Construction.WallHatch));
-            var mergedLines = MergeConnectedCutOutlines(lines).ToArray();
+            var mergedLines = MergeConnectedCutOutlines(lines)
+                .Where(line => !IsFloorTransitionInternalEnd(line))
+                .ToArray();
             var alignedDimensions = AlignDimensionsToOuterOutline(
                 mergedLines,
                 dimensions,
@@ -891,6 +893,15 @@ namespace WL.Stair.Core.Geometry
                 && (line.Role == StairLineRole.CutBoundary
                     || line.Role == StairLineRole.CutFlightProfile
                     || line.Role == StairLineRole.HatchBoundary);
+        }
+
+        private static bool IsFloorTransitionInternalEnd(DrawingLine line)
+        {
+            if (line == null || string.IsNullOrWhiteSpace(line.ComponentId)
+                || Math.Abs(line.Start.X - line.End.X) >= 0.001)
+                return false;
+            return line.ComponentId.IndexOf("-SHIFT-L", StringComparison.OrdinalIgnoreCase) >= 0
+                || line.ComponentId.IndexOf("-SHIFT-R", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private static bool IsHorizontal(DrawingLine line)
@@ -1418,18 +1429,61 @@ namespace WL.Stair.Core.Geometry
             var supports = sourceSupports.Where(item => item != null && item.Range != null).ToArray();
             if (supports.Length < 2) return;
             var thickness = floor.SlabThicknessOverride ?? defaults.FloorSlabThickness;
-            var halfBeam = Math.Max(0.5,
-                (floor.BeamWidthOverride ?? defaults.FloorBeam.Width) / 2.0);
-            // A changed stairwell range creates two beam locations on each side of
-            // the shared floor.  Join the *outer beam faces*, not merely the axis
-            // centres.  The overlap removes the hairline/open gaps that otherwise
-            // remain between the separately generated floor polygons.
-            var leftMin = supports.Min(item => item.Range.LeftAxisX) - halfBeam;
-            var leftMax = supports.Max(item => item.Range.LeftAxisX) + halfBeam;
-            var rightMin = supports.Min(item => item.Range.RightAxisX) - halfBeam;
-            var rightMax = supports.Max(item => item.Range.RightAxisX) + halfBeam;
-            AddTransitionSlab(lines, leftMin, leftMax, elevation, thickness, floor.Id + "-SHIFT-L");
-            AddTransitionSlab(lines, rightMin, rightMax, elevation, thickness, floor.Id + "-SHIFT-R");
+            AddFloorTransitionSlabsForSide(lines, floor, elevation, thickness,
+                supports, defaults, true, floor.Id + "-SHIFT-L");
+            AddFloorTransitionSlabsForSide(lines, floor, elevation, thickness,
+                supports, defaults, false, floor.Id + "-SHIFT-R");
+        }
+
+        private static void AddFloorTransitionSlabsForSide(
+            ICollection<DrawingLine> lines,
+            StairFloorDefinition floor,
+            double elevation,
+            double thickness,
+            IEnumerable<FloorSupportPosition> sourceSupports,
+            StairConstructionDefaults defaults,
+            bool leftSide,
+            string componentId)
+        {
+            var beamLocations = sourceSupports
+                .Select(support => new TransitionBeamLocation(
+                    leftSide ? support.Range.LeftAxisX : support.Range.RightAxisX,
+                    ResolveFloorBeamHalfWidth(floor, support, defaults, leftSide)))
+                .GroupBy(item => Math.Round(item.AxisX, 3))
+                .Select(group => new TransitionBeamLocation(
+                    group.First().AxisX,
+                    group.Max(item => item.HalfWidth)))
+                .OrderBy(item => item.AxisX)
+                .ToArray();
+            if (beamLocations.Length < 2) return;
+
+            for (var index = 0; index < beamLocations.Length - 1; index++)
+            {
+                var left = beamLocations[index];
+                var right = beamLocations[index + 1];
+                // The infill slab ends on the two facing beam edges.  Hatching
+                // still receives the closed slab, while the visible-line cleanup
+                // removes these two construction seams and retains only the
+                // combined external beam/slab perimeter.
+                var firstX = left.AxisX + left.HalfWidth;
+                var secondX = right.AxisX - right.HalfWidth;
+                if (secondX - firstX < 0.001) continue;
+                AddTransitionSlab(lines, firstX, secondX, elevation, thickness,
+                    beamLocations.Length == 2 ? componentId : componentId + "-" + (index + 1));
+            }
+        }
+
+        private static double ResolveFloorBeamHalfWidth(
+            StairFloorDefinition floor,
+            FloorSupportPosition support,
+            StairConstructionDefaults defaults,
+            bool leftSide)
+        {
+            var primarySide = leftSide ? support.Direction > 0 : support.Direction < 0;
+            var width = primarySide
+                ? floor.BeamWidthOverride ?? defaults.FloorBeam.Width
+                : floor.OppositeBeamWidthOverride ?? defaults.FloorBeam.Width;
+            return Math.Max(0.5, width / 2.0);
         }
 
         private static void AddTransitionSlab(
@@ -2281,6 +2335,19 @@ namespace WL.Stair.Core.Geometry
             public double X { get; }
 
             public double Elevation { get; }
+        }
+
+        private sealed class TransitionBeamLocation
+        {
+            public TransitionBeamLocation(double axisX, double halfWidth)
+            {
+                AxisX = axisX;
+                HalfWidth = halfWidth;
+            }
+
+            public double AxisX { get; }
+
+            public double HalfWidth { get; }
         }
 
         private sealed class WallSpan
