@@ -77,6 +77,7 @@ namespace WL.Stair.Tests
             LabelsFlightsAndLandings,
             SupportsBasementBaseElevation,
             DerivesLowestElevationFromBasementStoreys,
+            AcceptsNegativeBasementElevationAsPositiveHeight,
             ExpandsStandardFloorElevationsAndTotalDimension
             ,DrawsTwoStandardFloorBreakLinesAtTwelveHundred
             ,LaysOutPlansBeforeSectionAndRetainsEveryItem
@@ -154,6 +155,20 @@ namespace WL.Stair.Tests
                 "The lowest elevation must equal the negative sum of all basement heights.");
             TestAssert.NearlyEqual(-6200.0, outcome.Result.Storeys[0].LowerElevation, 0.001,
                 "The calculated section must start at the automatically derived basement elevation.");
+        }
+
+        private static void AcceptsNegativeBasementElevationAsPositiveHeight()
+        {
+            var project = StairProjectDefinition.CreateDefault();
+            project.BasementStoreyCount = 1;
+            project.Storeys[0].Height = -4500.0;
+
+            new StairProjectConstraintService().Normalize(project);
+
+            TestAssert.NearlyEqual(4500.0, project.Storeys[0].Height, 0.001,
+                "A negative basement elevation entry must be interpreted as a positive storey height.");
+            TestAssert.NearlyEqual(-4500.0, project.BaseElevation, 0.001,
+                "The automatic lowest elevation must retain the basement's negative direction.");
         }
 
         private static void ExpandsStandardFloorElevationsAndTotalDimension()

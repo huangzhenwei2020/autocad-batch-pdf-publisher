@@ -312,6 +312,12 @@ namespace WL.Stair.Core.Calculation
             }
             var basementCount = Math.Max(0, Math.Min(project.BasementStoreyCount,
                 project.Storeys.Count));
+            for (var index = 0; index < basementCount; index++)
+            {
+                var basement = project.Storeys[index];
+                if (basement != null && basement.Height < 0.0)
+                    basement.Height = Math.Abs(basement.Height);
+            }
             project.BaseElevation = -project.Storeys.Take(basementCount)
                 .Where(item => item != null)
                 .Sum(item => Math.Max(0.0, item.Height)
