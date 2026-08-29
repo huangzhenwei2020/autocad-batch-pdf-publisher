@@ -434,12 +434,14 @@ namespace WL.Stair.Core.Calculation
             var floors = (project.Floors ?? new List<StairFloorDefinition>())
                 .Where(floor => floor != null && !string.IsNullOrWhiteSpace(floor.Id))
                 .ToDictionary(floor => floor.Id, StringComparer.OrdinalIgnoreCase);
+            var axisResolver = new StairwellAxisResolver();
 
             ApplyAlternatingBoundaryDirections(project, floors);
 
             foreach (var storey in project.Storeys ?? new List<StairStoreyDefinition>())
             {
                 if (storey == null || storey.Flights == null) continue;
+                var stairwellDepth = axisResolver.Resolve(project, storey).Depth;
                 DistributeRiserCountsIfNeeded(storey);
 
                 StairFloorDefinition lowerFloor;
@@ -469,7 +471,7 @@ namespace WL.Stair.Core.Calculation
                     if (storey.StairwellConstraintLocked)
                     {
                         foreach (var flight in storey.Flights.Where(f => f != null && f.RiserCount > 1))
-                            flight.TreadDepth = Math.Max(1.0, (project.Construction.StairwellDepth - 2.0 * equalWidth) / (flight.RiserCount - 1));
+                            flight.TreadDepth = Math.Max(1.0, (stairwellDepth - 2.0 * equalWidth) / (flight.RiserCount - 1));
                     }
                     continue;
                 }
@@ -503,7 +505,7 @@ namespace WL.Stair.Core.Calculation
                         var endWidth = index == storey.Flights.Count - 1 ? PlatformWidth(upperFloor) : PlatformWidth(storey.Landings[index]);
                         if (AllowsClosureBetween(storeyBoundaries[index], storeyBoundaries[index + 1]))
                             continue;
-                        var horizontalRun = project.Construction.StairwellDepth - startWidth - endWidth;
+                        var horizontalRun = stairwellDepth - startWidth - endWidth;
                         if (horizontalRun > 0.0) flight.TreadDepth = horizontalRun / (flight.RiserCount - 1);
                     }
                 }
@@ -572,9 +574,11 @@ namespace WL.Stair.Core.Calculation
         {
             var boundaries = new List<object>();
             var flights = new List<StairFlightDefinition>();
+            var stairwellDepths = new List<double>();
+            var axisResolver = new StairwellAxisResolver();
             Action solveSegment = () =>
             {
-                SolveDirectConnectionSegment(project, boundaries, flights);
+                SolveDirectConnectionSegment(boundaries, flights, stairwellDepths);
             };
 
             foreach (var storey in project.Storeys.Where(item => item != null && item.Flights != null))
@@ -595,10 +599,12 @@ namespace WL.Stair.Core.Calculation
                         solveSegment();
                         boundaries.Clear();
                         flights.Clear();
+                        stairwellDepths.Clear();
                         continue;
                     }
                     if (boundaries.Count == 0) boundaries.Add(localBoundaries[index]);
                     flights.Add(storey.Flights[index]);
+                    stairwellDepths.Add(axisResolver.Resolve(project, storey).Depth);
                     boundaries.Add(localBoundaries[index + 1]);
                 }
             }
@@ -628,15 +634,16 @@ namespace WL.Stair.Core.Calculation
         }
 
         private static void SolveDirectConnectionSegment(
-            StairProjectDefinition project,
             IList<object> boundaries,
-            IList<StairFlightDefinition> flights)
+            IList<StairFlightDefinition> flights,
+            IList<double> stairwellDepths)
         {
-            if (project == null
-                || flights == null
+            if (flights == null
                 || boundaries == null
+                || stairwellDepths == null
                 || flights.Count == 0
-                || boundaries.Count != flights.Count + 1)
+                || boundaries.Count != flights.Count + 1
+                || stairwellDepths.Count != flights.Count)
             {
                 return;
             }
@@ -645,14 +652,14 @@ namespace WL.Stair.Core.Calculation
             if (anchorIndex < 0) anchorIndex = 0;
             for (var index = anchorIndex - 1; index >= 0; index--)
             {
-                var width = project.Construction.StairwellDepth
+                var width = stairwellDepths[index]
                     - PlatformWidth(boundaries[index + 1])
                     - flights[index].TreadDepth * Math.Max(0, flights[index].RiserCount - 1);
                 SetPlatformWidth(boundaries[index], Math.Max(1.0, width));
             }
             for (var index = anchorIndex; index < flights.Count; index++)
             {
-                var width = project.Construction.StairwellDepth
+                var width = stairwellDepths[index]
                     - PlatformWidth(boundaries[index])
                     - flights[index].TreadDepth * Math.Max(0, flights[index].RiserCount - 1);
                 SetPlatformWidth(boundaries[index + 1], Math.Max(1.0, width));
@@ -680,6 +687,7 @@ namespace WL.Stair.Core.Calculation
             var storey = (project.Storeys ?? new List<StairStoreyDefinition>())
                 .FirstOrDefault(item => item != null && item.Landings.Contains(landing));
             if (storey == null || storey.Flights == null) return;
+            var stairwellDepth = new StairwellAxisResolver().Resolve(project, storey).Depth;
 
             var boundaries = new List<object>();
             StairFloorDefinition lowerFloor;
@@ -699,7 +707,7 @@ namespace WL.Stair.Core.Calculation
             {
                 if (AllowsClosureBetween(boundaries[index], boundaries[index + 1])) break;
                 var flight = storey.Flights[index];
-                var pairWidth = project.Construction.StairwellDepth
+                var pairWidth = stairwellDepth
                     - flight.TreadDepth * Math.Max(0, flight.RiserCount - 1);
                 SetPlatformWidth(boundaries[index], Math.Max(
                     0.0,
@@ -709,7 +717,7 @@ namespace WL.Stair.Core.Calculation
             {
                 if (AllowsClosureBetween(boundaries[index], boundaries[index + 1])) break;
                 var flight = storey.Flights[index];
-                var pairWidth = project.Construction.StairwellDepth
+                var pairWidth = stairwellDepth
                     - flight.TreadDepth * Math.Max(0, flight.RiserCount - 1);
                 SetPlatformWidth(boundaries[index + 1], Math.Max(
                     0.0,

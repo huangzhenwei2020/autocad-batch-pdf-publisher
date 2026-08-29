@@ -1556,6 +1556,22 @@ namespace WL.Stair.Cad2022
                 return;
             }
 
+            if (!string.IsNullOrWhiteSpace(target)
+                && target.StartsWith("storey-stairwell:", StringComparison.OrdinalIgnoreCase))
+            {
+                int storeyIndex;
+                if (!int.TryParse(target.Substring("storey-stairwell:".Length), out storeyIndex)
+                    || storeyIndex < 0
+                    || storeyIndex >= _state.Project.Storeys.Count)
+                    return;
+                var measuredDepth = first.DistanceTo(second);
+                if (measuredDepth <= 0.001) return;
+                var storey = _state.Project.Storeys[storeyIndex];
+                storey.IndependentStairwellEnabled = true;
+                storey.StairwellDepthOverride = measuredDepth;
+                return;
+            }
+
             if (!string.IsNullOrWhiteSpace(target) && target.StartsWith("value:", StringComparison.OrdinalIgnoreCase))
             {
                 var path = target.Substring("value:".Length);

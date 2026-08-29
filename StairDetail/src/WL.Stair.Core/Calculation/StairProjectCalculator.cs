@@ -67,6 +67,7 @@ namespace WL.Stair.Core.Calculation
                 }
 
                 RequirePositive(storey.Height, storey.Id + ".Height", "WL-PR-003", issues);
+                ValidateIndependentStairwell(storey, issues);
                 if (storey.Flights == null || storey.Flights.Count == 0)
                 {
                     issues.Add(Error("WL-PR-004", storey.Id, "每个楼层段至少需要一跑梯段。"));
@@ -199,6 +200,30 @@ namespace WL.Stair.Core.Calculation
             }
             ValidateOpening(construction.Door, "Door", issues);
             ValidateOpening(construction.Window, "Window", issues);
+        }
+
+        private static void ValidateIndependentStairwell(
+            StairStoreyDefinition storey,
+            ICollection<ValidationIssue> issues)
+        {
+            if (storey == null || !storey.IndependentStairwellEnabled) return;
+            RequirePositive(
+                storey.StairwellDepthOverride,
+                storey.Id + ".StairwellDepthOverride",
+                "WL-PR-036",
+                issues);
+            if (storey.StairwellAlignment < StairwellAlignment.Left
+                || storey.StairwellAlignment > StairwellAlignment.Right)
+            {
+                issues.Add(Error("WL-PR-037", storey.Id + ".StairwellAlignment",
+                    "独立楼梯井只能选择左对齐、居中或右对齐。"));
+            }
+            if (double.IsNaN(storey.StairwellAxisOffset)
+                || double.IsInfinity(storey.StairwellAxisOffset))
+            {
+                issues.Add(Error("WL-PR-038", storey.Id + ".StairwellAxisOffset",
+                    "独立楼梯井轴线偏移必须是有限值。"));
+            }
         }
 
         private static void ValidateBeam(BeamDefaults beam, string parameter, ICollection<ValidationIssue> issues)

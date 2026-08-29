@@ -71,6 +71,8 @@ namespace WL.Stair.Tests
             OmitsFirstFloorSlabAndBeam,
             BuildsThreePlatformOutlinesWithoutOverlaps,
             AppliesStairwellConstraintsPerLockedStorey,
+            AppliesIndependentStairwellDepthToStoreyConstraints,
+            RejectsInvalidIndependentStairwellParameters,
             PreservesRiserCountsAndRecalculatesTreadDepth,
             LocksStoreyTreadDepthAndBalancesPlatforms,
             PreservesLockedPlatformWidth,
@@ -2272,6 +2274,45 @@ namespace WL.Stair.Tests
             new StairProjectConstraintService().Apply(project);
             TestAssert.Equal(7, project.Storeys[1].Flights[0].RiserCount,
                 "An unlocked storey must retain its manual riser count.");
+        }
+
+        private static void AppliesIndependentStairwellDepthToStoreyConstraints()
+        {
+            var project = StairProjectDefinition.CreateDefault();
+            var storey = project.Storeys[0];
+            storey.IndependentStairwellEnabled = true;
+            storey.StairwellDepthOverride = 5200.0;
+            storey.StairwellAlignment = StairwellAlignment.Center;
+            storey.Flights[0].TreadDepth = 300.0;
+            storey.Flights[1].TreadDepth = 300.0;
+            project.Floors[0].PlatformWidth = 1200.0;
+            project.Floors[0].PlatformWidthLocked = true;
+            storey.Landings[0].PlatformWidthLocked = false;
+
+            new StairProjectConstraintService().Apply(project);
+
+            TestAssert.NearlyEqual(1600.0, storey.Landings[0].PlatformWidth, 0.001,
+                "A constrained storey must solve its platforms from the independent depth.");
+            TestAssert.NearlyEqual(300.0, storey.Flights[0].TreadDepth, 0.001,
+                "Applying an independent depth must not change the linked tread depth.");
+        }
+
+        private static void RejectsInvalidIndependentStairwellParameters()
+        {
+            var project = StairProjectDefinition.CreateDefault();
+            var storey = project.Storeys[0];
+            storey.IndependentStairwellEnabled = true;
+            storey.StairwellDepthOverride = 0.0;
+            storey.StairwellAxisOffset = double.NaN;
+
+            var outcome = new StairProjectCalculator().Calculate(project);
+
+            TestAssert.True(!outcome.IsSuccess,
+                "An enabled independent stairwell with invalid parameters must fail validation.");
+            TestAssert.True(outcome.Issues.Any(issue => issue.Code == "WL-PR-036"),
+                "The independent stairwell depth error is missing.");
+            TestAssert.True(outcome.Issues.Any(issue => issue.Code == "WL-PR-038"),
+                "The independent stairwell offset error is missing.");
         }
 
         private static void DrawsWallsFromBeamCenterAxes()
