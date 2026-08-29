@@ -39,6 +39,7 @@
     <Compile Include="Calculation\StairFlightResult.cs" />
     <Compile Include="Calculation\StairProjectCalculator.cs" />
     <Compile Include="Calculation\StairProjectConstraintService.cs" />
+    <Compile Include="Calculation\StairwellAxisResolver.cs" />
     <Compile Include="Domain\FlightSplitPreference.cs" />
     <Compile Include="Domain\StairDefinition.cs" />
     <Compile Include="Domain\StairProjectDefinition.cs" />

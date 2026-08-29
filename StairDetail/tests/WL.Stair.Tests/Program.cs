@@ -17,6 +17,9 @@ namespace WL.Stair.Tests
             UsesUpdatedHatchScaleDefaults,
             UsesUpdatedPlatformDoorWindowDefaults,
             UsesOppositeSupportAndSlabOverhangDefaults,
+            MigratesLegacyProjectsWithoutChangingStairwellAxes,
+            ResolvesIndependentStairwellAlignmentAndOffset,
+            ResolvesOverallStairwellEnvelope,
             BuildsOppositeBeamSlabWithConfigurableOpenEnd,
             IgnoresLegacyLandingOppositeSupports,
             ExtendsTopWallsAboveTopFloorOpening,
@@ -368,7 +371,7 @@ namespace WL.Stair.Tests
         private static void UsesOppositeSupportAndSlabOverhangDefaults()
         {
             var project = StairProjectDefinition.CreateDefault();
-            TestAssert.Equal(21, project.SchemaVersion,
+            TestAssert.Equal(22, project.SchemaVersion,
                 "New stair projects must use the opposite-support schema.");
             TestAssert.True(project.Construction.OppositeSupportsEnabled,
                 "Opposite-wall supports must be enabled by default.");
@@ -392,7 +395,7 @@ namespace WL.Stair.Tests
             project.Storeys.SelectMany(item => item.Landings).ToList()
                 .ForEach(item => item.OppositeSupportType = OppositeSupportType.None);
             new StairProjectConstraintService().Normalize(project);
-            TestAssert.Equal(21, project.SchemaVersion,
+            TestAssert.Equal(22, project.SchemaVersion,
                 "Schema 20 projects must migrate to the opposite-support schema.");
             TestAssert.True(project.Construction.OppositeSupportsEnabled,
                 "Migrated projects must receive the enabled unified switch.");
@@ -403,6 +406,85 @@ namespace WL.Stair.Tests
             TestAssert.True(project.Storeys.SelectMany(item => item.Landings).All(item =>
                     item.OppositeSupportType == OppositeSupportType.None),
                 "Migration must remove opposite supports from rest landings.");
+        }
+
+        private static void MigratesLegacyProjectsWithoutChangingStairwellAxes()
+        {
+            var project = StairProjectDefinition.CreateDefault();
+            project.SchemaVersion = 21;
+            project.Storeys[0].IndependentStairwellEnabled = true;
+            project.Storeys[0].StairwellDepthOverride = 5200.0;
+            project.Storeys[0].StairwellAlignment = StairwellAlignment.Right;
+            project.Storeys[0].StairwellAxisOffset = 350.0;
+
+            new StairProjectConstraintService().Normalize(project);
+
+            TestAssert.Equal(22, project.SchemaVersion,
+                "Schema 21 projects must migrate to the independent-stairwell schema.");
+            TestAssert.True(project.Storeys.All(item => !item.IndependentStairwellEnabled),
+                "Migration must keep every legacy storey on unified stairwell axes.");
+            var resolver = new StairwellAxisResolver();
+            foreach (var storey in project.Storeys)
+            {
+                var range = resolver.Resolve(project, storey);
+                TestAssert.NearlyEqual(0.0, range.LeftAxisX, 0.001,
+                    "A migrated legacy storey must retain the original left axis.");
+                TestAssert.NearlyEqual(project.Construction.StairwellDepth, range.RightAxisX, 0.001,
+                    "A migrated legacy storey must retain the original right axis.");
+            }
+        }
+
+        private static void ResolvesIndependentStairwellAlignmentAndOffset()
+        {
+            var project = StairProjectDefinition.CreateDefault();
+            project.Construction.StairwellDepth = 5000.0;
+            var storey = project.Storeys[0];
+            storey.IndependentStairwellEnabled = true;
+            storey.StairwellDepthOverride = 4000.0;
+            storey.StairwellAxisOffset = 125.0;
+            var resolver = new StairwellAxisResolver();
+
+            storey.StairwellAlignment = StairwellAlignment.Left;
+            var left = resolver.Resolve(project, storey);
+            TestAssert.NearlyEqual(125.0, left.LeftAxisX, 0.001,
+                "Left alignment must anchor to the unified left axis before offset.");
+            TestAssert.NearlyEqual(4125.0, left.RightAxisX, 0.001,
+                "Left alignment must preserve the independent depth.");
+
+            storey.StairwellAlignment = StairwellAlignment.Center;
+            var center = resolver.Resolve(project, storey);
+            TestAssert.NearlyEqual(625.0, center.LeftAxisX, 0.001,
+                "Center alignment must distribute the depth difference evenly.");
+            TestAssert.NearlyEqual(4625.0, center.RightAxisX, 0.001,
+                "Center alignment must preserve the independent depth.");
+
+            storey.StairwellAlignment = StairwellAlignment.Right;
+            var right = resolver.Resolve(project, storey);
+            TestAssert.NearlyEqual(1125.0, right.LeftAxisX, 0.001,
+                "Right alignment must anchor to the unified right axis before offset.");
+            TestAssert.NearlyEqual(5125.0, right.RightAxisX, 0.001,
+                "Right alignment must preserve the independent depth.");
+        }
+
+        private static void ResolvesOverallStairwellEnvelope()
+        {
+            var project = StairProjectDefinition.CreateDefault();
+            project.Construction.StairwellDepth = 4600.0;
+            project.Storeys[0].IndependentStairwellEnabled = true;
+            project.Storeys[0].StairwellDepthOverride = 4300.0;
+            project.Storeys[0].StairwellAlignment = StairwellAlignment.Left;
+            project.Storeys[0].StairwellAxisOffset = -300.0;
+            project.Storeys[1].IndependentStairwellEnabled = true;
+            project.Storeys[1].StairwellDepthOverride = 5000.0;
+            project.Storeys[1].StairwellAlignment = StairwellAlignment.Right;
+            project.Storeys[1].StairwellAxisOffset = 200.0;
+
+            var envelope = new StairwellAxisResolver().ResolveEnvelope(project);
+
+            TestAssert.NearlyEqual(-300.0, envelope.LeftAxisX, 0.001,
+                "The envelope must include the furthest independent left axis.");
+            TestAssert.NearlyEqual(4800.0, envelope.RightAxisX, 0.001,
+                "The envelope must include the furthest independent right axis.");
         }
 
         private static void BuildsOppositeBeamSlabWithConfigurableOpenEnd()
@@ -1730,7 +1812,7 @@ namespace WL.Stair.Tests
 
             new StairProjectConstraintService().Normalize(project);
 
-            TestAssert.Equal(21, project.SchemaVersion,
+            TestAssert.Equal(22, project.SchemaVersion,
                 "Legacy projects must migrate through the current drawing-output schema.");
             TestAssert.True(project.Floors[1].AllowLowerFlightClosure,
                 "The old final-flight switch must migrate to the destination floor.");
@@ -1760,7 +1842,7 @@ namespace WL.Stair.Tests
 
             new StairProjectConstraintService().Normalize(project);
 
-            TestAssert.Equal(21, project.SchemaVersion,
+            TestAssert.Equal(22, project.SchemaVersion,
                 "Plan-source scale metadata must migrate to the current schema.");
             TestAssert.Equal(100, project.PlanSources[0].SourceScale,
                 "Migration must not alter the scale read from the source Tianzheng plan.");
@@ -1787,7 +1869,7 @@ namespace WL.Stair.Tests
             new StairProjectConstraintService().Normalize(project);
 
             var source = project.PlanSources[0];
-            TestAssert.Equal(21, project.SchemaVersion,
+            TestAssert.Equal(22, project.SchemaVersion,
                 "Standard-floor metadata must migrate additively.");
             TestAssert.Equal("二层", source.FloorLabel,
                 "A legacy source must inherit its existing display name.");
@@ -1821,7 +1903,7 @@ namespace WL.Stair.Tests
 
             new StairProjectConstraintService().Normalize(project);
 
-            TestAssert.Equal(21, project.SchemaVersion,
+            TestAssert.Equal(22, project.SchemaVersion,
                 "Logical-floor metadata must migrate to the current schema.");
             TestAssert.Equal("4~18层", project.Storeys[0].PlanFloorLabel,
                 "A captured standard-floor range must migrate to its storey record.");

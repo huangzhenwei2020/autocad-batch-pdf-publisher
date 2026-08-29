@@ -17,7 +17,7 @@ namespace WL.Stair.Core.Domain
     {
         public StairProjectDefinition()
         {
-            SchemaVersion = 21;
+            SchemaVersion = 22;
             Name = "楼梯大样";
             ProjectName = "未命名项目";
             SubprojectName = string.Empty;
@@ -511,6 +511,7 @@ namespace WL.Stair.Core.Domain
         {
             PlanFloorLabel = string.Empty;
             PlanRepeatCount = 1;
+            StairwellAlignment = StairwellAlignment.Center;
             Flights = new List<StairFlightDefinition>();
             Landings = new List<StairLandingDefinition>();
         }
@@ -547,6 +548,27 @@ namespace WL.Stair.Core.Domain
         public bool PlatformWidthsEqual { get; set; }
 
         public bool AllowUpperClosureGap { get; set; }
+
+        /// <summary>
+        /// Enables a storey-local stairwell axis range. When disabled, the
+        /// legacy unified construction depth and axes [0, depth] are used.
+        /// </summary>
+        public bool IndependentStairwellEnabled { get; set; }
+
+        /// <summary>
+        /// Storey-local stairwell depth. A non-positive value falls back to
+        /// the unified construction depth so newly enabled legacy records
+        /// remain safe until the user enters a value.
+        /// </summary>
+        public double StairwellDepthOverride { get; set; }
+
+        public StairwellAlignment StairwellAlignment { get; set; }
+
+        /// <summary>
+        /// Additional signed axis offset after alignment against the unified
+        /// stairwell range. Positive values move the local range to the right.
+        /// </summary>
+        public double StairwellAxisOffset { get; set; }
 
         public IList<StairFlightDefinition> Flights { get; set; }
 
@@ -730,6 +752,13 @@ namespace WL.Stair.Core.Domain
     {
         Left = -1,
         Right = 1
+    }
+
+    public enum StairwellAlignment
+    {
+        Left = 0,
+        Center = 1,
+        Right = 2
     }
 
     public enum StairSectionRepresentation

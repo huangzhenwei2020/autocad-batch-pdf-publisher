@@ -239,6 +239,20 @@ namespace WL.Stair.Core.Calculation
                     landing.OppositeSupportType = OppositeSupportType.None;
                 project.SchemaVersion = 21;
             }
+            if (project.SchemaVersion < 22)
+            {
+                // Per-storey stairwell ranges are additive. Legacy projects
+                // keep the exact unified axes and geometry until a user
+                // explicitly enables an override on an individual storey.
+                foreach (var storey in project.Storeys.Where(item => item != null))
+                {
+                    storey.IndependentStairwellEnabled = false;
+                    storey.StairwellDepthOverride = 0.0;
+                    storey.StairwellAlignment = StairwellAlignment.Center;
+                    storey.StairwellAxisOffset = 0.0;
+                }
+                project.SchemaVersion = 22;
+            }
             foreach (var landing in project.Storeys.Where(item => item != null)
                 .SelectMany(item => item.Landings ?? new List<StairLandingDefinition>())
                 .Where(item => item != null))
