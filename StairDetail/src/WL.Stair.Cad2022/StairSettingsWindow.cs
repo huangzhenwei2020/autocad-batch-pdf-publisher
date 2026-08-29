@@ -1781,7 +1781,12 @@ namespace WL.Stair.Cad2022
                 }))
                 .ToArray();
             var minX = xs.Min() - 350.0;
-            var maxX = xs.Max() + 350.0;
+            var geometryMaxX = xs.Max();
+            var floorLabelX = geometryMaxX + 580.0;
+            var showsSectionFloorLabels = string.IsNullOrWhiteSpace(previewFloorLabel)
+                && state != null && state.Project != null
+                && state.Project.Storeys != null && state.Project.Storeys.Count > 0;
+            var maxX = geometryMaxX + (showsSectionFloorLabels ? 1080.0 : 350.0);
             var minY = ys.Min() - 350.0;
             var maxY = ys.Max() + 350.0;
             var builder = new StringBuilder();
@@ -1819,8 +1824,8 @@ namespace WL.Stair.Cad2022
                         : (!string.IsNullOrWhiteSpace(storey.PlanFloorLabel) ? storey.PlanFloorLabel : storey.Name);
                     builder.AppendFormat(
                         CultureInfo.InvariantCulture,
-                        "<text x='{0}' y='{1}' text-anchor='end' style='font-size:115px;font-weight:700;fill:#58ef70;stroke:#101820;stroke-width:3;paint-order:stroke'>{2}</text>",
-                        maxX - 70.0,
+                        "<text x='{0}' y='{1}' text-anchor='start' dominant-baseline='middle' style='font-size:180px;font-weight:700;fill:#58ef70;stroke:#101820;stroke-width:4;paint-order:stroke'>{2}</text>",
+                        floorLabelX,
                         -elevation,
                         Escape(label));
                     elevation += Math.Max(0.0, storey.Height);
@@ -1835,8 +1840,8 @@ namespace WL.Stair.Cad2022
                 {
                     builder.AppendFormat(
                         CultureInfo.InvariantCulture,
-                        "<text x='{0}' y='{1}' text-anchor='end' style='font-size:115px;font-weight:700;fill:#58ef70;stroke:#101820;stroke-width:3;paint-order:stroke'>{2}</text>",
-                        maxX - 70.0,
+                        "<text x='{0}' y='{1}' text-anchor='start' dominant-baseline='middle' style='font-size:180px;font-weight:700;fill:#58ef70;stroke:#101820;stroke-width:4;paint-order:stroke'>{2}</text>",
+                        floorLabelX,
                         -elevation,
                         Escape(topFloor.PlanFloorLabel));
                 }
