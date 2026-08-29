@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using WL.Stair.Core.Calculation;
 using WL.Stair.Core.Domain;
@@ -77,6 +78,8 @@ namespace WL.Stair.Tests
             LocksStoreyTreadDepthAndBalancesPlatforms,
             PreservesLockedPlatformWidth,
             DrawsWallsFromBeamCenterAxes,
+            BuildsShiftedStoreyWallsAxesBeamsAndTransitionSlabs,
+            KeepsSectionGeometryWhenIndependentAxesMatchUnifiedAxes,
             BuildsWallSegmentDoorAndWindowOpenings,
             BuildsPlatformDoorWindowElevationWithoutChangingPlatform,
             ClipsOrdinaryPlanSegmentsToCropBoundary,
@@ -2344,6 +2347,81 @@ namespace WL.Stair.Tests
                     || Math.Abs(line.End.Y - (elevation - beamDepth)) < 0.001),
                     "A lower wall segment must stop at the floor-beam bottom.");
             }
+        }
+
+        private static void BuildsShiftedStoreyWallsAxesBeamsAndTransitionSlabs()
+        {
+            var project = StairProjectDefinition.CreateDefault();
+            var shifted = project.Storeys[0];
+            shifted.IndependentStairwellEnabled = true;
+            shifted.StairwellDepthOverride = 4000.0;
+            shifted.StairwellAlignment = StairwellAlignment.Left;
+            shifted.StairwellAxisOffset = -300.0;
+            new StairProjectConstraintService().Apply(project);
+            var outcome = new StairProjectCalculator().Calculate(project);
+
+            TestAssert.True(outcome.IsSuccess,
+                "A valid shifted stairwell storey must calculate successfully.");
+            var section = new StairProjectGeometryBuilder().BuildSection(project, outcome.Result);
+            var wallFaceXs = section.Lines
+                .Where(line => line.Role == StairLineRole.WallBoundary)
+                .Select(line => line.Start.X)
+                .Distinct()
+                .ToArray();
+            // The final section is rebased so the overall left envelope is X=0.
+            foreach (var axis in new[] { 0.0, 4000.0, 300.0, 4940.0 })
+            {
+                TestAssert.True(wallFaceXs.Any(x => Math.Abs(Math.Abs(x - axis) - 100.0) < 0.001),
+                    "Each old and new wall axis must produce its own vertical wall faces: "
+                    + axis.ToString(CultureInfo.InvariantCulture) + "; actual="
+                    + string.Join(",", wallFaceXs.Select(x => x.ToString("0.###", CultureInfo.InvariantCulture))));
+            }
+            TestAssert.True(section.Lines.Where(line => line.Role == StairLineRole.WallBoundary)
+                    .All(line => Math.Abs(line.Start.X - line.End.X) < 0.001),
+                "A stairwell depth transition must never create sloping walls.");
+            var axisXs = section.Lines.Where(line => line.Role == StairLineRole.AxisLine)
+                .Select(line => line.Start.X).Distinct().ToArray();
+            foreach (var axis in new[] { 0.0, 4000.0, 300.0, 4940.0 })
+                TestAssert.True(axisXs.Any(x => Math.Abs(x - axis) < 0.001),
+                    "Every storey-local wall axis must be visible in the section.");
+            TestAssert.True(section.Lines.Any(line =>
+                    line.ComponentId == "LB-02-SHIFT-L"
+                    || line.ComponentId == "LB-02-SHIFT-R"),
+                "The shared floor must add slab infill between shifted beam axes.");
+        }
+
+        private static void KeepsSectionGeometryWhenIndependentAxesMatchUnifiedAxes()
+        {
+            var legacy = StairProjectDefinition.CreateDefault();
+            var independent = StairProjectDefinition.CreateDefault();
+            foreach (var storey in independent.Storeys)
+            {
+                storey.IndependentStairwellEnabled = true;
+                storey.StairwellDepthOverride = independent.Construction.StairwellDepth;
+                storey.StairwellAlignment = StairwellAlignment.Center;
+                storey.StairwellAxisOffset = 0.0;
+            }
+            var constraints = new StairProjectConstraintService();
+            constraints.Apply(legacy);
+            constraints.Apply(independent);
+            var calculator = new StairProjectCalculator();
+            var legacyOutcome = calculator.Calculate(legacy);
+            var independentOutcome = calculator.Calculate(independent);
+            var builder = new StairProjectGeometryBuilder();
+            var legacyView = builder.BuildSection(legacy, legacyOutcome.Result);
+            var independentView = builder.BuildSection(independent, independentOutcome.Result);
+            Func<DrawingLine, string> signature = line => string.Join("|", new[]
+            {
+                NormalizeLine(line),
+                line.Role.ToString(),
+                line.IsHidden.ToString(),
+                line.ComponentId ?? string.Empty
+            });
+            var legacyLines = legacyView.Lines.Select(signature).OrderBy(item => item).ToArray();
+            var independentLines = independentView.Lines.Select(signature).OrderBy(item => item).ToArray();
+
+            TestAssert.Equal(string.Join("\n", legacyLines), string.Join("\n", independentLines),
+                "Enabling an equal, centered range must not change any existing section linework.");
         }
 
         private static void PreservesRiserCountsAndRecalculatesTreadDepth()

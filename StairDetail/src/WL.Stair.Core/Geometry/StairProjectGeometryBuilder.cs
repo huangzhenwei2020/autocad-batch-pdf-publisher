@@ -68,19 +68,17 @@ namespace WL.Stair.Core.Geometry
                 .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
             var physicalFloorElevations = BuildPhysicalFloorElevations(project);
             var floorPositions = new Dictionary<string, ComponentPosition>(StringComparer.OrdinalIgnoreCase);
+            var floorSupportPositions = new Dictionary<string, List<FloorSupportPosition>>(StringComparer.OrdinalIgnoreCase);
             var wallAnchors = new List<WallAnchor>();
+            var wallSpans = new List<WallSpan>();
             var lowestElevation = calculation.Storeys.Min(result => result.LowerElevation);
-            // The section uses an immutable axis coordinate system. The left
-            // axis is always X=0 and the right axis is always the stairwell
-            // depth, regardless of the first flight direction or platform
-            // widths. Mirroring therefore moves only stair components.
-            var firstAxisX = 0.0;
-            var secondAxisX = project.Construction.StairwellDepth;
-
-            Func<int, double> axisForDirection = direction =>
-                direction > 0 ? firstAxisX : secondAxisX;
-            Func<int, double, double> connectionForBoundary = (direction, width) =>
-                axisForDirection(direction) + (direction * width);
+            var axisResolver = new StairwellAxisResolver();
+            var stairwellRanges = project.Storeys.Where(item => item != null)
+                .ToDictionary(item => item.Id, item => axisResolver.Resolve(project, item),
+                    StringComparer.OrdinalIgnoreCase);
+            var envelope = axisResolver.ResolveEnvelope(project);
+            var firstAxisX = envelope.LeftAxisX;
+            var secondAxisX = envelope.RightAxisX;
             var floorDirections = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             foreach (var item in project.Storeys.Where(item => item.Flights.Count > 0))
             {
@@ -93,22 +91,30 @@ namespace WL.Stair.Core.Geometry
             foreach (var storey in project.Storeys)
             {
                 var storeyResult = storeyResults[storey.Id];
+                var stairwellRange = stairwellRanges[storey.Id];
+                Func<int, double> axisForDirection = direction =>
+                    direction > 0 ? stairwellRange.LeftAxisX : stairwellRange.RightAxisX;
+                Func<int, double, double> connectionForBoundary = (direction, width) =>
+                    axisForDirection(direction) + (direction * width);
+                wallSpans.Add(new WallSpan("L", stairwellRange.LeftAxisX,
+                    storeyResult.LowerElevation, storeyResult.UpperElevation));
+                wallSpans.Add(new WallSpan("R", stairwellRange.RightAxisX,
+                    storeyResult.LowerElevation, storeyResult.UpperElevation));
                 StairFloorDefinition lowerFloor;
                 StairFloorDefinition upperFloor;
                 floors.TryGetValue(storey.LowerFloorId, out lowerFloor);
                 floors.TryGetValue(storey.UpperFloorId, out upperFloor);
-                ComponentPosition lowerPosition;
-                if (!floorPositions.TryGetValue(storey.LowerFloorId, out lowerPosition))
-                {
-                    var lowerDirection = lowerFloor == null
-                        ? (int)storey.Flights[0].Direction
-                        : floorDirections[lowerFloor.Id];
-                    var lowerWidth = lowerFloor == null ? 0.0 : lowerFloor.PlatformWidth;
-                    lowerPosition = new ComponentPosition(
-                        connectionForBoundary(lowerDirection, lowerWidth),
-                        storeyResult.LowerElevation);
+                var lowerDirection = lowerFloor == null
+                    ? (int)storey.Flights[0].Direction
+                    : floorDirections[lowerFloor.Id];
+                var lowerWidth = lowerFloor == null ? 0.0 : lowerFloor.PlatformWidth;
+                var lowerPosition = new ComponentPosition(
+                    connectionForBoundary(lowerDirection, lowerWidth),
+                    storeyResult.LowerElevation);
+                AddFloorSupport(floorSupportPositions, storey.LowerFloorId,
+                    new FloorSupportPosition(lowerPosition, stairwellRange, lowerDirection, storey.Id));
+                if (!floorPositions.ContainsKey(storey.LowerFloorId))
                     floorPositions.Add(storey.LowerFloorId, lowerPosition);
-                }
 
                 var currentX = lowerPosition.X;
                 var currentElevation = lowerPosition.Elevation;
@@ -198,12 +204,14 @@ namespace WL.Stair.Core.Geometry
                         currentElevation,
                         endElevation,
                         flightResult.TreadDepth,
-                        flight.RiserCount));
+                        flight.RiserCount,
+                        stairwellRange.LeftAxisX,
+                        stairwellRange.RightAxisX));
                     var scale = Math.Max(1, project.DrawingScale);
                     dimensions.Add(new DrawingDimension(
-                        new Point2D(firstAxisX, currentElevation),
-                        new Point2D(firstAxisX, endElevation),
-                        new Point2D(firstAxisX - (6.0 * scale), (currentElevation + endElevation) / 2.0),
+                        new Point2D(stairwellRange.LeftAxisX, currentElevation),
+                        new Point2D(stairwellRange.LeftAxisX, endElevation),
+                        new Point2D(stairwellRange.LeftAxisX - (6.0 * scale), (currentElevation + endElevation) / 2.0),
                         FormatMillimeter(flightResult.RiserHeight) + "×" + flight.RiserCount
                             + "=" + FormatMillimeter(flightResult.VerticalRise),
                         flight.Id));
@@ -239,18 +247,17 @@ namespace WL.Stair.Core.Geometry
                     }
                 }
 
+                var upperDirection = upperFloor == null
+                    ? -(int)storey.Flights.Last().Direction
+                    : floorDirections[upperFloor.Id];
+                var upperWidth = upperFloor == null ? 0.0 : upperFloor.PlatformWidth;
+                var upperPosition = new ComponentPosition(
+                    connectionForBoundary(upperDirection, upperWidth),
+                    storeyResult.UpperElevation);
+                AddFloorSupport(floorSupportPositions, storey.UpperFloorId,
+                    new FloorSupportPosition(upperPosition, stairwellRange, upperDirection, storey.Id));
                 if (!floorPositions.ContainsKey(storey.UpperFloorId))
-                {
-                    var upperDirection = upperFloor == null
-                        ? -(int)storey.Flights.Last().Direction
-                        : floorDirections[upperFloor.Id];
-                    var upperWidth = upperFloor == null ? 0.0 : upperFloor.PlatformWidth;
-                    floorPositions.Add(
-                        storey.UpperFloorId,
-                        new ComponentPosition(
-                            connectionForBoundary(upperDirection, upperWidth),
-                            storeyResult.UpperElevation));
-                }
+                    floorPositions.Add(storey.UpperFloorId, upperPosition);
             }
 
             var drawingScale = Math.Max(1, project.DrawingScale);
@@ -288,21 +295,49 @@ namespace WL.Stair.Core.Geometry
                 var floorDirection = floorDirections.ContainsKey(floor.Id)
                     ? floorDirections[floor.Id]
                     : floor.ProjectionDirection;
-                wallAnchors.Add(new WallAnchor(
-                    axisForDirection(floorDirection),
-                    position.Elevation,
-                    floor.BeamDepthOverride ?? project.Construction.FloorBeam.Depth,
-                    floor.Id));
-                if (project.Construction.OppositeSupportsEnabled
-                    && floor.OppositeSupportType != OppositeSupportType.None)
+                List<FloorSupportPosition> supports;
+                if (!floorSupportPositions.TryGetValue(floor.Id, out supports)
+                    || supports.Count == 0)
                 {
-                    wallAnchors.Add(new WallAnchor(
-                        axisForDirection(-floorDirection),
-                        position.Elevation,
-                        floor.OppositeBeamDepthOverride ?? project.Construction.FloorBeam.Depth,
-                        floor.Id));
+                    supports = new List<FloorSupportPosition>
+                    {
+                        new FloorSupportPosition(position, axisResolver.Resolve(project, null),
+                            floorDirection, string.Empty)
+                    };
                 }
-                AddFloor(lines, floor, position, project.Construction, floorDirection);
+                var distinctSupports = supports.GroupBy(item => string.Join("|", new[]
+                    {
+                        Math.Round(item.Range.LeftAxisX, 3).ToString(CultureInfo.InvariantCulture),
+                        Math.Round(item.Range.RightAxisX, 3).ToString(CultureInfo.InvariantCulture),
+                        item.Direction.ToString(CultureInfo.InvariantCulture)
+                    })).Select(group => group.First()).ToArray();
+                for (var supportIndex = 0; supportIndex < distinctSupports.Length; supportIndex++)
+                {
+                    var support = distinctSupports[supportIndex];
+                    var supportDirection = support.Direction;
+                    var supportAxis = supportDirection > 0
+                        ? support.Range.LeftAxisX
+                        : support.Range.RightAxisX;
+                    wallAnchors.Add(new WallAnchor(
+                        supportAxis,
+                        position.Elevation,
+                        floor.BeamDepthOverride ?? project.Construction.FloorBeam.Depth,
+                        floor.Id));
+                    if (project.Construction.OppositeSupportsEnabled
+                        && floor.OppositeSupportType != OppositeSupportType.None)
+                    {
+                        wallAnchors.Add(new WallAnchor(
+                            supportDirection > 0 ? support.Range.RightAxisX : support.Range.LeftAxisX,
+                            position.Elevation,
+                            floor.OppositeBeamDepthOverride ?? project.Construction.FloorBeam.Depth,
+                            floor.Id));
+                    }
+                    AddFloor(lines, floor, support.Position, project.Construction,
+                        supportDirection, support.Range, supportIndex == 0);
+                }
+                if (distinctSupports.Length > 1)
+                    AddFloorTransitionSlabs(lines, floor, position.Elevation,
+                        distinctSupports.Select(item => item.Range), project.Construction);
             }
 
             foreach (var storeyResult in calculation.Storeys)
@@ -314,20 +349,23 @@ namespace WL.Stair.Core.Geometry
                 if (storey != null) floors.TryGetValue(storey.LowerFloorId, out lowerFloor);
                 var repeatCount = GetLogicalRepeatCount(storey, lowerFloor);
                 var storeyHeight = storeyResult.UpperElevation - storeyResult.LowerElevation;
+                var stairwellRange = storey == null
+                    ? envelope
+                    : stairwellRanges[storey.Id];
                 var dimensionText = repeatCount > 1
                     ? FormatMillimeter(storeyHeight) + "×" + repeatCount + "="
                         + FormatMillimeter(storeyHeight * repeatCount)
                     : FormatMillimeter(storeyHeight);
                 dimensions.Add(new DrawingDimension(
-                    new Point2D(firstAxisX, storeyResult.LowerElevation),
-                    new Point2D(firstAxisX, storeyResult.UpperElevation),
-                    new Point2D(firstAxisX - (11.0 * drawingScale), middle),
+                    new Point2D(stairwellRange.LeftAxisX, storeyResult.LowerElevation),
+                    new Point2D(stairwellRange.LeftAxisX, storeyResult.UpperElevation),
+                    new Point2D(stairwellRange.LeftAxisX - (11.0 * drawingScale), middle),
                     dimensionText,
                     storeyResult.Id));
                 dimensions.Add(new DrawingDimension(
-                    new Point2D(secondAxisX, storeyResult.LowerElevation),
-                    new Point2D(secondAxisX, storeyResult.UpperElevation),
-                    new Point2D(secondAxisX + (11.0 * drawingScale), middle),
+                    new Point2D(stairwellRange.RightAxisX, storeyResult.LowerElevation),
+                    new Point2D(stairwellRange.RightAxisX, storeyResult.UpperElevation),
+                    new Point2D(stairwellRange.RightAxisX + (11.0 * drawingScale), middle),
                     dimensionText,
                     storeyResult.Id));
             }
@@ -340,6 +378,7 @@ namespace WL.Stair.Core.Geometry
             AddStairwellWalls(
                 lines,
                 wallAnchors,
+                wallSpans,
                 lowestElevation,
                 highestElevation,
                 wallHeightAboveHighestFloor,
@@ -347,25 +386,22 @@ namespace WL.Stair.Core.Geometry
                 project.WallOpenings,
                 floorPositions.OrderBy(pair => pair.Value.Elevation)
                     .Select(pair => pair.Key).FirstOrDefault());
-            AddBaseWall(lines, firstAxisX, secondAxisX, lowestElevation, drawingScale,
+            var lowestRange = stairwellRanges[calculation.Storeys
+                .OrderBy(item => item.LowerElevation).First().Id];
+            var highestRange = stairwellRanges[calculation.Storeys
+                .OrderByDescending(item => item.UpperElevation).First().Id];
+            AddBaseWall(lines, lowestRange.LeftAxisX, lowestRange.RightAxisX, lowestElevation, drawingScale,
                 project.Construction);
-            AddTopBreakLine(lines, firstAxisX, secondAxisX,
+            AddTopBreakLine(lines, highestRange.LeftAxisX, highestRange.RightAxisX,
                 highestElevation + wallHeightAboveHighestFloor,
                 drawingScale,
                 project.Construction);
-            AddStandardFloorBreakLines(lines, project, calculation,
-                firstAxisX, secondAxisX, drawingScale);
-            AddStairwellAxisLines(
-                lines,
-                firstAxisX,
-                secondAxisX,
-                lowestElevation - AxisExtensionBeyondWall,
-                highestElevation + wallHeightAboveHighestFloor + AxisExtensionBeyondWall);
+            AddStandardFloorBreakLines(lines, project, calculation, drawingScale);
+            AddStairwellAxisLines(lines, wallSpans, lowestElevation,
+                highestElevation, wallHeightAboveHighestFloor);
             AddHorizontalDimensions(
                 dimensions,
                 horizontalDimensionSpecs,
-                firstAxisX,
-                secondAxisX,
                 drawingScale);
             AddOneHandrailHeightDimension(dimensions, lines, project.Construction.Railing, drawingScale,
                 firstAxisX, secondAxisX);
@@ -474,8 +510,6 @@ namespace WL.Stair.Core.Geometry
         private static void AddHorizontalDimensions(
             ICollection<DrawingDimension> dimensions,
             IEnumerable<HorizontalDimensionSpec> source,
-            double firstAxisX,
-            double secondAxisX,
             int scale)
         {
             var placedAtElevation = new Dictionary<double, int>();
@@ -492,14 +526,14 @@ namespace WL.Stair.Core.Geometry
                 // 除层高外，所有标注均以 1:1 下 6mm 的尺寸界线长度布置。
                 // 同一标高只保留一组横向尺寸链，因此不再额外外移分层。
                 var dimensionElevation = anchorElevation - (6.0 * Math.Max(1, scale));
-                var leftLength = spec.LeftEdge - firstAxisX;
-                var rightLength = secondAxisX - spec.RightEdge;
+                var leftLength = spec.LeftEdge - spec.LeftAxisX;
+                var rightLength = spec.RightAxisX - spec.RightEdge;
                 if (leftLength > 0.001)
                 {
                     dimensions.Add(new DrawingDimension(
-                        new Point2D(firstAxisX, anchorElevation),
+                        new Point2D(spec.LeftAxisX, anchorElevation),
                         new Point2D(spec.LeftEdge, anchorElevation),
-                        new Point2D((firstAxisX + spec.LeftEdge) / 2.0, dimensionElevation),
+                        new Point2D((spec.LeftAxisX + spec.LeftEdge) / 2.0, dimensionElevation),
                         FormatMillimeter(leftLength),
                         spec.ComponentId,
                         DrawingDimensionOrientation.Horizontal));
@@ -516,8 +550,8 @@ namespace WL.Stair.Core.Geometry
                 {
                     dimensions.Add(new DrawingDimension(
                         new Point2D(spec.RightEdge, anchorElevation),
-                        new Point2D(secondAxisX, anchorElevation),
-                        new Point2D((spec.RightEdge + secondAxisX) / 2.0, dimensionElevation),
+                        new Point2D(spec.RightAxisX, anchorElevation),
+                        new Point2D((spec.RightEdge + spec.RightAxisX) / 2.0, dimensionElevation),
                         FormatMillimeter(rightLength),
                         spec.ComponentId,
                         DrawingDimensionOrientation.Horizontal));
@@ -762,16 +796,22 @@ namespace WL.Stair.Core.Geometry
 
         private static void AddStairwellAxisLines(
             ICollection<DrawingLine> lines,
-            double firstAxisX,
-            double secondAxisX,
+            IEnumerable<WallSpan> sourceSpans,
             double lowestElevation,
-            double highestElevation)
+            double highestElevation,
+            double wallHeightAboveHighestFloor)
         {
-            foreach (var x in new[] { firstAxisX, secondAxisX }.Distinct())
+            foreach (var span in MergeWallSpans(sourceSpans))
             {
+                var bottom = span.Bottom;
+                var top = span.Top;
+                if (Math.Abs(bottom - lowestElevation) < 0.001)
+                    bottom -= AxisExtensionBeyondWall;
+                if (Math.Abs(top - highestElevation) < 0.001)
+                    top += wallHeightAboveHighestFloor + AxisExtensionBeyondWall;
                 lines.Add(new DrawingLine(
-                    new Point2D(x, lowestElevation),
-                    new Point2D(x, highestElevation),
+                    new Point2D(span.AxisX, bottom),
+                    new Point2D(span.AxisX, top),
                     StairLineRole.AxisLine,
                     false,
                     string.Empty));
@@ -1260,7 +1300,9 @@ namespace WL.Stair.Core.Geometry
             StairFloorDefinition floor,
             ComponentPosition position,
             StairConstructionDefaults defaults,
-            int logicalDirection)
+            int logicalDirection,
+            StairwellAxisRange stairwellRange,
+            bool includeDoorWindow)
         {
             var platformWidth = floor.PlatformWidth;
             var slabThickness = floor.SlabThicknessOverride ?? defaults.FloorSlabThickness;
@@ -1284,14 +1326,46 @@ namespace WL.Stair.Core.Geometry
                 StairLineRole.CutBoundary,
                 floor.Id);
             AddOppositeSupport(lines, position.X, position.Elevation, -logicalDirection,
-                platformWidth, defaults.StairwellDepth,
+                platformWidth, stairwellRange,
                 defaults.OppositeSupportsEnabled ? floor.OppositeSupportType : OppositeSupportType.None,
                 floor.OppositeSlabThicknessOverride ?? defaults.FloorSlabThickness,
                 floor.OppositeBeamWidthOverride ?? defaults.FloorBeam.Width,
                 floor.OppositeBeamDepthOverride ?? defaults.FloorBeam.Depth,
                 slabOverhang, closeOverhang, StairLineRole.CutBoundary, floor.Id);
-            AddPlatformDoorWindowElevation(lines, floor.DoorWindowElevation,
-                position.X, position.Elevation, -logicalDirection, platformWidth, floor.Id);
+            if (includeDoorWindow)
+                AddPlatformDoorWindowElevation(lines, floor.DoorWindowElevation,
+                    position.X, position.Elevation, -logicalDirection, platformWidth, floor.Id);
+        }
+
+        private static void AddFloorTransitionSlabs(
+            ICollection<DrawingLine> lines,
+            StairFloorDefinition floor,
+            double elevation,
+            IEnumerable<StairwellAxisRange> sourceRanges,
+            StairConstructionDefaults defaults)
+        {
+            var ranges = sourceRanges.Where(item => item != null).ToArray();
+            if (ranges.Length < 2) return;
+            var thickness = floor.SlabThicknessOverride ?? defaults.FloorSlabThickness;
+            var leftMin = ranges.Min(item => item.LeftAxisX);
+            var leftMax = ranges.Max(item => item.LeftAxisX);
+            var rightMin = ranges.Min(item => item.RightAxisX);
+            var rightMax = ranges.Max(item => item.RightAxisX);
+            AddTransitionSlab(lines, leftMin, leftMax, elevation, thickness, floor.Id + "-SHIFT-L");
+            AddTransitionSlab(lines, rightMin, rightMax, elevation, thickness, floor.Id + "-SHIFT-R");
+        }
+
+        private static void AddTransitionSlab(
+            ICollection<DrawingLine> lines,
+            double firstX,
+            double secondX,
+            double elevation,
+            double thickness,
+            string componentId)
+        {
+            if (Math.Abs(secondX - firstX) < 0.001 || thickness <= 0.0) return;
+            AddRectangleBoundary(lines, Math.Min(firstX, secondX), Math.Max(firstX, secondX),
+                elevation, thickness, StairLineRole.CutBoundary, false, componentId);
         }
 
         private static void AddPlatformOutline(
@@ -1347,7 +1421,7 @@ namespace WL.Stair.Core.Geometry
             double topElevation,
             int platformDirection,
             double platformWidth,
-            double stairwellDepth,
+            StairwellAxisRange stairwellRange,
             OppositeSupportType supportType,
             double slabThickness,
             double beamWidth,
@@ -1359,11 +1433,11 @@ namespace WL.Stair.Core.Geometry
         {
             if (supportType == OppositeSupportType.None) return;
             var platformAxisX = connectionX + platformDirection * platformWidth;
-            var oppositeAxisX = Math.Abs(platformAxisX)
-                <= Math.Abs(platformAxisX - stairwellDepth)
-                ? stairwellDepth
-                : 0.0;
-            var outsideDirection = oppositeAxisX <= stairwellDepth / 2.0 ? -1 : 1;
+            var oppositeAxisX = Math.Abs(platformAxisX - stairwellRange.LeftAxisX)
+                <= Math.Abs(platformAxisX - stairwellRange.RightAxisX)
+                ? stairwellRange.RightAxisX
+                : stairwellRange.LeftAxisX;
+            var outsideDirection = oppositeAxisX <= stairwellRange.CenterX ? -1 : 1;
             var halfBeam = Math.Max(0.5, beamWidth / 2.0);
             var points = new List<Point2D>();
             if (supportType == OppositeSupportType.BeamWithSlab)
@@ -1422,6 +1496,7 @@ namespace WL.Stair.Core.Geometry
         private static void AddStairwellWalls(
             ICollection<DrawingLine> lines,
             IEnumerable<WallAnchor> anchors,
+            IEnumerable<WallSpan> spans,
             double lowestElevation,
             double highestElevation,
             double wallHeightAboveHighestFloor,
@@ -1433,47 +1508,80 @@ namespace WL.Stair.Core.Geometry
                 return;
 
             var positions = anchors.ToArray();
-            if (positions.Length == 0) return;
+            var wallSpans = MergeWallSpans(spans);
+            if (wallSpans.Count == 0) return;
 
             var halfThickness = defaults.Wall.Thickness / 2.0;
-            var bottom = lowestElevation;
-            var top = highestElevation + wallHeightAboveHighestFloor;
             var openingLookup = (openings ?? Enumerable.Empty<StairWallOpeningDefinition>())
                 .Where(item => item != null && !string.IsNullOrWhiteSpace(item.SegmentId))
                 .GroupBy(item => item.SegmentId, StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(group => group.Key, group => group.Last(), StringComparer.OrdinalIgnoreCase);
-            var axisGroups = positions.GroupBy(anchor => Math.Round(anchor.AxisX, 3))
-                .OrderBy(group => group.Key).ToArray();
-            for (var axisIndex = 0; axisIndex < axisGroups.Length; axisIndex++)
+            foreach (var wallSpan in wallSpans)
             {
-                var axisGroup = axisGroups[axisIndex];
-                var beamIntervals = MergeIntervals(axisGroup
+                var axisAnchors = positions.Where(anchor =>
+                    Math.Abs(anchor.AxisX - wallSpan.AxisX) < 0.001).ToArray();
+                var top = Math.Abs(wallSpan.Top - highestElevation) < 0.001
+                    ? highestElevation + wallHeightAboveHighestFloor
+                    : wallSpan.Top;
+                var bottom = wallSpan.Bottom;
+                var beamIntervals = MergeIntervals(axisAnchors
                     .Select(anchor => new ElevationInterval(
                         anchor.TopElevation - anchor.BeamDepth,
                         anchor.TopElevation,
                         anchor.SupportId))
                     .OrderBy(interval => interval.Bottom));
-                var axisX = axisGroup.First().AxisX;
-                var side = axisIndex == 0 ? "L" : "R";
                 var cursor = bottom;
-                var supportId = string.IsNullOrWhiteSpace(lowestSupportId) ? "BASE" : lowestSupportId;
+                var floorAnchor = axisAnchors.FirstOrDefault(anchor =>
+                    Math.Abs(anchor.TopElevation - bottom) < 0.001);
+                var supportId = floorAnchor != null
+                    ? floorAnchor.SupportId
+                    : string.IsNullOrWhiteSpace(lowestSupportId) ? "BASE" : lowestSupportId;
                 foreach (var interval in beamIntervals)
                 {
-                    if (interval.Bottom > cursor + 0.001)
+                    if (interval.Top < bottom - 0.001 || interval.Bottom > top + 0.001)
+                        continue;
+                    var clippedBottom = Math.Max(bottom, interval.Bottom);
+                    var clippedTop = Math.Min(top, interval.Top);
+                    if (clippedBottom > cursor + 0.001)
                     {
-                        AddWallSegmentPair(lines, axisX - halfThickness, axisX + halfThickness,
-                            cursor, interval.Bottom, WallSegmentId(side, supportId), openingLookup);
+                        AddWallSegmentPair(lines, wallSpan.AxisX - halfThickness, wallSpan.AxisX + halfThickness,
+                            cursor, clippedBottom, WallSegmentId(wallSpan.Side, supportId), openingLookup);
                     }
-                    if (interval.Top >= cursor - 0.001)
+                    if (clippedTop >= cursor - 0.001)
                     {
                         supportId = interval.SupportId;
                     }
-                    cursor = Math.Max(cursor, interval.Top);
+                    cursor = Math.Max(cursor, clippedTop);
                 }
                 if (top > cursor + 0.001)
-                    AddWallSegmentPair(lines, axisX - halfThickness, axisX + halfThickness,
-                        cursor, top, WallSegmentId(side, supportId), openingLookup);
+                    AddWallSegmentPair(lines, wallSpan.AxisX - halfThickness, wallSpan.AxisX + halfThickness,
+                        cursor, top, WallSegmentId(wallSpan.Side, supportId), openingLookup);
             }
+        }
+
+        private static IList<WallSpan> MergeWallSpans(IEnumerable<WallSpan> source)
+        {
+            var result = new List<WallSpan>();
+            foreach (var group in (source ?? Enumerable.Empty<WallSpan>())
+                .Where(item => item != null)
+                .GroupBy(item => item.Side + "|" + Math.Round(item.AxisX, 3)
+                    .ToString(CultureInfo.InvariantCulture)))
+            {
+                foreach (var span in group.OrderBy(item => item.Bottom))
+                {
+                    var last = result.LastOrDefault(item => item.Side == span.Side
+                        && Math.Abs(item.AxisX - span.AxisX) < 0.001);
+                    if (last == null || span.Bottom > last.Top + 0.001)
+                    {
+                        result.Add(new WallSpan(span.Side, span.AxisX, span.Bottom, span.Top));
+                    }
+                    else
+                    {
+                        last.Top = Math.Max(last.Top, span.Top);
+                    }
+                }
+            }
+            return result.OrderBy(item => item.AxisX).ThenBy(item => item.Bottom).ToList();
         }
 
         private static IList<ElevationInterval> MergeIntervals(IEnumerable<ElevationInterval> source)
@@ -1975,8 +2083,6 @@ namespace WL.Stair.Core.Geometry
             ICollection<DrawingLine> lines,
             StairProjectDefinition project,
             StairProjectCalculationResult calculation,
-            double firstAxisX,
-            double secondAxisX,
             int drawingScale)
         {
             if (project == null || calculation == null) return;
@@ -1985,6 +2091,7 @@ namespace WL.Stair.Core.Geometry
             var floors = (project.Floors ?? new List<StairFloorDefinition>())
                 .Where(value => value != null).ToDictionary(value => value.Id,
                     StringComparer.OrdinalIgnoreCase);
+            var axisResolver = new StairwellAxisResolver();
             foreach (var storey in project.Storeys.Where(value => value != null))
             {
                 StairFloorDefinition lowerFloor;
@@ -1993,10 +2100,11 @@ namespace WL.Stair.Core.Geometry
                     && (lowerFloor == null || lowerFloor.PlanRepeatCount <= 1)) continue;
                 StairStoreyResult result;
                 if (!results.TryGetValue(storey.Id, out result)) continue;
-                AddHorizontalBreakLine(lines, firstAxisX, secondAxisX,
+                var range = axisResolver.Resolve(project, storey);
+                AddHorizontalBreakLine(lines, range.LeftAxisX, range.RightAxisX,
                     result.LowerElevation + 1200.0, drawingScale,
                     "STANDARD-BREAK-" + storey.Id + "-1");
-                AddHorizontalBreakLine(lines, firstAxisX, secondAxisX,
+                AddHorizontalBreakLine(lines, range.LeftAxisX, range.RightAxisX,
                     result.LowerElevation + 1300.0, drawingScale,
                     "STANDARD-BREAK-" + storey.Id + "-2");
             }
@@ -2034,6 +2142,21 @@ namespace WL.Stair.Core.Geometry
                 : value.ToString("0.0", CultureInfo.InvariantCulture);
         }
 
+        private static void AddFloorSupport(
+            IDictionary<string, List<FloorSupportPosition>> lookup,
+            string floorId,
+            FloorSupportPosition support)
+        {
+            if (lookup == null || string.IsNullOrWhiteSpace(floorId) || support == null) return;
+            List<FloorSupportPosition> values;
+            if (!lookup.TryGetValue(floorId, out values))
+            {
+                values = new List<FloorSupportPosition>();
+                lookup.Add(floorId, values);
+            }
+            values.Add(support);
+        }
+
         private sealed class ComponentPosition
         {
             public ComponentPosition(double x, double elevation)
@@ -2045,6 +2168,48 @@ namespace WL.Stair.Core.Geometry
             public double X { get; }
 
             public double Elevation { get; }
+        }
+
+        private sealed class FloorSupportPosition
+        {
+            public FloorSupportPosition(
+                ComponentPosition position,
+                StairwellAxisRange range,
+                int direction,
+                string storeyId)
+            {
+                Position = position;
+                Range = range;
+                Direction = direction;
+                StoreyId = storeyId ?? string.Empty;
+            }
+
+            public ComponentPosition Position { get; }
+
+            public StairwellAxisRange Range { get; }
+
+            public int Direction { get; }
+
+            public string StoreyId { get; }
+        }
+
+        private sealed class WallSpan
+        {
+            public WallSpan(string side, double axisX, double bottom, double top)
+            {
+                Side = side ?? string.Empty;
+                AxisX = axisX;
+                Bottom = Math.Min(bottom, top);
+                Top = Math.Max(bottom, top);
+            }
+
+            public string Side { get; }
+
+            public double AxisX { get; }
+
+            public double Bottom { get; }
+
+            public double Top { get; set; }
         }
 
         private sealed class DoorWindowGeometrySegment
@@ -2087,7 +2252,9 @@ namespace WL.Stair.Core.Geometry
                 double startElevation,
                 double endElevation,
                 double treadDepth,
-                int riserCount)
+                int riserCount,
+                double leftAxisX,
+                double rightAxisX)
             {
                 ComponentId = componentId;
                 LeftEdge = leftEdge;
@@ -2096,12 +2263,16 @@ namespace WL.Stair.Core.Geometry
                 EndElevation = endElevation;
                 TreadDepth = treadDepth;
                 RiserCount = riserCount;
+                LeftAxisX = leftAxisX;
+                RightAxisX = rightAxisX;
                 Key = string.Join("|", new[]
                 {
                     Math.Round(leftEdge, 3).ToString(CultureInfo.InvariantCulture),
                     Math.Round(rightEdge - leftEdge, 3).ToString(CultureInfo.InvariantCulture),
                     Math.Round(treadDepth, 3).ToString(CultureInfo.InvariantCulture),
-                    riserCount.ToString(CultureInfo.InvariantCulture)
+                    riserCount.ToString(CultureInfo.InvariantCulture),
+                    Math.Round(leftAxisX, 3).ToString(CultureInfo.InvariantCulture),
+                    Math.Round(rightAxisX, 3).ToString(CultureInfo.InvariantCulture)
                 });
             }
 
@@ -2118,6 +2289,10 @@ namespace WL.Stair.Core.Geometry
             public double TreadDepth { get; }
 
             public int RiserCount { get; }
+
+            public double LeftAxisX { get; }
+
+            public double RightAxisX { get; }
 
             public string Key { get; }
         }
