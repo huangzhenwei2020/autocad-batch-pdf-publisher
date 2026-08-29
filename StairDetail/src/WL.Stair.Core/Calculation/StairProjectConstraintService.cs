@@ -310,6 +310,12 @@ namespace WL.Stair.Core.Calculation
                     source.RepeatCount = CalculatePlanRepeatCount(source.FloorLabel);
                 }
             }
+            var basementCount = Math.Max(0, Math.Min(project.BasementStoreyCount,
+                project.Storeys.Count));
+            project.BaseElevation = -project.Storeys.Take(basementCount)
+                .Where(item => item != null)
+                .Sum(item => Math.Max(0.0, item.Height)
+                    * Math.Max(1, item.PlanRepeatCount));
             foreach (var opening in project.WallOpenings.Where(item => item != null))
             {
                 if (opening.Height <= 0.0)

@@ -75,7 +75,9 @@ namespace WL.Stair.Tests
             KeepsSectionAxesFixedDuringEditsAndMirroring,
             BuildsHandrailsDimensionsAndOptionalComponentSchedule,
             LabelsFlightsAndLandings,
-            SupportsBasementBaseElevation
+            SupportsBasementBaseElevation,
+            DerivesLowestElevationFromBasementStoreys,
+            ExpandsStandardFloorElevationsAndTotalDimension
             ,DrawsTwoStandardFloorBreakLinesAtTwelveHundred
             ,LaysOutPlansBeforeSectionAndRetainsEveryItem
             ,PacksFivePlansAndTallSectionIntoMergedGridCells
@@ -124,6 +126,7 @@ namespace WL.Stair.Tests
         {
             var project = StairProjectDefinition.CreateDefault();
             project.BaseElevation = -3000.0;
+            project.BasementStoreyCount = 1;
             project.InsertComponentSchedule = true;
             var outcome = new StairProjectCalculator().Calculate(project);
             var section = new StairProjectGeometryBuilder().BuildSection(project, outcome.Result);
@@ -133,8 +136,57 @@ namespace WL.Stair.Tests
                 "The basement base elevation was lost.");
             TestAssert.NearlyEqual(6200.0, outcome.Result.TotalHeight, 0.001,
                 "Total height must measure from the lowest floor to the highest floor.");
-            TestAssert.True(section.Texts.Any(text => text.Content.Contains("1层  -3.000")),
+            TestAssert.True(section.Texts.Any(text => text.Content.Contains("-3.000 (1F)")),
                 "The lowest floor label must use its logical floor name and elevation.");
+        }
+
+        private static void DerivesLowestElevationFromBasementStoreys()
+        {
+            var project = StairProjectDefinition.CreateDefault();
+            project.BasementStoreyCount = 2;
+            project.BaseElevation = 12345.0;
+
+            var outcome = new StairProjectCalculator().Calculate(project);
+
+            TestAssert.True(outcome.IsSuccess,
+                "A project with two basement storeys must calculate successfully.");
+            TestAssert.NearlyEqual(-6200.0, project.BaseElevation, 0.001,
+                "The lowest elevation must equal the negative sum of all basement heights.");
+            TestAssert.NearlyEqual(-6200.0, outcome.Result.Storeys[0].LowerElevation, 0.001,
+                "The calculated section must start at the automatically derived basement elevation.");
+        }
+
+        private static void ExpandsStandardFloorElevationsAndTotalDimension()
+        {
+            var project = StairProjectDefinition.CreateDefault();
+            project.Storeys[1].Height = 3000.0;
+            project.Floors[0].PlanFloorLabel = "1层";
+            project.Floors[1].PlanFloorLabel = "2~15层";
+            project.Floors[1].PlanRepeatCount = 14;
+            project.Floors[2].PlanFloorLabel = "16层";
+            project.Storeys[1].PlanFloorLabel = "2~15层";
+            project.Storeys[1].PlanRepeatCount = 14;
+
+            var outcome = new StairProjectCalculator().Calculate(project);
+            TestAssert.True(outcome.IsSuccess, "The standard-floor project must calculate.");
+            var section = new StairProjectGeometryBuilder().BuildSection(project, outcome.Result);
+            var rightDimensionX = section.Dimensions
+                .Where(dimension => project.Storeys.Any(storey =>
+                    storey.Id == dimension.ComponentId))
+                .Max(dimension => dimension.DimensionLinePoint.X);
+
+            TestAssert.True(section.Texts.Any(text => text.Content == "42.000 (15F)"),
+                "Every logical standard floor must have its real physical elevation.");
+            TestAssert.True(section.Texts.Any(text => text.Content == "45.000 (16F)"),
+                "The floor above a standard range must include all repeated storey heights.");
+            TestAssert.True(section.Dimensions.Any(dimension =>
+                    dimension.ComponentId == project.Storeys[1].Id
+                    && dimension.TextOverride == "3000×14=42000"),
+                "A standard-floor dimension must show storey height, repeat count, and total height.");
+            TestAssert.True(section.Texts.All(text =>
+                    !text.Content.EndsWith("F)", StringComparison.Ordinal)
+                    || text.Position.X > rightDimensionX),
+                "Floor and elevation labels must sit to the right of the vertical dimension line.");
         }
 
         private static void UsesUpdatedHatchScaleDefaults()
@@ -1341,17 +1393,16 @@ namespace WL.Stair.Tests
             var lowest = outcome.Result.Storeys.Min(item => item.LowerElevation);
             var expectedElevations = new Dictionary<string, double>
             {
-                { "-1层", outcome.Result.Storeys[0].LowerElevation - lowest },
-                { "1~3层", outcome.Result.Storeys[0].UpperElevation - lowest },
-                { "4层", outcome.Result.Storeys[1].UpperElevation - lowest },
-                { "5层", outcome.Result.Storeys[2].UpperElevation - lowest }
+                { "-3.000 (-1F)", outcome.Result.Storeys[0].LowerElevation - lowest },
+                { "±0.000 (1F)", outcome.Result.Storeys[1].LowerElevation - lowest },
+                { "9.000 (4F)", outcome.Result.Storeys[1].UpperElevation - lowest },
+                { "12.200 (5F)", outcome.Result.Storeys[2].UpperElevation - lowest }
             };
             var levelTexts = expectedElevations.Select(pair => section.Texts.Single(text =>
-                text.Content.StartsWith(pair.Key + "  ", StringComparison.Ordinal))).ToArray();
+                text.Content == pair.Key)).ToArray();
             foreach (var pair in expectedElevations)
             {
-                var text = section.Texts.Single(item => item.Content.StartsWith(
-                    pair.Key + "  ", StringComparison.Ordinal));
+                var text = section.Texts.Single(item => item.Content == pair.Key);
                 TestAssert.NearlyEqual(pair.Value, text.Position.Y, 0.001,
                     "Every floor label must sit on its physical slab elevation, including multi-flight storeys.");
             }
@@ -1952,7 +2003,7 @@ namespace WL.Stair.Tests
                 "The first level must not generate a floor slab.");
             TestAssert.Equal(0, section.Lines.Count(line => line.ComponentId == "LL-01"),
                 "The first level must not generate a floor beam.");
-            TestAssert.True(section.Texts.Any(text => text.Content.StartsWith("1层  ")),
+            TestAssert.True(section.Texts.Any(text => text.Content == "±0.000 (1F)"),
                 "The first-level elevation label must remain visible at the slab datum.");
         }
 
@@ -2523,7 +2574,7 @@ namespace WL.Stair.Tests
 
             TestAssert.True(section.Texts.Any(text => text.Content == "TD-1-1"), "Flight ID label is missing.");
             TestAssert.True(section.Texts.Any(text => text.Content == "PT-1-1"), "Landing ID label is missing.");
-            TestAssert.True(section.Texts.Any(text => text.Content.StartsWith("2层  ")),
+            TestAssert.True(section.Texts.Any(text => text.Content == "3.000 (2F)"),
                 "The physical-floor level label is missing.");
         }
 

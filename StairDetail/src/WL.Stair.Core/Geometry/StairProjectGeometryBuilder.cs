@@ -54,6 +54,7 @@ namespace WL.Stair.Core.Geometry
 
             var lines = new List<DrawingLine>();
             var texts = new List<DrawingText>();
+            var floorLevelTexts = new List<DrawingText>();
             var dimensions = new List<DrawingDimension>();
             var tables = new List<DrawingTable>();
             var hatchRegions = new List<DrawingHatchRegion>();
@@ -61,6 +62,11 @@ namespace WL.Stair.Core.Geometry
             var horizontalDimensionSpecs = new List<HorizontalDimensionSpec>();
             var floors = project.Floors.ToDictionary(floor => floor.Id, StringComparer.OrdinalIgnoreCase);
             var storeyResults = calculation.Storeys.ToDictionary(result => result.Id, StringComparer.OrdinalIgnoreCase);
+            var storeysByLowerFloor = project.Storeys
+                .Where(item => item != null && !string.IsNullOrWhiteSpace(item.LowerFloorId))
+                .GroupBy(item => item.LowerFloorId, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+            var physicalFloorElevations = BuildPhysicalFloorElevations(project);
             var floorPositions = new Dictionary<string, ComponentPosition>(StringComparer.OrdinalIgnoreCase);
             var wallAnchors = new List<WallAnchor>();
             var lowestElevation = calculation.Storeys.Min(result => result.LowerElevation);
@@ -247,6 +253,8 @@ namespace WL.Stair.Core.Geometry
                 }
             }
 
+            var drawingScale = Math.Max(1, project.DrawingScale);
+            var floorLevelTextX = secondAxisX + (18.0 * drawingScale);
             foreach (var floor in project.Floors)
             {
                 ComponentPosition position;
@@ -255,11 +263,23 @@ namespace WL.Stair.Core.Geometry
                     continue;
                 }
 
-                AddFloorLevelText(
-                    texts,
-                    floor,
-                    position.Elevation,
-                    secondAxisX + (5.0 * Math.Max(1, project.DrawingScale)));
+                double physicalElevation;
+                if (!physicalFloorElevations.TryGetValue(floor.Id, out physicalElevation))
+                    physicalElevation = position.Elevation;
+                StairStoreyDefinition representedStorey;
+                StairStoreyResult representedResult;
+                if (storeysByLowerFloor.TryGetValue(floor.Id, out representedStorey)
+                    && GetLogicalRepeatCount(representedStorey, floor) > 1
+                    && storeyResults.TryGetValue(representedStorey.Id, out representedResult))
+                {
+                    AddStandardFloorLevelTexts(floorLevelTexts, floor, representedStorey,
+                        representedResult, physicalElevation, floorLevelTextX);
+                }
+                else
+                {
+                    AddFloorLevelText(floorLevelTexts, floor, physicalElevation,
+                        position.Elevation, floorLevelTextX);
+                }
 
                 if (Math.Abs(position.Elevation - lowestElevation) < 0.001)
                 {
@@ -285,21 +305,30 @@ namespace WL.Stair.Core.Geometry
                 AddFloor(lines, floor, position, project.Construction, floorDirection);
             }
 
-            var drawingScale = Math.Max(1, project.DrawingScale);
             foreach (var storeyResult in calculation.Storeys)
             {
                 var middle = (storeyResult.LowerElevation + storeyResult.UpperElevation) / 2.0;
+                var storey = project.Storeys.FirstOrDefault(item => item != null
+                    && string.Equals(item.Id, storeyResult.Id, StringComparison.OrdinalIgnoreCase));
+                StairFloorDefinition lowerFloor = null;
+                if (storey != null) floors.TryGetValue(storey.LowerFloorId, out lowerFloor);
+                var repeatCount = GetLogicalRepeatCount(storey, lowerFloor);
+                var storeyHeight = storeyResult.UpperElevation - storeyResult.LowerElevation;
+                var dimensionText = repeatCount > 1
+                    ? FormatMillimeter(storeyHeight) + "×" + repeatCount + "="
+                        + FormatMillimeter(storeyHeight * repeatCount)
+                    : FormatMillimeter(storeyHeight);
                 dimensions.Add(new DrawingDimension(
                     new Point2D(firstAxisX, storeyResult.LowerElevation),
                     new Point2D(firstAxisX, storeyResult.UpperElevation),
                     new Point2D(firstAxisX - (11.0 * drawingScale), middle),
-                    FormatMillimeter(storeyResult.UpperElevation - storeyResult.LowerElevation),
+                    dimensionText,
                     storeyResult.Id));
                 dimensions.Add(new DrawingDimension(
                     new Point2D(secondAxisX, storeyResult.LowerElevation),
                     new Point2D(secondAxisX, storeyResult.UpperElevation),
                     new Point2D(secondAxisX + (11.0 * drawingScale), middle),
-                    FormatMillimeter(storeyResult.UpperElevation - storeyResult.LowerElevation),
+                    dimensionText,
                     storeyResult.Id));
             }
 
@@ -373,7 +402,18 @@ namespace WL.Stair.Core.Geometry
             var alignedDimensions = AlignDimensionsToOuterOutline(
                 mergedLines,
                 dimensions,
-                drawingScale);
+                drawingScale).ToArray();
+            var rightStoreyDimensionX = alignedDimensions
+                .Where(dimension => dimension.Orientation == DrawingDimensionOrientation.Vertical
+                    && project.Storeys.Any(storey => storey != null
+                        && string.Equals(storey.Id, dimension.ComponentId,
+                            StringComparison.OrdinalIgnoreCase)))
+                .Select(dimension => dimension.DimensionLinePoint.X)
+                .DefaultIfEmpty(secondAxisX + (11.0 * drawingScale))
+                .Max();
+            var finalFloorTextX = rightStoreyDimensionX + (5.0 * drawingScale);
+            texts.AddRange(floorLevelTexts.Select(text => new DrawingText(
+                new Point2D(finalFloorTextX, text.Position.Y), text.Content, text.Height)));
             return RebaseSectionToLeftAxisLowerPoint(
                 mergedLines,
                 texts,
@@ -1660,10 +1700,88 @@ namespace WL.Stair.Core.Geometry
             }
         }
 
+        private static IDictionary<string, double> BuildPhysicalFloorElevations(
+            StairProjectDefinition project)
+        {
+            var result = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+            var elevation = project.BaseElevation;
+            foreach (var storey in project.Storeys.Where(item => item != null))
+            {
+                if (!string.IsNullOrWhiteSpace(storey.LowerFloorId))
+                    result[storey.LowerFloorId] = elevation;
+                var lowerFloor = project.Floors.FirstOrDefault(item => item != null
+                    && string.Equals(item.Id, storey.LowerFloorId,
+                        StringComparison.OrdinalIgnoreCase));
+                elevation += storey.Height * GetLogicalRepeatCount(storey, lowerFloor);
+                if (!string.IsNullOrWhiteSpace(storey.UpperFloorId))
+                    result[storey.UpperFloorId] = elevation;
+            }
+            return result;
+        }
+
+        private static int GetLogicalRepeatCount(
+            StairStoreyDefinition storey,
+            StairFloorDefinition lowerFloor)
+        {
+            return Math.Max(1, Math.Max(
+                storey == null ? 1 : storey.PlanRepeatCount,
+                lowerFloor == null ? 1 : lowerFloor.PlanRepeatCount));
+        }
+
+        private static void AddStandardFloorLevelTexts(
+            ICollection<DrawingText> texts,
+            StairFloorDefinition floor,
+            StairStoreyDefinition storey,
+            StairStoreyResult storeyResult,
+            double physicalLowerElevation,
+            double textX)
+        {
+            int firstFloor;
+            int lastFloor;
+            var repeatCount = GetLogicalRepeatCount(storey, floor);
+            if (!TryParseFloorRange(floor.PlanFloorLabel, out firstFloor, out lastFloor))
+            {
+                AddFloorLevelText(texts, floor, physicalLowerElevation,
+                    storeyResult.LowerElevation, textX);
+                return;
+            }
+            var direction = lastFloor >= firstFloor ? 1 : -1;
+            var drawingHeight = storeyResult.UpperElevation - storeyResult.LowerElevation;
+            for (var index = 0; index < repeatCount; index++)
+            {
+                var drawingElevation = storeyResult.LowerElevation
+                    + (drawingHeight * index / repeatCount);
+                var physicalElevation = physicalLowerElevation + (storey.Height * index);
+                var floorNumber = firstFloor + (direction * index);
+                texts.Add(new DrawingText(
+                    new Point2D(textX, drawingElevation),
+                    FormatLevelElevation(physicalElevation) + " (" + floorNumber + "F)",
+                    90.0));
+            }
+        }
+
+        private static bool TryParseFloorRange(string label, out int first, out int last)
+        {
+            first = 0;
+            last = 0;
+            var text = (label ?? string.Empty).Replace(" ", string.Empty)
+                .Replace("～", "~").Replace("—", "~")
+                .Replace("至", "~").Replace("到", "~");
+            var separator = text.IndexOf('~');
+            if (separator <= 0 || separator >= text.Length - 1) return false;
+            var left = new string(text.Substring(0, separator)
+                .TakeWhile(character => character == '-' || char.IsDigit(character)).ToArray());
+            var right = new string(text.Substring(separator + 1)
+                .TakeWhile(character => character == '-' || char.IsDigit(character)).ToArray());
+            return int.TryParse(left, NumberStyles.Integer, CultureInfo.InvariantCulture, out first)
+                && int.TryParse(right, NumberStyles.Integer, CultureInfo.InvariantCulture, out last);
+        }
+
         private static void AddFloorLevelText(
             ICollection<DrawingText> texts,
             StairFloorDefinition floor,
-            double elevation,
+            double physicalElevation,
+            double drawingElevation,
             double textX)
         {
             var label = !string.IsNullOrWhiteSpace(floor.PlanFloorLabel)
@@ -1672,9 +1790,21 @@ namespace WL.Stair.Core.Geometry
                     ? floor.Name.Trim()
                     : floor.Id;
             texts.Add(new DrawingText(
-                new Point2D(textX, elevation),
-                label + "  " + FormatElevation(elevation),
+                new Point2D(textX, drawingElevation),
+                FormatLevelElevation(physicalElevation) + " (" + FormatFloorMark(label) + ")",
                 90.0));
+        }
+
+        private static string FormatFloorMark(string label)
+        {
+            var text = (label ?? string.Empty).Trim();
+            var numeric = new string(text.TakeWhile(character => character == '-'
+                || char.IsDigit(character)).ToArray());
+            int floorNumber;
+            return int.TryParse(numeric, NumberStyles.Integer, CultureInfo.InvariantCulture,
+                out floorNumber)
+                ? floorNumber.ToString(CultureInfo.InvariantCulture) + "F"
+                : text;
         }
 
         private static void AddRectangleBoundary(
@@ -1716,15 +1846,13 @@ namespace WL.Stair.Core.Geometry
                 componentId);
         }
 
-        private static string FormatElevation(double elevation)
+        private static string FormatLevelElevation(double elevation)
         {
             if (Math.Abs(elevation) < 0.001)
             {
                 return "±0.000";
             }
-            return elevation > 0.0
-                ? "+" + (elevation / 1000.0).ToString("0.000", CultureInfo.InvariantCulture)
-                : (elevation / 1000.0).ToString("0.000", CultureInfo.InvariantCulture);
+            return (elevation / 1000.0).ToString("0.000", CultureInfo.InvariantCulture);
         }
 
         private static void AddBaseWall(
