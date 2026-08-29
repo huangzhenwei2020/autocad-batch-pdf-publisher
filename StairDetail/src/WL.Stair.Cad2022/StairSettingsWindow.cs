@@ -19,6 +19,7 @@ using WL.Stair.Core.Calculation;
 using WL.Stair.Core.Domain;
 using WL.Stair.Core.Geometry;
 using WL.Stair.Core.Layout;
+using WL.Stair.Core.Validation;
 using WL.Stair.CadShared.PlanCapture;
 
 namespace WL.Stair.Cad2022
@@ -50,6 +51,7 @@ namespace WL.Stair.Cad2022
             _constraints.Normalize(_state.Project);
             _constraints.Apply(_state.Project);
             MigrateLegacyPlanCacheFingerprints();
+            InitializeLastSuccessfulPreview();
             Title = "万落建筑 - 楼梯构件设置";
             Width = 1380;
             Height = 850;
@@ -137,7 +139,16 @@ namespace WL.Stair.Cad2022
                 {
                     var actual = UnwrapException(exception);
                     WriteEditorLog(actual);
-                    SendPreview(null, "操作失败：" + actual.Message, false);
+                    SendPreviewSvg(
+                        _lastSuccessfulPreviewSvg,
+                        "操作失败：" + actual.Message,
+                        false,
+                        "剖面预览（参数待修正）",
+                        false,
+                        null,
+                        null,
+                        true,
+                        false);
                 }
             }
         }
@@ -325,7 +336,17 @@ namespace WL.Stair.Cad2022
             var outcome = _calculator.Calculate(_state.Project);
             if (!outcome.IsSuccess)
             {
-                SendPreview(null, JoinIssues(outcome), false);
+                var style = BuildValidationPreviewStyle(outcome.Issues);
+                SendPreviewSvg(
+                    _lastSuccessfulPreviewSvg,
+                    JoinIssues(outcome),
+                    false,
+                    "剖面预览（参数待修正）",
+                    false,
+                    style.ErrorComponents,
+                    style.WarningComponents,
+                    style.ErrorAll,
+                    style.WarningAll);
                 return;
             }
 
@@ -430,30 +451,47 @@ namespace WL.Stair.Cad2022
                 result.Flights.Count,
                 result.TotalRiserCount,
                 result.RiserHeight)));
+            var warningSummary = string.Join("；", outcome.Issues
+                .Where(issue => issue.Severity == ValidationSeverity.Warning)
+                .Select(issue => issue.ParameterName + ": " + issue.Message));
+            if (!string.IsNullOrWhiteSpace(warningSummary))
+                summary += "；规范提示：" + warningSummary;
             var previewFloorLabel = isPlanPreview && previewFloor != null
                 ? previewFloor.PlanFloorLabel
                 : null;
-            SendPreview(view, summary, true, previewFloorLabel, isPlanPreview);
+            SendPreview(view, summary, true, previewFloorLabel, isPlanPreview,
+                outcome.Issues);
         }
 
         private void SendPreview(DrawingView view, string summary, bool success,
-            string previewFloorLabel = null, bool resetView = false)
+            string previewFloorLabel = null, bool resetView = false,
+            IEnumerable<ValidationIssue> issues = null)
         {
             var svg = view == null ? string.Empty : BuildSvg(view, _state, previewFloorLabel);
-            if (success && !string.IsNullOrWhiteSpace(svg))
+            if (success && string.IsNullOrWhiteSpace(previewFloorLabel)
+                && !string.IsNullOrWhiteSpace(svg))
                 _lastSuccessfulPreviewSvg = svg;
             else if (!success && string.IsNullOrWhiteSpace(svg))
                 svg = _lastSuccessfulPreviewSvg;
+            var style = BuildValidationPreviewStyle(issues);
             SendPreviewSvg(
                 svg,
                 summary,
                 success,
                 string.IsNullOrWhiteSpace(previewFloorLabel) ? "剖面预览" : previewFloorLabel + " · 平面预览",
-                resetView);
+                resetView,
+                style.ErrorComponents,
+                style.WarningComponents,
+                style.ErrorAll,
+                style.WarningAll);
         }
 
         private void SendPreviewSvg(string svg, string summary, bool success,
-            string toolbarTitle, bool resetView = false)
+            string toolbarTitle, bool resetView = false,
+            IEnumerable<string> errorComponents = null,
+            IEnumerable<string> warningComponents = null,
+            bool errorAll = false,
+            bool warningAll = false)
         {
             if (_isClosing || _webView.CoreWebView2 == null) return;
             var payload = new Dictionary<string, object>
@@ -463,7 +501,11 @@ namespace WL.Stair.Cad2022
                 { "summary", summary },
                 { "svg", svg ?? string.Empty },
                 { "toolbarTitle", toolbarTitle ?? "剖面预览" },
-                { "resetView", resetView }
+                { "resetView", resetView },
+                { "errorComponents", (errorComponents ?? new string[0]).ToArray() },
+                { "warningComponents", (warningComponents ?? new string[0]).ToArray() },
+                { "errorAll", errorAll },
+                { "warningAll", warningAll }
             };
             _webView.CoreWebView2.PostWebMessageAsJson(_serializer.Serialize(payload));
         }
@@ -1615,6 +1657,88 @@ namespace WL.Stair.Cad2022
                     // The CAD dispatcher is already shutting down.
                 }
             });
+        }
+
+        private void InitializeLastSuccessfulPreview()
+        {
+            try
+            {
+                var outcome = _calculator.Calculate(_state.Project);
+                if (!outcome.IsSuccess) return;
+                var view = _geometryBuilder.BuildSection(_state.Project, outcome.Result);
+                _lastSuccessfulPreviewSvg = BuildSvg(view, _state, null);
+            }
+            catch
+            {
+                _lastSuccessfulPreviewSvg = string.Empty;
+            }
+        }
+
+        private ValidationPreviewStyle BuildValidationPreviewStyle(
+            IEnumerable<ValidationIssue> issues)
+        {
+            var result = new ValidationPreviewStyle();
+            foreach (var issue in issues ?? new ValidationIssue[0])
+            {
+                var targets = issue.Severity == ValidationSeverity.Error
+                    ? result.ErrorComponents
+                    : result.WarningComponents;
+                var parameter = issue.ParameterName ?? string.Empty;
+                var key = parameter.Split('.')[0];
+                var storey = (_state.Project.Storeys ?? new List<StairStoreyDefinition>())
+                    .FirstOrDefault(item => item != null && string.Equals(item.Id, key,
+                        StringComparison.OrdinalIgnoreCase));
+                if (storey != null)
+                {
+                    targets.Add(storey.Id);
+                    targets.Add(storey.LowerFloorId);
+                    targets.Add(storey.UpperFloorId);
+                    foreach (var flight in storey.Flights ?? new List<StairFlightDefinition>())
+                        if (flight != null) targets.Add(flight.Id);
+                    foreach (var landing in storey.Landings ?? new List<StairLandingDefinition>())
+                        if (landing != null) targets.Add(landing.Id);
+                    continue;
+                }
+
+                var knownComponent = (_state.Project.Floors ?? new List<StairFloorDefinition>())
+                        .Any(item => item != null && (string.Equals(item.Id, key,
+                            StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(item.BeamId, key, StringComparison.OrdinalIgnoreCase)))
+                    || (_state.Project.Storeys ?? new List<StairStoreyDefinition>())
+                        .Where(item => item != null)
+                        .SelectMany(item => (item.Flights ?? new List<StairFlightDefinition>())
+                            .Where(child => child != null).Select(child => child.Id)
+                            .Concat((item.Landings ?? new List<StairLandingDefinition>())
+                                .Where(child => child != null)
+                                .SelectMany(child => new[] { child.Id, child.BeamId })))
+                        .Any(id => string.Equals(id, key, StringComparison.OrdinalIgnoreCase));
+                if (knownComponent)
+                {
+                    targets.Add(key);
+                    continue;
+                }
+
+                if (issue.Severity == ValidationSeverity.Error) result.ErrorAll = true;
+                else result.WarningAll = true;
+            }
+            return result;
+        }
+
+        private sealed class ValidationPreviewStyle
+        {
+            public ValidationPreviewStyle()
+            {
+                ErrorComponents = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                WarningComponents = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            }
+
+            public ISet<string> ErrorComponents { get; private set; }
+
+            public ISet<string> WarningComponents { get; private set; }
+
+            public bool ErrorAll { get; set; }
+
+            public bool WarningAll { get; set; }
         }
 
         private static string JoinIssues(StairProjectCalculationOutcome outcome)
