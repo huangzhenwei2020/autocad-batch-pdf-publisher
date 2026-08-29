@@ -2388,6 +2388,16 @@ namespace WL.Stair.Tests
                     line.ComponentId == "LB-02-SHIFT-L"
                     || line.ComponentId == "LB-02-SHIFT-R"),
                 "The shared floor must add slab infill between shifted beam axes.");
+            TestAssert.True(section.Lines.Any(line =>
+                    line.ComponentId == "LB-02-SHIFT-L"
+                    && Math.Abs(line.Start.X - 400.0) < 0.001
+                    && Math.Abs(line.End.X - 400.0) < 0.001),
+                "The transition slab must extend through the shifted beam face instead of ending on its axis.");
+            TestAssert.True(section.Lines.Any(line =>
+                    line.ComponentId == "LB-02-RAILING-CONNECTION"
+                    && line.Role == StairLineRole.Handrail
+                    && Math.Abs(line.Start.Y - line.End.Y) < 0.001),
+                "Flights meeting at a shifted shared floor must receive a continuous platform handrail.");
         }
 
         private static void KeepsSectionGeometryWhenIndependentAxesMatchUnifiedAxes()

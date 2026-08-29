@@ -60,6 +60,8 @@ namespace WL.Stair.Core.Geometry
             var hatchRegions = new List<DrawingHatchRegion>();
             var leaders = new List<DrawingLeader>();
             var horizontalDimensionSpecs = new List<HorizontalDimensionSpec>();
+            var handrailBoundaryPoints = new Dictionary<string, List<HandrailBoundaryPoint>>(
+                StringComparer.OrdinalIgnoreCase);
             var floors = project.Floors.ToDictionary(floor => floor.Id, StringComparer.OrdinalIgnoreCase);
             var storeyResults = calculation.Storeys.ToDictionary(result => result.Id, StringComparer.OrdinalIgnoreCase);
             var storeysByLowerFloor = project.Storeys
@@ -197,6 +199,16 @@ namespace WL.Stair.Core.Geometry
                         boundaryConnectionX,
                         allowEndClosure,
                         project.Construction.Railing);
+                    AddHandrailBoundaryPoint(
+                        handrailBoundaryPoints,
+                        GetBoundaryId(sourceBoundary),
+                        currentElevation,
+                        flightStartX);
+                    AddHandrailBoundaryPoint(
+                        handrailBoundaryPoints,
+                        GetBoundaryId(destinationBoundary),
+                        endElevation,
+                        flightEndX);
                     horizontalDimensionSpecs.Add(new HorizontalDimensionSpec(
                         flight.Id,
                         Math.Min(flightStartX, flightEndX),
@@ -259,6 +271,11 @@ namespace WL.Stair.Core.Geometry
                 if (!floorPositions.ContainsKey(storey.UpperFloorId))
                     floorPositions.Add(storey.UpperFloorId, upperPosition);
             }
+
+            AddHandrailBoundaryConnections(
+                lines,
+                handrailBoundaryPoints,
+                project.Construction.Railing);
 
             var drawingScale = Math.Max(1, project.DrawingScale);
             var floorLevelTextX = secondAxisX + (18.0 * drawingScale);
@@ -337,7 +354,7 @@ namespace WL.Stair.Core.Geometry
                 }
                 if (distinctSupports.Length > 1)
                     AddFloorTransitionSlabs(lines, floor, position.Elevation,
-                        distinctSupports.Select(item => item.Range), project.Construction);
+                        distinctSupports, project.Construction);
             }
 
             foreach (var storeyResult in calculation.Storeys)
@@ -927,6 +944,64 @@ namespace WL.Stair.Core.Geometry
             return landing != null && landing.AllowUpperFlightClosure;
         }
 
+        private static string GetBoundaryId(object boundary)
+        {
+            var floor = boundary as StairFloorDefinition;
+            if (floor != null) return floor.Id;
+            var landing = boundary as StairLandingDefinition;
+            return landing == null ? string.Empty : landing.Id;
+        }
+
+        private static void AddHandrailBoundaryPoint(
+            IDictionary<string, List<HandrailBoundaryPoint>> lookup,
+            string boundaryId,
+            double elevation,
+            double x)
+        {
+            if (lookup == null || string.IsNullOrWhiteSpace(boundaryId)) return;
+            List<HandrailBoundaryPoint> points;
+            if (!lookup.TryGetValue(boundaryId, out points))
+            {
+                points = new List<HandrailBoundaryPoint>();
+                lookup.Add(boundaryId, points);
+            }
+            points.Add(new HandrailBoundaryPoint(x, elevation));
+        }
+
+        private static void AddHandrailBoundaryConnections(
+            ICollection<DrawingLine> lines,
+            IDictionary<string, List<HandrailBoundaryPoint>> lookup,
+            RailingDefaults railing)
+        {
+            if (lines == null || lookup == null || railing == null
+                || !railing.Enabled || railing.Height <= 0.0)
+                return;
+
+            foreach (var boundary in lookup)
+            {
+                foreach (var level in boundary.Value.GroupBy(point =>
+                    Math.Round(point.Elevation, 3)))
+                {
+                    var points = level
+                        .GroupBy(point => Math.Round(point.X, 3))
+                        .Select(group => group.First())
+                        .OrderBy(point => point.X)
+                        .ToArray();
+                    if (points.Length < 2) continue;
+                    var firstX = points.First().X;
+                    var lastX = points.Last().X;
+                    if (Math.Abs(lastX - firstX) < 0.001) continue;
+                    var railElevation = points[0].Elevation + railing.Height;
+                    lines.Add(new DrawingLine(
+                        new Point2D(firstX, railElevation),
+                        new Point2D(lastX, railElevation),
+                        StairLineRole.Handrail,
+                        false,
+                        boundary.Key + "-RAILING-CONNECTION"));
+                }
+            }
+        }
+
         private static void AddHandrail(
             ICollection<DrawingLine> lines,
             double flightStartX,
@@ -1337,16 +1412,22 @@ namespace WL.Stair.Core.Geometry
             ICollection<DrawingLine> lines,
             StairFloorDefinition floor,
             double elevation,
-            IEnumerable<StairwellAxisRange> sourceRanges,
+            IEnumerable<FloorSupportPosition> sourceSupports,
             StairConstructionDefaults defaults)
         {
-            var ranges = sourceRanges.Where(item => item != null).ToArray();
-            if (ranges.Length < 2) return;
+            var supports = sourceSupports.Where(item => item != null && item.Range != null).ToArray();
+            if (supports.Length < 2) return;
             var thickness = floor.SlabThicknessOverride ?? defaults.FloorSlabThickness;
-            var leftMin = ranges.Min(item => item.LeftAxisX);
-            var leftMax = ranges.Max(item => item.LeftAxisX);
-            var rightMin = ranges.Min(item => item.RightAxisX);
-            var rightMax = ranges.Max(item => item.RightAxisX);
+            var halfBeam = Math.Max(0.5,
+                (floor.BeamWidthOverride ?? defaults.FloorBeam.Width) / 2.0);
+            // A changed stairwell range creates two beam locations on each side of
+            // the shared floor.  Join the *outer beam faces*, not merely the axis
+            // centres.  The overlap removes the hairline/open gaps that otherwise
+            // remain between the separately generated floor polygons.
+            var leftMin = supports.Min(item => item.Range.LeftAxisX) - halfBeam;
+            var leftMax = supports.Max(item => item.Range.LeftAxisX) + halfBeam;
+            var rightMin = supports.Min(item => item.Range.RightAxisX) - halfBeam;
+            var rightMax = supports.Max(item => item.Range.RightAxisX) + halfBeam;
             AddTransitionSlab(lines, leftMin, leftMax, elevation, thickness, floor.Id + "-SHIFT-L");
             AddTransitionSlab(lines, rightMin, rightMax, elevation, thickness, floor.Id + "-SHIFT-R");
         }
@@ -2187,6 +2268,19 @@ namespace WL.Stair.Core.Geometry
             public int Direction { get; }
 
             public string StoreyId { get; }
+        }
+
+        private sealed class HandrailBoundaryPoint
+        {
+            public HandrailBoundaryPoint(double x, double elevation)
+            {
+                X = x;
+                Elevation = elevation;
+            }
+
+            public double X { get; }
+
+            public double Elevation { get; }
         }
 
         private sealed class WallSpan
