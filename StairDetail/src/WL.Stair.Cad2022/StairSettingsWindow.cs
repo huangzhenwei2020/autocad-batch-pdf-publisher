@@ -1217,7 +1217,11 @@ namespace WL.Stair.Cad2022
 
             using (editor.StartUserInteraction(this))
             {
-                var first = editor.GetPoint("\n指定测量框第一个角点: ");
+                var isStoreyStairwell = !string.IsNullOrWhiteSpace(target)
+                    && target.StartsWith("storey-stairwell:", StringComparison.OrdinalIgnoreCase);
+                var first = editor.GetPoint(isStoreyStairwell
+                    ? "\n指定本层第一条墙轴线上的一点: "
+                    : "\n指定测量框第一个角点: ");
                 if (first.Status != PromptStatus.OK) return;
                 PromptPointResult second;
                 if (string.Equals(target, "stairwell", StringComparison.OrdinalIgnoreCase))
@@ -1226,7 +1230,9 @@ namespace WL.Stair.Cad2022
                 }
                 else
                 {
-                    var secondOptions = new PromptPointOptions("\n指定测量终点: ") { BasePoint = first.Value, UseBasePoint = true };
+                    var secondOptions = new PromptPointOptions(isStoreyStairwell
+                        ? "\n指定本层另一条墙轴线上的一点: "
+                        : "\n指定测量终点: ") { BasePoint = first.Value, UseBasePoint = true };
                     second = editor.GetPoint(secondOptions);
                 }
                 if (second.Status != PromptStatus.OK) return;
@@ -1564,7 +1570,7 @@ namespace WL.Stair.Cad2022
                     || storeyIndex < 0
                     || storeyIndex >= _state.Project.Storeys.Count)
                     return;
-                var measuredDepth = first.DistanceTo(second);
+                var measuredDepth = Math.Abs(second.X - first.X);
                 if (measuredDepth <= 0.001) return;
                 var storey = _state.Project.Storeys[storeyIndex];
                 storey.IndependentStairwellEnabled = true;

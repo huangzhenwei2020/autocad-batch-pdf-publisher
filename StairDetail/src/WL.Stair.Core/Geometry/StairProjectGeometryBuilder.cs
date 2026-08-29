@@ -386,13 +386,9 @@ namespace WL.Stair.Core.Geometry
                 project.WallOpenings,
                 floorPositions.OrderBy(pair => pair.Value.Elevation)
                     .Select(pair => pair.Key).FirstOrDefault());
-            var lowestRange = stairwellRanges[calculation.Storeys
-                .OrderBy(item => item.LowerElevation).First().Id];
-            var highestRange = stairwellRanges[calculation.Storeys
-                .OrderByDescending(item => item.UpperElevation).First().Id];
-            AddBaseWall(lines, lowestRange.LeftAxisX, lowestRange.RightAxisX, lowestElevation, drawingScale,
+            AddBaseWall(lines, envelope.LeftAxisX, envelope.RightAxisX, lowestElevation, drawingScale,
                 project.Construction);
-            AddTopBreakLine(lines, highestRange.LeftAxisX, highestRange.RightAxisX,
+            AddTopBreakLine(lines, envelope.LeftAxisX, envelope.RightAxisX,
                 highestElevation + wallHeightAboveHighestFloor,
                 drawingScale,
                 project.Construction);
