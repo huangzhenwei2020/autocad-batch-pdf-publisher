@@ -29,8 +29,9 @@ namespace BatchPdfPublisher
             MenuService.InstallWhenReady();
             ShortcutAliasService.InstallWhenReady();
             ProjectAutoSaveService.Install();
+            CloudSyncCoordinator.Install();
         }
-        public void Terminate() { ProjectAutoSaveService.Remove(); ShortcutAliasService.Remove(); RibbonService.Remove(); MenuService.Remove(); }
+        public void Terminate() { CloudSyncCoordinator.Remove(); ProjectAutoSaveService.Remove(); ShortcutAliasService.Remove(); RibbonService.Remove(); MenuService.Remove(); }
 
         [CommandMethod("BPP")]
         public void BppCommand() => OpenPublisher();
@@ -39,6 +40,12 @@ namespace BatchPdfPublisher
         public void ConfigureShortcuts()
         {
             Application.ShowModalDialog(new ShortcutSettingsForm());
+        }
+
+        [CommandMethod("WLCLOUDSYNC", CommandFlags.Session)]
+        public void ConfigureCloudSync()
+        {
+            Application.ShowModalDialog(new CloudSyncSettingsForm());
         }
 
         [CommandMethod("WLJZSM", CommandFlags.Session)]
