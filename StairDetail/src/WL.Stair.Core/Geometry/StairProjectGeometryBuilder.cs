@@ -114,7 +114,7 @@ namespace WL.Stair.Core.Geometry
                     connectionForBoundary(lowerDirection, lowerWidth),
                     storeyResult.LowerElevation);
                 AddFloorSupport(floorSupportPositions, storey.LowerFloorId,
-                    new FloorSupportPosition(lowerPosition, stairwellRange, lowerDirection, storey.Id));
+                    new FloorSupportPosition(lowerPosition, stairwellRange, lowerDirection, storey.Id, true));
                 if (!floorPositions.ContainsKey(storey.LowerFloorId))
                     floorPositions.Add(storey.LowerFloorId, lowerPosition);
 
@@ -267,7 +267,7 @@ namespace WL.Stair.Core.Geometry
                     connectionForBoundary(upperDirection, upperWidth),
                     storeyResult.UpperElevation);
                 AddFloorSupport(floorSupportPositions, storey.UpperFloorId,
-                    new FloorSupportPosition(upperPosition, stairwellRange, upperDirection, storey.Id));
+                    new FloorSupportPosition(upperPosition, stairwellRange, upperDirection, storey.Id, false));
                 if (!floorPositions.ContainsKey(storey.UpperFloorId))
                     floorPositions.Add(storey.UpperFloorId, upperPosition);
             }
@@ -319,7 +319,7 @@ namespace WL.Stair.Core.Geometry
                     supports = new List<FloorSupportPosition>
                     {
                         new FloorSupportPosition(position, axisResolver.Resolve(project, null),
-                            floorDirection, string.Empty)
+                            floorDirection, string.Empty, true)
                     };
                 }
                 var distinctSupports = supports.GroupBy(item => string.Join("|", new[]
@@ -327,10 +327,11 @@ namespace WL.Stair.Core.Geometry
                         Math.Round(item.Range.LeftAxisX, 3).ToString(CultureInfo.InvariantCulture),
                         Math.Round(item.Range.RightAxisX, 3).ToString(CultureInfo.InvariantCulture),
                         item.Direction.ToString(CultureInfo.InvariantCulture)
-                    })).Select(group => group.First()).ToArray();
-                for (var supportIndex = 0; supportIndex < distinctSupports.Length; supportIndex++)
+                    })).Select(group => group.OrderByDescending(item => item.IsLowerBoundary).First()).ToArray();
+                var primarySupport = distinctSupports.FirstOrDefault(item => item.IsLowerBoundary)
+                    ?? distinctSupports[0];
+                foreach (var support in distinctSupports)
                 {
-                    var support = distinctSupports[supportIndex];
                     var supportDirection = support.Direction;
                     var supportAxis = supportDirection > 0
                         ? support.Range.LeftAxisX
@@ -349,12 +350,20 @@ namespace WL.Stair.Core.Geometry
                             floor.OppositeBeamDepthOverride ?? project.Construction.FloorBeam.Depth,
                             floor.Id));
                     }
-                    AddFloor(lines, floor, support.Position, project.Construction,
-                        supportDirection, support.Range, supportIndex == 0);
                 }
+                AddFloor(lines, floor, primarySupport.Position, project.Construction,
+                    primarySupport.Direction, primarySupport.Range, true);
                 if (distinctSupports.Length > 1)
+                {
+                    foreach (var secondarySupport in distinctSupports.Where(item =>
+                        !ReferenceEquals(item, primarySupport)))
+                    {
+                        AddFloorTransitionSupportBeams(lines, floor, position.Elevation,
+                            secondarySupport, project.Construction);
+                    }
                     AddFloorTransitionSlabs(lines, floor, position.Elevation,
-                        distinctSupports, project.Construction);
+                        distinctSupports, primarySupport, project.Construction);
+                }
             }
 
             foreach (var storeyResult in calculation.Storeys)
@@ -1424,15 +1433,69 @@ namespace WL.Stair.Core.Geometry
             StairFloorDefinition floor,
             double elevation,
             IEnumerable<FloorSupportPosition> sourceSupports,
+            FloorSupportPosition primarySupport,
             StairConstructionDefaults defaults)
         {
             var supports = sourceSupports.Where(item => item != null && item.Range != null).ToArray();
-            if (supports.Length < 2) return;
+            if (supports.Length < 2 || primarySupport == null) return;
             var thickness = floor.SlabThicknessOverride ?? defaults.FloorSlabThickness;
             AddFloorTransitionSlabsForSide(lines, floor, elevation, thickness,
-                supports, defaults, true, floor.Id + "-SHIFT-L");
+                supports, primarySupport, defaults, true, floor.Id + "-SHIFT-L");
             AddFloorTransitionSlabsForSide(lines, floor, elevation, thickness,
-                supports, defaults, false, floor.Id + "-SHIFT-R");
+                supports, primarySupport, defaults, false, floor.Id + "-SHIFT-R");
+        }
+
+        private static void AddFloorTransitionSupportBeams(
+            ICollection<DrawingLine> lines,
+            StairFloorDefinition floor,
+            double elevation,
+            FloorSupportPosition support,
+            StairConstructionDefaults defaults)
+        {
+            var slabThickness = floor.SlabThicknessOverride ?? defaults.FloorSlabThickness;
+            var primaryLeft = support.Direction > 0;
+            AddAttachedFloorBeam(lines,
+                primaryLeft ? support.Range.LeftAxisX : support.Range.RightAxisX,
+                elevation,
+                slabThickness,
+                floor.BeamWidthOverride ?? defaults.FloorBeam.Width,
+                floor.BeamDepthOverride ?? defaults.FloorBeam.Depth,
+                floor.Id + "-SHIFT-BEAM-PRIMARY-" + support.StoreyId);
+            if (!defaults.OppositeSupportsEnabled || floor.OppositeSupportType == OppositeSupportType.None)
+                return;
+            AddAttachedFloorBeam(lines,
+                primaryLeft ? support.Range.RightAxisX : support.Range.LeftAxisX,
+                elevation,
+                slabThickness,
+                floor.OppositeBeamWidthOverride ?? defaults.FloorBeam.Width,
+                floor.OppositeBeamDepthOverride ?? defaults.FloorBeam.Depth,
+                floor.Id + "-SHIFT-BEAM-OPPOSITE-" + support.StoreyId);
+        }
+
+        private static void AddAttachedFloorBeam(
+            ICollection<DrawingLine> lines,
+            double axisX,
+            double elevation,
+            double slabThickness,
+            double beamWidth,
+            double beamDepth,
+            string componentId)
+        {
+            var halfWidth = Math.Max(0.5, beamWidth / 2.0);
+            var slabBottom = elevation - Math.Max(0.0, slabThickness);
+            var beamBottom = elevation - Math.Max(slabThickness, beamDepth);
+            lines.Add(new DrawingLine(
+                new Point2D(axisX - halfWidth, slabBottom),
+                new Point2D(axisX - halfWidth, beamBottom),
+                StairLineRole.CutBoundary, false, componentId));
+            lines.Add(new DrawingLine(
+                new Point2D(axisX - halfWidth, beamBottom),
+                new Point2D(axisX + halfWidth, beamBottom),
+                StairLineRole.CutBoundary, false, componentId));
+            lines.Add(new DrawingLine(
+                new Point2D(axisX + halfWidth, beamBottom),
+                new Point2D(axisX + halfWidth, slabBottom),
+                StairLineRole.CutBoundary, false, componentId));
         }
 
         private static void AddFloorTransitionSlabsForSide(
@@ -1441,6 +1504,7 @@ namespace WL.Stair.Core.Geometry
             double elevation,
             double thickness,
             IEnumerable<FloorSupportPosition> sourceSupports,
+            FloorSupportPosition primarySupport,
             StairConstructionDefaults defaults,
             bool leftSide,
             string componentId)
@@ -1468,9 +1532,56 @@ namespace WL.Stair.Core.Geometry
                 var firstX = left.AxisX + left.HalfWidth;
                 var secondX = right.AxisX - right.HalfWidth;
                 if (secondX - firstX < 0.001) continue;
+                if (FloorSlabCoversInterval(floor, primarySupport, defaults,
+                        leftSide, firstX, secondX))
+                    continue;
                 AddTransitionSlab(lines, firstX, secondX, elevation, thickness,
                     beamLocations.Length == 2 ? componentId : componentId + "-" + (index + 1));
             }
+        }
+
+        private static bool FloorSlabCoversInterval(
+            StairFloorDefinition floor,
+            FloorSupportPosition support,
+            StairConstructionDefaults defaults,
+            bool leftSide,
+            double firstX,
+            double secondX)
+        {
+            double slabStart;
+            double slabEnd;
+            var primarySide = leftSide ? support.Direction > 0 : support.Direction < 0;
+            if (primarySide)
+            {
+                var beamWidth = floor.BeamWidthOverride ?? defaults.FloorBeam.Width;
+                var outsideBeamOffset = floor.PlatformType == PlatformLayoutType.Platform1
+                    ? 0.0
+                    : beamWidth / 2.0;
+                var totalWidth = floor.PlatformType == PlatformLayoutType.Platform3
+                    ? floor.PlatformWidth + outsideBeamOffset
+                        + Math.Max(0.0, floor.SlabOverhangOverride ?? defaults.SlabOverhang)
+                    : floor.PlatformWidth + outsideBeamOffset;
+                var direction = -support.Direction;
+                slabStart = Math.Min(support.Position.X,
+                    support.Position.X + (direction * totalWidth));
+                slabEnd = Math.Max(support.Position.X,
+                    support.Position.X + (direction * totalWidth));
+            }
+            else
+            {
+                var axisX = leftSide ? support.Range.LeftAxisX : support.Range.RightAxisX;
+                var halfBeam = Math.Max(0.5,
+                    (floor.OppositeBeamWidthOverride ?? defaults.FloorBeam.Width) / 2.0);
+                var outsideDirection = leftSide ? -1 : 1;
+                var extent = floor.OppositeSupportType == OppositeSupportType.BeamWithSlab
+                    ? halfBeam + Math.Max(0.0, floor.SlabOverhangOverride ?? defaults.SlabOverhang)
+                    : halfBeam;
+                slabStart = Math.Min(axisX + (outsideDirection * -halfBeam),
+                    axisX + (outsideDirection * extent));
+                slabEnd = Math.Max(axisX + (outsideDirection * -halfBeam),
+                    axisX + (outsideDirection * extent));
+            }
+            return firstX >= slabStart - 0.001 && secondX <= slabEnd + 0.001;
         }
 
         private static double ResolveFloorBeamHalfWidth(
@@ -2307,12 +2418,14 @@ namespace WL.Stair.Core.Geometry
                 ComponentPosition position,
                 StairwellAxisRange range,
                 int direction,
-                string storeyId)
+                string storeyId,
+                bool isLowerBoundary)
             {
                 Position = position;
                 Range = range;
                 Direction = direction;
                 StoreyId = storeyId ?? string.Empty;
+                IsLowerBoundary = isLowerBoundary;
             }
 
             public ComponentPosition Position { get; }
@@ -2322,6 +2435,8 @@ namespace WL.Stair.Core.Geometry
             public int Direction { get; }
 
             public string StoreyId { get; }
+
+            public bool IsLowerBoundary { get; }
         }
 
         private sealed class HandrailBoundaryPoint

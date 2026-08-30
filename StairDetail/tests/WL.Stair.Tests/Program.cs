@@ -2385,7 +2385,16 @@ namespace WL.Stair.Tests
                 TestAssert.True(axisXs.Any(x => Math.Abs(x - axis) < 0.001),
                     "Every storey-local wall axis must be visible in the section.");
             var transitionLines = section.Lines.Where(line =>
-                line.ComponentId.IndexOf("LB-02-SHIFT-", StringComparison.OrdinalIgnoreCase) >= 0).ToArray();
+                string.Equals(line.ComponentId, "LB-02-SHIFT-L", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(line.ComponentId, "LB-02-SHIFT-R", StringComparison.OrdinalIgnoreCase)).ToArray();
+            TestAssert.True(!transitionLines.Any(line =>
+                    string.Equals(line.ComponentId, "LB-02-SHIFT-L", StringComparison.OrdinalIgnoreCase)),
+                "The old floor platform already spanning the left wall offset must be reused without duplicate slab lines.");
+            TestAssert.True(transitionLines.Any(line =>
+                    string.Equals(line.ComponentId, "LB-02-SHIFT-R", StringComparison.OrdinalIgnoreCase)
+                    && Math.Abs(line.Start.Y - line.End.Y) < 0.001
+                    && SameUndirectedInterval(line.Start.X, line.End.X, 4100.0, 4840.0)),
+                "The uncovered side must receive a continuous slab between the inner and outer wall beams.");
             TestAssert.True(!transitionLines.Any(line =>
                     Math.Abs(line.Start.X - line.End.X) < 0.001),
                 "Beam/slab shared edges must be removed so only the combined external outline remains.");
