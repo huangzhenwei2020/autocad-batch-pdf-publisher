@@ -19,6 +19,7 @@ namespace BatchPdfPublisher.Views
         private readonly CheckBox _templates = new CheckBox { Text = "图框与方案库", AutoSize = true };
         private readonly CheckBox _drawings = new CheckBox { Text = "项目 DWG（V2 接入项目保存事件）", AutoSize = true };
         private readonly CheckBox _auto = new CheckBox { Text = "保存或检测到变化后自动同步", AutoSize = true };
+        private readonly ComboBox _initialPreference = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 230 };
         private readonly NumericUpDown _days = new NumericUpDown { Minimum = 1, Maximum = 3650, Value = 30, Width = 90 };
         private readonly NumericUpDown _versions = new NumericUpDown { Minimum = 1, Maximum = 200, Value = 20, Width = 90 };
         private readonly Label _status = new Label { AutoSize = true, ForeColor = Color.FromArgb(34, 98, 60), Padding = new Padding(0, 8, 0, 0) };
@@ -63,6 +64,7 @@ namespace BatchPdfPublisher.Views
             var browse = ButtonFor("选择…"); browse.Click += Browse; settingsPanel.Controls.Add(browse, 2, 1);
             settingsPanel.Controls.Add(LabelFor("本机设备名称"), 0, 2); settingsPanel.Controls.Add(_device, 1, 2);
             var open = ButtonFor("打开目录"); open.Click += OpenFolder; settingsPanel.Controls.Add(open, 2, 2);
+            settingsPanel.Controls.Add(LabelFor("首次连接时"), 0, 3); settingsPanel.Controls.Add(_initialPreference, 1, 3);
             root.Controls.Add(settingsPanel);
 
             var scope = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = true };
@@ -88,6 +90,10 @@ namespace BatchPdfPublisher.Views
         private void LoadSettings()
         {
             _settings = new CloudSyncSettingsStore().LoadSettings();
+            _initialPreference.Items.Clear();
+            _initialPreference.Items.Add("云端优先（先备份本机，推荐）");
+            _initialPreference.Items.Add("本机优先（先备份云端）");
+            _initialPreference.Items.Add("不选择，全部保留为冲突");
             _enabled.Checked = _settings.Enabled;
             _folder.Text = _settings.SyncFolder ?? string.Empty;
             _device.Text = string.IsNullOrWhiteSpace(_settings.DeviceName) ? Environment.MachineName : _settings.DeviceName;
@@ -98,6 +104,8 @@ namespace BatchPdfPublisher.Views
             _drawings.Checked = false;
             _drawings.Enabled = false;
             _auto.Checked = _settings.AutoSync;
+            _initialPreference.SelectedIndex = string.Equals(_settings.InitialSyncPreference, "Local", StringComparison.OrdinalIgnoreCase) ? 1
+                : string.Equals(_settings.InitialSyncPreference, "Conflict", StringComparison.OrdinalIgnoreCase) ? 2 : 0;
             _days.Value = Math.Max(_days.Minimum, Math.Min(_days.Maximum, _settings.HistoryRetentionDays));
             _versions.Value = Math.Max(_versions.Minimum, Math.Min(_versions.Maximum, _settings.KeepVersionsPerFile));
             _status.Text = _settings.Enabled ? "同步已启用。" : "同步默认关闭；启用并保存后才会读写同步目录。";
@@ -122,6 +130,7 @@ namespace BatchPdfPublisher.Views
             // detection and the pending-apply area are connected in V2.
             _settings.SyncProjectFiles = false;
             _settings.AutoSync = _auto.Checked;
+            _settings.InitialSyncPreference = _initialPreference.SelectedIndex == 1 ? "Local" : _initialPreference.SelectedIndex == 2 ? "Conflict" : "Remote";
             _settings.HistoryRetentionDays = (int)_days.Value;
             _settings.KeepVersionsPerFile = (int)_versions.Value;
             new CloudSyncSettingsStore().SaveSettings(_settings);

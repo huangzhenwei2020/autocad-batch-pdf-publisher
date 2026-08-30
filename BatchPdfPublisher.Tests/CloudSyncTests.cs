@@ -12,6 +12,7 @@ internal static class CloudSyncTests
         Run("UploadsNewLocalFile", UploadsNewLocalFile);
         Run("DownloadsToSecondDevice", DownloadsToSecondDevice);
         Run("PreservesBothSidesOnConflict", PreservesBothSidesOnConflict);
+        Run("FirstConnectionCanPreferRemoteWithBackup", FirstConnectionCanPreferRemoteWithBackup);
         Run("PropagatesRemoteDeletionWithBackup", PropagatesRemoteDeletionWithBackup);
         Run("RejectsOverlappingRoots", RejectsOverlappingRoots);
         Console.WriteLine("Executed " + _executed + " cloud sync tests; 0 failed.");
@@ -59,6 +60,23 @@ internal static class CloudSyncTests
             Equal("remote-change", File.ReadAllText(remoteFile));
             var conflictFiles = Directory.GetFiles(Path.Combine(shared, "万落建筑云同步", "冲突文件"), "*", SearchOption.AllDirectories);
             Equal(2, conflictFiles.Length);
+        });
+    }
+
+    private static void FirstConnectionCanPreferRemoteWithBackup()
+    {
+        WithWorkspace((root, local, shared, engine, settings, catalog) =>
+        {
+            var localFile = Path.Combine(local, "settings.json");
+            var remoteFile = Path.Combine(shared, "万落建筑云同步", "通用配置", "settings.json");
+            Directory.CreateDirectory(Path.GetDirectoryName(remoteFile));
+            File.WriteAllText(localFile, "generated-default");
+            File.WriteAllText(remoteFile, "cloud-current");
+            settings.InitialSyncPreference = "Remote";
+            var result = engine.Synchronize(settings, catalog);
+            Equal(1, result.Downloaded);
+            Equal("cloud-current", File.ReadAllText(localFile));
+            True(Directory.GetFiles(Path.Combine(root, "history"), "*", SearchOption.AllDirectories).Any(), "local backup missing");
         });
     }
 

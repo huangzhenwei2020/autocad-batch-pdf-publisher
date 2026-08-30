@@ -115,6 +115,18 @@ namespace BatchPdfPublisher.Services
                     Download(settings, logicalPath, remotePath, localPath, remoteHash, states, result);
                     return;
                 }
+                if (localHash != null && remoteHash != null &&
+                    string.Equals(settings.InitialSyncPreference, "Remote", StringComparison.OrdinalIgnoreCase))
+                {
+                    Download(settings, logicalPath, remotePath, localPath, remoteHash, states, result);
+                    return;
+                }
+                if (localHash != null && remoteHash != null &&
+                    string.Equals(settings.InitialSyncPreference, "Local", StringComparison.OrdinalIgnoreCase))
+                {
+                    Upload(settings, mirrorRoot, logicalPath, localPath, remotePath, localHash, states, result);
+                    return;
+                }
                 CreateConflict(settings, mirrorRoot, logicalPath, localPath, remotePath, localHash, remoteHash, baseHash, states, result);
                 return;
             }

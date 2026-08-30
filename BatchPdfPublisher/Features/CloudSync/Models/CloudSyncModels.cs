@@ -16,6 +16,7 @@ namespace BatchPdfPublisher.Services
             SyncTemplatesAndSchemes = true;
             SyncProjectFiles = false;
             AutoSync = true;
+            InitialSyncPreference = "Remote";
             HistoryRetentionDays = 30;
             KeepVersionsPerFile = 20;
         }
@@ -29,6 +30,7 @@ namespace BatchPdfPublisher.Services
         [DataMember] public bool SyncTemplatesAndSchemes { get; set; }
         [DataMember] public bool SyncProjectFiles { get; set; }
         [DataMember] public bool AutoSync { get; set; }
+        [DataMember] public string InitialSyncPreference { get; set; }
         [DataMember] public int HistoryRetentionDays { get; set; }
         [DataMember] public int KeepVersionsPerFile { get; set; }
     }
