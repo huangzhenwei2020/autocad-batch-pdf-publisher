@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Web.Script.Serialization;
+using System.Collections.Generic;
 using WL.Stair.Core.Domain;
 
 namespace WL.Stair.Cad2022
@@ -114,6 +115,58 @@ namespace WL.Stair.Cad2022
             }
         }
 
+        public IList<string> LoadSchemeNames()
+        {
+            try
+            {
+                lock (FileSync)
+                {
+                    if (!Directory.Exists(SchemeDirectory)) return new List<string>();
+                    return Directory.GetFiles(SchemeDirectory, "*.json", SearchOption.TopDirectoryOnly)
+                        .Select(Path.GetFileNameWithoutExtension)
+                        .Where(name => !string.IsNullOrWhiteSpace(name))
+                        .OrderBy(name => name, StringComparer.CurrentCultureIgnoreCase)
+                        .ToList();
+                }
+            }
+            catch { return new List<string>(); }
+        }
+
+        public void SaveScheme(string name, StairProjectDefinition project)
+        {
+            if (project == null) throw new ArgumentNullException(nameof(project));
+            var schemeName = SafeSchemeName(name);
+            lock (FileSync)
+            {
+                if (!Directory.Exists(SchemeDirectory)) Directory.CreateDirectory(SchemeDirectory);
+                var copy = _serializer.Deserialize<StairProjectDefinition>(_serializer.Serialize(project));
+                // CAD handles, cropped plan caches and their source drawings are
+                // project-local evidence, not reusable stair parameters.
+                copy.PlanSources = new List<StairPlanSourceDefinition>();
+                WriteAtomically(SchemePath(schemeName), _serializer.Serialize(copy));
+            }
+        }
+
+        public StairProjectDefinition LoadScheme(string name)
+        {
+            var path = SchemePath(SafeSchemeName(name));
+            lock (FileSync)
+            {
+                if (!File.Exists(path)) return null;
+                var project = _serializer.Deserialize<StairProjectDefinition>(File.ReadAllText(path));
+                if (project == null) return null;
+                project.PlanSources = new List<StairPlanSourceDefinition>();
+                return BindToActiveProject(project);
+            }
+        }
+
+        public void DeleteScheme(string name)
+        {
+            var path = SchemePath(SafeSchemeName(name));
+            lock (FileSync)
+                if (File.Exists(path)) File.Delete(path);
+        }
+
         private static string PortableRoot
         {
             get
@@ -129,6 +182,44 @@ namespace WL.Stair.Cad2022
         private static string LegacyPortableFilePath
         {
             get { return Path.Combine(PortableRoot, "最近使用方案.json"); }
+        }
+
+        private static string SchemeDirectory
+        {
+            get { return Path.Combine(PortableRoot, "方案库"); }
+        }
+
+        private static string SchemePath(string name)
+        {
+            return Path.Combine(SchemeDirectory, name + ".json");
+        }
+
+        private static string SafeSchemeName(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                throw new InvalidOperationException("方案名称不能为空。");
+            var result = value.Trim();
+            foreach (var character in Path.GetInvalidFileNameChars())
+                result = result.Replace(character, '_');
+            result = result.Trim('.', ' ');
+            if (string.IsNullOrWhiteSpace(result))
+                throw new InvalidOperationException("方案名称无效。");
+            return result.Length > 80 ? result.Substring(0, 80) : result;
+        }
+
+        private static void WriteAtomically(string path, string contents)
+        {
+            var temporaryPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                File.WriteAllText(temporaryPath, contents);
+                if (File.Exists(path)) File.Replace(temporaryPath, path, null);
+                else File.Move(temporaryPath, path);
+            }
+            finally
+            {
+                if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
+            }
         }
 
         public string LoadLastLayoutFrameId()

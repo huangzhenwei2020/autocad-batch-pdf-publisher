@@ -48,6 +48,7 @@ namespace WL.Stair.Cad2022
         public StairSettingsWindow()
         {
             _state = UiState.Create(_storage.LoadOrDefault());
+            _state.SavedSchemes = _storage.LoadSchemeNames();
             _state.SelectedLayoutFrameId = _storage.LoadLastLayoutFrameId();
             LoadRegisteredLayoutFrames();
             _constraints.Normalize(_state.Project);
@@ -349,6 +350,41 @@ namespace WL.Stair.Cad2022
                     style.WarningComponents,
                     style.ErrorAll,
                     style.WarningAll);
+                return;
+            }
+
+            if (message.Action == "save-scheme")
+            {
+                _storage.SaveScheme(message.Target, _state.Project);
+                _state.SavedSchemes = _storage.LoadSchemeNames();
+                SendState();
+                return;
+            }
+
+            if (message.Action == "load-scheme")
+            {
+                var current = _state.Project;
+                var loaded = _storage.LoadScheme(message.Target);
+                if (loaded == null) throw new InvalidOperationException("找不到楼梯方案：" + message.Target);
+                loaded.ProjectName = _storage.ActiveProjectName;
+                loaded.SubprojectName = current == null ? string.Empty : current.SubprojectName;
+                loaded.BuildingNumber = current == null ? string.Empty : current.BuildingNumber;
+                loaded.PlanSources = new List<StairPlanSourceDefinition>();
+                _state.Project = loaded;
+                _state.SelectedComponentId = null;
+                _state.SavedSchemes = _storage.LoadSchemeNames();
+                _constraints.Normalize(_state.Project);
+                _constraints.Apply(_state.Project);
+                _storage.Save(_state.Project);
+                SendState();
+                return;
+            }
+
+            if (message.Action == "delete-scheme")
+            {
+                _storage.DeleteScheme(message.Target);
+                _state.SavedSchemes = _storage.LoadSchemeNames();
+                SendState();
                 return;
             }
 
@@ -1848,7 +1884,11 @@ namespace WL.Stair.Cad2022
                 // A storey is the vertical interval between two floor slabs.
                 // Therefore N storeys have N+1 plan levels. Put labels on the
                 // actual slab elevations instead of at storey mid-heights.
-                var elevation = state.Project.BaseElevation;
+                // BuildSection rebases the lowest physical floor to drawing Y=0.
+                // Preview labels must use the same drawing coordinate; starting
+                // again from the (possibly negative) physical elevation shifts
+                // every label down by the basement depth.
+                var elevation = 0.0;
                 var physicalStoreys = state.Project.Storeys.Where(item => item != null).ToArray();
                 for (var storeyIndex = 0; storeyIndex < physicalStoreys.Length; storeyIndex++)
                 {
@@ -2150,6 +2190,8 @@ document.querySelectorAll('.tab').forEach(x=>x.onclick=()=>{tab=x.dataset.tab;re
 
             public string SelectedLayoutFrameId { get; set; }
 
+            public IList<string> SavedSchemes { get; set; }
+
             public static UiState Create(StairProjectDefinition project)
             {
                 return new UiState
@@ -2159,7 +2201,8 @@ document.querySelectorAll('.tab').forEach(x=>x.onclick=()=>{tab=x.dataset.tab;re
                     BaseElevationLocked = true,
                     DirectionLinked = true,
                     ConstructionLinked = true,
-                    SectionRepresentationLinked = true
+                    SectionRepresentationLinked = true,
+                    SavedSchemes = new List<string>()
                 };
             }
         }

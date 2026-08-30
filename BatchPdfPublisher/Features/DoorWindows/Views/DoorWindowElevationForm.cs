@@ -95,10 +95,10 @@ namespace BatchPdfPublisher.Views
             var auto = ButtonFor("按尺寸自动判断"); auto.Click += (s, e) => ApplyAutomaticSuggestions(); batch.Controls.Add(auto);
             var restoreDefault = ButtonFor("恢复默认样式"); restoreDefault.Click += (s, e) => RestoreDefaultStyles(); batch.Controls.Add(restoreDefault);
             var custom = ButtonFor("编辑当前分格"); custom.Click += (s, e) => EditCurrentDivision(); batch.Controls.Add(custom);
-            batch.Controls.Add(LabelFor("参数模板")); LoadTemplateChoices(); batch.Controls.Add(_templateChoice);
-            var applyTemplate = ButtonFor("应用到多选/勾选"); applyTemplate.Click += (s, e) => ApplySelectedTemplate(); batch.Controls.Add(applyTemplate);
-            var saveTemplate = ButtonFor("当前项存为模板"); saveTemplate.Click += (s, e) => SaveCurrentAsTemplate(); batch.Controls.Add(saveTemplate);
-            var deleteTemplate = ButtonFor("删除模板"); deleteTemplate.Click += (s, e) => DeleteSelectedTemplate(); batch.Controls.Add(deleteTemplate);
+            batch.Controls.Add(LabelFor("跨项目门窗方案库")); LoadTemplateChoices(); batch.Controls.Add(_templateChoice);
+            var applyTemplate = ButtonFor("应用方案到多选/勾选"); applyTemplate.Click += (s, e) => ApplySelectedTemplate(); batch.Controls.Add(applyTemplate);
+            var saveTemplate = ButtonFor("当前项保存为方案"); saveTemplate.Click += (s, e) => SaveCurrentAsTemplate(); batch.Controls.Add(saveTemplate);
+            var deleteTemplate = ButtonFor("删除方案"); deleteTemplate.Click += (s, e) => DeleteSelectedTemplate(); batch.Controls.Add(deleteTemplate);
             batch.Controls.Add(LabelFor("出图比例")); batch.Controls.Add(_drawingScale);
             batch.Controls.Add(_insertFrame); batch.Controls.Add(_useTianzhengTitle);
             batch.Controls.Add(_floorStatistics); batch.Controls.Add(_addCurrentFloor); batch.Controls.Add(_pickFloorTable); batch.Controls.Add(_clearFloorTables);
