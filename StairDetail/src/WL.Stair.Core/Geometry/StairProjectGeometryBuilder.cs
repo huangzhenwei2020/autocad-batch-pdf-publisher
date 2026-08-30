@@ -498,9 +498,13 @@ namespace WL.Stair.Core.Geometry
                 .Select(dimension => dimension.DimensionLinePoint.X)
                 .DefaultIfEmpty(secondAxisX + (11.0 * drawingScale))
                 .Max();
-            var finalFloorTextX = rightStoreyDimensionX + (5.0 * drawingScale);
+            // Level text is a paper-space annotation.  Keep a full 10 mm clear
+            // of the outer storey dimension so its longer standard-floor labels
+            // cannot run back into the vertical dimension text.
+            var finalFloorTextX = rightStoreyDimensionX + (10.0 * drawingScale);
+            var floorLevelTextHeight = 3.5 * drawingScale;
             texts.AddRange(floorLevelTexts.Select(text => new DrawingText(
-                new Point2D(finalFloorTextX, text.Position.Y), text.Content, text.Height)));
+                new Point2D(finalFloorTextX, text.Position.Y), text.Content, floorLevelTextHeight)));
             return RebaseSectionToLeftAxisLowerPoint(
                 mergedLines,
                 texts,
@@ -563,17 +567,27 @@ namespace WL.Stair.Core.Geometry
             IEnumerable<HorizontalDimensionSpec> source,
             int scale)
         {
-            var placedAtElevation = new Dictionary<double, int>();
-            foreach (var spec in source
+            var specs = source
                 .GroupBy(item => item.Key, StringComparer.OrdinalIgnoreCase)
                 .Select(group => group.First())
+                .ToArray();
+            if (specs.Length == 0) return;
+            var lowestElevation = specs.Min(item => Math.Min(item.StartElevation, item.EndElevation));
+            var placedAtElevation = new Dictionary<double, int>();
+            foreach (var spec in specs
                 .OrderBy(item => Math.Min(item.StartElevation, item.EndElevation)))
             {
-                var key = Math.Round(Math.Min(spec.StartElevation, spec.EndElevation), 3);
+                var sourceElevation = Math.Min(spec.StartElevation, spec.EndElevation);
+                // The zone below the lowest floor is reserved for axis-grid
+                // dimensions.  Hang the lowest flight's chain from its arrival
+                // platform instead of placing it under the building section.
+                var anchorElevation = Math.Abs(sourceElevation - lowestElevation) < 0.001
+                    ? Math.Max(spec.StartElevation, spec.EndElevation)
+                    : sourceElevation;
+                var key = Math.Round(anchorElevation, 3);
                 int row;
                 placedAtElevation.TryGetValue(key, out row);
                 placedAtElevation[key] = row + 1;
-                var anchorElevation = Math.Min(spec.StartElevation, spec.EndElevation);
                 // 除层高外，所有标注均以 1:1 下 6mm 的尺寸界线长度布置。
                 // 同一标高只保留一组横向尺寸链，因此不再额外外移分层。
                 var dimensionElevation = anchorElevation - (6.0 * Math.Max(1, scale));

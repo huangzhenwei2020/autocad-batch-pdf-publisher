@@ -3087,6 +3087,17 @@ namespace WL.Stair.Tests
             TestAssert.NearlyEqual(rightOutline + (11.0 * project.DrawingScale),
                 rightStoreyDimension.DimensionLinePoint.X, 0.001,
                 "The right storey dimension must be 11 drawing millimetres beyond the outer profile.");
+            var levelTexts = section.Texts.Where(text => text.Content.EndsWith("F)",
+                StringComparison.Ordinal)).ToArray();
+            TestAssert.True(levelTexts.Length > 0,
+                "The section must include floor elevation labels.");
+            TestAssert.True(levelTexts.All(text => Math.Abs(text.Position.X
+                    - (rightStoreyDimension.DimensionLinePoint.X
+                        + 10.0 * project.DrawingScale)) < 0.001),
+                "Floor elevation labels must remain 10 drawing millimetres outside the right storey dimension.");
+            TestAssert.True(levelTexts.All(text => Math.Abs(text.Height
+                    - 3.5 * project.DrawingScale) < 0.001),
+                "Floor elevation labels must use a 3.5 mm paper-space text height.");
             TestAssert.True(Math.Abs(leftStoreyDimension.FirstExtensionOrigin.X) > 0.001
                     && Math.Abs(rightStoreyDimension.FirstExtensionOrigin.X
                         - project.Construction.StairwellDepth) > 0.001,
@@ -3118,6 +3129,10 @@ namespace WL.Stair.Tests
                     Math.Abs(Math.Abs(dimension.FirstExtensionOrigin.Y - dimension.DimensionLinePoint.Y)
                         - (6.0 * project.DrawingScale)) < 0.001),
                 "All horizontal dimensions must use the 6 drawing millimetre inner extension length.");
+            TestAssert.True(horizontalDimensions
+                    .Where(dimension => dimension.ComponentId == firstFlight.Id)
+                    .All(dimension => dimension.DimensionLinePoint.Y > 0.0),
+                "The lowest flight dimension chain must hang from its arrival platform and leave the axis zone below the base clear.");
             TestAssert.Equal(1, section.Dimensions.Count(dimension =>
                     dimension.ComponentId == "RAILING"
                     && dimension.Orientation == DrawingDimensionOrientation.Vertical),

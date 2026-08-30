@@ -1804,11 +1804,25 @@ namespace WL.Stair.Cad2022
                 .ToArray();
             var minX = xs.Min() - 350.0;
             var geometryMaxX = xs.Max();
-            var floorLabelX = geometryMaxX + 580.0;
+            var drawingScale = state != null && state.Project != null
+                ? Math.Max(1, state.Project.DrawingScale)
+                : 50;
+            var levelTextRight = view.Texts
+                .Where(text => text != null && text.Content != null
+                    && text.Content.EndsWith("F)", StringComparison.Ordinal))
+                .Select(text => text.Position.X
+                    + EstimatePreviewTextWidth(text.Content, text.Height))
+                .DefaultIfEmpty(geometryMaxX)
+                .Max();
+            var floorLabelFontSize = 7.0 * drawingScale;
+            var floorLabelX = Math.Max(geometryMaxX, levelTextRight) + (4.0 * drawingScale);
             var showsSectionFloorLabels = string.IsNullOrWhiteSpace(previewFloorLabel)
                 && state != null && state.Project != null
                 && state.Project.Storeys != null && state.Project.Storeys.Count > 0;
-            var maxX = geometryMaxX + (showsSectionFloorLabels ? 1800.0 : 350.0);
+            var maxX = showsSectionFloorLabels
+                ? Math.Max(geometryMaxX + (36.0 * drawingScale),
+                    floorLabelX + (12.0 * drawingScale))
+                : geometryMaxX + 350.0;
             var minY = ys.Min() - 350.0;
             var maxY = ys.Max() + 350.0;
             var builder = new StringBuilder();
@@ -1852,9 +1866,10 @@ namespace WL.Stair.Cad2022
                                 ? storey.PlanFloorLabel : storey.Name));
                     builder.AppendFormat(
                         CultureInfo.InvariantCulture,
-                        "<text x='{0}' y='{1}' text-anchor='start' style='font-size:360px;font-weight:700;fill:#58ef70;stroke:#101820;stroke-width:6;paint-order:stroke'>{2}</text>",
+                        "<text x='{0}' y='{1}' text-anchor='start' style='font-size:{2}px;font-weight:700;fill:#58ef70;stroke:#101820;stroke-width:6;paint-order:stroke'>{3}</text>",
                         floorLabelX,
                         -elevation,
+                        floorLabelFontSize,
                         Escape(label));
                     elevation += Math.Max(0.0, storey.Height);
                 }
@@ -1868,9 +1883,10 @@ namespace WL.Stair.Cad2022
                 {
                     builder.AppendFormat(
                         CultureInfo.InvariantCulture,
-                        "<text x='{0}' y='{1}' text-anchor='start' style='font-size:360px;font-weight:700;fill:#58ef70;stroke:#101820;stroke-width:6;paint-order:stroke'>{2}</text>",
+                        "<text x='{0}' y='{1}' text-anchor='start' style='font-size:{2}px;font-weight:700;fill:#58ef70;stroke:#101820;stroke-width:6;paint-order:stroke'>{3}</text>",
                         floorLabelX,
                         -elevation,
+                        floorLabelFontSize,
                         Escape(topFloor.PlanFloorLabel));
                 }
             }
@@ -1908,9 +1924,10 @@ namespace WL.Stair.Cad2022
             {
                 builder.AppendFormat(
                     CultureInfo.InvariantCulture,
-                    "<text x='{0}' y='{1}'>{2}</text>",
+                    "<text x='{0}' y='{1}' style='font-size:{2}px'>{3}</text>",
                     drawingText.Position.X,
                     -drawingText.Position.Y,
+                    Math.Max(1.0, drawingText.Height),
                     Escape(drawingText.Content));
             }
             foreach (var dimension in view.Dimensions)
@@ -2064,6 +2081,17 @@ namespace WL.Stair.Cad2022
                 .Replace("'", "&#39;")
                 .Replace("<", "&lt;")
                 .Replace(">", "&gt;");
+        }
+
+        private static double EstimatePreviewTextWidth(string value, double height)
+        {
+            var textHeight = Math.Max(1.0, height);
+            return (value ?? string.Empty).Sum(character =>
+                char.IsWhiteSpace(character)
+                    ? textHeight * 0.35
+                    : character <= 0x7f
+                        ? textHeight * 0.62
+                        : textHeight);
         }
 
         private string BuildHtml()
