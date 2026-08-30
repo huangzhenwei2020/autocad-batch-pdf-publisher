@@ -140,6 +140,35 @@ namespace WL.Stair.Core.Geometry
                     // boundary wins: keep its position and close at the upper
                     // destination. This makes bottom-up editing deterministic.
                     var allowEndClosure = AllowsLowerFlightClosure(destinationBoundary);
+                    StairStoreyDefinition nextStorey;
+                    if (index == storey.Flights.Count - 1
+                        && upperFloor != null
+                        && storeysByLowerFloor.TryGetValue(upperFloor.Id, out nextStorey)
+                        && nextStorey != null
+                        && !string.Equals(nextStorey.Id, storey.Id,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        var nextRange = stairwellRanges[nextStorey.Id];
+                        var nextDirection = floorDirections[upperFloor.Id];
+                        var nextAxis = nextDirection > 0
+                            ? nextRange.LeftAxisX
+                            : nextRange.RightAxisX;
+                        var nextConnectionX = nextAxis
+                            + (nextDirection * upperFloor.PlatformWidth);
+                        var directFlightEndX = currentX
+                            + (direction * flightResult.HorizontalRun);
+                        var transitionClosureGap = direction
+                            * (nextConnectionX - directFlightEndX);
+                        if (transitionClosureGap > 0.001)
+                        {
+                            // At a changed stairwell range the upper storey's
+                            // single shared floor is the actual destination.
+                            // Reuse the existing lower-flight closure geometry
+                            // to bridge the final run to that floor platform.
+                            boundaryConnectionX = nextConnectionX;
+                            allowEndClosure = true;
+                        }
+                    }
                     var allowStartClosure = !allowEndClosure
                         && AllowsUpperFlightClosure(sourceBoundary);
                     var flightStartX = allowStartClosure
@@ -456,9 +485,7 @@ namespace WL.Stair.Core.Geometry
             // linework below is still merged to one line per shared edge.
             hatchRegions.AddRange(BuildStructuralHatchRegions(lines, project.Construction.SectionHatch));
             hatchRegions.AddRange(BuildWallHatchRegions(lines, project.Construction.WallHatch));
-            var mergedLines = MergeConnectedCutOutlines(lines)
-                .Where(line => !IsFloorTransitionInternalEnd(line))
-                .ToArray();
+            var mergedLines = MergeConnectedCutOutlines(lines).ToArray();
             var alignedDimensions = AlignDimensionsToOuterOutline(
                 mergedLines,
                 dimensions,
@@ -902,15 +929,6 @@ namespace WL.Stair.Core.Geometry
                 && (line.Role == StairLineRole.CutBoundary
                     || line.Role == StairLineRole.CutFlightProfile
                     || line.Role == StairLineRole.HatchBoundary);
-        }
-
-        private static bool IsFloorTransitionInternalEnd(DrawingLine line)
-        {
-            if (line == null || string.IsNullOrWhiteSpace(line.ComponentId)
-                || Math.Abs(line.Start.X - line.End.X) >= 0.001)
-                return false;
-            return line.ComponentId.IndexOf("-SHIFT-L", StringComparison.OrdinalIgnoreCase) >= 0
-                || line.ComponentId.IndexOf("-SHIFT-R", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private static bool IsHorizontal(DrawingLine line)
@@ -1496,6 +1514,13 @@ namespace WL.Stair.Core.Geometry
                 new Point2D(axisX + halfWidth, beamBottom),
                 new Point2D(axisX + halfWidth, slabBottom),
                 StairLineRole.CutBoundary, false, componentId));
+            // Duplicate the slab underside across the beam width.  The outline
+            // merger cancels this shared edge against the floor slab, so the
+            // attached beam and slab read as one closed structural perimeter.
+            lines.Add(new DrawingLine(
+                new Point2D(axisX + halfWidth, slabBottom),
+                new Point2D(axisX - halfWidth, slabBottom),
+                StairLineRole.CutBoundary, false, componentId));
         }
 
         private static void AddFloorTransitionSlabsForSide(
@@ -1520,21 +1545,33 @@ namespace WL.Stair.Core.Geometry
                 .OrderBy(item => item.AxisX)
                 .ToArray();
             if (beamLocations.Length < 2) return;
+            var primaryAxisX = leftSide
+                ? primarySupport.Range.LeftAxisX
+                : primarySupport.Range.RightAxisX;
 
             for (var index = 0; index < beamLocations.Length - 1; index++)
             {
                 var left = beamLocations[index];
                 var right = beamLocations[index + 1];
-                // The infill slab ends on the two facing beam edges.  Hatching
-                // still receives the closed slab, while the visible-line cleanup
-                // removes these two construction seams and retains only the
-                // combined external beam/slab perimeter.
-                var firstX = left.AxisX + left.HalfWidth;
-                var secondX = right.AxisX - right.HalfWidth;
-                if (secondX - firstX < 0.001) continue;
+                var facingFirstX = left.AxisX + left.HalfWidth;
+                var facingSecondX = right.AxisX - right.HalfWidth;
+                if (facingSecondX - facingFirstX < 0.001) continue;
                 if (FloorSlabCoversInterval(floor, primarySupport, defaults,
-                        leftSide, firstX, secondX))
+                        leftSide, facingFirstX, facingSecondX))
                     continue;
+
+                // The primary floor/support already owns its beam-and-slab
+                // perimeter.  A secondary wall beam is different: the infill
+                // slab must pass across its full width so the coincident slab
+                // underside and beam top cancel during outline merging.  This
+                // leaves one closed external beam/slab contour instead of a
+                // loose slab ending at the beam face.
+                var firstX = Math.Abs(left.AxisX - primaryAxisX) < 0.001
+                    ? facingFirstX
+                    : left.AxisX - left.HalfWidth;
+                var secondX = Math.Abs(right.AxisX - primaryAxisX) < 0.001
+                    ? facingSecondX
+                    : right.AxisX + right.HalfWidth;
                 AddTransitionSlab(lines, firstX, secondX, elevation, thickness,
                     beamLocations.Length == 2 ? componentId : componentId + "-" + (index + 1));
             }

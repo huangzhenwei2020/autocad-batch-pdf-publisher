@@ -79,6 +79,7 @@ namespace WL.Stair.Tests
             PreservesLockedPlatformWidth,
             DrawsWallsFromBeamCenterAxes,
             BuildsShiftedStoreyWallsAxesBeamsAndTransitionSlabs,
+            ConnectsIndependentStairwellTransitionAsOneOutline,
             KeepsSectionGeometryWhenIndependentAxesMatchUnifiedAxes,
             BuildsWallSegmentDoorAndWindowOpenings,
             BuildsPlatformDoorWindowElevationWithoutChangingPlatform,
@@ -2393,11 +2394,16 @@ namespace WL.Stair.Tests
             TestAssert.True(transitionLines.Any(line =>
                     string.Equals(line.ComponentId, "LB-02-SHIFT-R", StringComparison.OrdinalIgnoreCase)
                     && Math.Abs(line.Start.Y - line.End.Y) < 0.001
-                    && SameUndirectedInterval(line.Start.X, line.End.X, 4100.0, 4840.0)),
-                "The uncovered side must receive a continuous slab between the inner and outer wall beams.");
+                    && SameUndirectedInterval(line.Start.X, line.End.X, 3900.0, 4840.0)),
+                "The uncovered side slab must pass across the secondary beam and stop at the primary beam face.");
+            TestAssert.True(transitionLines.Any(line =>
+                    Math.Abs(line.Start.X - line.End.X) < 0.001
+                    && Math.Abs(line.Start.X - 3900.0) < 0.001),
+                "The transition slab must retain its external end so the combined beam/slab outline is closed.");
             TestAssert.True(!transitionLines.Any(line =>
-                    Math.Abs(line.Start.X - line.End.X) < 0.001),
-                "Beam/slab shared edges must be removed so only the combined external outline remains.");
+                    Math.Abs(line.Start.X - line.End.X) < 0.001
+                    && Math.Abs(line.Start.X - 4840.0) < 0.001),
+                "The transition slab seam against the primary support must cancel from the visible outline.");
             var transitionTop = outcome.Result.Storeys[0].UpperElevation;
             var transitionBottom = transitionTop - project.Construction.FloorSlabThickness;
             foreach (var gap in new[] { new[] { 0.0, 300.0 }, new[] { 4000.0, 4940.0 } })
@@ -2410,11 +2416,118 @@ namespace WL.Stair.Tests
                         && Math.Min(line.Start.Y, line.End.Y) < transitionTop - 0.001),
                     "No beam, floor or infill seam may remain inside the connected slab thickness.");
             }
+            foreach (var secondaryBeamAxis in new[] { 0.0, 4000.0 })
+            {
+                TestAssert.True(!section.Lines.Any(line =>
+                        Math.Abs(line.Start.Y - transitionBottom) < 0.001
+                        && Math.Abs(line.End.Y - transitionBottom) < 0.001
+                        && Math.Min(line.Start.X, line.End.X) < secondaryBeamAxis - 0.001
+                        && Math.Max(line.Start.X, line.End.X) > secondaryBeamAxis + 0.001),
+                    "The slab underside must disappear through an attached secondary beam width.");
+            }
             TestAssert.True(section.Lines.Any(line =>
                     line.ComponentId == "LB-02-RAILING-CONNECTION"
                     && line.Role == StairLineRole.Handrail
                     && Math.Abs(line.Start.Y - line.End.Y) < 0.001),
                 "Flights meeting at a shifted shared floor must receive a continuous platform handrail.");
+        }
+
+        private static void ConnectsIndependentStairwellTransitionAsOneOutline()
+        {
+            var project = StairProjectDefinition.CreateDefault();
+            project.Construction.StairwellDepth = 8900.0;
+            project.Construction.OppositeSupportsEnabled = true;
+            project.Construction.SlabOverhang = 300.0;
+            project.Construction.CloseSlabOverhangEdge = false;
+
+            var lower = project.Storeys[0];
+            lower.Height = 4500.0;
+            lower.TotalRiserCount = 30;
+            lower.IndependentStairwellEnabled = true;
+            lower.StairwellDepthOverride = 6000.0;
+            lower.StairwellAlignment = StairwellAlignment.Center;
+            lower.StairwellAxisOffset = 0.0;
+            lower.StairwellConstraintLocked = false;
+            lower.TreadDepthLinked = true;
+            lower.Flights.Clear();
+            lower.Landings.Clear();
+            lower.Flights.Add(StairFlightDefinition.CreateDefault(
+                "TD-B1-1", "第1跑", 10, StairFlightDirection.Left, StairSectionRepresentation.Cut));
+            lower.Flights.Add(StairFlightDefinition.CreateDefault(
+                "TD-B1-2", "第2跑", 10, StairFlightDirection.Right, StairSectionRepresentation.Rear));
+            lower.Flights.Add(StairFlightDefinition.CreateDefault(
+                "TD-B1-3", "第3跑", 10, StairFlightDirection.Left, StairSectionRepresentation.Cut));
+            lower.Landings.Add(StairLandingDefinition.CreateDefault(
+                "PT-B1-1", "休息平台1", "TD-B1-1", "TD-B1-2"));
+            lower.Landings.Add(StairLandingDefinition.CreateDefault(
+                "PT-B1-2", "休息平台2", "TD-B1-2", "TD-B1-3"));
+            lower.Landings[0].PlatformWidth = 2140.0;
+            lower.Landings[1].PlatformWidth = 1340.0;
+            project.Floors[0].PlatformWidth = 1340.0;
+            project.Floors[1].PlatformWidth = 2140.0;
+            project.Floors[1].PlatformWidthLocked = true;
+            project.Floors[1].PlatformType = PlatformLayoutType.Platform3;
+            project.Floors[1].OppositeSupportType = OppositeSupportType.BeamWithSlab;
+
+            new StairProjectConstraintService().Apply(project);
+            var outcome = new StairProjectCalculator().Calculate(project);
+            TestAssert.True(outcome.IsSuccess,
+                "The real three-flight independent-depth transition must calculate.");
+            var section = new StairProjectGeometryBuilder().BuildSection(project, outcome.Result);
+            var resolver = new StairwellAxisResolver();
+            var lowerRange = resolver.Resolve(project, lower);
+            var nextRange = resolver.Resolve(project, project.Storeys[1]);
+            var sharedFloor = project.Floors[1];
+            var elevation = outcome.Result.Storeys[0].UpperElevation;
+            var slabBottom = elevation - project.Construction.FloorSlabThickness;
+            var primaryConnectionX = nextRange.LeftAxisX + sharedFloor.PlatformWidth;
+            var finalFlightId = lower.Flights.Last().Id;
+
+            TestAssert.True(section.Lines.Any(line =>
+                    string.Equals(line.ComponentId, finalFlightId, StringComparison.OrdinalIgnoreCase)
+                    && Math.Abs(line.Start.Y - elevation) < 0.001
+                    && Math.Abs(line.End.Y - elevation) < 0.001
+                    && (Math.Abs(line.Start.X - primaryConnectionX) < 0.001
+                        || Math.Abs(line.End.X - primaryConnectionX) < 0.001)
+                    && Math.Abs(line.End.X - line.Start.X) > 0.001),
+                "The lower storey's final flight must automatically bridge to the upper storey's shared floor.");
+
+            var halfBeam = project.Construction.FloorBeam.Width / 2.0;
+            var secondaryRightOuter = lowerRange.RightAxisX - halfBeam;
+            var primaryRightFace = nextRange.RightAxisX - halfBeam;
+            var rightTransition = section.Lines.Where(line =>
+                string.Equals(line.ComponentId, sharedFloor.Id + "-SHIFT-R",
+                    StringComparison.OrdinalIgnoreCase)).ToArray();
+            TestAssert.True(rightTransition.Any(line =>
+                    Math.Abs(line.Start.Y - elevation) < 0.001
+                    && Math.Abs(line.End.Y - elevation) < 0.001
+                    && SameUndirectedInterval(line.Start.X, line.End.X,
+                        secondaryRightOuter, primaryRightFace)),
+                "The right transition slab must span from the secondary beam outer edge to the primary beam face.");
+            TestAssert.True(rightTransition.Any(line =>
+                    Math.Abs(line.Start.X - secondaryRightOuter) < 0.001
+                    && Math.Abs(line.End.X - secondaryRightOuter) < 0.001
+                    && Math.Abs(Math.Max(line.Start.Y, line.End.Y) - elevation) < 0.001
+                    && Math.Abs(Math.Min(line.Start.Y, line.End.Y) - slabBottom) < 0.001),
+                "The right transition slab must retain its external vertical edge and close the outline.");
+            TestAssert.True(!rightTransition.Any(line =>
+                    Math.Abs(line.Start.X - primaryRightFace) < 0.001
+                    && Math.Abs(line.End.X - primaryRightFace) < 0.001),
+                "The internal seam against the primary right support must not remain visible.");
+
+            foreach (var secondaryBeamAxis in new[]
+            {
+                lowerRange.LeftAxisX,
+                lowerRange.RightAxisX
+            })
+            {
+                TestAssert.True(!section.Lines.Any(line =>
+                        Math.Abs(line.Start.Y - slabBottom) < 0.001
+                        && Math.Abs(line.End.Y - slabBottom) < 0.001
+                        && Math.Min(line.Start.X, line.End.X) < secondaryBeamAxis - 0.001
+                        && Math.Max(line.Start.X, line.End.X) > secondaryBeamAxis + 0.001),
+                    "A connected floor slab underside must not pass visibly through its attached beam.");
+            }
         }
 
         private static void KeepsSectionGeometryWhenIndependentAxesMatchUnifiedAxes()
