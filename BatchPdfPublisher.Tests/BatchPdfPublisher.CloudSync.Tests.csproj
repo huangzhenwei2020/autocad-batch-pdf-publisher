@@ -14,5 +14,6 @@
     <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncCatalog.cs" Link="CloudSyncCatalog.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\LocalFolderSyncEngine.cs" Link="LocalFolderSyncEngine.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncPendingFileService.cs" Link="CloudSyncPendingFileService.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncCenterService.cs" Link="CloudSyncCenterService.cs" />
   </ItemGroup>
 </Project>

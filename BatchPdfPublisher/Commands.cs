@@ -49,6 +49,12 @@ namespace BatchPdfPublisher
             Application.ShowModalDialog(new CloudSyncSettingsForm());
         }
 
+        [CommandMethod("WLCLOUDCENTER", CommandFlags.Session)]
+        public void OpenCloudSyncCenter()
+        {
+            Application.ShowModalDialog(new CloudSyncCenterForm());
+        }
+
         [CommandMethod("WLJZSM", CommandFlags.Session)]
         public void OpenArchitectureAssistant()
         {

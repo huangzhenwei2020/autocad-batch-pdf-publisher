@@ -12,4 +12,10 @@ namespace BatchPdfPublisher.Services
         public static string PluginDirectory { get { return RootDirectory; } }
         public static string SettingsFile(string fileName, params string[] legacy) { return Path.Combine(Path.GetTempPath(), fileName); }
     }
+
+    public static class CloudSyncCoordinator
+    {
+        public static void Reload() { }
+        public static void RequestSynchronization(bool immediate) { }
+    }
 }

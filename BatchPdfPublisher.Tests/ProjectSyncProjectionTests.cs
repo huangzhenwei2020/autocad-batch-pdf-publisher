@@ -64,11 +64,3 @@ internal static class ProjectSyncProjectionTests
         if (!value) throw new Exception(message);
     }
 }
-
-namespace BatchPdfPublisher.Services
-{
-    public static class CloudSyncCoordinator
-    {
-        public static void Reload() { }
-    }
-}

@@ -79,8 +79,9 @@ namespace BatchPdfPublisher.Views
             var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.RightToLeft };
             var close = ButtonFor("关闭"); close.Click += delegate { Close(); };
             var save = ButtonFor("保存设置"); save.Click += SaveSettings;
+            var center = ButtonFor("同步中心"); center.Click += delegate { using (var form = new CloudSyncCenterForm()) form.ShowDialog(this); };
             _syncNow = ButtonFor("立即同步"); _syncNow.Click += SynchronizeNow;
-            actions.Controls.Add(close); actions.Controls.Add(_syncNow); actions.Controls.Add(save);
+            actions.Controls.Add(close); actions.Controls.Add(center); actions.Controls.Add(_syncNow); actions.Controls.Add(save);
             root.Controls.Add(actions);
 
             Load += delegate { LoadSettings(); CloudSyncCoordinator.SynchronizationCompleted += OnSynchronizationCompleted; };

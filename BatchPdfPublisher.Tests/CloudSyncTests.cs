@@ -18,6 +18,8 @@ internal static class CloudSyncTests
         Run("DefersOpenDrawingUntilClosed", DefersOpenDrawingUntilClosed);
         Run("MapsProjectFileOnlyOnce", MapsProjectFileOnlyOnce);
         Run("DefersRemoteDeletionUntilDrawingCloses", DefersRemoteDeletionUntilDrawingCloses);
+        Run("RestoresHistoryWithBackup", RestoresHistoryWithBackup);
+        Run("ResolvesConflictUsingLocalCopy", ResolvesConflictUsingLocalCopy);
         Console.WriteLine("Executed " + _executed + " cloud sync tests; 0 failed.");
     }
 
@@ -182,6 +184,60 @@ internal static class CloudSyncTests
             True(!File.Exists(drawing), "pending remote deletion was not applied after close");
             CloudSyncPendingFileService.ClearOpenPathProbe();
         });
+    }
+
+    private static void RestoresHistoryWithBackup()
+    {
+        WithDefaultWorkspace((root, settings, engine, catalog, localFile, remoteFile) =>
+        {
+            File.WriteAllText(localFile, "base"); engine.Synchronize(settings, catalog);
+            File.WriteAllText(remoteFile, "remote-current"); engine.Synchronize(settings, catalog);
+            Equal("remote-current", File.ReadAllText(localFile));
+            var center = new CloudSyncCenterService();
+            var history = center.Load().History.First(item => item.LogicalPath.EndsWith("settings.json", StringComparison.OrdinalIgnoreCase));
+            center.RestoreHistory(history);
+            Equal("base", File.ReadAllText(localFile));
+            True(Directory.GetFiles(Path.Combine(root, ".cloud-sync", "center-backups"), "*", SearchOption.AllDirectories).Any(), "restore backup missing");
+        });
+    }
+
+    private static void ResolvesConflictUsingLocalCopy()
+    {
+        WithDefaultWorkspace((root, settings, engine, catalog, localFile, remoteFile) =>
+        {
+            File.WriteAllText(localFile, "base"); engine.Synchronize(settings, catalog);
+            File.WriteAllText(localFile, "local-choice"); File.WriteAllText(remoteFile, "remote-choice");
+            Equal(1, engine.Synchronize(settings, catalog).Conflicts);
+            var center = new CloudSyncCenterService();
+            var conflict = center.Load().Conflicts.Single();
+            center.ResolveConflict(conflict, true);
+            Equal("local-choice", File.ReadAllText(localFile));
+            Equal("local-choice", File.ReadAllText(remoteFile));
+            Equal(0, center.Load().Conflicts.Count);
+        });
+    }
+
+    private static void WithDefaultWorkspace(Action<string, CloudSyncSettings, LocalFolderSyncEngine, CloudSyncCatalog, string, string> action)
+    {
+        var root = NewRoot();
+        try
+        {
+            UserDataPaths.TestRootDirectory = root;
+            Directory.CreateDirectory(UserDataPaths.SettingsDirectory);
+            var shared = Path.Combine(root, "shared"); Directory.CreateDirectory(shared);
+            var settings = new CloudSyncSettings
+            {
+                Enabled = true, SyncFolder = shared, DeviceName = "TEST-PC",
+                SyncGeneralSettings = true, SyncProjectConfigurations = false, SyncTemplatesAndSchemes = false
+            };
+            var store = new CloudSyncSettingsStore(); store.SaveSettings(settings);
+            var engine = new LocalFolderSyncEngine(store);
+            var catalog = CloudSyncCatalog.CreateDefault(settings);
+            var localFile = Path.Combine(UserDataPaths.SettingsDirectory, "settings.json");
+            var remoteFile = Path.Combine(shared, "万落建筑云同步", "通用配置", "settings.json");
+            action(root, settings, engine, catalog, localFile, remoteFile);
+        }
+        finally { Directory.Delete(root, true); }
     }
 
     private static void WithWorkspace(Action<string, string, string, LocalFolderSyncEngine, CloudSyncSettings, CloudSyncCatalog> action)
