@@ -388,7 +388,7 @@ namespace WL.Stair.Core.Geometry
                         !ReferenceEquals(item, primarySupport)))
                     {
                         AddFloorTransitionSupportBeams(lines, floor, position.Elevation,
-                            secondarySupport, project.Construction);
+                            secondarySupport, primarySupport, project.Construction);
                     }
                     AddFloorTransitionSlabs(lines, floor, position.Elevation,
                         distinctSupports, primarySupport, project.Construction);
@@ -1468,26 +1468,59 @@ namespace WL.Stair.Core.Geometry
             StairFloorDefinition floor,
             double elevation,
             FloorSupportPosition support,
+            FloorSupportPosition primarySupport,
             StairConstructionDefaults defaults)
         {
             var slabThickness = floor.SlabThicknessOverride ?? defaults.FloorSlabThickness;
             var primaryLeft = support.Direction > 0;
-            AddAttachedFloorBeam(lines,
-                primaryLeft ? support.Range.LeftAxisX : support.Range.RightAxisX,
-                elevation,
-                slabThickness,
-                floor.BeamWidthOverride ?? defaults.FloorBeam.Width,
-                floor.BeamDepthOverride ?? defaults.FloorBeam.Depth,
-                floor.Id + "-SHIFT-BEAM-PRIMARY-" + support.StoreyId);
+            var primaryAxisX = primaryLeft
+                ? support.Range.LeftAxisX
+                : support.Range.RightAxisX;
+            if (!SupportHasBeamAtAxis(floor, primarySupport, defaults, primaryAxisX))
+            {
+                AddAttachedFloorBeam(lines,
+                    primaryAxisX,
+                    elevation,
+                    slabThickness,
+                    floor.BeamWidthOverride ?? defaults.FloorBeam.Width,
+                    floor.BeamDepthOverride ?? defaults.FloorBeam.Depth,
+                    floor.Id + "-SHIFT-BEAM-PRIMARY-" + support.StoreyId);
+            }
             if (!defaults.OppositeSupportsEnabled || floor.OppositeSupportType == OppositeSupportType.None)
                 return;
+            var oppositeAxisX = primaryLeft
+                ? support.Range.RightAxisX
+                : support.Range.LeftAxisX;
+            if (Math.Abs(oppositeAxisX - primaryAxisX) < 0.001
+                || SupportHasBeamAtAxis(floor, primarySupport, defaults, oppositeAxisX))
+                return;
             AddAttachedFloorBeam(lines,
-                primaryLeft ? support.Range.RightAxisX : support.Range.LeftAxisX,
+                oppositeAxisX,
                 elevation,
                 slabThickness,
                 floor.OppositeBeamWidthOverride ?? defaults.FloorBeam.Width,
                 floor.OppositeBeamDepthOverride ?? defaults.FloorBeam.Depth,
                 floor.Id + "-SHIFT-BEAM-OPPOSITE-" + support.StoreyId);
+        }
+
+        private static bool SupportHasBeamAtAxis(
+            StairFloorDefinition floor,
+            FloorSupportPosition support,
+            StairConstructionDefaults defaults,
+            double axisX)
+        {
+            if (support == null || support.Range == null) return false;
+            var primaryAxisX = support.Direction > 0
+                ? support.Range.LeftAxisX
+                : support.Range.RightAxisX;
+            if (Math.Abs(axisX - primaryAxisX) < 0.001) return true;
+            if (!defaults.OppositeSupportsEnabled
+                || floor.OppositeSupportType == OppositeSupportType.None)
+                return false;
+            var oppositeAxisX = support.Direction > 0
+                ? support.Range.RightAxisX
+                : support.Range.LeftAxisX;
+            return Math.Abs(axisX - oppositeAxisX) < 0.001;
         }
 
         private static void AddAttachedFloorBeam(
@@ -1502,25 +1535,74 @@ namespace WL.Stair.Core.Geometry
             var halfWidth = Math.Max(0.5, beamWidth / 2.0);
             var slabBottom = elevation - Math.Max(0.0, slabThickness);
             var beamBottom = elevation - Math.Max(slabThickness, beamDepth);
-            lines.Add(new DrawingLine(
-                new Point2D(axisX - halfWidth, slabBottom),
-                new Point2D(axisX - halfWidth, beamBottom),
-                StairLineRole.CutBoundary, false, componentId));
-            lines.Add(new DrawingLine(
-                new Point2D(axisX - halfWidth, beamBottom),
-                new Point2D(axisX + halfWidth, beamBottom),
-                StairLineRole.CutBoundary, false, componentId));
-            lines.Add(new DrawingLine(
-                new Point2D(axisX + halfWidth, beamBottom),
-                new Point2D(axisX + halfWidth, slabBottom),
-                StairLineRole.CutBoundary, false, componentId));
-            // Duplicate the slab underside across the beam width.  The outline
-            // merger cancels this shared edge against the floor slab, so the
-            // attached beam and slab read as one closed structural perimeter.
-            lines.Add(new DrawingLine(
-                new Point2D(axisX + halfWidth, slabBottom),
-                new Point2D(axisX - halfWidth, slabBottom),
-                StairLineRole.CutBoundary, false, componentId));
+            var startX = axisX - halfWidth;
+            var endX = axisX + halfWidth;
+            // A freely shifted wall axis can put this beam partly inside an
+            // existing floor-end beam.  Drawing both complete rectangles makes
+            // their overlapping bottom edges disappear in the visible-outline
+            // merger.  Add only the still-uncovered beam-bottom intervals; the
+            // shared vertical edge then cancels and the two beams become one
+            // structural perimeter.
+            var uncovered = ResolveUncoveredHorizontalIntervals(
+                lines, beamBottom, startX, endX);
+            foreach (var interval in uncovered)
+            {
+                lines.Add(new DrawingLine(
+                    new Point2D(interval[0], slabBottom),
+                    new Point2D(interval[0], beamBottom),
+                    StairLineRole.CutBoundary, false, componentId));
+                lines.Add(new DrawingLine(
+                    new Point2D(interval[0], beamBottom),
+                    new Point2D(interval[1], beamBottom),
+                    StairLineRole.CutBoundary, false, componentId));
+                lines.Add(new DrawingLine(
+                    new Point2D(interval[1], beamBottom),
+                    new Point2D(interval[1], slabBottom),
+                    StairLineRole.CutBoundary, false, componentId));
+                // Duplicate the slab underside across only the new portion.
+                // The outline merger removes it wherever a slab is attached.
+                lines.Add(new DrawingLine(
+                    new Point2D(interval[1], slabBottom),
+                    new Point2D(interval[0], slabBottom),
+                    StairLineRole.CutBoundary, false, componentId));
+            }
+        }
+
+        private static IReadOnlyList<double[]> ResolveUncoveredHorizontalIntervals(
+            IEnumerable<DrawingLine> sourceLines,
+            double elevation,
+            double firstX,
+            double secondX)
+        {
+            var start = Math.Min(firstX, secondX);
+            var end = Math.Max(firstX, secondX);
+            var covered = sourceLines
+                .Where(line => !line.IsHidden
+                    && IsMergeCandidate(line)
+                    && Math.Abs(line.Start.Y - elevation) < 0.001
+                    && Math.Abs(line.End.Y - elevation) < 0.001
+                    && AxisEnd(line, false) > start + 0.001
+                    && AxisStart(line, false) < end - 0.001)
+                .Select(line => new[]
+                {
+                    Math.Max(start, AxisStart(line, false)),
+                    Math.Min(end, AxisEnd(line, false))
+                })
+                .Where(interval => interval[1] - interval[0] > 0.001)
+                .OrderBy(interval => interval[0])
+                .ToArray();
+            var result = new List<double[]>();
+            var cursor = start;
+            foreach (var interval in covered)
+            {
+                if (interval[0] > cursor + 0.001)
+                    result.Add(new[] { cursor, interval[0] });
+                cursor = Math.Max(cursor, interval[1]);
+                if (cursor >= end - 0.001) break;
+            }
+            if (cursor < end - 0.001)
+                result.Add(new[] { cursor, end });
+            return result;
         }
 
         private static void AddFloorTransitionSlabsForSide(
@@ -1556,9 +1638,6 @@ namespace WL.Stair.Core.Geometry
                 var facingFirstX = left.AxisX + left.HalfWidth;
                 var facingSecondX = right.AxisX - right.HalfWidth;
                 if (facingSecondX - facingFirstX < 0.001) continue;
-                if (FloorSlabCoversInterval(floor, primarySupport, defaults,
-                        leftSide, facingFirstX, facingSecondX))
-                    continue;
 
                 // The primary floor/support already owns its beam-and-slab
                 // perimeter.  A secondary wall beam is different: the infill
@@ -1572,21 +1651,81 @@ namespace WL.Stair.Core.Geometry
                 var secondX = Math.Abs(right.AxisX - primaryAxisX) < 0.001
                     ? facingSecondX
                     : right.AxisX + right.HalfWidth;
+                double primarySlabStart;
+                double primarySlabEnd;
+                if (TryResolveFloorSlabInterval(floor, primarySupport, defaults,
+                        leftSide, out primarySlabStart, out primarySlabEnd))
+                {
+                    var primaryIsLeft = Math.Abs(left.AxisX - primaryAxisX) < 0.001;
+                    if (primaryIsLeft)
+                    {
+                        if (primarySlabEnd >= secondX - 0.001) continue;
+                        if (primarySlabEnd > firstX + 0.001)
+                            firstX = primarySlabEnd;
+                    }
+                    else
+                    {
+                        if (primarySlabStart <= firstX + 0.001) continue;
+                        if (primarySlabStart < secondX - 0.001)
+                            secondX = primarySlabStart;
+                    }
+                }
+                // A final flight that is allowed to close to the shared floor
+                // can already occupy exactly this transition strip.  Adding a
+                // second rectangle over it would make the outline merger erase
+                // their coincident top and underside.  Reuse that existing
+                // closed strip just as we reuse an unchanged-axis beam.
+                if (HorizontalBoundaryCoversInterval(lines, elevation, firstX, secondX)
+                    && HorizontalBoundaryCoversInterval(
+                        lines, elevation - thickness, firstX, secondX))
+                    continue;
                 AddTransitionSlab(lines, firstX, secondX, elevation, thickness,
                     beamLocations.Length == 2 ? componentId : componentId + "-" + (index + 1));
             }
         }
 
-        private static bool FloorSlabCoversInterval(
+        private static bool HorizontalBoundaryCoversInterval(
+            IEnumerable<DrawingLine> sourceLines,
+            double elevation,
+            double firstX,
+            double secondX)
+        {
+            var start = Math.Min(firstX, secondX);
+            var end = Math.Max(firstX, secondX);
+            if (end - start < 0.001) return true;
+            var intervals = sourceLines
+                .Where(line => !line.IsHidden
+                    && IsMergeCandidate(line)
+                    && Math.Abs(line.Start.Y - elevation) < 0.001
+                    && Math.Abs(line.End.Y - elevation) < 0.001
+                    && AxisEnd(line, false) > start + 0.001
+                    && AxisStart(line, false) < end - 0.001)
+                .Select(line => new[]
+                {
+                    Math.Max(start, AxisStart(line, false)),
+                    Math.Min(end, AxisEnd(line, false))
+                })
+                .Where(interval => interval[1] - interval[0] > 0.001)
+                .OrderBy(interval => interval[0])
+                .ToArray();
+            var coveredUntil = start;
+            foreach (var interval in intervals)
+            {
+                if (interval[0] > coveredUntil + 0.001) return false;
+                coveredUntil = Math.Max(coveredUntil, interval[1]);
+                if (coveredUntil >= end - 0.001) return true;
+            }
+            return coveredUntil >= end - 0.001;
+        }
+
+        private static bool TryResolveFloorSlabInterval(
             StairFloorDefinition floor,
             FloorSupportPosition support,
             StairConstructionDefaults defaults,
             bool leftSide,
-            double firstX,
-            double secondX)
+            out double slabStart,
+            out double slabEnd)
         {
-            double slabStart;
-            double slabEnd;
             var primarySide = leftSide ? support.Direction > 0 : support.Direction < 0;
             if (primarySide)
             {
@@ -1606,19 +1745,24 @@ namespace WL.Stair.Core.Geometry
             }
             else
             {
+                if (floor.OppositeSupportType != OppositeSupportType.BeamWithSlab)
+                {
+                    slabStart = 0.0;
+                    slabEnd = 0.0;
+                    return false;
+                }
                 var axisX = leftSide ? support.Range.LeftAxisX : support.Range.RightAxisX;
                 var halfBeam = Math.Max(0.5,
                     (floor.OppositeBeamWidthOverride ?? defaults.FloorBeam.Width) / 2.0);
                 var outsideDirection = leftSide ? -1 : 1;
-                var extent = floor.OppositeSupportType == OppositeSupportType.BeamWithSlab
-                    ? halfBeam + Math.Max(0.0, floor.SlabOverhangOverride ?? defaults.SlabOverhang)
-                    : halfBeam;
+                var extent = halfBeam
+                    + Math.Max(0.0, floor.SlabOverhangOverride ?? defaults.SlabOverhang);
                 slabStart = Math.Min(axisX + (outsideDirection * -halfBeam),
                     axisX + (outsideDirection * extent));
                 slabEnd = Math.Max(axisX + (outsideDirection * -halfBeam),
                     axisX + (outsideDirection * extent));
             }
-            return firstX >= slabStart - 0.001 && secondX <= slabEnd + 0.001;
+            return true;
         }
 
         private static double ResolveFloorBeamHalfWidth(

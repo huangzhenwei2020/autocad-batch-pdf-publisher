@@ -80,6 +80,7 @@ namespace WL.Stair.Tests
             DrawsWallsFromBeamCenterAxes,
             BuildsShiftedStoreyWallsAxesBeamsAndTransitionSlabs,
             ConnectsIndependentStairwellTransitionAsOneOutline,
+            HandlesAllIndependentStairwellTransitionRanges,
             KeepsSectionGeometryWhenIndependentAxesMatchUnifiedAxes,
             BuildsWallSegmentDoorAndWindowOpenings,
             BuildsPlatformDoorWindowElevationWithoutChangingPlatform,
@@ -2530,6 +2531,166 @@ namespace WL.Stair.Tests
             }
         }
 
+        private static void HandlesAllIndependentStairwellTransitionRanges()
+        {
+            var alignments = new[]
+            {
+                StairwellAlignment.Left,
+                StairwellAlignment.Center,
+                StairwellAlignment.Right
+            };
+            var depths = new[] { 6000.0, 8900.0, 10000.0 };
+            var offsets = new[] { -500.0, 0.0, 500.0 };
+            foreach (var alignment in alignments)
+            foreach (var depth in depths)
+            foreach (var offset in offsets)
+            foreach (var mirrored in new[] { false, true })
+            {
+                var project = CreateIndependentTransitionProject(
+                    alignment, depth, offset, mirrored);
+                var outcome = new StairProjectCalculator().Calculate(project);
+                var caseName = alignment + "/" + depth.ToString("0", CultureInfo.InvariantCulture)
+                    + "/" + offset.ToString("+0;-0;0", CultureInfo.InvariantCulture)
+                    + (mirrored ? "/mirrored" : "/normal");
+                TestAssert.True(outcome.IsSuccess,
+                    "Independent stairwell transition must calculate: " + caseName);
+
+                var section = new StairProjectGeometryBuilder().BuildSection(project, outcome.Result);
+                var resolver = new StairwellAxisResolver();
+                var lowerRange = resolver.Resolve(project, project.Storeys[0]);
+                var primaryRange = resolver.Resolve(project, project.Storeys[1]);
+                var rebaseX = resolver.ResolveEnvelope(project).LeftAxisX;
+                var elevation = outcome.Result.Storeys[0].UpperElevation;
+                var slabBottom = elevation - project.Construction.FloorSlabThickness;
+                var beamBottom = elevation - project.Construction.FloorBeam.Depth;
+                var beamHalfWidth = project.Construction.FloorBeam.Width / 2.0;
+                var primaryAxes = new[]
+                {
+                    primaryRange.LeftAxisX,
+                    primaryRange.RightAxisX
+                };
+                var secondaryAxes = new[]
+                {
+                    lowerRange.LeftAxisX,
+                    lowerRange.RightAxisX
+                };
+                var expectedAddedAxes = secondaryAxes
+                    .Where(axis => !primaryAxes.Any(primary => Math.Abs(primary - axis) < 0.001))
+                    .Distinct()
+                    .ToArray();
+                var shiftBeamLines = section.Lines.Where(line =>
+                    (line.ComponentId ?? string.Empty).Contains("-SHIFT-BEAM-"))
+                    .ToArray();
+
+                foreach (var primaryAxis in primaryAxes)
+                {
+                    var rebasedAxis = primaryAxis - rebaseX;
+                    TestAssert.True(!shiftBeamLines.Any(line =>
+                            Math.Abs(line.Start.Y - line.End.Y) < 0.001
+                            && Math.Abs(line.Start.Y - beamBottom) < 0.001
+                            && Math.Min(line.Start.X, line.End.X) < rebasedAxis + beamHalfWidth - 0.001
+                            && Math.Max(line.Start.X, line.End.X) > rebasedAxis - beamHalfWidth + 0.001),
+                        "A coincident primary axis must reuse its original beam instead of adding a transition beam: "
+                        + caseName);
+                }
+                foreach (var secondaryAxis in expectedAddedAxes)
+                {
+                    var rebasedAxis = secondaryAxis - rebaseX;
+                    TestAssert.True(HasContinuousHorizontalCoverage(
+                            section.Lines, beamBottom,
+                            rebasedAxis - beamHalfWidth, rebasedAxis + beamHalfWidth),
+                        "Every changed secondary axis must be fully supported by an attached or merged beam: "
+                        + caseName + "; axis="
+                        + rebasedAxis.ToString("0.###", CultureInfo.InvariantCulture));
+                    var transitionCrossesBeam = section.Lines.Any(line =>
+                        (line.ComponentId ?? string.Empty).Contains("-SHIFT-")
+                        && !(line.ComponentId ?? string.Empty).Contains("-SHIFT-BEAM-")
+                        && Math.Abs(line.Start.Y - elevation) < 0.001
+                        && Math.Abs(line.End.Y - elevation) < 0.001
+                        && Math.Min(line.Start.X, line.End.X) < rebasedAxis - 0.001
+                        && Math.Max(line.Start.X, line.End.X) > rebasedAxis + 0.001);
+                    if (transitionCrossesBeam)
+                    {
+                        TestAssert.True(!section.Lines.Any(line =>
+                                Math.Abs(line.Start.Y - slabBottom) < 0.001
+                                && Math.Abs(line.End.Y - slabBottom) < 0.001
+                                && Math.Min(line.Start.X, line.End.X) < rebasedAxis - 0.001
+                                && Math.Max(line.Start.X, line.End.X) > rebasedAxis + 0.001),
+                            "A slab passing across an attached beam must not retain their shared underside: "
+                            + caseName);
+                    }
+                }
+
+                var sidePairs = new[]
+                {
+                    new[] { lowerRange.LeftAxisX - rebaseX, primaryRange.LeftAxisX - rebaseX },
+                    new[] { lowerRange.RightAxisX - rebaseX, primaryRange.RightAxisX - rebaseX }
+                };
+                foreach (var pair in sidePairs)
+                {
+                    if (Math.Abs(pair[0] - pair[1]) < 0.001) continue;
+                    var halfBeam = project.Construction.FloorBeam.Width / 2.0;
+                    var firstFace = Math.Min(pair[0], pair[1]) + halfBeam;
+                    var secondFace = Math.Max(pair[0], pair[1]) - halfBeam;
+                    if (secondFace - firstFace < 0.001) continue;
+                    TestAssert.True(HasContinuousHorizontalCoverage(
+                            section.Lines, elevation, firstFace, secondFace),
+                        "Every shifted external/internal wall pair must be connected by one floor top outline: "
+                        + caseName + "; " + firstFace.ToString("0.###", CultureInfo.InvariantCulture)
+                        + ".." + secondFace.ToString("0.###", CultureInfo.InvariantCulture));
+                }
+            }
+        }
+
+        private static StairProjectDefinition CreateIndependentTransitionProject(
+            StairwellAlignment alignment,
+            double depth,
+            double offset,
+            bool mirrored)
+        {
+            var project = StairProjectDefinition.CreateDefault();
+            project.Construction.StairwellDepth = 8900.0;
+            project.Construction.OppositeSupportsEnabled = true;
+            project.Construction.SlabOverhang = 300.0;
+            project.Construction.CloseSlabOverhangEdge = false;
+            var lower = project.Storeys[0];
+            lower.Height = 4500.0;
+            lower.TotalRiserCount = 30;
+            lower.IndependentStairwellEnabled = true;
+            lower.StairwellDepthOverride = depth;
+            lower.StairwellAlignment = alignment;
+            lower.StairwellAxisOffset = offset;
+            lower.StairwellConstraintLocked = false;
+            lower.TreadDepthLinked = true;
+            lower.Flights.Clear();
+            lower.Landings.Clear();
+            var firstDirection = mirrored
+                ? StairFlightDirection.Right
+                : StairFlightDirection.Left;
+            var secondDirection = mirrored
+                ? StairFlightDirection.Left
+                : StairFlightDirection.Right;
+            lower.Flights.Add(StairFlightDefinition.CreateDefault(
+                "TD-B1-1", "第1跑", 10, firstDirection, StairSectionRepresentation.Cut));
+            lower.Flights.Add(StairFlightDefinition.CreateDefault(
+                "TD-B1-2", "第2跑", 10, secondDirection, StairSectionRepresentation.Rear));
+            lower.Flights.Add(StairFlightDefinition.CreateDefault(
+                "TD-B1-3", "第3跑", 10, firstDirection, StairSectionRepresentation.Cut));
+            lower.Landings.Add(StairLandingDefinition.CreateDefault(
+                "PT-B1-1", "休息平台1", "TD-B1-1", "TD-B1-2"));
+            lower.Landings.Add(StairLandingDefinition.CreateDefault(
+                "PT-B1-2", "休息平台2", "TD-B1-2", "TD-B1-3"));
+            lower.Landings[0].PlatformWidth = 2140.0;
+            lower.Landings[1].PlatformWidth = 1340.0;
+            project.Floors[0].PlatformWidth = 1340.0;
+            project.Floors[1].PlatformWidth = 2140.0;
+            project.Floors[1].PlatformWidthLocked = true;
+            project.Floors[1].PlatformType = PlatformLayoutType.Platform3;
+            project.Floors[1].OppositeSupportType = OppositeSupportType.BeamWithSlab;
+            new StairProjectConstraintService().Apply(project);
+            return project;
+        }
+
         private static void KeepsSectionGeometryWhenIndependentAxesMatchUnifiedAxes()
         {
             var legacy = StairProjectDefinition.CreateDefault();
@@ -3015,6 +3176,39 @@ namespace WL.Stair.Tests
         {
             return Math.Abs(Math.Min(firstStart, firstEnd) - Math.Min(secondStart, secondEnd)) < 0.001
                 && Math.Abs(Math.Max(firstStart, firstEnd) - Math.Max(secondStart, secondEnd)) < 0.001;
+        }
+
+        private static bool HasContinuousHorizontalCoverage(
+            IEnumerable<DrawingLine> sourceLines,
+            double elevation,
+            double firstX,
+            double secondX)
+        {
+            var start = Math.Min(firstX, secondX);
+            var end = Math.Max(firstX, secondX);
+            var intervals = sourceLines
+                .Where(line => !line.IsHidden
+                    && Math.Abs(line.Start.Y - elevation) < 0.001
+                    && Math.Abs(line.End.Y - elevation) < 0.001
+                    && Math.Max(line.Start.X, line.End.X) > start + 0.001
+                    && Math.Min(line.Start.X, line.End.X) < end - 0.001)
+                .Select(line => new[]
+                {
+                    Math.Max(start, Math.Min(line.Start.X, line.End.X)),
+                    Math.Min(end, Math.Max(line.Start.X, line.End.X))
+                })
+                .Where(interval => interval[1] - interval[0] > 0.001)
+                .OrderBy(interval => interval[0])
+                .ToArray();
+            if (intervals.Length == 0) return false;
+            var coveredUntil = start;
+            foreach (var interval in intervals)
+            {
+                if (interval[0] > coveredUntil + 0.001) return false;
+                coveredUntil = Math.Max(coveredUntil, interval[1]);
+                if (coveredUntil >= end - 0.001) return true;
+            }
+            return coveredUntil >= end - 0.001;
         }
 
         private static bool AreSamePointForTest(Point2D first, Point2D second)
