@@ -61,6 +61,7 @@ namespace WL.Stair.Tests
             MigratesStandardFloorMetadataWithoutChangingCapturedGeometry,
             MigratesLogicalFloorRangeToStorey,
             AllowsUpperFlightClosureFromAPlatform,
+            LetsUpperClosureDestinationControlPlatformsAbove,
             AlternatesUnifiedFloorAndLandingDirections,
             DrawsUnifiedBoundaryGeometryFromConnectionToAxis,
             KeepsPlatformBeamsCenteredOnFixedAxes,
@@ -2279,6 +2280,72 @@ namespace WL.Stair.Tests
             new StairProjectConstraintService().Apply(project);
             TestAssert.Equal(7, project.Storeys[1].Flights[0].RiserCount,
                 "An unlocked storey must retain its manual riser count.");
+        }
+
+        private static void LetsUpperClosureDestinationControlPlatformsAbove()
+        {
+            var constraints = new StairProjectConstraintService();
+
+            // Floor -> landing: the lower floor owns the closure, while the
+            // landing on the other side becomes the anchor for everything above.
+            var floorSource = StairProjectDefinition.CreateDefault();
+            var firstStorey = floorSource.Storeys[0];
+            var lowerFloor = floorSource.Floors.First(item => item.Id == firstStorey.LowerFloorId);
+            var destinationLanding = firstStorey.Landings[0];
+            lowerFloor.AllowUpperFlightClosure = true;
+            constraints.Apply(floorSource);
+            var originalLowerWidth = lowerFloor.PlatformWidth;
+            var originalClosureResidual = floorSource.Construction.StairwellDepth
+                - lowerFloor.PlatformWidth
+                - firstStorey.Flights[0].TreadDepth
+                    * Math.Max(0, firstStorey.Flights[0].RiserCount - 1)
+                - destinationLanding.PlatformWidth;
+
+            constraints.SetPlatformWidth(floorSource, destinationLanding.Id, 1450.0);
+            constraints.Apply(floorSource);
+
+            TestAssert.NearlyEqual(originalLowerWidth, lowerFloor.PlatformWidth, 0.001,
+                "An upper-flight closure must protect its source floor from the destination edit.");
+            TestAssert.NearlyEqual(1450.0, destinationLanding.PlatformWidth, 0.001,
+                "The landing across an upper-flight closure must retain the user's width.");
+            var expectedUpperFloor = floorSource.Construction.StairwellDepth
+                - destinationLanding.PlatformWidth
+                - firstStorey.Flights[1].TreadDepth
+                    * Math.Max(0, firstStorey.Flights[1].RiserCount - 1);
+            var sharedFloor = floorSource.Floors.First(item => item.Id == firstStorey.UpperFloorId);
+            TestAssert.NearlyEqual(expectedUpperFloor, sharedFloor.PlatformWidth, 0.001,
+                "Changing the closure destination must propagate to the platform above it.");
+            var changedClosureResidual = floorSource.Construction.StairwellDepth
+                - lowerFloor.PlatformWidth
+                - firstStorey.Flights[0].TreadDepth
+                    * Math.Max(0, firstStorey.Flights[0].RiserCount - 1)
+                - destinationLanding.PlatformWidth;
+            TestAssert.True(Math.Abs(changedClosureResidual - originalClosureResidual) > 0.001,
+                "Changing the destination must change the closure length instead of moving its source.");
+
+            // Landing -> shared floor: the same rule must work when the freely
+            // editable destination is a floor and continue into the next storey.
+            var landingSource = StairProjectDefinition.CreateDefault();
+            var lowerStorey = landingSource.Storeys[0];
+            var sourceLanding = lowerStorey.Landings[0];
+            sourceLanding.AllowUpperFlightClosure = true;
+            constraints.Apply(landingSource);
+            var originalSourceWidth = sourceLanding.PlatformWidth;
+            var destinationFloor = landingSource.Floors.First(item => item.Id == lowerStorey.UpperFloorId);
+            constraints.SetPlatformWidth(landingSource, destinationFloor.Id, 1600.0);
+            constraints.Apply(landingSource);
+
+            TestAssert.NearlyEqual(originalSourceWidth, sourceLanding.PlatformWidth, 0.001,
+                "Editing the floor across a closure must not pull the lower landing with it.");
+            TestAssert.NearlyEqual(1600.0, destinationFloor.PlatformWidth, 0.001,
+                "The floor across an upper-flight closure must retain the user's width.");
+            var upperStorey = landingSource.Storeys[1];
+            var expectedUpperLanding = landingSource.Construction.StairwellDepth
+                - destinationFloor.PlatformWidth
+                - upperStorey.Flights[0].TreadDepth
+                    * Math.Max(0, upperStorey.Flights[0].RiserCount - 1);
+            TestAssert.NearlyEqual(expectedUpperLanding, upperStorey.Landings[0].PlatformWidth, 0.001,
+                "A destination-floor edit must propagate into the storey above the closure.");
         }
 
         private static void AppliesIndependentStairwellDepthToStoreyConstraints()
