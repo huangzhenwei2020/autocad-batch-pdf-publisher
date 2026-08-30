@@ -114,7 +114,16 @@ namespace BatchPdfPublisher.Services
                 Interlocked.Exchange(ref _running, 0);
                 var handler = SynchronizationCompleted;
                 if (handler != null) try { handler(result, failure); } catch { }
-                if (Interlocked.Exchange(ref _pending, 0) != 0) RequestSynchronization(false);
+                if (failure != null || (result != null && result.Errors > 0))
+                {
+                    Interlocked.Exchange(ref _pending, 1);
+                    lock (LifecycleSync)
+                    {
+                        if (_timer == null) _timer = new Timer(Execute, null, Timeout.Infinite, Timeout.Infinite);
+                        _timer.Change(TimeSpan.FromSeconds(30), Timeout.InfiniteTimeSpan);
+                    }
+                }
+                else if (Interlocked.Exchange(ref _pending, 0) != 0) RequestSynchronization(false);
             }
         }
 

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
+using System.Threading;
 
 namespace BatchPdfPublisher.Services
 {
@@ -32,48 +33,64 @@ namespace BatchPdfPublisher.Services
 
             lock (ProcessSync)
             {
-                var mirrorRoot = Path.GetFullPath(Path.Combine(settings.SyncFolder, "万落建筑云同步"));
-                ValidateRoots(mirrorRoot, catalog.Roots);
-                Directory.CreateDirectory(mirrorRoot);
-
-                var state = _store.LoadState();
-                var stateByPath = state.Files
-                    .Where(item => item != null && !string.IsNullOrWhiteSpace(item.LogicalPath))
-                    .GroupBy(item => item.LogicalPath, StringComparer.OrdinalIgnoreCase)
-                    .ToDictionary(group => group.Key, group => group.Last(), StringComparer.OrdinalIgnoreCase);
-                var localFiles = catalog.EnumerateFiles()
-                    .ToDictionary(file => file.LogicalPath, file => file.LocalPath, StringComparer.OrdinalIgnoreCase);
-                var remoteFiles = EnumerateRemoteFiles(mirrorRoot)
-                    .ToDictionary(file => file.LogicalPath, file => file.LocalPath, StringComparer.OrdinalIgnoreCase);
-                var paths = new HashSet<string>(stateByPath.Keys, StringComparer.OrdinalIgnoreCase);
-                paths.UnionWith(localFiles.Keys);
-                paths.UnionWith(remoteFiles.Keys);
-
-                var result = new CloudSyncResult();
-                foreach (var logicalPath in paths.OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+                using (var crossProcess = new Mutex(false, "WanluoArchitectureTools.CloudSync"))
                 {
+                    var acquired = false;
                     try
                     {
-                        ProcessFile(settings, catalog, mirrorRoot, logicalPath, localFiles, remoteFiles, stateByPath, result);
+                        try { acquired = crossProcess.WaitOne(TimeSpan.FromSeconds(30)); }
+                        catch (AbandonedMutexException) { acquired = true; }
+                        if (!acquired) throw new IOException("另一份 AutoCAD 正在执行同步，请稍后重试。");
+                        return SynchronizeLocked(settings, catalog);
                     }
-                    catch (Exception exception)
-                    {
-                        result.Errors++;
-                        result.Operations.Add(new CloudSyncOperation
-                        {
-                            LogicalPath = logicalPath,
-                            Kind = CloudSyncOperationKind.Error,
-                            Message = exception.Message
-                        });
-                    }
+                    finally { if (acquired) crossProcess.ReleaseMutex(); }
                 }
-
-                state.Files = stateByPath.Values.OrderBy(item => item.LogicalPath, StringComparer.OrdinalIgnoreCase).ToList();
-                _store.SaveState(state);
-                CleanupHistory(_localHistoryRoot, settings);
-                CleanupHistory(Path.Combine(mirrorRoot, "历史版本"), settings);
-                return result;
             }
+        }
+
+        private CloudSyncResult SynchronizeLocked(CloudSyncSettings settings, CloudSyncCatalog catalog)
+        {
+            var mirrorRoot = Path.GetFullPath(Path.Combine(settings.SyncFolder, "万落建筑云同步"));
+            ValidateRoots(mirrorRoot, catalog.Roots);
+            Directory.CreateDirectory(mirrorRoot);
+
+            var state = _store.LoadState();
+            var stateByPath = state.Files
+                .Where(item => item != null && !string.IsNullOrWhiteSpace(item.LogicalPath))
+                .GroupBy(item => item.LogicalPath, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.Last(), StringComparer.OrdinalIgnoreCase);
+            var localFiles = catalog.EnumerateFiles()
+                .ToDictionary(file => file.LogicalPath, file => file.LocalPath, StringComparer.OrdinalIgnoreCase);
+            var remoteFiles = EnumerateRemoteFiles(mirrorRoot)
+                .ToDictionary(file => file.LogicalPath, file => file.LocalPath, StringComparer.OrdinalIgnoreCase);
+            var paths = new HashSet<string>(stateByPath.Keys, StringComparer.OrdinalIgnoreCase);
+            paths.UnionWith(localFiles.Keys);
+            paths.UnionWith(remoteFiles.Keys);
+
+            var result = new CloudSyncResult();
+            foreach (var logicalPath in paths.OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    ProcessFile(settings, catalog, mirrorRoot, logicalPath, localFiles, remoteFiles, stateByPath, result);
+                }
+                catch (Exception exception)
+                {
+                    result.Errors++;
+                    result.Operations.Add(new CloudSyncOperation
+                    {
+                        LogicalPath = logicalPath,
+                        Kind = CloudSyncOperationKind.Error,
+                        Message = exception.Message
+                    });
+                }
+            }
+
+            state.Files = stateByPath.Values.OrderBy(item => item.LogicalPath, StringComparer.OrdinalIgnoreCase).ToList();
+            _store.SaveState(state);
+            CleanupHistory(_localHistoryRoot, settings);
+            CleanupHistory(Path.Combine(mirrorRoot, "历史版本"), settings);
+            return result;
         }
 
         private void ProcessFile(CloudSyncSettings settings, CloudSyncCatalog catalog, string mirrorRoot,
