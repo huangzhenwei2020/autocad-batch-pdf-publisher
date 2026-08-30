@@ -26,6 +26,7 @@ namespace WL.Stair.Cad2022
 {
     internal sealed class StairSettingsWindow : Window
     {
+        internal const string NoLayoutFrameId = "__NO_FRAME__";
         private static readonly object WebViewEnvironmentSync = new object();
         private static Task<CoreWebView2Environment> _webViewEnvironmentTask;
         private readonly WebView2 _webView = new WebView2();
@@ -357,7 +358,6 @@ namespace WL.Stair.Cad2022
             if (string.Equals(message.Action, "layout-preview", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(message.Action, "layout-move", StringComparison.OrdinalIgnoreCase))
             {
-                ValidatePlanCaches();
                 var layoutPreview = BuildCombinedLayoutPreview(outcome.Result);
                 SendPreviewSvg(
                     layoutPreview.Svg,
@@ -369,12 +369,6 @@ namespace WL.Stair.Cad2022
 
             if (message.Action == "confirm" || message.Action == "confirm-layout")
             {
-                if (message.Action == "confirm-layout" && SelectedLayoutFrame == null)
-                {
-                    SendPreview(null, "请先选择已登记排版范围的图框。", false);
-                    return;
-                }
-                if (message.Action == "confirm-layout") ValidatePlanCaches();
                 Project = _state.Project;
                 ConfirmedCalculation = outcome.Result;
                 GenerateCombinedLayout = message.Action == "confirm-layout";
@@ -432,7 +426,7 @@ namespace WL.Stair.Cad2022
                 var title = previewFloor == null ? string.Empty
                     : (previewFloor.PlanFloorLabel ?? string.Empty) + "楼梯平面图";
                 var cache = new StairPlanCacheService();
-                if (source != null && cache.IsValid(source, title))
+                if (source != null && cache.IsAvailable(source))
                 {
                     var lines = GetPlanPreviewLines(cache, source).Select(line =>
                         new DrawingLine(new Point2D(line.X1, line.Y1),
@@ -518,23 +512,19 @@ namespace WL.Stair.Cad2022
         {
             var scale = Math.Max(1, _state.Project.DrawingScale);
             var items = new List<StairLayoutItem>();
-            var registeredFloorIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var availableFloorIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var floor in _state.Project.Floors.Where(item => item != null))
             {
                 var source = FindPlanSourceForFloor(floor.Id);
-                if (source == null || source.Mode == StairPlanSourceMode.None
-                    || source.CropBoundaryPoints == null || source.CropBoundaryPoints.Count < 3)
+                if (source == null || source.Mode == StairPlanSourceMode.None)
                     continue;
                 var label = !string.IsNullOrWhiteSpace(floor.PlanFloorLabel)
                     ? floor.PlanFloorLabel
                     : (!string.IsNullOrWhiteSpace(source.FloorLabel) ? source.FloorLabel : floor.Name);
                 var title = (label ?? string.Empty) + "楼梯平面图";
                 var cache = new StairPlanCacheService();
-                var hasCache = cache.IsValid(source, title);
-                var minX = source.CropBoundaryPoints.Min(point => point.X);
-                var maxX = source.CropBoundaryPoints.Max(point => point.X);
-                var minY = source.CropBoundaryPoints.Min(point => point.Y);
-                var maxY = source.CropBoundaryPoints.Max(point => point.Y);
+                var hasCache = cache.IsAvailable(source);
+                if (!hasCache) continue;
                 double layoutOffsetX, layoutOffsetY, layoutWidth, layoutHeight;
                 StairPlanCacheService.GetLayoutRange(source, out layoutOffsetX,
                     out layoutOffsetY, out layoutWidth, out layoutHeight);
@@ -542,13 +532,12 @@ namespace WL.Stair.Cad2022
                 {
                     Key = floor.Id,
                     Name = title,
-                    Width = hasCache ? layoutWidth : Math.Max(1.0, maxX - minX + 50.0 * scale),
-                    Height = hasCache ? layoutHeight
-                        : Math.Max(1.0, maxY - minY + 50.0 * scale),
+                    Width = layoutWidth,
+                    Height = layoutHeight,
                     IsSection = false,
                     PreviewLines = hasCache ? GetPlanPreviewLines(cache, source) : null
                 });
-                registeredFloorIds.Add(floor.Id ?? string.Empty);
+                availableFloorIds.Add(floor.Id ?? string.Empty);
             }
 
             var section = _geometryBuilder.BuildSection(_state.Project, calculation);
@@ -605,7 +594,7 @@ namespace WL.Stair.Cad2022
             _state.Project.CombinedLayoutRowRatios = layout.RowHeights
                 .Select(value => value / Math.Max(1.0, layout.ContentTop - layout.ContentBottom)).ToList();
             var missing = _state.Project.Floors.Count(floor => floor != null
-                && !registeredFloorIds.Contains(floor.Id ?? string.Empty));
+                && !availableFloorIds.Contains(floor.Id ?? string.Empty));
             return new LayoutPreviewResult
             {
                 Svg = BuildCombinedLayoutSvg(layout, scale),
@@ -614,8 +603,8 @@ namespace WL.Stair.Cad2022
                     "已排入 {0} 个楼层平面 + 1 个楼梯剖面，共 {1} 页（{2}）{3}",
                     items.Count - 1,
                     layout.PageCount,
-                    frame == null ? "A1 横向试排" : frame.DisplayName,
-                    missing > 0 ? "；另有 " + missing + " 个平面层尚未登记" : string.Empty)
+                    frame == null ? "不插入图框，直接插入模式预览" : frame.DisplayName,
+                    missing > 0 ? "；另有 " + missing + " 个平面层未登记或缓存不可用，整套插入时将跳过" : string.Empty)
             };
         }
 
@@ -807,10 +796,17 @@ namespace WL.Stair.Cad2022
                 }
             }
             catch { }
+            if (string.Equals(_state.SelectedLayoutFrameId, NoLayoutFrameId,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                _storage.SaveLastLayoutFrameId(_state.SelectedLayoutFrameId);
+                return;
+            }
             if (string.IsNullOrWhiteSpace(_state.SelectedLayoutFrameId)
                 || !_state.LayoutFrames.Any(item => string.Equals(item.RegistrationId,
                     _state.SelectedLayoutFrameId, StringComparison.OrdinalIgnoreCase)))
-                _state.SelectedLayoutFrameId = _state.LayoutFrames.Select(item => item.RegistrationId).FirstOrDefault();
+                _state.SelectedLayoutFrameId = _state.LayoutFrames.Any()
+                    ? _state.LayoutFrames[0].RegistrationId : NoLayoutFrameId;
             _storage.SaveLastLayoutFrameId(_state.SelectedLayoutFrameId);
         }
 

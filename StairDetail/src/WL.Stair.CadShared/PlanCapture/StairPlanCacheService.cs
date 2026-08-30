@@ -147,12 +147,8 @@ namespace WL.Stair.CadShared.PlanCapture
 
         public bool IsValid(StairPlanSourceDefinition definition, string title)
         {
-            if (definition == null || definition.CacheWidth <= 0.0
-                || definition.CacheHeight <= 0.0
-                || string.IsNullOrWhiteSpace(definition.CacheRelativePath)
+            if (!IsAvailable(definition)
                 || string.IsNullOrWhiteSpace(definition.CacheFingerprint)) return false;
-            var path = ResolveRelative(definition.CacheRelativePath);
-            if (!File.Exists(path)) return false;
             var current = ComputeFingerprint(definition, title);
             if (string.Equals(definition.CacheFingerprint, current,
                 StringComparison.OrdinalIgnoreCase)) return true;
@@ -162,6 +158,18 @@ namespace WL.Stair.CadShared.PlanCapture
             return string.Equals(definition.CacheFingerprint,
                 ComputeLegacyFingerprint(definition, title),
                 StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Whether a previously captured plan is physically available for insertion.
+        /// Unlike IsValid, this ignores freshness so harmless edits such as renaming
+        /// a floor never block whole-set insertion.
+        /// </summary>
+        public bool IsAvailable(StairPlanSourceDefinition definition)
+        {
+            if (definition == null
+                || string.IsNullOrWhiteSpace(definition.CacheRelativePath)) return false;
+            return File.Exists(ResolveRelative(definition.CacheRelativePath));
         }
 
         public static void GetLayoutRange(StairPlanSourceDefinition definition,

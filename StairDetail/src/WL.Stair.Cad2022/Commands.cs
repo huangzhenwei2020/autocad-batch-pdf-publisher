@@ -109,32 +109,41 @@ namespace WL.Stair.Cad2022
             StairSettingsWindow.LayoutFrameOption frame)
         {
             var editor = document.Editor;
-            if (frame == null) { editor.WriteMessage("\n没有选择可用的登记图框。\n"); return; }
-            var point = editor.GetPoint("\n指定整套楼梯大样第一张图框的左下角插入点: ");
+            var point = editor.GetPoint(frame == null
+                ? "\n指定整套楼梯大样直接插入基点: "
+                : "\n指定整套楼梯大样第一张图框的左下角插入点: ");
             if (point.Status != PromptStatus.OK) { editor.WriteMessage("\n已取消整套插入。\n"); return; }
             var stage = "准备数据";
             HashSet<ObjectId> objectsBeforeInsert = null;
             try
             {
-                WriteCombinedLayoutLog("开始", "图框=" + frame.DisplayName
+                WriteCombinedLayoutLog("开始", "图框=" + (frame == null ? "无（直接插入）" : frame.DisplayName)
                     + "，比例=" + project.DrawingScale);
                 var scale = Math.Max(1, project.DrawingScale);
                 var entries = new List<CombinedEntry>();
+                var warnings = new List<string>();
                 var cache = new StairPlanCacheService();
                 foreach (var floor in project.Floors.Where(value => value != null))
                 {
                     var source = FindPlanSource(project, floor.Id);
-                    if (source == null || source.CropBoundaryPoints == null
-                        || source.CropBoundaryPoints.Count < 3) continue;
                     var label = !string.IsNullOrWhiteSpace(floor.PlanFloorLabel)
                         ? floor.PlanFloorLabel
-                        : (!string.IsNullOrWhiteSpace(source.FloorLabel) ? source.FloorLabel : floor.Name);
+                        : (source != null && !string.IsNullOrWhiteSpace(source.FloorLabel)
+                            ? source.FloorLabel : floor.Name);
                     var title = (label ?? string.Empty) + "楼梯平面图";
+                    if (source == null || source.Mode == StairPlanSourceMode.None)
+                    {
+                        warnings.Add(title + "未登记，已跳过");
+                        continue;
+                    }
                     source.TargetScale = scale;
+                    if (!cache.IsAvailable(source))
+                    {
+                        warnings.Add(title + "缓存不存在，已跳过");
+                        continue;
+                    }
                     if (!cache.IsValid(source, title))
-                        throw new InvalidOperationException(title
-                            + " 的小平面缓存不存在或参数已变化，请在楼层设置中重新拾取该层平面。"
-                            + "整套插入不会重新裁剪天正墙。" );
+                        warnings.Add(title + "参数可能已变化，仍使用现有缓存插入");
                     double layoutOffsetX, layoutOffsetY, layoutWidth, layoutHeight;
                     StairPlanCacheService.GetLayoutRange(source, out layoutOffsetX,
                         out layoutOffsetY, out layoutWidth, out layoutHeight);
@@ -173,68 +182,75 @@ namespace WL.Stair.Cad2022
                 entries.Add(sectionEntry);
                 entries = ApplyCombinedLayoutOrder(entries,
                     project.CombinedLayoutItemOrder);
-                var layout = StairCombinedLayout.Compute(entries.Select(value => value.LayoutItem),
-                    new StairLayoutOptions
-                    {
-                        PageWidth = frame.PageWidth * scale,
-                        PageHeight = frame.PageHeight * scale,
-                        LeftMargin = frame.LeftMargin * scale,
-                        RightMargin = frame.RightMargin * scale,
-                        TopMargin = frame.TopMargin * scale,
-                        BottomMargin = frame.BottomMargin * scale,
-                        ItemGap = 10.0 * scale,
-                        GridColumns = project.CombinedLayoutGridColumns,
-                        GridRows = project.CombinedLayoutGridRows,
-                        ColumnRatios = project.CombinedLayoutColumnRatios,
-                        RowRatios = project.CombinedLayoutRowRatios
-                    });
-                StairCombinedLayout.ApplyPlacements(layout,
-                    project.CombinedLayoutPlacements);
                 const double pageGapPaper = 25.0;
                 objectsBeforeInsert = SnapshotCurrentSpace(document.Database);
-                stage = "插入图框";
-                InsertRegisteredFrames(frame.RegistrationId, scale, point.Value,
-                    layout.PageCount, pageGapPaper);
-                WriteCombinedLayoutLog(stage, "成功，页数=" + layout.PageCount);
-                foreach (var slot in layout.Slots)
+                var insertedPlanCount = 0;
+                var insertedSectionCount = 0;
+                if (frame == null)
                 {
-                    var entry = entries.First(value => ReferenceEquals(value.LayoutItem, slot.Item));
-                    var pageOrigin = new Point3d(
-                        point.Value.X + slot.Page * (layout.PageWidth + pageGapPaper * scale),
-                        point.Value.Y, point.Value.Z);
-                    var target = new Point3d(pageOrigin.X + slot.X, pageOrigin.Y + slot.Y, pageOrigin.Z);
-                    if (entry.Source != null)
+                    stage = "直接插入";
+                    var cursorX = point.Value.X;
+                    foreach (var entry in entries)
                     {
-                        stage = "插入平面缓存：" + entry.FloorTitle;
-                        var inserted = cache.Insert(document, entry.Source,
-                            new Point3d(target.X - entry.CacheLayoutOffsetX,
-                                target.Y - entry.CacheLayoutOffsetY, target.Z));
-                        if (inserted <= 0)
-                            throw new InvalidOperationException(entry.FloorTitle
-                                + " 的缓存文件没有可插入对象。" );
-                        editor.WriteMessage("\n已插入 " + entry.FloorTitle
-                            + "：" + inserted + " 个对象。\n");
-                        WriteCombinedLayoutLog(stage, "成功，对象数=" + inserted);
-                    }
-                    else
-                    {
-                        stage = "插入楼梯剖面";
-                        using (var transaction = document.Database.TransactionManager.StartTransaction())
+                        var target = new Point3d(cursorX, point.Value.Y, point.Value.Z);
+                        if (TryInsertCombinedEntry(document, cache, entry, target,
+                            warnings, out var isPlan))
                         {
-                            new CadLineRenderer().Render(document.Database, transaction, entry.Section,
-                                new Point3d(target.X - entry.SectionMinX,
-                                    target.Y - entry.SectionMinY, target.Z));
-                            transaction.Commit();
+                            if (isPlan) insertedPlanCount++; else insertedSectionCount++;
                         }
-                        WriteCombinedLayoutLog(stage, "成功");
+                        cursorX += entry.LayoutItem.Width + 10.0 * scale;
                     }
                 }
-                stage = "插入排版分格";
-                DrawCombinedLayoutGrid(document.Database, layout, point.Value,
-                    pageGapPaper * scale, scale);
-                WriteCombinedLayoutLog(stage, "成功（普通虚线，不创建组和夹点编辑）");
-                editor.WriteMessage("\n整套楼梯大样已插入：" + (entries.Count - 1)
-                    + " 个平面、1 个剖面、" + layout.PageCount + " 张图框。\n");
+                else
+                {
+                    var layout = StairCombinedLayout.Compute(entries.Select(value => value.LayoutItem),
+                        new StairLayoutOptions
+                        {
+                            PageWidth = frame.PageWidth * scale,
+                            PageHeight = frame.PageHeight * scale,
+                            LeftMargin = frame.LeftMargin * scale,
+                            RightMargin = frame.RightMargin * scale,
+                            TopMargin = frame.TopMargin * scale,
+                            BottomMargin = frame.BottomMargin * scale,
+                            ItemGap = 10.0 * scale,
+                            GridColumns = project.CombinedLayoutGridColumns,
+                            GridRows = project.CombinedLayoutGridRows,
+                            ColumnRatios = project.CombinedLayoutColumnRatios,
+                            RowRatios = project.CombinedLayoutRowRatios
+                        });
+                    StairCombinedLayout.ApplyPlacements(layout,
+                        project.CombinedLayoutPlacements);
+                    stage = "插入图框";
+                    InsertRegisteredFrames(frame.RegistrationId, scale, point.Value,
+                        layout.PageCount, pageGapPaper);
+                    WriteCombinedLayoutLog(stage, "成功，页数=" + layout.PageCount);
+                    foreach (var slot in layout.Slots)
+                    {
+                        var entry = entries.First(value => ReferenceEquals(value.LayoutItem, slot.Item));
+                        var pageOrigin = new Point3d(
+                            point.Value.X + slot.Page * (layout.PageWidth + pageGapPaper * scale),
+                            point.Value.Y, point.Value.Z);
+                        var target = new Point3d(pageOrigin.X + slot.X, pageOrigin.Y + slot.Y, pageOrigin.Z);
+                        if (TryInsertCombinedEntry(document, cache, entry, target,
+                            warnings, out var isPlan))
+                        {
+                            if (isPlan) insertedPlanCount++; else insertedSectionCount++;
+                        }
+                    }
+                    stage = "插入排版分格";
+                    DrawCombinedLayoutGrid(document.Database, layout, point.Value,
+                        pageGapPaper * scale, scale);
+                    WriteCombinedLayoutLog(stage, "成功（普通虚线，不创建组和夹点编辑）");
+                    editor.WriteMessage("\n整套楼梯大样已插入：" + insertedPlanCount
+                        + " 个平面、" + insertedSectionCount + " 个剖面、"
+                        + layout.PageCount + " 张图框。\n");
+                }
+                if (frame == null)
+                    editor.WriteMessage("\n整套楼梯大样已直接插入：" + insertedPlanCount
+                        + " 个平面、" + insertedSectionCount + " 个剖面（未插入图框和排版分格）。\n");
+                if (warnings.Count > 0)
+                    editor.WriteMessage("\n整套插入提示：\n- "
+                        + string.Join("\n- ", warnings.Distinct()) + "\n");
             }
             catch (System.Exception exception)
             {
@@ -243,6 +259,48 @@ namespace WL.Stair.Cad2022
                 WriteCombinedLayoutLog(stage + "失败", exception.ToString());
                 editor.WriteMessage("\n整套插入失败（" + stage + "）："
                     + exception.Message + "\n已回滚本次插入产生的图框和构件。\n");
+            }
+        }
+
+        private static bool TryInsertCombinedEntry(Document document,
+            StairPlanCacheService cache, CombinedEntry entry, Point3d target,
+            IList<string> warnings, out bool isPlan)
+        {
+            isPlan = entry.Source != null;
+            try
+            {
+                if (isPlan)
+                {
+                    var inserted = cache.Insert(document, entry.Source,
+                        new Point3d(target.X - entry.CacheLayoutOffsetX,
+                            target.Y - entry.CacheLayoutOffsetY, target.Z));
+                    if (inserted <= 0)
+                    {
+                        warnings.Add(entry.FloorTitle + "缓存没有可插入对象，已跳过");
+                        return false;
+                    }
+                    document.Editor.WriteMessage("\n已插入 " + entry.FloorTitle
+                        + "：" + inserted + " 个对象。\n");
+                    WriteCombinedLayoutLog("插入平面缓存：" + entry.FloorTitle,
+                        "成功，对象数=" + inserted);
+                    return true;
+                }
+                using (var transaction = document.Database.TransactionManager.StartTransaction())
+                {
+                    new CadLineRenderer().Render(document.Database, transaction, entry.Section,
+                        new Point3d(target.X - entry.SectionMinX,
+                            target.Y - entry.SectionMinY, target.Z));
+                    transaction.Commit();
+                }
+                WriteCombinedLayoutLog("插入楼梯剖面", "成功");
+                return true;
+            }
+            catch (System.Exception exception)
+            {
+                var name = isPlan ? entry.FloorTitle : "楼梯剖面";
+                warnings.Add(name + "插入失败，已跳过：" + exception.Message);
+                WriteCombinedLayoutLog("插入跳过：" + name, exception.ToString());
+                return false;
             }
         }
 
