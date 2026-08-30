@@ -30,8 +30,9 @@ namespace BatchPdfPublisher
             ShortcutAliasService.InstallWhenReady();
             ProjectAutoSaveService.Install();
             CloudSyncCoordinator.Install();
+            CadSaveCloudSyncService.Install();
         }
-        public void Terminate() { CloudSyncCoordinator.Remove(); ProjectAutoSaveService.Remove(); ShortcutAliasService.Remove(); RibbonService.Remove(); MenuService.Remove(); }
+        public void Terminate() { CadSaveCloudSyncService.Remove(); CloudSyncCoordinator.Remove(); ProjectAutoSaveService.Remove(); ShortcutAliasService.Remove(); RibbonService.Remove(); MenuService.Remove(); }
 
         [CommandMethod("BPP")]
         public void BppCommand() => OpenPublisher();

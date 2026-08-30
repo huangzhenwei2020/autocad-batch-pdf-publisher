@@ -19,6 +19,7 @@ namespace BatchPdfPublisher.Services
             InitialSyncPreference = "Remote";
             HistoryRetentionDays = 30;
             KeepVersionsPerFile = 20;
+            ProjectMappings = new List<CloudSyncProjectMapping>();
         }
 
         [DataMember] public bool Enabled { get; set; }
@@ -33,6 +34,16 @@ namespace BatchPdfPublisher.Services
         [DataMember] public string InitialSyncPreference { get; set; }
         [DataMember] public int HistoryRetentionDays { get; set; }
         [DataMember] public int KeepVersionsPerFile { get; set; }
+        [DataMember] public List<CloudSyncProjectMapping> ProjectMappings { get; set; }
+    }
+
+    [DataContract]
+    public sealed class CloudSyncProjectMapping
+    {
+        [DataMember] public string ProjectName { get; set; }
+        [DataMember] public string CloudId { get; set; }
+        [DataMember] public string LocalFolder { get; set; }
+        [DataMember] public bool Enabled { get; set; }
     }
 
     [DataContract]
@@ -66,6 +77,7 @@ namespace BatchPdfPublisher.Services
         DeleteLocal,
         DeleteRemote,
         Conflict,
+        Pending,
         Error
     }
 
@@ -87,6 +99,7 @@ namespace BatchPdfPublisher.Services
         public int Uploaded { get; set; }
         public int Downloaded { get; set; }
         public int Conflicts { get; set; }
+        public int Pending { get; set; }
         public int Deleted { get; set; }
         public int Errors { get; set; }
 
@@ -94,8 +107,8 @@ namespace BatchPdfPublisher.Services
         {
             get
             {
-                return string.Format("上传 {0}，下载 {1}，删除 {2}，冲突 {3}，错误 {4}",
-                    Uploaded, Downloaded, Deleted, Conflicts, Errors);
+                return string.Format("上传 {0}，下载 {1}，删除 {2}，冲突 {3}，待应用 {4}，错误 {5}",
+                    Uploaded, Downloaded, Deleted, Conflicts, Pending, Errors);
             }
         }
     }

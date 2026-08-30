@@ -542,6 +542,7 @@ namespace BatchPdfPublisher.ViewModels
                 using (document.LockDocument()) document.Database.SaveAs(destination, DwgVersion.Current);
                 AddCadFiles(new[] { destination });
                 SaveCurrentProject();
+                CloudSyncCoordinator.RequestSynchronization(false);
                 Status = "已将当前 CAD 保存到工程文件夹：" + destination;
                 return true;
             }

@@ -15,6 +15,9 @@ internal static class CloudSyncTests
         Run("FirstConnectionCanPreferRemoteWithBackup", FirstConnectionCanPreferRemoteWithBackup);
         Run("PropagatesRemoteDeletionWithBackup", PropagatesRemoteDeletionWithBackup);
         Run("RejectsOverlappingRoots", RejectsOverlappingRoots);
+        Run("DefersOpenDrawingUntilClosed", DefersOpenDrawingUntilClosed);
+        Run("MapsProjectFileOnlyOnce", MapsProjectFileOnlyOnce);
+        Run("DefersRemoteDeletionUntilDrawingCloses", DefersRemoteDeletionUntilDrawingCloses);
         Console.WriteLine("Executed " + _executed + " cloud sync tests; 0 failed.");
     }
 
@@ -108,6 +111,77 @@ internal static class CloudSyncTests
             Throws<InvalidOperationException>(() => engine.Synchronize(settings, catalog));
         }
         finally { Directory.Delete(root, true); }
+    }
+
+    private static void DefersOpenDrawingUntilClosed()
+    {
+        WithWorkspace((root, local, shared, engine, settings, ignored) =>
+        {
+            UserDataPaths.TestRootDirectory = root;
+            var drawing = Path.Combine(local, "plan.dwg");
+            var catalog = new CloudSyncCatalog(new[] { new CloudSyncSource("项目文件/test", local, null) });
+            File.WriteAllText(drawing, "base");
+            engine.Synchronize(settings, catalog);
+            var remote = Path.Combine(shared, "万落建筑云同步", "项目文件", "test", "plan.dwg");
+            File.WriteAllText(remote, "remote-change");
+            CloudSyncPendingFileService.RegisterOpenPathProbe(path => true);
+            var deferred = engine.Synchronize(settings, catalog);
+            Equal(1, deferred.Pending);
+            Equal("base", File.ReadAllText(drawing));
+            CloudSyncPendingFileService.RegisterOpenPathProbe(path => false);
+            engine.Synchronize(settings, catalog);
+            Equal("remote-change", File.ReadAllText(drawing));
+            CloudSyncPendingFileService.ClearOpenPathProbe();
+        });
+    }
+
+    private static void MapsProjectFileOnlyOnce()
+    {
+        var root = NewRoot();
+        try
+        {
+            UserDataPaths.TestRootDirectory = root;
+            var project = Path.Combine(UserDataPaths.ProjectsDirectory, "示例项目");
+            Directory.CreateDirectory(project);
+            var drawing = Path.Combine(project, "plan.dwg");
+            var data = Path.Combine(project, "project.json");
+            File.WriteAllText(drawing, "dwg"); File.WriteAllText(data, "json");
+            var settings = new CloudSyncSettings
+            {
+                SyncGeneralSettings = false,
+                SyncProjectConfigurations = true,
+                SyncTemplatesAndSchemes = false,
+                SyncProjectFiles = true,
+                ProjectMappings = new System.Collections.Generic.List<CloudSyncProjectMapping>
+                {
+                    new CloudSyncProjectMapping { ProjectName = "示例项目", CloudId = "sample", LocalFolder = project, Enabled = true }
+                }
+            };
+            var files = CloudSyncCatalog.CreateDefault(settings).EnumerateFiles().ToList();
+            Equal(1, files.Count(item => string.Equals(item.LocalPath, drawing, StringComparison.OrdinalIgnoreCase)));
+            Equal(1, files.Count(item => string.Equals(item.LocalPath, data, StringComparison.OrdinalIgnoreCase)));
+            True(files.Any(item => item.LogicalPath == "项目文件/sample/plan.dwg"), "drawing should use project mapping");
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    private static void DefersRemoteDeletionUntilDrawingCloses()
+    {
+        WithWorkspace((root, local, shared, engine, settings, ignored) =>
+        {
+            UserDataPaths.TestRootDirectory = root;
+            var drawing = Path.Combine(local, "delete-me.dwg");
+            var catalog = new CloudSyncCatalog(new[] { new CloudSyncSource("项目文件/test", local, null) });
+            File.WriteAllText(drawing, "base"); engine.Synchronize(settings, catalog);
+            File.Delete(Path.Combine(shared, "万落建筑云同步", "项目文件", "test", "delete-me.dwg"));
+            CloudSyncPendingFileService.RegisterOpenPathProbe(path => true);
+            var deferred = engine.Synchronize(settings, catalog);
+            Equal(1, deferred.Pending); True(File.Exists(drawing), "open drawing was deleted");
+            CloudSyncPendingFileService.RegisterOpenPathProbe(path => false);
+            engine.Synchronize(settings, catalog);
+            True(!File.Exists(drawing), "pending remote deletion was not applied after close");
+            CloudSyncPendingFileService.ClearOpenPathProbe();
+        });
     }
 
     private static void WithWorkspace(Action<string, string, string, LocalFolderSyncEngine, CloudSyncSettings, CloudSyncCatalog> action)

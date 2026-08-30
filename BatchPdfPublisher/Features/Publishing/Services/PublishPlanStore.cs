@@ -27,7 +27,8 @@ namespace BatchPdfPublisher.Services
                         projects = (List<ProjectProfile>)new DataContractJsonSerializer(typeof(List<ProjectProfile>)).ReadObject(stream);
                     var normalizedProjectFolders = projects != null && projects.Any(x => x != null && NeedsProjectFolderNormalization(x.ProjectFolder));
                     Normalize(projects);
-                    if (FrameTemplateStore.MakePathsReadable(projects) || normalizedProjectFolders) SaveProjects(projects);
+                    var projected = ProjectSyncProjectionStore.MergeInto(projects);
+                    if (FrameTemplateStore.MakePathsReadable(projects) || normalizedProjectFolders || projected) SaveProjects(projects);
                     return projects;
                 }
                 catch
@@ -38,6 +39,7 @@ namespace BatchPdfPublisher.Services
 
             var migrated = new ProjectProfile { Name = "默认项目", Frames = LoadLegacyFrames() };
             var defaults = new List<ProjectProfile> { migrated };
+            ProjectSyncProjectionStore.MergeInto(defaults);
             SaveProjects(defaults);
             SetActiveProject(migrated.Name);
             return defaults;
@@ -129,6 +131,9 @@ namespace BatchPdfPublisher.Services
             var path = ProjectsPath();
             WriteAtomically(path, stream =>
                 new DataContractJsonSerializer(typeof(List<ProjectProfile>)).WriteObject(stream, projects));
+            ProjectSyncProjectionStore.Export(projects);
+            ProjectSyncProjectionStore.RefreshMappings(projects);
+            CloudSyncCoordinator.RequestSynchronization(false);
         }
 
         private static void WriteTextAtomically(string path, string value)

@@ -24,7 +24,9 @@ namespace BatchPdfPublisher.Services
 
         public CloudSyncSettings LoadSettings()
         {
-            return Load(_settingsPath, new CloudSyncSettings());
+            var settings = Load(_settingsPath, new CloudSyncSettings());
+            if (settings.ProjectMappings == null) settings.ProjectMappings = new System.Collections.Generic.List<CloudSyncProjectMapping>();
+            return settings;
         }
 
         public void SaveSettings(CloudSyncSettings settings)
@@ -33,6 +35,7 @@ namespace BatchPdfPublisher.Services
             if (string.IsNullOrWhiteSpace(settings.DeviceName)) settings.DeviceName = Environment.MachineName;
             if (settings.HistoryRetentionDays < 1) settings.HistoryRetentionDays = 30;
             if (settings.KeepVersionsPerFile < 1) settings.KeepVersionsPerFile = 20;
+            if (settings.ProjectMappings == null) settings.ProjectMappings = new System.Collections.Generic.List<CloudSyncProjectMapping>();
             Save(_settingsPath, settings);
         }
 

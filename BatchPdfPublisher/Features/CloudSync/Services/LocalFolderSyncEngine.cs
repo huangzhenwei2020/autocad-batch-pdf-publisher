@@ -50,6 +50,7 @@ namespace BatchPdfPublisher.Services
 
         private CloudSyncResult SynchronizeLocked(CloudSyncSettings settings, CloudSyncCatalog catalog)
         {
+            CloudSyncPendingFileService.ApplyAvailable(catalog);
             var mirrorRoot = Path.GetFullPath(Path.Combine(settings.SyncFolder, "万落建筑云同步"));
             ValidateRoots(mirrorRoot, catalog.Roots);
             Directory.CreateDirectory(mirrorRoot);
@@ -159,6 +160,13 @@ namespace BatchPdfPublisher.Services
             }
             if (remoteHash == null && HashesEqual(localHash, baseHash))
             {
+                if (CloudSyncPendingFileService.ShouldDefer(localPath))
+                {
+                    CloudSyncPendingFileService.StageDelete(logicalPath);
+                    result.Pending++;
+                    AddOperation(result, logicalPath, CloudSyncOperationKind.Pending, "图纸正在 AutoCAD 中打开，远端删除已暂存，关闭图纸后应用。");
+                    return;
+                }
                 Backup(localPath, _localHistoryRoot, logicalPath, settings);
                 File.Delete(localPath);
                 states.Remove(logicalPath);
@@ -193,6 +201,13 @@ namespace BatchPdfPublisher.Services
         private void Download(CloudSyncSettings settings, string logicalPath, string remotePath, string localPath,
             string remoteHash, IDictionary<string, CloudSyncFileState> states, CloudSyncResult result)
         {
+            if (CloudSyncPendingFileService.ShouldDefer(localPath))
+            {
+                CloudSyncPendingFileService.StageDownload(logicalPath, remotePath, remoteHash);
+                result.Pending++;
+                AddOperation(result, logicalPath, CloudSyncOperationKind.Pending, "图纸正在 AutoCAD 中打开，远端版本已下载到待应用区，关闭图纸后替换。");
+                return;
+            }
             if (File.Exists(localPath)) Backup(localPath, _localHistoryRoot, logicalPath, settings);
             AtomicCopy(remotePath, localPath, remoteHash);
             SaveState(states, logicalPath, remoteHash, remoteHash, remoteHash);

@@ -17,7 +17,7 @@ namespace BatchPdfPublisher.Views
         private readonly CheckBox _general = new CheckBox { Text = "通用设置", AutoSize = true };
         private readonly CheckBox _projects = new CheckBox { Text = "项目配置", AutoSize = true };
         private readonly CheckBox _templates = new CheckBox { Text = "图框与方案库", AutoSize = true };
-        private readonly CheckBox _drawings = new CheckBox { Text = "项目 DWG（V2 接入项目保存事件）", AutoSize = true };
+        private readonly CheckBox _drawings = new CheckBox { Text = "项目文件与 DWG（仅登记的工程目录）", AutoSize = true };
         private readonly CheckBox _auto = new CheckBox { Text = "保存或检测到变化后自动同步", AutoSize = true };
         private readonly ComboBox _initialPreference = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 230 };
         private readonly NumericUpDown _days = new NumericUpDown { Minimum = 1, Maximum = 3650, Value = 30, Width = 90 };
@@ -44,14 +44,14 @@ namespace BatchPdfPublisher.Views
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             Controls.Add(root);
 
-            var title = new Label { Text = "云同步（V1：本地同步文件夹）", Font = new Font(Font, FontStyle.Bold), AutoSize = true };
+            var title = new Label { Text = "云同步（V2：项目文件与 DWG 安全同步）", Font = new Font(Font, FontStyle.Bold), AutoSize = true };
             root.Controls.Add(title);
             var description = new Label
             {
                 AutoSize = true,
                 MaximumSize = new Size(780, 0),
                 ForeColor = Color.DimGray,
-                Text = "先将配置、项目参数、图框和方案库安全同步到指定文件夹。该文件夹可交给115客户端、NAS或其他同步工具；115账号直连将在官方应用审核后作为存储适配器接入。"
+                Text = "项目参数会自动转换为跨电脑可用的相对路径。DWG 保存成功后才进入同步；远端 DWG 若仍在 AutoCAD 中打开，只会进入待应用区，关闭图纸后再安全替换。"
             };
             root.Controls.Add(description);
 
@@ -101,8 +101,7 @@ namespace BatchPdfPublisher.Views
             _projects.Checked = _settings.SyncProjectConfigurations;
             _templates.Checked = _settings.SyncTemplatesAndSchemes;
             _drawings.Checked = _settings.SyncProjectFiles;
-            _drawings.Checked = false;
-            _drawings.Enabled = false;
+            _drawings.Enabled = true;
             _auto.Checked = _settings.AutoSync;
             _initialPreference.SelectedIndex = string.Equals(_settings.InitialSyncPreference, "Local", StringComparison.OrdinalIgnoreCase) ? 1
                 : string.Equals(_settings.InitialSyncPreference, "Conflict", StringComparison.OrdinalIgnoreCase) ? 2 : 0;
@@ -126,9 +125,9 @@ namespace BatchPdfPublisher.Views
             _settings.SyncGeneralSettings = _general.Checked;
             _settings.SyncProjectConfigurations = _projects.Checked;
             _settings.SyncTemplatesAndSchemes = _templates.Checked;
-            // V1 intentionally keeps DWG disabled until AutoCAD open-document
-            // detection and the pending-apply area are connected in V2.
-            _settings.SyncProjectFiles = false;
+            _settings.SyncProjectFiles = _drawings.Checked;
+            _settings.ProjectMappings = ProjectSyncProjectionStore.BuildMappings(
+                new PublishPlanStore().LoadProjects(), _settings.ProjectMappings);
             _settings.AutoSync = _auto.Checked;
             _settings.InitialSyncPreference = _initialPreference.SelectedIndex == 1 ? "Local" : _initialPreference.SelectedIndex == 2 ? "Conflict" : "Remote";
             _settings.HistoryRetentionDays = (int)_days.Value;
@@ -144,7 +143,9 @@ namespace BatchPdfPublisher.Views
             try
             {
                 if (!PersistSettings()) return;
-                _status.Text = _settings.Enabled ? "设置已保存，后台同步已启动。" : "设置已保存，同步已关闭。";
+                _status.Text = _settings.Enabled
+                    ? "设置已保存，后台同步已启动；已登记 " + (_settings.ProjectMappings == null ? 0 : _settings.ProjectMappings.Count) + " 个工程目录。"
+                    : "设置已保存，同步已关闭。";
             }
             catch (Exception exception) { ShowError(exception); }
         }
