@@ -58,6 +58,23 @@ namespace BatchPdfPublisher.Services
             }
         }
 
+        public static bool TryBeginManualSynchronization()
+        {
+            lock (LifecycleSync)
+            {
+                if (Interlocked.CompareExchange(ref _running, 1, 0) != 0) return false;
+                Interlocked.Exchange(ref _pending, 0);
+                if (_timer != null) _timer.Change(Timeout.Infinite, Timeout.Infinite);
+                return true;
+            }
+        }
+
+        public static void EndManualSynchronization()
+        {
+            Interlocked.Exchange(ref _running, 0);
+            if (Interlocked.Exchange(ref _pending, 0) != 0) RequestSynchronization(false);
+        }
+
         private static void ConfigureWatchers()
         {
             var settings = new CloudSyncSettingsStore().LoadSettings();

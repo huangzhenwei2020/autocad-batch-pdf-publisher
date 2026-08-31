@@ -25,6 +25,7 @@ namespace BatchPdfPublisher.Views
         private readonly NumericUpDown _days = new NumericUpDown { Minimum = 1, Maximum = 3650, Value = 30, Width = 90 };
         private readonly NumericUpDown _versions = new NumericUpDown { Minimum = 1, Maximum = 200, Value = 20, Width = 90 };
         private readonly Label _status = new Label { AutoSize = true, ForeColor = Color.FromArgb(34, 98, 60), Padding = new Padding(0, 8, 0, 0) };
+        private readonly ProgressBar _progress = new ProgressBar { Dock = DockStyle.Top, Height = 18, Visible = false, Style = ProgressBarStyle.Marquee };
         private readonly ListBox _details = new ListBox { Dock = DockStyle.Fill, HorizontalScrollbar = true };
         private readonly Button _syncNow;
         private CloudSyncSettings _settings;
@@ -82,7 +83,7 @@ namespace BatchPdfPublisher.Views
             root.Controls.Add(scope);
 
             var detailsPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 8, 0, 8) };
-            detailsPanel.Controls.Add(_details); detailsPanel.Controls.Add(_status); _status.Dock = DockStyle.Top;
+            detailsPanel.Controls.Add(_details); detailsPanel.Controls.Add(_progress); detailsPanel.Controls.Add(_status); _status.Dock = DockStyle.Top;
             root.Controls.Add(detailsPanel);
 
             var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.RightToLeft };
@@ -134,7 +135,7 @@ namespace BatchPdfPublisher.Views
             UpdateProviderUi();
         }
 
-        private bool PersistSettings()
+        private bool PersistSettings(bool requestAutomaticSync = true)
         {
             var folder = _folder.Text.Trim();
             var providerId = _provider.SelectedIndex == 1 ? "115OpenApi" : "LocalFolder";
@@ -166,7 +167,7 @@ namespace BatchPdfPublisher.Views
             _settings.KeepVersionsPerFile = (int)_versions.Value;
             new CloudSyncSettingsStore().SaveSettings(_settings);
             CloudSyncCoordinator.Reload();
-            if (_settings.Enabled && _settings.AutoSync) CloudSyncCoordinator.RequestSynchronization(false);
+            if (requestAutomaticSync && _settings.Enabled && _settings.AutoSync) CloudSyncCoordinator.RequestSynchronization(false);
             return true;
         }
 
@@ -184,17 +185,45 @@ namespace BatchPdfPublisher.Views
 
         private async void SynchronizeNow(object sender, EventArgs e)
         {
+            var manualStarted = false;
             try
             {
-                if (!PersistSettings()) return;
+                if (!PersistSettings(false)) return;
                 if (!_settings.Enabled) { MessageBox.Show(this, "请先启用云同步。", Text); return; }
-                _syncNow.Enabled = false; _status.Text = "正在核对本机与同步文件夹…"; _details.Items.Clear();
+                if (!CloudSyncCoordinator.TryBeginManualSynchronization())
+                {
+                    _status.Text = "后台同步正在运行，本次没有重复启动；请等待当前任务完成。";
+                    _status.ForeColor = Color.DarkOrange;
+                    return;
+                }
+                manualStarted = true;
+                _syncNow.Enabled = false; _status.Text = "正在准备同步…"; _details.Items.Clear();
+                _progress.Visible = true; _progress.Style = ProgressBarStyle.Marquee;
                 var settings = _settings;
-                var result = await Task.Run(() => CloudSyncWorkflow.Synchronize(settings, new CloudSyncSettingsStore()));
+                IProgress<CloudSyncProgress> uiProgress = new Progress<CloudSyncProgress>(ShowProgress);
+                var result = await Task.Run(() => CloudSyncWorkflow.Synchronize(settings, new CloudSyncSettingsStore(), item => uiProgress.Report(item)));
                 ShowResult(result);
             }
             catch (Exception exception) { ShowError(exception); }
-            finally { _syncNow.Enabled = true; }
+            finally
+            {
+                if (manualStarted) CloudSyncCoordinator.EndManualSynchronization();
+                _progress.Visible = false;
+                _syncNow.Enabled = true;
+            }
+        }
+
+        private void ShowProgress(CloudSyncProgress progress)
+        {
+            if (progress == null || IsDisposed) return;
+            _status.Text = progress.Stage + (string.IsNullOrWhiteSpace(progress.LogicalPath) ? string.Empty : "：" + progress.LogicalPath);
+            _status.ForeColor = Color.FromArgb(34, 98, 160);
+            if (progress.Total > 0)
+            {
+                _progress.Style = ProgressBarStyle.Continuous;
+                _progress.Value = progress.Percentage;
+            }
+            else _progress.Style = ProgressBarStyle.Marquee;
         }
 
         private void OnSynchronizationCompleted(CloudSyncResult result, Exception failure)

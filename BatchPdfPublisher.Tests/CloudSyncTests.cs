@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using BatchPdfPublisher.Services;
@@ -24,6 +25,8 @@ internal static class CloudSyncTests
         Run("ProtectsProviderCredentialsWithDpapi", ProtectsProviderCredentialsWithDpapi);
         Run("RunsLocalProviderWorkflow", RunsLocalProviderWorkflow);
         Run("IdentifiesCommonCloudFolders", IdentifiesCommonCloudFolders);
+        Run("MigratesNutstoreInternalRoot", MigratesNutstoreInternalRoot);
+        Run("ReportsSynchronizationProgress", ReportsSynchronizationProgress);
         Console.WriteLine("Executed " + _executed + " cloud sync tests; 0 failed.");
     }
 
@@ -284,6 +287,33 @@ internal static class CloudSyncTests
         Equal("坚果云", CloudSyncFolderDetector.IdentifyProvider(@"D:\坚果云\万落同步"));
         Equal("Syncthing", CloudSyncFolderDetector.IdentifyProvider(@"E:\Syncthing\WanLuo"));
         Equal("通用同步文件夹", CloudSyncFolderDetector.IdentifyProvider(@"F:\Shared\WanLuo"));
+    }
+
+    private static void MigratesNutstoreInternalRoot()
+    {
+        var root = NewRoot();
+        try
+        {
+            var internalRoot = Path.Combine(root, "Nutstore");
+            Directory.CreateDirectory(Path.Combine(internalRoot, "dlcache1"));
+            var cloudFolder = Path.Combine(internalRoot, "1", "我的坚果云");
+            Directory.CreateDirectory(cloudFolder);
+            Equal(Path.GetFullPath(cloudFolder), CloudSyncFolderDetector.ResolveUsableFolder(internalRoot));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    private static void ReportsSynchronizationProgress()
+    {
+        WithDefaultWorkspace((root, settings, engine, catalog, localFile, remoteFile) =>
+        {
+            File.WriteAllText(localFile, "progress");
+            var progress = new List<CloudSyncProgress>();
+            engine.Synchronize(settings, catalog, settings.SyncFolder, item => progress.Add(item));
+            True(progress.Any(item => item.Stage == "正在扫描本机文件"), "local scan progress was not reported");
+            True(progress.Any(item => item.Stage == "正在核对文件" && item.Total > 0), "file progress was not reported");
+            Equal("同步完成", progress.Last().Stage);
+        });
     }
 
     private static void WithDefaultWorkspace(Action<string, CloudSyncSettings, LocalFolderSyncEngine, CloudSyncCatalog, string, string> action)

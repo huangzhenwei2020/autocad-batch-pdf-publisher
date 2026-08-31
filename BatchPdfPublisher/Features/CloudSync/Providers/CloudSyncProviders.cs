@@ -78,12 +78,18 @@ namespace BatchPdfPublisher.Services
     {
         public static CloudSyncResult Synchronize(CloudSyncSettings settings, CloudSyncSettingsStore store)
         {
+            return Synchronize(settings, store, null);
+        }
+
+        public static CloudSyncResult Synchronize(CloudSyncSettings settings, CloudSyncSettingsStore store,
+            Action<CloudSyncProgress> progress)
+        {
             if (settings == null) throw new ArgumentNullException("settings");
             using (var provider = CloudSyncProviderFactory.Create(settings))
             {
                 provider.Prepare();
                 var result = new LocalFolderSyncEngine(store ?? new CloudSyncSettingsStore())
-                    .Synchronize(settings, CloudSyncCatalog.CreateDefault(settings), provider.WorkingFolder);
+                    .Synchronize(settings, CloudSyncCatalog.CreateDefault(settings), provider.WorkingFolder, progress);
                 provider.Complete(result);
                 return result;
             }

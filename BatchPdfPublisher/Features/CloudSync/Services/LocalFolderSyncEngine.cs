@@ -31,42 +31,56 @@ namespace BatchPdfPublisher.Services
 
         public CloudSyncResult Synchronize(CloudSyncSettings settings, CloudSyncCatalog catalog, string workingFolder)
         {
+            return Synchronize(settings, catalog, workingFolder, null);
+        }
+
+        public CloudSyncResult Synchronize(CloudSyncSettings settings, CloudSyncCatalog catalog, string workingFolder,
+            Action<CloudSyncProgress> progress)
+        {
             if (settings == null) throw new ArgumentNullException("settings");
             if (catalog == null) throw new ArgumentNullException("catalog");
             if (!settings.Enabled) throw new InvalidOperationException("云同步尚未启用。");
             if (string.IsNullOrWhiteSpace(workingFolder)) throw new InvalidOperationException("同步提供商没有可用的工作目录。");
 
-            lock (ProcessSync)
+            if (!Monitor.TryEnter(ProcessSync))
+                throw new IOException("同步任务已经在运行，请等待当前任务完成。");
+            try
             {
                 using (var crossProcess = new Mutex(false, "WanluoArchitectureTools.CloudSync"))
                 {
                     var acquired = false;
                     try
                     {
-                        try { acquired = crossProcess.WaitOne(TimeSpan.FromSeconds(30)); }
+                        try { acquired = crossProcess.WaitOne(TimeSpan.FromSeconds(2)); }
                         catch (AbandonedMutexException) { acquired = true; }
                         if (!acquired) throw new IOException("另一份 AutoCAD 正在执行同步，请稍后重试。");
-                        return SynchronizeLocked(settings, catalog, workingFolder);
+                        return SynchronizeLocked(settings, catalog, workingFolder, progress);
                     }
                     finally { if (acquired) crossProcess.ReleaseMutex(); }
                 }
             }
+            finally { Monitor.Exit(ProcessSync); }
         }
 
-        private CloudSyncResult SynchronizeLocked(CloudSyncSettings settings, CloudSyncCatalog catalog, string workingFolder)
+        private CloudSyncResult SynchronizeLocked(CloudSyncSettings settings, CloudSyncCatalog catalog, string workingFolder,
+            Action<CloudSyncProgress> progress)
         {
+            Report(progress, "正在应用待处理文件", null, 0, 0);
             CloudSyncPendingFileService.ApplyAvailable(catalog);
             var mirrorRoot = Path.GetFullPath(Path.Combine(workingFolder, "万落建筑云同步"));
             ValidateRoots(mirrorRoot, catalog.Roots);
             Directory.CreateDirectory(mirrorRoot);
 
+            Report(progress, "正在读取同步基线", null, 0, 0);
             var state = _store.LoadState();
             var stateByPath = state.Files
                 .Where(item => item != null && !string.IsNullOrWhiteSpace(item.LogicalPath))
                 .GroupBy(item => item.LogicalPath, StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(group => group.Key, group => group.Last(), StringComparer.OrdinalIgnoreCase);
+            Report(progress, "正在扫描本机文件", null, 0, 0);
             var localFiles = catalog.EnumerateFiles()
                 .ToDictionary(file => file.LogicalPath, file => file.LocalPath, StringComparer.OrdinalIgnoreCase);
+            Report(progress, "正在扫描云盘同步目录", null, 0, 0);
             var remoteFiles = EnumerateRemoteFiles(mirrorRoot)
                 .ToDictionary(file => file.LogicalPath, file => file.LocalPath, StringComparer.OrdinalIgnoreCase);
             var paths = new HashSet<string>(stateByPath.Keys, StringComparer.OrdinalIgnoreCase);
@@ -74,8 +88,11 @@ namespace BatchPdfPublisher.Services
             paths.UnionWith(remoteFiles.Keys);
 
             var result = new CloudSyncResult();
-            foreach (var logicalPath in paths.OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+            var orderedPaths = paths.OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToList();
+            for (var index = 0; index < orderedPaths.Count; index++)
             {
+                var logicalPath = orderedPaths[index];
+                Report(progress, "正在核对文件", logicalPath, index, orderedPaths.Count);
                 try
                 {
                     ProcessFile(settings, catalog, mirrorRoot, logicalPath, localFiles, remoteFiles, stateByPath, result);
@@ -92,10 +109,13 @@ namespace BatchPdfPublisher.Services
                 }
             }
 
+            Report(progress, "正在保存同步状态", null, orderedPaths.Count, orderedPaths.Count);
             state.Files = stateByPath.Values.OrderBy(item => item.LogicalPath, StringComparer.OrdinalIgnoreCase).ToList();
             _store.SaveState(state);
+            Report(progress, "正在整理历史版本", null, orderedPaths.Count, orderedPaths.Count);
             CleanupHistory(_localHistoryRoot, settings);
             CleanupHistory(Path.Combine(mirrorRoot, "历史版本"), settings);
+            Report(progress, "同步完成", null, orderedPaths.Count, orderedPaths.Count);
             return result;
         }
 
@@ -395,6 +415,13 @@ namespace BatchPdfPublisher.Services
         private static void AddOperation(CloudSyncResult result, string logicalPath, CloudSyncOperationKind kind, string message)
         {
             result.Operations.Add(new CloudSyncOperation { LogicalPath = logicalPath, Kind = kind, Message = message });
+        }
+
+        private static void Report(Action<CloudSyncProgress> progress, string stage, string logicalPath, int completed, int total)
+        {
+            if (progress == null) return;
+            try { progress(new CloudSyncProgress { Stage = stage, LogicalPath = logicalPath, Completed = completed, Total = total }); }
+            catch { }
         }
     }
 }

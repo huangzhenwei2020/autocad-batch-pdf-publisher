@@ -123,4 +123,17 @@ namespace BatchPdfPublisher.Services
             }
         }
     }
+
+    public sealed class CloudSyncProgress
+    {
+        public string Stage { get; set; }
+        public string LogicalPath { get; set; }
+        public int Completed { get; set; }
+        public int Total { get; set; }
+
+        public int Percentage
+        {
+            get { return Total <= 0 ? 0 : Math.Max(0, Math.Min(100, (int)Math.Round(Completed * 100d / Total))); }
+        }
+    }
 }

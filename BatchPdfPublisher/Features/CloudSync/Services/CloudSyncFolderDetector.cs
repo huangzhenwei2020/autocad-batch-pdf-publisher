@@ -39,7 +39,7 @@ namespace BatchPdfPublisher.Services
             var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             AddKnownFolder(result, profile, "Dropbox", "Dropbox");
             AddKnownFolder(result, profile, "坚果云", "坚果云");
-            AddKnownFolder(result, profile, "Nutstore", "坚果云");
+            AddNutstoreFolders(result, Path.Combine(profile, "Nutstore"));
             AddKnownFolder(result, profile, "Syncthing", "Syncthing");
 
             return result
@@ -66,6 +66,8 @@ namespace BatchPdfPublisher.Services
                 return "尚未选择同步文件夹；可自动识别 OneDrive、Dropbox、坚果云或 Syncthing。";
 
             var provider = IdentifyProvider(folderPath);
+            if (IsNutstoreInternalRoot(folderPath))
+                return "坚果云：当前路径是客户端内部目录，不是同步空间；请点击“自动识别”选择“我的坚果云”。";
             if (!Directory.Exists(folderPath))
                 return provider + "：目录不存在，请先在云盘客户端中创建或同步该目录。";
 
@@ -83,10 +85,46 @@ namespace BatchPdfPublisher.Services
                 + "。最终上传状态请以客户端托盘图标为准。";
         }
 
+        public static string ResolveUsableFolder(string folderPath)
+        {
+            if (!IsNutstoreInternalRoot(folderPath)) return folderPath;
+            var candidates = new List<CloudSyncFolderCandidate>();
+            AddNutstoreFolders(candidates, folderPath);
+            return candidates.Count == 1 ? candidates[0].FolderPath : folderPath;
+        }
+
         private static void AddKnownFolder(ICollection<CloudSyncFolderCandidate> result, string root, string name, string provider)
         {
             if (string.IsNullOrWhiteSpace(root)) return;
             Add(result, Path.Combine(root, name), provider, "常用目录");
+        }
+
+        private static void AddNutstoreFolders(ICollection<CloudSyncFolderCandidate> result, string internalRoot)
+        {
+            if (!Directory.Exists(internalRoot)) return;
+            try
+            {
+                foreach (var accountRoot in Directory.GetDirectories(internalRoot)
+                    .Where(path => int.TryParse(Path.GetFileName(path), out _)))
+                {
+                    foreach (var cloudFolder in Directory.GetDirectories(accountRoot))
+                        Add(result, cloudFolder, "坚果云", "坚果云挂载目录");
+                }
+            }
+            catch { }
+        }
+
+        private static bool IsNutstoreInternalRoot(string folderPath)
+        {
+            if (string.IsNullOrWhiteSpace(folderPath) || !Directory.Exists(folderPath)) return false;
+            try
+            {
+                return string.Equals(Path.GetFileName(folderPath.TrimEnd(Path.DirectorySeparatorChar)), "Nutstore", StringComparison.OrdinalIgnoreCase)
+                    && (Directory.Exists(Path.Combine(folderPath, "dlcache1"))
+                        || Directory.Exists(Path.Combine(folderPath, "sigs1"))
+                        || Directory.Exists(Path.Combine(folderPath, "tmp1")));
+            }
+            catch { return false; }
         }
 
         private static void AddDropboxInfo(ICollection<CloudSyncFolderCandidate> result, string infoFile)
