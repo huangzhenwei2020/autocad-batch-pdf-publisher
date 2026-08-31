@@ -25,6 +25,7 @@ namespace BatchPdfPublisher.Services
         public CloudSyncSettings LoadSettings()
         {
             var settings = Load(_settingsPath, new CloudSyncSettings());
+            if (string.IsNullOrWhiteSpace(settings.Provider)) settings.Provider = "LocalFolder";
             if (settings.ProjectMappings == null) settings.ProjectMappings = new System.Collections.Generic.List<CloudSyncProjectMapping>();
             return settings;
         }

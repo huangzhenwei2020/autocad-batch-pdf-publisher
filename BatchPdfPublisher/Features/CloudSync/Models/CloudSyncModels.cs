@@ -24,6 +24,8 @@ namespace BatchPdfPublisher.Services
 
         [DataMember] public bool Enabled { get; set; }
         [DataMember] public string Provider { get; set; }
+        [DataMember] public string ProviderClientId { get; set; }
+        [DataMember] public string ProviderRemoteFolder { get; set; }
         [DataMember] public string SyncFolder { get; set; }
         [DataMember] public string DeviceName { get; set; }
         [DataMember] public bool SyncGeneralSettings { get; set; }
@@ -44,6 +46,15 @@ namespace BatchPdfPublisher.Services
         [DataMember] public string CloudId { get; set; }
         [DataMember] public string LocalFolder { get; set; }
         [DataMember] public bool Enabled { get; set; }
+    }
+
+    [DataContract]
+    public sealed class CloudSyncCredential
+    {
+        [DataMember] public string AccessToken { get; set; }
+        [DataMember] public string RefreshToken { get; set; }
+        [DataMember] public string ExpiresAtUtc { get; set; }
+        [DataMember] public string AccountDisplayName { get; set; }
     }
 
     [DataContract]

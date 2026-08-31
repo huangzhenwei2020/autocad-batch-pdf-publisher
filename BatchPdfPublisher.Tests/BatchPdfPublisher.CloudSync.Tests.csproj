@@ -7,6 +7,9 @@
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+  </ItemGroup>
+  <ItemGroup>
     <Compile Include="CloudSyncTests.cs" />
     <Compile Include="UserDataPathsStub.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Models\CloudSyncModels.cs" Link="CloudSyncModels.cs" />
@@ -15,5 +18,7 @@
     <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\LocalFolderSyncEngine.cs" Link="LocalFolderSyncEngine.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncPendingFileService.cs" Link="CloudSyncPendingFileService.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncCenterService.cs" Link="CloudSyncCenterService.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncCredentialStore.cs" Link="CloudSyncCredentialStore.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Providers\CloudSyncProviders.cs" Link="CloudSyncProviders.cs" />
   </ItemGroup>
 </Project>

@@ -12,7 +12,9 @@ namespace BatchPdfPublisher.Views
     public sealed class CloudSyncSettingsForm : Form
     {
         private readonly CheckBox _enabled = new CheckBox { Text = "启用云同步", AutoSize = true };
+        private readonly ComboBox _provider = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
         private readonly TextBox _folder = new TextBox { Dock = DockStyle.Fill };
+        private readonly TextBox _clientId = new TextBox { Dock = DockStyle.Fill };
         private readonly TextBox _device = new TextBox { Dock = DockStyle.Fill };
         private readonly CheckBox _general = new CheckBox { Text = "通用设置", AutoSize = true };
         private readonly CheckBox _projects = new CheckBox { Text = "项目配置", AutoSize = true };
@@ -44,7 +46,7 @@ namespace BatchPdfPublisher.Views
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             Controls.Add(root);
 
-            var title = new Label { Text = "云同步（V2：项目文件与 DWG 安全同步）", Font = new Font(Font, FontStyle.Bold), AutoSize = true };
+            var title = new Label { Text = "云同步（V3：可切换存储提供商）", Font = new Font(Font, FontStyle.Bold), AutoSize = true };
             root.Controls.Add(title);
             var description = new Label
             {
@@ -60,11 +62,15 @@ namespace BatchPdfPublisher.Views
             settingsPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             settingsPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             settingsPanel.Controls.Add(_enabled, 0, 0); settingsPanel.SetColumnSpan(_enabled, 3);
-            settingsPanel.Controls.Add(LabelFor("同步文件夹"), 0, 1); settingsPanel.Controls.Add(_folder, 1, 1);
-            var browse = ButtonFor("选择…"); browse.Click += Browse; settingsPanel.Controls.Add(browse, 2, 1);
-            settingsPanel.Controls.Add(LabelFor("本机设备名称"), 0, 2); settingsPanel.Controls.Add(_device, 1, 2);
-            var open = ButtonFor("打开目录"); open.Click += OpenFolder; settingsPanel.Controls.Add(open, 2, 2);
-            settingsPanel.Controls.Add(LabelFor("首次连接时"), 0, 3); settingsPanel.Controls.Add(_initialPreference, 1, 3);
+            settingsPanel.Controls.Add(LabelFor("存储提供商"), 0, 1); settingsPanel.Controls.Add(_provider, 1, 1);
+            var portal = ButtonFor("115 开放平台"); portal.Click += Open115Portal; settingsPanel.Controls.Add(portal, 2, 1);
+            settingsPanel.Controls.Add(LabelFor("同步文件夹"), 0, 2); settingsPanel.Controls.Add(_folder, 1, 2);
+            var browse = ButtonFor("选择…"); browse.Click += Browse; settingsPanel.Controls.Add(browse, 2, 2);
+            settingsPanel.Controls.Add(LabelFor("115 Client ID"), 0, 3); settingsPanel.Controls.Add(_clientId, 1, 3);
+            settingsPanel.Controls.Add(LabelFor("审核通过后填写"), 2, 3);
+            settingsPanel.Controls.Add(LabelFor("本机设备名称"), 0, 4); settingsPanel.Controls.Add(_device, 1, 4);
+            var open = ButtonFor("打开目录"); open.Click += OpenFolder; settingsPanel.Controls.Add(open, 2, 4);
+            settingsPanel.Controls.Add(LabelFor("首次连接时"), 0, 5); settingsPanel.Controls.Add(_initialPreference, 1, 5);
             root.Controls.Add(settingsPanel);
 
             var scope = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = true };
@@ -91,12 +97,19 @@ namespace BatchPdfPublisher.Views
         private void LoadSettings()
         {
             _settings = new CloudSyncSettingsStore().LoadSettings();
+            _provider.Items.Clear();
+            _provider.Items.Add("本地同步文件夹");
+            _provider.Items.Add("115 官方 OpenAPI（申请审核后启用）");
+            _provider.SelectedIndexChanged += delegate { UpdateProviderUi(); };
+            _clientId.TextChanged += delegate { if (_provider.SelectedIndex == 1) UpdateProviderUi(); };
             _initialPreference.Items.Clear();
             _initialPreference.Items.Add("云端优先（先备份本机，推荐）");
             _initialPreference.Items.Add("本机优先（先备份云端）");
             _initialPreference.Items.Add("不选择，全部保留为冲突");
             _enabled.Checked = _settings.Enabled;
+            _provider.SelectedIndex = string.Equals(_settings.Provider, "115OpenApi", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
             _folder.Text = _settings.SyncFolder ?? string.Empty;
+            _clientId.Text = _settings.ProviderClientId ?? string.Empty;
             _device.Text = string.IsNullOrWhiteSpace(_settings.DeviceName) ? Environment.MachineName : _settings.DeviceName;
             _general.Checked = _settings.SyncGeneralSettings;
             _projects.Checked = _settings.SyncProjectConfigurations;
@@ -109,19 +122,28 @@ namespace BatchPdfPublisher.Views
             _days.Value = Math.Max(_days.Minimum, Math.Min(_days.Maximum, _settings.HistoryRetentionDays));
             _versions.Value = Math.Max(_versions.Minimum, Math.Min(_versions.Maximum, _settings.KeepVersionsPerFile));
             _status.Text = _settings.Enabled ? "同步已启用。" : "同步默认关闭；启用并保存后才会读写同步目录。";
+            UpdateProviderUi();
         }
 
         private bool PersistSettings()
         {
             var folder = _folder.Text.Trim();
-            if (_enabled.Checked && string.IsNullOrWhiteSpace(folder))
+            var providerId = _provider.SelectedIndex == 1 ? "115OpenApi" : "LocalFolder";
+            if (_enabled.Checked && providerId == "LocalFolder" && string.IsNullOrWhiteSpace(folder))
             {
                 MessageBox.Show(this, "启用同步前请选择同步文件夹。", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return false;
             }
-            if (_enabled.Checked) Directory.CreateDirectory(folder);
+            if (_enabled.Checked && providerId == "LocalFolder") Directory.CreateDirectory(folder);
+            if (_enabled.Checked && providerId == "115OpenApi")
+            {
+                MessageBox.Show(this, "115 官方直连需要先完成开发者认证和应用审核。\r\n\r\n当前可以保存 Client ID，但在取得审核后台的正式接口参数前不能启用直连；请继续使用“本地同步文件夹”模式。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return false;
+            }
             _settings.Enabled = _enabled.Checked;
+            _settings.Provider = providerId;
             _settings.SyncFolder = folder;
+            _settings.ProviderClientId = _clientId.Text.Trim();
             _settings.DeviceName = string.IsNullOrWhiteSpace(_device.Text) ? Environment.MachineName : _device.Text.Trim();
             _settings.SyncGeneralSettings = _general.Checked;
             _settings.SyncProjectConfigurations = _projects.Checked;
@@ -159,8 +181,7 @@ namespace BatchPdfPublisher.Views
                 if (!_settings.Enabled) { MessageBox.Show(this, "请先启用云同步。", Text); return; }
                 _syncNow.Enabled = false; _status.Text = "正在核对本机与同步文件夹…"; _details.Items.Clear();
                 var settings = _settings;
-                var result = await Task.Run(() => new LocalFolderSyncEngine(new CloudSyncSettingsStore())
-                    .Synchronize(settings, CloudSyncCatalog.CreateDefault(settings)));
+                var result = await Task.Run(() => CloudSyncWorkflow.Synchronize(settings, new CloudSyncSettingsStore()));
                 ShowResult(result);
             }
             catch (Exception exception) { ShowError(exception); }
@@ -202,6 +223,30 @@ namespace BatchPdfPublisher.Views
                 Directory.CreateDirectory(path);
                 Process.Start("explorer.exe", path);
             }
+            catch (Exception exception) { ShowError(exception); }
+        }
+
+        private void UpdateProviderUi()
+        {
+            var local = _provider.SelectedIndex != 1;
+            _folder.Enabled = local;
+            _clientId.Enabled = !local;
+            if (!local)
+            {
+                using (var provider = CloudSyncProviderFactory.Create(new CloudSyncSettings { Provider = "115OpenApi", ProviderClientId = _clientId.Text.Trim() }))
+                    _status.Text = provider.Status;
+                _status.ForeColor = Color.DarkOrange;
+            }
+            else
+            {
+                _status.Text = _settings != null && _settings.Enabled ? "本地同步文件夹模式已启用。" : "本地同步文件夹模式；启用并保存后开始同步。";
+                _status.ForeColor = Color.FromArgb(34, 120, 72);
+            }
+        }
+
+        private void Open115Portal(object sender, EventArgs e)
+        {
+            try { Process.Start(new ProcessStartInfo(OneOneFiveOpenApiProvider.DeveloperPortal) { UseShellExecute = true }); }
             catch (Exception exception) { ShowError(exception); }
         }
 

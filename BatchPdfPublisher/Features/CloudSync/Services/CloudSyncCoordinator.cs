@@ -61,11 +61,19 @@ namespace BatchPdfPublisher.Services
         private static void ConfigureWatchers()
         {
             var settings = new CloudSyncSettingsStore().LoadSettings();
-            if (!settings.Enabled || !settings.AutoSync || string.IsNullOrWhiteSpace(settings.SyncFolder)) return;
+            if (!settings.Enabled || !settings.AutoSync) return;
             var catalog = CloudSyncCatalog.CreateDefault(settings);
             foreach (var root in catalog.Roots) AddWatcher(root);
-            var mirror = Path.Combine(settings.SyncFolder, "万落建筑云同步");
-            try { Directory.CreateDirectory(mirror); AddWatcher(mirror); } catch { }
+            try
+            {
+                using (var provider = CloudSyncProviderFactory.Create(settings))
+                {
+                    if (!provider.IsReady) { Trace(provider.Status); return; }
+                    var mirror = Path.Combine(provider.WorkingFolder, "万落建筑云同步");
+                    Directory.CreateDirectory(mirror); AddWatcher(mirror);
+                }
+            }
+            catch (Exception exception) { Trace(exception.Message); return; }
             _timer = new Timer(Execute, null, TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(5));
         }
 
@@ -102,7 +110,7 @@ namespace BatchPdfPublisher.Services
                 var store = new CloudSyncSettingsStore();
                 var settings = store.LoadSettings();
                 if (settings.Enabled)
-                    result = new LocalFolderSyncEngine(store).Synchronize(settings, CloudSyncCatalog.CreateDefault(settings));
+                    result = CloudSyncWorkflow.Synchronize(settings, store);
             }
             catch (Exception exception)
             {

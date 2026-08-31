@@ -46,8 +46,8 @@ namespace BatchPdfPublisher.Services
         {
             _settings = new CloudSyncSettingsStore().LoadSettings();
             _catalog = CloudSyncCatalog.CreateDefault(_settings);
-            _mirrorRoot = string.IsNullOrWhiteSpace(_settings.SyncFolder) ? null :
-                Path.GetFullPath(Path.Combine(_settings.SyncFolder, "万落建筑云同步"));
+            using (var provider = CloudSyncProviderFactory.Create(_settings))
+                _mirrorRoot = provider.IsReady ? Path.GetFullPath(Path.Combine(provider.WorkingFolder, "万落建筑云同步")) : null;
             _pendingRoot = Path.Combine(UserDataPaths.RootDirectory, ".cloud-sync", "pending");
             _localHistoryRoot = Path.Combine(UserDataPaths.RootDirectory, ".cloud-sync", "history");
         }

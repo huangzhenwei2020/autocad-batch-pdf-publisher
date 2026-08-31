@@ -26,10 +26,15 @@ namespace BatchPdfPublisher.Services
 
         public CloudSyncResult Synchronize(CloudSyncSettings settings, CloudSyncCatalog catalog)
         {
+            return Synchronize(settings, catalog, settings == null ? null : settings.SyncFolder);
+        }
+
+        public CloudSyncResult Synchronize(CloudSyncSettings settings, CloudSyncCatalog catalog, string workingFolder)
+        {
             if (settings == null) throw new ArgumentNullException("settings");
             if (catalog == null) throw new ArgumentNullException("catalog");
             if (!settings.Enabled) throw new InvalidOperationException("云同步尚未启用。");
-            if (string.IsNullOrWhiteSpace(settings.SyncFolder)) throw new InvalidOperationException("请先选择本地同步文件夹。");
+            if (string.IsNullOrWhiteSpace(workingFolder)) throw new InvalidOperationException("同步提供商没有可用的工作目录。");
 
             lock (ProcessSync)
             {
@@ -41,17 +46,17 @@ namespace BatchPdfPublisher.Services
                         try { acquired = crossProcess.WaitOne(TimeSpan.FromSeconds(30)); }
                         catch (AbandonedMutexException) { acquired = true; }
                         if (!acquired) throw new IOException("另一份 AutoCAD 正在执行同步，请稍后重试。");
-                        return SynchronizeLocked(settings, catalog);
+                        return SynchronizeLocked(settings, catalog, workingFolder);
                     }
                     finally { if (acquired) crossProcess.ReleaseMutex(); }
                 }
             }
         }
 
-        private CloudSyncResult SynchronizeLocked(CloudSyncSettings settings, CloudSyncCatalog catalog)
+        private CloudSyncResult SynchronizeLocked(CloudSyncSettings settings, CloudSyncCatalog catalog, string workingFolder)
         {
             CloudSyncPendingFileService.ApplyAvailable(catalog);
-            var mirrorRoot = Path.GetFullPath(Path.Combine(settings.SyncFolder, "万落建筑云同步"));
+            var mirrorRoot = Path.GetFullPath(Path.Combine(workingFolder, "万落建筑云同步"));
             ValidateRoots(mirrorRoot, catalog.Roots);
             Directory.CreateDirectory(mirrorRoot);
 

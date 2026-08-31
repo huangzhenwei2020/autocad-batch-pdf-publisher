@@ -20,6 +20,9 @@ internal static class CloudSyncTests
         Run("DefersRemoteDeletionUntilDrawingCloses", DefersRemoteDeletionUntilDrawingCloses);
         Run("RestoresHistoryWithBackup", RestoresHistoryWithBackup);
         Run("ResolvesConflictUsingLocalCopy", ResolvesConflictUsingLocalCopy);
+        Run("CreatesProviderWithoutChangingLocalMode", CreatesProviderWithoutChangingLocalMode);
+        Run("ProtectsProviderCredentialsWithDpapi", ProtectsProviderCredentialsWithDpapi);
+        Run("RunsLocalProviderWorkflow", RunsLocalProviderWorkflow);
         Console.WriteLine("Executed " + _executed + " cloud sync tests; 0 failed.");
     }
 
@@ -215,6 +218,62 @@ internal static class CloudSyncTests
             Equal("local-choice", File.ReadAllText(remoteFile));
             Equal(0, center.Load().Conflicts.Count);
         });
+    }
+
+    private static void CreatesProviderWithoutChangingLocalMode()
+    {
+        var root = NewRoot();
+        try
+        {
+            using (var local = CloudSyncProviderFactory.Create(new CloudSyncSettings { Provider = "LocalFolder", SyncFolder = root }))
+            {
+                True(local.IsReady, "local folder provider should remain ready");
+                local.Prepare(); Equal(Path.GetFullPath(root), local.WorkingFolder);
+            }
+            using (var provider115 = CloudSyncProviderFactory.Create(new CloudSyncSettings { Provider = "115OpenApi" }))
+            {
+                True(!provider115.IsReady, "115 provider must not enable before official app approval");
+                Throws<InvalidOperationException>(() => provider115.Prepare());
+            }
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    private static void ProtectsProviderCredentialsWithDpapi()
+    {
+        var root = NewRoot();
+        try
+        {
+            var store = new CloudSyncCredentialStore(root);
+            store.Save("115OpenApi", new CloudSyncCredential { AccessToken = "secret-access", RefreshToken = "secret-refresh" });
+            var raw = File.ReadAllBytes(Directory.GetFiles(root, "*.credential").Single());
+            True(!System.Text.Encoding.UTF8.GetString(raw).Contains("secret-access"), "credential was stored as plaintext");
+            var loaded = store.Load("115OpenApi");
+            Equal("secret-access", loaded.AccessToken); Equal("secret-refresh", loaded.RefreshToken);
+            store.Delete("115OpenApi"); True(!Directory.GetFiles(root, "*.credential").Any(), "credential delete failed");
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    private static void RunsLocalProviderWorkflow()
+    {
+        var root = NewRoot();
+        try
+        {
+            UserDataPaths.TestRootDirectory = root;
+            Directory.CreateDirectory(UserDataPaths.SettingsDirectory);
+            File.WriteAllText(Path.Combine(UserDataPaths.SettingsDirectory, "workflow.json"), "value");
+            var shared = Path.Combine(root, "shared");
+            var settings = new CloudSyncSettings
+            {
+                Enabled = true, Provider = "LocalFolder", SyncFolder = shared,
+                SyncGeneralSettings = true, SyncProjectConfigurations = false, SyncTemplatesAndSchemes = false
+            };
+            var store = new CloudSyncSettingsStore(); store.SaveSettings(settings);
+            Equal(1, CloudSyncWorkflow.Synchronize(settings, store).Uploaded);
+            True(File.Exists(Path.Combine(shared, "万落建筑云同步", "通用配置", "workflow.json")), "provider workflow did not upload");
+        }
+        finally { Directory.Delete(root, true); }
     }
 
     private static void WithDefaultWorkspace(Action<string, CloudSyncSettings, LocalFolderSyncEngine, CloudSyncCatalog, string, string> action)
