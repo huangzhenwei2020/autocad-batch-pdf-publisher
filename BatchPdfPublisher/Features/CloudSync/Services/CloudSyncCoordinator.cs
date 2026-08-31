@@ -12,6 +12,9 @@ namespace BatchPdfPublisher.Services
         private static Timer _timer;
         private static int _running;
         private static int _pending;
+        private static int _reloadPending;
+        private static int _reloadWorker;
+        private static int _syncAfterReload;
         private static bool _installed;
 
         public static event Action<CloudSyncResult, Exception> SynchronizationCompleted;
@@ -22,28 +25,61 @@ namespace BatchPdfPublisher.Services
             {
                 if (_installed) return;
                 _installed = true;
-                ConfigureWatchers();
             }
+            QueueReload(false);
         }
 
         public static void Reload()
         {
+            List<FileSystemWatcher> watchers;
+            Timer timer;
             lock (LifecycleSync)
             {
-                DisposeWatchers();
-                if (_timer != null) { _timer.Dispose(); _timer = null; }
+                DetachResources(out watchers, out timer);
+            }
+            DisposeResources(watchers, timer);
+            lock (LifecycleSync)
+            {
                 if (_installed) ConfigureWatchers();
             }
         }
 
+        public static void QueueReload(bool synchronizeAfterReload)
+        {
+            if (synchronizeAfterReload) Interlocked.Exchange(ref _syncAfterReload, 1);
+            Interlocked.Exchange(ref _reloadPending, 1);
+            if (Interlocked.CompareExchange(ref _reloadWorker, 1, 0) != 0) return;
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                try
+                {
+                    while (Interlocked.Exchange(ref _reloadPending, 0) != 0) Reload();
+                    if (Interlocked.Exchange(ref _syncAfterReload, 0) != 0) RequestSynchronization(false);
+                }
+                catch (Exception exception)
+                {
+                    Interlocked.Exchange(ref _syncAfterReload, 0);
+                    Trace("后台重载同步监视器失败：" + exception);
+                }
+                finally
+                {
+                    Interlocked.Exchange(ref _reloadWorker, 0);
+                    if (Volatile.Read(ref _reloadPending) != 0 || Volatile.Read(ref _syncAfterReload) != 0)
+                        QueueReload(false);
+                }
+            });
+        }
+
         public static void Remove()
         {
+            List<FileSystemWatcher> watchers;
+            Timer timer;
             lock (LifecycleSync)
             {
                 _installed = false;
-                DisposeWatchers();
-                if (_timer != null) { _timer.Dispose(); _timer = null; }
+                DetachResources(out watchers, out timer);
             }
+            DisposeResources(watchers, timer);
         }
 
         public static void RequestSynchronization(bool immediate)
@@ -158,10 +194,19 @@ namespace BatchPdfPublisher.Services
             }
         }
 
-        private static void DisposeWatchers()
+        private static void DetachResources(out List<FileSystemWatcher> watchers, out Timer timer)
         {
-            foreach (var watcher in Watchers) try { watcher.Dispose(); } catch { }
+            watchers = new List<FileSystemWatcher>(Watchers);
             Watchers.Clear();
+            timer = _timer;
+            _timer = null;
+        }
+
+        private static void DisposeResources(IEnumerable<FileSystemWatcher> watchers, Timer timer)
+        {
+            if (timer != null) try { timer.Dispose(); } catch { }
+            foreach (var watcher in watchers ?? new FileSystemWatcher[0])
+                try { watcher.Dispose(); } catch { }
         }
 
         private static bool IsGeneratedSyncArtifact(string path)

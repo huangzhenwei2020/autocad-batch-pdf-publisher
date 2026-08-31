@@ -35,6 +35,7 @@ namespace BatchPdfPublisher.Views
         private CloudSyncProgress _latestProgress;
         private int _progressVersion;
         private int _progressUpdateQueued;
+        private int _providerStatusVersion;
 
         public CloudSyncSettingsForm()
         {
@@ -163,7 +164,15 @@ namespace BatchPdfPublisher.Views
                 MessageBox.Show(this, "启用同步前请选择同步文件夹。", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return false;
             }
-            if (_enabled.Checked && providerId == "LocalFolder") Directory.CreateDirectory(folder);
+            if (_enabled.Checked && providerId == "LocalFolder")
+            {
+                try { Path.GetFullPath(folder); }
+                catch (Exception exception)
+                {
+                    MessageBox.Show(this, "同步文件夹路径无效：" + exception.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return false;
+                }
+            }
             if (_enabled.Checked && providerId == "115OpenApi")
             {
                 MessageBox.Show(this, "115 官方直连需要先完成开发者认证和应用审核。\r\n\r\n当前可以保存 Client ID，但在取得审核后台的正式接口参数前不能启用直连；请继续使用“通用云盘同步文件夹”模式。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -185,8 +194,9 @@ namespace BatchPdfPublisher.Views
             _settings.HistoryRetentionDays = (int)_days.Value;
             _settings.KeepVersionsPerFile = (int)_versions.Value;
             new CloudSyncSettingsStore().SaveSettings(_settings);
-            if (reloadCoordinator) CloudSyncCoordinator.Reload();
-            if (requestAutomaticSync && _settings.Enabled && _settings.AutoSync) CloudSyncCoordinator.RequestSynchronization(false);
+            var synchronize = requestAutomaticSync && _settings.Enabled && _settings.AutoSync;
+            if (reloadCoordinator) CloudSyncCoordinator.QueueReload(synchronize);
+            else if (synchronize) CloudSyncCoordinator.RequestSynchronization(false);
             return true;
         }
 
@@ -244,7 +254,7 @@ namespace BatchPdfPublisher.Views
                 {
                     _progress.Visible = false;
                     _syncNow.Text = "立即同步";
-                    ThreadPool.QueueUserWorkItem(delegate { CloudSyncCoordinator.Reload(); });
+                    CloudSyncCoordinator.QueueReload(false);
                 }
             }
         }
@@ -399,18 +409,39 @@ namespace BatchPdfPublisher.Views
             var local = _provider.SelectedIndex != 1;
             _folder.Enabled = local;
             _clientId.Enabled = !local;
-            if (!local)
+            var version = Interlocked.Increment(ref _providerStatusVersion);
+            var folder = _folder.Text.Trim();
+            var clientId = _clientId.Text.Trim();
+            _status.Text = local ? "正在检查同步目录…" : "正在检查 115 开放平台配置…";
+            _status.ForeColor = Color.FromArgb(34, 98, 160);
+            ThreadPool.QueueUserWorkItem(delegate
             {
-                using (var provider = CloudSyncProviderFactory.Create(new CloudSyncSettings { Provider = "115OpenApi", ProviderClientId = _clientId.Text.Trim() }))
-                    _status.Text = provider.Status;
-                _status.ForeColor = Color.DarkOrange;
-            }
-            else
-            {
-                _status.Text = CloudSyncFolderDetector.Describe(_folder.Text.Trim());
-                _status.ForeColor = string.IsNullOrWhiteSpace(_folder.Text) || !Directory.Exists(_folder.Text.Trim())
-                    ? Color.DarkOrange : Color.FromArgb(34, 120, 72);
-            }
+                string message;
+                Color color;
+                if (!local)
+                {
+                    using (var provider = CloudSyncProviderFactory.Create(new CloudSyncSettings { Provider = "115OpenApi", ProviderClientId = clientId }))
+                        message = provider.Status;
+                    color = Color.DarkOrange;
+                }
+                else
+                {
+                    message = CloudSyncFolderDetector.Describe(folder);
+                    color = string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder)
+                        ? Color.DarkOrange : Color.FromArgb(34, 120, 72);
+                }
+                if (IsDisposed || Disposing || version != Volatile.Read(ref _providerStatusVersion)) return;
+                try
+                {
+                    BeginInvoke((Action)delegate
+                    {
+                        if (IsDisposed || Disposing || version != Volatile.Read(ref _providerStatusVersion)) return;
+                        _status.Text = message;
+                        _status.ForeColor = color;
+                    });
+                }
+                catch { }
+            });
         }
 
         private void Open115Portal(object sender, EventArgs e)

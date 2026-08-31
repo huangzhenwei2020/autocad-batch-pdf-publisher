@@ -107,7 +107,7 @@ namespace BatchPdfPublisher.Services
                 if (!changed) return;
                 settings.ProjectMappings = refreshed;
                 store.SaveSettings(settings);
-                CloudSyncCoordinator.Reload();
+                CloudSyncCoordinator.QueueReload(false);
             }
             catch { }
         }
