@@ -23,6 +23,7 @@ internal static class CloudSyncTests
         Run("CreatesProviderWithoutChangingLocalMode", CreatesProviderWithoutChangingLocalMode);
         Run("ProtectsProviderCredentialsWithDpapi", ProtectsProviderCredentialsWithDpapi);
         Run("RunsLocalProviderWorkflow", RunsLocalProviderWorkflow);
+        Run("IdentifiesCommonCloudFolders", IdentifiesCommonCloudFolders);
         Console.WriteLine("Executed " + _executed + " cloud sync tests; 0 failed.");
     }
 
@@ -274,6 +275,15 @@ internal static class CloudSyncTests
             True(File.Exists(Path.Combine(shared, "万落建筑云同步", "通用配置", "workflow.json")), "provider workflow did not upload");
         }
         finally { Directory.Delete(root, true); }
+    }
+
+    private static void IdentifiesCommonCloudFolders()
+    {
+        Equal("OneDrive", CloudSyncFolderDetector.IdentifyProvider(@"C:\Users\test\OneDrive\万落同步"));
+        Equal("Dropbox", CloudSyncFolderDetector.IdentifyProvider(@"D:\Dropbox\万落同步"));
+        Equal("坚果云", CloudSyncFolderDetector.IdentifyProvider(@"D:\坚果云\万落同步"));
+        Equal("Syncthing", CloudSyncFolderDetector.IdentifyProvider(@"E:\Syncthing\WanLuo"));
+        Equal("通用同步文件夹", CloudSyncFolderDetector.IdentifyProvider(@"F:\Shared\WanLuo"));
     }
 
     private static void WithDefaultWorkspace(Action<string, CloudSyncSettings, LocalFolderSyncEngine, CloudSyncCatalog, string, string> action)

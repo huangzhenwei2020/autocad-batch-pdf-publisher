@@ -30,10 +30,10 @@ namespace BatchPdfPublisher.Services
         private readonly CloudSyncSettings _settings;
         public LocalFolderCloudSyncProvider(CloudSyncSettings settings) { _settings = settings; }
         public string Id { get { return "LocalFolder"; } }
-        public string DisplayName { get { return "本地同步文件夹"; } }
+        public string DisplayName { get { return "通用云盘同步文件夹"; } }
         public string WorkingFolder { get { return string.IsNullOrWhiteSpace(_settings.SyncFolder) ? null : Path.GetFullPath(_settings.SyncFolder); } }
         public bool IsReady { get { return !string.IsNullOrWhiteSpace(WorkingFolder); } }
-        public string Status { get { return IsReady ? "本地同步文件夹已配置。" : "尚未选择本地同步文件夹。"; } }
+        public string Status { get { return CloudSyncFolderDetector.Describe(_settings.SyncFolder); } }
         public void Prepare()
         {
             if (!IsReady) throw new InvalidOperationException(Status);
