@@ -3,6 +3,10 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
+using System.Net;
+using System.Net.Http;
+using System.Text;
+using System.Threading.Tasks;
 using BatchPdfPublisher.Services;
 
 internal static class CloudSyncTests
@@ -30,6 +34,10 @@ internal static class CloudSyncTests
         Run("ReportsSynchronizationProgress", ReportsSynchronizationProgress);
         Run("CancelsLargeFileSynchronizationSafely", CancelsLargeFileSynchronizationSafely);
         Run("DoesNotDuplicateUnresolvedConflict", DoesNotDuplicateUnresolvedConflict);
+        Run("BuildsBaiduAuthorizationUrl", BuildsBaiduAuthorizationUrl);
+        Run("RejectsUnsafeBaiduRemotePath", RejectsUnsafeBaiduRemotePath);
+        Run("ExchangesBaiduAuthorizationCode", ExchangesBaiduAuthorizationCode);
+        Run("ValidatesBaiduOAuthCallback", ValidatesBaiduOAuthCallback);
         Console.WriteLine("Executed " + _executed + " cloud sync tests; 0 failed.");
     }
 
@@ -235,12 +243,12 @@ internal static class CloudSyncTests
             using (var local = CloudSyncProviderFactory.Create(new CloudSyncSettings { Provider = "LocalFolder", SyncFolder = root }))
             {
                 True(local.IsReady, "local folder provider should remain ready");
-                local.Prepare(); Equal(Path.GetFullPath(root), local.WorkingFolder);
+                local.Prepare(null, CancellationToken.None); Equal(Path.GetFullPath(root), local.WorkingFolder);
             }
             using (var provider115 = CloudSyncProviderFactory.Create(new CloudSyncSettings { Provider = "115OpenApi" }))
             {
                 True(!provider115.IsReady, "115 provider must not enable before official app approval");
-                Throws<InvalidOperationException>(() => provider115.Prepare());
+                Throws<InvalidOperationException>(() => provider115.Prepare(null, CancellationToken.None));
             }
         }
         finally { Directory.Delete(root, true); }
@@ -361,6 +369,56 @@ internal static class CloudSyncTests
         });
     }
 
+    private static void BuildsBaiduAuthorizationUrl()
+    {
+        var uri = BaiduNetdiskClient.BuildAuthorizationUri("app key", "https://example.test/oauth/callback", "state-value").AbsoluteUri;
+        True(uri.StartsWith(BaiduNetdiskClient.AuthorizationEndpoint, StringComparison.Ordinal), "wrong authorization endpoint");
+        True(uri.Contains("client_id=app%20key"), "client id was not encoded");
+        True(uri.Contains("scope=basic%2Cnetdisk"), "netdisk scope missing");
+        True(uri.Contains("state=state-value"), "oauth state missing");
+    }
+
+    private static void RejectsUnsafeBaiduRemotePath()
+    {
+        Equal("/apps/万落建筑工具/方案库", BaiduNetdiskClient.NormalizeRemotePath(@"\apps\万落建筑工具\方案库"));
+        Throws<IOException>(() => BaiduNetdiskClient.NormalizeRemotePath("/apps/万落建筑工具/../其他目录"));
+    }
+
+    private static void ExchangesBaiduAuthorizationCode()
+    {
+        HttpRequestMessage captured = null;
+        using (var http = new HttpClient(new StubHttpHandler(request =>
+        {
+            captured = request;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"access_token\":\"access\",\"refresh_token\":\"refresh\",\"expires_in\":3600}", Encoding.UTF8, "application/json")
+            };
+        })))
+        using (var client = new BaiduNetdiskClient(http))
+        {
+            var credential = client.ExchangeCodeAsync("app-key", "secret-key", "https://example.test/callback", "auth-code", CancellationToken.None).GetAwaiter().GetResult();
+            Equal("app-key", credential.ClientId); Equal("access", credential.AccessToken); Equal("refresh", credential.RefreshToken); Equal("secret-key", credential.ClientSecret);
+            Equal(HttpMethod.Get, captured.Method);
+            True(captured.RequestUri.Query.Contains("grant_type=authorization_code"), "authorization grant missing");
+            True(captured.RequestUri.Query.Contains("client_secret=secret-key"), "secret missing from token exchange");
+        }
+    }
+
+    private static void ValidatesBaiduOAuthCallback()
+    {
+        Equal("the-code", BaiduNetdiskClient.ExtractAuthorizationCode("https://example.test/callback?code=the-code&state=expected", "expected"));
+        Throws<InvalidOperationException>(() => BaiduNetdiskClient.ExtractAuthorizationCode("https://example.test/callback?code=old&state=wrong", "expected"));
+    }
+
+    private sealed class StubHttpHandler : HttpMessageHandler
+    {
+        private readonly Func<HttpRequestMessage, HttpResponseMessage> _handler;
+        public StubHttpHandler(Func<HttpRequestMessage, HttpResponseMessage> handler) { _handler = handler; }
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        { cancellationToken.ThrowIfCancellationRequested(); return Task.FromResult(_handler(request)); }
+    }
+
     private static void WithDefaultWorkspace(Action<string, CloudSyncSettings, LocalFolderSyncEngine, CloudSyncCatalog, string, string> action)
     {
         var root = NewRoot();
@@ -408,7 +466,12 @@ internal static class CloudSyncTests
 
     private static void Run(string name, Action test)
     {
-        test(); _executed++; Console.WriteLine("PASS " + name);
+        try { test(); _executed++; Console.WriteLine("PASS " + name); }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine("FAIL " + name + " · " + exception.GetType().FullName + " · " + exception.Message);
+            throw;
+        }
     }
     private static void Equal<T>(T expected, T actual)
     {

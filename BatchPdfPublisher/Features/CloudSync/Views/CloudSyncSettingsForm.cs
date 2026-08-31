@@ -16,6 +16,9 @@ namespace BatchPdfPublisher.Views
         private readonly ComboBox _provider = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
         private readonly TextBox _folder = new TextBox { Dock = DockStyle.Fill };
         private readonly TextBox _clientId = new TextBox { Dock = DockStyle.Fill };
+        private readonly TextBox _clientSecret = new TextBox { Dock = DockStyle.Fill, UseSystemPasswordChar = true };
+        private readonly TextBox _redirectUri = new TextBox { Dock = DockStyle.Fill };
+        private readonly TextBox _remoteFolder = new TextBox { Dock = DockStyle.Fill };
         private readonly TextBox _device = new TextBox { Dock = DockStyle.Fill };
         private readonly CheckBox _general = new CheckBox { Text = "通用设置", AutoSize = true };
         private readonly CheckBox _projects = new CheckBox { Text = "项目配置", AutoSize = true };
@@ -55,14 +58,14 @@ namespace BatchPdfPublisher.Views
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             Controls.Add(root);
 
-            var title = new Label { Text = "云同步（V4：通用云盘同步文件夹）", Font = new Font(Font, FontStyle.Bold), AutoSize = true };
+            var title = new Label { Text = "云同步（V5：插件直连云盘）", Font = new Font(Font, FontStyle.Bold), AutoSize = true };
             root.Controls.Add(title);
             var description = new Label
             {
                 AutoSize = true,
                 MaximumSize = new Size(780, 0),
                 ForeColor = Color.DimGray,
-                Text = "选择 OneDrive、Dropbox、坚果云、Syncthing 或其他同步工具维护的本地目录。插件负责版本、冲突和安全替换，外部客户端负责云端传输；项目参数会自动转换为跨电脑可用的相对路径。"
+                Text = "百度网盘直连由插件通过官方授权和文件接口上传、下载，无需安装网盘客户端。通用同步文件夹继续作为兼容模式；版本、冲突、历史和打开中 DWG 的保护规则保持不变。"
             };
             root.Controls.Add(description);
 
@@ -72,17 +75,23 @@ namespace BatchPdfPublisher.Views
             settingsPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             settingsPanel.Controls.Add(_enabled, 0, 0); settingsPanel.SetColumnSpan(_enabled, 3);
             settingsPanel.Controls.Add(LabelFor("存储提供商"), 0, 1); settingsPanel.Controls.Add(_provider, 1, 1);
-            var portal = ButtonFor("115 开放平台"); portal.Click += Open115Portal; settingsPanel.Controls.Add(portal, 2, 1);
+            var portal = ButtonFor("开放平台"); portal.Click += OpenProviderPortal; settingsPanel.Controls.Add(portal, 2, 1);
             settingsPanel.Controls.Add(LabelFor("云盘同步文件夹"), 0, 2); settingsPanel.Controls.Add(_folder, 1, 2);
             var folderActions = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
             var detect = ButtonFor("自动识别"); detect.Click += DetectFolders; folderActions.Controls.Add(detect);
             var browse = ButtonFor("选择…"); browse.Click += Browse; folderActions.Controls.Add(browse);
             settingsPanel.Controls.Add(folderActions, 2, 2);
-            settingsPanel.Controls.Add(LabelFor("115 Client ID"), 0, 3); settingsPanel.Controls.Add(_clientId, 1, 3);
-            settingsPanel.Controls.Add(LabelFor("审核通过后填写"), 2, 3);
-            settingsPanel.Controls.Add(LabelFor("本机设备名称"), 0, 4); settingsPanel.Controls.Add(_device, 1, 4);
-            var open = ButtonFor("打开目录"); open.Click += OpenFolder; settingsPanel.Controls.Add(open, 2, 4);
-            settingsPanel.Controls.Add(LabelFor("首次连接时"), 0, 5); settingsPanel.Controls.Add(_initialPreference, 1, 5);
+            settingsPanel.Controls.Add(LabelFor("App Key / Client ID"), 0, 3); settingsPanel.Controls.Add(_clientId, 1, 3);
+            var connect = ButtonFor("连接百度网盘"); connect.Click += ConnectBaidu; settingsPanel.Controls.Add(connect, 2, 3);
+            settingsPanel.Controls.Add(LabelFor("Secret Key（本机加密）"), 0, 4); settingsPanel.Controls.Add(_clientSecret, 1, 4);
+            settingsPanel.Controls.Add(LabelFor("不会上传"), 2, 4);
+            settingsPanel.Controls.Add(LabelFor("OAuth 回调地址"), 0, 5); settingsPanel.Controls.Add(_redirectUri, 1, 5);
+            settingsPanel.Controls.Add(LabelFor("须与应用登记一致"), 2, 5);
+            settingsPanel.Controls.Add(LabelFor("云端应用目录"), 0, 6); settingsPanel.Controls.Add(_remoteFolder, 1, 6);
+            settingsPanel.Controls.Add(LabelFor("例：/apps/万落建筑工具"), 2, 6);
+            settingsPanel.Controls.Add(LabelFor("本机设备名称"), 0, 7); settingsPanel.Controls.Add(_device, 1, 7);
+            var open = ButtonFor("打开目录"); open.Click += OpenFolder; settingsPanel.Controls.Add(open, 2, 7);
+            settingsPanel.Controls.Add(LabelFor("首次连接时"), 0, 8); settingsPanel.Controls.Add(_initialPreference, 1, 8);
             root.Controls.Add(settingsPanel);
 
             var scope = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = true };
@@ -116,23 +125,26 @@ namespace BatchPdfPublisher.Views
                 CloudSyncCoordinator.SynchronizationCompleted -= OnSynchronizationCompleted;
                 CancelSynchronizationWithoutBlockingUi();
             };
-            _folder.TextChanged += delegate { if (_provider.SelectedIndex != 1) UpdateProviderUi(); };
+            _folder.TextChanged += delegate { if (_provider.SelectedIndex == 1) UpdateProviderUi(); };
         }
 
         private void LoadSettings()
         {
             _settings = new CloudSyncSettingsStore().LoadSettings();
             _provider.Items.Clear();
-            _provider.Items.Add("通用云盘同步文件夹（推荐）");
+            _provider.Items.Add("百度网盘直连（无需客户端，推荐）");
+            _provider.Items.Add("通用云盘同步文件夹（兼容模式）");
             _provider.Items.Add("115 官方 OpenAPI（申请审核后启用）");
             _provider.SelectedIndexChanged += delegate { UpdateProviderUi(); };
-            _clientId.TextChanged += delegate { if (_provider.SelectedIndex == 1) UpdateProviderUi(); };
+            _clientId.TextChanged += delegate { if (_provider.SelectedIndex != 1) UpdateProviderUi(); };
+            _redirectUri.TextChanged += delegate { if (_provider.SelectedIndex == 0) UpdateProviderUi(); };
             _initialPreference.Items.Clear();
             _initialPreference.Items.Add("云端优先（先备份本机，推荐）");
             _initialPreference.Items.Add("本机优先（先备份云端）");
             _initialPreference.Items.Add("不选择，全部保留为冲突");
             _enabled.Checked = _settings.Enabled;
-            _provider.SelectedIndex = string.Equals(_settings.Provider, "115OpenApi", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+            _provider.SelectedIndex = string.Equals(_settings.Provider, "115OpenApi", StringComparison.OrdinalIgnoreCase) ? 2
+                : string.Equals(_settings.Provider, "LocalFolder", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
             _folder.Text = _settings.SyncFolder ?? string.Empty;
             if (string.IsNullOrWhiteSpace(_folder.Text))
             {
@@ -140,6 +152,8 @@ namespace BatchPdfPublisher.Views
                 if (detected.Count == 1) _folder.Text = detected[0].FolderPath;
             }
             _clientId.Text = _settings.ProviderClientId ?? string.Empty;
+            _redirectUri.Text = _settings.ProviderRedirectUri ?? string.Empty;
+            _remoteFolder.Text = string.IsNullOrWhiteSpace(_settings.ProviderRemoteFolder) ? "/apps/万落建筑工具" : _settings.ProviderRemoteFolder;
             _device.Text = string.IsNullOrWhiteSpace(_settings.DeviceName) ? Environment.MachineName : _settings.DeviceName;
             _general.Checked = _settings.SyncGeneralSettings;
             _projects.Checked = _settings.SyncProjectConfigurations;
@@ -158,7 +172,7 @@ namespace BatchPdfPublisher.Views
         private bool PersistSettings(bool requestAutomaticSync = true, bool reloadCoordinator = true)
         {
             var folder = _folder.Text.Trim();
-            var providerId = _provider.SelectedIndex == 1 ? "115OpenApi" : "LocalFolder";
+            var providerId = _provider.SelectedIndex == 2 ? "115OpenApi" : _provider.SelectedIndex == 1 ? "LocalFolder" : "BaiduNetdisk";
             if (_enabled.Checked && providerId == "LocalFolder" && string.IsNullOrWhiteSpace(folder))
             {
                 MessageBox.Show(this, "启用同步前请选择同步文件夹。", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -178,10 +192,22 @@ namespace BatchPdfPublisher.Views
                 MessageBox.Show(this, "115 官方直连需要先完成开发者认证和应用审核。\r\n\r\n当前可以保存 Client ID，但在取得审核后台的正式接口参数前不能启用直连；请继续使用“通用云盘同步文件夹”模式。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return false;
             }
+            if (_enabled.Checked && providerId == "BaiduNetdisk")
+            {
+                var candidate = new CloudSyncSettings { Provider = providerId, ProviderClientId = _clientId.Text.Trim(), ProviderRedirectUri = _redirectUri.Text.Trim() };
+                using (var provider = CloudSyncProviderFactory.Create(candidate))
+                    if (!provider.IsReady)
+                    {
+                        MessageBox.Show(this, provider.Status, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return false;
+                    }
+            }
             _settings.Enabled = _enabled.Checked;
             _settings.Provider = providerId;
             _settings.SyncFolder = folder;
             _settings.ProviderClientId = _clientId.Text.Trim();
+            _settings.ProviderRedirectUri = _redirectUri.Text.Trim();
+            _settings.ProviderRemoteFolder = _remoteFolder.Text.Trim();
             _settings.DeviceName = string.IsNullOrWhiteSpace(_device.Text) ? Environment.MachineName : _device.Text.Trim();
             _settings.SyncGeneralSettings = _general.Checked;
             _settings.SyncProjectConfigurations = _projects.Checked;
@@ -406,13 +432,18 @@ namespace BatchPdfPublisher.Views
 
         private void UpdateProviderUi()
         {
-            var local = _provider.SelectedIndex != 1;
+            var local = _provider.SelectedIndex == 1;
+            var baidu = _provider.SelectedIndex == 0;
             _folder.Enabled = local;
             _clientId.Enabled = !local;
+            _clientSecret.Enabled = baidu;
+            _redirectUri.Enabled = baidu;
+            _remoteFolder.Enabled = baidu;
             var version = Interlocked.Increment(ref _providerStatusVersion);
             var folder = _folder.Text.Trim();
             var clientId = _clientId.Text.Trim();
-            _status.Text = local ? "正在检查同步目录…" : "正在检查 115 开放平台配置…";
+            var redirectUri = _redirectUri.Text.Trim();
+            _status.Text = local ? "正在检查同步目录…" : baidu ? "正在检查百度网盘授权…" : "正在检查 115 开放平台配置…";
             _status.ForeColor = Color.FromArgb(34, 98, 160);
             ThreadPool.QueueUserWorkItem(delegate
             {
@@ -420,9 +451,10 @@ namespace BatchPdfPublisher.Views
                 Color color;
                 if (!local)
                 {
-                    using (var provider = CloudSyncProviderFactory.Create(new CloudSyncSettings { Provider = "115OpenApi", ProviderClientId = clientId }))
+                    var providerId = baidu ? "BaiduNetdisk" : "115OpenApi";
+                    using (var provider = CloudSyncProviderFactory.Create(new CloudSyncSettings { Provider = providerId, ProviderClientId = clientId, ProviderRedirectUri = redirectUri }))
                         message = provider.Status;
-                    color = Color.DarkOrange;
+                    color = providerId == "BaiduNetdisk" && message.Contains("已授权") ? Color.FromArgb(34, 120, 72) : Color.DarkOrange;
                 }
                 else
                 {
@@ -444,9 +476,48 @@ namespace BatchPdfPublisher.Views
             });
         }
 
-        private void Open115Portal(object sender, EventArgs e)
+        private void OpenProviderPortal(object sender, EventArgs e)
         {
-            try { Process.Start(new ProcessStartInfo(OneOneFiveOpenApiProvider.DeveloperPortal) { UseShellExecute = true }); }
+            try
+            {
+                var url = _provider.SelectedIndex == 2 ? OneOneFiveOpenApiProvider.DeveloperPortal : BaiduNetdiskProvider.DeveloperPortal;
+                Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+            }
+            catch (Exception exception) { ShowError(exception); }
+        }
+
+        private async void ConnectBaidu(object sender, EventArgs e)
+        {
+            if (_provider.SelectedIndex != 0)
+            {
+                MessageBox.Show(this, "请先选择“百度网盘直连”。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            var clientId = _clientId.Text.Trim(); var secret = _clientSecret.Text; var redirect = _redirectUri.Text.Trim();
+            if (string.IsNullOrWhiteSpace(clientId) || string.IsNullOrWhiteSpace(secret) || string.IsNullOrWhiteSpace(redirect))
+            {
+                MessageBox.Show(this, "请填写百度 App Key、Secret Key 和已登记的 OAuth 回调地址。", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            try
+            {
+                var state = Guid.NewGuid().ToString("N");
+                Process.Start(new ProcessStartInfo(BaiduNetdiskClient.BuildAuthorizationUri(clientId, redirect, state).AbsoluteUri) { UseShellExecute = true });
+                var callback = Microsoft.VisualBasic.Interaction.InputBox("请在浏览器完成百度网盘授权，然后复制并粘贴浏览器地址栏中的完整回调地址。", "连接百度网盘", string.Empty);
+                if (string.IsNullOrWhiteSpace(callback)) return;
+                var code = BaiduNetdiskClient.ExtractAuthorizationCode(callback, state);
+                _status.Text = "正在向百度网盘交换授权令牌…"; _status.ForeColor = Color.FromArgb(34, 98, 160);
+                var credential = await Task.Run(async () =>
+                {
+                    using (var client = new BaiduNetdiskClient()) return await client.ExchangeCodeAsync(clientId, secret, redirect, code.Trim(), CancellationToken.None);
+                });
+                new CloudSyncCredentialStore().Save("BaiduNetdisk", credential);
+                _settings.Provider = "BaiduNetdisk"; _settings.ProviderClientId = clientId; _settings.ProviderRedirectUri = redirect;
+                _settings.ProviderRemoteFolder = string.IsNullOrWhiteSpace(_remoteFolder.Text) ? "/apps/万落建筑工具" : _remoteFolder.Text.Trim();
+                new CloudSyncSettingsStore().SaveSettings(_settings);
+                _clientSecret.Clear();
+                _status.Text = "百度网盘连接成功；令牌和 Secret Key 已在本机加密保存。"; _status.ForeColor = Color.FromArgb(34, 120, 72);
+            }
             catch (Exception exception) { ShowError(exception); }
         }
 
