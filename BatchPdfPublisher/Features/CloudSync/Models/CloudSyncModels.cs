@@ -26,6 +26,7 @@ namespace BatchPdfPublisher.Services
         [DataMember] public string Provider { get; set; }
         [DataMember] public string ProviderClientId { get; set; }
         [DataMember] public string ProviderRedirectUri { get; set; }
+        [DataMember] public string ProviderBrokerUrl { get; set; }
         [DataMember] public string ProviderRemoteFolder { get; set; }
         [DataMember] public string SyncFolder { get; set; }
         [DataMember] public string DeviceName { get; set; }
@@ -54,6 +55,7 @@ namespace BatchPdfPublisher.Services
     {
         [DataMember] public string ClientId { get; set; }
         [DataMember] public string ClientSecret { get; set; }
+        [DataMember] public string AuthMode { get; set; }
         [DataMember] public string AccessToken { get; set; }
         [DataMember] public string RefreshToken { get; set; }
         [DataMember] public string ExpiresAtUtc { get; set; }

@@ -33,8 +33,11 @@ namespace BatchPdfPublisher.Views
         private readonly ListBox _details = new ListBox { Dock = DockStyle.Fill, HorizontalScrollbar = true };
         private readonly Button _syncNow;
         private readonly Button _close;
+        private readonly Button _acquireKey;
+        private readonly Button _connectBaidu;
         private CloudSyncSettings _settings;
         private CancellationTokenSource _syncCancellation;
+        private CancellationTokenSource _authorizationCancellation;
         private CloudSyncProgress _latestProgress;
         private int _progressVersion;
         private int _progressUpdateQueued;
@@ -83,8 +86,8 @@ namespace BatchPdfPublisher.Views
             settingsPanel.Controls.Add(folderActions, 2, 2);
             settingsPanel.Controls.Add(LabelFor("App Key / Client ID"), 0, 3); settingsPanel.Controls.Add(_clientId, 1, 3);
             var baiduActions = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
-            var acquireKey = ButtonFor("获取 App Key"); acquireKey.Click += AcquireBaiduAppKey; baiduActions.Controls.Add(acquireKey);
-            var connect = ButtonFor("连接百度网盘"); connect.Click += ConnectBaidu; baiduActions.Controls.Add(connect);
+            _acquireKey = ButtonFor("获取 App Key"); _acquireKey.Click += AcquireBaiduAppKey; baiduActions.Controls.Add(_acquireKey);
+            _connectBaidu = ButtonFor("连接百度网盘"); _connectBaidu.Click += ConnectBaidu; baiduActions.Controls.Add(_connectBaidu);
             settingsPanel.Controls.Add(baiduActions, 2, 3);
             settingsPanel.Controls.Add(LabelFor("Secret Key（本机加密）"), 0, 4); settingsPanel.Controls.Add(_clientSecret, 1, 4);
             settingsPanel.Controls.Add(LabelFor("不会上传"), 2, 4);
@@ -127,6 +130,7 @@ namespace BatchPdfPublisher.Views
             {
                 CloudSyncCoordinator.SynchronizationCompleted -= OnSynchronizationCompleted;
                 CancelSynchronizationWithoutBlockingUi();
+                CancelAuthorizationWithoutBlockingUi();
             };
             _folder.TextChanged += delegate { if (_provider.SelectedIndex == 1) UpdateProviderUi(); };
         }
@@ -134,6 +138,7 @@ namespace BatchPdfPublisher.Views
         private void LoadSettings()
         {
             _settings = new CloudSyncSettingsStore().LoadSettings();
+            _settings.ProviderBrokerUrl = WanluoCloudBrokerConfiguration.Resolve(_settings);
             _provider.Items.Clear();
             _provider.Items.Add("百度网盘直连（无需客户端，推荐）");
             _provider.Items.Add("通用云盘同步文件夹（兼容模式）");
@@ -197,7 +202,7 @@ namespace BatchPdfPublisher.Views
             }
             if (_enabled.Checked && providerId == "BaiduNetdisk")
             {
-                var candidate = new CloudSyncSettings { Provider = providerId, ProviderClientId = _clientId.Text.Trim(), ProviderRedirectUri = _redirectUri.Text.Trim() };
+                var candidate = new CloudSyncSettings { Provider = providerId, ProviderClientId = _clientId.Text.Trim(), ProviderRedirectUri = _redirectUri.Text.Trim(), ProviderBrokerUrl = _settings.ProviderBrokerUrl };
                 using (var provider = CloudSyncProviderFactory.Create(candidate))
                     if (!provider.IsReady)
                     {
@@ -210,6 +215,7 @@ namespace BatchPdfPublisher.Views
             _settings.SyncFolder = folder;
             _settings.ProviderClientId = _clientId.Text.Trim();
             _settings.ProviderRedirectUri = _redirectUri.Text.Trim();
+            _settings.ProviderBrokerUrl = WanluoCloudBrokerConfiguration.Resolve(_settings);
             _settings.ProviderRemoteFolder = _remoteFolder.Text.Trim();
             _settings.DeviceName = string.IsNullOrWhiteSpace(_device.Text) ? Environment.MachineName : _device.Text.Trim();
             _settings.SyncGeneralSettings = _general.Checked;
@@ -340,6 +346,7 @@ namespace BatchPdfPublisher.Views
             if (IsDisposed || Disposing) return;
             Hide();
             CancelSynchronizationWithoutBlockingUi();
+            CancelAuthorizationWithoutBlockingUi();
             DialogResult = DialogResult.Cancel;
             Close();
         }
@@ -353,6 +360,13 @@ namespace BatchPdfPublisher.Views
                 try { cancellation.Cancel(); }
                 catch (ObjectDisposedException) { }
             });
+        }
+
+        private void CancelAuthorizationWithoutBlockingUi()
+        {
+            var cancellation = _authorizationCancellation;
+            if (cancellation == null) return;
+            ThreadPool.QueueUserWorkItem(delegate { try { cancellation.Cancel(); } catch (ObjectDisposedException) { } });
         }
 
         private void OnSynchronizationCompleted(CloudSyncResult result, Exception failure)
@@ -437,15 +451,20 @@ namespace BatchPdfPublisher.Views
         {
             var local = _provider.SelectedIndex == 1;
             var baidu = _provider.SelectedIndex == 0;
+            var unified = baidu && !string.IsNullOrWhiteSpace(_settings == null ? null : _settings.ProviderBrokerUrl);
             _folder.Enabled = local;
-            _clientId.Enabled = !local;
-            _clientSecret.Enabled = baidu;
-            _redirectUri.Enabled = baidu;
+            _clientId.Enabled = !local && !unified;
+            _clientSecret.Enabled = baidu && !unified;
+            _redirectUri.Enabled = baidu && !unified;
             _remoteFolder.Enabled = baidu;
+            _acquireKey.Visible = baidu && !unified;
+            _connectBaidu.Visible = baidu;
+            _connectBaidu.Text = unified ? "登录百度网盘" : "连接百度网盘";
             var version = Interlocked.Increment(ref _providerStatusVersion);
             var folder = _folder.Text.Trim();
             var clientId = _clientId.Text.Trim();
             var redirectUri = _redirectUri.Text.Trim();
+            var brokerUrl = unified ? _settings.ProviderBrokerUrl : null;
             _status.Text = local ? "正在检查同步目录…" : baidu ? "正在检查百度网盘授权…" : "正在检查 115 开放平台配置…";
             _status.ForeColor = Color.FromArgb(34, 98, 160);
             ThreadPool.QueueUserWorkItem(delegate
@@ -455,7 +474,8 @@ namespace BatchPdfPublisher.Views
                 if (!local)
                 {
                     var providerId = baidu ? "BaiduNetdisk" : "115OpenApi";
-                    using (var provider = CloudSyncProviderFactory.Create(new CloudSyncSettings { Provider = providerId, ProviderClientId = clientId, ProviderRedirectUri = redirectUri }))
+                    using (var provider = CloudSyncProviderFactory.Create(new CloudSyncSettings { Provider = providerId, ProviderClientId = clientId, ProviderRedirectUri = redirectUri,
+                        ProviderBrokerUrl = brokerUrl }))
                         message = provider.Status;
                     color = providerId == "BaiduNetdisk" && message.Contains("已授权") ? Color.FromArgb(34, 120, 72) : Color.DarkOrange;
                 }
@@ -574,6 +594,31 @@ namespace BatchPdfPublisher.Views
             if (_provider.SelectedIndex != 0)
             {
                 MessageBox.Show(this, "请先选择“百度网盘直连”。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            var brokerUrl = WanluoCloudBrokerConfiguration.Resolve(_settings);
+            if (!string.IsNullOrWhiteSpace(brokerUrl))
+            {
+                if (_authorizationCancellation != null) { _authorizationCancellation.Cancel(); return; }
+                try
+                {
+                    _authorizationCancellation = new CancellationTokenSource();
+                    _connectBaidu.Text = "取消登录"; _status.Text = "正在打开百度官方授权页…"; _status.ForeColor = Color.FromArgb(34, 98, 160);
+                    CloudSyncCredential credential;
+                    using (var broker = new BaiduBrokerAuthClient()) credential = await broker.AuthorizeAsync(brokerUrl, _authorizationCancellation.Token);
+                    new CloudSyncCredentialStore().Save("BaiduNetdisk", credential);
+                    _settings.Provider = "BaiduNetdisk"; _settings.ProviderBrokerUrl = brokerUrl;
+                    if (string.IsNullOrWhiteSpace(_settings.ProviderRemoteFolder)) _settings.ProviderRemoteFolder = "/apps/万落建筑工具";
+                    new CloudSyncSettingsStore().SaveSettings(_settings);
+                    _status.Text = "百度网盘登录成功；令牌已在本机加密保存。"; _status.ForeColor = Color.FromArgb(34, 120, 72);
+                }
+                catch (OperationCanceledException) { if (!IsDisposed) { _status.Text = "百度网盘登录已取消。"; _status.ForeColor = Color.DarkOrange; } }
+                catch (Exception exception) { ShowError(exception); }
+                finally
+                {
+                    if (_authorizationCancellation != null) { _authorizationCancellation.Dispose(); _authorizationCancellation = null; }
+                    if (!IsDisposed) { _connectBaidu.Text = "登录百度网盘"; UpdateProviderUi(); }
+                }
                 return;
             }
             var clientId = _clientId.Text.Trim(); var secret = _clientSecret.Text; var redirect = _redirectUri.Text.Trim();

@@ -7,6 +7,8 @@ using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Threading.Tasks;
+using System.Runtime.Serialization.Json;
+using System.Security.Cryptography;
 using BatchPdfPublisher.Services;
 
 internal static class CloudSyncTests
@@ -38,6 +40,7 @@ internal static class CloudSyncTests
         Run("RejectsUnsafeBaiduRemotePath", RejectsUnsafeBaiduRemotePath);
         Run("ExchangesBaiduAuthorizationCode", ExchangesBaiduAuthorizationCode);
         Run("ValidatesBaiduOAuthCallback", ValidatesBaiduOAuthCallback);
+        Run("DecryptsUnifiedBrokerToken", DecryptsUnifiedBrokerToken);
         Console.WriteLine("Executed " + _executed + " cloud sync tests; 0 failed.");
     }
 
@@ -410,6 +413,51 @@ internal static class CloudSyncTests
     {
         Equal("the-code", BaiduNetdiskClient.ExtractAuthorizationCode("https://example.test/callback?code=the-code&state=expected", "expected"));
         Throws<InvalidOperationException>(() => BaiduNetdiskClient.ExtractAuthorizationCode("https://example.test/callback?code=old&state=wrong", "expected"));
+    }
+
+    private static void DecryptsUnifiedBrokerToken()
+    {
+        using (var rsa = new RSACng(2048))
+        {
+            var keyMaterial = new byte[64]; for (var index = 0; index < keyMaterial.Length; index++) keyMaterial[index] = (byte)(index + 1);
+            var iv = new byte[16]; for (var index = 0; index < iv.Length; index++) iv[index] = (byte)(100 + index);
+            byte[] plaintext;
+            using (var stream = new MemoryStream())
+            {
+                new DataContractJsonSerializer(typeof(BrokerTokenPayload)).WriteObject(stream, new BrokerTokenPayload { AccessToken = "broker-access", RefreshToken = "broker-refresh", ExpiresIn = 3600 });
+                plaintext = stream.ToArray();
+            }
+            byte[] ciphertext;
+            using (var aes = Aes.Create())
+            {
+                aes.KeySize = 256; aes.Mode = CipherMode.CBC; aes.Padding = PaddingMode.PKCS7;
+                aes.Key = keyMaterial.Take(32).ToArray(); aes.IV = iv;
+                using (var encryptor = aes.CreateEncryptor()) ciphertext = encryptor.TransformFinalBlock(plaintext, 0, plaintext.Length);
+            }
+            var authenticated = iv.Concat(ciphertext).ToArray(); byte[] mac;
+            using (var hmac = new HMACSHA256(keyMaterial.Skip(32).ToArray())) mac = hmac.ComputeHash(authenticated);
+            var envelope = new BrokerTokenEnvelope
+            {
+                Version = 1, Algorithm = "RSA-OAEP-256+A256CBC-HS256",
+                WrappedKey = BaiduBrokerAuthClient.Base64UrlEncode(rsa.Encrypt(keyMaterial, RSAEncryptionPadding.OaepSHA256)),
+                Iv = BaiduBrokerAuthClient.Base64UrlEncode(iv), Ciphertext = BaiduBrokerAuthClient.Base64UrlEncode(ciphertext), Mac = BaiduBrokerAuthClient.Base64UrlEncode(mac)
+            };
+            string encoded;
+            using (var stream = new MemoryStream())
+            {
+                new DataContractJsonSerializer(typeof(BrokerTokenEnvelope)).WriteObject(stream, envelope);
+                encoded = BaiduBrokerAuthClient.Base64UrlEncode(stream.ToArray());
+            }
+            var credential = BaiduBrokerAuthClient.DecryptCredential(encoded, rsa);
+            Equal("broker-access", credential.AccessToken); Equal("broker-refresh", credential.RefreshToken);
+            envelope.Mac = BaiduBrokerAuthClient.Base64UrlEncode(new byte[32]);
+            using (var stream = new MemoryStream())
+            {
+                new DataContractJsonSerializer(typeof(BrokerTokenEnvelope)).WriteObject(stream, envelope);
+                encoded = BaiduBrokerAuthClient.Base64UrlEncode(stream.ToArray());
+            }
+            Throws<CryptographicException>(() => BaiduBrokerAuthClient.DecryptCredential(encoded, rsa));
+        }
     }
 
     private sealed class StubHttpHandler : HttpMessageHandler

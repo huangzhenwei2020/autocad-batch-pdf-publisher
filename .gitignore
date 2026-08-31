@@ -29,3 +29,11 @@ obj-*/
 /build/stair-bzs/
 /build/ribbon-fix-r25/
 /*-安装包/
+
+# Cloud authorization broker secrets and dependencies.
+cloud/**/node_modules/
+cloud/**/.dev.vars
+cloud/**/.dev.vars.*
+!cloud/**/.dev.vars.example
+cloud/**/.env
+cloud/**/.env.*

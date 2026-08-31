@@ -104,6 +104,12 @@ namespace BatchPdfPublisher.Services
         {
             get
             {
+                if (!string.IsNullOrWhiteSpace(_settings.ProviderBrokerUrl))
+                {
+                    try { var brokerValue = _credentials.Load(Id); return brokerValue != null && string.Equals(brokerValue.AuthMode, "Broker", StringComparison.OrdinalIgnoreCase)
+                        && !string.IsNullOrWhiteSpace(brokerValue.RefreshToken); }
+                    catch { return false; }
+                }
                 if (string.IsNullOrWhiteSpace(_settings.ProviderClientId) || string.IsNullOrWhiteSpace(_settings.ProviderRedirectUri)) return false;
                 try { var value = _credentials.Load(Id); return value != null && string.Equals(value.ClientId, _settings.ProviderClientId, StringComparison.Ordinal)
                     && !string.IsNullOrWhiteSpace(value.RefreshToken) && !string.IsNullOrWhiteSpace(value.ClientSecret); }
@@ -114,6 +120,8 @@ namespace BatchPdfPublisher.Services
         {
             get
             {
+                if (!string.IsNullOrWhiteSpace(_settings.ProviderBrokerUrl))
+                    return IsReady ? "百度网盘已通过万落统一应用授权，无需 App Key。" : "尚未登录百度网盘；请点击“登录百度网盘”。";
                 if (string.IsNullOrWhiteSpace(_settings.ProviderClientId)) return "请填写百度开放平台 App Key。";
                 if (string.IsNullOrWhiteSpace(_settings.ProviderRedirectUri)) return "请填写与百度应用登记一致的回调地址。";
                 return IsReady ? "百度网盘已授权，可由插件直接同步，无需安装网盘客户端。" : "尚未授权百度网盘；请点击“连接百度网盘”。";
@@ -179,7 +187,11 @@ namespace BatchPdfPublisher.Services
             if (string.IsNullOrWhiteSpace(value.AccessToken) || !DateTime.TryParse(value.ExpiresAtUtc, CultureInfo.InvariantCulture,
                 DateTimeStyles.RoundtripKind, out expires) || expires <= DateTime.UtcNow)
             {
-                value = _client.RefreshAsync(_settings.ProviderClientId, value, cancellationToken).GetAwaiter().GetResult();
+                if (string.Equals(value.AuthMode, "Broker", StringComparison.OrdinalIgnoreCase))
+                {
+                    using (var broker = new BaiduBrokerAuthClient()) value = broker.RefreshAsync(_settings.ProviderBrokerUrl, value.RefreshToken, cancellationToken).GetAwaiter().GetResult();
+                }
+                else value = _client.RefreshAsync(_settings.ProviderClientId, value, cancellationToken).GetAwaiter().GetResult();
                 _credentials.Save(Id, value);
             }
             return value;
