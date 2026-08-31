@@ -176,6 +176,15 @@ namespace BatchPdfPublisher.Services
                 return;
             }
 
+            if (fileState != null && HashesEqual(localHash, fileState.LocalHash) &&
+                HashesEqual(remoteHash, fileState.RemoteHash))
+            {
+                result.Conflicts++;
+                AddOperation(result, logicalPath, CloudSyncOperationKind.Conflict,
+                    "本机和共享目录的冲突仍待处理，未重复生成冲突副本。");
+                return;
+            }
+
             if (baseHash == null)
             {
                 if (localHash != null && remoteHash == null)

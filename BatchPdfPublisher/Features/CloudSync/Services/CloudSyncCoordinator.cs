@@ -104,8 +104,14 @@ namespace BatchPdfPublisher.Services
                     IncludeSubdirectories = true,
                     NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite | NotifyFilters.Size
                 };
-                FileSystemEventHandler changed = delegate { RequestSynchronization(false); };
-                RenamedEventHandler renamed = delegate { RequestSynchronization(false); };
+                FileSystemEventHandler changed = delegate(object sender, FileSystemEventArgs args)
+                {
+                    if (!IsGeneratedSyncArtifact(args.FullPath)) RequestSynchronization(false);
+                };
+                RenamedEventHandler renamed = delegate(object sender, RenamedEventArgs args)
+                {
+                    if (!IsGeneratedSyncArtifact(args.FullPath)) RequestSynchronization(false);
+                };
                 watcher.Changed += changed;
                 watcher.Created += changed;
                 watcher.Deleted += changed;
@@ -156,6 +162,19 @@ namespace BatchPdfPublisher.Services
         {
             foreach (var watcher in Watchers) try { watcher.Dispose(); } catch { }
             Watchers.Clear();
+        }
+
+        private static bool IsGeneratedSyncArtifact(string path)
+        {
+            var normalized = (path ?? string.Empty).Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
+            return normalized.IndexOf(Path.DirectorySeparatorChar + "冲突文件" + Path.DirectorySeparatorChar,
+                       StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   normalized.IndexOf(Path.DirectorySeparatorChar + "历史版本" + Path.DirectorySeparatorChar,
+                       StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   normalized.IndexOf(Path.DirectorySeparatorChar + ".wanluo-sync" + Path.DirectorySeparatorChar,
+                       StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   normalized.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase) ||
+                   normalized.EndsWith(".rollback", StringComparison.OrdinalIgnoreCase);
         }
 
         private static void Trace(string message)

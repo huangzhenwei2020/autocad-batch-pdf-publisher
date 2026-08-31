@@ -29,6 +29,7 @@ internal static class CloudSyncTests
         Run("MigratesNutstoreInternalRoot", MigratesNutstoreInternalRoot);
         Run("ReportsSynchronizationProgress", ReportsSynchronizationProgress);
         Run("CancelsLargeFileSynchronizationSafely", CancelsLargeFileSynchronizationSafely);
+        Run("DoesNotDuplicateUnresolvedConflict", DoesNotDuplicateUnresolvedConflict);
         Console.WriteLine("Executed " + _executed + " cloud sync tests; 0 failed.");
     }
 
@@ -339,6 +340,24 @@ internal static class CloudSyncTests
                 ? Directory.GetFiles(mirror, "*.tmp", SearchOption.AllDirectories)
                 : new string[0];
             Equal(0, temporary.Length);
+        });
+    }
+
+    private static void DoesNotDuplicateUnresolvedConflict()
+    {
+        WithWorkspace((root, local, shared, engine, settings, catalog) =>
+        {
+            var localFile = Path.Combine(local, "settings.json");
+            var remoteFile = Path.Combine(shared, "万落建筑云同步", "通用配置", "settings.json");
+            File.WriteAllText(localFile, "base");
+            engine.Synchronize(settings, catalog);
+            File.WriteAllText(localFile, "local-change");
+            File.WriteAllText(remoteFile, "remote-change");
+            Equal(1, engine.Synchronize(settings, catalog).Conflicts);
+            var conflictRoot = Path.Combine(shared, "万落建筑云同步", "冲突文件");
+            var firstCount = Directory.GetFiles(conflictRoot, "*", SearchOption.AllDirectories).Length;
+            Equal(1, engine.Synchronize(settings, catalog).Conflicts);
+            Equal(firstCount, Directory.GetFiles(conflictRoot, "*", SearchOption.AllDirectories).Length);
         });
     }
 
