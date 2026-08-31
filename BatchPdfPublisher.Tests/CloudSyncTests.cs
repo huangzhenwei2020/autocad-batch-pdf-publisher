@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using BatchPdfPublisher.Services;
 
 internal static class CloudSyncTests
@@ -27,6 +28,7 @@ internal static class CloudSyncTests
         Run("IdentifiesCommonCloudFolders", IdentifiesCommonCloudFolders);
         Run("MigratesNutstoreInternalRoot", MigratesNutstoreInternalRoot);
         Run("ReportsSynchronizationProgress", ReportsSynchronizationProgress);
+        Run("CancelsLargeFileSynchronizationSafely", CancelsLargeFileSynchronizationSafely);
         Console.WriteLine("Executed " + _executed + " cloud sync tests; 0 failed.");
     }
 
@@ -313,6 +315,30 @@ internal static class CloudSyncTests
             True(progress.Any(item => item.Stage == "正在扫描本机文件"), "local scan progress was not reported");
             True(progress.Any(item => item.Stage == "正在核对文件" && item.Total > 0), "file progress was not reported");
             Equal("同步完成", progress.Last().Stage);
+        });
+    }
+
+    private static void CancelsLargeFileSynchronizationSafely()
+    {
+        WithWorkspace((root, local, shared, engine, settings, catalog) =>
+        {
+            var localFile = Path.Combine(local, "large-project.dwg");
+            using (var stream = new FileStream(localFile, FileMode.Create, FileAccess.Write, FileShare.None))
+                stream.SetLength(32L * 1024 * 1024);
+            using (var cancellation = new CancellationTokenSource())
+            {
+                Throws<OperationCanceledException>(() => engine.Synchronize(settings, catalog, settings.SyncFolder, item =>
+                {
+                    if (item.Stage == "正在核对文件") cancellation.Cancel();
+                }, cancellation.Token));
+            }
+            var mirror = Path.Combine(shared, "万落建筑云同步");
+            var formal = Path.Combine(mirror, "通用配置", "large-project.dwg");
+            True(!File.Exists(formal), "cancelled sync published an incomplete formal file");
+            var temporary = Directory.Exists(mirror)
+                ? Directory.GetFiles(mirror, "*.tmp", SearchOption.AllDirectories)
+                : new string[0];
+            Equal(0, temporary.Length);
         });
     }
 

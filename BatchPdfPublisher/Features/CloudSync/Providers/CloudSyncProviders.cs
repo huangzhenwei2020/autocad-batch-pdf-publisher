@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Threading;
 
 namespace BatchPdfPublisher.Services
 {
@@ -84,12 +85,20 @@ namespace BatchPdfPublisher.Services
         public static CloudSyncResult Synchronize(CloudSyncSettings settings, CloudSyncSettingsStore store,
             Action<CloudSyncProgress> progress)
         {
+            return Synchronize(settings, store, progress, CancellationToken.None);
+        }
+
+        public static CloudSyncResult Synchronize(CloudSyncSettings settings, CloudSyncSettingsStore store,
+            Action<CloudSyncProgress> progress, CancellationToken cancellationToken)
+        {
             if (settings == null) throw new ArgumentNullException("settings");
             using (var provider = CloudSyncProviderFactory.Create(settings))
             {
                 provider.Prepare();
+                cancellationToken.ThrowIfCancellationRequested();
                 var result = new LocalFolderSyncEngine(store ?? new CloudSyncSettingsStore())
-                    .Synchronize(settings, CloudSyncCatalog.CreateDefault(settings), provider.WorkingFolder, progress);
+                    .Synchronize(settings, CloudSyncCatalog.CreateDefault(settings), provider.WorkingFolder, progress, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
                 provider.Complete(result);
                 return result;
             }

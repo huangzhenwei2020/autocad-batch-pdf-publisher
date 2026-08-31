@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Threading;
 
 namespace BatchPdfPublisher.Services
 {
@@ -44,8 +45,13 @@ namespace BatchPdfPublisher.Services
 
         public static void StageDownload(string logicalPath, string source, string expectedHash)
         {
+            StageDownload(logicalPath, source, expectedHash, CancellationToken.None);
+        }
+
+        public static void StageDownload(string logicalPath, string source, string expectedHash, CancellationToken cancellationToken)
+        {
             var target = PendingPath(logicalPath, ".pending");
-            CopyAtomically(source, target, expectedHash);
+            CopyAtomically(source, target, expectedHash, cancellationToken);
             TryDelete(PendingPath(logicalPath, ".delete-pending"));
         }
 
@@ -59,10 +65,16 @@ namespace BatchPdfPublisher.Services
 
         public static int ApplyAvailable(CloudSyncCatalog catalog)
         {
+            return ApplyAvailable(catalog, CancellationToken.None);
+        }
+
+        public static int ApplyAvailable(CloudSyncCatalog catalog, CancellationToken cancellationToken)
+        {
             if (catalog == null || !Directory.Exists(PendingRoot)) return 0;
             var applied = 0;
             foreach (var pending in Directory.EnumerateFiles(PendingRoot, "*", SearchOption.AllDirectories).ToList())
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var delete = pending.EndsWith(".delete-pending", StringComparison.OrdinalIgnoreCase);
                 var suffix = delete ? ".delete-pending" : ".pending";
                 if (!delete && !pending.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)) continue;
@@ -73,12 +85,13 @@ namespace BatchPdfPublisher.Services
                 if (!catalog.TryResolve(logicalPath, out target) || ShouldDefer(target)) continue;
                 try
                 {
-                    Backup(target, logicalPath);
+                    Backup(target, logicalPath, cancellationToken);
                     if (delete) TryDelete(target);
-                    else CopyAtomically(pending, target, LocalFolderSyncEngine.ComputeHash(pending));
+                    else CopyAtomically(pending, target, LocalFolderSyncEngine.ComputeHash(pending), cancellationToken);
                     File.Delete(pending);
                     applied++;
                 }
+                catch (OperationCanceledException) { throw; }
                 catch { }
             }
             return applied;
@@ -93,28 +106,61 @@ namespace BatchPdfPublisher.Services
             return target;
         }
 
-        private static void CopyAtomically(string source, string target, string expectedHash)
+        private static void CopyAtomically(string source, string target, string expectedHash, CancellationToken cancellationToken)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(target));
             var temporary = target + "." + Guid.NewGuid().ToString("N") + ".tmp";
             try
             {
-                File.Copy(source, temporary, false);
-                if (!string.Equals(LocalFolderSyncEngine.ComputeHash(temporary), expectedHash, StringComparison.OrdinalIgnoreCase))
+                CopyFile(source, temporary, false, cancellationToken);
+                if (!string.Equals(LocalFolderSyncEngine.ComputeHash(temporary, cancellationToken), expectedHash, StringComparison.OrdinalIgnoreCase))
                     throw new IOException("待应用文件哈希校验失败。");
-                if (File.Exists(target)) File.Copy(temporary, target, true);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (File.Exists(target))
+                {
+                    try { File.Replace(temporary, target, null, true); }
+                    catch (PlatformNotSupportedException) { ReplaceWithRollback(temporary, target, cancellationToken); }
+                    catch (IOException) { ReplaceWithRollback(temporary, target, cancellationToken); }
+                }
                 else File.Move(temporary, target);
             }
             finally { TryDelete(temporary); }
         }
 
-        private static void Backup(string target, string logicalPath)
+        private static void Backup(string target, string logicalPath, CancellationToken cancellationToken)
         {
             if (!File.Exists(target)) return;
             var relative = logicalPath.Replace('/', Path.DirectorySeparatorChar);
             var directory = Path.Combine(HistoryRoot, Path.GetDirectoryName(relative) ?? string.Empty, Path.GetFileName(relative));
             Directory.CreateDirectory(directory);
-            File.Copy(target, Path.Combine(directory, DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff") + Path.GetExtension(target)), false);
+            CopyFile(target, Path.Combine(directory, DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff") + Path.GetExtension(target)), false,
+                cancellationToken);
+        }
+
+        private static void CopyFile(string source, string target, bool overwrite, CancellationToken cancellationToken)
+        {
+            if (!overwrite && File.Exists(target)) throw new IOException("目标文件已存在：" + target);
+            using (var input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read))
+            using (var output = new FileStream(target, overwrite ? FileMode.Create : FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                var buffer = new byte[1024 * 1024];
+                int read;
+                while ((read = input.Read(buffer, 0, buffer.Length)) > 0)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    output.Write(buffer, 0, read);
+                }
+                output.Flush(true);
+            }
+        }
+
+        private static void ReplaceWithRollback(string temporary, string target, CancellationToken cancellationToken)
+        {
+            var rollback = target + "." + Guid.NewGuid().ToString("N") + ".rollback";
+            CopyFile(target, rollback, false, cancellationToken);
+            try { CopyFile(temporary, target, true, cancellationToken); }
+            catch { CopyFile(rollback, target, true, CancellationToken.None); throw; }
+            finally { TryDelete(rollback); }
         }
 
         private static bool IsDrawing(string path)

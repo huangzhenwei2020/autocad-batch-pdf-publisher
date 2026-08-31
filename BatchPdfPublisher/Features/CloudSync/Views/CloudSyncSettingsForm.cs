@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using BatchPdfPublisher.Services;
@@ -28,7 +29,9 @@ namespace BatchPdfPublisher.Views
         private readonly ProgressBar _progress = new ProgressBar { Dock = DockStyle.Top, Height = 18, Visible = false, Style = ProgressBarStyle.Marquee };
         private readonly ListBox _details = new ListBox { Dock = DockStyle.Fill, HorizontalScrollbar = true };
         private readonly Button _syncNow;
+        private readonly Button _close;
         private CloudSyncSettings _settings;
+        private CancellationTokenSource _syncCancellation;
 
         public CloudSyncSettingsForm()
         {
@@ -38,7 +41,8 @@ namespace BatchPdfPublisher.Views
             Size = new Size(840, 680);
             Font = new Font("Microsoft YaHei UI", 9F);
 
-            var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(18), RowCount = 6, ColumnCount = 1 };
+            var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(18), RowCount = 7, ColumnCount = 1 };
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -82,20 +86,26 @@ namespace BatchPdfPublisher.Views
             scope.Controls.Add(_auto); scope.Controls.Add(LabelFor("历史天数")); scope.Controls.Add(_days); scope.Controls.Add(LabelFor("每文件版本数")); scope.Controls.Add(_versions);
             root.Controls.Add(scope);
 
-            var detailsPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 8, 0, 8) };
-            detailsPanel.Controls.Add(_details); detailsPanel.Controls.Add(_progress); detailsPanel.Controls.Add(_status); _status.Dock = DockStyle.Top;
+            var progressPanel = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 2, Padding = new Padding(0, 4, 0, 4) };
+            _status.Dock = DockStyle.Fill;
+            progressPanel.Controls.Add(_status, 0, 0); progressPanel.Controls.Add(_progress, 0, 1);
+            root.Controls.Add(progressPanel);
+
+            var detailsPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 4, 0, 8) };
+            detailsPanel.Controls.Add(_details);
             root.Controls.Add(detailsPanel);
 
             var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.RightToLeft };
-            var close = ButtonFor("关闭"); close.Click += delegate { Close(); };
+            _close = ButtonFor("关闭"); _close.Click += delegate { Close(); };
             var save = ButtonFor("保存设置"); save.Click += SaveSettings;
             var center = ButtonFor("同步中心"); center.Click += delegate { using (var form = new CloudSyncCenterForm()) form.ShowDialog(this); };
             _syncNow = ButtonFor("立即同步"); _syncNow.Click += SynchronizeNow;
-            actions.Controls.Add(close); actions.Controls.Add(center); actions.Controls.Add(_syncNow); actions.Controls.Add(save);
+            actions.Controls.Add(_close); actions.Controls.Add(center); actions.Controls.Add(_syncNow); actions.Controls.Add(save);
             root.Controls.Add(actions);
 
             Load += delegate { LoadSettings(); CloudSyncCoordinator.SynchronizationCompleted += OnSynchronizationCompleted; };
             FormClosed += delegate { CloudSyncCoordinator.SynchronizationCompleted -= OnSynchronizationCompleted; };
+            FormClosing += delegate { if (_syncCancellation != null) _syncCancellation.Cancel(); };
             _folder.TextChanged += delegate { if (_provider.SelectedIndex != 1) UpdateProviderUi(); };
         }
 
@@ -135,7 +145,7 @@ namespace BatchPdfPublisher.Views
             UpdateProviderUi();
         }
 
-        private bool PersistSettings(bool requestAutomaticSync = true)
+        private bool PersistSettings(bool requestAutomaticSync = true, bool reloadCoordinator = true)
         {
             var folder = _folder.Text.Trim();
             var providerId = _provider.SelectedIndex == 1 ? "115OpenApi" : "LocalFolder";
@@ -166,7 +176,7 @@ namespace BatchPdfPublisher.Views
             _settings.HistoryRetentionDays = (int)_days.Value;
             _settings.KeepVersionsPerFile = (int)_versions.Value;
             new CloudSyncSettingsStore().SaveSettings(_settings);
-            CloudSyncCoordinator.Reload();
+            if (reloadCoordinator) CloudSyncCoordinator.Reload();
             if (requestAutomaticSync && _settings.Enabled && _settings.AutoSync) CloudSyncCoordinator.RequestSynchronization(false);
             return true;
         }
@@ -185,10 +195,17 @@ namespace BatchPdfPublisher.Views
 
         private async void SynchronizeNow(object sender, EventArgs e)
         {
+            if (_syncCancellation != null)
+            {
+                _syncCancellation.Cancel();
+                _status.Text = "正在取消同步，请稍候…";
+                _status.ForeColor = Color.DarkOrange;
+                return;
+            }
             var manualStarted = false;
             try
             {
-                if (!PersistSettings(false)) return;
+                if (!PersistSettings(false, false)) return;
                 if (!_settings.Enabled) { MessageBox.Show(this, "请先启用云同步。", Text); return; }
                 if (!CloudSyncCoordinator.TryBeginManualSynchronization())
                 {
@@ -197,19 +214,30 @@ namespace BatchPdfPublisher.Views
                     return;
                 }
                 manualStarted = true;
-                _syncNow.Enabled = false; _status.Text = "正在准备同步…"; _details.Items.Clear();
+                _syncCancellation = new CancellationTokenSource();
+                _syncNow.Text = "取消同步"; _status.Text = "正在准备同步…"; _details.Items.Clear();
                 _progress.Visible = true; _progress.Style = ProgressBarStyle.Marquee;
                 var settings = _settings;
+                var cancellationToken = _syncCancellation.Token;
                 IProgress<CloudSyncProgress> uiProgress = new Progress<CloudSyncProgress>(ShowProgress);
-                var result = await Task.Run(() => CloudSyncWorkflow.Synchronize(settings, new CloudSyncSettingsStore(), item => uiProgress.Report(item)));
+                var result = await Task.Run(() => CloudSyncWorkflow.Synchronize(settings, new CloudSyncSettingsStore(), item => uiProgress.Report(item), cancellationToken));
                 ShowResult(result);
+            }
+            catch (OperationCanceledException)
+            {
+                if (!IsDisposed) { _status.Text = "同步已取消，现有正式文件未被不完整文件覆盖。"; _status.ForeColor = Color.DarkOrange; }
             }
             catch (Exception exception) { ShowError(exception); }
             finally
             {
                 if (manualStarted) CloudSyncCoordinator.EndManualSynchronization();
-                _progress.Visible = false;
-                _syncNow.Enabled = true;
+                if (_syncCancellation != null) { _syncCancellation.Dispose(); _syncCancellation = null; }
+                if (!IsDisposed)
+                {
+                    _progress.Visible = false;
+                    _syncNow.Text = "立即同步";
+                    ThreadPool.QueueUserWorkItem(delegate { CloudSyncCoordinator.Reload(); });
+                }
             }
         }
 
@@ -331,6 +359,7 @@ namespace BatchPdfPublisher.Views
 
         private void ShowError(Exception exception)
         {
+            if (IsDisposed || Disposing) return;
             _status.Text = "同步失败：" + exception.Message;
             _status.ForeColor = Color.Firebrick;
         }
