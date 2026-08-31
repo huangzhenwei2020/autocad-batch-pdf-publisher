@@ -82,7 +82,10 @@ namespace BatchPdfPublisher.Views
             var browse = ButtonFor("选择…"); browse.Click += Browse; folderActions.Controls.Add(browse);
             settingsPanel.Controls.Add(folderActions, 2, 2);
             settingsPanel.Controls.Add(LabelFor("App Key / Client ID"), 0, 3); settingsPanel.Controls.Add(_clientId, 1, 3);
-            var connect = ButtonFor("连接百度网盘"); connect.Click += ConnectBaidu; settingsPanel.Controls.Add(connect, 2, 3);
+            var baiduActions = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
+            var acquireKey = ButtonFor("获取 App Key"); acquireKey.Click += AcquireBaiduAppKey; baiduActions.Controls.Add(acquireKey);
+            var connect = ButtonFor("连接百度网盘"); connect.Click += ConnectBaidu; baiduActions.Controls.Add(connect);
+            settingsPanel.Controls.Add(baiduActions, 2, 3);
             settingsPanel.Controls.Add(LabelFor("Secret Key（本机加密）"), 0, 4); settingsPanel.Controls.Add(_clientSecret, 1, 4);
             settingsPanel.Controls.Add(LabelFor("不会上传"), 2, 4);
             settingsPanel.Controls.Add(LabelFor("OAuth 回调地址"), 0, 5); settingsPanel.Controls.Add(_redirectUri, 1, 5);
@@ -486,6 +489,86 @@ namespace BatchPdfPublisher.Views
             catch (Exception exception) { ShowError(exception); }
         }
 
+        private void AcquireBaiduAppKey(object sender, EventArgs e)
+        {
+            if (_provider.SelectedIndex != 0)
+            {
+                MessageBox.Show(this, "请先选择“百度网盘直连”。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            using (var dialog = new Form
+            {
+                Text = "获取百度网盘 App Key",
+                StartPosition = FormStartPosition.CenterParent,
+                MinimumSize = new Size(700, 500),
+                Size = new Size(760, 560),
+                Font = Font
+            })
+            {
+                var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(18), ColumnCount = 2, RowCount = 7 };
+                root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 170));
+                root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+                root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+                root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                dialog.Controls.Add(root);
+
+                var heading = new Label { Text = "百度官方签发 App Key", AutoSize = true, Font = new Font(Font, FontStyle.Bold), Margin = new Padding(3, 3, 3, 8) };
+                root.Controls.Add(heading, 0, 0); root.SetColumnSpan(heading, 2);
+                var explanation = new Label
+                {
+                    AutoSize = true,
+                    MaximumSize = new Size(690, 0),
+                    ForeColor = Color.DimGray,
+                    Text = "App Key 只能由百度开放平台在完成开发者认证、创建应用后签发，插件不能代替用户绕过官方认证。点击下方按钮会打开官方页面；取得参数后填入本向导即可自动带回云同步设置。"
+                };
+                root.Controls.Add(explanation, 0, 1); root.SetColumnSpan(explanation, 2);
+
+                var appKey = new TextBox { Dock = DockStyle.Top, Text = _clientId.Text.Trim() };
+                var secret = new TextBox { Dock = DockStyle.Top, UseSystemPasswordChar = true, Text = _clientSecret.Text };
+                var redirect = new TextBox { Dock = DockStyle.Top, Text = _redirectUri.Text.Trim() };
+                var remote = new TextBox { Dock = DockStyle.Top, Text = string.IsNullOrWhiteSpace(_remoteFolder.Text) ? "/apps/万落建筑工具" : _remoteFolder.Text.Trim() };
+                AddWizardField(root, "App Key", appKey, 2);
+                AddWizardField(root, "Secret Key", secret, 3);
+                AddWizardField(root, "OAuth 回调地址", redirect, 4);
+
+                var remotePanel = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1 };
+                remotePanel.Controls.Add(remote);
+                remotePanel.Controls.Add(new Label { AutoSize = true, ForeColor = Color.DimGray, Text = "应用目录名称必须与百度后台创建的应用一致，例如 /apps/万落建筑工具。", Margin = new Padding(0, 5, 0, 0) });
+                root.Controls.Add(LabelFor("云端应用目录"), 0, 5); root.Controls.Add(remotePanel, 1, 5);
+
+                var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.RightToLeft, WrapContents = false };
+                var apply = ButtonFor("填写完成"); apply.DialogResult = DialogResult.OK;
+                var cancel = ButtonFor("取消"); cancel.DialogResult = DialogResult.Cancel;
+                var open = ButtonFor("打开百度开放平台");
+                open.Click += delegate
+                {
+                    try { Process.Start(new ProcessStartInfo(BaiduNetdiskProvider.DeveloperPortal) { UseShellExecute = true }); }
+                    catch (Exception exception) { MessageBox.Show(dialog, exception.Message, dialog.Text, MessageBoxButtons.OK, MessageBoxIcon.Error); }
+                };
+                actions.Controls.Add(apply); actions.Controls.Add(cancel); actions.Controls.Add(open);
+                root.Controls.Add(actions, 0, 6); root.SetColumnSpan(actions, 2);
+                dialog.AcceptButton = apply; dialog.CancelButton = cancel;
+                dialog.FormClosing += delegate(object closingSender, FormClosingEventArgs closingArgs)
+                {
+                    if (dialog.DialogResult != DialogResult.OK) return;
+                    if (!string.IsNullOrWhiteSpace(appKey.Text) && !string.IsNullOrWhiteSpace(secret.Text) && !string.IsNullOrWhiteSpace(redirect.Text)) return;
+                    closingArgs.Cancel = true;
+                    MessageBox.Show(dialog, "App Key、Secret Key 和 OAuth 回调地址都不能为空。", dialog.Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                };
+
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                _clientId.Text = appKey.Text.Trim(); _clientSecret.Text = secret.Text;
+                _redirectUri.Text = redirect.Text.Trim(); _remoteFolder.Text = remote.Text.Trim();
+                _status.Text = "应用参数已填写；下一步点击“连接百度网盘”完成账号授权。";
+                _status.ForeColor = Color.FromArgb(34, 98, 160);
+            }
+        }
+
         private async void ConnectBaidu(object sender, EventArgs e)
         {
             if (_provider.SelectedIndex != 0)
@@ -530,5 +613,9 @@ namespace BatchPdfPublisher.Views
 
         private static Label LabelFor(string text) { return new Label { Text = text, AutoSize = true, Margin = new Padding(3, 7, 8, 3) }; }
         private static Button ButtonFor(string text) { return new Button { Text = text, AutoSize = true, Padding = new Padding(8, 3, 8, 3), Margin = new Padding(6, 2, 0, 2) }; }
+        private static void AddWizardField(TableLayoutPanel panel, string label, Control input, int row)
+        {
+            panel.Controls.Add(LabelFor(label), 0, row); panel.Controls.Add(input, 1, row);
+        }
     }
 }
