@@ -371,6 +371,7 @@ internal static class CloudSyncTests
 
     private static void BuildsBaiduAuthorizationUrl()
     {
+        Equal("https://openapi.baidu.com/oauth/2.0/login_success", BaiduNetdiskClient.DefaultRedirectUri);
         var uri = BaiduNetdiskClient.BuildAuthorizationUri("app key", "https://example.test/oauth/callback", "state-value").AbsoluteUri;
         True(uri.StartsWith(BaiduNetdiskClient.AuthorizationEndpoint, StringComparison.Ordinal), "wrong authorization endpoint");
         True(uri.Contains("client_id=app%20key"), "client id was not encoded");

@@ -155,7 +155,7 @@ namespace BatchPdfPublisher.Views
                 if (detected.Count == 1) _folder.Text = detected[0].FolderPath;
             }
             _clientId.Text = _settings.ProviderClientId ?? string.Empty;
-            _redirectUri.Text = _settings.ProviderRedirectUri ?? string.Empty;
+            _redirectUri.Text = string.IsNullOrWhiteSpace(_settings.ProviderRedirectUri) ? BaiduNetdiskClient.DefaultRedirectUri : _settings.ProviderRedirectUri;
             _remoteFolder.Text = string.IsNullOrWhiteSpace(_settings.ProviderRemoteFolder) ? "/apps/万落建筑工具" : _settings.ProviderRemoteFolder;
             _device.Text = string.IsNullOrWhiteSpace(_settings.DeviceName) ? Environment.MachineName : _settings.DeviceName;
             _general.Checked = _settings.SyncGeneralSettings;
@@ -530,7 +530,7 @@ namespace BatchPdfPublisher.Views
 
                 var appKey = new TextBox { Dock = DockStyle.Top, Text = _clientId.Text.Trim() };
                 var secret = new TextBox { Dock = DockStyle.Top, UseSystemPasswordChar = true, Text = _clientSecret.Text };
-                var redirect = new TextBox { Dock = DockStyle.Top, Text = _redirectUri.Text.Trim() };
+                var redirect = new TextBox { Dock = DockStyle.Top, Text = string.IsNullOrWhiteSpace(_redirectUri.Text) ? BaiduNetdiskClient.DefaultRedirectUri : _redirectUri.Text.Trim() };
                 var remote = new TextBox { Dock = DockStyle.Top, Text = string.IsNullOrWhiteSpace(_remoteFolder.Text) ? "/apps/万落建筑工具" : _remoteFolder.Text.Trim() };
                 AddWizardField(root, "App Key", appKey, 2);
                 AddWizardField(root, "Secret Key", secret, 3);

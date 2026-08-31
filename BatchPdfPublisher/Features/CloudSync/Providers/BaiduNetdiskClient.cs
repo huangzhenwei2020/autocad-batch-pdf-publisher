@@ -17,6 +17,7 @@ namespace BatchPdfPublisher.Services
     {
         public const string AuthorizationEndpoint = "https://openapi.baidu.com/oauth/2.0/authorize";
         public const string TokenEndpoint = "https://openapi.baidu.com/oauth/2.0/token";
+        public const string DefaultRedirectUri = "https://openapi.baidu.com/oauth/2.0/login_success";
         public const string FileEndpoint = "https://pan.baidu.com/rest/2.0/xpan/file";
         public const string UploadEndpoint = "https://d.pcs.baidu.com/rest/2.0/pcs/superfile2";
         private const int BlockSize = 4 * 1024 * 1024;
