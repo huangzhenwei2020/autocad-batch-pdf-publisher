@@ -32,6 +32,9 @@ namespace BatchPdfPublisher.Views
         private readonly Button _close;
         private CloudSyncSettings _settings;
         private CancellationTokenSource _syncCancellation;
+        private CloudSyncProgress _latestProgress;
+        private int _progressVersion;
+        private int _progressUpdateQueued;
 
         public CloudSyncSettingsForm()
         {
@@ -96,7 +99,10 @@ namespace BatchPdfPublisher.Views
             root.Controls.Add(detailsPanel);
 
             var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.RightToLeft };
-            _close = ButtonFor("关闭"); _close.Click += delegate { Close(); };
+            _close = ButtonFor("关闭");
+            _close.DialogResult = DialogResult.Cancel;
+            _close.Click += delegate { CloseImmediately(); };
+            CancelButton = _close;
             var save = ButtonFor("保存设置"); save.Click += SaveSettings;
             var center = ButtonFor("同步中心"); center.Click += delegate { using (var form = new CloudSyncCenterForm()) form.ShowDialog(this); };
             _syncNow = ButtonFor("立即同步"); _syncNow.Click += SynchronizeNow;
@@ -104,8 +110,11 @@ namespace BatchPdfPublisher.Views
             root.Controls.Add(actions);
 
             Load += delegate { LoadSettings(); CloudSyncCoordinator.SynchronizationCompleted += OnSynchronizationCompleted; };
-            FormClosed += delegate { CloudSyncCoordinator.SynchronizationCompleted -= OnSynchronizationCompleted; };
-            FormClosing += delegate { if (_syncCancellation != null) _syncCancellation.Cancel(); };
+            FormClosed += delegate
+            {
+                CloudSyncCoordinator.SynchronizationCompleted -= OnSynchronizationCompleted;
+                CancelSynchronizationWithoutBlockingUi();
+            };
             _folder.TextChanged += delegate { if (_provider.SelectedIndex != 1) UpdateProviderUi(); };
         }
 
@@ -219,8 +228,7 @@ namespace BatchPdfPublisher.Views
                 _progress.Visible = true; _progress.Style = ProgressBarStyle.Marquee;
                 var settings = _settings;
                 var cancellationToken = _syncCancellation.Token;
-                IProgress<CloudSyncProgress> uiProgress = new Progress<CloudSyncProgress>(ShowProgress);
-                var result = await Task.Run(() => CloudSyncWorkflow.Synchronize(settings, new CloudSyncSettingsStore(), item => uiProgress.Report(item), cancellationToken));
+                var result = await Task.Run(() => CloudSyncWorkflow.Synchronize(settings, new CloudSyncSettingsStore(), QueueProgress, cancellationToken));
                 ShowResult(result);
             }
             catch (OperationCanceledException)
@@ -252,6 +260,60 @@ namespace BatchPdfPublisher.Views
                 _progress.Value = progress.Percentage;
             }
             else _progress.Style = ProgressBarStyle.Marquee;
+        }
+
+        private void QueueProgress(CloudSyncProgress progress)
+        {
+            if (progress == null || IsDisposed || Disposing) return;
+            _latestProgress = progress;
+            Interlocked.Increment(ref _progressVersion);
+            if (Interlocked.CompareExchange(ref _progressUpdateQueued, 1, 0) != 0) return;
+            try
+            {
+                if (!IsHandleCreated)
+                {
+                    Interlocked.Exchange(ref _progressUpdateQueued, 0);
+                    return;
+                }
+                BeginInvoke((Action)DrainProgress);
+            }
+            catch
+            {
+                Interlocked.Exchange(ref _progressUpdateQueued, 0);
+            }
+        }
+
+        private void DrainProgress()
+        {
+            if (IsDisposed || Disposing)
+            {
+                Interlocked.Exchange(ref _progressUpdateQueued, 0);
+                return;
+            }
+            var displayedVersion = Volatile.Read(ref _progressVersion);
+            ShowProgress(_latestProgress);
+            Interlocked.Exchange(ref _progressUpdateQueued, 0);
+            if (displayedVersion != Volatile.Read(ref _progressVersion)) QueueProgress(_latestProgress);
+        }
+
+        private void CloseImmediately()
+        {
+            if (IsDisposed || Disposing) return;
+            Hide();
+            CancelSynchronizationWithoutBlockingUi();
+            DialogResult = DialogResult.Cancel;
+            Close();
+        }
+
+        private void CancelSynchronizationWithoutBlockingUi()
+        {
+            var cancellation = _syncCancellation;
+            if (cancellation == null) return;
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                try { cancellation.Cancel(); }
+                catch (ObjectDisposedException) { }
+            });
         }
 
         private void OnSynchronizationCompleted(CloudSyncResult result, Exception failure)
