@@ -25,7 +25,10 @@ namespace BatchPdfPublisher.Services
         public CloudSyncSettings LoadSettings()
         {
             var settings = Load(_settingsPath, new CloudSyncSettings());
-            if (string.IsNullOrWhiteSpace(settings.Provider)) settings.Provider = "LocalFolder";
+            if (string.IsNullOrWhiteSpace(settings.Provider) ||
+                (string.Equals(settings.Provider, "LocalFolder", StringComparison.OrdinalIgnoreCase) &&
+                 string.IsNullOrWhiteSpace(settings.SyncFolder)))
+                settings.Provider = "BaiduNetdisk";
             settings.SyncFolder = CloudSyncFolderDetector.ResolveUsableFolder(settings.SyncFolder);
             if (settings.ProjectMappings == null) settings.ProjectMappings = new System.Collections.Generic.List<CloudSyncProjectMapping>();
             return settings;

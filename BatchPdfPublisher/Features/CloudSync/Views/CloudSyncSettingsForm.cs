@@ -35,6 +35,9 @@ namespace BatchPdfPublisher.Views
         private readonly Button _close;
         private readonly Button _acquireKey;
         private readonly Button _connectBaidu;
+        private readonly Button _openFolder;
+        private readonly Label _folderLabel = new Label { Text = "云盘同步文件夹", AutoSize = true, Margin = new Padding(3, 7, 8, 3) };
+        private readonly FlowLayoutPanel _folderActions = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
         private readonly Label _clientIdLabel = new Label { Text = "App Key / Client ID", AutoSize = true, Margin = new Padding(3, 7, 8, 3) };
         private readonly Label _unifiedLoginHint = new Label { Text = "万落统一应用授权，无需填写 App Key", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(3, 7, 8, 3), Visible = false };
         private readonly Label _secretLabel = new Label { Text = "Secret Key（本机加密）", AutoSize = true, Margin = new Padding(3, 7, 8, 3) };
@@ -85,11 +88,10 @@ namespace BatchPdfPublisher.Views
             settingsPanel.Controls.Add(_enabled, 0, 0); settingsPanel.SetColumnSpan(_enabled, 3);
             settingsPanel.Controls.Add(LabelFor("存储提供商"), 0, 1); settingsPanel.Controls.Add(_provider, 1, 1);
             var portal = ButtonFor("开放平台"); portal.Click += OpenProviderPortal; settingsPanel.Controls.Add(portal, 2, 1);
-            settingsPanel.Controls.Add(LabelFor("云盘同步文件夹"), 0, 2); settingsPanel.Controls.Add(_folder, 1, 2);
-            var folderActions = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
-            var detect = ButtonFor("自动识别"); detect.Click += DetectFolders; folderActions.Controls.Add(detect);
-            var browse = ButtonFor("选择…"); browse.Click += Browse; folderActions.Controls.Add(browse);
-            settingsPanel.Controls.Add(folderActions, 2, 2);
+            settingsPanel.Controls.Add(_folderLabel, 0, 2); settingsPanel.Controls.Add(_folder, 1, 2);
+            var detect = ButtonFor("自动识别"); detect.Click += DetectFolders; _folderActions.Controls.Add(detect);
+            var browse = ButtonFor("选择…"); browse.Click += Browse; _folderActions.Controls.Add(browse);
+            settingsPanel.Controls.Add(_folderActions, 2, 2);
             settingsPanel.Controls.Add(_clientIdLabel, 0, 3); settingsPanel.Controls.Add(_clientId, 1, 3);
             settingsPanel.Controls.Add(_unifiedLoginHint, 1, 3);
             var baiduActions = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
@@ -103,7 +105,7 @@ namespace BatchPdfPublisher.Views
             settingsPanel.Controls.Add(LabelFor("云端应用目录"), 0, 6); settingsPanel.Controls.Add(_remoteFolder, 1, 6);
             settingsPanel.Controls.Add(LabelFor("例：/apps/万落建筑工具"), 2, 6);
             settingsPanel.Controls.Add(LabelFor("本机设备名称"), 0, 7); settingsPanel.Controls.Add(_device, 1, 7);
-            var open = ButtonFor("打开目录"); open.Click += OpenFolder; settingsPanel.Controls.Add(open, 2, 7);
+            _openFolder = ButtonFor("打开本机数据"); _openFolder.Click += OpenFolder; settingsPanel.Controls.Add(_openFolder, 2, 7);
             settingsPanel.Controls.Add(LabelFor("首次连接时"), 0, 8); settingsPanel.Controls.Add(_initialPreference, 1, 8);
             root.Controls.Add(settingsPanel);
 
@@ -388,12 +390,13 @@ namespace BatchPdfPublisher.Views
 
         private void ShowResult(CloudSyncResult result)
         {
-            _status.Text = "同步完成：" + result.Summary;
+            _status.Text = "同步完成：" + result.Summary + "。本机数据已保存到万落用户数据目录。";
             _status.ForeColor = result.Errors > 0 || result.Conflicts > 0 ? Color.DarkOrange : Color.FromArgb(34, 120, 72);
             _details.Items.Clear();
             foreach (var operation in result.Operations)
                 _details.Items.Add(operation.Kind + " · " + operation.LogicalPath + " · " + operation.Message);
             if (!result.Operations.Any()) _details.Items.Add("所有文件均已是最新版本。");
+            _details.Items.Add("本机数据目录 · " + UserDataPaths.RootDirectory);
         }
 
         private void Browse(object sender, EventArgs e)
@@ -446,7 +449,7 @@ namespace BatchPdfPublisher.Views
         {
             try
             {
-                var path = _folder.Text.Trim();
+                var path = _provider.SelectedIndex == 1 ? _folder.Text.Trim() : UserDataPaths.RootDirectory;
                 if (string.IsNullOrWhiteSpace(path)) return;
                 Directory.CreateDirectory(path);
                 Process.Start("explorer.exe", path);
@@ -461,6 +464,10 @@ namespace BatchPdfPublisher.Views
             var brokerUrl = baidu ? WanluoCloudBrokerConfiguration.Resolve(_settings) : string.Empty;
             var unified = baidu && !string.IsNullOrWhiteSpace(brokerUrl);
             _folder.Enabled = local;
+            _folder.Visible = local;
+            _folderLabel.Visible = local;
+            _folderActions.Visible = local;
+            _openFolder.Text = local ? "打开同步目录" : "打开本机数据";
             _clientId.Enabled = !local && !unified;
             _clientSecret.Enabled = baidu && !unified;
             _redirectUri.Enabled = baidu && !unified;

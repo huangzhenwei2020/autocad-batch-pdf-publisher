@@ -29,6 +29,8 @@ internal static class CloudSyncTests
         Run("RestoresHistoryWithBackup", RestoresHistoryWithBackup);
         Run("ResolvesConflictUsingLocalCopy", ResolvesConflictUsingLocalCopy);
         Run("CreatesProviderWithoutChangingLocalMode", CreatesProviderWithoutChangingLocalMode);
+        Run("NewInstallationDefaultsToBaidu", NewInstallationDefaultsToBaidu);
+        Run("EmptyLocalFolderMigratesToBaidu", EmptyLocalFolderMigratesToBaidu);
         Run("ProtectsProviderCredentialsWithDpapi", ProtectsProviderCredentialsWithDpapi);
         Run("RunsLocalProviderWorkflow", RunsLocalProviderWorkflow);
         Run("IdentifiesCommonCloudFolders", IdentifiesCommonCloudFolders);
@@ -274,6 +276,23 @@ internal static class CloudSyncTests
         finally { Directory.Delete(root, true); }
     }
 
+    private static void NewInstallationDefaultsToBaidu()
+    {
+        Equal("BaiduNetdisk", new CloudSyncSettings().Provider);
+    }
+
+    private static void EmptyLocalFolderMigratesToBaidu()
+    {
+        var root = NewRoot();
+        try
+        {
+            var store = new CloudSyncSettingsStore(Path.Combine(root, "settings.json"), Path.Combine(root, "state.json"));
+            store.SaveSettings(new CloudSyncSettings { Provider = "LocalFolder", SyncFolder = string.Empty });
+            Equal("BaiduNetdisk", store.LoadSettings().Provider);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
     private static void RunsLocalProviderWorkflow()
     {
         var root = NewRoot();
@@ -512,7 +531,7 @@ internal static class CloudSyncTests
             var shared = Path.Combine(root, "shared"); Directory.CreateDirectory(shared);
             var settings = new CloudSyncSettings
             {
-                Enabled = true, SyncFolder = shared, DeviceName = "TEST-PC",
+                Enabled = true, Provider = "LocalFolder", SyncFolder = shared, DeviceName = "TEST-PC",
                 SyncGeneralSettings = true, SyncProjectConfigurations = false, SyncTemplatesAndSchemes = false
             };
             var store = new CloudSyncSettingsStore(); store.SaveSettings(settings);
@@ -534,7 +553,7 @@ internal static class CloudSyncTests
             Directory.CreateDirectory(local); Directory.CreateDirectory(shared);
             var store = new CloudSyncSettingsStore(Path.Combine(root, "settings.json"), Path.Combine(root, "state.json"));
             var engine = new LocalFolderSyncEngine(store, Path.Combine(root, "history"));
-            var settings = new CloudSyncSettings { Enabled = true, SyncFolder = shared, DeviceName = "TEST-PC" };
+            var settings = new CloudSyncSettings { Enabled = true, Provider = "LocalFolder", SyncFolder = shared, DeviceName = "TEST-PC" };
             var catalog = new CloudSyncCatalog(new[] { new CloudSyncSource("通用配置", local, null) });
             action(root, local, shared, engine, settings, catalog);
         }

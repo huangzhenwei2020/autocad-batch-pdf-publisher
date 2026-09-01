@@ -9,7 +9,7 @@ namespace BatchPdfPublisher.Services
     {
         public CloudSyncSettings()
         {
-            Provider = "LocalFolder";
+            Provider = "BaiduNetdisk";
             DeviceName = Environment.MachineName;
             SyncGeneralSettings = true;
             SyncProjectConfigurations = true;
