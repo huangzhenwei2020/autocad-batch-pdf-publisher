@@ -1923,10 +1923,14 @@ namespace WL.Stair.Tests
             var terminalFloor = project.Floors.First(item => item.Id == project.Storeys[project.Storeys.Count - 1].UpperFloorId);
             TestAssert.Equal("4~18层", lowerFloor.PlanFloorLabel,
                 "The lower physical floor must own the migrated plan-level label.");
+            TestAssert.Equal("4~18层楼板", lowerFloor.Name,
+                "The slab editor title must follow the user-defined logical floor label.");
             TestAssert.Equal(15, lowerFloor.PlanRepeatCount,
                 "The lower physical floor must own the migrated repeat count.");
             TestAssert.Equal("19层", terminalFloor.PlanFloorLabel,
                 "The terminal upper plan must be derived after a standard-floor range.");
+            TestAssert.Equal("19层楼板", terminalFloor.Name,
+                "The terminal slab editor title must follow the derived top-floor label.");
             TestAssert.Equal(lowerFloor.Id, project.PlanSources[0].FloorId,
                 "A legacy captured plan must migrate to the interval's lower physical floor.");
         }

@@ -295,6 +295,15 @@ namespace WL.Stair.Core.Calculation
                     topFloor.PlanRepeatCount = CalculatePlanRepeatCount(topFloor.PlanFloorLabel);
                 }
             }
+            // The logical plan-level label is the user-facing floor identity.
+            // Keep the slab/beam editor title on that same source of truth so
+            // ranges such as "4~17层" and the derived terminal floor cannot
+            // fall back to the old physical sequence names.
+            foreach (var floor in project.Floors.Where(item => item != null))
+            {
+                if (!string.IsNullOrWhiteSpace(floor.PlanFloorLabel))
+                    floor.Name = floor.PlanFloorLabel.Trim() + "楼板";
+            }
             foreach (var source in project.PlanSources.Where(item => item != null))
             {
                 if (source.CropOffset <= 0.0) source.CropOffset = 300.0;

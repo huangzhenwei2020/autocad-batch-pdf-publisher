@@ -28,6 +28,7 @@ namespace BatchPdfPublisher.Views
         private readonly CheckBox _suffixIncrement = new CheckBox();
         private readonly ComboBox _presets = new ComboBox();
         private readonly ComboBox _incrementMode = new ComboBox();
+        private readonly ComboBox _incrementStart = new ComboBox();
         private readonly ComboBox _incrementPosition = new ComboBox();
         private readonly ComboBox _direction = new ComboBox();
         private readonly FlowLayoutPanel _advancedPanel = new FlowLayoutPanel();
@@ -51,7 +52,7 @@ namespace BatchPdfPublisher.Views
             _settings = AttributeBatchSettings.Load();
             _presetItems = AttributePresetStore.Load();
             _registeredBlockNames = new HashSet<string>(new PublishPlanStore().LoadFrames().Select(x => x.BlockName).Where(x => !string.IsNullOrWhiteSpace(x)), StringComparer.OrdinalIgnoreCase);
-            Text = "批量修改图块属性  v0.8.6"; Width = 980; Height = 600; StartPosition = FormStartPosition.CenterParent;
+            Text = "批量修改图块属性  v0.8.7"; Width = 1040; Height = 620; StartPosition = FormStartPosition.CenterParent;
             Build();
             FormClosed += (s, e) => _markers.Dispose();
         }
@@ -106,6 +107,10 @@ namespace BatchPdfPublisher.Views
                 ? _settings.NumberingStyle.Value
                 : (_settings.Letters ? (int)AttributeNumberingStyle.LatinUpper : (int)AttributeNumberingStyle.Arabic);
             _incrementMode.SelectedIndex = !_settings.Increment ? 0 : savedStyle + 1; _incrementMode.SelectedIndexChanged += (s, e) => SyncIncrementMode(); commonRow.Controls.Add(_incrementMode);
+            commonRow.Controls.Add(LabelFor("递增首项")); _incrementStart.Width = 88; _incrementStart.DropDownStyle = ComboBoxStyle.DropDown; _incrementStart.MaxDropDownItems = 20;
+            UpdateIncrementStartItems(_settings.StartItem); _incrementStart.Enabled = _incrementMode.SelectedIndex > 0;
+            _incrementStart.TextChanged += (s, e) => { if (_loadingOptions) return; _settings.StartItem = _incrementStart.Text; SaveSettings(); RefreshGrid(); };
+            Tip(_incrementStart, "可从列表选择难输入的编号，也可直接输入任意首项，例如 5、01、⑦、丙或 C。"); commonRow.Controls.Add(_incrementStart);
             commonRow.Controls.Add(LabelFor("递增位置")); _incrementPosition.Width = 105; _incrementPosition.DropDownStyle = ComboBoxStyle.DropDownList; _incrementPosition.Items.AddRange(new object[] { "后缀递增", "前缀递增", "前后缀递增" });
             var incrementPosition = _settings.PrefixIncrement && _settings.SuffixIncrement ? 2 : _settings.PrefixIncrement ? 1 : 0;
             _prefixIncrement.Checked = incrementPosition != 0; _suffixIncrement.Checked = incrementPosition != 1;
@@ -200,7 +205,7 @@ namespace BatchPdfPublisher.Views
             {
                 var target = targets[i];
                 var style = CurrentNumberingStyle();
-                var automaticValue = AttributeBatchService.BuildComposedValue(_seed.Text, _prefix.Text, _suffix.Text, i,
+                var automaticValue = AttributeBatchService.BuildComposedValue(_seed.Text, _prefix.Text, _suffix.Text, _incrementStart.Text, i,
                     _increment.Checked, _prefixIncrement.Checked, _suffixIncrement.Checked, style, (int)_step.Value, _reverse.Checked);
                 target.NewValue = _manualValues.TryGetValue(target.AttributeId, out var manualValue) ? manualValue : automaticValue;
                 _previewRows.Add(new AttributePreviewRow { Selected = !_excludedAttributeIds.Contains(target.AttributeId), Target = target, Sequence = i + 1, BlockName = target.BlockName, Tag = target.Tag, OldValue = target.OldValue, NewValue = target.NewValue, X = target.Center.X.ToString("0.###"), Y = target.Center.Y.ToString("0.###") });
@@ -209,6 +214,8 @@ namespace BatchPdfPublisher.Views
             _grid.ResumeLayout(false);
             UpdatePreviewStates();
             _tolerance.BackColor = !string.IsNullOrWhiteSpace(_tolerance.Text) && !CurrentTolerance().HasValue ? System.Drawing.Color.MistyRose : System.Drawing.Color.White;
+            _incrementStart.BackColor = _increment.Checked && !AttributeBatchService.IsNumberingStartItem(_incrementStart.Text, CurrentNumberingStyle())
+                ? System.Drawing.Color.MistyRose : System.Drawing.Color.White;
         }
         private void Apply()
         {
@@ -244,6 +251,8 @@ namespace BatchPdfPublisher.Views
             _increment.Checked = _incrementMode.SelectedIndex > 0;
             _letters.Checked = CurrentNumberingStyle() == AttributeNumberingStyle.LatinUpper || CurrentNumberingStyle() == AttributeNumberingStyle.LatinLower;
             _incrementPosition.Enabled = _increment.Checked;
+            _incrementStart.Enabled = _increment.Checked;
+            UpdateIncrementStartItems(_incrementStart.Text);
             if (_loadingOptions) return;
             _settings.Increment = _increment.Checked; _settings.Letters = _letters.Checked; _settings.NumberingStyle = (int)CurrentNumberingStyle(); SaveSettings(); RefreshGrid();
         }
@@ -263,6 +272,23 @@ namespace BatchPdfPublisher.Views
         {
             var value = Math.Max(0, _incrementMode.SelectedIndex - 1);
             return (AttributeNumberingStyle)Math.Min((int)AttributeNumberingStyle.ChineseOrdinal, value);
+        }
+        private void UpdateIncrementStartItems(string selected)
+        {
+            selected = selected ?? string.Empty;
+            var style = CurrentNumberingStyle();
+            var choices = AttributeBatchService.GetNumberingStartItems(style);
+            if (!AttributeBatchService.IsNumberingStartItem(selected, style))
+                selected = choices.FirstOrDefault() ?? string.Empty;
+            _incrementStart.BeginUpdate();
+            try
+            {
+                _incrementStart.Items.Clear();
+                foreach (var item in choices)
+                    _incrementStart.Items.Add(item);
+                _incrementStart.Text = selected;
+            }
+            finally { _incrementStart.EndUpdate(); }
         }
         private void SyncDirection()
         {
@@ -321,12 +347,13 @@ namespace BatchPdfPublisher.Views
                     ? preset.NumberingStyle.Value
                     : (preset.Letters ? (int)AttributeNumberingStyle.LatinUpper : (int)AttributeNumberingStyle.Arabic);
                 _incrementMode.SelectedIndex = !preset.Increment ? 0 : presetStyle + 1; _direction.SelectedIndex = preset.Reverse ? 1 : 0;
+                UpdateIncrementStartItems(preset.StartItem);
                 var presetPosition = preset.PrefixIncrement && preset.SuffixIncrement ? 2 : preset.PrefixIncrement ? 1 : 0;
                 _prefixIncrement.Checked = presetPosition != 0; _suffixIncrement.Checked = presetPosition != 1;
                 _incrementPosition.SelectedIndex = presetPosition; _incrementPosition.Enabled = preset.Increment;
                 _step.Value = Math.Max(_step.Minimum, Math.Min(_step.Maximum, preset.Step));
                 _sort.SelectedIndex = Math.Max(0, Math.Min(1, preset.Sort)); _tolerance.Text = preset.Tolerance ?? string.Empty;
-                _settings.Increment = preset.Increment; _settings.Letters = preset.Letters; _settings.NumberingStyle = presetStyle; _settings.Reverse = preset.Reverse;
+                _settings.Increment = preset.Increment; _settings.Letters = preset.Letters; _settings.NumberingStyle = presetStyle; _settings.StartItem = preset.StartItem; _settings.Reverse = preset.Reverse;
                 _settings.PrefixIncrement = _prefixIncrement.Checked; _settings.SuffixIncrement = _suffixIncrement.Checked;
                 _settings.Step = (int)_step.Value; _settings.Sort = _sort.SelectedIndex; _settings.Tolerance = _tolerance.Text;
                 _settings.LastPreset = preset.Name; SaveSettings(); _manualValues.Clear();
@@ -339,7 +366,7 @@ namespace BatchPdfPublisher.Views
             if (string.IsNullOrWhiteSpace(name)) return;
             var preset = _presetItems.FirstOrDefault(x => string.Equals(x.Name, name, StringComparison.OrdinalIgnoreCase));
             if (preset == null) { preset = new AttributeBatchPreset(); _presetItems.Add(preset); }
-            preset.Name = name; preset.Seed = _seed.Text; preset.Prefix = _prefix.Text; preset.Suffix = _suffix.Text; preset.Increment = _increment.Checked; preset.PrefixIncrement = _prefixIncrement.Checked; preset.SuffixIncrement = _suffixIncrement.Checked; preset.Letters = _letters.Checked; preset.NumberingStyle = (int)CurrentNumberingStyle(); preset.Reverse = _reverse.Checked; preset.Step = (int)_step.Value; preset.Sort = _sort.SelectedIndex; preset.Tolerance = _tolerance.Text;
+            preset.Name = name; preset.Seed = _seed.Text; preset.Prefix = _prefix.Text; preset.Suffix = _suffix.Text; preset.StartItem = _incrementStart.Text; preset.Increment = _increment.Checked; preset.PrefixIncrement = _prefixIncrement.Checked; preset.SuffixIncrement = _suffixIncrement.Checked; preset.Letters = _letters.Checked; preset.NumberingStyle = (int)CurrentNumberingStyle(); preset.Reverse = _reverse.Checked; preset.Step = (int)_step.Value; preset.Sort = _sort.SelectedIndex; preset.Tolerance = _tolerance.Text;
             AttributePresetStore.Save(_presetItems); _settings.LastPreset = name; SaveSettings(); RefreshPresets();
         }
         private void DeletePreset()
