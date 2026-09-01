@@ -40,6 +40,7 @@ internal static class CloudSyncTests
         Run("RejectsUnsafeBaiduRemotePath", RejectsUnsafeBaiduRemotePath);
         Run("ExchangesBaiduAuthorizationCode", ExchangesBaiduAuthorizationCode);
         Run("ValidatesBaiduOAuthCallback", ValidatesBaiduOAuthCallback);
+        Run("DownloadsBaiduFileThroughMultimediaMetadata", DownloadsBaiduFileThroughMultimediaMetadata);
         Run("DecryptsUnifiedBrokerToken", DecryptsUnifiedBrokerToken);
         Console.WriteLine("Executed " + _executed + " cloud sync tests; 0 failed.");
     }
@@ -413,6 +414,39 @@ internal static class CloudSyncTests
     {
         Equal("the-code", BaiduNetdiskClient.ExtractAuthorizationCode("https://example.test/callback?code=the-code&state=expected", "expected"));
         Throws<InvalidOperationException>(() => BaiduNetdiskClient.ExtractAuthorizationCode("https://example.test/callback?code=old&state=wrong", "expected"));
+    }
+
+    private static void DownloadsBaiduFileThroughMultimediaMetadata()
+    {
+        var requests = new List<HttpRequestMessage>();
+        using (var http = new HttpClient(new StubHttpHandler(request =>
+        {
+            requests.Add(request);
+            if (requests.Count == 1)
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{\"errno\":0,\"list\":[{\"dlink\":\"https://d.pcs.baidu.test/file/demo\"}]}", Encoding.UTF8, "application/json")
+                };
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(Encoding.UTF8.GetBytes("downloaded")) };
+        })))
+        using (var client = new BaiduNetdiskClient(http))
+        {
+            var root = NewRoot();
+            try
+            {
+                var target = Path.Combine(root, "download.bin");
+                client.DownloadAsync("access-token", new BaiduRemoteEntry { FileSystemId = 123456789L, Size = 10 }, target, null, CancellationToken.None).GetAwaiter().GetResult();
+                Equal("downloaded", File.ReadAllText(target));
+                Equal(2, requests.Count);
+                Equal(BaiduNetdiskClient.MultimediaEndpoint, requests[0].RequestUri.GetLeftPart(UriPartial.Path));
+                True(requests[0].RequestUri.Query.Contains("method=filemetas"), "filemetas method missing");
+                True(requests[0].RequestUri.Query.Contains("dlink=1"), "dlink flag missing");
+                True(requests[0].RequestUri.Query.Contains("fsids=%5B123456789%5D"), "fs_id missing");
+                Equal("pan.baidu.com", requests[1].Headers.UserAgent.ToString());
+                True(requests[1].RequestUri.Query.Contains("access_token=access-token"), "download token missing");
+            }
+            finally { Directory.Delete(root, true); }
+        }
     }
 
     private static void DecryptsUnifiedBrokerToken()

@@ -19,6 +19,7 @@ namespace BatchPdfPublisher.Services
         public const string TokenEndpoint = "https://openapi.baidu.com/oauth/2.0/token";
         public const string DefaultRedirectUri = "https://openapi.baidu.com/oauth/2.0/login_success";
         public const string FileEndpoint = "https://pan.baidu.com/rest/2.0/xpan/file";
+        public const string MultimediaEndpoint = "https://pan.baidu.com/rest/2.0/xpan/multimedia";
         public const string UploadEndpoint = "https://d.pcs.baidu.com/rest/2.0/pcs/superfile2";
         private const int BlockSize = 4 * 1024 * 1024;
         private readonly HttpClient _http;
@@ -116,14 +117,16 @@ namespace BatchPdfPublisher.Services
             Action<long, long> progress, CancellationToken cancellationToken)
         {
             if (entry == null || entry.IsDirectory) throw new ArgumentException("下载对象必须是文件。", "entry");
-            var metas = await GetJsonAsync<BaiduMetaResponse>(FileEndpoint + "?method=filemetas&access_token=" + E(accessToken)
+            var metas = await GetJsonAsync<BaiduMetaResponse>(MultimediaEndpoint + "?method=filemetas&openapi=xpansdk&access_token=" + E(accessToken)
                 + "&fsids=" + E("[" + entry.FileSystemId.ToString(CultureInfo.InvariantCulture) + "]") + "&dlink=1",
                 cancellationToken).ConfigureAwait(false);
             EnsureSuccess(metas.ErrorCode, metas.ErrorMessage);
             var meta = metas.Items == null ? null : metas.Items.FirstOrDefault();
-            if (meta == null || string.IsNullOrWhiteSpace(meta.DownloadLink)) throw new IOException("百度网盘没有返回下载地址。");
+            if (meta == null || string.IsNullOrWhiteSpace(meta.DownloadLink))
+                throw new IOException("百度网盘文件元信息没有返回下载地址（fs_id=" + entry.FileSystemId.ToString(CultureInfo.InvariantCulture) + "）。");
             var separator = meta.DownloadLink.Contains("?") ? "&" : "?";
-            using (var response = await _http.GetAsync(meta.DownloadLink + separator + "access_token=" + E(accessToken), HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false))
+            using (var request = new HttpRequestMessage(HttpMethod.Get, meta.DownloadLink + separator + "access_token=" + E(accessToken)))
+            using (var response = await SendDownloadAsync(request, cancellationToken).ConfigureAwait(false))
             {
                 await EnsureHttpSuccess(response).ConfigureAwait(false);
                 Directory.CreateDirectory(Path.GetDirectoryName(targetPath));
@@ -137,6 +140,12 @@ namespace BatchPdfPublisher.Services
                 }
                 finally { TryDelete(temporary); }
             }
+        }
+
+        private async Task<HttpResponseMessage> SendDownloadAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            request.Headers.TryAddWithoutValidation("User-Agent", "pan.baidu.com");
+            return await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
         }
 
         public async Task UploadAsync(string accessToken, string localPath, string remotePath,
