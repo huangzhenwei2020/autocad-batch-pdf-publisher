@@ -83,6 +83,27 @@ test("tampered state is rejected before token exchange", async () => {
   assert.match(await response.text(), /request_failed/);
 });
 
+test("token exchange uses manual redirect handling and rejects redirects", async () => {
+  const { publicJwk } = await clientKeys();
+  const start = await worker.fetch(new Request("https://auth.example.test/v1/baidu/authorize", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ port: 43823, nonce: "fedcba9876543210fedcba9876543210", public_key: publicJwk })
+  }), env);
+  const state = new URL((await start.json()).authorize_url).searchParams.get("state");
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    assert.equal(options.redirect, "manual");
+    return new Response(null, { status: 302, headers: { location: "https://unexpected.example/" } });
+  };
+  try {
+    const response = await worker.fetch(new Request(`${env.BAIDU_REDIRECT_URI}?code=redirect-code&state=${encodeURIComponent(state)}`), env);
+    assert.equal(response.status, 400);
+    assert.match(await response.text(), /baidu_token_redirect_rejected/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 test("authorize rejects streamed bodies larger than 32 KiB", async () => {
   const response = await worker.fetch(new Request("https://auth.example.test/v1/baidu/authorize", {
     method: "POST",

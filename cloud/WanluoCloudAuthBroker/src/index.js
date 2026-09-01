@@ -90,7 +90,10 @@ async function refresh(request, env) {
 async function exchangeToken(parameters) {
   const url = new URL(BAIDU_TOKEN);
   for (const [key, value] of Object.entries(parameters)) url.searchParams.set(key, value);
-  const response = await fetch(url, { method: "GET", redirect: "error" });
+  const response = await fetch(url, { method: "GET", redirect: "manual" });
+  if (response.status >= 300 && response.status < 400) {
+    throw new Error("baidu_token_redirect_rejected");
+  }
   const token = await response.json();
   if (!response.ok || token.error || !token.access_token || !token.refresh_token) {
     throw new Error(`baidu_token_error:${token.error_description || token.error || response.status}`);
