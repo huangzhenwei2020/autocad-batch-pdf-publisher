@@ -476,7 +476,7 @@ namespace BatchPdfPublisher.Views
             _redirectHint.Visible = !unified;
             _acquireKey.Visible = baidu && !unified;
             _connectBaidu.Visible = baidu;
-            _connectBaidu.Text = unified ? "登录百度网盘" : "连接百度网盘";
+            _connectBaidu.Text = unified ? "检查登录状态…" : "连接百度网盘";
             var version = Interlocked.Increment(ref _providerStatusVersion);
             var folder = _folder.Text.Trim();
             var clientId = _clientId.Text.Trim();
@@ -488,13 +488,17 @@ namespace BatchPdfPublisher.Views
             {
                 string message;
                 Color color;
+                var ready = false;
                 if (!local)
                 {
                     var providerId = baidu ? "BaiduNetdisk" : "115OpenApi";
                     using (var provider = CloudSyncProviderFactory.Create(new CloudSyncSettings { Provider = providerId, ProviderClientId = clientId, ProviderRedirectUri = redirectUri,
                         ProviderBrokerUrl = brokerUrl }))
+                    {
                         message = provider.Status;
-                    color = providerId == "BaiduNetdisk" && message.Contains("已授权") ? Color.FromArgb(34, 120, 72) : Color.DarkOrange;
+                        ready = provider.IsReady;
+                    }
+                    color = providerId == "BaiduNetdisk" && ready ? Color.FromArgb(34, 120, 72) : Color.DarkOrange;
                 }
                 else
                 {
@@ -510,6 +514,8 @@ namespace BatchPdfPublisher.Views
                         if (IsDisposed || Disposing || version != Volatile.Read(ref _providerStatusVersion)) return;
                         _status.Text = message;
                         _status.ForeColor = color;
+                        if (baidu && unified && _authorizationCancellation == null)
+                            _connectBaidu.Text = ready ? "已登录（重新授权）" : "登录百度网盘";
                     });
                 }
                 catch { }
