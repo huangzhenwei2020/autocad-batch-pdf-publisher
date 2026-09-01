@@ -627,6 +627,7 @@ namespace BatchPdfPublisher.Views
                     _settings.Provider = "BaiduNetdisk"; _settings.ProviderBrokerUrl = brokerUrl;
                     if (string.IsNullOrWhiteSpace(_settings.ProviderRemoteFolder)) _settings.ProviderRemoteFolder = "/apps/万落建筑工具";
                     new CloudSyncSettingsStore().SaveSettings(_settings);
+                    CloudSyncCoordinator.QueueReload(false);
                     _status.Text = "百度网盘登录成功；令牌已在本机加密保存。"; _status.ForeColor = Color.FromArgb(34, 120, 72);
                 }
                 catch (OperationCanceledException) { if (!IsDisposed) { _status.Text = "百度网盘登录已取消。"; _status.ForeColor = Color.DarkOrange; } }

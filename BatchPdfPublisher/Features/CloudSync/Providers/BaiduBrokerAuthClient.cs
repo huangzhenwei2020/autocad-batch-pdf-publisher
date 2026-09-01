@@ -161,7 +161,7 @@ namespace BatchPdfPublisher.Services
                     if (parts.Length < 2 || parts[0] != "GET") throw new IOException("本机 OAuth 回调格式无效。");
                     var uri = new Uri("http://127.0.0.1" + parts[1]); var values = ParseQuery(uri.Query);
                     if (!values.TryGetValue("nonce", out var nonce) || !values.TryGetValue("payload", out var payload)) throw new IOException("本机 OAuth 回调缺少参数。");
-                    var html = "<!doctype html><meta charset=\"utf-8\"><title>万落建筑工具</title><h2>百度网盘连接成功</h2><p>可以关闭此页面并返回 AutoCAD。</p>";
+                    var html = "<!doctype html><meta charset=\"utf-8\"><title>万落建筑工具</title><h2>授权数据已返回 AutoCAD</h2><p>请返回 AutoCAD，最终结果以插件显示的“已登录”为准；随后可以关闭此页面。</p>";
                     var bytes = Encoding.UTF8.GetBytes(html);
                     var header = Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\nContent-Length: " + bytes.Length + "\r\nConnection: close\r\n\r\n");
                     await stream.WriteAsync(header, 0, header.Length, cancellationToken).ConfigureAwait(false);
