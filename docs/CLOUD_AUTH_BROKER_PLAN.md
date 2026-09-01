@@ -71,3 +71,8 @@ AutoCAD 插件
 - 固定 HTTPS 回调域名和授权代理已部署。
 - Secret 扫描确认源码、构建产物和日志中均无 Secret Key。
 - 插件与服务端协议测试、R24 构建和两机真实同步全部通过。
+
+## 8. 部署状态
+
+- 2026-09-01：Cloudflare Worker 已部署至 `https://wanluo-cloud-auth-broker.xxyyu520.workers.dev`，健康检查通过；百度 App Key、Secret、固定回调地址和状态加密密钥均以 Cloudflare Secret 保存，未写入仓库。
+- 待完成：在百度开放平台把 OAuth 回调地址登记为 `https://wanluo-cloud-auth-broker.xxyyu520.workers.dev/oauth/baidu/callback`，随后在插件中启用该代理并完成真实账号端到端验收。

@@ -2,9 +2,5 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "wanluo-cloud-auth-broker",
   "main": "src/index.js",
-  "compatibility_date": "2026-09-01",
-  "vars": {
-    "BAIDU_CLIENT_ID": "REPLACE_AFTER_APP_APPROVAL",
-    "BAIDU_REDIRECT_URI": "https://auth.example.com/oauth/baidu/callback"
-  }
+  "compatibility_date": "2026-09-01"
 }

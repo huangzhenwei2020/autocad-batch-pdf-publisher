@@ -32,6 +32,7 @@ obj-*/
 
 # Cloud authorization broker secrets and dependencies.
 cloud/**/node_modules/
+cloud/**/.wrangler/
 cloud/**/.dev.vars
 cloud/**/.dev.vars.*
 !cloud/**/.dev.vars.example
