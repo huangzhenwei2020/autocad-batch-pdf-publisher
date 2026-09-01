@@ -5,8 +5,7 @@ namespace BatchPdfPublisher.Services
 {
     public static class WanluoCloudBrokerConfiguration
     {
-        // Set only after the production HTTPS endpoint has been deployed and verified.
-        public const string DefaultBrokerUrl = "";
+        public const string DefaultBrokerUrl = "https://wanluo-cloud-auth-broker.xxyyu520.workers.dev";
 
         public static string Resolve(CloudSyncSettings settings)
         {

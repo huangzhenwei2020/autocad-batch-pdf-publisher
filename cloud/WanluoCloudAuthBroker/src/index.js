@@ -1,6 +1,7 @@
 const BAIDU_AUTHORIZE = "https://openapi.baidu.com/oauth/2.0/authorize";
 const BAIDU_TOKEN = "https://openapi.baidu.com/oauth/2.0/token";
 const STATE_LIFETIME_SECONDS = 600;
+const MAX_JSON_BYTES = 32768;
 
 export default {
   async fetch(request, env) {
@@ -10,12 +11,16 @@ export default {
         return json({ ok: true, service: "wanluo-cloud-auth-broker", version: 1 });
       }
       if (request.method === "POST" && url.pathname === "/v1/baidu/authorize") {
+        const limited = await rateLimit(request, env, url.pathname);
+        if (limited) return limited;
         return await authorize(request, env);
       }
       if (request.method === "GET" && url.pathname === "/oauth/baidu/callback") {
         return await callback(url, env);
       }
       if (request.method === "POST" && url.pathname === "/v1/baidu/refresh") {
+        const limited = await rateLimit(request, env, url.pathname);
+        if (limited) return limited;
         return await refresh(request, env);
       }
       return json({ error: "not_found" }, 404);
@@ -161,9 +166,41 @@ function requireConfig(env) {
 }
 
 async function readJson(request) {
-  const length = Number(request.headers.get("content-length") || 0);
-  if (length > 32768) throw new Error("request_too_large");
-  return await request.json();
+  const header = request.headers.get("content-length");
+  if (header !== null) {
+    const declared = Number(header);
+    if (!Number.isFinite(declared) || declared < 0 || declared > MAX_JSON_BYTES) throw new Error("request_too_large");
+  }
+  if (!request.body) throw new Error("invalid_json");
+  const reader = request.body.getReader();
+  const chunks = [];
+  let length = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > MAX_JSON_BYTES) {
+        await reader.cancel("request_too_large");
+        throw new Error("request_too_large");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  try { return JSON.parse(textDecoder.decode(bytes)); }
+  catch { throw new Error("invalid_json"); }
+}
+
+async function rateLimit(request, env, route) {
+  if (!env.AUTH_RATE_LIMITER) return null;
+  const address = request.headers.get("CF-Connecting-IP") || "unknown";
+  const result = await env.AUTH_RATE_LIMITER.limit({ key: `${address}:${route}` });
+  return result.success ? null : json({ error: "rate_limited" }, 429);
 }
 
 function requiredQuery(url, name) {
@@ -181,6 +218,7 @@ function securityHeaders(extra = {}) {
     "Cache-Control": "no-store",
     "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
     "Referrer-Policy": "no-referrer",
+    "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
     "X-Content-Type-Options": "nosniff",
     ...extra
   };
@@ -213,4 +251,4 @@ function concatBytes(first, second) {
   return result;
 }
 
-export const testing = { encryptState, decryptState, encryptForClient, base64UrlEncode, base64UrlDecode };
+export const testing = { encryptState, decryptState, encryptForClient, base64UrlEncode, base64UrlDecode, readJson, rateLimit };

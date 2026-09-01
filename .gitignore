@@ -38,3 +38,4 @@ cloud/**/.dev.vars.*
 !cloud/**/.dev.vars.example
 cloud/**/.env
 cloud/**/.env.*
+cloud/**/*.cpuprofile

@@ -82,3 +82,31 @@ test("tampered state is rejected before token exchange", async () => {
   assert.equal(response.status, 400);
   assert.match(await response.text(), /request_failed/);
 });
+
+test("authorize rejects streamed bodies larger than 32 KiB", async () => {
+  const response = await worker.fetch(new Request("https://auth.example.test/v1/baidu/authorize", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ padding: "x".repeat(33000) })
+  }), env);
+  assert.equal(response.status, 400);
+  assert.match(await response.text(), /request_too_large/);
+});
+
+test("authorization endpoints return 429 when the binding denies a request", async () => {
+  let receivedKey = "";
+  const limitedEnv = {
+    ...env,
+    AUTH_RATE_LIMITER: {
+      async limit({ key }) { receivedKey = key; return { success: false }; }
+    }
+  };
+  const response = await worker.fetch(new Request("https://auth.example.test/v1/baidu/authorize", {
+    method: "POST",
+    headers: { "content-type": "application/json", "CF-Connecting-IP": "192.0.2.7" },
+    body: "{}"
+  }), limitedEnv);
+  assert.equal(response.status, 429);
+  assert.deepEqual(await response.json(), { error: "rate_limited" });
+  assert.equal(receivedKey, "192.0.2.7:/v1/baidu/authorize");
+});

@@ -35,6 +35,12 @@ namespace BatchPdfPublisher.Views
         private readonly Button _close;
         private readonly Button _acquireKey;
         private readonly Button _connectBaidu;
+        private readonly Label _clientIdLabel = new Label { Text = "App Key / Client ID", AutoSize = true, Margin = new Padding(3, 7, 8, 3) };
+        private readonly Label _unifiedLoginHint = new Label { Text = "万落统一应用授权，无需填写 App Key", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(3, 7, 8, 3), Visible = false };
+        private readonly Label _secretLabel = new Label { Text = "Secret Key（本机加密）", AutoSize = true, Margin = new Padding(3, 7, 8, 3) };
+        private readonly Label _secretHint = new Label { Text = "不会上传", AutoSize = true, Margin = new Padding(3, 7, 8, 3) };
+        private readonly Label _redirectLabel = new Label { Text = "OAuth 回调地址", AutoSize = true, Margin = new Padding(3, 7, 8, 3) };
+        private readonly Label _redirectHint = new Label { Text = "须与应用登记一致", AutoSize = true, Margin = new Padding(3, 7, 8, 3) };
         private CloudSyncSettings _settings;
         private CancellationTokenSource _syncCancellation;
         private CancellationTokenSource _authorizationCancellation;
@@ -84,15 +90,16 @@ namespace BatchPdfPublisher.Views
             var detect = ButtonFor("自动识别"); detect.Click += DetectFolders; folderActions.Controls.Add(detect);
             var browse = ButtonFor("选择…"); browse.Click += Browse; folderActions.Controls.Add(browse);
             settingsPanel.Controls.Add(folderActions, 2, 2);
-            settingsPanel.Controls.Add(LabelFor("App Key / Client ID"), 0, 3); settingsPanel.Controls.Add(_clientId, 1, 3);
+            settingsPanel.Controls.Add(_clientIdLabel, 0, 3); settingsPanel.Controls.Add(_clientId, 1, 3);
+            settingsPanel.Controls.Add(_unifiedLoginHint, 1, 3);
             var baiduActions = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
             _acquireKey = ButtonFor("获取 App Key"); _acquireKey.Click += AcquireBaiduAppKey; baiduActions.Controls.Add(_acquireKey);
             _connectBaidu = ButtonFor("连接百度网盘"); _connectBaidu.Click += ConnectBaidu; baiduActions.Controls.Add(_connectBaidu);
             settingsPanel.Controls.Add(baiduActions, 2, 3);
-            settingsPanel.Controls.Add(LabelFor("Secret Key（本机加密）"), 0, 4); settingsPanel.Controls.Add(_clientSecret, 1, 4);
-            settingsPanel.Controls.Add(LabelFor("不会上传"), 2, 4);
-            settingsPanel.Controls.Add(LabelFor("OAuth 回调地址"), 0, 5); settingsPanel.Controls.Add(_redirectUri, 1, 5);
-            settingsPanel.Controls.Add(LabelFor("须与应用登记一致"), 2, 5);
+            settingsPanel.Controls.Add(_secretLabel, 0, 4); settingsPanel.Controls.Add(_clientSecret, 1, 4);
+            settingsPanel.Controls.Add(_secretHint, 2, 4);
+            settingsPanel.Controls.Add(_redirectLabel, 0, 5); settingsPanel.Controls.Add(_redirectUri, 1, 5);
+            settingsPanel.Controls.Add(_redirectHint, 2, 5);
             settingsPanel.Controls.Add(LabelFor("云端应用目录"), 0, 6); settingsPanel.Controls.Add(_remoteFolder, 1, 6);
             settingsPanel.Controls.Add(LabelFor("例：/apps/万落建筑工具"), 2, 6);
             settingsPanel.Controls.Add(LabelFor("本机设备名称"), 0, 7); settingsPanel.Controls.Add(_device, 1, 7);
@@ -451,12 +458,22 @@ namespace BatchPdfPublisher.Views
         {
             var local = _provider.SelectedIndex == 1;
             var baidu = _provider.SelectedIndex == 0;
-            var unified = baidu && !string.IsNullOrWhiteSpace(_settings == null ? null : _settings.ProviderBrokerUrl);
+            var brokerUrl = baidu ? WanluoCloudBrokerConfiguration.Resolve(_settings) : string.Empty;
+            var unified = baidu && !string.IsNullOrWhiteSpace(brokerUrl);
             _folder.Enabled = local;
             _clientId.Enabled = !local && !unified;
             _clientSecret.Enabled = baidu && !unified;
             _redirectUri.Enabled = baidu && !unified;
             _remoteFolder.Enabled = baidu;
+            _clientId.Visible = !unified;
+            _unifiedLoginHint.Visible = unified;
+            _clientIdLabel.Text = unified ? "百度账号" : "App Key / Client ID";
+            _secretLabel.Visible = !unified;
+            _clientSecret.Visible = !unified;
+            _secretHint.Visible = !unified;
+            _redirectLabel.Visible = !unified;
+            _redirectUri.Visible = !unified;
+            _redirectHint.Visible = !unified;
             _acquireKey.Visible = baidu && !unified;
             _connectBaidu.Visible = baidu;
             _connectBaidu.Text = unified ? "登录百度网盘" : "连接百度网盘";
@@ -464,7 +481,7 @@ namespace BatchPdfPublisher.Views
             var folder = _folder.Text.Trim();
             var clientId = _clientId.Text.Trim();
             var redirectUri = _redirectUri.Text.Trim();
-            var brokerUrl = unified ? _settings.ProviderBrokerUrl : null;
+            brokerUrl = unified ? brokerUrl : null;
             _status.Text = local ? "正在检查同步目录…" : baidu ? "正在检查百度网盘授权…" : "正在检查 115 开放平台配置…";
             _status.ForeColor = Color.FromArgb(34, 98, 160);
             ThreadPool.QueueUserWorkItem(delegate
