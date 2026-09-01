@@ -16,6 +16,7 @@ namespace BatchPdfPublisher.Services
     public static class CloudSyncCoordinator
     {
         public static void Reload() { }
+        public static void QueueReload(bool synchronizeAfterReload) { }
         public static void RequestSynchronization(bool immediate) { }
     }
 }

@@ -235,6 +235,9 @@ Copy-Item -LiteralPath (Join-Path $repositoryRoot 'COMPATIBILITY.md') -Destinati
 if (Test-Path -LiteralPath (Join-Path $repositoryRoot 'docs\BUILD_AND_INSTALL.md')) {
     Copy-Item -LiteralPath (Join-Path $repositoryRoot 'docs\BUILD_AND_INSTALL.md') -Destination (Join-Path $OutputRoot '构建与安装说明.md') -Force
 }
+if (Test-Path -LiteralPath (Join-Path $repositoryRoot 'docs\用户版安装说明.md')) {
+    Copy-Item -LiteralPath (Join-Path $repositoryRoot 'docs\用户版安装说明.md') -Destination (Join-Path $OutputRoot '用户版安装说明.md') -Force
+}
 
 # 源码发布目录可不携带 .git（便于用户只保留可编辑源码）。无 Git 时仍必须能完整构建。
 $gitCommit = ''
