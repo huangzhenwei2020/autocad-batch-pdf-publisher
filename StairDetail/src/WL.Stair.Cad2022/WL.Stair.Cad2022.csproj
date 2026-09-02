@@ -67,6 +67,12 @@
     <Compile Include="..\WL.Stair.CadShared\StairTitleService.cs">
       <Link>StairTitleService.cs</Link>
     </Compile>
+    <Compile Include="..\WL.Stair.CadShared\WanluoDataPaths.cs">
+      <Link>WanluoDataPaths.cs</Link>
+    </Compile>
+    <Compile Include="..\WL.Stair.CadShared\JsonDataSerializer.cs">
+      <Link>JsonDataSerializer.cs</Link>
+    </Compile>
     <Compile Include="..\WL.Stair.CadShared\PlanCapture\StairPlanCaptureService.cs">
       <Link>PlanCapture\StairPlanCaptureService.cs</Link>
     </Compile>

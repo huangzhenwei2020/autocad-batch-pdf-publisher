@@ -20,6 +20,7 @@ namespace BatchPdfPublisher.Views
     internal sealed class DoorWindowElevationForm : DpiAwareForm
     {
         private readonly Document _document;
+        private readonly ModelessDocumentBinding _documentBinding;
         private DoorWindowScheduleReadResult _source;
         private DoorWindowScheduleReadResult _baseSource;
         private readonly BindingList<DoorWindowScheduleItem> _rows = new BindingList<DoorWindowScheduleItem>();
@@ -61,6 +62,7 @@ namespace BatchPdfPublisher.Views
             StartPosition = FormStartPosition.CenterParent;
             Width = 1240; Height = 720; MinimumSize = new Size(980, 560);
             Font = new DrawingFont("Microsoft YaHei UI", 9F);
+            _documentBinding = new ModelessDocumentBinding(this, document);
             Build(); LoadSource(source);
             Shown += (s, e) => RestoreSavedSession();
             FormClosed += (s, e) => SavePreferences(false);

@@ -81,6 +81,8 @@ namespace BatchPdfPublisher.ViewModels
             var activeName = _store.LoadActiveProjectName();
             SelectedProject = Projects.FirstOrDefault(x => string.Equals(x.Name, activeName, StringComparison.OrdinalIgnoreCase)) ?? Projects.FirstOrDefault();
             RefreshPlotStyles();
+            if (!string.IsNullOrWhiteSpace(PublishPlanStore.LastRecoveryNotice))
+                Status = "数据恢复提醒：" + PublishPlanStore.LastRecoveryNotice;
         }
 
         public ObservableCollection<ProjectProfile> Projects { get; }
@@ -524,6 +526,84 @@ namespace BatchPdfPublisher.ViewModels
                 Status = "项目文件夹更新失败：" + exception.Message;
                 return false;
             }
+        }
+
+        public bool MigrateProjectFolder(string folder)
+        {
+            if (SelectedProject == null) { Status = "请先选择工程。"; return false; }
+            if (string.IsNullOrWhiteSpace(folder)) { Status = "请选择新的项目文件夹。"; return false; }
+            var previous = GetProjectFolder();
+            try
+            {
+                var source = System.IO.Path.GetFullPath(previous).TrimEnd(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar);
+                var target = System.IO.Path.GetFullPath(folder.Trim()).TrimEnd(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar);
+                if (string.Equals(source, target, StringComparison.OrdinalIgnoreCase)) { Status = "新旧项目文件夹相同，无需迁移。"; return false; }
+                var sourcePrefix = source + System.IO.Path.DirectorySeparatorChar;
+                var targetPrefix = target + System.IO.Path.DirectorySeparatorChar;
+                if (targetPrefix.StartsWith(sourcePrefix, StringComparison.OrdinalIgnoreCase) ||
+                    sourcePrefix.StartsWith(targetPrefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    Status = "新旧项目文件夹不能互相包含。";
+                    return false;
+                }
+                if (!System.IO.Directory.Exists(source)) { Status = "原项目文件夹不存在：" + source; return false; }
+                if (System.IO.Directory.Exists(target) && System.IO.Directory.EnumerateFileSystemEntries(target).Any())
+                {
+                    Status = "为防止覆盖文件，请选择一个空文件夹进行迁移。";
+                    return false;
+                }
+                System.IO.Directory.CreateDirectory(target);
+                foreach (var directory in System.IO.Directory.GetDirectories(source, "*", System.IO.SearchOption.AllDirectories))
+                {
+                    var relative = directory.Substring(sourcePrefix.Length);
+                    System.IO.Directory.CreateDirectory(System.IO.Path.Combine(target, relative));
+                }
+                foreach (var file in System.IO.Directory.GetFiles(source, "*", System.IO.SearchOption.AllDirectories))
+                {
+                    var relative = file.Substring(sourcePrefix.Length);
+                    var destination = System.IO.Path.Combine(target, relative);
+                    System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(destination));
+                    System.IO.File.Copy(file, destination, false);
+                    if (new System.IO.FileInfo(file).Length != new System.IO.FileInfo(destination).Length)
+                        throw new System.IO.IOException("复制后文件大小不一致：" + relative);
+                }
+
+                SelectedProject.ProjectFolder = target;
+                SelectedProject.CadFiles = RemapProjectPaths(SelectedProject.CadFiles, source, target);
+                SelectedProject.SelectedCadFiles = RemapProjectPaths(SelectedProject.SelectedCadFiles, source, target);
+                foreach (var sheet in SelectedProject.SavedSheets ?? new System.Collections.Generic.List<SheetCatalogItem>())
+                    sheet.SourceFile = RemapProjectPath(sheet.SourceFile, source, target);
+                OutputDirectory = RemapProjectPath(OutputDirectory, source, target);
+                SaveCurrentProject();
+                LoadProjectIntoEditor(SelectedProject);
+                Status = "项目已复制迁移到：" + target + "。原目录已保留，请确认新目录正常后再自行删除。";
+                return true;
+            }
+            catch (System.Exception exception)
+            {
+                Status = "项目迁移失败，原项目未切换：" + exception.Message;
+                return false;
+            }
+        }
+
+        private static System.Collections.Generic.List<string> RemapProjectPaths(
+            System.Collections.Generic.IEnumerable<string> paths, string source, string target)
+        {
+            return (paths ?? Enumerable.Empty<string>()).Select(path => RemapProjectPath(path, source, target)).ToList();
+        }
+
+        private static string RemapProjectPath(string path, string source, string target)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return path;
+            try
+            {
+                var full = System.IO.Path.GetFullPath(path);
+                var prefix = source.TrimEnd(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar) + System.IO.Path.DirectorySeparatorChar;
+                return full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                    ? System.IO.Path.Combine(target, full.Substring(prefix.Length))
+                    : path;
+            }
+            catch { return path; }
         }
 
         public bool SaveCurrentCadToProjectFolder(out string destination, out string error)

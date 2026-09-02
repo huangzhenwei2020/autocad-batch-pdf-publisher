@@ -44,7 +44,29 @@ internal static class CloudSyncTests
         Run("ValidatesBaiduOAuthCallback", ValidatesBaiduOAuthCallback);
         Run("DownloadsBaiduFileThroughMultimediaMetadata", DownloadsBaiduFileThroughMultimediaMetadata);
         Run("DecryptsUnifiedBrokerToken", DecryptsUnifiedBrokerToken);
+        Run("RecoversCorruptSettingsFromBackup", RecoversCorruptSettingsFromBackup);
         Console.WriteLine("Executed " + _executed + " cloud sync tests; 0 failed.");
+    }
+
+    private static void RecoversCorruptSettingsFromBackup()
+    {
+        var root = NewRoot();
+        try
+        {
+            UserDataPaths.TestRootDirectory = root;
+            var settingsPath = Path.Combine(root, "settings.json");
+            var statePath = Path.Combine(root, "state.json");
+            var store = new CloudSyncSettingsStore(settingsPath, statePath);
+            store.SaveSettings(new CloudSyncSettings { DeviceName = "backup-version" });
+            store.SaveSettings(new CloudSyncSettings { DeviceName = "current-version" });
+            File.WriteAllText(settingsPath, "{broken");
+            var recovered = store.LoadSettings();
+            Equal("backup-version", recovered.DeviceName);
+            True(Directory.GetFiles(root, "settings.json.corrupt-*", SearchOption.TopDirectoryOnly).Length == 1,
+                "corrupt settings were not quarantined");
+            True(!string.IsNullOrWhiteSpace(CloudSyncSettingsStore.LastRecoveryNotice), "recovery notice missing");
+        }
+        finally { try { Directory.Delete(root, true); } catch { } }
     }
 
     private static void UploadsNewLocalFile()

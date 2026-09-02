@@ -1,0 +1,55 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <OutputType>Library</OutputType>
+    <AssemblyName>WL.Stair.Cad2026</AssemblyName>
+    <RootNamespace>WL.Stair.Cad2022</RootNamespace>
+    <PlatformTarget>x64</PlatformTarget>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <Version>1.2.0</Version>
+    <AssemblyVersion>1.2.0.0</AssemblyVersion>
+    <FileVersion>1.2.0.0</FileVersion>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <Nullable>disable</Nullable>
+    <AutoCadApiPath Condition="'$(AutoCadApiPath)' == ''">C:\Program Files\Autodesk\AutoCAD 2026</AutoCadApiPath>
+    <UseAutoCadNuGet Condition="'$(UseAutoCadNuGet)' == '' And !Exists('$(AutoCadApiPath)\acmgd.dll')">true</UseAutoCadNuGet>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(UseAutoCadNuGet)' != 'true'">
+    <Reference Include="acmgd" HintPath="$(AutoCadApiPath)\acmgd.dll" Private="false" />
+    <Reference Include="acdbmgd" HintPath="$(AutoCadApiPath)\acdbmgd.dll" Private="false" />
+    <Reference Include="accoremgd" HintPath="$(AutoCadApiPath)\accoremgd.dll" Private="false" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(UseAutoCadNuGet)' == 'true'">
+    <PackageReference Include="AutoCAD.NET" Version="25.0.1" PrivateAssets="all" ExcludeAssets="runtime" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4078.44" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="..\..\assets\HatchPatterns\*.pat" Link="HatchPatterns\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\WL.Stair.Cad2022\CadLineRenderer.cs" Link="CadLineRenderer.cs" />
+    <Compile Include="..\WL.Stair.Cad2022\DetailLayoutPlanBridge.cs" Link="DetailLayoutPlanBridge.cs" />
+    <Compile Include="..\WL.Stair.Cad2022\Commands.cs" Link="Commands.cs" />
+    <Compile Include="..\WL.Stair.Cad2022\PromptService.cs" Link="PromptService.cs" />
+    <Compile Include="..\WL.Stair.Cad2022\StairSettingsForm.cs" Link="StairSettingsForm.cs" />
+    <Compile Include="..\WL.Stair.Cad2022\StairSettingsWindow.cs" Link="StairSettingsWindow.cs" />
+    <Compile Include="..\WL.Stair.Cad2022\StairProjectStorage.cs" Link="StairProjectStorage.cs" />
+    <Compile Include="..\WL.Stair.Cad2022\StairEditorPage.cs" Link="StairEditorPage.cs" />
+    <Compile Include="..\WL.Stair.CadShared\StairTitleService.cs" Link="StairTitleService.cs" />
+    <Compile Include="..\WL.Stair.CadShared\WanluoDataPaths.cs" Link="WanluoDataPaths.cs" />
+    <Compile Include="..\WL.Stair.CadShared\JsonDataSerializer.cs" Link="JsonDataSerializer.cs" />
+    <Compile Include="..\WL.Stair.CadShared\PlanCapture\StairPlanCaptureService.cs" Link="PlanCapture\StairPlanCaptureService.cs" />
+    <Compile Include="..\WL.Stair.CadShared\PlanCapture\StairPlanCacheService.cs" Link="PlanCapture\StairPlanCacheService.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\WL.Stair.Core\WL.Stair.Core.Net8.csproj" />
+  </ItemGroup>
+  <Target Name="CheckAutoCadReferences" BeforeTargets="ResolveAssemblyReferences">
+    <Error Condition="'$(UseAutoCadNuGet)' != 'true' And !Exists('$(AutoCadApiPath)\acmgd.dll')" Text="AutoCAD 2025/2026 managed assemblies were not found at $(AutoCadApiPath)." />
+  </Target>
+</Project>

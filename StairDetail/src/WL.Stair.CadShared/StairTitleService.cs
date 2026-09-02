@@ -129,9 +129,7 @@ namespace WL.Stair.CadShared
         {
             try
             {
-                var root = Environment.GetEnvironmentVariable("WANLUO_ARCHITECTURE_TOOLS_ROOT");
-                if (string.IsNullOrWhiteSpace(root)) return;
-                var logs = System.IO.Path.Combine(root, "用户配置文件", "Logs");
+                var logs = System.IO.Path.Combine(WanluoDataPaths.Root, "Logs");
                 System.IO.Directory.CreateDirectory(logs);
                 System.IO.File.AppendAllText(System.IO.Path.Combine(logs, "stair-title.log"),
                     DateTime.Now.ToString("O") + " " + message + Environment.NewLine);

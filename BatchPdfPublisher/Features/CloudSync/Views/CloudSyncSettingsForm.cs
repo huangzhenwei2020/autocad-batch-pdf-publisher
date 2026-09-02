@@ -182,7 +182,9 @@ namespace BatchPdfPublisher.Views
                 : string.Equals(_settings.InitialSyncPreference, "Conflict", StringComparison.OrdinalIgnoreCase) ? 2 : 0;
             _days.Value = Math.Max(_days.Minimum, Math.Min(_days.Maximum, _settings.HistoryRetentionDays));
             _versions.Value = Math.Max(_versions.Minimum, Math.Min(_versions.Maximum, _settings.KeepVersionsPerFile));
-            _status.Text = _settings.Enabled ? "同步已启用。" : "同步默认关闭；启用并保存后才会读写同步目录。";
+            _status.Text = !string.IsNullOrWhiteSpace(CloudSyncSettingsStore.LastRecoveryNotice)
+                ? "数据恢复提醒：" + CloudSyncSettingsStore.LastRecoveryNotice
+                : _settings.Enabled ? "同步已启用。" : "同步默认关闭；启用并保存后才会读写同步目录。";
             UpdateProviderUi();
         }
 

@@ -15,6 +15,7 @@ namespace BatchPdfPublisher.Services
         private static int _reloadPending;
         private static int _reloadWorker;
         private static int _syncAfterReload;
+        private static int _consecutiveFailures;
         private static bool _installed;
 
         public static event Action<CloudSyncResult, Exception> SynchronizationCompleted;
@@ -183,14 +184,21 @@ namespace BatchPdfPublisher.Services
                 if (handler != null) try { handler(result, failure); } catch { }
                 if (failure != null || (result != null && result.Errors > 0))
                 {
+                    var failureCount = Interlocked.Increment(ref _consecutiveFailures);
+                    var retrySeconds = Math.Min(900, 30 * (int)Math.Pow(2, Math.Min(5, failureCount - 1)));
                     Interlocked.Exchange(ref _pending, 1);
                     lock (LifecycleSync)
                     {
                         if (_timer == null) _timer = new Timer(Execute, null, Timeout.Infinite, Timeout.Infinite);
-                        _timer.Change(TimeSpan.FromSeconds(30), Timeout.InfiniteTimeSpan);
+                        _timer.Change(TimeSpan.FromSeconds(retrySeconds), Timeout.InfiniteTimeSpan);
                     }
+                    Trace("同步连续失败 " + failureCount + " 次，将在 " + retrySeconds + " 秒后重试。");
                 }
-                else if (Interlocked.Exchange(ref _pending, 0) != 0) RequestSynchronization(false);
+                else
+                {
+                    Interlocked.Exchange(ref _consecutiveFailures, 0);
+                    if (Interlocked.Exchange(ref _pending, 0) != 0) RequestSynchronization(false);
+                }
             }
         }
 

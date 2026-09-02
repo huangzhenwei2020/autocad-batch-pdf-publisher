@@ -141,8 +141,7 @@ namespace BatchPdfPublisher.Services
             if (settings.SyncTemplatesAndSchemes)
             {
                 sources.Add(new CloudSyncSource("图框模板", UserDataPaths.FrameTemplatesDirectory, IncludeNormalFile));
-                var portableRoot = UserDataPaths.PluginDirectory;
-                var stairSchemes = Path.Combine(portableRoot, "用户配置文件", "楼梯大样", "方案库");
+                var stairSchemes = Path.Combine(UserDataPaths.RootDirectory, "楼梯大样", "方案库");
                 sources.Add(new CloudSyncSource("方案库/楼梯", stairSchemes, IncludeNormalFile));
             }
             return new CloudSyncCatalog(sources);

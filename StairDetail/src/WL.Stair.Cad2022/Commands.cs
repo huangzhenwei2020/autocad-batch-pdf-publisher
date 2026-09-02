@@ -13,6 +13,7 @@ using System.Text;
 using System.Threading.Tasks;
 using WL.Stair.Core.Calculation;
 using WL.Stair.Core.Domain;
+using WL.Stair.CadShared;
 using WL.Stair.Core.Geometry;
 using WL.Stair.Core.Layout;
 using WL.Stair.Core.Validation;
@@ -491,15 +492,7 @@ namespace WL.Stair.Cad2022
         {
             try
             {
-                var root = Environment.GetEnvironmentVariable("WANLUO_ARCHITECTURE_TOOLS_ROOT");
-                if (string.IsNullOrWhiteSpace(root))
-                {
-                    root = Path.GetDirectoryName(typeof(Commands).Assembly.Location);
-                    for (var index = 0; index < 2 && !string.IsNullOrWhiteSpace(root); index++)
-                        root = Path.GetDirectoryName(root);
-                }
-                if (string.IsNullOrWhiteSpace(root)) return;
-                var directory = Path.Combine(root, "用户配置文件", "Logs");
+                var directory = Path.Combine(WanluoDataPaths.Root, "Logs");
                 Directory.CreateDirectory(directory);
                 File.AppendAllText(Path.Combine(directory, "stair-combined-layout.log"),
                     DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " [" + stage + "] "

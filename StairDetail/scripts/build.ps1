@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [ValidateSet("Debug", "Release")]
-    [string]$Configuration = "Debug"
+    [string]$Configuration = "Debug",
+    [string]$AutoCadApiPath
 )
 
 $ErrorActionPreference = "Stop"
@@ -27,7 +28,9 @@ if (-not $framework) {
     throw ".NET Framework 4.8 or 4.8.1 targeting pack was not found."
 }
 
-& $msbuild $solution /restore /m /p:Configuration=$Configuration /p:TargetFrameworkVersion=$framework /verbosity:minimal
+$arguments = @($solution, '/restore', '/m', "/p:Configuration=$Configuration", "/p:TargetFrameworkVersion=$framework", '/verbosity:minimal')
+if (-not [string]::IsNullOrWhiteSpace($AutoCadApiPath)) { $arguments += "/p:AutoCad2022Dir=$AutoCadApiPath" }
+& $msbuild @arguments
 if ($LASTEXITCODE -ne 0) {
     throw "Build failed with exit code $LASTEXITCODE."
 }

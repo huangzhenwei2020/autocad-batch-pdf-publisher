@@ -7,11 +7,13 @@
     <PlatformTarget>x64</PlatformTarget>
     <AutoCadSdkPath Condition="'$(AutoCadSdkPath)' == '' And Exists('C:\Program Files\Autodesk\AutoCAD 2026\acmgd.dll')">C:\Program Files\Autodesk\AutoCAD 2026</AutoCadSdkPath>
     <AutoCadSdkPath Condition="'$(AutoCadSdkPath)' == '' And Exists('D:\Program Files\Autodesk\AutoCAD 2026\acmgd.dll')">D:\Program Files\Autodesk\AutoCAD 2026</AutoCadSdkPath>
+    <UseAutoCadNuGet Condition="'$(UseAutoCadNuGet)' == '' And !Exists('$(AutoCadSdkPath)\acmgd.dll')">true</UseAutoCadNuGet>
     <MSBuildWarningsAsMessages>$(MSBuildWarningsAsMessages);MSB3277</MSBuildWarningsAsMessages>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Web.WebView2" />
+    <PackageReference Condition="'$(UseAutoCadNuGet)' == 'true'" Include="AutoCAD.NET" PrivateAssets="all" ExcludeAssets="runtime" />
   </ItemGroup>
 
   <ItemGroup>
@@ -32,7 +34,7 @@
     </Content>
   </ItemGroup>
 
-  <ItemGroup>
+  <ItemGroup Condition="'$(UseAutoCadNuGet)' != 'true'">
     <Reference Include="acmgd">
       <HintPath>$(AutoCadSdkPath)\acmgd.dll</HintPath>
       <Private>false</Private>
@@ -49,7 +51,7 @@
 
   <Target Name="ValidateAutoCadSdk" BeforeTargets="ResolveReferences">
     <Error
-      Condition="!Exists('$(AutoCadSdkPath)\acmgd.dll') Or !Exists('$(AutoCadSdkPath)\acdbmgd.dll') Or !Exists('$(AutoCadSdkPath)\accoremgd.dll')"
+      Condition="'$(UseAutoCadNuGet)' != 'true' And (!Exists('$(AutoCadSdkPath)\acmgd.dll') Or !Exists('$(AutoCadSdkPath)\acdbmgd.dll') Or !Exists('$(AutoCadSdkPath)\accoremgd.dll'))"
       Text="未找到 AutoCAD 2026 托管 SDK。请通过 /p:AutoCadSdkPath=... 指定包含 acmgd.dll、acdbmgd.dll、accoremgd.dll 的目录。" />
   </Target>
 </Project>

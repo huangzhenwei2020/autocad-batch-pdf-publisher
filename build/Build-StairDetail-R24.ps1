@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [ValidateSet('Debug', 'Release')]
-    [string]$Configuration = 'Release'
+    [string]$Configuration = 'Release',
+    [string]$AutoCadApiPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -18,7 +19,7 @@ if (-not (Test-Path -LiteralPath $buildScript)) {
     throw "未找到楼梯大样构建脚本：$buildScript"
 }
 
-& $buildScript -Configuration $Configuration
+& $buildScript -Configuration $Configuration -AutoCadApiPath $AutoCadApiPath
 
 if (Test-Path -LiteralPath $stagingRoot) {
     Remove-Item -LiteralPath $stagingRoot -Recurse -Force

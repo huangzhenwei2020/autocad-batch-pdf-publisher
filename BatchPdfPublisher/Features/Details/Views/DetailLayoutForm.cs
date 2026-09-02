@@ -20,6 +20,7 @@ namespace BatchPdfPublisher.Views
     internal sealed class DetailLayoutForm : DpiAwareForm
     {
         private readonly Document _document;
+        private readonly ModelessDocumentBinding _documentBinding;
         private readonly List<DetailLayoutItem> _items = new List<DetailLayoutItem>();
         private readonly List<FrameDefinition> _frames;
         private readonly CheckedListBox _list = new CheckedListBox { Dock = DockStyle.Fill, IntegralHeight = false, CheckOnClick = true };
@@ -43,6 +44,7 @@ namespace BatchPdfPublisher.Views
             _frames = new PublishPlanStore().LoadFrames().Where(x => x != null && !string.IsNullOrWhiteSpace(x.BlockName)).ToList();
             Text = "大样排版"; StartPosition = FormStartPosition.CenterScreen; ClientSize = new Size(1050, 690); MinimumSize = new Size(850, 540);
             Font = new Font("Microsoft YaHei UI", 9f); BackColor = Color.White;
+            _documentBinding = new ModelessDocumentBinding(this, document);
             Build(); LoadSettings(); RefreshLayout(true);
             FormClosed += (s, e) => SaveSettings();
         }

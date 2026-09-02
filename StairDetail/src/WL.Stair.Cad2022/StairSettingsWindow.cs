@@ -6,13 +6,13 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
-using System.Web.Script.Serialization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Geometry;
+using WL.Stair.CadShared;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
 using WL.Stair.Core.Calculation;
@@ -30,7 +30,7 @@ namespace WL.Stair.Cad2022
         private static readonly object WebViewEnvironmentSync = new object();
         private static Task<CoreWebView2Environment> _webViewEnvironmentTask;
         private readonly WebView2 _webView = new WebView2();
-        private readonly JavaScriptSerializer _serializer = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
+        private readonly JsonDataSerializer _serializer = new JsonDataSerializer();
         private readonly StairProjectCalculator _calculator = new StairProjectCalculator();
         private readonly StairProjectGeometryBuilder _geometryBuilder = new StairProjectGeometryBuilder();
         private readonly StairClearanceValidator _clearanceValidator = new StairClearanceValidator();
@@ -170,10 +170,7 @@ namespace WL.Stair.Cad2022
         {
             try
             {
-                var root = Environment.GetEnvironmentVariable(
-                    "WANLUO_ARCHITECTURE_TOOLS_ROOT");
-                if (string.IsNullOrWhiteSpace(root)) return;
-                var directory = Path.Combine(root, "用户配置文件", "Logs");
+                var directory = Path.Combine(WanluoDataPaths.Root, "Logs");
                 Directory.CreateDirectory(directory);
                 File.AppendAllText(Path.Combine(directory, "stair-editor.log"),
                     DateTime.Now.ToString("O", CultureInfo.InvariantCulture)
@@ -208,9 +205,7 @@ namespace WL.Stair.Cad2022
             _lastOpeningPreviewTrace = signature;
             try
             {
-                var root = Environment.GetEnvironmentVariable("WANLUO_ARCHITECTURE_TOOLS_ROOT");
-                if (string.IsNullOrWhiteSpace(root)) return;
-                var directory = Path.Combine(root, "用户配置文件", "Logs");
+                var directory = Path.Combine(WanluoDataPaths.Root, "Logs");
                 Directory.CreateDirectory(directory);
                 File.AppendAllText(Path.Combine(directory, "stair-opening-preview.log"),
                     DateTime.Now.ToString("O", CultureInfo.InvariantCulture) + " "

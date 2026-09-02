@@ -2420,9 +2420,7 @@ namespace WL.Stair.CadShared.PlanCapture
         {
             try
             {
-                var root = Environment.GetEnvironmentVariable("WANLUO_ARCHITECTURE_TOOLS_ROOT");
-                if (string.IsNullOrWhiteSpace(root)) return;
-                var path = Path.Combine(root, "用户配置文件", "日志", "stair-plan-capture.log");
+                var path = Path.Combine(WanluoDataPaths.Root, "日志", "stair-plan-capture.log");
                 Directory.CreateDirectory(Path.GetDirectoryName(path));
                 var text = new StringBuilder()
                     .AppendLine("[正式小平面工作副本]")
@@ -2445,9 +2443,7 @@ namespace WL.Stair.CadShared.PlanCapture
         {
             try
             {
-                var root = Environment.GetEnvironmentVariable("WANLUO_ARCHITECTURE_TOOLS_ROOT");
-                if (string.IsNullOrWhiteSpace(root)) return;
-                var path = Path.Combine(root, "用户配置文件", "日志", "stair-plan-capture.log");
+                var path = Path.Combine(WanluoDataPaths.Root, "日志", "stair-plan-capture.log");
                 Directory.CreateDirectory(Path.GetDirectoryName(path));
                 var text = new StringBuilder()
                     .AppendLine("[正式平面来源识别]")
@@ -2477,9 +2473,7 @@ namespace WL.Stair.CadShared.PlanCapture
         {
             try
             {
-                var root = Environment.GetEnvironmentVariable("WANLUO_ARCHITECTURE_TOOLS_ROOT");
-                if (string.IsNullOrWhiteSpace(root)) return;
-                var path = Path.Combine(root, "用户配置文件", "日志", "stair-plan-capture.log");
+                var path = Path.Combine(WanluoDataPaths.Root, "日志", "stair-plan-capture.log");
                 Directory.CreateDirectory(Path.GetDirectoryName(path));
                 var text = new StringBuilder()
                     .AppendLine("[平面复制兼容性检查]")

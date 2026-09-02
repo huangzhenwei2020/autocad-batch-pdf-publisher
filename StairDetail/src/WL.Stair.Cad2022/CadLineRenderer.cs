@@ -361,11 +361,7 @@ namespace WL.Stair.Cad2022
         {
             try
             {
-                var packageRoot = Environment.GetEnvironmentVariable("WANLUO_ARCHITECTURE_TOOLS_ROOT");
-                var userRoot = !string.IsNullOrWhiteSpace(packageRoot) && Directory.Exists(packageRoot)
-                    ? Path.Combine(packageRoot, "用户配置文件")
-                    : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                        "WanluoArchitectureTools", "用户配置文件");
+                var userRoot = WanluoDataPaths.Root;
                 var target = Path.Combine(userRoot, "填充素材");
                 Directory.CreateDirectory(target);
                 var source = Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location),
@@ -488,11 +484,7 @@ namespace WL.Stair.Cad2022
         {
             try
             {
-                var packageRoot = Environment.GetEnvironmentVariable("WANLUO_ARCHITECTURE_TOOLS_ROOT");
-                var root = !string.IsNullOrWhiteSpace(packageRoot) && Directory.Exists(packageRoot)
-                    ? Path.Combine(packageRoot, "用户配置文件")
-                    : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                        "WanluoArchitectureTools", "用户配置文件");
+                var root = WanluoDataPaths.Root;
                 var logDirectory = Path.Combine(root, "Logs");
                 Directory.CreateDirectory(logDirectory);
                 var line = string.Format(CultureInfo.InvariantCulture,

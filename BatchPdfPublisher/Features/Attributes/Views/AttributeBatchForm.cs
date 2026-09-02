@@ -52,7 +52,7 @@ namespace BatchPdfPublisher.Views
             _settings = AttributeBatchSettings.Load();
             _presetItems = AttributePresetStore.Load();
             _registeredBlockNames = new HashSet<string>(new PublishPlanStore().LoadFrames().Select(x => x.BlockName).Where(x => !string.IsNullOrWhiteSpace(x)), StringComparer.OrdinalIgnoreCase);
-            Text = "批量修改图块属性  v0.8.7"; Width = 1040; Height = 620; StartPosition = FormStartPosition.CenterParent;
+            Text = "批量修改图块属性  " + WanluoArchitectureTools.ProductVersion.Display; Width = 1040; Height = 620; StartPosition = FormStartPosition.CenterParent;
             Build();
             FormClosed += (s, e) => _markers.Dispose();
         }

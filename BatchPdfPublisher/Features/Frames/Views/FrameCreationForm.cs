@@ -17,6 +17,7 @@ namespace BatchPdfPublisher.Views
     public sealed class FrameCreationForm : DpiAwareForm
     {
         private readonly Document _document;
+        private readonly ModelessDocumentBinding _documentBinding;
         private readonly Action _refresh;
         private readonly ComboBox _paper = new ComboBox();
         private readonly ComboBox _extension = new ComboBox();
@@ -41,6 +42,7 @@ namespace BatchPdfPublisher.Views
             _registeredFrames = new PublishPlanStore().LoadFrames().Where(x => x != null && !string.IsNullOrWhiteSpace(x.BlockName)).ToList();
             Text = "创建 / 插入图框"; Width = 660; Height = 440; MinimumSize = new Size(620, 410);
             StartPosition = FormStartPosition.CenterParent; Font = new Font("Microsoft YaHei UI", 9F);
+            _documentBinding = new ModelessDocumentBinding(this, document);
             Build(); LoadSettings(); FormClosed += (s, e) => SaveSettings();
         }
 

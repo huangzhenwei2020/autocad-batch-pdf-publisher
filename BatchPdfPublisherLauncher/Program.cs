@@ -40,6 +40,7 @@ namespace BatchPdfPublisherLauncher
             try
             {
                 Environment.SetEnvironmentVariable("WANLUO_ARCHITECTURE_TOOLS_ROOT", PackageRoot, EnvironmentVariableTarget.Process);
+                Environment.SetEnvironmentVariable("WANLUO_ARCHITECTURE_TOOLS_USER_DATA_ROOT", UserDataRoot, EnvironmentVariableTarget.Process);
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
                 Log("启动器开始运行");
@@ -422,7 +423,7 @@ namespace BatchPdfPublisherLauncher
                 // AutoCAD resolves stand-alone custom PAT files from the process startup
                 // directory and caches that lookup. Start in the plugin's portable hatch
                 // asset folder; no AutoCAD support folder or registry profile is modified.
-                WorkingDirectory = EnsureDirectory(Path.Combine(PackageRoot, "用户配置文件", "填充素材")),
+                WorkingDirectory = EnsureDirectory(Path.Combine(UserDataRoot, "填充素材")),
                 UseShellExecute = true
             });
 
@@ -828,7 +829,7 @@ namespace BatchPdfPublisherLauncher
         {
             if (string.IsNullOrWhiteSpace(stairAssembly) || !File.Exists(stairAssembly)) return;
             var source = Path.Combine(Path.GetDirectoryName(stairAssembly), "HatchPatterns");
-            var target = EnsureDirectory(Path.Combine(PackageRoot, "用户配置文件", "填充素材"));
+            var target = EnsureDirectory(Path.Combine(UserDataRoot, "填充素材"));
             if (Directory.Exists(source))
             {
                 foreach (var file in Directory.GetFiles(source, "*.pat"))
@@ -1034,7 +1035,7 @@ namespace BatchPdfPublisherLauncher
                 .ToList();
             var package = new StringBuilder();
             package.AppendLine("<?xml version=\"1.0\" encoding=\"utf-8\"?>");
-            package.AppendLine("<ApplicationPackage SchemaVersion=\"1.0\" AutodeskProduct=\"AutoCAD\" Name=\"WanluoArchitectureTools\" AppVersion=\"1.1.1\" ProductCode=\"{7B9E2D72-1C3E-4F3D-9C0C-7D5D3E5A0A01}\">");
+            package.AppendLine("<ApplicationPackage SchemaVersion=\"1.0\" AutodeskProduct=\"AutoCAD\" Name=\"WanluoArchitectureTools\" AppVersion=\"" + WanluoArchitectureTools.ProductVersion.Semantic + "\" ProductCode=\"{7B9E2D72-1C3E-4F3D-9C0C-7D5D3E5A0A01}\">");
             package.AppendLine("  <CompanyDetails Name=\"万落建筑工具\" />");
             foreach (var installedBand in installedBands)
             {

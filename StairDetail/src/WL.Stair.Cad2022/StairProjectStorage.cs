@@ -1,8 +1,8 @@
 using System;
 using System.IO;
 using System.Linq;
-using System.Web.Script.Serialization;
 using System.Collections.Generic;
+using WL.Stair.CadShared;
 using WL.Stair.Core.Domain;
 
 namespace WL.Stair.Cad2022
@@ -10,7 +10,7 @@ namespace WL.Stair.Cad2022
     internal sealed class StairProjectStorage
     {
         private static readonly object FileSync = new object();
-        private readonly JavaScriptSerializer _serializer = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
+        private readonly JsonDataSerializer _serializer = new JsonDataSerializer();
 
         public string FilePath
         {
@@ -171,11 +171,7 @@ namespace WL.Stair.Cad2022
         {
             get
             {
-                var packageRoot = Environment.GetEnvironmentVariable(
-                    "WANLUO_ARCHITECTURE_TOOLS_ROOT");
-                if (!string.IsNullOrWhiteSpace(packageRoot))
-                    return Path.Combine(packageRoot, "用户配置文件", "楼梯大样");
-                return Path.GetDirectoryName(LegacyFilePath);
+                return Path.Combine(WanluoDataPaths.Root, "楼梯大样");
             }
         }
 

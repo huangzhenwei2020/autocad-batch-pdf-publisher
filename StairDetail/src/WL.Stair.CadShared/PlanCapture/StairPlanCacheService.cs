@@ -821,20 +821,7 @@ namespace WL.Stair.CadShared.PlanCapture
 
         private static string GetUserConfigRoot()
         {
-            var packageRoot = Environment.GetEnvironmentVariable(
-                "WANLUO_ARCHITECTURE_TOOLS_ROOT");
-            if (string.IsNullOrWhiteSpace(packageRoot))
-            {
-                var assembly = typeof(StairPlanCacheService).Assembly.Location;
-                var directory = Path.GetDirectoryName(assembly);
-                // ...\CadApi\R24\WL.Stair.Cad2022.dll -> plug-in root
-                packageRoot = directory;
-                for (var index = 0; index < 2 && !string.IsNullOrWhiteSpace(packageRoot); index++)
-                    packageRoot = Path.GetDirectoryName(packageRoot);
-            }
-            if (string.IsNullOrWhiteSpace(packageRoot))
-                throw new InvalidOperationException("无法确定插件目录，不能保存楼梯平面缓存。");
-            return Path.Combine(Path.GetFullPath(packageRoot), "用户配置文件");
+            return WanluoDataPaths.Root;
         }
 
         private static string MakeRelativeToUserConfig(string path)

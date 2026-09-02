@@ -43,6 +43,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="AssemblyInfo.cs" />
+    <Compile Include="..\Shared\ProductVersion.cs"><Link>Infrastructure\ProductVersion.cs</Link></Compile>
     <Compile Include="Compatibility\Net40Polyfills.cs" />
     <Compile Include="Commands.cs" />
     <Compile Include="Infrastructure\**\*.cs" />

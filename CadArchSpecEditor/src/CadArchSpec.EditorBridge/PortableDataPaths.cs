@@ -10,9 +10,11 @@ namespace CadArchSpec.EditorBridge
         {
             get
             {
-                var package = Environment.GetEnvironmentVariable("WANLUO_ARCHITECTURE_TOOLS_ROOT");
-                if (string.IsNullOrWhiteSpace(package) || !Directory.Exists(package)) package = FindPackageRoot();
-                var path = Path.Combine(package, "用户配置文件", "建筑设计说明");
+                var userRoot = Environment.GetEnvironmentVariable("WANLUO_ARCHITECTURE_TOOLS_USER_DATA_ROOT");
+                if (string.IsNullOrWhiteSpace(userRoot))
+                    userRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                        "WanluoArchitectureTools", "用户配置文件");
+                var path = Path.Combine(userRoot, "建筑设计说明");
                 Directory.CreateDirectory(path); return path;
             }
         }

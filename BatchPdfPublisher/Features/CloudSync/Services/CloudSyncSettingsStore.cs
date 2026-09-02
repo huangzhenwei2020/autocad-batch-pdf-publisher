@@ -6,6 +6,7 @@ namespace BatchPdfPublisher.Services
 {
     public sealed class CloudSyncSettingsStore
     {
+        public static string LastRecoveryNotice { get; private set; }
         private static readonly object FileSync = new object();
         private readonly string _settingsPath;
         private readonly string _statePath;
@@ -65,13 +66,57 @@ namespace BatchPdfPublisher.Services
                 {
                     if (!File.Exists(path)) return fallback;
                     using (var stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read))
-                        return (T)new DataContractJsonSerializer(typeof(T)).ReadObject(stream);
+                    {
+                        var value = (T)new DataContractJsonSerializer(typeof(T)).ReadObject(stream);
+                        if ((object)value == null) throw new InvalidDataException("同步配置内容为空。");
+                        return value;
+                    }
                 }
                 catch
                 {
+                    var backup = path + ".bak";
+                    try
+                    {
+                        if (File.Exists(backup))
+                        {
+                            T recovered;
+                            using (var stream = File.Open(backup, FileMode.Open, FileAccess.Read, FileShare.Read))
+                                recovered = (T)new DataContractJsonSerializer(typeof(T)).ReadObject(stream);
+                            if ((object)recovered == null) throw new InvalidDataException("同步配置备份内容为空。");
+                            Quarantine(path);
+                            Save(path, recovered);
+                            ReportRecovery("云同步配置已从备份恢复：" + path);
+                            return recovered;
+                        }
+                    }
+                    catch (Exception exception)
+                    {
+                        ReportRecovery("云同步配置和备份都无法读取：" + exception.Message);
+                    }
+                    Quarantine(path);
+                    ReportRecovery("云同步配置无法读取，已隔离损坏文件并暂时使用默认值。");
                     return fallback;
                 }
             }
+        }
+
+        private static void Quarantine(string path)
+        {
+            if (!File.Exists(path)) return;
+            var target = path + ".corrupt-" + DateTime.Now.ToString("yyyyMMdd-HHmmssfff");
+            try { File.Move(path, target); }
+            catch { try { File.Copy(path, target, false); File.Delete(path); } catch { } }
+        }
+
+        private static void ReportRecovery(string message)
+        {
+            LastRecoveryNotice = message;
+            try
+            {
+                File.AppendAllText(Path.Combine(UserDataPaths.LogsDirectory, "data-recovery.log"),
+                    DateTime.Now.ToString("O") + " " + message + Environment.NewLine);
+            }
+            catch { }
         }
 
         private static void Save<T>(string path, T value)

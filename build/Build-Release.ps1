@@ -128,8 +128,33 @@ function Invoke-Checked([scriptblock]$Command, [string]$Description) {
 Assert-ChildPath $OutputRoot $distRoot '发布输出目录'
 Assert-ChildPath $artifactRoot (Join-Path $repositoryRoot '.artifacts') '中间目录'
 
+# Capture source identity before any packaging step regenerates tracked payloads.
+$sourceGitCommit = ''
+$sourceGitBranch = ''
+$sourceGitDirty = $false
+if (Test-Path -LiteralPath (Join-Path $repositoryRoot '.git')) {
+    $sourceGitCommit = (& git -C $repositoryRoot rev-parse HEAD 2>$null | Select-Object -First 1)
+    $sourceGitBranch = (& git -C $repositoryRoot branch --show-current 2>$null | Select-Object -First 1)
+    $sourceGitDirty = [bool](& git -C $repositoryRoot status --porcelain 2>$null | Select-Object -First 1)
+}
+
+$productVersionSource = Join-Path $repositoryRoot 'Shared\ProductVersion.cs'
+$productVersionText = Get-Content -LiteralPath $productVersionSource -Raw
+$productVersionMatch = [regex]::Match($productVersionText, 'Semantic\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"')
+if (-not $productVersionMatch.Success) { throw '无法从 Shared\ProductVersion.cs 读取产品版本。' }
+$productVersion = $productVersionMatch.Groups[1].Value
+foreach ($versionedFile in @(
+    'StairDetail\src\WL.Stair.Core\Properties\AssemblyInfo.cs',
+    'StairDetail\src\WL.Stair.Cad2022\Properties\AssemblyInfo.cs',
+    'StairDetail\packaging\PackageContents.2022.xml',
+    'CadArchSpecEditor\Directory.Build.props')) {
+    $versionedText = Get-Content -LiteralPath (Join-Path $repositoryRoot $versionedFile) -Raw
+    if ($versionedText -notmatch [regex]::Escape($productVersion)) {
+        throw "组件版本未与 $productVersion 同步：$versionedFile"
+    }
+}
+
 $installations = @(Find-AutoCadInstallations)
-if ($installations.Count -eq 0) { throw '未找到安装了 .NET API 的 AutoCAD 2021-2026。' }
 
 $available = @{}
 foreach ($installation in $installations) {
@@ -139,11 +164,21 @@ foreach ($installation in $installations) {
     }
 }
 
+# R25 targets .NET 8. Autodesk's official compile-time package allows a full
+# R25 build on an R24-only workstation. AutoCAD still supplies runtime APIs.
+if (-not $available.ContainsKey('R25')) {
+    $available['R25'] = [pscustomobject]@{
+        Year = 2026
+        Path = ''
+        Source = 'AutoCAD.NET 25.0.1'
+    }
+}
+
 if (-not $Bands -or $Bands.Count -eq 0) { $Bands = @($available.Keys | Sort-Object) }
 $Bands = @($Bands | ForEach-Object { $_.Trim().ToUpperInvariant() } | Select-Object -Unique)
 foreach ($band in $Bands) {
     if ($band -notin @('R24','R25')) { throw "不支持的 API 组：$band。当前仅支持 AutoCAD 2021-2026。" }
-    if (-not $available.ContainsKey($band)) { throw "本机没有可用于 $band 的 AutoCAD API。请安装对应 CAD，或使用 build\AutodeskSdk 方案。" }
+    if (-not $available.ContainsKey($band)) { throw "本机没有可用于 $band 的 AutoCAD API。R24 需要安装对应 CAD。" }
 }
 
 if (Test-Path -LiteralPath $OutputRoot) {
@@ -168,17 +203,28 @@ foreach ($band in $Bands) {
     $bandOutput = Join-Path $OutputRoot "CadApi\$band"
     $bandObject = Join-Path $artifactRoot "obj-$band\"
     New-Item -ItemType Directory -Path $bandOutput, $bandObject -Force | Out-Null
-    Write-Host "[$band] AutoCAD $($installation.Year): $($installation.Path)" -ForegroundColor Cyan
+    $apiDescription = if ([string]::IsNullOrWhiteSpace($installation.Path)) { $installation.Source } else { $installation.Path }
+    Write-Host "[$band] AutoCAD $($installation.Year): $apiDescription" -ForegroundColor Cyan
 
     if ($band -eq 'R25') {
         $dotnet = Find-DotNet8
         $project = Join-Path $repositoryRoot 'BatchPdfPublisher\BatchPdfPublisher.Net8.csproj'
-        Invoke-Checked {
-            & $dotnet build $project -c Release --nologo `
-                "-p:AutoCadApiPath=$($installation.Path)" `
-                "-p:OutputPath=$bandOutput\" `
-                "-p:BaseIntermediateOutputPath=$bandObject"
-        } "编译 $band"
+        if ([string]::IsNullOrWhiteSpace($installation.Path)) {
+            Invoke-Checked {
+                & $dotnet build $project -c Release --nologo `
+                    '-p:UseAutoCadNuGet=true' `
+                    "-p:OutputPath=$bandOutput\" `
+                    "-p:BaseIntermediateOutputPath=$bandObject"
+            } "编译 $band"
+        }
+        else {
+            Invoke-Checked {
+                & $dotnet build $project -c Release --nologo `
+                    "-p:AutoCadApiPath=$($installation.Path)" `
+                    "-p:OutputPath=$bandOutput\" `
+                    "-p:BaseIntermediateOutputPath=$bandObject"
+            } "编译 $band"
+        }
     }
     else {
         $project = Join-Path $repositoryRoot 'BatchPdfPublisher\BatchPdfPublisher.csproj'
@@ -198,7 +244,7 @@ foreach ($band in $Bands) {
     $buildRecords += [pscustomobject]@{
         Band = $band
         AutoCadYear = $installation.Year
-        ApiPath = $installation.Path
+        ApiPath = $apiDescription
         PluginSha256 = (Get-FileHash -LiteralPath $plugin -Algorithm SHA256).Hash
     }
 }
@@ -212,6 +258,21 @@ $hatchPatternSource = Join-Path $repositoryRoot 'StairDetail\assets\HatchPattern
 $hatchPatternTarget = Join-Path $OutputRoot '用户配置文件\填充素材'
 New-Item -ItemType Directory -Path $hatchPatternTarget -Force | Out-Null
 Copy-Item -Path (Join-Path $hatchPatternSource '*.pat') -Destination $hatchPatternTarget -Force
+
+# Rebuild the stair payload from the same source revision as the main plug-in.
+if ($Bands -contains 'R24') {
+    & (Join-Path $repositoryRoot 'build\Build-StairDetail-R24.ps1') -Configuration Release -AutoCadApiPath $available['R24'].Path
+}
+if ($Bands -contains 'R25') {
+    $r25DotNet = Find-DotNet8
+    & (Join-Path $repositoryRoot 'build\Build-StairDetail-R25.ps1') -Configuration Release `
+        -AutoCadApiPath $available['R25'].Path -DotNetPath $r25DotNet
+}
+$payloadDotNet = Find-DotNet8
+& (Join-Path $repositoryRoot 'build\Build-CadArchSpecPayload.ps1') -Bands $Bands `
+    -R24ApiPath $(if ($available.ContainsKey('R24')) { $available['R24'].Path } else { '' }) `
+    -R25ApiPath $(if ($available.ContainsKey('R25')) { $available['R25'].Path } else { '' }) `
+    -DotNetPath $payloadDotNet
 
 $launcherProject = Join-Path $repositoryRoot 'BatchPdfPublisherLauncher\BatchPdfPublisherLauncher.csproj'
 $launcherObject = Join-Path $artifactRoot 'obj-launcher\'
@@ -240,20 +301,13 @@ if (Test-Path -LiteralPath (Join-Path $repositoryRoot 'docs\用户版安装说�
 }
 
 # 源码发布目录可不携带 .git（便于用户只保留可编辑源码）。无 Git 时仍必须能完整构建。
-$gitCommit = ''
-$gitBranch = ''
-$gitDirty = $false
-if (Test-Path -LiteralPath (Join-Path $repositoryRoot '.git')) {
-    $gitCommit = (& git -C $repositoryRoot rev-parse HEAD 2>$null | Select-Object -First 1)
-    $gitBranch = (& git -C $repositoryRoot branch --show-current 2>$null | Select-Object -First 1)
-    $gitDirty = [bool](& git -C $repositoryRoot status --porcelain 2>$null | Select-Object -First 1)
-}
 $manifest = [ordered]@{
     Product = '万落建筑工具'
+    ProductVersion = $productVersion
     BuiltAt = (Get-Date).ToString('o')
-    GitCommit = $gitCommit
-    GitBranch = $gitBranch
-    GitDirty = $gitDirty
+    GitCommit = $sourceGitCommit
+    GitBranch = $sourceGitBranch
+    GitDirty = $sourceGitDirty
     LauncherSha256 = (Get-FileHash -LiteralPath $launcher -Algorithm SHA256).Hash
     Bands = $buildRecords
 }

@@ -10,6 +10,7 @@ namespace BatchPdfPublisher.Services
     public sealed class PublishPlanStore
     {
         public static event Action FramesChanged;
+        public static string LastRecoveryNotice { get; private set; }
         private static readonly object FileWriteSync = new object();
         private const string ProjectsFileName = "项目列表.json";
         private const string ActiveProjectFileName = "当前项目.txt";
@@ -22,18 +23,36 @@ namespace BatchPdfPublisher.Services
             {
                 try
                 {
-                    List<ProjectProfile> projects;
-                    using (var stream = File.OpenRead(path))
-                        projects = (List<ProjectProfile>)new DataContractJsonSerializer(typeof(List<ProjectProfile>)).ReadObject(stream);
+                    var projects = ReadProjects(path);
                     var normalizedProjectFolders = projects != null && projects.Any(x => x != null && NeedsProjectFolderNormalization(x.ProjectFolder));
                     Normalize(projects);
                     var projected = ProjectSyncProjectionStore.MergeInto(projects);
                     if (FrameTemplateStore.MakePathsReadable(projects) || normalizedProjectFolders || projected) SaveProjects(projects);
                     return projects;
                 }
-                catch
+                catch (Exception primaryFailure)
                 {
-                    // A malformed project file should not prevent the plugin from opening.
+                    var backup = path + ".bak";
+                    try
+                    {
+                        if (File.Exists(backup))
+                        {
+                            var recovered = ReadProjects(backup);
+                            Quarantine(path);
+                            WriteAtomically(path, stream =>
+                                new DataContractJsonSerializer(typeof(List<ProjectProfile>)).WriteObject(stream, recovered));
+                            ReportRecovery("项目配置已从备份恢复：" + path);
+                            Normalize(recovered);
+                            ProjectSyncProjectionStore.MergeInto(recovered);
+                            return recovered;
+                        }
+                    }
+                    catch (Exception backupFailure)
+                    {
+                        ReportRecovery("项目配置和备份都无法读取：" + primaryFailure.Message + "；" + backupFailure.Message);
+                    }
+                    Quarantine(path);
+                    ReportRecovery("项目配置无法读取，已保留损坏文件并建立临时默认项目：" + primaryFailure.Message);
                 }
             }
 
@@ -199,8 +218,8 @@ namespace BatchPdfPublisher.Services
             File.Copy(path, rollback, true);
             try
             {
+                File.Copy(rollback, backup, true);
                 File.Copy(temporary, path, true);
-                File.Copy(path, backup, true);
             }
             catch
             {
@@ -211,6 +230,35 @@ namespace BatchPdfPublisher.Services
             {
                 try { if (File.Exists(rollback)) File.Delete(rollback); } catch { }
             }
+        }
+
+        private static List<ProjectProfile> ReadProjects(string path)
+        {
+            using (var stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                var projects = (List<ProjectProfile>)new DataContractJsonSerializer(typeof(List<ProjectProfile>)).ReadObject(stream);
+                if (projects == null) throw new InvalidDataException("项目配置内容为空。");
+                return projects;
+            }
+        }
+
+        private static void Quarantine(string path)
+        {
+            if (!File.Exists(path)) return;
+            var target = path + ".corrupt-" + DateTime.Now.ToString("yyyyMMdd-HHmmssfff");
+            try { File.Move(path, target); }
+            catch { try { File.Copy(path, target, false); File.Delete(path); } catch { } }
+        }
+
+        private static void ReportRecovery(string message)
+        {
+            LastRecoveryNotice = message;
+            try
+            {
+                File.AppendAllText(Path.Combine(UserDataPaths.LogsDirectory, "data-recovery.log"),
+                    DateTime.Now.ToString("O") + " " + message + Environment.NewLine);
+            }
+            catch { }
         }
 
         private static void Normalize(List<ProjectProfile> projects)
