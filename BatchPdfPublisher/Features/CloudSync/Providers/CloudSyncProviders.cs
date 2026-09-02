@@ -13,6 +13,7 @@ namespace BatchPdfPublisher.Services
     {
         string Id { get; }
         string DisplayName { get; }
+        string StateIdentity { get; }
         string WorkingFolder { get; }
         bool IsReady { get; }
         string Status { get; }
@@ -39,6 +40,7 @@ namespace BatchPdfPublisher.Services
         public LocalFolderCloudSyncProvider(CloudSyncSettings settings) { _settings = settings; }
         public string Id { get { return "LocalFolder"; } }
         public string DisplayName { get { return "通用云盘同步文件夹"; } }
+        public string StateIdentity { get { return "LocalFolder|" + NormalizeIdentityPath(WorkingFolder); } }
         public string WorkingFolder { get { return string.IsNullOrWhiteSpace(_settings.SyncFolder) ? null : Path.GetFullPath(_settings.SyncFolder); } }
         public bool IsReady { get { return !string.IsNullOrWhiteSpace(WorkingFolder); } }
         public string Status { get { return CloudSyncFolderDetector.Describe(_settings.SyncFolder); } }
@@ -49,6 +51,7 @@ namespace BatchPdfPublisher.Services
         }
         public void Complete(CloudSyncResult result, Action<CloudSyncProgress> progress, CancellationToken cancellationToken) { }
         public void Dispose() { }
+        private static string NormalizeIdentityPath(string value) { return string.IsNullOrWhiteSpace(value) ? string.Empty : Path.GetFullPath(value).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToUpperInvariant(); }
     }
 
     /// <summary>
@@ -63,6 +66,7 @@ namespace BatchPdfPublisher.Services
         public OneOneFiveOpenApiProvider(CloudSyncSettings settings) { _settings = settings; }
         public string Id { get { return "115OpenApi"; } }
         public string DisplayName { get { return "115 官方 OpenAPI"; } }
+        public string StateIdentity { get { return "115OpenApi|" + (_settings.ProviderClientId ?? string.Empty).Trim(); } }
         public string WorkingFolder
         {
             get { return Path.Combine(UserDataPaths.RootDirectory, ".cloud-sync", "provider-cache", "115"); }
@@ -99,6 +103,14 @@ namespace BatchPdfPublisher.Services
 
         public string Id { get { return "BaiduNetdisk"; } }
         public string DisplayName { get { return "百度网盘直连（无需客户端）"; } }
+        public string StateIdentity
+        {
+            get
+            {
+                var identity = _credential == null ? string.Empty : _credential.AccountIdentity;
+                return "BaiduNetdisk|" + (identity ?? string.Empty) + "|" + RemoteRoot.ToUpperInvariant();
+            }
+        }
         public string WorkingFolder { get { return Path.Combine(UserDataPaths.RootDirectory, ".cloud-sync", "provider-cache", "baidu"); } }
         public bool IsReady
         {
@@ -185,6 +197,7 @@ namespace BatchPdfPublisher.Services
         {
             var value = _credential ?? _credentials.Load(Id);
             if (value == null) throw new InvalidOperationException("百度网盘尚未授权。");
+            var identity = EnsureAccountIdentity(value);
             DateTime expires;
             if (string.IsNullOrWhiteSpace(value.AccessToken) || !DateTime.TryParse(value.ExpiresAtUtc, CultureInfo.InvariantCulture,
                 DateTimeStyles.RoundtripKind, out expires) || expires <= DateTime.UtcNow)
@@ -194,9 +207,21 @@ namespace BatchPdfPublisher.Services
                     using (var broker = new BaiduBrokerAuthClient()) value = broker.RefreshAsync(_settings.ProviderBrokerUrl, value.RefreshToken, cancellationToken).GetAwaiter().GetResult();
                 }
                 else value = _client.RefreshAsync(_settings.ProviderClientId, value, cancellationToken).GetAwaiter().GetResult();
+                value.AccountIdentity = identity;
                 _credentials.Save(Id, value);
             }
+            else if (string.IsNullOrWhiteSpace(value.AccountIdentity)) { value.AccountIdentity = identity; _credentials.Save(Id, value); }
             return value;
+        }
+
+        private static string EnsureAccountIdentity(CloudSyncCredential credential)
+        {
+            if (!string.IsNullOrWhiteSpace(credential.AccountIdentity)) return credential.AccountIdentity;
+            using (var sha = SHA256.Create())
+            {
+                var bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(credential.RefreshToken ?? string.Empty));
+                return string.Concat(bytes.Take(12).Select(value => value.ToString("x2")));
+            }
         }
 
         private string RemoteRoot { get { return BaiduNetdiskClient.NormalizeRemotePath(string.IsNullOrWhiteSpace(_settings.ProviderRemoteFolder) ? "/apps/万落建筑工具" : _settings.ProviderRemoteFolder); } }
@@ -253,23 +278,36 @@ namespace BatchPdfPublisher.Services
             {
                 provider.Prepare(progress, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
-                EnsureProviderState(store ?? new CloudSyncSettingsStore(), provider.Id);
-                var result = new LocalFolderSyncEngine(store ?? new CloudSyncSettingsStore())
-                    .Synchronize(settings, CloudSyncCatalog.CreateDefault(settings), provider.WorkingFolder, progress, cancellationToken);
-                cancellationToken.ThrowIfCancellationRequested();
-                provider.Complete(result, progress, cancellationToken);
-                return result;
+                var actualStore = store ?? new CloudSyncSettingsStore();
+                var previousState = actualStore.LoadState();
+                var firstConnection = EnsureProviderState(actualStore, provider.Id, provider.StateIdentity);
+                try
+                {
+                    var result = new LocalFolderSyncEngine(actualStore)
+                        .Synchronize(settings, CloudSyncCatalog.CreateDefault(settings), provider.WorkingFolder, progress, cancellationToken, firstConnection);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    provider.Complete(result, progress, cancellationToken);
+                    return result;
+                }
+                catch
+                {
+                    actualStore.SaveState(previousState);
+                    throw;
+                }
             }
         }
 
-        private static void EnsureProviderState(CloudSyncSettingsStore store, string providerId)
+        private static bool EnsureProviderState(CloudSyncSettingsStore store, string providerId, string providerScope)
         {
             var state = store.LoadState();
-            if (string.Equals(state.ProviderId, providerId, StringComparison.OrdinalIgnoreCase)) return;
-            if (!string.IsNullOrWhiteSpace(state.ProviderId) || !string.Equals(providerId, "LocalFolder", StringComparison.OrdinalIgnoreCase))
-                state.Files.Clear();
+            if (string.Equals(state.ProviderId, providerId, StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(state.ProviderScope) && string.Equals(state.ProviderScope, providerScope, StringComparison.Ordinal)) return false;
+            state.Files.Clear();
+            state.SchemaVersion = 2;
             state.ProviderId = providerId;
+            state.ProviderScope = providerScope;
             store.SaveState(state);
+            return true;
         }
     }
 }

@@ -15,7 +15,7 @@ namespace BatchPdfPublisher.Services
         private static readonly object Sync = new object();
         private static Func<string, bool> _openPathProbe;
         private static string PendingRoot { get { return Path.Combine(UserDataPaths.RootDirectory, ".cloud-sync", "pending"); } }
-        private static string HistoryRoot { get { return Path.Combine(UserDataPaths.RootDirectory, ".cloud-sync", "pending-history"); } }
+        private static string HistoryRoot { get { return CloudBackupService.GetPendingHistoryRoot(); } }
 
         public static void RegisterOpenPathProbe(Func<string, bool> probe)
         {

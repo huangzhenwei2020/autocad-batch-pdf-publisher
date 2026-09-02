@@ -17,6 +17,7 @@ namespace BatchPdfPublisher.Views
         private readonly ListView _history = CreateList("分类", "来源", "文件", "用途", "版本时间");
         private readonly ListView _projects = CreateList("项目名称", "本机状态", "本机目录");
         private readonly TextBox _workspaceRoot = new TextBox { Dock = DockStyle.Fill };
+        private readonly CheckBox _showArchived = new CheckBox { Text = "显示已归档项目", AutoSize = true, Margin = new Padding(12, 7, 3, 3) };
 
         public CloudSyncCenterForm()
         {
@@ -34,7 +35,8 @@ namespace BatchPdfPublisher.Views
             var footer = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 48, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(8) };
             var close = ButtonFor("关闭"); close.Click += delegate { Close(); };
             var refresh = ButtonFor("刷新"); refresh.Click += delegate { ReloadData(); };
-            footer.Controls.Add(close); footer.Controls.Add(refresh);
+            var backups = ButtonFor("打开备份文件夹"); backups.Click += OpenBackupFolder;
+            footer.Controls.Add(close); footer.Controls.Add(refresh); footer.Controls.Add(backups);
             Controls.Add(tabs); Controls.Add(_summary); Controls.Add(footer);
             Shown += delegate { ReloadData(); };
         }
@@ -94,7 +96,10 @@ namespace BatchPdfPublisher.Views
             var all = ButtonFor("全选"); all.Click += delegate { SetAllProjects(true); };
             var none = ButtonFor("全不选"); none.Click += delegate { SetAllProjects(false); };
             var consolidate = ButtonFor("一键统一目录"); consolidate.Click += ConsolidateProjects;
-            bar.Controls.Add(save); bar.Controls.Add(all); bar.Controls.Add(none); bar.Controls.Add(consolidate);
+            var archive = ButtonFor("归档云端项目"); archive.Click += delegate { SetSelectedProjectArchived(true); };
+            var restore = ButtonFor("恢复归档项目"); restore.Click += delegate { SetSelectedProjectArchived(false); };
+            _showArchived.CheckedChanged += delegate { ReloadProjects(); };
+            bar.Controls.Add(save); bar.Controls.Add(all); bar.Controls.Add(none); bar.Controls.Add(consolidate); bar.Controls.Add(archive); bar.Controls.Add(restore); bar.Controls.Add(_showArchived);
             page.Controls.Add(bar);
             return page;
         }
@@ -141,30 +146,34 @@ namespace BatchPdfPublisher.Views
             var root = CloudProjectWorkspaceService.GetWorkspaceRoot(settings);
             _workspaceRoot.Text = root;
             var local = new PublishPlanStore().LoadProjects();
-            var cloud = ProjectSyncProjectionStore.DiscoverCloudProjects();
+            var cloud = ProjectSyncProjectionStore.DiscoverCloudProjects(_showArchived.Checked);
             var mappings = settings.ProjectMappings ?? new System.Collections.Generic.List<CloudSyncProjectMapping>();
             var rows = local.Select(project => new ProjectSelectionRow
             {
                 Name = project.Name,
                 CloudId = ProjectSyncProjectionStore.StableProjectId(project.Name),
                 Folder = project.ProjectFolder,
-                IsLocal = true
+                IsLocal = true,
+                IsArchived = ProjectSyncProjectionStore.IsCloudProjectArchived(ProjectSyncProjectionStore.StableProjectId(project.Name))
             }).Concat(cloud.Where(remote => !local.Any(project => string.Equals(project.Name, remote.ProjectName, StringComparison.OrdinalIgnoreCase)))
                 .Select(remote => new ProjectSelectionRow
                 {
                     Name = remote.ProjectName,
                     CloudId = remote.CloudId,
                     Folder = CloudProjectWorkspaceService.ProjectFolderFor(settings, remote.ProjectName),
-                    IsLocal = false
+                    IsLocal = false,
+                    IsArchived = remote.IsArchived
                 })).OrderBy(row => row.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
             _projects.BeginUpdate(); _projects.Items.Clear();
             foreach (var row in rows)
             {
                 var mapping = mappings.FirstOrDefault(candidate => candidate != null && string.Equals(candidate.CloudId, row.CloudId, StringComparison.OrdinalIgnoreCase));
                 var unified = CloudProjectWorkspaceService.IsUnderWorkspace(row.Folder, root);
-                var status = row.IsLocal ? (unified ? "本机已有" : "目录待统一") : "云端可下载";
+                var status = row.IsArchived ? (row.IsLocal ? "本机已有 · 云端已归档" : "云端已归档")
+                    : row.IsLocal ? (unified ? "本机已有" : "目录待统一") : "云端可下载";
                 var item = new ListViewItem(new[] { row.Name, status, row.Folder }) { Tag = row, Checked = mapping != null && mapping.Enabled };
-                if (!unified) item.ForeColor = Color.DarkOrange;
+                if (row.IsArchived) { item.ForeColor = Color.DimGray; item.Checked = false; }
+                else if (!unified) item.ForeColor = Color.DarkOrange;
                 _projects.Items.Add(item);
             }
             _projects.EndUpdate();
@@ -182,6 +191,7 @@ namespace BatchPdfPublisher.Views
                 {
                     var row = item.Tag as ProjectSelectionRow;
                     if (row == null) continue;
+                    if (row.IsArchived && item.Checked) throw new InvalidOperationException("项目“" + row.Name + "”已归档，请先恢复后再同步。");
                     var folder = row.IsLocal ? row.Folder : CloudProjectWorkspaceService.ProjectFolderFor(settings, row.Name);
                     if (item.Checked && !CloudProjectWorkspaceService.IsUnderWorkspace(folder, settings.ProjectWorkspaceRoot))
                         throw new InvalidOperationException("项目“" + row.Name + "”不在统一工作总目录中，请先点击“一键统一目录”。");
@@ -205,7 +215,10 @@ namespace BatchPdfPublisher.Views
                 var settingsStore = new CloudSyncSettingsStore();
                 var settings = settingsStore.LoadSettings();
                 settings.ProjectWorkspaceRoot = Path.GetFullPath(_workspaceRoot.Text.Trim());
-                if (MessageBox.Show(this, "把目录外的项目复制到统一工作总目录？\r\n原目录不会删除，成功后将自动选中全部本机项目。",
+                var projects = new PublishPlanStore().LoadProjects();
+                var preview = CloudProjectWorkspaceService.AnalyzeConsolidation(projects, settings);
+                if (MessageBox.Show(this, "准备归拢 " + preview.ProjectCount + " 个项目，共约 " + preview.RequiredText + "。\r\n"
+                    + "目标磁盘可用 " + preview.AvailableText + "。\r\n\r\n原目录不会删除，成功后将自动选中全部本机项目。",
                     Text, MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
                 Cursor = Cursors.WaitCursor;
                 var result = CloudProjectWorkspaceService.ConsolidateAll(new PublishPlanStore(), settings);
@@ -227,9 +240,47 @@ namespace BatchPdfPublisher.Views
                 if (dialog.ShowDialog(this) == DialogResult.OK) _workspaceRoot.Text = dialog.SelectedPath;
         }
 
+        private void OpenBackupFolder(object sender, EventArgs e)
+        {
+            try
+            {
+                var settings = new CloudSyncSettingsStore().LoadSettings();
+                var path = CloudBackupService.GetBackupRoot(settings);
+                Directory.CreateDirectory(path);
+                Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+            }
+            catch (Exception exception) { ShowError(exception); }
+        }
+
         private void SetAllProjects(bool value)
         {
-            foreach (ListViewItem item in _projects.Items) item.Checked = value;
+            foreach (ListViewItem item in _projects.Items)
+            {
+                var row = item.Tag as ProjectSelectionRow;
+                item.Checked = value && (row == null || !row.IsArchived);
+            }
+        }
+
+        private void SetSelectedProjectArchived(bool archived)
+        {
+            if (_projects.SelectedItems.Count == 0) { MessageBox.Show(this, "请先选择一个项目。", Text); return; }
+            var row = _projects.SelectedItems[0].Tag as ProjectSelectionRow;
+            if (row == null || row.IsArchived == archived) return;
+            var action = archived ? "归档" : "恢复";
+            var explanation = archived
+                ? "归档后该项目不会出现在新电脑的默认下载列表中，云端文件和本机文件都不会删除。"
+                : "恢复后项目会重新出现在云端项目列表中，但不会自动下载，需要重新勾选。";
+            if (MessageBox.Show(this, "确定" + action + "项目“" + row.Name + "”？\r\n\r\n" + explanation,
+                Text, MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            try
+            {
+                ProjectSyncProjectionStore.SetCloudProjectArchived(row.CloudId, archived);
+                var store = new CloudSyncSettingsStore(); var settings = store.LoadSettings();
+                foreach (var mapping in settings.ProjectMappings ?? new System.Collections.Generic.List<CloudSyncProjectMapping>())
+                    if (mapping != null && string.Equals(mapping.CloudId, row.CloudId, StringComparison.OrdinalIgnoreCase)) mapping.Enabled = false;
+                store.SaveSettings(settings); CloudSyncCoordinator.QueueReload(settings.Enabled); ReloadData();
+            }
+            catch (Exception exception) { ShowError(exception); }
         }
 
         private void ApplyPending(object sender, EventArgs e)
@@ -301,6 +352,7 @@ namespace BatchPdfPublisher.Views
             public string CloudId { get; set; }
             public string Folder { get; set; }
             public bool IsLocal { get; set; }
+            public bool IsArchived { get; set; }
         }
 
         private static TabPage Page(string text) { return new TabPage(text) { Padding = new Padding(8) }; }

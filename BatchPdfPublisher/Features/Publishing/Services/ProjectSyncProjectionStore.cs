@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
 using System.Security.Cryptography;
 using System.Text;
@@ -42,12 +43,13 @@ namespace BatchPdfPublisher.Services
             if (projects == null || !Directory.Exists(ProjectionDirectory)) return false;
             var changed = false;
             var settings = new CloudSyncSettingsStore().LoadSettings();
+            var archived = new HashSet<string>(LoadArchivedProjectIds(), StringComparer.OrdinalIgnoreCase);
             var selected = new HashSet<string>((settings.ProjectMappings ?? new List<CloudSyncProjectMapping>())
                 .Where(item => item != null && item.Enabled && !string.IsNullOrWhiteSpace(item.CloudId))
                 .Select(item => item.CloudId), StringComparer.OrdinalIgnoreCase);
             lock (FileSync)
             {
-                foreach (var path in Directory.EnumerateFiles(ProjectionDirectory, "项目.json", SearchOption.AllDirectories))
+                foreach (var path in ProjectProjectionFiles())
                 {
                     ProjectProfile remote;
                     try { remote = Deserialize(File.ReadAllBytes(path)); }
@@ -56,6 +58,7 @@ namespace BatchPdfPublisher.Services
                     var existing = projects.FirstOrDefault(item => item != null &&
                         string.Equals(item.Name, remote.Name, StringComparison.OrdinalIgnoreCase));
                     var cloudId = Path.GetFileName(Path.GetDirectoryName(path));
+                    if (archived.Contains(cloudId)) continue;
                     if (existing == null && !selected.Contains(cloudId)) continue;
                     if (existing != null && BytesEqual(Serialize(CreatePortable(existing)), Serialize(remote))) continue;
                     var localFolder = existing == null || string.IsNullOrWhiteSpace(existing.ProjectFolder)
@@ -80,6 +83,7 @@ namespace BatchPdfPublisher.Services
                 .GroupBy(item => item.ProjectName, StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(group => group.Key, group => group.Last(), StringComparer.OrdinalIgnoreCase);
             var result = new List<CloudSyncProjectMapping>();
+            var archived = new HashSet<string>(LoadArchivedProjectIds(), StringComparer.OrdinalIgnoreCase);
             foreach (var project in (projects ?? Enumerable.Empty<ProjectProfile>())
                 .Where(item => item != null && !string.IsNullOrWhiteSpace(item.Name)))
             {
@@ -90,7 +94,7 @@ namespace BatchPdfPublisher.Services
                     ProjectName = project.Name,
                     CloudId = StableProjectId(project.Name),
                     LocalFolder = string.IsNullOrWhiteSpace(project.ProjectFolder) ? DefaultProjectFolder(project.Name) : project.ProjectFolder,
-                    Enabled = existing != null && existing.Enabled
+                    Enabled = existing != null && existing.Enabled && !archived.Contains(StableProjectId(project.Name))
                 });
             }
             foreach (var existing in old.Values.Where(item => item != null &&
@@ -99,20 +103,24 @@ namespace BatchPdfPublisher.Services
             return result;
         }
 
-        public static IList<CloudProjectInfo> DiscoverCloudProjects()
+        public static IList<CloudProjectInfo> DiscoverCloudProjects(bool includeArchived = false)
         {
             var result = new List<CloudProjectInfo>();
             if (!Directory.Exists(ProjectionDirectory)) return result;
-            foreach (var path in Directory.EnumerateFiles(ProjectionDirectory, "项目.json", SearchOption.AllDirectories))
+            var archived = new HashSet<string>(LoadArchivedProjectIds(), StringComparer.OrdinalIgnoreCase);
+            foreach (var path in ProjectProjectionFiles())
             {
                 try
                 {
                     var project = Deserialize(File.ReadAllBytes(path));
                     if (project == null || string.IsNullOrWhiteSpace(project.Name)) continue;
+                    var cloudId = Path.GetFileName(Path.GetDirectoryName(path));
+                    if (!includeArchived && archived.Contains(cloudId)) continue;
                     result.Add(new CloudProjectInfo
                     {
                         ProjectName = project.Name,
-                        CloudId = Path.GetFileName(Path.GetDirectoryName(path))
+                        CloudId = cloudId,
+                        IsArchived = archived.Contains(cloudId)
                     });
                 }
                 catch { }
@@ -230,6 +238,53 @@ namespace BatchPdfPublisher.Services
                 var hash = sha.ComputeHash(Encoding.UTF8.GetBytes((name ?? string.Empty).Trim().ToUpperInvariant()));
                 return safe + "-" + string.Concat(hash.Take(5).Select(value => value.ToString("x2")));
             }
+        }
+
+        private static IEnumerable<string> ProjectProjectionFiles()
+        {
+            return Directory.EnumerateFiles(ProjectionDirectory, "*", SearchOption.AllDirectories)
+                .Where(path => string.Equals(Path.GetFileName(path), "项目.json", StringComparison.OrdinalIgnoreCase));
+        }
+
+        public static void SetCloudProjectArchived(string cloudId, bool archived)
+        {
+            if (string.IsNullOrWhiteSpace(cloudId)) return;
+            lock (FileSync)
+            {
+                var values = new HashSet<string>(LoadArchivedProjectIds(), StringComparer.OrdinalIgnoreCase);
+                if (archived) values.Add(cloudId.Trim()); else values.Remove(cloudId.Trim());
+                WriteArchiveList(values.OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToList());
+            }
+        }
+
+        public static bool IsCloudProjectArchived(string cloudId)
+        {
+            return !string.IsNullOrWhiteSpace(cloudId) && LoadArchivedProjectIds().Contains(cloudId, StringComparer.OrdinalIgnoreCase);
+        }
+
+        private static string ArchiveListPath { get { return Path.Combine(ProjectionDirectory, "归档项目.json"); } }
+
+        private static List<string> LoadArchivedProjectIds()
+        {
+            try
+            {
+                if (!File.Exists(ArchiveListPath)) return new List<string>();
+                using (var stream = File.OpenRead(ArchiveListPath))
+                    return (List<string>)new DataContractJsonSerializer(typeof(List<string>)).ReadObject(stream) ?? new List<string>();
+            }
+            catch { return new List<string>(); }
+        }
+
+        private static void WriteArchiveList(List<string> values)
+        {
+            Directory.CreateDirectory(ProjectionDirectory);
+            var temporary = ArchiveListPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                using (var stream = File.Create(temporary)) new DataContractJsonSerializer(typeof(List<string>)).WriteObject(stream, values);
+                if (File.Exists(ArchiveListPath)) File.Copy(temporary, ArchiveListPath, true); else File.Move(temporary, ArchiveListPath);
+            }
+            finally { try { if (File.Exists(temporary)) File.Delete(temporary); } catch { } }
         }
 
         private static string DefaultProjectFolder(string name)

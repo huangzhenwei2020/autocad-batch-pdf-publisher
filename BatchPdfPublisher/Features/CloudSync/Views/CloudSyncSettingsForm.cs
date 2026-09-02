@@ -21,6 +21,7 @@ namespace BatchPdfPublisher.Views
         private readonly TextBox _remoteFolder = new TextBox { Dock = DockStyle.Fill };
         private readonly TextBox _device = new TextBox { Dock = DockStyle.Fill };
         private readonly TextBox _workspaceRoot = new TextBox { Dock = DockStyle.Fill };
+        private readonly TextBox _backupRoot = new TextBox { Dock = DockStyle.Fill };
         private readonly CheckBox _general = new CheckBox { Text = "通用设置", AutoSize = true };
         private readonly CheckBox _projects = new CheckBox { Text = "项目配置", AutoSize = true };
         private readonly CheckBox _templates = new CheckBox { Text = "图框与方案库", AutoSize = true };
@@ -113,6 +114,11 @@ namespace BatchPdfPublisher.Views
             var browseWorkspace = ButtonFor("选择…"); browseWorkspace.Click += BrowseWorkspace; workspaceActions.Controls.Add(browseWorkspace);
             var consolidate = ButtonFor("一键统一目录"); consolidate.Click += ConsolidateProjects; workspaceActions.Controls.Add(consolidate);
             settingsPanel.Controls.Add(workspaceActions, 2, 9);
+            settingsPanel.Controls.Add(LabelFor("备份保存位置"), 0, 10); settingsPanel.Controls.Add(_backupRoot, 1, 10);
+            var backupActions = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
+            var browseBackup = ButtonFor("选择…"); browseBackup.Click += BrowseBackupRoot; backupActions.Controls.Add(browseBackup);
+            var openBackup = ButtonFor("打开备份"); openBackup.Click += OpenBackupFolder; backupActions.Controls.Add(openBackup);
+            settingsPanel.Controls.Add(backupActions, 2, 10);
             root.Controls.Add(settingsPanel);
 
             var scope = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = true };
@@ -179,6 +185,7 @@ namespace BatchPdfPublisher.Views
             _remoteFolder.Text = string.IsNullOrWhiteSpace(_settings.ProviderRemoteFolder) ? "/apps/万落建筑工具" : _settings.ProviderRemoteFolder;
             _device.Text = string.IsNullOrWhiteSpace(_settings.DeviceName) ? Environment.MachineName : _settings.DeviceName;
             _workspaceRoot.Text = CloudProjectWorkspaceService.GetWorkspaceRoot(_settings);
+            _backupRoot.Text = CloudBackupService.GetBackupRoot(_settings);
             _general.Checked = _settings.SyncGeneralSettings;
             _projects.Checked = _settings.SyncProjectConfigurations;
             _templates.Checked = _settings.SyncTemplatesAndSchemes;
@@ -240,6 +247,12 @@ namespace BatchPdfPublisher.Views
             catch (Exception exception)
             {
                 MessageBox.Show(this, "统一工作总目录无效：" + exception.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
+            try { _settings.BackupRoot = Path.GetFullPath(_backupRoot.Text.Trim()); }
+            catch (Exception exception)
+            {
+                MessageBox.Show(this, "备份保存位置无效：" + exception.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return false;
             }
             _settings.SyncGeneralSettings = _general.Checked;
@@ -437,11 +450,14 @@ namespace BatchPdfPublisher.Views
             try
             {
                 var root = Path.GetFullPath(_workspaceRoot.Text.Trim());
+                _settings.ProjectWorkspaceRoot = root;
+                var projects = new PublishPlanStore().LoadProjects();
+                var preview = CloudProjectWorkspaceService.AnalyzeConsolidation(projects, _settings);
                 if (MessageBox.Show(this,
-                    "将把目录外的项目完整复制到：\r\n" + root +
+                    "将把 " + preview.ProjectCount + " 个目录外项目完整复制到：\r\n" + root +
+                    "\r\n项目共约 " + preview.RequiredText + "，目标磁盘可用 " + preview.AvailableText + "。" +
                     "\r\n\r\n原目录不会删除；复制成功后 BPP 改用新目录，并选中这些项目进行云同步。是否继续？",
                     "一键统一项目目录", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-                _settings.ProjectWorkspaceRoot = root;
                 Cursor = Cursors.WaitCursor;
                 var result = CloudProjectWorkspaceService.ConsolidateAll(new PublishPlanStore(), _settings);
                 _settings.SyncProjectFiles = true;
@@ -456,6 +472,24 @@ namespace BatchPdfPublisher.Views
             }
             catch (Exception exception) { ShowError(exception); }
             finally { Cursor = Cursors.Default; }
+        }
+
+        private void OpenBackupFolder(object sender, EventArgs e)
+        {
+            try
+            {
+                var candidate = new CloudSyncSettings { BackupRoot = _backupRoot.Text.Trim() };
+                var path = CloudBackupService.GetBackupRoot(candidate);
+                Directory.CreateDirectory(path);
+                Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+            }
+            catch (Exception exception) { ShowError(exception); }
+        }
+
+        private void BrowseBackupRoot(object sender, EventArgs e)
+        {
+            using (var dialog = new FolderBrowserDialog { Description = "选择万落建筑工具的备份保存位置" })
+                if (dialog.ShowDialog(this) == DialogResult.OK) _backupRoot.Text = dialog.SelectedPath;
         }
 
         private void DetectFolders(object sender, EventArgs e)

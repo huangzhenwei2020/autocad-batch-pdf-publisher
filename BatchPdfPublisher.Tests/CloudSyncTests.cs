@@ -25,6 +25,8 @@ internal static class CloudSyncTests
         Run("RejectsOverlappingRoots", RejectsOverlappingRoots);
         Run("DefersOpenDrawingUntilClosed", DefersOpenDrawingUntilClosed);
         Run("MapsProjectFileOnlyOnce", MapsProjectFileOnlyOnce);
+        Run("ExcludesMachineSpecificProjectList", ExcludesMachineSpecificProjectList);
+        Run("IncludesNormalProjectAttachments", IncludesNormalProjectAttachments);
         Run("IgnoresUnselectedRemoteProject", IgnoresUnselectedRemoteProject);
         Run("BaiduCachesOnlySelectedProjects", BaiduCachesOnlySelectedProjects);
         Run("DefersRemoteDeletionUntilDrawingCloses", DefersRemoteDeletionUntilDrawingCloses);
@@ -35,6 +37,7 @@ internal static class CloudSyncTests
         Run("EmptyLocalFolderMigratesToBaidu", EmptyLocalFolderMigratesToBaidu);
         Run("ProtectsProviderCredentialsWithDpapi", ProtectsProviderCredentialsWithDpapi);
         Run("RunsLocalProviderWorkflow", RunsLocalProviderWorkflow);
+        Run("ChangingProviderScopeCannotDeleteLocalFiles", ChangingProviderScopeCannotDeleteLocalFiles);
         Run("IdentifiesCommonCloudFolders", IdentifiesCommonCloudFolders);
         Run("MigratesNutstoreInternalRoot", MigratesNutstoreInternalRoot);
         Run("ReportsSynchronizationProgress", ReportsSynchronizationProgress);
@@ -243,6 +246,46 @@ internal static class CloudSyncTests
         finally { Directory.Delete(root, true); }
     }
 
+    private static void ExcludesMachineSpecificProjectList()
+    {
+        var root = NewRoot();
+        try
+        {
+            UserDataPaths.TestRootDirectory = root;
+            Directory.CreateDirectory(UserDataPaths.ProjectsDirectory);
+            File.WriteAllText(Path.Combine(UserDataPaths.ProjectsDirectory, "项目列表.json"), "[{\"ProjectFolder\":\"D:\\\\old-pc\"}]");
+            File.WriteAllText(Path.Combine(UserDataPaths.ProjectsDirectory, "当前项目.txt"), "旧电脑项目");
+            var projection = Path.Combine(UserDataPaths.ProjectsDirectory, "同步项目", "sample", "项目.json");
+            Directory.CreateDirectory(Path.GetDirectoryName(projection)); File.WriteAllText(projection, "{}");
+            var settings = new CloudSyncSettings { SyncGeneralSettings = false, SyncProjectConfigurations = true, SyncTemplatesAndSchemes = false };
+            var files = CloudSyncCatalog.CreateDefault(settings).EnumerateFiles().ToList();
+            Equal(1, files.Count);
+            Equal("项目配置/同步项目/sample/项目.json", files[0].LogicalPath);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    private static void IncludesNormalProjectAttachments()
+    {
+        var root = NewRoot();
+        try
+        {
+            UserDataPaths.TestRootDirectory = root;
+            var project = Path.Combine(root, "project"); Directory.CreateDirectory(project);
+            foreach (var name in new[] { "plan.dwg", "site.jpg", "notes.txt", "plot.ctb", "reference.pdf" }) File.WriteAllText(Path.Combine(project, name), name);
+            File.WriteAllText(Path.Combine(project, "ignored.bak"), "temporary");
+            var settings = new CloudSyncSettings
+            {
+                SyncGeneralSettings = false, SyncProjectConfigurations = false, SyncTemplatesAndSchemes = false, SyncProjectFiles = true,
+                ProjectMappings = new List<CloudSyncProjectMapping> { new CloudSyncProjectMapping { CloudId = "sample", LocalFolder = project, Enabled = true } }
+            };
+            var names = CloudSyncCatalog.CreateDefault(settings).EnumerateFiles().Select(file => Path.GetFileName(file.LocalPath)).ToList();
+            True(new[] { "plan.dwg", "site.jpg", "notes.txt", "plot.ctb", "reference.pdf" }.All(names.Contains), "normal project attachments were excluded");
+            True(!names.Contains("ignored.bak"), "temporary backup file was included");
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
     private static void BaiduCachesOnlySelectedProjects()
     {
         var settings = new CloudSyncSettings
@@ -293,7 +336,7 @@ internal static class CloudSyncTests
             var history = center.Load().History.First(item => item.LogicalPath.EndsWith("settings.json", StringComparison.OrdinalIgnoreCase));
             center.RestoreHistory(history);
             Equal("base", File.ReadAllText(localFile));
-            True(Directory.GetFiles(Path.Combine(root, ".cloud-sync", "center-backups"), "*", SearchOption.AllDirectories).Any(), "restore backup missing");
+            True(Directory.GetFiles(Path.Combine(root, "backups", "手动操作前备份"), "*", SearchOption.AllDirectories).Any(), "restore backup missing");
         });
     }
 
@@ -377,7 +420,8 @@ internal static class CloudSyncTests
             var settings = new CloudSyncSettings
             {
                 Enabled = true, Provider = "LocalFolder", SyncFolder = shared,
-                SyncGeneralSettings = true, SyncProjectConfigurations = false, SyncTemplatesAndSchemes = false
+                SyncGeneralSettings = true, SyncProjectConfigurations = false, SyncTemplatesAndSchemes = false,
+                BackupRoot = Path.Combine(root, "backups")
             };
             var store = new CloudSyncSettingsStore(); store.SaveSettings(settings);
             Equal(1, CloudSyncWorkflow.Synchronize(settings, store).Uploaded);
@@ -393,6 +437,30 @@ internal static class CloudSyncTests
         Equal("坚果云", CloudSyncFolderDetector.IdentifyProvider(@"D:\坚果云\万落同步"));
         Equal("Syncthing", CloudSyncFolderDetector.IdentifyProvider(@"E:\Syncthing\WanLuo"));
         Equal("通用同步文件夹", CloudSyncFolderDetector.IdentifyProvider(@"F:\Shared\WanLuo"));
+    }
+
+    private static void ChangingProviderScopeCannotDeleteLocalFiles()
+    {
+        var root = NewRoot();
+        try
+        {
+            UserDataPaths.TestRootDirectory = root;
+            Directory.CreateDirectory(UserDataPaths.SettingsDirectory);
+            var firstCloud = Path.Combine(root, "cloud-a"); var secondCloud = Path.Combine(root, "cloud-b");
+            Directory.CreateDirectory(firstCloud); Directory.CreateDirectory(secondCloud);
+            var local = Path.Combine(UserDataPaths.SettingsDirectory, "scope-test.json"); File.WriteAllText(local, "keep-me");
+            var settings = new CloudSyncSettings { Enabled = true, Provider = "LocalFolder", SyncFolder = firstCloud, SyncGeneralSettings = true,
+                SyncProjectConfigurations = false, SyncTemplatesAndSchemes = false, InitialSyncPreference = "Remote", DeviceName = "TEST-PC",
+                BackupRoot = Path.Combine(root, "backups") };
+            var store = new CloudSyncSettingsStore(); store.SaveSettings(settings);
+            CloudSyncWorkflow.Synchronize(settings, store);
+            settings.SyncFolder = secondCloud; store.SaveSettings(settings);
+            CloudSyncWorkflow.Synchronize(settings, store);
+            Equal("keep-me", File.ReadAllText(local));
+            True(File.Exists(Path.Combine(secondCloud, "万落建筑云同步", "通用配置", "scope-test.json")), "local file was not safely initialized in the new cloud scope");
+            True(Directory.GetDirectories(Path.Combine(root, "backups", "首次连接备份")).Length >= 1, "first connection snapshot missing");
+        }
+        finally { Directory.Delete(root, true); }
     }
 
     private static void MigratesNutstoreInternalRoot()
@@ -604,7 +672,8 @@ internal static class CloudSyncTests
             var settings = new CloudSyncSettings
             {
                 Enabled = true, Provider = "LocalFolder", SyncFolder = shared, DeviceName = "TEST-PC",
-                SyncGeneralSettings = true, SyncProjectConfigurations = false, SyncTemplatesAndSchemes = false
+                SyncGeneralSettings = true, SyncProjectConfigurations = false, SyncTemplatesAndSchemes = false,
+                BackupRoot = Path.Combine(root, "backups")
             };
             var store = new CloudSyncSettingsStore(); store.SaveSettings(settings);
             var engine = new LocalFolderSyncEngine(store);

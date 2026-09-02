@@ -119,7 +119,8 @@ namespace BatchPdfPublisher.Services
             var sources = new List<CloudSyncSource>();
             var projectMappings = settings.SyncProjectFiles && settings.ProjectMappings != null
                 ? settings.ProjectMappings.Where(item => item != null && item.Enabled &&
-                    !string.IsNullOrWhiteSpace(item.CloudId) && !string.IsNullOrWhiteSpace(item.LocalFolder)).ToList()
+                    !string.IsNullOrWhiteSpace(item.CloudId) && !string.IsNullOrWhiteSpace(item.LocalFolder) &&
+                    !ProjectSyncProjectionStore.IsCloudProjectArchived(item.CloudId)).ToList()
                 : new List<CloudSyncProjectMapping>();
             var mappedProjectPrefixes = projectMappings.Select(item => RelativePrefix(item.LocalFolder, UserDataPaths.ProjectsDirectory))
                 .Where(prefix => !string.IsNullOrWhiteSpace(prefix)).ToList();
@@ -127,7 +128,7 @@ namespace BatchPdfPublisher.Services
                 sources.Add(new CloudSyncSource("通用配置", UserDataPaths.SettingsDirectory, IncludeGeneralSetting));
             if (settings.SyncProjectConfigurations)
                 sources.Add(new CloudSyncSource("项目配置", UserDataPaths.ProjectsDirectory,
-                    relative => IncludeProjectFile(relative, false) && !IsUnderAnyPrefix(relative, mappedProjectPrefixes)));
+                    relative => IncludePortableProjectConfiguration(relative) && !IsUnderAnyPrefix(relative, mappedProjectPrefixes)));
             if (settings.SyncProjectFiles)
             {
                 foreach (var mapping in projectMappings)
@@ -160,28 +161,18 @@ namespace BatchPdfPublisher.Services
             return IncludeNormalFile(relative);
         }
 
-        private static bool IncludeProjectFile(string relative, bool includeDrawingFiles)
+        private static bool IncludePortableProjectConfiguration(string relative)
         {
             if (!IncludeNormalFile(relative)) return false;
-            var extension = Path.GetExtension(relative);
-            if (extension.Equals(".pdf", StringComparison.OrdinalIgnoreCase)) return false;
-            if (extension.Equals(".dwg", StringComparison.OrdinalIgnoreCase) ||
-                extension.Equals(".dxf", StringComparison.OrdinalIgnoreCase)) return includeDrawingFiles;
-            return true;
+            var normalized = CloudSyncSource.NormalizeLogicalPath(relative);
+            if (normalized.Equals("同步项目/归档项目.json", StringComparison.OrdinalIgnoreCase)) return true;
+            return normalized.StartsWith("同步项目/", StringComparison.OrdinalIgnoreCase) &&
+                   Path.GetFileName(normalized).Equals("项目.json", StringComparison.OrdinalIgnoreCase);
         }
 
         private static bool IncludeExternalProjectFile(string relative)
         {
-            if (!IncludeNormalFile(relative)) return false;
-            var extension = Path.GetExtension(relative);
-            return extension.Equals(".dwg", StringComparison.OrdinalIgnoreCase) ||
-                   extension.Equals(".dxf", StringComparison.OrdinalIgnoreCase) ||
-                   extension.Equals(".json", StringComparison.OrdinalIgnoreCase) ||
-                   extension.Equals(".xml", StringComparison.OrdinalIgnoreCase) ||
-                   extension.Equals(".xlsx", StringComparison.OrdinalIgnoreCase) ||
-                   extension.Equals(".xls", StringComparison.OrdinalIgnoreCase) ||
-                   extension.Equals(".docx", StringComparison.OrdinalIgnoreCase) ||
-                   extension.Equals(".doc", StringComparison.OrdinalIgnoreCase);
+            return IncludeNormalFile(relative);
         }
 
         private static bool IncludeNormalFile(string relative)

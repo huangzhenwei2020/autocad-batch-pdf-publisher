@@ -12,7 +12,7 @@ internal static class ProjectSyncProjectionTests
         try { Execute(); }
         catch (Exception exception)
         {
-            Console.Error.WriteLine("FAIL " + exception.GetType().FullName + ": " + exception.Message);
+            Console.Error.WriteLine("FAIL " + exception);
             Environment.ExitCode = 1;
         }
     }
@@ -68,8 +68,18 @@ internal static class ProjectSyncProjectionTests
             Assert(restored.ProjectFolder.StartsWith(CloudProjectWorkspaceService.GetWorkspaceRoot(), StringComparison.OrdinalIgnoreCase), "second device mapping was not in workspace root");
             Assert(restored.CadFiles.Single().EndsWith(Path.Combine("CAD", "plan.dwg"), StringComparison.OrdinalIgnoreCase), "relative DWG was not restored");
             Assert(!restored.CadFiles.Any(path => path.Contains("unrelated.dwg")), "external machine path should not cross devices");
+            var cloudId = Path.GetFileName(Path.GetDirectoryName(projection));
+            ProjectSyncProjectionStore.SetCloudProjectArchived(cloudId, true);
+            Assert(ProjectSyncProjectionStore.DiscoverCloudProjects().Count == 0, "archived project remained in the normal cloud list");
+            Assert(ProjectSyncProjectionStore.DiscoverCloudProjects(true).Single().IsArchived, "archived project was not available for recovery");
+            Assert(!ProjectSyncProjectionStore.BuildMappings(imported, new[] { new CloudSyncProjectMapping { ProjectName = project.Name, CloudId = cloudId, Enabled = true } })
+                .Single(mapping => mapping.ProjectName == project.Name).Enabled,
+                "archived project remained enabled for file synchronization");
+            ProjectSyncProjectionStore.SetCloudProjectArchived(cloudId, false);
+            Assert(ProjectSyncProjectionStore.DiscoverCloudProjects().Count == 1, "restored project did not return to the cloud list");
             Console.WriteLine("PASS PortableProjectProjection");
             Console.WriteLine("PASS ImportsOnlySelectedCloudProject");
+            Console.WriteLine("PASS ArchivesCloudProjectsWithoutDeletingFiles");
         }
         finally { try { Directory.Delete(root, true); } catch { } }
     }

@@ -22,6 +22,7 @@ namespace BatchPdfPublisher.Services
             KeepVersionsPerFile = 20;
             ProjectMappings = new List<CloudSyncProjectMapping>();
             ProjectWorkspaceRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "万落建筑项目");
+            BackupRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "万落建筑备份");
         }
 
         [DataMember] public bool Enabled { get; set; }
@@ -42,6 +43,7 @@ namespace BatchPdfPublisher.Services
         [DataMember] public int KeepVersionsPerFile { get; set; }
         [DataMember] public List<CloudSyncProjectMapping> ProjectMappings { get; set; }
         [DataMember] public string ProjectWorkspaceRoot { get; set; }
+        [DataMember] public string BackupRoot { get; set; }
     }
 
     [DataContract]
@@ -63,6 +65,7 @@ namespace BatchPdfPublisher.Services
         [DataMember] public string RefreshToken { get; set; }
         [DataMember] public string ExpiresAtUtc { get; set; }
         [DataMember] public string AccountDisplayName { get; set; }
+        [DataMember] public string AccountIdentity { get; set; }
     }
 
     [DataContract]
@@ -80,12 +83,13 @@ namespace BatchPdfPublisher.Services
     {
         public CloudSyncState()
         {
-            SchemaVersion = 1;
+            SchemaVersion = 2;
             Files = new List<CloudSyncFileState>();
         }
 
         [DataMember] public int SchemaVersion { get; set; }
         [DataMember] public string ProviderId { get; set; }
+        [DataMember] public string ProviderScope { get; set; }
         [DataMember] public List<CloudSyncFileState> Files { get; set; }
     }
 

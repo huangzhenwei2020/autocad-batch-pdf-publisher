@@ -15,7 +15,7 @@ namespace BatchPdfPublisher.Services
         private readonly string _localHistoryRoot;
 
         public LocalFolderSyncEngine(CloudSyncSettingsStore store)
-            : this(store, Path.Combine(UserDataPaths.RootDirectory, ".cloud-sync", "history"))
+            : this(store, CloudBackupService.GetHistoryRoot())
         {
         }
 
@@ -44,6 +44,12 @@ namespace BatchPdfPublisher.Services
         public CloudSyncResult Synchronize(CloudSyncSettings settings, CloudSyncCatalog catalog, string workingFolder,
             Action<CloudSyncProgress> progress, CancellationToken cancellationToken)
         {
+            return Synchronize(settings, catalog, workingFolder, progress, cancellationToken, false);
+        }
+
+        internal CloudSyncResult Synchronize(CloudSyncSettings settings, CloudSyncCatalog catalog, string workingFolder,
+            Action<CloudSyncProgress> progress, CancellationToken cancellationToken, bool createInitialSnapshot)
+        {
             if (settings == null) throw new ArgumentNullException("settings");
             if (catalog == null) throw new ArgumentNullException("catalog");
             if (!settings.Enabled) throw new InvalidOperationException("云同步尚未启用。");
@@ -62,7 +68,7 @@ namespace BatchPdfPublisher.Services
                         catch (AbandonedMutexException) { acquired = true; }
                         if (!acquired) throw new IOException("另一份 AutoCAD 正在执行同步，请稍后重试。");
                         cancellationToken.ThrowIfCancellationRequested();
-                        return SynchronizeLocked(settings, catalog, workingFolder, progress, cancellationToken);
+                        return SynchronizeLocked(settings, catalog, workingFolder, progress, cancellationToken, createInitialSnapshot);
                     }
                     finally { if (acquired) crossProcess.ReleaseMutex(); }
                 }
@@ -71,13 +77,14 @@ namespace BatchPdfPublisher.Services
         }
 
         private CloudSyncResult SynchronizeLocked(CloudSyncSettings settings, CloudSyncCatalog catalog, string workingFolder,
-            Action<CloudSyncProgress> progress, CancellationToken cancellationToken)
+            Action<CloudSyncProgress> progress, CancellationToken cancellationToken, bool createInitialSnapshot)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Report(progress, "正在应用待处理文件", null, 0, 0);
             CloudSyncPendingFileService.ApplyAvailable(catalog, cancellationToken);
             var mirrorRoot = Path.GetFullPath(Path.Combine(workingFolder, "万落建筑云同步"));
             ValidateRoots(mirrorRoot, catalog.Roots);
+            CloudBackupService.ValidateLocation(settings, catalog.Roots, mirrorRoot);
             Directory.CreateDirectory(mirrorRoot);
 
             Report(progress, "正在读取同步基线", null, 0, 0);
@@ -95,6 +102,8 @@ namespace BatchPdfPublisher.Services
                 localFiles[file.LogicalPath] = file.LocalPath;
                 if (++scanned % 100 == 0) Report(progress, "正在扫描本机文件", file.LogicalPath, scanned, 0);
             }
+            if (createInitialSnapshot)
+                CloudBackupService.CreateFirstConnectionSnapshot(settings, localFiles, progress, cancellationToken);
             Report(progress, "正在扫描云盘同步目录", null, 0, 0);
             var remoteFiles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             scanned = 0;
@@ -150,6 +159,8 @@ namespace BatchPdfPublisher.Services
             _store.SaveState(state);
             Report(progress, "正在整理历史版本", null, orderedPaths.Count, orderedPaths.Count);
             CleanupHistory(_localHistoryRoot, settings, cancellationToken);
+            CleanupHistory(CloudBackupService.GetPendingHistoryRoot(settings), settings, cancellationToken);
+            CleanupHistory(CloudBackupService.GetManualHistoryRoot(settings), settings, cancellationToken);
             CleanupHistory(Path.Combine(mirrorRoot, "历史版本"), settings, cancellationToken);
             Report(progress, "同步完成", null, orderedPaths.Count, orderedPaths.Count);
             return result;

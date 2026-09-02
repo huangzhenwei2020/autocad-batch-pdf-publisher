@@ -53,6 +53,18 @@ internal static class PublishPlanStoreTests
             Assert(File.Exists(moved.CadFiles.Single()), "drawing was not copied to consolidated project");
             Assert(File.Exists(drawing), "source drawing should be retained after consolidation");
             Console.WriteLine("PASS ConsolidatesProjectsWithoutDeletingSource");
+
+            var nestedRejected = false;
+            try
+            {
+                CloudProjectWorkspaceService.ConsolidateAll(store, new CloudSyncSettings
+                {
+                    ProjectWorkspaceRoot = Path.Combine(moved.ProjectFolder, "错误的内部总目录"), SyncProjectFiles = true
+                });
+            }
+            catch (InvalidOperationException) { nestedRejected = true; }
+            Assert(nestedRejected, "workspace nested inside a source project was accepted");
+            Console.WriteLine("PASS RejectsWorkspaceInsideProjectFolder");
         }
         finally { try { Directory.Delete(root, true); } catch { } }
     }

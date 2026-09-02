@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using BatchPdfPublisher.Models;
 
 namespace BatchPdfPublisher.Services
@@ -10,6 +11,7 @@ namespace BatchPdfPublisher.Services
     {
         public string ProjectName { get; set; }
         public string CloudId { get; set; }
+        public bool IsArchived { get; set; }
     }
 
     public sealed class ProjectConsolidationResult
@@ -22,6 +24,15 @@ namespace BatchPdfPublisher.Services
 
         public IList<string> MovedProjects { get; private set; }
         public IList<string> Errors { get; private set; }
+    }
+
+    public sealed class ProjectConsolidationPreview
+    {
+        public int ProjectCount { get; set; }
+        public long RequiredBytes { get; set; }
+        public long AvailableBytes { get; set; }
+        public string RequiredText { get { return CloudProjectWorkspaceService.FormatBytes(RequiredBytes); } }
+        public string AvailableText { get { return CloudProjectWorkspaceService.FormatBytes(AvailableBytes); } }
     }
 
     public static class CloudProjectWorkspaceService
@@ -85,13 +96,15 @@ namespace BatchPdfPublisher.Services
             var root = GetWorkspaceRoot(settings);
             Directory.CreateDirectory(root);
             var projects = store.LoadProjects();
+            AnalyzeConsolidation(projects, settings);
             var result = new ProjectConsolidationResult();
             foreach (var project in projects.Where(item => item != null && !IsUnderWorkspace(item.ProjectFolder, root)))
             {
+                string target = null;
                 try
                 {
                     var source = Path.GetFullPath(project.ProjectFolder);
-                    var target = UniqueTarget(root, SafeName(project.Name));
+                    target = UniqueTarget(root, SafeName(project.Name));
                     if (Directory.Exists(source)) CopyDirectory(source, target);
                     else Directory.CreateDirectory(target);
                     RemapProject(project, source, target);
@@ -99,6 +112,8 @@ namespace BatchPdfPublisher.Services
                 }
                 catch (Exception exception)
                 {
+                    if (!string.IsNullOrWhiteSpace(target) && IsUnderWorkspace(target, root))
+                        try { if (Directory.Exists(target)) Directory.Delete(target, true); } catch { }
                     result.Errors.Add(project.Name + "：" + exception.Message);
                 }
             }
@@ -113,16 +128,80 @@ namespace BatchPdfPublisher.Services
         {
             Directory.CreateDirectory(target);
             var prefix = source.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-            foreach (var directory in Directory.GetDirectories(source, "*", SearchOption.AllDirectories))
-                Directory.CreateDirectory(Path.Combine(target, directory.Substring(prefix.Length)));
-            foreach (var file in Directory.GetFiles(source, "*", SearchOption.AllDirectories))
+            var pending = new Stack<string>(); pending.Push(source);
+            while (pending.Count > 0)
             {
-                var destination = Path.Combine(target, file.Substring(prefix.Length));
-                Directory.CreateDirectory(Path.GetDirectoryName(destination));
-                File.Copy(file, destination, false);
-                if (new FileInfo(file).Length != new FileInfo(destination).Length)
-                    throw new IOException("复制后文件大小不一致：" + Path.GetFileName(file));
+                var directory = pending.Pop();
+                foreach (var child in Directory.GetDirectories(directory, "*", SearchOption.TopDirectoryOnly))
+                {
+                    RejectReparsePoint(child); Directory.CreateDirectory(Path.Combine(target, child.Substring(prefix.Length))); pending.Push(child);
+                }
+                foreach (var file in Directory.GetFiles(directory, "*", SearchOption.TopDirectoryOnly))
+                {
+                    RejectReparsePoint(file);
+                    var destination = Path.Combine(target, file.Substring(prefix.Length));
+                    Directory.CreateDirectory(Path.GetDirectoryName(destination)); File.Copy(file, destination, false);
+                    if (!string.Equals(Hash(file), Hash(destination), StringComparison.OrdinalIgnoreCase))
+                        throw new IOException("复制后文件校验失败：" + Path.GetFileName(file));
+                }
             }
+        }
+
+        public static ProjectConsolidationPreview AnalyzeConsolidation(IEnumerable<ProjectProfile> projects, CloudSyncSettings settings)
+        {
+            var root = GetWorkspaceRoot(settings);
+            long required = 0;
+            var outside = (projects ?? Enumerable.Empty<ProjectProfile>()).Where(item => item != null && !IsUnderWorkspace(item.ProjectFolder, root)).ToList();
+            foreach (var project in outside)
+            {
+                var source = Path.GetFullPath(project.ProjectFolder);
+                if (!Directory.Exists(source)) continue;
+                if (PathsEqual(root, source) || IsUnderWorkspace(root, source))
+                    throw new InvalidOperationException("统一工作总目录不能放在项目“" + project.Name + "”的文件夹内部。");
+                required += DirectorySizeWithoutLinks(source);
+            }
+            var drive = new DriveInfo(Path.GetPathRoot(root));
+            var reserve = Math.Max(200L * 1024 * 1024, required / 20);
+            if (drive.AvailableFreeSpace < required + reserve)
+                throw new IOException("统一目录空间不足，需要约 " + FormatBytes(required + reserve) + "，当前可用 " + FormatBytes(drive.AvailableFreeSpace) + "。");
+            return new ProjectConsolidationPreview { ProjectCount = outside.Count, RequiredBytes = required, AvailableBytes = drive.AvailableFreeSpace };
+        }
+
+        private static long DirectorySizeWithoutLinks(string root)
+        {
+            long total = 0; var pending = new Stack<string>(); pending.Push(root);
+            while (pending.Count > 0)
+            {
+                var directory = pending.Pop();
+                foreach (var child in Directory.GetDirectories(directory, "*", SearchOption.TopDirectoryOnly)) { RejectReparsePoint(child); pending.Push(child); }
+                foreach (var file in Directory.GetFiles(directory, "*", SearchOption.TopDirectoryOnly)) { RejectReparsePoint(file); total += new FileInfo(file).Length; }
+            }
+            return total;
+        }
+
+        private static void RejectReparsePoint(string path)
+        {
+            if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+                throw new IOException("项目中包含链接目录或链接文件，请先改为普通文件夹：" + path);
+        }
+
+        private static string Hash(string path)
+        {
+            using (var stream = File.OpenRead(path)) using (var sha = SHA256.Create())
+                return string.Concat(sha.ComputeHash(stream).Select(value => value.ToString("x2")));
+        }
+
+        private static bool PathsEqual(string left, string right)
+        {
+            return string.Equals(Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), StringComparison.OrdinalIgnoreCase);
+        }
+
+        internal static string FormatBytes(long bytes)
+        {
+            if (bytes >= 1024L * 1024 * 1024) return (bytes / (1024d * 1024 * 1024)).ToString("0.##") + " GB";
+            if (bytes >= 1024L * 1024) return (bytes / (1024d * 1024)).ToString("0.##") + " MB";
+            return (bytes / 1024d).ToString("0.##") + " KB";
         }
 
         private static void RemapProject(ProjectProfile project, string source, string target)

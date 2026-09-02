@@ -55,7 +55,7 @@ namespace BatchPdfPublisher.Services
             using (var provider = CloudSyncProviderFactory.Create(_settings))
                 _mirrorRoot = provider.IsReady ? Path.GetFullPath(Path.Combine(provider.WorkingFolder, "万落建筑云同步")) : null;
             _pendingRoot = Path.Combine(UserDataPaths.RootDirectory, ".cloud-sync", "pending");
-            _localHistoryRoot = Path.Combine(UserDataPaths.RootDirectory, ".cloud-sync", "history");
+            _localHistoryRoot = CloudBackupService.GetHistoryRoot(_settings);
         }
 
         public CloudSyncCenterSnapshot Load()
@@ -64,6 +64,13 @@ namespace BatchPdfPublisher.Services
             LoadPending(snapshot.Pending);
             LoadConflicts(snapshot.Conflicts);
             LoadHistory(snapshot.History, _localHistoryRoot, "本机历史");
+            LoadHistory(snapshot.History, CloudBackupService.GetPendingHistoryRoot(_settings), "待应用前备份");
+            foreach (var category in new[] { "冲突解决前-本机", "冲突解决前-共享", "历史恢复前" })
+                LoadHistory(snapshot.History, Path.Combine(CloudBackupService.GetManualHistoryRoot(_settings), category), category);
+            LoadHistory(snapshot.History, Path.Combine(UserDataPaths.RootDirectory, ".cloud-sync", "history"), "旧版本机历史");
+            LoadHistory(snapshot.History, Path.Combine(UserDataPaths.RootDirectory, ".cloud-sync", "pending-history"), "旧版待应用备份");
+            foreach (var category in new[] { "冲突解决前-本机", "冲突解决前-共享", "历史恢复前" })
+                LoadHistory(snapshot.History, Path.Combine(UserDataPaths.RootDirectory, ".cloud-sync", "center-backups", category), "旧版" + category);
             if (!string.IsNullOrWhiteSpace(_mirrorRoot)) LoadHistory(snapshot.History, Path.Combine(_mirrorRoot, "历史版本"), "共享历史");
             var recent = snapshot.History.OrderByDescending(item => item.ModifiedAt).Take(1000).ToList();
             snapshot.History.Clear();
@@ -213,7 +220,7 @@ namespace BatchPdfPublisher.Services
         {
             switch (CategoryFor(logicalPath))
             {
-                case "项目文件": return "项目中的 DWG、表格和文档；仅同步已选择的项目";
+                case "项目文件": return "项目中的图纸及配套资料；仅同步已选择的项目";
                 case "项目资料": return "用于识别项目、图框登记和发布参数，不等于整套 DWG";
                 case "软件设置": return "文字、标注、界面及常用制图设置";
                 case "图框模板": return "登记过的图框和排版范围";
@@ -251,11 +258,7 @@ namespace BatchPdfPublisher.Services
 
         private void BackupBeforeAction(string path, string logicalPath, string category)
         {
-            if (!File.Exists(path)) return;
-            var directory = Path.Combine(UserDataPaths.RootDirectory, ".cloud-sync", "center-backups", category,
-                logicalPath.Replace('/', Path.DirectorySeparatorChar));
-            Directory.CreateDirectory(directory);
-            File.Copy(path, Path.Combine(directory, DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff") + Path.GetExtension(path)), false);
+            CloudBackupService.BackupFile(path, logicalPath, Path.Combine("手动操作前备份", category), _settings);
         }
 
         private static void CopyAtomically(string source, string target, string expectedHash)

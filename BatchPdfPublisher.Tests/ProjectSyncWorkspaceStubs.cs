@@ -7,6 +7,7 @@ namespace BatchPdfPublisher.Services
     {
         public string ProjectName { get; set; }
         public string CloudId { get; set; }
+        public bool IsArchived { get; set; }
     }
 
     public static class CloudProjectWorkspaceService
