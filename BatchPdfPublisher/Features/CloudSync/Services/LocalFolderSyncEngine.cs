@@ -101,12 +101,18 @@ namespace BatchPdfPublisher.Services
             foreach (var file in EnumerateRemoteFiles(mirrorRoot))
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                string mappedPath;
+                if (!catalog.TryResolve(file.LogicalPath, out mappedPath)) continue;
                 remoteFiles[file.LogicalPath] = file.LocalPath;
                 if (++scanned % 100 == 0) Report(progress, "正在扫描云盘同步目录", file.LogicalPath, scanned, 0);
             }
-            var paths = new HashSet<string>(stateByPath.Keys, StringComparer.OrdinalIgnoreCase);
-            paths.UnionWith(localFiles.Keys);
+            var paths = new HashSet<string>(localFiles.Keys, StringComparer.OrdinalIgnoreCase);
             paths.UnionWith(remoteFiles.Keys);
+            foreach (var logicalPath in stateByPath.Keys)
+            {
+                string mappedPath;
+                if (catalog.TryResolve(logicalPath, out mappedPath)) paths.Add(logicalPath);
+            }
 
             var result = new CloudSyncResult();
             var orderedPaths = paths.OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToList();

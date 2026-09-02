@@ -49,12 +49,27 @@ internal static class ProjectSyncProjectionTests
             var secondProjection = Path.Combine(ProjectSyncProjectionStore.ProjectionDirectory, Path.GetFileName(Path.GetDirectoryName(projection)), "项目.json");
             Directory.CreateDirectory(Path.GetDirectoryName(secondProjection)); File.Copy(projection, secondProjection);
             var imported = new List<ProjectProfile>();
+            Assert(!ProjectSyncProjectionStore.MergeInto(imported), "unselected cloud project should not be imported");
+            new CloudSyncSettingsStore().SaveSettings(new CloudSyncSettings
+            {
+                ProjectMappings = new List<CloudSyncProjectMapping>
+                {
+                    new CloudSyncProjectMapping
+                    {
+                        ProjectName = project.Name,
+                        CloudId = Path.GetFileName(Path.GetDirectoryName(projection)),
+                        LocalFolder = CloudProjectWorkspaceService.ProjectFolderFor(null, project.Name),
+                        Enabled = true
+                    }
+                }
+            });
             Assert(ProjectSyncProjectionStore.MergeInto(imported), "projection was not imported");
             var restored = imported.Single();
-            Assert(restored.ProjectFolder.StartsWith(UserDataPaths.ProjectsDirectory, StringComparison.OrdinalIgnoreCase), "second device mapping was not local");
+            Assert(restored.ProjectFolder.StartsWith(CloudProjectWorkspaceService.GetWorkspaceRoot(), StringComparison.OrdinalIgnoreCase), "second device mapping was not in workspace root");
             Assert(restored.CadFiles.Single().EndsWith(Path.Combine("CAD", "plan.dwg"), StringComparison.OrdinalIgnoreCase), "relative DWG was not restored");
             Assert(!restored.CadFiles.Any(path => path.Contains("unrelated.dwg")), "external machine path should not cross devices");
             Console.WriteLine("PASS PortableProjectProjection");
+            Console.WriteLine("PASS ImportsOnlySelectedCloudProject");
         }
         finally { try { Directory.Delete(root, true); } catch { } }
     }

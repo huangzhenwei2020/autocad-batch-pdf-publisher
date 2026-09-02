@@ -25,6 +25,8 @@ internal static class CloudSyncTests
         Run("RejectsOverlappingRoots", RejectsOverlappingRoots);
         Run("DefersOpenDrawingUntilClosed", DefersOpenDrawingUntilClosed);
         Run("MapsProjectFileOnlyOnce", MapsProjectFileOnlyOnce);
+        Run("IgnoresUnselectedRemoteProject", IgnoresUnselectedRemoteProject);
+        Run("BaiduCachesOnlySelectedProjects", BaiduCachesOnlySelectedProjects);
         Run("DefersRemoteDeletionUntilDrawingCloses", DefersRemoteDeletionUntilDrawingCloses);
         Run("RestoresHistoryWithBackup", RestoresHistoryWithBackup);
         Run("ResolvesConflictUsingLocalCopy", ResolvesConflictUsingLocalCopy);
@@ -211,6 +213,54 @@ internal static class CloudSyncTests
             True(files.Any(item => item.LogicalPath == "项目文件/sample/plan.dwg"), "drawing should use project mapping");
         }
         finally { Directory.Delete(root, true); }
+    }
+
+    private static void IgnoresUnselectedRemoteProject()
+    {
+        var root = NewRoot();
+        try
+        {
+            UserDataPaths.TestRootDirectory = root;
+            var local = Path.Combine(root, "selected-project");
+            var shared = Path.Combine(root, "shared");
+            Directory.CreateDirectory(local);
+            var mirror = Path.Combine(shared, "万落建筑云同步", "项目文件");
+            Directory.CreateDirectory(Path.Combine(mirror, "selected"));
+            Directory.CreateDirectory(Path.Combine(mirror, "unselected"));
+            File.WriteAllText(Path.Combine(mirror, "selected", "selected.dwg"), "selected");
+            var untouched = Path.Combine(mirror, "unselected", "unselected.dwg");
+            File.WriteAllText(untouched, "unselected");
+            var settings = new CloudSyncSettings { Enabled = true, SyncFolder = shared, InitialSyncPreference = "Remote" };
+            var store = new CloudSyncSettingsStore(Path.Combine(root, "settings.json"), Path.Combine(root, "state.json"));
+            var engine = new LocalFolderSyncEngine(store, Path.Combine(root, "history"));
+            var catalog = new CloudSyncCatalog(new[] { new CloudSyncSource("项目文件/selected", local, null) });
+            var result = engine.Synchronize(settings, catalog, shared);
+            Equal(1, result.Downloaded);
+            Equal(0, result.Errors);
+            True(File.Exists(Path.Combine(local, "selected.dwg")), "selected project was not downloaded");
+            True(File.Exists(untouched), "unselected remote project was changed");
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    private static void BaiduCachesOnlySelectedProjects()
+    {
+        var settings = new CloudSyncSettings
+        {
+            SyncProjectFiles = true,
+            ProjectMappings = new List<CloudSyncProjectMapping>
+            {
+                new CloudSyncProjectMapping { CloudId = "selected", Enabled = true },
+                new CloudSyncProjectMapping { CloudId = "not-selected", Enabled = false }
+            }
+        };
+        using (var provider = new BaiduNetdiskProvider(settings))
+        {
+            True(provider.ShouldTransferRelativePath("万落建筑云同步/项目配置/project.json"), "project catalog should always download");
+            True(provider.ShouldTransferRelativePath("万落建筑云同步/项目文件/selected/plan.dwg"), "selected project should download");
+            True(!provider.ShouldTransferRelativePath("万落建筑云同步/项目文件/not-selected/plan.dwg"), "unselected project entered provider cache");
+            True(!provider.ShouldTransferRelativePath("万落建筑云同步/项目文件/unknown/plan.dwg"), "unknown project entered provider cache");
+        }
     }
 
     private static void DefersRemoteDeletionUntilDrawingCloses()

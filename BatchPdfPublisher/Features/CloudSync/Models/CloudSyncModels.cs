@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Runtime.Serialization;
 
 namespace BatchPdfPublisher.Services
@@ -20,6 +21,7 @@ namespace BatchPdfPublisher.Services
             HistoryRetentionDays = 30;
             KeepVersionsPerFile = 20;
             ProjectMappings = new List<CloudSyncProjectMapping>();
+            ProjectWorkspaceRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "万落建筑项目");
         }
 
         [DataMember] public bool Enabled { get; set; }
@@ -39,6 +41,7 @@ namespace BatchPdfPublisher.Services
         [DataMember] public int HistoryRetentionDays { get; set; }
         [DataMember] public int KeepVersionsPerFile { get; set; }
         [DataMember] public List<CloudSyncProjectMapping> ProjectMappings { get; set; }
+        [DataMember] public string ProjectWorkspaceRoot { get; set; }
     }
 
     [DataContract]

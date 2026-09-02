@@ -9,6 +9,7 @@
   <ItemGroup>
     <Compile Include="ProjectSyncProjectionTests.cs" />
     <Compile Include="UserDataPathsStub.cs" />
+    <Compile Include="ProjectSyncWorkspaceStubs.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Models\CloudSyncModels.cs" Link="CloudSyncModels.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncSettingsStore.cs" Link="CloudSyncSettingsStore.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncFolderDetector.cs" Link="CloudSyncFolderDetector.cs" />

@@ -20,10 +20,11 @@ namespace BatchPdfPublisher.Views
         private readonly TextBox _redirectUri = new TextBox { Dock = DockStyle.Fill };
         private readonly TextBox _remoteFolder = new TextBox { Dock = DockStyle.Fill };
         private readonly TextBox _device = new TextBox { Dock = DockStyle.Fill };
+        private readonly TextBox _workspaceRoot = new TextBox { Dock = DockStyle.Fill };
         private readonly CheckBox _general = new CheckBox { Text = "通用设置", AutoSize = true };
         private readonly CheckBox _projects = new CheckBox { Text = "项目配置", AutoSize = true };
         private readonly CheckBox _templates = new CheckBox { Text = "图框与方案库", AutoSize = true };
-        private readonly CheckBox _drawings = new CheckBox { Text = "项目文件与 DWG（仅登记的工程目录）", AutoSize = true };
+        private readonly CheckBox _drawings = new CheckBox { Text = "已选项目的 DWG 与资料（在同步中心选择）", AutoSize = true };
         private readonly CheckBox _auto = new CheckBox { Text = "保存或检测到变化后自动同步", AutoSize = true };
         private readonly ComboBox _initialPreference = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 230 };
         private readonly NumericUpDown _days = new NumericUpDown { Minimum = 1, Maximum = 3650, Value = 30, Width = 90 };
@@ -36,7 +37,7 @@ namespace BatchPdfPublisher.Views
         private readonly Button _acquireKey;
         private readonly Button _connectBaidu;
         private readonly Button _openFolder;
-        private readonly Label _folderLabel = new Label { Text = "云盘同步文件夹", AutoSize = true, Margin = new Padding(3, 7, 8, 3) };
+        private readonly Label _folderLabel = new Label { Text = "云盘镜像目录", AutoSize = true, Margin = new Padding(3, 7, 8, 3) };
         private readonly FlowLayoutPanel _folderActions = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
         private readonly Label _clientIdLabel = new Label { Text = "App Key / Client ID", AutoSize = true, Margin = new Padding(3, 7, 8, 3) };
         private readonly Label _unifiedLoginHint = new Label { Text = "万落统一应用授权，无需填写 App Key", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(3, 7, 8, 3), Visible = false };
@@ -107,6 +108,11 @@ namespace BatchPdfPublisher.Views
             settingsPanel.Controls.Add(LabelFor("本机设备名称"), 0, 7); settingsPanel.Controls.Add(_device, 1, 7);
             _openFolder = ButtonFor("打开本机数据"); _openFolder.Click += OpenFolder; settingsPanel.Controls.Add(_openFolder, 2, 7);
             settingsPanel.Controls.Add(LabelFor("首次连接时"), 0, 8); settingsPanel.Controls.Add(_initialPreference, 1, 8);
+            settingsPanel.Controls.Add(LabelFor("统一工作总目录"), 0, 9); settingsPanel.Controls.Add(_workspaceRoot, 1, 9);
+            var workspaceActions = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
+            var browseWorkspace = ButtonFor("选择…"); browseWorkspace.Click += BrowseWorkspace; workspaceActions.Controls.Add(browseWorkspace);
+            var consolidate = ButtonFor("一键统一目录"); consolidate.Click += ConsolidateProjects; workspaceActions.Controls.Add(consolidate);
+            settingsPanel.Controls.Add(workspaceActions, 2, 9);
             root.Controls.Add(settingsPanel);
 
             var scope = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = true };
@@ -172,6 +178,7 @@ namespace BatchPdfPublisher.Views
             _redirectUri.Text = string.IsNullOrWhiteSpace(_settings.ProviderRedirectUri) ? BaiduNetdiskClient.DefaultRedirectUri : _settings.ProviderRedirectUri;
             _remoteFolder.Text = string.IsNullOrWhiteSpace(_settings.ProviderRemoteFolder) ? "/apps/万落建筑工具" : _settings.ProviderRemoteFolder;
             _device.Text = string.IsNullOrWhiteSpace(_settings.DeviceName) ? Environment.MachineName : _settings.DeviceName;
+            _workspaceRoot.Text = CloudProjectWorkspaceService.GetWorkspaceRoot(_settings);
             _general.Checked = _settings.SyncGeneralSettings;
             _projects.Checked = _settings.SyncProjectConfigurations;
             _templates.Checked = _settings.SyncTemplatesAndSchemes;
@@ -229,12 +236,24 @@ namespace BatchPdfPublisher.Views
             _settings.ProviderBrokerUrl = WanluoCloudBrokerConfiguration.Resolve(_settings);
             _settings.ProviderRemoteFolder = _remoteFolder.Text.Trim();
             _settings.DeviceName = string.IsNullOrWhiteSpace(_device.Text) ? Environment.MachineName : _device.Text.Trim();
+            try { _settings.ProjectWorkspaceRoot = Path.GetFullPath(_workspaceRoot.Text.Trim()); }
+            catch (Exception exception)
+            {
+                MessageBox.Show(this, "统一工作总目录无效：" + exception.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
             _settings.SyncGeneralSettings = _general.Checked;
             _settings.SyncProjectConfigurations = _projects.Checked;
             _settings.SyncTemplatesAndSchemes = _templates.Checked;
             _settings.SyncProjectFiles = _drawings.Checked;
             _settings.ProjectMappings = ProjectSyncProjectionStore.BuildMappings(
                 new PublishPlanStore().LoadProjects(), _settings.ProjectMappings);
+            try { CloudProjectWorkspaceService.ValidateForProjectSync(_settings, new PublishPlanStore().LoadProjects()); }
+            catch (InvalidOperationException exception)
+            {
+                MessageBox.Show(this, exception.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
             _settings.AutoSync = _auto.Checked;
             _settings.InitialSyncPreference = _initialPreference.SelectedIndex == 1 ? "Local" : _initialPreference.SelectedIndex == 2 ? "Conflict" : "Remote";
             _settings.HistoryRetentionDays = (int)_days.Value;
@@ -405,6 +424,38 @@ namespace BatchPdfPublisher.Views
         {
             using (var dialog = new FolderBrowserDialog { Description = "选择云盘客户端或同步工具维护的本地文件夹" })
                 if (dialog.ShowDialog(this) == DialogResult.OK) _folder.Text = dialog.SelectedPath;
+        }
+
+        private void BrowseWorkspace(object sender, EventArgs e)
+        {
+            using (var dialog = new FolderBrowserDialog { Description = "选择所有 BPP 项目统一存放的工作总目录" })
+                if (dialog.ShowDialog(this) == DialogResult.OK) _workspaceRoot.Text = dialog.SelectedPath;
+        }
+
+        private void ConsolidateProjects(object sender, EventArgs e)
+        {
+            try
+            {
+                var root = Path.GetFullPath(_workspaceRoot.Text.Trim());
+                if (MessageBox.Show(this,
+                    "将把目录外的项目完整复制到：\r\n" + root +
+                    "\r\n\r\n原目录不会删除；复制成功后 BPP 改用新目录，并选中这些项目进行云同步。是否继续？",
+                    "一键统一项目目录", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+                _settings.ProjectWorkspaceRoot = root;
+                Cursor = Cursors.WaitCursor;
+                var result = CloudProjectWorkspaceService.ConsolidateAll(new PublishPlanStore(), _settings);
+                _settings.SyncProjectFiles = true;
+                new CloudSyncSettingsStore().SaveSettings(_settings);
+                _drawings.Checked = true;
+                CloudSyncCoordinator.QueueReload(_settings.Enabled);
+                var message = "已归拢 " + result.MovedProjects.Count + " 个项目。原目录均已保留。";
+                if (result.Errors.Count > 0) message += "\r\n\r\n以下项目未处理：\r\n" + string.Join("\r\n", result.Errors);
+                MessageBox.Show(this, message, "统一目录完成", MessageBoxButtons.OK,
+                    result.Errors.Count == 0 ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+                _status.Text = message.Replace("\r\n", " ");
+            }
+            catch (Exception exception) { ShowError(exception); }
+            finally { Cursor = Cursors.Default; }
         }
 
         private void DetectFolders(object sender, EventArgs e)

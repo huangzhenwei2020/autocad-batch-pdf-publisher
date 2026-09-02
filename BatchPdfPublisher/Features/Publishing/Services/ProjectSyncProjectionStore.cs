@@ -41,6 +41,10 @@ namespace BatchPdfPublisher.Services
         {
             if (projects == null || !Directory.Exists(ProjectionDirectory)) return false;
             var changed = false;
+            var settings = new CloudSyncSettingsStore().LoadSettings();
+            var selected = new HashSet<string>((settings.ProjectMappings ?? new List<CloudSyncProjectMapping>())
+                .Where(item => item != null && item.Enabled && !string.IsNullOrWhiteSpace(item.CloudId))
+                .Select(item => item.CloudId), StringComparer.OrdinalIgnoreCase);
             lock (FileSync)
             {
                 foreach (var path in Directory.EnumerateFiles(ProjectionDirectory, "项目.json", SearchOption.AllDirectories))
@@ -51,9 +55,11 @@ namespace BatchPdfPublisher.Services
                     if (remote == null || string.IsNullOrWhiteSpace(remote.Name)) continue;
                     var existing = projects.FirstOrDefault(item => item != null &&
                         string.Equals(item.Name, remote.Name, StringComparison.OrdinalIgnoreCase));
+                    var cloudId = Path.GetFileName(Path.GetDirectoryName(path));
+                    if (existing == null && !selected.Contains(cloudId)) continue;
                     if (existing != null && BytesEqual(Serialize(CreatePortable(existing)), Serialize(remote))) continue;
                     var localFolder = existing == null || string.IsNullOrWhiteSpace(existing.ProjectFolder)
-                        ? DefaultProjectFolder(remote.Name) : existing.ProjectFolder;
+                        ? CloudProjectWorkspaceService.ProjectFolderFor(settings, remote.Name) : existing.ProjectFolder;
                     var localOutput = existing == null ? null : existing.OutputDirectory;
                     var localExternalCad = existing == null ? new List<string>() : ExternalPaths(existing.CadFiles, localFolder);
                     var localExternalSelected = existing == null ? new List<string>() : ExternalPaths(existing.SelectedCadFiles, localFolder);
@@ -84,10 +90,35 @@ namespace BatchPdfPublisher.Services
                     ProjectName = project.Name,
                     CloudId = StableProjectId(project.Name),
                     LocalFolder = string.IsNullOrWhiteSpace(project.ProjectFolder) ? DefaultProjectFolder(project.Name) : project.ProjectFolder,
-                    Enabled = existing == null || existing.Enabled
+                    Enabled = existing != null && existing.Enabled
                 });
             }
+            foreach (var existing in old.Values.Where(item => item != null &&
+                !result.Any(current => string.Equals(current.CloudId, item.CloudId, StringComparison.OrdinalIgnoreCase))))
+                result.Add(existing);
             return result;
+        }
+
+        public static IList<CloudProjectInfo> DiscoverCloudProjects()
+        {
+            var result = new List<CloudProjectInfo>();
+            if (!Directory.Exists(ProjectionDirectory)) return result;
+            foreach (var path in Directory.EnumerateFiles(ProjectionDirectory, "项目.json", SearchOption.AllDirectories))
+            {
+                try
+                {
+                    var project = Deserialize(File.ReadAllBytes(path));
+                    if (project == null || string.IsNullOrWhiteSpace(project.Name)) continue;
+                    result.Add(new CloudProjectInfo
+                    {
+                        ProjectName = project.Name,
+                        CloudId = Path.GetFileName(Path.GetDirectoryName(path))
+                    });
+                }
+                catch { }
+            }
+            return result.GroupBy(item => item.CloudId, StringComparer.OrdinalIgnoreCase).Select(group => group.First())
+                .OrderBy(item => item.ProjectName, StringComparer.CurrentCultureIgnoreCase).ToList();
         }
 
         public static void RefreshMappings(IEnumerable<ProjectProfile> projects)
@@ -189,7 +220,7 @@ namespace BatchPdfPublisher.Services
             return Path.Combine(ProjectionDirectory, StableProjectId(name), "项目.json");
         }
 
-        private static string StableProjectId(string name)
+        public static string StableProjectId(string name)
         {
             var safe = new string((name ?? "项目").Trim().Select(character =>
                 Path.GetInvalidFileNameChars().Contains(character) ? '_' : character).ToArray());
@@ -205,7 +236,7 @@ namespace BatchPdfPublisher.Services
         {
             var safe = new string((string.IsNullOrWhiteSpace(name) ? "默认项目" : name.Trim()).Select(character =>
                 Path.GetInvalidFileNameChars().Contains(character) ? '_' : character).ToArray());
-            return Path.Combine(UserDataPaths.ProjectsDirectory, safe);
+            return CloudProjectWorkspaceService.ProjectFolderFor(null, safe);
         }
 
         private static byte[] Serialize(ProjectProfile project)

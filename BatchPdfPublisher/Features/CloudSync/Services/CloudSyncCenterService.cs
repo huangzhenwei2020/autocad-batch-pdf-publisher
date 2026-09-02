@@ -24,6 +24,9 @@ namespace BatchPdfPublisher.Services
         public string FilePath { get; set; }
         public string Kind { get; set; }
         public DateTime ModifiedAt { get; set; }
+        public string Category { get; set; }
+        public string Purpose { get; set; }
+        public string DisplayPath { get; set; }
     }
 
     public sealed class CloudSyncConflictItem
@@ -32,6 +35,9 @@ namespace BatchPdfPublisher.Services
         public string LocalCopyPath { get; set; }
         public string RemoteCopyPath { get; set; }
         public DateTime ModifiedAt { get; set; }
+        public string Category { get; set; }
+        public string Purpose { get; set; }
+        public string DisplayPath { get; set; }
     }
 
     public sealed class CloudSyncCenterService
@@ -124,12 +130,16 @@ namespace BatchPdfPublisher.Services
                 if (!deletion && !path.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)) continue;
                 var relative = path.Substring(_pendingRoot.TrimEnd(Path.DirectorySeparatorChar).Length)
                     .TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                var logical = CloudSyncSource.NormalizeLogicalPath(relative.Substring(0, relative.Length - suffix.Length));
                 target.Add(new CloudSyncCenterItem
                 {
-                    LogicalPath = CloudSyncSource.NormalizeLogicalPath(relative.Substring(0, relative.Length - suffix.Length)),
+                    LogicalPath = logical,
                     FilePath = path,
                     Kind = deletion ? "等待删除" : "等待替换",
-                    ModifiedAt = File.GetLastWriteTime(path)
+                    ModifiedAt = File.GetLastWriteTime(path),
+                    Category = CategoryFor(logical),
+                    Purpose = PurposeFor(logical),
+                    DisplayPath = DisplayPathFor(logical)
                 });
             }
         }
@@ -155,7 +165,10 @@ namespace BatchPdfPublisher.Services
                     LogicalPath = logical,
                     LocalCopyPath = local,
                     RemoteCopyPath = remote,
-                    ModifiedAt = File.GetLastWriteTime(sample)
+                    ModifiedAt = File.GetLastWriteTime(sample),
+                    Category = CategoryFor(logical),
+                    Purpose = PurposeFor(logical),
+                    DisplayPath = DisplayPathFor(logical)
                 });
             }
         }
@@ -172,8 +185,59 @@ namespace BatchPdfPublisher.Services
                 logical = CloudSyncSource.NormalizeLogicalPath(logical);
                 string ignored;
                 if (!_catalog.TryResolve(logical, out ignored)) continue;
-                target.Add(new CloudSyncCenterItem { LogicalPath = logical, FilePath = path, Kind = kind, ModifiedAt = File.GetLastWriteTime(path) });
+                target.Add(new CloudSyncCenterItem
+                {
+                    LogicalPath = logical,
+                    FilePath = path,
+                    Kind = kind,
+                    ModifiedAt = File.GetLastWriteTime(path),
+                    Category = CategoryFor(logical),
+                    Purpose = PurposeFor(logical),
+                    DisplayPath = DisplayPathFor(logical)
+                });
             }
+        }
+
+        public static string CategoryFor(string logicalPath)
+        {
+            var path = CloudSyncSource.NormalizeLogicalPath(logicalPath);
+            if (path.StartsWith("项目文件/", StringComparison.OrdinalIgnoreCase)) return "项目文件";
+            if (path.StartsWith("项目配置/", StringComparison.OrdinalIgnoreCase)) return "项目资料";
+            if (path.StartsWith("通用配置/", StringComparison.OrdinalIgnoreCase)) return "软件设置";
+            if (path.StartsWith("图框模板/", StringComparison.OrdinalIgnoreCase)) return "图框模板";
+            if (path.StartsWith("方案库/", StringComparison.OrdinalIgnoreCase)) return "方案库";
+            return "其他";
+        }
+
+        public static string PurposeFor(string logicalPath)
+        {
+            switch (CategoryFor(logicalPath))
+            {
+                case "项目文件": return "项目中的 DWG、表格和文档；仅同步已选择的项目";
+                case "项目资料": return "用于识别项目、图框登记和发布参数，不等于整套 DWG";
+                case "软件设置": return "文字、标注、界面及常用制图设置";
+                case "图框模板": return "登记过的图框和排版范围";
+                case "方案库": return "楼梯大样等可复用参数方案";
+                default: return "云同步产生的其他数据";
+            }
+        }
+
+        private string DisplayPathFor(string logicalPath)
+        {
+            var path = CloudSyncSource.NormalizeLogicalPath(logicalPath);
+            if (path.StartsWith("项目文件/", StringComparison.OrdinalIgnoreCase))
+            {
+                var parts = path.Split('/');
+                if (parts.Length >= 2)
+                {
+                    var mapping = (_settings.ProjectMappings ?? new List<CloudSyncProjectMapping>()).FirstOrDefault(item =>
+                        item != null && string.Equals(item.CloudId, parts[1], StringComparison.OrdinalIgnoreCase));
+                    var project = mapping == null ? parts[1] : mapping.ProjectName;
+                    return project + (parts.Length > 2 ? " / " + string.Join(" / ", parts.Skip(2)) : string.Empty);
+                }
+            }
+            var slash = path.IndexOf('/');
+            return slash >= 0 ? path.Substring(slash + 1).Replace('/', Path.DirectorySeparatorChar) : path;
         }
 
         private string ResolveRemote(string logicalPath)

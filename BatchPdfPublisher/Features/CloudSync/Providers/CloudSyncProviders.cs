@@ -142,7 +142,9 @@ namespace BatchPdfPublisher.Services
             foreach (var entry in files)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var relative = RelativeRemotePath(entry.Path); var local = SafeLocalPath(relative);
+                var relative = RelativeRemotePath(entry.Path);
+                if (!ShouldTransferRelativePath(relative)) continue;
+                var local = SafeLocalPath(relative);
                 _remoteHashes[relative] = entry.Md5 ?? string.Empty;
                 if (File.Exists(local) && FileLength(local) == entry.Size && string.Equals(Md5(local), entry.Md5, StringComparison.OrdinalIgnoreCase)) continue;
                 progress?.Invoke(new CloudSyncProgress { Stage = "正在从百度网盘下载", LogicalPath = relative });
@@ -205,6 +207,17 @@ namespace BatchPdfPublisher.Services
             return normalized.Substring(root.Length + 1).Replace('/', Path.DirectorySeparatorChar);
         }
         private string RelativeLocalPath(string path) { return Path.GetFullPath(path).Substring(Path.GetFullPath(WorkingFolder).TrimEnd(Path.DirectorySeparatorChar).Length + 1); }
+        internal bool ShouldTransferRelativePath(string relativePath)
+        {
+            var path = CloudSyncSource.NormalizeLogicalPath(relativePath);
+            const string projectPrefix = "万落建筑云同步/项目文件/";
+            if (!path.StartsWith(projectPrefix, StringComparison.OrdinalIgnoreCase)) return true;
+            var remainder = path.Substring(projectPrefix.Length);
+            var slash = remainder.IndexOf('/');
+            var cloudId = slash < 0 ? remainder : remainder.Substring(0, slash);
+            return _settings.SyncProjectFiles && (_settings.ProjectMappings ?? new List<CloudSyncProjectMapping>()).Any(mapping =>
+                mapping != null && mapping.Enabled && string.Equals(mapping.CloudId, cloudId, StringComparison.OrdinalIgnoreCase));
+        }
         private string SafeLocalPath(string relative)
         {
             var root = Path.GetFullPath(WorkingFolder).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
@@ -235,6 +248,7 @@ namespace BatchPdfPublisher.Services
             Action<CloudSyncProgress> progress, CancellationToken cancellationToken)
         {
             if (settings == null) throw new ArgumentNullException("settings");
+            CloudProjectWorkspaceService.ValidateForProjectSync(settings, new PublishPlanStore().LoadProjects());
             using (var provider = CloudSyncProviderFactory.Create(settings))
             {
                 provider.Prepare(progress, cancellationToken);

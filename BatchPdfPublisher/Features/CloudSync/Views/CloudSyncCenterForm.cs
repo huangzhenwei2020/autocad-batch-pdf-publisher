@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Linq;
 using System.Windows.Forms;
 using BatchPdfPublisher.Services;
 
@@ -9,11 +10,13 @@ namespace BatchPdfPublisher.Views
 {
     public sealed class CloudSyncCenterForm : Form
     {
-        private readonly CloudSyncCenterService _service = new CloudSyncCenterService();
+        private CloudSyncCenterService _service = new CloudSyncCenterService();
         private readonly Label _summary = new Label { Dock = DockStyle.Top, Height = 34, Padding = new Padding(10, 8, 0, 0) };
-        private readonly ListView _pending = CreateList("状态", "逻辑文件", "更新时间");
-        private readonly ListView _conflicts = CreateList("逻辑文件", "本机副本", "共享副本", "发生时间");
-        private readonly ListView _history = CreateList("来源", "逻辑文件", "版本时间");
+        private readonly ListView _pending = CreateList("分类", "状态", "文件", "用途", "更新时间");
+        private readonly ListView _conflicts = CreateList("分类", "文件", "用途", "本机副本", "共享副本", "发生时间");
+        private readonly ListView _history = CreateList("分类", "来源", "文件", "用途", "版本时间");
+        private readonly ListView _projects = CreateList("项目名称", "本机状态", "本机目录");
+        private readonly TextBox _workspaceRoot = new TextBox { Dock = DockStyle.Fill };
 
         public CloudSyncCenterForm()
         {
@@ -24,6 +27,7 @@ namespace BatchPdfPublisher.Views
             Font = new Font("Microsoft YaHei UI", 9F);
 
             var tabs = new TabControl { Dock = DockStyle.Fill };
+            tabs.TabPages.Add(BuildProjectTab());
             tabs.TabPages.Add(BuildPendingTab());
             tabs.TabPages.Add(BuildConflictTab());
             tabs.TabPages.Add(BuildHistoryTab());
@@ -38,6 +42,7 @@ namespace BatchPdfPublisher.Views
         private TabPage BuildPendingTab()
         {
             var page = Page("待应用"); page.Controls.Add(_pending);
+            page.Controls.Add(HelpText("CAD 正在使用的文件不会被直接覆盖，会先放在这里；关闭对应图纸后可安全应用。"));
             var bar = ActionBar();
             var apply = ButtonFor("应用所有可用项"); apply.Click += ApplyPending;
             var discard = ButtonFor("放弃所选待应用项"); discard.Click += DiscardPending;
@@ -49,6 +54,7 @@ namespace BatchPdfPublisher.Views
         private TabPage BuildConflictTab()
         {
             var page = Page("冲突"); page.Controls.Add(_conflicts);
+            page.Controls.Add(HelpText("同一文件在两台电脑都被修改时会保留两个副本，请确认采用哪一个，原文件会先备份。"));
             var bar = ActionBar();
             var local = ButtonFor("采用本机版本"); local.Click += delegate { ResolveConflict(true); };
             var remote = ButtonFor("采用共享版本"); remote.Click += delegate { ResolveConflict(false); };
@@ -60,6 +66,7 @@ namespace BatchPdfPublisher.Views
         private TabPage BuildHistoryTab()
         {
             var page = Page("历史版本"); page.Controls.Add(_history);
+            page.Controls.Add(HelpText("这里保存同步前的旧版本。恢复时当前文件仍会先备份，不会直接丢失。"));
             var bar = ActionBar();
             var restore = ButtonFor("恢复所选版本到本机"); restore.Click += RestoreHistory;
             var open = ButtonFor("打开位置"); open.Click += delegate { OpenSelected(_history); };
@@ -67,15 +74,42 @@ namespace BatchPdfPublisher.Views
             page.Controls.Add(bar); return page;
         }
 
+        private TabPage BuildProjectTab()
+        {
+            var page = Page("项目同步");
+            _projects.CheckBoxes = true;
+            page.Controls.Add(_projects);
+            var top = new TableLayoutPanel { Dock = DockStyle.Top, Height = 72, ColumnCount = 3, Padding = new Padding(0, 0, 0, 6) };
+            top.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 115));
+            top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            top.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            top.Controls.Add(new Label { Text = "统一工作总目录", AutoSize = true, Margin = new Padding(3, 8, 8, 3) }, 0, 0);
+            top.Controls.Add(_workspaceRoot, 1, 0);
+            var choose = ButtonFor("选择目录"); choose.Click += BrowseWorkspace; top.Controls.Add(choose, 2, 0);
+            var hint = HelpText("先同步项目资料即可看到云端项目；只勾选这台电脑需要工作的项目，DWG 和资料才会下载到工作总目录。", 34);
+            top.Controls.Add(hint, 0, 1); top.SetColumnSpan(hint, 3);
+            page.Controls.Add(top);
+            var bar = ActionBar();
+            var save = ButtonFor("保存选择并同步"); save.Click += SaveProjectSelection;
+            var all = ButtonFor("全选"); all.Click += delegate { SetAllProjects(true); };
+            var none = ButtonFor("全不选"); none.Click += delegate { SetAllProjects(false); };
+            var consolidate = ButtonFor("一键统一目录"); consolidate.Click += ConsolidateProjects;
+            bar.Controls.Add(save); bar.Controls.Add(all); bar.Controls.Add(none); bar.Controls.Add(consolidate);
+            page.Controls.Add(bar);
+            return page;
+        }
+
         private void ReloadData()
         {
             try
             {
+                _service = new CloudSyncCenterService();
                 var data = _service.Load();
+                ReloadProjects();
                 _pending.BeginUpdate(); _pending.Items.Clear();
                 foreach (var item in data.Pending)
                 {
-                    var row = new ListViewItem(new[] { item.Kind, item.LogicalPath, item.ModifiedAt.ToString("yyyy-MM-dd HH:mm:ss") }) { Tag = item };
+                    var row = new ListViewItem(new[] { item.Category, item.Kind, item.DisplayPath, item.Purpose, item.ModifiedAt.ToString("yyyy-MM-dd HH:mm:ss") }) { Tag = item };
                     _pending.Items.Add(row);
                 }
                 _pending.EndUpdate();
@@ -83,7 +117,7 @@ namespace BatchPdfPublisher.Views
                 _conflicts.BeginUpdate(); _conflicts.Items.Clear();
                 foreach (var item in data.Conflicts)
                 {
-                    var row = new ListViewItem(new[] { item.LogicalPath, ExistsText(item.LocalCopyPath), ExistsText(item.RemoteCopyPath), item.ModifiedAt.ToString("yyyy-MM-dd HH:mm:ss") }) { Tag = item };
+                    var row = new ListViewItem(new[] { item.Category, item.DisplayPath, item.Purpose, ExistsText(item.LocalCopyPath), ExistsText(item.RemoteCopyPath), item.ModifiedAt.ToString("yyyy-MM-dd HH:mm:ss") }) { Tag = item };
                     _conflicts.Items.Add(row);
                 }
                 _conflicts.EndUpdate();
@@ -91,7 +125,7 @@ namespace BatchPdfPublisher.Views
                 _history.BeginUpdate(); _history.Items.Clear();
                 foreach (var item in data.History)
                 {
-                    var row = new ListViewItem(new[] { item.Kind, item.LogicalPath, item.ModifiedAt.ToString("yyyy-MM-dd HH:mm:ss") }) { Tag = item };
+                    var row = new ListViewItem(new[] { item.Category, item.Kind, item.DisplayPath, item.Purpose, item.ModifiedAt.ToString("yyyy-MM-dd HH:mm:ss") }) { Tag = item };
                     _history.Items.Add(row);
                 }
                 _history.EndUpdate();
@@ -99,6 +133,103 @@ namespace BatchPdfPublisher.Views
                 _summary.ForeColor = data.Pending.Count > 0 || data.Conflicts.Count > 0 ? Color.DarkOrange : Color.FromArgb(34, 120, 72);
             }
             catch (Exception exception) { ShowError(exception); }
+        }
+
+        private void ReloadProjects()
+        {
+            var settings = new CloudSyncSettingsStore().LoadSettings();
+            var root = CloudProjectWorkspaceService.GetWorkspaceRoot(settings);
+            _workspaceRoot.Text = root;
+            var local = new PublishPlanStore().LoadProjects();
+            var cloud = ProjectSyncProjectionStore.DiscoverCloudProjects();
+            var mappings = settings.ProjectMappings ?? new System.Collections.Generic.List<CloudSyncProjectMapping>();
+            var rows = local.Select(project => new ProjectSelectionRow
+            {
+                Name = project.Name,
+                CloudId = ProjectSyncProjectionStore.StableProjectId(project.Name),
+                Folder = project.ProjectFolder,
+                IsLocal = true
+            }).Concat(cloud.Where(remote => !local.Any(project => string.Equals(project.Name, remote.ProjectName, StringComparison.OrdinalIgnoreCase)))
+                .Select(remote => new ProjectSelectionRow
+                {
+                    Name = remote.ProjectName,
+                    CloudId = remote.CloudId,
+                    Folder = CloudProjectWorkspaceService.ProjectFolderFor(settings, remote.ProjectName),
+                    IsLocal = false
+                })).OrderBy(row => row.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
+            _projects.BeginUpdate(); _projects.Items.Clear();
+            foreach (var row in rows)
+            {
+                var mapping = mappings.FirstOrDefault(candidate => candidate != null && string.Equals(candidate.CloudId, row.CloudId, StringComparison.OrdinalIgnoreCase));
+                var unified = CloudProjectWorkspaceService.IsUnderWorkspace(row.Folder, root);
+                var status = row.IsLocal ? (unified ? "本机已有" : "目录待统一") : "云端可下载";
+                var item = new ListViewItem(new[] { row.Name, status, row.Folder }) { Tag = row, Checked = mapping != null && mapping.Enabled };
+                if (!unified) item.ForeColor = Color.DarkOrange;
+                _projects.Items.Add(item);
+            }
+            _projects.EndUpdate();
+        }
+
+        private void SaveProjectSelection(object sender, EventArgs e)
+        {
+            try
+            {
+                var settingsStore = new CloudSyncSettingsStore();
+                var settings = settingsStore.LoadSettings();
+                settings.ProjectWorkspaceRoot = Path.GetFullPath(_workspaceRoot.Text.Trim());
+                var mappings = new System.Collections.Generic.List<CloudSyncProjectMapping>();
+                foreach (ListViewItem item in _projects.Items)
+                {
+                    var row = item.Tag as ProjectSelectionRow;
+                    if (row == null) continue;
+                    var folder = row.IsLocal ? row.Folder : CloudProjectWorkspaceService.ProjectFolderFor(settings, row.Name);
+                    if (item.Checked && !CloudProjectWorkspaceService.IsUnderWorkspace(folder, settings.ProjectWorkspaceRoot))
+                        throw new InvalidOperationException("项目“" + row.Name + "”不在统一工作总目录中，请先点击“一键统一目录”。");
+                    mappings.Add(new CloudSyncProjectMapping { ProjectName = row.Name, CloudId = row.CloudId, LocalFolder = folder, Enabled = item.Checked });
+                }
+                settings.ProjectMappings = mappings;
+                settings.SyncProjectFiles = mappings.Any(item => item.Enabled);
+                settingsStore.SaveSettings(settings);
+                new PublishPlanStore().LoadProjects();
+                CloudSyncCoordinator.QueueReload(settings.Enabled);
+                MessageBox.Show(this, "已保存。勾选的项目会同步到统一工作总目录；未勾选项目只保留云端，不占用本机空间。", Text);
+                ReloadData();
+            }
+            catch (Exception exception) { ShowError(exception); }
+        }
+
+        private void ConsolidateProjects(object sender, EventArgs e)
+        {
+            try
+            {
+                var settingsStore = new CloudSyncSettingsStore();
+                var settings = settingsStore.LoadSettings();
+                settings.ProjectWorkspaceRoot = Path.GetFullPath(_workspaceRoot.Text.Trim());
+                if (MessageBox.Show(this, "把目录外的项目复制到统一工作总目录？\r\n原目录不会删除，成功后将自动选中全部本机项目。",
+                    Text, MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+                Cursor = Cursors.WaitCursor;
+                var result = CloudProjectWorkspaceService.ConsolidateAll(new PublishPlanStore(), settings);
+                settings.SyncProjectFiles = true;
+                settingsStore.SaveSettings(settings);
+                CloudSyncCoordinator.QueueReload(settings.Enabled);
+                var message = "已归拢 " + result.MovedProjects.Count + " 个项目。";
+                if (result.Errors.Count > 0) message += "\r\n\r\n未处理：\r\n" + string.Join("\r\n", result.Errors);
+                MessageBox.Show(this, message, Text, MessageBoxButtons.OK, result.Errors.Count == 0 ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+                ReloadData();
+            }
+            catch (Exception exception) { ShowError(exception); }
+            finally { Cursor = Cursors.Default; }
+        }
+
+        private void BrowseWorkspace(object sender, EventArgs e)
+        {
+            using (var dialog = new FolderBrowserDialog { Description = "选择所有 BPP 项目统一存放的工作总目录" })
+                if (dialog.ShowDialog(this) == DialogResult.OK) _workspaceRoot.Text = dialog.SelectedPath;
+        }
+
+        private void SetAllProjects(bool value)
+        {
+            foreach (ListViewItem item in _projects.Items) item.Checked = value;
         }
 
         private void ApplyPending(object sender, EventArgs e)
@@ -164,13 +295,23 @@ namespace BatchPdfPublisher.Views
         }
 
         private static string ExistsText(string path) { return !string.IsNullOrWhiteSpace(path) && File.Exists(path) ? "有" : "无"; }
+        private sealed class ProjectSelectionRow
+        {
+            public string Name { get; set; }
+            public string CloudId { get; set; }
+            public string Folder { get; set; }
+            public bool IsLocal { get; set; }
+        }
+
         private static TabPage Page(string text) { return new TabPage(text) { Padding = new Padding(8) }; }
+        private static Label HelpText(string text, int height = 42) { return new Label { Text = text, Dock = DockStyle.Top, Height = height, Padding = new Padding(4, 7, 4, 4), ForeColor = Color.DimGray }; }
         private static FlowLayoutPanel ActionBar() { return new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 48, Padding = new Padding(0, 8, 0, 0) }; }
         private static Button ButtonFor(string text) { return new Button { Text = text, AutoSize = true, Padding = new Padding(10, 3, 10, 3), Margin = new Padding(0, 0, 8, 0) }; }
         private static ListView CreateList(params string[] columns)
         {
             var list = new ListView { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, GridLines = true, HideSelection = false };
-            foreach (var column in columns) list.Columns.Add(column, column.Contains("逻辑") ? 430 : column.Contains("副本") ? 100 : 150);
+            foreach (var column in columns)
+                list.Columns.Add(column, column == "文件" || column == "本机目录" ? 360 : column == "用途" ? 300 : column.Contains("副本") ? 90 : 130);
             return list;
         }
     }

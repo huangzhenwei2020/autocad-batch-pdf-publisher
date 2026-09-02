@@ -144,7 +144,7 @@ namespace BatchPdfPublisher.Services
             FramesChanged?.Invoke();
         }
 
-        private void SaveProjects(List<ProjectProfile> projects)
+        public void SaveProjects(List<ProjectProfile> projects)
         {
             Normalize(projects);
             var path = ProjectsPath();
@@ -304,7 +304,7 @@ namespace BatchPdfPublisher.Services
         {
             var name = string.IsNullOrWhiteSpace(projectName) ? "默认项目" : projectName.Trim();
             foreach (var invalid in Path.GetInvalidFileNameChars()) name = name.Replace(invalid, '_');
-            return Path.Combine(UserDataPaths.ProjectsDirectory, name);
+            return Path.Combine(CloudProjectWorkspaceService.GetWorkspaceRoot(), name);
         }
         private static string ResolveProjectFolder(string requestedFolder, string projectName)
         {
