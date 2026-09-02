@@ -8,6 +8,7 @@
     <RootNamespace>BatchPdfPublisher</RootNamespace>
     <AssemblyName>BatchPdfPublisher</AssemblyName>
     <PlatformTarget>x64</PlatformTarget>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <NoWarn>$(NoWarn);CA1416</NoWarn>
     <DefaultItemExcludes>$(DefaultItemExcludes);obj\**;obj-*\**</DefaultItemExcludes>

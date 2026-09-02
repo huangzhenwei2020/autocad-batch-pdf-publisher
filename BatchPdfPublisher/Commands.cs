@@ -17,6 +17,7 @@ namespace BatchPdfPublisher
         private static PublisherForm _publisherForm;
         private static TianzhengRoomRenameForm _roomRenameForm;
         private static DoorWindowElevationForm _doorWindowElevationForm;
+        private static LineVisionForm _lineVisionForm;
         private static IList<SheetItem> _catalogSheets;
         private static CatalogSettings _catalogSettings;
         private static Action _catalogDone;
@@ -98,6 +99,23 @@ namespace BatchPdfPublisher
             var document = Application.DocumentManager.MdiActiveDocument;
             if (document == null) return;
             Application.ShowModelessDialog(new DetailLayoutForm(document));
+        }
+
+        [CommandMethod("LINEVISION", CommandFlags.Session)]
+        [CommandMethod("TXZCAD", CommandFlags.Session)]
+        public void OpenLineVision()
+        {
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document == null) return;
+            if (_lineVisionForm != null && !_lineVisionForm.IsDisposed)
+            {
+                _lineVisionForm.Show();
+                _lineVisionForm.Activate();
+                return;
+            }
+            _lineVisionForm = new LineVisionForm(document);
+            _lineVisionForm.FormClosed += (sender, args) => _lineVisionForm = null;
+            Application.ShowModelessDialog(_lineVisionForm);
         }
 
         [CommandMethod("FJGM")]

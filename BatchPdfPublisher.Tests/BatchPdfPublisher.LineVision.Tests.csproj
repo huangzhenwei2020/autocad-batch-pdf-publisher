@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="LineVisionTests.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\LineVision\Models\LineVisionModels.cs" Link="LineVisionModels.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\LineVision\Services\LineVisionProcessor.cs" Link="LineVisionProcessor.cs" />
+  </ItemGroup>
+</Project>

@@ -249,6 +249,10 @@ foreach ($band in $Bands) {
     }
 }
 
+$lineVisionTests = Join-Path $repositoryRoot 'BatchPdfPublisher.Tests\BatchPdfPublisher.LineVision.Tests.csproj'
+$testDotNet = Find-DotNet8
+Invoke-Checked { & $testDotNet run --project $lineVisionTests -c Release --nologo } '图像转 CAD 算法测试'
+
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'Resources') -Destination (Join-Path $OutputRoot 'Resources') -Recurse -Force
 
 # Custom hatch definitions are user-visible, portable resources. Keep the

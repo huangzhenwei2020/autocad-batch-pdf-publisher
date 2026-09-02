@@ -23,6 +23,7 @@ namespace BatchPdfPublisher.Services
             F("drawing_scale", "比例管理", "BL1", "BL1", "制图与标注", "scale", "把所选对象转换到指定图纸比例，并同步普通 CAD 与天正标注。"),
             F("door_window", "门窗立面", "MCLM", "MCLM", "建筑工具", "doorwindow", "读取门窗表，校验编号和洞口尺寸，并批量设置门窗立面分格与开启参数。"),
             F("detail_layout", "大样排版", "WLDYLAYOUT", "DYPB", "建筑工具", "detail", "逐个框选大样并自动计算边界，在登记图框中拖拽排序和分页排版。"),
+            F("line_vision", "图像转 CAD", "LINEVISION", "TXZCAD", "建筑工具", "image", "识别建筑线稿、扫描图或截图中的线条，预览确认后生成可编辑 CAD 图元。"),
             F("room_rename", "房间改名", "FJGM", "FJGM", "建筑工具", "room", "以一个天正房间为样板，批量修改匹配房间的名称。"),
             F("shortcut_settings", "快捷键设置", "WLHOTKEYS", "KJJPZ", "系统设置", "shortcut", "统一查看、修改和恢复万落建筑工具的快捷键。"),
             F("cloud_sync", "云同步", "WLCLOUDSYNC", "YTB", "系统设置", "sync", "同步通用配置、跨项目方案库、图框模板和项目文件，并保留冲突副本与历史版本。")
