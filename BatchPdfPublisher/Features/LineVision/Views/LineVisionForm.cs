@@ -20,8 +20,8 @@ namespace BatchPdfPublisher.Views
         private readonly TextBox _path = new TextBox { Width = 330, ReadOnly = true };
         private readonly ComboBox _profile = DropDown(150);
         private readonly ComboBox _view = DropDown(118);
-        private readonly TextBox _threshold = Box("0", 55), _minimum = Box("18", 55), _closeGap = Box("2", 55), _collinear = Box("3", 55), _mergeGap = Box("5", 55), _scale = Box("1", 82);
-        private readonly CheckBox _diagonals = new CheckBox { Text = "识别45°斜线", Checked = true, AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
+        private readonly TextBox _threshold = Box("0", 55), _minimum = Box("18", 55), _closeGap = Box("2", 55), _collinear = Box("3", 55), _mergeGap = Box("5", 55), _orthogonalTolerance = Box("2", 45), _scale = Box("1", 82);
+        private readonly CheckBox _diagonals = new CheckBox { Text = "保留任意角度线", Checked = true, AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
         private readonly CheckBox _recognizeText = new CheckBox { Text = "识别文字", Checked = true, AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
         private readonly CheckBox _maskText = new CheckBox { Text = "线稿中遮罩文字", Checked = true, AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
         private readonly CheckBox _insertText = new CheckBox { Text = "生成CAD文字", Checked = true, AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
@@ -78,6 +78,7 @@ namespace BatchPdfPublisher.Views
 
             var parameterRow = Row();
             Add(parameterRow, "阈值(0自动)", _threshold); Add(parameterRow, "最短线", _minimum); Add(parameterRow, "补断线", _closeGap); Add(parameterRow, "共线容差", _collinear); Add(parameterRow, "合并间隙", _mergeGap);
+            Add(parameterRow, "横竖吸附(°)", _orthogonalTolerance);
             parameterRow.Controls.Add(_diagonals); parameterRow.Controls.Add(LabelFor("预览")); parameterRow.Controls.Add(_view);
             _analyze.BackColor = Color.FromArgb(32, 113, 196); _analyze.ForeColor = Color.White; _analyze.Click += async (s, e) => await AnalyzeAsync(); parameterRow.Controls.Add(_analyze);
             _cancelAnalysis.Enabled = false; _cancelAnalysis.Click += (s, e) => { if (_cancellation != null) _cancellation.Cancel(); }; parameterRow.Controls.Add(_cancelAnalysis); top.Controls.Add(parameterRow);
@@ -87,12 +88,12 @@ namespace BatchPdfPublisher.Views
             var fit = ButtonFor("适合窗口"); fit.Click += (s, e) => _preview.Fit(); scaleRow.Controls.Add(fit);
             var all = ButtonFor("全选"); all.Click += (s, e) => SetAll(true); scaleRow.Controls.Add(all);
             var none = ButtonFor("全不选"); none.Click += (s, e) => SetAll(false); scaleRow.Controls.Add(none);
-            scaleRow.Controls.Add(new Label { Text = "绿色水平线 · 蓝色垂直线 · 黄色斜线；滚轮缩放，右键或中键平移", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(12, 8, 0, 0) }); top.Controls.Add(scaleRow);
+            scaleRow.Controls.Add(new Label { Text = "横竖吸附范围外保持原角度；绿色水平 · 蓝色垂直 · 黄色斜线", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(12, 8, 0, 0) }); top.Controls.Add(scaleRow);
             var ocrRow = Row(); ocrRow.Controls.Add(_recognizeText); Add(ocrRow, "语言", _ocrLanguage); Add(ocrRow, "最低置信度", _ocrConfidence); ocrRow.Controls.Add(_maskText); Add(ocrRow, "遮罩扩边(px)", _maskExpansion); ocrRow.Controls.Add(_insertText);
             ocrRow.Controls.Add(new Label { Text = "文字可在右侧“文字”页校正后再插入", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(12, 8, 0, 0) }); top.Controls.Add(ocrRow);
             root.Controls.Add(top, 0, 0);
 
-            _objects.Columns.Add("生成", 48); _objects.Columns.Add("类型", 72); _objects.Columns.Add("长度(px)", 82); _objects.Columns.Add("置信度", 70); _objects.Columns.Add("坐标", 250);
+            _objects.Columns.Add("生成", 48); _objects.Columns.Add("类型", 72); _objects.Columns.Add("角度", 58); _objects.Columns.Add("长度(px)", 82); _objects.Columns.Add("置信度", 70); _objects.Columns.Add("坐标", 250);
             _objects.ItemChecked += (s, e) =>
             {
                 if (_syncingObjects || _result == null || e.Item.Index < 0 || e.Item.Index >= _result.Segments.Count) return;
@@ -244,7 +245,8 @@ namespace BatchPdfPublisher.Views
             {
                 Threshold = ParseInt(_threshold, "二值化阈值", 0, 254), MinimumLineLengthPixels = ParseInt(_minimum, "最短线", 3, 10000),
                 CloseGapPixels = ParseInt(_closeGap, "补断线", 0, 100), CollinearTolerancePixels = ParseInt(_collinear, "共线容差", 0, 100),
-                MergeGapPixels = ParseInt(_mergeGap, "合并间隙", 0, 500), DetectDiagonals = _diagonals.Checked
+                MergeGapPixels = ParseInt(_mergeGap, "合并间隙", 0, 500), DetectDiagonals = _diagonals.Checked,
+                OrthogonalToleranceDegrees = ParseDouble(_orthogonalTolerance, "横竖吸附角度", 0d, 15d)
             };
         }
 
@@ -261,7 +263,7 @@ namespace BatchPdfPublisher.Views
             if (_result != null) foreach (var line in _result.Segments)
             {
                 var item = new ListViewItem(string.Empty) { Checked = line.IsEnabled };
-                item.SubItems.Add(DirectionText(line.Direction)); item.SubItems.Add(line.Length.ToString("0.0", CultureInfo.InvariantCulture)); item.SubItems.Add(line.Confidence.ToString("P0", CultureInfo.CurrentCulture));
+                item.SubItems.Add(DirectionText(line.Direction)); item.SubItems.Add(LineAngle(line).ToString("0.0°", CultureInfo.InvariantCulture)); item.SubItems.Add(line.Length.ToString("0.0", CultureInfo.InvariantCulture)); item.SubItems.Add(line.Confidence.ToString("P0", CultureInfo.CurrentCulture));
                 item.SubItems.Add(string.Format(CultureInfo.InvariantCulture, "({0:0},{1:0}) → ({2:0},{3:0})", line.X1, line.Y1, line.X2, line.Y2)); _objects.Items.Add(item);
             }
             _objects.EndUpdate(); _syncingObjects = false;
@@ -334,7 +336,7 @@ namespace BatchPdfPublisher.Views
                     if (parts[0] == "threshold") _threshold.Text = parts[1]; else if (parts[0] == "minimum") _minimum.Text = parts[1]; else if (parts[0] == "closeGap") _closeGap.Text = parts[1];
                     else if (parts[0] == "collinear") _collinear.Text = parts[1]; else if (parts[0] == "mergeGap") _mergeGap.Text = parts[1]; else if (parts[0] == "scale") _scale.Text = parts[1]; else if (parts[0] == "diagonals") _diagonals.Checked = parts[1] == "1";
                     else if (parts[0] == "recognizeText") _recognizeText.Checked = parts[1] == "1"; else if (parts[0] == "maskText") _maskText.Checked = parts[1] == "1"; else if (parts[0] == "insertText") _insertText.Checked = parts[1] == "1";
-                    else if (parts[0] == "ocrLanguage") _ocrLanguage.SelectedIndex = parts[1] == "en-US" ? 1 : 0; else if (parts[0] == "ocrConfidence") _ocrConfidence.Text = parts[1]; else if (parts[0] == "maskExpansion") _maskExpansion.Text = parts[1];
+                    else if (parts[0] == "ocrLanguage") _ocrLanguage.SelectedIndex = parts[1] == "en-US" ? 1 : 0; else if (parts[0] == "ocrConfidence") _ocrConfidence.Text = parts[1]; else if (parts[0] == "maskExpansion") _maskExpansion.Text = parts[1]; else if (parts[0] == "orthogonalTolerance") _orthogonalTolerance.Text = parts[1];
                 }
             }
             catch { }
@@ -345,12 +347,13 @@ namespace BatchPdfPublisher.Views
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath));
-                File.WriteAllLines(SettingsPath, new[] { "threshold=" + _threshold.Text, "minimum=" + _minimum.Text, "closeGap=" + _closeGap.Text, "collinear=" + _collinear.Text, "mergeGap=" + _mergeGap.Text, "scale=" + _scale.Text, "diagonals=" + (_diagonals.Checked ? "1" : "0"), "recognizeText=" + (_recognizeText.Checked ? "1" : "0"), "maskText=" + (_maskText.Checked ? "1" : "0"), "insertText=" + (_insertText.Checked ? "1" : "0"), "ocrLanguage=" + (_ocrLanguage.SelectedIndex == 1 ? "en-US" : "zh-Hans-CN"), "ocrConfidence=" + _ocrConfidence.Text, "maskExpansion=" + _maskExpansion.Text });
+                File.WriteAllLines(SettingsPath, new[] { "threshold=" + _threshold.Text, "minimum=" + _minimum.Text, "closeGap=" + _closeGap.Text, "collinear=" + _collinear.Text, "mergeGap=" + _mergeGap.Text, "orthogonalTolerance=" + _orthogonalTolerance.Text, "scale=" + _scale.Text, "diagonals=" + (_diagonals.Checked ? "1" : "0"), "recognizeText=" + (_recognizeText.Checked ? "1" : "0"), "maskText=" + (_maskText.Checked ? "1" : "0"), "insertText=" + (_insertText.Checked ? "1" : "0"), "ocrLanguage=" + (_ocrLanguage.SelectedIndex == 1 ? "en-US" : "zh-Hans-CN"), "ocrConfidence=" + _ocrConfidence.Text, "maskExpansion=" + _maskExpansion.Text });
             }
             catch { }
         }
 
-        private static string DirectionText(LineVisionDirection direction) { return direction == LineVisionDirection.Horizontal ? "水平" : direction == LineVisionDirection.Vertical ? "垂直" : direction == LineVisionDirection.Diagonal ? "斜线" : "待确认"; }
+        private static string DirectionText(LineVisionDirection direction) { return direction == LineVisionDirection.Horizontal ? "水平" : direction == LineVisionDirection.Vertical ? "垂直" : direction == LineVisionDirection.Diagonal ? "45°斜线" : direction == LineVisionDirection.Angled ? "原角度" : "待确认"; }
+        private static double LineAngle(LineVisionSegment line) { var value = Math.Atan2(-(line.Y2 - line.Y1), line.X2 - line.X1) * 180d / Math.PI; value %= 180d; if (value < 0d) value += 180d; return value; }
         private static int ParseInt(TextBox box, string name, int minimum, int maximum) { int value; if (!int.TryParse(box.Text, out value) || value < minimum || value > maximum) throw new InvalidOperationException(name + "必须为 " + minimum + "–" + maximum + " 的整数。"); return value; }
         private static double ParseDouble(TextBox box, string name, double minimum, double maximum) { double value; if (!double.TryParse(box.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out value) || value < minimum || value > maximum) throw new InvalidOperationException(name + "必须为 " + minimum.ToString(CultureInfo.InvariantCulture) + "–" + maximum.ToString(CultureInfo.InvariantCulture) + " 的数字。"); return value; }
         private static FlowLayoutPanel Row() { return new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, WrapContents = true, Margin = new Padding(0, 0, 0, 4) }; }

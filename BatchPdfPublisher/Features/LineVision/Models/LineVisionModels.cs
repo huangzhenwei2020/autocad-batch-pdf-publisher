@@ -11,6 +11,7 @@ namespace BatchPdfPublisher.Models
         Horizontal,
         Vertical,
         Diagonal,
+        Angled,
         Uncertain
     }
 
@@ -54,6 +55,7 @@ namespace BatchPdfPublisher.Models
         public int CollinearTolerancePixels { get; set; } = 3;
         public int MergeGapPixels { get; set; } = 5;
         public bool DetectDiagonals { get; set; } = true;
+        public double OrthogonalToleranceDegrees { get; set; } = 2d;
         public double CadUnitsPerPixel { get; set; } = 1d;
     }
 

@@ -84,6 +84,7 @@ namespace BatchPdfPublisher.Services
             result[LineVisionDirection.Horizontal] = EnsureLayer(database, transaction, "LV-LINE-H", 3);
             result[LineVisionDirection.Vertical] = EnsureLayer(database, transaction, "LV-LINE-V", 5);
             result[LineVisionDirection.Diagonal] = EnsureLayer(database, transaction, "LV-LINE-DIAG", 2);
+            result[LineVisionDirection.Angled] = result[LineVisionDirection.Diagonal];
             result[LineVisionDirection.Uncertain] = EnsureLayer(database, transaction, "LV-UNCERTAIN", 1);
             return result;
         }

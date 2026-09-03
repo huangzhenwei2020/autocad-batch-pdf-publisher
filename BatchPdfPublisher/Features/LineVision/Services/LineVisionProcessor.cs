@@ -55,16 +55,15 @@ namespace BatchPdfPublisher.Services
                             RemoveIsolatedPixels(dark, width, height);
                             Report(progress, 30, "正在识别闭合圆形……");
                             var circles = DetectCircles(dark, width, height, cancellationToken);
-                            Report(progress, 35, "正在提取水平线和垂直线……");
                             var candidates = new List<LineVisionSegment>();
-                            DetectRows(dark, width, height, settings, candidates, cancellationToken);
-                            DetectColumns(dark, width, height, settings, candidates, cancellationToken);
                             if (settings.DetectDiagonals)
                             {
-                                Report(progress, 58, "正在提取斜线……");
-                                DetectDiagonals(dark, width, height, settings, candidates, true, cancellationToken);
-                                DetectDiagonals(dark, width, height, settings, candidates, false, cancellationToken);
+                                Report(progress, 35, "正在提取任意角度直线……");
+                                candidates.AddRange(DetectAngledSegments(dark, width, height, settings, cancellationToken));
                             }
+                            Report(progress, 48, "正在补充水平线和垂直线……");
+                            DetectRows(dark, width, height, settings, candidates, cancellationToken);
+                            DetectColumns(dark, width, height, settings, candidates, cancellationToken);
                             cancellationToken.ThrowIfCancellationRequested();
                             Report(progress, 76, "正在聚类并合并共线段……");
                             var merged = MergeSegments(candidates, settings.CollinearTolerancePixels, settings.MergeGapPixels);
@@ -122,6 +121,7 @@ namespace BatchPdfPublisher.Services
                     MergeInto(match, candidate);
                 }
             }
+            result.AddRange(source.Where(x => x.Direction == LineVisionDirection.Angled && x.Length > 0.5).Select(Clone));
             return result.Where(x => x.Length > 0.5).ToList();
         }
 
@@ -174,6 +174,98 @@ namespace BatchPdfPublisher.Services
             }
             return circles;
         }
+
+        internal static List<LineVisionSegment> DetectAngledSegments(bool[] pixels, int width, int height, LineVisionSettings settings, CancellationToken cancellationToken)
+        {
+            var result = new List<LineVisionSegment>();
+            var consumed = new bool[pixels.Length];
+            var minimum = Math.Max(6, settings.MinimumLineLengthPixels);
+            for (var index = 0; index < pixels.Length; index++)
+            {
+                if ((index & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
+                if (!pixels[index] || consumed[index]) continue;
+                var x = index % width; var y = index / width;
+                double angle;
+                if (!TryEstimateDirection(pixels, width, height, x, y, Math.Max(8, Math.Min(20, minimum)), out angle)) continue;
+                var cos = Math.Cos(angle); var sin = Math.Sin(angle);
+                var backward = Support(pixels, width, height, x, y, -cos, -sin, settings.CloseGapPixels);
+                var forward = Support(pixels, width, height, x, y, cos, sin, settings.CloseGapPixels);
+                var length = backward.Distance + forward.Distance + 1;
+                if (length < minimum || backward.Support + forward.Support < length * 0.68d) continue;
+                var x1 = x - cos * backward.Distance; var y1 = y - sin * backward.Distance;
+                var x2 = x + cos * forward.Distance; var y2 = y + sin * forward.Distance;
+                var degrees = NormalizeAngle(Math.Atan2(y2 - y1, x2 - x1) * 180d / Math.PI);
+                LineVisionDirection direction;
+                if (DistanceToHorizontal(degrees) <= settings.OrthogonalToleranceDegrees)
+                {
+                    direction = LineVisionDirection.Horizontal; var average = (y1 + y2) * 0.5d; y1 = average; y2 = average;
+                }
+                else if (Math.Abs(degrees - 90d) <= settings.OrthogonalToleranceDegrees)
+                {
+                    direction = LineVisionDirection.Vertical; var average = (x1 + x2) * 0.5d; x1 = average; x2 = average;
+                }
+                else direction = Math.Abs(degrees - 45d) <= 1.5d || Math.Abs(degrees - 135d) <= 1.5d ? LineVisionDirection.Diagonal : LineVisionDirection.Angled;
+                result.Add(New(x1, y1, x2, y2, direction, Math.Min(1d, (backward.Support + forward.Support) / Math.Max(1d, length))));
+                MarkConsumed(consumed, pixels, width, height, x1, y1, x2, y2, 1);
+            }
+            return MergeSegments(result, Math.Max(1d, settings.CollinearTolerancePixels), Math.Max(0d, settings.MergeGapPixels));
+        }
+
+        private static bool TryEstimateDirection(bool[] pixels, int width, int height, int centerX, int centerY, int radius, out double angle)
+        {
+            var count = 0; double meanX = 0d; double meanY = 0d;
+            for (var y = Math.Max(0, centerY - radius); y <= Math.Min(height - 1, centerY + radius); y++)
+                for (var x = Math.Max(0, centerX - radius); x <= Math.Min(width - 1, centerX + radius); x++)
+                    if (pixels[y * width + x]) { count++; meanX += x; meanY += y; }
+            if (count < 5) { angle = 0d; return false; }
+            meanX /= count; meanY /= count;
+            double xx = 0d; double yy = 0d; double xy = 0d;
+            for (var y = Math.Max(0, centerY - radius); y <= Math.Min(height - 1, centerY + radius); y++)
+                for (var x = Math.Max(0, centerX - radius); x <= Math.Min(width - 1, centerX + radius); x++)
+                    if (pixels[y * width + x]) { var dx = x - meanX; var dy = y - meanY; xx += dx * dx; yy += dy * dy; xy += dx * dy; }
+            var spread = xx + yy; var anisotropy = Math.Sqrt((xx - yy) * (xx - yy) + 4d * xy * xy);
+            if (spread < 1d || anisotropy / spread < 0.58d) { angle = 0d; return false; }
+            angle = 0.5d * Math.Atan2(2d * xy, xx - yy);
+            return true;
+        }
+
+        private static LineSupport Support(bool[] pixels, int width, int height, double startX, double startY, double dx, double dy, int allowedGap)
+        {
+            var support = 0; var lastSupport = 0; var maxDistance = Math.Sqrt(width * width + height * height);
+            for (var step = 1; step <= maxDistance; step++)
+            {
+                var x = (int)Math.Round(startX + dx * step); var y = (int)Math.Round(startY + dy * step);
+                if (x < 0 || y < 0 || x >= width || y >= height) break;
+                var found = false;
+                for (var yy = -1; yy <= 1 && !found; yy++) for (var xx = -1; xx <= 1; xx++)
+                {
+                    var nx = x + xx; var ny = y + yy;
+                    if (nx >= 0 && ny >= 0 && nx < width && ny < height && pixels[ny * width + nx]) { found = true; break; }
+                }
+                if (found) { support++; lastSupport = step; }
+                else if (step - lastSupport > Math.Max(1, allowedGap + 1)) break;
+            }
+            return new LineSupport { Distance = lastSupport, Support = support };
+        }
+
+        private static void MarkConsumed(bool[] consumed, bool[] pixels, int width, int height, double x1, double y1, double x2, double y2, int radius)
+        {
+            var steps = Math.Max(1, (int)Math.Ceiling(Math.Sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1))));
+            for (var step = 0; step <= steps; step++)
+            {
+                var t = step / (double)steps; var x = (int)Math.Round(x1 + (x2 - x1) * t); var y = (int)Math.Round(y1 + (y2 - y1) * t);
+                for (var yy = -radius; yy <= radius; yy++) for (var xx = -radius; xx <= radius; xx++)
+                {
+                    var nx = x + xx; var ny = y + yy;
+                    if (nx >= 0 && ny >= 0 && nx < width && ny < height) { var index = ny * width + nx; consumed[index] = true; pixels[index] = false; }
+                }
+            }
+        }
+
+        private static double NormalizeAngle(double degrees) { degrees %= 180d; if (degrees < 0d) degrees += 180d; return degrees; }
+        private static double DistanceToHorizontal(double degrees) { return Math.Min(degrees, 180d - degrees); }
+
+        private sealed class LineSupport { public int Distance; public int Support; }
 
         private static Rectangle NormalizeRegion(Rectangle? requested, int width, int height)
         {
@@ -381,6 +473,12 @@ namespace BatchPdfPublisher.Services
         {
             if (line.Direction == LineVisionDirection.Horizontal) return (line.Y1 + line.Y2) * 0.5;
             if (line.Direction == LineVisionDirection.Vertical) return (line.X1 + line.X2) * 0.5;
+            if (line.Direction == LineVisionDirection.Angled)
+            {
+                var dx = line.X2 - line.X1; var dy = line.Y2 - line.Y1;
+                var length = Math.Max(1e-8, Math.Sqrt(dx * dx + dy * dy));
+                return ((line.X1 * -dy + line.Y1 * dx) + (line.X2 * -dy + line.Y2 * dx)) * 0.5 / length;
+            }
             return line.Y2 >= line.Y1
                 ? ((line.Y1 - line.X1) + (line.Y2 - line.X2)) * 0.5
                 : ((line.Y1 + line.X1) + (line.Y2 + line.X2)) * 0.5;
@@ -389,7 +487,16 @@ namespace BatchPdfPublisher.Services
         private static double AxisStart(LineVisionSegment line) { return line.Direction == LineVisionDirection.Vertical ? Math.Min(line.Y1, line.Y2) : Math.Min(line.X1, line.X2); }
         private static double AxisEnd(LineVisionSegment line) { return line.Direction == LineVisionDirection.Vertical ? Math.Max(line.Y1, line.Y2) : Math.Max(line.X1, line.X2); }
         private static bool IntervalsTouch(LineVisionSegment a, LineVisionSegment b, double gap) { return AxisStart(b) <= AxisEnd(a) + gap && AxisStart(a) <= AxisEnd(b) + gap; }
-        private static bool SameOrientation(LineVisionSegment a, LineVisionSegment b) { return a.Direction != LineVisionDirection.Diagonal || (a.Y2 >= a.Y1) == (b.Y2 >= b.Y1); }
+        private static bool SameOrientation(LineVisionSegment a, LineVisionSegment b)
+        {
+            if (a.Direction == LineVisionDirection.Angled)
+            {
+                var first = NormalizeAngle(Math.Atan2(a.Y2 - a.Y1, a.X2 - a.X1) * 180d / Math.PI);
+                var second = NormalizeAngle(Math.Atan2(b.Y2 - b.Y1, b.X2 - b.X1) * 180d / Math.PI);
+                return Math.Abs(first - second) <= 2d;
+            }
+            return a.Direction != LineVisionDirection.Diagonal || (a.Y2 >= a.Y1) == (b.Y2 >= b.Y1);
+        }
 
         private static void MergeInto(LineVisionSegment target, LineVisionSegment source)
         {

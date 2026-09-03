@@ -19,6 +19,8 @@ internal static class LineVisionTests
         Run("HonorsCropRegion", HonorsCropRegion);
         Run("MergesSmallCollinearGap", MergesSmallCollinearGap);
         Run("DoesNotMergeOppositeDiagonals", DoesNotMergeOppositeDiagonals);
+        Run("PreservesArbitraryLineAngle", PreservesArbitraryLineAngle);
+        Run("UsesConfigurableOrthogonalTolerance", UsesConfigurableOrthogonalTolerance);
         Run("RecognizesClosedCircle", RecognizesClosedCircle);
         Run("MasksRecognizedTextBeforeLineDetection", MasksRecognizedTextBeforeLineDetection);
         var worker = Environment.GetEnvironmentVariable("WANLUO_LINEVISION_OCR_WORKER");
@@ -93,6 +95,39 @@ internal static class LineVisionTests
         });
     }
 
+    private static void PreservesArbitraryLineAngle()
+    {
+        WithImage(260, 180, graphics =>
+        {
+            using (var pen = new Pen(Color.Black, 3f)) graphics.DrawLine(pen, 25, 145, 225, 70);
+        }, path =>
+        {
+            using (var result = LineVisionProcessor.Analyze(path, null, Settings()))
+            {
+                var line = result.Segments.Where(item => item.Direction == LineVisionDirection.Angled).OrderByDescending(item => item.Length).FirstOrDefault();
+                True(line != null && line.Length > 170, "任意角度直线没有保留");
+                var angle = Math.Abs(Math.Atan2(line.Y2 - line.Y1, line.X2 - line.X1) * 180d / Math.PI);
+                True(Math.Abs(angle - 20.6d) < 3d, "任意角度直线被错误拉成横线、竖线或45度线");
+            }
+        });
+    }
+
+    private static void UsesConfigurableOrthogonalTolerance()
+    {
+        WithImage(280, 120, graphics =>
+        {
+            using (var pen = new Pen(Color.Black, 3f)) graphics.DrawLine(pen, 20, 70, 255, 58);
+        }, path =>
+        {
+            var strict = Settings(); strict.OrthogonalToleranceDegrees = 2d;
+            using (var result = LineVisionProcessor.Analyze(path, null, strict))
+                True(result.Segments.Any(item => item.Direction == LineVisionDirection.Angled && item.Length > 190), "严格容差下斜线被错误吸附为水平线");
+            var loose = Settings(); loose.OrthogonalToleranceDegrees = 5d;
+            using (var result = LineVisionProcessor.Analyze(path, null, loose))
+                True(result.Segments.Any(item => item.Direction == LineVisionDirection.Horizontal && item.Length > 190), "宽松容差没有按设置吸附为水平线");
+        });
+    }
+
     private static void MasksRecognizedTextBeforeLineDetection()
     {
         WithImage(240, 100, graphics => graphics.DrawLine(Pens.Black, 10, 50, 230, 50), path =>
@@ -129,7 +164,7 @@ internal static class LineVisionTests
 
     private static LineVisionSettings Settings()
     {
-        return new LineVisionSettings { Threshold = 128, MinimumLineLengthPixels = 14, CloseGapPixels = 2, CollinearTolerancePixels = 3, MergeGapPixels = 5, DetectDiagonals = true };
+        return new LineVisionSettings { Threshold = 128, MinimumLineLengthPixels = 14, CloseGapPixels = 2, CollinearTolerancePixels = 3, MergeGapPixels = 5, DetectDiagonals = true, OrthogonalToleranceDegrees = 2d };
     }
 
     private static LineVisionSegment Segment(double x1, double y1, double x2, double y2, LineVisionDirection direction)

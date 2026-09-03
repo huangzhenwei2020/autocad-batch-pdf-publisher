@@ -231,7 +231,7 @@ namespace BatchPdfPublisher.Views
         {
             if (direction == LineVisionDirection.Horizontal) return Color.LimeGreen;
             if (direction == LineVisionDirection.Vertical) return Color.DeepSkyBlue;
-            if (direction == LineVisionDirection.Diagonal) return Color.Gold;
+            if (direction == LineVisionDirection.Diagonal || direction == LineVisionDirection.Angled) return Color.Gold;
             return Color.Red;
         }
 
