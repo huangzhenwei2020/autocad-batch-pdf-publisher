@@ -32,7 +32,7 @@ namespace CadArchSpec.Installer
 
         public InstallerForm()
         {
-            Text = "建筑设计说明助手安装程序 v1.3.1";
+            Text = "建筑设计说明助手安装程序 v1.3.2";
             StartPosition = FormStartPosition.CenterScreen;
             AutoScaleMode = AutoScaleMode.Dpi;
             AutoScaleDimensions = new SizeF(96F, 96F);

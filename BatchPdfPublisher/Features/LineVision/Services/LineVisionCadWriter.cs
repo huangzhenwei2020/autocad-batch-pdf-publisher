@@ -18,10 +18,11 @@ namespace BatchPdfPublisher.Services
             if (document == null || result == null) return inserted;
             if (unitsPerPixel <= 0d || double.IsNaN(unitsPerPixel) || double.IsInfinity(unitsPerPixel)) throw new InvalidOperationException("像素比例必须大于 0。");
             var enabled = result.Segments.Where(x => x.IsEnabled).ToList();
+            var circles = result.Circles.Where(x => x.IsEnabled && x.Radius > 0d).ToList();
             var textRegions = includeText
                 ? result.TextRegions.Where(x => x.IsEnabled && !string.IsNullOrWhiteSpace(x.Text)).ToList()
                 : new List<LineVisionOcrTextRegion>();
-            if (enabled.Count == 0 && textRegions.Count == 0) throw new InvalidOperationException("没有启用的线段或文字可插入。");
+            if (enabled.Count == 0 && circles.Count == 0 && textRegions.Count == 0) throw new InvalidOperationException("没有启用的线段、圆形或文字可插入。");
             var picked = document.Editor.GetPoint(new PromptPointOptions("\n指定图像转 CAD 结果的左下角插入点："));
             if (picked.Status != PromptStatus.OK) return inserted;
             var insertion = picked.Value;
@@ -39,6 +40,13 @@ namespace BatchPdfPublisher.Services
                     var line = new Line(start, end) { LayerId = layers[segment.Direction] };
                     space.AppendEntity(line); transaction.AddNewlyCreatedDBObject(line, true);
                     inserted.LineCount++;
+                }
+                foreach (var circle in circles)
+                {
+                    var center = ToCad(circle.CenterX, circle.CenterY, insertion, result.Height, unitsPerPixel).TransformBy(ucsToWorld);
+                    var entity = new Circle(center, ucsToWorld.CoordinateSystem3d.Zaxis, circle.Radius * unitsPerPixel) { LayerId = layers[LineVisionDirection.Uncertain] };
+                    space.AppendEntity(entity); transaction.AddNewlyCreatedDBObject(entity, true);
+                    inserted.CircleCount++;
                 }
                 var textLayer = EnsureLayer(document.Database, transaction, "LV-TEXT", 6);
                 foreach (var region in textRegions)

@@ -53,6 +53,8 @@ namespace BatchPdfPublisher.Services
                                 ApplyTextMasks(dark, binary, width, height, ratio, recognizedText, maskExpansionPixels);
                             }
                             RemoveIsolatedPixels(dark, width, height);
+                            Report(progress, 30, "正在识别闭合圆形……");
+                            var circles = DetectCircles(dark, width, height, cancellationToken);
                             Report(progress, 35, "正在提取水平线和垂直线……");
                             var candidates = new List<LineVisionSegment>();
                             DetectRows(dark, width, height, settings, candidates, cancellationToken);
@@ -71,6 +73,10 @@ namespace BatchPdfPublisher.Services
                                 segment.X1 *= ratio; segment.Y1 *= ratio;
                                 segment.X2 *= ratio; segment.Y2 *= ratio;
                             }
+                            foreach (var circle in circles)
+                            {
+                                circle.CenterX *= ratio; circle.CenterY *= ratio; circle.Radius *= ratio;
+                            }
                             Report(progress, 100, "识别完成");
                             var previewWidth = Math.Min(cropped.Width, 1800);
                             var previewHeight = Math.Max(1, (int)Math.Round(cropped.Height * previewWidth / (double)cropped.Width));
@@ -85,6 +91,7 @@ namespace BatchPdfPublisher.Services
                                 SourcePreview = Resize(cropped, previewWidth, previewHeight),
                                 BinaryPreview = binary,
                                 Segments = merged,
+                                Circles = circles,
                                 TextRegions = recognizedText
                             };
                             binary = null;
@@ -116,6 +123,56 @@ namespace BatchPdfPublisher.Services
                 }
             }
             return result.Where(x => x.Length > 0.5).ToList();
+        }
+
+        internal static List<LineVisionCircle> DetectCircles(bool[] pixels, int width, int height, CancellationToken cancellationToken)
+        {
+            var visited = new bool[pixels.Length];
+            var circles = new List<LineVisionCircle>();
+            var queue = new Queue<int>();
+            for (var seed = 0; seed < pixels.Length; seed++)
+            {
+                if (!pixels[seed] || visited[seed]) continue;
+                queue.Clear(); queue.Enqueue(seed); visited[seed] = true;
+                var points = new List<Point>(); var minX = width; var minY = height; var maxX = -1; var maxY = -1;
+                while (queue.Count > 0)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var index = queue.Dequeue(); var x = index % width; var y = index / width;
+                    points.Add(new Point(x, y)); minX = Math.Min(minX, x); minY = Math.Min(minY, y); maxX = Math.Max(maxX, x); maxY = Math.Max(maxY, y);
+                    for (var dy = -1; dy <= 1; dy++) for (var dx = -1; dx <= 1; dx++)
+                    {
+                        if (dx == 0 && dy == 0) continue;
+                        var nx = x + dx; var ny = y + dy;
+                        if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+                        var next = ny * width + nx;
+                        if (pixels[next] && !visited[next]) { visited[next] = true; queue.Enqueue(next); }
+                    }
+                }
+                var boxWidth = maxX - minX + 1; var boxHeight = maxY - minY + 1;
+                if (points.Count < 24 || boxWidth < 8 || boxHeight < 8 || boxWidth > 500 || boxHeight > 500) continue;
+                var radius = (boxWidth + boxHeight) * 0.25d;
+                var centerX = (minX + maxX) * 0.5d; var centerY = (minY + maxY) * 0.5d;
+                if (Math.Abs(boxWidth - boxHeight) > Math.Max(3, radius * 0.22d)) continue;
+                var bins = new bool[36]; var onRing = 0;
+                foreach (var point in points)
+                {
+                    var dx = point.X - centerX; var dy = point.Y - centerY;
+                    var distance = Math.Sqrt(dx * dx + dy * dy);
+                    if (Math.Abs(distance - radius) <= Math.Max(2d, radius * 0.12d))
+                    {
+                        onRing++;
+                        var angle = Math.Atan2(dy, dx) + Math.PI;
+                        bins[Math.Min(35, (int)(angle / (Math.PI * 2d) * bins.Length))] = true;
+                    }
+                }
+                var coverage = bins.Count(value => value) / (double)bins.Length;
+                var expected = Math.PI * radius * 2d;
+                var density = points.Count / Math.Max(1d, expected);
+                if (coverage < 0.72d || density < 0.35d || density > 4.5d || onRing < 18) continue;
+                circles.Add(new LineVisionCircle { CenterX = centerX, CenterY = centerY, Radius = radius, Confidence = Math.Min(1d, coverage * 0.7d + Math.Max(0d, 1d - Math.Abs(density - 1d) / 3d) * 0.3d) });
+            }
+            return circles;
         }
 
         private static Rectangle NormalizeRegion(Rectangle? requested, int width, int height)

@@ -158,6 +158,12 @@ namespace BatchPdfPublisher.Views
                     using (var pen = new Pen(selected ? Color.Magenta : ColorFor(segment.Direction), selected ? 3.2f : Math.Max(1.2f, Math.Min(3f, _zoom * 0.65f))))
                         e.Graphics.DrawLine(pen, ToResultScreen(segment.X1, segment.Y1), ToResultScreen(segment.X2, segment.Y2));
                 }
+                foreach (var circle in _result.Circles.Where(item => item.IsEnabled))
+                {
+                    var center = ToResultScreen(circle.CenterX, circle.CenterY);
+                    var radius = (float)(circle.Radius * _result.SourcePreviewScale * _zoom);
+                    using (var pen = new Pen(Color.Orange, Math.Max(1.5f, _zoom * 0.75f))) e.Graphics.DrawEllipse(pen, center.X - radius, center.Y - radius, radius * 2f, radius * 2f);
+                }
                 for (var index = 0; index < _result.TextRegions.Count; index++)
                 {
                     var text = _result.TextRegions[index];

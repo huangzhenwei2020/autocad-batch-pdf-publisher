@@ -19,6 +19,7 @@ internal static class LineVisionTests
         Run("HonorsCropRegion", HonorsCropRegion);
         Run("MergesSmallCollinearGap", MergesSmallCollinearGap);
         Run("DoesNotMergeOppositeDiagonals", DoesNotMergeOppositeDiagonals);
+        Run("RecognizesClosedCircle", RecognizesClosedCircle);
         Run("MasksRecognizedTextBeforeLineDetection", MasksRecognizedTextBeforeLineDetection);
         var worker = Environment.GetEnvironmentVariable("WANLUO_LINEVISION_OCR_WORKER");
         if (!string.IsNullOrWhiteSpace(worker) && File.Exists(worker)) Run("RecognizesTextThroughIsolatedWorker", () => RecognizesTextThroughIsolatedWorker(worker));
@@ -79,6 +80,17 @@ internal static class LineVisionTests
             Segment(0, 50, 50, 0, LineVisionDirection.Diagonal)
         };
         Equal(2, LineVisionProcessor.MergeSegments(lines, 3, 5).Count);
+    }
+
+    private static void RecognizesClosedCircle()
+    {
+        WithImage(180, 180, graphics => graphics.DrawEllipse(Pens.Black, 45, 45, 90, 90), path =>
+        {
+            using (var result = LineVisionProcessor.Analyze(path, null, Settings()))
+            {
+                True(result.Circles.Any(circle => Math.Abs(circle.CenterX - 90) < 5 && Math.Abs(circle.CenterY - 90) < 5 && Math.Abs(circle.Radius - 45) < 7), "未识别闭合圆形");
+            }
+        });
     }
 
     private static void MasksRecognizedTextBeforeLineDetection()

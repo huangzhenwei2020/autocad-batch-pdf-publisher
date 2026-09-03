@@ -286,7 +286,8 @@ namespace BatchPdfPublisher.Views
             if (_result == null) return;
             var enabled = _result.Segments.Count(x => x.IsEnabled);
             var textEnabled = _result.TextRegions.Count(x => x.IsEnabled && !string.IsNullOrWhiteSpace(x.Text));
-            _status.Text = "线段 " + _result.Segments.Count + " 根（选中 " + enabled + "），文字 " + _result.TextRegions.Count + " 个（选中 " + textEnabled + "）。";
+            var circles = _result.Circles.Count(x => x.IsEnabled);
+            _status.Text = "线段 " + _result.Segments.Count + " 根（选中 " + enabled + "），圆形 " + _result.Circles.Count + " 个（选中 " + circles + "），文字 " + _result.TextRegions.Count + " 个（选中 " + textEnabled + "）。";
             if (!string.IsNullOrWhiteSpace(_result.OcrWarning)) _status.Text += " OCR 未完成，已按纯线稿处理：" + _result.OcrWarning;
         }
 
