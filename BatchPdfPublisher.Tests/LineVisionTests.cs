@@ -28,9 +28,12 @@ internal static class LineVisionTests
         Run("KeepsTIntersectionAsLines", KeepsTIntersectionAsLines);
         Run("ReconstructsPolylineFromImage", ReconstructsPolylineFromImage);
         Run("CanDisablePolylineReconstruction", CanDisablePolylineReconstruction);
+        Run("SnapsWorkerPolylineUsingUserTolerance", SnapsWorkerPolylineUsingUserTolerance);
         Run("MasksRecognizedTextBeforeLineDetection", MasksRecognizedTextBeforeLineDetection);
         var worker = Environment.GetEnvironmentVariable("WANLUO_LINEVISION_OCR_WORKER");
         if (!string.IsNullOrWhiteSpace(worker) && File.Exists(worker)) Run("RecognizesTextThroughIsolatedWorker", () => RecognizesTextThroughIsolatedWorker(worker));
+        var vectorWorker = Environment.GetEnvironmentVariable("WANLUO_LINEVISION_VECTOR_WORKER");
+        if (!string.IsNullOrWhiteSpace(vectorWorker) && File.Exists(vectorWorker)) Run("VectorizesThroughIsolatedWorker", () => VectorizesThroughIsolatedWorker(vectorWorker));
         Console.WriteLine("Executed " + _executed + " LineVision tests; 0 failed.");
     }
 
@@ -213,6 +216,16 @@ internal static class LineVisionTests
         });
     }
 
+    private static void SnapsWorkerPolylineUsingUserTolerance()
+    {
+        var strict = new LineVisionPolyline { Points = new List<PointF> { new PointF(0, 0), new PointF(100, 5) } };
+        LineVisionVectorWorkerClient.SnapOrthogonal(strict, 2d);
+        True(Math.Abs(strict.Points[1].Y - 5) < 0.01, "严格容差错误拉平骨架折线");
+        var loose = new LineVisionPolyline { Points = new List<PointF> { new PointF(0, 0), new PointF(100, 5) } };
+        LineVisionVectorWorkerClient.SnapOrthogonal(loose, 5d);
+        True(Math.Abs(loose.Points[1].Y) < 0.01, "宽松容差没有拉平骨架折线");
+    }
+
     private static void MasksRecognizedTextBeforeLineDetection()
     {
         WithImage(240, 100, graphics => graphics.DrawLine(Pens.Black, 10, 50, 230, 50), path =>
@@ -247,9 +260,27 @@ internal static class LineVisionTests
         finally { UserDataPaths.TestRootDirectory = null; try { Directory.Delete(root, true); } catch { } }
     }
 
+    private static void VectorizesThroughIsolatedWorker(string workerPath)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "WanluoLineVisionVectorTests", Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root); UserDataPaths.TestRootDirectory = root;
+        try
+        {
+            WithImage(360, 260, graphics => { using (var pen = new Pen(Color.Black, 7f)) { graphics.DrawRectangle(pen, 35, 35, 285, 185); graphics.DrawLine(pen, 175, 35, 175, 220); } }, path =>
+            {
+                var settings = Settings(); settings.VectorMode = LineVisionVectorMode.Centerline;
+                var center = new LineVisionVectorWorkerClient(workerPath).VectorizeAsync(path, null, settings, null, 0, CancellationToken.None).GetAwaiter().GetResult();
+                True(center.Any(item => item.Source == "骨架中心线" && item.Points.Count >= 2), "独立矢量 Worker 没有返回中心线");
+                settings.VectorMode = LineVisionVectorMode.Hybrid;
+                var hybrid = new LineVisionVectorWorkerClient(workerPath).VectorizeAsync(path, null, settings, null, 0, CancellationToken.None).GetAwaiter().GetResult();
+                True(hybrid.Any(item => item.Source == "VTracer轮廓" && !item.IsEnabled), "混合模式没有返回默认关闭的 VTracer 候选");
+            });
+        }
+        finally { UserDataPaths.TestRootDirectory = null; try { Directory.Delete(root, true); } catch { } }
+    }
+
     private static LineVisionSettings Settings()
     {
-        return new LineVisionSettings { Threshold = 128, MinimumLineLengthPixels = 14, CloseGapPixels = 2, CollinearTolerancePixels = 3, MergeGapPixels = 5, DetectDiagonals = true, OrthogonalToleranceDegrees = 2d, BuildPolylines = true };
+        return new LineVisionSettings { Threshold = 128, MinimumLineLengthPixels = 14, CloseGapPixels = 2, CollinearTolerancePixels = 3, MergeGapPixels = 5, DetectDiagonals = true, OrthogonalToleranceDegrees = 2d, BuildPolylines = true, VectorMode = LineVisionVectorMode.Legacy };
     }
 
     private static LineVisionSegment Segment(double x1, double y1, double x2, double y2, LineVisionDirection direction)

@@ -265,12 +265,36 @@ $ocrWorker = Join-Path $ocrWorkerOutput 'LineVisionOcrWorker.exe'
 if (-not (Test-Path -LiteralPath $ocrWorker)) { throw '本地 OCR Worker 没有生成。' }
 foreach ($band in $Bands) { Copy-Item -LiteralPath $ocrWorker -Destination (Join-Path $OutputRoot "CadApi\$band\LineVisionOcrWorker.exe") -Force }
 
+$vectorWorkerProject = Join-Path $repositoryRoot 'LineVisionVectorWorker\LineVisionVectorWorker.csproj'
+$vectorWorkerOutput = Join-Path $artifactRoot 'linevision-vector-worker'
+$vectorWorkerObject = Join-Path $artifactRoot 'obj-linevision-vector-worker\'
+New-Item -ItemType Directory -Path $vectorWorkerOutput, $vectorWorkerObject -Force | Out-Null
+Invoke-Checked {
+    & $msbuild $vectorWorkerProject /t:Rebuild /p:Configuration=Release `
+        "/p:TargetFrameworkVersion=$framework" "/p:OutputPath=$vectorWorkerOutput\" `
+        "/p:BaseIntermediateOutputPath=$vectorWorkerObject" /v:minimal
+} '编译图像转 CAD 矢量化 Worker'
+$vectorWorker = Join-Path $vectorWorkerOutput 'LineVisionVectorWorker.exe'
+$vtracer = Join-Path $repositoryRoot 'ThirdParty\VTracer\win-x64\vtracer.exe'
+if (-not (Test-Path -LiteralPath $vectorWorker) -or -not (Test-Path -LiteralPath $vtracer)) { throw '矢量化 Worker 或 vtracer.exe 没有生成。' }
+foreach ($band in $Bands) {
+    $bandPath = Join-Path $OutputRoot "CadApi\$band"
+    Copy-Item -LiteralPath $vectorWorker, $vtracer -Destination $bandPath -Force
+    Copy-Item -LiteralPath (Join-Path $repositoryRoot 'ThirdParty\VTracer\LICENSE.txt') -Destination (Join-Path $bandPath 'VTracer-LICENSE.txt') -Force
+    Copy-Item -LiteralPath (Join-Path $repositoryRoot 'ThirdParty\SkeletonTracing\LICENSE.txt') -Destination (Join-Path $bandPath 'SkeletonTracing-LICENSE.txt') -Force
+}
+
 $lineVisionTests = Join-Path $repositoryRoot 'BatchPdfPublisher.Tests\BatchPdfPublisher.LineVision.Tests.csproj'
 $testDotNet = Find-DotNet8
 Invoke-Checked {
     $previousWorker = $env:WANLUO_LINEVISION_OCR_WORKER
-    try { $env:WANLUO_LINEVISION_OCR_WORKER = $ocrWorker; & $testDotNet run --project $lineVisionTests -c Release --nologo }
-    finally { $env:WANLUO_LINEVISION_OCR_WORKER = $previousWorker }
+    $previousVectorWorker = $env:WANLUO_LINEVISION_VECTOR_WORKER
+    try {
+        Copy-Item -LiteralPath $vtracer -Destination $vectorWorkerOutput -Force
+        $env:WANLUO_LINEVISION_OCR_WORKER = $ocrWorker; $env:WANLUO_LINEVISION_VECTOR_WORKER = $vectorWorker
+        & $testDotNet run --project $lineVisionTests -c Release --nologo
+    }
+    finally { $env:WANLUO_LINEVISION_OCR_WORKER = $previousWorker; $env:WANLUO_LINEVISION_VECTOR_WORKER = $previousVectorWorker }
 } '图像转 CAD 算法和 OCR 测试'
 
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'Resources') -Destination (Join-Path $OutputRoot 'Resources') -Recurse -Force

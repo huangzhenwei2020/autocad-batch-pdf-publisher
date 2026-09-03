@@ -15,6 +15,8 @@ namespace BatchPdfPublisher.Models
         Uncertain
     }
 
+    internal enum LineVisionVectorMode { Legacy, Centerline, Outline, Hybrid }
+
     internal sealed class LineVisionSegment
     {
         public Guid Id { get; set; } = Guid.NewGuid();
@@ -66,6 +68,7 @@ namespace BatchPdfPublisher.Models
         public bool IsClosed { get; set; }
         public double Confidence { get; set; }
         public bool IsEnabled { get; set; } = true;
+        public string Source { get; set; }
     }
 
     internal sealed class LineVisionSettings
@@ -78,6 +81,7 @@ namespace BatchPdfPublisher.Models
         public bool DetectDiagonals { get; set; } = true;
         public double OrthogonalToleranceDegrees { get; set; } = 2d;
         public bool BuildPolylines { get; set; } = true;
+        public LineVisionVectorMode VectorMode { get; set; } = LineVisionVectorMode.Centerline;
         public double CadUnitsPerPixel { get; set; } = 1d;
     }
 
@@ -97,6 +101,7 @@ namespace BatchPdfPublisher.Models
         public List<LineVisionPolyline> Polylines { get; set; } = new List<LineVisionPolyline>();
         public List<LineVisionOcrTextRegion> TextRegions { get; set; } = new List<LineVisionOcrTextRegion>();
         public string OcrWarning { get; set; }
+        public string VectorWarning { get; set; }
 
         public void Dispose()
         {

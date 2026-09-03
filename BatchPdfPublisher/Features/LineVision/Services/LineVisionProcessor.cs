@@ -57,25 +57,30 @@ namespace BatchPdfPublisher.Services
                             var circles = DetectCircles(dark, width, height, cancellationToken);
                             Report(progress, 33, "正在识别圆弧……");
                             var arcs = DetectArcs(dark, width, height, cancellationToken);
-                            var candidates = new List<LineVisionSegment>();
-                            if (settings.DetectDiagonals)
+                            var merged = new List<LineVisionSegment>();
+                            var polylines = new List<LineVisionPolyline>();
+                            if (settings.VectorMode == LineVisionVectorMode.Legacy)
                             {
-                                Report(progress, 35, "正在提取任意角度直线……");
-                                candidates.AddRange(DetectAngledSegments((bool[])dark.Clone(), width, height, settings, cancellationToken));
+                                var candidates = new List<LineVisionSegment>();
+                                if (settings.DetectDiagonals)
+                                {
+                                    Report(progress, 35, "正在提取任意角度直线……");
+                                    candidates.AddRange(DetectAngledSegments((bool[])dark.Clone(), width, height, settings, cancellationToken));
+                                }
+                                Report(progress, 48, "正在补充水平线和垂直线……");
+                                DetectRows(dark, width, height, settings, candidates, cancellationToken);
+                                DetectColumns(dark, width, height, settings, candidates, cancellationToken);
+                                candidates = RemoveDirectionalDuplicates(candidates, Math.Max(2d, settings.CollinearTolerancePixels + 1d));
+                                cancellationToken.ThrowIfCancellationRequested();
+                                Report(progress, 76, "正在聚类并合并共线段……");
+                                merged = MergeSegments(candidates, settings.CollinearTolerancePixels, settings.MergeGapPixels);
+                                foreach (var segment in merged)
+                                {
+                                    segment.X1 *= ratio; segment.Y1 *= ratio;
+                                    segment.X2 *= ratio; segment.Y2 *= ratio;
+                                }
+                                polylines = settings.BuildPolylines ? BuildPolylines(merged, Math.Max(1d, settings.MergeGapPixels * ratio)) : new List<LineVisionPolyline>();
                             }
-                            Report(progress, 48, "正在补充水平线和垂直线……");
-                            DetectRows(dark, width, height, settings, candidates, cancellationToken);
-                            DetectColumns(dark, width, height, settings, candidates, cancellationToken);
-                            candidates = RemoveDirectionalDuplicates(candidates, Math.Max(2d, settings.CollinearTolerancePixels + 1d));
-                            cancellationToken.ThrowIfCancellationRequested();
-                            Report(progress, 76, "正在聚类并合并共线段……");
-                            var merged = MergeSegments(candidates, settings.CollinearTolerancePixels, settings.MergeGapPixels);
-                            foreach (var segment in merged)
-                            {
-                                segment.X1 *= ratio; segment.Y1 *= ratio;
-                                segment.X2 *= ratio; segment.Y2 *= ratio;
-                            }
-                            var polylines = settings.BuildPolylines ? BuildPolylines(merged, Math.Max(1d, settings.MergeGapPixels * ratio)) : new List<LineVisionPolyline>();
                             foreach (var circle in circles)
                             {
                                 circle.CenterX *= ratio; circle.CenterY *= ratio; circle.Radius *= ratio;
@@ -222,7 +227,7 @@ namespace BatchPdfPublisher.Services
             if (edges.Count < 2 || (!closed && points.Count < 3)) return;
             if (closed) points.RemoveAt(points.Count - 1);
             var confidence = edges.Average(edge => Math.Max(0d, Math.Min(1d, edge.Segment.Confidence)));
-            result.Add(new PolylineBuild { SourceEdges = edges.Select(edge => edge.Index).ToList(), Value = new LineVisionPolyline { Points = points, IsClosed = closed, Confidence = confidence } });
+            result.Add(new PolylineBuild { SourceEdges = edges.Select(edge => edge.Index).ToList(), Value = new LineVisionPolyline { Points = points, IsClosed = closed, Confidence = confidence, Source = "兼容算法" } });
         }
 
         private static ChainNode FindOrAddNode(IList<ChainNode> nodes, PointF point, double tolerance)

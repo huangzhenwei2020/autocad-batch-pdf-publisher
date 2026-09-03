@@ -35,6 +35,7 @@ foreach ($band in $Bands) {
     Copy-Item -LiteralPath (Join-Path $sourceBand 'PdfSharp.dll') -Destination $targetBand -Force
     $ocrWorker = Join-Path $sourceBand 'LineVisionOcrWorker.exe'
     if (Test-Path -LiteralPath $ocrWorker) { Copy-Item -LiteralPath $ocrWorker -Destination $targetBand -Force }
+    foreach ($file in @('LineVisionVectorWorker.exe','vtracer.exe','VTracer-LICENSE.txt','SkeletonTracing-LICENSE.txt')) { $source = Join-Path $sourceBand $file; if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination $targetBand -Force } }
 }
 
 Copy-Item -LiteralPath (Join-Path $releaseRoot '万落建筑工具启动器.exe') -Destination $PortableRoot -Force
