@@ -80,7 +80,7 @@ if ((Test-Path -LiteralPath $newtonsoft2022) -and -not (Test-Path -LiteralPath $
 
 $packageContents = @'
 <?xml version="1.0" encoding="utf-8"?>
-<ApplicationPackage SchemaVersion="1.0" AutodeskProduct="AutoCAD" Name="CadArchSpecEditor" AppVersion="1.3.4" ProductCode="{1E296FC4-E75B-4B8B-80B7-CA2376D71D32}">
+<ApplicationPackage SchemaVersion="1.0" AutodeskProduct="AutoCAD" Name="CadArchSpecEditor" AppVersion="1.3.5" ProductCode="{1E296FC4-E75B-4B8B-80B7-CA2376D71D32}">
   <CompanyDetails Name="CadArchSpecEditor" />
   <Components>
     <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R24.1" SeriesMax="R24.1" />

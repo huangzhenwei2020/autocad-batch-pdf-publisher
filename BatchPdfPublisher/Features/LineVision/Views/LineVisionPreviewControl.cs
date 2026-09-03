@@ -51,6 +51,7 @@ namespace BatchPdfPublisher.Views
         public int SelectedTextIndex { get; set; } = -1;
         public int SelectedCircleIndex { get; set; } = -1;
         public int SelectedArcIndex { get; set; } = -1;
+        public int SelectedPolylineIndex { get; set; } = -1;
 
         public LineVisionPreviewControl()
         {
@@ -175,6 +176,15 @@ namespace BatchPdfPublisher.Views
                     var selected = index == SelectedArcIndex;
                     using (var pen = new Pen(selected ? Color.Magenta : Color.Cyan, selected ? 3.2f : Math.Max(1.5f, _zoom * 0.75f)))
                         e.Graphics.DrawArc(pen, center.X - radius, center.Y - radius, radius * 2f, radius * 2f, (float)arc.StartAngleDegrees, (float)arc.SweepAngleDegrees);
+                }
+                for (var index = 0; index < _result.Polylines.Count; index++)
+                {
+                    var polyline = _result.Polylines[index]; if (!polyline.IsEnabled || polyline.Points.Count < 2) continue;
+                    var points = polyline.Points.Select(point => ToResultScreen(point.X, point.Y)).ToArray(); var selected = index == SelectedPolylineIndex;
+                    using (var pen = new Pen(selected ? Color.Magenta : Color.FromArgb(255, 255, 150, 30), selected ? 3.2f : 2f))
+                    {
+                        e.Graphics.DrawLines(pen, points); if (polyline.IsClosed && points.Length > 2) e.Graphics.DrawLine(pen, points[points.Length - 1], points[0]);
+                    }
                 }
                 for (var index = 0; index < _result.TextRegions.Count; index++)
                 {

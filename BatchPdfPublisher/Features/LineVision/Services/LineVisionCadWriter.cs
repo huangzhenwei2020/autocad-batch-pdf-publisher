@@ -20,10 +20,11 @@ namespace BatchPdfPublisher.Services
             var enabled = result.Segments.Where(x => x.IsEnabled).ToList();
             var circles = result.Circles.Where(x => x.IsEnabled && x.Radius > 0d).ToList();
             var arcs = result.Arcs.Where(x => x.IsEnabled && x.Radius > 0d && x.SweepAngleDegrees > 0d).ToList();
+            var polylines = result.Polylines.Where(x => x.IsEnabled && x.Points.Count >= 2).ToList();
             var textRegions = includeText
                 ? result.TextRegions.Where(x => x.IsEnabled && !string.IsNullOrWhiteSpace(x.Text)).ToList()
                 : new List<LineVisionOcrTextRegion>();
-            if (enabled.Count == 0 && circles.Count == 0 && arcs.Count == 0 && textRegions.Count == 0) throw new InvalidOperationException("没有启用的线段、圆弧、圆形或文字可插入。");
+            if (enabled.Count == 0 && circles.Count == 0 && arcs.Count == 0 && polylines.Count == 0 && textRegions.Count == 0) throw new InvalidOperationException("没有启用的线段、折线、圆弧、圆形或文字可插入。");
             var picked = document.Editor.GetPoint(new PromptPointOptions("\n指定图像转 CAD 结果的左下角插入点："));
             if (picked.Status != PromptStatus.OK) return inserted;
             var insertion = picked.Value;
@@ -41,6 +42,16 @@ namespace BatchPdfPublisher.Services
                     var line = new Line(start, end) { LayerId = layers[segment.Direction] };
                     space.AppendEntity(line); transaction.AddNewlyCreatedDBObject(line, true);
                     inserted.LineCount++;
+                }
+                foreach (var source in polylines)
+                {
+                    var entity = new Polyline { LayerId = layers[LineVisionDirection.Angled], Closed = source.IsClosed };
+                    for (var index = 0; index < source.Points.Count; index++)
+                    {
+                        var point = ToCad(source.Points[index].X, source.Points[index].Y, insertion, result.Height, unitsPerPixel);
+                        entity.AddVertexAt(index, new Point2d(point.X, point.Y), 0d, 0d, 0d);
+                    }
+                    entity.TransformBy(ucsToWorld); space.AppendEntity(entity); transaction.AddNewlyCreatedDBObject(entity, true); inserted.PolylineCount++;
                 }
                 foreach (var circle in circles)
                 {
@@ -80,7 +91,7 @@ namespace BatchPdfPublisher.Services
                 }
                 transaction.Commit();
             }
-            document.Editor.WriteMessage("\n图像转 CAD 完成，共插入 " + inserted.LineCount + " 根直线、" + inserted.ArcCount + " 段圆弧、" + inserted.CircleCount + " 个圆、" + inserted.TextCount + " 个文字。\n");
+            document.Editor.WriteMessage("\n图像转 CAD 完成，共插入 " + inserted.LineCount + " 根直线、" + inserted.PolylineCount + " 条折线、" + inserted.ArcCount + " 段圆弧、" + inserted.CircleCount + " 个圆、" + inserted.TextCount + " 个文字。\n");
             return inserted;
         }
 

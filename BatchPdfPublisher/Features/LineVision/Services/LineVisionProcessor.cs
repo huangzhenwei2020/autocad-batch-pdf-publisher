@@ -61,11 +61,12 @@ namespace BatchPdfPublisher.Services
                             if (settings.DetectDiagonals)
                             {
                                 Report(progress, 35, "正在提取任意角度直线……");
-                                candidates.AddRange(DetectAngledSegments(dark, width, height, settings, cancellationToken));
+                                candidates.AddRange(DetectAngledSegments((bool[])dark.Clone(), width, height, settings, cancellationToken));
                             }
                             Report(progress, 48, "正在补充水平线和垂直线……");
                             DetectRows(dark, width, height, settings, candidates, cancellationToken);
                             DetectColumns(dark, width, height, settings, candidates, cancellationToken);
+                            candidates = RemoveDirectionalDuplicates(candidates, Math.Max(2d, settings.CollinearTolerancePixels + 1d));
                             cancellationToken.ThrowIfCancellationRequested();
                             Report(progress, 76, "正在聚类并合并共线段……");
                             var merged = MergeSegments(candidates, settings.CollinearTolerancePixels, settings.MergeGapPixels);
@@ -74,6 +75,7 @@ namespace BatchPdfPublisher.Services
                                 segment.X1 *= ratio; segment.Y1 *= ratio;
                                 segment.X2 *= ratio; segment.Y2 *= ratio;
                             }
+                            var polylines = settings.BuildPolylines ? BuildPolylines(merged, Math.Max(1d, settings.MergeGapPixels * ratio)) : new List<LineVisionPolyline>();
                             foreach (var circle in circles)
                             {
                                 circle.CenterX *= ratio; circle.CenterY *= ratio; circle.Radius *= ratio;
@@ -98,6 +100,7 @@ namespace BatchPdfPublisher.Services
                                 Segments = merged,
                                 Circles = circles,
                                 Arcs = arcs,
+                                Polylines = polylines,
                                 TextRegions = recognizedText
                             };
                             binary = null;
@@ -181,6 +184,58 @@ namespace BatchPdfPublisher.Services
             }
             return circles;
         }
+
+        internal static List<LineVisionPolyline> BuildPolylines(IList<LineVisionSegment> segments, double endpointTolerance)
+        {
+            if (segments == null || segments.Count < 2) return new List<LineVisionPolyline>();
+            var result = new List<PolylineBuild>();
+            var active = segments.Select((segment, index) => new ChainEdge { Segment = segment, Index = index }).ToList();
+            var nodes = new List<ChainNode>();
+            foreach (var edge in active)
+            {
+                edge.First = FindOrAddNode(nodes, new PointF((float)edge.Segment.X1, (float)edge.Segment.Y1), endpointTolerance);
+                edge.Second = FindOrAddNode(nodes, new PointF((float)edge.Segment.X2, (float)edge.Segment.Y2), endpointTolerance);
+                edge.First.Edges.Add(edge); edge.Second.Edges.Add(edge);
+            }
+            var used = new HashSet<int>();
+            foreach (var start in nodes.Where(node => node.Edges.Count == 1)) TryBuildChain(start, used, result);
+            foreach (var edge in active.Where(edge => !used.Contains(edge.Index) && edge.First.Edges.Count == 2 && edge.Second.Edges.Count == 2)) TryBuildChain(edge.First, used, result);
+            foreach (var polyline in result)
+            {
+                foreach (var edge in polyline.SourceEdges) segments[edge].IsEnabled = false;
+            }
+            return result.Select(item => item.Value).ToList();
+        }
+
+        private static void TryBuildChain(ChainNode start, HashSet<int> used, IList<PolylineBuild> result)
+        {
+            var points = new List<PointF> { start.Point }; var edges = new List<ChainEdge>(); var current = start; var guard = 0;
+            while (guard++ < 10000)
+            {
+                var nextEdge = current.Edges.FirstOrDefault(edge => !used.Contains(edge.Index));
+                if (nextEdge == null) break;
+                used.Add(nextEdge.Index); edges.Add(nextEdge);
+                var next = ReferenceEquals(nextEdge.First, current) ? nextEdge.Second : nextEdge.First; points.Add(next.Point); current = next;
+                if (ReferenceEquals(current, start) || current.Edges.Count != 2) break;
+            }
+            var closed = points.Count > 3 && ReferenceEquals(current, start);
+            if (edges.Count < 2 || (!closed && points.Count < 3)) return;
+            if (closed) points.RemoveAt(points.Count - 1);
+            var confidence = edges.Average(edge => Math.Max(0d, Math.Min(1d, edge.Segment.Confidence)));
+            result.Add(new PolylineBuild { SourceEdges = edges.Select(edge => edge.Index).ToList(), Value = new LineVisionPolyline { Points = points, IsClosed = closed, Confidence = confidence } });
+        }
+
+        private static ChainNode FindOrAddNode(IList<ChainNode> nodes, PointF point, double tolerance)
+        {
+            var match = nodes.FirstOrDefault(node => DistanceSquared(node.Point, point) <= tolerance * tolerance);
+            if (match != null) return match;
+            match = new ChainNode { Point = point }; nodes.Add(match); return match;
+        }
+
+        private static double DistanceSquared(PointF first, PointF second) { var dx = first.X - second.X; var dy = first.Y - second.Y; return dx * dx + dy * dy; }
+        private sealed class ChainNode { public PointF Point; public List<ChainEdge> Edges = new List<ChainEdge>(); }
+        private sealed class ChainEdge { public int Index; public LineVisionSegment Segment; public ChainNode First; public ChainNode Second; }
+        private sealed class PolylineBuild { public LineVisionPolyline Value; public List<int> SourceEdges; }
 
         internal static List<LineVisionArc> DetectArcs(bool[] pixels, int width, int height, CancellationToken cancellationToken)
         {
@@ -307,6 +362,47 @@ namespace BatchPdfPublisher.Services
                 MarkConsumed(consumed, pixels, width, height, x1, y1, x2, y2, 1);
             }
             return MergeSegments(result, Math.Max(1d, settings.CollinearTolerancePixels), Math.Max(0d, settings.MergeGapPixels));
+        }
+
+        internal static List<LineVisionSegment> RemoveDirectionalDuplicates(IList<LineVisionSegment> source, double tolerance)
+        {
+            var orthogonal = source.Where(item => item.Direction == LineVisionDirection.Horizontal || item.Direction == LineVisionDirection.Vertical).ToList();
+            var angled = source.Where(item => item.Direction == LineVisionDirection.Angled || item.Direction == LineVisionDirection.Diagonal).ToList();
+            var remove = new HashSet<Guid>();
+            foreach (var line in angled)
+            {
+                var duplicate = orthogonal.Any(axis => axis.Length >= line.Length * 0.8d && SegmentNearAxis(line, axis, tolerance));
+                if (duplicate) remove.Add(line.Id);
+            }
+            foreach (var axis in orthogonal)
+            {
+                var duplicate = angled.Any(line => !remove.Contains(line.Id) && line.Length >= axis.Length * 2d && SegmentNearLineMidpoint(axis, line, tolerance));
+                if (duplicate) remove.Add(axis.Id);
+            }
+            return source.Where(item => !remove.Contains(item.Id)).ToList();
+        }
+
+        private static bool SegmentNearAxis(LineVisionSegment segment, LineVisionSegment axis, double tolerance)
+        {
+            if (axis.Direction == LineVisionDirection.Horizontal)
+                return Math.Abs(segment.Y1 - axis.Y1) <= tolerance && Math.Abs(segment.Y2 - axis.Y1) <= tolerance && IntervalsOverlap(segment.X1, segment.X2, axis.X1, axis.X2, tolerance);
+            return Math.Abs(segment.X1 - axis.X1) <= tolerance && Math.Abs(segment.X2 - axis.X1) <= tolerance && IntervalsOverlap(segment.Y1, segment.Y2, axis.Y1, axis.Y2, tolerance);
+        }
+
+        private static bool SegmentNearLineMidpoint(LineVisionSegment segment, LineVisionSegment line, double tolerance)
+        {
+            var x = (segment.X1 + segment.X2) * 0.5d; var y = (segment.Y1 + segment.Y2) * 0.5d;
+            var dx = line.X2 - line.X1; var dy = line.Y2 - line.Y1; var lengthSquared = dx * dx + dy * dy;
+            if (lengthSquared < 1e-8) return false;
+            var t = ((x - line.X1) * dx + (y - line.Y1) * dy) / lengthSquared;
+            if (t < -0.02d || t > 1.02d) return false;
+            var px = line.X1 + t * dx; var py = line.Y1 + t * dy;
+            return Math.Sqrt((x - px) * (x - px) + (y - py) * (y - py)) <= tolerance;
+        }
+
+        private static bool IntervalsOverlap(double a1, double a2, double b1, double b2, double tolerance)
+        {
+            return Math.Min(Math.Max(a1, a2), Math.Max(b1, b2)) + tolerance >= Math.Max(Math.Min(a1, a2), Math.Min(b1, b2));
         }
 
         private static bool TryEstimateDirection(bool[] pixels, int width, int height, int centerX, int centerY, int radius, out double angle)

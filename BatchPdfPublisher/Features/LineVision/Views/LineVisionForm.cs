@@ -25,6 +25,7 @@ namespace BatchPdfPublisher.Views
         private readonly CheckBox _recognizeText = new CheckBox { Text = "识别文字", Checked = true, AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
         private readonly CheckBox _maskText = new CheckBox { Text = "线稿中遮罩文字", Checked = true, AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
         private readonly CheckBox _insertText = new CheckBox { Text = "生成CAD文字", Checked = true, AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
+        private readonly CheckBox _buildPolylines = new CheckBox { Text = "连接为折线", Checked = true, AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
         private readonly ComboBox _ocrLanguage = DropDown(118);
         private readonly TextBox _ocrConfidence = Box("0.70", 55), _maskExpansion = Box("2", 45);
         private readonly Label _range = new Label { Text = "范围：整张图片", AutoSize = true, ForeColor = Color.FromArgb(60, 75, 92), Margin = new Padding(8, 8, 0, 0) };
@@ -34,6 +35,7 @@ namespace BatchPdfPublisher.Views
         private readonly ListView _objects = new ListView { Dock = DockStyle.Fill, View = View.Details, CheckBoxes = true, FullRowSelect = true, GridLines = true, HideSelection = false };
         private readonly ListView _circles = new ListView { Dock = DockStyle.Fill, View = View.Details, CheckBoxes = true, FullRowSelect = true, GridLines = true, HideSelection = false };
         private readonly ListView _arcs = new ListView { Dock = DockStyle.Fill, View = View.Details, CheckBoxes = true, FullRowSelect = true, GridLines = true, HideSelection = false };
+        private readonly ListView _polylines = new ListView { Dock = DockStyle.Fill, View = View.Details, CheckBoxes = true, FullRowSelect = true, GridLines = true, HideSelection = false };
         private readonly DataGridView _texts = new DataGridView { Dock = DockStyle.Fill, AutoGenerateColumns = false, AllowUserToAddRows = false, AllowUserToDeleteRows = false, RowHeadersVisible = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false, BackgroundColor = Color.White };
         private Rectangle? _region;
         private LineVisionResult _result;
@@ -80,7 +82,7 @@ namespace BatchPdfPublisher.Views
             var parameterRow = Row();
             Add(parameterRow, "阈值(0自动)", _threshold); Add(parameterRow, "最短线", _minimum); Add(parameterRow, "补断线", _closeGap); Add(parameterRow, "共线容差", _collinear); Add(parameterRow, "合并间隙", _mergeGap);
             Add(parameterRow, "横竖吸附(°)", _orthogonalTolerance);
-            parameterRow.Controls.Add(_diagonals); parameterRow.Controls.Add(LabelFor("预览")); parameterRow.Controls.Add(_view);
+            parameterRow.Controls.Add(_diagonals); parameterRow.Controls.Add(_buildPolylines); parameterRow.Controls.Add(LabelFor("预览")); parameterRow.Controls.Add(_view);
             _analyze.BackColor = Color.FromArgb(32, 113, 196); _analyze.ForeColor = Color.White; _analyze.Click += async (s, e) => await AnalyzeAsync(); parameterRow.Controls.Add(_analyze);
             _cancelAnalysis.Enabled = false; _cancelAnalysis.Click += (s, e) => { if (_cancellation != null) _cancellation.Cancel(); }; parameterRow.Controls.Add(_cancelAnalysis); top.Controls.Add(parameterRow);
 
@@ -104,6 +106,7 @@ namespace BatchPdfPublisher.Views
             BuildTextGrid();
             var tabs = new TabControl { Dock = DockStyle.Fill };
             var linePage = new TabPage("线段"); linePage.Controls.Add(_objects); tabs.TabPages.Add(linePage);
+            BuildPolylineList(); var polylinePage = new TabPage("折线"); polylinePage.Controls.Add(_polylines); tabs.TabPages.Add(polylinePage);
             BuildCircleList();
             var circlePage = new TabPage("圆形"); circlePage.Controls.Add(_circles); tabs.TabPages.Add(circlePage);
             BuildArcList();
@@ -131,6 +134,17 @@ namespace BatchPdfPublisher.Views
             _texts.DataError += (s, e) => { e.ThrowException = false; };
             _texts.CellValueChanged += TextCellValueChanged;
             _texts.SelectionChanged += (s, e) => { _preview.SelectedTextIndex = _texts.CurrentRow == null ? -1 : _texts.CurrentRow.Index; _preview.Invalidate(); };
+        }
+
+        private void BuildPolylineList()
+        {
+            _polylines.Columns.Add("生成", 48); _polylines.Columns.Add("节点", 55); _polylines.Columns.Add("闭合", 55); _polylines.Columns.Add("置信度", 70);
+            _polylines.ItemChecked += (s, e) =>
+            {
+                if (_syncingObjects || _result == null || e.Item.Index < 0 || e.Item.Index >= _result.Polylines.Count) return;
+                _result.Polylines[e.Item.Index].IsEnabled = e.Item.Checked; _preview.Invalidate(); UpdateStatus();
+            };
+            _polylines.SelectedIndexChanged += (s, e) => { _preview.SelectedPolylineIndex = _polylines.SelectedIndices.Count == 0 ? -1 : _polylines.SelectedIndices[0]; _preview.Invalidate(); };
         }
 
         private void BuildCircleList()
@@ -219,7 +233,7 @@ namespace BatchPdfPublisher.Views
                 result.OcrWarning = ocrWarning;
                 if (cancellation.IsCancellationRequested || !string.Equals(path, _path.Text, StringComparison.OrdinalIgnoreCase)) { result.Dispose(); return; }
                 if (_result != null) _result.Dispose(); _result = result;
-                _preview.SetResult(result); _view.SelectedIndex = 0; SyncObjects(); SyncCircles(); SyncArcs(); SyncTexts(); UpdateStatus();
+                _preview.SetResult(result); _view.SelectedIndex = 0; SyncObjects(); SyncPolylines(); SyncCircles(); SyncArcs(); SyncTexts(); UpdateStatus();
             }
             catch (OperationCanceledException) { _status.Text = "分析已取消。"; }
             catch (Exception exception) { _status.Text = "分析失败"; MessageBox.Show(this, "分析图像失败：\r\n" + exception.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Error); }
@@ -241,7 +255,7 @@ namespace BatchPdfPublisher.Views
             catch (Exception exception) { failure = exception; }
             finally { if (!IsDisposed) { Show(); Activate(); } }
             if (failure != null) MessageBox.Show(this, "插入失败：\r\n" + failure.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
-            else if (inserted.TotalCount > 0) MessageBox.Show(this, "已插入 " + inserted.LineCount + " 根可编辑直线、" + inserted.ArcCount + " 段可编辑圆弧、" + inserted.CircleCount + " 个可编辑圆、" + inserted.TextCount + " 个可编辑文字。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            else if (inserted.TotalCount > 0) MessageBox.Show(this, "已插入 " + inserted.LineCount + " 根直线、" + inserted.PolylineCount + " 条折线、" + inserted.ArcCount + " 段圆弧、" + inserted.CircleCount + " 个圆、" + inserted.TextCount + " 个文字。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         private void Calibrate(object sender, LineVisionCalibrationEventArgs e)
@@ -260,7 +274,7 @@ namespace BatchPdfPublisher.Views
                 Threshold = ParseInt(_threshold, "二值化阈值", 0, 254), MinimumLineLengthPixels = ParseInt(_minimum, "最短线", 3, 10000),
                 CloseGapPixels = ParseInt(_closeGap, "补断线", 0, 100), CollinearTolerancePixels = ParseInt(_collinear, "共线容差", 0, 100),
                 MergeGapPixels = ParseInt(_mergeGap, "合并间隙", 0, 500), DetectDiagonals = _diagonals.Checked,
-                OrthogonalToleranceDegrees = ParseDouble(_orthogonalTolerance, "横竖吸附角度", 0d, 15d)
+                OrthogonalToleranceDegrees = ParseDouble(_orthogonalTolerance, "横竖吸附角度", 0d, 15d), BuildPolylines = _buildPolylines.Checked
             };
         }
 
@@ -292,6 +306,17 @@ namespace BatchPdfPublisher.Views
                 _texts.Rows.Add(text.IsEnabled, text.Text, text.Confidence.ToString("P0", CultureInfo.CurrentCulture), string.Format(CultureInfo.InvariantCulture, "{0:0},{1:0}", bounds.Left, bounds.Top));
             }
             _syncingObjects = false;
+        }
+
+        private void SyncPolylines()
+        {
+            _syncingObjects = true; _polylines.BeginUpdate(); _polylines.Items.Clear();
+            if (_result != null) foreach (var polyline in _result.Polylines)
+            {
+                var item = new ListViewItem(string.Empty) { Checked = polyline.IsEnabled };
+                item.SubItems.Add(polyline.Points.Count.ToString(CultureInfo.InvariantCulture)); item.SubItems.Add(polyline.IsClosed ? "是" : "否"); item.SubItems.Add(polyline.Confidence.ToString("P0", CultureInfo.CurrentCulture)); _polylines.Items.Add(item);
+            }
+            _polylines.EndUpdate(); _syncingObjects = false;
         }
 
         private void SyncCircles()
@@ -335,10 +360,12 @@ namespace BatchPdfPublisher.Views
             foreach (var line in _result.Segments) line.IsEnabled = enabled;
             foreach (var circle in _result.Circles) circle.IsEnabled = enabled;
             foreach (var arc in _result.Arcs) arc.IsEnabled = enabled;
+            foreach (var polyline in _result.Polylines) polyline.IsEnabled = enabled;
             foreach (var text in _result.TextRegions) text.IsEnabled = enabled;
             foreach (ListViewItem item in _objects.Items) item.Checked = enabled;
             foreach (ListViewItem item in _circles.Items) item.Checked = enabled;
             foreach (ListViewItem item in _arcs.Items) item.Checked = enabled;
+            foreach (ListViewItem item in _polylines.Items) item.Checked = enabled;
             foreach (DataGridViewRow row in _texts.Rows) row.Cells["Enabled"].Value = enabled;
             _syncingObjects = false; _preview.Invalidate(); UpdateStatus();
         }
@@ -350,7 +377,8 @@ namespace BatchPdfPublisher.Views
             var textEnabled = _result.TextRegions.Count(x => x.IsEnabled && !string.IsNullOrWhiteSpace(x.Text));
             var circles = _result.Circles.Count(x => x.IsEnabled);
             var arcs = _result.Arcs.Count(x => x.IsEnabled);
-            _status.Text = "线段 " + _result.Segments.Count + " 根（选中 " + enabled + "），圆弧 " + _result.Arcs.Count + " 段（选中 " + arcs + "），圆形 " + _result.Circles.Count + " 个（选中 " + circles + "），文字 " + _result.TextRegions.Count + " 个（选中 " + textEnabled + "）。";
+            var polylines = _result.Polylines.Count(x => x.IsEnabled);
+            _status.Text = "直线 " + _result.Segments.Count + " 根（选中 " + enabled + "），折线 " + _result.Polylines.Count + " 条（选中 " + polylines + "），圆弧 " + _result.Arcs.Count + " 段（选中 " + arcs + "），圆 " + _result.Circles.Count + " 个，文字 " + _result.TextRegions.Count + " 个。";
             if (!string.IsNullOrWhiteSpace(_result.OcrWarning)) _status.Text += " OCR 未完成，已按纯线稿处理：" + _result.OcrWarning;
         }
 
@@ -365,7 +393,7 @@ namespace BatchPdfPublisher.Views
                     if (parts[0] == "threshold") _threshold.Text = parts[1]; else if (parts[0] == "minimum") _minimum.Text = parts[1]; else if (parts[0] == "closeGap") _closeGap.Text = parts[1];
                     else if (parts[0] == "collinear") _collinear.Text = parts[1]; else if (parts[0] == "mergeGap") _mergeGap.Text = parts[1]; else if (parts[0] == "scale") _scale.Text = parts[1]; else if (parts[0] == "diagonals") _diagonals.Checked = parts[1] == "1";
                     else if (parts[0] == "recognizeText") _recognizeText.Checked = parts[1] == "1"; else if (parts[0] == "maskText") _maskText.Checked = parts[1] == "1"; else if (parts[0] == "insertText") _insertText.Checked = parts[1] == "1";
-                    else if (parts[0] == "ocrLanguage") _ocrLanguage.SelectedIndex = parts[1] == "en-US" ? 1 : 0; else if (parts[0] == "ocrConfidence") _ocrConfidence.Text = parts[1]; else if (parts[0] == "maskExpansion") _maskExpansion.Text = parts[1]; else if (parts[0] == "orthogonalTolerance") _orthogonalTolerance.Text = parts[1];
+                    else if (parts[0] == "ocrLanguage") _ocrLanguage.SelectedIndex = parts[1] == "en-US" ? 1 : 0; else if (parts[0] == "ocrConfidence") _ocrConfidence.Text = parts[1]; else if (parts[0] == "maskExpansion") _maskExpansion.Text = parts[1]; else if (parts[0] == "orthogonalTolerance") _orthogonalTolerance.Text = parts[1]; else if (parts[0] == "buildPolylines") _buildPolylines.Checked = parts[1] == "1";
                 }
             }
             catch { }
@@ -376,7 +404,7 @@ namespace BatchPdfPublisher.Views
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath));
-                File.WriteAllLines(SettingsPath, new[] { "threshold=" + _threshold.Text, "minimum=" + _minimum.Text, "closeGap=" + _closeGap.Text, "collinear=" + _collinear.Text, "mergeGap=" + _mergeGap.Text, "orthogonalTolerance=" + _orthogonalTolerance.Text, "scale=" + _scale.Text, "diagonals=" + (_diagonals.Checked ? "1" : "0"), "recognizeText=" + (_recognizeText.Checked ? "1" : "0"), "maskText=" + (_maskText.Checked ? "1" : "0"), "insertText=" + (_insertText.Checked ? "1" : "0"), "ocrLanguage=" + (_ocrLanguage.SelectedIndex == 1 ? "en-US" : "zh-Hans-CN"), "ocrConfidence=" + _ocrConfidence.Text, "maskExpansion=" + _maskExpansion.Text });
+                File.WriteAllLines(SettingsPath, new[] { "threshold=" + _threshold.Text, "minimum=" + _minimum.Text, "closeGap=" + _closeGap.Text, "collinear=" + _collinear.Text, "mergeGap=" + _mergeGap.Text, "orthogonalTolerance=" + _orthogonalTolerance.Text, "buildPolylines=" + (_buildPolylines.Checked ? "1" : "0"), "scale=" + _scale.Text, "diagonals=" + (_diagonals.Checked ? "1" : "0"), "recognizeText=" + (_recognizeText.Checked ? "1" : "0"), "maskText=" + (_maskText.Checked ? "1" : "0"), "insertText=" + (_insertText.Checked ? "1" : "0"), "ocrLanguage=" + (_ocrLanguage.SelectedIndex == 1 ? "en-US" : "zh-Hans-CN"), "ocrConfidence=" + _ocrConfidence.Text, "maskExpansion=" + _maskExpansion.Text });
             }
             catch { }
         }

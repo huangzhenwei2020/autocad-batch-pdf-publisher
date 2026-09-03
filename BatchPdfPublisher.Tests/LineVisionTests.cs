@@ -24,6 +24,10 @@ internal static class LineVisionTests
         Run("RecognizesClosedCircle", RecognizesClosedCircle);
         Run("RecognizesQuarterArc", RecognizesQuarterArc);
         Run("DoesNotTreatBentLineAsArc", DoesNotTreatBentLineAsArc);
+        Run("BuildsClosedPolylineFromRectangle", BuildsClosedPolylineFromRectangle);
+        Run("KeepsTIntersectionAsLines", KeepsTIntersectionAsLines);
+        Run("ReconstructsPolylineFromImage", ReconstructsPolylineFromImage);
+        Run("CanDisablePolylineReconstruction", CanDisablePolylineReconstruction);
         Run("MasksRecognizedTextBeforeLineDetection", MasksRecognizedTextBeforeLineDetection);
         var worker = Environment.GetEnvironmentVariable("WANLUO_LINEVISION_OCR_WORKER");
         if (!string.IsNullOrWhiteSpace(worker) && File.Exists(worker)) Run("RecognizesTextThroughIsolatedWorker", () => RecognizesTextThroughIsolatedWorker(worker));
@@ -158,6 +162,57 @@ internal static class LineVisionTests
         });
     }
 
+    private static void BuildsClosedPolylineFromRectangle()
+    {
+        var lines = new List<LineVisionSegment>
+        {
+            Segment(10, 10, 100, 10, LineVisionDirection.Horizontal), Segment(100, 10, 100, 70, LineVisionDirection.Vertical),
+            Segment(100, 70, 10, 70, LineVisionDirection.Horizontal), Segment(10, 70, 10, 10, LineVisionDirection.Vertical)
+        };
+        var result = LineVisionProcessor.BuildPolylines(lines, 1.5d);
+        Equal(1, result.Count); True(result[0].IsClosed && result[0].Points.Count == 4, "矩形没有重构为闭合折线");
+        True(lines.All(line => !line.IsEnabled), "已进入折线的源线段仍会重复插入");
+    }
+
+    private static void KeepsTIntersectionAsLines()
+    {
+        var lines = new List<LineVisionSegment>
+        {
+            Segment(10, 40, 70, 40, LineVisionDirection.Horizontal), Segment(70, 40, 130, 40, LineVisionDirection.Horizontal),
+            Segment(70, 40, 70, 100, LineVisionDirection.Vertical)
+        };
+        Equal(0, LineVisionProcessor.BuildPolylines(lines, 1.5d).Count);
+        True(lines.All(line => line.IsEnabled), "T形交叉被错误合并成折线");
+    }
+
+    private static void ReconstructsPolylineFromImage()
+    {
+        WithImage(220, 160, graphics =>
+        {
+            using (var pen = new Pen(Color.Black, 3f)) graphics.DrawRectangle(pen, 35, 30, 145, 95);
+        }, path =>
+        {
+            using (var result = LineVisionProcessor.Analyze(path, null, Settings()))
+            {
+                if (!result.Polylines.Any(item => item.IsClosed && item.Points.Count >= 4))
+                    Console.WriteLine("DEBUG segments=" + string.Join(" | ", result.Segments.Select(item => string.Format("{0}:({1:0.0},{2:0.0})-({3:0.0},{4:0.0}) enabled={5}", item.Direction, item.X1, item.Y1, item.X2, item.Y2, item.IsEnabled))));
+                True(result.Polylines.Any(item => item.IsClosed && item.Points.Count >= 4), "图像中的闭合矩形没有重构为折线");
+            }
+        });
+    }
+
+    private static void CanDisablePolylineReconstruction()
+    {
+        WithImage(220, 160, graphics => { using (var pen = new Pen(Color.Black, 3f)) graphics.DrawRectangle(pen, 35, 30, 145, 95); }, path =>
+        {
+            var settings = Settings(); settings.BuildPolylines = false;
+            using (var result = LineVisionProcessor.Analyze(path, null, settings))
+            {
+                Equal(0, result.Polylines.Count); True(result.Segments.Any(item => item.IsEnabled), "关闭折线重构后源直线没有保留");
+            }
+        });
+    }
+
     private static void MasksRecognizedTextBeforeLineDetection()
     {
         WithImage(240, 100, graphics => graphics.DrawLine(Pens.Black, 10, 50, 230, 50), path =>
@@ -194,7 +249,7 @@ internal static class LineVisionTests
 
     private static LineVisionSettings Settings()
     {
-        return new LineVisionSettings { Threshold = 128, MinimumLineLengthPixels = 14, CloseGapPixels = 2, CollinearTolerancePixels = 3, MergeGapPixels = 5, DetectDiagonals = true, OrthogonalToleranceDegrees = 2d };
+        return new LineVisionSettings { Threshold = 128, MinimumLineLengthPixels = 14, CloseGapPixels = 2, CollinearTolerancePixels = 3, MergeGapPixels = 5, DetectDiagonals = true, OrthogonalToleranceDegrees = 2d, BuildPolylines = true };
     }
 
     private static LineVisionSegment Segment(double x1, double y1, double x2, double y2, LineVisionDirection direction)

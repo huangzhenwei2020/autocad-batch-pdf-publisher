@@ -59,6 +59,15 @@ namespace BatchPdfPublisher.Models
         public bool IsEnabled { get; set; } = true;
     }
 
+    internal sealed class LineVisionPolyline
+    {
+        public Guid Id { get; set; } = Guid.NewGuid();
+        public List<PointF> Points { get; set; } = new List<PointF>();
+        public bool IsClosed { get; set; }
+        public double Confidence { get; set; }
+        public bool IsEnabled { get; set; } = true;
+    }
+
     internal sealed class LineVisionSettings
     {
         public int Threshold { get; set; }
@@ -68,6 +77,7 @@ namespace BatchPdfPublisher.Models
         public int MergeGapPixels { get; set; } = 5;
         public bool DetectDiagonals { get; set; } = true;
         public double OrthogonalToleranceDegrees { get; set; } = 2d;
+        public bool BuildPolylines { get; set; } = true;
         public double CadUnitsPerPixel { get; set; } = 1d;
     }
 
@@ -84,6 +94,7 @@ namespace BatchPdfPublisher.Models
         public List<LineVisionSegment> Segments { get; set; } = new List<LineVisionSegment>();
         public List<LineVisionCircle> Circles { get; set; } = new List<LineVisionCircle>();
         public List<LineVisionArc> Arcs { get; set; } = new List<LineVisionArc>();
+        public List<LineVisionPolyline> Polylines { get; set; } = new List<LineVisionPolyline>();
         public List<LineVisionOcrTextRegion> TextRegions { get; set; } = new List<LineVisionOcrTextRegion>();
         public string OcrWarning { get; set; }
 
@@ -145,7 +156,8 @@ namespace BatchPdfPublisher.Models
         public int TextCount { get; set; }
         public int CircleCount { get; set; }
         public int ArcCount { get; set; }
-        public int TotalCount { get { return LineCount + CircleCount + ArcCount + TextCount; } }
+        public int PolylineCount { get; set; }
+        public int TotalCount { get { return LineCount + CircleCount + ArcCount + PolylineCount + TextCount; } }
     }
 
     internal sealed class UnavailableLineVisionOcrEngine : ILineVisionOcrEngine
