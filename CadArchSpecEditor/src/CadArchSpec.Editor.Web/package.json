@@ -1,6 +1,6 @@
 {
   "name": "cad-arch-spec-editor-web",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "prosemirror-commands": "1.7.1",
-    "prosemirror-history": "1.4.1",
+    "prosemirror-history": "1.4.2",
     "prosemirror-keymap": "1.2.3",
     "prosemirror-model": "1.25.4",
     "prosemirror-schema-basic": "1.2.4",

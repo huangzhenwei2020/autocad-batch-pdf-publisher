@@ -196,6 +196,24 @@ namespace BatchPdfPublisher.Services
                 return;
             }
 
+            if (localHash != null && remoteHash != null)
+            {
+                var localTime = File.GetLastWriteTimeUtc(localPath); var remoteTime = File.GetLastWriteTimeUtc(remotePath);
+                var difference = localTime - remoteTime;
+                if (difference > TimeSpan.FromSeconds(2))
+                {
+                    Upload(settings, mirrorRoot, logicalPath, localPath, remotePath, localHash, states, result, progress, cancellationToken);
+                    ReplaceLastOperationMessage(result, logicalPath, "本机修改时间较新，已备份并覆盖云端版本。");
+                    return;
+                }
+                if (difference < TimeSpan.FromSeconds(-2))
+                {
+                    Download(settings, logicalPath, remotePath, localPath, remoteHash, states, result, progress, cancellationToken);
+                    ReplaceLastOperationMessage(result, logicalPath, "云端修改时间较新，已备份并覆盖本机版本。");
+                    return;
+                }
+            }
+
             if (fileState != null && HashesEqual(localHash, fileState.LocalHash) &&
                 HashesEqual(remoteHash, fileState.RemoteHash))
             {
@@ -246,7 +264,7 @@ namespace BatchPdfPublisher.Services
             if (remoteHash == null && HashesEqual(localHash, baseHash))
             {
                 Upload(settings, mirrorRoot, logicalPath, localPath, remotePath, localHash, states, result, progress, cancellationToken);
-                AddOperation(result, logicalPath, CloudSyncOperationKind.Upload, "云端副本缺失，已从本机自动补传。");
+                ReplaceLastOperationMessage(result, logicalPath, "云端副本缺失，已从本机自动补传。");
                 return;
             }
             if (HashesEqual(localHash, baseHash) && remoteHash != null)
@@ -346,6 +364,7 @@ namespace BatchPdfPublisher.Services
             try
             {
                 CopyFile(source, temporary, false, direction, logicalPath, progress, cancellationToken);
+                try { File.SetLastWriteTimeUtc(temporary, File.GetLastWriteTimeUtc(source)); } catch { }
                 var actualHash = ComputeHash(temporary, cancellationToken);
                 if (!HashesEqual(actualHash, expectedHash)) throw new IOException("同步文件哈希校验失败。");
                 if (File.Exists(target))
@@ -517,6 +536,12 @@ namespace BatchPdfPublisher.Services
         private static void AddOperation(CloudSyncResult result, string logicalPath, CloudSyncOperationKind kind, string message)
         {
             result.Operations.Add(new CloudSyncOperation { LogicalPath = logicalPath, Kind = kind, Message = message });
+        }
+
+        private static void ReplaceLastOperationMessage(CloudSyncResult result, string logicalPath, string message)
+        {
+            var operation = result.Operations.LastOrDefault(item => string.Equals(item.LogicalPath, logicalPath, StringComparison.OrdinalIgnoreCase));
+            if (operation != null) operation.Message = message;
         }
 
         private static void Report(Action<CloudSyncProgress> progress, string stage, string logicalPath, int completed, int total)

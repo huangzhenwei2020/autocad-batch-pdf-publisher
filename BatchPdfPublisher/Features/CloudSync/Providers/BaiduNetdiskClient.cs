@@ -103,7 +103,7 @@ namespace BatchPdfPublisher.Services
                     foreach (var item in items)
                     {
                         var entry = new BaiduRemoteEntry { Path = NormalizeRemotePath(item.Path), IsDirectory = item.IsDirectory != 0,
-                            Size = item.Size, Md5 = item.Md5, FileSystemId = item.FileSystemId };
+                            Size = item.Size, Md5 = item.Md5, FileSystemId = item.FileSystemId, ModifiedAtUnix = item.ServerModifiedAt > 0 ? item.ServerModifiedAt : item.LocalModifiedAt };
                         result.Add(entry); if (entry.IsDirectory) pending.Enqueue(entry.Path);
                     }
                     progress?.Invoke(new CloudSyncProgress { Stage = "正在读取百度网盘目录", LogicalPath = directory, Completed = result.Count, Total = 0 });
@@ -137,6 +137,7 @@ namespace BatchPdfPublisher.Services
                     using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1024 * 1024, true))
                         await CopyWithProgress(input, output, entry.Size, progress, cancellationToken).ConfigureAwait(false);
                     ReplaceFile(temporary, targetPath);
+                    if (entry.ModifiedAtUnix > 0) try { File.SetLastWriteTimeUtc(targetPath, DateTimeOffset.FromUnixTimeSeconds(entry.ModifiedAtUnix).UtcDateTime); } catch { }
                 }
                 finally { TryDelete(temporary); }
             }
@@ -288,11 +289,11 @@ namespace BatchPdfPublisher.Services
         public void Dispose() { if (_ownsHttp) _http.Dispose(); }
     }
 
-    public sealed class BaiduRemoteEntry { public string Path { get; set; } public bool IsDirectory { get; set; } public long Size { get; set; } public string Md5 { get; set; } public long FileSystemId { get; set; } }
+    public sealed class BaiduRemoteEntry { public string Path { get; set; } public bool IsDirectory { get; set; } public long Size { get; set; } public string Md5 { get; set; } public long FileSystemId { get; set; } public long ModifiedAtUnix { get; set; } }
 
     [DataContract] internal class BaiduApiResponse { [DataMember(Name = "errno")] public int ErrorCode { get; set; } [DataMember(Name = "errmsg")] public string ErrorMessage { get; set; } }
     [DataContract] internal sealed class BaiduListResponse : BaiduApiResponse { [DataMember(Name = "list")] public List<BaiduListItem> Items { get; set; } }
-    [DataContract] internal sealed class BaiduListItem { [DataMember(Name = "path")] public string Path { get; set; } [DataMember(Name = "isdir")] public int IsDirectory { get; set; } [DataMember(Name = "size")] public long Size { get; set; } [DataMember(Name = "md5")] public string Md5 { get; set; } [DataMember(Name = "fs_id")] public long FileSystemId { get; set; } }
+    [DataContract] internal sealed class BaiduListItem { [DataMember(Name = "path")] public string Path { get; set; } [DataMember(Name = "isdir")] public int IsDirectory { get; set; } [DataMember(Name = "size")] public long Size { get; set; } [DataMember(Name = "md5")] public string Md5 { get; set; } [DataMember(Name = "fs_id")] public long FileSystemId { get; set; } [DataMember(Name = "server_mtime")] public long ServerModifiedAt { get; set; } [DataMember(Name = "local_mtime")] public long LocalModifiedAt { get; set; } }
     [DataContract] internal sealed class BaiduMetaResponse : BaiduApiResponse { [DataMember(Name = "list")] public List<BaiduMetaItem> Items { get; set; } }
     [DataContract] internal sealed class BaiduMetaItem { [DataMember(Name = "dlink")] public string DownloadLink { get; set; } }
     [DataContract] internal sealed class BaiduPrecreateResponse : BaiduApiResponse { [DataMember(Name = "uploadid")] public string UploadId { get; set; } [DataMember(Name = "block_list")] public List<int> RequiredBlocks { get; set; } }

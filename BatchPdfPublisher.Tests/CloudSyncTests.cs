@@ -19,8 +19,9 @@ internal static class CloudSyncTests
     {
         Run("UploadsNewLocalFile", UploadsNewLocalFile);
         Run("DownloadsToSecondDevice", DownloadsToSecondDevice);
-        Run("PreservesBothSidesOnConflict", PreservesBothSidesOnConflict);
-        Run("FirstConnectionCanPreferRemoteWithBackup", FirstConnectionCanPreferRemoteWithBackup);
+        Run("UsesNewerLocalFile", UsesNewerLocalFile);
+        Run("UsesNewerRemoteFile", UsesNewerRemoteFile);
+        Run("KeepsConflictWhenTimesMatch", KeepsConflictWhenTimesMatch);
         Run("RepairsMissingRemoteFileFromLocal", RepairsMissingRemoteFileFromLocal);
         Run("RejectsOverlappingRoots", RejectsOverlappingRoots);
         Run("DefersOpenDrawingUntilClosed", DefersOpenDrawingUntilClosed);
@@ -101,38 +102,43 @@ internal static class CloudSyncTests
         });
     }
 
-    private static void PreservesBothSidesOnConflict()
+    private static void UsesNewerLocalFile()
     {
         WithWorkspace((root, local, shared, engine, settings, catalog) =>
         {
             var localFile = Path.Combine(local, "settings.json");
             var remoteFile = Path.Combine(shared, "万落建筑云同步", "通用配置", "settings.json");
             File.WriteAllText(localFile, "base"); engine.Synchronize(settings, catalog);
-            File.WriteAllText(localFile, "local-change");
-            File.WriteAllText(remoteFile, "remote-change");
+            File.WriteAllText(remoteFile, "remote-change"); File.SetLastWriteTimeUtc(remoteFile, DateTime.UtcNow.AddMinutes(-2));
+            File.WriteAllText(localFile, "local-change"); File.SetLastWriteTimeUtc(localFile, DateTime.UtcNow);
             var result = engine.Synchronize(settings, catalog);
-            Equal(1, result.Conflicts);
             Equal("local-change", File.ReadAllText(localFile));
-            Equal("remote-change", File.ReadAllText(remoteFile));
-            var conflictFiles = Directory.GetFiles(Path.Combine(shared, "万落建筑云同步", "冲突文件"), "*", SearchOption.AllDirectories);
-            Equal(2, conflictFiles.Length);
+            Equal("local-change", File.ReadAllText(remoteFile)); Equal(1, result.Uploaded);
         });
     }
 
-    private static void FirstConnectionCanPreferRemoteWithBackup()
+    private static void UsesNewerRemoteFile()
     {
         WithWorkspace((root, local, shared, engine, settings, catalog) =>
         {
             var localFile = Path.Combine(local, "settings.json");
             var remoteFile = Path.Combine(shared, "万落建筑云同步", "通用配置", "settings.json");
-            Directory.CreateDirectory(Path.GetDirectoryName(remoteFile));
-            File.WriteAllText(localFile, "generated-default");
-            File.WriteAllText(remoteFile, "cloud-current");
-            settings.InitialSyncPreference = "Remote";
+            File.WriteAllText(localFile, "base"); engine.Synchronize(settings, catalog);
+            File.WriteAllText(localFile, "local-old"); File.SetLastWriteTimeUtc(localFile, DateTime.UtcNow.AddMinutes(-2));
+            File.WriteAllText(remoteFile, "cloud-current"); File.SetLastWriteTimeUtc(remoteFile, DateTime.UtcNow);
             var result = engine.Synchronize(settings, catalog);
-            Equal(1, result.Downloaded);
-            Equal("cloud-current", File.ReadAllText(localFile));
-            True(Directory.GetFiles(Path.Combine(root, "history"), "*", SearchOption.AllDirectories).Any(), "local backup missing");
+            Equal("cloud-current", File.ReadAllText(localFile)); Equal(1, result.Downloaded);
+        });
+    }
+
+    private static void KeepsConflictWhenTimesMatch()
+    {
+        WithWorkspace((root, local, shared, engine, settings, catalog) =>
+        {
+            var localFile = Path.Combine(local, "settings.json"); var remoteFile = Path.Combine(shared, "万落建筑云同步", "通用配置", "settings.json");
+            File.WriteAllText(localFile, "base"); engine.Synchronize(settings, catalog);
+            var same = DateTime.UtcNow.AddMinutes(1); File.WriteAllText(localFile, "local"); File.SetLastWriteTimeUtc(localFile, same); File.WriteAllText(remoteFile, "remote"); File.SetLastWriteTimeUtc(remoteFile, same);
+            var result = engine.Synchronize(settings, catalog); Equal(1, result.Conflicts); Equal("local", File.ReadAllText(localFile)); Equal("remote", File.ReadAllText(remoteFile));
         });
     }
 
