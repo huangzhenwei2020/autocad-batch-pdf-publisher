@@ -249,9 +249,29 @@ foreach ($band in $Bands) {
     }
 }
 
+$windowsMetadata = Get-ChildItem (Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\UnionMetadata') -Filter Windows.winmd -Recurse -ErrorAction SilentlyContinue |
+    Where-Object { $_.Directory.Name -match '^10\.' } | Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+if (-not $windowsMetadata) { throw '找不到 Windows 10/11 SDK 的 Windows.winmd，无法编译本地 OCR Worker。' }
+$ocrWorkerProject = Join-Path $repositoryRoot 'LineVisionOcrWorker\LineVisionOcrWorker.csproj'
+$ocrWorkerOutput = Join-Path $artifactRoot 'linevision-ocr-worker'
+New-Item -ItemType Directory -Path $ocrWorkerOutput -Force | Out-Null
+Invoke-Checked {
+    & $msbuild $ocrWorkerProject /t:Rebuild /p:Configuration=Release `
+        "/p:TargetFrameworkVersion=$framework" `
+        "/p:WindowsMetadataPath=$windowsMetadata" `
+        "/p:OutputPath=$ocrWorkerOutput\" /v:minimal
+} '编译图像转 CAD 本地 OCR Worker'
+$ocrWorker = Join-Path $ocrWorkerOutput 'LineVisionOcrWorker.exe'
+if (-not (Test-Path -LiteralPath $ocrWorker)) { throw '本地 OCR Worker 没有生成。' }
+foreach ($band in $Bands) { Copy-Item -LiteralPath $ocrWorker -Destination (Join-Path $OutputRoot "CadApi\$band\LineVisionOcrWorker.exe") -Force }
+
 $lineVisionTests = Join-Path $repositoryRoot 'BatchPdfPublisher.Tests\BatchPdfPublisher.LineVision.Tests.csproj'
 $testDotNet = Find-DotNet8
-Invoke-Checked { & $testDotNet run --project $lineVisionTests -c Release --nologo } '图像转 CAD 算法测试'
+Invoke-Checked {
+    $previousWorker = $env:WANLUO_LINEVISION_OCR_WORKER
+    try { $env:WANLUO_LINEVISION_OCR_WORKER = $ocrWorker; & $testDotNet run --project $lineVisionTests -c Release --nologo }
+    finally { $env:WANLUO_LINEVISION_OCR_WORKER = $previousWorker }
+} '图像转 CAD 算法和 OCR 测试'
 
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'Resources') -Destination (Join-Path $OutputRoot 'Resources') -Recurse -Force
 

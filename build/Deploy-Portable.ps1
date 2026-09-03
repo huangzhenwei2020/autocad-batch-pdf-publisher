@@ -33,6 +33,8 @@ foreach ($band in $Bands) {
     New-Item -ItemType Directory -Path $targetBand -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $sourceBand 'BatchPdfPublisher.dll') -Destination $targetBand -Force
     Copy-Item -LiteralPath (Join-Path $sourceBand 'PdfSharp.dll') -Destination $targetBand -Force
+    $ocrWorker = Join-Path $sourceBand 'LineVisionOcrWorker.exe'
+    if (Test-Path -LiteralPath $ocrWorker) { Copy-Item -LiteralPath $ocrWorker -Destination $targetBand -Force }
 }
 
 Copy-Item -LiteralPath (Join-Path $releaseRoot '万落建筑工具启动器.exe') -Destination $PortableRoot -Force

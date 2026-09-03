@@ -10,6 +10,7 @@ namespace BatchPdfPublisher.Services
         public static string ProjectsDirectory { get { return Path.Combine(RootDirectory, "项目配置"); } }
         public static string FrameTemplatesDirectory { get { return Path.Combine(RootDirectory, "图框模板"); } }
         public static string LogsDirectory { get { var path = Path.Combine(RootDirectory, "Logs"); Directory.CreateDirectory(path); return path; } }
+        public static string TemporaryDirectory { get { var path = Path.Combine(RootDirectory, "Temp"); Directory.CreateDirectory(path); return path; } }
         public static string PluginDirectory { get { return RootDirectory; } }
         public static string SettingsFile(string fileName, params string[] legacy) { Directory.CreateDirectory(SettingsDirectory); return Path.Combine(SettingsDirectory, fileName); }
     }

@@ -58,6 +58,8 @@ namespace BatchPdfPublisher.Models
         public Bitmap SourcePreview { get; set; }
         public Bitmap BinaryPreview { get; set; }
         public List<LineVisionSegment> Segments { get; set; } = new List<LineVisionSegment>();
+        public List<LineVisionOcrTextRegion> TextRegions { get; set; } = new List<LineVisionOcrTextRegion>();
+        public string OcrWarning { get; set; }
 
         public void Dispose()
         {
@@ -77,22 +79,45 @@ namespace BatchPdfPublisher.Models
 
     internal sealed class LineVisionOcrOptions
     {
-        public string Language { get; set; } = "ch_en";
+        public string Language { get; set; } = "zh-Hans-CN";
         public double MinimumConfidence { get; set; } = 0.7d;
+        public Rectangle? SourceRegion { get; set; }
+        public int TimeoutSeconds { get; set; } = 90;
+        public int MaskExpansionPixels { get; set; } = 2;
     }
 
     internal sealed class LineVisionOcrPageResult
     {
+        public string Language { get; set; }
         public List<LineVisionOcrTextRegion> TextRegions { get; set; } = new List<LineVisionOcrTextRegion>();
     }
 
     internal sealed class LineVisionOcrTextRegion
     {
         public string Text { get; set; }
+        public string OriginalText { get; set; }
         public PointF[] Polygon { get; set; }
         public double RotationDegrees { get; set; }
         public double Confidence { get; set; }
         public bool IsEnabled { get; set; } = true;
+
+        public RectangleF Bounds
+        {
+            get
+            {
+                if (Polygon == null || Polygon.Length == 0) return RectangleF.Empty;
+                var left = Polygon[0].X; var right = left; var top = Polygon[0].Y; var bottom = top;
+                foreach (var point in Polygon) { left = Math.Min(left, point.X); right = Math.Max(right, point.X); top = Math.Min(top, point.Y); bottom = Math.Max(bottom, point.Y); }
+                return RectangleF.FromLTRB(left, top, right, bottom);
+            }
+        }
+    }
+
+    internal sealed class LineVisionInsertResult
+    {
+        public int LineCount { get; set; }
+        public int TextCount { get; set; }
+        public int TotalCount { get { return LineCount + TextCount; } }
     }
 
     internal sealed class UnavailableLineVisionOcrEngine : ILineVisionOcrEngine

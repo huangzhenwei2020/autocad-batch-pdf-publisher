@@ -20,6 +20,13 @@ namespace BatchPdfPublisher.Services
 
         public static LineVisionResult Analyze(string path, Rectangle? requestedRegion, LineVisionSettings settings, CancellationToken cancellationToken, Action<int, string> progress = null)
         {
+            return Analyze(path, requestedRegion, settings, null, false, 0, cancellationToken, progress);
+        }
+
+        public static LineVisionResult Analyze(string path, Rectangle? requestedRegion, LineVisionSettings settings,
+            IEnumerable<LineVisionOcrTextRegion> textRegions, bool maskText, int maskExpansionPixels,
+            CancellationToken cancellationToken, Action<int, string> progress = null)
+        {
             if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("请选择图片文件。", "path");
             cancellationToken.ThrowIfCancellationRequested();
             settings = settings ?? new LineVisionSettings();
@@ -39,6 +46,12 @@ namespace BatchPdfPublisher.Services
                         var dark = BuildBinary(source, settings.Threshold, out var binary);
                         try
                         {
+                            var recognizedText = (textRegions ?? Enumerable.Empty<LineVisionOcrTextRegion>()).ToList();
+                            if (maskText && recognizedText.Count > 0)
+                            {
+                                Report(progress, 25, "正在遮罩文字区域……");
+                                ApplyTextMasks(dark, binary, width, height, ratio, recognizedText, maskExpansionPixels);
+                            }
                             RemoveIsolatedPixels(dark, width, height);
                             Report(progress, 35, "正在提取水平线和垂直线……");
                             var candidates = new List<LineVisionSegment>();
@@ -71,7 +84,8 @@ namespace BatchPdfPublisher.Services
                                 SourcePreviewScale = previewWidth / (double)cropped.Width,
                                 SourcePreview = Resize(cropped, previewWidth, previewHeight),
                                 BinaryPreview = binary,
-                                Segments = merged
+                                Segments = merged,
+                                TextRegions = recognizedText
                             };
                             binary = null;
                             return result;
@@ -211,6 +225,28 @@ namespace BatchPdfPublisher.Services
                     if (neighbors == 0) remove.Add(index);
                 }
             foreach (var index in remove) pixels[index] = false;
+        }
+
+        private static void ApplyTextMasks(bool[] pixels, Bitmap preview, int width, int height, double analysisRatio,
+            IEnumerable<LineVisionOcrTextRegion> regions, int expansionPixels)
+        {
+            using (var graphics = Graphics.FromImage(preview))
+            using (var brush = new SolidBrush(Color.White))
+            {
+                foreach (var region in regions.Where(value => value != null && value.IsEnabled))
+                {
+                    var bounds = region.Bounds;
+                    if (bounds.Width <= 0f || bounds.Height <= 0f) continue;
+                    var expansion = Math.Max(0, expansionPixels) / Math.Max(1d, analysisRatio);
+                    var left = Math.Max(0, (int)Math.Floor(bounds.Left / analysisRatio - expansion));
+                    var top = Math.Max(0, (int)Math.Floor(bounds.Top / analysisRatio - expansion));
+                    var right = Math.Min(width, (int)Math.Ceiling(bounds.Right / analysisRatio + expansion));
+                    var bottom = Math.Min(height, (int)Math.Ceiling(bounds.Bottom / analysisRatio + expansion));
+                    if (right <= left || bottom <= top) continue;
+                    for (var y = top; y < bottom; y++) Array.Clear(pixels, y * width + left, right - left);
+                    graphics.FillRectangle(brush, left, top, right - left, bottom - top);
+                }
+            }
         }
 
         private static void DetectRows(bool[] pixels, int width, int height, LineVisionSettings settings, IList<LineVisionSegment> target, CancellationToken cancellationToken)

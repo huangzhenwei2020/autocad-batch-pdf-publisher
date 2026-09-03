@@ -12,14 +12,18 @@ namespace BatchPdfPublisher.Services
 {
     internal static class LineVisionCadWriter
     {
-        public static int PromptAndInsert(Document document, LineVisionResult result, double unitsPerPixel)
+        public static LineVisionInsertResult PromptAndInsert(Document document, LineVisionResult result, double unitsPerPixel, bool includeText)
         {
-            if (document == null || result == null) return 0;
+            var inserted = new LineVisionInsertResult();
+            if (document == null || result == null) return inserted;
             if (unitsPerPixel <= 0d || double.IsNaN(unitsPerPixel) || double.IsInfinity(unitsPerPixel)) throw new InvalidOperationException("像素比例必须大于 0。");
             var enabled = result.Segments.Where(x => x.IsEnabled).ToList();
-            if (enabled.Count == 0) throw new InvalidOperationException("没有启用的识别线段可插入。");
+            var textRegions = includeText
+                ? result.TextRegions.Where(x => x.IsEnabled && !string.IsNullOrWhiteSpace(x.Text)).ToList()
+                : new List<LineVisionOcrTextRegion>();
+            if (enabled.Count == 0 && textRegions.Count == 0) throw new InvalidOperationException("没有启用的线段或文字可插入。");
             var picked = document.Editor.GetPoint(new PromptPointOptions("\n指定图像转 CAD 结果的左下角插入点："));
-            if (picked.Status != PromptStatus.OK) return 0;
+            if (picked.Status != PromptStatus.OK) return inserted;
             var insertion = picked.Value;
             var ucsToWorld = document.Editor.CurrentUserCoordinateSystem;
             using (document.LockDocument())
@@ -34,11 +38,31 @@ namespace BatchPdfPublisher.Services
                     if (start.DistanceTo(end) < 1e-8) continue;
                     var line = new Line(start, end) { LayerId = layers[segment.Direction] };
                     space.AppendEntity(line); transaction.AddNewlyCreatedDBObject(line, true);
+                    inserted.LineCount++;
+                }
+                var textLayer = EnsureLayer(document.Database, transaction, "LV-TEXT", 6);
+                foreach (var region in textRegions)
+                {
+                    var bounds = region.Bounds;
+                    if (bounds.Width < 1f || bounds.Height < 1f) continue;
+                    var position = ToCad(bounds.Left, bounds.Bottom, insertion, result.Height, unitsPerPixel);
+                    var text = new DBText
+                    {
+                        Position = position,
+                        Height = Math.Max(unitsPerPixel, bounds.Height * unitsPerPixel * 0.78d),
+                        Rotation = -region.RotationDegrees * Math.PI / 180d,
+                        TextString = region.Text.Trim(),
+                        LayerId = textLayer,
+                        TextStyleId = document.Database.Textstyle
+                    };
+                    text.TransformBy(ucsToWorld);
+                    space.AppendEntity(text); transaction.AddNewlyCreatedDBObject(text, true);
+                    inserted.TextCount++;
                 }
                 transaction.Commit();
             }
-            document.Editor.WriteMessage("\n图像转 CAD 完成，共插入 " + enabled.Count + " 根可编辑直线。\n");
-            return enabled.Count;
+            document.Editor.WriteMessage("\n图像转 CAD 完成，共插入 " + inserted.LineCount + " 根直线、" + inserted.TextCount + " 个文字。\n");
+            return inserted;
         }
 
         private static Point3d ToCad(double x, double y, Point3d insertion, double imageHeight, double scale)

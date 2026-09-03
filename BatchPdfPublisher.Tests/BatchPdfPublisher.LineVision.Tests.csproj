@@ -11,7 +11,9 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="LineVisionTests.cs" />
+    <Compile Include="UserDataPathsStub.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\LineVision\Models\LineVisionModels.cs" Link="LineVisionModels.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\LineVision\Services\LineVisionProcessor.cs" Link="LineVisionProcessor.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\LineVision\Services\LineVisionOcrWorkerClient.cs" Link="LineVisionOcrWorkerClient.cs" />
   </ItemGroup>
 </Project>

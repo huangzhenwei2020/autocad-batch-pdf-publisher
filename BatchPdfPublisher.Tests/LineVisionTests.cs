@@ -7,6 +7,7 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
+using System.Threading;
 
 internal static class LineVisionTests
 {
@@ -18,6 +19,9 @@ internal static class LineVisionTests
         Run("HonorsCropRegion", HonorsCropRegion);
         Run("MergesSmallCollinearGap", MergesSmallCollinearGap);
         Run("DoesNotMergeOppositeDiagonals", DoesNotMergeOppositeDiagonals);
+        Run("MasksRecognizedTextBeforeLineDetection", MasksRecognizedTextBeforeLineDetection);
+        var worker = Environment.GetEnvironmentVariable("WANLUO_LINEVISION_OCR_WORKER");
+        if (!string.IsNullOrWhiteSpace(worker) && File.Exists(worker)) Run("RecognizesTextThroughIsolatedWorker", () => RecognizesTextThroughIsolatedWorker(worker));
         Console.WriteLine("Executed " + _executed + " LineVision tests; 0 failed.");
     }
 
@@ -75,6 +79,40 @@ internal static class LineVisionTests
             Segment(0, 50, 50, 0, LineVisionDirection.Diagonal)
         };
         Equal(2, LineVisionProcessor.MergeSegments(lines, 3, 5).Count);
+    }
+
+    private static void MasksRecognizedTextBeforeLineDetection()
+    {
+        WithImage(240, 100, graphics => graphics.DrawLine(Pens.Black, 10, 50, 230, 50), path =>
+        {
+            var text = new LineVisionOcrTextRegion
+            {
+                Text = "3600", Confidence = 0.9, IsEnabled = true,
+                Polygon = new[] { new PointF(95, 38), new PointF(145, 38), new PointF(145, 62), new PointF(95, 62) }
+            };
+            using (var result = LineVisionProcessor.Analyze(path, null, Settings(), new[] { text }, true, 2, CancellationToken.None))
+                True(!result.Segments.Any(line => line.Direction == LineVisionDirection.Horizontal && Math.Min(line.X1, line.X2) < 95 && Math.Max(line.X1, line.X2) > 145), "文字遮罩后仍生成了穿过文字的直线");
+        });
+    }
+
+    private static void RecognizesTextThroughIsolatedWorker(string workerPath)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "WanluoLineVisionOcrTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root); UserDataPaths.TestRootDirectory = root;
+        try
+        {
+            WithImage(900, 260, graphics =>
+            {
+                using (var font = new Font("Arial", 68f, FontStyle.Bold)) graphics.DrawString("ROOM 3600", font, Brushes.Black, 25, 70);
+            }, path =>
+            {
+                var engine = new LineVisionOcrWorkerClient(workerPath);
+                var result = engine.RecognizeAsync(path, new LineVisionOcrOptions { Language = "en-US", MinimumConfidence = 0.5 }, CancellationToken.None).GetAwaiter().GetResult();
+                True(result.TextRegions.Any(), "独立 OCR Worker 没有返回文字区域");
+                True(result.TextRegions.Any(item => (item.Text ?? string.Empty).IndexOf("3600", StringComparison.OrdinalIgnoreCase) >= 0), "独立 OCR Worker 没有识别尺寸数字 3600");
+            });
+        }
+        finally { UserDataPaths.TestRootDirectory = null; try { Directory.Delete(root, true); } catch { } }
     }
 
     private static LineVisionSettings Settings()

@@ -48,6 +48,7 @@ namespace BatchPdfPublisher.Views
         public event EventHandler<LineVisionCalibrationEventArgs> CalibrationSelected;
         public LineVisionPreviewMode PreviewMode { get; set; } = LineVisionPreviewMode.Result;
         public int SelectedSegmentIndex { get; set; } = -1;
+        public int SelectedTextIndex { get; set; } = -1;
 
         public LineVisionPreviewControl()
         {
@@ -156,6 +157,21 @@ namespace BatchPdfPublisher.Views
                     var selected = index == SelectedSegmentIndex;
                     using (var pen = new Pen(selected ? Color.Magenta : ColorFor(segment.Direction), selected ? 3.2f : Math.Max(1.2f, Math.Min(3f, _zoom * 0.65f))))
                         e.Graphics.DrawLine(pen, ToResultScreen(segment.X1, segment.Y1), ToResultScreen(segment.X2, segment.Y2));
+                }
+                for (var index = 0; index < _result.TextRegions.Count; index++)
+                {
+                    var text = _result.TextRegions[index];
+                    var bounds = text.Bounds;
+                    var screen = new RectangleF(
+                        ToResultScreen(bounds.Left, bounds.Top).X,
+                        ToResultScreen(bounds.Left, bounds.Top).Y,
+                        (float)(bounds.Width * _result.SourcePreviewScale * _zoom),
+                        (float)(bounds.Height * _result.SourcePreviewScale * _zoom));
+                    var selected = index == SelectedTextIndex;
+                    var color = !text.IsEnabled ? Color.FromArgb(190, 235, 80, 80) : selected ? Color.Magenta : Color.FromArgb(230, 190, 90, 255);
+                    using (var fill = new SolidBrush(Color.FromArgb(selected ? 55 : 28, color))) e.Graphics.FillRectangle(fill, screen);
+                    using (var pen = new Pen(color, selected ? 3f : 1.5f) { DashStyle = text.IsEnabled ? DashStyle.Solid : DashStyle.Dash })
+                        e.Graphics.DrawRectangle(pen, screen.X, screen.Y, screen.Width, screen.Height);
                 }
             }
             if (!_region.IsEmpty)
