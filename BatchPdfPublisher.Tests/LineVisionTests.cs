@@ -22,6 +22,8 @@ internal static class LineVisionTests
         Run("PreservesArbitraryLineAngle", PreservesArbitraryLineAngle);
         Run("UsesConfigurableOrthogonalTolerance", UsesConfigurableOrthogonalTolerance);
         Run("RecognizesClosedCircle", RecognizesClosedCircle);
+        Run("RecognizesQuarterArc", RecognizesQuarterArc);
+        Run("DoesNotTreatBentLineAsArc", DoesNotTreatBentLineAsArc);
         Run("MasksRecognizedTextBeforeLineDetection", MasksRecognizedTextBeforeLineDetection);
         var worker = Environment.GetEnvironmentVariable("WANLUO_LINEVISION_OCR_WORKER");
         if (!string.IsNullOrWhiteSpace(worker) && File.Exists(worker)) Run("RecognizesTextThroughIsolatedWorker", () => RecognizesTextThroughIsolatedWorker(worker));
@@ -91,6 +93,7 @@ internal static class LineVisionTests
             using (var result = LineVisionProcessor.Analyze(path, null, Settings()))
             {
                 True(result.Circles.Any(circle => Math.Abs(circle.CenterX - 90) < 5 && Math.Abs(circle.CenterY - 90) < 5 && Math.Abs(circle.Radius - 45) < 7), "未识别闭合圆形");
+                Equal(0, result.Arcs.Count);
             }
         });
     }
@@ -125,6 +128,33 @@ internal static class LineVisionTests
             var loose = Settings(); loose.OrthogonalToleranceDegrees = 5d;
             using (var result = LineVisionProcessor.Analyze(path, null, loose))
                 True(result.Segments.Any(item => item.Direction == LineVisionDirection.Horizontal && item.Length > 190), "宽松容差没有按设置吸附为水平线");
+        });
+    }
+
+    private static void RecognizesQuarterArc()
+    {
+        WithImage(220, 220, graphics =>
+        {
+            using (var pen = new Pen(Color.Black, 3f)) graphics.DrawArc(pen, 40, 40, 140, 140, 5, 95);
+        }, path =>
+        {
+            using (var result = LineVisionProcessor.Analyze(path, null, Settings()))
+            {
+                var arc = result.Arcs.OrderByDescending(item => item.Confidence).FirstOrDefault();
+                True(arc != null && Math.Abs(arc.Radius - 70d) < 10d, "未识别常见门扇圆弧");
+                True(arc.SweepAngleDegrees > 70d && arc.SweepAngleDegrees < 120d, "圆弧角度范围不正确");
+            }
+        });
+    }
+
+    private static void DoesNotTreatBentLineAsArc()
+    {
+        WithImage(220, 160, graphics =>
+        {
+            using (var pen = new Pen(Color.Black, 3f)) { graphics.DrawLine(pen, 20, 120, 105, 35); graphics.DrawLine(pen, 105, 35, 195, 120); }
+        }, path =>
+        {
+            using (var result = LineVisionProcessor.Analyze(path, null, Settings())) Equal(0, result.Arcs.Count);
         });
     }
 

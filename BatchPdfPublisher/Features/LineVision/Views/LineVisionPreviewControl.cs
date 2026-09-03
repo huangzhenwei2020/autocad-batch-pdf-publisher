@@ -50,6 +50,7 @@ namespace BatchPdfPublisher.Views
         public int SelectedSegmentIndex { get; set; } = -1;
         public int SelectedTextIndex { get; set; } = -1;
         public int SelectedCircleIndex { get; set; } = -1;
+        public int SelectedArcIndex { get; set; } = -1;
 
         public LineVisionPreviewControl()
         {
@@ -166,6 +167,14 @@ namespace BatchPdfPublisher.Views
                     var radius = (float)(circle.Radius * _result.SourcePreviewScale * _zoom);
                     var selected = index == SelectedCircleIndex;
                     using (var pen = new Pen(selected ? Color.Magenta : Color.Orange, selected ? 3.2f : Math.Max(1.5f, _zoom * 0.75f))) e.Graphics.DrawEllipse(pen, center.X - radius, center.Y - radius, radius * 2f, radius * 2f);
+                }
+                for (var index = 0; index < _result.Arcs.Count; index++)
+                {
+                    var arc = _result.Arcs[index]; if (!arc.IsEnabled) continue;
+                    var center = ToResultScreen(arc.CenterX, arc.CenterY); var radius = (float)(arc.Radius * _result.SourcePreviewScale * _zoom);
+                    var selected = index == SelectedArcIndex;
+                    using (var pen = new Pen(selected ? Color.Magenta : Color.Cyan, selected ? 3.2f : Math.Max(1.5f, _zoom * 0.75f)))
+                        e.Graphics.DrawArc(pen, center.X - radius, center.Y - radius, radius * 2f, radius * 2f, (float)arc.StartAngleDegrees, (float)arc.SweepAngleDegrees);
                 }
                 for (var index = 0; index < _result.TextRegions.Count; index++)
                 {

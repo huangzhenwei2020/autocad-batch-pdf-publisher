@@ -19,10 +19,11 @@ namespace BatchPdfPublisher.Services
             if (unitsPerPixel <= 0d || double.IsNaN(unitsPerPixel) || double.IsInfinity(unitsPerPixel)) throw new InvalidOperationException("像素比例必须大于 0。");
             var enabled = result.Segments.Where(x => x.IsEnabled).ToList();
             var circles = result.Circles.Where(x => x.IsEnabled && x.Radius > 0d).ToList();
+            var arcs = result.Arcs.Where(x => x.IsEnabled && x.Radius > 0d && x.SweepAngleDegrees > 0d).ToList();
             var textRegions = includeText
                 ? result.TextRegions.Where(x => x.IsEnabled && !string.IsNullOrWhiteSpace(x.Text)).ToList()
                 : new List<LineVisionOcrTextRegion>();
-            if (enabled.Count == 0 && circles.Count == 0 && textRegions.Count == 0) throw new InvalidOperationException("没有启用的线段、圆形或文字可插入。");
+            if (enabled.Count == 0 && circles.Count == 0 && arcs.Count == 0 && textRegions.Count == 0) throw new InvalidOperationException("没有启用的线段、圆弧、圆形或文字可插入。");
             var picked = document.Editor.GetPoint(new PromptPointOptions("\n指定图像转 CAD 结果的左下角插入点："));
             if (picked.Status != PromptStatus.OK) return inserted;
             var insertion = picked.Value;
@@ -48,6 +49,16 @@ namespace BatchPdfPublisher.Services
                     space.AppendEntity(entity); transaction.AddNewlyCreatedDBObject(entity, true);
                     inserted.CircleCount++;
                 }
+                foreach (var arc in arcs)
+                {
+                    var center = ToCad(arc.CenterX, arc.CenterY, insertion, result.Height, unitsPerPixel);
+                    var startAngle = -(arc.StartAngleDegrees + arc.SweepAngleDegrees) * Math.PI / 180d;
+                    var endAngle = -arc.StartAngleDegrees * Math.PI / 180d;
+                    var entity = new Arc(center, arc.Radius * unitsPerPixel, startAngle, endAngle) { LayerId = layers[LineVisionDirection.Uncertain] };
+                    entity.TransformBy(ucsToWorld);
+                    space.AppendEntity(entity); transaction.AddNewlyCreatedDBObject(entity, true);
+                    inserted.ArcCount++;
+                }
                 var textLayer = EnsureLayer(document.Database, transaction, "LV-TEXT", 6);
                 foreach (var region in textRegions)
                 {
@@ -69,7 +80,7 @@ namespace BatchPdfPublisher.Services
                 }
                 transaction.Commit();
             }
-            document.Editor.WriteMessage("\n图像转 CAD 完成，共插入 " + inserted.LineCount + " 根直线、" + inserted.CircleCount + " 个圆、" + inserted.TextCount + " 个文字。\n");
+            document.Editor.WriteMessage("\n图像转 CAD 完成，共插入 " + inserted.LineCount + " 根直线、" + inserted.ArcCount + " 段圆弧、" + inserted.CircleCount + " 个圆、" + inserted.TextCount + " 个文字。\n");
             return inserted;
         }
 
@@ -85,7 +96,7 @@ namespace BatchPdfPublisher.Services
             result[LineVisionDirection.Vertical] = EnsureLayer(database, transaction, "LV-LINE-V", 5);
             result[LineVisionDirection.Diagonal] = EnsureLayer(database, transaction, "LV-LINE-DIAG", 2);
             result[LineVisionDirection.Angled] = result[LineVisionDirection.Diagonal];
-            result[LineVisionDirection.Uncertain] = EnsureLayer(database, transaction, "LV-UNCERTAIN", 1);
+            result[LineVisionDirection.Uncertain] = EnsureLayer(database, transaction, "LV-CURVE", 4);
             return result;
         }
 

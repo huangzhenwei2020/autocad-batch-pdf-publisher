@@ -33,6 +33,7 @@ namespace BatchPdfPublisher.Views
         private readonly LineVisionPreviewControl _preview = new LineVisionPreviewControl();
         private readonly ListView _objects = new ListView { Dock = DockStyle.Fill, View = View.Details, CheckBoxes = true, FullRowSelect = true, GridLines = true, HideSelection = false };
         private readonly ListView _circles = new ListView { Dock = DockStyle.Fill, View = View.Details, CheckBoxes = true, FullRowSelect = true, GridLines = true, HideSelection = false };
+        private readonly ListView _arcs = new ListView { Dock = DockStyle.Fill, View = View.Details, CheckBoxes = true, FullRowSelect = true, GridLines = true, HideSelection = false };
         private readonly DataGridView _texts = new DataGridView { Dock = DockStyle.Fill, AutoGenerateColumns = false, AllowUserToAddRows = false, AllowUserToDeleteRows = false, RowHeadersVisible = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false, BackgroundColor = Color.White };
         private Rectangle? _region;
         private LineVisionResult _result;
@@ -105,6 +106,8 @@ namespace BatchPdfPublisher.Views
             var linePage = new TabPage("线段"); linePage.Controls.Add(_objects); tabs.TabPages.Add(linePage);
             BuildCircleList();
             var circlePage = new TabPage("圆形"); circlePage.Controls.Add(_circles); tabs.TabPages.Add(circlePage);
+            BuildArcList();
+            var arcPage = new TabPage("圆弧"); arcPage.Controls.Add(_arcs); tabs.TabPages.Add(arcPage);
             var textPage = new TabPage("文字"); textPage.Controls.Add(_texts); tabs.TabPages.Add(textPage);
             var split = new SplitContainer { Dock = DockStyle.Fill, FixedPanel = FixedPanel.Panel2, SplitterDistance = 850, BackColor = Color.FromArgb(220, 226, 232) };
             split.Panel1.Controls.Add(_preview); split.Panel2.Controls.Add(tabs); root.Controls.Add(split, 0, 1);
@@ -139,6 +142,17 @@ namespace BatchPdfPublisher.Views
                 _result.Circles[e.Item.Index].IsEnabled = e.Item.Checked; _preview.Invalidate(); UpdateStatus();
             };
             _circles.SelectedIndexChanged += (s, e) => { _preview.SelectedCircleIndex = _circles.SelectedIndices.Count == 0 ? -1 : _circles.SelectedIndices[0]; _preview.Invalidate(); };
+        }
+
+        private void BuildArcList()
+        {
+            _arcs.Columns.Add("生成", 48); _arcs.Columns.Add("半径(px)", 75); _arcs.Columns.Add("圆心角", 68); _arcs.Columns.Add("置信度", 70); _arcs.Columns.Add("圆心", 110);
+            _arcs.ItemChecked += (s, e) =>
+            {
+                if (_syncingObjects || _result == null || e.Item.Index < 0 || e.Item.Index >= _result.Arcs.Count) return;
+                _result.Arcs[e.Item.Index].IsEnabled = e.Item.Checked; _preview.Invalidate(); UpdateStatus();
+            };
+            _arcs.SelectedIndexChanged += (s, e) => { _preview.SelectedArcIndex = _arcs.SelectedIndices.Count == 0 ? -1 : _arcs.SelectedIndices[0]; _preview.Invalidate(); };
         }
 
         private void ChooseImage()
@@ -205,7 +219,7 @@ namespace BatchPdfPublisher.Views
                 result.OcrWarning = ocrWarning;
                 if (cancellation.IsCancellationRequested || !string.Equals(path, _path.Text, StringComparison.OrdinalIgnoreCase)) { result.Dispose(); return; }
                 if (_result != null) _result.Dispose(); _result = result;
-                _preview.SetResult(result); _view.SelectedIndex = 0; SyncObjects(); SyncCircles(); SyncTexts(); UpdateStatus();
+                _preview.SetResult(result); _view.SelectedIndex = 0; SyncObjects(); SyncCircles(); SyncArcs(); SyncTexts(); UpdateStatus();
             }
             catch (OperationCanceledException) { _status.Text = "分析已取消。"; }
             catch (Exception exception) { _status.Text = "分析失败"; MessageBox.Show(this, "分析图像失败：\r\n" + exception.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Error); }
@@ -227,7 +241,7 @@ namespace BatchPdfPublisher.Views
             catch (Exception exception) { failure = exception; }
             finally { if (!IsDisposed) { Show(); Activate(); } }
             if (failure != null) MessageBox.Show(this, "插入失败：\r\n" + failure.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
-            else if (inserted.TotalCount > 0) MessageBox.Show(this, "已插入 " + inserted.LineCount + " 根可编辑直线、" + inserted.CircleCount + " 个可编辑圆、" + inserted.TextCount + " 个可编辑文字。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            else if (inserted.TotalCount > 0) MessageBox.Show(this, "已插入 " + inserted.LineCount + " 根可编辑直线、" + inserted.ArcCount + " 段可编辑圆弧、" + inserted.CircleCount + " 个可编辑圆、" + inserted.TextCount + " 个可编辑文字。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         private void Calibrate(object sender, LineVisionCalibrationEventArgs e)
@@ -294,6 +308,18 @@ namespace BatchPdfPublisher.Views
             _circles.EndUpdate(); _syncingObjects = false;
         }
 
+        private void SyncArcs()
+        {
+            _syncingObjects = true; _arcs.BeginUpdate(); _arcs.Items.Clear();
+            if (_result != null) foreach (var arc in _result.Arcs)
+            {
+                var item = new ListViewItem(string.Empty) { Checked = arc.IsEnabled };
+                item.SubItems.Add(arc.Radius.ToString("0.0", CultureInfo.InvariantCulture)); item.SubItems.Add(arc.SweepAngleDegrees.ToString("0.0°", CultureInfo.InvariantCulture));
+                item.SubItems.Add(arc.Confidence.ToString("P0", CultureInfo.CurrentCulture)); item.SubItems.Add(string.Format(CultureInfo.InvariantCulture, "({0:0},{1:0})", arc.CenterX, arc.CenterY)); _arcs.Items.Add(item);
+            }
+            _arcs.EndUpdate(); _syncingObjects = false;
+        }
+
         private void TextCellValueChanged(object sender, DataGridViewCellEventArgs e)
         {
             if (_syncingObjects || _result == null || e.RowIndex < 0 || e.RowIndex >= _result.TextRegions.Count) return;
@@ -308,9 +334,11 @@ namespace BatchPdfPublisher.Views
             if (_result == null) return; _syncingObjects = true;
             foreach (var line in _result.Segments) line.IsEnabled = enabled;
             foreach (var circle in _result.Circles) circle.IsEnabled = enabled;
+            foreach (var arc in _result.Arcs) arc.IsEnabled = enabled;
             foreach (var text in _result.TextRegions) text.IsEnabled = enabled;
             foreach (ListViewItem item in _objects.Items) item.Checked = enabled;
             foreach (ListViewItem item in _circles.Items) item.Checked = enabled;
+            foreach (ListViewItem item in _arcs.Items) item.Checked = enabled;
             foreach (DataGridViewRow row in _texts.Rows) row.Cells["Enabled"].Value = enabled;
             _syncingObjects = false; _preview.Invalidate(); UpdateStatus();
         }
@@ -321,7 +349,8 @@ namespace BatchPdfPublisher.Views
             var enabled = _result.Segments.Count(x => x.IsEnabled);
             var textEnabled = _result.TextRegions.Count(x => x.IsEnabled && !string.IsNullOrWhiteSpace(x.Text));
             var circles = _result.Circles.Count(x => x.IsEnabled);
-            _status.Text = "线段 " + _result.Segments.Count + " 根（选中 " + enabled + "），圆形 " + _result.Circles.Count + " 个（选中 " + circles + "），文字 " + _result.TextRegions.Count + " 个（选中 " + textEnabled + "）。";
+            var arcs = _result.Arcs.Count(x => x.IsEnabled);
+            _status.Text = "线段 " + _result.Segments.Count + " 根（选中 " + enabled + "），圆弧 " + _result.Arcs.Count + " 段（选中 " + arcs + "），圆形 " + _result.Circles.Count + " 个（选中 " + circles + "），文字 " + _result.TextRegions.Count + " 个（选中 " + textEnabled + "）。";
             if (!string.IsNullOrWhiteSpace(_result.OcrWarning)) _status.Text += " OCR 未完成，已按纯线稿处理：" + _result.OcrWarning;
         }
 

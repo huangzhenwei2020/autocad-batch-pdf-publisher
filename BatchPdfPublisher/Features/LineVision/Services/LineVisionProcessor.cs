@@ -55,6 +55,8 @@ namespace BatchPdfPublisher.Services
                             RemoveIsolatedPixels(dark, width, height);
                             Report(progress, 30, "正在识别闭合圆形……");
                             var circles = DetectCircles(dark, width, height, cancellationToken);
+                            Report(progress, 33, "正在识别圆弧……");
+                            var arcs = DetectArcs(dark, width, height, cancellationToken);
                             var candidates = new List<LineVisionSegment>();
                             if (settings.DetectDiagonals)
                             {
@@ -76,6 +78,10 @@ namespace BatchPdfPublisher.Services
                             {
                                 circle.CenterX *= ratio; circle.CenterY *= ratio; circle.Radius *= ratio;
                             }
+                            foreach (var arc in arcs)
+                            {
+                                arc.CenterX *= ratio; arc.CenterY *= ratio; arc.Radius *= ratio;
+                            }
                             Report(progress, 100, "识别完成");
                             var previewWidth = Math.Min(cropped.Width, 1800);
                             var previewHeight = Math.Max(1, (int)Math.Round(cropped.Height * previewWidth / (double)cropped.Width));
@@ -91,6 +97,7 @@ namespace BatchPdfPublisher.Services
                                 BinaryPreview = binary,
                                 Segments = merged,
                                 Circles = circles,
+                                Arcs = arcs,
                                 TextRegions = recognizedText
                             };
                             binary = null;
@@ -174,6 +181,97 @@ namespace BatchPdfPublisher.Services
             }
             return circles;
         }
+
+        internal static List<LineVisionArc> DetectArcs(bool[] pixels, int width, int height, CancellationToken cancellationToken)
+        {
+            var visited = new bool[pixels.Length]; var result = new List<LineVisionArc>(); var queue = new Queue<int>();
+            for (var seed = 0; seed < pixels.Length; seed++)
+            {
+                if (!pixels[seed] || visited[seed]) continue;
+                queue.Clear(); queue.Enqueue(seed); visited[seed] = true;
+                var points = new List<Point>();
+                while (queue.Count > 0)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var index = queue.Dequeue(); var x = index % width; var y = index / width; points.Add(new Point(x, y));
+                    for (var dy = -1; dy <= 1; dy++) for (var dx = -1; dx <= 1; dx++)
+                    {
+                        if (dx == 0 && dy == 0) continue;
+                        var nx = x + dx; var ny = y + dy; if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+                        var next = ny * width + nx; if (pixels[next] && !visited[next]) { visited[next] = true; queue.Enqueue(next); }
+                    }
+                }
+                LineVisionArc arc;
+                if (!TryFitArc(points, out arc)) continue;
+                result.Add(arc);
+                MarkArcPixels(pixels, width, height, arc, 2);
+            }
+            return result;
+        }
+
+        private static bool TryFitArc(IList<Point> points, out LineVisionArc arc)
+        {
+            arc = null; if (points == null || points.Count < 24 || points.Count > 5000) return false;
+            Point first = points[0], second = points[0], third = points[0]; double farthest = -1d;
+            foreach (var point in points) { var value = DistanceSquared(first, point); if (value > farthest) { farthest = value; second = point; } }
+            farthest = -1d; foreach (var point in points) { var value = DistanceSquared(second, point); if (value > farthest) { farthest = value; first = point; } }
+            var chordX = second.X - first.X; var chordY = second.Y - first.Y; var chordLength = Math.Sqrt(chordX * chordX + chordY * chordY);
+            if (chordLength < 10d) return false;
+            var maximumDistance = -1d;
+            foreach (var point in points)
+            {
+                var distance = Math.Abs(chordY * point.X - chordX * point.Y + second.X * first.Y - second.Y * first.X) / chordLength;
+                if (distance > maximumDistance) { maximumDistance = distance; third = point; }
+            }
+            if (maximumDistance < 3d || !TryCircleThrough(first, second, third, out var centerX, out var centerY, out var radius)) return false;
+            if (radius < 6d || radius > 1000d) return false;
+            var angles = new List<double>(); var error = 0d; var support = 0;
+            foreach (var point in points)
+            {
+                var distance = Math.Sqrt((point.X - centerX) * (point.X - centerX) + (point.Y - centerY) * (point.Y - centerY));
+                var delta = Math.Abs(distance - radius); error += delta;
+                if (delta <= Math.Max(2d, radius * 0.08d)) { support++; angles.Add(Normalize360(Math.Atan2(point.Y - centerY, point.X - centerX) * 180d / Math.PI)); }
+            }
+            if (support < 20 || support / (double)points.Count < 0.68d || error / points.Count > Math.Max(2.5d, radius * 0.09d)) return false;
+            angles.Sort(); var largestGap = -1d; var gapIndex = -1;
+            for (var index = 0; index < angles.Count; index++)
+            {
+                var next = index == angles.Count - 1 ? angles[0] + 360d : angles[index + 1]; var gap = next - angles[index];
+                if (gap > largestGap) { largestGap = gap; gapIndex = index; }
+            }
+            var sweep = 360d - largestGap; if (sweep < 25d || sweep > 330d) return false;
+            var start = angles[(gapIndex + 1) % angles.Count];
+            var bins = new bool[36]; foreach (var angle in angles) { var relative = Normalize360(angle - start); if (relative <= sweep + 3d) bins[Math.Min(35, (int)(relative / 10d))] = true; }
+            var expectedBins = Math.Max(3, (int)Math.Ceiling(sweep / 10d)); var occupied = bins.Count(value => value);
+            if (occupied < expectedBins * 0.62d) return false;
+            arc = new LineVisionArc { CenterX = centerX, CenterY = centerY, Radius = radius, StartAngleDegrees = start, SweepAngleDegrees = sweep, Confidence = Math.Min(1d, support / (double)points.Count * 0.65d + occupied / (double)expectedBins * 0.35d) };
+            return true;
+        }
+
+        private static bool TryCircleThrough(Point first, Point second, Point third, out double centerX, out double centerY, out double radius)
+        {
+            var denominator = 2d * (first.X * (second.Y - third.Y) + second.X * (third.Y - first.Y) + third.X * (first.Y - second.Y));
+            if (Math.Abs(denominator) < 1e-6) { centerX = centerY = radius = 0d; return false; }
+            var firstSquare = first.X * first.X + first.Y * first.Y; var secondSquare = second.X * second.X + second.Y * second.Y; var thirdSquare = third.X * third.X + third.Y * third.Y;
+            centerX = (firstSquare * (second.Y - third.Y) + secondSquare * (third.Y - first.Y) + thirdSquare * (first.Y - second.Y)) / denominator;
+            centerY = (firstSquare * (third.X - second.X) + secondSquare * (first.X - third.X) + thirdSquare * (second.X - first.X)) / denominator;
+            radius = Math.Sqrt((first.X - centerX) * (first.X - centerX) + (first.Y - centerY) * (first.Y - centerY)); return true;
+        }
+
+        private static void MarkArcPixels(bool[] pixels, int width, int height, LineVisionArc arc, int radiusPixels)
+        {
+            var steps = Math.Max(12, (int)Math.Ceiling(arc.Radius * arc.SweepAngleDegrees * Math.PI / 180d));
+            for (var step = 0; step <= steps; step++)
+            {
+                var angle = (arc.StartAngleDegrees + arc.SweepAngleDegrees * step / steps) * Math.PI / 180d;
+                var x = (int)Math.Round(arc.CenterX + arc.Radius * Math.Cos(angle)); var y = (int)Math.Round(arc.CenterY + arc.Radius * Math.Sin(angle));
+                for (var yy = -radiusPixels; yy <= radiusPixels; yy++) for (var xx = -radiusPixels; xx <= radiusPixels; xx++)
+                { var nx = x + xx; var ny = y + yy; if (nx >= 0 && ny >= 0 && nx < width && ny < height) pixels[ny * width + nx] = false; }
+            }
+        }
+
+        private static double DistanceSquared(Point first, Point second) { var dx = first.X - second.X; var dy = first.Y - second.Y; return dx * dx + dy * dy; }
+        private static double Normalize360(double degrees) { degrees %= 360d; if (degrees < 0d) degrees += 360d; return degrees; }
 
         internal static List<LineVisionSegment> DetectAngledSegments(bool[] pixels, int width, int height, LineVisionSettings settings, CancellationToken cancellationToken)
         {

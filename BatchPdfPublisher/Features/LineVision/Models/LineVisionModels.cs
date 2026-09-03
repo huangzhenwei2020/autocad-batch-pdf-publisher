@@ -47,6 +47,18 @@ namespace BatchPdfPublisher.Models
         public bool IsEnabled { get; set; } = true;
     }
 
+    internal sealed class LineVisionArc
+    {
+        public Guid Id { get; set; } = Guid.NewGuid();
+        public double CenterX { get; set; }
+        public double CenterY { get; set; }
+        public double Radius { get; set; }
+        public double StartAngleDegrees { get; set; }
+        public double SweepAngleDegrees { get; set; }
+        public double Confidence { get; set; }
+        public bool IsEnabled { get; set; } = true;
+    }
+
     internal sealed class LineVisionSettings
     {
         public int Threshold { get; set; }
@@ -71,6 +83,7 @@ namespace BatchPdfPublisher.Models
         public Bitmap BinaryPreview { get; set; }
         public List<LineVisionSegment> Segments { get; set; } = new List<LineVisionSegment>();
         public List<LineVisionCircle> Circles { get; set; } = new List<LineVisionCircle>();
+        public List<LineVisionArc> Arcs { get; set; } = new List<LineVisionArc>();
         public List<LineVisionOcrTextRegion> TextRegions { get; set; } = new List<LineVisionOcrTextRegion>();
         public string OcrWarning { get; set; }
 
@@ -131,7 +144,8 @@ namespace BatchPdfPublisher.Models
         public int LineCount { get; set; }
         public int TextCount { get; set; }
         public int CircleCount { get; set; }
-        public int TotalCount { get { return LineCount + CircleCount + TextCount; } }
+        public int ArcCount { get; set; }
+        public int TotalCount { get { return LineCount + CircleCount + ArcCount + TextCount; } }
     }
 
     internal sealed class UnavailableLineVisionOcrEngine : ILineVisionOcrEngine
