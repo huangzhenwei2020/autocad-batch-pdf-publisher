@@ -32,6 +32,7 @@ namespace BatchPdfPublisher.Views
         private readonly ProgressBar _progress = new ProgressBar { Dock = DockStyle.Fill, Minimum = 0, Maximum = 100 };
         private readonly LineVisionPreviewControl _preview = new LineVisionPreviewControl();
         private readonly ListView _objects = new ListView { Dock = DockStyle.Fill, View = View.Details, CheckBoxes = true, FullRowSelect = true, GridLines = true, HideSelection = false };
+        private readonly ListView _circles = new ListView { Dock = DockStyle.Fill, View = View.Details, CheckBoxes = true, FullRowSelect = true, GridLines = true, HideSelection = false };
         private readonly DataGridView _texts = new DataGridView { Dock = DockStyle.Fill, AutoGenerateColumns = false, AllowUserToAddRows = false, AllowUserToDeleteRows = false, RowHeadersVisible = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false, BackgroundColor = Color.White };
         private Rectangle? _region;
         private LineVisionResult _result;
@@ -101,6 +102,8 @@ namespace BatchPdfPublisher.Views
             BuildTextGrid();
             var tabs = new TabControl { Dock = DockStyle.Fill };
             var linePage = new TabPage("线段"); linePage.Controls.Add(_objects); tabs.TabPages.Add(linePage);
+            BuildCircleList();
+            var circlePage = new TabPage("圆形"); circlePage.Controls.Add(_circles); tabs.TabPages.Add(circlePage);
             var textPage = new TabPage("文字"); textPage.Controls.Add(_texts); tabs.TabPages.Add(textPage);
             var split = new SplitContainer { Dock = DockStyle.Fill, FixedPanel = FixedPanel.Panel2, SplitterDistance = 850, BackColor = Color.FromArgb(220, 226, 232) };
             split.Panel1.Controls.Add(_preview); split.Panel2.Controls.Add(tabs); root.Controls.Add(split, 0, 1);
@@ -124,6 +127,17 @@ namespace BatchPdfPublisher.Views
             _texts.DataError += (s, e) => { e.ThrowException = false; };
             _texts.CellValueChanged += TextCellValueChanged;
             _texts.SelectionChanged += (s, e) => { _preview.SelectedTextIndex = _texts.CurrentRow == null ? -1 : _texts.CurrentRow.Index; _preview.Invalidate(); };
+        }
+
+        private void BuildCircleList()
+        {
+            _circles.Columns.Add("生成", 48); _circles.Columns.Add("半径(px)", 82); _circles.Columns.Add("置信度", 70); _circles.Columns.Add("圆心", 120);
+            _circles.ItemChecked += (s, e) =>
+            {
+                if (_syncingObjects || _result == null || e.Item.Index < 0 || e.Item.Index >= _result.Circles.Count) return;
+                _result.Circles[e.Item.Index].IsEnabled = e.Item.Checked; _preview.Invalidate(); UpdateStatus();
+            };
+            _circles.SelectedIndexChanged += (s, e) => { _preview.SelectedCircleIndex = _circles.SelectedIndices.Count == 0 ? -1 : _circles.SelectedIndices[0]; _preview.Invalidate(); };
         }
 
         private void ChooseImage()
@@ -190,7 +204,7 @@ namespace BatchPdfPublisher.Views
                 result.OcrWarning = ocrWarning;
                 if (cancellation.IsCancellationRequested || !string.Equals(path, _path.Text, StringComparison.OrdinalIgnoreCase)) { result.Dispose(); return; }
                 if (_result != null) _result.Dispose(); _result = result;
-                _preview.SetResult(result); _view.SelectedIndex = 0; SyncObjects(); SyncTexts(); UpdateStatus();
+                _preview.SetResult(result); _view.SelectedIndex = 0; SyncObjects(); SyncCircles(); SyncTexts(); UpdateStatus();
             }
             catch (OperationCanceledException) { _status.Text = "分析已取消。"; }
             catch (Exception exception) { _status.Text = "分析失败"; MessageBox.Show(this, "分析图像失败：\r\n" + exception.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Error); }
@@ -212,7 +226,7 @@ namespace BatchPdfPublisher.Views
             catch (Exception exception) { failure = exception; }
             finally { if (!IsDisposed) { Show(); Activate(); } }
             if (failure != null) MessageBox.Show(this, "插入失败：\r\n" + failure.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
-            else if (inserted.TotalCount > 0) MessageBox.Show(this, "已插入 " + inserted.LineCount + " 根可编辑直线、" + inserted.TextCount + " 个可编辑文字。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            else if (inserted.TotalCount > 0) MessageBox.Show(this, "已插入 " + inserted.LineCount + " 根可编辑直线、" + inserted.CircleCount + " 个可编辑圆、" + inserted.TextCount + " 个可编辑文字。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         private void Calibrate(object sender, LineVisionCalibrationEventArgs e)
@@ -264,6 +278,20 @@ namespace BatchPdfPublisher.Views
             _syncingObjects = false;
         }
 
+        private void SyncCircles()
+        {
+            _syncingObjects = true; _circles.BeginUpdate(); _circles.Items.Clear();
+            if (_result != null) foreach (var circle in _result.Circles)
+            {
+                var item = new ListViewItem(string.Empty) { Checked = circle.IsEnabled };
+                item.SubItems.Add(circle.Radius.ToString("0.0", CultureInfo.InvariantCulture));
+                item.SubItems.Add(circle.Confidence.ToString("P0", CultureInfo.CurrentCulture));
+                item.SubItems.Add(string.Format(CultureInfo.InvariantCulture, "({0:0},{1:0})", circle.CenterX, circle.CenterY));
+                _circles.Items.Add(item);
+            }
+            _circles.EndUpdate(); _syncingObjects = false;
+        }
+
         private void TextCellValueChanged(object sender, DataGridViewCellEventArgs e)
         {
             if (_syncingObjects || _result == null || e.RowIndex < 0 || e.RowIndex >= _result.TextRegions.Count) return;
@@ -277,7 +305,11 @@ namespace BatchPdfPublisher.Views
         {
             if (_result == null) return; _syncingObjects = true;
             foreach (var line in _result.Segments) line.IsEnabled = enabled;
+            foreach (var circle in _result.Circles) circle.IsEnabled = enabled;
+            foreach (var text in _result.TextRegions) text.IsEnabled = enabled;
             foreach (ListViewItem item in _objects.Items) item.Checked = enabled;
+            foreach (ListViewItem item in _circles.Items) item.Checked = enabled;
+            foreach (DataGridViewRow row in _texts.Rows) row.Cells["Enabled"].Value = enabled;
             _syncingObjects = false; _preview.Invalidate(); UpdateStatus();
         }
 

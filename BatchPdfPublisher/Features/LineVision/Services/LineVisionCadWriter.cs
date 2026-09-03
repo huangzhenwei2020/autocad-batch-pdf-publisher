@@ -69,7 +69,7 @@ namespace BatchPdfPublisher.Services
                 }
                 transaction.Commit();
             }
-            document.Editor.WriteMessage("\n图像转 CAD 完成，共插入 " + inserted.LineCount + " 根直线、" + inserted.TextCount + " 个文字。\n");
+            document.Editor.WriteMessage("\n图像转 CAD 完成，共插入 " + inserted.LineCount + " 根直线、" + inserted.CircleCount + " 个圆、" + inserted.TextCount + " 个文字。\n");
             return inserted;
         }
 
