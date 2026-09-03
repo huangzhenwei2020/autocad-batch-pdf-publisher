@@ -12,6 +12,15 @@ namespace Wanluo.LineVision.VectorWorker
         [DataMember(Name = "height", Order = 5)] public int Height { get; set; }
         [DataMember(Name = "centerlines", Order = 6)] public List<VectorPolyline> Centerlines { get; set; } = new List<VectorPolyline>();
         [DataMember(Name = "outlines", Order = 7)] public List<VectorPolyline> Outlines { get; set; } = new List<VectorPolyline>();
+        [DataMember(Name = "wallRegions", Order = 8)] public List<VectorWallRegion> WallRegions { get; set; } = new List<VectorWallRegion>();
+    }
+
+    [DataContract] internal sealed class VectorWallRegion
+    {
+        [DataMember(Name = "outer", Order = 1)] public List<VectorPoint> Outer { get; set; } = new List<VectorPoint>();
+        [DataMember(Name = "holes", Order = 2)] public List<List<VectorPoint>> Holes { get; set; } = new List<List<VectorPoint>>();
+        [DataMember(Name = "averageThickness", Order = 3)] public double AverageThickness { get; set; }
+        [DataMember(Name = "confidence", Order = 4)] public double Confidence { get; set; }
     }
 
     [DataContract] internal sealed class VectorPolyline

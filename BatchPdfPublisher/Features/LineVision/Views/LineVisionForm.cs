@@ -27,8 +27,10 @@ namespace BatchPdfPublisher.Views
         private readonly CheckBox _maskText = new CheckBox { Text = "线稿中遮罩文字", Checked = true, AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
         private readonly CheckBox _insertText = new CheckBox { Text = "生成CAD文字", Checked = true, AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
         private readonly CheckBox _buildPolylines = new CheckBox { Text = "连接为折线", Checked = true, AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
+        private readonly CheckBox _detectWallFills = new CheckBox { Text = "识别墙体填充", Checked = true, AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
         private readonly ComboBox _ocrLanguage = DropDown(118);
         private readonly TextBox _ocrConfidence = Box("0.70", 55), _maskExpansion = Box("2", 45);
+        private readonly TextBox _wallMinimum = Box("3", 42), _wallMaximum = Box("80", 48);
         private readonly Label _range = new Label { Text = "范围：整张图片", AutoSize = true, ForeColor = Color.FromArgb(60, 75, 92), Margin = new Padding(8, 8, 0, 0) };
         private readonly Label _status = new Label { Text = "请选择图片。", AutoSize = true, ForeColor = Color.FromArgb(50, 65, 80), Margin = new Padding(0, 8, 0, 0) };
         private readonly ProgressBar _progress = new ProgressBar { Dock = DockStyle.Fill, Minimum = 0, Maximum = 100 };
@@ -37,6 +39,7 @@ namespace BatchPdfPublisher.Views
         private readonly ListView _circles = new ListView { Dock = DockStyle.Fill, View = View.Details, CheckBoxes = true, FullRowSelect = true, GridLines = true, HideSelection = false };
         private readonly ListView _arcs = new ListView { Dock = DockStyle.Fill, View = View.Details, CheckBoxes = true, FullRowSelect = true, GridLines = true, HideSelection = false };
         private readonly ListView _polylines = new ListView { Dock = DockStyle.Fill, View = View.Details, CheckBoxes = true, FullRowSelect = true, GridLines = true, HideSelection = false };
+        private readonly ListView _walls = new ListView { Dock = DockStyle.Fill, View = View.Details, CheckBoxes = true, FullRowSelect = true, GridLines = true, HideSelection = false };
         private readonly DataGridView _texts = new DataGridView { Dock = DockStyle.Fill, AutoGenerateColumns = false, AllowUserToAddRows = false, AllowUserToDeleteRows = false, RowHeadersVisible = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false, BackgroundColor = Color.White };
         private Rectangle? _region;
         private LineVisionResult _result;
@@ -85,7 +88,7 @@ namespace BatchPdfPublisher.Views
             var parameterRow = Row();
             Add(parameterRow, "阈值(0自动)", _threshold); Add(parameterRow, "最短线", _minimum); Add(parameterRow, "补断线", _closeGap); Add(parameterRow, "共线容差", _collinear); Add(parameterRow, "合并间隙", _mergeGap);
             Add(parameterRow, "横竖吸附(°)", _orthogonalTolerance);
-            parameterRow.Controls.Add(_diagonals); parameterRow.Controls.Add(_buildPolylines); parameterRow.Controls.Add(LabelFor("预览")); parameterRow.Controls.Add(_view);
+            parameterRow.Controls.Add(_diagonals); parameterRow.Controls.Add(_buildPolylines); parameterRow.Controls.Add(_detectWallFills); Add(parameterRow, "墙厚(px)", _wallMinimum); parameterRow.Controls.Add(LabelFor("至")); parameterRow.Controls.Add(_wallMaximum); parameterRow.Controls.Add(LabelFor("预览")); parameterRow.Controls.Add(_view);
             _analyze.BackColor = Color.FromArgb(32, 113, 196); _analyze.ForeColor = Color.White; _analyze.Click += async (s, e) => await AnalyzeAsync(); parameterRow.Controls.Add(_analyze);
             _cancelAnalysis.Enabled = false; _cancelAnalysis.Click += (s, e) => { if (_cancellation != null) _cancellation.Cancel(); }; parameterRow.Controls.Add(_cancelAnalysis); top.Controls.Add(parameterRow);
 
@@ -110,6 +113,7 @@ namespace BatchPdfPublisher.Views
             var tabs = new TabControl { Dock = DockStyle.Fill };
             var linePage = new TabPage("线段"); linePage.Controls.Add(_objects); tabs.TabPages.Add(linePage);
             BuildPolylineList(); var polylinePage = new TabPage("折线"); polylinePage.Controls.Add(_polylines); tabs.TabPages.Add(polylinePage);
+            BuildWallList(); var wallPage = new TabPage("墙体填充"); wallPage.Controls.Add(_walls); tabs.TabPages.Add(wallPage);
             BuildCircleList();
             var circlePage = new TabPage("圆形"); circlePage.Controls.Add(_circles); tabs.TabPages.Add(circlePage);
             BuildArcList();
@@ -148,6 +152,13 @@ namespace BatchPdfPublisher.Views
                 _result.Polylines[e.Item.Index].IsEnabled = e.Item.Checked; _preview.Invalidate(); UpdateStatus();
             };
             _polylines.SelectedIndexChanged += (s, e) => { _preview.SelectedPolylineIndex = _polylines.SelectedIndices.Count == 0 ? -1 : _polylines.SelectedIndices[0]; _preview.Invalidate(); };
+        }
+
+        private void BuildWallList()
+        {
+            _walls.Columns.Add("填充", 48); _walls.Columns.Add("平均厚度", 78); _walls.Columns.Add("孔洞", 50); _walls.Columns.Add("置信度", 70);
+            _walls.ItemChecked += (s, e) => { if (_syncingObjects || _result == null || e.Item.Index < 0 || e.Item.Index >= _result.WallRegions.Count) return; _result.WallRegions[e.Item.Index].IsEnabled = e.Item.Checked; _preview.Invalidate(); UpdateStatus(); };
+            _walls.SelectedIndexChanged += (s, e) => { _preview.SelectedWallIndex = _walls.SelectedIndices.Count == 0 ? -1 : _walls.SelectedIndices[0]; _preview.Invalidate(); };
         }
 
         private void BuildCircleList()
@@ -238,8 +249,8 @@ namespace BatchPdfPublisher.Views
                     try
                     {
                         ((IProgress<Tuple<int, string>>)progress).Report(Tuple.Create(82, "正在运行骨架/VTracer矢量内核……"));
-                        var vectorPolylines = await new LineVisionVectorWorkerClient().VectorizeAsync(path, region, settings, mask ? textRegions : null, expansion, cancellation.Token);
-                        result.Polylines = vectorPolylines;
+                        var vector = await new LineVisionVectorWorkerClient().VectorizeAsync(path, region, settings, mask ? textRegions : null, expansion, cancellation.Token);
+                        result.Polylines = vector.Polylines; result.WallRegions = vector.WallRegions;
                         result.Segments.Clear();
                     }
                     catch (OperationCanceledException) { throw; }
@@ -248,7 +259,7 @@ namespace BatchPdfPublisher.Views
                 result.OcrWarning = ocrWarning;
                 if (cancellation.IsCancellationRequested || !string.Equals(path, _path.Text, StringComparison.OrdinalIgnoreCase)) { result.Dispose(); return; }
                 if (_result != null) _result.Dispose(); _result = result;
-                _preview.SetResult(result); _view.SelectedIndex = 0; SyncObjects(); SyncPolylines(); SyncCircles(); SyncArcs(); SyncTexts(); UpdateStatus();
+                _preview.SetResult(result); _view.SelectedIndex = 0; SyncObjects(); SyncPolylines(); SyncWalls(); SyncCircles(); SyncArcs(); SyncTexts(); UpdateStatus();
             }
             catch (OperationCanceledException) { _status.Text = "分析已取消。"; }
             catch (Exception exception) { _status.Text = "分析失败"; MessageBox.Show(this, "分析图像失败：\r\n" + exception.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Error); }
@@ -270,7 +281,7 @@ namespace BatchPdfPublisher.Views
             catch (Exception exception) { failure = exception; }
             finally { if (!IsDisposed) { Show(); Activate(); } }
             if (failure != null) MessageBox.Show(this, "插入失败：\r\n" + failure.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
-            else if (inserted.TotalCount > 0) MessageBox.Show(this, "已插入 " + inserted.LineCount + " 根直线、" + inserted.PolylineCount + " 条折线、" + inserted.ArcCount + " 段圆弧、" + inserted.CircleCount + " 个圆、" + inserted.TextCount + " 个文字。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            else if (inserted.TotalCount > 0) MessageBox.Show(this, "已插入 " + inserted.LineCount + " 根直线、" + inserted.PolylineCount + " 条折线、" + inserted.WallFillCount + " 个墙体填充、" + inserted.ArcCount + " 段圆弧、" + inserted.CircleCount + " 个圆、" + inserted.TextCount + " 个文字。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         private void Calibrate(object sender, LineVisionCalibrationEventArgs e)
@@ -291,6 +302,7 @@ namespace BatchPdfPublisher.Views
                 MergeGapPixels = ParseInt(_mergeGap, "合并间隙", 0, 500), DetectDiagonals = _diagonals.Checked,
                 OrthogonalToleranceDegrees = ParseDouble(_orthogonalTolerance, "横竖吸附角度", 0d, 15d), BuildPolylines = _buildPolylines.Checked,
                 VectorMode = _vectorMode.SelectedIndex == 1 ? LineVisionVectorMode.Outline : _vectorMode.SelectedIndex == 2 ? LineVisionVectorMode.Hybrid : _vectorMode.SelectedIndex == 3 ? LineVisionVectorMode.Legacy : LineVisionVectorMode.Centerline
+                , DetectWallFills = _detectWallFills.Checked, MinimumWallThicknessPixels = ParseDouble(_wallMinimum, "最小墙厚", 1d, 500d), MaximumWallThicknessPixels = ParseDouble(_wallMaximum, "最大墙厚", 2d, 2000d)
             };
         }
 
@@ -335,6 +347,13 @@ namespace BatchPdfPublisher.Views
             _polylines.EndUpdate(); _syncingObjects = false;
         }
 
+        private void SyncWalls()
+        {
+            _syncingObjects = true; _walls.BeginUpdate(); _walls.Items.Clear();
+            if (_result != null) foreach (var wall in _result.WallRegions) { var item = new ListViewItem(string.Empty) { Checked = wall.IsEnabled }; item.SubItems.Add(wall.AverageThickness.ToString("0.0 px", CultureInfo.InvariantCulture)); item.SubItems.Add(wall.Holes.Count.ToString(CultureInfo.InvariantCulture)); item.SubItems.Add(wall.Confidence.ToString("P0", CultureInfo.CurrentCulture)); _walls.Items.Add(item); }
+            _walls.EndUpdate(); _syncingObjects = false;
+        }
+
         private void SyncCircles()
         {
             _syncingObjects = true; _circles.BeginUpdate(); _circles.Items.Clear();
@@ -377,11 +396,13 @@ namespace BatchPdfPublisher.Views
             foreach (var circle in _result.Circles) circle.IsEnabled = enabled;
             foreach (var arc in _result.Arcs) arc.IsEnabled = enabled;
             foreach (var polyline in _result.Polylines) polyline.IsEnabled = enabled;
+            foreach (var wall in _result.WallRegions) wall.IsEnabled = enabled;
             foreach (var text in _result.TextRegions) text.IsEnabled = enabled;
             foreach (ListViewItem item in _objects.Items) item.Checked = enabled;
             foreach (ListViewItem item in _circles.Items) item.Checked = enabled;
             foreach (ListViewItem item in _arcs.Items) item.Checked = enabled;
             foreach (ListViewItem item in _polylines.Items) item.Checked = enabled;
+            foreach (ListViewItem item in _walls.Items) item.Checked = enabled;
             foreach (DataGridViewRow row in _texts.Rows) row.Cells["Enabled"].Value = enabled;
             _syncingObjects = false; _preview.Invalidate(); UpdateStatus();
         }
@@ -394,7 +415,8 @@ namespace BatchPdfPublisher.Views
             var circles = _result.Circles.Count(x => x.IsEnabled);
             var arcs = _result.Arcs.Count(x => x.IsEnabled);
             var polylines = _result.Polylines.Count(x => x.IsEnabled);
-            _status.Text = "直线 " + _result.Segments.Count + " 根（选中 " + enabled + "），折线 " + _result.Polylines.Count + " 条（选中 " + polylines + "），圆弧 " + _result.Arcs.Count + " 段（选中 " + arcs + "），圆 " + _result.Circles.Count + " 个，文字 " + _result.TextRegions.Count + " 个。";
+            var walls = _result.WallRegions.Count(x => x.IsEnabled);
+            _status.Text = "直线 " + _result.Segments.Count + " 根，折线 " + _result.Polylines.Count + " 条（选中 " + polylines + "），墙体候选 " + _result.WallRegions.Count + " 个（填充 " + walls + "），圆弧 " + _result.Arcs.Count + " 段，文字 " + _result.TextRegions.Count + " 个。";
             if (!string.IsNullOrWhiteSpace(_result.OcrWarning)) _status.Text += " OCR 未完成，已按纯线稿处理：" + _result.OcrWarning;
             if (!string.IsNullOrWhiteSpace(_result.VectorWarning)) _status.Text += " 新矢量内核未完成，已保留兼容算法：" + _result.VectorWarning;
         }
@@ -412,6 +434,7 @@ namespace BatchPdfPublisher.Views
                     else if (parts[0] == "recognizeText") _recognizeText.Checked = parts[1] == "1"; else if (parts[0] == "maskText") _maskText.Checked = parts[1] == "1"; else if (parts[0] == "insertText") _insertText.Checked = parts[1] == "1";
                     else if (parts[0] == "ocrLanguage") _ocrLanguage.SelectedIndex = parts[1] == "en-US" ? 1 : 0; else if (parts[0] == "ocrConfidence") _ocrConfidence.Text = parts[1]; else if (parts[0] == "maskExpansion") _maskExpansion.Text = parts[1]; else if (parts[0] == "orthogonalTolerance") _orthogonalTolerance.Text = parts[1]; else if (parts[0] == "buildPolylines") _buildPolylines.Checked = parts[1] == "1";
                     else if (parts[0] == "vectorMode") { int value; if (int.TryParse(parts[1], out value)) _vectorMode.SelectedIndex = Math.Max(0, Math.Min(3, value)); }
+                    else if (parts[0] == "detectWallFills") _detectWallFills.Checked = parts[1] == "1"; else if (parts[0] == "wallMinimum") _wallMinimum.Text = parts[1]; else if (parts[0] == "wallMaximum") _wallMaximum.Text = parts[1];
                 }
             }
             catch { }
@@ -422,7 +445,7 @@ namespace BatchPdfPublisher.Views
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath));
-                File.WriteAllLines(SettingsPath, new[] { "threshold=" + _threshold.Text, "minimum=" + _minimum.Text, "closeGap=" + _closeGap.Text, "collinear=" + _collinear.Text, "mergeGap=" + _mergeGap.Text, "orthogonalTolerance=" + _orthogonalTolerance.Text, "buildPolylines=" + (_buildPolylines.Checked ? "1" : "0"), "vectorMode=" + _vectorMode.SelectedIndex, "scale=" + _scale.Text, "diagonals=" + (_diagonals.Checked ? "1" : "0"), "recognizeText=" + (_recognizeText.Checked ? "1" : "0"), "maskText=" + (_maskText.Checked ? "1" : "0"), "insertText=" + (_insertText.Checked ? "1" : "0"), "ocrLanguage=" + (_ocrLanguage.SelectedIndex == 1 ? "en-US" : "zh-Hans-CN"), "ocrConfidence=" + _ocrConfidence.Text, "maskExpansion=" + _maskExpansion.Text });
+                File.WriteAllLines(SettingsPath, new[] { "threshold=" + _threshold.Text, "minimum=" + _minimum.Text, "closeGap=" + _closeGap.Text, "collinear=" + _collinear.Text, "mergeGap=" + _mergeGap.Text, "orthogonalTolerance=" + _orthogonalTolerance.Text, "buildPolylines=" + (_buildPolylines.Checked ? "1" : "0"), "vectorMode=" + _vectorMode.SelectedIndex, "detectWallFills=" + (_detectWallFills.Checked ? "1" : "0"), "wallMinimum=" + _wallMinimum.Text, "wallMaximum=" + _wallMaximum.Text, "scale=" + _scale.Text, "diagonals=" + (_diagonals.Checked ? "1" : "0"), "recognizeText=" + (_recognizeText.Checked ? "1" : "0"), "maskText=" + (_maskText.Checked ? "1" : "0"), "insertText=" + (_insertText.Checked ? "1" : "0"), "ocrLanguage=" + (_ocrLanguage.SelectedIndex == 1 ? "en-US" : "zh-Hans-CN"), "ocrConfidence=" + _ocrConfidence.Text, "maskExpansion=" + _maskExpansion.Text });
             }
             catch { }
         }

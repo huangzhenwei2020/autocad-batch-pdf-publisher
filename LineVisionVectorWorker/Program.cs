@@ -22,7 +22,11 @@ namespace Wanluo.LineVision.VectorWorker
                 {
                     var result = new VectorResult { Success = true, Mode = mode, Width = source.Width, Height = source.Height };
                     if (mode == "centerline" || mode == "hybrid") result.Centerlines = SkeletonVectorizer.Vectorize(source, ParseInt(Value(args, "--threshold"), 0), ParseInt(Value(args, "--chunk-size"), 10));
-                    if (mode == "outline" || mode == "hybrid") result.Outlines = RunVTracer(input, output, args);
+                    if (mode == "outline" || mode == "hybrid")
+                    {
+                        result.Outlines = RunVTracer(input, output, args);
+                        result.WallRegions = WallRegionDetector.Detect(result.Outlines, ParseDouble(Value(args, "--wall-min"), 3d), ParseDouble(Value(args, "--wall-max"), 80d));
+                    }
                     Write(output, result); return 0;
                 }
             }

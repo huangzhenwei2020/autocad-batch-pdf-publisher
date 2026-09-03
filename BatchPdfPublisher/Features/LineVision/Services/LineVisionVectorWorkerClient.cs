@@ -18,7 +18,7 @@ namespace BatchPdfPublisher.Services
         public LineVisionVectorWorkerClient(string workerPath = null) { _workerPath = string.IsNullOrWhiteSpace(workerPath) ? Path.Combine(Path.GetDirectoryName(typeof(LineVisionVectorWorkerClient).Assembly.Location), "LineVisionVectorWorker.exe") : workerPath; }
         public bool IsAvailable { get { return File.Exists(_workerPath); } }
 
-        public async Task<List<LineVisionPolyline>> VectorizeAsync(string imagePath, Rectangle? region, LineVisionSettings settings, IEnumerable<LineVisionOcrTextRegion> textRegions, int maskExpansion, CancellationToken cancellationToken)
+        public async Task<LineVisionVectorResult> VectorizeAsync(string imagePath, Rectangle? region, LineVisionSettings settings, IEnumerable<LineVisionOcrTextRegion> textRegions, int maskExpansion, CancellationToken cancellationToken)
         {
             if (!IsAvailable) throw new FileNotFoundException("未找到矢量化 Worker，请重新运行最新版启动器。", _workerPath);
             var operation = Path.Combine(UserDataPaths.TemporaryDirectory, "linevision-vector-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(operation);
@@ -26,8 +26,8 @@ namespace BatchPdfPublisher.Services
             try
             {
                 if (region.HasValue || textRegions != null) { input = Path.Combine(operation, "prepared.png"); SavePrepared(imagePath, region, textRegions, maskExpansion, input); }
-                var mode = settings.VectorMode == LineVisionVectorMode.Outline ? "outline" : settings.VectorMode == LineVisionVectorMode.Hybrid ? "hybrid" : "centerline";
-                var start = new ProcessStartInfo { FileName = _workerPath, Arguments = "--input " + Quote(input) + " --output " + Quote(output) + " --mode " + mode + " --threshold " + settings.Threshold, WorkingDirectory = Path.GetDirectoryName(_workerPath), UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true };
+                var mode = settings.VectorMode == LineVisionVectorMode.Outline ? "outline" : settings.VectorMode == LineVisionVectorMode.Hybrid || settings.DetectWallFills ? "hybrid" : "centerline";
+                var start = new ProcessStartInfo { FileName = _workerPath, Arguments = "--input " + Quote(input) + " --output " + Quote(output) + " --mode " + mode + " --threshold " + settings.Threshold + " --wall-min " + settings.MinimumWallThicknessPixels.ToString(System.Globalization.CultureInfo.InvariantCulture) + " --wall-max " + settings.MaximumWallThicknessPixels.ToString(System.Globalization.CultureInfo.InvariantCulture), WorkingDirectory = Path.GetDirectoryName(_workerPath), UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true };
                 using (var process = Process.Start(start))
                 {
                     if (process == null) throw new InvalidOperationException("无法启动矢量化 Worker。"); var started = DateTime.UtcNow;
@@ -38,17 +38,24 @@ namespace BatchPdfPublisher.Services
                     }
                     var error = await process.StandardError.ReadToEndAsync().ConfigureAwait(false); var dto = Read(output);
                     if (dto == null || !dto.Success) throw new InvalidOperationException(dto == null ? "矢量化 Worker 没有返回结果。" + error : dto.Error);
-                    return Convert(dto, settings.VectorMode, settings.OrthogonalToleranceDegrees);
+                    return Convert(dto, settings, settings.OrthogonalToleranceDegrees);
                 }
             }
             finally { try { Directory.Delete(operation, true); } catch { } }
         }
 
-        private static List<LineVisionPolyline> Convert(VectorResult dto, LineVisionVectorMode mode, double orthogonalTolerance)
+        private static LineVisionVectorResult Convert(VectorResult dto, LineVisionSettings settings, double orthogonalTolerance)
         {
-            var result = new List<LineVisionPolyline>(); Add(result, dto.Centerlines, "骨架中心线", true);
-            Add(result, dto.Outlines, "VTracer轮廓", mode == LineVisionVectorMode.Outline);
-            foreach (var polyline in result) SnapOrthogonal(polyline, orthogonalTolerance);
+            var result = new LineVisionVectorResult(); Add(result.Polylines, dto.Centerlines, "骨架中心线", true);
+            Add(result.Polylines, dto.Outlines, "VTracer轮廓", settings.VectorMode == LineVisionVectorMode.Outline);
+            foreach (var polyline in result.Polylines) SnapOrthogonal(polyline, orthogonalTolerance);
+            if (settings.DetectWallFills) foreach (var wall in dto.WallRegions ?? new List<VectorWallRegion>())
+            {
+                var converted = new LineVisionWallRegion { AverageThickness = wall.AverageThickness, Confidence = wall.Confidence, IsEnabled = false };
+                foreach (var point in wall.Outer ?? new List<VectorPoint>()) converted.Outer.Add(new PointF((float)point.X, (float)point.Y));
+                foreach (var hole in wall.Holes ?? new List<List<VectorPoint>>()) { var points = new List<PointF>(); foreach (var point in hole) points.Add(new PointF((float)point.X, (float)point.Y)); converted.Holes.Add(points); }
+                if (converted.Outer.Count >= 3) result.WallRegions.Add(converted);
+            }
             return result;
         }
 
@@ -106,8 +113,11 @@ namespace BatchPdfPublisher.Services
         private static VectorResult Read(string path) { if (!File.Exists(path)) return null; try { var serializer = new DataContractJsonSerializer(typeof(VectorResult)); using (var stream = File.OpenRead(path)) return serializer.ReadObject(stream) as VectorResult; } catch { return null; } }
         private static string Quote(string value) { return "\"" + (value ?? string.Empty).Replace("\"", "\\\"") + "\""; }
 
-        [DataContract] private sealed class VectorResult { [DataMember(Name = "success")] public bool Success { get; set; } [DataMember(Name = "error")] public string Error { get; set; } [DataMember(Name = "centerlines")] public List<VectorPolyline> Centerlines { get; set; } [DataMember(Name = "outlines")] public List<VectorPolyline> Outlines { get; set; } }
+        [DataContract] private sealed class VectorResult { [DataMember(Name = "success")] public bool Success { get; set; } [DataMember(Name = "error")] public string Error { get; set; } [DataMember(Name = "centerlines")] public List<VectorPolyline> Centerlines { get; set; } [DataMember(Name = "outlines")] public List<VectorPolyline> Outlines { get; set; } [DataMember(Name = "wallRegions")] public List<VectorWallRegion> WallRegions { get; set; } }
         [DataContract] private sealed class VectorPolyline { [DataMember(Name = "points")] public List<VectorPoint> Points { get; set; } [DataMember(Name = "closed")] public bool Closed { get; set; } [DataMember(Name = "confidence")] public double Confidence { get; set; } }
         [DataContract] private sealed class VectorPoint { [DataMember(Name = "x")] public double X { get; set; } [DataMember(Name = "y")] public double Y { get; set; } }
+        [DataContract] private sealed class VectorWallRegion { [DataMember(Name = "outer")] public List<VectorPoint> Outer { get; set; } [DataMember(Name = "holes")] public List<List<VectorPoint>> Holes { get; set; } [DataMember(Name = "averageThickness")] public double AverageThickness { get; set; } [DataMember(Name = "confidence")] public double Confidence { get; set; } }
     }
+
+    internal sealed class LineVisionVectorResult { public List<LineVisionPolyline> Polylines { get; set; } = new List<LineVisionPolyline>(); public List<LineVisionWallRegion> WallRegions { get; set; } = new List<LineVisionWallRegion>(); }
 }

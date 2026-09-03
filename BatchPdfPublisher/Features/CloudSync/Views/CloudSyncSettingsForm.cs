@@ -318,6 +318,7 @@ namespace BatchPdfPublisher.Views
                 var cancellationToken = _syncCancellation.Token;
                 var result = await Task.Run(() => CloudSyncWorkflow.Synchronize(settings, new CloudSyncSettingsStore(), QueueProgress, cancellationToken));
                 ShowResult(result);
+                CloudSyncCadNotificationService.Show(result, null);
             }
             catch (OperationCanceledException)
             {
@@ -341,6 +342,8 @@ namespace BatchPdfPublisher.Views
         {
             if (progress == null || IsDisposed) return;
             _status.Text = progress.Stage + (string.IsNullOrWhiteSpace(progress.LogicalPath) ? string.Empty : "：" + progress.LogicalPath);
+            if (!string.IsNullOrWhiteSpace(progress.BytesText)) _status.Text += "　" + progress.BytesText;
+            if (!string.IsNullOrWhiteSpace(progress.SpeedText)) _status.Text += "　" + progress.SpeedText;
             _status.ForeColor = Color.FromArgb(34, 98, 160);
             if (progress.Total > 0)
             {
@@ -424,12 +427,13 @@ namespace BatchPdfPublisher.Views
 
         private void ShowResult(CloudSyncResult result)
         {
-            _status.Text = "同步完成：" + result.Summary + "。本机数据已保存到万落用户数据目录。";
+            _status.Text = "同步完成：" + result.Summary + "。本机 " + result.LocalFileCount + " 个文件，云端 " + result.RemoteFileCount + " 个文件。";
             _status.ForeColor = result.Errors > 0 || result.Conflicts > 0 ? Color.DarkOrange : Color.FromArgb(34, 120, 72);
             _details.Items.Clear();
             foreach (var operation in result.Operations)
                 _details.Items.Add(operation.Kind + " · " + operation.LogicalPath + " · " + operation.Message);
             if (!result.Operations.Any()) _details.Items.Add("所有文件均已是最新版本。");
+            _details.Items.Add("状态 · 本机 " + result.LocalFileCount + " 个文件 · 云端 " + result.RemoteFileCount + " 个文件");
             _details.Items.Add("本机数据目录 · " + UserDataPaths.RootDirectory);
         }
 

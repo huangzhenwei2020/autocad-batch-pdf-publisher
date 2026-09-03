@@ -28,6 +28,7 @@ namespace BatchPdfPublisher.Services
                 _installed = true;
             }
             QueueReload(false);
+            CloudSyncCadNotificationService.Install();
         }
 
         public static void Reload()
@@ -81,6 +82,7 @@ namespace BatchPdfPublisher.Services
                 DetachResources(out watchers, out timer);
             }
             DisposeResources(watchers, timer);
+            CloudSyncCadNotificationService.Remove();
         }
 
         public static void RequestSynchronization(bool immediate)
@@ -182,6 +184,7 @@ namespace BatchPdfPublisher.Services
                 Interlocked.Exchange(ref _running, 0);
                 var handler = SynchronizationCompleted;
                 if (handler != null) try { handler(result, failure); } catch { }
+                try { CloudSyncCadNotificationService.Show(result, failure); } catch { }
                 if (failure != null || (result != null && result.Errors > 0))
                 {
                     var failureCount = Interlocked.Increment(ref _consecutiveFailures);

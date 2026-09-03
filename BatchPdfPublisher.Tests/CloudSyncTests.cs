@@ -21,7 +21,7 @@ internal static class CloudSyncTests
         Run("DownloadsToSecondDevice", DownloadsToSecondDevice);
         Run("PreservesBothSidesOnConflict", PreservesBothSidesOnConflict);
         Run("FirstConnectionCanPreferRemoteWithBackup", FirstConnectionCanPreferRemoteWithBackup);
-        Run("PropagatesRemoteDeletionWithBackup", PropagatesRemoteDeletionWithBackup);
+        Run("RepairsMissingRemoteFileFromLocal", RepairsMissingRemoteFileFromLocal);
         Run("RejectsOverlappingRoots", RejectsOverlappingRoots);
         Run("DefersOpenDrawingUntilClosed", DefersOpenDrawingUntilClosed);
         Run("MapsProjectFileOnlyOnce", MapsProjectFileOnlyOnce);
@@ -29,7 +29,7 @@ internal static class CloudSyncTests
         Run("IncludesNormalProjectAttachments", IncludesNormalProjectAttachments);
         Run("IgnoresUnselectedRemoteProject", IgnoresUnselectedRemoteProject);
         Run("BaiduCachesOnlySelectedProjects", BaiduCachesOnlySelectedProjects);
-        Run("DefersRemoteDeletionUntilDrawingCloses", DefersRemoteDeletionUntilDrawingCloses);
+        Run("RepairsMissingRemoteDrawingEvenWhenOpen", RepairsMissingRemoteDrawingEvenWhenOpen);
         Run("RestoresHistoryWithBackup", RestoresHistoryWithBackup);
         Run("ResolvesConflictUsingLocalCopy", ResolvesConflictUsingLocalCopy);
         Run("CreatesProviderWithoutChangingLocalMode", CreatesProviderWithoutChangingLocalMode);
@@ -136,7 +136,7 @@ internal static class CloudSyncTests
         });
     }
 
-    private static void PropagatesRemoteDeletionWithBackup()
+    private static void RepairsMissingRemoteFileFromLocal()
     {
         WithWorkspace((root, local, shared, engine, settings, catalog) =>
         {
@@ -145,9 +145,10 @@ internal static class CloudSyncTests
             File.WriteAllText(localFile, "base"); engine.Synchronize(settings, catalog);
             File.Delete(remoteFile);
             var result = engine.Synchronize(settings, catalog);
-            Equal(1, result.Deleted);
-            True(!File.Exists(localFile), "local file should be deleted");
-            True(Directory.GetFiles(Path.Combine(root, "history"), "*", SearchOption.AllDirectories).Any(), "history backup missing");
+            Equal(1, result.Uploaded);
+            Equal("base", File.ReadAllText(localFile));
+            Equal("base", File.ReadAllText(remoteFile));
+            True(result.Operations.Any(item => item.Kind == CloudSyncOperationKind.Upload && item.Message.Contains("补传")), "missing remote file was not reported as repair upload");
         });
     }
 
@@ -306,7 +307,7 @@ internal static class CloudSyncTests
         }
     }
 
-    private static void DefersRemoteDeletionUntilDrawingCloses()
+    private static void RepairsMissingRemoteDrawingEvenWhenOpen()
     {
         WithWorkspace((root, local, shared, engine, settings, ignored) =>
         {
@@ -316,11 +317,9 @@ internal static class CloudSyncTests
             File.WriteAllText(drawing, "base"); engine.Synchronize(settings, catalog);
             File.Delete(Path.Combine(shared, "万落建筑云同步", "项目文件", "test", "delete-me.dwg"));
             CloudSyncPendingFileService.RegisterOpenPathProbe(path => true);
-            var deferred = engine.Synchronize(settings, catalog);
-            Equal(1, deferred.Pending); True(File.Exists(drawing), "open drawing was deleted");
-            CloudSyncPendingFileService.RegisterOpenPathProbe(path => false);
-            engine.Synchronize(settings, catalog);
-            True(!File.Exists(drawing), "pending remote deletion was not applied after close");
+            var repaired = engine.Synchronize(settings, catalog);
+            Equal(1, repaired.Uploaded); True(File.Exists(drawing), "open drawing was deleted");
+            True(File.Exists(Path.Combine(shared, "万落建筑云同步", "项目文件", "test", "delete-me.dwg")), "missing cloud drawing was not repaired");
             CloudSyncPendingFileService.ClearOpenPathProbe();
         });
     }
@@ -486,6 +485,7 @@ internal static class CloudSyncTests
             engine.Synchronize(settings, catalog, settings.SyncFolder, item => progress.Add(item));
             True(progress.Any(item => item.Stage == "正在扫描本机文件"), "local scan progress was not reported");
             True(progress.Any(item => item.Stage == "正在核对文件" && item.Total > 0), "file progress was not reported");
+            True(progress.Any(item => item.Direction == "上传" && item.BytesTotal > 0 && item.BytesCompleted == item.BytesTotal), "byte transfer progress was not reported");
             Equal("同步完成", progress.Last().Stage);
         });
     }

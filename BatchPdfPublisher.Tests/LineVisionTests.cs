@@ -269,10 +269,11 @@ internal static class LineVisionTests
             {
                 var settings = Settings(); settings.VectorMode = LineVisionVectorMode.Centerline;
                 var center = new LineVisionVectorWorkerClient(workerPath).VectorizeAsync(path, null, settings, null, 0, CancellationToken.None).GetAwaiter().GetResult();
-                True(center.Any(item => item.Source == "骨架中心线" && item.Points.Count >= 2), "独立矢量 Worker 没有返回中心线");
+                True(center.Polylines.Any(item => item.Source == "骨架中心线" && item.Points.Count >= 2), "独立矢量 Worker 没有返回中心线");
                 settings.VectorMode = LineVisionVectorMode.Hybrid;
                 var hybrid = new LineVisionVectorWorkerClient(workerPath).VectorizeAsync(path, null, settings, null, 0, CancellationToken.None).GetAwaiter().GetResult();
-                True(hybrid.Any(item => item.Source == "VTracer轮廓" && !item.IsEnabled), "混合模式没有返回默认关闭的 VTracer 候选");
+                True(hybrid.Polylines.Any(item => item.Source == "VTracer轮廓" && !item.IsEnabled), "混合模式没有返回默认关闭的 VTracer 候选");
+                True(hybrid.WallRegions.Any(item => item.Outer.Count >= 3 && !item.IsEnabled), "混合模式没有返回默认关闭的墙体填充候选");
             });
         }
         finally { UserDataPaths.TestRootDirectory = null; try { Directory.Delete(root, true); } catch { } }

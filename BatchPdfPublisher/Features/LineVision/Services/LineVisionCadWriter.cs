@@ -21,10 +21,11 @@ namespace BatchPdfPublisher.Services
             var circles = result.Circles.Where(x => x.IsEnabled && x.Radius > 0d).ToList();
             var arcs = result.Arcs.Where(x => x.IsEnabled && x.Radius > 0d && x.SweepAngleDegrees > 0d).ToList();
             var polylines = result.Polylines.Where(x => x.IsEnabled && x.Points.Count >= 2).ToList();
+            var walls = result.WallRegions.Where(x => x.IsEnabled && x.Outer.Count >= 3).ToList();
             var textRegions = includeText
                 ? result.TextRegions.Where(x => x.IsEnabled && !string.IsNullOrWhiteSpace(x.Text)).ToList()
                 : new List<LineVisionOcrTextRegion>();
-            if (enabled.Count == 0 && circles.Count == 0 && arcs.Count == 0 && polylines.Count == 0 && textRegions.Count == 0) throw new InvalidOperationException("没有启用的线段、折线、圆弧、圆形或文字可插入。");
+            if (enabled.Count == 0 && circles.Count == 0 && arcs.Count == 0 && polylines.Count == 0 && walls.Count == 0 && textRegions.Count == 0) throw new InvalidOperationException("没有启用的线段、折线、墙体填充、圆弧、圆形或文字可插入。");
             var picked = document.Editor.GetPoint(new PromptPointOptions("\n指定图像转 CAD 结果的左下角插入点："));
             if (picked.Status != PromptStatus.OK) return inserted;
             var insertion = picked.Value;
@@ -52,6 +53,17 @@ namespace BatchPdfPublisher.Services
                         entity.AddVertexAt(index, new Point2d(point.X, point.Y), 0d, 0d, 0d);
                     }
                     entity.TransformBy(ucsToWorld); space.AppendEntity(entity); transaction.AddNewlyCreatedDBObject(entity, true); inserted.PolylineCount++;
+                }
+                foreach (var wall in walls)
+                {
+                    var boundaries = new List<ObjectId>();
+                    boundaries.Add(AppendBoundary(space, transaction, wall.Outer, insertion, result.Height, unitsPerPixel, ucsToWorld, layers.WallBoundary));
+                    foreach (var hole in wall.Holes.Where(value => value.Count >= 3)) boundaries.Add(AppendBoundary(space, transaction, hole, insertion, result.Height, unitsPerPixel, ucsToWorld, layers.WallBoundary));
+                    var hatch = new Hatch { LayerId = layers.WallFill, Associative = true }; space.AppendEntity(hatch); transaction.AddNewlyCreatedDBObject(hatch, true);
+                    hatch.SetHatchPattern(HatchPatternType.PreDefined, "SOLID");
+                    hatch.AppendLoop(HatchLoopTypes.Outermost, new ObjectIdCollection { boundaries[0] });
+                    for (var index = 1; index < boundaries.Count; index++) hatch.AppendLoop(HatchLoopTypes.Default, new ObjectIdCollection { boundaries[index] });
+                    hatch.EvaluateHatch(true); inserted.WallFillCount++;
                 }
                 foreach (var circle in circles)
                 {
@@ -91,7 +103,7 @@ namespace BatchPdfPublisher.Services
                 }
                 transaction.Commit();
             }
-            document.Editor.WriteMessage("\n图像转 CAD 完成，共插入 " + inserted.LineCount + " 根直线、" + inserted.PolylineCount + " 条折线、" + inserted.ArcCount + " 段圆弧、" + inserted.CircleCount + " 个圆、" + inserted.TextCount + " 个文字。\n");
+            document.Editor.WriteMessage("\n图像转 CAD 完成，共插入 " + inserted.LineCount + " 根直线、" + inserted.PolylineCount + " 条折线、" + inserted.WallFillCount + " 个墙体填充、" + inserted.ArcCount + " 段圆弧、" + inserted.CircleCount + " 个圆、" + inserted.TextCount + " 个文字。\n");
             return inserted;
         }
 
@@ -100,14 +112,25 @@ namespace BatchPdfPublisher.Services
             return new Point3d(insertion.X + x * scale, insertion.Y + (imageHeight - y) * scale, insertion.Z);
         }
 
-        private static Dictionary<LineVisionDirection, ObjectId> EnsureLayers(Database database, Transaction transaction)
+        private sealed class LayerIds : Dictionary<LineVisionDirection, ObjectId> { public ObjectId WallBoundary; public ObjectId WallFill; }
+
+        private static ObjectId AppendBoundary(BlockTableRecord space, Transaction transaction, IList<System.Drawing.PointF> points, Point3d insertion, double imageHeight, double scale, Matrix3d transform, ObjectId layer)
         {
-            var result = new Dictionary<LineVisionDirection, ObjectId>();
+            var entity = new Polyline { LayerId = layer, Closed = true };
+            for (var index = 0; index < points.Count; index++) { var point = ToCad(points[index].X, points[index].Y, insertion, imageHeight, scale); entity.AddVertexAt(index, new Point2d(point.X, point.Y), 0d, 0d, 0d); }
+            entity.TransformBy(transform); space.AppendEntity(entity); transaction.AddNewlyCreatedDBObject(entity, true); return entity.ObjectId;
+        }
+
+        private static LayerIds EnsureLayers(Database database, Transaction transaction)
+        {
+            var result = new LayerIds();
             result[LineVisionDirection.Horizontal] = EnsureLayer(database, transaction, "LV-LINE-H", 3);
             result[LineVisionDirection.Vertical] = EnsureLayer(database, transaction, "LV-LINE-V", 5);
             result[LineVisionDirection.Diagonal] = EnsureLayer(database, transaction, "LV-LINE-DIAG", 2);
             result[LineVisionDirection.Angled] = result[LineVisionDirection.Diagonal];
             result[LineVisionDirection.Uncertain] = EnsureLayer(database, transaction, "LV-CURVE", 4);
+            result.WallBoundary = EnsureLayer(database, transaction, "LV-WALL-BOUNDARY", 1);
+            result.WallFill = EnsureLayer(database, transaction, "LV-WALL-FILL", 8);
             return result;
         }
 

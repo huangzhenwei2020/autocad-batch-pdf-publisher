@@ -15,7 +15,7 @@ namespace BatchPdfPublisher.Views
         private readonly ListView _pending = CreateList("分类", "状态", "文件", "用途", "更新时间");
         private readonly ListView _conflicts = CreateList("分类", "文件", "用途", "本机副本", "共享副本", "发生时间");
         private readonly ListView _history = CreateList("分类", "来源", "文件", "用途", "版本时间");
-        private readonly ListView _projects = CreateList("项目名称", "本机状态", "本机目录");
+        private readonly ListView _projects = CreateList("项目名称", "本机状态", "云端状态", "本机目录");
         private readonly TextBox _workspaceRoot = new TextBox { Dock = DockStyle.Fill };
         private readonly CheckBox _showArchived = new CheckBox { Text = "显示已归档项目", AutoSize = true, Margin = new Padding(12, 7, 3, 3) };
 
@@ -154,7 +154,8 @@ namespace BatchPdfPublisher.Views
                 CloudId = ProjectSyncProjectionStore.StableProjectId(project.Name),
                 Folder = project.ProjectFolder,
                 IsLocal = true,
-                IsArchived = ProjectSyncProjectionStore.IsCloudProjectArchived(ProjectSyncProjectionStore.StableProjectId(project.Name))
+                IsArchived = ProjectSyncProjectionStore.IsCloudProjectArchived(ProjectSyncProjectionStore.StableProjectId(project.Name)),
+                IsCloud = cloud.Any(remote => string.Equals(remote.ProjectName, project.Name, StringComparison.OrdinalIgnoreCase))
             }).Concat(cloud.Where(remote => !local.Any(project => string.Equals(project.Name, remote.ProjectName, StringComparison.OrdinalIgnoreCase)))
                 .Select(remote => new ProjectSelectionRow
                 {
@@ -162,6 +163,7 @@ namespace BatchPdfPublisher.Views
                     CloudId = remote.CloudId,
                     Folder = CloudProjectWorkspaceService.ProjectFolderFor(settings, remote.ProjectName),
                     IsLocal = false,
+                    IsCloud = true,
                     IsArchived = remote.IsArchived
                 })).OrderBy(row => row.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
             _projects.BeginUpdate(); _projects.Items.Clear();
@@ -169,9 +171,9 @@ namespace BatchPdfPublisher.Views
             {
                 var mapping = mappings.FirstOrDefault(candidate => candidate != null && string.Equals(candidate.CloudId, row.CloudId, StringComparison.OrdinalIgnoreCase));
                 var unified = CloudProjectWorkspaceService.IsUnderWorkspace(row.Folder, root);
-                var status = row.IsArchived ? (row.IsLocal ? "本机已有 · 云端已归档" : "云端已归档")
-                    : row.IsLocal ? (unified ? "本机已有" : "目录待统一") : "云端可下载";
-                var item = new ListViewItem(new[] { row.Name, status, row.Folder }) { Tag = row, Checked = mapping != null && mapping.Enabled };
+                var localStatus = row.IsLocal ? (Directory.Exists(row.Folder) ? (unified ? "已有" : "目录待统一") : "登记存在，目录缺失") : "无";
+                var cloudStatus = row.IsArchived ? "已归档" : row.IsCloud ? "已有，可下载" : "无，勾选后上传";
+                var item = new ListViewItem(new[] { row.Name, localStatus, cloudStatus, row.Folder }) { Tag = row, Checked = mapping != null && mapping.Enabled };
                 if (row.IsArchived) { item.ForeColor = Color.DimGray; item.Checked = false; }
                 else if (!unified) item.ForeColor = Color.DarkOrange;
                 _projects.Items.Add(item);
@@ -353,6 +355,7 @@ namespace BatchPdfPublisher.Views
             public string Folder { get; set; }
             public bool IsLocal { get; set; }
             public bool IsArchived { get; set; }
+            public bool IsCloud { get; set; }
         }
 
         private static TabPage Page(string text) { return new TabPage(text) { Padding = new Padding(8) }; }
@@ -363,7 +366,7 @@ namespace BatchPdfPublisher.Views
         {
             var list = new ListView { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, GridLines = true, HideSelection = false };
             foreach (var column in columns)
-                list.Columns.Add(column, column == "文件" || column == "本机目录" ? 360 : column == "用途" ? 300 : column.Contains("副本") ? 90 : 130);
+                list.Columns.Add(column, column == "文件" || column == "本机目录" ? 330 : column == "用途" ? 300 : column.Contains("状态") ? 135 : column.Contains("副本") ? 90 : 130);
             return list;
         }
     }

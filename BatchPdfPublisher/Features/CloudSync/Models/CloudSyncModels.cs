@@ -126,6 +126,10 @@ namespace BatchPdfPublisher.Services
         public int Pending { get; set; }
         public int Deleted { get; set; }
         public int Errors { get; set; }
+        public int LocalFileCount { get; set; }
+        public int RemoteFileCount { get; set; }
+        public long UploadedBytes { get; set; }
+        public long DownloadedBytes { get; set; }
 
         public string Summary
         {
@@ -143,10 +147,26 @@ namespace BatchPdfPublisher.Services
         public string LogicalPath { get; set; }
         public int Completed { get; set; }
         public int Total { get; set; }
+        public long BytesCompleted { get; set; }
+        public long BytesTotal { get; set; }
+        public double BytesPerSecond { get; set; }
+        public string Direction { get; set; }
+
+        public string SpeedText
+        {
+            get { return BytesPerSecond <= 0d ? string.Empty : FormatBytes((long)BytesPerSecond) + "/s"; }
+        }
+
+        public string BytesText
+        {
+            get { return BytesTotal <= 0 ? string.Empty : FormatBytes(BytesCompleted) + " / " + FormatBytes(BytesTotal); }
+        }
 
         public int Percentage
         {
-            get { return Total <= 0 ? 0 : Math.Max(0, Math.Min(100, (int)Math.Round(Completed * 100d / Total))); }
+            get { return BytesTotal > 0 ? Math.Max(0, Math.Min(100, (int)Math.Round(BytesCompleted * 100d / BytesTotal))) : Total <= 0 ? 0 : Math.Max(0, Math.Min(100, (int)Math.Round(Completed * 100d / Total))); }
         }
+
+        private static string FormatBytes(long value) { var units = new[] { "B", "KB", "MB", "GB" }; var number = Math.Max(0, value); var index = 0; double display = number; while (display >= 1024d && index < units.Length - 1) { display /= 1024d; index++; } return display.ToString(index == 0 ? "0" : "0.0") + " " + units[index]; }
     }
 }

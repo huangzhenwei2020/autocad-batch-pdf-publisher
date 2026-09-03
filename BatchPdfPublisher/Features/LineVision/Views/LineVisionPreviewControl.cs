@@ -52,6 +52,7 @@ namespace BatchPdfPublisher.Views
         public int SelectedCircleIndex { get; set; } = -1;
         public int SelectedArcIndex { get; set; } = -1;
         public int SelectedPolylineIndex { get; set; } = -1;
+        public int SelectedWallIndex { get; set; } = -1;
 
         public LineVisionPreviewControl()
         {
@@ -184,6 +185,18 @@ namespace BatchPdfPublisher.Views
                     using (var pen = new Pen(selected ? Color.Magenta : Color.FromArgb(255, 255, 150, 30), selected ? 3.2f : 2f))
                     {
                         e.Graphics.DrawLines(pen, points); if (polyline.IsClosed && points.Length > 2) e.Graphics.DrawLine(pen, points[points.Length - 1], points[0]);
+                    }
+                }
+                for (var index = 0; index < _result.WallRegions.Count; index++)
+                {
+                    var wall = _result.WallRegions[index]; if (wall.Outer.Count < 3) continue;
+                    using (var path = new GraphicsPath(FillMode.Alternate))
+                    {
+                        path.AddPolygon(wall.Outer.Select(point => ToResultScreen(point.X, point.Y)).ToArray());
+                        foreach (var hole in wall.Holes.Where(value => value.Count >= 3)) path.AddPolygon(hole.Select(point => ToResultScreen(point.X, point.Y)).ToArray());
+                        var selected = index == SelectedWallIndex;
+                        using (var brush = new SolidBrush(Color.FromArgb(selected ? 105 : wall.IsEnabled ? 65 : 18, 220, 55, 55))) e.Graphics.FillPath(brush, path);
+                        using (var pen = new Pen(selected ? Color.Magenta : wall.IsEnabled ? Color.Red : Color.FromArgb(135, 220, 90, 90), selected ? 3f : wall.IsEnabled ? 1.5f : 1f) { DashStyle = wall.IsEnabled ? DashStyle.Solid : DashStyle.Dash }) e.Graphics.DrawPath(pen, path);
                     }
                 }
                 for (var index = 0; index < _result.TextRegions.Count; index++)

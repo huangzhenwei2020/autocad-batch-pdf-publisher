@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Collections.Generic;
 using System.Globalization;
@@ -160,8 +161,9 @@ namespace BatchPdfPublisher.Services
                 _remoteHashes[relative] = entry.Md5 ?? string.Empty;
                 if (File.Exists(local) && FileLength(local) == entry.Size && string.Equals(Md5(local), entry.Md5, StringComparison.OrdinalIgnoreCase)) continue;
                 progress?.Invoke(new CloudSyncProgress { Stage = "正在从百度网盘下载", LogicalPath = relative });
+                var transfer = Stopwatch.StartNew();
                 _client.DownloadAsync(_credential.AccessToken, entry, local, (done, total) => progress?.Invoke(new CloudSyncProgress
-                { Stage = "正在从百度网盘下载", LogicalPath = relative, Completed = ToProgress(done, total), Total = 1000 }), cancellationToken).GetAwaiter().GetResult();
+                { Stage = "正在从百度网盘下载", Direction = "下载", LogicalPath = relative, Completed = ToProgress(done, total), Total = 1000, BytesCompleted = done, BytesTotal = total, BytesPerSecond = done / Math.Max(0.001d, transfer.Elapsed.TotalSeconds) }), cancellationToken).GetAwaiter().GetResult();
             }
             var remoteSet = new HashSet<string>(_remoteHashes.Keys, StringComparer.OrdinalIgnoreCase);
             foreach (var local in Directory.GetFiles(WorkingFolder, "*", SearchOption.AllDirectories))
@@ -181,9 +183,10 @@ namespace BatchPdfPublisher.Services
                 cancellationToken.ThrowIfCancellationRequested(); var hash = Md5(pair.Value);
                 if (_remoteHashes.TryGetValue(pair.Key, out var remoteHash) && string.Equals(hash, remoteHash, StringComparison.OrdinalIgnoreCase)) continue;
                 progress?.Invoke(new CloudSyncProgress { Stage = "正在上传到百度网盘", LogicalPath = pair.Key });
+                var transfer = Stopwatch.StartNew();
                 _client.UploadAsync(_credential.AccessToken, pair.Value, RemoteRoot + "/" + pair.Key.Replace('\\', '/'),
-                    (done, total) => progress?.Invoke(new CloudSyncProgress { Stage = "正在上传到百度网盘", LogicalPath = pair.Key,
-                        Completed = ToProgress(done, total), Total = 1000 }), cancellationToken).GetAwaiter().GetResult();
+                    (done, total) => progress?.Invoke(new CloudSyncProgress { Stage = "正在上传到百度网盘", Direction = "上传", LogicalPath = pair.Key,
+                        Completed = ToProgress(done, total), Total = 1000, BytesCompleted = done, BytesTotal = total, BytesPerSecond = done / Math.Max(0.001d, transfer.Elapsed.TotalSeconds) }), cancellationToken).GetAwaiter().GetResult();
             }
             foreach (var removed in _remoteHashes.Keys.Where(x => !current.ContainsKey(x)).ToList())
             {

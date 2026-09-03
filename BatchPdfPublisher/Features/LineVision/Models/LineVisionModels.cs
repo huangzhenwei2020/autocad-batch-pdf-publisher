@@ -71,6 +71,16 @@ namespace BatchPdfPublisher.Models
         public string Source { get; set; }
     }
 
+    internal sealed class LineVisionWallRegion
+    {
+        public Guid Id { get; set; } = Guid.NewGuid();
+        public List<PointF> Outer { get; set; } = new List<PointF>();
+        public List<List<PointF>> Holes { get; set; } = new List<List<PointF>>();
+        public double AverageThickness { get; set; }
+        public double Confidence { get; set; }
+        public bool IsEnabled { get; set; }
+    }
+
     internal sealed class LineVisionSettings
     {
         public int Threshold { get; set; }
@@ -82,6 +92,9 @@ namespace BatchPdfPublisher.Models
         public double OrthogonalToleranceDegrees { get; set; } = 2d;
         public bool BuildPolylines { get; set; } = true;
         public LineVisionVectorMode VectorMode { get; set; } = LineVisionVectorMode.Centerline;
+        public bool DetectWallFills { get; set; } = true;
+        public double MinimumWallThicknessPixels { get; set; } = 3d;
+        public double MaximumWallThicknessPixels { get; set; } = 80d;
         public double CadUnitsPerPixel { get; set; } = 1d;
     }
 
@@ -99,6 +112,7 @@ namespace BatchPdfPublisher.Models
         public List<LineVisionCircle> Circles { get; set; } = new List<LineVisionCircle>();
         public List<LineVisionArc> Arcs { get; set; } = new List<LineVisionArc>();
         public List<LineVisionPolyline> Polylines { get; set; } = new List<LineVisionPolyline>();
+        public List<LineVisionWallRegion> WallRegions { get; set; } = new List<LineVisionWallRegion>();
         public List<LineVisionOcrTextRegion> TextRegions { get; set; } = new List<LineVisionOcrTextRegion>();
         public string OcrWarning { get; set; }
         public string VectorWarning { get; set; }
@@ -162,7 +176,8 @@ namespace BatchPdfPublisher.Models
         public int CircleCount { get; set; }
         public int ArcCount { get; set; }
         public int PolylineCount { get; set; }
-        public int TotalCount { get { return LineCount + CircleCount + ArcCount + PolylineCount + TextCount; } }
+        public int WallFillCount { get; set; }
+        public int TotalCount { get { return LineCount + CircleCount + ArcCount + PolylineCount + WallFillCount + TextCount; } }
     }
 
     internal sealed class UnavailableLineVisionOcrEngine : ILineVisionOcrEngine
