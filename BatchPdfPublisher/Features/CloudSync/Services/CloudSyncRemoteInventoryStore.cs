@@ -46,6 +46,20 @@ namespace BatchPdfPublisher.Services
             return LoadFiles().Any(path => path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
         }
 
+        public static bool HasSnapshot()
+        {
+            lock (FileSync)
+            {
+                if (!File.Exists(InventoryPath)) return false;
+                try
+                {
+                    using (var stream = File.OpenRead(InventoryPath))
+                        return new DataContractJsonSerializer(typeof(CloudSyncRemoteInventory)).ReadObject(stream) is CloudSyncRemoteInventory;
+                }
+                catch { return false; }
+            }
+        }
+
         public static IList<string> ProjectFilePaths()
         {
             const string prefix = "万落建筑云同步/项目文件/";

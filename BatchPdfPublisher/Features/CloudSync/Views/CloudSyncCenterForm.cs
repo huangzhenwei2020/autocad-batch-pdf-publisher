@@ -37,7 +37,7 @@ namespace BatchPdfPublisher.Views
             tabs.TabPages.Add(BuildHistoryTab());
             var footer = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 48, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(8) };
             var close = ButtonFor("关闭"); close.Click += delegate { Close(); };
-            var refresh = ButtonFor("刷新"); refresh.Click += delegate { ReloadData(); };
+            var refresh = ButtonFor("核对并同步"); refresh.Click += RefreshFromCloud;
             var backups = ButtonFor("打开备份文件夹"); backups.Click += OpenBackupFolder;
             footer.Controls.Add(close); footer.Controls.Add(refresh); footer.Controls.Add(backups);
             Controls.Add(tabs); Controls.Add(_syncProgress); Controls.Add(_summary); Controls.Add(footer);
@@ -177,6 +177,16 @@ namespace BatchPdfPublisher.Views
             _workspaceRoot.Text = root;
             var cloud = ProjectSyncProjectionStore.DiscoverCloudProjects(_showArchived.Checked);
             var mappings = settings.ProjectMappings ?? new System.Collections.Generic.List<CloudSyncProjectMapping>();
+            var inventoryAvailable = CloudSyncRemoteInventoryStore.HasSnapshot();
+            var remotePaths = CloudSyncRemoteInventoryStore.ProjectFilePaths();
+            var state = new CloudSyncSettingsStore().LoadState();
+            string providerWorkingFolder = null;
+            try
+            {
+                using (var provider = CloudSyncProviderFactory.Create(settings))
+                    if (provider.IsReady) providerWorkingFolder = provider.WorkingFolder;
+            }
+            catch { }
             var rows = local.Select(project => new ProjectSelectionRow
             {
                 Name = project.Name,
@@ -202,15 +212,33 @@ namespace BatchPdfPublisher.Views
                 var unified = CloudProjectWorkspaceService.IsUnderWorkspace(row.Folder, root);
                 var localStatus = row.IsLocal ? (Directory.Exists(row.Folder) ? (unified ? "已有" : "目录待统一") : "登记存在，目录缺失") : "无";
                 var selected = mapping != null && mapping.Enabled;
-                var hasCloudFiles = CloudSyncRemoteInventoryStore.HasProjectFiles(row.CloudId);
-                var cloudStatus = row.IsArchived ? "已归档" : hasCloudFiles ? "云端已有项目文件"
-                    : selected ? "已选择，等待上传" : row.IsCloud ? "仅有项目登记，未选择文件" : "未选择，不会上传";
+                var syncStatus = CloudProjectSyncStatusService.Evaluate(row.CloudId, row.Folder, providerWorkingFolder,
+                    selected, inventoryAvailable, remotePaths, state);
+                var cloudStatus = row.IsArchived ? "已归档" : syncStatus.Text;
                 var item = new ListViewItem(new[] { row.Name, localStatus, cloudStatus, row.Folder }) { Tag = row, Checked = mapping != null && mapping.Enabled };
                 if (row.IsArchived) { item.ForeColor = Color.DimGray; item.Checked = false; }
-                else if (!unified) item.ForeColor = Color.DarkOrange;
+                else if (!unified || syncStatus.Direction == CloudProjectSyncDirection.Download ||
+                         syncStatus.Direction == CloudProjectSyncDirection.Upload ||
+                         syncStatus.Direction == CloudProjectSyncDirection.Bidirectional ||
+                         syncStatus.Direction == CloudProjectSyncDirection.Checking) item.ForeColor = Color.DarkOrange;
                 _projects.Items.Add(item);
             }
             _projects.EndUpdate();
+        }
+
+        private void RefreshFromCloud(object sender, EventArgs e)
+        {
+            try
+            {
+                var settings = new CloudSyncSettingsStore().LoadSettings();
+                if (!settings.Enabled) { ReloadData(); return; }
+                _syncProgress.Visible = true;
+                _syncProgress.Style = ProgressBarStyle.Marquee;
+                _summary.Text = "正在后台读取云端清单并按文件新旧同步…";
+                _summary.ForeColor = Color.FromArgb(34, 98, 160);
+                CloudSyncCoordinator.RequestSynchronization(true);
+            }
+            catch (Exception exception) { ShowError(exception); }
         }
 
         private void OnSynchronizationProgress(CloudSyncProgress progress)

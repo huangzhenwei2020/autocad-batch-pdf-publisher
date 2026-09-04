@@ -22,6 +22,8 @@ internal static class CloudSyncTests
         Run("DownloadsToSecondDevice", DownloadsToSecondDevice);
         Run("UsesNewerLocalFile", UsesNewerLocalFile);
         Run("UsesNewerRemoteFile", UsesNewerRemoteFile);
+        Run("ReportsCloudProjectDownloadWhenRemoteIsNewer", ReportsCloudProjectDownloadWhenRemoteIsNewer);
+        Run("DoesNotClaimUploadBeforeCloudInventoryIsKnown", DoesNotClaimUploadBeforeCloudInventoryIsKnown);
         Run("KeepsConflictWhenTimesMatch", KeepsConflictWhenTimesMatch);
         Run("RepairsMissingRemoteFileFromLocal", RepairsMissingRemoteFileFromLocal);
         Run("RejectsOverlappingRoots", RejectsOverlappingRoots);
@@ -135,6 +137,42 @@ internal static class CloudSyncTests
             var result = engine.Synchronize(settings, catalog);
             Equal("cloud-current", File.ReadAllText(localFile)); Equal(1, result.Downloaded);
         });
+    }
+
+    private static void ReportsCloudProjectDownloadWhenRemoteIsNewer()
+    {
+        var root = NewRoot();
+        try
+        {
+            var local = Path.Combine(root, "local");
+            var provider = Path.Combine(root, "provider");
+            var cache = Path.Combine(provider, "万落建筑云同步", "项目文件", "sample");
+            Directory.CreateDirectory(local); Directory.CreateDirectory(cache);
+            var localFile = Path.Combine(local, "drawing.dwg");
+            var remoteFile = Path.Combine(cache, "drawing.dwg");
+            File.WriteAllText(localFile, "old"); File.SetLastWriteTimeUtc(localFile, DateTime.UtcNow.AddMinutes(-5));
+            File.WriteAllText(remoteFile, "new"); File.SetLastWriteTimeUtc(remoteFile, DateTime.UtcNow);
+            var status = CloudProjectSyncStatusService.Evaluate("sample", local, provider, true, true,
+                new[] { "项目文件/sample/drawing.dwg" }, new CloudSyncState());
+            Equal(CloudProjectSyncDirection.Download, status.Direction);
+            Equal("云端较新，等待下载", status.Text);
+        }
+        finally { try { Directory.Delete(root, true); } catch { } }
+    }
+
+    private static void DoesNotClaimUploadBeforeCloudInventoryIsKnown()
+    {
+        var root = NewRoot();
+        try
+        {
+            var local = Path.Combine(root, "local"); Directory.CreateDirectory(local);
+            File.WriteAllText(Path.Combine(local, "drawing.dwg"), "local");
+            var status = CloudProjectSyncStatusService.Evaluate("sample", local, Path.Combine(root, "provider"), true, false,
+                new string[0], new CloudSyncState());
+            Equal(CloudProjectSyncDirection.Checking, status.Direction);
+            Equal("等待核对云端", status.Text);
+        }
+        finally { try { Directory.Delete(root, true); } catch { } }
     }
 
     private static void KeepsConflictWhenTimesMatch()
