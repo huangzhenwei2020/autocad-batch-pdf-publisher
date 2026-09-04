@@ -168,6 +168,7 @@ namespace BatchPdfPublisher.Services
             Interlocked.Exchange(ref _pending, 0);
             CloudSyncResult result = null;
             Exception failure = null;
+            Trace("同步开始。");
             try
             {
                 var store = new CloudSyncSettingsStore();
@@ -183,10 +184,11 @@ namespace BatchPdfPublisher.Services
             finally
             {
                 Interlocked.Exchange(ref _running, 0);
+                TraceResult(result, failure);
                 var handler = SynchronizationCompleted;
                 if (handler != null) try { handler(result, failure); } catch { }
                 try { CloudSyncCadNotificationService.Show(result, failure); } catch { }
-                if (failure != null || (result != null && result.Errors > 0))
+                if (CloudSyncRetryPolicy.ShouldRetry(failure, result))
                 {
                     var failureCount = Interlocked.Increment(ref _consecutiveFailures);
                     var retrySeconds = Math.Min(900, 30 * (int)Math.Pow(2, Math.Min(5, failureCount - 1)));
@@ -201,9 +203,25 @@ namespace BatchPdfPublisher.Services
                 else
                 {
                     Interlocked.Exchange(ref _consecutiveFailures, 0);
-                    if (Interlocked.Exchange(ref _pending, 0) != 0) RequestSynchronization(false);
+                    if (failure != null) Interlocked.Exchange(ref _pending, 0);
+                    else if (Interlocked.Exchange(ref _pending, 0) != 0) RequestSynchronization(false);
                 }
             }
+        }
+
+        private static void TraceResult(CloudSyncResult result, Exception failure)
+        {
+            if (failure != null)
+            {
+                Trace("同步失败：" + failure.Message);
+                return;
+            }
+            if (result == null) { Trace("同步结束：未执行。"); return; }
+            Trace("同步完成：" + result.Summary);
+            foreach (var operation in result.Operations)
+                if (operation != null && operation.Kind != CloudSyncOperationKind.None)
+                    Trace(operation.Kind + " " + (operation.LogicalPath ?? string.Empty) +
+                        (string.IsNullOrWhiteSpace(operation.Message) ? string.Empty : "；" + operation.Message));
         }
 
         private static void ReportProgress(CloudSyncProgress progress)

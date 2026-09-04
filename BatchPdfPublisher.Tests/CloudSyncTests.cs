@@ -24,6 +24,7 @@ internal static class CloudSyncTests
         Run("UsesNewerRemoteFile", UsesNewerRemoteFile);
         Run("ReportsCloudProjectDownloadWhenRemoteIsNewer", ReportsCloudProjectDownloadWhenRemoteIsNewer);
         Run("DoesNotClaimUploadBeforeCloudInventoryIsKnown", DoesNotClaimUploadBeforeCloudInventoryIsKnown);
+        Run("DoesNotRetryConfigurationErrors", DoesNotRetryConfigurationErrors);
         Run("KeepsConflictWhenTimesMatch", KeepsConflictWhenTimesMatch);
         Run("RepairsMissingRemoteFileFromLocal", RepairsMissingRemoteFileFromLocal);
         Run("RejectsOverlappingRoots", RejectsOverlappingRoots);
@@ -173,6 +174,16 @@ internal static class CloudSyncTests
             Equal("等待核对云端", status.Text);
         }
         finally { try { Directory.Delete(root, true); } catch { } }
+    }
+
+    private static void DoesNotRetryConfigurationErrors()
+    {
+        True(!CloudSyncRetryPolicy.ShouldRetry(new InvalidOperationException("项目目录未统一"), null),
+            "configuration errors must not start an automatic retry loop");
+        True(!CloudSyncRetryPolicy.ShouldRetry(new OperationCanceledException(), null),
+            "user cancellation must not retry");
+        True(CloudSyncRetryPolicy.ShouldRetry(new IOException("temporary network failure"), null),
+            "transient I/O failures should retry");
     }
 
     private static void KeepsConflictWhenTimesMatch()

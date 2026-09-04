@@ -162,6 +162,7 @@ namespace BatchPdfPublisher.Services
             _prepareWarnings.Clear();
             foreach (var entry in files) _allRemotePaths.Add(RelativeRemotePath(entry.Path));
             CloudSyncRemoteInventoryStore.Save(_allRemotePaths);
+            var selectedFiles = new List<Tuple<BaiduRemoteEntry, string, string, bool>>();
             foreach (var entry in files)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -169,17 +170,29 @@ namespace BatchPdfPublisher.Services
                 if (!ShouldTransferRelativePath(relative)) continue;
                 var local = SafeLocalPath(relative);
                 _remoteHashes[relative] = entry.Md5 ?? string.Empty;
-                if (CachedFileMatches(entry, local))
+                selectedFiles.Add(Tuple.Create(entry, relative, local, CachedFileMatches(entry, local)));
+            }
+            var downloadTotal = selectedFiles.Count(item => !item.Item4);
+            var downloadIndex = 0;
+            foreach (var item in selectedFiles)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var entry = item.Item1;
+                var relative = item.Item2;
+                var local = item.Item3;
+                if (item.Item4)
                 {
                     _remoteCacheHashes[relative] = Md5(local);
                     continue;
                 }
-                progress?.Invoke(new CloudSyncProgress { Stage = "正在从百度网盘下载", LogicalPath = relative });
+                downloadIndex++;
+                var downloadStage = string.Format("正在从百度网盘下载（{0}/{1}）", downloadIndex, downloadTotal);
+                progress?.Invoke(new CloudSyncProgress { Stage = downloadStage, LogicalPath = relative });
                 var transfer = Stopwatch.StartNew();
                 try
                 {
                     _client.DownloadAsync(_credential.AccessToken, entry, local, (done, total) => progress?.Invoke(new CloudSyncProgress
-                    { Stage = "正在从百度网盘下载", Direction = "下载", LogicalPath = relative, Completed = ToProgress(done, total), Total = 1000, BytesCompleted = done, BytesTotal = total, BytesPerSecond = done / Math.Max(0.001d, transfer.Elapsed.TotalSeconds) }), cancellationToken).GetAwaiter().GetResult();
+                    { Stage = downloadStage, Direction = "下载", LogicalPath = relative, Completed = ToProgress(done, total), Total = 1000, BytesCompleted = done, BytesTotal = total, BytesPerSecond = done / Math.Max(0.001d, transfer.Elapsed.TotalSeconds) }), cancellationToken).GetAwaiter().GetResult();
                     _remoteCacheHashes[relative] = Md5(local);
                 }
                 catch (IOException exception) when (IsUnavailableRemoteFile(exception))

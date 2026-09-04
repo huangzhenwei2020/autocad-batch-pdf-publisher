@@ -29,6 +29,7 @@
     <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncFolderDetector.cs" Link="CloudSyncFolderDetector.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncRemoteInventoryStore.cs" Link="CloudSyncRemoteInventoryStore.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudProjectSyncStatusService.cs" Link="CloudProjectSyncStatusService.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncRetryPolicy.cs" Link="CloudSyncRetryPolicy.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Providers\CloudSyncProviders.cs" Link="CloudSyncProviders.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Providers\BaiduNetdiskClient.cs" Link="BaiduNetdiskClient.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Providers\BaiduBrokerAuthClient.cs" Link="BaiduBrokerAuthClient.cs" />
