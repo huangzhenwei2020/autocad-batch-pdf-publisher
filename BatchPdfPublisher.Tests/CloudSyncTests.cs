@@ -25,6 +25,7 @@ internal static class CloudSyncTests
         Run("ReportsCloudProjectDownloadWhenRemoteIsNewer", ReportsCloudProjectDownloadWhenRemoteIsNewer);
         Run("DoesNotClaimUploadBeforeCloudInventoryIsKnown", DoesNotClaimUploadBeforeCloudInventoryIsKnown);
         Run("DoesNotRetryConfigurationErrors", DoesNotRetryConfigurationErrors);
+        Run("IgnoresWatcherEventsCreatedBySynchronization", IgnoresWatcherEventsCreatedBySynchronization);
         Run("KeepsConflictWhenTimesMatch", KeepsConflictWhenTimesMatch);
         Run("RepairsMissingRemoteFileFromLocal", RepairsMissingRemoteFileFromLocal);
         Run("RejectsOverlappingRoots", RejectsOverlappingRoots);
@@ -184,6 +185,14 @@ internal static class CloudSyncTests
             "user cancellation must not retry");
         True(CloudSyncRetryPolicy.ShouldRetry(new IOException("temporary network failure"), null),
             "transient I/O failures should retry");
+    }
+
+    private static void IgnoresWatcherEventsCreatedBySynchronization()
+    {
+        True(!CloudSyncRetryPolicy.ShouldQueueWatcherEvent(true),
+            "writes created by the active synchronization must not queue another pass");
+        True(CloudSyncRetryPolicy.ShouldQueueWatcherEvent(false),
+            "user changes outside synchronization must still queue a pass");
     }
 
     private static void KeepsConflictWhenTimesMatch()

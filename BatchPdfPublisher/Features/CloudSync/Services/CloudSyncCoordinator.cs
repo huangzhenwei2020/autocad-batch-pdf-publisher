@@ -146,11 +146,15 @@ namespace BatchPdfPublisher.Services
                 };
                 FileSystemEventHandler changed = delegate(object sender, FileSystemEventArgs args)
                 {
-                    if (!IsGeneratedSyncArtifact(args.FullPath)) RequestSynchronization(false);
+                    if (!IsGeneratedSyncArtifact(args.FullPath) &&
+                        CloudSyncRetryPolicy.ShouldQueueWatcherEvent(Volatile.Read(ref _running) != 0))
+                        RequestSynchronization(false);
                 };
                 RenamedEventHandler renamed = delegate(object sender, RenamedEventArgs args)
                 {
-                    if (!IsGeneratedSyncArtifact(args.FullPath)) RequestSynchronization(false);
+                    if (!IsGeneratedSyncArtifact(args.FullPath) &&
+                        CloudSyncRetryPolicy.ShouldQueueWatcherEvent(Volatile.Read(ref _running) != 0))
+                        RequestSynchronization(false);
                 };
                 watcher.Changed += changed;
                 watcher.Created += changed;
