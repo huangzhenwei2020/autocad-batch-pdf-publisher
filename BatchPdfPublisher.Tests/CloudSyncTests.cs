@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Threading;
 using System.Net;
@@ -27,11 +28,14 @@ internal static class CloudSyncTests
         Run("DefersOpenDrawingUntilClosed", DefersOpenDrawingUntilClosed);
         Run("MapsProjectFileOnlyOnce", MapsProjectFileOnlyOnce);
         Run("ExcludesMachineSpecificProjectList", ExcludesMachineSpecificProjectList);
+        Run("PackagesSystemFilesAndDefersChangedPackage", PackagesSystemFilesAndDefersChangedPackage);
+        Run("FirstConnectionPrefersExistingRemoteSystemPackage", FirstConnectionPrefersExistingRemoteSystemPackage);
         Run("IncludesNormalProjectAttachments", IncludesNormalProjectAttachments);
         Run("IgnoresUnselectedRemoteProject", IgnoresUnselectedRemoteProject);
         Run("BaiduCachesOnlySelectedProjects", BaiduCachesOnlySelectedProjects);
         Run("RepairsMissingRemoteDrawingEvenWhenOpen", RepairsMissingRemoteDrawingEvenWhenOpen);
         Run("RestoresHistoryWithBackup", RestoresHistoryWithBackup);
+        Run("ListsWorkFilesAndTheirHistory", ListsWorkFilesAndTheirHistory);
         Run("ResolvesConflictUsingLocalCopy", ResolvesConflictUsingLocalCopy);
         Run("CreatesProviderWithoutChangingLocalMode", CreatesProviderWithoutChangingLocalMode);
         Run("NewInstallationDefaultsToBaidu", NewInstallationDefaultsToBaidu);
@@ -265,9 +269,53 @@ internal static class CloudSyncTests
             var projection = Path.Combine(UserDataPaths.ProjectsDirectory, "同步项目", "sample", "项目.json");
             Directory.CreateDirectory(Path.GetDirectoryName(projection)); File.WriteAllText(projection, "{}");
             var settings = new CloudSyncSettings { SyncGeneralSettings = false, SyncProjectConfigurations = true, SyncTemplatesAndSchemes = false };
+            True(CloudSystemPackageService.Prepare(settings, true, null, CancellationToken.None), "system package was not created");
             var files = CloudSyncCatalog.CreateDefault(settings).EnumerateFiles().ToList();
             Equal(1, files.Count);
-            Equal("项目配置/同步项目/sample/项目.json", files[0].LogicalPath);
+            Equal(CloudSystemPackageService.LogicalPath, files[0].LogicalPath);
+            using (var archive = ZipFile.OpenRead(files[0].LocalPath))
+            {
+                True(archive.GetEntry("项目配置/同步项目/sample/项目.json") != null, "portable project projection missing from package");
+                True(archive.GetEntry("项目配置/项目列表.json") == null, "machine-specific project list entered package");
+                True(archive.GetEntry("项目配置/当前项目.txt") == null, "machine-specific active project entered package");
+            }
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    private static void PackagesSystemFilesAndDefersChangedPackage()
+    {
+        var root = NewRoot();
+        try
+        {
+            UserDataPaths.TestRootDirectory = root;
+            Directory.CreateDirectory(UserDataPaths.SettingsDirectory);
+            var source = Path.Combine(UserDataPaths.SettingsDirectory, "drawing.settings.json");
+            File.WriteAllText(source, "first");
+            var settings = new CloudSyncSettings { SyncGeneralSettings = true, SyncProjectConfigurations = false,
+                SyncTemplatesAndSchemes = false, SystemPackageIntervalMinutes = 30 };
+            True(CloudSystemPackageService.Prepare(settings, false, null, CancellationToken.None), "first package should be created immediately");
+            var firstHash = LocalFolderSyncEngine.ComputeHash(CloudSystemPackageService.PackagePath);
+            File.WriteAllText(source, "second");
+            True(!CloudSystemPackageService.Prepare(settings, false, null, CancellationToken.None), "changed package should wait for configured interval");
+            Equal(firstHash, LocalFolderSyncEngine.ComputeHash(CloudSystemPackageService.PackagePath));
+            True(CloudSystemPackageService.Prepare(settings, true, null, CancellationToken.None), "manual synchronization should force package creation");
+            True(!string.Equals(firstHash, LocalFolderSyncEngine.ComputeHash(CloudSystemPackageService.PackagePath), StringComparison.Ordinal), "forced package was not refreshed");
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    private static void FirstConnectionPrefersExistingRemoteSystemPackage()
+    {
+        var root = NewRoot();
+        try
+        {
+            UserDataPaths.TestRootDirectory = root;
+            Directory.CreateDirectory(UserDataPaths.SettingsDirectory);
+            File.WriteAllText(Path.Combine(UserDataPaths.SettingsDirectory, "defaults.json"), "fresh-install-default");
+            var settings = new CloudSyncSettings { SyncGeneralSettings = true, SyncProjectConfigurations = false, SyncTemplatesAndSchemes = false };
+            True(CloudSystemPackageService.Prepare(settings, false, true, null, CancellationToken.None), "remote package should remain in synchronization scope");
+            True(!File.Exists(CloudSystemPackageService.PackagePath), "fresh installation created a local package before downloading remote settings");
         }
         finally { Directory.Delete(root, true); }
     }
@@ -306,7 +354,8 @@ internal static class CloudSyncTests
         };
         using (var provider = new BaiduNetdiskProvider(settings))
         {
-            True(provider.ShouldTransferRelativePath("万落建筑云同步/项目配置/project.json"), "project catalog should always download");
+            True(!provider.ShouldTransferRelativePath("万落建筑云同步/项目配置/project.json"), "legacy loose system file should be ignored");
+            True(provider.ShouldTransferRelativePath("万落建筑云同步/系统文件包/万落建筑系统文件.zip"), "system package should download");
             True(provider.ShouldTransferRelativePath("万落建筑云同步/项目文件/selected/plan.dwg"), "selected project should download");
             True(!provider.ShouldTransferRelativePath("万落建筑云同步/项目文件/not-selected/plan.dwg"), "unselected project entered provider cache");
             True(!provider.ShouldTransferRelativePath("万落建筑云同步/项目文件/unknown/plan.dwg"), "unknown project entered provider cache");
@@ -430,7 +479,7 @@ internal static class CloudSyncTests
             };
             var store = new CloudSyncSettingsStore(); store.SaveSettings(settings);
             Equal(1, CloudSyncWorkflow.Synchronize(settings, store).Uploaded);
-            True(File.Exists(Path.Combine(shared, "万落建筑云同步", "通用配置", "workflow.json")), "provider workflow did not upload");
+            True(File.Exists(Path.Combine(shared, "万落建筑云同步", "系统文件包", CloudSystemPackageService.PackageFileName)), "provider workflow did not upload system package");
         }
         finally { Directory.Delete(root, true); }
     }
@@ -442,6 +491,40 @@ internal static class CloudSyncTests
         Equal("坚果云", CloudSyncFolderDetector.IdentifyProvider(@"D:\坚果云\万落同步"));
         Equal("Syncthing", CloudSyncFolderDetector.IdentifyProvider(@"E:\Syncthing\WanLuo"));
         Equal("通用同步文件夹", CloudSyncFolderDetector.IdentifyProvider(@"F:\Shared\WanLuo"));
+    }
+
+    private static void ListsWorkFilesAndTheirHistory()
+    {
+        var root = NewRoot();
+        try
+        {
+            UserDataPaths.TestRootDirectory = root;
+            var project = Path.Combine(root, "workspace", "示例项目"); Directory.CreateDirectory(project);
+            var drawing = Path.Combine(project, "一层平面.dwg"); File.WriteAllText(drawing, "current");
+            var settings = new CloudSyncSettings
+            {
+                Provider = "LocalFolder", SyncFolder = Path.Combine(root, "cloud"), SyncProjectFiles = true,
+                SyncGeneralSettings = false, SyncProjectConfigurations = false, SyncTemplatesAndSchemes = false,
+                BackupRoot = Path.Combine(root, "backups"),
+                ProjectMappings = new List<CloudSyncProjectMapping>
+                {
+                    new CloudSyncProjectMapping { ProjectName = "示例项目", CloudId = "sample", LocalFolder = project, Enabled = true }
+                }
+            };
+            new CloudSyncSettingsStore().SaveSettings(settings);
+            CloudSyncRemoteInventoryStore.Save(new[] { "万落建筑云同步/项目文件/sample/一层平面.dwg" });
+            File.WriteAllText(drawing, "old");
+            CloudBackupService.BackupFile(drawing, "项目文件/sample/一层平面.dwg", "历史版本", settings);
+            File.WriteAllText(drawing, "current");
+            var center = new CloudSyncCenterService();
+            var item = center.Load().WorkFiles.Single(candidate => candidate.LogicalPath == "项目文件/sample/一层平面.dwg");
+            True(item.LocalExists && item.CloudExists, "work file local/cloud status was not loaded");
+            var history = center.HistoryFor(item.LogicalPath);
+            Equal(1, history.Count);
+            center.RestoreHistory(history[0]);
+            Equal("old", File.ReadAllText(drawing));
+        }
+        finally { Directory.Delete(root, true); }
     }
 
     private static void ChangingProviderScopeCannotDeleteLocalFiles()
@@ -462,7 +545,7 @@ internal static class CloudSyncTests
             settings.SyncFolder = secondCloud; store.SaveSettings(settings);
             CloudSyncWorkflow.Synchronize(settings, store);
             Equal("keep-me", File.ReadAllText(local));
-            True(File.Exists(Path.Combine(secondCloud, "万落建筑云同步", "通用配置", "scope-test.json")), "local file was not safely initialized in the new cloud scope");
+            True(File.Exists(Path.Combine(secondCloud, "万落建筑云同步", "系统文件包", CloudSystemPackageService.PackageFileName)), "local system package was not safely initialized in the new cloud scope");
             True(Directory.GetDirectories(Path.Combine(root, "backups", "首次连接备份")).Length >= 1, "first connection snapshot missing");
         }
         finally { Directory.Delete(root, true); }
@@ -683,7 +766,7 @@ internal static class CloudSyncTests
             };
             var store = new CloudSyncSettingsStore(); store.SaveSettings(settings);
             var engine = new LocalFolderSyncEngine(store);
-            var catalog = CloudSyncCatalog.CreateDefault(settings);
+            var catalog = new CloudSyncCatalog(new[] { new CloudSyncSource("通用配置", UserDataPaths.SettingsDirectory, null) });
             var localFile = Path.Combine(UserDataPaths.SettingsDirectory, "settings.json");
             var remoteFile = Path.Combine(shared, "万落建筑云同步", "通用配置", "settings.json");
             action(root, settings, engine, catalog, localFile, remoteFile);

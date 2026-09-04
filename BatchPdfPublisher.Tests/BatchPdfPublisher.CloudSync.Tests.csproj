@@ -20,6 +20,7 @@
     <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Models\CloudSyncModels.cs" Link="CloudSyncModels.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncSettingsStore.cs" Link="CloudSyncSettingsStore.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncCatalog.cs" Link="CloudSyncCatalog.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSystemPackageService.cs" Link="CloudSystemPackageService.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\LocalFolderSyncEngine.cs" Link="LocalFolderSyncEngine.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncPendingFileService.cs" Link="CloudSyncPendingFileService.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncCenterService.cs" Link="CloudSyncCenterService.cs" />

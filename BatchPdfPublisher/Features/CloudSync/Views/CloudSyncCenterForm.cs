@@ -17,6 +17,7 @@ namespace BatchPdfPublisher.Views
         private readonly ListView _conflicts = CreateList("分类", "文件", "用途", "本机副本", "共享副本", "发生时间");
         private readonly ListView _history = CreateList("分类", "来源", "文件", "用途", "版本时间");
         private readonly ListView _projects = CreateList("项目名称", "本机状态", "云端状态", "本机目录");
+        private readonly ListView _workFiles = CreateList("项目 / 文件", "类型", "本机", "云端", "大小", "修改时间");
         private readonly TextBox _workspaceRoot = new TextBox { Dock = DockStyle.Fill };
         private readonly CheckBox _showArchived = new CheckBox { Text = "显示已归档项目", AutoSize = true, Margin = new Padding(12, 7, 3, 3) };
 
@@ -30,6 +31,7 @@ namespace BatchPdfPublisher.Views
 
             var tabs = new TabControl { Dock = DockStyle.Fill };
             tabs.TabPages.Add(BuildProjectTab());
+            tabs.TabPages.Add(BuildWorkFilesTab());
             tabs.TabPages.Add(BuildPendingTab());
             tabs.TabPages.Add(BuildConflictTab());
             tabs.TabPages.Add(BuildHistoryTab());
@@ -76,6 +78,20 @@ namespace BatchPdfPublisher.Views
             var open = ButtonFor("打开位置"); open.Click += delegate { OpenSelected(_history); };
             bar.Controls.Add(restore); bar.Controls.Add(open);
             page.Controls.Add(bar); return page;
+        }
+
+        private TabPage BuildWorkFilesTab()
+        {
+            var page = Page("工作文件");
+            _workFiles.DoubleClick += delegate { ShowSelectedWorkFileHistory(); };
+            page.Controls.Add(_workFiles);
+            page.Controls.Add(HelpText("显示已选择同步项目中的工作文件。双击一个文件可查看它自己的全部历史版本，并恢复到任意保留版本。"));
+            var bar = ActionBar();
+            var versions = ButtonFor("查看历史版本"); versions.Click += delegate { ShowSelectedWorkFileHistory(); };
+            var open = ButtonFor("打开文件位置"); open.Click += delegate { OpenSelected(_workFiles); };
+            bar.Controls.Add(versions); bar.Controls.Add(open);
+            page.Controls.Add(bar);
+            return page;
         }
 
         private TabPage BuildProjectTab()
@@ -136,7 +152,18 @@ namespace BatchPdfPublisher.Views
                     _history.Items.Add(row);
                 }
                 _history.EndUpdate();
-                _summary.Text = string.Format("待应用 {0} 项　冲突 {1} 项　历史版本 {2} 项", data.Pending.Count, data.Conflicts.Count, data.History.Count);
+
+                _workFiles.BeginUpdate(); _workFiles.Items.Clear();
+                foreach (var item in data.WorkFiles)
+                {
+                    var row = new ListViewItem(new[] { item.DisplayPath, item.Kind, item.LocalExists ? "已有" : "无",
+                        item.CloudExists ? "已有" : "无", FormatBytes(item.Size),
+                        item.ModifiedAt == DateTime.MinValue ? "-" : item.ModifiedAt.ToString("yyyy-MM-dd HH:mm:ss") }) { Tag = item };
+                    if (!item.LocalExists) row.ForeColor = Color.DarkOrange;
+                    _workFiles.Items.Add(row);
+                }
+                _workFiles.EndUpdate();
+                _summary.Text = string.Format("工作文件 {0} 项　待应用 {1} 项　冲突 {2} 项　历史版本 {3} 项", data.WorkFiles.Count, data.Pending.Count, data.Conflicts.Count, data.History.Count);
                 _summary.ForeColor = data.Pending.Count > 0 || data.Conflicts.Count > 0 ? Color.DarkOrange : Color.FromArgb(34, 120, 72);
             }
             catch (Exception exception) { ShowError(exception); }
@@ -369,6 +396,50 @@ namespace BatchPdfPublisher.Views
             catch (Exception exception) { ShowError(exception); }
         }
 
+        private void ShowSelectedWorkFileHistory()
+        {
+            var selected = SelectedTag<CloudSyncCenterItem>(_workFiles);
+            if (selected == null) { MessageBox.Show(this, "请先选择一个工作文件。", Text); return; }
+            System.Collections.Generic.IList<CloudSyncCenterItem> versions;
+            try { versions = _service.HistoryFor(selected.LogicalPath); }
+            catch (Exception exception) { ShowError(exception); return; }
+
+            using (var dialog = new Form
+            {
+                Text = "历史版本 · " + selected.DisplayPath,
+                StartPosition = FormStartPosition.CenterParent,
+                MinimumSize = new Size(760, 420),
+                Size = new Size(900, 520),
+                Font = Font
+            })
+            {
+                var list = CreateList("来源", "版本时间", "大小", "备份位置");
+                foreach (var version in versions)
+                    list.Items.Add(new ListViewItem(new[] { version.Kind, version.ModifiedAt.ToString("yyyy-MM-dd HH:mm:ss"),
+                        FormatBytes(SafeLength(version.FilePath)), version.FilePath }) { Tag = version });
+                var hint = HelpText(versions.Count == 0
+                    ? "该文件暂时没有历史版本。文件发生上传、下载、冲突解决或手动恢复前，系统会自动保留版本。"
+                    : "选择需要的版本后点击恢复；恢复前仍会备份当前文件，因此可以继续撤回。", 40);
+                var bar = ActionBar();
+                var restore = ButtonFor("恢复所选版本");
+                restore.Enabled = versions.Count > 0;
+                restore.Click += delegate
+                {
+                    var version = SelectedTag<CloudSyncCenterItem>(list);
+                    if (version == null) { MessageBox.Show(dialog, "请先选择一个历史版本。", dialog.Text); return; }
+                    if (MessageBox.Show(dialog, "确定恢复这个历史版本到本机？\r\n当前文件会先自动备份。\r\n\r\n" +
+                        version.ModifiedAt.ToString("yyyy-MM-dd HH:mm:ss"), dialog.Text, MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+                    try { _service.RestoreHistory(version); MessageBox.Show(dialog, "历史版本已恢复。", dialog.Text); dialog.Close(); ReloadData(); }
+                    catch (Exception exception) { MessageBox.Show(dialog, exception.Message, dialog.Text, MessageBoxButtons.OK, MessageBoxIcon.Error); }
+                };
+                var open = ButtonFor("打开备份位置"); open.Click += delegate { OpenSelected(list); };
+                var close = ButtonFor("关闭"); close.Click += delegate { dialog.Close(); };
+                bar.Controls.Add(restore); bar.Controls.Add(open); bar.Controls.Add(close);
+                dialog.Controls.Add(list); dialog.Controls.Add(hint); dialog.Controls.Add(bar);
+                dialog.ShowDialog(this);
+            }
+        }
+
         private void OpenSelected(ListView list)
         {
             if (list.SelectedItems.Count == 0) return;
@@ -394,6 +465,14 @@ namespace BatchPdfPublisher.Views
         }
 
         private static string ExistsText(string path) { return !string.IsNullOrWhiteSpace(path) && File.Exists(path) ? "有" : "无"; }
+        private static long SafeLength(string path) { try { return File.Exists(path) ? new FileInfo(path).Length : 0; } catch { return 0; } }
+        private static string FormatBytes(long bytes)
+        {
+            if (bytes >= 1024L * 1024 * 1024) return (bytes / (1024d * 1024 * 1024)).ToString("0.##") + " GB";
+            if (bytes >= 1024L * 1024) return (bytes / (1024d * 1024)).ToString("0.##") + " MB";
+            if (bytes >= 1024L) return (bytes / 1024d).ToString("0.##") + " KB";
+            return bytes + " B";
+        }
         private sealed class ProjectSelectionRow
         {
             public string Name { get; set; }
@@ -412,7 +491,7 @@ namespace BatchPdfPublisher.Views
         {
             var list = new ListView { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, GridLines = true, HideSelection = false };
             foreach (var column in columns)
-                list.Columns.Add(column, column == "文件" || column == "本机目录" ? 330 : column == "用途" ? 300 : column.Contains("状态") ? 135 : column.Contains("副本") ? 90 : 130);
+                list.Columns.Add(column, column == "文件" || column == "本机目录" || column == "项目 / 文件" || column == "备份位置" ? 330 : column == "用途" ? 300 : column.Contains("状态") ? 135 : column.Contains("副本") ? 90 : 130);
             return list;
         }
     }

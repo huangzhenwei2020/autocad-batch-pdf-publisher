@@ -20,6 +20,7 @@ namespace BatchPdfPublisher.Services
             InitialSyncPreference = "Remote";
             HistoryRetentionDays = 30;
             KeepVersionsPerFile = 20;
+            SystemPackageIntervalMinutes = 30;
             ProjectMappings = new List<CloudSyncProjectMapping>();
             ProjectWorkspaceRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "万落建筑项目");
             BackupRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "万落建筑备份");
@@ -41,6 +42,7 @@ namespace BatchPdfPublisher.Services
         [DataMember] public string InitialSyncPreference { get; set; }
         [DataMember] public int HistoryRetentionDays { get; set; }
         [DataMember] public int KeepVersionsPerFile { get; set; }
+        [DataMember] public int SystemPackageIntervalMinutes { get; set; }
         [DataMember] public List<CloudSyncProjectMapping> ProjectMappings { get; set; }
         [DataMember] public string ProjectWorkspaceRoot { get; set; }
         [DataMember] public string BackupRoot { get; set; }

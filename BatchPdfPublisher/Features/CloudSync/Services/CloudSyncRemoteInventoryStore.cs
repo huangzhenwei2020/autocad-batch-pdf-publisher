@@ -46,6 +46,14 @@ namespace BatchPdfPublisher.Services
             return LoadFiles().Any(path => path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
         }
 
+        public static IList<string> ProjectFilePaths()
+        {
+            const string prefix = "万落建筑云同步/项目文件/";
+            return LoadFiles().Where(path => path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                .Select(path => path.Substring("万落建筑云同步/".Length))
+                .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToList();
+        }
+
         private static IList<string> LoadFiles()
         {
             lock (FileSync)

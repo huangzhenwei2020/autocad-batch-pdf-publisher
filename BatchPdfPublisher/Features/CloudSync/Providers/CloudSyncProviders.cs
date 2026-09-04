@@ -261,6 +261,14 @@ namespace BatchPdfPublisher.Services
         internal bool ShouldTransferRelativePath(string relativePath)
         {
             var path = CloudSyncSource.NormalizeLogicalPath(relativePath);
+            var legacySystemPrefixes = new[]
+            {
+                "万落建筑云同步/通用配置/", "万落建筑云同步/项目配置/",
+                "万落建筑云同步/图框模板/", "万落建筑云同步/方案库/",
+                "万落建筑云同步/历史版本/通用配置/", "万落建筑云同步/历史版本/项目配置/",
+                "万落建筑云同步/历史版本/图框模板/", "万落建筑云同步/历史版本/方案库/"
+            };
+            if (legacySystemPrefixes.Any(prefix => path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))) return false;
             const string projectPrefix = "万落建筑云同步/项目文件/";
             if (!path.StartsWith(projectPrefix, StringComparison.OrdinalIgnoreCase)) return true;
             var remainder = path.Substring(projectPrefix.Length);
@@ -306,6 +314,12 @@ namespace BatchPdfPublisher.Services
         public static CloudSyncResult Synchronize(CloudSyncSettings settings, CloudSyncSettingsStore store,
             Action<CloudSyncProgress> progress, CancellationToken cancellationToken)
         {
+            return Synchronize(settings, store, progress, cancellationToken, false);
+        }
+
+        public static CloudSyncResult Synchronize(CloudSyncSettings settings, CloudSyncSettingsStore store,
+            Action<CloudSyncProgress> progress, CancellationToken cancellationToken, bool forceSystemPackage)
+        {
             if (settings == null) throw new ArgumentNullException("settings");
             var actualStore = store ?? new CloudSyncSettingsStore();
             var projects = new PublishPlanStore().LoadProjects();
@@ -320,13 +334,18 @@ namespace BatchPdfPublisher.Services
             {
                 provider.Prepare(progress, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
+                var remotePackagePath = Path.Combine(provider.WorkingFolder, "万落建筑云同步", CloudSystemPackageService.LogicalPrefix,
+                    CloudSystemPackageService.PackageFileName);
+                var includeSystemPackage = CloudSystemPackageService.Prepare(settings, forceSystemPackage,
+                    File.Exists(remotePackagePath), progress, cancellationToken);
                 var previousState = actualStore.LoadState();
                 var firstConnection = EnsureProviderState(actualStore, provider.Id, provider.StateIdentity);
                 try
                 {
                     var result = new LocalFolderSyncEngine(actualStore)
-                        .Synchronize(settings, CloudSyncCatalog.CreateDefault(settings), provider.WorkingFolder, progress, cancellationToken, firstConnection);
+                        .Synchronize(settings, CloudSyncCatalog.CreateDefault(settings, includeSystemPackage), provider.WorkingFolder, progress, cancellationToken, firstConnection);
                     cancellationToken.ThrowIfCancellationRequested();
+                    CloudSystemPackageService.ApplyDownloadedPackage(settings, result, progress, cancellationToken);
                     provider.Complete(result, progress, cancellationToken);
                     return result;
                 }

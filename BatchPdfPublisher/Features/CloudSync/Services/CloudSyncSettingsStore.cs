@@ -32,6 +32,7 @@ namespace BatchPdfPublisher.Services
                 settings.Provider = "BaiduNetdisk";
             settings.SyncFolder = CloudSyncFolderDetector.ResolveUsableFolder(settings.SyncFolder);
             if (settings.ProjectMappings == null) settings.ProjectMappings = new System.Collections.Generic.List<CloudSyncProjectMapping>();
+            if (settings.SystemPackageIntervalMinutes < 1) settings.SystemPackageIntervalMinutes = 30;
             return settings;
         }
 
@@ -41,6 +42,7 @@ namespace BatchPdfPublisher.Services
             if (string.IsNullOrWhiteSpace(settings.DeviceName)) settings.DeviceName = Environment.MachineName;
             if (settings.HistoryRetentionDays < 1) settings.HistoryRetentionDays = 30;
             if (settings.KeepVersionsPerFile < 1) settings.KeepVersionsPerFile = 20;
+            if (settings.SystemPackageIntervalMinutes < 1) settings.SystemPackageIntervalMinutes = 30;
             if (settings.ProjectMappings == null) settings.ProjectMappings = new System.Collections.Generic.List<CloudSyncProjectMapping>();
             Save(_settingsPath, settings);
         }

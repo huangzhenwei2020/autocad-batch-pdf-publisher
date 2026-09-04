@@ -30,6 +30,7 @@ namespace BatchPdfPublisher.Views
         private readonly ComboBox _initialPreference = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 230 };
         private readonly NumericUpDown _days = new NumericUpDown { Minimum = 1, Maximum = 3650, Value = 30, Width = 90 };
         private readonly NumericUpDown _versions = new NumericUpDown { Minimum = 1, Maximum = 200, Value = 20, Width = 90 };
+        private readonly NumericUpDown _systemPackageMinutes = new NumericUpDown { Minimum = 1, Maximum = 1440, Value = 30, Width = 90 };
         private readonly Label _status = new Label { AutoSize = true, ForeColor = Color.FromArgb(34, 98, 60), Padding = new Padding(0, 8, 0, 0) };
         private readonly ProgressBar _progress = new ProgressBar { Dock = DockStyle.Top, Height = 18, Visible = false, Style = ProgressBarStyle.Marquee };
         private readonly ListBox _details = new ListBox { Dock = DockStyle.Fill, HorizontalScrollbar = true };
@@ -72,14 +73,14 @@ namespace BatchPdfPublisher.Views
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             Controls.Add(root);
 
-            var title = new Label { Text = "云同步（V5：插件直连云盘）", Font = new Font(Font, FontStyle.Bold), AutoSize = true };
+            var title = new Label { Text = "云同步（系统文件打包 + 工作文件版本）", Font = new Font(Font, FontStyle.Bold), AutoSize = true };
             root.Controls.Add(title);
             var description = new Label
             {
                 AutoSize = true,
                 MaximumSize = new Size(780, 0),
                 ForeColor = Color.DimGray,
-                Text = "百度网盘直连由插件通过官方授权和文件接口上传、下载，无需安装网盘客户端。通用同步文件夹继续作为兼容模式；版本、冲突、历史和打开中 DWG 的保护规则保持不变。"
+                Text = "设置、项目登记、图框和方案库合并为一个系统文件包，减少零散文件传输；项目 DWG 与资料继续按文件同步并保留历史版本。"
             };
             root.Controls.Add(description);
 
@@ -124,6 +125,7 @@ namespace BatchPdfPublisher.Views
             var scope = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = true };
             scope.Controls.Add(LabelFor("同步内容：")); scope.Controls.Add(_general); scope.Controls.Add(_projects); scope.Controls.Add(_templates); scope.Controls.Add(_drawings);
             scope.Controls.Add(_auto); scope.Controls.Add(LabelFor("历史天数")); scope.Controls.Add(_days); scope.Controls.Add(LabelFor("每文件版本数")); scope.Controls.Add(_versions);
+            scope.Controls.Add(LabelFor("系统文件变动后等待（分钟）")); scope.Controls.Add(_systemPackageMinutes);
             root.Controls.Add(scope);
 
             var progressPanel = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 2, Padding = new Padding(0, 4, 0, 4) };
@@ -196,6 +198,7 @@ namespace BatchPdfPublisher.Views
                 : string.Equals(_settings.InitialSyncPreference, "Conflict", StringComparison.OrdinalIgnoreCase) ? 2 : 0;
             _days.Value = Math.Max(_days.Minimum, Math.Min(_days.Maximum, _settings.HistoryRetentionDays));
             _versions.Value = Math.Max(_versions.Minimum, Math.Min(_versions.Maximum, _settings.KeepVersionsPerFile));
+            _systemPackageMinutes.Value = Math.Max(_systemPackageMinutes.Minimum, Math.Min(_systemPackageMinutes.Maximum, _settings.SystemPackageIntervalMinutes));
             _status.Text = !string.IsNullOrWhiteSpace(CloudSyncSettingsStore.LastRecoveryNotice)
                 ? "数据恢复提醒：" + CloudSyncSettingsStore.LastRecoveryNotice
                 : _settings.Enabled ? "同步已启用。" : "同步默认关闭；启用并保存后才会读写同步目录。";
@@ -271,6 +274,7 @@ namespace BatchPdfPublisher.Views
             _settings.InitialSyncPreference = _initialPreference.SelectedIndex == 1 ? "Local" : _initialPreference.SelectedIndex == 2 ? "Conflict" : "Remote";
             _settings.HistoryRetentionDays = (int)_days.Value;
             _settings.KeepVersionsPerFile = (int)_versions.Value;
+            _settings.SystemPackageIntervalMinutes = (int)_systemPackageMinutes.Value;
             new CloudSyncSettingsStore().SaveSettings(_settings);
             var synchronize = requestAutomaticSync && _settings.Enabled && _settings.AutoSync;
             if (reloadCoordinator) CloudSyncCoordinator.QueueReload(synchronize);
@@ -316,7 +320,7 @@ namespace BatchPdfPublisher.Views
                 _progress.Visible = true; _progress.Style = ProgressBarStyle.Marquee;
                 var settings = _settings;
                 var cancellationToken = _syncCancellation.Token;
-                var result = await Task.Run(() => CloudSyncWorkflow.Synchronize(settings, new CloudSyncSettingsStore(), QueueProgress, cancellationToken));
+                var result = await Task.Run(() => CloudSyncWorkflow.Synchronize(settings, new CloudSyncSettingsStore(), QueueProgress, cancellationToken, true));
                 ShowResult(result);
                 CloudSyncCadNotificationService.Show(result, null);
             }

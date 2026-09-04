@@ -115,6 +115,11 @@ namespace BatchPdfPublisher.Services
 
         public static CloudSyncCatalog CreateDefault(CloudSyncSettings settings)
         {
+            return CreateDefault(settings, true);
+        }
+
+        public static CloudSyncCatalog CreateDefault(CloudSyncSettings settings, bool includeSystemPackage)
+        {
             if (settings == null) throw new ArgumentNullException("settings");
             var sources = new List<CloudSyncSource>();
             var projectMappings = settings.SyncProjectFiles && settings.ProjectMappings != null
@@ -122,13 +127,10 @@ namespace BatchPdfPublisher.Services
                     !string.IsNullOrWhiteSpace(item.CloudId) && !string.IsNullOrWhiteSpace(item.LocalFolder) &&
                     !ProjectSyncProjectionStore.IsCloudProjectArchived(item.CloudId)).ToList()
                 : new List<CloudSyncProjectMapping>();
-            var mappedProjectPrefixes = projectMappings.Select(item => RelativePrefix(item.LocalFolder, UserDataPaths.ProjectsDirectory))
-                .Where(prefix => !string.IsNullOrWhiteSpace(prefix)).ToList();
-            if (settings.SyncGeneralSettings)
-                sources.Add(new CloudSyncSource("通用配置", UserDataPaths.SettingsDirectory, IncludeGeneralSetting));
-            if (settings.SyncProjectConfigurations)
-                sources.Add(new CloudSyncSource("项目配置", UserDataPaths.ProjectsDirectory,
-                    relative => IncludePortableProjectConfiguration(relative) && !IsUnderAnyPrefix(relative, mappedProjectPrefixes)));
+            if (includeSystemPackage && (settings.SyncGeneralSettings || settings.SyncProjectConfigurations || settings.SyncTemplatesAndSchemes))
+                sources.Add(new CloudSyncSource(CloudSystemPackageService.LogicalPrefix,
+                    CloudSystemPackageService.PackageDirectory, relative =>
+                        Path.GetFileName(relative).Equals(CloudSystemPackageService.PackageFileName, StringComparison.OrdinalIgnoreCase)));
             if (settings.SyncProjectFiles)
             {
                 foreach (var mapping in projectMappings)
@@ -139,16 +141,10 @@ namespace BatchPdfPublisher.Services
                     sources.Add(new CloudSyncSource("项目文件/" + mapping.CloudId, root, IncludeExternalProjectFile));
                 }
             }
-            if (settings.SyncTemplatesAndSchemes)
-            {
-                sources.Add(new CloudSyncSource("图框模板", UserDataPaths.FrameTemplatesDirectory, IncludeNormalFile));
-                var stairSchemes = Path.Combine(UserDataPaths.RootDirectory, "楼梯大样", "方案库");
-                sources.Add(new CloudSyncSource("方案库/楼梯", stairSchemes, IncludeNormalFile));
-            }
             return new CloudSyncCatalog(sources);
         }
 
-        private static bool IncludeGeneralSetting(string relative)
+        internal static bool IncludeGeneralSetting(string relative)
         {
             var fileName = Path.GetFileName(relative);
             if (fileName.Equals("cloud-sync.settings.json", StringComparison.OrdinalIgnoreCase)) return false;
@@ -161,7 +157,7 @@ namespace BatchPdfPublisher.Services
             return IncludeNormalFile(relative);
         }
 
-        private static bool IncludePortableProjectConfiguration(string relative)
+        internal static bool IncludePortableProjectConfiguration(string relative)
         {
             if (!IncludeNormalFile(relative)) return false;
             var normalized = CloudSyncSource.NormalizeLogicalPath(relative);
@@ -175,7 +171,7 @@ namespace BatchPdfPublisher.Services
             return IncludeNormalFile(relative);
         }
 
-        private static bool IncludeNormalFile(string relative)
+        internal static bool IncludeNormalFile(string relative)
         {
             var normalized = relative.Replace('\\', '/');
             var parts = normalized.Split('/');
@@ -194,24 +190,5 @@ namespace BatchPdfPublisher.Services
             return !TemporaryExtensions.Any(item => item.Equals(extension, StringComparison.OrdinalIgnoreCase));
         }
 
-        private static string RelativePrefix(string path, string root)
-        {
-            try
-            {
-                var fullPath = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-                var fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-                var prefix = fullRoot + Path.DirectorySeparatorChar;
-                return fullPath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
-                    ? fullPath.Substring(prefix.Length).Replace(Path.DirectorySeparatorChar, '/').Trim('/') : null;
-            }
-            catch { return null; }
-        }
-
-        private static bool IsUnderAnyPrefix(string relative, IEnumerable<string> prefixes)
-        {
-            var normalized = CloudSyncSource.NormalizeLogicalPath(relative);
-            return (prefixes ?? Enumerable.Empty<string>()).Any(prefix => normalized.Equals(prefix, StringComparison.OrdinalIgnoreCase) ||
-                normalized.StartsWith(prefix.TrimEnd('/') + "/", StringComparison.OrdinalIgnoreCase));
-        }
     }
 }

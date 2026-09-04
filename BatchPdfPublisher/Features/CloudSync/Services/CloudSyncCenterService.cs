@@ -12,10 +12,12 @@ namespace BatchPdfPublisher.Services
             Pending = new List<CloudSyncCenterItem>();
             Conflicts = new List<CloudSyncConflictItem>();
             History = new List<CloudSyncCenterItem>();
+            WorkFiles = new List<CloudSyncCenterItem>();
         }
         public IList<CloudSyncCenterItem> Pending { get; private set; }
         public IList<CloudSyncConflictItem> Conflicts { get; private set; }
         public IList<CloudSyncCenterItem> History { get; private set; }
+        public IList<CloudSyncCenterItem> WorkFiles { get; private set; }
     }
 
     public sealed class CloudSyncCenterItem
@@ -27,6 +29,9 @@ namespace BatchPdfPublisher.Services
         public string Category { get; set; }
         public string Purpose { get; set; }
         public string DisplayPath { get; set; }
+        public bool LocalExists { get; set; }
+        public bool CloudExists { get; set; }
+        public long Size { get; set; }
     }
 
     public sealed class CloudSyncConflictItem
@@ -63,19 +68,34 @@ namespace BatchPdfPublisher.Services
             var snapshot = new CloudSyncCenterSnapshot();
             LoadPending(snapshot.Pending);
             LoadConflicts(snapshot.Conflicts);
-            LoadHistory(snapshot.History, _localHistoryRoot, "本机历史");
-            LoadHistory(snapshot.History, CloudBackupService.GetPendingHistoryRoot(_settings), "待应用前备份");
-            foreach (var category in new[] { "冲突解决前-本机", "冲突解决前-共享", "历史恢复前" })
-                LoadHistory(snapshot.History, Path.Combine(CloudBackupService.GetManualHistoryRoot(_settings), category), category);
-            LoadHistory(snapshot.History, Path.Combine(UserDataPaths.RootDirectory, ".cloud-sync", "history"), "旧版本机历史");
-            LoadHistory(snapshot.History, Path.Combine(UserDataPaths.RootDirectory, ".cloud-sync", "pending-history"), "旧版待应用备份");
-            foreach (var category in new[] { "冲突解决前-本机", "冲突解决前-共享", "历史恢复前" })
-                LoadHistory(snapshot.History, Path.Combine(UserDataPaths.RootDirectory, ".cloud-sync", "center-backups", category), "旧版" + category);
-            if (!string.IsNullOrWhiteSpace(_mirrorRoot)) LoadHistory(snapshot.History, Path.Combine(_mirrorRoot, "历史版本"), "共享历史");
+            LoadWorkFiles(snapshot.WorkFiles);
+            LoadAllHistory(snapshot.History);
             var recent = snapshot.History.OrderByDescending(item => item.ModifiedAt).Take(1000).ToList();
             snapshot.History.Clear();
             foreach (var item in recent) snapshot.History.Add(item);
             return snapshot;
+        }
+
+        private void LoadAllHistory(IList<CloudSyncCenterItem> target)
+        {
+            LoadHistory(target, _localHistoryRoot, "本机历史");
+            LoadHistory(target, CloudBackupService.GetPendingHistoryRoot(_settings), "待应用前备份");
+            foreach (var category in new[] { "冲突解决前-本机", "冲突解决前-共享", "历史恢复前" })
+                LoadHistory(target, Path.Combine(CloudBackupService.GetManualHistoryRoot(_settings), category), category);
+            LoadHistory(target, Path.Combine(UserDataPaths.RootDirectory, ".cloud-sync", "history"), "旧版本机历史");
+            LoadHistory(target, Path.Combine(UserDataPaths.RootDirectory, ".cloud-sync", "pending-history"), "旧版待应用备份");
+            foreach (var category in new[] { "冲突解决前-本机", "冲突解决前-共享", "历史恢复前" })
+                LoadHistory(target, Path.Combine(UserDataPaths.RootDirectory, ".cloud-sync", "center-backups", category), "旧版" + category);
+            if (!string.IsNullOrWhiteSpace(_mirrorRoot)) LoadHistory(target, Path.Combine(_mirrorRoot, "历史版本"), "共享历史");
+        }
+
+        public IList<CloudSyncCenterItem> HistoryFor(string logicalPath)
+        {
+            if (string.IsNullOrWhiteSpace(logicalPath)) return new List<CloudSyncCenterItem>();
+            var all = new List<CloudSyncCenterItem>();
+            LoadAllHistory(all);
+            return all.Where(item => string.Equals(item.LogicalPath, logicalPath, StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(item => item.ModifiedAt).ToList();
         }
 
         public int ApplyPending()
@@ -98,7 +118,7 @@ namespace BatchPdfPublisher.Services
             if (string.IsNullOrWhiteSpace(source) || !File.Exists(source))
                 throw new IOException(useLocalCopy ? "本机冲突副本不存在。" : "共享冲突副本不存在。");
             string localPath;
-            if (!_catalog.TryResolve(item.LogicalPath, out localPath)) throw new IOException("找不到冲突文件的本机工程映射。");
+            if (!TryResolveLocal(item.LogicalPath, out localPath)) throw new IOException("找不到冲突文件的本机映射。");
             if (CloudSyncPendingFileService.ShouldDefer(localPath)) throw new IOException("该 DWG 正在 AutoCAD 中打开，请关闭图纸后再解决冲突。");
             var remotePath = ResolveRemote(item.LogicalPath);
             BackupBeforeAction(localPath, item.LogicalPath, "冲突解决前-本机");
@@ -114,7 +134,7 @@ namespace BatchPdfPublisher.Services
         {
             if (item == null || !File.Exists(item.FilePath)) throw new IOException("历史版本不存在。");
             string target;
-            if (!_catalog.TryResolve(item.LogicalPath, out target)) throw new IOException("找不到历史版本的本机工程映射。");
+            if (!TryResolveLocal(item.LogicalPath, out target)) throw new IOException("找不到历史版本的本机文件映射。");
             if (CloudSyncPendingFileService.ShouldDefer(target)) throw new IOException("该 DWG 正在 AutoCAD 中打开，请关闭图纸后再恢复。");
             BackupBeforeAction(target, item.LogicalPath, "历史恢复前");
             CopyAtomically(item.FilePath, target, LocalFolderSyncEngine.ComputeHash(item.FilePath));
@@ -191,7 +211,7 @@ namespace BatchPdfPublisher.Services
                 if (string.IsNullOrWhiteSpace(logical)) continue;
                 logical = CloudSyncSource.NormalizeLogicalPath(logical);
                 string ignored;
-                if (!_catalog.TryResolve(logical, out ignored)) continue;
+                if (!TryResolveLocal(logical, out ignored)) continue;
                 target.Add(new CloudSyncCenterItem
                 {
                     LogicalPath = logical,
@@ -205,6 +225,55 @@ namespace BatchPdfPublisher.Services
             }
         }
 
+        private void LoadWorkFiles(IList<CloudSyncCenterItem> target)
+        {
+            var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var file in _catalog.EnumerateFiles())
+                if (file.LogicalPath.StartsWith("项目文件/", StringComparison.OrdinalIgnoreCase)) paths.Add(file.LogicalPath);
+            foreach (var logical in CloudSyncRemoteInventoryStore.ProjectFilePaths())
+            {
+                string ignored;
+                if (_catalog.TryResolve(logical, out ignored)) paths.Add(logical);
+            }
+            if (!string.IsNullOrWhiteSpace(_mirrorRoot))
+            {
+                var projectRoot = Path.Combine(_mirrorRoot, "项目文件");
+                if (Directory.Exists(projectRoot))
+                    foreach (var file in Directory.EnumerateFiles(projectRoot, "*", SearchOption.AllDirectories))
+                    {
+                        var relative = file.Substring(_mirrorRoot.TrimEnd(Path.DirectorySeparatorChar).Length)
+                            .TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                        string ignored;
+                        var logical = CloudSyncSource.NormalizeLogicalPath(relative);
+                        if (_catalog.TryResolve(logical, out ignored)) paths.Add(logical);
+                    }
+            }
+            var remotePaths = new HashSet<string>(CloudSyncRemoteInventoryStore.ProjectFilePaths(), StringComparer.OrdinalIgnoreCase);
+            foreach (var logical in paths.OrderBy(DisplayPathFor, StringComparer.CurrentCultureIgnoreCase))
+            {
+                string localPath;
+                if (!_catalog.TryResolve(logical, out localPath)) continue;
+                var remotePath = string.IsNullOrWhiteSpace(_mirrorRoot) ? null : ResolveRemote(logical);
+                var localExists = File.Exists(localPath);
+                var cachedRemoteExists = !string.IsNullOrWhiteSpace(remotePath) && File.Exists(remotePath);
+                var cloudExists = remotePaths.Contains(logical) || cachedRemoteExists;
+                var source = localExists ? localPath : cachedRemoteExists ? remotePath : null;
+                target.Add(new CloudSyncCenterItem
+                {
+                    LogicalPath = logical,
+                    FilePath = source,
+                    Kind = Path.GetExtension(logical).TrimStart('.').ToUpperInvariant(),
+                    ModifiedAt = source == null ? DateTime.MinValue : File.GetLastWriteTime(source),
+                    Category = "项目文件",
+                    Purpose = PurposeFor(logical),
+                    DisplayPath = DisplayPathFor(logical),
+                    LocalExists = localExists,
+                    CloudExists = cloudExists,
+                    Size = source == null ? 0 : SafeLength(source)
+                });
+            }
+        }
+
         public static string CategoryFor(string logicalPath)
         {
             var path = CloudSyncSource.NormalizeLogicalPath(logicalPath);
@@ -213,6 +282,7 @@ namespace BatchPdfPublisher.Services
             if (path.StartsWith("通用配置/", StringComparison.OrdinalIgnoreCase)) return "软件设置";
             if (path.StartsWith("图框模板/", StringComparison.OrdinalIgnoreCase)) return "图框模板";
             if (path.StartsWith("方案库/", StringComparison.OrdinalIgnoreCase)) return "方案库";
+            if (path.StartsWith(CloudSystemPackageService.LogicalPrefix + "/", StringComparison.OrdinalIgnoreCase)) return "系统文件";
             return "其他";
         }
 
@@ -225,6 +295,7 @@ namespace BatchPdfPublisher.Services
                 case "软件设置": return "文字、标注、界面及常用制图设置";
                 case "图框模板": return "登记过的图框和排版范围";
                 case "方案库": return "楼梯大样等可复用参数方案";
+                case "系统文件": return "设置、项目登记、图框和方案库的合并压缩包";
                 default: return "云同步产生的其他数据";
             }
         }
@@ -259,6 +330,12 @@ namespace BatchPdfPublisher.Services
         private void BackupBeforeAction(string path, string logicalPath, string category)
         {
             CloudBackupService.BackupFile(path, logicalPath, Path.Combine("手动操作前备份", category), _settings);
+        }
+
+        private bool TryResolveLocal(string logicalPath, out string localPath)
+        {
+            return _catalog.TryResolve(logicalPath, out localPath) ||
+                   CloudSystemPackageService.TryResolveSystemFile(_settings, logicalPath, out localPath);
         }
 
         private static void CopyAtomically(string source, string target, string expectedHash)
@@ -297,6 +374,12 @@ namespace BatchPdfPublisher.Services
             var full = Path.GetFullPath(path);
             var prefix = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
             return full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static long SafeLength(string path)
+        {
+            try { return File.Exists(path) ? new FileInfo(path).Length : 0; }
+            catch { return 0; }
         }
     }
 }
