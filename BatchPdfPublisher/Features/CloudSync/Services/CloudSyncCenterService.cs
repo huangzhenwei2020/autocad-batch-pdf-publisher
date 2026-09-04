@@ -130,7 +130,7 @@ namespace BatchPdfPublisher.Services
             CloudSyncCoordinator.RequestSynchronization(false);
         }
 
-        public void RestoreHistory(CloudSyncCenterItem item)
+        public string RestoreHistory(CloudSyncCenterItem item)
         {
             if (item == null || !File.Exists(item.FilePath)) throw new IOException("历史版本不存在。");
             string target;
@@ -139,6 +139,7 @@ namespace BatchPdfPublisher.Services
             BackupBeforeAction(target, item.LogicalPath, "历史恢复前");
             CopyAtomically(item.FilePath, target, LocalFolderSyncEngine.ComputeHash(item.FilePath));
             CloudSyncCoordinator.RequestSynchronization(false);
+            return target;
         }
 
         public string FolderFor(string path)
@@ -252,7 +253,7 @@ namespace BatchPdfPublisher.Services
             foreach (var logical in paths.OrderBy(DisplayPathFor, StringComparer.CurrentCultureIgnoreCase))
             {
                 string localPath;
-                if (!_catalog.TryResolve(logical, out localPath)) continue;
+                if (!TryResolveLocal(logical, out localPath)) continue;
                 var remotePath = string.IsNullOrWhiteSpace(_mirrorRoot) ? null : ResolveRemote(logical);
                 var localExists = File.Exists(localPath);
                 var cachedRemoteExists = !string.IsNullOrWhiteSpace(remotePath) && File.Exists(remotePath);
@@ -334,8 +335,30 @@ namespace BatchPdfPublisher.Services
 
         private bool TryResolveLocal(string logicalPath, out string localPath)
         {
-            return _catalog.TryResolve(logicalPath, out localPath) ||
+            return TryResolveProjectFileInWorkspace(logicalPath, out localPath) ||
+                   _catalog.TryResolve(logicalPath, out localPath) ||
                    CloudSystemPackageService.TryResolveSystemFile(_settings, logicalPath, out localPath);
+        }
+
+        private bool TryResolveProjectFileInWorkspace(string logicalPath, out string localPath)
+        {
+            localPath = null;
+            var normalized = CloudSyncSource.NormalizeLogicalPath(logicalPath);
+            if (!normalized.StartsWith("项目文件/", StringComparison.OrdinalIgnoreCase)) return false;
+            var parts = normalized.Split('/');
+            if (parts.Length < 3) return false;
+            var mapping = (_settings.ProjectMappings ?? new List<CloudSyncProjectMapping>()).FirstOrDefault(item =>
+                item != null && item.Enabled && string.Equals(item.CloudId, parts[1], StringComparison.OrdinalIgnoreCase));
+            if (mapping == null || string.IsNullOrWhiteSpace(mapping.ProjectName)) return false;
+            var workspace = CloudProjectWorkspaceService.GetWorkspaceRoot(_settings);
+            var projectRoot = CloudProjectWorkspaceService.IsUnderWorkspace(mapping.LocalFolder, workspace)
+                ? Path.GetFullPath(mapping.LocalFolder) : CloudProjectWorkspaceService.ProjectFolderFor(_settings, mapping.ProjectName);
+            var rootPrefix = projectRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            var relative = string.Join(Path.DirectorySeparatorChar.ToString(), parts.Skip(2));
+            var candidate = Path.GetFullPath(Path.Combine(rootPrefix, relative));
+            if (!candidate.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase)) return false;
+            localPath = candidate;
+            return true;
         }
 
         private static void CopyAtomically(string source, string target, string expectedHash)

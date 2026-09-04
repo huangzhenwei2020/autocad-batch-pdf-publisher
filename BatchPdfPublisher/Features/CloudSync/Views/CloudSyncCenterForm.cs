@@ -171,7 +171,7 @@ namespace BatchPdfPublisher.Views
 
         private void ReloadProjects()
         {
-            var local = new PublishPlanStore().LoadProjects();
+            var local = new PublishPlanStore().LoadProjects(false);
             var settings = new CloudSyncSettingsStore().LoadSettings();
             var root = CloudProjectWorkspaceService.GetWorkspaceRoot(settings);
             _workspaceRoot.Text = root;
@@ -392,7 +392,13 @@ namespace BatchPdfPublisher.Views
             var item = SelectedTag<CloudSyncCenterItem>(_history); if (item == null) return;
             if (MessageBox.Show(this, "确定恢复这个历史版本到本机？\r\n当前版本会先自动备份。\r\n\r\n" + item.LogicalPath + "\r\n" + item.ModifiedAt,
                 Text, MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-            try { _service.RestoreHistory(item); ReloadData(); }
+            try
+            {
+                var target = _service.RestoreHistory(item);
+                MessageBox.Show(this, "历史版本已恢复到统一工作目录：\r\n" + target, Text,
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                ReloadData();
+            }
             catch (Exception exception) { ShowError(exception); }
         }
 
@@ -429,7 +435,12 @@ namespace BatchPdfPublisher.Views
                     if (version == null) { MessageBox.Show(dialog, "请先选择一个历史版本。", dialog.Text); return; }
                     if (MessageBox.Show(dialog, "确定恢复这个历史版本到本机？\r\n当前文件会先自动备份。\r\n\r\n" +
                         version.ModifiedAt.ToString("yyyy-MM-dd HH:mm:ss"), dialog.Text, MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-                    try { _service.RestoreHistory(version); MessageBox.Show(dialog, "历史版本已恢复。", dialog.Text); dialog.Close(); ReloadData(); }
+                    try
+                    {
+                        var target = _service.RestoreHistory(version);
+                        MessageBox.Show(dialog, "历史版本已恢复到统一工作目录：\r\n" + target, dialog.Text);
+                        dialog.Close(); ReloadData();
+                    }
                     catch (Exception exception) { MessageBox.Show(dialog, exception.Message, dialog.Text, MessageBoxButtons.OK, MessageBoxIcon.Error); }
                 };
                 var open = ButtonFor("打开备份位置"); open.Click += delegate { OpenSelected(list); };

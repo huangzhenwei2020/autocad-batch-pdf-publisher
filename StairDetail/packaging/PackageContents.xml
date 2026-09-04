@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ApplicationPackage
   SchemaVersion="1.0"
-  AppVersion="1.4.4"
+  AppVersion="1.4.5"
   ProductCode="{98BF4480-F7F9-42CB-AEE3-F3F9C3B0D6DB}"
   Name="WanLuo Architecture"
   Description="WanLuo Architecture stair detail prototype"

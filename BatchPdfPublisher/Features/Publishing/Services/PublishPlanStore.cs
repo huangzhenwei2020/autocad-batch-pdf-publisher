@@ -18,6 +18,11 @@ namespace BatchPdfPublisher.Services
 
         public List<ProjectProfile> LoadProjects()
         {
+            return LoadProjects(true);
+        }
+
+        public List<ProjectProfile> LoadProjects(bool persistNormalization)
+        {
             var path = ProjectsPath();
             if (File.Exists(path))
             {
@@ -27,7 +32,8 @@ namespace BatchPdfPublisher.Services
                     var normalizedProjectFolders = projects != null && projects.Any(x => x != null && NeedsProjectFolderNormalization(x.ProjectFolder));
                     Normalize(projects);
                     var projected = ProjectSyncProjectionStore.MergeInto(projects);
-                    if (FrameTemplateStore.MakePathsReadable(projects) || normalizedProjectFolders || projected) SaveProjects(projects);
+                    var framePathsChanged = persistNormalization && FrameTemplateStore.MakePathsReadable(projects);
+                    if (persistNormalization && (framePathsChanged || normalizedProjectFolders || projected)) SaveProjects(projects);
                     return projects;
                 }
                 catch (Exception primaryFailure)
@@ -59,8 +65,11 @@ namespace BatchPdfPublisher.Services
             var migrated = new ProjectProfile { Name = "默认项目", Frames = LoadLegacyFrames() };
             var defaults = new List<ProjectProfile> { migrated };
             ProjectSyncProjectionStore.MergeInto(defaults);
-            SaveProjects(defaults);
-            SetActiveProject(migrated.Name);
+            if (persistNormalization)
+            {
+                SaveProjects(defaults);
+                SetActiveProject(migrated.Name);
+            }
             return defaults;
         }
 

@@ -33,9 +33,11 @@ internal static class CloudSyncTests
         Run("IncludesNormalProjectAttachments", IncludesNormalProjectAttachments);
         Run("IgnoresUnselectedRemoteProject", IgnoresUnselectedRemoteProject);
         Run("BaiduCachesOnlySelectedProjects", BaiduCachesOnlySelectedProjects);
+        Run("BaiduSkipsUnchangedFileWithoutMd5", BaiduSkipsUnchangedFileWithoutMd5);
         Run("RepairsMissingRemoteDrawingEvenWhenOpen", RepairsMissingRemoteDrawingEvenWhenOpen);
         Run("RestoresHistoryWithBackup", RestoresHistoryWithBackup);
         Run("ListsWorkFilesAndTheirHistory", ListsWorkFilesAndTheirHistory);
+        Run("RestoresProjectHistoryIntoUnifiedWorkspace", RestoresProjectHistoryIntoUnifiedWorkspace);
         Run("ResolvesConflictUsingLocalCopy", ResolvesConflictUsingLocalCopy);
         Run("CreatesProviderWithoutChangingLocalMode", CreatesProviderWithoutChangingLocalMode);
         Run("NewInstallationDefaultsToBaidu", NewInstallationDefaultsToBaidu);
@@ -362,6 +364,22 @@ internal static class CloudSyncTests
         }
     }
 
+    private static void BaiduSkipsUnchangedFileWithoutMd5()
+    {
+        var root = NewRoot();
+        try
+        {
+            var path = Path.Combine(root, "cached.dwg"); File.WriteAllText(path, "same");
+            var modified = DateTimeOffset.UtcNow.AddMinutes(-2).ToUnixTimeSeconds();
+            File.SetLastWriteTimeUtc(path, DateTimeOffset.FromUnixTimeSeconds(modified).UtcDateTime);
+            var entry = new BaiduRemoteEntry { Size = new FileInfo(path).Length, Md5 = string.Empty, ModifiedAtUnix = modified };
+            True(BaiduNetdiskProvider.CachedFileMatches(entry, path), "unchanged no-MD5 cache should not download again");
+            entry.ModifiedAtUnix = modified + 30;
+            True(!BaiduNetdiskProvider.CachedFileMatches(entry, path), "changed remote timestamp should refresh cache");
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
     private static void RepairsMissingRemoteDrawingEvenWhenOpen()
     {
         WithWorkspace((root, local, shared, engine, settings, ignored) =>
@@ -504,6 +522,7 @@ internal static class CloudSyncTests
             var settings = new CloudSyncSettings
             {
                 Provider = "LocalFolder", SyncFolder = Path.Combine(root, "cloud"), SyncProjectFiles = true,
+                ProjectWorkspaceRoot = Path.Combine(root, "workspace"),
                 SyncGeneralSettings = false, SyncProjectConfigurations = false, SyncTemplatesAndSchemes = false,
                 BackupRoot = Path.Combine(root, "backups"),
                 ProjectMappings = new List<CloudSyncProjectMapping>
@@ -523,6 +542,37 @@ internal static class CloudSyncTests
             Equal(1, history.Count);
             center.RestoreHistory(history[0]);
             Equal("old", File.ReadAllText(drawing));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    private static void RestoresProjectHistoryIntoUnifiedWorkspace()
+    {
+        var root = NewRoot();
+        try
+        {
+            UserDataPaths.TestRootDirectory = root;
+            var oldFolder = Path.Combine(root, "old-location"); Directory.CreateDirectory(oldFolder);
+            var workspace = Path.Combine(root, "workspace");
+            var settings = new CloudSyncSettings
+            {
+                Provider = "LocalFolder", SyncFolder = Path.Combine(root, "cloud"), SyncProjectFiles = true,
+                SyncGeneralSettings = false, SyncProjectConfigurations = false, SyncTemplatesAndSchemes = false,
+                ProjectWorkspaceRoot = workspace, BackupRoot = Path.Combine(root, "backups"),
+                ProjectMappings = new List<CloudSyncProjectMapping>
+                {
+                    new CloudSyncProjectMapping { ProjectName = "示例项目", CloudId = "sample", LocalFolder = oldFolder, Enabled = true }
+                }
+            };
+            new CloudSyncSettingsStore().SaveSettings(settings);
+            var historySource = Path.Combine(root, "history-source.dwg"); File.WriteAllText(historySource, "history");
+            CloudBackupService.BackupFile(historySource, "项目文件/sample/图纸/一层.dwg", "历史版本", settings);
+            var center = new CloudSyncCenterService();
+            var version = center.HistoryFor("项目文件/sample/图纸/一层.dwg").Single();
+            var target = center.RestoreHistory(version);
+            var expected = Path.Combine(workspace, "示例项目", "图纸", "一层.dwg");
+            Equal(Path.GetFullPath(expected), Path.GetFullPath(target));
+            Equal("history", File.ReadAllText(expected));
         }
         finally { Directory.Delete(root, true); }
     }

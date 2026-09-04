@@ -94,6 +94,7 @@ namespace BatchPdfPublisher.Services
         private readonly CloudSyncCredentialStore _credentials;
         private readonly BaiduNetdiskClient _client;
         private readonly Dictionary<string, string> _remoteHashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, string> _remoteCacheHashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> _allRemotePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> _unavailableRemotePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly List<CloudSyncOperation> _prepareWarnings = new List<CloudSyncOperation>();
@@ -155,6 +156,7 @@ namespace BatchPdfPublisher.Services
             catch (IOException ex) when (ex.Message.Contains("31066") || ex.Message.Contains("-9")) { entries = new List<BaiduRemoteEntry>(); }
             var files = entries.Where(x => !x.IsDirectory).ToList();
             _remoteHashes.Clear();
+            _remoteCacheHashes.Clear();
             _allRemotePaths.Clear();
             _unavailableRemotePaths.Clear();
             _prepareWarnings.Clear();
@@ -167,13 +169,18 @@ namespace BatchPdfPublisher.Services
                 if (!ShouldTransferRelativePath(relative)) continue;
                 var local = SafeLocalPath(relative);
                 _remoteHashes[relative] = entry.Md5 ?? string.Empty;
-                if (File.Exists(local) && FileLength(local) == entry.Size && string.Equals(Md5(local), entry.Md5, StringComparison.OrdinalIgnoreCase)) continue;
+                if (CachedFileMatches(entry, local))
+                {
+                    _remoteCacheHashes[relative] = Md5(local);
+                    continue;
+                }
                 progress?.Invoke(new CloudSyncProgress { Stage = "正在从百度网盘下载", LogicalPath = relative });
                 var transfer = Stopwatch.StartNew();
                 try
                 {
                     _client.DownloadAsync(_credential.AccessToken, entry, local, (done, total) => progress?.Invoke(new CloudSyncProgress
                     { Stage = "正在从百度网盘下载", Direction = "下载", LogicalPath = relative, Completed = ToProgress(done, total), Total = 1000, BytesCompleted = done, BytesTotal = total, BytesPerSecond = done / Math.Max(0.001d, transfer.Elapsed.TotalSeconds) }), cancellationToken).GetAwaiter().GetResult();
+                    _remoteCacheHashes[relative] = Md5(local);
                 }
                 catch (IOException exception) when (IsUnavailableRemoteFile(exception))
                 {
@@ -201,7 +208,11 @@ namespace BatchPdfPublisher.Services
             foreach (var pair in current)
             {
                 cancellationToken.ThrowIfCancellationRequested(); var hash = Md5(pair.Value);
-                if (_remoteHashes.TryGetValue(pair.Key, out var remoteHash) && string.Equals(hash, remoteHash, StringComparison.OrdinalIgnoreCase)) continue;
+                string remoteHash;
+                if (_remoteHashes.TryGetValue(pair.Key, out remoteHash) && string.Equals(hash, remoteHash, StringComparison.OrdinalIgnoreCase)) continue;
+                string cachedHash;
+                if (string.IsNullOrWhiteSpace(remoteHash) && _remoteCacheHashes.TryGetValue(pair.Key, out cachedHash) &&
+                    string.Equals(hash, cachedHash, StringComparison.OrdinalIgnoreCase)) continue;
                 progress?.Invoke(new CloudSyncProgress { Stage = "正在上传到百度网盘", LogicalPath = pair.Key });
                 var transfer = Stopwatch.StartNew();
                 _client.UploadAsync(_credential.AccessToken, pair.Value, RemoteRoot + "/" + pair.Key.Replace('\\', '/'),
@@ -285,6 +296,14 @@ namespace BatchPdfPublisher.Services
             return path;
         }
         private static long FileLength(string path) { try { return new FileInfo(path).Length; } catch { return -1; } }
+        internal static bool CachedFileMatches(BaiduRemoteEntry entry, string path)
+        {
+            if (entry == null || !File.Exists(path) || FileLength(path) != entry.Size) return false;
+            if (!string.IsNullOrWhiteSpace(entry.Md5)) return string.Equals(Md5(path), entry.Md5, StringComparison.OrdinalIgnoreCase);
+            if (entry.ModifiedAtUnix <= 0) return false;
+            var localSeconds = new DateTimeOffset(File.GetLastWriteTimeUtc(path)).ToUnixTimeSeconds();
+            return Math.Abs(localSeconds - entry.ModifiedAtUnix) <= 2;
+        }
         private static string Md5(string path) { using (var stream = File.OpenRead(path)) using (var md5 = MD5.Create()) { var builder = new StringBuilder(); foreach (var b in md5.ComputeHash(stream)) builder.Append(b.ToString("x2")); return builder.ToString(); } }
         private static int ToProgress(long done, long total) { return total <= 0 ? 0 : Math.Max(0, Math.Min(1000, (int)(done * 1000L / total))); }
         private static bool IsUnavailableRemoteFile(IOException exception)
