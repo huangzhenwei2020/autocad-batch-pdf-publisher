@@ -77,9 +77,17 @@ internal static class ProjectSyncProjectionTests
                 "archived project remained enabled for file synchronization");
             ProjectSyncProjectionStore.SetCloudProjectArchived(cloudId, false);
             Assert(ProjectSyncProjectionStore.DiscoverCloudProjects().Count == 1, "restored project did not return to the cloud list");
+            var workspace = CloudProjectWorkspaceService.GetWorkspaceRoot();
+            var workspaceProject = new ProjectProfile { Name = "统一目录项目", ProjectFolder = Path.Combine(workspace, "统一目录项目") };
+            var automatic = ProjectSyncProjectionStore.BuildMappings(new[] { workspaceProject }, new CloudSyncProjectMapping[0], workspace).Single();
+            Assert(automatic.Enabled && !automatic.SelectionConfirmed, "new local project in workspace was not selected automatically");
+            automatic.Enabled = false; automatic.SelectionConfirmed = true;
+            var preserved = ProjectSyncProjectionStore.BuildMappings(new[] { workspaceProject }, new[] { automatic }, workspace).Single();
+            Assert(!preserved.Enabled && preserved.SelectionConfirmed, "explicit project deselection was not preserved");
             Console.WriteLine("PASS PortableProjectProjection");
             Console.WriteLine("PASS ImportsOnlySelectedCloudProject");
             Console.WriteLine("PASS ArchivesCloudProjectsWithoutDeletingFiles");
+            Console.WriteLine("PASS AutoSelectsNewWorkspaceProjectsAndPreservesExplicitChoice");
         }
         finally { try { Directory.Delete(root, true); } catch { } }
     }

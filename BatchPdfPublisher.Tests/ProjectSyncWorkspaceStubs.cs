@@ -21,5 +21,12 @@ namespace BatchPdfPublisher.Services
         {
             return Path.Combine(GetWorkspaceRoot(settings), projectName ?? "默认项目");
         }
+
+        public static bool IsUnderWorkspace(string folder, string workspaceRoot)
+        {
+            if (string.IsNullOrWhiteSpace(folder) || string.IsNullOrWhiteSpace(workspaceRoot)) return false;
+            var root = Path.GetFullPath(workspaceRoot).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            return Path.GetFullPath(folder).StartsWith(root, StringComparison.OrdinalIgnoreCase);
+        }
     }
 }

@@ -8,7 +8,7 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyProduct("WanLuo Architecture")]
 [assembly: ComVisible(false)]
 [assembly: Guid("6FE83198-B24B-40D6-8891-38F7E1A95D6A")]
-[assembly: AssemblyVersion("1.4.2.0")]
-[assembly: AssemblyFileVersion("1.4.2.0")]
+[assembly: AssemblyVersion("1.4.3.0")]
+[assembly: AssemblyFileVersion("1.4.3.0")]
 [assembly: CommandClass(typeof(WL.Stair.Cad2024.Commands))]
 

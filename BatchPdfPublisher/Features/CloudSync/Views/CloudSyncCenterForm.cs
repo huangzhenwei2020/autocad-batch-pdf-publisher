@@ -12,6 +12,7 @@ namespace BatchPdfPublisher.Views
     {
         private CloudSyncCenterService _service = new CloudSyncCenterService();
         private readonly Label _summary = new Label { Dock = DockStyle.Top, Height = 34, Padding = new Padding(10, 8, 0, 0) };
+        private readonly ProgressBar _syncProgress = new ProgressBar { Dock = DockStyle.Top, Height = 16, Visible = false, Style = ProgressBarStyle.Marquee };
         private readonly ListView _pending = CreateList("分类", "状态", "文件", "用途", "更新时间");
         private readonly ListView _conflicts = CreateList("分类", "文件", "用途", "本机副本", "共享副本", "发生时间");
         private readonly ListView _history = CreateList("分类", "来源", "文件", "用途", "版本时间");
@@ -37,8 +38,9 @@ namespace BatchPdfPublisher.Views
             var refresh = ButtonFor("刷新"); refresh.Click += delegate { ReloadData(); };
             var backups = ButtonFor("打开备份文件夹"); backups.Click += OpenBackupFolder;
             footer.Controls.Add(close); footer.Controls.Add(refresh); footer.Controls.Add(backups);
-            Controls.Add(tabs); Controls.Add(_summary); Controls.Add(footer);
-            Shown += delegate { ReloadData(); };
+            Controls.Add(tabs); Controls.Add(_syncProgress); Controls.Add(_summary); Controls.Add(footer);
+            Shown += delegate { CloudSyncCoordinator.SynchronizationProgress += OnSynchronizationProgress; CloudSyncCoordinator.SynchronizationCompleted += OnSynchronizationCompleted; ReloadData(); };
+            FormClosed += delegate { CloudSyncCoordinator.SynchronizationProgress -= OnSynchronizationProgress; CloudSyncCoordinator.SynchronizationCompleted -= OnSynchronizationCompleted; };
         }
 
         private TabPage BuildPendingTab()
@@ -142,10 +144,10 @@ namespace BatchPdfPublisher.Views
 
         private void ReloadProjects()
         {
+            var local = new PublishPlanStore().LoadProjects();
             var settings = new CloudSyncSettingsStore().LoadSettings();
             var root = CloudProjectWorkspaceService.GetWorkspaceRoot(settings);
             _workspaceRoot.Text = root;
-            var local = new PublishPlanStore().LoadProjects();
             var cloud = ProjectSyncProjectionStore.DiscoverCloudProjects(_showArchived.Checked);
             var mappings = settings.ProjectMappings ?? new System.Collections.Generic.List<CloudSyncProjectMapping>();
             var rows = local.Select(project => new ProjectSelectionRow
@@ -172,13 +174,55 @@ namespace BatchPdfPublisher.Views
                 var mapping = mappings.FirstOrDefault(candidate => candidate != null && string.Equals(candidate.CloudId, row.CloudId, StringComparison.OrdinalIgnoreCase));
                 var unified = CloudProjectWorkspaceService.IsUnderWorkspace(row.Folder, root);
                 var localStatus = row.IsLocal ? (Directory.Exists(row.Folder) ? (unified ? "已有" : "目录待统一") : "登记存在，目录缺失") : "无";
-                var cloudStatus = row.IsArchived ? "已归档" : row.IsCloud ? "已有，可下载" : "无，勾选后上传";
+                var selected = mapping != null && mapping.Enabled;
+                var hasCloudFiles = CloudSyncRemoteInventoryStore.HasProjectFiles(row.CloudId);
+                var cloudStatus = row.IsArchived ? "已归档" : hasCloudFiles ? "云端已有项目文件"
+                    : selected ? "已选择，等待上传" : row.IsCloud ? "仅有项目登记，未选择文件" : "未选择，不会上传";
                 var item = new ListViewItem(new[] { row.Name, localStatus, cloudStatus, row.Folder }) { Tag = row, Checked = mapping != null && mapping.Enabled };
                 if (row.IsArchived) { item.ForeColor = Color.DimGray; item.Checked = false; }
                 else if (!unified) item.ForeColor = Color.DarkOrange;
                 _projects.Items.Add(item);
             }
             _projects.EndUpdate();
+        }
+
+        private void OnSynchronizationProgress(CloudSyncProgress progress)
+        {
+            if (progress == null || IsDisposed || Disposing) return;
+            try { BeginInvoke((Action)delegate { ShowSynchronizationProgress(progress); }); } catch { }
+        }
+
+        private void ShowSynchronizationProgress(CloudSyncProgress progress)
+        {
+            if (IsDisposed || progress == null) return;
+            _syncProgress.Visible = true;
+            if (progress.Total > 0 || progress.BytesTotal > 0)
+            {
+                _syncProgress.Style = ProgressBarStyle.Continuous;
+                _syncProgress.Value = progress.Percentage;
+            }
+            else _syncProgress.Style = ProgressBarStyle.Marquee;
+            _summary.Text = progress.Stage + (string.IsNullOrWhiteSpace(progress.LogicalPath) ? string.Empty : "：" + progress.LogicalPath)
+                + (string.IsNullOrWhiteSpace(progress.BytesText) ? string.Empty : "　" + progress.BytesText)
+                + (string.IsNullOrWhiteSpace(progress.SpeedText) ? string.Empty : "　" + progress.SpeedText);
+            _summary.ForeColor = Color.FromArgb(34, 98, 160);
+        }
+
+        private void OnSynchronizationCompleted(CloudSyncResult result, Exception failure)
+        {
+            if (IsDisposed || Disposing) return;
+            try
+            {
+                BeginInvoke((Action)delegate
+                {
+                    _syncProgress.Visible = true;
+                    _syncProgress.Style = ProgressBarStyle.Continuous;
+                    _syncProgress.Value = failure == null ? 100 : 0;
+                    if (failure != null) { _summary.Text = "同步失败：" + failure.Message; _summary.ForeColor = Color.Firebrick; }
+                    else if (result != null) { _summary.Text = "同步完成：" + result.Summary; _summary.ForeColor = result.Errors > 0 || result.Warnings > 0 ? Color.DarkOrange : Color.FromArgb(34, 120, 72); ReloadProjects(); }
+                });
+            }
+            catch { }
         }
 
         private void SaveProjectSelection(object sender, EventArgs e)
@@ -197,7 +241,8 @@ namespace BatchPdfPublisher.Views
                     var folder = row.IsLocal ? row.Folder : CloudProjectWorkspaceService.ProjectFolderFor(settings, row.Name);
                     if (item.Checked && !CloudProjectWorkspaceService.IsUnderWorkspace(folder, settings.ProjectWorkspaceRoot))
                         throw new InvalidOperationException("项目“" + row.Name + "”不在统一工作总目录中，请先点击“一键统一目录”。");
-                    mappings.Add(new CloudSyncProjectMapping { ProjectName = row.Name, CloudId = row.CloudId, LocalFolder = folder, Enabled = item.Checked });
+                    mappings.Add(new CloudSyncProjectMapping { ProjectName = row.Name, CloudId = row.CloudId, LocalFolder = folder,
+                        Enabled = item.Checked, SelectionConfirmed = true });
                 }
                 settings.ProjectMappings = mappings;
                 settings.SyncProjectFiles = mappings.Any(item => item.Enabled);
@@ -279,7 +324,8 @@ namespace BatchPdfPublisher.Views
                 ProjectSyncProjectionStore.SetCloudProjectArchived(row.CloudId, archived);
                 var store = new CloudSyncSettingsStore(); var settings = store.LoadSettings();
                 foreach (var mapping in settings.ProjectMappings ?? new System.Collections.Generic.List<CloudSyncProjectMapping>())
-                    if (mapping != null && string.Equals(mapping.CloudId, row.CloudId, StringComparison.OrdinalIgnoreCase)) mapping.Enabled = false;
+                    if (mapping != null && string.Equals(mapping.CloudId, row.CloudId, StringComparison.OrdinalIgnoreCase))
+                    { mapping.Enabled = false; mapping.SelectionConfirmed = true; }
                 store.SaveSettings(settings); CloudSyncCoordinator.QueueReload(settings.Enabled); ReloadData();
             }
             catch (Exception exception) { ShowError(exception); }

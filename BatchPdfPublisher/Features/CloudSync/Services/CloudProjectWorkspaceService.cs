@@ -118,9 +118,10 @@ namespace BatchPdfPublisher.Services
                 }
             }
             store.SaveProjects(projects);
-            settings.ProjectMappings = ProjectSyncProjectionStore.BuildMappings(projects, settings.ProjectMappings);
+            settings.ProjectMappings = ProjectSyncProjectionStore.BuildMappings(projects, settings.ProjectMappings, settings.ProjectWorkspaceRoot);
             var localNames = new HashSet<string>(projects.Where(item => item != null).Select(item => item.Name), StringComparer.OrdinalIgnoreCase);
-            foreach (var mapping in settings.ProjectMappings) mapping.Enabled = localNames.Contains(mapping.ProjectName);
+            foreach (var mapping in settings.ProjectMappings)
+            { mapping.Enabled = localNames.Contains(mapping.ProjectName); mapping.SelectionConfirmed = true; }
             return result;
         }
 

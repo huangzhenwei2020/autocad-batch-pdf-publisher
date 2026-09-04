@@ -9,9 +9,9 @@
     <RootNamespace>WL.Stair.Cad2022</RootNamespace>
     <PlatformTarget>x64</PlatformTarget>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
-    <Version>1.4.2</Version>
-    <AssemblyVersion>1.4.2.0</AssemblyVersion>
-    <FileVersion>1.4.2.0</FileVersion>
+    <Version>1.4.3</Version>
+    <AssemblyVersion>1.4.3.0</AssemblyVersion>
+    <FileVersion>1.4.3.0</FileVersion>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     <Nullable>disable</Nullable>
     <AutoCadApiPath Condition="'$(AutoCadApiPath)' == ''">C:\Program Files\Autodesk\AutoCAD 2026</AutoCadApiPath>

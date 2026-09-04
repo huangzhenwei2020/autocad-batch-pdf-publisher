@@ -78,6 +78,12 @@ namespace BatchPdfPublisher.Services
         public static List<CloudSyncProjectMapping> BuildMappings(IEnumerable<ProjectProfile> projects,
             IEnumerable<CloudSyncProjectMapping> previous)
         {
+            return BuildMappings(projects, previous, null);
+        }
+
+        public static List<CloudSyncProjectMapping> BuildMappings(IEnumerable<ProjectProfile> projects,
+            IEnumerable<CloudSyncProjectMapping> previous, string workspaceRoot)
+        {
             var old = (previous ?? Enumerable.Empty<CloudSyncProjectMapping>())
                 .Where(item => item != null && !string.IsNullOrWhiteSpace(item.ProjectName))
                 .GroupBy(item => item.ProjectName, StringComparer.OrdinalIgnoreCase)
@@ -89,12 +95,18 @@ namespace BatchPdfPublisher.Services
             {
                 CloudSyncProjectMapping existing;
                 old.TryGetValue(project.Name, out existing);
+                var localFolder = string.IsNullOrWhiteSpace(project.ProjectFolder) ? DefaultProjectFolder(project.Name) : project.ProjectFolder;
+                var archivedProject = archived.Contains(StableProjectId(project.Name));
+                var selectedByDefault = !string.IsNullOrWhiteSpace(workspaceRoot) &&
+                    CloudProjectWorkspaceService.IsUnderWorkspace(localFolder, workspaceRoot);
                 result.Add(new CloudSyncProjectMapping
                 {
                     ProjectName = project.Name,
                     CloudId = StableProjectId(project.Name),
-                    LocalFolder = string.IsNullOrWhiteSpace(project.ProjectFolder) ? DefaultProjectFolder(project.Name) : project.ProjectFolder,
-                    Enabled = existing != null && existing.Enabled && !archived.Contains(StableProjectId(project.Name))
+                    LocalFolder = localFolder,
+                    Enabled = !archivedProject && (existing != null && existing.SelectionConfirmed
+                        ? existing.Enabled : selectedByDefault),
+                    SelectionConfirmed = existing != null && existing.SelectionConfirmed
                 });
             }
             foreach (var existing in old.Values.Where(item => item != null &&
@@ -136,13 +148,13 @@ namespace BatchPdfPublisher.Services
                 var store = new CloudSyncSettingsStore();
                 var settings = store.LoadSettings();
                 if (!settings.SyncProjectFiles) return;
-                var refreshed = BuildMappings(projects, settings.ProjectMappings);
+                var refreshed = BuildMappings(projects, settings.ProjectMappings, settings.ProjectWorkspaceRoot);
                 var before = settings.ProjectMappings ?? new List<CloudSyncProjectMapping>();
                 var changed = before.Count != refreshed.Count || before.Zip(refreshed, (left, right) =>
                     left == null || !string.Equals(left.ProjectName, right.ProjectName, StringComparison.OrdinalIgnoreCase) ||
                     !string.Equals(left.CloudId, right.CloudId, StringComparison.OrdinalIgnoreCase) ||
                     !string.Equals(left.LocalFolder, right.LocalFolder, StringComparison.OrdinalIgnoreCase) ||
-                    left.Enabled != right.Enabled).Any(value => value);
+                    left.Enabled != right.Enabled || left.SelectionConfirmed != right.SelectionConfirmed).Any(value => value);
                 if (!changed) return;
                 settings.ProjectMappings = refreshed;
                 store.SaveSettings(settings);

@@ -94,6 +94,9 @@ namespace BatchPdfPublisher.Services
         private readonly CloudSyncCredentialStore _credentials;
         private readonly BaiduNetdiskClient _client;
         private readonly Dictionary<string, string> _remoteHashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _allRemotePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _unavailableRemotePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private readonly List<CloudSyncOperation> _prepareWarnings = new List<CloudSyncOperation>();
         private CloudSyncCredential _credential;
 
         public BaiduNetdiskProvider(CloudSyncSettings settings)
@@ -152,6 +155,11 @@ namespace BatchPdfPublisher.Services
             catch (IOException ex) when (ex.Message.Contains("31066") || ex.Message.Contains("-9")) { entries = new List<BaiduRemoteEntry>(); }
             var files = entries.Where(x => !x.IsDirectory).ToList();
             _remoteHashes.Clear();
+            _allRemotePaths.Clear();
+            _unavailableRemotePaths.Clear();
+            _prepareWarnings.Clear();
+            foreach (var entry in files) _allRemotePaths.Add(RelativeRemotePath(entry.Path));
+            CloudSyncRemoteInventoryStore.Save(_allRemotePaths);
             foreach (var entry in files)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -162,8 +170,19 @@ namespace BatchPdfPublisher.Services
                 if (File.Exists(local) && FileLength(local) == entry.Size && string.Equals(Md5(local), entry.Md5, StringComparison.OrdinalIgnoreCase)) continue;
                 progress?.Invoke(new CloudSyncProgress { Stage = "正在从百度网盘下载", LogicalPath = relative });
                 var transfer = Stopwatch.StartNew();
-                _client.DownloadAsync(_credential.AccessToken, entry, local, (done, total) => progress?.Invoke(new CloudSyncProgress
-                { Stage = "正在从百度网盘下载", Direction = "下载", LogicalPath = relative, Completed = ToProgress(done, total), Total = 1000, BytesCompleted = done, BytesTotal = total, BytesPerSecond = done / Math.Max(0.001d, transfer.Elapsed.TotalSeconds) }), cancellationToken).GetAwaiter().GetResult();
+                try
+                {
+                    _client.DownloadAsync(_credential.AccessToken, entry, local, (done, total) => progress?.Invoke(new CloudSyncProgress
+                    { Stage = "正在从百度网盘下载", Direction = "下载", LogicalPath = relative, Completed = ToProgress(done, total), Total = 1000, BytesCompleted = done, BytesTotal = total, BytesPerSecond = done / Math.Max(0.001d, transfer.Elapsed.TotalSeconds) }), cancellationToken).GetAwaiter().GetResult();
+                }
+                catch (IOException exception) when (IsUnavailableRemoteFile(exception))
+                {
+                    TryDeleteCachedFile(local);
+                    _unavailableRemotePaths.Add(relative);
+                    _prepareWarnings.Add(new CloudSyncOperation { LogicalPath = relative, Kind = CloudSyncOperationKind.Error,
+                        Message = "云端文件暂时无法读取，已跳过，不影响其他项目同步：" + exception.Message });
+                    progress?.Invoke(new CloudSyncProgress { Stage = "已跳过无法读取的云端文件", LogicalPath = relative });
+                }
             }
             var remoteSet = new HashSet<string>(_remoteHashes.Keys, StringComparer.OrdinalIgnoreCase);
             foreach (var local in Directory.GetFiles(WorkingFolder, "*", SearchOption.AllDirectories))
@@ -176,6 +195,7 @@ namespace BatchPdfPublisher.Services
         public void Complete(CloudSyncResult result, Action<CloudSyncProgress> progress, CancellationToken cancellationToken)
         {
             _credential = EnsureCredential(cancellationToken);
+            foreach (var warning in _prepareWarnings) { result.Operations.Add(warning); result.Warnings++; }
             var current = Directory.GetFiles(WorkingFolder, "*", SearchOption.AllDirectories)
                 .ToDictionary(RelativeLocalPath, x => x, StringComparer.OrdinalIgnoreCase);
             foreach (var pair in current)
@@ -188,12 +208,15 @@ namespace BatchPdfPublisher.Services
                     (done, total) => progress?.Invoke(new CloudSyncProgress { Stage = "正在上传到百度网盘", Direction = "上传", LogicalPath = pair.Key,
                         Completed = ToProgress(done, total), Total = 1000, BytesCompleted = done, BytesTotal = total, BytesPerSecond = done / Math.Max(0.001d, transfer.Elapsed.TotalSeconds) }), cancellationToken).GetAwaiter().GetResult();
             }
-            foreach (var removed in _remoteHashes.Keys.Where(x => !current.ContainsKey(x)).ToList())
+            foreach (var removed in _remoteHashes.Keys.Where(x => !current.ContainsKey(x) && !_unavailableRemotePaths.Contains(x)).ToList())
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 progress?.Invoke(new CloudSyncProgress { Stage = "正在删除百度网盘旧文件", LogicalPath = removed });
                 _client.DeleteAsync(_credential.AccessToken, RemoteRoot + "/" + removed.Replace('\\', '/'), cancellationToken).GetAwaiter().GetResult();
+                _allRemotePaths.Remove(removed);
             }
+            _allRemotePaths.UnionWith(current.Keys);
+            CloudSyncRemoteInventoryStore.Save(_allRemotePaths);
         }
 
         private CloudSyncCredential EnsureCredential(CancellationToken cancellationToken)
@@ -256,6 +279,14 @@ namespace BatchPdfPublisher.Services
         private static long FileLength(string path) { try { return new FileInfo(path).Length; } catch { return -1; } }
         private static string Md5(string path) { using (var stream = File.OpenRead(path)) using (var md5 = MD5.Create()) { var builder = new StringBuilder(); foreach (var b in md5.ComputeHash(stream)) builder.Append(b.ToString("x2")); return builder.ToString(); } }
         private static int ToProgress(long done, long total) { return total <= 0 ? 0 : Math.Max(0, Math.Min(1000, (int)(done * 1000L / total))); }
+        private static bool IsUnavailableRemoteFile(IOException exception)
+        {
+            var message = exception == null ? string.Empty : exception.Message;
+            return message.IndexOf("文件元信息没有返回下载地址", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   message.IndexOf("接口错误 42214", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   message.IndexOf("pcs meta error", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+        private static void TryDeleteCachedFile(string path) { try { if (File.Exists(path)) File.Delete(path); } catch { } }
         public void Dispose() { _client.Dispose(); }
     }
 
@@ -276,12 +307,19 @@ namespace BatchPdfPublisher.Services
             Action<CloudSyncProgress> progress, CancellationToken cancellationToken)
         {
             if (settings == null) throw new ArgumentNullException("settings");
-            CloudProjectWorkspaceService.ValidateForProjectSync(settings, new PublishPlanStore().LoadProjects());
+            var actualStore = store ?? new CloudSyncSettingsStore();
+            var projects = new PublishPlanStore().LoadProjects();
+            var persisted = actualStore.LoadSettings();
+            if (persisted != null && persisted.ProjectMappings != null)
+            {
+                settings.ProjectMappings = persisted.ProjectMappings;
+                settings.SyncProjectFiles = persisted.SyncProjectFiles;
+            }
+            CloudProjectWorkspaceService.ValidateForProjectSync(settings, projects);
             using (var provider = CloudSyncProviderFactory.Create(settings))
             {
                 provider.Prepare(progress, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
-                var actualStore = store ?? new CloudSyncSettingsStore();
                 var previousState = actualStore.LoadState();
                 var firstConnection = EnsureProviderState(actualStore, provider.Id, provider.StateIdentity);
                 try

@@ -53,6 +53,7 @@ namespace BatchPdfPublisher.Services
         [DataMember] public string CloudId { get; set; }
         [DataMember] public string LocalFolder { get; set; }
         [DataMember] public bool Enabled { get; set; }
+        [DataMember] public bool SelectionConfirmed { get; set; }
     }
 
     [DataContract]
@@ -126,6 +127,7 @@ namespace BatchPdfPublisher.Services
         public int Pending { get; set; }
         public int Deleted { get; set; }
         public int Errors { get; set; }
+        public int Warnings { get; set; }
         public int LocalFileCount { get; set; }
         public int RemoteFileCount { get; set; }
         public long UploadedBytes { get; set; }
@@ -135,8 +137,8 @@ namespace BatchPdfPublisher.Services
         {
             get
             {
-                return string.Format("上传 {0}，下载 {1}，删除 {2}，冲突 {3}，待应用 {4}，错误 {5}",
-                    Uploaded, Downloaded, Deleted, Conflicts, Pending, Errors);
+                return string.Format("上传 {0}，下载 {1}，删除 {2}，冲突 {3}，待应用 {4}，警告 {5}，错误 {6}",
+                    Uploaded, Downloaded, Deleted, Conflicts, Pending, Warnings, Errors);
             }
         }
     }

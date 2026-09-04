@@ -19,6 +19,7 @@ namespace BatchPdfPublisher.Services
         private static bool _installed;
 
         public static event Action<CloudSyncResult, Exception> SynchronizationCompleted;
+        public static event Action<CloudSyncProgress> SynchronizationProgress;
 
         public static void Install()
         {
@@ -172,7 +173,7 @@ namespace BatchPdfPublisher.Services
                 var store = new CloudSyncSettingsStore();
                 var settings = store.LoadSettings();
                 if (settings.Enabled)
-                    result = CloudSyncWorkflow.Synchronize(settings, store);
+                    result = CloudSyncWorkflow.Synchronize(settings, store, ReportProgress, CancellationToken.None);
             }
             catch (Exception exception)
             {
@@ -203,6 +204,12 @@ namespace BatchPdfPublisher.Services
                     if (Interlocked.Exchange(ref _pending, 0) != 0) RequestSynchronization(false);
                 }
             }
+        }
+
+        private static void ReportProgress(CloudSyncProgress progress)
+        {
+            var handler = SynchronizationProgress;
+            if (handler != null) try { handler(progress); } catch { }
         }
 
         private static void DetachResources(out List<FileSystemWatcher> watchers, out Timer timer)
