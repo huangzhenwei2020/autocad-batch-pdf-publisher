@@ -11,6 +11,9 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="CloudSyncTests.cs" />
+    <Compile Include="CloudSyncSafetyTests.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\ImmutableCloudJournal.cs" Link="ImmutableCloudJournal.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncTransaction.cs" Link="CloudSyncTransaction.cs" />
     <Compile Include="UserDataPathsStub.cs" />
     <Compile Include="CloudWorkflowStubs.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\Publishing\Models\ProjectProfile.cs" Link="ProjectProfile.cs" />

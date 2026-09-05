@@ -78,6 +78,7 @@ namespace BatchPdfPublisher.Services
         [DataMember] public string BaseHash { get; set; }
         [DataMember] public string LocalHash { get; set; }
         [DataMember] public string RemoteHash { get; set; }
+        [DataMember] public string ConflictHeads { get; set; }
         [DataMember] public string LastSynchronizedAtUtc { get; set; }
     }
 
@@ -134,13 +135,18 @@ namespace BatchPdfPublisher.Services
         public int RemoteFileCount { get; set; }
         public long UploadedBytes { get; set; }
         public long DownloadedBytes { get; set; }
+        public int NetworkUploaded { get; set; }
+        public int NetworkDownloaded { get; set; }
+        public long NetworkUploadedBytes { get; set; }
+        public long NetworkDownloadedBytes { get; set; }
 
         public string Summary
         {
             get
             {
-                return string.Format("上传 {0}，下载 {1}，删除 {2}，冲突 {3}，待应用 {4}，警告 {5}，错误 {6}",
-                    Uploaded, Downloaded, Deleted, Conflicts, Pending, Warnings, Errors);
+                return string.Format("缓存更新 {0}，本机应用 {1}，删除 {2}，冲突 {3}，待应用 {4}，警告 {5}，错误 {6}；网络上传 {7} 包/{8} 字节，下载 {9} 文件/{10} 字节",
+                    Uploaded, Downloaded, Deleted, Conflicts, Pending, Warnings, Errors,
+                    NetworkUploaded, NetworkUploadedBytes, NetworkDownloaded, NetworkDownloadedBytes);
             }
         }
     }

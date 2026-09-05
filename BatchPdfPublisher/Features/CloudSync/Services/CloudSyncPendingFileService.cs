@@ -83,6 +83,7 @@ namespace BatchPdfPublisher.Services
                 var logicalPath = CloudSyncSource.NormalizeLogicalPath(relative.Substring(0, relative.Length - suffix.Length));
                 string target;
                 if (!catalog.TryResolve(logicalPath, out target) || ShouldDefer(target)) continue;
+                if (!File.Exists(target)) continue; // an old provider's pending copy cannot initialize a new target
                 // A queued download cannot prove that the user has not saved a newer
                 // drawing since staging. Let the normal three-way comparison decide.
                 if (File.Exists(target) && !string.Equals(LocalFolderSyncEngine.ComputeHash(target),
@@ -113,6 +114,7 @@ namespace BatchPdfPublisher.Services
 
         private static void CopyAtomically(string source, string target, string expectedHash, CancellationToken cancellationToken)
         {
+            var expectedBefore = CloudSyncTransaction.Hash(target);
             Directory.CreateDirectory(Path.GetDirectoryName(target));
             var temporary = target + "." + Guid.NewGuid().ToString("N") + ".tmp";
             try
@@ -121,11 +123,10 @@ namespace BatchPdfPublisher.Services
                 if (!string.Equals(LocalFolderSyncEngine.ComputeHash(temporary, cancellationToken), expectedHash, StringComparison.OrdinalIgnoreCase))
                     throw new IOException("待应用文件哈希校验失败。");
                 cancellationToken.ThrowIfCancellationRequested();
+                CloudSyncTransaction.BeforeReplace(target, expectedBefore, expectedHash);
                 if (File.Exists(target))
                 {
-                    try { File.Replace(temporary, target, null, true); }
-                    catch (PlatformNotSupportedException) { ReplaceWithRollback(temporary, target, cancellationToken); }
-                    catch (IOException) { ReplaceWithRollback(temporary, target, cancellationToken); }
+                    File.Replace(temporary, target, null, true);
                 }
                 else File.Move(temporary, target);
             }

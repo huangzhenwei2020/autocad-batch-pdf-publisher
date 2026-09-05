@@ -22,7 +22,7 @@ namespace BatchPdfPublisher.Services
         public IEnumerable<CloudSyncFile> EnumerateFiles()
         {
             if (!Directory.Exists(LocalRoot)) yield break;
-            foreach (var path in Directory.EnumerateFiles(LocalRoot, "*", SearchOption.AllDirectories))
+            foreach (var path in CloudSyncCatalog.EnumerateRegularFiles(LocalRoot))
             {
                 var relative = path.Substring(LocalRoot.Length).TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
                 if (!IsSafeRelativePath(relative) || !_include(relative)) continue;
@@ -42,7 +42,10 @@ namespace BatchPdfPublisher.Services
             if (!normalized.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return false;
             var relative = normalized.Substring(prefix.Length).Replace('/', Path.DirectorySeparatorChar);
             if (!IsSafeRelativePath(relative) || !_include(relative)) return false;
-            var candidate = Path.GetFullPath(Path.Combine(LocalRoot, relative));
+            string candidate;
+            try { candidate = ImmutableCloudJournal.SafePath(LocalRoot, NormalizeLogicalPath(relative)); }
+            catch (InvalidDataException) { return false; }
+            if (File.Exists(candidate) && (File.GetAttributes(candidate) & FileAttributes.ReparsePoint) != 0) return false;
             var rootPrefix = LocalRoot + Path.DirectorySeparatorChar;
             if (!candidate.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase)) return false;
             localPath = candidate;
@@ -87,6 +90,26 @@ namespace BatchPdfPublisher.Services
         };
 
         private readonly IList<CloudSyncSource> _sources;
+        private readonly HashSet<string> _excluded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        internal void Exclude(IEnumerable<string> paths)
+        {
+            foreach (var path in paths) _excluded.Add(CloudSyncSource.NormalizeLogicalPath(path));
+        }
+
+        internal static IEnumerable<string> EnumerateRegularFiles(string root)
+        {
+            var pending = new Stack<string>(); pending.Push(root);
+            while (pending.Count > 0)
+            {
+                var directory = pending.Pop();
+                if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0) continue;
+                foreach (var file in Directory.EnumerateFiles(directory))
+                    if ((File.GetAttributes(file) & FileAttributes.ReparsePoint) == 0) yield return file;
+                foreach (var child in Directory.EnumerateDirectories(directory))
+                    if ((File.GetAttributes(child) & FileAttributes.ReparsePoint) == 0) pending.Push(child);
+            }
+        }
 
         public CloudSyncCatalog(IEnumerable<CloudSyncSource> sources)
         {
@@ -96,12 +119,14 @@ namespace BatchPdfPublisher.Services
         public IEnumerable<CloudSyncFile> EnumerateFiles()
         {
             return _sources.SelectMany(source => source.EnumerateFiles())
+                .Where(file => !_excluded.Contains(file.LogicalPath))
                 .GroupBy(file => file.LogicalPath, StringComparer.OrdinalIgnoreCase)
                 .Select(group => group.First());
         }
 
         public bool TryResolve(string logicalPath, out string localPath)
         {
+            if (_excluded.Contains(CloudSyncSource.NormalizeLogicalPath(logicalPath))) { localPath = null; return false; }
             foreach (var source in _sources)
                 if (source.TryResolve(logicalPath, out localPath)) return true;
             localPath = null;
@@ -127,10 +152,18 @@ namespace BatchPdfPublisher.Services
                     !string.IsNullOrWhiteSpace(item.CloudId) && !string.IsNullOrWhiteSpace(item.LocalFolder) &&
                     !ProjectSyncProjectionStore.IsCloudProjectArchived(item.CloudId)).ToList()
                 : new List<CloudSyncProjectMapping>();
-            if (includeSystemPackage && (settings.SyncGeneralSettings || settings.SyncProjectConfigurations || settings.SyncTemplatesAndSchemes))
-                sources.Add(new CloudSyncSource(CloudSystemPackageService.LogicalPrefix,
-                    CloudSystemPackageService.PackageDirectory, relative =>
-                        Path.GetFileName(relative).Equals(CloudSystemPackageService.PackageFileName, StringComparison.OrdinalIgnoreCase)));
+            if (includeSystemPackage)
+            {
+                if (settings.SyncGeneralSettings)
+                    sources.Add(new CloudSyncSource("通用配置", UserDataPaths.SettingsDirectory, IncludeGeneralSetting));
+                if (settings.SyncProjectConfigurations)
+                    sources.Add(new CloudSyncSource("项目配置", UserDataPaths.ProjectsDirectory, IncludePortableProjectConfiguration));
+                if (settings.SyncTemplatesAndSchemes)
+                {
+                    sources.Add(new CloudSyncSource("图框模板", UserDataPaths.FrameTemplatesDirectory, IncludeNormalFile));
+                    sources.Add(new CloudSyncSource("方案库/楼梯", Path.Combine(UserDataPaths.RootDirectory, "楼梯大样", "方案库"), IncludeNormalFile));
+                }
+            }
             if (settings.SyncProjectFiles)
             {
                 foreach (var mapping in projectMappings)
@@ -186,7 +219,8 @@ namespace BatchPdfPublisher.Services
                                   part.Equals("历史版本", StringComparison.OrdinalIgnoreCase))) return false;
             var fileName = Path.GetFileName(relative);
             if (fileName.StartsWith(".", StringComparison.Ordinal) ||
-                fileName.StartsWith("~", StringComparison.Ordinal)) return false;
+                fileName.StartsWith("~", StringComparison.Ordinal) ||
+                fileName.IndexOf(".cloud-conflict-", StringComparison.OrdinalIgnoreCase) >= 0) return false;
             var extension = Path.GetExtension(fileName);
             return !TemporaryExtensions.Any(item => item.Equals(extension, StringComparison.OrdinalIgnoreCase));
         }

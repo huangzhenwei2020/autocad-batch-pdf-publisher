@@ -165,7 +165,7 @@ namespace BatchPdfPublisher.Services
             CleanupHistory(Path.Combine(mirrorRoot, "历史版本"), settings, cancellationToken);
             result.LocalFileCount = catalog.EnumerateFiles().Count();
             result.RemoteFileCount = EnumerateRemoteFiles(mirrorRoot).Count();
-            Report(progress, "同步完成", null, orderedPaths.Count, orderedPaths.Count);
+            Report(progress, "文件核对完成，等待发布", null, orderedPaths.Count, orderedPaths.Count);
             return result;
         }
 
@@ -196,27 +196,9 @@ namespace BatchPdfPublisher.Services
                 return;
             }
 
-            if (baseHash == null && localHash != null && remoteHash != null &&
-                !logicalPath.StartsWith(CloudSystemPackageService.LogicalPrefix + "/", StringComparison.OrdinalIgnoreCase))
-            {
-                var localTime = File.GetLastWriteTimeUtc(localPath); var remoteTime = File.GetLastWriteTimeUtc(remotePath);
-                var difference = localTime - remoteTime;
-                if (difference > TimeSpan.FromSeconds(2))
-                {
-                    Upload(settings, mirrorRoot, logicalPath, localPath, remotePath, localHash, states, result, progress, cancellationToken);
-                    ReplaceLastOperationMessage(result, logicalPath, "本机修改时间较新，已备份并覆盖云端版本。");
-                    return;
-                }
-                if (difference < TimeSpan.FromSeconds(-2))
-                {
-                    Download(settings, logicalPath, remotePath, localPath, remoteHash, states, result, progress, cancellationToken);
-                    ReplaceLastOperationMessage(result, logicalPath, "云端修改时间较新，已备份并覆盖本机版本。");
-                    return;
-                }
-            }
-
             if (fileState != null && HashesEqual(localHash, fileState.LocalHash) &&
-                HashesEqual(remoteHash, fileState.RemoteHash))
+                HashesEqual(remoteHash, fileState.RemoteHash) &&
+                string.Equals(fileState.ConflictHeads, ImmutableCloudJournal.HeadStamp(mirrorRoot, logicalPath), StringComparison.Ordinal))
             {
                 result.Conflicts++;
                 AddOperation(result, logicalPath, CloudSyncOperationKind.Conflict,
@@ -228,24 +210,12 @@ namespace BatchPdfPublisher.Services
             {
                 if (localHash != null && remoteHash == null)
                 {
-                    Upload(settings, mirrorRoot, logicalPath, localPath, remotePath, localHash, states, result, progress, cancellationToken);
+                    Upload(settings, mirrorRoot, logicalPath, localPath, remotePath, localHash, remoteHash, states, result, progress, cancellationToken);
                     return;
                 }
                 if (localHash == null && remoteHash != null)
                 {
-                    Download(settings, logicalPath, remotePath, localPath, remoteHash, states, result, progress, cancellationToken);
-                    return;
-                }
-                if (localHash != null && remoteHash != null &&
-                    string.Equals(settings.InitialSyncPreference, "Remote", StringComparison.OrdinalIgnoreCase))
-                {
-                    Download(settings, logicalPath, remotePath, localPath, remoteHash, states, result, progress, cancellationToken);
-                    return;
-                }
-                if (localHash != null && remoteHash != null &&
-                    string.Equals(settings.InitialSyncPreference, "Local", StringComparison.OrdinalIgnoreCase))
-                {
-                    Upload(settings, mirrorRoot, logicalPath, localPath, remotePath, localHash, states, result, progress, cancellationToken);
+                    Download(settings, logicalPath, remotePath, localPath, remoteHash, localHash, states, result, progress, cancellationToken);
                     return;
                 }
                 CreateConflict(settings, mirrorRoot, logicalPath, localPath, remotePath, localHash, remoteHash, baseHash, states, result,
@@ -261,18 +231,18 @@ namespace BatchPdfPublisher.Services
             }
             if (remoteHash == null && HashesEqual(localHash, baseHash))
             {
-                Upload(settings, mirrorRoot, logicalPath, localPath, remotePath, localHash, states, result, progress, cancellationToken);
+                Upload(settings, mirrorRoot, logicalPath, localPath, remotePath, localHash, remoteHash, states, result, progress, cancellationToken);
                 ReplaceLastOperationMessage(result, logicalPath, "云端副本缺失，已从本机自动补传。");
                 return;
             }
             if (HashesEqual(localHash, baseHash) && remoteHash != null)
             {
-                Download(settings, logicalPath, remotePath, localPath, remoteHash, states, result, progress, cancellationToken);
+                Download(settings, logicalPath, remotePath, localPath, remoteHash, localHash, states, result, progress, cancellationToken);
                 return;
             }
             if (HashesEqual(remoteHash, baseHash) && localHash != null)
             {
-                Upload(settings, mirrorRoot, logicalPath, localPath, remotePath, localHash, states, result, progress, cancellationToken);
+                Upload(settings, mirrorRoot, logicalPath, localPath, remotePath, localHash, remoteHash, states, result, progress, cancellationToken);
                 return;
             }
 
@@ -281,11 +251,11 @@ namespace BatchPdfPublisher.Services
         }
 
         private void Upload(CloudSyncSettings settings, string mirrorRoot, string logicalPath, string localPath,
-            string remotePath, string localHash, IDictionary<string, CloudSyncFileState> states, CloudSyncResult result,
+            string remotePath, string localHash, string expectedRemoteHash, IDictionary<string, CloudSyncFileState> states, CloudSyncResult result,
             Action<CloudSyncProgress> progress, CancellationToken cancellationToken)
         {
             if (File.Exists(remotePath)) Backup(remotePath, Path.Combine(mirrorRoot, "历史版本"), logicalPath, settings, cancellationToken);
-            var size = new FileInfo(localPath).Length; AtomicCopy(localPath, remotePath, localHash, "上传", logicalPath, progress, cancellationToken);
+            var size = new FileInfo(localPath).Length; AtomicCopy(localPath, remotePath, localHash, expectedRemoteHash, "上传", logicalPath, progress, cancellationToken);
             SaveState(states, logicalPath, localHash, localHash, localHash);
             result.Uploaded++;
             result.UploadedBytes += size;
@@ -293,7 +263,7 @@ namespace BatchPdfPublisher.Services
         }
 
         private void Download(CloudSyncSettings settings, string logicalPath, string remotePath, string localPath,
-            string remoteHash, IDictionary<string, CloudSyncFileState> states, CloudSyncResult result,
+            string remoteHash, string expectedLocalHash, IDictionary<string, CloudSyncFileState> states, CloudSyncResult result,
             Action<CloudSyncProgress> progress, CancellationToken cancellationToken)
         {
             if (CloudSyncPendingFileService.ShouldDefer(localPath))
@@ -304,7 +274,7 @@ namespace BatchPdfPublisher.Services
                 return;
             }
             if (File.Exists(localPath)) Backup(localPath, _localHistoryRoot, logicalPath, settings, cancellationToken);
-            var size = new FileInfo(remotePath).Length; AtomicCopy(remotePath, localPath, remoteHash, "下载", logicalPath, progress, cancellationToken);
+            var size = new FileInfo(remotePath).Length; AtomicCopy(remotePath, localPath, remoteHash, expectedLocalHash, "下载", logicalPath, progress, cancellationToken);
             SaveState(states, logicalPath, remoteHash, remoteHash, remoteHash);
             result.Downloaded++;
             result.DownloadedBytes += size;
@@ -320,10 +290,12 @@ namespace BatchPdfPublisher.Services
             var conflictRoot = Path.Combine(mirrorRoot, "冲突文件", timestamp + "-" + device);
             if (File.Exists(localPath)) CopyConflict(localPath, conflictRoot, logicalPath, ".local-conflict", cancellationToken);
             if (File.Exists(remotePath)) CopyConflict(remotePath, conflictRoot, logicalPath, ".remote-conflict", cancellationToken);
+            ImmutableCloudJournal.RecordConflictHeads(mirrorRoot, logicalPath, ResolveRemotePath(conflictRoot, logicalPath));
             var state = GetOrCreateState(states, logicalPath);
             state.BaseHash = baseHash;
             state.LocalHash = localHash;
             state.RemoteHash = remoteHash;
+            state.ConflictHeads = ImmutableCloudJournal.HeadStamp(mirrorRoot, logicalPath);
             result.Conflicts++;
             AddOperation(result, logicalPath, CloudSyncOperationKind.Conflict,
                 "本机和共享目录均已修改，已保留两份冲突副本，未覆盖正式文件。");
@@ -353,7 +325,7 @@ namespace BatchPdfPublisher.Services
             }
         }
 
-        private static void AtomicCopy(string source, string target, string expectedHash, string direction, string logicalPath, Action<CloudSyncProgress> progress, CancellationToken cancellationToken)
+        private static void AtomicCopy(string source, string target, string expectedHash, string expectedTarget, string direction, string logicalPath, Action<CloudSyncProgress> progress, CancellationToken cancellationToken)
         {
             var directory = Path.GetDirectoryName(target);
             if (string.IsNullOrWhiteSpace(directory)) throw new IOException("同步目标目录无效。");
@@ -365,11 +337,10 @@ namespace BatchPdfPublisher.Services
                 try { File.SetLastWriteTimeUtc(temporary, File.GetLastWriteTimeUtc(source)); } catch { }
                 var actualHash = ComputeHash(temporary, cancellationToken);
                 if (!HashesEqual(actualHash, expectedHash)) throw new IOException("同步文件哈希校验失败。");
+                CloudSyncTransaction.BeforeReplace(target, expectedTarget, actualHash);
                 if (File.Exists(target))
                 {
-                    try { File.Replace(temporary, target, null, true); }
-                    catch (PlatformNotSupportedException) { ReplaceWithRollback(temporary, target, cancellationToken); }
-                    catch (IOException) { ReplaceWithRollback(temporary, target, cancellationToken); }
+                    File.Replace(temporary, target, null, true); // no in-place truncation fallback
                 }
                 else File.Move(temporary, target);
             }
@@ -508,7 +479,7 @@ namespace BatchPdfPublisher.Services
             return full;
         }
 
-        private static void ValidateRoots(string mirrorRoot, IEnumerable<string> localRoots)
+        internal static void ValidateRoots(string mirrorRoot, IEnumerable<string> localRoots)
         {
             var mirror = Path.GetFullPath(mirrorRoot).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
             foreach (var rootValue in localRoots)

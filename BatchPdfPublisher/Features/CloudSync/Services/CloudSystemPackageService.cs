@@ -141,6 +141,24 @@ namespace BatchPdfPublisher.Services
             return settings.SyncGeneralSettings || settings.SyncProjectConfigurations || settings.SyncTemplatesAndSchemes;
         }
 
+        // Legacy ZIP is an import source, never an instruction to overwrite live configuration.
+        internal static void ExpandLegacyToMirror(CloudSyncSettings settings, string mirror, CancellationToken token)
+        {
+            var package = Path.Combine(mirror, LogicalPrefix, PackageFileName);
+            if (!File.Exists(package)) return;
+            using (var zip = ZipFile.OpenRead(package))
+                foreach (var entry in zip.Entries)
+                {
+                    token.ThrowIfCancellationRequested();
+                    string mapped;
+                    if (!TryResolveEntry(settings, entry.FullName, out mapped)) continue;
+                    var target = ImmutableCloudJournal.SafePath(mirror, entry.FullName);
+                    if (File.Exists(ImmutableCloudJournal.SafePath(Path.Combine(mirror, ".wanluo-sync", "resolutions"), entry.FullName + ".json"))) continue;
+                    Directory.CreateDirectory(Path.GetDirectoryName(target));
+                    using (var input = entry.Open()) using (var output = File.Create(target)) input.CopyTo(output);
+                }
+        }
+
         private static IEnumerable<PackageSourceFile> SystemFiles(CloudSyncSettings settings)
         {
             if (settings.SyncGeneralSettings)

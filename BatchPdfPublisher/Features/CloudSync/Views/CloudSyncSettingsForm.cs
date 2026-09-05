@@ -73,14 +73,14 @@ namespace BatchPdfPublisher.Views
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             Controls.Add(root);
 
-            var title = new Label { Text = "云同步（系统文件打包 + 工作文件版本）", Font = new Font(Font, FontStyle.Bold), AutoSize = true };
+            var title = new Label { Text = "云同步 V2（逐文件核对 · 不可变版本 · 冲突保留）", Font = new Font(Font, FontStyle.Bold), AutoSize = true };
             root.Controls.Add(title);
             var description = new Label
             {
                 AutoSize = true,
                 MaximumSize = new Size(780, 0),
                 ForeColor = Color.DimGray,
-                Text = "设置、项目登记、图框和方案库合并为一个系统文件包，减少零散文件传输；项目 DWG 与资料继续按文件同步并保留历史版本。"
+                Text = "设置、项目登记、图框、方案库及工作文件逐文件核对；每轮变更发布为不可变版本包。双方不同且无法确定来源时保留冲突，不按时间强制覆盖；失败保留恢复记录。"
             };
             root.Controls.Add(description);
 
@@ -125,7 +125,7 @@ namespace BatchPdfPublisher.Views
             var scope = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = true };
             scope.Controls.Add(LabelFor("同步内容：")); scope.Controls.Add(_general); scope.Controls.Add(_projects); scope.Controls.Add(_templates); scope.Controls.Add(_drawings);
             scope.Controls.Add(_auto); scope.Controls.Add(LabelFor("历史天数")); scope.Controls.Add(_days); scope.Controls.Add(LabelFor("每文件版本数")); scope.Controls.Add(_versions);
-            scope.Controls.Add(LabelFor("系统文件变动后等待（分钟）")); scope.Controls.Add(_systemPackageMinutes);
+            scope.Controls.Add(LabelFor("所有电脑需升级到 V2；旧云端文件只读保留，不自动删除。"));
             root.Controls.Add(scope);
 
             var progressPanel = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 2, Padding = new Padding(0, 4, 0, 4) };
@@ -170,9 +170,7 @@ namespace BatchPdfPublisher.Views
             _clientId.TextChanged += delegate { if (_provider.SelectedIndex != 1) UpdateProviderUi(); };
             _redirectUri.TextChanged += delegate { if (_provider.SelectedIndex == 0) UpdateProviderUi(); };
             _initialPreference.Items.Clear();
-            _initialPreference.Items.Add("云端优先（先备份本机，推荐）");
-            _initialPreference.Items.Add("本机优先（先备份云端）");
-            _initialPreference.Items.Add("不选择，全部保留为冲突");
+            _initialPreference.Items.Add("内容不同保留冲突，不自动覆盖");
             _enabled.Checked = _settings.Enabled;
             _provider.SelectedIndex = string.Equals(_settings.Provider, "115OpenApi", StringComparison.OrdinalIgnoreCase) ? 2
                 : string.Equals(_settings.Provider, "LocalFolder", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
@@ -194,8 +192,8 @@ namespace BatchPdfPublisher.Views
             _drawings.Checked = _settings.SyncProjectFiles;
             _drawings.Enabled = true;
             _auto.Checked = _settings.AutoSync;
-            _initialPreference.SelectedIndex = string.Equals(_settings.InitialSyncPreference, "Local", StringComparison.OrdinalIgnoreCase) ? 1
-                : string.Equals(_settings.InitialSyncPreference, "Conflict", StringComparison.OrdinalIgnoreCase) ? 2 : 0;
+            _initialPreference.SelectedIndex = 0;
+            _initialPreference.Enabled = false;
             _days.Value = Math.Max(_days.Minimum, Math.Min(_days.Maximum, _settings.HistoryRetentionDays));
             _versions.Value = Math.Max(_versions.Minimum, Math.Min(_versions.Maximum, _settings.KeepVersionsPerFile));
             _systemPackageMinutes.Value = Math.Max(_systemPackageMinutes.Minimum, Math.Min(_systemPackageMinutes.Maximum, _settings.SystemPackageIntervalMinutes));
@@ -271,7 +269,7 @@ namespace BatchPdfPublisher.Views
                 return false;
             }
             _settings.AutoSync = _auto.Checked;
-            _settings.InitialSyncPreference = _initialPreference.SelectedIndex == 1 ? "Local" : _initialPreference.SelectedIndex == 2 ? "Conflict" : "Remote";
+            _settings.InitialSyncPreference = "Conflict";
             _settings.HistoryRetentionDays = (int)_days.Value;
             _settings.KeepVersionsPerFile = (int)_versions.Value;
             _settings.SystemPackageIntervalMinutes = (int)_systemPackageMinutes.Value;

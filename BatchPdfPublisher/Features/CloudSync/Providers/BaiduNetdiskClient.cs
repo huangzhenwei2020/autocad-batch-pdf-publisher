@@ -204,7 +204,7 @@ namespace BatchPdfPublisher.Services
             return "/" + string.Join("/", segments);
         }
 
-        private async Task EnsureDirectoryAsync(string token, string path, CancellationToken cancellationToken)
+        internal async Task EnsureDirectoryAsync(string token, string path, CancellationToken cancellationToken)
         {
             var segments = NormalizeRemotePath(path).Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
             var start = segments.Length >= 2 && string.Equals(segments[0], "apps", StringComparison.OrdinalIgnoreCase) ? 2 : 0;

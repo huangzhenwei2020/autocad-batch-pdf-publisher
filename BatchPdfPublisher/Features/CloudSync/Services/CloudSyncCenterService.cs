@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 
 namespace BatchPdfPublisher.Services
 {
@@ -113,10 +114,28 @@ namespace BatchPdfPublisher.Services
 
         public void ResolveConflict(CloudSyncConflictItem item, bool useLocalCopy)
         {
+            using (var mutex = new Mutex(false, "WanluoArchitectureTools.CloudSync"))
+            {
+                var acquired = false;
+                try
+                {
+                    try { acquired = mutex.WaitOne(0); } catch (AbandonedMutexException) { acquired = true; }
+                    if (!acquired) throw new IOException("同步正在进行，请完成后再处理冲突。");
+                    using (var transaction = new CloudSyncTransaction(Path.Combine(UserDataPaths.RootDirectory, ".cloud-sync", "transactions")))
+                    { ResolveConflictLocked(item, useLocalCopy); transaction.Commit(); }
+                }
+                finally { if (acquired) mutex.ReleaseMutex(); }
+            }
+        }
+
+        private void ResolveConflictLocked(CloudSyncConflictItem item, bool useLocalCopy)
+        {
             if (item == null) throw new ArgumentNullException("item");
             var source = useLocalCopy ? item.LocalCopyPath : item.RemoteCopyPath;
             if (string.IsNullOrWhiteSpace(source) || !File.Exists(source))
                 throw new IOException(useLocalCopy ? "本机冲突副本不存在。" : "共享冲突副本不存在。");
+            if (string.IsNullOrEmpty(_mirrorRoot) || !IsWithin(source, Path.Combine(_mirrorRoot, "冲突文件")))
+                throw new IOException("冲突副本不在当前同步范围内。");
             string localPath;
             if (!TryResolveLocal(item.LogicalPath, out localPath)) throw new IOException("找不到冲突文件的本机映射。");
             if (CloudSyncPendingFileService.ShouldDefer(localPath)) throw new IOException("该 DWG 正在 AutoCAD 中打开，请关闭图纸后再解决冲突。");
@@ -126,6 +145,7 @@ namespace BatchPdfPublisher.Services
             var hash = LocalFolderSyncEngine.ComputeHash(source);
             CopyAtomically(source, localPath, hash);
             CopyAtomically(source, remotePath, hash);
+            ImmutableCloudJournal.RecordResolution(_mirrorRoot, item.LogicalPath, hash, source);
             MarkResolved(item.LocalCopyPath); MarkResolved(item.RemoteCopyPath);
             CloudSyncCoordinator.RequestSynchronization(false);
         }
@@ -363,6 +383,7 @@ namespace BatchPdfPublisher.Services
 
         private static void CopyAtomically(string source, string target, string expectedHash)
         {
+            var expectedBefore = CloudSyncTransaction.Hash(target);
             Directory.CreateDirectory(Path.GetDirectoryName(target));
             var temporary = target + "." + Guid.NewGuid().ToString("N") + ".tmp";
             try
@@ -370,7 +391,8 @@ namespace BatchPdfPublisher.Services
                 File.Copy(source, temporary, false);
                 if (!string.Equals(LocalFolderSyncEngine.ComputeHash(temporary), expectedHash, StringComparison.OrdinalIgnoreCase))
                     throw new IOException("文件复制后哈希校验失败。");
-                if (File.Exists(target)) File.Copy(temporary, target, true);
+                CloudSyncTransaction.BeforeReplace(target, expectedBefore, expectedHash);
+                if (File.Exists(target)) File.Replace(temporary, target, null);
                 else File.Move(temporary, target);
             }
             finally { try { if (File.Exists(temporary)) File.Delete(temporary); } catch { } }

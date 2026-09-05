@@ -126,7 +126,7 @@ namespace BatchPdfPublisher.Services
                 using (var provider = CloudSyncProviderFactory.Create(settings))
                 {
                     if (!provider.IsReady) { Trace(provider.Status); return; }
-                    var mirror = Path.Combine(provider.WorkingFolder, "万落建筑云同步");
+                    var mirror = Path.Combine(settings.SyncFolder ?? string.Empty, ImmutableCloudJournal.RemoteDirectory);
                     if (string.Equals(provider.Id, "LocalFolder", StringComparison.OrdinalIgnoreCase))
                     { Directory.CreateDirectory(mirror); AddWatcher(mirror); }
                 }

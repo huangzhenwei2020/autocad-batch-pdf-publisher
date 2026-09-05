@@ -63,6 +63,19 @@ internal static class CloudSyncTests
         Run("DownloadsBaiduFileThroughMultimediaMetadata", DownloadsBaiduFileThroughMultimediaMetadata);
         Run("DecryptsUnifiedBrokerToken", DecryptsUnifiedBrokerToken);
         Run("RecoversCorruptSettingsFromBackup", RecoversCorruptSettingsFromBackup);
+        Run("ConcurrentSameFilePreservesBothBranches", CloudSyncSafetyTests.ConcurrentSameFilePreservesBothBranches);
+        Run("ConcurrentDifferentFilesMerge", CloudSyncSafetyTests.ConcurrentDifferentFilesMerge);
+        Run("ExplicitResolutionDoesNotSwallowUnseenBranch", CloudSyncSafetyTests.ExplicitResolutionDoesNotSwallowUnseenBranch);
+        Run("MissingParentFailsClosed", CloudSyncSafetyTests.MissingParentFailsClosed);
+        Run("CorruptArchiveFailsClosed", CloudSyncSafetyTests.CorruptArchiveFailsClosed);
+        Run("UnsafeVersionPathsRejected", CloudSyncSafetyTests.UnsafeVersionPathsRejected);
+        Run("TransactionRollsBackAllWritesAndState", CloudSyncSafetyTests.TransactionRollsBackAllWritesAndState);
+        Run("TransactionPreservesInterveningUserSave", CloudSyncSafetyTests.TransactionPreservesInterveningUserSave);
+        Run("RestartReplaysDurableJournal", CloudSyncSafetyTests.RestartReplaysDurableJournal);
+        Run("FirstConnectionNeverUsesTimestampOrPreference", CloudSyncSafetyTests.FirstConnectionNeverUsesTimestampOrPreference);
+        Run("TwoDeviceWorkflowConvergesWithoutRepeatingTransfers", CloudSyncSafetyTests.TwoDeviceWorkflowConvergesWithoutRepeatingTransfers);
+        Run("WorkflowCancellationRestoresAppliedFilesThenRetries", CloudSyncSafetyTests.WorkflowCancellationRestoresAppliedFilesThenRetries);
+        Run("BaiduProviderCountsRealDownloadsAndReusesArchive", CloudSyncSafetyTests.BaiduProviderCountsRealDownloadsAndReusesArchive);
         Console.WriteLine("Executed " + _executed + " cloud sync tests; 0 failed.");
     }
 
@@ -366,8 +379,8 @@ internal static class CloudSyncTests
             True(CloudSystemPackageService.Prepare(settings, true, null, CancellationToken.None), "system package was not created");
             var files = CloudSyncCatalog.CreateDefault(settings).EnumerateFiles().ToList();
             Equal(1, files.Count);
-            Equal(CloudSystemPackageService.LogicalPath, files[0].LogicalPath);
-            using (var archive = ZipFile.OpenRead(files[0].LocalPath))
+            Equal("项目配置/同步项目/sample/项目.json", files[0].LogicalPath);
+            using (var archive = ZipFile.OpenRead(CloudSystemPackageService.PackagePath))
             {
                 True(archive.GetEntry("项目配置/同步项目/sample/项目.json") != null, "portable project projection missing from package");
                 True(archive.GetEntry("项目配置/项目列表.json") == null, "machine-specific project list entered package");
@@ -528,7 +541,8 @@ internal static class CloudSyncTests
             using (var local = CloudSyncProviderFactory.Create(new CloudSyncSettings { Provider = "LocalFolder", SyncFolder = root }))
             {
                 True(local.IsReady, "local folder provider should remain ready");
-                local.Prepare(null, CancellationToken.None); Equal(Path.GetFullPath(root), local.WorkingFolder);
+                local.Prepare(null, CancellationToken.None);
+                True(!string.Equals(Path.GetFullPath(root), local.WorkingFolder, StringComparison.OrdinalIgnoreCase), "provider must isolate materialized cache from shared immutable versions");
             }
             using (var provider115 = CloudSyncProviderFactory.Create(new CloudSyncSettings { Provider = "115OpenApi" }))
             {
@@ -589,7 +603,9 @@ internal static class CloudSyncTests
             };
             var store = new CloudSyncSettingsStore(); store.SaveSettings(settings);
             Equal(1, CloudSyncWorkflow.Synchronize(settings, store).Uploaded);
-            True(File.Exists(Path.Combine(shared, "万落建筑云同步", "系统文件包", CloudSystemPackageService.PackageFileName)), "provider workflow did not upload system package");
+            Equal(1, Directory.GetFiles(Path.Combine(shared, ImmutableCloudJournal.RemoteDirectory), "*.zip").Length);
+            Equal(0, CloudSyncWorkflow.Synchronize(settings, store).Uploaded);
+            Equal(1, Directory.GetFiles(Path.Combine(shared, ImmutableCloudJournal.RemoteDirectory), "*.zip").Length);
         }
         finally { Directory.Delete(root, true); }
     }
@@ -687,7 +703,7 @@ internal static class CloudSyncTests
             settings.SyncFolder = secondCloud; store.SaveSettings(settings);
             CloudSyncWorkflow.Synchronize(settings, store);
             Equal("keep-me", File.ReadAllText(local));
-            True(File.Exists(Path.Combine(secondCloud, "万落建筑云同步", "系统文件包", CloudSystemPackageService.PackageFileName)), "local system package was not safely initialized in the new cloud scope");
+            Equal(1, Directory.GetFiles(Path.Combine(secondCloud, ImmutableCloudJournal.RemoteDirectory), "*.zip").Length);
             True(Directory.GetDirectories(Path.Combine(root, "backups", "首次连接备份")).Length >= 1, "first connection snapshot missing");
         }
         finally { Directory.Delete(root, true); }
@@ -717,7 +733,7 @@ internal static class CloudSyncTests
             True(progress.Any(item => item.Stage == "正在扫描本机文件"), "local scan progress was not reported");
             True(progress.Any(item => item.Stage == "正在核对文件" && item.Total > 0), "file progress was not reported");
             True(progress.Any(item => item.Direction == "上传" && item.BytesTotal > 0 && item.BytesCompleted == item.BytesTotal), "byte transfer progress was not reported");
-            Equal("同步完成", progress.Last().Stage);
+            Equal("文件核对完成，等待发布", progress.Last().Stage);
         });
     }
 
@@ -910,6 +926,8 @@ internal static class CloudSyncTests
             var engine = new LocalFolderSyncEngine(store);
             var catalog = new CloudSyncCatalog(new[] { new CloudSyncSource("通用配置", UserDataPaths.SettingsDirectory, null) });
             var localFile = Path.Combine(UserDataPaths.SettingsDirectory, "settings.json");
+            using (var provider = CloudSyncProviderFactory.Create(settings)) shared = provider.WorkingFolder;
+            settings.SyncFolder = shared; // low-level engine tests operate on the provider's materialized cache
             var remoteFile = Path.Combine(shared, "万落建筑云同步", "通用配置", "settings.json");
             action(root, settings, engine, catalog, localFile, remoteFile);
         }

@@ -10,6 +10,7 @@ namespace BatchPdfPublisher.Services
         private static readonly object FileSync = new object();
         private readonly string _settingsPath;
         private readonly string _statePath;
+        internal string StatePath { get { return Path.GetFullPath(_statePath); } }
 
         public CloudSyncSettingsStore()
             : this(UserDataPaths.SettingsFile("cloud-sync.settings.json"),
@@ -110,7 +111,7 @@ namespace BatchPdfPublisher.Services
             catch { try { File.Copy(path, target, false); File.Delete(path); } catch { } }
         }
 
-        private static void ReportRecovery(string message)
+        internal static void ReportRecovery(string message)
         {
             LastRecoveryNotice = message;
             try
@@ -128,6 +129,7 @@ namespace BatchPdfPublisher.Services
                 var directory = Path.GetDirectoryName(path);
                 if (string.IsNullOrWhiteSpace(directory)) throw new IOException("同步配置目录无效。");
                 Directory.CreateDirectory(directory);
+                var expectedBefore = CloudSyncTransaction.Hash(path);
                 var temporary = Path.Combine(directory, "." + Path.GetFileName(path) + "." + Guid.NewGuid().ToString("N") + ".tmp");
                 try
                 {
@@ -136,6 +138,7 @@ namespace BatchPdfPublisher.Services
                         new DataContractJsonSerializer(typeof(T)).WriteObject(stream, value);
                         stream.Flush(true);
                     }
+                    CloudSyncTransaction.BeforeReplace(path, expectedBefore, CloudSyncTransaction.Hash(temporary));
                     if (File.Exists(path)) File.Replace(temporary, path, path + ".bak", true);
                     else File.Move(temporary, path);
                 }
