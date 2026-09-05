@@ -22,6 +22,11 @@ namespace BatchPdfPublisher.Services
         public const string MultimediaEndpoint = "https://pan.baidu.com/rest/2.0/xpan/multimedia";
         public const string UploadEndpoint = "https://d.pcs.baidu.com/rest/2.0/pcs/superfile2";
         private const int BlockSize = 4 * 1024 * 1024;
+        internal static bool IsPlainMd5(string value)
+        {
+            return value != null && value.Length == 32 && value.All(c =>
+                (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'));
+        }
         private readonly HttpClient _http;
         private readonly bool _ownsHttp;
 
@@ -129,6 +134,19 @@ namespace BatchPdfPublisher.Services
             using (var response = await SendDownloadAsync(request, cancellationToken).ConfigureAwait(false))
             {
                 await EnsureHttpSuccess(response).ConfigureAwait(false);
+                entry.DownloadMd5 = null;
+                IEnumerable<string> checksumHeaders;
+                if (response.Content.Headers.TryGetValues("Content-MD5", out checksumHeaders))
+                {
+                    var checksum = checksumHeaders.FirstOrDefault();
+                    if (IsPlainMd5(checksum)) entry.DownloadMd5 = checksum;
+                    else try
+                    {
+                        var bytes = Convert.FromBase64String(checksum ?? string.Empty);
+                        if (bytes.Length == 16) entry.DownloadMd5 = string.Concat(bytes.Select(b => b.ToString("x2")));
+                    }
+                    catch (FormatException) { }
+                }
                 Directory.CreateDirectory(Path.GetDirectoryName(targetPath));
                 var temporary = targetPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
                 try
@@ -289,7 +307,7 @@ namespace BatchPdfPublisher.Services
         public void Dispose() { if (_ownsHttp) _http.Dispose(); }
     }
 
-    public sealed class BaiduRemoteEntry { public string Path { get; set; } public bool IsDirectory { get; set; } public long Size { get; set; } public string Md5 { get; set; } public long FileSystemId { get; set; } public long ModifiedAtUnix { get; set; } }
+    public sealed class BaiduRemoteEntry { public string Path { get; set; } public bool IsDirectory { get; set; } public long Size { get; set; } public string Md5 { get; set; } public string DownloadMd5 { get; set; } public long FileSystemId { get; set; } public long ModifiedAtUnix { get; set; } }
 
     [DataContract] internal class BaiduApiResponse { [DataMember(Name = "errno")] public int ErrorCode { get; set; } [DataMember(Name = "errmsg")] public string ErrorMessage { get; set; } }
     [DataContract] internal sealed class BaiduListResponse : BaiduApiResponse { [DataMember(Name = "list")] public List<BaiduListItem> Items { get; set; } }

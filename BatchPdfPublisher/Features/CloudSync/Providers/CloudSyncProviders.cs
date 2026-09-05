@@ -251,10 +251,9 @@ namespace BatchPdfPublisher.Services
             Directory.CreateDirectory(Path.GetDirectoryName(target));
             _client.DownloadAsync(_credential.AccessToken, entry, temporary, (done, total) =>
                 progress?.Invoke(new CloudSyncProgress { Stage = "正在下载云端版本", Direction = "下载", BytesCompleted = done, BytesTotal = total }), token).GetAwaiter().GetResult();
-            if (new FileInfo(temporary).Length != entry.Size ||
-                (!string.IsNullOrWhiteSpace(entry.Md5) && !string.Equals(Md5(temporary), entry.Md5, StringComparison.OrdinalIgnoreCase)))
-                throw new InvalidDataException("云端下载完整性校验失败，未应用到本机。");
+            ValidateDownloadedFile(entry, temporary);
             if (File.Exists(target)) File.Replace(temporary, target, null); else File.Move(temporary, target);
+            SaveVerifiedReceipt(entry, target);
             _networkDownloads++; _networkDownloadBytes += entry.Size;
         }
 
@@ -354,7 +353,16 @@ namespace BatchPdfPublisher.Services
         internal static bool CachedFileMatches(BaiduRemoteEntry entry, string path)
         {
             if (entry == null || !File.Exists(path) || FileLength(path) != entry.Size) return false;
-            if (!string.IsNullOrWhiteSpace(entry.Md5)) return string.Equals(Md5(path), entry.Md5, StringComparison.OrdinalIgnoreCase);
+            if (BaiduNetdiskClient.IsPlainMd5(entry.Md5)) return string.Equals(Md5(path), entry.Md5, StringComparison.OrdinalIgnoreCase);
+            try
+            {
+                var receipt = File.ReadAllLines(path + ".verified");
+                if (receipt.Length == 2 && receipt[0] == Revision(entry) &&
+                    string.Equals(receipt[1], CloudSyncTransaction.Hash(path), StringComparison.OrdinalIgnoreCase)) return true;
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+            if (!string.IsNullOrWhiteSpace(entry.Md5)) return false;
             if (entry.ModifiedAtUnix <= 0) return false;
             var localSeconds = new DateTimeOffset(File.GetLastWriteTimeUtc(path)).ToUnixTimeSeconds();
             return Math.Abs(localSeconds - entry.ModifiedAtUnix) <= 2;
@@ -369,6 +377,25 @@ namespace BatchPdfPublisher.Services
                    message.IndexOf("pcs meta error", StringComparison.OrdinalIgnoreCase) >= 0;
         }
         private static void TryDeleteCachedFile(string path) { try { if (File.Exists(path)) File.Delete(path); } catch { } }
+        internal static void ValidateDownloadedFile(BaiduRemoteEntry entry, string path)
+        {
+            var expected = BaiduNetdiskClient.IsPlainMd5(entry.DownloadMd5) ? entry.DownloadMd5 :
+                BaiduNetdiskClient.IsPlainMd5(entry.Md5) ? entry.Md5 : null;
+            var actualLength = FileLength(path);
+            var actualMd5 = Md5(path);
+            // New immutable archives also carry an independent SHA-256 in their name.
+            var archiveHash = Path.GetFileNameWithoutExtension(entry.Path ?? string.Empty);
+            var immutable = (entry.Path ?? string.Empty).Replace('\\', '/').Contains("/" + ImmutableCloudJournal.RemoteDirectory + "/") &&
+                archiveHash.Length == 64 && string.Equals(CloudSyncTransaction.Hash(path), archiveHash, StringComparison.OrdinalIgnoreCase);
+            if (actualLength != entry.Size || (expected != null ? !string.Equals(actualMd5, expected, StringComparison.OrdinalIgnoreCase) : !immutable))
+                throw new InvalidDataException("云端下载完整性校验失败，未应用到本机。文件：" + entry.Path +
+                    "；预期字节：" + entry.Size + "，实际字节：" + actualLength +
+                    "；预期 MD5：" + (expected ?? "未提供可验证值") + "，实际 MD5：" + actualMd5);
+        }
+        internal static void SaveVerifiedReceipt(BaiduRemoteEntry entry, string path)
+        {
+            File.WriteAllLines(path + ".verified", new[] { Revision(entry), CloudSyncTransaction.Hash(path) });
+        }
         public void Dispose() { _client.Dispose(); }
     }
 

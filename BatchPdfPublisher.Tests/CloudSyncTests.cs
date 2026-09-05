@@ -61,6 +61,7 @@ internal static class CloudSyncTests
         Run("ExchangesBaiduAuthorizationCode", ExchangesBaiduAuthorizationCode);
         Run("ValidatesBaiduOAuthCallback", ValidatesBaiduOAuthCallback);
         Run("DownloadsBaiduFileThroughMultimediaMetadata", DownloadsBaiduFileThroughMultimediaMetadata);
+        Run("ValidatesBaiduDownloadAndCacheReceipt", ValidatesBaiduDownloadAndCacheReceipt);
         Run("DecryptsUnifiedBrokerToken", DecryptsUnifiedBrokerToken);
         Run("RecoversCorruptSettingsFromBackup", RecoversCorruptSettingsFromBackup);
         Run("ConcurrentSameFilePreservesBothBranches", CloudSyncSafetyTests.ConcurrentSameFilePreservesBothBranches);
@@ -833,7 +834,9 @@ internal static class CloudSyncTests
                 {
                     Content = new StringContent("{\"errno\":0,\"list\":[{\"dlink\":\"https://d.pcs.baidu.test/file/demo\"}]}", Encoding.UTF8, "application/json")
                 };
-            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(Encoding.UTF8.GetBytes("downloaded")) };
+            var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(Encoding.UTF8.GetBytes("downloaded")) };
+            response.Content.Headers.TryAddWithoutValidation("Content-MD5", "9f7f3f4971ac2c53a4757e95dbbbf3ba");
+            return response;
         })))
         using (var client = new BaiduNetdiskClient(http))
         {
@@ -841,7 +844,9 @@ internal static class CloudSyncTests
             try
             {
                 var target = Path.Combine(root, "download.bin");
-                client.DownloadAsync("access-token", new BaiduRemoteEntry { FileSystemId = 123456789L, Size = 10 }, target, null, CancellationToken.None).GetAwaiter().GetResult();
+                var entry = new BaiduRemoteEntry { FileSystemId = 123456789L, Size = 10 };
+                client.DownloadAsync("access-token", entry, target, null, CancellationToken.None).GetAwaiter().GetResult();
+                Equal("9f7f3f4971ac2c53a4757e95dbbbf3ba", entry.DownloadMd5);
                 Equal("downloaded", File.ReadAllText(target));
                 Equal(2, requests.Count);
                 Equal(BaiduNetdiskClient.MultimediaEndpoint, requests[0].RequestUri.GetLeftPart(UriPartial.Path));
@@ -853,6 +858,33 @@ internal static class CloudSyncTests
             }
             finally { Directory.Delete(root, true); }
         }
+    }
+
+    private static void ValidatesBaiduDownloadAndCacheReceipt()
+    {
+        var root = NewRoot();
+        try
+        {
+            var path = Path.Combine(root, "payload");
+            File.WriteAllBytes(path, Encoding.UTF8.GetBytes("abc"));
+            var entry = new BaiduRemoteEntry { Path = "/apps/test/legacy.zip", Size = 3, FileSystemId = 42,
+                Md5 = "708f69341md4f2a6da98b6dd2ddeb37a", DownloadMd5 = "900150983cd24fb0d6963f7d28e17f72" };
+            BaiduNetdiskProvider.ValidateDownloadedFile(entry, path);
+            BaiduNetdiskProvider.SaveVerifiedReceipt(entry, path);
+            True(BaiduNetdiskProvider.CachedFileMatches(entry, path), "verified obfuscated MD5 cache must be reused");
+            entry.ModifiedAtUnix++;
+            True(!BaiduNetdiskProvider.CachedFileMatches(entry, path), "changed revision must invalidate receipt");
+            entry.ModifiedAtUnix--;
+            File.WriteAllBytes(path, Encoding.UTF8.GetBytes("abd"));
+            True(!BaiduNetdiskProvider.CachedFileMatches(entry, path), "same-size corruption must invalidate receipt");
+            Throws<InvalidDataException>(() => BaiduNetdiskProvider.ValidateDownloadedFile(entry, path));
+            File.WriteAllBytes(path, Encoding.UTF8.GetBytes("abc"));
+            entry.Size = 4;
+            Throws<InvalidDataException>(() => BaiduNetdiskProvider.ValidateDownloadedFile(entry, path));
+            entry.Size = 3; entry.DownloadMd5 = null;
+            Throws<InvalidDataException>(() => BaiduNetdiskProvider.ValidateDownloadedFile(entry, path));
+        }
+        finally { Directory.Delete(root, true); }
     }
 
     private static void DecryptsUnifiedBrokerToken()
