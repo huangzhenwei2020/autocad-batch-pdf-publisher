@@ -179,7 +179,19 @@ namespace BatchPdfPublisher.Services
             string remotePath;
             if (!remoteFiles.TryGetValue(logicalPath, out remotePath)) remotePath = ResolveRemotePath(mirrorRoot, logicalPath);
 
-            var localHash = HashIfExists(localPath, cancellationToken);
+            var localContentPath = localPath;
+            string localHash;
+            if (CloudSyncPendingFileService.ShouldDefer(localPath))
+            {
+                if (!CloudSyncSavedDrawingSnapshotStore.TryGet(localPath, out localContentPath, out localHash))
+                {
+                    result.Pending++;
+                    AddOperation(result, logicalPath, CloudSyncOperationKind.Pending,
+                        "图纸正在 AutoCAD 中打开；等待保存完成后生成同步副本，本轮继续处理其他文件。");
+                    return;
+                }
+            }
+            else localHash = HashIfExists(localPath, cancellationToken);
             var remoteHash = HashIfExists(remotePath, cancellationToken);
             CloudSyncFileState fileState;
             states.TryGetValue(logicalPath, out fileState);
@@ -210,7 +222,7 @@ namespace BatchPdfPublisher.Services
             {
                 if (localHash != null && remoteHash == null)
                 {
-                    Upload(settings, mirrorRoot, logicalPath, localPath, remotePath, localHash, remoteHash, states, result, progress, cancellationToken);
+                    Upload(settings, mirrorRoot, logicalPath, localContentPath, remotePath, localHash, remoteHash, states, result, progress, cancellationToken);
                     return;
                 }
                 if (localHash == null && remoteHash != null)
@@ -218,7 +230,7 @@ namespace BatchPdfPublisher.Services
                     Download(settings, logicalPath, remotePath, localPath, remoteHash, localHash, states, result, progress, cancellationToken);
                     return;
                 }
-                CreateConflict(settings, mirrorRoot, logicalPath, localPath, remotePath, localHash, remoteHash, baseHash, states, result,
+                CreateConflict(settings, mirrorRoot, logicalPath, localContentPath, remotePath, localHash, remoteHash, baseHash, states, result,
                     cancellationToken);
                 return;
             }
@@ -231,7 +243,7 @@ namespace BatchPdfPublisher.Services
             }
             if (remoteHash == null && HashesEqual(localHash, baseHash))
             {
-                Upload(settings, mirrorRoot, logicalPath, localPath, remotePath, localHash, remoteHash, states, result, progress, cancellationToken);
+                Upload(settings, mirrorRoot, logicalPath, localContentPath, remotePath, localHash, remoteHash, states, result, progress, cancellationToken);
                 ReplaceLastOperationMessage(result, logicalPath, "云端副本缺失，已从本机自动补传。");
                 return;
             }
@@ -242,11 +254,11 @@ namespace BatchPdfPublisher.Services
             }
             if (HashesEqual(remoteHash, baseHash) && localHash != null)
             {
-                Upload(settings, mirrorRoot, logicalPath, localPath, remotePath, localHash, remoteHash, states, result, progress, cancellationToken);
+                Upload(settings, mirrorRoot, logicalPath, localContentPath, remotePath, localHash, remoteHash, states, result, progress, cancellationToken);
                 return;
             }
 
-            CreateConflict(settings, mirrorRoot, logicalPath, localPath, remotePath, localHash, remoteHash, baseHash, states, result,
+            CreateConflict(settings, mirrorRoot, logicalPath, localContentPath, remotePath, localHash, remoteHash, baseHash, states, result,
                 cancellationToken);
         }
 

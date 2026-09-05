@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using Autodesk.AutoCAD.ApplicationServices;
+using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.Runtime;
 
 namespace BatchPdfPublisher.Services
@@ -10,6 +11,7 @@ namespace BatchPdfPublisher.Services
     public static class CadSaveCloudSyncService
     {
         private static readonly HashSet<Document> Attached = new HashSet<Document>();
+        private static readonly HashSet<Document> PendingSnapshots = new HashSet<Document>();
         private static bool _installed;
 
         public static void Install()
@@ -19,6 +21,7 @@ namespace BatchPdfPublisher.Services
             var manager = Application.DocumentManager;
             manager.DocumentCreated += OnDocumentCreated;
             manager.DocumentToBeDestroyed += OnDocumentToBeDestroyed;
+            Application.Idle += OnIdle;
             foreach (Document document in manager) Attach(document);
             CloudSyncPendingFileService.RegisterOpenPathProbe(IsDrawingOpen);
         }
@@ -30,7 +33,9 @@ namespace BatchPdfPublisher.Services
             var manager = Application.DocumentManager;
             manager.DocumentCreated -= OnDocumentCreated;
             manager.DocumentToBeDestroyed -= OnDocumentToBeDestroyed;
+            Application.Idle -= OnIdle;
             foreach (var document in new List<Document>(Attached)) Detach(document);
+            lock (PendingSnapshots) PendingSnapshots.Clear();
             CloudSyncPendingFileService.ClearOpenPathProbe();
         }
 
@@ -41,6 +46,7 @@ namespace BatchPdfPublisher.Services
 
         private static void OnDocumentToBeDestroyed(object sender, DocumentCollectionEventArgs args)
         {
+            lock (PendingSnapshots) PendingSnapshots.Remove(args.Document);
             Detach(args.Document);
             CloudSyncCoordinator.RequestSynchronization(false);
         }
@@ -62,7 +68,46 @@ namespace BatchPdfPublisher.Services
             var command = (args == null ? string.Empty : args.GlobalCommandName) ?? string.Empty;
             command = command.Trim().TrimStart('_', '.').ToUpperInvariant();
             if (command == "SAVE" || command == "QSAVE" || command == "SAVEAS")
-                CloudSyncCoordinator.RequestSynchronization(false);
+            {
+                var document = sender as Document;
+                if (document != null) lock (PendingSnapshots) PendingSnapshots.Add(document);
+            }
+        }
+
+        private static void OnIdle(object sender, EventArgs args)
+        {
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(Convert.ToString(Application.GetSystemVariable("CMDNAMES")))) return;
+            }
+            catch { return; }
+            Document[] documents;
+            lock (PendingSnapshots)
+            {
+                documents = new List<Document>(PendingSnapshots).ToArray();
+                PendingSnapshots.Clear();
+            }
+            var attempted = documents.Length > 0;
+            foreach (var document in documents)
+            {
+                if (document == null || document.Database == null) continue;
+                var source = string.IsNullOrWhiteSpace(document.Database.Filename) ? document.Name : document.Database.Filename;
+                if (string.IsNullOrWhiteSpace(source) || !File.Exists(source)) continue;
+                string temporary = null;
+                try
+                {
+                    temporary = CloudSyncSavedDrawingSnapshotStore.TemporaryPath(source);
+                    using (document.LockDocument())
+                    using (var snapshot = document.Database.Wblock())
+                        snapshot.SaveAs(temporary, DwgVersion.Current);
+                    CloudSyncSavedDrawingSnapshotStore.Commit(source, temporary);
+                }
+                catch
+                {
+                    if (!string.IsNullOrWhiteSpace(temporary)) CloudSyncSavedDrawingSnapshotStore.TryDelete(temporary);
+                }
+            }
+            if (attempted) CloudSyncCoordinator.RequestSynchronization(false);
         }
 
         private static bool IsDrawingOpen(string path)

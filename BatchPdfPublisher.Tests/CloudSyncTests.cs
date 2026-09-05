@@ -32,6 +32,7 @@ internal static class CloudSyncTests
         Run("RepairsMissingRemoteFileFromLocal", RepairsMissingRemoteFileFromLocal);
         Run("RejectsOverlappingRoots", RejectsOverlappingRoots);
         Run("DefersOpenDrawingUntilClosed", DefersOpenDrawingUntilClosed);
+        Run("OpenDrawingDoesNotBlockOtherFiles", OpenDrawingDoesNotBlockOtherFiles);
         Run("MapsProjectFileOnlyOnce", MapsProjectFileOnlyOnce);
         Run("ExcludesMachineSpecificProjectList", ExcludesMachineSpecificProjectList);
         Run("PackagesSystemFilesAndDefersChangedPackage", PackagesSystemFilesAndDefersChangedPackage);
@@ -495,10 +496,17 @@ internal static class CloudSyncTests
             var catalog = new CloudSyncCatalog(new[] { new CloudSyncSource("项目文件/test", local, null) });
             File.WriteAllText(drawing, "base"); engine.Synchronize(settings, catalog);
             File.Delete(Path.Combine(shared, "万落建筑云同步", "项目文件", "test", "delete-me.dwg"));
+            var temporary = CloudSyncSavedDrawingSnapshotStore.TemporaryPath(drawing);
+            File.WriteAllText(temporary, "base");
+            CloudSyncSavedDrawingSnapshotStore.Commit(drawing, temporary);
+            string savedCopy, savedHash;
+            True(CloudSyncSavedDrawingSnapshotStore.TryGet(drawing, out savedCopy, out savedHash), "saved drawing snapshot was not reusable");
             CloudSyncPendingFileService.RegisterOpenPathProbe(path => true);
             var repaired = engine.Synchronize(settings, catalog);
             Equal(1, repaired.Uploaded); True(File.Exists(drawing), "open drawing was deleted");
-            True(File.Exists(Path.Combine(shared, "万落建筑云同步", "项目文件", "test", "delete-me.dwg")), "missing cloud drawing was not repaired");
+            var repairedRemote = Path.Combine(shared, "万落建筑云同步", "项目文件", "test", "delete-me.dwg");
+            True(File.Exists(repairedRemote), "missing cloud drawing was not repaired");
+            Equal("base", File.ReadAllText(repairedRemote));
             CloudSyncPendingFileService.ClearOpenPathProbe();
         });
     }
@@ -885,6 +893,26 @@ internal static class CloudSyncTests
             Throws<InvalidDataException>(() => BaiduNetdiskProvider.ValidateDownloadedFile(entry, path));
         }
         finally { Directory.Delete(root, true); }
+    }
+
+    private static void OpenDrawingDoesNotBlockOtherFiles()
+    {
+        WithWorkspace((root, local, shared, engine, settings, ignored) =>
+        {
+            UserDataPaths.TestRootDirectory = root;
+            var drawing = Path.Combine(local, "open.dwg");
+            var notes = Path.Combine(local, "notes.txt");
+            File.WriteAllText(drawing, "saved drawing");
+            File.WriteAllText(notes, "notes");
+            var catalog = new CloudSyncCatalog(new[] { new CloudSyncSource("项目文件/test", local, null) });
+            CloudSyncPendingFileService.RegisterOpenPathProbe(path => path.EndsWith("open.dwg", StringComparison.OrdinalIgnoreCase));
+            var result = engine.Synchronize(settings, catalog);
+            Equal(1, result.Pending);
+            Equal(0, result.Errors);
+            Equal(1, result.Uploaded);
+            Equal("notes", File.ReadAllText(Path.Combine(shared, "万落建筑云同步", "项目文件", "test", "notes.txt")));
+            CloudSyncPendingFileService.ClearOpenPathProbe();
+        });
     }
 
     private static void DecryptsUnifiedBrokerToken()
