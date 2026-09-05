@@ -30,6 +30,7 @@ namespace WL.Stair.Tests
             RejectsInvalidGeometry,
             ReportsLandingAndWidthWarnings,
             UsesGb50352StairStepChecks,
+            AppliesSelectedStairCategoryStepLimits,
             DetectsInsufficientFlightClearance,
             DetectsInsufficientPlatformClearance,
             AcceptsCompliantStairClearance,
@@ -379,7 +380,7 @@ namespace WL.Stair.Tests
         private static void UsesOppositeSupportAndSlabOverhangDefaults()
         {
             var project = StairProjectDefinition.CreateDefault();
-            TestAssert.Equal(22, project.SchemaVersion,
+            TestAssert.Equal(23, project.SchemaVersion,
                 "New stair projects must use the opposite-support schema.");
             TestAssert.True(project.Construction.OppositeSupportsEnabled,
                 "Opposite-wall supports must be enabled by default.");
@@ -403,7 +404,7 @@ namespace WL.Stair.Tests
             project.Storeys.SelectMany(item => item.Landings).ToList()
                 .ForEach(item => item.OppositeSupportType = OppositeSupportType.None);
             new StairProjectConstraintService().Normalize(project);
-            TestAssert.Equal(22, project.SchemaVersion,
+            TestAssert.Equal(23, project.SchemaVersion,
                 "Schema 20 projects must migrate to the opposite-support schema.");
             TestAssert.True(project.Construction.OppositeSupportsEnabled,
                 "Migrated projects must receive the enabled unified switch.");
@@ -427,7 +428,7 @@ namespace WL.Stair.Tests
 
             new StairProjectConstraintService().Normalize(project);
 
-            TestAssert.Equal(22, project.SchemaVersion,
+            TestAssert.Equal(23, project.SchemaVersion,
                 "Schema 21 projects must migrate to the independent-stairwell schema.");
             TestAssert.True(project.Storeys.All(item => !item.IndependentStairwellEnabled),
                 "Migration must keep every legacy storey on unified stairwell axes.");
@@ -724,6 +725,58 @@ namespace WL.Stair.Tests
                     && issue.Message.Contains("GB 50352-2019")
                     && issue.Message.Contains("260mm")),
                 "A tread below 260 mm must report the GB 50352-2019 table 6.8.10 warning.");
+        }
+
+        private static void AppliesSelectedStairCategoryStepLimits()
+        {
+            var expectations = new[]
+            {
+                new { Category = StairUseCategory.ResidentialCommon, Width = 260.0, Height = 175.0, Name = "住宅共用楼梯" },
+                new { Category = StairUseCategory.KindergartenAndPrimarySchool, Width = 260.0, Height = 150.0, Name = "幼儿园、小学校等楼梯" },
+                new { Category = StairUseCategory.AssemblyCommercialMedicalSchool, Width = 280.0, Height = 160.0, Name = "电影院、剧场、体育馆、商场、医院、旅馆和大中学校等楼梯" },
+                new { Category = StairUseCategory.OtherBuilding, Width = 260.0, Height = 170.0, Name = "其他建筑楼梯" },
+                new { Category = StairUseCategory.DedicatedEvacuation, Width = 250.0, Height = 180.0, Name = "专用疏散楼梯" },
+                new { Category = StairUseCategory.ServiceAndResidentialInterior, Width = 220.0, Height = 200.0, Name = "服务楼梯、住宅套内楼梯" }
+            };
+
+            foreach (var expected in expectations)
+            {
+                var limits = StairUseCategoryRules.GetLimits(expected.Category);
+                TestAssert.Equal(expected.Width, limits.MinimumTreadDepth,
+                    expected.Name + "踏步最小宽度不正确。");
+                TestAssert.Equal(expected.Height, limits.MaximumRiserHeight,
+                    expected.Name + "踏步最大高度不正确。");
+
+                var project = StairProjectDefinition.CreateDefault();
+                project.StairCategory = expected.Category;
+                var storey = project.Storeys[0];
+                storey.Height = expected.Height * 30.0;
+                storey.Flights[0].RiserCount = 15;
+                storey.Flights[1].RiserCount = 15;
+                storey.Flights[0].TreadDepth = expected.Width;
+                storey.Flights[1].TreadDepth = expected.Width;
+                var compliant = new StairProjectCalculator().Calculate(project);
+                TestAssert.True(!compliant.Issues.Any(issue => issue.Code == "WL-PR-101"
+                        && string.Equals(issue.ParameterName, storey.Id, StringComparison.OrdinalIgnoreCase)),
+                    expected.Name + "在表列限值上不应产生踏步高度警告。");
+                TestAssert.True(!compliant.Issues.Any(issue => issue.Code == "WL-PR-102"
+                        && string.Equals(issue.ParameterName, storey.Flights[0].Id, StringComparison.OrdinalIgnoreCase)),
+                    expected.Name + "在表列限值上不应产生踏步宽度警告。");
+
+                storey.Flights[0].TreadDepth = expected.Width - 1.0;
+                var narrow = new StairProjectCalculator().Calculate(project);
+                TestAssert.True(narrow.Issues.Any(issue => issue.Code == "WL-PR-102"
+                        && issue.Message.Contains(expected.Name)
+                        && issue.Message.Contains(expected.Width.ToString("0", CultureInfo.InvariantCulture) + "mm")),
+                    expected.Name + "未按所选类别报告踏步宽度限值。");
+            }
+
+            var legacy = StairProjectDefinition.CreateDefault();
+            legacy.SchemaVersion = 22;
+            legacy.StairCategory = StairUseCategory.ResidentialCommon;
+            new StairProjectConstraintService().Normalize(legacy);
+            TestAssert.Equal(StairUseCategory.OtherBuilding, legacy.StairCategory,
+                "旧方案应迁移到原先采用的其他建筑楼梯类别。");
         }
 
         private static void RejectsInvalidStructuralThickness()
@@ -1820,7 +1873,7 @@ namespace WL.Stair.Tests
 
             new StairProjectConstraintService().Normalize(project);
 
-            TestAssert.Equal(22, project.SchemaVersion,
+            TestAssert.Equal(23, project.SchemaVersion,
                 "Legacy projects must migrate through the current drawing-output schema.");
             TestAssert.True(project.Floors[1].AllowLowerFlightClosure,
                 "The old final-flight switch must migrate to the destination floor.");
@@ -1850,7 +1903,7 @@ namespace WL.Stair.Tests
 
             new StairProjectConstraintService().Normalize(project);
 
-            TestAssert.Equal(22, project.SchemaVersion,
+            TestAssert.Equal(23, project.SchemaVersion,
                 "Plan-source scale metadata must migrate to the current schema.");
             TestAssert.Equal(100, project.PlanSources[0].SourceScale,
                 "Migration must not alter the scale read from the source Tianzheng plan.");
@@ -1877,7 +1930,7 @@ namespace WL.Stair.Tests
             new StairProjectConstraintService().Normalize(project);
 
             var source = project.PlanSources[0];
-            TestAssert.Equal(22, project.SchemaVersion,
+            TestAssert.Equal(23, project.SchemaVersion,
                 "Standard-floor metadata must migrate additively.");
             TestAssert.Equal("二层", source.FloorLabel,
                 "A legacy source must inherit its existing display name.");
@@ -1911,7 +1964,7 @@ namespace WL.Stair.Tests
 
             new StairProjectConstraintService().Normalize(project);
 
-            TestAssert.Equal(22, project.SchemaVersion,
+            TestAssert.Equal(23, project.SchemaVersion,
                 "Logical-floor metadata must migrate to the current schema.");
             TestAssert.Equal("4~18层", project.Storeys[0].PlanFloorLabel,
                 "A captured standard-floor range must migrate to its storey record.");

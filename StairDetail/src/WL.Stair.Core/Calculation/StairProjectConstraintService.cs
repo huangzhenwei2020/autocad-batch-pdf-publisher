@@ -253,6 +253,16 @@ namespace WL.Stair.Core.Calculation
                 }
                 project.SchemaVersion = 22;
             }
+            if (project.SchemaVersion < 23)
+            {
+                // The former validator always used the "other building"
+                // thresholds. Preserve that result for every saved project
+                // until the user explicitly chooses another stair category.
+                project.StairCategory = StairUseCategory.OtherBuilding;
+                project.SchemaVersion = 23;
+            }
+            if (!Enum.IsDefined(typeof(StairUseCategory), project.StairCategory))
+                project.StairCategory = StairUseCategory.OtherBuilding;
             foreach (var landing in project.Storeys.Where(item => item != null)
                 .SelectMany(item => item.Landings ?? new List<StairLandingDefinition>())
                 .Where(item => item != null))

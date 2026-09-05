@@ -108,7 +108,7 @@ namespace WL.Stair.Core.Calculation
                 }
 
                 var riserHeight = storey.Height / totalRisers;
-                ValidateRiserHeight(storey, riserHeight, issues);
+                ValidateRiserHeight(project.StairCategory, storey, riserHeight, issues);
                 var flightResults = storey.Flights
                     .Where(flight => flight != null)
                     .Select(flight => new StairProjectFlightResult(
@@ -148,26 +148,30 @@ namespace WL.Stair.Core.Calculation
         }
 
         private void ValidateRiserHeight(
+            StairUseCategory category,
             StairStoreyDefinition storey,
             double riserHeight,
             ICollection<ValidationIssue> issues)
         {
+            var limits = StairUseCategoryRules.GetLimits(category);
             if (riserHeight < _rules.MinimumRiserHeight || riserHeight > _rules.MaximumRiserHeight)
             {
                 issues.Add(Error("WL-PR-010", storey.Id, "该层按各梯段级数计算出的踏步高度超出生成范围。"));
             }
-            else if (riserHeight > _rules.RecommendedMaximumRiserHeight)
+            else if (riserHeight > limits.MaximumRiserHeight)
             {
                 issues.Add(Warning("WL-PR-101", storey.Id,
-                    "按《民用建筑设计统一标准》GB 50352-2019 表6.8.10“其他建筑楼梯”校核，踏步高度应不大于175mm。"));
+                    string.Format("按《民用建筑设计统一标准》GB 50352-2019 表6.8.10“{0}”校核，踏步高度应不大于{1:0}mm。",
+                        limits.Name, limits.MaximumRiserHeight)));
             }
 
             foreach (var flight in storey.Flights.Where(item => item != null))
             {
-                if (flight.TreadDepth < _rules.RecommendedMinimumTreadDepth)
+                if (flight.TreadDepth < limits.MinimumTreadDepth)
                 {
                     issues.Add(Warning("WL-PR-102", flight.Id,
-                        "按《民用建筑设计统一标准》GB 50352-2019 表6.8.10“其他建筑楼梯”校核，踏步宽度应不小于260mm。"));
+                        string.Format("按《民用建筑设计统一标准》GB 50352-2019 表6.8.10“{0}”校核，踏步宽度应不小于{1:0}mm。",
+                            limits.Name, limits.MinimumTreadDepth)));
                 }
             }
         }

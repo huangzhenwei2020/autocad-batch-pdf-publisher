@@ -17,12 +17,13 @@ namespace WL.Stair.Core.Domain
     {
         public StairProjectDefinition()
         {
-            SchemaVersion = 22;
+            SchemaVersion = 23;
             Name = "楼梯大样";
             ProjectName = "未命名项目";
             SubprojectName = string.Empty;
             BuildingNumber = "1#";
             StairNumber = "LT-01";
+            StairCategory = StairUseCategory.OtherBuilding;
             DrawingScale = 50;
             InsertComponentSchedule = false;
             ShowBold = true;
@@ -49,6 +50,8 @@ namespace WL.Stair.Core.Domain
         public string BuildingNumber { get; set; }
 
         public string StairNumber { get; set; }
+
+        public StairUseCategory StairCategory { get; set; }
 
         public int DrawingScale { get; set; }
 
@@ -118,6 +121,54 @@ namespace WL.Stair.Core.Domain
             project.Storeys.Add(StairStoreyDefinition.CreateDoubleFlight(
                 "LC-02", "二至三层", "LB-02", "LB-03", 3200.0, 2));
             return project;
+        }
+    }
+
+    public enum StairUseCategory
+    {
+        OtherBuilding = 0,
+        ResidentialCommon = 1,
+        KindergartenAndPrimarySchool = 2,
+        AssemblyCommercialMedicalSchool = 3,
+        DedicatedEvacuation = 4,
+        ServiceAndResidentialInterior = 5
+    }
+
+    public sealed class StairStepLimits
+    {
+        public StairStepLimits(string name, double minimumTreadDepth, double maximumRiserHeight)
+        {
+            Name = name;
+            MinimumTreadDepth = minimumTreadDepth;
+            MaximumRiserHeight = maximumRiserHeight;
+        }
+
+        public string Name { get; private set; }
+
+        public double MinimumTreadDepth { get; private set; }
+
+        public double MaximumRiserHeight { get; private set; }
+    }
+
+    public static class StairUseCategoryRules
+    {
+        public static StairStepLimits GetLimits(StairUseCategory category)
+        {
+            switch (category)
+            {
+                case StairUseCategory.ResidentialCommon:
+                    return new StairStepLimits("住宅共用楼梯", 260.0, 175.0);
+                case StairUseCategory.KindergartenAndPrimarySchool:
+                    return new StairStepLimits("幼儿园、小学校等楼梯", 260.0, 150.0);
+                case StairUseCategory.AssemblyCommercialMedicalSchool:
+                    return new StairStepLimits("电影院、剧场、体育馆、商场、医院、旅馆和大中学校等楼梯", 280.0, 160.0);
+                case StairUseCategory.DedicatedEvacuation:
+                    return new StairStepLimits("专用疏散楼梯", 250.0, 180.0);
+                case StairUseCategory.ServiceAndResidentialInterior:
+                    return new StairStepLimits("服务楼梯、住宅套内楼梯", 220.0, 200.0);
+                default:
+                    return new StairStepLimits("其他建筑楼梯", 260.0, 170.0);
+            }
         }
     }
 
