@@ -19,6 +19,8 @@ internal static class CloudSyncTests
     private static void Main()
     {
         Run("UploadsNewLocalFile", UploadsNewLocalFile);
+        Run("MissingLocalRootPreservesRemote", MissingLocalRootPreservesRemote);
+        Run("PendingDownloadPreservesLaterSave", PendingDownloadPreservesLaterSave);
         Run("DownloadsToSecondDevice", DownloadsToSecondDevice);
         Run("UsesNewerLocalFile", UsesNewerLocalFile);
         Run("UsesNewerRemoteFile", UsesNewerRemoteFile);
@@ -85,6 +87,38 @@ internal static class CloudSyncTests
         finally { try { Directory.Delete(root, true); } catch { } }
     }
 
+    private static void MissingLocalRootPreservesRemote()
+    {
+        WithWorkspace((root, local, shared, engine, settings, catalog) =>
+        {
+            File.WriteAllText(Path.Combine(local, "settings.json"), "keep");
+            engine.Synchronize(settings, catalog);
+            Directory.Move(local, local + "-offline");
+            var result = engine.Synchronize(settings, catalog);
+            Equal(0, result.Deleted);
+            Equal("keep", File.ReadAllText(Path.Combine(shared, "万落建筑云同步", "通用配置", "settings.json")));
+        });
+    }
+
+    private static void PendingDownloadPreservesLaterSave()
+    {
+        var root = NewRoot();
+        try
+        {
+            UserDataPaths.TestRootDirectory = root;
+            var local = Path.Combine(root, "local"); Directory.CreateDirectory(local);
+            var target = Path.Combine(local, "drawing.dwg");
+            var remote = Path.Combine(root, "remote.dwg");
+            File.WriteAllText(target, "before"); File.WriteAllText(remote, "cloud");
+            CloudSyncPendingFileService.StageDownload("项目文件/test/drawing.dwg", remote, LocalFolderSyncEngine.ComputeHash(remote));
+            File.WriteAllText(target, "user-later-save");
+            var catalog = new CloudSyncCatalog(new[] { new CloudSyncSource("项目文件/test", local, null) });
+            Equal(0, CloudSyncPendingFileService.ApplyAvailable(catalog));
+            Equal("user-later-save", File.ReadAllText(target));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
     private static void UploadsNewLocalFile()
     {
         WithWorkspace((root, local, shared, engine, settings, catalog) =>
@@ -123,7 +157,7 @@ internal static class CloudSyncTests
             File.WriteAllText(localFile, "local-change"); File.SetLastWriteTimeUtc(localFile, DateTime.UtcNow);
             var result = engine.Synchronize(settings, catalog);
             Equal("local-change", File.ReadAllText(localFile));
-            Equal("local-change", File.ReadAllText(remoteFile)); Equal(1, result.Uploaded);
+            Equal("remote-change", File.ReadAllText(remoteFile)); Equal(1, result.Conflicts);
         });
     }
 
@@ -137,7 +171,7 @@ internal static class CloudSyncTests
             File.WriteAllText(localFile, "local-old"); File.SetLastWriteTimeUtc(localFile, DateTime.UtcNow.AddMinutes(-2));
             File.WriteAllText(remoteFile, "cloud-current"); File.SetLastWriteTimeUtc(remoteFile, DateTime.UtcNow);
             var result = engine.Synchronize(settings, catalog);
-            Equal("cloud-current", File.ReadAllText(localFile)); Equal(1, result.Downloaded);
+            Equal("local-old", File.ReadAllText(localFile)); Equal(1, result.Conflicts);
         });
     }
 

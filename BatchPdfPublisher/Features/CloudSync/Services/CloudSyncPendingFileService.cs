@@ -83,6 +83,11 @@ namespace BatchPdfPublisher.Services
                 var logicalPath = CloudSyncSource.NormalizeLogicalPath(relative.Substring(0, relative.Length - suffix.Length));
                 string target;
                 if (!catalog.TryResolve(logicalPath, out target) || ShouldDefer(target)) continue;
+                // A queued download cannot prove that the user has not saved a newer
+                // drawing since staging. Let the normal three-way comparison decide.
+                if (File.Exists(target) && !string.Equals(LocalFolderSyncEngine.ComputeHash(target),
+                    delete ? null : LocalFolderSyncEngine.ComputeHash(pending), StringComparison.OrdinalIgnoreCase)) continue;
+                if (delete) continue;
                 try
                 {
                     Backup(target, logicalPath, cancellationToken);

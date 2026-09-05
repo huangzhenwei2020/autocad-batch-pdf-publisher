@@ -99,6 +99,7 @@ namespace BatchPdfPublisher.Services
         private readonly HashSet<string> _unavailableRemotePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly List<CloudSyncOperation> _prepareWarnings = new List<CloudSyncOperation>();
         private CloudSyncCredential _credential;
+        private Dictionary<string, string> _remoteRevisions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         public BaiduNetdiskProvider(CloudSyncSettings settings)
             : this(settings, new CloudSyncCredentialStore(), new BaiduNetdiskClient()) { }
@@ -155,6 +156,7 @@ namespace BatchPdfPublisher.Services
             try { entries = _client.ListRecursiveAsync(_credential.AccessToken, RemoteRoot, progress, cancellationToken).GetAwaiter().GetResult(); }
             catch (IOException ex) when (ex.Message.Contains("31066") || ex.Message.Contains("-9")) { entries = new List<BaiduRemoteEntry>(); }
             var files = entries.Where(x => !x.IsDirectory).ToList();
+            _remoteRevisions = files.ToDictionary(x => RelativeRemotePath(x.Path), Revision, StringComparer.OrdinalIgnoreCase);
             _remoteHashes.Clear();
             _remoteCacheHashes.Clear();
             _allRemotePaths.Clear();
@@ -227,6 +229,13 @@ namespace BatchPdfPublisher.Services
                 if (string.IsNullOrWhiteSpace(remoteHash) && _remoteCacheHashes.TryGetValue(pair.Key, out cachedHash) &&
                     string.Equals(hash, cachedHash, StringComparison.OrdinalIgnoreCase)) continue;
                 progress?.Invoke(new CloudSyncProgress { Stage = "正在上传到百度网盘", LogicalPath = pair.Key });
+                var currentEntries = _client.ListRecursiveAsync(_credential.AccessToken, RemoteRoot, null, cancellationToken).GetAwaiter().GetResult();
+                var currentEntry = currentEntries.FirstOrDefault(x => !x.IsDirectory &&
+                    string.Equals(RelativeRemotePath(x.Path), pair.Key, StringComparison.OrdinalIgnoreCase));
+                string expectedRevision;
+                _remoteRevisions.TryGetValue(pair.Key, out expectedRevision);
+                if (!string.Equals(expectedRevision, currentEntry == null ? null : Revision(currentEntry), StringComparison.Ordinal))
+                    throw new InvalidOperationException("云端文件在本轮同步期间发生变化，已停止上传，请重新核对：" + pair.Key);
                 var transfer = Stopwatch.StartNew();
                 _client.UploadAsync(_credential.AccessToken, pair.Value, RemoteRoot + "/" + pair.Key.Replace('\\', '/'),
                     (done, total) => progress?.Invoke(new CloudSyncProgress { Stage = "正在上传到百度网盘", Direction = "上传", LogicalPath = pair.Key,
@@ -234,10 +243,8 @@ namespace BatchPdfPublisher.Services
             }
             foreach (var removed in _remoteHashes.Keys.Where(x => !current.ContainsKey(x) && !_unavailableRemotePaths.Contains(x)).ToList())
             {
+                // Cache eviction and retention cleanup are not user-authorized cloud deletions.
                 cancellationToken.ThrowIfCancellationRequested();
-                progress?.Invoke(new CloudSyncProgress { Stage = "正在删除百度网盘旧文件", LogicalPath = removed });
-                _client.DeleteAsync(_credential.AccessToken, RemoteRoot + "/" + removed.Replace('\\', '/'), cancellationToken).GetAwaiter().GetResult();
-                _allRemotePaths.Remove(removed);
             }
             _allRemotePaths.UnionWith(current.Keys);
             CloudSyncRemoteInventoryStore.Save(_allRemotePaths);
@@ -262,6 +269,11 @@ namespace BatchPdfPublisher.Services
             }
             else if (string.IsNullOrWhiteSpace(value.AccountIdentity)) { value.AccountIdentity = identity; _credentials.Save(Id, value); }
             return value;
+        }
+
+        private static string Revision(BaiduRemoteEntry entry)
+        {
+            return entry.FileSystemId + "|" + entry.Size + "|" + entry.ModifiedAtUnix + "|" + entry.Md5;
         }
 
         private static string EnsureAccountIdentity(CloudSyncCredential credential)
@@ -350,6 +362,23 @@ namespace BatchPdfPublisher.Services
         }
 
         public static CloudSyncResult Synchronize(CloudSyncSettings settings, CloudSyncSettingsStore store,
+            Action<CloudSyncProgress> progress, CancellationToken cancellationToken, bool forceSystemPackage)
+        {
+            using (var mutex = new Mutex(false, "WanluoArchitectureTools.CloudSync"))
+            {
+                var acquired = false;
+                try
+                {
+                    try { acquired = mutex.WaitOne(0); } catch (AbandonedMutexException) { acquired = true; }
+                    if (!acquired) throw new IOException("另一份 AutoCAD 正在同步，请稍后重试。");
+                    return SynchronizeLocked(settings, store, progress, cancellationToken, forceSystemPackage);
+                }
+                finally { if (acquired) mutex.ReleaseMutex(); }
+            }
+        }
+
+
+        private static CloudSyncResult SynchronizeLocked(CloudSyncSettings settings, CloudSyncSettingsStore store,
             Action<CloudSyncProgress> progress, CancellationToken cancellationToken, bool forceSystemPackage)
         {
             if (settings == null) throw new ArgumentNullException("settings");

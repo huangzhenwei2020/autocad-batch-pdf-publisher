@@ -147,6 +147,7 @@ namespace BatchPdfPublisher.Services
         internal static bool IncludeGeneralSetting(string relative)
         {
             var fileName = Path.GetFileName(relative);
+            if (fileName.IndexOf(".cloud-conflict-", StringComparison.OrdinalIgnoreCase) >= 0) return false;
             if (fileName.Equals("cloud-sync.settings.json", StringComparison.OrdinalIgnoreCase)) return false;
             if (fileName.Equals("当前项目.txt", StringComparison.OrdinalIgnoreCase)) return false;
             if (fileName.Equals("项目列表.json", StringComparison.OrdinalIgnoreCase)) return false;

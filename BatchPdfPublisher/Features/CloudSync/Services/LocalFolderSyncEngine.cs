@@ -196,7 +196,8 @@ namespace BatchPdfPublisher.Services
                 return;
             }
 
-            if (localHash != null && remoteHash != null)
+            if (baseHash == null && localHash != null && remoteHash != null &&
+                !logicalPath.StartsWith(CloudSystemPackageService.LogicalPrefix + "/", StringComparison.OrdinalIgnoreCase))
             {
                 var localTime = File.GetLastWriteTimeUtc(localPath); var remoteTime = File.GetLastWriteTimeUtc(remotePath);
                 var difference = localTime - remoteTime;
@@ -254,11 +255,8 @@ namespace BatchPdfPublisher.Services
 
             if (localHash == null && HashesEqual(remoteHash, baseHash))
             {
-                Backup(remotePath, Path.Combine(mirrorRoot, "历史版本"), logicalPath, settings, cancellationToken);
-                File.Delete(remotePath);
-                states.Remove(logicalPath);
-                result.Deleted++;
-                AddOperation(result, logicalPath, CloudSyncOperationKind.DeleteRemote, "本地删除已同步到共享目录。");
+                result.Warnings++;
+                AddOperation(result, logicalPath, CloudSyncOperationKind.None, "本机文件缺失，保留云端及同步基线；不自动传播删除。");
                 return;
             }
             if (remoteHash == null && HashesEqual(localHash, baseHash))

@@ -94,7 +94,7 @@ namespace BatchPdfPublisher.Services
             lock (LifecycleSync)
             {
                 if (_timer == null) _timer = new Timer(Execute, null, Timeout.Infinite, Timeout.Infinite);
-                _timer.Change(immediate ? 10 : 2500, Timeout.Infinite);
+                _timer.Change(immediate ? 10 : 2500, settings.AutoSync ? 300000 : Timeout.Infinite);
             }
         }
 
@@ -127,7 +127,8 @@ namespace BatchPdfPublisher.Services
                 {
                     if (!provider.IsReady) { Trace(provider.Status); return; }
                     var mirror = Path.Combine(provider.WorkingFolder, "万落建筑云同步");
-                    Directory.CreateDirectory(mirror); AddWatcher(mirror);
+                    if (string.Equals(provider.Id, "LocalFolder", StringComparison.OrdinalIgnoreCase))
+                    { Directory.CreateDirectory(mirror); AddWatcher(mirror); }
                 }
             }
             catch (Exception exception) { Trace(exception.Message); return; }

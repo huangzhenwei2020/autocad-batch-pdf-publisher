@@ -110,8 +110,19 @@ namespace BatchPdfPublisher.Services
                         {
                             using (var input = entry.Open())
                             using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None)) input.CopyTo(output);
-                            if (File.Exists(target)) File.Replace(temporary, target, target + ".bak", true);
-                            else File.Move(temporary, target);
+                            if (File.Exists(target))
+                            {
+                                if (!string.Equals(LocalFolderSyncEngine.ComputeHash(target), LocalFolderSyncEngine.ComputeHash(temporary), StringComparison.OrdinalIgnoreCase))
+                                {
+                                    var preserved = target + ".cloud-conflict-" + packageHash.Substring(0, 12);
+                                    if (!File.Exists(preserved)) File.Copy(temporary, preserved, false);
+                                    result.Warnings++;
+                                    result.Operations.Add(new CloudSyncOperation { Kind = CloudSyncOperationKind.Conflict,
+                                        LogicalPath = entry.FullName, Message = "系统配置不同，保留本机及云端冲突副本：" + preserved });
+                                }
+                                continue;
+                            }
+                            File.Move(temporary, target);
                             try { File.SetLastWriteTime(target, entry.LastWriteTime.LocalDateTime); } catch { }
                         }
                         finally { try { if (File.Exists(temporary)) File.Delete(temporary); } catch { } }
