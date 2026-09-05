@@ -63,6 +63,7 @@ internal static class CloudSyncTests
         Run("ValidatesBaiduOAuthCallback", ValidatesBaiduOAuthCallback);
         Run("DownloadsBaiduFileThroughMultimediaMetadata", DownloadsBaiduFileThroughMultimediaMetadata);
         Run("ValidatesBaiduDownloadAndCacheReceipt", ValidatesBaiduDownloadAndCacheReceipt);
+        Run("BuildsReadableBaiduProjectPaths", BuildsReadableBaiduProjectPaths);
         Run("DecryptsUnifiedBrokerToken", DecryptsUnifiedBrokerToken);
         Run("RecoversCorruptSettingsFromBackup", RecoversCorruptSettingsFromBackup);
         Run("ConcurrentSameFilePreservesBothBranches", CloudSyncSafetyTests.ConcurrentSameFilePreservesBothBranches);
@@ -893,6 +894,20 @@ internal static class CloudSyncTests
             Throws<InvalidDataException>(() => BaiduNetdiskProvider.ValidateDownloadedFile(entry, path));
         }
         finally { Directory.Delete(root, true); }
+    }
+
+    private static void BuildsReadableBaiduProjectPaths()
+    {
+        var settings = new CloudSyncSettings
+        {
+            ProjectMappings = new List<CloudSyncProjectMapping>
+            {
+                new CloudSyncProjectMapping { ProjectName = "桂林·山水湾四期", CloudId = "桂林·山水湾四期-eb699ebe23" }
+            }
+        };
+        Equal("/apps/万落建筑工具/项目文件/桂林·山水湾四期/CAD/（建筑）山水湾四期.dwg",
+            BaiduNetdiskProvider.ReadableProjectRemotePath(settings, "/apps/万落建筑工具",
+                "项目文件/桂林·山水湾四期-eb699ebe23/CAD/（建筑）山水湾四期.dwg"));
     }
 
     private static void OpenDrawingDoesNotBlockOtherFiles()

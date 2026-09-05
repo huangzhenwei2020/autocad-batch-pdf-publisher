@@ -195,6 +195,8 @@ namespace BatchPdfPublisher.Services
         }
 
         private ImmutableCloudJournal _journal;
+        private string _mirror;
+        private Dictionary<string, BaiduRemoteEntry> _remoteFiles;
         private int _networkDownloads;
         private long _networkDownloadBytes;
         public IEnumerable<string> BlockedPaths { get { return _journal == null ? Enumerable.Empty<string>() : _journal.Blocked; } }
@@ -206,8 +208,10 @@ namespace BatchPdfPublisher.Services
             Directory.CreateDirectory(WorkingFolder);
             _client.EnsureDirectoryAsync(_credential.AccessToken, RemoteRoot + "/" + ImmutableCloudJournal.RemoteDirectory, cancellationToken).GetAwaiter().GetResult();
             var entries = _client.ListRecursiveAsync(_credential.AccessToken, RemoteRoot, progress, cancellationToken).GetAwaiter().GetResult();
-            var mirror = Path.Combine(WorkingFolder, "万落建筑云同步");
-            _journal = new ImmutableCloudJournal(Path.Combine(WorkingFolder, ".v2"), mirror);
+            _remoteFiles = entries.Where(e => !e.IsDirectory).GroupBy(e => BaiduNetdiskClient.NormalizeRemotePath(e.Path), StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.Last(), StringComparer.OrdinalIgnoreCase);
+            _mirror = Path.Combine(WorkingFolder, "万落建筑云同步");
+            _journal = new ImmutableCloudJournal(Path.Combine(WorkingFolder, ".v2"), _mirror);
             _networkDownloads = 0; _networkDownloadBytes = 0;
             var paths = new List<string>();
             foreach (var entry in entries.Where(e => !e.IsDirectory))
@@ -228,19 +232,19 @@ namespace BatchPdfPublisher.Services
                 if (logical.StartsWith("历史版本/") || logical.StartsWith("冲突文件/") || logical.StartsWith(".wanluo-sync/")) continue;
                 var legacy = ImmutableCloudJournal.SafePath(Path.Combine(WorkingFolder, ".legacy"), logical);
                 if (!CachedFileMatches(entry, legacy)) DownloadVerified(entry, legacy, progress, cancellationToken);
-                var targetPath = ImmutableCloudJournal.SafePath(mirror, logical);
+                var targetPath = ImmutableCloudJournal.SafePath(_mirror, logical);
                 // Explicit user resolution remains pending until its immutable commit is published.
-                if (!File.Exists(ImmutableCloudJournal.SafePath(Path.Combine(mirror, ".wanluo-sync", "resolutions"), logical + ".json")))
+                if (!File.Exists(ImmutableCloudJournal.SafePath(Path.Combine(_mirror, ".wanluo-sync", "resolutions"), logical + ".json")))
                 {
                     Directory.CreateDirectory(Path.GetDirectoryName(targetPath));
                     File.Copy(legacy, targetPath, true);
                 }
                 paths.Add(relative);
             }
-            CloudSystemPackageService.ExpandLegacyToMirror(_settings, mirror, cancellationToken);
+            CloudSystemPackageService.ExpandLegacyToMirror(_settings, _mirror, cancellationToken);
             _journal.Materialize(CloudSyncCatalog.CreateDefault(_settings), cancellationToken);
             paths.AddRange(CloudSyncCatalog.CreateDefault(_settings).EnumerateFiles()
-                .Where(f => File.Exists(ImmutableCloudJournal.SafePath(mirror, f.LogicalPath))).Select(f => "万落建筑云同步/" + f.LogicalPath));
+                .Where(f => File.Exists(ImmutableCloudJournal.SafePath(_mirror, f.LogicalPath))).Select(f => "万落建筑云同步/" + f.LogicalPath));
             CloudSyncRemoteInventoryStore.Save(paths);
         }
 
@@ -267,16 +271,78 @@ namespace BatchPdfPublisher.Services
                     Message = "云端有并发版本，已保留全部分支；请在同步中心选择版本。" });
             }
             var commit = _journal.CreateCommit(CloudSyncCatalog.CreateDefault(_settings), cancellationToken);
-            if (commit == null) return;
-            var name = Path.GetFileName(commit);
-            progress?.Invoke(new CloudSyncProgress { Stage = "正在发布不可变版本包", LogicalPath = name });
-            // Content-addressed destination: simultaneous identical retries write identical bytes;
-            // different commits have different paths. No existing user/cloud file is overwritten.
-            _client.UploadAsync(_credential.AccessToken, commit, RemoteRoot + "/" + ImmutableCloudJournal.RemoteDirectory + "/" + name,
-                (done, total) => progress?.Invoke(new CloudSyncProgress { Stage = "正在发布不可变版本包", Direction = "上传", BytesCompleted = done, BytesTotal = total }),
-                cancellationToken).GetAwaiter().GetResult();
-            result.NetworkUploaded++; result.NetworkUploadedBytes += new FileInfo(commit).Length;
-            File.Copy(commit, Path.Combine(_journal.Archives, name), true);
+            if (commit != null)
+            {
+                var name = Path.GetFileName(commit);
+                progress?.Invoke(new CloudSyncProgress { Stage = "正在发布不可变版本包", LogicalPath = name });
+                // Content-addressed destination: simultaneous identical retries write identical bytes;
+                // different commits have different paths. No existing user/cloud file is overwritten.
+                _client.UploadAsync(_credential.AccessToken, commit, RemoteRoot + "/" + ImmutableCloudJournal.RemoteDirectory + "/" + name,
+                    (done, total) => progress?.Invoke(new CloudSyncProgress { Stage = "正在发布不可变版本包", Direction = "上传", BytesCompleted = done, BytesTotal = total }), cancellationToken).GetAwaiter().GetResult();
+                result.NetworkUploaded++; result.NetworkUploadedBytes += new FileInfo(commit).Length;
+                File.Copy(commit, Path.Combine(_journal.Archives, name), true);
+            }
+            PublishReadableProjectFiles(result, progress, cancellationToken);
+        }
+
+        private void PublishReadableProjectFiles(CloudSyncResult result, Action<CloudSyncProgress> progress, CancellationToken token)
+        {
+            if (!_settings.SyncProjectFiles || _settings.ProjectMappings == null) return;
+            var changed = new HashSet<string>(result.Operations.Where(o => o.Kind == CloudSyncOperationKind.Upload || o.Kind == CloudSyncOperationKind.Download)
+                .Select(o => o.LogicalPath), StringComparer.OrdinalIgnoreCase);
+            foreach (var file in CloudSyncCatalog.CreateDefault(_settings).EnumerateFiles()
+                .Where(f => f.LogicalPath.StartsWith("项目文件/", StringComparison.OrdinalIgnoreCase)))
+            {
+                token.ThrowIfCancellationRequested();
+                if (_journal.Blocked.Contains(file.LogicalPath)) continue;
+                var source = ImmutableCloudJournal.SafePath(_mirror, file.LogicalPath);
+                if (!File.Exists(source)) continue;
+                var remote = ReadableProjectRemotePath(_settings, RemoteRoot, file.LogicalPath);
+                BaiduRemoteEntry existing;
+                var needsUpload = changed.Contains(file.LogicalPath) || _remoteFiles == null || !_remoteFiles.TryGetValue(remote, out existing) || existing.Size != new FileInfo(source).Length;
+                if (!needsUpload) continue;
+                try
+                {
+                    progress?.Invoke(new CloudSyncProgress { Stage = "正在更新网盘可读项目文件", LogicalPath = remote });
+                    _client.UploadAsync(_credential.AccessToken, source, remote,
+                        (done, total) => progress?.Invoke(new CloudSyncProgress { Stage = "正在更新网盘可读项目文件", Direction = "上传", LogicalPath = file.LogicalPath, BytesCompleted = done, BytesTotal = total }),
+                        token).GetAwaiter().GetResult();
+                    result.NetworkUploaded++; result.NetworkUploadedBytes += new FileInfo(source).Length;
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception exception)
+                {
+                    result.Warnings++;
+                    result.Operations.Add(new CloudSyncOperation { LogicalPath = file.LogicalPath, Kind = CloudSyncOperationKind.None,
+                        Message = "安全版本已保存，但网盘可读副本更新失败：" + exception.Message });
+                }
+            }
+        }
+
+        internal static string ReadableProjectRemotePath(CloudSyncSettings settings, string remoteRoot, string logicalPath)
+        {
+            var normalized = CloudSyncSource.NormalizeLogicalPath(logicalPath);
+            const string prefix = "项目文件/";
+            if (!normalized.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) throw new IOException("不是项目文件路径。");
+            var remainder = normalized.Substring(prefix.Length);
+            var slash = remainder.IndexOf('/');
+            if (slash <= 0 || slash == remainder.Length - 1) throw new IOException("项目文件路径不完整。");
+            var cloudId = remainder.Substring(0, slash);
+            var mapping = (settings.ProjectMappings ?? new List<CloudSyncProjectMapping>()).FirstOrDefault(item => item != null &&
+                string.Equals(item.CloudId, cloudId, StringComparison.OrdinalIgnoreCase));
+            var projectName = mapping == null || string.IsNullOrWhiteSpace(mapping.ProjectName) ? cloudId : mapping.ProjectName.Trim();
+            var duplicate = (settings.ProjectMappings ?? new List<CloudSyncProjectMapping>()).Count(item => item != null &&
+                string.Equals((item.ProjectName ?? string.Empty).Trim(), projectName, StringComparison.OrdinalIgnoreCase)) > 1;
+            if (duplicate) projectName += "（" + cloudId.Substring(0, Math.Min(6, cloudId.Length)) + "）";
+            var relative = string.Join("/", remainder.Substring(slash + 1).Split('/').Select(ReadableSegment));
+            return BaiduNetdiskClient.NormalizeRemotePath(remoteRoot + "/项目文件/" + ReadableSegment(projectName) + "/" + relative);
+        }
+
+        private static string ReadableSegment(string value)
+        {
+            var invalid = new[] { '\\', ':', '*', '?', '"', '<', '>', '|' };
+            var text = new string((value ?? string.Empty).Trim().Select(c => invalid.Contains(c) || char.IsControl(c) ? '_' : c).ToArray()).TrimEnd('.', ' ');
+            return string.IsNullOrWhiteSpace(text) || text == "." || text == ".." ? "未命名" : text;
         }
 
         private CloudSyncCredential EnsureCredential(CancellationToken cancellationToken)
