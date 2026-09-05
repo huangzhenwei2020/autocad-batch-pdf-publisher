@@ -30,7 +30,7 @@ namespace BatchPdfPublisherLauncher
         private const string StairPayloadR24ResourceName = "WanluoArchitectureTools.StairDetail.R24.zip";
         private const string StairPayloadR25ResourceName = "WanluoArchitectureTools.StairDetail.R25.zip";
         private static readonly string PackageRoot = Path.GetFullPath(AppDomain.CurrentDomain.BaseDirectory);
-        private static readonly string UserDataRoot = Path.Combine(PackageRoot, "用户配置文件");
+        private static readonly string UserDataRoot = ResolveUserDataRoot();
         private static readonly string LaunchLogPath = Path.Combine(EnsureDirectory(Path.Combine(UserDataRoot, "Logs")), "launcher.log");
         private static readonly string LoadReceiptPath = Path.Combine(EnsureDirectory(Path.Combine(UserDataRoot, "Temp")), "WanluoArchitectureTools.loaded.log");
 
@@ -40,6 +40,7 @@ namespace BatchPdfPublisherLauncher
             try
             {
                 Environment.SetEnvironmentVariable("WANLUO_ARCHITECTURE_TOOLS_ROOT", PackageRoot, EnvironmentVariableTarget.Process);
+                Environment.SetEnvironmentVariable("WANLUO_ARCHITECTURE_TOOLS_USER_DATA_ROOT", UserDataRoot, EnvironmentVariableTarget.Process);
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
                 Log("启动器开始运行");
@@ -75,6 +76,7 @@ namespace BatchPdfPublisherLauncher
                 var pluginAssembly = InstallPlugin(payload, options.InstallPermanently);
                 var architectureAssembly = InstallArchitectureAssistant(launcherDirectory, payload.Band, options.InstallPermanently);
                 var stairAssembly = InstallStairDetail(launcherDirectory, payload.Band, options.InstallPermanently);
+                PrepareStairHatchPatterns(stairAssembly);
                 ValidateInstalledComponents(payload.Band, pluginAssembly, architectureAssembly, stairAssembly);
                 if (options.InstallPermanently) InstallAutoLoadBundle(pluginAssembly, payload.PdfDependencyPath, payload.Band, architectureAssembly, stairAssembly);
                 Log((options.InstallPermanently ? "已部署插件: " : "便携加载插件: ") + pluginAssembly);
@@ -418,7 +420,10 @@ namespace BatchPdfPublisherLauncher
             {
                 FileName = platform.Executable,
                 Arguments = platform.Arguments + " /b \"" + startupScript + "\"",
-                WorkingDirectory = platform.WorkingDirectory,
+                // AutoCAD resolves stand-alone custom PAT files from the process startup
+                // directory and caches that lookup. Start in the plugin's portable hatch
+                // asset folder; no AutoCAD support folder or registry profile is modified.
+                WorkingDirectory = EnsureDirectory(Path.Combine(UserDataRoot, "填充素材")),
                 UseShellExecute = true
             });
 
@@ -438,10 +443,11 @@ namespace BatchPdfPublisherLauncher
             if (Directory.Exists(releases)) Directory.Delete(releases, true);
             TryDelete(LastPlatformPath());
             var suiteFiles = Path.Combine(appData, "WanluoArchitectureTools");
-            if (Directory.Exists(suiteFiles)) Directory.Delete(suiteFiles, true);
+            var runtimeFiles = Path.Combine(suiteFiles, "用户配置文件", "运行文件");
+            if (Directory.Exists(runtimeFiles)) Directory.Delete(runtimeFiles, true);
             var autodeskRoot = Path.Combine(appData, "Autodesk");
             if (Directory.Exists(autodeskRoot))
-                foreach (var plotters in Directory.GetDirectories(autodeskRoot, "Plotters", SearchOption.AllDirectories))
+                foreach (var plotters in EnumerateDirectoriesSafely(autodeskRoot, "Plotters"))
                 {
                     TryDelete(Path.Combine(plotters, PlotterConfigName));
                     TryDelete(Path.Combine(plotters, "PMP Files", PlotterMediaName));
@@ -459,6 +465,42 @@ namespace BatchPdfPublisherLauncher
         }
 
         private static void TryDelete(string path) { try { if (File.Exists(path)) File.Delete(path); } catch { } }
+
+        private static string ResolveUserDataRoot()
+        {
+            var stableRoot = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "WanluoArchitectureTools",
+                "用户配置文件");
+            Directory.CreateDirectory(stableRoot);
+            MergePortableUserData(Path.Combine(PackageRoot, "用户配置文件"), stableRoot);
+            return stableRoot;
+        }
+
+        private static void MergePortableUserData(string sourceRoot, string targetRoot)
+        {
+            if (!Directory.Exists(sourceRoot) || PathsEqual(sourceRoot, targetRoot)) return;
+            foreach (var sourceFile in Directory.GetFiles(sourceRoot, "*", SearchOption.AllDirectories))
+            {
+                var relative = sourceFile.Substring(sourceRoot.TrimEnd(Path.DirectorySeparatorChar).Length).TrimStart(Path.DirectorySeparatorChar);
+                var topLevel = relative.Split(Path.DirectorySeparatorChar)[0];
+                if (new[] { "运行文件", "Logs", "Temp" }.Contains(topLevel, StringComparer.OrdinalIgnoreCase)) continue;
+                var targetFile = Path.Combine(targetRoot, relative);
+                try
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(targetFile));
+                    if (!File.Exists(targetFile)) File.Copy(sourceFile, targetFile, false);
+                }
+                catch { }
+            }
+        }
+
+        private static bool PathsEqual(string left, string right)
+        {
+            return string.Equals(Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar),
+                Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar),
+                StringComparison.OrdinalIgnoreCase);
+        }
 
         private static bool WaitForCadProcess(int seconds)
         {
@@ -549,7 +591,7 @@ namespace BatchPdfPublisherLauncher
         {
             var autodeskRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Autodesk");
             if (!Directory.Exists(autodeskRoot)) throw new DirectoryNotFoundException("未找到 AutoCAD 用户配置目录。");
-            var plotterDirectories = Directory.GetDirectories(autodeskRoot, "Plotters", SearchOption.AllDirectories)
+            var plotterDirectories = EnumerateDirectoriesSafely(autodeskRoot, "Plotters")
                 .Where(path => path.IndexOf("AutoCAD ", StringComparison.OrdinalIgnoreCase) >= 0)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
@@ -567,6 +609,39 @@ namespace BatchPdfPublisherLauncher
                 BindPmp(targetPc3, targetPmp);
                 BindPmpSelfPath(targetPmp);
                 Log("已部署毫米纸张库: " + plotterDirectory);
+            }
+        }
+
+        private static IEnumerable<string> EnumerateDirectoriesSafely(string root, string wantedName)
+        {
+            var pending = new Stack<string>();
+            pending.Push(root);
+            while (pending.Count > 0)
+            {
+                var directory = pending.Pop();
+                string[] children;
+                try { children = Directory.GetDirectories(directory); }
+                catch (UnauthorizedAccessException exception)
+                {
+                    Log("跳过无权访问的 Autodesk 配置目录: " + directory + "；" + exception.Message);
+                    continue;
+                }
+                catch (IOException exception)
+                {
+                    Log("跳过无法读取的 Autodesk 配置目录: " + directory + "；" + exception.Message);
+                    continue;
+                }
+                foreach (var child in children)
+                {
+                    FileAttributes attributes;
+                    try { attributes = File.GetAttributes(child); }
+                    catch (UnauthorizedAccessException) { continue; }
+                    catch (IOException) { continue; }
+                    if ((attributes & FileAttributes.ReparsePoint) != 0) continue;
+                    if (string.Equals(Path.GetFileName(child), wantedName, StringComparison.OrdinalIgnoreCase))
+                        yield return child;
+                    pending.Push(child);
+                }
             }
         }
 
@@ -783,6 +858,27 @@ namespace BatchPdfPublisherLauncher
             return Path.Combine(target, hostName);
         }
 
+        private static void PrepareStairHatchPatterns(string stairAssembly)
+        {
+            if (string.IsNullOrWhiteSpace(stairAssembly) || !File.Exists(stairAssembly)) return;
+            var source = Path.Combine(Path.GetDirectoryName(stairAssembly), "HatchPatterns");
+            var target = EnsureDirectory(Path.Combine(UserDataRoot, "填充素材"));
+            if (Directory.Exists(source))
+            {
+                foreach (var file in Directory.GetFiles(source, "*.pat"))
+                    File.Copy(file, Path.Combine(target, Path.GetFileName(file)), true);
+            }
+            var supportPath = Environment.GetEnvironmentVariable("ACAD") ?? string.Empty;
+            if (!supportPath.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries)
+                .Any(path => string.Equals(path.Trim(), target, StringComparison.OrdinalIgnoreCase)))
+            {
+                Environment.SetEnvironmentVariable("ACAD",
+                    string.IsNullOrWhiteSpace(supportPath) ? target : supportPath.TrimEnd(';') + ";" + target,
+                    EnvironmentVariableTarget.Process);
+            }
+            Log("已部署楼梯填充素材并加入 CAD 支持路径: " + target);
+        }
+
         private static string ExtractEmbeddedStairDetail(string band, string hostName)
         {
             var resourceName = string.Equals(band, "R24", StringComparison.OrdinalIgnoreCase) ? StairPayloadR24ResourceName :
@@ -972,7 +1068,7 @@ namespace BatchPdfPublisherLauncher
                 .ToList();
             var package = new StringBuilder();
             package.AppendLine("<?xml version=\"1.0\" encoding=\"utf-8\"?>");
-            package.AppendLine("<ApplicationPackage SchemaVersion=\"1.0\" AutodeskProduct=\"AutoCAD\" Name=\"WanluoArchitectureTools\" AppVersion=\"1.1.1\" ProductCode=\"{7B9E2D72-1C3E-4F3D-9C0C-7D5D3E5A0A01}\">");
+            package.AppendLine("<ApplicationPackage SchemaVersion=\"1.0\" AutodeskProduct=\"AutoCAD\" Name=\"WanluoArchitectureTools\" AppVersion=\"" + WanluoArchitectureTools.ProductVersion.Semantic + "\" ProductCode=\"{7B9E2D72-1C3E-4F3D-9C0C-7D5D3E5A0A01}\">");
             package.AppendLine("  <CompanyDetails Name=\"万落建筑工具\" />");
             foreach (var installedBand in installedBands)
             {

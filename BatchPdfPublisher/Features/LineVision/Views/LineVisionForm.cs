@@ -1,0 +1,464 @@
+using Autodesk.AutoCAD.ApplicationServices;
+using BatchPdfPublisher.Models;
+using BatchPdfPublisher.Services;
+using Microsoft.VisualBasic;
+using System;
+using System.Drawing;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
+using System.Threading;
+using System.Windows.Forms;
+
+namespace BatchPdfPublisher.Views
+{
+    internal sealed class LineVisionForm : DpiAwareForm
+    {
+        private readonly Document _document;
+        private readonly ModelessDocumentBinding _documentBinding;
+        private readonly TextBox _path = new TextBox { Width = 330, ReadOnly = true };
+        private readonly ComboBox _profile = DropDown(150);
+        private readonly ComboBox _view = DropDown(118);
+        private readonly ComboBox _vectorMode = DropDown(132);
+        private readonly TextBox _threshold = Box("0", 55), _minimum = Box("18", 55), _closeGap = Box("2", 55), _collinear = Box("3", 55), _mergeGap = Box("5", 55), _orthogonalTolerance = Box("2", 45), _scale = Box("1", 82);
+        private readonly CheckBox _diagonals = new CheckBox { Text = "保留任意角度线", Checked = true, AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
+        private readonly CheckBox _recognizeText = new CheckBox { Text = "识别文字", Checked = true, AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
+        private readonly CheckBox _maskText = new CheckBox { Text = "线稿中遮罩文字", Checked = true, AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
+        private readonly CheckBox _insertText = new CheckBox { Text = "生成CAD文字", Checked = true, AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
+        private readonly CheckBox _buildPolylines = new CheckBox { Text = "连接为折线", Checked = true, AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
+        private readonly CheckBox _detectWallFills = new CheckBox { Text = "识别墙体填充", Checked = true, AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
+        private readonly ComboBox _ocrLanguage = DropDown(118);
+        private readonly TextBox _ocrConfidence = Box("0.70", 55), _maskExpansion = Box("2", 45);
+        private readonly TextBox _wallMinimum = Box("3", 42), _wallMaximum = Box("80", 48);
+        private readonly Label _range = new Label { Text = "范围：整张图片", AutoSize = true, ForeColor = Color.FromArgb(60, 75, 92), Margin = new Padding(8, 8, 0, 0) };
+        private readonly Label _status = new Label { Text = "请选择图片。", AutoSize = true, ForeColor = Color.FromArgb(50, 65, 80), Margin = new Padding(0, 8, 0, 0) };
+        private readonly ProgressBar _progress = new ProgressBar { Dock = DockStyle.Fill, Minimum = 0, Maximum = 100 };
+        private readonly LineVisionPreviewControl _preview = new LineVisionPreviewControl();
+        private readonly ListView _objects = new ListView { Dock = DockStyle.Fill, View = View.Details, CheckBoxes = true, FullRowSelect = true, GridLines = true, HideSelection = false };
+        private readonly ListView _circles = new ListView { Dock = DockStyle.Fill, View = View.Details, CheckBoxes = true, FullRowSelect = true, GridLines = true, HideSelection = false };
+        private readonly ListView _arcs = new ListView { Dock = DockStyle.Fill, View = View.Details, CheckBoxes = true, FullRowSelect = true, GridLines = true, HideSelection = false };
+        private readonly ListView _polylines = new ListView { Dock = DockStyle.Fill, View = View.Details, CheckBoxes = true, FullRowSelect = true, GridLines = true, HideSelection = false };
+        private readonly ListView _walls = new ListView { Dock = DockStyle.Fill, View = View.Details, CheckBoxes = true, FullRowSelect = true, GridLines = true, HideSelection = false };
+        private readonly DataGridView _texts = new DataGridView { Dock = DockStyle.Fill, AutoGenerateColumns = false, AllowUserToAddRows = false, AllowUserToDeleteRows = false, RowHeadersVisible = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false, BackgroundColor = Color.White };
+        private Rectangle? _region;
+        private LineVisionResult _result;
+        private bool _syncingObjects;
+        private CancellationTokenSource _cancellation;
+        private readonly Button _analyze = ButtonFor("分析图像");
+        private readonly Button _cancelAnalysis = ButtonFor("取消分析");
+
+        private static string SettingsPath { get { return UserDataPaths.SettingsFile("line-vision.ini"); } }
+
+        public LineVisionForm(Document document)
+        {
+            _document = document ?? throw new ArgumentNullException("document");
+            _documentBinding = new ModelessDocumentBinding(this, document);
+            Text = "图像转 CAD"; StartPosition = FormStartPosition.CenterScreen; ClientSize = new Size(1220, 760); MinimumSize = new Size(940, 610);
+            Font = new Font("Microsoft YaHei UI", 9f); BackColor = Color.White;
+            Build(); LoadSettings();
+            FormClosed += (s, e) => { if (_cancellation != null) _cancellation.Cancel(); SaveSettings(); if (_result != null) _result.Dispose(); };
+        }
+
+        private void Build()
+        {
+            _profile.Items.AddRange(new object[] { "建筑平面图", "普通线稿", "手绘草图" }); _profile.SelectedIndex = 0;
+            _profile.SelectedIndexChanged += (s, e) => ApplyProfileDefaults();
+            _view.Items.AddRange(new object[] { "彩色识别结果", "原始图像", "黑白预处理" }); _view.SelectedIndex = 0;
+            _vectorMode.Items.AddRange(new object[] { "建筑中心线", "保留轮廓", "混合识别", "兼容旧算法" }); _vectorMode.SelectedIndex = 0;
+            _ocrLanguage.Items.AddRange(new object[] { "简体中文", "英文" }); _ocrLanguage.SelectedIndex = 0;
+            _view.SelectedIndexChanged += (s, e) =>
+            {
+                _preview.PreviewMode = _view.SelectedIndex == 1 ? LineVisionPreviewMode.Original : _view.SelectedIndex == 2 ? LineVisionPreviewMode.Binary : LineVisionPreviewMode.Result;
+                _preview.Fit(); _preview.Invalidate();
+            };
+            _preview.RegionSelected += (s, e) => { _region = e.Region; _range.Text = string.Format(CultureInfo.InvariantCulture, "范围：X {0}，Y {1}，{2} × {3} px", e.Region.X, e.Region.Y, e.Region.Width, e.Region.Height); };
+            _preview.CalibrationSelected += Calibrate;
+
+            var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3 };
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize)); root.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));
+            var top = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, Padding = new Padding(10, 8, 10, 6), BackColor = Color.FromArgb(245, 247, 250) };
+            var fileRow = Row(); fileRow.Controls.Add(LabelFor("图片")); fileRow.Controls.Add(_path);
+            var choose = ButtonFor("选择图片"); choose.Click += (s, e) => ChooseImage(); fileRow.Controls.Add(choose);
+            fileRow.Controls.Add(LabelFor("模式")); fileRow.Controls.Add(_profile);
+            fileRow.Controls.Add(LabelFor("矢量算法")); fileRow.Controls.Add(_vectorMode);
+            var whole = ButtonFor("整图"); whole.Click += (s, e) => UseWholeImage(); fileRow.Controls.Add(whole);
+            var crop = ButtonFor("框选范围"); crop.Click += (s, e) => BeginCrop(); fileRow.Controls.Add(crop); fileRow.Controls.Add(_range); top.Controls.Add(fileRow);
+
+            var parameterRow = Row();
+            Add(parameterRow, "阈值(0自动)", _threshold); Add(parameterRow, "最短线", _minimum); Add(parameterRow, "补断线", _closeGap); Add(parameterRow, "共线容差", _collinear); Add(parameterRow, "合并间隙", _mergeGap);
+            Add(parameterRow, "横竖吸附(°)", _orthogonalTolerance);
+            parameterRow.Controls.Add(_diagonals); parameterRow.Controls.Add(_buildPolylines); parameterRow.Controls.Add(_detectWallFills); Add(parameterRow, "墙厚(px)", _wallMinimum); parameterRow.Controls.Add(LabelFor("至")); parameterRow.Controls.Add(_wallMaximum); parameterRow.Controls.Add(LabelFor("预览")); parameterRow.Controls.Add(_view);
+            _analyze.BackColor = Color.FromArgb(32, 113, 196); _analyze.ForeColor = Color.White; _analyze.Click += async (s, e) => await AnalyzeAsync(); parameterRow.Controls.Add(_analyze);
+            _cancelAnalysis.Enabled = false; _cancelAnalysis.Click += (s, e) => { if (_cancellation != null) _cancellation.Cancel(); }; parameterRow.Controls.Add(_cancelAnalysis); top.Controls.Add(parameterRow);
+
+            var scaleRow = Row(); Add(scaleRow, "CAD单位/像素", _scale);
+            var calibrate = ButtonFor("两点标定"); calibrate.Click += (s, e) => _preview.BeginCalibration(); scaleRow.Controls.Add(calibrate);
+            var fit = ButtonFor("适合窗口"); fit.Click += (s, e) => _preview.Fit(); scaleRow.Controls.Add(fit);
+            var all = ButtonFor("全选"); all.Click += (s, e) => SetAll(true); scaleRow.Controls.Add(all);
+            var none = ButtonFor("全不选"); none.Click += (s, e) => SetAll(false); scaleRow.Controls.Add(none);
+            scaleRow.Controls.Add(new Label { Text = "横竖吸附范围外保持原角度；绿色水平 · 蓝色垂直 · 黄色斜线", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(12, 8, 0, 0) }); top.Controls.Add(scaleRow);
+            var ocrRow = Row(); ocrRow.Controls.Add(_recognizeText); Add(ocrRow, "语言", _ocrLanguage); Add(ocrRow, "最低置信度", _ocrConfidence); ocrRow.Controls.Add(_maskText); Add(ocrRow, "遮罩扩边(px)", _maskExpansion); ocrRow.Controls.Add(_insertText);
+            ocrRow.Controls.Add(new Label { Text = "文字可在右侧“文字”页校正后再插入", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(12, 8, 0, 0) }); top.Controls.Add(ocrRow);
+            root.Controls.Add(top, 0, 0);
+
+            _objects.Columns.Add("生成", 48); _objects.Columns.Add("类型", 72); _objects.Columns.Add("角度", 58); _objects.Columns.Add("长度(px)", 82); _objects.Columns.Add("置信度", 70); _objects.Columns.Add("坐标", 250);
+            _objects.ItemChecked += (s, e) =>
+            {
+                if (_syncingObjects || _result == null || e.Item.Index < 0 || e.Item.Index >= _result.Segments.Count) return;
+                _result.Segments[e.Item.Index].IsEnabled = e.Item.Checked; _preview.Invalidate(); UpdateStatus();
+            };
+            _objects.SelectedIndexChanged += (s, e) => { _preview.SelectedSegmentIndex = _objects.SelectedIndices.Count == 0 ? -1 : _objects.SelectedIndices[0]; _preview.Invalidate(); };
+            BuildTextGrid();
+            var tabs = new TabControl { Dock = DockStyle.Fill };
+            var linePage = new TabPage("线段"); linePage.Controls.Add(_objects); tabs.TabPages.Add(linePage);
+            BuildPolylineList(); var polylinePage = new TabPage("折线"); polylinePage.Controls.Add(_polylines); tabs.TabPages.Add(polylinePage);
+            BuildWallList(); var wallPage = new TabPage("墙体填充"); wallPage.Controls.Add(_walls); tabs.TabPages.Add(wallPage);
+            BuildCircleList();
+            var circlePage = new TabPage("圆形"); circlePage.Controls.Add(_circles); tabs.TabPages.Add(circlePage);
+            BuildArcList();
+            var arcPage = new TabPage("圆弧"); arcPage.Controls.Add(_arcs); tabs.TabPages.Add(arcPage);
+            var textPage = new TabPage("文字"); textPage.Controls.Add(_texts); tabs.TabPages.Add(textPage);
+            var split = new SplitContainer { Dock = DockStyle.Fill, FixedPanel = FixedPanel.Panel2, SplitterDistance = 850, BackColor = Color.FromArgb(220, 226, 232) };
+            split.Panel1.Controls.Add(_preview); split.Panel2.Controls.Add(tabs); root.Controls.Add(split, 0, 1);
+
+            var footer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, Padding = new Padding(12, 7, 12, 7), BackColor = Color.FromArgb(245, 247, 250) };
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            footer.Controls.Add(_status, 0, 0); footer.Controls.Add(_progress, 1, 0);
+            var actions = new FlowLayoutPanel { AutoSize = true, WrapContents = false, FlowDirection = FlowDirection.RightToLeft };
+            var closeButton = ButtonFor("关闭"); closeButton.Click += (s, e) => Close(); actions.Controls.Add(closeButton);
+            var insert = ButtonFor("插入 CAD"); insert.BackColor = Color.FromArgb(32, 113, 196); insert.ForeColor = Color.White; insert.Click += async (s, e) => await InsertAsync(); actions.Controls.Add(insert);
+            footer.Controls.Add(actions, 2, 0); root.Controls.Add(footer, 0, 2); Controls.Add(root);
+        }
+
+        private void BuildTextGrid()
+        {
+            _texts.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Enabled", HeaderText = "生成", Width = 48 });
+            _texts.Columns.Add(new DataGridViewTextBoxColumn { Name = "Text", HeaderText = "识别文字", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill });
+            _texts.Columns.Add(new DataGridViewTextBoxColumn { Name = "Confidence", HeaderText = "置信度", Width = 68, ReadOnly = true });
+            _texts.Columns.Add(new DataGridViewTextBoxColumn { Name = "Position", HeaderText = "位置", Width = 95, ReadOnly = true });
+            _texts.CurrentCellDirtyStateChanged += (s, e) => { if (_texts.IsCurrentCellDirty) _texts.CommitEdit(DataGridViewDataErrorContexts.Commit); };
+            _texts.DataError += (s, e) => { e.ThrowException = false; };
+            _texts.CellValueChanged += TextCellValueChanged;
+            _texts.SelectionChanged += (s, e) => { _preview.SelectedTextIndex = _texts.CurrentRow == null ? -1 : _texts.CurrentRow.Index; _preview.Invalidate(); };
+        }
+
+        private void BuildPolylineList()
+        {
+            _polylines.Columns.Add("生成", 48); _polylines.Columns.Add("来源", 88); _polylines.Columns.Add("节点", 55); _polylines.Columns.Add("闭合", 55); _polylines.Columns.Add("置信度", 70);
+            _polylines.ItemChecked += (s, e) =>
+            {
+                if (_syncingObjects || _result == null || e.Item.Index < 0 || e.Item.Index >= _result.Polylines.Count) return;
+                _result.Polylines[e.Item.Index].IsEnabled = e.Item.Checked; _preview.Invalidate(); UpdateStatus();
+            };
+            _polylines.SelectedIndexChanged += (s, e) => { _preview.SelectedPolylineIndex = _polylines.SelectedIndices.Count == 0 ? -1 : _polylines.SelectedIndices[0]; _preview.Invalidate(); };
+        }
+
+        private void BuildWallList()
+        {
+            _walls.Columns.Add("填充", 48); _walls.Columns.Add("平均厚度", 78); _walls.Columns.Add("孔洞", 50); _walls.Columns.Add("置信度", 70);
+            _walls.ItemChecked += (s, e) => { if (_syncingObjects || _result == null || e.Item.Index < 0 || e.Item.Index >= _result.WallRegions.Count) return; _result.WallRegions[e.Item.Index].IsEnabled = e.Item.Checked; _preview.Invalidate(); UpdateStatus(); };
+            _walls.SelectedIndexChanged += (s, e) => { _preview.SelectedWallIndex = _walls.SelectedIndices.Count == 0 ? -1 : _walls.SelectedIndices[0]; _preview.Invalidate(); };
+        }
+
+        private void BuildCircleList()
+        {
+            _circles.Columns.Add("生成", 48); _circles.Columns.Add("半径(px)", 82); _circles.Columns.Add("置信度", 70); _circles.Columns.Add("圆心", 120);
+            _circles.ItemChecked += (s, e) =>
+            {
+                if (_syncingObjects || _result == null || e.Item.Index < 0 || e.Item.Index >= _result.Circles.Count) return;
+                _result.Circles[e.Item.Index].IsEnabled = e.Item.Checked; _preview.Invalidate(); UpdateStatus();
+            };
+            _circles.SelectedIndexChanged += (s, e) => { _preview.SelectedCircleIndex = _circles.SelectedIndices.Count == 0 ? -1 : _circles.SelectedIndices[0]; _preview.Invalidate(); };
+        }
+
+        private void BuildArcList()
+        {
+            _arcs.Columns.Add("生成", 48); _arcs.Columns.Add("半径(px)", 75); _arcs.Columns.Add("圆心角", 68); _arcs.Columns.Add("置信度", 70); _arcs.Columns.Add("圆心", 110);
+            _arcs.ItemChecked += (s, e) =>
+            {
+                if (_syncingObjects || _result == null || e.Item.Index < 0 || e.Item.Index >= _result.Arcs.Count) return;
+                _result.Arcs[e.Item.Index].IsEnabled = e.Item.Checked; _preview.Invalidate(); UpdateStatus();
+            };
+            _arcs.SelectedIndexChanged += (s, e) => { _preview.SelectedArcIndex = _arcs.SelectedIndices.Count == 0 ? -1 : _arcs.SelectedIndices[0]; _preview.Invalidate(); };
+        }
+
+        private void ChooseImage()
+        {
+            if (_cancellation != null) _cancellation.Cancel();
+            using (var dialog = new OpenFileDialog { Filter = "支持的图片|*.png;*.jpg;*.jpeg;*.bmp;*.tif;*.tiff|所有文件|*.*", Title = "选择要转换为 CAD 的图片" })
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                try { _path.Text = dialog.FileName; _region = null; _range.Text = "范围：整张图片"; _preview.LoadInput(dialog.FileName); _view.SelectedIndex = 1; _status.Text = "图片已载入，请选择整图或框选范围后分析。"; }
+                catch (Exception exception) { MessageBox.Show(this, "无法打开图片：\r\n" + exception.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+            }
+        }
+
+        private void UseWholeImage()
+        {
+            _region = null; _range.Text = "范围：整张图片";
+            if (File.Exists(_path.Text)) { try { _preview.LoadInput(_path.Text); _view.SelectedIndex = 1; } catch { } }
+        }
+
+        private void BeginCrop()
+        {
+            if (!File.Exists(_path.Text)) { MessageBox.Show(this, "请先选择图片。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+            try { _preview.LoadInput(_path.Text); _view.SelectedIndex = 1; _preview.BeginRegionSelection(); _status.Text = "请在图片上按住左键框选识别范围。"; }
+            catch (Exception exception) { MessageBox.Show(this, exception.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+        }
+
+        private async Task AnalyzeAsync()
+        {
+            if (!File.Exists(_path.Text)) { MessageBox.Show(this, "请先选择图片。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+            LineVisionSettings settings;
+            try { settings = ReadSettings(); }
+            catch (Exception exception) { MessageBox.Show(this, exception.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            if (_cancellation != null) _cancellation.Cancel();
+            _cancellation = new CancellationTokenSource();
+            var cancellation = _cancellation;
+            var path = _path.Text; var region = _region;
+            _analyze.Enabled = false; _cancelAnalysis.Enabled = true; _progress.Value = 0; _status.Text = "准备分析……";
+            try
+            {
+                var progress = new Progress<Tuple<int, string>>(value => { _progress.Value = Math.Max(0, Math.Min(100, value.Item1)); _status.Text = value.Item2; });
+                var recognized = new LineVisionOcrPageResult();
+                string ocrWarning = null;
+                if (_recognizeText.Checked)
+                {
+                    try
+                    {
+                        ((IProgress<Tuple<int, string>>)progress).Report(Tuple.Create(4, "正在识别文字……"));
+                        var engine = new LineVisionOcrWorkerClient();
+                        recognized = await engine.RecognizeAsync(path, new LineVisionOcrOptions
+                        {
+                            Language = _ocrLanguage.SelectedIndex == 1 ? "en-US" : "zh-Hans-CN",
+                            MinimumConfidence = ParseDouble(_ocrConfidence, "最低置信度", 0d, 1d),
+                            SourceRegion = region,
+                            MaskExpansionPixels = ParseInt(_maskExpansion, "遮罩扩边", 0, 50)
+                        }, cancellation.Token);
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception exception) { ocrWarning = exception.Message; }
+                }
+                var textRegions = recognized.TextRegions;
+                var mask = _recognizeText.Checked && _maskText.Checked && string.IsNullOrEmpty(ocrWarning);
+                var expansion = ParseInt(_maskExpansion, "遮罩扩边", 0, 50);
+                var result = await Task.Run(() => LineVisionProcessor.Analyze(path, region, settings, textRegions, mask, expansion, cancellation.Token, (percent, message) => ((IProgress<Tuple<int, string>>)progress).Report(Tuple.Create(percent, message))));
+                if (settings.VectorMode != LineVisionVectorMode.Legacy)
+                {
+                    try
+                    {
+                        ((IProgress<Tuple<int, string>>)progress).Report(Tuple.Create(82, "正在运行骨架/VTracer矢量内核……"));
+                        var vector = await new LineVisionVectorWorkerClient().VectorizeAsync(path, region, settings, mask ? textRegions : null, expansion, cancellation.Token);
+                        result.Polylines = vector.Polylines; result.WallRegions = vector.WallRegions;
+                        result.Segments.Clear();
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception exception) { result.VectorWarning = exception.Message; }
+                }
+                result.OcrWarning = ocrWarning;
+                if (cancellation.IsCancellationRequested || !string.Equals(path, _path.Text, StringComparison.OrdinalIgnoreCase)) { result.Dispose(); return; }
+                if (_result != null) _result.Dispose(); _result = result;
+                _preview.SetResult(result); _view.SelectedIndex = 0; SyncObjects(); SyncPolylines(); SyncWalls(); SyncCircles(); SyncArcs(); SyncTexts(); UpdateStatus();
+            }
+            catch (OperationCanceledException) { _status.Text = "分析已取消。"; }
+            catch (Exception exception) { _status.Text = "分析失败"; MessageBox.Show(this, "分析图像失败：\r\n" + exception.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Error); }
+            finally
+            {
+                if (ReferenceEquals(_cancellation, cancellation)) _cancellation = null;
+                cancellation.Dispose();
+                if (!IsDisposed) { _analyze.Enabled = true; _cancelAnalysis.Enabled = false; _progress.Value = 0; }
+            }
+        }
+
+        private async Task InsertAsync()
+        {
+            if (_result == null) { MessageBox.Show(this, "请先分析图像。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+            double scale;
+            if (!double.TryParse(_scale.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out scale) || scale <= 0d) { MessageBox.Show(this, "CAD单位/像素必须是大于0的数字。", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            Hide(); Exception failure = null; var inserted = new LineVisionInsertResult();
+            try { await CadCommandContext.ExecuteAsync(() => inserted = LineVisionCadWriter.PromptAndInsert(_document, _result, scale, _insertText.Checked)); }
+            catch (Exception exception) { failure = exception; }
+            finally { if (!IsDisposed) { Show(); Activate(); } }
+            if (failure != null) MessageBox.Show(this, "插入失败：\r\n" + failure.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
+            else if (inserted.TotalCount > 0) MessageBox.Show(this, "已插入 " + inserted.LineCount + " 根直线、" + inserted.PolylineCount + " 条折线、" + inserted.WallFillCount + " 个墙体填充、" + inserted.ArcCount + " 段圆弧、" + inserted.CircleCount + " 个圆、" + inserted.TextCount + " 个文字。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        private void Calibrate(object sender, LineVisionCalibrationEventArgs e)
+        {
+            var input = Interaction.InputBox("两点图像距离为 " + e.PixelDistance.ToString("0.##", CultureInfo.InvariantCulture) + " px。\r\n请输入这两点在 CAD 中的实际距离：", "两点比例标定", "1000");
+            double actual;
+            if (!double.TryParse(input, NumberStyles.Float, CultureInfo.InvariantCulture, out actual) || actual <= 0d) return;
+            _scale.Text = (actual / e.PixelDistance).ToString("0.########", CultureInfo.InvariantCulture);
+            _status.Text = "比例已标定：1 px = " + _scale.Text + " CAD单位。";
+        }
+
+        private LineVisionSettings ReadSettings()
+        {
+            return new LineVisionSettings
+            {
+                Threshold = ParseInt(_threshold, "二值化阈值", 0, 254), MinimumLineLengthPixels = ParseInt(_minimum, "最短线", 3, 10000),
+                CloseGapPixels = ParseInt(_closeGap, "补断线", 0, 100), CollinearTolerancePixels = ParseInt(_collinear, "共线容差", 0, 100),
+                MergeGapPixels = ParseInt(_mergeGap, "合并间隙", 0, 500), DetectDiagonals = _diagonals.Checked,
+                OrthogonalToleranceDegrees = ParseDouble(_orthogonalTolerance, "横竖吸附角度", 0d, 15d), BuildPolylines = _buildPolylines.Checked,
+                VectorMode = _vectorMode.SelectedIndex == 1 ? LineVisionVectorMode.Outline : _vectorMode.SelectedIndex == 2 ? LineVisionVectorMode.Hybrid : _vectorMode.SelectedIndex == 3 ? LineVisionVectorMode.Legacy : LineVisionVectorMode.Centerline
+                , DetectWallFills = _detectWallFills.Checked, MinimumWallThicknessPixels = ParseDouble(_wallMinimum, "最小墙厚", 1d, 500d), MaximumWallThicknessPixels = ParseDouble(_wallMaximum, "最大墙厚", 2d, 2000d)
+            };
+        }
+
+        private void ApplyProfileDefaults()
+        {
+            if (_profile.SelectedIndex == 1) { _minimum.Text = "12"; _closeGap.Text = "1"; _collinear.Text = "2"; _mergeGap.Text = "3"; }
+            else if (_profile.SelectedIndex == 2) { _minimum.Text = "10"; _closeGap.Text = "4"; _collinear.Text = "5"; _mergeGap.Text = "8"; }
+            else { _minimum.Text = "18"; _closeGap.Text = "2"; _collinear.Text = "3"; _mergeGap.Text = "5"; }
+        }
+
+        private void SyncObjects()
+        {
+            _syncingObjects = true; _objects.BeginUpdate(); _objects.Items.Clear();
+            if (_result != null) foreach (var line in _result.Segments)
+            {
+                var item = new ListViewItem(string.Empty) { Checked = line.IsEnabled };
+                item.SubItems.Add(DirectionText(line.Direction)); item.SubItems.Add(LineAngle(line).ToString("0.0°", CultureInfo.InvariantCulture)); item.SubItems.Add(line.Length.ToString("0.0", CultureInfo.InvariantCulture)); item.SubItems.Add(line.Confidence.ToString("P0", CultureInfo.CurrentCulture));
+                item.SubItems.Add(string.Format(CultureInfo.InvariantCulture, "({0:0},{1:0}) → ({2:0},{3:0})", line.X1, line.Y1, line.X2, line.Y2)); _objects.Items.Add(item);
+            }
+            _objects.EndUpdate(); _syncingObjects = false;
+        }
+
+        private void SyncTexts()
+        {
+            _syncingObjects = true; _texts.Rows.Clear();
+            if (_result != null) foreach (var text in _result.TextRegions)
+            {
+                var bounds = text.Bounds;
+                _texts.Rows.Add(text.IsEnabled, text.Text, text.Confidence.ToString("P0", CultureInfo.CurrentCulture), string.Format(CultureInfo.InvariantCulture, "{0:0},{1:0}", bounds.Left, bounds.Top));
+            }
+            _syncingObjects = false;
+        }
+
+        private void SyncPolylines()
+        {
+            _syncingObjects = true; _polylines.BeginUpdate(); _polylines.Items.Clear();
+            if (_result != null) foreach (var polyline in _result.Polylines)
+            {
+                var item = new ListViewItem(string.Empty) { Checked = polyline.IsEnabled };
+                item.SubItems.Add(string.IsNullOrWhiteSpace(polyline.Source) ? "兼容算法" : polyline.Source); item.SubItems.Add(polyline.Points.Count.ToString(CultureInfo.InvariantCulture)); item.SubItems.Add(polyline.IsClosed ? "是" : "否"); item.SubItems.Add(polyline.Confidence.ToString("P0", CultureInfo.CurrentCulture)); _polylines.Items.Add(item);
+            }
+            _polylines.EndUpdate(); _syncingObjects = false;
+        }
+
+        private void SyncWalls()
+        {
+            _syncingObjects = true; _walls.BeginUpdate(); _walls.Items.Clear();
+            if (_result != null) foreach (var wall in _result.WallRegions) { var item = new ListViewItem(string.Empty) { Checked = wall.IsEnabled }; item.SubItems.Add(wall.AverageThickness.ToString("0.0 px", CultureInfo.InvariantCulture)); item.SubItems.Add(wall.Holes.Count.ToString(CultureInfo.InvariantCulture)); item.SubItems.Add(wall.Confidence.ToString("P0", CultureInfo.CurrentCulture)); _walls.Items.Add(item); }
+            _walls.EndUpdate(); _syncingObjects = false;
+        }
+
+        private void SyncCircles()
+        {
+            _syncingObjects = true; _circles.BeginUpdate(); _circles.Items.Clear();
+            if (_result != null) foreach (var circle in _result.Circles)
+            {
+                var item = new ListViewItem(string.Empty) { Checked = circle.IsEnabled };
+                item.SubItems.Add(circle.Radius.ToString("0.0", CultureInfo.InvariantCulture));
+                item.SubItems.Add(circle.Confidence.ToString("P0", CultureInfo.CurrentCulture));
+                item.SubItems.Add(string.Format(CultureInfo.InvariantCulture, "({0:0},{1:0})", circle.CenterX, circle.CenterY));
+                _circles.Items.Add(item);
+            }
+            _circles.EndUpdate(); _syncingObjects = false;
+        }
+
+        private void SyncArcs()
+        {
+            _syncingObjects = true; _arcs.BeginUpdate(); _arcs.Items.Clear();
+            if (_result != null) foreach (var arc in _result.Arcs)
+            {
+                var item = new ListViewItem(string.Empty) { Checked = arc.IsEnabled };
+                item.SubItems.Add(arc.Radius.ToString("0.0", CultureInfo.InvariantCulture)); item.SubItems.Add(arc.SweepAngleDegrees.ToString("0.0°", CultureInfo.InvariantCulture));
+                item.SubItems.Add(arc.Confidence.ToString("P0", CultureInfo.CurrentCulture)); item.SubItems.Add(string.Format(CultureInfo.InvariantCulture, "({0:0},{1:0})", arc.CenterX, arc.CenterY)); _arcs.Items.Add(item);
+            }
+            _arcs.EndUpdate(); _syncingObjects = false;
+        }
+
+        private void TextCellValueChanged(object sender, DataGridViewCellEventArgs e)
+        {
+            if (_syncingObjects || _result == null || e.RowIndex < 0 || e.RowIndex >= _result.TextRegions.Count) return;
+            var region = _result.TextRegions[e.RowIndex];
+            if (e.ColumnIndex == _texts.Columns["Enabled"].Index) region.IsEnabled = Convert.ToBoolean(_texts.Rows[e.RowIndex].Cells[e.ColumnIndex].Value ?? false);
+            else if (e.ColumnIndex == _texts.Columns["Text"].Index) region.Text = Convert.ToString(_texts.Rows[e.RowIndex].Cells[e.ColumnIndex].Value) ?? string.Empty;
+            _preview.Invalidate(); UpdateStatus();
+        }
+
+        private void SetAll(bool enabled)
+        {
+            if (_result == null) return; _syncingObjects = true;
+            foreach (var line in _result.Segments) line.IsEnabled = enabled;
+            foreach (var circle in _result.Circles) circle.IsEnabled = enabled;
+            foreach (var arc in _result.Arcs) arc.IsEnabled = enabled;
+            foreach (var polyline in _result.Polylines) polyline.IsEnabled = enabled;
+            foreach (var wall in _result.WallRegions) wall.IsEnabled = enabled;
+            foreach (var text in _result.TextRegions) text.IsEnabled = enabled;
+            foreach (ListViewItem item in _objects.Items) item.Checked = enabled;
+            foreach (ListViewItem item in _circles.Items) item.Checked = enabled;
+            foreach (ListViewItem item in _arcs.Items) item.Checked = enabled;
+            foreach (ListViewItem item in _polylines.Items) item.Checked = enabled;
+            foreach (ListViewItem item in _walls.Items) item.Checked = enabled;
+            foreach (DataGridViewRow row in _texts.Rows) row.Cells["Enabled"].Value = enabled;
+            _syncingObjects = false; _preview.Invalidate(); UpdateStatus();
+        }
+
+        private void UpdateStatus()
+        {
+            if (_result == null) return;
+            var enabled = _result.Segments.Count(x => x.IsEnabled);
+            var textEnabled = _result.TextRegions.Count(x => x.IsEnabled && !string.IsNullOrWhiteSpace(x.Text));
+            var circles = _result.Circles.Count(x => x.IsEnabled);
+            var arcs = _result.Arcs.Count(x => x.IsEnabled);
+            var polylines = _result.Polylines.Count(x => x.IsEnabled);
+            var walls = _result.WallRegions.Count(x => x.IsEnabled);
+            _status.Text = "直线 " + _result.Segments.Count + " 根，折线 " + _result.Polylines.Count + " 条（选中 " + polylines + "），墙体候选 " + _result.WallRegions.Count + " 个（填充 " + walls + "），圆弧 " + _result.Arcs.Count + " 段，文字 " + _result.TextRegions.Count + " 个。";
+            if (!string.IsNullOrWhiteSpace(_result.OcrWarning)) _status.Text += " OCR 未完成，已按纯线稿处理：" + _result.OcrWarning;
+            if (!string.IsNullOrWhiteSpace(_result.VectorWarning)) _status.Text += " 新矢量内核未完成，已保留兼容算法：" + _result.VectorWarning;
+        }
+
+        private void LoadSettings()
+        {
+            if (!File.Exists(SettingsPath)) return;
+            try
+            {
+                foreach (var line in File.ReadAllLines(SettingsPath))
+                {
+                    var parts = line.Split(new[] { '=' }, 2); if (parts.Length != 2) continue;
+                    if (parts[0] == "threshold") _threshold.Text = parts[1]; else if (parts[0] == "minimum") _minimum.Text = parts[1]; else if (parts[0] == "closeGap") _closeGap.Text = parts[1];
+                    else if (parts[0] == "collinear") _collinear.Text = parts[1]; else if (parts[0] == "mergeGap") _mergeGap.Text = parts[1]; else if (parts[0] == "scale") _scale.Text = parts[1]; else if (parts[0] == "diagonals") _diagonals.Checked = parts[1] == "1";
+                    else if (parts[0] == "recognizeText") _recognizeText.Checked = parts[1] == "1"; else if (parts[0] == "maskText") _maskText.Checked = parts[1] == "1"; else if (parts[0] == "insertText") _insertText.Checked = parts[1] == "1";
+                    else if (parts[0] == "ocrLanguage") _ocrLanguage.SelectedIndex = parts[1] == "en-US" ? 1 : 0; else if (parts[0] == "ocrConfidence") _ocrConfidence.Text = parts[1]; else if (parts[0] == "maskExpansion") _maskExpansion.Text = parts[1]; else if (parts[0] == "orthogonalTolerance") _orthogonalTolerance.Text = parts[1]; else if (parts[0] == "buildPolylines") _buildPolylines.Checked = parts[1] == "1";
+                    else if (parts[0] == "vectorMode") { int value; if (int.TryParse(parts[1], out value)) _vectorMode.SelectedIndex = Math.Max(0, Math.Min(3, value)); }
+                    else if (parts[0] == "detectWallFills") _detectWallFills.Checked = parts[1] == "1"; else if (parts[0] == "wallMinimum") _wallMinimum.Text = parts[1]; else if (parts[0] == "wallMaximum") _wallMaximum.Text = parts[1];
+                }
+            }
+            catch { }
+        }
+
+        private void SaveSettings()
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath));
+                File.WriteAllLines(SettingsPath, new[] { "threshold=" + _threshold.Text, "minimum=" + _minimum.Text, "closeGap=" + _closeGap.Text, "collinear=" + _collinear.Text, "mergeGap=" + _mergeGap.Text, "orthogonalTolerance=" + _orthogonalTolerance.Text, "buildPolylines=" + (_buildPolylines.Checked ? "1" : "0"), "vectorMode=" + _vectorMode.SelectedIndex, "detectWallFills=" + (_detectWallFills.Checked ? "1" : "0"), "wallMinimum=" + _wallMinimum.Text, "wallMaximum=" + _wallMaximum.Text, "scale=" + _scale.Text, "diagonals=" + (_diagonals.Checked ? "1" : "0"), "recognizeText=" + (_recognizeText.Checked ? "1" : "0"), "maskText=" + (_maskText.Checked ? "1" : "0"), "insertText=" + (_insertText.Checked ? "1" : "0"), "ocrLanguage=" + (_ocrLanguage.SelectedIndex == 1 ? "en-US" : "zh-Hans-CN"), "ocrConfidence=" + _ocrConfidence.Text, "maskExpansion=" + _maskExpansion.Text });
+            }
+            catch { }
+        }
+
+        private static string DirectionText(LineVisionDirection direction) { return direction == LineVisionDirection.Horizontal ? "水平" : direction == LineVisionDirection.Vertical ? "垂直" : direction == LineVisionDirection.Diagonal ? "45°斜线" : direction == LineVisionDirection.Angled ? "原角度" : "待确认"; }
+        private static double LineAngle(LineVisionSegment line) { var value = Math.Atan2(-(line.Y2 - line.Y1), line.X2 - line.X1) * 180d / Math.PI; value %= 180d; if (value < 0d) value += 180d; return value; }
+        private static int ParseInt(TextBox box, string name, int minimum, int maximum) { int value; if (!int.TryParse(box.Text, out value) || value < minimum || value > maximum) throw new InvalidOperationException(name + "必须为 " + minimum + "–" + maximum + " 的整数。"); return value; }
+        private static double ParseDouble(TextBox box, string name, double minimum, double maximum) { double value; if (!double.TryParse(box.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out value) || value < minimum || value > maximum) throw new InvalidOperationException(name + "必须为 " + minimum.ToString(CultureInfo.InvariantCulture) + "–" + maximum.ToString(CultureInfo.InvariantCulture) + " 的数字。"); return value; }
+        private static FlowLayoutPanel Row() { return new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, WrapContents = true, Margin = new Padding(0, 0, 0, 4) }; }
+        private static Label LabelFor(string text) { return new Label { Text = text, AutoSize = true, Margin = new Padding(6, 8, 3, 0) }; }
+        private static Button ButtonFor(string text) { return new Button { Text = text, AutoSize = true, Height = 29, Margin = new Padding(5, 2, 0, 2), FlatStyle = FlatStyle.Flat }; }
+        private static TextBox Box(string text, int width) { return new TextBox { Text = text, Width = width, Margin = new Padding(0, 4, 4, 0) }; }
+        private static ComboBox DropDown(int width) { return new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = width, Margin = new Padding(0, 4, 5, 0) }; }
+        private static void Add(FlowLayoutPanel row, string label, Control control) { row.Controls.Add(LabelFor(label)); row.Controls.Add(control); }
+    }
+}

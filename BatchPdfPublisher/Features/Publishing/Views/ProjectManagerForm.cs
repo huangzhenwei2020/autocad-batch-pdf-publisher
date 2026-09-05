@@ -18,6 +18,8 @@ namespace BatchPdfPublisher.Views
         private readonly TextBox _folder = new TextBox();
         private readonly NumericUpDown _autoSaveMinutes = new NumericUpDown();
         private readonly ToolTip _toolTip = new ToolTip();
+        private bool _updatingSelection;
+        private bool _folderChosenForNewProject;
 
         public ProjectManagerForm(PublisherViewModel viewModel, Action refreshPublisher, Action configureScan)
         {
@@ -65,6 +67,7 @@ namespace BatchPdfPublisher.Views
             var operations = new GroupBox { Text = "工程操作", Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(12, 10, 12, 8), Margin = new Padding(0, 0, 0, 10) };
             var operationButtons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true };
             operationButtons.Controls.Add(Button("切换项目", SwitchSelected)); operationButtons.Controls.Add(Button("保存参数", SaveParameters, true));
+            operationButtons.Controls.Add(Button("复制迁移项目", MigrateProject));
             operationButtons.Controls.Add(Button("保存 CAD", SaveCurrentCad, true)); operationButtons.Controls.Add(Button("打开目录", OpenFolder));
             operationButtons.Controls.Add(Button("扫描设置", () => _configureScan())); operationButtons.Controls.Add(Button("删除项目", DeleteSelected));
             operations.Controls.Add(operationButtons); right.Controls.Add(operations, 0, 2);
@@ -80,7 +83,7 @@ namespace BatchPdfPublisher.Views
             autoSaveGrid.Controls.Add(autoSaveLine, 0, 0);
             autoSaveGrid.Controls.Add(new Label { Text = "备份位置：项目文件夹\\自动保存\\原文件名_自动保存.dwg，可直接用 CAD 打开。", AutoSize = true, MaximumSize = new Size(560, 42), ForeColor = Color.FromArgb(105, 105, 105), Margin = new Padding(0, 6, 0, 0) }, 0, 1);
             autoSave.Controls.Add(autoSaveGrid); right.Controls.Add(autoSave, 0, 3);
-            right.Controls.Add(new Label { Text = "删除项目只删除插件参数，项目文件夹及其中的 DWG 不会删除。", AutoSize = true, ForeColor = Color.FromArgb(105, 105, 105), Margin = new Padding(2, 3, 0, 0) }, 0, 4);
+            right.Controls.Add(new Label { Text = "保存参数只更改登记路径，不搬移文件；需要搬移时请用“复制迁移项目”。删除项目不会删除文件夹或 DWG。", AutoSize = true, MaximumSize = new Size(560, 48), ForeColor = Color.FromArgb(105, 105, 105), Margin = new Padding(2, 3, 0, 0) }, 0, 4);
             split.Panel2.Controls.Add(right);
 
             var close = Button("关闭窗口", () => Close()); close.DialogResult = DialogResult.OK;
@@ -88,6 +91,7 @@ namespace BatchPdfPublisher.Views
             bottom.Controls.Add(close); outer.Controls.Add(bottom, 0, 1);
             _projects.SelectedIndexChanged += (sender, args) => UpdateSelection();
             _projects.DoubleClick += (sender, args) => SwitchSelected();
+            _folder.TextChanged += (sender, args) => { if (!_updatingSelection) _folderChosenForNewProject = true; };
         }
 
         private void RefreshProjects()
@@ -103,14 +107,23 @@ namespace BatchPdfPublisher.Views
         {
             var project = _projects.SelectedItem as ProjectProfile ?? _viewModel.SelectedProject;
             if (project == null) return;
-            _name.Text = project.Name;
-            _folder.Text = _viewModel.GetProjectFolder(project);
-            _autoSaveMinutes.Value = Math.Max(_autoSaveMinutes.Minimum, Math.Min(_autoSaveMinutes.Maximum, _viewModel.GetProjectAutoSaveMinutes(project)));
+            _updatingSelection = true;
+            try
+            {
+                _name.Text = project.Name;
+                _folder.Text = _viewModel.GetProjectFolder(project);
+                _autoSaveMinutes.Value = Math.Max(_autoSaveMinutes.Minimum, Math.Min(_autoSaveMinutes.Maximum, _viewModel.GetProjectAutoSaveMinutes(project)));
+                _folderChosenForNewProject = false;
+            }
+            finally { _updatingSelection = false; }
         }
 
         private void CreateOrSwitch()
         {
-            if (_viewModel.CreateOrSelectProject(_name.Text)) { _refreshPublisher(); RefreshProjects(); }
+            var existing = _viewModel.Projects.FirstOrDefault(project => string.Equals(project.Name, (_name.Text ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase));
+            var requestedFolder = existing == null && _folderChosenForNewProject ? _folder.Text : null;
+            if (_viewModel.CreateOrSelectProject(_name.Text, requestedFolder)) { _refreshPublisher(); RefreshProjects(); }
+            else MessageBox.Show(this, _viewModel.Status, "新建工程", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
 
         private void SwitchSelected()
@@ -132,7 +145,7 @@ namespace BatchPdfPublisher.Views
         {
             var selected = _projects.SelectedItem as ProjectProfile;
             if (selected != null && !ReferenceEquals(selected, _viewModel.SelectedProject)) _viewModel.SelectedProject = selected;
-            _viewModel.SetProjectFolder(_folder.Text);
+            if (!_viewModel.SetProjectFolder(_folder.Text)) { MessageBox.Show(this, _viewModel.Status, "项目文件夹", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
             _viewModel.SetProjectAutoSaveMinutes((int)_autoSaveMinutes.Value);
             _viewModel.SaveProjectParameters(); _refreshPublisher();
         }
@@ -155,7 +168,23 @@ namespace BatchPdfPublisher.Views
         private void ChooseFolder()
         {
             using (var dialog = new FolderBrowserDialog { Description = "选择工程文件夹", SelectedPath = _folder.Text })
-                if (dialog.ShowDialog(this) == DialogResult.OK) _folder.Text = dialog.SelectedPath;
+                if (dialog.ShowDialog(this) == DialogResult.OK) { _folder.Text = dialog.SelectedPath; _folderChosenForNewProject = true; }
+        }
+
+        private void MigrateProject()
+        {
+            var selected = _projects.SelectedItem as ProjectProfile;
+            if (selected != null && !ReferenceEquals(selected, _viewModel.SelectedProject)) _viewModel.SelectedProject = selected;
+            if (MessageBox.Show(this, "将原项目文件完整复制到当前填写的新目录，并把插件切换到新目录？\r\n\r\n新目录必须为空，原目录将保留作为备份。", "复制迁移项目", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            UseWaitCursor = true;
+            try
+            {
+                var succeeded = _viewModel.MigrateProjectFolder(_folder.Text);
+                MessageBox.Show(this, _viewModel.Status, "复制迁移项目", MessageBoxButtons.OK,
+                    succeeded ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+                if (succeeded) { _refreshPublisher(); RefreshProjects(); }
+            }
+            finally { UseWaitCursor = false; }
         }
 
         private void SaveCurrentCad()
@@ -201,6 +230,7 @@ namespace BatchPdfPublisher.Views
                 case "选择目录": return "选择用于保存工程 CAD、自动保存备份和项目资料的文件夹。";
                 case "切换项目": return "切换到左侧选中的工程并载入该工程的设置。";
                 case "保存参数": return "保存当前工程名称、目录、扫描范围和自动保存间隔。";
+                case "复制迁移项目": return "把原项目完整复制到空的新目录，验证成功后切换登记路径，原目录保留。";
                 case "保存 CAD": return "把当前正在编辑的 CAD 文件保存到项目文件夹。";
                 case "打开目录": return "在文件资源管理器中打开当前项目文件夹。";
                 case "扫描设置": return "设置扫描模型空间、布局以及参与扫描的布局名称。";

@@ -17,6 +17,7 @@ namespace BatchPdfPublisher.Views
     public sealed class FrameCreationForm : DpiAwareForm
     {
         private readonly Document _document;
+        private readonly ModelessDocumentBinding _documentBinding;
         private readonly Action _refresh;
         private readonly ComboBox _paper = new ComboBox();
         private readonly ComboBox _extension = new ComboBox();
@@ -28,21 +29,28 @@ namespace BatchPdfPublisher.Views
         private readonly Button _colorButton = new Button();
         private readonly TextBox _remark = new TextBox();
         private readonly CheckBox _register = new CheckBox();
+        private readonly ComboBox _registeredFrame = new ComboBox();
+        private readonly ComboBox _insertScale = new ComboBox();
+        private Button _insertRegisteredButton;
+        private Button _rangeButton;
+        private readonly List<FrameDefinition> _registeredFrames;
         private readonly ToolTip _toolTip = new ToolTip();
 
         public FrameCreationForm(Document document, Action refresh)
         {
             _document = document; _refresh = refresh;
-            Text = "创建图框"; Width = 560; Height = 370; MinimumSize = new Size(520, 340);
+            _registeredFrames = new PublishPlanStore().LoadFrames().Where(x => x != null && !string.IsNullOrWhiteSpace(x.BlockName)).ToList();
+            Text = "创建 / 插入图框"; Width = 660; Height = 440; MinimumSize = new Size(620, 410);
             StartPosition = FormStartPosition.CenterParent; Font = new Font("Microsoft YaHei UI", 9F);
+            _documentBinding = new ModelessDocumentBinding(this, document);
             Build(); LoadSettings(); FormClosed += (s, e) => SaveSettings();
         }
 
         private void Build()
         {
-            var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(16), ColumnCount = 2, RowCount = 8 };
+            var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(16), ColumnCount = 2, RowCount = 10 };
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120)); root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            for (var i = 0; i < 7; i++) root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            for (var i = 0; i < 9; i++) root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); Controls.Add(root);
             root.Controls.Add(new Label { Text = "纸张规格", AutoSize = true, Margin = new Padding(0, 7, 0, 3) }, 0, 0);
             AddCombo(_paper, new[] { "A0", "A1", "A2", "A3", "A4" }, "A1", root, 1, 0);
@@ -65,15 +73,26 @@ namespace BatchPdfPublisher.Views
             _widthFactor.DropDownStyle = ComboBoxStyle.DropDownList; _widthFactor.Width = 65; _widthFactor.Items.AddRange(new object[] { "0.5", "0.7", "1" }); _widthFactor.SelectedItem = "1";
             _colorButton.Text = string.Empty; _colorButton.Width = 32; _colorButton.Height = 30; _colorButton.BackColor = Color.White; _colorButton.ForeColor = Color.Black; _colorButton.FlatStyle = FlatStyle.Flat; _colorButton.Click += (s, e) => ChooseColor(); _toolTip.SetToolTip(_colorButton, "选择 AutoCAD 文字颜色");
             fontLine.Controls.Add(_font); fontLine.Controls.Add(new Label { Text = " 高", AutoSize = true, Margin = new Padding(4, 7, 2, 0) }); fontLine.Controls.Add(_height); fontLine.Controls.Add(new Label { Text = " 宽", AutoSize = true, Margin = new Padding(4, 7, 2, 0) }); fontLine.Controls.Add(_widthFactor); fontLine.Controls.Add(_colorButton); root.Controls.Add(fontLine, 1, 5);
-            var help = new Label { Text = "矩形按真实毫米尺寸插入；属性文字按钮会提示框选范围并自动居中。", AutoSize = true, ForeColor = Color.FromArgb(80, 100, 125), Margin = new Padding(0, 8, 0, 8) };
-            root.Controls.Add(help, 0, 7); root.SetColumnSpan(help, 2);
+
+            root.Controls.Add(new Label { Text = "插入登记图框", AutoSize = true, Margin = new Padding(0, 7, 0, 3) }, 0, 7);
+            var insertLine = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = false };
+            _registeredFrame.DropDownStyle = ComboBoxStyle.DropDownList; _registeredFrame.Width = 300;
+            foreach (var frame in _registeredFrames) _registeredFrame.Items.Add(frame.DisplayName);
+            if (_registeredFrame.Items.Count > 0) _registeredFrame.SelectedIndex = 0;
+            _insertScale.DropDownStyle = ComboBoxStyle.DropDown; _insertScale.Width = 90;
+            _insertScale.Items.AddRange(new object[] { "1:1", "1:2", "1:5", "1:10", "1:20", "1:25", "1:50", "1:100", "1:150", "1:200" }); _insertScale.Text = "1:100";
+            insertLine.Controls.Add(_registeredFrame); insertLine.Controls.Add(new Label { Text = " 比例", AutoSize = true, Margin = new Padding(6, 7, 2, 0) }); insertLine.Controls.Add(_insertScale);
+            root.Controls.Add(insertLine, 1, 7);
+            var help = new Label { Text = _registeredFrames.Count == 0 ? "当前项目还没有登记图框，请先创建并登记。" : "按 CAD 块插入方式使用块基点和所选统一比例，块参照放到图框层。", AutoSize = true, ForeColor = Color.FromArgb(80, 100, 125), Margin = new Padding(0, 8, 0, 8) };
+            root.Controls.Add(help, 0, 8); root.SetColumnSpan(help, 2);
             var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, WrapContents = false };
             actions.Controls.Add(Button("关闭", (s, e) => Close(), false));
             actions.Controls.Add(Button("创建图框块", (s, e) => RunCad(CreateBlock), true));
+            _insertRegisteredButton = Button("插入登记图框", (s, e) => RunCad(InsertRegisteredFrame), true); _insertRegisteredButton.Enabled = _registeredFrames.Count > 0; actions.Controls.Add(_insertRegisteredButton);
+            _rangeButton = Button("写入排版范围", (s, e) => RunCad(WriteLayoutRange), true); _rangeButton.Enabled = _registeredFrames.Count > 0; actions.Controls.Add(_rangeButton);
             actions.Controls.Add(Button("插入属性文字", (s, e) => RunCad(InsertProperty), false));
             actions.Controls.Add(Button("插入纸张边框矩形", (s, e) => RunCad(InsertBorder), false));
-            root.Controls.Add(actions, 0, 8); root.SetColumnSpan(actions, 2);
-            root.RowCount = 9; root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.Controls.Add(actions, 0, 9); root.SetColumnSpan(actions, 2);
         }
 
         private void InsertBorder()
@@ -109,6 +128,30 @@ namespace BatchPdfPublisher.Views
             if (FrameCreationService.InsertCenteredProperty(_document, _property.Text, _font.Text, double.Parse(_height.Text), double.Parse(_widthFactor.Text), selected)) _refresh?.Invoke();
         }
 
+        private void InsertRegisteredFrame()
+        {
+            SaveSettings();
+            if (_registeredFrame.SelectedIndex < 0 || _registeredFrame.SelectedIndex >= _registeredFrames.Count)
+                throw new InvalidOperationException("请选择已登记的图框。");
+            var scaleText = (_insertScale.Text ?? string.Empty).Trim().Replace('：', ':');
+            var separator = scaleText.LastIndexOf(':');
+            if (separator >= 0) scaleText = scaleText.Substring(separator + 1).Trim();
+            int scale;
+            if (!int.TryParse(scaleText, out scale) || scale <= 0) throw new InvalidOperationException("请输入有效比例，例如 1:50。");
+            if (FrameCreationService.InsertRegisteredFrame(_document, _registeredFrames[_registeredFrame.SelectedIndex], scale)) _refresh?.Invoke();
+        }
+
+        private void WriteLayoutRange()
+        {
+            SaveSettings();
+            if (_registeredFrame.SelectedIndex < 0 || _registeredFrame.SelectedIndex >= _registeredFrames.Count)
+                throw new InvalidOperationException("请选择已登记的图框。");
+            var frame = _registeredFrames[_registeredFrame.SelectedIndex];
+            if (!FrameLayoutRangeService.PromptAndSaveRange(_document, frame)) return;
+            _refresh?.Invoke();
+            BeginInvoke(new Action(() => MessageBox.Show(this, "图框排版范围已重新登记成功。\r\n" + FrameLayoutRangeService.Describe(frame), "创建 / 插入图框", MessageBoxButtons.OK, MessageBoxIcon.Information)));
+        }
+
         private void CreateBlock()
         {
             SaveSettings();
@@ -125,6 +168,7 @@ namespace BatchPdfPublisher.Views
                     registered = new FrameRegistrationService().RegisterCreated(_document, createdReferenceId, remark, out var registrationError);
                     if (!registered)
                         MessageBox.Show(this, "图框块已创建，但自动登记失败：\r\n" + registrationError, "创建图框", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    else ReloadRegisteredFrames(blockName);
                 }
                 _refresh?.Invoke();
                 if (!_register.Checked || registered)
@@ -147,6 +191,18 @@ namespace BatchPdfPublisher.Views
                 }
             }
             finally { }
+        }
+
+        private void ReloadRegisteredFrames(string selectedBlockName)
+        {
+            _registeredFrames.Clear();
+            _registeredFrames.AddRange(new PublishPlanStore().LoadFrames().Where(x => x != null && !string.IsNullOrWhiteSpace(x.BlockName)));
+            _registeredFrame.Items.Clear();
+            foreach (var frame in _registeredFrames) _registeredFrame.Items.Add(frame.DisplayName);
+            var index = _registeredFrames.FindIndex(x => string.Equals(x.BlockName, selectedBlockName, StringComparison.OrdinalIgnoreCase));
+            _registeredFrame.SelectedIndex = index >= 0 ? index : (_registeredFrame.Items.Count > 0 ? 0 : -1);
+            if (_insertRegisteredButton != null) _insertRegisteredButton.Enabled = _registeredFrames.Count > 0;
+            if (_rangeButton != null) _rangeButton.Enabled = _registeredFrames.Count > 0;
         }
 
         private static string SettingsPath => UserDataPaths.SettingsFile("frame-creation.settings", "BatchPdfPublisher.frame-creation.settings");
@@ -177,6 +233,16 @@ namespace BatchPdfPublisher.Views
                 if (values.ContainsKey("Height")) _height.Text = values["Height"];
                 if (values.ContainsKey("WidthFactor")) _widthFactor.SelectedItem = values["WidthFactor"];
                 if (values.ContainsKey("Register")) _register.Checked = values["Register"] == "1";
+                if (values.ContainsKey("InsertScale")) _insertScale.Text = values["InsertScale"];
+                if (values.ContainsKey("InsertFrameId") || values.ContainsKey("InsertFrameBlock"))
+                {
+                    var frameId = values.ContainsKey("InsertFrameId") ? values["InsertFrameId"] : string.Empty;
+                    var blockName = values.ContainsKey("InsertFrameBlock") ? values["InsertFrameBlock"] : string.Empty;
+                    var selected = _registeredFrames.FindIndex(x =>
+                        (!string.IsNullOrWhiteSpace(frameId) && string.Equals(x.RegistrationId, frameId, StringComparison.OrdinalIgnoreCase)) ||
+                        (!string.IsNullOrWhiteSpace(blockName) && string.Equals(x.BlockName, blockName, StringComparison.OrdinalIgnoreCase)));
+                    if (selected >= 0) _registeredFrame.SelectedIndex = selected;
+                }
                 var color = AcColor.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 7);
                 if (values.ContainsKey("ColorIndex") && short.TryParse(values["ColorIndex"], out var index)) color = AcColor.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, index);
                 if (values.ContainsKey("ColorMethod") && values["ColorMethod"] == "ByColor" && byte.TryParse(values["ColorR"], out var red) && byte.TryParse(values["ColorG"], out var green) && byte.TryParse(values["ColorB"], out var blue)) color = AcColor.FromRgb(red, green, blue);
@@ -189,7 +255,9 @@ namespace BatchPdfPublisher.Views
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath));
-                var color = _colorButton.Tag as AcColor; File.WriteAllLines(SettingsPath, new[] { "Paper=" + _paper.Text, "Extension=" + _extension.Text, "Orientation=" + _orientation.Text, "Remark=" + _remark.Text, "Property=" + _property.Text, "Font=" + _font.Text, "Height=" + _height.Text, "WidthFactor=" + _widthFactor.Text, "Register=" + (_register.Checked ? "1" : "0"), "ColorMethod=" + (color == null ? "ByAci" : color.ColorMethod.ToString()), "ColorIndex=" + (color?.ColorIndex ?? 7), "ColorR=" + (color?.Red ?? 255), "ColorG=" + (color?.Green ?? 255), "ColorB=" + (color?.Blue ?? 255) });
+                var color = _colorButton.Tag as AcColor;
+                var selectedFrame = _registeredFrame.SelectedIndex >= 0 && _registeredFrame.SelectedIndex < _registeredFrames.Count ? _registeredFrames[_registeredFrame.SelectedIndex] : null;
+                File.WriteAllLines(SettingsPath, new[] { "Paper=" + _paper.Text, "Extension=" + _extension.Text, "Orientation=" + _orientation.Text, "Remark=" + _remark.Text, "Property=" + _property.Text, "Font=" + _font.Text, "Height=" + _height.Text, "WidthFactor=" + _widthFactor.Text, "Register=" + (_register.Checked ? "1" : "0"), "InsertFrameId=" + (selectedFrame?.RegistrationId ?? string.Empty), "InsertFrameBlock=" + (selectedFrame?.BlockName ?? string.Empty), "InsertScale=" + _insertScale.Text, "ColorMethod=" + (color == null ? "ByAci" : color.ColorMethod.ToString()), "ColorIndex=" + (color?.ColorIndex ?? 7), "ColorR=" + (color?.Red ?? 255), "ColorG=" + (color?.Green ?? 255), "ColorB=" + (color?.Blue ?? 255) });
             }
             catch { }
         }

@@ -556,13 +556,15 @@ namespace BatchPdfPublisher.Models
 
         private static DoorWindowCell OpeningArea(DoorWindowElevationGeometry geometry, DoorWindowScheduleItem item, DoorWindowCell cell)
         {
-            var fixedArea = FixedFrameArea(geometry, item, cell);
-            var doorFrame = IsOperable(cell.Opening) ? Math.Max(0d, item.DoorFrameWidth) : 0d;
-            var clearance = Math.Min(6d, Math.Min(cell.Right - cell.Left, cell.Top - cell.Bottom) * .01d);
-            var left = fixedArea.Left + doorFrame + clearance; var right = fixedArea.Right - doorFrame - clearance;
-            var bottom = fixedArea.Bottom + doorFrame + clearance; var top = fixedArea.Top - doorFrame - clearance;
-            if (right <= left || top <= bottom) return cell;
-            return new DoorWindowCell(left, bottom, right, top) { Opening = cell.Opening, Material = cell.Material, IsDoor = cell.IsDoor };
+            // 开启线取门扇边框的外轮廓：先扣除固定外框/分隔框，再不扣 50 mm 门扇内框。
+            // 因而两条开启线只连接可动门扇的上点、下点与对侧中点，不会落到固定框或内框上。
+            var sashOuter = FixedFrameArea(geometry, item, cell);
+            return new DoorWindowCell(sashOuter.Left, sashOuter.Bottom, sashOuter.Right, sashOuter.Top)
+            {
+                Opening = cell.Opening,
+                Material = cell.Material,
+                IsDoor = cell.IsDoor
+            };
         }
 
         private static DoorWindowCell FixedFrameArea(DoorWindowElevationGeometry geometry, DoorWindowScheduleItem item, DoorWindowCell cell)

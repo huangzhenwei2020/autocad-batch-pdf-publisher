@@ -18,7 +18,6 @@ obj-*/
 /dist/
 /CadApi/
 /ArchitectureAssistant/
-/StairDetail/
 /tmp/
 /WanLuoArchitecture/
 /BatchPdfPublisher/obj-*/
@@ -30,3 +29,13 @@ obj-*/
 /build/stair-bzs/
 /build/ribbon-fix-r25/
 /*-安装包/
+
+# Cloud authorization broker secrets and dependencies.
+cloud/**/node_modules/
+cloud/**/.wrangler/
+cloud/**/.dev.vars
+cloud/**/.dev.vars.*
+!cloud/**/.dev.vars.example
+cloud/**/.env
+cloud/**/.env.*
+cloud/**/*.cpuprofile

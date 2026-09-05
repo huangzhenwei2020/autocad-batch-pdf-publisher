@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 
@@ -8,8 +9,21 @@ namespace BatchPdfPublisher.Services
     public static class UserDataPaths
     {
         public const string PortableRootEnvironmentVariable = "WANLUO_ARCHITECTURE_TOOLS_ROOT";
+        private static readonly object MigrationLock = new object();
+        private static bool _migrationChecked;
         public static string PluginDirectory { get { return FindPluginDirectory(); } }
-        public static string RootDirectory { get { return Ensure(Path.Combine(PluginDirectory, "用户配置文件")); } }
+        public static string RootDirectory
+        {
+            get
+            {
+                var root = Ensure(Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "WanluoArchitectureTools",
+                    "用户配置文件"));
+                MigratePortableUserData(root);
+                return root;
+            }
+        }
         public static string SettingsDirectory { get { return Ensure(Path.Combine(RootDirectory, "通用设置")); } }
         public static string ProjectsDirectory { get { return Ensure(Path.Combine(RootDirectory, "项目配置")); } }
         public static string LogsDirectory { get { return Ensure(Path.Combine(RootDirectory, "Logs")); } }
@@ -63,6 +77,45 @@ namespace BatchPdfPublisher.Services
                 if (File.Exists(Path.Combine(current.FullName, "万落建筑工具启动器.exe")) || (Directory.Exists(Path.Combine(current.FullName, "CadApi")) && Directory.Exists(Path.Combine(current.FullName, "Resources")))) return current.FullName;
             }
             return Path.GetFullPath(string.IsNullOrWhiteSpace(location) ? AppDomain.CurrentDomain.BaseDirectory : location);
+        }
+
+        private static void MigratePortableUserData(string targetRoot)
+        {
+            lock (MigrationLock)
+            {
+                if (_migrationChecked) return;
+                _migrationChecked = true;
+                var sourceRoot = Path.Combine(PluginDirectory, "用户配置文件");
+                if (PathsEqual(sourceRoot, targetRoot) || !Directory.Exists(sourceRoot)) return;
+                MergeDirectory(sourceRoot, targetRoot, new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    "运行文件", "Logs", "Temp"
+                });
+            }
+        }
+
+        private static void MergeDirectory(string sourceRoot, string targetRoot, ISet<string> excludedTopLevelNames)
+        {
+            foreach (var sourceFile in Directory.GetFiles(sourceRoot, "*", SearchOption.AllDirectories))
+            {
+                var relative = sourceFile.Substring(sourceRoot.TrimEnd(Path.DirectorySeparatorChar).Length).TrimStart(Path.DirectorySeparatorChar);
+                var topLevel = relative.Split(Path.DirectorySeparatorChar)[0];
+                if (excludedTopLevelNames.Contains(topLevel)) continue;
+                var targetFile = Path.Combine(targetRoot, relative);
+                try
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(targetFile));
+                    if (!File.Exists(targetFile)) File.Copy(sourceFile, targetFile, false);
+                }
+                catch { }
+            }
+        }
+
+        private static bool PathsEqual(string left, string right)
+        {
+            return string.Equals(Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar),
+                Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar),
+                StringComparison.OrdinalIgnoreCase);
         }
 
         private static string Ensure(string path)

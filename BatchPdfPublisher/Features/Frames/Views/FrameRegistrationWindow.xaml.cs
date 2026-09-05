@@ -23,6 +23,7 @@ namespace BatchPdfPublisher.Views
         private FrameProjectScanReport _projectScan;
         public List<FrameProjectScanIssue> RequestedIssues { get; } = new List<FrameProjectScanIssue>();
         public bool OpenAllRequested { get; private set; }
+        public bool PickLayoutRangeRequested => PickLayoutRangeBox.IsChecked == true;
 
         public FrameDefinition Definition { get; private set; }
 
@@ -58,13 +59,15 @@ namespace BatchPdfPublisher.Views
             SelectComboByText(ExtensionBox, string.IsNullOrWhiteSpace(existing?.Extension ?? guess.Extension) ? "无加长" : existing?.Extension ?? guess.Extension);
             SelectComboByText(OrientationBox, existing?.PaperOrientation ?? guess.PaperOrientation);
             NoteBox.Text = existing?.Note ?? string.Empty;
+            PickLayoutRangeBox.IsChecked = existing == null || !FrameLayoutRangeService.HasValidRange(existing);
+            LayoutRangeText.Text = "当前登记：" + FrameLayoutRangeService.Describe(existing) + "。范围按图框 1:1 纸面毫米保存，供大样和门窗排版共用。";
 
             if (existing == null)
             {
-                SelectTag(BuildingTagBox, tags, "楼栋", "BUILDING", "栋号");
-                SelectTag(SheetNumberTagBox, tags, "图号", "SHEETNO", "SHEET_NO", "DRAWINGNO");
-                SelectTag(SheetNameTagBox, tags, "图名", "SHEETNAME", "SHEET_NAME", "DRAWINGNAME");
-                SelectTag(PrintScaleTagBox, tags, "比例", "SCALE", "PRINTSCALE");
+                SelectTag(BuildingTagBox, tags, "子项目名称", "楼栋", "BUILDING", "栋号", "SUBPROJECT", "SUBPROJECTNAME");
+                SelectTag(SheetNumberTagBox, tags, "图号", "SHEETNO", "SHEET_NO", "DRAWINGNO", "DRAWING_NO");
+                SelectTag(SheetNameTagBox, tags, "图名", "图纸名称", "SHEETNAME", "SHEET_NAME", "DRAWINGNAME", "DRAWING_NAME");
+                SelectTag(PrintScaleTagBox, tags, "比例", "SCALE", "PRINTSCALE", "PRINT_SCALE");
                 FillValueFromSelectedTag(BuildingTagBox, BuildingValueBox);
                 FillValueFromSelectedTag(SheetNumberTagBox, SheetNumberValueBox);
                 FillValueFromSelectedTag(SheetNameTagBox, SheetNameValueBox);
@@ -123,6 +126,7 @@ namespace BatchPdfPublisher.Views
             {
                 RegistrationId = string.IsNullOrWhiteSpace(_existing?.RegistrationId) ? Guid.NewGuid().ToString("N") : _existing.RegistrationId,
                 BlockName = BlockNameBox.Text,
+                TemplateRelativePath = _existing?.TemplateRelativePath,
                 AttributeTagSignature = _attributeTagSignature ?? _existing?.AttributeTagSignature,
                 DefinitionSignature = _definitionSignature ?? _existing?.DefinitionSignature,
                 ReferenceAspectRatio = _referenceAspectRatio > 0d ? _referenceAspectRatio : _existing?.ReferenceAspectRatio ?? 0d,
@@ -137,7 +141,12 @@ namespace BatchPdfPublisher.Views
                 DefaultBuilding = BuildingValueBox.Text?.Trim(),
                 DefaultSheetNumber = SheetNumberValueBox.Text?.Trim(),
                 DefaultSheetName = SheetNameValueBox.Text?.Trim(),
-                DefaultPrintScale = PrintScaleValueBox.Text?.Trim()
+                DefaultPrintScale = PrintScaleValueBox.Text?.Trim(),
+                HasLayoutRange = _existing?.HasLayoutRange ?? false,
+                LayoutLeftMargin = _existing?.LayoutLeftMargin ?? 0d,
+                LayoutRightMargin = _existing?.LayoutRightMargin ?? 0d,
+                LayoutTopMargin = _existing?.LayoutTopMargin ?? 0d,
+                LayoutBottomMargin = _existing?.LayoutBottomMargin ?? 0d
             };
             DialogResult = true;
         }
@@ -266,7 +275,24 @@ namespace BatchPdfPublisher.Views
 
         private static void SelectTag(ComboBox box, IEnumerable<string> tags, params string[] aliases)
         {
-            box.SelectedItem = tags.FirstOrDefault(t => aliases.Any(a => string.Equals(a, t, StringComparison.OrdinalIgnoreCase))) ?? DoNotRead;
+            var available = tags.Where(x => !string.IsNullOrWhiteSpace(x)).ToList();
+            foreach (var alias in aliases)
+            {
+                var exact = available.FirstOrDefault(tag => string.Equals(alias, tag, StringComparison.OrdinalIgnoreCase));
+                if (exact != null) { box.SelectedItem = exact; return; }
+            }
+            foreach (var alias in aliases)
+            {
+                var normalizedAlias = NormalizeTag(alias);
+                var normalized = available.FirstOrDefault(tag => string.Equals(normalizedAlias, NormalizeTag(tag), StringComparison.OrdinalIgnoreCase));
+                if (normalized != null) { box.SelectedItem = normalized; return; }
+            }
+            box.SelectedItem = DoNotRead;
+        }
+
+        private static string NormalizeTag(string value)
+        {
+            return new string((value ?? string.Empty).Where(char.IsLetterOrDigit).ToArray()).ToUpperInvariant();
         }
     }
 }

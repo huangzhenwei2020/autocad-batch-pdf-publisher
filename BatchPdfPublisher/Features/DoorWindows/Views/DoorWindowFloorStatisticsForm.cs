@@ -22,6 +22,7 @@ namespace BatchPdfPublisher.Views
         }
 
         private readonly Document _document;
+        private readonly ModelessDocumentBinding _documentBinding;
         private readonly List<FloorSource> _sources = new List<FloorSource>();
         private readonly DataGridView _grid = new DataGridView();
         private readonly Label _hint = new Label { AutoSize = true, ForeColor = Color.DimGray };
@@ -39,6 +40,7 @@ namespace BatchPdfPublisher.Views
         {
             _document = document; Text = "门窗表·每层单独统计设置"; StartPosition = FormStartPosition.CenterParent;
             Width = 760; Height = 470; MinimumSize = new Size(620, 360); Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
+            _documentBinding = new ModelessDocumentBinding(this, document);
             Build(); RefreshGrid();
         }
 

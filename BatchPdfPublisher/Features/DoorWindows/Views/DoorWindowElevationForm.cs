@@ -20,6 +20,7 @@ namespace BatchPdfPublisher.Views
     internal sealed class DoorWindowElevationForm : DpiAwareForm
     {
         private readonly Document _document;
+        private readonly ModelessDocumentBinding _documentBinding;
         private DoorWindowScheduleReadResult _source;
         private DoorWindowScheduleReadResult _baseSource;
         private readonly BindingList<DoorWindowScheduleItem> _rows = new BindingList<DoorWindowScheduleItem>();
@@ -61,6 +62,7 @@ namespace BatchPdfPublisher.Views
             StartPosition = FormStartPosition.CenterParent;
             Width = 1240; Height = 720; MinimumSize = new Size(980, 560);
             Font = new DrawingFont("Microsoft YaHei UI", 9F);
+            _documentBinding = new ModelessDocumentBinding(this, document);
             Build(); LoadSource(source);
             Shown += (s, e) => RestoreSavedSession();
             FormClosed += (s, e) => SavePreferences(false);
@@ -93,11 +95,12 @@ namespace BatchPdfPublisher.Views
             var applyBatch = ButtonFor("应用到多选/勾选"); applyBatch.Click += (s, e) => ApplyBatch(); batch.Controls.Add(applyBatch);
             var constructionBatch = ButtonFor("批量构造设置"); constructionBatch.Click += (s, e) => ApplyBatchConstruction(); batch.Controls.Add(constructionBatch);
             var auto = ButtonFor("按尺寸自动判断"); auto.Click += (s, e) => ApplyAutomaticSuggestions(); batch.Controls.Add(auto);
+            var restoreDefault = ButtonFor("恢复默认样式"); restoreDefault.Click += (s, e) => RestoreDefaultStyles(); batch.Controls.Add(restoreDefault);
             var custom = ButtonFor("编辑当前分格"); custom.Click += (s, e) => EditCurrentDivision(); batch.Controls.Add(custom);
-            batch.Controls.Add(LabelFor("参数模板")); LoadTemplateChoices(); batch.Controls.Add(_templateChoice);
-            var applyTemplate = ButtonFor("应用到多选/勾选"); applyTemplate.Click += (s, e) => ApplySelectedTemplate(); batch.Controls.Add(applyTemplate);
-            var saveTemplate = ButtonFor("当前项存为模板"); saveTemplate.Click += (s, e) => SaveCurrentAsTemplate(); batch.Controls.Add(saveTemplate);
-            var deleteTemplate = ButtonFor("删除模板"); deleteTemplate.Click += (s, e) => DeleteSelectedTemplate(); batch.Controls.Add(deleteTemplate);
+            batch.Controls.Add(LabelFor("跨项目门窗方案库")); LoadTemplateChoices(); batch.Controls.Add(_templateChoice);
+            var applyTemplate = ButtonFor("应用方案到多选/勾选"); applyTemplate.Click += (s, e) => ApplySelectedTemplate(); batch.Controls.Add(applyTemplate);
+            var saveTemplate = ButtonFor("当前项保存为方案"); saveTemplate.Click += (s, e) => SaveCurrentAsTemplate(); batch.Controls.Add(saveTemplate);
+            var deleteTemplate = ButtonFor("删除方案"); deleteTemplate.Click += (s, e) => DeleteSelectedTemplate(); batch.Controls.Add(deleteTemplate);
             batch.Controls.Add(LabelFor("出图比例")); batch.Controls.Add(_drawingScale);
             batch.Controls.Add(_insertFrame); batch.Controls.Add(_useTianzhengTitle);
             batch.Controls.Add(_floorStatistics); batch.Controls.Add(_addCurrentFloor); batch.Controls.Add(_pickFloorTable); batch.Controls.Add(_clearFloorTables);
@@ -446,7 +449,7 @@ namespace BatchPdfPublisher.Views
 
         private static DoorWindowScheduleItem CloneScheduleItem(DoorWindowScheduleItem x)
         {
-            return new DoorWindowScheduleItem
+            var clone = new DoorWindowScheduleItem
             {
                 Selected = x.Selected, Sequence = x.Sequence, Code = x.Code, SourceCategory = x.SourceCategory, Width = x.Width, Height = x.Height, Quantity = x.Quantity,
                 SourceNote = x.SourceNote, Material = x.Material, AtlasName = x.AtlasName, Remarks = x.Remarks, SillHeight = x.SillHeight, SillHeightSuppressed = x.SillHeightSuppressed,
@@ -457,6 +460,9 @@ namespace BatchPdfPublisher.Views
                 BayLeftSide = x.BayLeftSide, BayRightSide = x.BayRightSide, BayLeftDepth = x.BayLeftDepth, BayRightDepth = x.BayRightDepth, BayLeftCellLayout = x.BayLeftCellLayout,
                 BayRightCellLayout = x.BayRightCellLayout, Status = x.Status, SourceRow = x.SourceRow, LockedPage = x.LockedPage
             };
+            foreach (var quantity in x.FloorQuantities)
+                clone.FloorQuantities.Add(new DoorWindowFloorQuantity { FloorName = quantity.FloorName, PerFloorQuantity = quantity.PerFloorQuantity, FloorCount = quantity.FloorCount });
+            return clone;
         }
 
         private void ApplyBatch()
@@ -505,6 +511,31 @@ namespace BatchPdfPublisher.Views
             var targets = OperationTargets();
             foreach (var item in targets) { DoorWindowElevationSuggestionService.Apply(item); UpdateStatus(item); }
             _grid.Refresh(); UpdateSummary(); UpdatePreview();
+        }
+
+        /// <summary>
+        /// 明确的回退入口：仅重置可编辑的立面做法，不改变编号、洞口尺寸、数量、来源、图集名称和备注。
+        /// 蓝色多选行优先；未多选时按“生成”勾选项处理，避免误把整张表恢复默认。
+        /// </summary>
+        private void RestoreDefaultStyles()
+        {
+            CommitGridEdits();
+            var targets = OperationTargets();
+            if (targets.Count == 0)
+            {
+                MessageBox.Show(this, "请先多选或勾选需要恢复默认样式的门窗。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            var message = "将按当前系统默认重新生成所选 " + targets.Count + " 项的外框、分隔、安装缝、材质和分格。\r\n"
+                + "编号、洞口尺寸、数量、来源、图集名称和备注不会改变。\r\n\r\n是否继续？";
+            if (MessageBox.Show(this, message, "恢复默认样式", MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
+            foreach (var item in targets)
+            {
+                DoorWindowElevationSuggestionService.Apply(item);
+                UpdateStatus(item);
+            }
+            _grid.Refresh(); UpdateSummary(); UpdatePreview();
+            _status.Text = "已将 " + targets.Count + " 项门窗恢复为当前默认样式；可继续双击编辑分格。";
         }
 
         private void LoadTemplateChoices(string selectedId = null)
@@ -608,8 +639,18 @@ namespace BatchPdfPublisher.Views
 
         private void SaveSession()
         {
+            var baseItems = _baseSource != null && _baseSource.Items != null && _baseSource.Items.Count > 0
+                ? _baseSource.Items
+                : _rows.ToList();
             _store.SaveSession(_floorStatistics.Checked, _baseSource == null ? null : _baseSource.SourceHandle,
-                _floorSources.Select(x => new DoorWindowFloorSourcePreference { FloorName = x.FloorName, FloorCount = x.FloorCount, SourceHandle = x.SourceHandle }));
+                baseItems.Select(CloneScheduleItem),
+                _floorSources.Select(x => new DoorWindowFloorSourcePreference
+                {
+                    FloorName = x.FloorName,
+                    FloorCount = x.FloorCount,
+                    SourceHandle = x.SourceHandle,
+                    Items = x.Items.Select(CloneScheduleItem).ToList()
+                }));
         }
 
         private void RestoreSavedSession()
@@ -624,8 +665,11 @@ namespace BatchPdfPublisher.Views
                     foreach (var source in session.FloorSources)
                     {
                         DoorWindowScheduleReadResult result;
-                        if (!TryReadSourceByHandle(source.SourceHandle, out result)) continue;
-                        restored.Add(new FloorScheduleSource { FloorName = source.FloorName, FloorCount = Math.Max(1, source.FloorCount), SourceHandle = source.SourceHandle, Items = result.Items.ToList() });
+                        var items = TryReadSourceByHandle(source.SourceHandle, out result)
+                            ? result.Items.Select(CloneScheduleItem).ToList()
+                            : (source.Items ?? new List<DoorWindowScheduleItem>()).Select(CloneScheduleItem).ToList();
+                        if (items.Count == 0) continue;
+                        restored.Add(new FloorScheduleSource { FloorName = source.FloorName, FloorCount = Math.Max(1, source.FloorCount), SourceHandle = source.SourceHandle, Items = items });
                     }
                     if (restored.Count > 0)
                     {
@@ -641,10 +685,15 @@ namespace BatchPdfPublisher.Views
                         return;
                     }
                 }
-                if (!string.IsNullOrWhiteSpace(session.BaseSourceHandle))
+                if (!string.IsNullOrWhiteSpace(session.BaseSourceHandle) || (session.BaseItems != null && session.BaseItems.Count > 0))
                 {
                     DoorWindowScheduleReadResult result;
-                    if (TryReadSourceByHandle(session.BaseSourceHandle, out result))
+                    if (!TryReadSourceByHandle(session.BaseSourceHandle, out result) && session.BaseItems != null && session.BaseItems.Count > 0)
+                    {
+                        result = new DoorWindowScheduleReadResult { SourceHandle = session.BaseSourceHandle, SourceDxfName = "已保存门窗表", Adapter = "项目快照" };
+                        result.Items.AddRange(session.BaseItems.Select(CloneScheduleItem));
+                    }
+                    if (result != null && result.Items.Count > 0)
                     {
                         _baseSource = result; _changingFloorMode = true; _floorStatistics.Checked = false; _changingFloorMode = false; _addCurrentFloor.Enabled = false; LoadSource(result);
                     }
@@ -804,7 +853,7 @@ namespace BatchPdfPublisher.Views
             if (_insertFrame.Checked)
             {
                 var saved = DoorWindowLayoutPreviewForm.LoadSavedMargins();
-                using (var preview = new DoorWindowLayoutPreviewForm(ready, scale, null, saved.IncludeSchedule, saved.IncludeScheduleNotes, _useTianzhengTitle.Checked))
+                using (var preview = new DoorWindowLayoutPreviewForm(_document, ready, scale, null, saved.IncludeSchedule, saved.IncludeScheduleNotes, _useTianzhengTitle.Checked))
                 {
                     if (preview.ShowDialog(this) != DialogResult.OK) return;
                     ready = preview.OrderedItems.ToList();

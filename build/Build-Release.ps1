@@ -128,8 +128,33 @@ function Invoke-Checked([scriptblock]$Command, [string]$Description) {
 Assert-ChildPath $OutputRoot $distRoot '发布输出目录'
 Assert-ChildPath $artifactRoot (Join-Path $repositoryRoot '.artifacts') '中间目录'
 
+# Capture source identity before any packaging step regenerates tracked payloads.
+$sourceGitCommit = ''
+$sourceGitBranch = ''
+$sourceGitDirty = $false
+if (Test-Path -LiteralPath (Join-Path $repositoryRoot '.git')) {
+    $sourceGitCommit = (& git -C $repositoryRoot rev-parse HEAD 2>$null | Select-Object -First 1)
+    $sourceGitBranch = (& git -C $repositoryRoot branch --show-current 2>$null | Select-Object -First 1)
+    $sourceGitDirty = [bool](& git -C $repositoryRoot status --porcelain 2>$null | Select-Object -First 1)
+}
+
+$productVersionSource = Join-Path $repositoryRoot 'Shared\ProductVersion.cs'
+$productVersionText = Get-Content -LiteralPath $productVersionSource -Raw
+$productVersionMatch = [regex]::Match($productVersionText, 'Semantic\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"')
+if (-not $productVersionMatch.Success) { throw '无法从 Shared\ProductVersion.cs 读取产品版本。' }
+$productVersion = $productVersionMatch.Groups[1].Value
+foreach ($versionedFile in @(
+    'StairDetail\src\WL.Stair.Core\Properties\AssemblyInfo.cs',
+    'StairDetail\src\WL.Stair.Cad2022\Properties\AssemblyInfo.cs',
+    'StairDetail\packaging\PackageContents.2022.xml',
+    'CadArchSpecEditor\Directory.Build.props')) {
+    $versionedText = Get-Content -LiteralPath (Join-Path $repositoryRoot $versionedFile) -Raw
+    if ($versionedText -notmatch [regex]::Escape($productVersion)) {
+        throw "组件版本未与 $productVersion 同步：$versionedFile"
+    }
+}
+
 $installations = @(Find-AutoCadInstallations)
-if ($installations.Count -eq 0) { throw '未找到安装了 .NET API 的 AutoCAD 2021-2026。' }
 
 $available = @{}
 foreach ($installation in $installations) {
@@ -139,14 +164,31 @@ foreach ($installation in $installations) {
     }
 }
 
+# R25 targets .NET 8. Autodesk's official compile-time package allows a full
+# R25 build on an R24-only workstation. AutoCAD still supplies runtime APIs.
+if (-not $available.ContainsKey('R25')) {
+    $available['R25'] = [pscustomobject]@{
+        Year = 2026
+        Path = ''
+        Source = 'AutoCAD.NET 25.0.1'
+    }
+}
+
 if (-not $Bands -or $Bands.Count -eq 0) { $Bands = @($available.Keys | Sort-Object) }
 $Bands = @($Bands | ForEach-Object { $_.Trim().ToUpperInvariant() } | Select-Object -Unique)
 foreach ($band in $Bands) {
     if ($band -notin @('R24','R25')) { throw "不支持的 API 组：$band。当前仅支持 AutoCAD 2021-2026。" }
-    if (-not $available.ContainsKey($band)) { throw "本机没有可用于 $band 的 AutoCAD API。请安装对应 CAD，或使用 build\AutodeskSdk 方案。" }
+    if (-not $available.ContainsKey($band)) { throw "本机没有可用于 $band 的 AutoCAD API。R24 需要安装对应 CAD。" }
 }
 
-if (Test-Path -LiteralPath $OutputRoot) { Remove-Item -LiteralPath $OutputRoot -Recurse -Force }
+if (Test-Path -LiteralPath $OutputRoot) {
+    # User projects, registrations and settings must survive an in-place update.
+    # Clean only generated payloads and leave the legacy portable data available
+    # for the new version's one-time migration to the stable AppData location.
+    Get-ChildItem -LiteralPath $OutputRoot -Force |
+        Where-Object { $_.Name -ne '用户配置文件' } |
+        Remove-Item -Recurse -Force
+}
 if (-not $KeepIntermediate -and (Test-Path -LiteralPath $artifactRoot)) { Remove-Item -LiteralPath $artifactRoot -Recurse -Force }
 New-Item -ItemType Directory -Path $OutputRoot, $artifactRoot -Force | Out-Null
 
@@ -161,17 +203,28 @@ foreach ($band in $Bands) {
     $bandOutput = Join-Path $OutputRoot "CadApi\$band"
     $bandObject = Join-Path $artifactRoot "obj-$band\"
     New-Item -ItemType Directory -Path $bandOutput, $bandObject -Force | Out-Null
-    Write-Host "[$band] AutoCAD $($installation.Year): $($installation.Path)" -ForegroundColor Cyan
+    $apiDescription = if ([string]::IsNullOrWhiteSpace($installation.Path)) { $installation.Source } else { $installation.Path }
+    Write-Host "[$band] AutoCAD $($installation.Year): $apiDescription" -ForegroundColor Cyan
 
     if ($band -eq 'R25') {
         $dotnet = Find-DotNet8
         $project = Join-Path $repositoryRoot 'BatchPdfPublisher\BatchPdfPublisher.Net8.csproj'
-        Invoke-Checked {
-            & $dotnet build $project -c Release --nologo `
-                "-p:AutoCadApiPath=$($installation.Path)" `
-                "-p:OutputPath=$bandOutput\" `
-                "-p:BaseIntermediateOutputPath=$bandObject"
-        } "编译 $band"
+        if ([string]::IsNullOrWhiteSpace($installation.Path)) {
+            Invoke-Checked {
+                & $dotnet build $project -c Release --nologo `
+                    '-p:UseAutoCadNuGet=true' `
+                    "-p:OutputPath=$bandOutput\" `
+                    "-p:BaseIntermediateOutputPath=$bandObject"
+            } "编译 $band"
+        }
+        else {
+            Invoke-Checked {
+                & $dotnet build $project -c Release --nologo `
+                    "-p:AutoCadApiPath=$($installation.Path)" `
+                    "-p:OutputPath=$bandOutput\" `
+                    "-p:BaseIntermediateOutputPath=$bandObject"
+            } "编译 $band"
+        }
     }
     else {
         $project = Join-Path $repositoryRoot 'BatchPdfPublisher\BatchPdfPublisher.csproj'
@@ -191,12 +244,83 @@ foreach ($band in $Bands) {
     $buildRecords += [pscustomobject]@{
         Band = $band
         AutoCadYear = $installation.Year
-        ApiPath = $installation.Path
+        ApiPath = $apiDescription
         PluginSha256 = (Get-FileHash -LiteralPath $plugin -Algorithm SHA256).Hash
     }
 }
 
+$windowsMetadata = Get-ChildItem (Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\UnionMetadata') -Filter Windows.winmd -Recurse -ErrorAction SilentlyContinue |
+    Where-Object { $_.Directory.Name -match '^10\.' } | Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+if (-not $windowsMetadata) { throw '找不到 Windows 10/11 SDK 的 Windows.winmd，无法编译本地 OCR Worker。' }
+$ocrWorkerProject = Join-Path $repositoryRoot 'LineVisionOcrWorker\LineVisionOcrWorker.csproj'
+$ocrWorkerOutput = Join-Path $artifactRoot 'linevision-ocr-worker'
+New-Item -ItemType Directory -Path $ocrWorkerOutput -Force | Out-Null
+Invoke-Checked {
+    & $msbuild $ocrWorkerProject /t:Rebuild /p:Configuration=Release `
+        "/p:TargetFrameworkVersion=$framework" `
+        "/p:WindowsMetadataPath=$windowsMetadata" `
+        "/p:OutputPath=$ocrWorkerOutput\" /v:minimal
+} '编译图像转 CAD 本地 OCR Worker'
+$ocrWorker = Join-Path $ocrWorkerOutput 'LineVisionOcrWorker.exe'
+if (-not (Test-Path -LiteralPath $ocrWorker)) { throw '本地 OCR Worker 没有生成。' }
+foreach ($band in $Bands) { Copy-Item -LiteralPath $ocrWorker -Destination (Join-Path $OutputRoot "CadApi\$band\LineVisionOcrWorker.exe") -Force }
+
+$vectorWorkerProject = Join-Path $repositoryRoot 'LineVisionVectorWorker\LineVisionVectorWorker.csproj'
+$vectorWorkerOutput = Join-Path $artifactRoot 'linevision-vector-worker'
+$vectorWorkerObject = Join-Path $artifactRoot 'obj-linevision-vector-worker\'
+New-Item -ItemType Directory -Path $vectorWorkerOutput, $vectorWorkerObject -Force | Out-Null
+Invoke-Checked {
+    & $msbuild $vectorWorkerProject /t:Rebuild /p:Configuration=Release `
+        "/p:TargetFrameworkVersion=$framework" "/p:OutputPath=$vectorWorkerOutput\" `
+        "/p:BaseIntermediateOutputPath=$vectorWorkerObject" /v:minimal
+} '编译图像转 CAD 矢量化 Worker'
+$vectorWorker = Join-Path $vectorWorkerOutput 'LineVisionVectorWorker.exe'
+$vtracer = Join-Path $repositoryRoot 'ThirdParty\VTracer\win-x64\vtracer.exe'
+if (-not (Test-Path -LiteralPath $vectorWorker) -or -not (Test-Path -LiteralPath $vtracer)) { throw '矢量化 Worker 或 vtracer.exe 没有生成。' }
+foreach ($band in $Bands) {
+    $bandPath = Join-Path $OutputRoot "CadApi\$band"
+    Copy-Item -LiteralPath $vectorWorker, $vtracer -Destination $bandPath -Force
+    Copy-Item -LiteralPath (Join-Path $repositoryRoot 'ThirdParty\VTracer\LICENSE.txt') -Destination (Join-Path $bandPath 'VTracer-LICENSE.txt') -Force
+    Copy-Item -LiteralPath (Join-Path $repositoryRoot 'ThirdParty\SkeletonTracing\LICENSE.txt') -Destination (Join-Path $bandPath 'SkeletonTracing-LICENSE.txt') -Force
+}
+
+$lineVisionTests = Join-Path $repositoryRoot 'BatchPdfPublisher.Tests\BatchPdfPublisher.LineVision.Tests.csproj'
+$testDotNet = Find-DotNet8
+Invoke-Checked {
+    $previousWorker = $env:WANLUO_LINEVISION_OCR_WORKER
+    $previousVectorWorker = $env:WANLUO_LINEVISION_VECTOR_WORKER
+    try {
+        Copy-Item -LiteralPath $vtracer -Destination $vectorWorkerOutput -Force
+        $env:WANLUO_LINEVISION_OCR_WORKER = $ocrWorker; $env:WANLUO_LINEVISION_VECTOR_WORKER = $vectorWorker
+        & $testDotNet run --project $lineVisionTests -c Release --nologo
+    }
+    finally { $env:WANLUO_LINEVISION_OCR_WORKER = $previousWorker; $env:WANLUO_LINEVISION_VECTOR_WORKER = $previousVectorWorker }
+} '图像转 CAD 算法和 OCR 测试'
+
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'Resources') -Destination (Join-Path $OutputRoot 'Resources') -Recurse -Force
+
+# Custom hatch definitions are user-visible, portable resources. Keep the
+# canonical copies under the plugin's user configuration folder so moving the
+# entire plugin directory to another computer preserves the stair materials.
+$hatchPatternSource = Join-Path $repositoryRoot 'StairDetail\assets\HatchPatterns'
+$hatchPatternTarget = Join-Path $OutputRoot '用户配置文件\填充素材'
+New-Item -ItemType Directory -Path $hatchPatternTarget -Force | Out-Null
+Copy-Item -Path (Join-Path $hatchPatternSource '*.pat') -Destination $hatchPatternTarget -Force
+
+# Rebuild the stair payload from the same source revision as the main plug-in.
+if ($Bands -contains 'R24') {
+    & (Join-Path $repositoryRoot 'build\Build-StairDetail-R24.ps1') -Configuration Release -AutoCadApiPath $available['R24'].Path
+}
+if ($Bands -contains 'R25') {
+    $r25DotNet = Find-DotNet8
+    & (Join-Path $repositoryRoot 'build\Build-StairDetail-R25.ps1') -Configuration Release `
+        -AutoCadApiPath $available['R25'].Path -DotNetPath $r25DotNet
+}
+$payloadDotNet = Find-DotNet8
+& (Join-Path $repositoryRoot 'build\Build-CadArchSpecPayload.ps1') -Bands $Bands `
+    -R24ApiPath $(if ($available.ContainsKey('R24')) { $available['R24'].Path } else { '' }) `
+    -R25ApiPath $(if ($available.ContainsKey('R25')) { $available['R25'].Path } else { '' }) `
+    -DotNetPath $payloadDotNet
 
 $launcherProject = Join-Path $repositoryRoot 'BatchPdfPublisherLauncher\BatchPdfPublisherLauncher.csproj'
 $launcherObject = Join-Path $artifactRoot 'obj-launcher\'
@@ -220,22 +344,18 @@ Copy-Item -LiteralPath (Join-Path $repositoryRoot 'COMPATIBILITY.md') -Destinati
 if (Test-Path -LiteralPath (Join-Path $repositoryRoot 'docs\BUILD_AND_INSTALL.md')) {
     Copy-Item -LiteralPath (Join-Path $repositoryRoot 'docs\BUILD_AND_INSTALL.md') -Destination (Join-Path $OutputRoot '构建与安装说明.md') -Force
 }
+if (Test-Path -LiteralPath (Join-Path $repositoryRoot 'docs\用户版安装说明.md')) {
+    Copy-Item -LiteralPath (Join-Path $repositoryRoot 'docs\用户版安装说明.md') -Destination (Join-Path $OutputRoot '用户版安装说明.md') -Force
+}
 
 # 源码发布目录可不携带 .git（便于用户只保留可编辑源码）。无 Git 时仍必须能完整构建。
-$gitCommit = ''
-$gitBranch = ''
-$gitDirty = $false
-if (Test-Path -LiteralPath (Join-Path $repositoryRoot '.git')) {
-    $gitCommit = (& git -C $repositoryRoot rev-parse HEAD 2>$null | Select-Object -First 1)
-    $gitBranch = (& git -C $repositoryRoot branch --show-current 2>$null | Select-Object -First 1)
-    $gitDirty = [bool](& git -C $repositoryRoot status --porcelain 2>$null | Select-Object -First 1)
-}
 $manifest = [ordered]@{
     Product = '万落建筑工具'
+    ProductVersion = $productVersion
     BuiltAt = (Get-Date).ToString('o')
-    GitCommit = $gitCommit
-    GitBranch = $gitBranch
-    GitDirty = $gitDirty
+    GitCommit = $sourceGitCommit
+    GitBranch = $sourceGitBranch
+    GitDirty = $sourceGitDirty
     LauncherSha256 = (Get-FileHash -LiteralPath $launcher -Algorithm SHA256).Hash
     Bands = $buildRecords
 }

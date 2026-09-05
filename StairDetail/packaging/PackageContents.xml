@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ApplicationPackage
+  SchemaVersion="1.0"
+  AppVersion="1.4.5"
+  ProductCode="{98BF4480-F7F9-42CB-AEE3-F3F9C3B0D6DB}"
+  Name="WanLuo Architecture"
+  Description="WanLuo Architecture stair detail prototype"
+  Author="WanLuo Architecture">
+  <CompanyDetails Name="WanLuo Architecture" />
+  <Components Description="AutoCAD 2024 component" RuntimeRequirements="OS=Win64|Platform=AutoCAD*|SeriesMin=R24.3|SeriesMax=R24.3">
+    <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R24.3" SeriesMax="R24.3" />
+    <ComponentEntry
+      AppName="WL.Stair.Cad2024"
+      ModuleName="./Contents/Windows/2024/WL.Stair.Cad2024.dll"
+      AppDescription="One-click stair detail prototype"
+      LoadOnCommandInvocation="True">
+      <Commands GroupName="WL_STAIRS">
+        <Command Global="LTDY" Local="LTDY" />
+      </Commands>
+    </ComponentEntry>
+  </Components>
+</ApplicationPackage>

@@ -172,6 +172,14 @@ namespace BatchPdfPublisher.Services
                 group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(2, 14), new WpfPoint(8, 8))));
                 group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(14, 14), new WpfPoint(8, 8))));
             }
+            else if (kind == "image")
+            {
+                group.Children.Add(new GeometryDrawing(Brushes.White, pen, new RectangleGeometry(new WpfRect(2, 3, 12, 10))));
+                group.Children.Add(new GeometryDrawing(brush, null, new EllipseGeometry(new WpfPoint(5, 6), 1.4, 1.4)));
+                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(3, 12), new WpfPoint(7, 8))));
+                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(7, 8), new WpfPoint(10, 11))));
+                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(10, 11), new WpfPoint(13, 7))));
+            }
             else if (kind == "spec")
             {
                 group.Children.Add(new GeometryDrawing(Brushes.White, pen, new RectangleGeometry(new WpfRect(3, 2, 10, 12))));

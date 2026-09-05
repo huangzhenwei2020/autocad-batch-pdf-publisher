@@ -51,6 +51,7 @@ namespace BatchPdfPublisher.Services
         private sealed class ElevationPlacement
         {
             public DoorWindowScheduleItem Item;
+            public DoorWindowElevationGeometry Geometry;
             public double InnerGap, OuterGap, LowerExtent, UpperExtent, BayLeftExtent, BayRightExtent;
             public double TotalWidth { get { return BayLeftExtent + Item.Width + BayRightExtent; } }
         }
@@ -58,12 +59,15 @@ namespace BatchPdfPublisher.Services
         /// <summary>排版参数（纸面毫米，插入时按出图比例换算）。</summary>
         public sealed class DoorWindowLayoutOptions
         {
-            public double LeftMargin = 20d;
-            public double RightMargin = 20d;
-            public double TopMargin = 15d;
+            public double LeftMargin = 40d;
+            public double RightMargin = 80d;
+            public double TopMargin = 20d;
             public double BottomMargin = 20d;
             public double PageGap = 30d;
-            public double ItemGap = 12d;
+            public double ItemGap = 5d;
+            public double BoundaryGap = 10d;
+            public string LayoutFrameRegistrationId;
+            public string LayoutFrameBlockName;
             /// <summary>横向排版时标题栏占用宽度（纸面毫米），0 表示不预留。</summary>
             public double TitleBlockWidth = 0d;
             /// <summary>是否插入独立门窗表；不占用图框排版范围。</summary>
@@ -90,10 +94,18 @@ namespace BatchPdfPublisher.Services
             public double ContentLeft, ContentRight, ContentBottom, ContentTop;
             public int PageCount;
             public readonly List<DoorWindowLayoutSlot> Slots = new List<DoorWindowLayoutSlot>();
-            /// <summary>第一页顶部门窗表占用高度（模型单位），0 表示不插入门窗表。</summary>
+            /// <summary>门窗表占用高度（模型单位），0 表示不插入门窗表。</summary>
             public double ScheduleHeight;
-            /// <summary>第一页门窗表下方设计说明占用高度（模型单位），0 表示不插入说明。</summary>
+            /// <summary>设计说明占用高度（模型单位），0 表示不插入说明。</summary>
             public double ScheduleNotesHeight;
+            public readonly List<DoorWindowLayoutAttachment> Attachments = new List<DoorWindowLayoutAttachment>();
+        }
+
+        public sealed class DoorWindowLayoutAttachment
+        {
+            public string Kind;
+            public int Page;
+            public double X, Top, Width, Height;
         }
 
         /// <summary>按登记图框纸张与排版参数分页计算每个门窗的槽位。占位含标注外框。</summary>
@@ -106,18 +118,23 @@ namespace BatchPdfPublisher.Services
                 throw new InvalidOperationException("图框“" + frame.PaperDisplay + "”的纸张尺寸无效。");
             var pageWidth = paper[0] * scale; var pageHeight = paper[1] * scale;
             var opts = options ?? new DoorWindowLayoutOptions();
-            var leftMargin = Math.Max(0d, opts.LeftMargin) * scale;
-            var rightMargin = (Math.Max(0d, opts.RightMargin) + Math.Max(0d, opts.TitleBlockWidth)) * scale;
-            var bottomMargin = Math.Max(0d, opts.BottomMargin) * scale;
-            var topMargin = Math.Max(0d, opts.TopMargin) * scale;
+            if (!FrameLayoutRangeService.HasValidRange(frame)) throw new InvalidOperationException("图框“" + frame.DisplayName + "”尚未登记排版范围。");
+            var itemGap = Math.Max(0d, opts.ItemGap) * scale;
+            var boundaryGap = Math.Max(0d, opts.BoundaryGap) * scale;
+            var leftMargin = frame.LayoutLeftMargin * scale + boundaryGap;
+            var rightMargin = frame.LayoutRightMargin * scale + boundaryGap;
+            var bottomMargin = frame.LayoutBottomMargin * scale + boundaryGap;
+            var topMargin = frame.LayoutTopMargin * scale + boundaryGap;
             var contentLeft = leftMargin; var contentRight = pageWidth - rightMargin; var contentBottom = bottomMargin; var contentTop = pageHeight - topMargin;
             if (contentRight <= contentLeft || contentTop <= contentBottom) throw new InvalidOperationException("登记图框的可排版区域无效。");
             var plan = new DoorWindowLayoutPlan { PageWidth = pageWidth, PageHeight = pageHeight, ContentLeft = contentLeft, ContentRight = contentRight, ContentBottom = contentBottom, ContentTop = contentTop };
-            var items = DoorWindowTypeOrdering.Sort(source);
-            var itemGap = Math.Max(0d, opts.ItemGap) * scale;
-            // 门窗表和设计说明是独立、可移动的 CAD 对象，不参与图框内的门窗排版占位。
-            plan.ScheduleHeight = 0d;
-            plan.ScheduleNotesHeight = 0d;
+            // Preserve the preview's user-defined order. The caller supplies the
+            // initial type order; re-sorting here would silently undo dragging.
+            var items = (source ?? new List<DoorWindowScheduleItem>()).Where(x => x != null).ToList();
+            // 门窗表和设计说明仍是独立 CAD 对象，但作为附件排在全部门窗之后并占用图框内容区。
+            plan.ScheduleHeight = opts.IncludeSchedule ? (items.Count + 2d) * 5.5d * scale : 0d;
+            var notesWidth = Math.Min(180d * scale, contentRight - contentLeft);
+            plan.ScheduleNotesHeight = opts.IncludeScheduleNotes ? EstimateScheduleNotesHeight(notesWidth, scale) : 0d;
             // 顺序：先左右后上下——第一行在顶部，同一行从左到右排满后换到下一行。
             // slot.X/slot.Y 统一为立面插入原点（左下角，相对页原点，模型单位）。
             // 每页独立游标：锁定项先放入指定页，未锁定项再按顺序流式填充（自动跳过已被占用的页/行）。
@@ -129,14 +146,31 @@ namespace BatchPdfPublisher.Services
                 if (!pageCursors.TryGetValue(page, out cursor)) { cursor = new PageCursor { X = contentLeft, Y = contentTop }; pageCursors[page] = cursor; }
                 return cursor;
             }
+            var attachmentPage = 0;
+            var attachmentTop = contentTop;
+            Action<string, double, double> placeAttachment = (kind, width, height) =>
+            {
+                if (width <= 0d || height <= 0d) return;
+                if (width > contentRight - contentLeft || height > contentTop - contentBottom)
+                    throw new InvalidOperationException((kind == "Schedule" ? "门窗表" : "门窗设计说明") + "放不进所选 " + frame.PaperDisplay + " 图框的排版区域，请选择更大或加长图框。 ");
+                if (attachmentTop - height < contentBottom)
+                {
+                    attachmentPage++;
+                    attachmentTop = contentTop;
+                }
+                plan.Attachments.Add(new DoorWindowLayoutAttachment { Kind = kind, Page = attachmentPage, X = contentLeft, Top = attachmentTop, Width = width, Height = height });
+                attachmentTop -= height + itemGap;
+                pageCursors[attachmentPage] = new PageCursor { X = contentLeft, Y = attachmentTop, RowHeight = 0d };
+                maxPage = Math.Max(maxPage, attachmentPage);
+            };
             // 放置单个门窗。锁定项放不下指定页时抛错；未锁定项返回 false 表示该页放不下需换页。
             Func<DoorWindowScheduleItem, int, bool, bool> place = (item, page, locked) =>
             {
                 if (double.IsNaN(item.Width) || double.IsInfinity(item.Width) || double.IsNaN(item.Height) || double.IsInfinity(item.Height) || item.Width <= 0d || item.Height <= 0d)
                     throw new InvalidOperationException("门窗“" + (item.Code ?? "未编号") + "”的洞口尺寸无效，请重新读取门窗表。");
                 var placement = CreatePlacement(item, drawingScale);
-                var footprintWidth = placement.OuterGap * 2d + placement.TotalWidth + itemGap;
-                var footprintHeight = placement.UpperExtent + placement.LowerExtent + item.Height + itemGap;
+                var footprintWidth = placement.OuterGap * 2d + placement.TotalWidth;
+                var footprintHeight = placement.UpperExtent + placement.LowerExtent + item.Height;
                 // 任何一页都放不下（含未锁定项换页到后续页）才报错；锁定项在指定页放不下由下方页内检查专门提示。
                 if (footprintWidth > contentRight - contentLeft || footprintHeight > contentTop - contentBottom)
                     throw new InvalidOperationException("门窗“" + item.Code + "”在 1:" + scale + " 时放不进所选 " + frame.PaperDisplay + " 图框，请选择更大或加长图框。");
@@ -166,6 +200,19 @@ namespace BatchPdfPublisher.Services
             var currentPage = 0;
             foreach (var item in items.Where(x => x.LockedPage <= 0))
                 while (!place(item, currentPage, false)) currentPage++;
+            // 附件从最后一个门窗所在页的下一行开始，放不下时再增加图框页。
+            attachmentPage = maxPage;
+            var lastCursor = CursorFor(attachmentPage);
+            attachmentTop = lastCursor.X > contentLeft || lastCursor.RowHeight > 0d
+                ? lastCursor.Y - lastCursor.RowHeight - itemGap
+                : lastCursor.Y;
+            if (opts.IncludeSchedule)
+            {
+                var floorCount = items.SelectMany(x => x.FloorQuantities).Select(x => x.FloorName).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.CurrentCultureIgnoreCase).Count();
+                var schedulePaperWidth = floorCount > 0 ? Math.Max(165d, 145d + floorCount * 15d) : 165d;
+                placeAttachment("Schedule", schedulePaperWidth * scale, plan.ScheduleHeight);
+            }
+            if (opts.IncludeScheduleNotes) placeAttachment("Notes", notesWidth, plan.ScheduleNotesHeight);
             plan.PageCount = maxPage + 1;
             return plan;
         }
@@ -189,7 +236,7 @@ namespace BatchPdfPublisher.Services
             FrameDefinition best = null; var bestPages = int.MaxValue; var bestArea = double.MaxValue;
             foreach (var frame in candidates)
             {
-                if (frame == null || string.IsNullOrWhiteSpace(frame.BlockName)) continue;
+                if (frame == null || string.IsNullOrWhiteSpace(frame.BlockName) || !FrameLayoutRangeService.HasValidRange(frame)) continue;
                 var key = (frame.PaperSize ?? string.Empty) + "|" + (frame.Extension ?? string.Empty) + "|" + (frame.PaperOrientation ?? string.Empty);
                 if (!seen.Add(key)) continue; // 同纸张同方向的多个块只比一次
                 double area;
@@ -212,7 +259,7 @@ namespace BatchPdfPublisher.Services
         public static int Insert(Document document, IList<DoorWindowScheduleItem> source, int drawingScale, FrameDefinition frame, Action<int, int, string> progress = null, DoorWindowLayoutOptions layoutOptions = null)
         {
             if (document == null) throw new ArgumentNullException("document");
-            var items = DoorWindowTypeOrdering.Sort((source ?? new List<DoorWindowScheduleItem>()).Where(x => x.Selected && (x.Status ?? string.Empty).Contains("可生成")));
+            var items = (source ?? new List<DoorWindowScheduleItem>()).Where(x => x != null && x.Selected && (x.Status ?? string.Empty).Contains("可生成")).ToList();
             if (items.Count == 0) throw new InvalidOperationException("没有勾选参数完整的门窗。");
             drawingScale = Math.Max(1, drawingScale);
             var useTianzhengTitle = layoutOptions == null || layoutOptions.UseTianzhengTitle;
@@ -221,20 +268,25 @@ namespace BatchPdfPublisher.Services
             {
                 var pointResult = document.Editor.GetPoint("\n指定批量门窗立面左下角插入点: ");
                 if (pointResult.Status != PromptStatus.OK) return 0;
+                var insertionTiming = System.Diagnostics.Stopwatch.StartNew();
+                long preparationMilliseconds;
                 // 无图框：连续排列。
                 using (var transaction = document.Database.TransactionManager.StartTransaction())
                 {
                     var database = document.Database;
                     DoorWindowElevationMetadataService.EnsureRegistered(database, transaction);
                     var profile = DraftingStandardService.LoadProfile();
-                    var resources = DraftingStandardService.EnsureAll(database, transaction, profile, profile.UpdateExisting);
+                    // 门窗立面必须使用插件统一标注资源；即使图纸中已有同名样式也按当前插件配置刷新。
+                    var resources = DraftingStandardService.EnsureAll(database, transaction, profile, true);
                     var dimensionStyle = DraftingStandardService.EnsureDimensionStyleForScale(database, transaction, drawingScale, profile, resources, true);
+                    var doorWindowLayers = EnsureDoorWindowLayers(database, transaction);
+                    preparationMilliseconds = insertionTiming.ElapsedMilliseconds;
                     var space = (BlockTableRecord)transaction.GetObject(database.CurrentSpaceId, OpenMode.ForWrite);
                     var elevations = items.Select(item => CreatePlacement(item, drawingScale)).ToList();
-                    InsertContinuous(elevations, pointResult.Value, drawingScale, space, transaction, resources, dimensionStyle, progress, useTianzhengTitle);
+                    InsertContinuous(elevations, pointResult.Value, drawingScale, space, transaction, resources, dimensionStyle, doorWindowLayers, progress, useTianzhengTitle);
                     transaction.Commit();
                 }
-                document.Editor.Regen();
+                LogInsertionTiming(document, items.Count, false, preparationMilliseconds, insertionTiming.ElapsedMilliseconds);
                 document.Editor.WriteMessage("\n已插入 " + items.Count + " 个可独立编辑的门窗立面。几何按实际毫米 1:1 绘制，标注采用万落建筑工具 1:" + drawingScale + " 标注样式。\n");
                 return items.Count;
             }
@@ -243,21 +295,25 @@ namespace BatchPdfPublisher.Services
             FrameTemplateStore.EnsureAvailable(document.Database, frame);
             var framePoint = document.Editor.GetPoint("\n指定第一张门窗立面图框左下角插入点: ");
             if (framePoint.Status != PromptStatus.OK) return 0;
+            var pagedTiming = System.Diagnostics.Stopwatch.StartNew();
+            long pagedPreparationMilliseconds;
             var pageCount = 0;
             using (var transaction = document.Database.TransactionManager.StartTransaction())
             {
                 var database = document.Database;
                 DoorWindowElevationMetadataService.EnsureRegistered(database, transaction);
                 var profile = DraftingStandardService.LoadProfile();
-                var resources = DraftingStandardService.EnsureAll(database, transaction, profile, profile.UpdateExisting);
+                var resources = DraftingStandardService.EnsureAll(database, transaction, profile, true);
                 var dimensionStyle = DraftingStandardService.EnsureDimensionStyleForScale(database, transaction, drawingScale, profile, resources, true);
+                var doorWindowLayers = EnsureDoorWindowLayers(database, transaction);
+                pagedPreparationMilliseconds = pagedTiming.ElapsedMilliseconds;
                 var blocks = (BlockTable)transaction.GetObject(database.BlockTableId, OpenMode.ForWrite);
                 var space = (BlockTableRecord)transaction.GetObject(database.CurrentSpaceId, OpenMode.ForWrite);
                 var elevations = items.Select(item => CreatePlacement(item, drawingScale)).ToList();
-                pageCount = InsertPaged(elevations, framePoint.Value, drawingScale, frame, blocks, space, transaction, resources, dimensionStyle, progress, layoutOptions);
+                pageCount = InsertPaged(elevations, framePoint.Value, drawingScale, frame, blocks, space, transaction, resources, dimensionStyle, doorWindowLayers, progress, layoutOptions);
                 transaction.Commit();
             }
-            document.Editor.Regen();
+            LogInsertionTiming(document, items.Count, true, pagedPreparationMilliseconds, pagedTiming.ElapsedMilliseconds);
             document.Editor.WriteMessage("\n已插入 " + items.Count + " 个可独立编辑的门窗立面，自动排入 " + pageCount + " 张 " + frame.PaperDisplay + " 图框。几何按实际毫米 1:1 绘制，标注采用万落建筑工具 1:" + drawingScale + " 标注样式。\n");
             return items.Count;
         }
@@ -355,7 +411,6 @@ namespace BatchPdfPublisher.Services
             var item = (source ?? new List<DoorWindowScheduleItem>()).FirstOrDefault(x =>
                 string.Equals(x.Code, metadata.Code, StringComparison.OrdinalIgnoreCase) &&
                 Math.Abs(x.Width - metadata.Width) < 0.01 && Math.Abs(x.Height - metadata.Height) < 0.01) ?? metadata.ToItem();
-            DoorWindowElevationGeometryBuilder.Build(item);
             drawingScale = Math.Max(1, drawingScale);
             var replaced = 0;
             using (var transaction = document.Database.TransactionManager.StartTransaction())
@@ -363,8 +418,9 @@ namespace BatchPdfPublisher.Services
                 var database = document.Database;
                 DoorWindowElevationMetadataService.EnsureRegistered(database, transaction);
                 var profile = DraftingStandardService.LoadProfile();
-                var resources = DraftingStandardService.EnsureAll(database, transaction, profile, profile.UpdateExisting);
+                var resources = DraftingStandardService.EnsureAll(database, transaction, profile, true);
                 var dimensionStyle = DraftingStandardService.EnsureDimensionStyleForScale(database, transaction, drawingScale, profile, resources, true);
+                var doorWindowLayers = EnsureDoorWindowLayers(database, transaction);
                 var space = (BlockTableRecord)transaction.GetObject(database.CurrentSpaceId, OpenMode.ForWrite);
                 var ids = DoorWindowElevationMetadataService.FindGroup(space, transaction, metadata.GroupId);
                 foreach (var id in ids)
@@ -373,12 +429,23 @@ namespace BatchPdfPublisher.Services
                     if (entity == null) continue;
                     entity.Erase(); replaced++;
                 }
-                InsertElevation(CreatePlacement(item, drawingScale), metadata.Origin, drawingScale, space, transaction, resources, dimensionStyle, metadata.GroupId);
+                InsertElevation(CreatePlacement(item, drawingScale), metadata.Origin, drawingScale, space, transaction, resources, dimensionStyle, doorWindowLayers, metadata.GroupId);
                 transaction.Commit();
             }
-            document.Editor.Regen();
             document.Editor.WriteMessage("\n门窗立面“" + (item.Code ?? "未编号") + "”已原位更新，替换 " + replaced + " 个插件生成对象。\n");
             return replaced;
+        }
+
+        private static void LogInsertionTiming(Document document, int count, bool withFrame, long preparationMilliseconds, long totalMilliseconds)
+        {
+            try
+            {
+                System.IO.File.AppendAllText(System.IO.Path.Combine(UserDataPaths.LogsDirectory, "door-window-insertion.log"),
+                    DateTime.Now.ToString("O") + " count=" + count + " withFrame=" + (withFrame ? "1" : "0") +
+                    " prepareMs=" + preparationMilliseconds + " insertCommitMs=" + Math.Max(0L, totalMilliseconds - preparationMilliseconds) +
+                    " totalMs=" + totalMilliseconds + " drawing=" + (document == null ? string.Empty : document.Database.Filename ?? string.Empty) + Environment.NewLine);
+            }
+            catch { }
         }
 
         private static ElevationPlacement CreatePlacement(DoorWindowScheduleItem item, int drawingScale)
@@ -388,14 +455,14 @@ namespace BatchPdfPublisher.Services
             var innerGap = 4d * drawingScale;
             var outerGap = 8d * drawingScale;
             var upperExtent = geometry.BayLeftExtent > 0d || geometry.BayRightExtent > 0d ? 11d * drawingScale : 0d;
-            return new ElevationPlacement { Item = item, InnerGap = innerGap, OuterGap = outerGap, LowerExtent = outerGap + 18d * drawingScale, UpperExtent = upperExtent, BayLeftExtent = geometry.BayLeftExtent, BayRightExtent = geometry.BayRightExtent };
+            return new ElevationPlacement { Item = item, Geometry = geometry, InnerGap = innerGap, OuterGap = outerGap, LowerExtent = outerGap + 18d * drawingScale, UpperExtent = upperExtent, BayLeftExtent = geometry.BayLeftExtent, BayRightExtent = geometry.BayRightExtent };
         }
 
-        private static void InsertElevation(ElevationPlacement elevation, Point3d origin, int drawingScale, BlockTableRecord space, Transaction transaction, DraftingStandardResources resources, ObjectId dimensionStyle, string existingGroupId = null, bool useTianzhengTitle = true)
+        private static void InsertElevation(ElevationPlacement elevation, Point3d origin, int drawingScale, BlockTableRecord space, Transaction transaction, DraftingStandardResources resources, ObjectId dimensionStyle, DoorWindowLayers doorWindowLayers, string existingGroupId = null, bool useTianzhengTitle = true)
         {
-            var item = elevation.Item; var geometry = DoorWindowElevationGeometryBuilder.Build(item);
+            var item = elevation.Item; var geometry = elevation.Geometry ?? DoorWindowElevationGeometryBuilder.Build(item);
             var metadata = DoorWindowElevationMetadata.Create(item, origin, drawingScale, existingGroupId);
-            AppendGeometry(geometry, origin, space, transaction, resources, metadata, item);
+            AppendGeometry(geometry, origin, space, transaction, resources, doorWindowLayers, metadata, item);
             var innerGap = elevation.InnerGap; var outerGap = elevation.OuterGap;
             // 内层：安装缝与全部分段连成一条连续标注直线；外层：总宽/总高。
             AddLayerDimensions(geometry, origin, innerGap, outerGap, space, transaction, resources.AnnotationDimensionLayerId, dimensionStyle, metadata, item);
@@ -424,11 +491,11 @@ namespace BatchPdfPublisher.Services
             }
         }
 
-        private static void AppendGeometry(DoorWindowElevationGeometry geometry, Point3d origin, BlockTableRecord space, Transaction transaction, DraftingStandardResources resources, DoorWindowElevationMetadata metadata, DoorWindowScheduleItem item)
+        private static void AppendGeometry(DoorWindowElevationGeometry geometry, Point3d origin, BlockTableRecord space, Transaction transaction, DraftingStandardResources resources, DoorWindowLayers doorWindowLayers, DoorWindowElevationMetadata metadata, DoorWindowScheduleItem item)
         {
             const double tolerance = .01d;
-            var doorWindowLayers = EnsureDoorWindowLayers(space.Database, transaction);
-            var mainLayer = (item.ElevationType ?? string.Empty).Contains("窗") ? doorWindowLayers.Window : doorWindowLayers.Door;
+            // 门带玻璃亮子时整套沿用窗的青色图层与线型，避免门扇、亮子出现两种做法。
+            var mainLayer = UsesWindowAppearance(item) ? doorWindowLayers.Window : doorWindowLayers.Door;
             foreach (var roleGroup in geometry.Lines.GroupBy(x => x.Role))
             {
                 var segments = roleGroup.ToList(); var used = new bool[segments.Count];
@@ -525,6 +592,16 @@ namespace BatchPdfPublisher.Services
             bool Matches(Point2d point, double x, double y) { return point.GetDistanceTo(new Point2d(x, y)) <= tolerance; }
         }
 
+        private static bool UsesWindowAppearance(DoorWindowScheduleItem item)
+        {
+            var type = item == null ? string.Empty : item.ElevationType ?? string.Empty;
+            if (type.Contains("窗")) return true;
+            if (!type.Contains("门")) return false;
+            // 只有门上亮存在时才改用窗的做法；普通门仍保持原来的门图层表达。
+            return DoorWindowElevationGeometryBuilder.ParseCellLayout(item.CustomCellLayout)
+                .Any(x => !x.IsDoor && string.Equals(x.Material, "玻璃", StringComparison.Ordinal));
+        }
+
         private static DoorWindowLayers EnsureDoorWindowLayers(Database database, Transaction transaction)
         {
             var dash = EnsureDashLineType(database, transaction);
@@ -559,12 +636,12 @@ namespace BatchPdfPublisher.Services
             return record.ObjectId;
         }
 
-        private static void InsertContinuous(IList<ElevationPlacement> elevations, Point3d origin, int scale, BlockTableRecord space, Transaction transaction, DraftingStandardResources resources, ObjectId dimensionStyle, Action<int, int, string> progress, bool useTianzhengTitle = true)
+        private static void InsertContinuous(IList<ElevationPlacement> elevations, Point3d origin, int scale, BlockTableRecord space, Transaction transaction, DraftingStandardResources resources, ObjectId dimensionStyle, DoorWindowLayers doorWindowLayers, Action<int, int, string> progress, bool useTianzhengTitle = true)
         {
             var x = origin.X; var completed = 0;
             foreach (var elevation in elevations)
             {
-                InsertElevation(elevation, new Point3d(x + elevation.BayLeftExtent, origin.Y, origin.Z), scale, space, transaction, resources, dimensionStyle, null, useTianzhengTitle);
+                InsertElevation(elevation, new Point3d(x + elevation.BayLeftExtent, origin.Y, origin.Z), scale, space, transaction, resources, dimensionStyle, doorWindowLayers, null, useTianzhengTitle);
                 // 连续排列按左右两侧标注外框共同占位。
                 x += elevation.OuterGap * 2d + elevation.TotalWidth + Math.Max(16d * scale, 800d);
                 completed++; if (progress != null) progress(completed, elevations.Count, elevation.Item.Code);
@@ -572,7 +649,7 @@ namespace BatchPdfPublisher.Services
         }
 
         /// <summary>按登记图框纸张分页排版：每页插入图框块，门窗按 ComputeLayout 槽位排入。</summary>
-        private static int InsertPaged(IList<ElevationPlacement> elevations, Point3d origin, int scale, FrameDefinition frame, BlockTable blockTable, BlockTableRecord space, Transaction transaction, DraftingStandardResources resources, ObjectId dimensionStyle, Action<int, int, string> progress, DoorWindowLayoutOptions layoutOptions = null)
+        private static int InsertPaged(IList<ElevationPlacement> elevations, Point3d origin, int scale, FrameDefinition frame, BlockTable blockTable, BlockTableRecord space, Transaction transaction, DraftingStandardResources resources, ObjectId dimensionStyle, DoorWindowLayers doorWindowLayers, Action<int, int, string> progress, DoorWindowLayoutOptions layoutOptions = null)
         {
             if (frame == null || string.IsNullOrWhiteSpace(frame.BlockName)) throw new InvalidOperationException("请选择有效的登记图框。");
             if (!blockTable.Has(frame.BlockName)) throw new InvalidOperationException("当前图纸不存在已登记图框块“" + frame.BlockName + "”。请先把该图框插入当前图纸，或重新登记当前图纸中的图框。");
@@ -596,36 +673,35 @@ namespace BatchPdfPublisher.Services
                     // slot.X/slot.Y 是立面插入原点（左下角，相对页左下角，模型单位）。
                     var insertion = new Point3d(pageOrigin.X + slot.X, pageOrigin.Y + slot.Y, origin.Z);
                     var elevation = elevations.First(x => ReferenceEquals(x.Item, slot.Item));
-                    InsertElevation(elevation, insertion, scale, space, transaction, resources, dimensionStyle, null, useTianzhengTitle);
+                    InsertElevation(elevation, insertion, scale, space, transaction, resources, dimensionStyle, doorWindowLayers, null, useTianzhengTitle);
                     completed++; if (progress != null) progress(completed, elevations.Count, elevation.Item.Code);
                 }
             }
-            InsertIndependentScheduleAndNotes(space.Database, space, transaction, elevations.Select(x => x.Item).ToList(), scale, layoutOptions, resources, origin, pageWidth, pageHeight, plan.PageCount, pageGap);
+            InsertScheduleAndNotesInFrames(space.Database, space, transaction, elevations.Select(x => x.Item).ToList(), scale, layoutOptions, resources, origin, pageWidth, pageGap, plan);
             return plan.PageCount;
         }
 
-        private static void InsertIndependentScheduleAndNotes(Database database, BlockTableRecord space, Transaction transaction, IList<DoorWindowScheduleItem> items, int scale, DoorWindowLayoutOptions options, DraftingStandardResources resources, Point3d frameOrigin, double pageWidth, double pageHeight, int pageCount, double pageGap)
+        private static void InsertScheduleAndNotesInFrames(Database database, BlockTableRecord space, Transaction transaction, IList<DoorWindowScheduleItem> items, int scale, DoorWindowLayoutOptions options, DraftingStandardResources resources, Point3d frameOrigin, double pageWidth, double pageGap, DoorWindowLayoutPlan plan)
         {
             if (options == null || (!options.IncludeSchedule && !options.IncludeScheduleNotes)) return;
-            var suggestedX = frameOrigin.X + Math.Max(1, pageCount) * (pageWidth + pageGap);
-            var suggestedTop = frameOrigin.Y + pageHeight;
-            var notesTop = suggestedTop;
-            if (options.IncludeSchedule)
+            var scheduleSlot = plan.Attachments.FirstOrDefault(x => string.Equals(x.Kind, "Schedule", StringComparison.Ordinal));
+            if (scheduleSlot != null)
             {
-                var position = new Point3d(suggestedX, suggestedTop, frameOrigin.Z);
+                var pageOrigin = new Point3d(frameOrigin.X + scheduleSlot.Page * (pageWidth + pageGap), frameOrigin.Y, frameOrigin.Z);
+                var position = new Point3d(pageOrigin.X + scheduleSlot.X, pageOrigin.Y + scheduleSlot.Top, frameOrigin.Z);
                 var table = BuildScheduleTable(database, items, scale, position);
                 space.AppendEntity(table); transaction.AddNewlyCreatedDBObject(table, true); table.GenerateLayout();
-                // 门窗表与设计说明按同一附件区自动纵向排版，不再要求用户分别指定插入点。
-                notesTop = suggestedTop - (12.5d + items.Count * 5.5d + 15d) * scale;
             }
-            if (options.IncludeScheduleNotes)
+            var notesSlot = plan.Attachments.FirstOrDefault(x => string.Equals(x.Kind, "Notes", StringComparison.Ordinal));
+            if (notesSlot != null)
             {
-                var position = new Point3d(suggestedX, notesTop, frameOrigin.Z);
+                var pageOrigin = new Point3d(frameOrigin.X + notesSlot.Page * (pageWidth + pageGap), frameOrigin.Y, frameOrigin.Z);
+                var position = new Point3d(pageOrigin.X + notesSlot.X, pageOrigin.Y + notesSlot.Top, frameOrigin.Z);
                 var notes = new MText
                 {
                     Contents = string.Join("\\P", ScheduleNotes), Location = position, Attachment = AttachmentPoint.TopLeft,
                     TextHeight = 3.5d * scale, LineSpacingFactor = 1.35d, LineSpacingStyle = LineSpacingStyle.AtLeast,
-                    Width = 180d * scale, TextStyleId = resources.AnnotationTextStyleId, LayerId = resources.AnnotationTextLayerId
+                    Width = notesSlot.Width, TextStyleId = resources.AnnotationTextStyleId, LayerId = resources.AnnotationTextLayerId
                 };
                 space.AppendEntity(notes); transaction.AddNewlyCreatedDBObject(notes, true);
             }

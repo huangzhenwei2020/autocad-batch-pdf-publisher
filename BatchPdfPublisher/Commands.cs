@@ -17,6 +17,7 @@ namespace BatchPdfPublisher
         private static PublisherForm _publisherForm;
         private static TianzhengRoomRenameForm _roomRenameForm;
         private static DoorWindowElevationForm _doorWindowElevationForm;
+        private static LineVisionForm _lineVisionForm;
         private static IList<SheetItem> _catalogSheets;
         private static CatalogSettings _catalogSettings;
         private static Action _catalogDone;
@@ -29,8 +30,10 @@ namespace BatchPdfPublisher
             MenuService.InstallWhenReady();
             ShortcutAliasService.InstallWhenReady();
             ProjectAutoSaveService.Install();
+            CloudSyncCoordinator.Install();
+            CadSaveCloudSyncService.Install();
         }
-        public void Terminate() { ProjectAutoSaveService.Remove(); ShortcutAliasService.Remove(); RibbonService.Remove(); MenuService.Remove(); }
+        public void Terminate() { CadSaveCloudSyncService.Remove(); CloudSyncCoordinator.Remove(); ProjectAutoSaveService.Remove(); ShortcutAliasService.Remove(); RibbonService.Remove(); MenuService.Remove(); }
 
         [CommandMethod("BPP")]
         public void BppCommand() => OpenPublisher();
@@ -39,6 +42,18 @@ namespace BatchPdfPublisher
         public void ConfigureShortcuts()
         {
             Application.ShowModalDialog(new ShortcutSettingsForm());
+        }
+
+        [CommandMethod("WLCLOUDSYNC", CommandFlags.Session)]
+        public void ConfigureCloudSync()
+        {
+            Application.ShowModalDialog(new CloudSyncSettingsForm());
+        }
+
+        [CommandMethod("WLCLOUDCENTER", CommandFlags.Session)]
+        public void OpenCloudSyncCenter()
+        {
+            Application.ShowModalDialog(new CloudSyncCenterForm());
         }
 
         [CommandMethod("WLJZSM", CommandFlags.Session)]
@@ -75,6 +90,32 @@ namespace BatchPdfPublisher
             var document = Application.DocumentManager.MdiActiveDocument;
             if (document == null) return;
             Application.ShowModelessDialog(new FrameCreationForm(document, null));
+        }
+
+        [CommandMethod("WLDYLayout")]
+        [CommandMethod("DYPB")]
+        public void OpenDetailLayout()
+        {
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document == null) return;
+            Application.ShowModelessDialog(new DetailLayoutForm(document));
+        }
+
+        [CommandMethod("LINEVISION", CommandFlags.Session)]
+        [CommandMethod("TXZCAD", CommandFlags.Session)]
+        public void OpenLineVision()
+        {
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document == null) return;
+            if (_lineVisionForm != null && !_lineVisionForm.IsDisposed)
+            {
+                _lineVisionForm.Show();
+                _lineVisionForm.Activate();
+                return;
+            }
+            _lineVisionForm = new LineVisionForm(document);
+            _lineVisionForm.FormClosed += (sender, args) => _lineVisionForm = null;
+            Application.ShowModelessDialog(_lineVisionForm);
         }
 
         [CommandMethod("FJGM")]

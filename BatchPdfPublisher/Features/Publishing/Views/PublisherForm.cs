@@ -53,7 +53,7 @@ namespace BatchPdfPublisher.Views
 
         public PublisherForm()
         {
-            Text = "万落建筑工具 · 批量 PDF 发布  v0.8.6";
+            Text = "万落建筑工具 · 批量 PDF 发布  " + WanluoArchitectureTools.ProductVersion.Display;
             Width = 1240;
             Height = 760;
             MinimumSize = new System.Drawing.Size(840, 540);
