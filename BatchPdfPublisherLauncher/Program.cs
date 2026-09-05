@@ -447,7 +447,7 @@ namespace BatchPdfPublisherLauncher
             if (Directory.Exists(runtimeFiles)) Directory.Delete(runtimeFiles, true);
             var autodeskRoot = Path.Combine(appData, "Autodesk");
             if (Directory.Exists(autodeskRoot))
-                foreach (var plotters in Directory.GetDirectories(autodeskRoot, "Plotters", SearchOption.AllDirectories))
+                foreach (var plotters in EnumerateDirectoriesSafely(autodeskRoot, "Plotters"))
                 {
                     TryDelete(Path.Combine(plotters, PlotterConfigName));
                     TryDelete(Path.Combine(plotters, "PMP Files", PlotterMediaName));
@@ -591,7 +591,7 @@ namespace BatchPdfPublisherLauncher
         {
             var autodeskRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Autodesk");
             if (!Directory.Exists(autodeskRoot)) throw new DirectoryNotFoundException("未找到 AutoCAD 用户配置目录。");
-            var plotterDirectories = Directory.GetDirectories(autodeskRoot, "Plotters", SearchOption.AllDirectories)
+            var plotterDirectories = EnumerateDirectoriesSafely(autodeskRoot, "Plotters")
                 .Where(path => path.IndexOf("AutoCAD ", StringComparison.OrdinalIgnoreCase) >= 0)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
@@ -609,6 +609,39 @@ namespace BatchPdfPublisherLauncher
                 BindPmp(targetPc3, targetPmp);
                 BindPmpSelfPath(targetPmp);
                 Log("已部署毫米纸张库: " + plotterDirectory);
+            }
+        }
+
+        private static IEnumerable<string> EnumerateDirectoriesSafely(string root, string wantedName)
+        {
+            var pending = new Stack<string>();
+            pending.Push(root);
+            while (pending.Count > 0)
+            {
+                var directory = pending.Pop();
+                string[] children;
+                try { children = Directory.GetDirectories(directory); }
+                catch (UnauthorizedAccessException exception)
+                {
+                    Log("跳过无权访问的 Autodesk 配置目录: " + directory + "；" + exception.Message);
+                    continue;
+                }
+                catch (IOException exception)
+                {
+                    Log("跳过无法读取的 Autodesk 配置目录: " + directory + "；" + exception.Message);
+                    continue;
+                }
+                foreach (var child in children)
+                {
+                    FileAttributes attributes;
+                    try { attributes = File.GetAttributes(child); }
+                    catch (UnauthorizedAccessException) { continue; }
+                    catch (IOException) { continue; }
+                    if ((attributes & FileAttributes.ReparsePoint) != 0) continue;
+                    if (string.Equals(Path.GetFileName(child), wantedName, StringComparison.OrdinalIgnoreCase))
+                        yield return child;
+                    pending.Push(child);
+                }
             }
         }
 

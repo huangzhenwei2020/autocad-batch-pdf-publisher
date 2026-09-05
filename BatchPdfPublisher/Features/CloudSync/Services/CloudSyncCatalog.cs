@@ -103,11 +103,37 @@ namespace BatchPdfPublisher.Services
             while (pending.Count > 0)
             {
                 var directory = pending.Pop();
-                if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0) continue;
-                foreach (var file in Directory.EnumerateFiles(directory))
-                    if ((File.GetAttributes(file) & FileAttributes.ReparsePoint) == 0) yield return file;
-                foreach (var child in Directory.EnumerateDirectories(directory))
-                    if ((File.GetAttributes(child) & FileAttributes.ReparsePoint) == 0) pending.Push(child);
+                FileAttributes directoryAttributes;
+                try { directoryAttributes = File.GetAttributes(directory); }
+                catch (UnauthorizedAccessException) { continue; }
+                catch (IOException) { continue; }
+                if ((directoryAttributes & FileAttributes.ReparsePoint) != 0) continue;
+
+                string[] files;
+                try { files = Directory.GetFiles(directory); }
+                catch (UnauthorizedAccessException) { continue; }
+                catch (IOException) { continue; }
+                foreach (var file in files)
+                {
+                    FileAttributes attributes;
+                    try { attributes = File.GetAttributes(file); }
+                    catch (UnauthorizedAccessException) { continue; }
+                    catch (IOException) { continue; }
+                    if ((attributes & FileAttributes.ReparsePoint) == 0) yield return file;
+                }
+
+                string[] children;
+                try { children = Directory.GetDirectories(directory); }
+                catch (UnauthorizedAccessException) { continue; }
+                catch (IOException) { continue; }
+                foreach (var child in children)
+                {
+                    FileAttributes attributes;
+                    try { attributes = File.GetAttributes(child); }
+                    catch (UnauthorizedAccessException) { continue; }
+                    catch (IOException) { continue; }
+                    if ((attributes & FileAttributes.ReparsePoint) == 0) pending.Push(child);
+                }
             }
         }
 
