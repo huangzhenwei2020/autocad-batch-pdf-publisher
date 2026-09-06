@@ -60,7 +60,7 @@ namespace BatchPdfPublisher.Views
             _document = document; _source = source; _baseSource = source;
             Text = "批量门窗立面";
             StartPosition = FormStartPosition.CenterParent;
-            Width = 1240; Height = 720; MinimumSize = new Size(980, 560);
+            Width = 1320; Height = 780; MinimumSize = new Size(980, 620);
             Font = new DrawingFont("Microsoft YaHei UI", 9F);
             _documentBinding = new ModelessDocumentBinding(this, document);
             Build(); LoadSource(source);
@@ -71,24 +71,24 @@ namespace BatchPdfPublisher.Views
         private void Build()
         {
             var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, BackColor = Color.White };
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 140));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-            var header = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Padding = new Padding(14, 8, 12, 6), BackColor = Color.FromArgb(245, 247, 250) };
+            var header = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 2, Padding = new Padding(14, 8, 12, 6), BackColor = Color.FromArgb(245, 247, 250) };
             header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             var title = new Label { Text = "门窗表数据", Font = new DrawingFont(Font, FontStyle.Bold), AutoSize = true, Margin = new Padding(0, 0, 0, 2) };
             _sourceLabel.AutoSize = true; _sourceLabel.ForeColor = Color.FromArgb(70, 82, 96);
             var labels = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FormsFlowDirection.TopDown, WrapContents = false }; labels.Controls.Add(title); labels.Controls.Add(_sourceLabel); header.Controls.Add(labels, 0, 0);
-            var sourceButtons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = false, FlowDirection = FormsFlowDirection.LeftToRight };
+            var sourceButtons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, FlowDirection = FormsFlowDirection.LeftToRight };
             var repick = ButtonFor("重新拾取门窗表"); repick.Click += (s, e) => Repick(); sourceButtons.Controls.Add(repick);
             var importCsv = ButtonFor("导入CSV/Excel"); importCsv.Click += (s, e) => ImportFromFile(); sourceButtons.Controls.Add(importCsv);
             var locate = ButtonFor("定位来源表"); locate.Click += (s, e) => LocateSource(); sourceButtons.Controls.Add(locate);
             var log = ButtonFor("打开诊断日志"); log.Click += (s, e) => OpenLog(); sourceButtons.Controls.Add(log);
             header.Controls.Add(sourceButtons, 1, 0); root.Controls.Add(header, 0, 0);
 
-            var batch = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = true, Padding = new Padding(12, 7, 8, 5), BackColor = Color.FromArgb(250, 251, 252) };
+            var batch = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, Padding = new Padding(12, 7, 8, 5), BackColor = Color.FromArgb(250, 251, 252) };
             batch.Controls.Add(LabelFor("批量设置")); batch.Controls.Add(_batchType); batch.Controls.Add(_batchDivision); batch.Controls.Add(_batchOpening);
             batch.Controls.Add(LabelFor("按类型选择")); batch.Controls.Add(_filterType);
             var selectType = ButtonFor("勾选该类型"); selectType.Click += (s, e) => SelectByType(); batch.Controls.Add(selectType);
@@ -132,10 +132,10 @@ namespace BatchPdfPublisher.Views
             previewPanel.Controls.Add(_preview, 0, 1); split.Panel2.Controls.Add(previewPanel); root.Controls.Add(split, 0, 2);
             Shown += (s, e) => { InitializeSplitLayout(split); SelectFirstRow(); };
 
-            var footer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Padding = new Padding(12, 8, 12, 7), BackColor = Color.FromArgb(245, 247, 250) };
+            var footer = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 2, Padding = new Padding(12, 8, 12, 7), BackColor = Color.FromArgb(245, 247, 250) };
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             _status.AutoSize = true; _status.Margin = new Padding(0, 7, 0, 0); footer.Controls.Add(_status, 0, 0);
-            var actions = new FlowLayoutPanel { AutoSize = true, WrapContents = false, FlowDirection = FormsFlowDirection.RightToLeft };
+            var actions = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, FlowDirection = FormsFlowDirection.RightToLeft };
             var save = ButtonFor("保存门窗设置"); save.Click += (s, e) => SavePreferences(true); actions.Controls.Add(save);
             var insert = ButtonFor("插入所选立面"); insert.Click += (s, e) => InsertElevations(); actions.Controls.Add(insert);
             var update = ButtonFor("更新已生成立面"); update.Click += (s, e) => UpdateGeneratedElevation(); actions.Controls.Add(update);
@@ -412,12 +412,10 @@ namespace BatchPdfPublisher.Views
                 SourceDxfName = "分层门窗统计", SourceHandle = string.Join(",", _floorSources.Select(x => x.SourceHandle).Where(x => !string.IsNullOrWhiteSpace(x))),
                 Adapter = _floorSources.Count + " 个楼层表"
             };
-            var conflicts = new List<string>();
             foreach (var codeGroup in _floorSources.SelectMany(floor => floor.Items.Select(item => new { floor, item }))
                 .GroupBy(x => (x.item.Code ?? string.Empty).Trim(), StringComparer.OrdinalIgnoreCase))
             {
                 var variants = codeGroup.GroupBy(x => x.item.Width.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + "×" + x.item.Height.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + "|" + (x.item.ElevationType ?? string.Empty)).ToList();
-                if (variants.Count > 1) conflicts.Add(codeGroup.Key);
                 foreach (var variant in variants)
                 {
                     var first = variant.First().item;
@@ -429,21 +427,19 @@ namespace BatchPdfPublisher.Views
                         combined.FloorQuantities.Add(new DoorWindowFloorQuantity { FloorName = floor.FloorName, PerFloorQuantity = quantity, FloorCount = floor.FloorCount });
                     }
                     combined.Quantity = combined.FloorQuantities.Sum(x => x.TotalQuantity);
-                    if (variants.Count > 1) { combined.SourceNote = string.Join("；", new[] { combined.SourceNote, "同编号类型或尺寸冲突" }.Where(x => !string.IsNullOrWhiteSpace(x))); }
                     merged.Items.Add(combined);
                 }
             }
+            // 保持原门窗表规则：同一原编号出现不同尺寸/类型时分行，并自动追加 A、B…后缀。
+            // 分层统计只负责汇总各层数量，不能把这一可生成场景重新判定为冲突。
+            TianzhengDoorWindowService.AssignSizeSuffixes(merged.Items);
             // 分层汇总行直接作为当前网格数据载入，不能再次按普通门窗表流程重建并覆盖楼层明细。
             _source = merged; _rows.RaiseListChangedEvents = false; _rows.Clear();
             foreach (var item in DoorWindowTypeOrdering.Sort(merged.Items)) _rows.Add(item);
             DoorWindowTypeOrdering.Renumber(_rows); _rows.RaiseListChangedEvents = true; _rows.ResetBindings();
             _sourceLabel.Text = merged.SourceDxfName + " · " + merged.Adapter + " · 分层统计";
             _preview.ShowItem(_rows.FirstOrDefault());
-            // LoadSource 会按当前项目偏好重新构造行对象，补回本次分层统计的楼层数量明细。
-            if (conflicts.Count > 0)
-                foreach (var item in _rows.Where(x => conflicts.Contains((x.Code ?? string.Empty).Trim(), StringComparer.OrdinalIgnoreCase))) { item.Status = "同编号类型或尺寸冲突"; item.Selected = false; }
             _grid.Refresh(); UpdateSummary();
-            if (conflicts.Count > 0) MessageBox.Show(this, "以下编号在不同楼层出现了类型或尺寸冲突，已经分行显示并阻止直接生成：\r\n" + string.Join("、", conflicts.Distinct()), Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
             _status.Text = "已统计 " + _floorSources.Count + " 个楼层表；总数量已按普通层直接相加、标准层按单层数量×层数计算。";
         }
 

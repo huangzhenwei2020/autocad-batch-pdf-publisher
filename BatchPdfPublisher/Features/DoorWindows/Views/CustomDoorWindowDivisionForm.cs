@@ -46,18 +46,17 @@ namespace BatchPdfPublisher.Views
         {
             _source = source ?? throw new ArgumentNullException("source");
             Text = "门窗分格编辑 — " + (source.Code ?? "未编号"); StartPosition = FormStartPosition.CenterParent;
-            Width = 1040; Height = 720; MinimumSize = new Size(820, 560); Font = new Font("Microsoft YaHei UI", 9F);
+            Width = 1240; Height = 780; MinimumSize = new Size(900, 640); Font = new Font("Microsoft YaHei UI", 9F);
             _activeEditor = _editor; Build(); LoadLayout(); ValidateLayout();
         }
 
         private void Build()
         {
             var root = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1, Padding = new Padding(10), BackColor = Color.White };
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 184)); root.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
-            var header = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 5, ColumnCount = 1 };
-            header.RowStyles.Add(new RowStyle(SizeType.Absolute, 36)); header.RowStyles.Add(new RowStyle(SizeType.Absolute, 36)); header.RowStyles.Add(new RowStyle(SizeType.Absolute, 36)); header.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
-            header.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
-            var tools = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize)); root.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            var header = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, RowCount = 5, ColumnCount = 1 };
+            for (var row = 0; row < 5; row++) header.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            var tools = WrappingRow();
             var splitVertical = ButtonFor("竖向分隔当前框"); splitVertical.Click += (s, e) => ActiveEditor().SplitSelected(true); tools.Controls.Add(splitVertical);
             var splitHorizontal = ButtonFor("横向分隔当前框"); splitHorizontal.Click += (s, e) => ActiveEditor().SplitSelected(false); tools.Controls.Add(splitHorizontal);
             var merge = ButtonFor("合并所选框"); merge.Click += (s, e) => { if (!ActiveEditor().MergeSelected()) MessageBox.Show(this, "请用 Shift 选择当前面中能组成完整矩形的相邻框。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information); }; tools.Controls.Add(merge);
@@ -66,28 +65,28 @@ namespace BatchPdfPublisher.Views
             var equalHeight = ButtonFor("所选同列等高"); equalHeight.Click += (s, e) => { if (!ActiveEditor().EqualizeSelectedHeights()) ShowEqualizeHint(); }; tools.Controls.Add(equalHeight);
             var center = ButtonFor("所选居中"); center.Click += (s, e) => { if (!ActiveEditor().CenterSelected()) MessageBox.Show(this, "请选择当前面中同一行连续面板后再居中。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information); }; tools.Controls.Add(center);
             var reset = ButtonFor("恢复完整外框"); reset.Click += (s, e) => { if (MessageBox.Show(this, "恢复后当前面的分格会被清除，是否继续？", Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) == DialogResult.Yes) ActiveEditor().ResetToFullFrame(); }; tools.Controls.Add(reset); header.Controls.Add(tools, 0, 0);
-            var properties = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
+            var properties = WrappingRow();
             properties.Controls.Add(LabelFor("当前框宽")); properties.Controls.Add(_selectedWidth); properties.Controls.Add(LabelFor("高")); properties.Controls.Add(_selectedHeight);
             _opening.Items.AddRange(Openings.Cast<object>().ToArray()); properties.Controls.Add(LabelFor("开启")); properties.Controls.Add(_opening);
             _material.Items.AddRange(Materials.Cast<object>().ToArray()); properties.Controls.Add(LabelFor("材质")); properties.Controls.Add(_material);
             _isDoor.Enabled = (_source.ElevationType ?? string.Empty).Contains("门"); properties.Controls.Add(_isDoor);
             properties.Controls.Add(LabelFor("门套")); _doorFrameType.Items.AddRange(new object[] { "N型", "口型" }); properties.Controls.Add(_doorFrameType); properties.Controls.Add(_hasDoorFrame); properties.Controls.Add(_doorFrameWidth); properties.Controls.Add(LabelFor("mm")); header.Controls.Add(properties, 0, 1);
-            var construction = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
+            var construction = WrappingRow();
             construction.Controls.Add(_hasInstallationGap); construction.Controls.Add(_installationGap); construction.Controls.Add(LabelFor("mm"));
             construction.Controls.Add(_hasOuterFrame); construction.Controls.Add(_outerFrameWidth); construction.Controls.Add(LabelFor("mm"));
             construction.Controls.Add(_hasMullion); construction.Controls.Add(_mullionWidth); construction.Controls.Add(LabelFor("mm（开启/推拉相邻处自动按 2 倍处理）")); header.Controls.Add(construction, 0, 2);
             construction.Controls.Add(LabelFor("鼠标移动步长")); construction.Controls.Add(_mouseSnapStep); construction.Controls.Add(LabelFor("mm（0=不吸附）"));
-            var bay = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
+            var bay = WrappingRow();
             _bayLeftSide.Items.AddRange(new object[] { "墙", "窗" }); _bayRightSide.Items.AddRange(new object[] { "墙", "窗" });
             bay.Controls.Add(LabelFor("凸窗左转折")); bay.Controls.Add(_bayLeftSide); bay.Controls.Add(_bayLeftDepth); bay.Controls.Add(LabelFor("mm"));
             bay.Controls.Add(LabelFor("右转折")); bay.Controls.Add(_bayRightSide); bay.Controls.Add(_bayRightDepth); bay.Controls.Add(LabelFor("mm（可设：墙+窗、窗+窗、窗+墙）")); header.Controls.Add(bay, 0, 3);
-            header.Controls.Add(new Label { Text = "单击选择；Shift+单击增加或取消选择；拖动分隔线按自定义步长调整。宽度从左到右、高度从上到下确定，右下角面板承接最终剩余尺寸。", Dock = DockStyle.Fill, ForeColor = Color.DimGray, TextAlign = ContentAlignment.MiddleLeft }, 0, 4);
+            header.Controls.Add(new Label { Text = "单击选择；Shift+单击增加或取消选择；拖动分隔线按自定义步长调整。宽度从左到右、高度从上到下确定，右下角面板承接最终剩余尺寸。", AutoSize = true, Dock = DockStyle.Top, ForeColor = Color.DimGray, Padding = new Padding(3, 4, 3, 6) }, 0, 4);
             root.Controls.Add(header, 0, 0);
             _faces.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25)); _faces.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50)); _faces.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
             _faces.Controls.Add(FaceGroup("左转折面", _leftEditor), 0, 0); _faces.Controls.Add(FaceGroup("正面", _editor), 1, 0); _faces.Controls.Add(FaceGroup("右转折面", _rightEditor), 2, 0);
             root.Controls.Add(_faces, 0, 1);
 
-            var footer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2 }; footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            var footer = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 2 }; footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             _message.Margin = new Padding(3, 12, 0, 0); footer.Controls.Add(_message, 0, 0);
             var actions = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.RightToLeft };
             var save = ButtonFor("保存门窗分格"); save.Click += (s, e) => SaveAndClose(); actions.Controls.Add(save);
@@ -296,6 +295,7 @@ namespace BatchPdfPublisher.Views
         private static NumericUpDown SnapStepBox() { return new NumericUpDown { Minimum = 0, Maximum = 1000, DecimalPlaces = 2, Increment = 1, Width = 68, Height = 28, Value = 5 }; }
         private static NumericUpDown ProfileBox() { return new NumericUpDown { Minimum = 0, Maximum = 500, DecimalPlaces = 1, Increment = 5, Width = 68, Height = 28, Value = 50 }; }
         private static NumericUpDown DepthBox() { return new NumericUpDown { Minimum = 50, Maximum = 5000, DecimalPlaces = 1, Increment = 50, Width = 78, Height = 28, Value = 600 }; }
+        private static FlowLayoutPanel WrappingRow() { return new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, FlowDirection = FlowDirection.LeftToRight, Margin = new Padding(0, 0, 0, 2), Padding = new Padding(0, 2, 0, 2) }; }
         private static CheckBox OptionBox(string text) { return new CheckBox { Text = text, Checked = true, AutoSize = true, Margin = new Padding(10, 7, 2, 0) }; }
         private static decimal ClampDecimal(double value, NumericUpDown box) { return Math.Max(box.Minimum, Math.Min(box.Maximum, (decimal)value)); }
         private static Label LabelFor(string text) { return new Label { Text = text, AutoSize = true, Margin = new Padding(10, 7, 3, 0) }; }
