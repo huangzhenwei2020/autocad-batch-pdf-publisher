@@ -4,7 +4,7 @@
 > 建立日期：2026-09-06。  
 > 基准分支：`codex/detail-layout-frame-ranges`。  
 > 基准提交：`0726c65`（普通门默认图集迁移为“无”）。  
-> 适用范围：`BatchPdfPublisher`、`LineVisionOcrWorker`、`CadArchSpecEditor`。  
+> 适用范围：`LineVision` 图片转 CAD、独立 CAD 表格转换模块、`CadArchSpecEditor`。
 > 关联计划：`docs/plans/CadArchSpecEditor_Codex_MasterPlan.md`。
 
 ---
@@ -22,6 +22,14 @@
 - 图片、扫描件、PDF 底图：使用 OCR 和图像结构识别；
 - 原生 DWG：优先直接读取 CAD 实体，不经过截图和 OCR；
 - 建筑设计说明：以结构化项目数据为唯一业务数据源，AI 只能提交可审阅的局部修改建议。
+
+### 1.1 与现有门窗立面功能的边界
+
+- 本计划后续功能与门窗立面业务无关；
+- 不在 `Features/DoorWindows` 下增加 OCR、CAD 表格或建筑说明代码；
+- 不复用门窗表格的业务模型、门窗编号规则、门窗图集设置或门窗 UI；
+- 可以借鉴现有天正对象探针、只读爆炸和跨版本处理经验，但应提取为独立通用服务；
+- CAD 表格识别结果的主要去向是 CSV/XLSX 和建筑设计说明专业表格。
 
 ---
 
@@ -97,6 +105,42 @@ GenOffice 主要用于架构参考，不整体嵌入当前 AutoCAD 插件。重�
 - 不使用已废弃的 Excel COM 自动化；
 - 优先选择支持 .NET Framework 4.8 与 .NET 8 的开源 OOXML 方案，选型后固定版本并补充第三方声明。
 
+### 3.4 追加调研结论
+
+#### Autodesk 代理对象机制
+
+Autodesk 官方说明表明：
+
+- 第三方自定义实体在定义程序未加载时会以 `ProxyEntity` 形式存在；
+- `ProxyEntity.Explode()` 可以返回其保存的图形副本；
+- API 的 `Explode()` 是只读分解，不会删除或改写原实体；
+- 这与用户执行的 `EXPLODE` 命令不同，后者会删除原对象并把分解结果写入图纸。
+
+因此，天正文字兼容采用“原生属性优先、只读分解后备”，禁止为了读取内容而执行 CAD 的炸开命令。
+
+#### `cad-extract`
+
+开源项目 `ricklove/cad-extract` 提供了值得借鉴的 CAD 表格处理顺序：
+
+1. 识别表格和单元格；
+2. 将文字定位到单元格；
+3. 识别合并单元格；
+4. 分离相邻或接触的多个表格；
+5. 输出 CSV/XLSX；
+6. 用提取结果重新绘制并进行视觉回放比较。
+
+该项目规模较小且 README 明确列有合并行列等未完成问题，因此只借鉴算法分层和视觉回放测试，不直接作为产品依赖。
+
+Autodesk 在 2026 年的官方支持说明中仍表示 AutoCAD 不能直接把既有线条和文字转换成 Table，只能使用 DATAEXTRACTION 后人工整理，或自行开发自动化。因此“线框与文字自动还原成单元格”确实是需要本项目实现的独立能力，不是对已有 AutoCAD 命令的重复包装。
+
+#### Camelot
+
+Camelot 面向 PDF 而非 DWG，但其“结构由矢量线或图像线检测，单元格内容优先取原始文本层，只有扫描件才 OCR”的原则与本项目一致。可参考其结构与文字分离思想，不引入其 Python PDF 技术栈到 AutoCAD 插件。
+
+#### ezdxf
+
+`ezdxf` 适合独立 DXF 文件读写和测试数据生成，但本产品已经运行在 AutoCAD 内部，DWG 主路径应继续使用 Autodesk API，以保留对象 Handle、块变换、原生 Table 和天正运行环境。`ezdxf` 只考虑用于离线测试工具，不作为 DWG 正式读取器。
+
 ---
 
 ## 4. 总体架构
@@ -119,13 +163,16 @@ CAD 实体读取器 ──► 网格推断 ──► 单元格文字归属 ─�
                                 CSV                   XLSX       建筑说明专业表格
 ```
 
-建议新增模块：
+建议新增模块，名称可在实施阶段按现有解决方案结构调整：
 
 ```text
 PaddleOcrWorker/
-BatchPdfPublisher/Features/CadTableExtraction/
+CadTableExtraction.Core/
+CadArchSpecEditor/src/CadArchSpec.Host.Shared/CadTable/
 CadArchSpecEditor/src/.../Imports/
 ```
+
+如果最终仍由主插件提供 Ribbon/命令入口，入口只负责启动独立功能，不得让 CAD 表格核心依赖 `Features/DoorWindows`。
 
 统一数据协议至少包含：
 
@@ -144,7 +191,7 @@ CadArchSpecEditor/src/.../Imports/
 
 ### 阶段 0：基线冻结与样本准备
 
-- [ ] 记录当前 LineVision、门窗立面和建筑说明测试基线；
+- [ ] 记录当前 LineVision、CAD 宿主和建筑说明测试基线；
 - [ ] 收集不少于 20 张建筑图像样本，覆盖中文、数字、标高、尺寸、轴号、旋转文字和低清晰度；
 - [ ] 收集不少于 15 个 DWG 表格样本，覆盖原生 Table、线框表格、块内表格、旋转表格、断线和合并单元格；
 - [ ] 样本脱敏，不把真实项目名称和敏感路径提交到 Git；
@@ -215,9 +262,34 @@ CadArchSpecEditor/src/.../Imports/
 - [ ] 支持 AutoCAD `Table`；
 - [ ] 支持 `Line`、`Polyline`、`Polyline2d` 中的水平和垂直边；
 - [ ] 支持 `DBText`、`MText` 和 `AttributeReference`；
+- [ ] 支持天正原生文字和天正文字代理对象；
 - [ ] 正确处理块参照变换、嵌套块、比例和旋转；
 - [ ] 默认忽略不可见、冻结或关闭图层，并允许用户选择包含；
 - [ ] 记录每个识别元素的源 Handle，便于定位。
+
+#### 2.2.1 天正文字兼容读取链
+
+天正文字不是一个固定类型，T20/T30、不同 AutoCAD 版本以及“是否加载天正运行环境”会得到不同对象表现。因此不得只判断一个 CLR 类型，按以下优先级读取：
+
+1. **标准文字**：直接读取 `DBText`、`MText`、块属性及原生 Table 单元格；
+2. **天正运行环境已加载**：根据 `RXClass.DxfName` 识别 `TCH_*TEXT*`、`TCH_*WORD*` 等候选对象，通过只读 COM/IDispatch 候选属性读取真实文字、位置、高度和旋转；
+3. **只读分解**：对无法直接取值的天正实体或 `ProxyEntity` 调用 API `Entity.Explode(DBObjectCollection)`，递归收集临时 `DBText/MText/AttributeReference`；
+4. **图形 OCR 后备**：若对象有可见图形但前三层均取不到文字，只在用户允许时渲染选区并 OCR，结果标为低可信来源；
+5. **无法识别**：保留源 Handle、DXF 名称和范围，在预览中显示“天正文字待确认”，不得丢弃或凭空生成内容。
+
+实现约束：
+
+- 禁止调用用户命令 `EXPLODE`；
+- `Explode()` 返回的临时对象必须释放，不得加入数据库；
+- 递归深度和对象数量必须有限制，防止异常代理对象卡死；
+- COM/IDispatch 属性采用只读白名单，不调用未知方法；
+- 文字坐标必须应用块参照和嵌套对象的完整变换矩阵；
+- MText 同时保留纯文本与必要换行，不把格式控制码写入 Excel；
+- 记录读取途径：`Standard`、`TianzhengProperty`、`ExplodedClone`、`OcrFallback`；
+- 天正未加载时仍要尽量识别代理图形；天正已加载时优先读取真实对象数据；
+- 分别建立 AutoCAD 2022—2026 与可获得的天正 T20/T30 样本测试。
+
+现有 `TianzhengDoorWindowService`、`TianzhengScaleService` 和 `TianzhengTitleProbeService` 已验证 RXClass、IDispatch 与只读分解路径可行。实施时只提炼通用读取机制，不让新模块引用门窗业务服务。
 
 #### 2.3 网格推断
 
@@ -343,6 +415,8 @@ CadArchSpecEditor/src/.../Imports/
 - 完整线框、断线、双线和局部缺边；
 - 合并表头、跨行和跨列；
 - DBText、MText、块属性和多行文字；
+- 天正原生单行/多行文字、天正代理文字、天正未加载时的代理图形；
+- 同一张表混用 AutoCAD 文字与天正文字；
 - 模型空间、布局空间、普通块和嵌套块；
 - 旋转角度、非 1:1 块比例和不同图形单位；
 - 不规则内容和无法唯一判断的反例。
@@ -403,6 +477,8 @@ CadArchSpecEditor/src/.../Imports/
 | AutoCAD 多版本 API 差异 | 共享核心与薄宿主分离，分别构建测试 |
 | OCR 或 AI 修改错误 | 原文、来源、置信度和差异始终可见 |
 | 第三方许可证遗漏 | 安装包自动生成第三方声明，禁止引入许可不清依赖 |
+| 天正对象随版本变化 | RXClass 分类加多级读取链，不绑定单一 CLR 类型或单一属性名 |
+| 天正未加载只能看到代理对象 | 使用只读 `ProxyEntity.Explode()`，失败时明确标记并允许 OCR 后备 |
 
 ---
 
@@ -411,6 +487,7 @@ CadArchSpecEditor/src/.../Imports/
 | 日期 | 变更 | 原因 |
 | --- | --- | --- |
 | 2026-09-06 | 建立初版计划 | 明确 PaddleOCR、CAD 表格转换和建筑设计说明增强的实施边界与顺序 |
+| 2026-09-06 | 收紧模块边界并增加天正文字兼容方案 | 后续功能以建筑说明和独立 CAD 表格转换为主，与门窗立面业务解耦 |
 
 ---
 
@@ -420,4 +497,9 @@ CadArchSpecEditor/src/.../Imports/
 - PP-OCR 使用说明：<https://github.com/PaddlePaddle/PaddleOCR/blob/main/docs/version3.x/pipeline_usage/OCR.en.md>
 - PP-StructureV3：<https://github.com/PaddlePaddle/PaddleOCR/blob/main/docs/version3.x/pipeline_usage/PP-StructureV3.en.md>
 - GenOffice：<https://github.com/genspark-ai/genoffice>
-
+- Autodesk ProxyEntity：<https://help.autodesk.com/cloudhelp/2018/ENU/OARX-ManagedRefGuide/files/OREFNET-Autodesk_AutoCAD_DatabaseServices_ProxyEntity.html>
+- Autodesk Exploding Entities：<https://help.autodesk.com/cloudhelp/2022/ENU/OARX-DevGuide/files/GUID-88A2E2A3-B8F3-45AE-A484-F366072ADDF6.htm>
+- Autodesk 线条和文字转表格说明：<https://www.autodesk.com/support/technical/article/caas/sfdcarticles/sfdcarticles/How-to-convert-text-to-table-in-AutoCAD.html>
+- cad-extract：<https://github.com/ricklove/cad-extract>
+- Camelot：<https://github.com/camelot-dev/camelot>
+- ezdxf：<https://github.com/mozman/ezdxf>
