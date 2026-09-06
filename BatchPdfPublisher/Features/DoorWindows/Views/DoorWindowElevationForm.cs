@@ -1079,7 +1079,9 @@ namespace BatchPdfPublisher.Views
         }
 
         private static bool CanGenerate(DoorWindowScheduleItem item) { return item != null && item.Status == "参数完整，可生成"; }
-        private static bool IsSelectable(DoorWindowScheduleItem item) { return CanGenerate(item); }
+        // 勾选同时承担批量编辑范围的作用，不能要求参数已经完整；
+        // 是否允许实际生成统一在插入前由 CanGenerate 再校验。
+        private static bool IsSelectable(DoorWindowScheduleItem item) { return item != null; }
 
         private void SelectAll(bool selected)
         {
