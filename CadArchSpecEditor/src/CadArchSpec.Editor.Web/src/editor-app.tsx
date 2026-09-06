@@ -105,6 +105,7 @@ export function createProjectMessage(
     | "cad.frame.pick"
     | "cad.text.read"
     | "cad.table.read"
+    | "table.xlsx.export"
     | "cad.section.insert",
   payload: Record<string, unknown> = {},
 ) {
@@ -521,6 +522,9 @@ export function ArchitectureSpecEditor() {
         setProjectNotice(
           `已读取${sourceLabel}：${Number(payload.rowCount ?? imported.rows.length)} 行 × ${Number(payload.columnCount ?? imported.columns.length)} 列${warningCount ? `，有 ${warningCount} 项需要确认` : ""}；请检查后保存表格`,
         );
+      } else if (event.data.type === "table.xlsxExported") {
+        setCadBusy(false);
+        setProjectNotice(payload.cancelled === true ? "已取消导出 XLSX" : `Excel 表格已导出：${String(payload.filePath ?? "")}`);
       } else if (event.data.type === "cad.sectionInserted") {
         setCadBusy(false);
         const overflow = payload.overflow === true;
@@ -623,6 +627,7 @@ export function ArchitectureSpecEditor() {
       | "cad.frame.pick"
       | "cad.text.read"
       | "cad.table.read"
+      | "table.xlsx.export"
       | "cad.section.insert",
     payload: Record<string, unknown> = {},
   ) => window.chrome?.webview?.postMessage(createProjectMessage(type, payload));
@@ -1371,6 +1376,11 @@ export function ArchitectureSpecEditor() {
           value={workspace.tables ?? []}
           fields={workspace.fields}
           selectedTableId={tableEditTargetId}
+          onExportXlsx={(table) => {
+            if (!requireCadHost() || cadBusy) return;
+            setCadBusy(true);
+            postProjectMessage("table.xlsx.export", { table });
+          }}
           onSave={(tables) => {
             const synchronized = editorHandle?.synchronizeTables(tables) ?? 0;
             changeWorkspace((current) => ({ ...current, tables }));

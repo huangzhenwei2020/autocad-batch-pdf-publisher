@@ -65,6 +65,12 @@ describe("architecture specification editor", () => {
     expect(message.protocolVersion).toBe(1);
   });
 
+  it("creates the XLSX export bridge message", () => {
+    const message = createProjectMessage("table.xlsx.export", { table: { tableId: "table-1" } });
+    expect(message.type).toBe("table.xlsx.export");
+    expect(message.payload).toEqual({ table: { tableId: "table-1" } });
+  });
+
   it("creates an editable custom table without applying a specialist template", () => {
     const table = createProfessionalTableTemplate("custom", "");
     expect(table.tableType).toBe("custom");

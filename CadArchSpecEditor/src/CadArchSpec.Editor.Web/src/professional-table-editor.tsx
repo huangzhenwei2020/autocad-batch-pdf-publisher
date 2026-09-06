@@ -30,6 +30,7 @@ type Props = {
   value: ArchitectureTable[];
   fields: ProjectField[];
   selectedTableId?: string;
+  onExportXlsx?(table: ArchitectureTable): void;
   onSave(value: ArchitectureTable[]): void;
   onClose(): void;
 };
@@ -51,7 +52,7 @@ const newColumnKey = (table: ArchitectureTable) => {
   return `column${index}`;
 };
 
-export function ProfessionalTableEditor({ value, fields, selectedTableId, onSave, onClose }: Props) {
+export function ProfessionalTableEditor({ value, fields, selectedTableId, onExportXlsx, onSave, onClose }: Props) {
   const initial = value.map(normalizeProfessionalTable);
   const [tables, setTables] = useState<ArchitectureTable[]>(initial);
   const [selectedId, setSelectedId] = useState(
@@ -411,6 +412,7 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onSave
                   </button>
                   <span className="command-separator" />
                   <button className="button" onClick={exportCsv}>导出 CSV</button>
+                  <button className="button" disabled={!onExportXlsx} onClick={() => selected && onExportXlsx?.(selected)}>导出 XLSX</button>
                   <button
                     className="button"
                     onClick={() => {
