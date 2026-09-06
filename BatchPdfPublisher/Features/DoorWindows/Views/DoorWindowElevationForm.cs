@@ -96,7 +96,10 @@ namespace BatchPdfPublisher.Views
             header.Controls.Add(sourceButtons, 0, 1); sidebar.Controls.Add(header, 0, 0);
 
             var batch = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, WrapContents = false, FlowDirection = FormsFlowDirection.TopDown, Padding = new Padding(12, 8, 8, 8), BackColor = Color.FromArgb(250, 251, 252) };
-            batch.Controls.Add(LabelFor("批量设置")); batch.Controls.Add(_batchType); batch.Controls.Add(_batchDivision); batch.Controls.Add(_batchOpening);
+            batch.Controls.Add(LabelFor("批量设置（作用于多选/勾选项）"));
+            batch.Controls.Add(LabelFor("门窗类型")); batch.Controls.Add(_batchType);
+            batch.Controls.Add(LabelFor("分格模板")); batch.Controls.Add(_batchDivision);
+            batch.Controls.Add(LabelFor("开启方式")); batch.Controls.Add(_batchOpening);
             batch.Controls.Add(LabelFor("按类型选择")); batch.Controls.Add(_filterType);
             var selectType = ButtonFor("勾选该类型"); selectType.Click += (s, e) => SelectByType(); batch.Controls.Add(selectType);
             var applyBatch = ButtonFor("应用到多选/勾选"); applyBatch.Click += (s, e) => ApplyBatch(); batch.Controls.Add(applyBatch);
@@ -140,7 +143,7 @@ namespace BatchPdfPublisher.Views
             var footer = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 2, Padding = new Padding(12, 8, 12, 7), BackColor = Color.FromArgb(245, 247, 250) };
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             _status.AutoSize = true; _status.Margin = new Padding(0, 7, 0, 0); footer.Controls.Add(_status, 0, 0);
-            var actions = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, FlowDirection = FormsFlowDirection.RightToLeft };
+            var actions = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = false, FlowDirection = FormsFlowDirection.RightToLeft };
             var save = ButtonFor("保存门窗设置"); save.Click += (s, e) => SavePreferences(true); actions.Controls.Add(save);
             var insert = ButtonFor("插入所选立面"); insert.Click += (s, e) => InsertElevations(); actions.Controls.Add(insert);
             var update = ButtonFor("更新已生成立面"); update.Click += (s, e) => UpdateGeneratedElevation(); actions.Controls.Add(update);
