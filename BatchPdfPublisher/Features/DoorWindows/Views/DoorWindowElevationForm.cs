@@ -81,44 +81,42 @@ namespace BatchPdfPublisher.Views
             sidebar.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             sidebar.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-            var header = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, RowCount = 4, Padding = new Padding(14, 10, 10, 8), BackColor = Color.FromArgb(245, 247, 250) };
-            header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            for (var row = 0; row < 4; row++) header.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             var title = new Label { Text = "门窗表数据", Font = new DrawingFont(Font, FontStyle.Bold), AutoSize = true, Margin = new Padding(0, 0, 0, 2) };
             _sourceLabel.AutoSize = true; _sourceLabel.ForeColor = Color.FromArgb(70, 82, 96);
-            var labels = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, FlowDirection = FormsFlowDirection.TopDown, WrapContents = false }; labels.Controls.Add(title); labels.Controls.Add(_sourceLabel); header.Controls.Add(labels, 0, 0);
-            var sourceButtons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, FlowDirection = FormsFlowDirection.LeftToRight };
+            var sourceButtons = new FlowLayoutPanel { Width = 282, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, FlowDirection = FormsFlowDirection.LeftToRight };
             var repick = ButtonFor("重新拾取门窗表"); repick.Click += (s, e) => Repick(); sourceButtons.Controls.Add(repick);
             var importCsv = ButtonFor("导入CSV/Excel"); importCsv.Click += (s, e) => ImportFromFile(); sourceButtons.Controls.Add(importCsv);
             var locate = ButtonFor("定位来源表"); locate.Click += (s, e) => LocateSource(); sourceButtons.Controls.Add(locate);
             var log = ButtonFor("打开诊断日志"); log.Click += (s, e) => OpenLog(); sourceButtons.Controls.Add(log);
-            foreach (Control control in sourceButtons.Controls) { var button = control as Button; if (button != null) { button.AutoSize = false; button.Width = 142; button.Height = 31; } }
-            header.Controls.Add(sourceButtons, 0, 1);
-            _floorStatistics.Margin = new Padding(3, 8, 3, 3); header.Controls.Add(_floorStatistics, 0, 2);
-            var floorButtons = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true };
-            foreach (var button in new[] { _addCurrentFloor, _pickFloorTable, _clearFloorTables }) { button.AutoSize = false; button.Width = 94; button.Height = 31; floorButtons.Controls.Add(button); }
-            header.Controls.Add(floorButtons, 0, 3);
-            var sourceGroup = new GroupBox { Text = "数据来源与分层统计", Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, MinimumSize = new Size(315, 0), Padding = new Padding(5), Margin = new Padding(5) };
-            sourceGroup.Controls.Add(header); sidebar.Controls.Add(sourceGroup, 0, 0);
+            foreach (Control control in sourceButtons.Controls) { var button = control as Button; if (button != null) { button.AutoSize = false; button.Width = 134; button.Height = 31; } }
+            _floorStatistics.Margin = new Padding(3, 8, 3, 3);
+            var floorButtons = new FlowLayoutPanel { Width = 282, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true };
+            foreach (var button in new[] { _addCurrentFloor, _pickFloorTable, _clearFloorTables }) { button.AutoSize = false; button.Width = 88; button.Height = 31; floorButtons.Controls.Add(button); }
+            var sourceGroup = SidebarGroup("数据来源与分层统计", title, _sourceLabel, sourceButtons, _floorStatistics, floorButtons);
+            sourceGroup.Margin = new Padding(12, 8, 8, 4);
+            sidebar.Controls.Add(sourceGroup, 0, 0);
 
-            var batch = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, WrapContents = false, FlowDirection = FormsFlowDirection.TopDown, Padding = new Padding(12, 8, 8, 8), BackColor = Color.FromArgb(250, 251, 252) };
+            var batch = new TableLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, ColumnCount = 1, RowCount = 5, Padding = new Padding(12, 8, 8, 8), BackColor = Color.FromArgb(250, 251, 252) };
+            batch.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            for (var row = 0; row < 4; row++) batch.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            batch.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             var selectType = ButtonFor("勾选该类型"); selectType.Click += (s, e) => SelectByType();
             var selectAll = ButtonFor("全选"); selectAll.Click += (s, e) => SelectAll(true);
             var selectNone = ButtonFor("全不选"); selectNone.Click += (s, e) => SelectAll(false);
-            batch.Controls.Add(SidebarGroup("选择范围", LabelFor("按门窗类型"), _filterType, selectType, ButtonPair(selectAll, selectNone)));
+            batch.Controls.Add(SidebarGroup("选择范围", LabelFor("按门窗类型"), _filterType, selectType, ButtonPair(selectAll, selectNone)), 0, 0);
 
             var applyBatch = ButtonFor("应用到多选/勾选"); applyBatch.Click += (s, e) => ApplyBatch();
             var constructionBatch = ButtonFor("批量构造设置"); constructionBatch.Click += (s, e) => ApplyBatchConstruction();
             var auto = ButtonFor("按尺寸自动判断"); auto.Click += (s, e) => ApplyAutomaticSuggestions();
             var restoreDefault = ButtonFor("恢复默认样式"); restoreDefault.Click += (s, e) => RestoreDefaultStyles();
             var custom = ButtonFor("编辑当前分格"); custom.Click += (s, e) => EditCurrentDivision();
-            batch.Controls.Add(SidebarGroup("批量修改（作用于多选/勾选项）", LabelFor("门窗类型"), _batchType, LabelFor("分格模板"), _batchDivision, LabelFor("开启方式"), _batchOpening, applyBatch, constructionBatch, auto, restoreDefault, custom));
+            batch.Controls.Add(SidebarGroup("批量修改（作用于多选/勾选项）", LabelFor("门窗类型"), _batchType, LabelFor("分格模板"), _batchDivision, LabelFor("开启方式"), _batchOpening, applyBatch, constructionBatch, auto, restoreDefault, custom), 0, 1);
 
             LoadTemplateChoices();
             var applyTemplate = ButtonFor("应用方案到多选/勾选"); applyTemplate.Click += (s, e) => ApplySelectedTemplate();
             var saveTemplate = ButtonFor("当前项保存为方案"); saveTemplate.Click += (s, e) => SaveCurrentAsTemplate();
             var deleteTemplate = ButtonFor("删除方案"); deleteTemplate.Click += (s, e) => DeleteSelectedTemplate();
-            batch.Controls.Add(SidebarGroup("跨项目门窗方案库", _templateChoice, applyTemplate, saveTemplate, deleteTemplate));
+            batch.Controls.Add(SidebarGroup("跨项目门窗方案库", _templateChoice, applyTemplate, saveTemplate, deleteTemplate), 0, 2);
 
             _addCurrentFloor.Enabled = _floorStatistics.Checked; _pickFloorTable.Visible = _clearFloorTables.Visible = false;
             _floorStatistics.CheckedChanged += (s, e) => ChangeFloorStatisticsMode();
@@ -132,7 +130,7 @@ namespace BatchPdfPublisher.Views
             }
             catch { }
             batch.Controls.Add(SidebarGroup("出图设置", LabelFor("出图比例"), _drawingScale, _insertFrame, _useTianzhengTitle,
-                new Label { Text = "几何按实际毫米 1:1；安装缝默认 20 mm。", AutoSize = true, ForeColor = Color.DimGray, MaximumSize = new Size(275, 0) }));
+                new Label { Text = "几何按实际毫米 1:1；安装缝默认 20 mm。", AutoSize = true, ForeColor = Color.DimGray, MaximumSize = new Size(275, 0) }), 0, 3);
             sidebar.Controls.Add(batch, 0, 1);
 
             ConfigureGrid();
@@ -161,8 +159,9 @@ namespace BatchPdfPublisher.Views
 
         private static GroupBox SidebarGroup(string title, params Control[] controls)
         {
-            var group = new GroupBox { Text = title, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, MinimumSize = new Size(300, 0), Padding = new Padding(8), Margin = new Padding(0, 0, 0, 8) };
-            var content = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Width = 282, MinimumSize = new Size(282, 0), WrapContents = false, FlowDirection = FormsFlowDirection.TopDown };
+            var group = new GroupBox { Text = title, Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, MinimumSize = new Size(300, 0), Padding = new Padding(8), Margin = new Padding(0, 0, 0, 8) };
+            var content = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, RowCount = controls.Length, MinimumSize = new Size(282, 0) };
+            content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             foreach (var control in controls)
             {
                 control.Margin = new Padding(3, 3, 3, 4);
@@ -172,7 +171,9 @@ namespace BatchPdfPublisher.Views
                 if (combo != null) combo.Width = 276;
                 var label = control as Label;
                 if (label != null) { label.MaximumSize = new Size(276, 0); label.Margin = new Padding(3, 5, 3, 2); }
-                content.Controls.Add(control);
+                control.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+                content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                content.Controls.Add(control, 0, content.Controls.Count);
             }
             group.Controls.Add(content); return group;
         }
