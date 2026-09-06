@@ -81,9 +81,9 @@ namespace BatchPdfPublisher.Views
             sidebar.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             sidebar.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-            var header = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, RowCount = 2, Padding = new Padding(14, 10, 10, 8), BackColor = Color.FromArgb(245, 247, 250) };
+            var header = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, RowCount = 4, Padding = new Padding(14, 10, 10, 8), BackColor = Color.FromArgb(245, 247, 250) };
             header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            header.RowStyles.Add(new RowStyle(SizeType.AutoSize)); header.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            for (var row = 0; row < 4; row++) header.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             var title = new Label { Text = "门窗表数据", Font = new DrawingFont(Font, FontStyle.Bold), AutoSize = true, Margin = new Padding(0, 0, 0, 2) };
             _sourceLabel.AutoSize = true; _sourceLabel.ForeColor = Color.FromArgb(70, 82, 96);
             var labels = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, FlowDirection = FormsFlowDirection.TopDown, WrapContents = false }; labels.Controls.Add(title); labels.Controls.Add(_sourceLabel); header.Controls.Add(labels, 0, 0);
@@ -93,27 +93,33 @@ namespace BatchPdfPublisher.Views
             var locate = ButtonFor("定位来源表"); locate.Click += (s, e) => LocateSource(); sourceButtons.Controls.Add(locate);
             var log = ButtonFor("打开诊断日志"); log.Click += (s, e) => OpenLog(); sourceButtons.Controls.Add(log);
             foreach (Control control in sourceButtons.Controls) { var button = control as Button; if (button != null) { button.AutoSize = false; button.Width = 142; button.Height = 31; } }
-            header.Controls.Add(sourceButtons, 0, 1); sidebar.Controls.Add(header, 0, 0);
+            header.Controls.Add(sourceButtons, 0, 1);
+            _floorStatistics.Margin = new Padding(3, 8, 3, 3); header.Controls.Add(_floorStatistics, 0, 2);
+            var floorButtons = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true };
+            foreach (var button in new[] { _addCurrentFloor, _pickFloorTable, _clearFloorTables }) { button.AutoSize = false; button.Width = 94; button.Height = 31; floorButtons.Controls.Add(button); }
+            header.Controls.Add(floorButtons, 0, 3);
+            var sourceGroup = new GroupBox { Text = "数据来源与分层统计", Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(5), Margin = new Padding(5) };
+            sourceGroup.Controls.Add(header); sidebar.Controls.Add(sourceGroup, 0, 0);
 
             var batch = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, WrapContents = false, FlowDirection = FormsFlowDirection.TopDown, Padding = new Padding(12, 8, 8, 8), BackColor = Color.FromArgb(250, 251, 252) };
-            batch.Controls.Add(LabelFor("批量设置（作用于多选/勾选项）"));
-            batch.Controls.Add(LabelFor("门窗类型")); batch.Controls.Add(_batchType);
-            batch.Controls.Add(LabelFor("分格模板")); batch.Controls.Add(_batchDivision);
-            batch.Controls.Add(LabelFor("开启方式")); batch.Controls.Add(_batchOpening);
-            batch.Controls.Add(LabelFor("按类型选择")); batch.Controls.Add(_filterType);
-            var selectType = ButtonFor("勾选该类型"); selectType.Click += (s, e) => SelectByType(); batch.Controls.Add(selectType);
-            var applyBatch = ButtonFor("应用到多选/勾选"); applyBatch.Click += (s, e) => ApplyBatch(); batch.Controls.Add(applyBatch);
-            var constructionBatch = ButtonFor("批量构造设置"); constructionBatch.Click += (s, e) => ApplyBatchConstruction(); batch.Controls.Add(constructionBatch);
-            var auto = ButtonFor("按尺寸自动判断"); auto.Click += (s, e) => ApplyAutomaticSuggestions(); batch.Controls.Add(auto);
-            var restoreDefault = ButtonFor("恢复默认样式"); restoreDefault.Click += (s, e) => RestoreDefaultStyles(); batch.Controls.Add(restoreDefault);
-            var custom = ButtonFor("编辑当前分格"); custom.Click += (s, e) => EditCurrentDivision(); batch.Controls.Add(custom);
-            batch.Controls.Add(LabelFor("跨项目门窗方案库")); LoadTemplateChoices(); batch.Controls.Add(_templateChoice);
-            var applyTemplate = ButtonFor("应用方案到多选/勾选"); applyTemplate.Click += (s, e) => ApplySelectedTemplate(); batch.Controls.Add(applyTemplate);
-            var saveTemplate = ButtonFor("当前项保存为方案"); saveTemplate.Click += (s, e) => SaveCurrentAsTemplate(); batch.Controls.Add(saveTemplate);
-            var deleteTemplate = ButtonFor("删除方案"); deleteTemplate.Click += (s, e) => DeleteSelectedTemplate(); batch.Controls.Add(deleteTemplate);
-            batch.Controls.Add(LabelFor("出图比例")); batch.Controls.Add(_drawingScale);
-            batch.Controls.Add(_insertFrame); batch.Controls.Add(_useTianzhengTitle);
-            batch.Controls.Add(_floorStatistics); batch.Controls.Add(_addCurrentFloor); batch.Controls.Add(_pickFloorTable); batch.Controls.Add(_clearFloorTables);
+            var selectType = ButtonFor("勾选该类型"); selectType.Click += (s, e) => SelectByType();
+            var selectAll = ButtonFor("全选"); selectAll.Click += (s, e) => SelectAll(true);
+            var selectNone = ButtonFor("全不选"); selectNone.Click += (s, e) => SelectAll(false);
+            batch.Controls.Add(SidebarGroup("选择范围", LabelFor("按门窗类型"), _filterType, selectType, ButtonPair(selectAll, selectNone)));
+
+            var applyBatch = ButtonFor("应用到多选/勾选"); applyBatch.Click += (s, e) => ApplyBatch();
+            var constructionBatch = ButtonFor("批量构造设置"); constructionBatch.Click += (s, e) => ApplyBatchConstruction();
+            var auto = ButtonFor("按尺寸自动判断"); auto.Click += (s, e) => ApplyAutomaticSuggestions();
+            var restoreDefault = ButtonFor("恢复默认样式"); restoreDefault.Click += (s, e) => RestoreDefaultStyles();
+            var custom = ButtonFor("编辑当前分格"); custom.Click += (s, e) => EditCurrentDivision();
+            batch.Controls.Add(SidebarGroup("批量修改（作用于多选/勾选项）", LabelFor("门窗类型"), _batchType, LabelFor("分格模板"), _batchDivision, LabelFor("开启方式"), _batchOpening, applyBatch, constructionBatch, auto, restoreDefault, custom));
+
+            LoadTemplateChoices();
+            var applyTemplate = ButtonFor("应用方案到多选/勾选"); applyTemplate.Click += (s, e) => ApplySelectedTemplate();
+            var saveTemplate = ButtonFor("当前项保存为方案"); saveTemplate.Click += (s, e) => SaveCurrentAsTemplate();
+            var deleteTemplate = ButtonFor("删除方案"); deleteTemplate.Click += (s, e) => DeleteSelectedTemplate();
+            batch.Controls.Add(SidebarGroup("跨项目门窗方案库", _templateChoice, applyTemplate, saveTemplate, deleteTemplate));
+
             _addCurrentFloor.Enabled = _floorStatistics.Checked; _pickFloorTable.Visible = _clearFloorTables.Visible = false;
             _floorStatistics.CheckedChanged += (s, e) => ChangeFloorStatisticsMode();
             _addCurrentFloor.Click += (s, e) => OpenFloorSettings();
@@ -125,10 +131,8 @@ namespace BatchPdfPublisher.Views
                 _useTianzhengTitle.Checked = saved.UseTianzhengTitle;
             }
             catch { }
-            var selectAll = ButtonFor("全选"); selectAll.Click += (s, e) => SelectAll(true); batch.Controls.Add(selectAll);
-            var selectNone = ButtonFor("全不选"); selectNone.Click += (s, e) => SelectAll(false); batch.Controls.Add(selectNone);
-            batch.Controls.Add(new Label { Text = "几何按实际毫米 1:1；安装缝默认 20 mm。天正图名接口未确认时使用兼容图名。", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(14, 7, 0, 0) });
-            FormatSidebarControls(batch, 300);
+            batch.Controls.Add(SidebarGroup("出图设置", LabelFor("出图比例"), _drawingScale, _insertFrame, _useTianzhengTitle,
+                new Label { Text = "几何按实际毫米 1:1；安装缝默认 20 mm。", AutoSize = true, ForeColor = Color.DimGray, MaximumSize = new Size(275, 0) }));
             sidebar.Controls.Add(batch, 0, 1);
 
             ConfigureGrid();
@@ -155,18 +159,30 @@ namespace BatchPdfPublisher.Views
             Controls.Add(root);
         }
 
-        private static void FormatSidebarControls(FlowLayoutPanel panel, int width)
+        private static GroupBox SidebarGroup(string title, params Control[] controls)
         {
-            foreach (Control control in panel.Controls)
+            var group = new GroupBox { Text = title, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Width = 300, Padding = new Padding(8), Margin = new Padding(0, 0, 0, 8) };
+            var content = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = false, FlowDirection = FormsFlowDirection.TopDown };
+            foreach (var control in controls)
             {
                 control.Margin = new Padding(3, 3, 3, 4);
                 var button = control as Button;
-                if (button != null) { button.AutoSize = false; button.Width = width; button.Height = 31; }
+                if (button != null) { button.AutoSize = false; button.Width = 276; button.Height = 31; }
                 var combo = control as ComboBox;
-                if (combo != null) combo.Width = width;
+                if (combo != null) combo.Width = 276;
                 var label = control as Label;
-                if (label != null) { label.MaximumSize = new Size(width, 0); label.Margin = new Padding(3, 8, 3, 3); }
+                if (label != null) { label.MaximumSize = new Size(276, 0); label.Margin = new Padding(3, 5, 3, 2); }
+                content.Controls.Add(control);
             }
+            group.Controls.Add(content); return group;
+        }
+
+        private static TableLayoutPanel ButtonPair(Button left, Button right)
+        {
+            var panel = new TableLayoutPanel { Width = 276, Height = 35, ColumnCount = 2, RowCount = 1, Margin = new Padding(3, 2, 3, 3) };
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50)); panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            foreach (var button in new[] { left, right }) { button.AutoSize = false; button.Dock = DockStyle.Fill; button.Height = 31; button.Margin = new Padding(2); }
+            panel.Controls.Add(left, 0, 0); panel.Controls.Add(right, 1, 0); return panel;
         }
 
         private void ConfigureGrid()
@@ -488,9 +504,9 @@ namespace BatchPdfPublisher.Views
 
         private void SelectByType()
         {
-            _grid.EndEdit(); var type = Convert.ToString(_filterType.SelectedItem);
+            CommitGridEdits(); var type = Convert.ToString(_filterType.SelectedItem);
             foreach (var item in _rows) item.Selected = IsSelectable(item) && (type == "全部类型" || string.Equals(item.ElevationType, type, StringComparison.Ordinal));
-            _grid.Refresh(); UpdateSummary();
+            RefreshSelectionBindings();
         }
 
         private void ApplyBatchConstruction()
@@ -1065,7 +1081,20 @@ namespace BatchPdfPublisher.Views
         private static bool CanGenerate(DoorWindowScheduleItem item) { return item != null && item.Status == "参数完整，可生成"; }
         private static bool IsSelectable(DoorWindowScheduleItem item) { return CanGenerate(item); }
 
-        private void SelectAll(bool selected) { foreach (var item in _rows) item.Selected = selected && IsSelectable(item); _grid.Refresh(); UpdateSummary(); }
+        private void SelectAll(bool selected)
+        {
+            CommitGridEdits();
+            foreach (var item in _rows) item.Selected = selected && IsSelectable(item);
+            RefreshSelectionBindings();
+        }
+
+        private void RefreshSelectionBindings()
+        {
+            _rows.ResetBindings();
+            if (_grid.Columns.Count > 0) _grid.InvalidateColumn(0);
+            _grid.Update();
+            UpdateSummary();
+        }
         private static Label LabelFor(string text) { return new Label { Text = text, AutoSize = true, Margin = new Padding(2, 7, 8, 0) }; }
         private static Button ButtonFor(string text) { return new Button { Text = text, AutoSize = true, Height = 29, Padding = new Padding(8, 0, 8, 0) }; }
         private static ComboBox Combo(IEnumerable<string> values) { var box = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 118, Height = 28, Margin = new Padding(4, 3, 4, 0) }; box.Items.AddRange(values.Cast<object>().ToArray()); box.SelectedIndex = 0; return box; }
