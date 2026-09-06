@@ -99,8 +99,11 @@
       "cadarchspec.application": {
         "type": "Project",
         "dependencies": {
-          "CadArchSpec.Domain": "[1.0.0, )"
+          "CadArchSpec.Domain": "[1.4.5, )"
         }
+      },
+      "cadarchspec.cadtable": {
+        "type": "Project"
       },
       "cadarchspec.domain": {
         "type": "Project"
@@ -108,27 +111,27 @@
       "cadarchspec.editorbridge": {
         "type": "Project",
         "dependencies": {
-          "CadArchSpec.Domain": "[1.0.0, )",
+          "CadArchSpec.Domain": "[1.4.5, )",
           "Newtonsoft.Json": "[13.0.3, )"
         }
       },
       "cadarchspec.layoutengine": {
         "type": "Project",
         "dependencies": {
-          "CadArchSpec.Domain": "[1.0.0, )"
+          "CadArchSpec.Domain": "[1.4.5, )"
         }
       },
       "cadarchspec.ruleengine": {
         "type": "Project",
         "dependencies": {
-          "CadArchSpec.Domain": "[1.0.0, )",
+          "CadArchSpec.Domain": "[1.4.5, )",
           "Newtonsoft.Json": "[13.0.3, )"
         }
       },
       "cadarchspec.standardregistry": {
         "type": "Project",
         "dependencies": {
-          "CadArchSpec.Domain": "[1.0.0, )"
+          "CadArchSpec.Domain": "[1.4.5, )"
         }
       },
       "Newtonsoft.Json": {
