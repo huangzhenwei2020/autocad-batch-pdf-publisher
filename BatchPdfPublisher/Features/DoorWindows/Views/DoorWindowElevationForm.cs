@@ -265,7 +265,7 @@ namespace BatchPdfPublisher.Views
                     item.BayLeftCellLayout = preference.BayLeftCellLayout;
                     item.BayRightCellLayout = preference.BayRightCellLayout;
                     item.Material = string.IsNullOrWhiteSpace(preference.Material) ? item.Material : preference.Material;
-                    item.AtlasName = string.IsNullOrWhiteSpace(preference.AtlasName) ? item.AtlasName : DoorWindowElevationSuggestionService.NormalizeAtlasName(preference.AtlasName); item.Remarks = preference.Remarks;
+                    ApplySavedAtlas(item, preference); item.Remarks = preference.Remarks;
                     if (preference.HasSillHeight) { item.SillHeight = preference.SillHeight; item.SillHeightSuppressed = preference.SillHeightSuppressed; }
                 }
                 UpdateStatus(item); prepared.Add(item);
@@ -317,9 +317,21 @@ namespace BatchPdfPublisher.Views
             item.BayLeftSide = string.IsNullOrWhiteSpace(preference.BayLeftSide) ? "墙" : preference.BayLeftSide; item.BayRightSide = string.IsNullOrWhiteSpace(preference.BayRightSide) ? "墙" : preference.BayRightSide;
             item.BayLeftDepth = preference.BayLeftDepth > 0d ? preference.BayLeftDepth : 600d; item.BayRightDepth = preference.BayRightDepth > 0d ? preference.BayRightDepth : 600d;
             item.BayLeftCellLayout = preference.BayLeftCellLayout; item.BayRightCellLayout = preference.BayRightCellLayout;
-            item.Material = string.IsNullOrWhiteSpace(preference.Material) ? item.Material : preference.Material; item.AtlasName = string.IsNullOrWhiteSpace(preference.AtlasName) ? item.AtlasName : DoorWindowElevationSuggestionService.NormalizeAtlasName(preference.AtlasName); item.Remarks = preference.Remarks;
+            item.Material = string.IsNullOrWhiteSpace(preference.Material) ? item.Material : preference.Material; ApplySavedAtlas(item, preference); item.Remarks = preference.Remarks;
             if (preference.HasSillHeight) { item.SillHeight = preference.SillHeight; item.SillHeightSuppressed = preference.SillHeightSuppressed; }
             item.GenerateFireRescueElevation = preference.GenerateFireRescueElevation;
+        }
+
+        private static void ApplySavedAtlas(DoorWindowScheduleItem item, DoorWindowElevationPreference preference)
+        {
+            var saved = DoorWindowElevationSuggestionService.NormalizeAtlasName(preference == null ? null : preference.AtlasName);
+            // 旧版本没有记录“是否手动选择”。其中“无”只能由新版用户主动选出，需按明确选择保留；
+            // 其余旧值重新按当前门窗类型推断，使普通门从旧的铝合金默认值迁正为“无”。
+            var explicitChoice = preference != null && (preference.AtlasNameExplicitlySelected || string.Equals(saved, "无", StringComparison.Ordinal));
+            item.AtlasNameExplicitlySelected = explicitChoice;
+            item.AtlasName = explicitChoice
+                ? saved
+                : DoorWindowElevationSuggestionService.InferAtlas(item.Code, item.ElevationType, item.SourceNote);
         }
 
         private void ChangeFloorStatisticsMode()
@@ -481,7 +493,7 @@ namespace BatchPdfPublisher.Views
             var clone = new DoorWindowScheduleItem
             {
                 Selected = x.Selected, GenerateFireRescueElevation = x.GenerateFireRescueElevation, Sequence = x.Sequence, Code = x.Code, SourceCategory = x.SourceCategory, Width = x.Width, Height = x.Height, Quantity = x.Quantity,
-                SourceNote = x.SourceNote, Material = x.Material, AtlasName = x.AtlasName, Remarks = x.Remarks, SillHeight = x.SillHeight, SillHeightSuppressed = x.SillHeightSuppressed,
+                SourceNote = x.SourceNote, Material = x.Material, AtlasName = x.AtlasName, AtlasNameExplicitlySelected = x.AtlasNameExplicitlySelected, Remarks = x.Remarks, SillHeight = x.SillHeight, SillHeightSuppressed = x.SillHeightSuppressed,
                 ElevationType = x.ElevationType, DivisionPreset = x.DivisionPreset, OpeningMode = x.OpeningMode, HasInstallationGap = x.HasInstallationGap, InstallationGap = x.InstallationGap,
                 HasOuterFrame = x.HasOuterFrame, OuterFrameWidth = x.OuterFrameWidth, HasMullion = x.HasMullion, MullionWidth = x.MullionWidth, DoorFrameType = x.DoorFrameType, DoorFrameWidth = x.DoorFrameWidth,
                 DrawingScale = x.DrawingScale, CustomColumnRatios = x.CustomColumnRatios, CustomRowRatios = x.CustomRowRatios, CustomColumnWidths = x.CustomColumnWidths,
@@ -499,7 +511,12 @@ namespace BatchPdfPublisher.Views
             var targets = OperationTargets();
             foreach (var item in targets)
             {
-                if (Convert.ToString(_batchType.SelectedItem) != "不修改") { item.ElevationType = Convert.ToString(_batchType.SelectedItem); DoorWindowElevationSuggestionService.ApplyConstructionDefaults(item); }
+                if (Convert.ToString(_batchType.SelectedItem) != "不修改")
+                {
+                    item.ElevationType = Convert.ToString(_batchType.SelectedItem);
+                    DoorWindowElevationSuggestionService.ApplyConstructionDefaults(item);
+                    if (!item.AtlasNameExplicitlySelected) item.AtlasName = DoorWindowElevationSuggestionService.InferAtlas(item.Code, item.ElevationType, item.SourceNote);
+                }
                 if (Convert.ToString(_batchDivision.SelectedItem) != "不修改") item.DivisionPreset = Convert.ToString(_batchDivision.SelectedItem);
                 if (Convert.ToString(_batchOpening.SelectedItem) != "不修改") item.OpeningMode = Convert.ToString(_batchOpening.SelectedItem);
                 if ((item.ElevationType ?? string.Empty).Contains("窗") && item.SillHeight <= 0d && !item.SillHeightSuppressed) item.SillHeight = 900d; NormalizeSillHeight(item);
@@ -1010,9 +1027,10 @@ namespace BatchPdfPublisher.Views
                         else if (property == "DoorFrameWidthDisplay") target.DoorFrameWidth = source.DoorFrameWidth;
                         else if (property == "Material") target.Material = source.Material;
                         else if (property == "SillHeightDisplay") { target.SillHeight = source.SillHeight; target.SillHeightSuppressed = source.SillHeightSuppressed; }
-                        else if (property == "AtlasName") target.AtlasName = source.AtlasName;
+                        else if (property == "AtlasName") { target.AtlasName = source.AtlasName; target.AtlasNameExplicitlySelected = true; }
                         else if (property == "Remarks") target.Remarks = source.Remarks;
                         if (property == "ElevationType" && (target.ElevationType ?? string.Empty).Contains("窗") && target.SillHeight <= 0d && !target.SillHeightSuppressed) target.SillHeight = 900d;
+                        if (property == "ElevationType" && !target.AtlasNameExplicitlySelected) target.AtlasName = DoorWindowElevationSuggestionService.InferAtlas(target.Code, target.ElevationType, target.SourceNote);
                         NormalizeSillHeight(target);
                         if (property == "InstallationGap" || property == "HasInstallationGap") NormalizeActualSizes(target);
                         UpdateStatus(target);
@@ -1022,6 +1040,9 @@ namespace BatchPdfPublisher.Views
             }
             if (property == "InstallationGap" || property == "HasInstallationGap") NormalizeActualSizes(_rows[e.RowIndex]);
             if (property == "ElevationType") DoorWindowElevationSuggestionService.ApplyConstructionDefaults(_rows[e.RowIndex]);
+            if (property == "AtlasName") _rows[e.RowIndex].AtlasNameExplicitlySelected = true;
+            if (property == "ElevationType" && !_rows[e.RowIndex].AtlasNameExplicitlySelected)
+                _rows[e.RowIndex].AtlasName = DoorWindowElevationSuggestionService.InferAtlas(_rows[e.RowIndex].Code, _rows[e.RowIndex].ElevationType, _rows[e.RowIndex].SourceNote);
             if (property == "ElevationType" && (_rows[e.RowIndex].ElevationType ?? string.Empty).Contains("窗") && _rows[e.RowIndex].SillHeight <= 0d && !_rows[e.RowIndex].SillHeightSuppressed) _rows[e.RowIndex].SillHeight = 900d;
             NormalizeSillHeight(_rows[e.RowIndex]);
             var typeChanged = property == "ElevationType";

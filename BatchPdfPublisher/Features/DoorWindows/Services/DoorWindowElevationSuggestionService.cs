@@ -18,7 +18,9 @@ namespace BatchPdfPublisher.Services
             item.Material = IsWindowType(type) ? "玻璃" : "无";
             if (IsWindowType(type) && item.SillHeight <= 0d && !item.SillHeightSuppressed) item.SillHeight = 900d;
             if (!IsWindowType(type)) { item.SillHeight = 0d; item.SillHeightSuppressed = false; }
-            item.AtlasName = string.IsNullOrWhiteSpace(item.AtlasName) ? InferAtlas(code, type, item.SourceNote) : NormalizeAtlasName(item.AtlasName);
+            item.AtlasName = item.AtlasNameExplicitlySelected && !string.IsNullOrWhiteSpace(item.AtlasName)
+                ? NormalizeAtlasName(item.AtlasName)
+                : InferAtlas(code, type, item.SourceNote);
             if (string.IsNullOrWhiteSpace(item.Remarks)) item.Remarks = InferFireRating(code);
 
             if (type == "推拉门")

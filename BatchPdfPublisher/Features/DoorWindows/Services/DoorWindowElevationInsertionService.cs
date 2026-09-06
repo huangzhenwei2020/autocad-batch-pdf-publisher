@@ -84,7 +84,7 @@ namespace BatchPdfPublisher.Services
             {
                 Selected = x.Selected, Sequence = x.Sequence, Code = x.Code, SourceCategory = x.SourceCategory,
                 Width = x.Width, Height = x.Height, Quantity = x.Quantity, SourceNote = x.SourceNote,
-                Material = x.Material, AtlasName = x.AtlasName, Remarks = x.Remarks, SillHeight = x.SillHeight,
+                Material = x.Material, AtlasName = x.AtlasName, AtlasNameExplicitlySelected = x.AtlasNameExplicitlySelected, Remarks = x.Remarks, SillHeight = x.SillHeight,
                 SillHeightSuppressed = x.SillHeightSuppressed, ElevationType = x.ElevationType, DivisionPreset = x.DivisionPreset,
                 OpeningMode = x.OpeningMode, HasInstallationGap = x.HasInstallationGap, InstallationGap = x.InstallationGap,
                 HasOuterFrame = x.HasOuterFrame, OuterFrameWidth = x.OuterFrameWidth, HasMullion = x.HasMullion,

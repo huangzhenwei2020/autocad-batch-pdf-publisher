@@ -95,6 +95,7 @@ namespace BatchPdfPublisher.Services
                 preference.BayRightCellLayout = item.BayRightCellLayout;
                 preference.Material = item.Material;
                 preference.AtlasName = item.AtlasName;
+                preference.AtlasNameExplicitlySelected = item.AtlasNameExplicitlySelected;
                 preference.Remarks = item.Remarks;
                 preference.SillHeight = item.SillHeight;
                 preference.HasSillHeight = true;

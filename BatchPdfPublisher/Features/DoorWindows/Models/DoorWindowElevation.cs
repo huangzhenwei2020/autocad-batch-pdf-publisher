@@ -69,6 +69,8 @@ namespace BatchPdfPublisher.Models
         public string SourceNote { get; set; }
         public string Material { get; set; } = "无";
         public string AtlasName { get; set; }
+        /// <summary>区分用户在下拉框中的明确选择和旧版本自动推断值。</summary>
+        public bool AtlasNameExplicitlySelected { get; set; }
         public string Remarks { get; set; }
         public double SillHeight { get; set; }
         /// <summary>用户把离地高度设为"—"时置 true，表示不标注离地高度。</summary>
@@ -209,6 +211,7 @@ namespace BatchPdfPublisher.Models
         public string BayRightCellLayout { get; set; }
         public string Material { get; set; }
         public string AtlasName { get; set; }
+        public bool AtlasNameExplicitlySelected { get; set; }
         public string Remarks { get; set; }
         public double SillHeight { get; set; }
         public bool HasSillHeight { get; set; }
