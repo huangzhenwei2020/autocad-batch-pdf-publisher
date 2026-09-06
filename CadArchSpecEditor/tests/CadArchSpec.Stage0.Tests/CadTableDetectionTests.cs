@@ -52,6 +52,45 @@ namespace CadArchSpec.Stage0.Tests
             Assert.Equal(CadTextSourceKind.ExplodedClone, result.UnassignedText[0].SourceKind);
         }
 
+        [Fact]
+        public void InfersHorizontalMergedCellFromMissingInternalDivider()
+        {
+            var input = new CadTableDetectionInput();
+            input.Segments.AddRange(new[]
+            {
+                Segment(0, 0, 200, 0), Segment(0, 50, 200, 50), Segment(0, 100, 200, 100),
+                Segment(0, 0, 0, 100), Segment(100, 0, 100, 50), Segment(200, 0, 200, 100)
+            });
+            input.TextFragments.Add(Text("合并表头", 100, 75, CadTextSourceKind.Standard));
+
+            var result = new OrthogonalCadTableDetector().Detect(input);
+
+            Assert.Equal(3, result.Cells.Count);
+            var merged = result.Cells.Single(cell => cell.RowIndex == 0 && cell.ColumnIndex == 0);
+            Assert.Equal(2, merged.ColumnSpan);
+            Assert.Equal(1, merged.RowSpan);
+            Assert.Equal("合并表头", merged.Text);
+            Assert.Contains(result.Warnings, warning => warning.Contains("合并单元格"));
+        }
+
+        [Fact]
+        public void InfersVerticalMergedCellFromMissingInternalDivider()
+        {
+            var input = new CadTableDetectionInput();
+            input.Segments.AddRange(new[]
+            {
+                Segment(0, 0, 200, 0), Segment(100, 50, 200, 50), Segment(0, 100, 200, 100),
+                Segment(0, 0, 0, 100), Segment(100, 0, 100, 100), Segment(200, 0, 200, 100)
+            });
+
+            var result = new OrthogonalCadTableDetector().Detect(input);
+
+            Assert.Equal(3, result.Cells.Count);
+            var merged = result.Cells.Single(cell => cell.RowIndex == 0 && cell.ColumnIndex == 0);
+            Assert.Equal(1, merged.ColumnSpan);
+            Assert.Equal(2, merged.RowSpan);
+        }
+
         private static CadTableDetectionInput Grid(IEnumerable<double> xs, IEnumerable<double> ys)
         {
             var x = xs.ToArray();

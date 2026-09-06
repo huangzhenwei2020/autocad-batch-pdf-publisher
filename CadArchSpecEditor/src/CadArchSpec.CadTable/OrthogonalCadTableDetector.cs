@@ -45,34 +45,79 @@ namespace CadArchSpec.CadTable
                 return result;
             }
 
-            for (var row = 0; row < result.RowBoundaries.Count - 1; row++)
-            {
-                var top = result.RowBoundaries[row];
-                var bottom = result.RowBoundaries[row + 1];
-                for (var column = 0; column < result.ColumnBoundaries.Count - 1; column++)
-                {
-                    var left = result.ColumnBoundaries[column];
-                    var right = result.ColumnBoundaries[column + 1];
-                    if (!Covers(horizontal, top, left, right, options) ||
-                        !Covers(horizontal, bottom, left, right, options) ||
-                        !Covers(vertical, left, bottom, top, options) ||
-                        !Covers(vertical, right, bottom, top, options)) continue;
-                    result.Cells.Add(new DetectedCadTableCell
-                    {
-                        RowIndex = row,
-                        ColumnIndex = column,
-                        Left = left,
-                        Bottom = bottom,
-                        Right = right,
-                        Top = top
-                    });
-                }
-            }
+            DetectCells(result, horizontal, vertical, options);
 
             AssignText(result, input.TextFragments ?? new List<CadTextFragment>(), options.CoordinateTolerance);
             if (result.Cells.Count == 0) result.Warnings.Add("检测到边界坐标，但没有形成闭合单元格。");
+            var mergedCount = result.Cells.Count(cell => cell.RowSpan > 1 || cell.ColumnSpan > 1);
+            if (mergedCount > 0) result.Warnings.Add("根据缺失的内部分隔线推断出 " + mergedCount + " 个合并单元格，请在预览中确认。");
             if (result.UnassignedText.Count > 0) result.Warnings.Add("有 " + result.UnassignedText.Count + " 段文字未能归入单元格，需要人工确认。");
             return result;
+        }
+
+        private static void DetectCells(CadTableDetectionResult result, IList<AxisSegment> horizontal,
+            IList<AxisSegment> vertical, CadTableDetectionOptions options)
+        {
+            var rowCount = result.RowBoundaries.Count - 1;
+            var columnCount = result.ColumnBoundaries.Count - 1;
+            var occupied = new bool[rowCount, columnCount];
+            var unresolved = 0;
+            for (var row = 0; row < rowCount; row++)
+            {
+                for (var column = 0; column < columnCount; column++)
+                {
+                    if (occupied[row, column]) continue;
+                    DetectedCadTableCell best = null;
+                    var bestArea = int.MaxValue;
+                    for (var rowSpan = 1; row + rowSpan <= rowCount; rowSpan++)
+                    {
+                        for (var columnSpan = 1; column + columnSpan <= columnCount; columnSpan++)
+                        {
+                            var area = rowSpan * columnSpan;
+                            if (area >= bestArea || Overlaps(occupied, row, column, rowSpan, columnSpan)) continue;
+                            var top = result.RowBoundaries[row];
+                            var bottom = result.RowBoundaries[row + rowSpan];
+                            var left = result.ColumnBoundaries[column];
+                            var right = result.ColumnBoundaries[column + columnSpan];
+                            if (!Covers(horizontal, top, left, right, options) ||
+                                !Covers(horizontal, bottom, left, right, options) ||
+                                !Covers(vertical, left, bottom, top, options) ||
+                                !Covers(vertical, right, bottom, top, options)) continue;
+                            bestArea = area;
+                            best = new DetectedCadTableCell
+                            {
+                                RowIndex = row,
+                                ColumnIndex = column,
+                                RowSpan = rowSpan,
+                                ColumnSpan = columnSpan,
+                                Left = left,
+                                Bottom = bottom,
+                                Right = right,
+                                Top = top
+                            };
+                        }
+                    }
+                    if (best == null)
+                    {
+                        unresolved++;
+                        continue;
+                    }
+                    result.Cells.Add(best);
+                    for (var occupiedRow = row; occupiedRow < row + best.RowSpan; occupiedRow++)
+                        for (var occupiedColumn = column; occupiedColumn < column + best.ColumnSpan; occupiedColumn++)
+                            occupied[occupiedRow, occupiedColumn] = true;
+                }
+            }
+            if (unresolved > 0)
+                result.Warnings.Add("有 " + unresolved + " 个网格区域边界不完整，未自动生成单元格。");
+        }
+
+        private static bool Overlaps(bool[,] occupied, int row, int column, int rowSpan, int columnSpan)
+        {
+            for (var currentRow = row; currentRow < row + rowSpan; currentRow++)
+                for (var currentColumn = column; currentColumn < column + columnSpan; currentColumn++)
+                    if (occupied[currentRow, currentColumn]) return true;
+            return false;
         }
 
         private static bool TryNormalize(CadTableSegment source, double angleTolerance, out AxisSegment result, bool horizontal)

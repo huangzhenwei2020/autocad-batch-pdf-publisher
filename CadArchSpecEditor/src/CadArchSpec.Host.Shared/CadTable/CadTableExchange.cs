@@ -97,6 +97,9 @@ namespace CadArchSpec.Host.Shared.CadTable
                 {
                     var detectedCell = detected.Cells.FirstOrDefault(cell =>
                         cell.RowIndex == rowIndex && cell.ColumnIndex == columnIndex);
+                    var coveringCell = detectedCell ?? detected.Cells.FirstOrDefault(cell =>
+                        rowIndex >= cell.RowIndex && rowIndex < cell.RowIndex + cell.RowSpan &&
+                        columnIndex >= cell.ColumnIndex && columnIndex < cell.ColumnIndex + cell.ColumnSpan);
                     var value = detectedCell == null ? string.Empty : detectedCell.Text ?? string.Empty;
                     double numeric;
                     var numericValue = double.TryParse(value.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out numeric)
@@ -112,9 +115,9 @@ namespace CadArchSpec.Host.Shared.CadTable
                         ["fieldPath"] = string.Empty,
                         ["formula"] = string.Empty,
                         ["state"] = string.IsNullOrWhiteSpace(value) ? "unknown" : "pending",
-                        ["source"] = "CAD只读识别",
-                        ["rowSpan"] = 1,
-                        ["columnSpan"] = 1
+                        ["source"] = coveringCell == null ? "CAD边界待确认" : "CAD只读识别",
+                        ["rowSpan"] = detectedCell != null ? detectedCell.RowSpan : coveringCell != null ? 0 : 1,
+                        ["columnSpan"] = detectedCell != null ? detectedCell.ColumnSpan : coveringCell != null ? 0 : 1
                     });
                 }
                 rows.Add(new JObject
@@ -135,6 +138,7 @@ namespace CadArchSpec.Host.Shared.CadTable
                 ["explodedObjectCount"] = read.ExplodedObjectCount,
                 ["rowCount"] = rowCount,
                 ["columnCount"] = columnCount,
+                ["nativeTable"] = false,
                 ["warnings"] = JArray.FromObject(warnings),
                 ["drawingPath"] = document.Name ?? string.Empty,
                 ["table"] = new JObject
