@@ -20,9 +20,14 @@ namespace CadArchSpec.CadTable
             if (options.CoordinateTolerance <= 0) throw new ArgumentOutOfRangeException(nameof(options.CoordinateTolerance));
             if (options.MaximumBorderGap < 0) throw new ArgumentOutOfRangeException(nameof(options.MaximumBorderGap));
 
+            var rotation = options.DetectOverallRotation ? DetectOverallRotation(input.Segments) : 0d;
+            var normalizedInput = Math.Abs(rotation) > options.OrthogonalAngleToleranceDegrees
+                ? RotateInput(input, -rotation)
+                : input;
+
             var horizontal = new List<AxisSegment>();
             var vertical = new List<AxisSegment>();
-            foreach (var segment in input.Segments ?? new List<CadTableSegment>())
+            foreach (var segment in normalizedInput.Segments ?? new List<CadTableSegment>())
             {
                 AxisSegment normalized;
                 if (TryNormalize(segment, options.OrthogonalAngleToleranceDegrees, out normalized, true)) horizontal.Add(normalized);
@@ -33,6 +38,7 @@ namespace CadArchSpec.CadTable
             vertical = Merge(vertical, options.CoordinateTolerance, options.MaximumBorderGap);
             var result = new CadTableDetectionResult
             {
+                DetectedRotationDegrees = rotation,
                 ColumnBoundaries = Cluster(vertical.Select(item => item.Fixed), options.CoordinateTolerance),
                 RowBoundaries = Cluster(horizontal.Select(item => item.Fixed), options.CoordinateTolerance)
                     .OrderByDescending(value => value).ToList()
@@ -41,18 +47,88 @@ namespace CadArchSpec.CadTable
             if (result.ColumnBoundaries.Count < 2 || result.RowBoundaries.Count < 2)
             {
                 result.Warnings.Add("没有检测到完整的表格行列边界。");
-                result.UnassignedText.AddRange(input.TextFragments ?? new List<CadTextFragment>());
+                result.UnassignedText.AddRange(normalizedInput.TextFragments ?? new List<CadTextFragment>());
                 return result;
             }
 
             DetectCells(result, horizontal, vertical, options);
 
-            AssignText(result, input.TextFragments ?? new List<CadTextFragment>(), options.CoordinateTolerance);
+            AssignText(result, normalizedInput.TextFragments ?? new List<CadTextFragment>(), options.CoordinateTolerance);
             if (result.Cells.Count == 0) result.Warnings.Add("检测到边界坐标，但没有形成闭合单元格。");
             var mergedCount = result.Cells.Count(cell => cell.RowSpan > 1 || cell.ColumnSpan > 1);
             if (mergedCount > 0) result.Warnings.Add("根据缺失的内部分隔线推断出 " + mergedCount + " 个合并单元格，请在预览中确认。");
             if (result.UnassignedText.Count > 0) result.Warnings.Add("有 " + result.UnassignedText.Count + " 段文字未能归入单元格，需要人工确认。");
             return result;
+        }
+
+        private static double DetectOverallRotation(IEnumerable<CadTableSegment> segments)
+        {
+            var cosine = 0d;
+            var sine = 0d;
+            var totalLength = 0d;
+            foreach (var segment in segments ?? new List<CadTableSegment>())
+            {
+                if (segment == null || segment.Start == null || segment.End == null) continue;
+                var dx = segment.End.X - segment.Start.X;
+                var dy = segment.End.Y - segment.Start.Y;
+                var length = Math.Sqrt(dx * dx + dy * dy);
+                if (length < 0.000001d) continue;
+                // Multiplying the angle by four makes horizontal and vertical table
+                // edges vote for the same orientation while keeping the sign of skew.
+                var angle = Math.Atan2(dy, dx);
+                cosine += Math.Cos(angle * 4d) * length;
+                sine += Math.Sin(angle * 4d) * length;
+                totalLength += length;
+            }
+            if (totalLength < 0.000001d || Math.Abs(cosine) + Math.Abs(sine) < 0.000001d) return 0d;
+            var degrees = Math.Atan2(sine, cosine) * 180d / Math.PI / 4d;
+            while (degrees >= 45d) degrees -= 90d;
+            while (degrees < -45d) degrees += 90d;
+            return degrees;
+        }
+
+        private static CadTableDetectionInput RotateInput(CadTableDetectionInput input, double degrees)
+        {
+            var radians = degrees * Math.PI / 180d;
+            var cosine = Math.Cos(radians);
+            var sine = Math.Sin(radians);
+            var result = new CadTableDetectionInput();
+            foreach (var segment in input.Segments ?? new List<CadTableSegment>())
+            {
+                if (segment == null || segment.Start == null || segment.End == null) continue;
+                result.Segments.Add(new CadTableSegment
+                {
+                    Start = Rotate(segment.Start, cosine, sine),
+                    End = Rotate(segment.End, cosine, sine),
+                    SourceHandle = segment.SourceHandle,
+                    Layer = segment.Layer
+                });
+            }
+            foreach (var fragment in input.TextFragments ?? new List<CadTextFragment>())
+            {
+                if (fragment == null || fragment.Center == null) continue;
+                result.TextFragments.Add(new CadTextFragment
+                {
+                    Text = fragment.Text,
+                    PlainText = fragment.PlainText,
+                    Center = Rotate(fragment.Center, cosine, sine),
+                    Width = fragment.Width,
+                    Height = fragment.Height,
+                    RotationDegrees = fragment.RotationDegrees + degrees,
+                    Confidence = fragment.Confidence,
+                    SourceKind = fragment.SourceKind,
+                    SourceHandle = fragment.SourceHandle,
+                    SourceDxfName = fragment.SourceDxfName
+                });
+            }
+            return result;
+        }
+
+        private static CadTablePoint Rotate(CadTablePoint point, double cosine, double sine)
+        {
+            return new CadTablePoint(
+                point.X * cosine - point.Y * sine,
+                point.X * sine + point.Y * cosine);
         }
 
         private static void DetectCells(CadTableDetectionResult result, IList<AxisSegment> horizontal,

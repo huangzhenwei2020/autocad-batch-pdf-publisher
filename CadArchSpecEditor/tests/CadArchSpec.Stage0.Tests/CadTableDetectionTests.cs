@@ -91,6 +91,24 @@ namespace CadArchSpec.Stage0.Tests
             Assert.Equal(2, merged.RowSpan);
         }
 
+        [Fact]
+        public void DetectsTableAfterOverallRotationWithoutMutatingSourceCoordinates()
+        {
+            var input = Grid(new[] { 0d, 100d, 200d }, new[] { 0d, 50d, 100d });
+            input.TextFragments.Add(Text("旋转表格", 50, 75, CadTextSourceKind.ExplodedClone));
+            var rotated = Rotate(input, 30d);
+            var originalX = rotated.Segments[0].Start.X;
+            var originalY = rotated.Segments[0].Start.Y;
+
+            var result = new OrthogonalCadTableDetector().Detect(rotated);
+
+            Assert.Equal(4, result.Cells.Count);
+            Assert.Equal(30d, result.DetectedRotationDegrees, 6);
+            Assert.Equal("旋转表格", result.Cells.Single(cell => cell.RowIndex == 0 && cell.ColumnIndex == 0).Text);
+            Assert.Equal(originalX, rotated.Segments[0].Start.X);
+            Assert.Equal(originalY, rotated.Segments[0].Start.Y);
+        }
+
         private static CadTableDetectionInput Grid(IEnumerable<double> xs, IEnumerable<double> ys)
         {
             var x = xs.ToArray();
@@ -109,6 +127,35 @@ namespace CadArchSpec.Stage0.Tests
         private static CadTextFragment Text(string text, double x, double y, CadTextSourceKind source)
         {
             return new CadTextFragment { Text = text, PlainText = text, Center = new CadTablePoint(x, y), SourceKind = source, SourceHandle = "A1" };
+        }
+
+        private static CadTableDetectionInput Rotate(CadTableDetectionInput input, double degrees)
+        {
+            var radians = degrees * System.Math.PI / 180d;
+            var cosine = System.Math.Cos(radians);
+            var sine = System.Math.Sin(radians);
+            var result = new CadTableDetectionInput();
+            foreach (var segment in input.Segments)
+                result.Segments.Add(new CadTableSegment
+                {
+                    Start = Rotate(segment.Start, cosine, sine),
+                    End = Rotate(segment.End, cosine, sine)
+                });
+            foreach (var text in input.TextFragments)
+                result.TextFragments.Add(new CadTextFragment
+                {
+                    Text = text.Text,
+                    PlainText = text.PlainText,
+                    Center = Rotate(text.Center, cosine, sine),
+                    SourceKind = text.SourceKind,
+                    SourceHandle = text.SourceHandle
+                });
+            return result;
+        }
+
+        private static CadTablePoint Rotate(CadTablePoint point, double cosine, double sine)
+        {
+            return new CadTablePoint(point.X * cosine - point.Y * sine, point.X * sine + point.Y * cosine);
         }
     }
 }

@@ -69,6 +69,7 @@ namespace CadArchSpec.CadTable
         public double CoordinateTolerance { get; set; } = 1d;
         public double MaximumBorderGap { get; set; } = 2d;
         public double OrthogonalAngleToleranceDegrees { get; set; } = 1d;
+        public bool DetectOverallRotation { get; set; } = true;
     }
 
     public sealed class DetectedCadTableCell
@@ -87,6 +88,7 @@ namespace CadArchSpec.CadTable
 
     public sealed class CadTableDetectionResult
     {
+        public double DetectedRotationDegrees { get; set; }
         public List<double> ColumnBoundaries { get; set; } = new List<double>();
         public List<double> RowBoundaries { get; set; } = new List<double>();
         public List<DetectedCadTableCell> Cells { get; set; } = new List<DetectedCadTableCell>();

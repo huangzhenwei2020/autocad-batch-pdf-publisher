@@ -29,12 +29,12 @@ namespace CadArchSpec.Host.Shared.CadTable
                 if (entity == null) continue;
                 result.SourceEntityCount++;
                 var sourceHandle = SafeHandle(entity);
-                Collect(entity, sourceHandle, result, 0, false);
+                Collect(transaction, entity, sourceHandle, result, 0, false);
             }
             return result;
         }
 
-        private static void Collect(Entity entity, string sourceHandle, CadTableEntityReadResult result, int depth, bool explodedClone)
+        private static void Collect(Transaction transaction, Entity entity, string sourceHandle, CadTableEntityReadResult result, int depth, bool explodedClone)
         {
             if (entity == null) return;
             var sourceKind = explodedClone ? CadTextSourceKind.ExplodedClone : CadTextSourceKind.Standard;
@@ -76,6 +76,36 @@ namespace CadArchSpec.Host.Shared.CadTable
                 return;
             }
 
+            var polyline2d = entity as Polyline2d;
+            if (polyline2d != null && !explodedClone)
+            {
+                var points = new List<Point3d>();
+                foreach (ObjectId vertexId in polyline2d)
+                {
+                    var vertex = transaction.GetObject(vertexId, OpenMode.ForRead, false) as Vertex2d;
+                    if (vertex != null) points.Add(vertex.Position);
+                }
+                for (var index = 0; index < points.Count - 1; index++)
+                    AddSegment(result, points[index], points[index + 1], sourceHandle, polyline2d.Layer);
+                if (polyline2d.Closed && points.Count > 2)
+                    AddSegment(result, points[points.Count - 1], points[0], sourceHandle, polyline2d.Layer);
+                return;
+            }
+
+            var blockReference = entity as BlockReference;
+            if (blockReference != null && !explodedClone)
+            {
+                // AttributeReference positions are already expressed in the inserted
+                // block's world coordinates and are not reliably returned by Explode.
+                foreach (ObjectId attributeId in blockReference.AttributeCollection)
+                {
+                    if (attributeId.IsNull || !attributeId.IsValid) continue;
+                    var blockAttribute = transaction.GetObject(attributeId, OpenMode.ForRead, false) as AttributeReference;
+                    if (blockAttribute != null)
+                        Collect(transaction, blockAttribute, sourceHandle, result, depth + 1, false);
+                }
+            }
+
             if (!explodedClone && IsTianzhengText(entity))
             {
                 string text;
@@ -112,7 +142,7 @@ namespace CadArchSpec.Host.Shared.CadTable
                 {
                     if (result.ExplodedObjectCount > MaximumExplodedObjects) break;
                     var child = item as Entity;
-                    if (child != null) Collect(child, sourceHandle, result, depth + 1, true);
+                    if (child != null) Collect(transaction, child, sourceHandle, result, depth + 1, true);
                 }
             }
             catch (Exception exception)
