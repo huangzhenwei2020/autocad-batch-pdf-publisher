@@ -37,7 +37,7 @@ namespace BatchPdfPublisher.Views
         private readonly CheckBox _insertFrame = new CheckBox { Text = "插入图框排版", AutoSize = true, Margin = new Padding(4, 7, 4, 0) };
         private readonly CheckBox _useTianzhengTitle = new CheckBox { Text = "使用天正图名标注", AutoSize = true, Margin = new Padding(4, 7, 4, 0), Checked = true };
         private readonly CheckBox _floorStatistics = new CheckBox { Text = "每层单独统计", AutoSize = true, Margin = new Padding(10, 7, 4, 0) };
-        private readonly Button _addCurrentFloor = ButtonFor("分层统计设置");
+        private readonly Button _addCurrentFloor = ButtonFor("分层统计");
         private readonly Button _pickFloorTable = ButtonFor("拾取楼层门窗表");
         private readonly Button _clearFloorTables = ButtonFor("清空分层统计");
         private readonly List<FloorScheduleSource> _floorSources = new List<FloorScheduleSource>();
@@ -91,7 +91,7 @@ namespace BatchPdfPublisher.Views
             foreach (Control control in sourceButtons.Controls) { var button = control as Button; if (button != null) { button.AutoSize = false; button.Width = 134; button.Height = 31; } }
             _floorStatistics.Margin = new Padding(3, 8, 3, 3);
             var floorButtons = new FlowLayoutPanel { Width = 282, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true };
-            foreach (var button in new[] { _addCurrentFloor, _pickFloorTable, _clearFloorTables }) { button.AutoSize = false; button.Width = 88; button.Height = 31; floorButtons.Controls.Add(button); }
+            foreach (var button in new[] { _addCurrentFloor, _pickFloorTable, _clearFloorTables }) { button.AutoSize = false; button.Width = 134; button.Height = 31; floorButtons.Controls.Add(button); }
             var sourceGroup = SidebarGroup("数据来源与分层统计", title, _sourceLabel, sourceButtons, _floorStatistics, floorButtons);
             sourceGroup.Margin = new Padding(12, 8, 8, 4);
             sidebar.Controls.Add(sourceGroup, 0, 0);

@@ -182,7 +182,10 @@ namespace BatchPdfPublisher.Views
 
         protected override void OnPaint(PaintEventArgs e)
         {
-            base.OnPaint(e); e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            base.OnPaint(e);
+            // AutoCAD/远程桌面及高 DPI 重绘时先完整清除旧帧，避免提示文字和图形残影叠加。
+            e.Graphics.Clear(BackColor);
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
             var margin = 54f; var footer = 34f; var usable = new RectangleF(margin, 18, Math.Max(10, Width - margin * 2), Math.Max(10, Height - margin - footer));
             var visibleLeft = _hasBayReturns ? Math.Min(_bayLeftDepth, _frameWidth * .45d) : 0d;
             var visibleRight = _hasBayReturns ? Math.Min(_bayRightDepth, _frameWidth * .45d) : 0d;
