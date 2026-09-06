@@ -36,7 +36,7 @@ namespace BatchPdfPublisher.Views
         public DoorWindowLayoutPreviewForm(Document document, IList<DoorWindowScheduleItem> items, int drawingScale, FrameDefinition selectedFrame, bool includeSchedule, bool includeNotes, bool useTianzhengTitle)
         {
             _document = document;
-            _source = (items ?? new List<DoorWindowScheduleItem>()).Where(x => x != null).ToList();
+            _source = DoorWindowElevationInsertionService.ExpandFireRescueElevations(items);
             _scale = Math.Max(1, drawingScale);
             _frames = new PublishPlanStore().LoadFrames().Where(x => !string.IsNullOrWhiteSpace(x.BlockName)).ToList();
             var saved = LoadSavedMargins();

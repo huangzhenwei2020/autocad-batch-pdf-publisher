@@ -52,8 +52,53 @@ namespace BatchPdfPublisher.Services
         {
             public DoorWindowScheduleItem Item;
             public DoorWindowElevationGeometry Geometry;
-            public double InnerGap, OuterGap, LowerExtent, UpperExtent, BayLeftExtent, BayRightExtent;
-            public double TotalWidth { get { return BayLeftExtent + Item.Width + BayRightExtent; } }
+            public double InnerGap, OuterGap, LowerExtent, UpperExtent, BayLeftExtent, BayRightExtent, RightAnnotationExtent;
+            public double TotalWidth { get { return BayLeftExtent + Item.Width + BayRightExtent + RightAnnotationExtent; } }
+        }
+
+        /// <summary>
+        /// 将用户勾选的条目展开成“普通立面 + 消防救援窗立面”。展开只用于立面排版和插入，
+        /// 门窗表仍使用原条目，避免数量和编号重复。
+        /// </summary>
+        public static List<DoorWindowScheduleItem> ExpandFireRescueElevations(IEnumerable<DoorWindowScheduleItem> source)
+        {
+            var items = (source ?? Enumerable.Empty<DoorWindowScheduleItem>()).Where(x => x != null).ToList();
+            // 排版预览确认后传回的列表已经包含内部变体，不再重复展开。
+            if (items.Any(x => x.IsFireRescueVariant)) return items;
+            var result = new List<DoorWindowScheduleItem>();
+            foreach (var item in items)
+            {
+                result.Add(item);
+                if (!item.GenerateFireRescueElevation) continue;
+                var rescue = CloneForElevation(item);
+                rescue.GenerateFireRescueElevation = false;
+                rescue.IsFireRescueVariant = true;
+                result.Add(rescue);
+            }
+            return result;
+        }
+
+        private static DoorWindowScheduleItem CloneForElevation(DoorWindowScheduleItem x)
+        {
+            var clone = new DoorWindowScheduleItem
+            {
+                Selected = x.Selected, Sequence = x.Sequence, Code = x.Code, SourceCategory = x.SourceCategory,
+                Width = x.Width, Height = x.Height, Quantity = x.Quantity, SourceNote = x.SourceNote,
+                Material = x.Material, AtlasName = x.AtlasName, Remarks = x.Remarks, SillHeight = x.SillHeight,
+                SillHeightSuppressed = x.SillHeightSuppressed, ElevationType = x.ElevationType, DivisionPreset = x.DivisionPreset,
+                OpeningMode = x.OpeningMode, HasInstallationGap = x.HasInstallationGap, InstallationGap = x.InstallationGap,
+                HasOuterFrame = x.HasOuterFrame, OuterFrameWidth = x.OuterFrameWidth, HasMullion = x.HasMullion,
+                MullionWidth = x.MullionWidth, DoorFrameType = x.DoorFrameType, DoorFrameWidth = x.DoorFrameWidth,
+                DrawingScale = x.DrawingScale, CustomColumnRatios = x.CustomColumnRatios, CustomRowRatios = x.CustomRowRatios,
+                CustomColumnWidths = x.CustomColumnWidths, CustomRowHeights = x.CustomRowHeights, CustomCellLayout = x.CustomCellLayout,
+                CellOpeningModes = x.CellOpeningModes, DoorPlacement = x.DoorPlacement, DoorEdgeDistance = x.DoorEdgeDistance,
+                BayLeftSide = x.BayLeftSide, BayRightSide = x.BayRightSide, BayLeftDepth = x.BayLeftDepth,
+                BayRightDepth = x.BayRightDepth, BayLeftCellLayout = x.BayLeftCellLayout, BayRightCellLayout = x.BayRightCellLayout,
+                Status = x.Status, SourceRow = x.SourceRow, LockedPage = x.LockedPage
+            };
+            foreach (var quantity in x.FloorQuantities)
+                clone.FloorQuantities.Add(new DoorWindowFloorQuantity { FloorName = quantity.FloorName, PerFloorQuantity = quantity.PerFloorQuantity, FloorCount = quantity.FloorCount });
+            return clone;
         }
 
         /// <summary>排版参数（纸面毫米，插入时按出图比例换算）。</summary>
@@ -130,9 +175,10 @@ namespace BatchPdfPublisher.Services
             var plan = new DoorWindowLayoutPlan { PageWidth = pageWidth, PageHeight = pageHeight, ContentLeft = contentLeft, ContentRight = contentRight, ContentBottom = contentBottom, ContentTop = contentTop };
             // Preserve the preview's user-defined order. The caller supplies the
             // initial type order; re-sorting here would silently undo dragging.
-            var items = (source ?? new List<DoorWindowScheduleItem>()).Where(x => x != null).ToList();
+            var items = ExpandFireRescueElevations(source);
+            var scheduleItems = items.Where(x => !x.IsFireRescueVariant).ToList();
             // 门窗表和设计说明仍是独立 CAD 对象，但作为附件排在全部门窗之后并占用图框内容区。
-            plan.ScheduleHeight = opts.IncludeSchedule ? (items.Count + 2d) * 5.5d * scale : 0d;
+            plan.ScheduleHeight = opts.IncludeSchedule ? (scheduleItems.Count + 2d) * 5.5d * scale : 0d;
             var notesWidth = Math.Min(180d * scale, contentRight - contentLeft);
             plan.ScheduleNotesHeight = opts.IncludeScheduleNotes ? EstimateScheduleNotesHeight(notesWidth, scale) : 0d;
             // 顺序：先左右后上下——第一行在顶部，同一行从左到右排满后换到下一行。
@@ -208,7 +254,7 @@ namespace BatchPdfPublisher.Services
                 : lastCursor.Y;
             if (opts.IncludeSchedule)
             {
-                var floorCount = items.SelectMany(x => x.FloorQuantities).Select(x => x.FloorName).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.CurrentCultureIgnoreCase).Count();
+                var floorCount = scheduleItems.SelectMany(x => x.FloorQuantities).Select(x => x.FloorName).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.CurrentCultureIgnoreCase).Count();
                 var schedulePaperWidth = floorCount > 0 ? Math.Max(165d, 145d + floorCount * 15d) : 165d;
                 placeAttachment("Schedule", schedulePaperWidth * scale, plan.ScheduleHeight);
             }
@@ -259,7 +305,8 @@ namespace BatchPdfPublisher.Services
         public static int Insert(Document document, IList<DoorWindowScheduleItem> source, int drawingScale, FrameDefinition frame, Action<int, int, string> progress = null, DoorWindowLayoutOptions layoutOptions = null)
         {
             if (document == null) throw new ArgumentNullException("document");
-            var items = (source ?? new List<DoorWindowScheduleItem>()).Where(x => x != null && x.Selected && (x.Status ?? string.Empty).Contains("可生成")).ToList();
+            var originalItems = (source ?? new List<DoorWindowScheduleItem>()).Where(x => x != null && x.Selected && (x.Status ?? string.Empty).Contains("可生成") && !x.IsFireRescueVariant).ToList();
+            var items = ExpandFireRescueElevations((source ?? new List<DoorWindowScheduleItem>()).Where(x => x != null && x.Selected && (x.Status ?? string.Empty).Contains("可生成")));
             if (items.Count == 0) throw new InvalidOperationException("没有勾选参数完整的门窗。");
             drawingScale = Math.Max(1, drawingScale);
             var useTianzhengTitle = layoutOptions == null || layoutOptions.UseTianzhengTitle;
@@ -310,7 +357,7 @@ namespace BatchPdfPublisher.Services
                 var blocks = (BlockTable)transaction.GetObject(database.BlockTableId, OpenMode.ForWrite);
                 var space = (BlockTableRecord)transaction.GetObject(database.CurrentSpaceId, OpenMode.ForWrite);
                 var elevations = items.Select(item => CreatePlacement(item, drawingScale)).ToList();
-                pageCount = InsertPaged(elevations, framePoint.Value, drawingScale, frame, blocks, space, transaction, resources, dimensionStyle, doorWindowLayers, progress, layoutOptions);
+                pageCount = InsertPaged(elevations, originalItems, framePoint.Value, drawingScale, frame, blocks, space, transaction, resources, dimensionStyle, doorWindowLayers, progress, layoutOptions);
                 transaction.Commit();
             }
             LogInsertionTiming(document, items.Count, true, pagedPreparationMilliseconds, pagedTiming.ElapsedMilliseconds);
@@ -411,6 +458,12 @@ namespace BatchPdfPublisher.Services
             var item = (source ?? new List<DoorWindowScheduleItem>()).FirstOrDefault(x =>
                 string.Equals(x.Code, metadata.Code, StringComparison.OrdinalIgnoreCase) &&
                 Math.Abs(x.Width - metadata.Width) < 0.01 && Math.Abs(x.Height - metadata.Height) < 0.01) ?? metadata.ToItem();
+            if (metadata.IsFireRescueVariant && !item.IsFireRescueVariant)
+            {
+                item = CloneForElevation(item);
+                item.GenerateFireRescueElevation = false;
+                item.IsFireRescueVariant = true;
+            }
             drawingScale = Math.Max(1, drawingScale);
             var replaced = 0;
             using (var transaction = document.Database.TransactionManager.StartTransaction())
@@ -455,7 +508,14 @@ namespace BatchPdfPublisher.Services
             var innerGap = 4d * drawingScale;
             var outerGap = 8d * drawingScale;
             var upperExtent = geometry.BayLeftExtent > 0d || geometry.BayRightExtent > 0d ? 11d * drawingScale : 0d;
-            return new ElevationPlacement { Item = item, Geometry = geometry, InnerGap = innerGap, OuterGap = outerGap, LowerExtent = outerGap + 18d * drawingScale, UpperExtent = upperExtent, BayLeftExtent = geometry.BayLeftExtent, BayRightExtent = geometry.BayRightExtent };
+            if (item.IsFireRescueVariant) upperExtent = Math.Max(upperExtent, 28d * drawingScale);
+            return new ElevationPlacement
+            {
+                Item = item, Geometry = geometry, InnerGap = innerGap, OuterGap = outerGap,
+                LowerExtent = outerGap + (item.IsFireRescueVariant ? 31d : 18d) * drawingScale,
+                UpperExtent = upperExtent, BayLeftExtent = geometry.BayLeftExtent, BayRightExtent = geometry.BayRightExtent,
+                RightAnnotationExtent = item.IsFireRescueVariant ? 112d * drawingScale : 0d
+            };
         }
 
         private static void InsertElevation(ElevationPlacement elevation, Point3d origin, int drawingScale, BlockTableRecord space, Transaction transaction, DraftingStandardResources resources, ObjectId dimensionStyle, DoorWindowLayers doorWindowLayers, string existingGroupId = null, bool useTianzhengTitle = true)
@@ -489,6 +549,8 @@ namespace BatchPdfPublisher.Services
                 AddCenteredText(space, transaction, titleText, titleCenter, titleHeight, resources.TitleTextStyleId, resources.AnnotationTextLayerId, metadata);
                 AddCenteredText(space, transaction, "1:" + drawingScale.ToString(CultureInfo.InvariantCulture), new Point3d(titleCenter.X, titleCenter.Y - 3.6d * drawingScale, titleCenter.Z), noteHeight, resources.AnnotationTextStyleId, resources.AnnotationTextLayerId, metadata);
             }
+            if (item.IsFireRescueVariant)
+                AddFireRescueAnnotations(elevation, origin, titleCenter, drawingScale, space, transaction, resources, metadata);
         }
 
         private static void AppendGeometry(DoorWindowElevationGeometry geometry, Point3d origin, BlockTableRecord space, Transaction transaction, DraftingStandardResources resources, DoorWindowLayers doorWindowLayers, DoorWindowElevationMetadata metadata, DoorWindowScheduleItem item)
@@ -649,7 +711,7 @@ namespace BatchPdfPublisher.Services
         }
 
         /// <summary>按登记图框纸张分页排版：每页插入图框块，门窗按 ComputeLayout 槽位排入。</summary>
-        private static int InsertPaged(IList<ElevationPlacement> elevations, Point3d origin, int scale, FrameDefinition frame, BlockTable blockTable, BlockTableRecord space, Transaction transaction, DraftingStandardResources resources, ObjectId dimensionStyle, DoorWindowLayers doorWindowLayers, Action<int, int, string> progress, DoorWindowLayoutOptions layoutOptions = null)
+        private static int InsertPaged(IList<ElevationPlacement> elevations, IList<DoorWindowScheduleItem> scheduleItems, Point3d origin, int scale, FrameDefinition frame, BlockTable blockTable, BlockTableRecord space, Transaction transaction, DraftingStandardResources resources, ObjectId dimensionStyle, DoorWindowLayers doorWindowLayers, Action<int, int, string> progress, DoorWindowLayoutOptions layoutOptions = null)
         {
             if (frame == null || string.IsNullOrWhiteSpace(frame.BlockName)) throw new InvalidOperationException("请选择有效的登记图框。");
             if (!blockTable.Has(frame.BlockName)) throw new InvalidOperationException("当前图纸不存在已登记图框块“" + frame.BlockName + "”。请先把该图框插入当前图纸，或重新登记当前图纸中的图框。");
@@ -677,7 +739,7 @@ namespace BatchPdfPublisher.Services
                     completed++; if (progress != null) progress(completed, elevations.Count, elevation.Item.Code);
                 }
             }
-            InsertScheduleAndNotesInFrames(space.Database, space, transaction, elevations.Select(x => x.Item).ToList(), scale, layoutOptions, resources, origin, pageWidth, pageGap, plan);
+            InsertScheduleAndNotesInFrames(space.Database, space, transaction, scheduleItems, scale, layoutOptions, resources, origin, pageWidth, pageGap, plan);
             return plan.PageCount;
         }
 
@@ -821,6 +883,78 @@ namespace BatchPdfPublisher.Services
                 };
                 AppendTagged(space, transaction, note, metadata);
             }
+        }
+
+        /// <summary>消防救援窗专用标识、引线说明、图名副标题和右下角设计说明。</summary>
+        private static void AddFireRescueAnnotations(ElevationPlacement elevation, Point3d origin, Point3d titleCenter, int scale, BlockTableRecord space, Transaction transaction, DraftingStandardResources resources, DoorWindowElevationMetadata metadata)
+        {
+            var item = elevation.Item;
+            var geometry = elevation.Geometry;
+            var red = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 1);
+            var symbolSize = 5d * scale;
+            var center = new Point3d(origin.X + item.Width * .5d, origin.Y + item.Height * .52d, origin.Z);
+            var half = symbolSize * .5d;
+
+            var square = new Polyline(4)
+            {
+                Closed = true,
+                LayerId = resources.AnnotationTextLayerId,
+                Color = red,
+                ConstantWidth = Math.Max(.35d * scale, 1d)
+            };
+            square.AddVertexAt(0, new Point2d(center.X - half, center.Y - half), 0d, 0d, 0d);
+            square.AddVertexAt(1, new Point2d(center.X + half, center.Y - half), 0d, 0d, 0d);
+            square.AddVertexAt(2, new Point2d(center.X + half, center.Y + half), 0d, 0d, 0d);
+            square.AddVertexAt(3, new Point2d(center.X - half, center.Y + half), 0d, 0d, 0d);
+            AppendTagged(space, transaction, square, metadata);
+
+            var triangle = new Solid(
+                new Point3d(center.X - half * .62d, center.Y - half * .38d, origin.Z),
+                new Point3d(center.X + half * .62d, center.Y - half * .38d, origin.Z),
+                new Point3d(center.X, center.Y + half * .55d, origin.Z),
+                new Point3d(center.X, center.Y + half * .55d, origin.Z))
+            { LayerId = resources.AnnotationTextLayerId, Color = red };
+            AppendTagged(space, transaction, triangle, metadata);
+
+            var overallLeft = origin.X - geometry.BayLeftExtent;
+            var overallRight = origin.X + item.Width + geometry.BayRightExtent;
+            var notePoint = new Point3d(overallLeft, origin.Y + item.Height + 20d * scale, origin.Z);
+            var elbow = new Point3d(center.X - 2d * scale, origin.Y + item.Height + 14d * scale, origin.Z);
+            var leader = new Leader { LayerId = resources.AnnotationTextLayerId, Color = red, HasArrowHead = true };
+            leader.AppendVertex(new Point3d(center.X, center.Y + half, origin.Z));
+            leader.AppendVertex(elbow);
+            leader.AppendVertex(notePoint);
+            AppendTagged(space, transaction, leader, metadata);
+
+            var leaderText = new MText
+            {
+                Contents = "（消防救援窗口）室内外易于识别的明显标志",
+                Location = notePoint,
+                Attachment = AttachmentPoint.BottomLeft,
+                TextHeight = 3.5d * scale,
+                Width = Math.Max(80d * scale, overallRight - overallLeft),
+                TextStyleId = resources.AnnotationTextStyleId,
+                LayerId = resources.AnnotationTextLayerId
+            };
+            AppendTagged(space, transaction, leaderText, metadata);
+
+            AddCenteredText(space, transaction, (item.Code ?? "未编号") + "_作为消防救援窗时",
+                new Point3d(titleCenter.X, titleCenter.Y - 9d * scale, titleCenter.Z),
+                3.5d * scale, resources.AnnotationTextStyleId, resources.AnnotationTextLayerId, metadata);
+
+            var requirement = new MText
+            {
+                Contents = "消防救援窗口，玻璃应为安全玻璃，\\P窗口的净尺寸不应小于1000X1000，\\P窗台不宜大于1200，间距不宜大于20米。",
+                Location = new Point3d(overallRight + 12d * scale, origin.Y - 9d * scale, origin.Z),
+                Attachment = AttachmentPoint.TopLeft,
+                TextHeight = 3.5d * scale,
+                LineSpacingFactor = 1.2d,
+                LineSpacingStyle = LineSpacingStyle.AtLeast,
+                Width = 98d * scale,
+                TextStyleId = resources.AnnotationTextStyleId,
+                LayerId = resources.AnnotationTextLayerId
+            };
+            AppendTagged(space, transaction, requirement, metadata);
         }
 
         private static void AddContinuousRun(BlockTableRecord space, Transaction transaction, Point3d origin, IEnumerable<double> coordinates, bool horizontal, double lineCoordinate, double extensionBase, ObjectId layer, ObjectId style, DoorWindowElevationMetadata metadata, double tolerance)

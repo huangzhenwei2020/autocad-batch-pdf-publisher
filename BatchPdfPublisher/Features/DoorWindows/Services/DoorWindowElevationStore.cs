@@ -99,6 +99,7 @@ namespace BatchPdfPublisher.Services
                 preference.SillHeight = item.SillHeight;
                 preference.HasSillHeight = true;
                 preference.SillHeightSuppressed = item.SillHeightSuppressed;
+                preference.GenerateFireRescueElevation = item.GenerateFireRescueElevation;
                 /*
                     ElevationType = item.ElevationType,
                     DivisionPreset = item.DivisionPreset,

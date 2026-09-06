@@ -50,6 +50,10 @@ namespace BatchPdfPublisher.Models
     public sealed class DoorWindowScheduleItem
     {
         public bool Selected { get; set; } = true;
+        /// <summary>勾选后除普通立面外，再生成一份带消防救援窗口标识和说明的立面。</summary>
+        public bool GenerateFireRescueElevation { get; set; }
+        /// <summary>仅供本次排版/插入识别展开后的消防版本，不写入用户配置。</summary>
+        internal bool IsFireRescueVariant;
         public int Sequence { get; set; }
         public string Code { get; set; }
         public string SourceCategory { get; set; }
@@ -209,6 +213,7 @@ namespace BatchPdfPublisher.Models
         public double SillHeight { get; set; }
         public bool HasSillHeight { get; set; }
         public bool SillHeightSuppressed { get; set; }
+        public bool GenerateFireRescueElevation { get; set; }
     }
 
     public sealed class DoorWindowElevationSession
@@ -257,6 +262,7 @@ namespace BatchPdfPublisher.Models
         public double BayRightDepth { get; set; } = 600d;
         public string BayLeftCellLayout { get; set; }
         public string BayRightCellLayout { get; set; }
+        public bool GenerateFireRescueElevation { get; set; }
         public DateTime UpdatedAt { get; set; }
 
         public void ApplyTo(DoorWindowScheduleItem item)
@@ -296,6 +302,7 @@ namespace BatchPdfPublisher.Models
             item.BayRightDepth = BayRightDepth;
             item.BayLeftCellLayout = ScaleBayLayout(BayLeftCellLayout, BayLeftDepth, item.BayLeftDepth, item.Height);
             item.BayRightCellLayout = ScaleBayLayout(BayRightCellLayout, BayRightDepth, item.BayRightDepth, item.Height);
+            item.GenerateFireRescueElevation = GenerateFireRescueElevation;
         }
 
         public static DoorWindowElevationTemplate FromItem(string name, DoorWindowScheduleItem item)
@@ -329,6 +336,7 @@ namespace BatchPdfPublisher.Models
                 BayRightDepth = item.BayRightDepth,
                 BayLeftCellLayout = item.BayLeftCellLayout,
                 BayRightCellLayout = item.BayRightCellLayout,
+                GenerateFireRescueElevation = item.GenerateFireRescueElevation,
                 UpdatedAt = DateTime.Now
             };
         }

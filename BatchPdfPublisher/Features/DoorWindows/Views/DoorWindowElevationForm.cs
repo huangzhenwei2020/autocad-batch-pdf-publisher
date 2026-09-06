@@ -196,6 +196,7 @@ namespace BatchPdfPublisher.Views
             _grid.ShowCellToolTips = false;
             _grid.EnableHeadersVisualStyles = false; _grid.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(225, 232, 240); _grid.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(248, 250, 252);
             _grid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "生成", DataPropertyName = "Selected", Width = 52 });
+            _grid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "作为消防救援窗", DataPropertyName = "GenerateFireRescueElevation", Width = 118, ToolTipText = "保留普通立面，并额外生成带消防救援窗口标志和说明的立面" });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "序", DataPropertyName = "Sequence", Width = 44, ReadOnly = true });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "编号", DataPropertyName = "Code", Width = 95 });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "洞口尺寸", DataPropertyName = "SizeText", Width = 116, ReadOnly = true });
@@ -224,7 +225,7 @@ namespace BatchPdfPublisher.Views
             _grid.CellValueChanged += OnGridCellValueChanged;
             _grid.SelectionChanged += (s, e) => UpdatePreview();
             _grid.CellDoubleClick += (s, e) => { if (e.RowIndex >= 0) EditCurrentDivision(); };
-            _grid.ColumnHeaderMouseClick += (s, e) => { if (e.ColumnIndex == 0) SelectAll(!_rows.Where(IsSelectable).All(x => x.Selected)); };
+            _grid.ColumnHeaderMouseClick += (s, e) => { if (_grid.Columns[e.ColumnIndex].DataPropertyName == "Selected") SelectAll(!_rows.Where(IsSelectable).All(x => x.Selected)); };
             _grid.RowPrePaint += (s, e) => { if (e.RowIndex < 0 || e.RowIndex >= _rows.Count) return; var status = _rows[e.RowIndex].Status ?? string.Empty; if (status.Contains("冲突") || status.Contains("缺少") || status.Contains("小于")) e.InheritedRowStyle.ForeColor = Color.Firebrick; else if (status.Contains("可生成")) e.InheritedRowStyle.ForeColor = Color.FromArgb(20, 112, 65); else e.InheritedRowStyle.ForeColor = _grid.DefaultCellStyle.ForeColor; };
             _grid.CellBeginEdit += (s, e) => { if (e.RowIndex >= 0 && _grid.Columns[e.ColumnIndex].DataPropertyName == "SillHeightDisplay" && !(_rows[e.RowIndex].ElevationType ?? string.Empty).Contains("窗")) e.Cancel = true; };
             _grid.DataError += (s, e) => { e.ThrowException = false; };
@@ -318,6 +319,7 @@ namespace BatchPdfPublisher.Views
             item.BayLeftCellLayout = preference.BayLeftCellLayout; item.BayRightCellLayout = preference.BayRightCellLayout;
             item.Material = string.IsNullOrWhiteSpace(preference.Material) ? item.Material : preference.Material; item.AtlasName = string.IsNullOrWhiteSpace(preference.AtlasName) ? item.AtlasName : DoorWindowElevationSuggestionService.NormalizeAtlasName(preference.AtlasName); item.Remarks = preference.Remarks;
             if (preference.HasSillHeight) { item.SillHeight = preference.SillHeight; item.SillHeightSuppressed = preference.SillHeightSuppressed; }
+            item.GenerateFireRescueElevation = preference.GenerateFireRescueElevation;
         }
 
         private void ChangeFloorStatisticsMode()
@@ -478,7 +480,7 @@ namespace BatchPdfPublisher.Views
         {
             var clone = new DoorWindowScheduleItem
             {
-                Selected = x.Selected, Sequence = x.Sequence, Code = x.Code, SourceCategory = x.SourceCategory, Width = x.Width, Height = x.Height, Quantity = x.Quantity,
+                Selected = x.Selected, GenerateFireRescueElevation = x.GenerateFireRescueElevation, Sequence = x.Sequence, Code = x.Code, SourceCategory = x.SourceCategory, Width = x.Width, Height = x.Height, Quantity = x.Quantity,
                 SourceNote = x.SourceNote, Material = x.Material, AtlasName = x.AtlasName, Remarks = x.Remarks, SillHeight = x.SillHeight, SillHeightSuppressed = x.SillHeightSuppressed,
                 ElevationType = x.ElevationType, DivisionPreset = x.DivisionPreset, OpeningMode = x.OpeningMode, HasInstallationGap = x.HasInstallationGap, InstallationGap = x.InstallationGap,
                 HasOuterFrame = x.HasOuterFrame, OuterFrameWidth = x.OuterFrameWidth, HasMullion = x.HasMullion, MullionWidth = x.MullionWidth, DoorFrameType = x.DoorFrameType, DoorFrameWidth = x.DoorFrameWidth,
@@ -847,7 +849,9 @@ namespace BatchPdfPublisher.Views
         private void SelectFirstRow()
         {
             if (_grid.Rows.Count == 0 || _grid.Columns.Count < 2) { _preview.ShowItem(_rows.FirstOrDefault()); return; }
-            _grid.ClearSelection(); _grid.Rows[0].Selected = true; _grid.CurrentCell = _grid.Rows[0].Cells[1]; UpdatePreview();
+            _grid.ClearSelection(); _grid.Rows[0].Selected = true;
+            var codeColumn = _grid.Columns.Cast<DataGridViewColumn>().FirstOrDefault(x => x.DataPropertyName == "Code");
+            _grid.CurrentCell = _grid.Rows[0].Cells[codeColumn == null ? 0 : codeColumn.Index]; UpdatePreview();
         }
 
 #if ACAD_R19
@@ -981,7 +985,7 @@ namespace BatchPdfPublisher.Views
         {
             if (e.RowIndex < 0 || e.RowIndex >= _rows.Count || _propagatingGridEdit) return;
             var property = _grid.Columns[e.ColumnIndex].DataPropertyName;
-            var editableBatchProperty = property == "ElevationType" || property == "DivisionPreset" || property == "OpeningMode" || property == "HasInstallationGap" || property == "InstallationGap" || property == "HasOuterFrame" || property == "OuterFrameWidth" || property == "HasMullion" || property == "MullionWidth" || property == "DoorFrameType" || property == "DoorFrameWidthDisplay" || property == "Material" || property == "SillHeightDisplay" || property == "AtlasName" || property == "Remarks";
+            var editableBatchProperty = property == "GenerateFireRescueElevation" || property == "ElevationType" || property == "DivisionPreset" || property == "OpeningMode" || property == "HasInstallationGap" || property == "InstallationGap" || property == "HasOuterFrame" || property == "OuterFrameWidth" || property == "HasMullion" || property == "MullionWidth" || property == "DoorFrameType" || property == "DoorFrameWidthDisplay" || property == "Material" || property == "SillHeightDisplay" || property == "AtlasName" || property == "Remarks";
             if (editableBatchProperty && _grid.SelectedRows.Count > 1)
             {
                 _propagatingGridEdit = true;
@@ -992,7 +996,8 @@ namespace BatchPdfPublisher.Views
                     {
                         if (row.Index < 0 || row.Index >= _rows.Count || row.Index == e.RowIndex) continue;
                         var target = _rows[row.Index];
-                        if (property == "ElevationType") { target.ElevationType = source.ElevationType; DoorWindowElevationSuggestionService.ApplyConstructionDefaults(target); }
+                        if (property == "GenerateFireRescueElevation") target.GenerateFireRescueElevation = source.GenerateFireRescueElevation;
+                        else if (property == "ElevationType") { target.ElevationType = source.ElevationType; DoorWindowElevationSuggestionService.ApplyConstructionDefaults(target); }
                         else if (property == "DivisionPreset") target.DivisionPreset = source.DivisionPreset;
                         else if (property == "OpeningMode") target.OpeningMode = source.OpeningMode;
                         else if (property == "HasInstallationGap") target.HasInstallationGap = source.HasInstallationGap;
@@ -1036,7 +1041,9 @@ namespace BatchPdfPublisher.Views
             var index = current == null ? -1 : _rows.IndexOf(current);
             if (index >= 0 && _grid.Rows.Count > index && _grid.Columns.Count > 1)
             {
-                _grid.ClearSelection(); _grid.Rows[index].Selected = true; _grid.CurrentCell = _grid.Rows[index].Cells[1];
+                _grid.ClearSelection(); _grid.Rows[index].Selected = true;
+                var codeColumn = _grid.Columns.Cast<DataGridViewColumn>().FirstOrDefault(x => x.DataPropertyName == "Code");
+                _grid.CurrentCell = _grid.Rows[index].Cells[codeColumn == null ? 0 : codeColumn.Index];
             }
         }
 

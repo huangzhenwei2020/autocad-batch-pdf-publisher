@@ -354,7 +354,7 @@ namespace BatchPdfPublisher.Views
 
             // 分区：顶部序号条(13px)，底部图名+比例(16px)，中间画门窗+标注。
             var topBand = 13f;
-            var bottomBand = 16f;
+            var bottomBand = item.IsFireRescueVariant ? 30f : 16f;
             var mid = new RectangleF(rect.X + 2f, rect.Y + topBand, Math.Max(1f, rect.Width - 4f), Math.Max(1f, rect.Height - topBand - bottomBand));
             // 标注带：门窗图底部与 mid 底部之间留 dimBand+2px 画标注线/数字。
             var dimBand = 9f;
@@ -392,6 +392,24 @@ namespace BatchPdfPublisher.Views
                     graphics.DrawLine(pen, x1, y1, x2, y2);
                 }
 
+                if (item.IsFireRescueVariant)
+                {
+                    var rescueX = originX + (float)geometry.HoleWidth * scale * .5f;
+                    var rescueY = originY - holeH * scale * .52f;
+                    var rescueSize = Math.Max(7f, Math.Min(14f, Math.Min(drawGeometryWidth * scale, holeH * scale) * .13f));
+                    using (var rescuePen = new Pen(Color.Red, Math.Max(1.2f, rescueSize * .08f)))
+                    using (var rescueBrush = new SolidBrush(Color.Red))
+                    {
+                        graphics.DrawRectangle(rescuePen, rescueX - rescueSize / 2f, rescueY - rescueSize / 2f, rescueSize, rescueSize);
+                        graphics.FillPolygon(rescueBrush, new[]
+                        {
+                            new PointF(rescueX, rescueY - rescueSize * .28f),
+                            new PointF(rescueX - rescueSize * .3f, rescueY + rescueSize * .25f),
+                            new PointF(rescueX + rescueSize * .3f, rescueY + rescueSize * .25f)
+                        });
+                    }
+                }
+
                 // 总宽标注线（门窗图下方）+ 数字。
                 var dimBottom = originY + 3f;
                 if (dimBottom + 2f <= mid.Bottom)
@@ -409,7 +427,8 @@ namespace BatchPdfPublisher.Views
                 // 底部：图名 + 比例。
                 var bottomY = rect.Y + rect.Height - bottomBand;
                 DrawCentered(graphics, item.Code ?? "未编号", new RectangleF(rect.X, bottomY, rect.Width, bottomBand * 0.55f), Color.FromArgb(30, 45, 60), Math.Max(6f, Math.Min(8f, scale * 2f)));
-                DrawCentered(graphics, "1:" + _scale.ToString(System.Globalization.CultureInfo.InvariantCulture), new RectangleF(rect.X, bottomY + bottomBand * 0.55f, rect.Width, bottomBand * 0.45f), Color.FromArgb(90, 100, 115), Math.Max(5f, Math.Min(7f, scale * 1.7f)));
+                var bottomText = item.IsFireRescueVariant ? (item.Code ?? "未编号") + "_作为消防救援窗时" : "1:" + _scale.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                DrawCentered(graphics, bottomText, new RectangleF(rect.X, bottomY + bottomBand * 0.55f, rect.Width, bottomBand * 0.45f), item.IsFireRescueVariant ? Color.Firebrick : Color.FromArgb(90, 100, 115), Math.Max(5f, Math.Min(7f, scale * 1.7f)));
             }
         }
 
