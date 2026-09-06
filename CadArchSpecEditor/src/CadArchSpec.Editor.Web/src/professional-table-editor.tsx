@@ -236,6 +236,9 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onSave
               <button className="button" onClick={() => addTemplate("technicalEconomicIndicators")}>
                 + 技术经济指标表
               </button>
+              <button className="button" onClick={() => addTemplate("custom")}>
+                + 自定义表格
+              </button>
               <button className="button" onClick={() => addTemplate("waterproofDesign")}>
                 + 防水设计表
               </button>
@@ -289,7 +292,7 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onSave
             {!selected ? (
               <div className="table-empty-canvas">
                 <strong>尚未创建专业表格</strong>
-                <span>从左侧选择技术经济指标表或防水设计表开始。</span>
+                <span>从左侧选择模板创建表格，或从 CAD 读取现有表格。</span>
               </div>
             ) : (
               <>

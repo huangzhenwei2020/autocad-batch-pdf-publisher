@@ -230,6 +230,7 @@ export const defaultCadLayout = (): CadLayoutProfile => ({
 });
 
 export type ProfessionalTableType =
+  | "custom"
   | "technicalEconomicIndicators"
   | "waterproofDesign"
   | "interiorFinish"

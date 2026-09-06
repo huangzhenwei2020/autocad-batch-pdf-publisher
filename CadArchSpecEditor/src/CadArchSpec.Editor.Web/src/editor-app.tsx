@@ -11,6 +11,7 @@ import {
   sectionDocumentToPlainText,
   updateReviewIssueAction,
   type EditorWorkspace,
+  type ArchitectureTable,
   type CadLayoutProfile,
   type FieldChangeEntry,
   type FieldSourceType,
@@ -103,6 +104,7 @@ export function createProjectMessage(
     | "review.run"
     | "cad.frame.pick"
     | "cad.text.read"
+    | "cad.table.read"
     | "cad.section.insert",
   payload: Record<string, unknown> = {},
 ) {
@@ -494,6 +496,30 @@ export function ArchitectureSpecEditor() {
         setSaveState("dirty");
         setCadBusy(false);
         setProjectNotice(`已从 CAD 读取 ${Number(payload.count ?? 0)} 个文字对象`);
+      } else if (event.data.type === "cad.tableRead") {
+        if (payload.cancelled === true) {
+          setCadBusy(false);
+          setProjectNotice("已取消读取 CAD 表格");
+          return;
+        }
+        const imported = payload.table as ArchitectureTable | undefined;
+        if (!imported?.tableId || !Array.isArray(imported.columns) || !Array.isArray(imported.rows)) {
+          setCadBusy(false);
+          window.alert("CAD 表格识别结果不完整，未修改当前项目。");
+          return;
+        }
+        setWorkspace((current) => ({
+          ...current,
+          tables: [...(current.tables ?? []).filter((table) => table.tableId !== imported.tableId), imported],
+        }));
+        setSaveState("dirty");
+        setTableEditTargetId(imported.tableId);
+        setTablesOpen(true);
+        setCadBusy(false);
+        const warningCount = Array.isArray(payload.warnings) ? payload.warnings.length : 0;
+        setProjectNotice(
+          `已识别 ${Number(payload.rowCount ?? imported.rows.length)} 行 × ${Number(payload.columnCount ?? imported.columns.length)} 列${warningCount ? `，有 ${warningCount} 项需要确认` : ""}；请检查后保存表格`,
+        );
       } else if (event.data.type === "cad.sectionInserted") {
         setCadBusy(false);
         const overflow = payload.overflow === true;
@@ -595,6 +621,7 @@ export function ArchitectureSpecEditor() {
       | "review.run"
       | "cad.frame.pick"
       | "cad.text.read"
+      | "cad.table.read"
       | "cad.section.insert",
     payload: Record<string, unknown> = {},
   ) => window.chrome?.webview?.postMessage(createProjectMessage(type, payload));
@@ -662,6 +689,13 @@ export function ArchitectureSpecEditor() {
     setCadBusy(true);
     setProjectNotice("请在 CAD 中框选需要导入的文字…");
     postProjectMessage("cad.text.read", { sectionId: selectedSectionId });
+  };
+
+  const readTableFromCad = () => {
+    if (!requireCadHost() || cadBusy) return;
+    setCadBusy(true);
+    setProjectNotice("请在 CAD 中框选一张表格的线条和文字…");
+    postProjectMessage("cad.table.read");
   };
 
   const insertCurrentSectionToCad = () => {
@@ -871,6 +905,7 @@ export function ArchitectureSpecEditor() {
           <button className="button" onClick={() => setConditionsOpen(true)}>项目条件</button>
           <button className="button" onClick={() => setCadLayoutOpen(true)}>CAD 版面</button>
           <button className="button" disabled={cadBusy} onClick={readTextFromCad}>从 CAD 获取文字</button>
+          <button className="button" disabled={cadBusy} onClick={readTableFromCad}>从 CAD 读取表格</button>
           <button className="button" disabled={cadBusy} onClick={insertCurrentSectionToCad}>插入当前章节</button>
           <button className="button" onClick={() => setTablesOpen(true)}>
             专业表格{workspace.tables?.length ? ` (${workspace.tables.length})` : ""}

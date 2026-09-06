@@ -59,6 +59,20 @@ function createRuleIssue(ruleId: string, fieldPath: string) {
 }
 
 describe("architecture specification editor", () => {
+  it("creates the CAD table read bridge message", () => {
+    const message = createProjectMessage("cad.table.read");
+    expect(message.type).toBe("cad.table.read");
+    expect(message.protocolVersion).toBe(1);
+  });
+
+  it("creates an editable custom table without applying a specialist template", () => {
+    const table = createProfessionalTableTemplate("custom", "");
+    expect(table.tableType).toBe("custom");
+    expect(table.title).toBe("自定义表格");
+    expect(table.columns).toHaveLength(2);
+    expect(table.rows).toHaveLength(1);
+  });
+
   it("creates the first two professional table templates", () => {
     const indicators = createProfessionalTableTemplate("technicalEconomicIndicators", "表1");
     const waterproof = createProfessionalTableTemplate("waterproofDesign", "表2");

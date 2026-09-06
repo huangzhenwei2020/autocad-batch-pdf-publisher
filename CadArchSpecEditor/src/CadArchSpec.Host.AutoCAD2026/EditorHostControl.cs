@@ -202,6 +202,9 @@ namespace CadArchSpec.Host.AutoCAD2026
                     case "cad.text.read":
                         PostMessage("cad.textRead", await CadDrawingExchange.ReadSelectedTextAsync((string)message.Payload["sectionId"]));
                         break;
+                    case "cad.table.read":
+                        PostMessage("cad.tableRead", await CadArchSpec.Host.Shared.CadTable.CadTableExchange.ReadSelectedTableAsync());
+                        break;
                     case "cad.section.insert":
                         PostMessage("cad.sectionInserted", await CadDrawingExchange.InsertSectionAsync(message.Payload));
                         break;

@@ -116,6 +116,24 @@ export function createProfessionalTableTemplate(
   tableType: ProfessionalTableType,
   tableNumber: string,
 ): ArchitectureTable {
+  if (tableType === "custom") {
+    const columns = [
+      column("column1", "列1", 36, false),
+      column("column2", "列2", 36, false),
+    ];
+    return {
+      tableId: id("table"),
+      schemaVersion: 1,
+      tableType,
+      tableNumber,
+      title: "自定义表格",
+      repeatHeader: true,
+      allowSplitAcrossPages: true,
+      columns,
+      rows: [createEmptyRow(columns)],
+      formulaAudits: [],
+    };
+  }
   if (tableType === "interiorFinish") {
     const columns = [
       column("room", "房间或部位", 32),
