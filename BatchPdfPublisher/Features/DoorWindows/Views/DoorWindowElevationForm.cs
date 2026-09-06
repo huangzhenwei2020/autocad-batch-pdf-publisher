@@ -70,25 +70,32 @@ namespace BatchPdfPublisher.Views
 
         private void Build()
         {
-            var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, BackColor = Color.White };
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, BackColor = Color.White };
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            var workspace = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, BackColor = Color.White };
+            workspace.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 340));
+            workspace.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            workspace.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 330));
+            var sidebar = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, BackColor = Color.FromArgb(250, 251, 252), Padding = new Padding(0, 0, 5, 0) };
+            sidebar.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            sidebar.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-            var header = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 2, Padding = new Padding(14, 8, 12, 6), BackColor = Color.FromArgb(245, 247, 250) };
-            header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            var header = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, RowCount = 2, Padding = new Padding(14, 10, 10, 8), BackColor = Color.FromArgb(245, 247, 250) };
+            header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            header.RowStyles.Add(new RowStyle(SizeType.AutoSize)); header.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             var title = new Label { Text = "门窗表数据", Font = new DrawingFont(Font, FontStyle.Bold), AutoSize = true, Margin = new Padding(0, 0, 0, 2) };
             _sourceLabel.AutoSize = true; _sourceLabel.ForeColor = Color.FromArgb(70, 82, 96);
-            var labels = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FormsFlowDirection.TopDown, WrapContents = false }; labels.Controls.Add(title); labels.Controls.Add(_sourceLabel); header.Controls.Add(labels, 0, 0);
+            var labels = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, FlowDirection = FormsFlowDirection.TopDown, WrapContents = false }; labels.Controls.Add(title); labels.Controls.Add(_sourceLabel); header.Controls.Add(labels, 0, 0);
             var sourceButtons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, FlowDirection = FormsFlowDirection.LeftToRight };
             var repick = ButtonFor("重新拾取门窗表"); repick.Click += (s, e) => Repick(); sourceButtons.Controls.Add(repick);
             var importCsv = ButtonFor("导入CSV/Excel"); importCsv.Click += (s, e) => ImportFromFile(); sourceButtons.Controls.Add(importCsv);
             var locate = ButtonFor("定位来源表"); locate.Click += (s, e) => LocateSource(); sourceButtons.Controls.Add(locate);
             var log = ButtonFor("打开诊断日志"); log.Click += (s, e) => OpenLog(); sourceButtons.Controls.Add(log);
-            header.Controls.Add(sourceButtons, 1, 0); root.Controls.Add(header, 0, 0);
+            foreach (Control control in sourceButtons.Controls) { var button = control as Button; if (button != null) { button.AutoSize = false; button.Width = 142; button.Height = 31; } }
+            header.Controls.Add(sourceButtons, 0, 1); sidebar.Controls.Add(header, 0, 0);
 
-            var batch = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, Padding = new Padding(12, 7, 8, 5), BackColor = Color.FromArgb(250, 251, 252) };
+            var batch = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, WrapContents = false, FlowDirection = FormsFlowDirection.TopDown, Padding = new Padding(12, 8, 8, 8), BackColor = Color.FromArgb(250, 251, 252) };
             batch.Controls.Add(LabelFor("批量设置")); batch.Controls.Add(_batchType); batch.Controls.Add(_batchDivision); batch.Controls.Add(_batchOpening);
             batch.Controls.Add(LabelFor("按类型选择")); batch.Controls.Add(_filterType);
             var selectType = ButtonFor("勾选该类型"); selectType.Click += (s, e) => SelectByType(); batch.Controls.Add(selectType);
@@ -118,19 +125,17 @@ namespace BatchPdfPublisher.Views
             var selectAll = ButtonFor("全选"); selectAll.Click += (s, e) => SelectAll(true); batch.Controls.Add(selectAll);
             var selectNone = ButtonFor("全不选"); selectNone.Click += (s, e) => SelectAll(false); batch.Controls.Add(selectNone);
             batch.Controls.Add(new Label { Text = "几何按实际毫米 1:1；安装缝默认 20 mm。天正图名接口未确认时使用兼容图名。", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(14, 7, 0, 0) });
-            root.Controls.Add(batch, 0, 1);
+            FormatSidebarControls(batch, 300);
+            sidebar.Controls.Add(batch, 0, 1);
 
             ConfigureGrid();
-            // SplitContainer is still at its design-time default width while the
-            // form tree is being constructed.  Setting minimum panel widths here
-            // throws before the window can be shown on some DPI configurations.
-            var split = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, SplitterWidth = 5, BackColor = Color.FromArgb(225, 229, 234) };
-            split.Panel1.Controls.Add(_grid);
             var previewPanel = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, BackColor = Color.White };
             previewPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 36)); previewPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             previewPanel.Controls.Add(new Label { Text = "当前立面预览", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(10, 0, 0, 0), BackColor = Color.FromArgb(245, 247, 250) }, 0, 0);
-            previewPanel.Controls.Add(_preview, 0, 1); split.Panel2.Controls.Add(previewPanel); root.Controls.Add(split, 0, 2);
-            Shown += (s, e) => { InitializeSplitLayout(split); SelectFirstRow(); };
+            previewPanel.Controls.Add(_preview, 0, 1);
+            workspace.Controls.Add(sidebar, 0, 0); workspace.Controls.Add(_grid, 1, 0); workspace.Controls.Add(previewPanel, 2, 0);
+            root.Controls.Add(workspace, 0, 0);
+            Shown += (s, e) => SelectFirstRow();
 
             var footer = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 2, Padding = new Padding(12, 8, 12, 7), BackColor = Color.FromArgb(245, 247, 250) };
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -143,19 +148,22 @@ namespace BatchPdfPublisher.Views
             var close = ButtonFor("关闭"); close.Click += (s, e) => Close(); actions.Controls.Add(close);
             var none = ButtonFor("取消全选"); none.Click += (s, e) => SelectAll(false); actions.Controls.Add(none);
             var all = ButtonFor("全选可生成项"); all.Click += (s, e) => SelectAll(true); actions.Controls.Add(all);
-            footer.Controls.Add(actions, 1, 0); root.Controls.Add(footer, 0, 3);
+            footer.Controls.Add(actions, 1, 0); root.Controls.Add(footer, 0, 1);
             Controls.Add(root);
         }
 
-        private static void InitializeSplitLayout(SplitContainer split)
+        private static void FormatSidebarControls(FlowLayoutPanel panel, int width)
         {
-            if (split == null || split.ClientSize.Width < 700) return;
-            // Set the distance first while both minimum sizes are still zero,
-            // then apply constraints after the control has its real pixel width.
-            var maximum = Math.Max(1, split.ClientSize.Width - split.SplitterWidth - 240);
-            split.SplitterDistance = Math.Min(maximum, Math.Max(480, split.ClientSize.Width - 350));
-            split.Panel1MinSize = Math.Min(480, split.SplitterDistance);
-            split.Panel2MinSize = Math.Min(240, split.ClientSize.Width - split.SplitterDistance - split.SplitterWidth);
+            foreach (Control control in panel.Controls)
+            {
+                control.Margin = new Padding(3, 3, 3, 4);
+                var button = control as Button;
+                if (button != null) { button.AutoSize = false; button.Width = width; button.Height = 31; }
+                var combo = control as ComboBox;
+                if (combo != null) combo.Width = width;
+                var label = control as Label;
+                if (label != null) { label.MaximumSize = new Size(width, 0); label.Margin = new Padding(3, 8, 3, 3); }
+            }
         }
 
         private void ConfigureGrid()
