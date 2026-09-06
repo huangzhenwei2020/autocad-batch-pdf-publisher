@@ -9,12 +9,15 @@ namespace BatchPdfPublisher.Views
     internal sealed class DoorWindowElevationPreviewControl : Control
     {
         private DoorWindowScheduleItem _item;
+        private Bitmap _renderCache;
+        private bool _renderDirty = true;
         public DoorWindowElevationPreviewControl()
         {
-            DoubleBuffered = true; BackColor = Color.White; Dock = DockStyle.Fill;
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            DoubleBuffered = true; ResizeRedraw = true; BackColor = Color.White; Dock = DockStyle.Fill;
         }
 
-        public void ShowItem(DoorWindowScheduleItem item) { _item = item; Invalidate(); }
+        public void ShowItem(DoorWindowScheduleItem item) { _item = item; InvalidateRender(); }
 
         protected override void OnPaint(PaintEventArgs e)
         {
@@ -22,21 +25,34 @@ namespace BatchPdfPublisher.Views
             if (Width <= 0 || Height <= 0) return;
             try
             {
-                using (var buffer = new Bitmap(Width, Height))
+                if (_renderCache == null || _renderCache.Width != Width || _renderCache.Height != Height || _renderDirty)
                 {
-                    using (var bufferGraphics = Graphics.FromImage(buffer))
+                    if (_renderCache != null) _renderCache.Dispose();
+                    _renderCache = new Bitmap(Width, Height);
+                    using (var bufferGraphics = Graphics.FromImage(_renderCache))
                     {
                         bufferGraphics.Clear(Color.White);
                         PaintPreview(bufferGraphics);
                     }
-                    e.Graphics.DrawImage(buffer, 0, 0, Width, Height);
+                    _renderDirty = false;
                 }
+                e.Graphics.DrawImageUnscaled(_renderCache, 0, 0);
             }
             catch (Exception exception)
             {
                 try { if (ClientRectangle.Width > 0 && ClientRectangle.Height > 0) DrawCentered(e.Graphics, "预览绘制失败：" + exception.Message, ClientRectangle, Color.Firebrick, 10F); } catch { }
             }
         }
+
+        protected override void OnResize(EventArgs e) { _renderDirty = true; base.OnResize(e); Invalidate(); }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && _renderCache != null) { _renderCache.Dispose(); _renderCache = null; }
+            base.Dispose(disposing);
+        }
+
+        private void InvalidateRender() { _renderDirty = true; Invalidate(); }
 
         private void PaintPreview(Graphics graphics)
         {

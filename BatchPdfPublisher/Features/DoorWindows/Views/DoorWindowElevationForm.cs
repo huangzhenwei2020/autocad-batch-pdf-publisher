@@ -24,7 +24,7 @@ namespace BatchPdfPublisher.Views
         private DoorWindowScheduleReadResult _source;
         private DoorWindowScheduleReadResult _baseSource;
         private readonly BindingList<DoorWindowScheduleItem> _rows = new BindingList<DoorWindowScheduleItem>();
-        private readonly DataGridView _grid = new DataGridView();
+        private readonly DataGridView _grid = new BufferedDataGridView();
         private readonly DoorWindowElevationPreviewControl _preview = new DoorWindowElevationPreviewControl();
         private readonly Label _sourceLabel = new Label();
         private readonly Label _status = new Label();
@@ -191,6 +191,9 @@ namespace BatchPdfPublisher.Views
             _grid.Dock = DockStyle.Fill; _grid.AutoGenerateColumns = false; _grid.AllowUserToAddRows = false; _grid.AllowUserToDeleteRows = false;
             _grid.RowHeadersVisible = false; _grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect; _grid.MultiSelect = true; _grid.EditMode = DataGridViewEditMode.EditOnEnter;
             _grid.BackgroundColor = Color.White; _grid.BorderStyle = BorderStyle.FixedSingle; _grid.ColumnHeadersHeight = 34; _grid.RowTemplate.Height = 29;
+            _grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None; _grid.AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.None;
+            _grid.AllowUserToResizeRows = false; _grid.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
+            _grid.ShowCellToolTips = false;
             _grid.EnableHeadersVisualStyles = false; _grid.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(225, 232, 240); _grid.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(248, 250, 252);
             _grid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "生成", DataPropertyName = "Selected", Width = 52 });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "序", DataPropertyName = "Sequence", Width = 44, ReadOnly = true });
@@ -222,7 +225,7 @@ namespace BatchPdfPublisher.Views
             _grid.SelectionChanged += (s, e) => UpdatePreview();
             _grid.CellDoubleClick += (s, e) => { if (e.RowIndex >= 0) EditCurrentDivision(); };
             _grid.ColumnHeaderMouseClick += (s, e) => { if (e.ColumnIndex == 0) SelectAll(!_rows.Where(IsSelectable).All(x => x.Selected)); };
-            _grid.CellFormatting += (s, e) => { if (e.RowIndex < 0) return; var status = _rows[e.RowIndex].Status ?? string.Empty; if (status.Contains("冲突") || status.Contains("缺少") || status.Contains("小于")) e.CellStyle.ForeColor = Color.Firebrick; else if (status.Contains("可生成")) e.CellStyle.ForeColor = Color.FromArgb(20, 112, 65); };
+            _grid.RowPrePaint += (s, e) => { if (e.RowIndex < 0 || e.RowIndex >= _rows.Count) return; var status = _rows[e.RowIndex].Status ?? string.Empty; if (status.Contains("冲突") || status.Contains("缺少") || status.Contains("小于")) e.InheritedRowStyle.ForeColor = Color.Firebrick; else if (status.Contains("可生成")) e.InheritedRowStyle.ForeColor = Color.FromArgb(20, 112, 65); else e.InheritedRowStyle.ForeColor = _grid.DefaultCellStyle.ForeColor; };
             _grid.CellBeginEdit += (s, e) => { if (e.RowIndex >= 0 && _grid.Columns[e.ColumnIndex].DataPropertyName == "SillHeightDisplay" && !(_rows[e.RowIndex].ElevationType ?? string.Empty).Contains("窗")) e.Cancel = true; };
             _grid.DataError += (s, e) => { e.ThrowException = false; };
         }
@@ -1102,6 +1105,16 @@ namespace BatchPdfPublisher.Views
         private static Button ButtonFor(string text) { return new Button { Text = text, AutoSize = true, Height = 29, Padding = new Padding(8, 0, 8, 0) }; }
         private static ComboBox Combo(IEnumerable<string> values) { var box = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 118, Height = 28, Margin = new Padding(4, 3, 4, 0) }; box.Items.AddRange(values.Cast<object>().ToArray()); box.SelectedIndex = 0; return box; }
         private static ComboBox ScaleCombo() { var box = new ComboBox { DropDownStyle = ComboBoxStyle.DropDown, Width = 76, Height = 28, Margin = new Padding(4, 3, 4, 0), Text = "1:50" }; box.Items.AddRange(new object[] { "1:20", "1:25", "1:30", "1:50", "1:100" }); return box; }
-        private static DataGridViewComboBoxColumn ComboColumn(string header, string property, int width, IEnumerable<string> values) { var column = new DataGridViewComboBoxColumn { HeaderText = header, DataPropertyName = property, Width = width, FlatStyle = FlatStyle.Flat }; column.Items.AddRange(values.Cast<object>().ToArray()); return column; }
+        private static DataGridViewComboBoxColumn ComboColumn(string header, string property, int width, IEnumerable<string> values) { var column = new DataGridViewComboBoxColumn { HeaderText = header, DataPropertyName = property, Width = width, FlatStyle = FlatStyle.Flat, DisplayStyle = DataGridViewComboBoxDisplayStyle.DropDownButton, DisplayStyleForCurrentCellOnly = true }; column.Items.AddRange(values.Cast<object>().ToArray()); return column; }
+
+        private sealed class BufferedDataGridView : DataGridView
+        {
+            public BufferedDataGridView()
+            {
+                DoubleBuffered = true;
+                SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+                UpdateStyles();
+            }
+        }
     }
 }
