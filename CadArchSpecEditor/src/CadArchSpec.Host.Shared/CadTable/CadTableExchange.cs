@@ -13,19 +13,19 @@ namespace CadArchSpec.Host.Shared.CadTable
 {
     internal static class CadTableExchange
     {
-        public static async Task<JObject> ReadSelectedTableAsync()
+        public static async Task<JObject> ReadSelectedTableAsync(bool includeHiddenLayers = false)
         {
             JObject result = null;
             await Application.DocumentManager.ExecuteInCommandContextAsync(
                 async _ =>
                 {
-                    result = ReadSelectedTableCore();
+                    result = ReadSelectedTableCore(includeHiddenLayers);
                     await Task.CompletedTask;
                 }, null);
             return result;
         }
 
-        private static JObject ReadSelectedTableCore()
+        private static JObject ReadSelectedTableCore(bool includeHiddenLayers)
         {
             var document = Application.DocumentManager.MdiActiveDocument;
             if (document == null) throw new InvalidOperationException("当前没有活动的 CAD 图纸。");
@@ -52,7 +52,7 @@ namespace CadArchSpec.Host.Shared.CadTable
                     transaction.Commit();
                     return nativeResult;
                 }
-                read = CadTableEntityReader.Read(transaction, ids);
+                read = CadTableEntityReader.Read(transaction, ids, includeHiddenLayers);
                 transaction.Commit();
             }
             if (read.Input.Segments.Count == 0)
@@ -136,6 +136,8 @@ namespace CadArchSpec.Host.Shared.CadTable
                 ["segmentCount"] = read.Input.Segments.Count,
                 ["textCount"] = read.Input.TextFragments.Count,
                 ["explodedObjectCount"] = read.ExplodedObjectCount,
+                ["skippedHiddenEntityCount"] = read.SkippedHiddenEntityCount,
+                ["includedHiddenLayers"] = includeHiddenLayers,
                 ["rowCount"] = rowCount,
                 ["columnCount"] = columnCount,
                 ["nativeTable"] = false,

@@ -198,7 +198,8 @@ namespace CadArchSpec.Host.AutoCAD2022
                         PostMessage("cad.textRead", await CadDrawingExchange.ReadSelectedTextAsync((string)message.Payload["sectionId"]));
                         break;
                     case "cad.table.read":
-                        PostMessage("cad.tableRead", await CadArchSpec.Host.Shared.CadTable.CadTableExchange.ReadSelectedTableAsync());
+                        PostMessage("cad.tableRead", await CadArchSpec.Host.Shared.CadTable.CadTableExchange.ReadSelectedTableAsync(
+                            (bool?)message.Payload["includeHiddenLayers"] == true));
                         break;
                     case "table.xlsx.export":
                         PostMessage("table.xlsxExported", CadArchSpec.Host.Shared.CadTable.CadTableXlsxExchange.Export(message.Payload, this));

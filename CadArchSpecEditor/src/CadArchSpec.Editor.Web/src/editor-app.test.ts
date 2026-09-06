@@ -60,9 +60,10 @@ function createRuleIssue(ruleId: string, fieldPath: string) {
 
 describe("architecture specification editor", () => {
   it("creates the CAD table read bridge message", () => {
-    const message = createProjectMessage("cad.table.read");
+    const message = createProjectMessage("cad.table.read", { includeHiddenLayers: true });
     expect(message.type).toBe("cad.table.read");
     expect(message.protocolVersion).toBe(1);
+    expect(message.payload).toEqual({ includeHiddenLayers: true });
   });
 
   it("creates the XLSX export bridge message", () => {

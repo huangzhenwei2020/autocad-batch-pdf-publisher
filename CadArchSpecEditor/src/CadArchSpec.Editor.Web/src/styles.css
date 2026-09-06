@@ -711,6 +711,21 @@ button:disabled {
   background: #2e9665;
 }
 
+.cad-table-layer-option {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  color: #536276;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.cad-table-layer-option input {
+  margin: 0;
+}
+
 .project-strip {
   display: grid;
   flex: 0 0 58px;

@@ -48,6 +48,7 @@ import { StandardLibraryDialog } from "./standard-library-dialog";
 
 export const protocolVersion = 1;
 const storageKey = "cad-arch-spec-editor.workspace.v1";
+const includeHiddenCadLayersKey = "cad-arch-spec-editor.include-hidden-cad-layers.v1";
 
 type HostReadyPayload = {
   productName: string;
@@ -277,6 +278,9 @@ export function ArchitectureSpecEditor() {
   const [standardsOpen, setStandardsOpen] = useState(false);
   const [cadLayoutOpen, setCadLayoutOpen] = useState(false);
   const [cadBusy, setCadBusy] = useState(false);
+  const [includeHiddenCadLayers, setIncludeHiddenCadLayers] = useState(
+    () => localStorage.getItem(includeHiddenCadLayersKey) === "true",
+  );
   const [previewZoomPercent, setPreviewZoomPercent] = useState(100);
   const [isCanvasPanning, setIsCanvasPanning] = useState(false);
   const [tableToInsert, setTableToInsert] = useState("");
@@ -518,9 +522,10 @@ export function ArchitectureSpecEditor() {
         setTablesOpen(true);
         setCadBusy(false);
         const warningCount = Array.isArray(payload.warnings) ? payload.warnings.length : 0;
+        const skippedHiddenCount = Number(payload.skippedHiddenEntityCount ?? 0);
         const sourceLabel = payload.nativeTable === true ? "AutoCAD 原生表格" : "CAD 线框表格";
         setProjectNotice(
-          `已读取${sourceLabel}：${Number(payload.rowCount ?? imported.rows.length)} 行 × ${Number(payload.columnCount ?? imported.columns.length)} 列${warningCount ? `，有 ${warningCount} 项需要确认` : ""}；请检查后保存表格`,
+          `已读取${sourceLabel}：${Number(payload.rowCount ?? imported.rows.length)} 行 × ${Number(payload.columnCount ?? imported.columns.length)} 列${skippedHiddenCount ? `，已忽略 ${skippedHiddenCount} 个隐藏对象` : ""}${warningCount ? `，有 ${warningCount} 项需要确认` : ""}；请检查后保存表格`,
         );
       } else if (event.data.type === "table.xlsxExported") {
         setCadBusy(false);
@@ -701,7 +706,7 @@ export function ArchitectureSpecEditor() {
     if (!requireCadHost() || cadBusy) return;
     setCadBusy(true);
     setProjectNotice("请在 CAD 中框选一张表格的线条和文字…");
-    postProjectMessage("cad.table.read");
+    postProjectMessage("cad.table.read", { includeHiddenLayers: includeHiddenCadLayers });
   };
 
   const insertCurrentSectionToCad = () => {
@@ -912,6 +917,18 @@ export function ArchitectureSpecEditor() {
           <button className="button" onClick={() => setCadLayoutOpen(true)}>CAD 版面</button>
           <button className="button" disabled={cadBusy} onClick={readTextFromCad}>从 CAD 获取文字</button>
           <button className="button" disabled={cadBusy} onClick={readTableFromCad}>从 CAD 读取表格</button>
+          <label className="cad-table-layer-option" title="默认忽略关闭、冻结或设为不可见的图层对象">
+            <input
+              type="checkbox"
+              checked={includeHiddenCadLayers}
+              onChange={(event) => {
+                const checked = event.target.checked;
+                setIncludeHiddenCadLayers(checked);
+                localStorage.setItem(includeHiddenCadLayersKey, String(checked));
+              }}
+            />
+            包含隐藏图层
+          </label>
           <button className="button" disabled={cadBusy} onClick={insertCurrentSectionToCad}>插入当前章节</button>
           <button className="button" onClick={() => setTablesOpen(true)}>
             专业表格{workspace.tables?.length ? ` (${workspace.tables.length})` : ""}

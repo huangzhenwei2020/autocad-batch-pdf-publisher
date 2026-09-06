@@ -62,6 +62,7 @@ namespace CadArchSpec.CadTable
         public List<string> Warnings { get; set; } = new List<string>();
         public int SourceEntityCount { get; set; }
         public int ExplodedObjectCount { get; set; }
+        public int SkippedHiddenEntityCount { get; set; }
     }
 
     public sealed class CadTableDetectionOptions

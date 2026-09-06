@@ -18,7 +18,8 @@ namespace CadArchSpec.Host.Shared.CadTable
             "TextString", "Text", "Contents", "Content", "Caption", "Value"
         };
 
-        public static CadTableEntityReadResult Read(Transaction transaction, IEnumerable<ObjectId> objectIds)
+        public static CadTableEntityReadResult Read(Transaction transaction, IEnumerable<ObjectId> objectIds,
+            bool includeHiddenLayers = false)
         {
             if (transaction == null) throw new ArgumentNullException(nameof(transaction));
             if (objectIds == null) throw new ArgumentNullException(nameof(objectIds));
@@ -28,15 +29,26 @@ namespace CadArchSpec.Host.Shared.CadTable
                 var entity = transaction.GetObject(objectId, OpenMode.ForRead, false) as Entity;
                 if (entity == null) continue;
                 result.SourceEntityCount++;
+                if (!includeHiddenLayers && !IsVisible(transaction, entity))
+                {
+                    result.SkippedHiddenEntityCount++;
+                    continue;
+                }
                 var sourceHandle = SafeHandle(entity);
-                Collect(transaction, entity, sourceHandle, result, 0, false);
+                Collect(transaction, entity, sourceHandle, result, 0, false, includeHiddenLayers);
             }
             return result;
         }
 
-        private static void Collect(Transaction transaction, Entity entity, string sourceHandle, CadTableEntityReadResult result, int depth, bool explodedClone)
+        private static void Collect(Transaction transaction, Entity entity, string sourceHandle,
+            CadTableEntityReadResult result, int depth, bool explodedClone, bool includeHiddenLayers)
         {
             if (entity == null) return;
+            if (!includeHiddenLayers && !IsVisible(transaction, entity))
+            {
+                result.SkippedHiddenEntityCount++;
+                return;
+            }
             var sourceKind = explodedClone ? CadTextSourceKind.ExplodedClone : CadTextSourceKind.Standard;
             var dbText = entity as DBText;
             if (dbText != null)
@@ -102,7 +114,7 @@ namespace CadArchSpec.Host.Shared.CadTable
                     if (attributeId.IsNull || !attributeId.IsValid) continue;
                     var blockAttribute = transaction.GetObject(attributeId, OpenMode.ForRead, false) as AttributeReference;
                     if (blockAttribute != null)
-                        Collect(transaction, blockAttribute, sourceHandle, result, depth + 1, false);
+                        Collect(transaction, blockAttribute, sourceHandle, result, depth + 1, false, includeHiddenLayers);
                 }
             }
 
@@ -142,7 +154,7 @@ namespace CadArchSpec.Host.Shared.CadTable
                 {
                     if (result.ExplodedObjectCount > MaximumExplodedObjects) break;
                     var child = item as Entity;
-                    if (child != null) Collect(transaction, child, sourceHandle, result, depth + 1, true);
+                    if (child != null) Collect(transaction, child, sourceHandle, result, depth + 1, true, includeHiddenLayers);
                 }
             }
             catch (Exception exception)
@@ -270,6 +282,23 @@ namespace CadArchSpec.Host.Shared.CadTable
         private static void AddWarning(CadTableEntityReadResult result, string sourceHandle, string message, DBObject value)
         {
             result.Warnings.Add("Handle " + (string.IsNullOrWhiteSpace(sourceHandle) ? "未知" : sourceHandle) + "（" + DxfName(value) + "）：" + message);
+        }
+
+        private static bool IsVisible(Transaction transaction, Entity entity)
+        {
+            try
+            {
+                if (!entity.Visible) return false;
+                if (entity.LayerId.IsNull || !entity.LayerId.IsValid) return true;
+                var layer = transaction.GetObject(entity.LayerId, OpenMode.ForRead, false) as LayerTableRecord;
+                return layer == null || !layer.IsOff && !layer.IsFrozen;
+            }
+            catch
+            {
+                // A proxy clone may not expose a database-backed layer. Do not drop
+                // visible geometry merely because its layer metadata is unavailable.
+                return entity.Visible;
+            }
         }
     }
 }
