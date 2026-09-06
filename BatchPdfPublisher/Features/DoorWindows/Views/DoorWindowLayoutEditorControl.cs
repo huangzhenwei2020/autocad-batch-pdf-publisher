@@ -35,6 +35,8 @@ namespace BatchPdfPublisher.Views
         private double _drawMinX, _drawMaxX;
         private RectangleF _leftBayRect, _rightBayRect;
         private double _snapStep = 5d;
+        private Bitmap _renderCache;
+        private bool _renderDirty = true;
 
         public event EventHandler LayoutChanged;
         public event EventHandler SelectedCellChanged;
@@ -42,7 +44,8 @@ namespace BatchPdfPublisher.Views
 
         public DoorWindowLayoutEditorControl()
         {
-            DoubleBuffered = true; BackColor = Color.White; Dock = DockStyle.Fill; MinimumSize = new Size(360, 300);
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            DoubleBuffered = true; ResizeRedraw = true; BackColor = Color.White; Dock = DockStyle.Fill; MinimumSize = new Size(360, 300);
         }
 
         public IList<DoorWindowLayoutCell> Cells { get { return _cells; } }
@@ -62,12 +65,12 @@ namespace BatchPdfPublisher.Views
             _frameWidth = Math.Max(1d, width); _frameHeight = Math.Max(1d, height); _cells.Clear();
             foreach (var cell in cells ?? Enumerable.Empty<DoorWindowLayoutCell>()) _cells.Add(Copy(cell));
             if (_cells.Count == 0) _cells.Add(new DoorWindowLayoutCell { Left = 0, Bottom = 0, Right = _frameWidth, Top = _frameHeight, Opening = "固定", Material = "无" });
-            var first = OrderedCells.FirstOrDefault(); _selected = first == null ? -1 : _cells.IndexOf(first); _selectedIndices.Clear(); if (_selected >= 0) _selectedIndices.Add(_selected); Invalidate(); RaiseSelectionChanged();
+            var first = OrderedCells.FirstOrDefault(); _selected = first == null ? -1 : _cells.IndexOf(first); _selectedIndices.Clear(); if (_selected >= 0) _selectedIndices.Add(_selected); InvalidateRender(); RaiseSelectionChanged();
         }
 
-        public void SetProfileWidths(double outerWidth, double mullionWidth) { _outerProfileWidth = Math.Max(0d, outerWidth); _mullionProfileWidth = Math.Max(0d, mullionWidth); Invalidate(); }
-        public void SetInstallationGap(bool enabled, double gap) { _hasInstallationGap = enabled; _installationGap = Math.Max(0d, gap); Invalidate(); }
-        public void SetConstruction(bool hasOuterFrame, bool hasMullion, string doorFrameType, double doorFrameWidth) { _hasOuterFrame = hasOuterFrame; _hasMullion = hasMullion; _doorFrameType = string.IsNullOrWhiteSpace(doorFrameType) ? "N型" : doorFrameType; _doorFrameWidth = Math.Max(0d, doorFrameWidth); Invalidate(); }
+        public void SetProfileWidths(double outerWidth, double mullionWidth) { _outerProfileWidth = Math.Max(0d, outerWidth); _mullionProfileWidth = Math.Max(0d, mullionWidth); InvalidateRender(); }
+        public void SetInstallationGap(bool enabled, double gap) { _hasInstallationGap = enabled; _installationGap = Math.Max(0d, gap); InvalidateRender(); }
+        public void SetConstruction(bool hasOuterFrame, bool hasMullion, string doorFrameType, double doorFrameWidth) { _hasOuterFrame = hasOuterFrame; _hasMullion = hasMullion; _doorFrameType = string.IsNullOrWhiteSpace(doorFrameType) ? "N型" : doorFrameType; _doorFrameWidth = Math.Max(0d, doorFrameWidth); InvalidateRender(); }
         public int SelectedBayReturn { get { return _selectedBayReturn; } }
         public void ConfigureBayReturns(bool enabled, string leftSide, double leftDepth, string rightSide, double rightDepth)
         {
@@ -76,7 +79,7 @@ namespace BatchPdfPublisher.Views
             _bayRightSide = string.Equals(rightSide, "窗", StringComparison.Ordinal) ? "窗" : "墙";
             _bayLeftDepth = SafeBayDepth(leftDepth); _bayRightDepth = SafeBayDepth(rightDepth);
             if (!enabled) _selectedBayReturn = 0;
-            Invalidate();
+            InvalidateRender();
         }
         public void ResizeLayout(double width, double height)
         {
@@ -183,9 +186,21 @@ namespace BatchPdfPublisher.Views
         protected override void OnPaint(PaintEventArgs e)
         {
             base.OnPaint(e);
-            // AutoCAD/远程桌面及高 DPI 重绘时先完整清除旧帧，避免提示文字和图形残影叠加。
-            e.Graphics.Clear(BackColor);
-            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            if (ClientSize.Width <= 0 || ClientSize.Height <= 0) return;
+            if (_renderCache == null || _renderCache.Width != ClientSize.Width || _renderCache.Height != ClientSize.Height || _renderDirty)
+            {
+                if (_renderCache != null) _renderCache.Dispose();
+                _renderCache = new Bitmap(ClientSize.Width, ClientSize.Height);
+                using (var graphics = Graphics.FromImage(_renderCache)) Render(graphics);
+                _renderDirty = false;
+            }
+            e.Graphics.DrawImageUnscaled(_renderCache, 0, 0);
+        }
+
+        private void Render(Graphics graphics)
+        {
+            graphics.Clear(BackColor);
+            graphics.SmoothingMode = SmoothingMode.AntiAlias;
             var margin = 54f; var footer = 34f; var usable = new RectangleF(margin, 18, Math.Max(10, Width - margin * 2), Math.Max(10, Height - margin - footer));
             var visibleLeft = _hasBayReturns ? Math.Min(_bayLeftDepth, _frameWidth * .45d) : 0d;
             var visibleRight = _hasBayReturns ? Math.Min(_bayRightDepth, _frameWidth * .45d) : 0d;
@@ -206,35 +221,45 @@ namespace BatchPdfPublisher.Views
             using (var sashPen = new Pen(Color.FromArgb(150, 150, 150), 1.25f))
             {
                 var displayOrder = OrderedCells.Select((cell, index) => new { cell, number = index + 1 }).ToDictionary(x => x.cell, x => x.number);
-                DrawBayReturn(e.Graphics, _leftBayRect, true, _bayLeftSide, _bayLeftDepth, selectedPen, pen, openingPen, font);
-                DrawBayReturn(e.Graphics, _rightBayRect, false, _bayRightSide, _bayRightDepth, selectedPen, pen, openingPen, font);
+                DrawBayReturn(graphics, _leftBayRect, true, _bayLeftSide, _bayLeftDepth, selectedPen, pen, openingPen, font);
+                DrawBayReturn(graphics, _rightBayRect, false, _bayRightSide, _bayRightDepth, selectedPen, pen, openingPen, font);
                 for (var index = 0; index < _cells.Count; index++)
                 {
-                    var rect = ToPixels(_cells[index]); if (_selectedIndices.Contains(index)) e.Graphics.FillRectangle(selectedBrush, rect);
+                    var rect = ToPixels(_cells[index]); if (_selectedIndices.Contains(index)) graphics.FillRectangle(selectedBrush, rect);
                     var drawPen = _selectedIndices.Contains(index) ? selectedPen : pen; if (_cells[index].IsDeleted) drawPen.DashStyle = DashStyle.Dash;
-                    DrawCellBoundary(e.Graphics, drawPen, _cells[index]); drawPen.DashStyle = DashStyle.Solid;
-                    if (!_cells[index].IsDeleted) DrawProfileRectangle(e.Graphics, pen, _cells[index]);
-                    if (!_cells[index].IsDeleted) DrawMaterialSymbol(e.Graphics, openingPen, _cells[index]);
+                    DrawCellBoundary(graphics, drawPen, _cells[index]); drawPen.DashStyle = DashStyle.Solid;
+                    if (!_cells[index].IsDeleted) DrawProfileRectangle(graphics, pen, _cells[index]);
+                    if (!_cells[index].IsDeleted) DrawMaterialSymbol(graphics, openingPen, _cells[index]);
                     if (!_cells[index].IsDeleted)
                     {
                         var openingRect = OpeningRectangle(_cells[index]);
-                        if (IsOperable(_cells[index].Opening) && _doorFrameWidth > 0d && openingRect.Width > 2f && openingRect.Height > 2f) e.Graphics.DrawRectangle(sashPen, openingRect.X, openingRect.Y, openingRect.Width, openingRect.Height);
-                        DrawOpeningSymbol(e.Graphics, openingPen, openingRect, _cells[index].Opening, (_cells[index].Left + _cells[index].Right) / 2d <= _frameWidth / 2d);
+                        if (IsOperable(_cells[index].Opening) && _doorFrameWidth > 0d && openingRect.Width > 2f && openingRect.Height > 2f) graphics.DrawRectangle(sashPen, openingRect.X, openingRect.Y, openingRect.Width, openingRect.Height);
+                        DrawOpeningSymbol(graphics, openingPen, openingRect, _cells[index].Opening, (_cells[index].Left + _cells[index].Right) / 2d <= _frameWidth / 2d);
                     }
                     var text = displayOrder[_cells[index]] + "  " + (_cells[index].Right - _cells[index].Left).ToString("0.##") + "×" + (_cells[index].Top - _cells[index].Bottom).ToString("0.##") + "\n" + (_cells[index].Opening ?? "固定") + " / " + (string.IsNullOrWhiteSpace(_cells[index].Material) ? "无" : _cells[index].Material);
                     if (_cells[index].IsDeleted) text = displayOrder[_cells[index]] + "  已删除（可恢复）";
-                    TextRenderer.DrawText(e.Graphics, text, font, Rectangle.Round(rect), Color.FromArgb(45, 55, 65), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
-                    if (_cells[index].IsDoor && !_cells[index].IsDeleted) TextRenderer.DrawText(e.Graphics, "门", doorFont, new Rectangle((int)rect.X + 4, (int)rect.Y + 4, 28, 22), Color.FromArgb(190, 105, 30));
+                    TextRenderer.DrawText(graphics, text, font, Rectangle.Round(rect), Color.FromArgb(45, 55, 65), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
+                    if (_cells[index].IsDoor && !_cells[index].IsDeleted) TextRenderer.DrawText(graphics, "门", doorFont, new Rectangle((int)rect.X + 4, (int)rect.Y + 4, 28, 22), Color.FromArgb(190, 105, 30));
                 }
                 outerPen.Color = Color.FromArgb(165, 175, 185); outerPen.DashStyle = DashStyle.Dash;
                 if (_hasInstallationGap && _installationGap > 0d)
                 {
                     var active = _cells.Where(x => !x.IsDeleted).Select(x => new DoorWindowCell(x.Left, x.Bottom, x.Right, x.Top)).ToList();
                     foreach (var segment in DoorWindowElevationGeometryBuilder.BuildInstallationGapOutline(active, _installationGap))
-                        e.Graphics.DrawLine(outerPen, ToPixelX(segment.X1), ToPixelY(segment.Y1), ToPixelX(segment.X2), ToPixelY(segment.Y2));
+                        graphics.DrawLine(outerPen, ToPixelX(segment.X1), ToPixelY(segment.Y1), ToPixelX(segment.X2), ToPixelY(segment.Y2));
                 }
-                TextRenderer.DrawText(e.Graphics, _hasBayReturns ? "点击左右转折面即可选择；双击可切换墙/窗，顶部可修改深度。主窗格仍按普通窗方式分格。" : "拖动分隔线调整；蓝色框为当前面板", font, new Rectangle(0, Height - 28, Width, 22), Color.DimGray, TextFormatFlags.HorizontalCenter);
+                var hint = _hasBayReturns ? "双击转折面可切换墙/窗" : "拖动分隔线调整";
+                TextRenderer.DrawText(graphics, hint, font, new Rectangle(4, Height - 28, Math.Max(1, Width - 8), 22), Color.DimGray,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
             }
+        }
+
+        protected override void OnResize(EventArgs e) { _renderDirty = true; base.OnResize(e); Invalidate(); }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && _renderCache != null) { _renderCache.Dispose(); _renderCache = null; }
+            base.Dispose(disposing);
         }
 
         protected override void OnMouseDown(MouseEventArgs e)
@@ -245,7 +270,7 @@ namespace BatchPdfPublisher.Views
             {
                 _selectedBayReturn = bay;
                 if (e.Clicks >= 2) { if (bay < 0) _bayLeftSide = _bayLeftSide == "窗" ? "墙" : "窗"; else _bayRightSide = _bayRightSide == "窗" ? "墙" : "窗"; }
-                Invalidate(); if (BayReturnSelected != null) BayReturnSelected(this, EventArgs.Empty); return;
+                InvalidateRender(); if (BayReturnSelected != null) BayReturnSelected(this, EventArgs.Empty); return;
             }
             _selectedBayReturn = 0; _dragDivider = HitDivider(e.Location);
             if (_dragDivider != null) { Capture = true; return; }
@@ -255,7 +280,7 @@ namespace BatchPdfPublisher.Views
                 if (hit >= 0) { if (!_selectedIndices.Add(hit)) _selectedIndices.Remove(hit); _selected = _selectedIndices.Contains(hit) ? hit : _selectedIndices.LastOrDefault(); if (_selectedIndices.Count == 0) _selected = -1; }
             }
             else { _selectedIndices.Clear(); if (hit >= 0) _selectedIndices.Add(hit); _selected = hit; }
-            Invalidate(); RaiseSelectionChanged();
+            InvalidateRender(); RaiseSelectionChanged();
         }
 
         protected override void OnMouseMove(MouseEventArgs e)
@@ -322,7 +347,7 @@ namespace BatchPdfPublisher.Views
             else coordinate = Math.Max(lower, Math.Min(upper, coordinate));
             foreach (var index in divider.Before) { if (divider.Vertical) _cells[index].Right = coordinate; else _cells[index].Top = coordinate; }
             foreach (var index in divider.After) { if (divider.Vertical) _cells[index].Left = coordinate; else _cells[index].Bottom = coordinate; }
-            divider.Coordinate = coordinate; Invalidate(); if (_dragDivider == null) OnLayoutChanged(); else RaiseSelectionChanged(); return true;
+            divider.Coordinate = coordinate; InvalidateRender(); if (_dragDivider == null) OnLayoutChanged(); else RaiseSelectionChanged(); return true;
         }
 
         private int HitBayReturn(Point point)
@@ -340,7 +365,8 @@ namespace BatchPdfPublisher.Views
         private float ToPixelY(double value) { return _drawingArea.Bottom - (float)(value / _frameHeight) * _drawingArea.Height; }
         private double FromPixelX(float value) { return _drawMinX + (value - _drawingArea.Left) / Math.Max(1f, _drawingArea.Width) * (_drawMaxX - _drawMinX); }
         private double FromPixelY(float value) { return (_drawingArea.Bottom - value) / Math.Max(1f, _drawingArea.Height) * _frameHeight; }
-        private void OnLayoutChanged() { Invalidate(); if (LayoutChanged != null) LayoutChanged(this, EventArgs.Empty); RaiseSelectionChanged(); }
+        private void InvalidateRender() { _renderDirty = true; Invalidate(); }
+        private void OnLayoutChanged() { InvalidateRender(); if (LayoutChanged != null) LayoutChanged(this, EventArgs.Empty); RaiseSelectionChanged(); }
         private void RaiseSelectionChanged() { if (SelectedCellChanged != null) SelectedCellChanged(this, EventArgs.Empty); }
         private bool Equalize(bool widths)
         {
