@@ -98,7 +98,7 @@ namespace BatchPdfPublisher.Views
             var floorButtons = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true };
             foreach (var button in new[] { _addCurrentFloor, _pickFloorTable, _clearFloorTables }) { button.AutoSize = false; button.Width = 94; button.Height = 31; floorButtons.Controls.Add(button); }
             header.Controls.Add(floorButtons, 0, 3);
-            var sourceGroup = new GroupBox { Text = "数据来源与分层统计", Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(5), Margin = new Padding(5) };
+            var sourceGroup = new GroupBox { Text = "数据来源与分层统计", Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, MinimumSize = new Size(315, 0), Padding = new Padding(5), Margin = new Padding(5) };
             sourceGroup.Controls.Add(header); sidebar.Controls.Add(sourceGroup, 0, 0);
 
             var batch = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, WrapContents = false, FlowDirection = FormsFlowDirection.TopDown, Padding = new Padding(12, 8, 8, 8), BackColor = Color.FromArgb(250, 251, 252) };
@@ -161,8 +161,8 @@ namespace BatchPdfPublisher.Views
 
         private static GroupBox SidebarGroup(string title, params Control[] controls)
         {
-            var group = new GroupBox { Text = title, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Width = 300, Padding = new Padding(8), Margin = new Padding(0, 0, 0, 8) };
-            var content = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = false, FlowDirection = FormsFlowDirection.TopDown };
+            var group = new GroupBox { Text = title, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, MinimumSize = new Size(300, 0), Padding = new Padding(8), Margin = new Padding(0, 0, 0, 8) };
+            var content = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Width = 282, MinimumSize = new Size(282, 0), WrapContents = false, FlowDirection = FormsFlowDirection.TopDown };
             foreach (var control in controls)
             {
                 control.Margin = new Padding(3, 3, 3, 4);
