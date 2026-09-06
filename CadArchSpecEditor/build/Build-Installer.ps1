@@ -83,11 +83,11 @@ $packageContents = @'
 <ApplicationPackage SchemaVersion="1.0" AutodeskProduct="AutoCAD" Name="CadArchSpecEditor" AppVersion="1.4.5" ProductCode="{1E296FC4-E75B-4B8B-80B7-CA2376D71D32}">
   <CompanyDetails Name="CadArchSpecEditor" />
   <Components>
-    <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R24.1" SeriesMax="R24.1" />
+    <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R24.1" SeriesMax="R24.3" />
     <ComponentEntry AppName="CadArchSpecEditor-2022" ModuleName="./Contents/R24.1/CadArchSpec.Host.AutoCAD2022.dll" AppDescription="建筑设计说明助手" LoadReasons="LoadOnStartup" />
   </Components>
   <Components>
-    <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R25.1" SeriesMax="R25.1" />
+    <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R25.0" SeriesMax="R25.1" />
     <ComponentEntry AppName="CadArchSpecEditor-2026" ModuleName="./Contents/R25.1/CadArchSpec.Host.AutoCAD2026.dll" AppDescription="建筑设计说明助手" LoadReasons="LoadOnStartup" />
   </Components>
 </ApplicationPackage>
