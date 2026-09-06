@@ -219,6 +219,8 @@ namespace BatchPdfPublisher.Services
         public static string InferAtlas(string code, string type, string note)
         {
             var value = ((code ?? string.Empty) + " " + (type ?? string.Empty) + " " + (note ?? string.Empty)).ToUpperInvariant();
+            // 普通门没有必须套用的通用图集，默认明确写“无”，同时允许用户在下拉框中另行指定。
+            if (string.Equals((type ?? string.Empty).Trim(), "普通门", StringComparison.Ordinal)) return "无";
             if (value.Contains("五金") || value.Contains("附件")) return "《门、窗、幕墙窗用五金附件》（04J631）";
             if (value.Contains("百叶") || value.StartsWith("BY")) return "《百叶窗》（05J624-1）";
             if (value.Contains("防火") || value.StartsWith("FM") || value.StartsWith("FHM") || value.StartsWith("FC")) return "《防火门窗》（12J609）";
@@ -242,6 +244,7 @@ namespace BatchPdfPublisher.Services
         {
             return new[]
             {
+                "无",
                 "《铝合金门窗》（22J603-1）",
                 "《防火门窗》（12J609）",
                 "《不锈钢门窗》（13J602-3）",
