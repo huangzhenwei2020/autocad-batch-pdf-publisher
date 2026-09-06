@@ -41,7 +41,18 @@ namespace CadArchSpec.Host.Shared.CadTable
             CadTableEntityReadResult read;
             using (var transaction = document.Database.TransactionManager.StartTransaction())
             {
-                read = CadTableEntityReader.Read(transaction, selection.Value.GetObjectIds());
+                var ids = selection.Value.GetObjectIds();
+                var nativeTables = ids.Select(id => transaction.GetObject(id, OpenMode.ForRead, false) as Table)
+                    .Where(table => table != null).ToList();
+                if (nativeTables.Count > 1)
+                    throw new InvalidOperationException("一次只能读取一张 AutoCAD 原生表格。");
+                if (nativeTables.Count == 1)
+                {
+                    var nativeResult = BuildNativeTablePayload(nativeTables[0], document.Name);
+                    transaction.Commit();
+                    return nativeResult;
+                }
+                read = CadTableEntityReader.Read(transaction, ids);
                 transaction.Commit();
             }
             if (read.Input.Segments.Count == 0)
@@ -133,6 +144,117 @@ namespace CadArchSpec.Host.Shared.CadTable
                     ["tableType"] = "custom",
                     ["tableNumber"] = string.Empty,
                     ["title"] = string.IsNullOrWhiteSpace(drawingName) ? "CAD识别表格" : drawingName + "－CAD识别表格",
+                    ["repeatHeader"] = true,
+                    ["allowSplitAcrossPages"] = true,
+                    ["columns"] = columns,
+                    ["rows"] = rows,
+                    ["formulaAudits"] = new JArray()
+                }
+            };
+        }
+
+        private static JObject BuildNativeTablePayload(Table source, string drawingPath)
+        {
+            var rowCount = source.Rows.Count;
+            var columnCount = source.Columns.Count;
+            if (rowCount <= 0 || columnCount <= 0)
+                throw new InvalidOperationException("所选 AutoCAD 表格没有可读取的行列。");
+            var columns = CreateColumns(columnCount);
+            var rows = new JArray();
+            for (var rowIndex = 0; rowIndex < rowCount; rowIndex++)
+            {
+                var cells = new JArray();
+                for (var columnIndex = 0; columnIndex < columnCount; columnIndex++)
+                {
+                    var sourceCell = source.Cells[rowIndex, columnIndex];
+                    var merged = sourceCell.IsMerged == true;
+                    var mergeRange = merged ? sourceCell.GetMergeRange() : source.Cells[rowIndex, columnIndex];
+                    var isAnchor = !merged || mergeRange.TopRow == rowIndex && mergeRange.LeftColumn == columnIndex;
+                    var rowSpan = isAnchor ? (merged ? mergeRange.BottomRow - mergeRange.TopRow + 1 : 1) : 0;
+                    var columnSpan = isAnchor ? (merged ? mergeRange.RightColumn - mergeRange.LeftColumn + 1 : 1) : 0;
+                    var value = isAnchor ? (sourceCell.TextString ?? string.Empty).Trim() : string.Empty;
+                    cells.Add(CreateCell(columnIndex, value, rowSpan, columnSpan, "AutoCAD原生表格"));
+                }
+                rows.Add(CreateRow(cells));
+            }
+            return CreatePayload(columns, rows, rowCount, columnCount, drawingPath,
+                new JArray(), 1, 0, 0, 0, "CAD原生表格", true);
+        }
+
+        private static JArray CreateColumns(int columnCount)
+        {
+            var columns = new JArray();
+            for (var columnIndex = 0; columnIndex < columnCount; columnIndex++)
+            {
+                columns.Add(new JObject
+                {
+                    ["key"] = "column" + (columnIndex + 1),
+                    ["title"] = "列" + (columnIndex + 1),
+                    ["unit"] = string.Empty,
+                    ["widthMillimeters"] = 36,
+                    ["decimalPlaces"] = 0,
+                    ["required"] = false
+                });
+            }
+            return columns;
+        }
+
+        private static JObject CreateCell(int columnIndex, string value, int rowSpan, int columnSpan, string source)
+        {
+            double numeric;
+            var numericValue = double.TryParse((value ?? string.Empty).Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out numeric)
+                ? (JToken)new JValue(numeric)
+                : JValue.CreateNull();
+            return new JObject
+            {
+                ["cellId"] = "cell-" + Guid.NewGuid().ToString("N"),
+                ["columnKey"] = "column" + (columnIndex + 1),
+                ["displayValue"] = value ?? string.Empty,
+                ["numericValue"] = numericValue,
+                ["unit"] = string.Empty,
+                ["fieldPath"] = string.Empty,
+                ["formula"] = string.Empty,
+                ["state"] = string.IsNullOrWhiteSpace(value) ? "unknown" : "pending",
+                ["source"] = source,
+                ["rowSpan"] = rowSpan,
+                ["columnSpan"] = columnSpan
+            };
+        }
+
+        private static JObject CreateRow(JArray cells)
+        {
+            return new JObject
+            {
+                ["rowId"] = "row-" + Guid.NewGuid().ToString("N"),
+                ["rowType"] = "Data",
+                ["keepTogether"] = true,
+                ["cells"] = cells
+            };
+        }
+
+        private static JObject CreatePayload(JArray columns, JArray rows, int rowCount, int columnCount,
+            string drawingPath, JArray warnings, int sourceEntityCount, int segmentCount, int textCount,
+            int explodedObjectCount, string titleSuffix, bool nativeTable)
+        {
+            var drawingName = Path.GetFileNameWithoutExtension(drawingPath ?? string.Empty);
+            return new JObject
+            {
+                ["sourceEntityCount"] = sourceEntityCount,
+                ["segmentCount"] = segmentCount,
+                ["textCount"] = textCount,
+                ["explodedObjectCount"] = explodedObjectCount,
+                ["rowCount"] = rowCount,
+                ["columnCount"] = columnCount,
+                ["nativeTable"] = nativeTable,
+                ["warnings"] = warnings,
+                ["drawingPath"] = drawingPath ?? string.Empty,
+                ["table"] = new JObject
+                {
+                    ["tableId"] = "table-" + Guid.NewGuid().ToString("N"),
+                    ["schemaVersion"] = 1,
+                    ["tableType"] = "custom",
+                    ["tableNumber"] = string.Empty,
+                    ["title"] = string.IsNullOrWhiteSpace(drawingName) ? titleSuffix : drawingName + "－" + titleSuffix,
                     ["repeatHeader"] = true,
                     ["allowSplitAcrossPages"] = true,
                     ["columns"] = columns,

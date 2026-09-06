@@ -517,8 +517,9 @@ export function ArchitectureSpecEditor() {
         setTablesOpen(true);
         setCadBusy(false);
         const warningCount = Array.isArray(payload.warnings) ? payload.warnings.length : 0;
+        const sourceLabel = payload.nativeTable === true ? "AutoCAD 原生表格" : "CAD 线框表格";
         setProjectNotice(
-          `已识别 ${Number(payload.rowCount ?? imported.rows.length)} 行 × ${Number(payload.columnCount ?? imported.columns.length)} 列${warningCount ? `，有 ${warningCount} 项需要确认` : ""}；请检查后保存表格`,
+          `已读取${sourceLabel}：${Number(payload.rowCount ?? imported.rows.length)} 行 × ${Number(payload.columnCount ?? imported.columns.length)} 列${warningCount ? `，有 ${warningCount} 项需要确认` : ""}；请检查后保存表格`,
         );
       } else if (event.data.type === "cad.sectionInserted") {
         setCadBusy(false);
