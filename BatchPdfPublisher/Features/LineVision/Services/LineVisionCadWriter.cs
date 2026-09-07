@@ -85,14 +85,14 @@ namespace BatchPdfPublisher.Services
                 var textLayer = EnsureLayer(document.Database, transaction, "LV-TEXT", 6);
                 foreach (var region in textRegions)
                 {
-                    var bounds = region.Bounds;
-                    if (bounds.Width < 1f || bounds.Height < 1f) continue;
-                    var position = ToCad(bounds.Left, bounds.Bottom, insertion, result.Height, unitsPerPixel);
+                    var placement = LineVisionOcrGeometry.GetPlacement(region);
+                    if (placement.TextHeightPixels < 1d) continue;
+                    var position = ToCad(placement.BaselineOrigin.X, placement.BaselineOrigin.Y, insertion, result.Height, unitsPerPixel);
                     var text = new DBText
                     {
                         Position = position,
-                        Height = Math.Max(unitsPerPixel, bounds.Height * unitsPerPixel * 0.78d),
-                        Rotation = -region.RotationDegrees * Math.PI / 180d,
+                        Height = Math.Max(unitsPerPixel, placement.TextHeightPixels * unitsPerPixel * 0.78d),
+                        Rotation = -placement.RotationDegrees * Math.PI / 180d,
                         TextString = region.Text.Trim(),
                         LayerId = textLayer,
                         TextStyleId = document.Database.Textstyle

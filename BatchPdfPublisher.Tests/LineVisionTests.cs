@@ -36,10 +36,16 @@ internal static class LineVisionTests
         Run("SelectsRequestedOcrEngine", SelectsRequestedOcrEngine);
         Run("NormalizesEngineeringOcrSymbols", NormalizesEngineeringOcrSymbols);
         Run("DoesNotRewriteNarrativeLetterX", DoesNotRewriteNarrativeLetterX);
+        Run("PlacesRotatedOcrTextFromPolygon", PlacesRotatedOcrTextFromPolygon);
+        Run("PlacesUpsideDownOcrTextFromPolygon", PlacesUpsideDownOcrTextFromPolygon);
         var worker = Environment.GetEnvironmentVariable("WANLUO_LINEVISION_OCR_WORKER");
         if (!string.IsNullOrWhiteSpace(worker) && File.Exists(worker)) Run("RecognizesTextThroughIsolatedWorker", () => RecognizesTextThroughIsolatedWorker(worker));
         var paddleWorker = Environment.GetEnvironmentVariable("WANLUO_LINEVISION_PADDLE_WORKER");
-        if (!string.IsNullOrWhiteSpace(paddleWorker) && File.Exists(paddleWorker)) Run("RecognizesTextThroughPaddleWorker", () => RecognizesTextThroughPaddleWorker(paddleWorker));
+        if (!string.IsNullOrWhiteSpace(paddleWorker) && File.Exists(paddleWorker))
+        {
+            Run("RecognizesTextThroughPaddleWorker", () => RecognizesTextThroughPaddleWorker(paddleWorker));
+            Run("RecognizesRotatedTextThroughPaddleWorker", () => RecognizesRotatedTextThroughPaddleWorker(paddleWorker));
+        }
         var vectorWorker = Environment.GetEnvironmentVariable("WANLUO_LINEVISION_VECTOR_WORKER");
         if (!string.IsNullOrWhiteSpace(vectorWorker) && File.Exists(vectorWorker)) Run("VectorizesThroughIsolatedWorker", () => VectorizesThroughIsolatedWorker(vectorWorker));
         Console.WriteLine("Executed " + _executed + " LineVision tests; 0 failed.");
@@ -296,6 +302,31 @@ internal static class LineVisionTests
         finally { UserDataPaths.TestRootDirectory = null; try { Directory.Delete(root, true); } catch { } }
     }
 
+    private static void RecognizesRotatedTextThroughPaddleWorker(string workerPath)
+    {
+        var previous = Environment.GetEnvironmentVariable("WANLUO_LINEVISION_PADDLE_WORKER");
+        Environment.SetEnvironmentVariable("WANLUO_LINEVISION_PADDLE_WORKER", workerPath);
+        try
+        {
+            foreach (var expectedAngle in new[] { 90f, 180f, 270f })
+            {
+                WithImage(900, 900, graphics =>
+                {
+                    graphics.TranslateTransform(450f, 450f); graphics.RotateTransform(expectedAngle);
+                    using (var font = new Font("Arial", 68f, FontStyle.Bold)) graphics.DrawString("ROOM 3600", font, Brushes.Black, -260f, -50f);
+                    graphics.ResetTransform();
+                }, path =>
+                {
+                    var result = new LineVisionPaddleOcrWorkerClient().RecognizeAsync(path, new LineVisionOcrOptions { Language = "en-US", MinimumConfidence = 0.4 }, CancellationToken.None).GetAwaiter().GetResult();
+                    var text = result.TextRegions.FirstOrDefault(item => (item.Text ?? string.Empty).IndexOf("3600", StringComparison.OrdinalIgnoreCase) >= 0);
+                    True(text != null, "PaddleOCR 没有识别 " + expectedAngle + " 度文字");
+                    True(Math.Abs(LineVisionOcrGeometry.NormalizeDegrees(text.RotationDegrees - expectedAngle)) < 15d, "PaddleOCR 返回的 " + expectedAngle + " 度文字方向不正确：" + text.RotationDegrees);
+                });
+            }
+        }
+        finally { Environment.SetEnvironmentVariable("WANLUO_LINEVISION_PADDLE_WORKER", previous); }
+    }
+
     private static void ExposesVersionedOcrEngineCapabilities()
     {
         var engine = new LineVisionOcrWorkerClient("missing-worker.exe");
@@ -333,6 +364,30 @@ internal static class LineVisionTests
     private static void DoesNotRewriteNarrativeLetterX()
     {
         Equal("X轴与 A X B 保持原文", LineVisionOcrTextNormalizer.Normalize("X轴与 A X B 保持原文"));
+    }
+
+    private static void PlacesRotatedOcrTextFromPolygon()
+    {
+        var region = new LineVisionOcrTextRegion
+        {
+            Text = "竖排文字", RotationDegrees = 90d,
+            Polygon = new[] { new PointF(80, 20), new PointF(80, 180), new PointF(50, 180), new PointF(50, 20) }
+        };
+        var placement = LineVisionOcrGeometry.GetPlacement(region);
+        Near(50d, placement.BaselineOrigin.X); Near(20d, placement.BaselineOrigin.Y);
+        Near(30d, placement.TextHeightPixels); Near(90d, placement.RotationDegrees);
+    }
+
+    private static void PlacesUpsideDownOcrTextFromPolygon()
+    {
+        var region = new LineVisionOcrTextRegion
+        {
+            Text = "倒置文字", RotationDegrees = 180d,
+            Polygon = new[] { new PointF(20, 30), new PointF(180, 30), new PointF(180, 55), new PointF(20, 55) }
+        };
+        var placement = LineVisionOcrGeometry.GetPlacement(region);
+        Near(180d, placement.BaselineOrigin.X); Near(30d, placement.BaselineOrigin.Y);
+        Near(25d, placement.TextHeightPixels); Near(180d, placement.RotationDegrees);
     }
 
     private static void VectorizesThroughIsolatedWorker(string workerPath)
@@ -382,6 +437,7 @@ internal static class LineVisionTests
     private static void Run(string name, Action test) { test(); _executed++; Console.WriteLine("PASS " + name); }
     private static void True(bool value, string message) { if (!value) throw new InvalidOperationException(message); }
     private static void Equal<T>(T expected, T actual) { if (!EqualityComparer<T>.Default.Equals(expected, actual)) throw new InvalidOperationException("Expected " + expected + ", actual " + actual); }
+    private static void Near(double expected, double actual) { if (Math.Abs(expected - actual) > 0.01d) throw new InvalidOperationException("Expected near " + expected + ", actual " + actual); }
 
     private sealed class FakeOcrEngine : ILineVisionOcrEngine
     {

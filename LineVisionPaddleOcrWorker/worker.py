@@ -83,6 +83,29 @@ def polygon_angle(points: list[list[float]]) -> float:
     return math.degrees(math.atan2(points[1][1] - points[0][1], points[1][0] - points[0][0]))
 
 
+def orient_polygon_to_text_line(points: list[list[float]]) -> list[list[float]]:
+    """Put the detected text-line long edge at points 0 -> 1.
+
+    Paddle's detector emits axis-aligned four-point boxes for many 90 degree
+    lines. In those boxes the first edge is the short top edge, so its angle is
+    always zero. Rotating the point order by one position preserves the box but
+    exposes the actual text baseline direction (90 degrees); the line
+    orientation classifier then distinguishes 90 from 270 degrees.
+    """
+    if len(points) < 4:
+        return points
+    edge_01 = math.hypot(points[1][0] - points[0][0], points[1][1] - points[0][1])
+    edge_12 = math.hypot(points[2][0] - points[1][0], points[2][1] - points[1][1])
+    return points if edge_01 >= edge_12 else [points[1], points[2], points[3], points[0]]
+
+
+def normalize_degrees(value: float) -> float:
+    value %= 360.0
+    if value > 180.0:
+        value -= 360.0
+    return value
+
+
 def recognize(request: dict[str, Any]) -> dict[str, Any]:
     request_id = request.get("RequestId", request.get("requestId"))
     output = result_template(request_id)
@@ -125,18 +148,25 @@ def recognize(request: dict[str, Any]) -> dict[str, Any]:
         texts = list(plain(data.get("rec_texts", [])))
         scores = list(plain(data.get("rec_scores", [])))
         polygons = list(plain(data.get("rec_polys", [])))
+        # Paddle returns class ids here: 0 = normal line, 1 = text line is
+        # upside down and was rotated 180 degrees before recognition.
+        orientations = list(plain(data.get("textline_orientation_angles", [])))
         for index, text in enumerate(texts):
             points = polygons[index] if index < len(polygons) else []
             points = [[float(point[0]), float(point[1])] for point in points]
             if not text or len(points) < 4:
                 continue
+            points = orient_polygon_to_text_line(points)
             xs = [point[0] for point in points]
             ys = [point[1] for point in points]
+            rotation = polygon_angle(points)
+            if index < len(orientations) and int(orientations[index]) == 1:
+                rotation += 180.0
             output["TextRegions"].append({
                 "Text": str(text),
                 "X": min(xs), "Y": min(ys),
                 "Width": max(xs) - min(xs), "Height": max(ys) - min(ys),
-                "RotationDegrees": polygon_angle(points),
+                "RotationDegrees": normalize_degrees(rotation),
                 "Confidence": float(scores[index]) if index < len(scores) else 0.0,
                 "Polygon": [{"X": point[0], "Y": point[1]} for point in points],
             })

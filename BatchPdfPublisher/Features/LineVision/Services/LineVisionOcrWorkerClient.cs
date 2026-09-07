@@ -103,8 +103,8 @@ namespace BatchPdfPublisher.Services
                     Text = text, OriginalText = item.Text,
                     Polygon = item.Polygon != null && item.Polygon.Count >= 4
                         ? item.Polygon.Select(point => new PointF((float)point.X, (float)point.Y)).ToArray()
-                        : new[] { new PointF((float)item.X, (float)item.Y), new PointF((float)(item.X + item.Width), (float)item.Y), new PointF((float)(item.X + item.Width), (float)(item.Y + item.Height)), new PointF((float)item.X, (float)(item.Y + item.Height)) },
-                    RotationDegrees = item.RotationDegrees, Confidence = item.Confidence,
+                        : LineVisionOcrGeometry.CreatePolygon(new RectangleF((float)item.X, (float)item.Y, (float)item.Width, (float)item.Height), item.RotationDegrees),
+                    RotationDegrees = LineVisionOcrGeometry.NormalizeDegrees(item.RotationDegrees), Confidence = item.Confidence,
                     IsEnabled = item.Confidence >= minimumConfidence
                 });
             }
@@ -128,7 +128,11 @@ namespace BatchPdfPublisher.Services
             {
                 var fileHash = BitConverter.ToString(hash.ComputeHash(stream)).Replace("-", string.Empty);
                 var region = options.SourceRegion.HasValue ? options.SourceRegion.Value.ToString() : "all";
-                var value = EngineId + "|" + fileHash + "|" + region + "|" + options.Language + "|" + options.MinimumConfidence.ToString("R", CultureInfo.InvariantCulture);
+                // Keep recognition caches tied to both the protocol and the
+                // post-processing geometry revision. Otherwise a newer worker
+                // can keep returning stale horizontal boxes created by an old
+                // build for the same image bytes.
+                var value = EngineId + "|" + Capabilities.EngineVersion + "|protocol=" + LineVisionOcrProtocol.CurrentVersion + "|geometry=2|" + fileHash + "|" + region + "|" + options.Language + "|" + options.MinimumConfidence.ToString("R", CultureInfo.InvariantCulture);
                 return BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(value))).Replace("-", string.Empty);
             }
         }

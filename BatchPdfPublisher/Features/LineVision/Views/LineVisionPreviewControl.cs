@@ -202,17 +202,13 @@ namespace BatchPdfPublisher.Views
                 for (var index = 0; index < _result.TextRegions.Count; index++)
                 {
                     var text = _result.TextRegions[index];
-                    var bounds = text.Bounds;
-                    var screen = new RectangleF(
-                        ToResultScreen(bounds.Left, bounds.Top).X,
-                        ToResultScreen(bounds.Left, bounds.Top).Y,
-                        (float)(bounds.Width * _result.SourcePreviewScale * _zoom),
-                        (float)(bounds.Height * _result.SourcePreviewScale * _zoom));
+                    var points = (text.Polygon ?? new PointF[0]).Select(point => ToResultScreen(point.X, point.Y)).ToArray();
+                    if (points.Length < 4) continue;
                     var selected = index == SelectedTextIndex;
                     var color = !text.IsEnabled ? Color.FromArgb(190, 235, 80, 80) : selected ? Color.Magenta : Color.FromArgb(230, 190, 90, 255);
-                    using (var fill = new SolidBrush(Color.FromArgb(selected ? 55 : 28, color))) e.Graphics.FillRectangle(fill, screen);
+                    using (var fill = new SolidBrush(Color.FromArgb(selected ? 55 : 28, color))) e.Graphics.FillPolygon(fill, points);
                     using (var pen = new Pen(color, selected ? 3f : 1.5f) { DashStyle = text.IsEnabled ? DashStyle.Solid : DashStyle.Dash })
-                        e.Graphics.DrawRectangle(pen, screen.X, screen.Y, screen.Width, screen.Height);
+                        e.Graphics.DrawPolygon(pen, points);
                 }
             }
             if (!_region.IsEmpty)
