@@ -113,6 +113,48 @@ namespace CadArchSpec.Stage0.Tests
             Assert.Equal(originalY, rotated.Segments[0].Start.Y);
         }
 
+        [Fact]
+        public void PreservesMTextParagraphsWhileRemovingFormattingCommands()
+        {
+            var contents = "{\\fSimSun|b0|i0;5厚1:2水泥砂浆抹面压光\\P15厚聚合物水泥防水砂浆\\C1;\\P防水混凝土厚度250，抗渗等级P8}";
+
+            var text = MTextContentNormalizer.Normalize(contents);
+
+            Assert.Equal("5厚1:2水泥砂浆抹面压光" + System.Environment.NewLine +
+                "15厚聚合物水泥防水砂浆" + System.Environment.NewLine +
+                "防水混凝土厚度250，抗渗等级P8", text);
+        }
+
+        [Fact]
+        public void RemovesMTextParagraphFormattingWithoutCreatingFakeText()
+        {
+            var text = MTextContentNormalizer.Normalize("{\\pxqc;第一行\\P第二行}");
+
+            Assert.Equal("第一行" + System.Environment.NewLine + "第二行", text);
+        }
+
+        [Fact]
+        public void JoinsFragmentsOnTheSameVisualLineBeforeStartingTheNextLine()
+        {
+            var input = Grid(new[] { 0d, 100d }, new[] { 0d, 100d });
+            input.TextFragments.Add(Text("5厚", 20, 75, CadTextSourceKind.ExplodedClone, 5));
+            input.TextFragments.Add(Text("1:2水泥砂浆", 45, 74.5, CadTextSourceKind.ExplodedClone, 5));
+            input.TextFragments.Add(Text("15厚防水砂浆", 30, 55, CadTextSourceKind.ExplodedClone, 5));
+
+            var result = new OrthogonalCadTableDetector().Detect(input);
+
+            Assert.Equal("5厚1:2水泥砂浆" + System.Environment.NewLine + "15厚防水砂浆",
+                result.Cells.Single().Text);
+        }
+
+        [Fact]
+        public void PreservesCadColumnWidthRatiosForEditorDisplay()
+        {
+            var widths = CadTableColumnWidthNormalizer.Normalize(new[] { 20d, 60d, 40d });
+
+            Assert.Equal(new[] { 40d, 120d, 80d }, widths);
+        }
+
         private static CadTableDetectionInput Grid(IEnumerable<double> xs, IEnumerable<double> ys)
         {
             var x = xs.ToArray();
@@ -128,9 +170,9 @@ namespace CadArchSpec.Stage0.Tests
             return new CadTableSegment { Start = new CadTablePoint(x1, y1), End = new CadTablePoint(x2, y2) };
         }
 
-        private static CadTextFragment Text(string text, double x, double y, CadTextSourceKind source)
+        private static CadTextFragment Text(string text, double x, double y, CadTextSourceKind source, double height = 0d)
         {
-            return new CadTextFragment { Text = text, PlainText = text, Center = new CadTablePoint(x, y), SourceKind = source, SourceHandle = "A1" };
+            return new CadTextFragment { Text = text, PlainText = text, Center = new CadTablePoint(x, y), Height = height, SourceKind = source, SourceHandle = "A1" };
         }
 
         private static CadTableDetectionInput Rotate(CadTableDetectionInput input, double degrees)

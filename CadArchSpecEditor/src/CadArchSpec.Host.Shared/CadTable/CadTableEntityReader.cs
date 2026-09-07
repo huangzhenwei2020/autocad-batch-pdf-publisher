@@ -60,7 +60,8 @@ namespace CadArchSpec.Host.Shared.CadTable
             var mText = entity as MText;
             if (mText != null)
             {
-                AddText(result, mText.Contents, mText.Text, Center(mText, mText.Location), mText.TextHeight, mText.Rotation, sourceKind, sourceHandle, DxfName(mText));
+                AddText(result, mText.Contents, MTextContentNormalizer.Normalize(mText.Contents, mText.Text),
+                    Center(mText, mText.Location), mText.TextHeight, mText.Rotation, sourceKind, sourceHandle, DxfName(mText));
                 return;
             }
 
@@ -124,7 +125,8 @@ namespace CadArchSpec.Host.Shared.CadTable
                 if (TryReadTianzhengText(entity, out text))
                 {
                     var fallback = Center(entity, Point3d.Origin);
-                    AddText(result, text, text, fallback, Height(entity), Rotation(entity), CadTextSourceKind.TianzhengProperty, sourceHandle, DxfName(entity));
+                    AddText(result, text, MTextContentNormalizer.Normalize(text, text), fallback,
+                        Height(entity), Rotation(entity), CadTextSourceKind.TianzhengProperty, sourceHandle, DxfName(entity));
                     return;
                 }
             }

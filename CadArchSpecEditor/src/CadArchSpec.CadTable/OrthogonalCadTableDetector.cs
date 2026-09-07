@@ -337,9 +337,35 @@ namespace CadArchSpec.CadTable
             foreach (var cell in result.Cells)
             {
                 cell.TextFragments = cell.TextFragments.OrderByDescending(item => item.Center.Y).ThenBy(item => item.Center.X).ToList();
-                cell.Text = string.Join(Environment.NewLine, cell.TextFragments.Select(item =>
-                    string.IsNullOrWhiteSpace(item.PlainText) ? item.Text : item.PlainText).Where(value => !string.IsNullOrWhiteSpace(value)));
+                cell.Text = CombineTextFragments(cell.TextFragments, tolerance);
             }
+        }
+
+        private static string CombineTextFragments(IList<CadTextFragment> fragments, double tolerance)
+        {
+            if (fragments == null || fragments.Count == 0) return string.Empty;
+            if (fragments.Count == 1) return VisibleText(fragments[0]);
+            var lines = new List<List<CadTextFragment>>();
+            foreach (var fragment in fragments.OrderByDescending(item => item.Center.Y).ThenBy(item => item.Center.X))
+            {
+                var line = lines.LastOrDefault();
+                var lineY = line == null || line.Count == 0 ? 0d : line.Average(item => item.Center.Y);
+                var height = Math.Max(fragment.Height, line == null || line.Count == 0 ? 0d : line.Max(item => item.Height));
+                var lineTolerance = Math.Max(tolerance, height * 0.6d);
+                if (line == null || Math.Abs(lineY - fragment.Center.Y) > lineTolerance)
+                {
+                    line = new List<CadTextFragment>();
+                    lines.Add(line);
+                }
+                line.Add(fragment);
+            }
+            return string.Join(Environment.NewLine, lines.Select(line => string.Concat(line
+                .OrderBy(item => item.Center.X).Select(VisibleText))).Where(value => !string.IsNullOrWhiteSpace(value)));
+        }
+
+        private static string VisibleText(CadTextFragment fragment)
+        {
+            return (string.IsNullOrWhiteSpace(fragment.PlainText) ? fragment.Text : fragment.PlainText) ?? string.Empty;
         }
     }
 }

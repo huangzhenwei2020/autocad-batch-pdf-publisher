@@ -183,6 +183,8 @@ namespace CadArchSpec.Host.Shared.CadTable
             var rowCount = detected.RowBoundaries.Count - 1;
             var tableId = "table-" + Guid.NewGuid().ToString("N");
             var columns = new JArray();
+            var displayWidths = CadTableColumnWidthNormalizer.Normalize(Enumerable.Range(0, columnCount)
+                .Select(index => Math.Abs(detected.ColumnBoundaries[index + 1] - detected.ColumnBoundaries[index])));
             for (var columnIndex = 0; columnIndex < columnCount; columnIndex++)
             {
                 columns.Add(new JObject
@@ -190,7 +192,7 @@ namespace CadArchSpec.Host.Shared.CadTable
                     ["key"] = "column" + (columnIndex + 1),
                     ["title"] = "列" + (columnIndex + 1),
                     ["unit"] = string.Empty,
-                    ["widthMillimeters"] = 36,
+                    ["widthMillimeters"] = displayWidths[columnIndex],
                     ["decimalPlaces"] = 0,
                     ["required"] = false
                 });
@@ -276,7 +278,8 @@ namespace CadArchSpec.Host.Shared.CadTable
             var columnCount = source.Columns.Count;
             if (rowCount <= 0 || columnCount <= 0)
                 throw new InvalidOperationException("所选 AutoCAD 表格没有可读取的行列。");
-            var columns = CreateColumns(columnCount);
+            var columns = CreateColumns(columnCount,
+                Enumerable.Range(0, columnCount).Select(index => source.Columns[index].Width));
             var rows = new JArray();
             for (var rowIndex = 0; rowIndex < rowCount; rowIndex++)
             {
@@ -299,9 +302,10 @@ namespace CadArchSpec.Host.Shared.CadTable
                 new JArray(), 1, 0, 0, 0, "CAD原生表格", true);
         }
 
-        private static JArray CreateColumns(int columnCount)
+        private static JArray CreateColumns(int columnCount, IEnumerable<double> sourceWidths = null)
         {
             var columns = new JArray();
+            var displayWidths = CadTableColumnWidthNormalizer.Normalize(sourceWidths ?? Enumerable.Repeat(1d, columnCount));
             for (var columnIndex = 0; columnIndex < columnCount; columnIndex++)
             {
                 columns.Add(new JObject
@@ -309,7 +313,7 @@ namespace CadArchSpec.Host.Shared.CadTable
                     ["key"] = "column" + (columnIndex + 1),
                     ["title"] = "列" + (columnIndex + 1),
                     ["unit"] = string.Empty,
-                    ["widthMillimeters"] = 36,
+                    ["widthMillimeters"] = displayWidths[columnIndex],
                     ["decimalPlaces"] = 0,
                     ["required"] = false
                 });

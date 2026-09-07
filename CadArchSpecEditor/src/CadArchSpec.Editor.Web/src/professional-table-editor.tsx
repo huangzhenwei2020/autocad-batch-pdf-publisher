@@ -708,9 +708,13 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onExpo
                                   selectCell(rowIndex, columnIndex, event.shiftKey)
                                 }
                               >
-                                <input
+                                <textarea
                                   className={invalid ? "invalid" : ""}
                                   value={cell.displayValue}
+                                  rows={Math.min(
+                                    8,
+                                    Math.max(1, cell.displayValue.split(/\r?\n/).length),
+                                  )}
                                   title={
                                     issues.find(
                                       (issue) =>
