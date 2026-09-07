@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
+using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Xml;
@@ -24,6 +25,7 @@ namespace CadArchSpec.CadTable
     {
         public string Title { get; set; } = "表格";
         public List<string> Columns { get; set; } = new List<string>();
+        public List<double> ColumnWidthsMillimeters { get; set; } = new List<double>();
         public List<SpreadsheetRow> Rows { get; set; } = new List<SpreadsheetRow>();
     }
 
@@ -49,6 +51,10 @@ namespace CadArchSpec.CadTable
 
         private static void WriteWorksheet(ZipArchive archive, SpreadsheetTable table)
         {
+            var excelColumnWidths = Enumerable.Range(0, table.Columns.Count)
+                .Select(index => ToExcelColumnWidth(index < table.ColumnWidthsMillimeters.Count
+                    ? table.ColumnWidthsMillimeters[index] : 36d)).ToList();
+            var rowHeights = CalculateRowHeights(table, excelColumnWidths);
             var entry = archive.CreateEntry("xl/worksheets/sheet1.xml", CompressionLevel.Optimal);
             using (var stream = entry.Open())
             using (var writer = XmlWriter.Create(stream, new XmlWriterSettings { Encoding = new UTF8Encoding(false), Indent = false }))
@@ -72,15 +78,15 @@ namespace CadArchSpec.CadTable
                     writer.WriteStartElement("col");
                     writer.WriteAttributeString("min", (index + 1).ToString());
                     writer.WriteAttributeString("max", (index + 1).ToString());
-                    writer.WriteAttributeString("width", "18");
+                    writer.WriteAttributeString("width", excelColumnWidths[index].ToString("0.##", CultureInfo.InvariantCulture));
                     writer.WriteAttributeString("customWidth", "1");
                     writer.WriteEndElement();
                 }
                 writer.WriteEndElement();
                 writer.WriteStartElement("sheetData");
-                WriteRow(writer, 1, table.Columns.Select(value => new SpreadsheetCell { Value = value }).ToList(), 1);
+                WriteRow(writer, 1, table.Columns.Select(value => new SpreadsheetCell { Value = value }).ToList(), 1, 24d);
                 for (var rowIndex = 0; rowIndex < table.Rows.Count; rowIndex++)
-                    WriteRow(writer, rowIndex + 2, table.Rows[rowIndex].Cells, 2);
+                    WriteRow(writer, rowIndex + 2, table.Rows[rowIndex].Cells, 2, rowHeights[rowIndex]);
                 writer.WriteEndElement();
 
                 var merges = new List<string>();
@@ -116,10 +122,13 @@ namespace CadArchSpec.CadTable
             }
         }
 
-        private static void WriteRow(XmlWriter writer, int rowNumber, IList<SpreadsheetCell> cells, int styleIndex)
+        private static void WriteRow(XmlWriter writer, int rowNumber, IList<SpreadsheetCell> cells,
+            int styleIndex, double heightPoints)
         {
             writer.WriteStartElement("row");
             writer.WriteAttributeString("r", rowNumber.ToString());
+            writer.WriteAttributeString("ht", heightPoints.ToString("0.##", CultureInfo.InvariantCulture));
+            writer.WriteAttributeString("customHeight", "1");
             for (var columnIndex = 0; columnIndex < cells.Count; columnIndex++)
             {
                 var cell = cells[columnIndex];
@@ -137,6 +146,48 @@ namespace CadArchSpec.CadTable
                 writer.WriteEndElement();
             }
             writer.WriteEndElement();
+        }
+
+        private static List<double> CalculateRowHeights(SpreadsheetTable table, IList<double> excelColumnWidths)
+        {
+            var heights = Enumerable.Repeat(18d, table.Rows.Count).ToList();
+            for (var rowIndex = 0; rowIndex < table.Rows.Count; rowIndex++)
+            {
+                var cells = table.Rows[rowIndex].Cells;
+                for (var columnIndex = 0; columnIndex < cells.Count && columnIndex < excelColumnWidths.Count; columnIndex++)
+                {
+                    var cell = cells[columnIndex];
+                    if (cell == null || cell.RowSpan <= 0 || cell.ColumnSpan <= 0 || string.IsNullOrEmpty(cell.Value)) continue;
+                    var effectiveWidth = Enumerable.Range(columnIndex,
+                            Math.Min(cell.ColumnSpan, excelColumnWidths.Count - columnIndex))
+                        .Sum(index => excelColumnWidths[index]);
+                    var visualLines = EstimateVisualLineCount(cell.Value, effectiveWidth);
+                    var requiredPerRow = Math.Min(300d, Math.Max(18d, visualLines * 15d + 3d)) /
+                        Math.Max(1, cell.RowSpan);
+                    for (var offset = 0; offset < cell.RowSpan && rowIndex + offset < heights.Count; offset++)
+                        heights[rowIndex + offset] = Math.Max(heights[rowIndex + offset], requiredPerRow);
+                }
+            }
+            return heights.Select(value => Math.Round(value, 2)).ToList();
+        }
+
+        private static int EstimateVisualLineCount(string value, double excelColumnWidth)
+        {
+            var capacity = Math.Max(1, (int)Math.Floor(excelColumnWidth));
+            var total = 0;
+            foreach (var line in (value ?? string.Empty).Replace("\r\n", "\n").Replace('\r', '\n')
+                .Split(new[] { '\n' }, StringSplitOptions.None))
+            {
+                var units = line.Sum(character => character <= 0x7f ? 1 : 2);
+                total += Math.Max(1, (int)Math.Ceiling(units / (double)capacity));
+            }
+            return Math.Max(1, total);
+        }
+
+        private static double ToExcelColumnWidth(double millimeters)
+        {
+            if (double.IsNaN(millimeters) || double.IsInfinity(millimeters) || millimeters <= 0d) millimeters = 36d;
+            return Math.Round(Math.Max(4d, Math.Min(80d, millimeters * 0.54d)), 2);
         }
 
         private static string CellReference(int row, int column)

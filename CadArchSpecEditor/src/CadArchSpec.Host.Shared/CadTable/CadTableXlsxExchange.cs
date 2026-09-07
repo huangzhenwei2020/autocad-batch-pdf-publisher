@@ -34,8 +34,10 @@ namespace CadArchSpec.Host.Shared.CadTable
         private static SpreadsheetTable Convert(JObject source)
         {
             var table = new SpreadsheetTable { Title = (string)source["title"] ?? "表格" };
-            table.Columns.AddRange(((JArray)source["columns"] ?? new JArray()).OfType<JObject>()
-                .Select(column => (string)column["title"] ?? string.Empty));
+            var columns = ((JArray)source["columns"] ?? new JArray()).OfType<JObject>().ToList();
+            table.Columns.AddRange(columns.Select(column => (string)column["title"] ?? string.Empty));
+            table.ColumnWidthsMillimeters.AddRange(columns.Select(column =>
+                Math.Max(1d, (double?)column["widthMillimeters"] ?? 36d)));
             foreach (var rowSource in ((JArray)source["rows"] ?? new JArray()).OfType<JObject>())
             {
                 var row = new SpreadsheetRow();
