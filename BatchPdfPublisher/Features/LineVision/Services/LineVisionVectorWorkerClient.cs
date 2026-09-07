@@ -98,14 +98,8 @@ namespace BatchPdfPublisher.Services
             {
                 var region = requested.HasValue ? Rectangle.Intersect(new Rectangle(0, 0, source.Width, source.Height), requested.Value) : new Rectangle(0, 0, source.Width, source.Height);
                 using (var prepared = source.Clone(region, PixelFormat.Format24bppRgb))
-                using (var graphics = Graphics.FromImage(prepared))
-                using (var brush = new SolidBrush(Color.White))
                 {
-                    foreach (var text in textRegions ?? new List<LineVisionOcrTextRegion>())
-                    {
-                        if (text == null || !text.IsEnabled) continue; var bounds = text.Bounds;
-                        graphics.FillRectangle(brush, bounds.Left - expansion, bounds.Top - expansion, bounds.Width + expansion * 2, bounds.Height + expansion * 2);
-                    }
+                    LineVisionTextMasker.Apply(prepared, null, textRegions, 1d, Math.Max(0, expansion));
                     prepared.Save(output, ImageFormat.Png);
                 }
             }

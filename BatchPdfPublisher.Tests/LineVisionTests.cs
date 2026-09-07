@@ -31,6 +31,7 @@ internal static class LineVisionTests
         Run("CanDisablePolylineReconstruction", CanDisablePolylineReconstruction);
         Run("SnapsWorkerPolylineUsingUserTolerance", SnapsWorkerPolylineUsingUserTolerance);
         Run("MasksRecognizedTextBeforeLineDetection", MasksRecognizedTextBeforeLineDetection);
+        Run("UsesPolygonInsteadOfBoundingBoxForTextMask", UsesPolygonInsteadOfBoundingBoxForTextMask);
         Run("ExposesVersionedOcrEngineCapabilities", ExposesVersionedOcrEngineCapabilities);
         Run("FallsBackWhenEnhancedOcrFails", FallsBackWhenEnhancedOcrFails);
         Run("SelectsRequestedOcrEngine", SelectsRequestedOcrEngine);
@@ -276,6 +277,21 @@ internal static class LineVisionTests
             });
         }
         finally { UserDataPaths.TestRootDirectory = null; try { Directory.Delete(root, true); } catch { } }
+    }
+
+    private static void UsesPolygonInsteadOfBoundingBoxForTextMask()
+    {
+        using (var bitmap = new Bitmap(200, 200, PixelFormat.Format24bppRgb))
+        {
+            var dark = Enumerable.Repeat(true, bitmap.Width * bitmap.Height).ToArray();
+            var text = OcrRegion("旋转文字", 0.95d, new[]
+            {
+                new PointF(100, 20), new PointF(180, 100), new PointF(100, 180), new PointF(20, 100)
+            });
+            LineVisionTextMasker.Apply(bitmap, dark, new[] { text }, 1d, 0d);
+            True(!dark[100 * bitmap.Width + 100], "多边形内部没有被遮罩");
+            True(dark[30 * bitmap.Width + 30], "多边形外但外包矩形内的线稿被误删");
+        }
     }
 
     private static void RecognizesTextThroughPaddleWorker(string workerPath)

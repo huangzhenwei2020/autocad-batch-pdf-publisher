@@ -578,23 +578,7 @@ namespace BatchPdfPublisher.Services
         private static void ApplyTextMasks(bool[] pixels, Bitmap preview, int width, int height, double analysisRatio,
             IEnumerable<LineVisionOcrTextRegion> regions, int expansionPixels)
         {
-            using (var graphics = Graphics.FromImage(preview))
-            using (var brush = new SolidBrush(Color.White))
-            {
-                foreach (var region in regions.Where(value => value != null && value.IsEnabled))
-                {
-                    var bounds = region.Bounds;
-                    if (bounds.Width <= 0f || bounds.Height <= 0f) continue;
-                    var expansion = Math.Max(0, expansionPixels) / Math.Max(1d, analysisRatio);
-                    var left = Math.Max(0, (int)Math.Floor(bounds.Left / analysisRatio - expansion));
-                    var top = Math.Max(0, (int)Math.Floor(bounds.Top / analysisRatio - expansion));
-                    var right = Math.Min(width, (int)Math.Ceiling(bounds.Right / analysisRatio + expansion));
-                    var bottom = Math.Min(height, (int)Math.Ceiling(bounds.Bottom / analysisRatio + expansion));
-                    if (right <= left || bottom <= top) continue;
-                    for (var y = top; y < bottom; y++) Array.Clear(pixels, y * width + left, right - left);
-                    graphics.FillRectangle(brush, left, top, right - left, bottom - top);
-                }
-            }
+            LineVisionTextMasker.Apply(preview, pixels, regions, 1d / Math.Max(1d, analysisRatio), Math.Max(0, expansionPixels));
         }
 
         private static void DetectRows(bool[] pixels, int width, int height, LineVisionSettings settings, IList<LineVisionSegment> target, CancellationToken cancellationToken)
