@@ -34,6 +34,8 @@ internal static class LineVisionTests
         Run("ExposesVersionedOcrEngineCapabilities", ExposesVersionedOcrEngineCapabilities);
         Run("FallsBackWhenEnhancedOcrFails", FallsBackWhenEnhancedOcrFails);
         Run("SelectsRequestedOcrEngine", SelectsRequestedOcrEngine);
+        Run("NormalizesEngineeringOcrSymbols", NormalizesEngineeringOcrSymbols);
+        Run("DoesNotRewriteNarrativeLetterX", DoesNotRewriteNarrativeLetterX);
         var worker = Environment.GetEnvironmentVariable("WANLUO_LINEVISION_OCR_WORKER");
         if (!string.IsNullOrWhiteSpace(worker) && File.Exists(worker)) Run("RecognizesTextThroughIsolatedWorker", () => RecognizesTextThroughIsolatedWorker(worker));
         var paddleWorker = Environment.GetEnvironmentVariable("WANLUO_LINEVISION_PADDLE_WORKER");
@@ -288,6 +290,7 @@ internal static class LineVisionTests
                 True(result.TextRegions.Any(), "PaddleOCR 用户组件没有返回文字区域");
                 True(result.TextRegions.Any(item => (item.Text ?? string.Empty).IndexOf("3600", StringComparison.OrdinalIgnoreCase) >= 0), "PaddleOCR 用户组件没有识别尺寸数字 3600");
                 True(result.TextRegions.All(item => item.Polygon != null && item.Polygon.Length == 4), "PaddleOCR 用户组件没有返回四点文字框");
+                True(result.TextRegions.All(item => !string.IsNullOrWhiteSpace(item.OriginalText)), "PaddleOCR 用户组件没有保留 OCR 原文");
             });
         }
         finally { UserDataPaths.TestRootDirectory = null; try { Directory.Delete(root, true); } catch { } }
@@ -318,6 +321,18 @@ internal static class LineVisionTests
         Equal("automatic-ocr", LineVisionOcrEngineSelector.Create(LineVisionOcrMode.Automatic).EngineId);
         Equal("paddleocr-worker", LineVisionOcrEngineSelector.Create(LineVisionOcrMode.Paddle).EngineId);
         Equal("windows-ocr-worker", LineVisionOcrEngineSelector.Create(LineVisionOcrMode.Windows).EngineId);
+    }
+
+    private static void NormalizesEngineeringOcrSymbols()
+    {
+        var source = "  １２００ X １５００　\n φ 100  + / - 0。030  1 ： 2  ";
+        var normalized = LineVisionOcrTextNormalizer.Normalize(source);
+        Equal("1200×1500" + Environment.NewLine + "Φ100 ±0.030 1:2", normalized);
+    }
+
+    private static void DoesNotRewriteNarrativeLetterX()
+    {
+        Equal("X轴与 A X B 保持原文", LineVisionOcrTextNormalizer.Normalize("X轴与 A X B 保持原文"));
     }
 
     private static void VectorizesThroughIsolatedWorker(string workerPath)

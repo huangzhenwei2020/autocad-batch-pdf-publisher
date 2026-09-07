@@ -96,7 +96,7 @@ namespace BatchPdfPublisher.Services
             var result = new LineVisionOcrPageResult { ProtocolVersion = dto.ProtocolVersion, EngineId = dto.EngineId, EngineVersion = dto.EngineVersion, Language = dto.Language };
             foreach (var item in dto.TextRegions ?? new List<LineVisionOcrWorkerTextRegion>())
             {
-                var text = Normalize(item.Text);
+                var text = LineVisionOcrTextNormalizer.Normalize(item.Text);
                 if (string.IsNullOrWhiteSpace(text)) continue;
                 result.TextRegions.Add(new LineVisionOcrTextRegion
                 {
@@ -109,12 +109,6 @@ namespace BatchPdfPublisher.Services
                 });
             }
             return result;
-        }
-
-        private static string Normalize(string text)
-        {
-            if (string.IsNullOrWhiteSpace(text)) return string.Empty;
-            return string.Join(" ", text.Replace('\u3000', ' ').Split((char[])null, StringSplitOptions.RemoveEmptyEntries));
         }
 
         private static void SaveCrop(string path, Rectangle requested, string output)
