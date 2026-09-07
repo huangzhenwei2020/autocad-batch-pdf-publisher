@@ -108,6 +108,7 @@ namespace BatchPdfPublisher.Services
                     IsEnabled = item.Confidence >= minimumConfidence
                 });
             }
+            result.TextRegions = LineVisionOcrRegionDeduplicator.Deduplicate(result.TextRegions);
             return result;
         }
 

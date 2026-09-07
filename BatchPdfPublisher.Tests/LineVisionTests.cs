@@ -38,6 +38,8 @@ internal static class LineVisionTests
         Run("DoesNotRewriteNarrativeLetterX", DoesNotRewriteNarrativeLetterX);
         Run("PlacesRotatedOcrTextFromPolygon", PlacesRotatedOcrTextFromPolygon);
         Run("PlacesUpsideDownOcrTextFromPolygon", PlacesUpsideDownOcrTextFromPolygon);
+        Run("DeduplicatesOverlappingOcrRegionsSafely", DeduplicatesOverlappingOcrRegionsSafely);
+        Run("KeepsDistinctOrSeparatedOcrRegions", KeepsDistinctOrSeparatedOcrRegions);
         var worker = Environment.GetEnvironmentVariable("WANLUO_LINEVISION_OCR_WORKER");
         if (!string.IsNullOrWhiteSpace(worker) && File.Exists(worker)) Run("RecognizesTextThroughIsolatedWorker", () => RecognizesTextThroughIsolatedWorker(worker));
         var paddleWorker = Environment.GetEnvironmentVariable("WANLUO_LINEVISION_PADDLE_WORKER");
@@ -388,6 +390,31 @@ internal static class LineVisionTests
         var placement = LineVisionOcrGeometry.GetPlacement(region);
         Near(180d, placement.BaselineOrigin.X); Near(30d, placement.BaselineOrigin.Y);
         Near(25d, placement.TextHeightPixels); Near(180d, placement.RotationDegrees);
+    }
+
+    private static void DeduplicatesOverlappingOcrRegionsSafely()
+    {
+        var weaker = OcrRegion("3600", 0.72d, new[] { new PointF(20, 20), new PointF(180, 20), new PointF(180, 50), new PointF(20, 50) });
+        var stronger = OcrRegion("3 600", 0.96d, new[] { new PointF(22, 19), new PointF(182, 19), new PointF(182, 51), new PointF(22, 51) });
+        var result = LineVisionOcrRegionDeduplicator.Deduplicate(new[] { weaker, stronger });
+        Equal(1, result.Count); True(object.ReferenceEquals(stronger, result[0]), "重叠重复文字没有保留高置信度结果");
+        var rotatedFirst = OcrRegion("±0.000", 0.80d, LineVisionOcrGeometry.CreatePolygon(new RectangleF(250, 40, 180, 28), 30d));
+        var rotatedSecond = OcrRegion("±0.000", 0.91d, LineVisionOcrGeometry.CreatePolygon(new RectangleF(252, 41, 180, 28), 30d));
+        var rotated = LineVisionOcrRegionDeduplicator.Deduplicate(new[] { rotatedFirst, rotatedSecond });
+        Equal(1, rotated.Count); True(object.ReferenceEquals(rotatedSecond, rotated[0]), "旋转重复文字框没有安全去重");
+    }
+
+    private static void KeepsDistinctOrSeparatedOcrRegions()
+    {
+        var first = OcrRegion("3600", 0.92d, new[] { new PointF(20, 20), new PointF(180, 20), new PointF(180, 50), new PointF(20, 50) });
+        var differentText = OcrRegion("3800", 0.94d, new[] { new PointF(22, 20), new PointF(182, 20), new PointF(182, 50), new PointF(22, 50) });
+        var separated = OcrRegion("3600", 0.95d, new[] { new PointF(20, 80), new PointF(180, 80), new PointF(180, 110), new PointF(20, 110) });
+        Equal(3, LineVisionOcrRegionDeduplicator.Deduplicate(new[] { first, differentText, separated }).Count);
+    }
+
+    private static LineVisionOcrTextRegion OcrRegion(string text, double confidence, PointF[] polygon)
+    {
+        return new LineVisionOcrTextRegion { Text = text, OriginalText = text, Confidence = confidence, Polygon = polygon, IsEnabled = true };
     }
 
     private static void VectorizesThroughIsolatedWorker(string workerPath)
