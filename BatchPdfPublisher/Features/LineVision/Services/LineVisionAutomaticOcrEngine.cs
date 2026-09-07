@@ -10,8 +10,25 @@ namespace BatchPdfPublisher.Services
     internal sealed class LineVisionPaddleOcrWorkerClient : LineVisionOcrWorkerClient
     {
         public LineVisionPaddleOcrWorkerClient()
-            : base(Path.Combine(Path.GetDirectoryName(typeof(LineVisionPaddleOcrWorkerClient).Assembly.Location), "LineVisionPaddleOcrWorker.exe"))
+            : base(ResolveWorkerPath())
         {
+        }
+
+        private static string ResolveWorkerPath()
+        {
+            var configured = Environment.GetEnvironmentVariable("WANLUO_LINEVISION_PADDLE_WORKER");
+            if (!string.IsNullOrWhiteSpace(configured) && File.Exists(configured)) return configured;
+            var assemblyDirectory = Path.GetDirectoryName(typeof(LineVisionPaddleOcrWorkerClient).Assembly.Location);
+            var fileName = "LineVisionPaddleOcrWorker.exe";
+            var candidates = new[]
+            {
+                Path.Combine(assemblyDirectory, fileName),
+                Path.Combine(assemblyDirectory, "LineVisionPaddleOcrWorker", fileName),
+                Path.Combine(UserDataPaths.PluginDirectory, "OcrEngine", "LineVisionPaddleOcrWorker", fileName),
+                Path.Combine(UserDataPaths.RootDirectory, "运行文件", "LineVisionPaddleOcrWorker", fileName)
+            };
+            foreach (var candidate in candidates) if (File.Exists(candidate)) return candidate;
+            return candidates[0];
         }
 
         public override string EngineId { get { return "paddleocr-worker"; } }

@@ -74,6 +74,9 @@ namespace BatchPdfPublisherLauncher
                 // first; permanent installation recreates one clean unified bundle.
                 RemoveAutoLoadBundles();
                 var pluginAssembly = InstallPlugin(payload, options.InstallPermanently);
+                var paddleOcrWorker = InstallPaddleOcr(launcherDirectory, options.InstallPermanently);
+                if (!string.IsNullOrWhiteSpace(paddleOcrWorker))
+                    Environment.SetEnvironmentVariable("WANLUO_LINEVISION_PADDLE_WORKER", paddleOcrWorker, EnvironmentVariableTarget.Process);
                 var architectureAssembly = InstallArchitectureAssistant(launcherDirectory, payload.Band, options.InstallPermanently);
                 var stairAssembly = InstallStairDetail(launcherDirectory, payload.Band, options.InstallPermanently);
                 PrepareStairHatchPatterns(stairAssembly);
@@ -82,6 +85,7 @@ namespace BatchPdfPublisherLauncher
                 Log((options.InstallPermanently ? "已部署插件: " : "便携加载插件: ") + pluginAssembly);
                 if (!string.IsNullOrWhiteSpace(architectureAssembly)) Log((options.InstallPermanently ? "已部署建筑说明助手: " : "便携加载建筑说明助手: ") + architectureAssembly);
                 if (!string.IsNullOrWhiteSpace(stairAssembly)) Log((options.InstallPermanently ? "已部署一键楼梯大样: " : "便携加载一键楼梯大样: ") + stairAssembly);
+                if (!string.IsNullOrWhiteSpace(paddleOcrWorker)) Log((options.InstallPermanently ? "已部署 PaddleOCR 增强组件: " : "便携使用 PaddleOCR 增强组件: ") + paddleOcrWorker);
                 var assemblies = new[] { pluginAssembly, architectureAssembly, stairAssembly }.Where(x => !string.IsNullOrWhiteSpace(x)).ToArray();
                 if (options.LoadIntoRunningCad)
                 {
@@ -791,6 +795,49 @@ namespace BatchPdfPublisherLauncher
             var legacyArrowLibrary = Path.Combine(contentsDirectory, ArrowLibraryName);
             if (File.Exists(legacyArrowLibrary)) File.Delete(legacyArrowLibrary);
             return installedAssembly;
+        }
+
+        private static string InstallPaddleOcr(string launcherDirectory, bool installPermanently)
+        {
+            var source = Path.Combine(launcherDirectory, "OcrEngine", "LineVisionPaddleOcrWorker");
+            var sourceExecutable = Path.Combine(source, "LineVisionPaddleOcrWorker.exe");
+            var sourceManifest = Path.Combine(source, "component-manifest.json");
+            if (!File.Exists(sourceExecutable) || !File.Exists(sourceManifest)) return null;
+            if (!installPermanently) return sourceExecutable;
+
+            var runtimeRoot = EnsureDirectory(Path.Combine(UserDataRoot, "运行文件"));
+            var target = Path.Combine(runtimeRoot, "LineVisionPaddleOcrWorker");
+            var targetExecutable = Path.Combine(target, "LineVisionPaddleOcrWorker.exe");
+            var targetManifest = Path.Combine(target, "component-manifest.json");
+            if (File.Exists(targetExecutable) && File.Exists(targetManifest)
+                && string.Equals(GetFileHash(sourceManifest), GetFileHash(targetManifest), StringComparison.OrdinalIgnoreCase))
+                return targetExecutable;
+
+            // Copy the large component to a sibling staging directory first.
+            // The active copy is replaced only after the manifest and executable
+            // have both arrived, so an interrupted install keeps the old OCR usable.
+            var staging = target + ".stage-" + Guid.NewGuid().ToString("N");
+            var backup = target + ".previous-" + Guid.NewGuid().ToString("N");
+            try
+            {
+                CopyDirectory(source, staging);
+                var stagedExecutable = Path.Combine(staging, "LineVisionPaddleOcrWorker.exe");
+                var stagedManifest = Path.Combine(staging, "component-manifest.json");
+                if (!File.Exists(stagedExecutable) || !File.Exists(stagedManifest)
+                    || !string.Equals(GetFileHash(sourceManifest), GetFileHash(stagedManifest), StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException("PaddleOCR 增强组件复制不完整，已保留原运行版本。");
+
+                if (Directory.Exists(target)) Directory.Move(target, backup);
+                Directory.Move(staging, target);
+                try { if (Directory.Exists(backup)) Directory.Delete(backup, true); } catch { }
+                return targetExecutable;
+            }
+            catch
+            {
+                try { if (Directory.Exists(staging)) Directory.Delete(staging, true); } catch { }
+                try { if (!Directory.Exists(target) && Directory.Exists(backup)) Directory.Move(backup, target); } catch { }
+                throw;
+            }
         }
 
         private static string EscapeLispString(string value)

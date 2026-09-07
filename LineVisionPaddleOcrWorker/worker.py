@@ -7,12 +7,31 @@ import json
 import math
 import os
 import sys
+import traceback
 from typing import Any
 
 PROTOCOL_VERSION = 1
 ENGINE_ID = "paddleocr-worker"
 EXPECTED_PADDLEOCR_VERSION = "3.7.0"
 MODEL_VERSION = "PP-OCRv6-small"
+
+
+def worker_root() -> str:
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def packaged_model(name: str) -> str:
+    relative = os.path.join("models", name)
+    path = os.path.join(worker_root(), relative)
+    # Paddle's Windows inference runtime currently fails to parse a PIR model
+    # when its model_dir contains non-ASCII characters. The worker changes its
+    # current directory to its own folder and deliberately supplies this ASCII
+    # relative path, so installation under a Chinese folder remains supported.
+    if not os.path.isdir(path):
+        raise FileNotFoundError(f"Packaged OCR model is missing: {name}")
+    return relative
 
 
 def result_template(request_id: str | None) -> dict[str, Any]:
@@ -77,14 +96,26 @@ def recognize(request: dict[str, Any]) -> dict[str, Any]:
 
     language = request.get("Language", request.get("language")) or "zh-Hans-CN"
     paddle_language = "en" if language.lower().startswith("en") else "ch"
-    pipeline = PaddleOCR(
-        lang=paddle_language,
-        text_detection_model_name="PP-OCRv6_small_det",
-        text_recognition_model_name="PP-OCRv6_small_rec",
-        use_doc_orientation_classify=True,
-        use_doc_unwarping=False,
-        use_textline_orientation=True,
-    )
+    os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+    pipeline_options: dict[str, Any] = {
+        "lang": paddle_language,
+        "text_detection_model_name": "PP-OCRv6_small_det",
+        "text_recognition_model_name": "PP-OCRv6_small_rec",
+        # PaddlePaddle 3.3.1 currently has a reproducible oneDNN/PIR failure on
+        # Windows CPU inference. Keep the supported worker on the stable plain
+        # CPU path until the upstream issue is fixed and revalidated.
+        "enable_mkldnn": False,
+        "use_doc_orientation_classify": False,
+        "use_doc_unwarping": False,
+        "use_textline_orientation": True,
+    }
+    local_models = {
+        "text_detection_model_dir": packaged_model("PP-OCRv6_small_det"),
+        "text_recognition_model_dir": packaged_model("PP-OCRv6_small_rec"),
+        "textline_orientation_model_dir": packaged_model("PP-LCNet_x1_0_textline_ori"),
+    }
+    pipeline_options.update(local_models)
+    pipeline = PaddleOCR(**pipeline_options)
     image_path = request.get("ImagePath", request.get("imagePath"))
     with Image.open(image_path) as image:
         output["ImageWidth"], output["ImageHeight"] = image.size
@@ -121,6 +152,7 @@ def main() -> int:
         sys.stdout.reconfigure(encoding="utf-8")
     if hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8")
+    os.chdir(worker_root())
     parser = argparse.ArgumentParser()
     parser.add_argument("--request")
     parser.add_argument("--output")
@@ -145,7 +177,7 @@ def main() -> int:
     except Exception as exception:
         output = result_template(request.get("RequestId", request.get("requestId")))
         output["Error"] = str(exception)
-        print(str(exception), file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
         code = 2
     os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
     with open(args.output, "w", encoding="utf-8") as stream:

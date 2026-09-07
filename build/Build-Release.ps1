@@ -2,7 +2,8 @@
 param(
     [string[]]$Bands,
     [string]$OutputRoot,
-    [switch]$KeepIntermediate
+    [switch]$KeepIntermediate,
+    [switch]$IncludePaddleOcr
 )
 
 $ErrorActionPreference = 'Stop'
@@ -265,6 +266,17 @@ $ocrWorker = Join-Path $ocrWorkerOutput 'LineVisionOcrWorker.exe'
 if (-not (Test-Path -LiteralPath $ocrWorker)) { throw '本地 OCR Worker 没有生成。' }
 foreach ($band in $Bands) { Copy-Item -LiteralPath $ocrWorker -Destination (Join-Path $OutputRoot "CadApi\$band\LineVisionOcrWorker.exe") -Force }
 
+# PaddleOCR is a large shared component. Keep one copy at the product root
+# instead of duplicating roughly 650 MB into every AutoCAD version folder.
+$paddleOcrWorker = $null
+if ($IncludePaddleOcr) {
+    $paddleOutput = Join-Path $OutputRoot 'OcrEngine'
+    & (Join-Path $repositoryRoot 'build\Build-LineVisionPaddleOcrWorker.ps1') -OutputRoot $paddleOutput
+    if ($LASTEXITCODE -ne 0) { throw "PaddleOCR 用户组件打包失败，退出代码 $LASTEXITCODE" }
+    $paddleOcrWorker = Join-Path $paddleOutput 'LineVisionPaddleOcrWorker\LineVisionPaddleOcrWorker.exe'
+    if (-not (Test-Path -LiteralPath $paddleOcrWorker)) { throw "PaddleOCR 用户组件没有生成：$paddleOcrWorker" }
+}
+
 $vectorWorkerProject = Join-Path $repositoryRoot 'LineVisionVectorWorker\LineVisionVectorWorker.csproj'
 $vectorWorkerOutput = Join-Path $artifactRoot 'linevision-vector-worker'
 $vectorWorkerObject = Join-Path $artifactRoot 'obj-linevision-vector-worker\'
@@ -288,13 +300,20 @@ $lineVisionTests = Join-Path $repositoryRoot 'BatchPdfPublisher.Tests\BatchPdfPu
 $testDotNet = Find-DotNet8
 Invoke-Checked {
     $previousWorker = $env:WANLUO_LINEVISION_OCR_WORKER
+    $previousPaddleWorker = $env:WANLUO_LINEVISION_PADDLE_WORKER
     $previousVectorWorker = $env:WANLUO_LINEVISION_VECTOR_WORKER
     try {
         Copy-Item -LiteralPath $vtracer -Destination $vectorWorkerOutput -Force
-        $env:WANLUO_LINEVISION_OCR_WORKER = $ocrWorker; $env:WANLUO_LINEVISION_VECTOR_WORKER = $vectorWorker
+        $env:WANLUO_LINEVISION_OCR_WORKER = $ocrWorker
+        $env:WANLUO_LINEVISION_PADDLE_WORKER = $paddleOcrWorker
+        $env:WANLUO_LINEVISION_VECTOR_WORKER = $vectorWorker
         & $testDotNet run --project $lineVisionTests -c Release --nologo
     }
-    finally { $env:WANLUO_LINEVISION_OCR_WORKER = $previousWorker; $env:WANLUO_LINEVISION_VECTOR_WORKER = $previousVectorWorker }
+    finally {
+        $env:WANLUO_LINEVISION_OCR_WORKER = $previousWorker
+        $env:WANLUO_LINEVISION_PADDLE_WORKER = $previousPaddleWorker
+        $env:WANLUO_LINEVISION_VECTOR_WORKER = $previousVectorWorker
+    }
 } '图像转 CAD 算法和 OCR 测试'
 
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'Resources') -Destination (Join-Path $OutputRoot 'Resources') -Recurse -Force
@@ -357,6 +376,8 @@ $manifest = [ordered]@{
     GitBranch = $sourceGitBranch
     GitDirty = $sourceGitDirty
     LauncherSha256 = (Get-FileHash -LiteralPath $launcher -Algorithm SHA256).Hash
+    PaddleOcrIncluded = [bool]$IncludePaddleOcr
+    PaddleOcrSha256 = $(if ($paddleOcrWorker) { (Get-FileHash -LiteralPath $paddleOcrWorker -Algorithm SHA256).Hash } else { $null })
     Bands = $buildRecords
 }
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $OutputRoot 'build-info.json') -Encoding UTF8

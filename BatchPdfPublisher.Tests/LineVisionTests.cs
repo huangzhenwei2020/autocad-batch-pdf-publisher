@@ -35,6 +35,8 @@ internal static class LineVisionTests
         Run("FallsBackWhenEnhancedOcrFails", FallsBackWhenEnhancedOcrFails);
         var worker = Environment.GetEnvironmentVariable("WANLUO_LINEVISION_OCR_WORKER");
         if (!string.IsNullOrWhiteSpace(worker) && File.Exists(worker)) Run("RecognizesTextThroughIsolatedWorker", () => RecognizesTextThroughIsolatedWorker(worker));
+        var paddleWorker = Environment.GetEnvironmentVariable("WANLUO_LINEVISION_PADDLE_WORKER");
+        if (!string.IsNullOrWhiteSpace(paddleWorker) && File.Exists(paddleWorker)) Run("RecognizesTextThroughPaddleWorker", () => RecognizesTextThroughPaddleWorker(paddleWorker));
         var vectorWorker = Environment.GetEnvironmentVariable("WANLUO_LINEVISION_VECTOR_WORKER");
         if (!string.IsNullOrWhiteSpace(vectorWorker) && File.Exists(vectorWorker)) Run("VectorizesThroughIsolatedWorker", () => VectorizesThroughIsolatedWorker(vectorWorker));
         Console.WriteLine("Executed " + _executed + " LineVision tests; 0 failed.");
@@ -260,6 +262,31 @@ internal static class LineVisionTests
                 Equal("windows-ocr-worker", result.EngineId);
                 True(result.TextRegions.Any(), "独立 OCR Worker 没有返回文字区域");
                 True(result.TextRegions.Any(item => (item.Text ?? string.Empty).IndexOf("3600", StringComparison.OrdinalIgnoreCase) >= 0), "独立 OCR Worker 没有识别尺寸数字 3600");
+            });
+        }
+        finally { UserDataPaths.TestRootDirectory = null; try { Directory.Delete(root, true); } catch { } }
+    }
+
+    private static void RecognizesTextThroughPaddleWorker(string workerPath)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "WanluoLineVisionPaddleTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root); UserDataPaths.TestRootDirectory = root;
+        try
+        {
+            WithImage(900, 260, graphics =>
+            {
+                using (var font = new Font("Arial", 68f, FontStyle.Bold)) graphics.DrawString("ROOM 3600", font, Brushes.Black, 25, 70);
+            }, path =>
+            {
+                // The production client resolves the worker through the same
+                // environment variable that the release script sets here.
+                var engine = new LineVisionPaddleOcrWorkerClient();
+                var result = engine.RecognizeAsync(path, new LineVisionOcrOptions { Language = "en-US", MinimumConfidence = 0.5 }, CancellationToken.None).GetAwaiter().GetResult();
+                Equal(LineVisionOcrProtocol.CurrentVersion, result.ProtocolVersion);
+                Equal("paddleocr-worker", result.EngineId);
+                True(result.TextRegions.Any(), "PaddleOCR 用户组件没有返回文字区域");
+                True(result.TextRegions.Any(item => (item.Text ?? string.Empty).IndexOf("3600", StringComparison.OrdinalIgnoreCase) >= 0), "PaddleOCR 用户组件没有识别尺寸数字 3600");
+                True(result.TextRegions.All(item => item.Polygon != null && item.Polygon.Length == 4), "PaddleOCR 用户组件没有返回四点文字框");
             });
         }
         finally { UserDataPaths.TestRootDirectory = null; try { Directory.Delete(root, true); } catch { } }
