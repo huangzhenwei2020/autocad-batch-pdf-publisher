@@ -16,6 +16,7 @@
     <Compile Include="..\BatchPdfPublisher\Features\LineVision\Models\LineVisionOcrProtocol.cs" Link="LineVisionOcrProtocol.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\LineVision\Services\LineVisionProcessor.cs" Link="LineVisionProcessor.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\LineVision\Services\LineVisionOcrWorkerClient.cs" Link="LineVisionOcrWorkerClient.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\LineVision\Services\LineVisionAutomaticOcrEngine.cs" Link="LineVisionAutomaticOcrEngine.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\LineVision\Services\LineVisionVectorWorkerClient.cs" Link="LineVisionVectorWorkerClient.cs" />
   </ItemGroup>
 </Project>

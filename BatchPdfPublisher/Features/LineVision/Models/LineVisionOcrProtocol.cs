@@ -55,5 +55,13 @@ namespace BatchPdfPublisher.Models
         [DataMember(Order = 5)] public double Height { get; set; }
         [DataMember(Order = 6)] public double RotationDegrees { get; set; }
         [DataMember(Order = 7)] public double Confidence { get; set; }
+        [DataMember(Order = 8)] public List<LineVisionOcrProtocolPoint> Polygon { get; set; } = new List<LineVisionOcrProtocolPoint>();
+    }
+
+    [DataContract]
+    internal sealed class LineVisionOcrProtocolPoint
+    {
+        [DataMember(Order = 1)] public double X { get; set; }
+        [DataMember(Order = 2)] public double Y { get; set; }
     }
 }

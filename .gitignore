@@ -7,6 +7,8 @@ obj-*/
 *.dll
 *.pdb
 *.exe
+__pycache__/
+*.pyc
 *.dwl
 *.dwl2
 .agents/

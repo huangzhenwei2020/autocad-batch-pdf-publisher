@@ -8,6 +8,7 @@ using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 
 internal static class LineVisionTests
 {
@@ -31,6 +32,7 @@ internal static class LineVisionTests
         Run("SnapsWorkerPolylineUsingUserTolerance", SnapsWorkerPolylineUsingUserTolerance);
         Run("MasksRecognizedTextBeforeLineDetection", MasksRecognizedTextBeforeLineDetection);
         Run("ExposesVersionedOcrEngineCapabilities", ExposesVersionedOcrEngineCapabilities);
+        Run("FallsBackWhenEnhancedOcrFails", FallsBackWhenEnhancedOcrFails);
         var worker = Environment.GetEnvironmentVariable("WANLUO_LINEVISION_OCR_WORKER");
         if (!string.IsNullOrWhiteSpace(worker) && File.Exists(worker)) Run("RecognizesTextThroughIsolatedWorker", () => RecognizesTextThroughIsolatedWorker(worker));
         var vectorWorker = Environment.GetEnvironmentVariable("WANLUO_LINEVISION_VECTOR_WORKER");
@@ -272,6 +274,17 @@ internal static class LineVisionTests
         True(engine.Capabilities.Languages.Contains("zh-Hans-CN"), "Windows OCR 能力信息缺少简体中文");
     }
 
+    private static void FallsBackWhenEnhancedOcrFails()
+    {
+        var primary = new FakeOcrEngine("paddleocr-worker", true, () => throw new InvalidOperationException("simulated Paddle failure"));
+        var fallback = new FakeOcrEngine("windows-ocr-worker", true, () => new LineVisionOcrPageResult { ProtocolVersion = 1, EngineId = "windows-ocr-worker" });
+        var result = new LineVisionFallbackOcrEngine(primary, fallback)
+            .RecognizeAsync("unused.png", new LineVisionOcrOptions(), CancellationToken.None).GetAwaiter().GetResult();
+        Equal("windows-ocr-worker", result.EngineId);
+        Equal(1, primary.CallCount);
+        Equal(1, fallback.CallCount);
+    }
+
     private static void VectorizesThroughIsolatedWorker(string workerPath)
     {
         var root = Path.Combine(Path.GetTempPath(), "WanluoLineVisionVectorTests", Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root); UserDataPaths.TestRootDirectory = root;
@@ -319,4 +332,21 @@ internal static class LineVisionTests
     private static void Run(string name, Action test) { test(); _executed++; Console.WriteLine("PASS " + name); }
     private static void True(bool value, string message) { if (!value) throw new InvalidOperationException(message); }
     private static void Equal<T>(T expected, T actual) { if (!EqualityComparer<T>.Default.Equals(expected, actual)) throw new InvalidOperationException("Expected " + expected + ", actual " + actual); }
+
+    private sealed class FakeOcrEngine : ILineVisionOcrEngine
+    {
+        private readonly Func<LineVisionOcrPageResult> _recognize;
+        public FakeOcrEngine(string engineId, bool available, Func<LineVisionOcrPageResult> recognize) { EngineId = engineId; IsAvailable = available; _recognize = recognize; }
+        public int CallCount { get; private set; }
+        public string EngineId { get; private set; }
+        public string DisplayName { get { return EngineId; } }
+        public bool IsAvailable { get; private set; }
+        public LineVisionOcrEngineCapabilities Capabilities { get { return new LineVisionOcrEngineCapabilities { EngineId = EngineId, DisplayName = DisplayName, ProtocolVersion = 1 }; } }
+        public Task<LineVisionOcrPageResult> RecognizeAsync(string imagePath, LineVisionOcrOptions options, CancellationToken cancellationToken)
+        {
+            CallCount++;
+            try { return Task.FromResult(_recognize()); }
+            catch (Exception exception) { return Task.FromException<LineVisionOcrPageResult>(exception); }
+        }
+    }
 }

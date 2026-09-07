@@ -16,7 +16,7 @@ using System.Threading.Tasks;
 
 namespace BatchPdfPublisher.Services
 {
-    internal sealed class LineVisionOcrWorkerClient : ILineVisionOcrEngine
+    internal class LineVisionOcrWorkerClient : ILineVisionOcrEngine
     {
         private readonly string _workerPath;
         private static string CacheDirectory { get { var path = Path.Combine(UserDataPaths.RootDirectory, "识别缓存", "LineVisionOCR"); Directory.CreateDirectory(path); return path; } }
@@ -26,10 +26,10 @@ namespace BatchPdfPublisher.Services
             _workerPath = string.IsNullOrWhiteSpace(workerPath) ? Path.Combine(Path.GetDirectoryName(typeof(LineVisionOcrWorkerClient).Assembly.Location), "LineVisionOcrWorker.exe") : workerPath;
         }
 
-        public string DisplayName { get { return "Windows 本地 OCR（独立进程）"; } }
-        public string EngineId { get { return "windows-ocr-worker"; } }
-        public bool IsAvailable { get { return File.Exists(_workerPath); } }
-        public LineVisionOcrEngineCapabilities Capabilities { get { return new LineVisionOcrEngineCapabilities { EngineId = EngineId, DisplayName = DisplayName, EngineVersion = "1", ProtocolVersion = LineVisionOcrProtocol.CurrentVersion, SupportsPolygon = false, SupportsConfidence = false, SupportsRotation = true, Languages = new List<string> { "zh-Hans-CN", "en-US" } }; } }
+        public virtual string DisplayName { get { return "Windows 本地 OCR（独立进程）"; } }
+        public virtual string EngineId { get { return "windows-ocr-worker"; } }
+        public virtual bool IsAvailable { get { return File.Exists(_workerPath); } }
+        public virtual LineVisionOcrEngineCapabilities Capabilities { get { return new LineVisionOcrEngineCapabilities { EngineId = EngineId, DisplayName = DisplayName, EngineVersion = "1", ProtocolVersion = LineVisionOcrProtocol.CurrentVersion, SupportsPolygon = false, SupportsConfidence = false, SupportsRotation = true, Languages = new List<string> { "zh-Hans-CN", "en-US" } }; } }
 
         public async Task<LineVisionOcrPageResult> RecognizeAsync(string imagePath, LineVisionOcrOptions options, CancellationToken cancellationToken)
         {
@@ -101,7 +101,9 @@ namespace BatchPdfPublisher.Services
                 result.TextRegions.Add(new LineVisionOcrTextRegion
                 {
                     Text = text, OriginalText = item.Text,
-                    Polygon = new[] { new PointF((float)item.X, (float)item.Y), new PointF((float)(item.X + item.Width), (float)item.Y), new PointF((float)(item.X + item.Width), (float)(item.Y + item.Height)), new PointF((float)item.X, (float)(item.Y + item.Height)) },
+                    Polygon = item.Polygon != null && item.Polygon.Count >= 4
+                        ? item.Polygon.Select(point => new PointF((float)point.X, (float)point.Y)).ToArray()
+                        : new[] { new PointF((float)item.X, (float)item.Y), new PointF((float)(item.X + item.Width), (float)item.Y), new PointF((float)(item.X + item.Width), (float)(item.Y + item.Height)), new PointF((float)item.X, (float)(item.Y + item.Height)) },
                     RotationDegrees = item.RotationDegrees, Confidence = item.Confidence,
                     IsEnabled = item.Confidence >= minimumConfidence
                 });
@@ -125,14 +127,14 @@ namespace BatchPdfPublisher.Services
             }
         }
 
-        private static string BuildCacheKey(string path, LineVisionOcrOptions options)
+        private string BuildCacheKey(string path, LineVisionOcrOptions options)
         {
             using (var hash = SHA256.Create())
             using (var stream = File.OpenRead(path))
             {
                 var fileHash = BitConverter.ToString(hash.ComputeHash(stream)).Replace("-", string.Empty);
                 var region = options.SourceRegion.HasValue ? options.SourceRegion.Value.ToString() : "all";
-                var value = fileHash + "|" + region + "|" + options.Language + "|" + options.MinimumConfidence.ToString("R", CultureInfo.InvariantCulture);
+                var value = EngineId + "|" + fileHash + "|" + region + "|" + options.Language + "|" + options.MinimumConfidence.ToString("R", CultureInfo.InvariantCulture);
                 return BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(value))).Replace("-", string.Empty);
             }
         }

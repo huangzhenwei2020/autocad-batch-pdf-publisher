@@ -228,7 +228,7 @@ namespace BatchPdfPublisher.Views
                     try
                     {
                         ((IProgress<Tuple<int, string>>)progress).Report(Tuple.Create(4, "正在识别文字……"));
-                        var engine = new LineVisionOcrWorkerClient();
+                        var engine = LineVisionOcrEngineSelector.CreateAutomatic();
                         recognized = await engine.RecognizeAsync(path, new LineVisionOcrOptions
                         {
                             Language = _ocrLanguage.SelectedIndex == 1 ? "en-US" : "zh-Hans-CN",
