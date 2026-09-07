@@ -61,6 +61,7 @@ namespace CadArchSpec.CadTable
             var ignoredDecorationCount = PruneUnusedGridLines(result, horizontal, vertical, options);
             if (ignoredDecorationCount > 0)
                 result.Warnings.Add("已忽略 " + ignoredDecorationCount + " 条未参与闭合单元格边界的装饰线。");
+            PruneDetachedClosedDecorations(result, textFragments, options.CoordinateTolerance);
 
             AssignText(result, textFragments, options.CoordinateTolerance);
             if (result.Cells.Count == 0) result.Warnings.Add("检测到边界坐标，但没有形成闭合单元格。");
@@ -100,6 +101,117 @@ namespace CadArchSpec.CadTable
             result.Warnings.RemoveAll(warning => warning.IndexOf("网格区域边界不完整", StringComparison.Ordinal) >= 0);
             result.Warnings.AddRange(refined.Warnings);
             return ignoredCount;
+        }
+
+        private static void PruneDetachedClosedDecorations(CadTableDetectionResult result,
+            IList<CadTextFragment> textFragments, double tolerance)
+        {
+            if (result.Cells.Count < 2) return;
+            var components = ConnectedCellComponents(result.Cells, tolerance)
+                .OrderByDescending(component => component.Count).ToList();
+            if (components.Count < 2) return;
+
+            var largest = components[0];
+            var hasUniqueDominantTable = largest.Count >= 2 &&
+                (components.Count == 1 || largest.Count > components[1].Count);
+            if (!hasUniqueDominantTable)
+            {
+                result.Warnings.Add("检测到 " + components.Count + " 个彼此独立的闭合区域，无法安全判断主表格，已全部保留，请确认。");
+                return;
+            }
+
+            var removable = components.Skip(1).Where(component => component.Count == 1 &&
+                !ComponentContainsText(component, textFragments, tolerance)).ToList();
+            if (removable.Count == 0)
+            {
+                result.Warnings.Add("检测到 " + components.Count + " 个彼此独立的闭合区域；含文字或结构较复杂的区域已保留，请确认。");
+                return;
+            }
+
+            var removedCells = new HashSet<DetectedCadTableCell>(removable.SelectMany(component => component));
+            result.Cells = result.Cells.Where(cell => !removedCells.Contains(cell)).ToList();
+            ReindexCellsAndBoundaries(result, tolerance);
+            result.Warnings.Add("已忽略 " + removable.Count + " 个不含文字且未连接主表格的闭合装饰框。");
+
+            var remainingComponentCount = ConnectedCellComponents(result.Cells, tolerance).Count;
+            if (remainingComponentCount > 1)
+                result.Warnings.Add("仍有 " + remainingComponentCount + " 个彼此独立的闭合区域，已保留含文字或结构较复杂的区域，请确认。");
+        }
+
+        private static List<List<DetectedCadTableCell>> ConnectedCellComponents(
+            IList<DetectedCadTableCell> cells, double tolerance)
+        {
+            var components = new List<List<DetectedCadTableCell>>();
+            var remaining = new HashSet<DetectedCadTableCell>(cells);
+            while (remaining.Count > 0)
+            {
+                var seed = remaining.First();
+                remaining.Remove(seed);
+                var component = new List<DetectedCadTableCell>();
+                var pending = new Queue<DetectedCadTableCell>();
+                pending.Enqueue(seed);
+                while (pending.Count > 0)
+                {
+                    var current = pending.Dequeue();
+                    component.Add(current);
+                    var neighbours = remaining.Where(candidate => CellsShareEdge(current, candidate, tolerance)).ToList();
+                    foreach (var neighbour in neighbours)
+                    {
+                        remaining.Remove(neighbour);
+                        pending.Enqueue(neighbour);
+                    }
+                }
+                components.Add(component);
+            }
+            return components;
+        }
+
+        private static bool CellsShareEdge(DetectedCadTableCell first, DetectedCadTableCell second,
+            double tolerance)
+        {
+            var verticalOverlap = Math.Min(first.Top, second.Top) - Math.Max(first.Bottom, second.Bottom);
+            var horizontalOverlap = Math.Min(first.Right, second.Right) - Math.Max(first.Left, second.Left);
+            var sharesVerticalEdge = verticalOverlap > tolerance &&
+                (Math.Abs(first.Right - second.Left) <= tolerance || Math.Abs(second.Right - first.Left) <= tolerance);
+            var sharesHorizontalEdge = horizontalOverlap > tolerance &&
+                (Math.Abs(first.Bottom - second.Top) <= tolerance || Math.Abs(second.Bottom - first.Top) <= tolerance);
+            return sharesVerticalEdge || sharesHorizontalEdge;
+        }
+
+        private static bool ComponentContainsText(IEnumerable<DetectedCadTableCell> component,
+            IEnumerable<CadTextFragment> textFragments, double tolerance)
+        {
+            return component.Any(cell => textFragments.Any(fragment => fragment != null && fragment.Center != null &&
+                fragment.Center.X >= cell.Left - tolerance && fragment.Center.X <= cell.Right + tolerance &&
+                fragment.Center.Y >= cell.Bottom - tolerance && fragment.Center.Y <= cell.Top + tolerance));
+        }
+
+        private static void ReindexCellsAndBoundaries(CadTableDetectionResult result, double tolerance)
+        {
+            result.ColumnBoundaries = Cluster(result.Cells.SelectMany(cell => new[] { cell.Left, cell.Right }), tolerance);
+            result.RowBoundaries = Cluster(result.Cells.SelectMany(cell => new[] { cell.Top, cell.Bottom }), tolerance)
+                .OrderByDescending(value => value).ToList();
+            foreach (var cell in result.Cells)
+            {
+                cell.ColumnIndex = ClosestBoundaryIndex(result.ColumnBoundaries, cell.Left);
+                cell.RowIndex = ClosestBoundaryIndex(result.RowBoundaries, cell.Top);
+                cell.ColumnSpan = Math.Max(1, ClosestBoundaryIndex(result.ColumnBoundaries, cell.Right) - cell.ColumnIndex);
+                cell.RowSpan = Math.Max(1, ClosestBoundaryIndex(result.RowBoundaries, cell.Bottom) - cell.RowIndex);
+            }
+        }
+
+        private static int ClosestBoundaryIndex(IList<double> boundaries, double coordinate)
+        {
+            var bestIndex = 0;
+            var bestDistance = double.MaxValue;
+            for (var index = 0; index < boundaries.Count; index++)
+            {
+                var distance = Math.Abs(boundaries[index] - coordinate);
+                if (distance >= bestDistance) continue;
+                bestDistance = distance;
+                bestIndex = index;
+            }
+            return bestIndex;
         }
 
         private static List<CadTextFragment> DeduplicateTextFragments(IEnumerable<CadTextFragment> source,

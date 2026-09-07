@@ -72,6 +72,34 @@ namespace CadArchSpec.Stage0.Tests
         }
 
         [Fact]
+        public void IgnoresDetachedEmptyClosedDecorationBesideTheMainTable()
+        {
+            var input = Grid(new[] { 0d, 100d, 200d }, new[] { 0d, 50d, 100d });
+            input.Segments.AddRange(Grid(new[] { 300d, 320d }, new[] { 10d, 30d }).Segments);
+
+            var result = new OrthogonalCadTableDetector().Detect(input);
+
+            Assert.Equal(4, result.Cells.Count);
+            Assert.Equal(new[] { 0d, 100d, 200d }, result.ColumnBoundaries);
+            Assert.Equal(new[] { 100d, 50d, 0d }, result.RowBoundaries);
+            Assert.Contains(result.Warnings, warning => warning.Contains("闭合装饰框"));
+        }
+
+        [Fact]
+        public void KeepsDetachedClosedRegionWhenItContainsText()
+        {
+            var input = Grid(new[] { 0d, 100d, 200d }, new[] { 0d, 50d, 100d });
+            input.Segments.AddRange(Grid(new[] { 300d, 320d }, new[] { 10d, 30d }).Segments);
+            input.TextFragments.Add(Text("图例", 310, 20, CadTextSourceKind.Standard));
+
+            var result = new OrthogonalCadTableDetector().Detect(input);
+
+            Assert.Equal(5, result.Cells.Count);
+            Assert.Contains(result.Cells, cell => cell.Text == "图例");
+            Assert.Contains(result.Warnings, warning => warning.Contains("已保留") && warning.Contains("请确认"));
+        }
+
+        [Fact]
         public void KeepsAmbiguousBoundaryTextForManualReview()
         {
             var input = Grid(new[] { 0d, 100d, 200d }, new[] { 0d, 50d });
