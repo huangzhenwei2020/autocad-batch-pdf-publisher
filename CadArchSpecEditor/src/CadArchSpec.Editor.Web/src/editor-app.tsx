@@ -106,6 +106,7 @@ export function createProjectMessage(
     | "cad.frame.pick"
     | "cad.text.read"
     | "cad.table.read"
+    | "cad.table.locate"
     | "table.xlsx.export"
     | "cad.section.insert",
   payload: Record<string, unknown> = {},
@@ -530,6 +531,9 @@ export function ArchitectureSpecEditor() {
       } else if (event.data.type === "table.xlsxExported") {
         setCadBusy(false);
         setProjectNotice(payload.cancelled === true ? "已取消导出 XLSX" : `Excel 表格已导出：${String(payload.filePath ?? "")}`);
+      } else if (event.data.type === "cad.tableLocated") {
+        setCadBusy(false);
+        setProjectNotice(`已在 CAD 中定位 ${Number(payload.locatedCount ?? 0)} 个来源对象`);
       } else if (event.data.type === "cad.sectionInserted") {
         setCadBusy(false);
         const overflow = payload.overflow === true;
@@ -632,6 +636,7 @@ export function ArchitectureSpecEditor() {
       | "cad.frame.pick"
       | "cad.text.read"
       | "cad.table.read"
+      | "cad.table.locate"
       | "table.xlsx.export"
       | "cad.section.insert",
     payload: Record<string, unknown> = {},
@@ -1397,6 +1402,11 @@ export function ArchitectureSpecEditor() {
             if (!requireCadHost() || cadBusy) return;
             setCadBusy(true);
             postProjectMessage("table.xlsx.export", { table });
+          }}
+          onLocateCadSources={(drawingPath, handles) => {
+            if (!requireCadHost() || cadBusy || handles.length === 0) return;
+            setCadBusy(true);
+            postProjectMessage("cad.table.locate", { drawingPath, handles });
           }}
           onSave={(tables) => {
             const synchronized = editorHandle?.synchronizeTables(tables) ?? 0;

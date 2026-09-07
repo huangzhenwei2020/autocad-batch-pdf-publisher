@@ -256,6 +256,7 @@ export type ArchitectureTableCell = {
   formula: string;
   state: FieldState;
   source: string;
+  sourceHandles?: string[];
   rowSpan: number;
   columnSpan: number;
 };
@@ -273,6 +274,7 @@ export type ArchitectureTable = {
   tableType: ProfessionalTableType;
   tableNumber: string;
   title: string;
+  sourceDrawingPath?: string;
   repeatHeader: boolean;
   allowSplitAcrossPages: boolean;
   columns: ArchitectureTableColumn[];

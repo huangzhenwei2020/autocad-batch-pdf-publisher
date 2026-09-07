@@ -11,6 +11,7 @@ namespace CadArchSpec.CadTable
             public double Fixed { get; set; }
             public double Start { get; set; }
             public double End { get; set; }
+            public List<string> SourceHandles { get; set; } = new List<string>();
         }
 
         public CadTableDetectionResult Detect(CadTableDetectionInput input, CadTableDetectionOptions options = null)
@@ -171,6 +172,12 @@ namespace CadArchSpec.CadTable
                                 Right = right,
                                 Top = top
                             };
+                            best.SourceHandles = CoveringHandles(horizontal, top, left, right, options)
+                                .Concat(CoveringHandles(horizontal, bottom, left, right, options))
+                                .Concat(CoveringHandles(vertical, left, bottom, top, options))
+                                .Concat(CoveringHandles(vertical, right, bottom, top, options))
+                                .Where(value => !string.IsNullOrWhiteSpace(value))
+                                .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
                         }
                     }
                     if (best == null)
@@ -212,7 +219,9 @@ namespace CadArchSpec.CadTable
                 {
                     Fixed = (source.Start.Y + source.End.Y) * 0.5d,
                     Start = Math.Min(source.Start.X, source.End.X),
-                    End = Math.Max(source.Start.X, source.End.X)
+                    End = Math.Max(source.Start.X, source.End.X),
+                    SourceHandles = string.IsNullOrWhiteSpace(source.SourceHandle)
+                        ? new List<string>() : new List<string> { source.SourceHandle }
                 };
                 return true;
             }
@@ -222,7 +231,9 @@ namespace CadArchSpec.CadTable
             {
                 Fixed = (source.Start.X + source.End.X) * 0.5d,
                 Start = Math.Min(source.Start.Y, source.End.Y),
-                End = Math.Max(source.Start.Y, source.End.Y)
+                End = Math.Max(source.Start.Y, source.End.Y),
+                SourceHandles = string.IsNullOrWhiteSpace(source.SourceHandle)
+                    ? new List<string>() : new List<string> { source.SourceHandle }
             };
             return true;
         }
@@ -238,12 +249,20 @@ namespace CadArchSpec.CadTable
                     var existing = result.LastOrDefault(value => Math.Abs(value.Fixed - fixedCoordinate) <= coordinateTolerance && item.Start <= value.End + maximumGap);
                     if (existing == null)
                     {
-                        result.Add(new AxisSegment { Fixed = fixedCoordinate, Start = item.Start, End = item.End });
+                        result.Add(new AxisSegment
+                        {
+                            Fixed = fixedCoordinate,
+                            Start = item.Start,
+                            End = item.End,
+                            SourceHandles = item.SourceHandles.ToList()
+                        });
                     }
                     else
                     {
                         existing.Start = Math.Min(existing.Start, item.Start);
                         existing.End = Math.Max(existing.End, item.End);
+                        existing.SourceHandles = existing.SourceHandles.Concat(item.SourceHandles)
+                            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
                     }
                 }
             }
@@ -288,6 +307,14 @@ namespace CadArchSpec.CadTable
                 item.Start <= start + options.MaximumBorderGap && item.End >= end - options.MaximumBorderGap);
         }
 
+        private static IEnumerable<string> CoveringHandles(IEnumerable<AxisSegment> source,
+            double fixedCoordinate, double start, double end, CadTableDetectionOptions options)
+        {
+            return source.Where(item => Math.Abs(item.Fixed - fixedCoordinate) <= options.CoordinateTolerance &&
+                    item.Start <= start + options.MaximumBorderGap && item.End >= end - options.MaximumBorderGap)
+                .SelectMany(item => item.SourceHandles);
+        }
+
         private static void AssignText(CadTableDetectionResult result, IEnumerable<CadTextFragment> fragments, double tolerance)
         {
             foreach (var fragment in fragments)
@@ -302,6 +329,9 @@ namespace CadArchSpec.CadTable
                     continue;
                 }
                 matches[0].TextFragments.Add(fragment);
+                if (!string.IsNullOrWhiteSpace(fragment.SourceHandle) &&
+                    !matches[0].SourceHandles.Contains(fragment.SourceHandle, StringComparer.OrdinalIgnoreCase))
+                    matches[0].SourceHandles.Add(fragment.SourceHandle);
             }
 
             foreach (var cell in result.Cells)

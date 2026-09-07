@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -6,6 +7,7 @@ using System.Threading.Tasks;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
+using Autodesk.AutoCAD.Geometry;
 using CadArchSpec.CadTable;
 using Newtonsoft.Json.Linq;
 
@@ -23,6 +25,111 @@ namespace CadArchSpec.Host.Shared.CadTable
                     await Task.CompletedTask;
                 }, null);
             return result;
+        }
+
+        public static async Task<JObject> LocateSourcesAsync(JObject payload)
+        {
+            JObject result = null;
+            await Application.DocumentManager.ExecuteInCommandContextAsync(
+                async _ =>
+                {
+                    result = LocateSourcesCore(payload ?? new JObject());
+                    await Task.CompletedTask;
+                }, null);
+            return result;
+        }
+
+        private static JObject LocateSourcesCore(JObject payload)
+        {
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document == null) throw new InvalidOperationException("当前没有活动的 CAD 图纸。");
+            var sourceDrawingPath = ((string)payload["drawingPath"] ?? string.Empty).Trim();
+            if (!string.IsNullOrWhiteSpace(sourceDrawingPath) &&
+                !SamePath(sourceDrawingPath, document.Name))
+                throw new InvalidOperationException("该单元格来源于另一张图纸，请先打开并切换到：\r\n" + sourceDrawingPath);
+
+            var handles = (payload["handles"] as JArray ?? new JArray())
+                .Values<string>().Where(value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            if (handles.Count == 0) throw new InvalidOperationException("当前单元格没有可定位的 CAD 来源 Handle。");
+
+            var ids = new System.Collections.Generic.List<ObjectId>();
+            Extents3d? extents = null;
+            using (var transaction = document.Database.TransactionManager.StartTransaction())
+            {
+                foreach (var handleText in handles)
+                {
+                    long handleValue;
+                    if (!long.TryParse(handleText, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out handleValue)) continue;
+                    try
+                    {
+                        var id = document.Database.GetObjectId(false, new Handle(handleValue), 0);
+                        var entity = transaction.GetObject(id, OpenMode.ForRead, false) as Entity;
+                        if (entity == null) continue;
+                        ids.Add(id);
+                        try
+                        {
+                            var current = entity.GeometricExtents;
+                            if (extents == null) extents = current;
+                            else
+                            {
+                                var combined = extents.Value;
+                                combined.AddExtents(current);
+                                extents = combined;
+                            }
+                        }
+                        catch
+                        {
+                        }
+                    }
+                    catch (Autodesk.AutoCAD.Runtime.Exception)
+                    {
+                    }
+                }
+            }
+            if (ids.Count == 0) throw new InvalidOperationException("当前图纸中已找不到该单元格的来源对象，可能已被删除或替换。");
+
+            document.Editor.SetImpliedSelection(ids.ToArray());
+            if (extents != null)
+            {
+                var bounds = extents.Value;
+                using (var view = document.Editor.GetCurrentView())
+                {
+                    var transform = Matrix3d.PlaneToWorld(view.ViewDirection);
+                    transform = Matrix3d.Displacement(view.Target - Point3d.Origin) * transform;
+                    transform = Matrix3d.Rotation(-view.ViewTwist, view.ViewDirection, view.Target) * transform;
+                    transform = transform.Inverse();
+                    var minimum = bounds.MinPoint.TransformBy(transform);
+                    var maximum = bounds.MaxPoint.TransformBy(transform);
+                    var width = Math.Max(Math.Abs(maximum.X - minimum.X), 1d);
+                    var height = Math.Max(Math.Abs(maximum.Y - minimum.Y), 1d);
+                    var viewRatio = view.Height <= 1e-9 ? 1d : view.Width / view.Height;
+                    if (width / height > viewRatio) height = width / viewRatio;
+                    else width = height * viewRatio;
+                    view.CenterPoint = new Point2d(
+                        (minimum.X + maximum.X) * 0.5d,
+                        (minimum.Y + maximum.Y) * 0.5d);
+                    view.Width = width * 1.35d;
+                    view.Height = height * 1.35d;
+                    document.Editor.SetCurrentView(view);
+                }
+            }
+            document.Window.Focus();
+            Application.UpdateScreen();
+            return new JObject { ["locatedCount"] = ids.Count };
+        }
+
+        private static bool SamePath(string first, string second)
+        {
+            try
+            {
+                return string.Equals(Path.GetFullPath(first), Path.GetFullPath(second ?? string.Empty),
+                    StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return string.Equals(first, second, StringComparison.OrdinalIgnoreCase);
+            }
         }
 
         private static JObject ReadSelectedTableCore(bool includeHiddenLayers)
@@ -116,6 +223,9 @@ namespace CadArchSpec.Host.Shared.CadTable
                         ["formula"] = string.Empty,
                         ["state"] = string.IsNullOrWhiteSpace(value) ? "unknown" : "pending",
                         ["source"] = coveringCell == null ? "CAD边界待确认" : "CAD只读识别",
+                        ["sourceHandles"] = coveringCell == null
+                            ? new JArray()
+                            : JArray.FromObject(coveringCell.SourceHandles.Distinct(StringComparer.OrdinalIgnoreCase)),
                         ["rowSpan"] = detectedCell != null ? detectedCell.RowSpan : coveringCell != null ? 0 : 1,
                         ["columnSpan"] = detectedCell != null ? detectedCell.ColumnSpan : coveringCell != null ? 0 : 1
                     });
@@ -150,6 +260,7 @@ namespace CadArchSpec.Host.Shared.CadTable
                     ["tableType"] = "custom",
                     ["tableNumber"] = string.Empty,
                     ["title"] = string.IsNullOrWhiteSpace(drawingName) ? "CAD识别表格" : drawingName + "－CAD识别表格",
+                    ["sourceDrawingPath"] = document.Name ?? string.Empty,
                     ["repeatHeader"] = true,
                     ["allowSplitAcrossPages"] = true,
                     ["columns"] = columns,
@@ -179,7 +290,8 @@ namespace CadArchSpec.Host.Shared.CadTable
                     var rowSpan = isAnchor ? (merged ? mergeRange.BottomRow - mergeRange.TopRow + 1 : 1) : 0;
                     var columnSpan = isAnchor ? (merged ? mergeRange.RightColumn - mergeRange.LeftColumn + 1 : 1) : 0;
                     var value = isAnchor ? (sourceCell.TextString ?? string.Empty).Trim() : string.Empty;
-                    cells.Add(CreateCell(columnIndex, value, rowSpan, columnSpan, "AutoCAD原生表格"));
+                    cells.Add(CreateCell(columnIndex, value, rowSpan, columnSpan, "AutoCAD原生表格",
+                        new[] { SafeHandle(source) }));
                 }
                 rows.Add(CreateRow(cells));
             }
@@ -205,7 +317,8 @@ namespace CadArchSpec.Host.Shared.CadTable
             return columns;
         }
 
-        private static JObject CreateCell(int columnIndex, string value, int rowSpan, int columnSpan, string source)
+        private static JObject CreateCell(int columnIndex, string value, int rowSpan, int columnSpan,
+            string source, IEnumerable<string> sourceHandles = null)
         {
             double numeric;
             var numericValue = double.TryParse((value ?? string.Empty).Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out numeric)
@@ -222,6 +335,9 @@ namespace CadArchSpec.Host.Shared.CadTable
                 ["formula"] = string.Empty,
                 ["state"] = string.IsNullOrWhiteSpace(value) ? "unknown" : "pending",
                 ["source"] = source,
+                ["sourceHandles"] = JArray.FromObject((sourceHandles ?? Enumerable.Empty<string>())
+                    .Where(handle => !string.IsNullOrWhiteSpace(handle))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)),
                 ["rowSpan"] = rowSpan,
                 ["columnSpan"] = columnSpan
             };
@@ -261,6 +377,7 @@ namespace CadArchSpec.Host.Shared.CadTable
                     ["tableType"] = "custom",
                     ["tableNumber"] = string.Empty,
                     ["title"] = string.IsNullOrWhiteSpace(drawingName) ? titleSuffix : drawingName + "－" + titleSuffix,
+                    ["sourceDrawingPath"] = drawingPath ?? string.Empty,
                     ["repeatHeader"] = true,
                     ["allowSplitAcrossPages"] = true,
                     ["columns"] = columns,
@@ -268,6 +385,12 @@ namespace CadArchSpec.Host.Shared.CadTable
                     ["formulaAudits"] = new JArray()
                 }
             };
+        }
+
+        private static string SafeHandle(DBObject value)
+        {
+            try { return value.Handle.ToString(); }
+            catch { return string.Empty; }
         }
     }
 }

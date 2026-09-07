@@ -206,6 +206,9 @@ namespace CadArchSpec.Host.AutoCAD2026
                         PostMessage("cad.tableRead", await CadArchSpec.Host.Shared.CadTable.CadTableExchange.ReadSelectedTableAsync(
                             (bool?)message.Payload["includeHiddenLayers"] == true));
                         break;
+                    case "cad.table.locate":
+                        PostMessage("cad.tableLocated", await CadArchSpec.Host.Shared.CadTable.CadTableExchange.LocateSourcesAsync(message.Payload));
+                        break;
                     case "table.xlsx.export":
                         PostMessage("table.xlsxExported", CadArchSpec.Host.Shared.CadTable.CadTableXlsxExchange.Export(message.Payload, this));
                         break;

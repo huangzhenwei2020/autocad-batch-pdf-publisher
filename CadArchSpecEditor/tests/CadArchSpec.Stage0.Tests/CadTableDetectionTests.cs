@@ -11,6 +11,7 @@ namespace CadArchSpec.Stage0.Tests
         public void DetectsRegularGridAndAssignsTextByReadingOrder()
         {
             var input = Grid(new[] { 0d, 100d, 200d }, new[] { 0d, 50d, 100d });
+            for (var index = 0; index < input.Segments.Count; index++) input.Segments[index].SourceHandle = "L" + index;
             input.TextFragments.Add(Text("表头", 50, 75, CadTextSourceKind.Standard));
             input.TextFragments.Add(Text("天正内容", 150, 25, CadTextSourceKind.TianzhengProperty));
 
@@ -20,6 +21,9 @@ namespace CadArchSpec.Stage0.Tests
             Assert.Equal("表头", result.Cells.Single(cell => cell.RowIndex == 0 && cell.ColumnIndex == 0).Text);
             var tianzheng = result.Cells.Single(cell => cell.RowIndex == 1 && cell.ColumnIndex == 1).TextFragments.Single();
             Assert.Equal(CadTextSourceKind.TianzhengProperty, tianzheng.SourceKind);
+            var firstCell = result.Cells.Single(cell => cell.RowIndex == 0 && cell.ColumnIndex == 0);
+            Assert.Contains("A1", firstCell.SourceHandles);
+            Assert.Contains(firstCell.SourceHandles, handle => handle.StartsWith("L"));
             Assert.Empty(result.UnassignedText);
         }
 

@@ -85,6 +85,7 @@ namespace CadArchSpec.CadTable
         public double Top { get; set; }
         public string Text { get; set; } = string.Empty;
         public List<CadTextFragment> TextFragments { get; set; } = new List<CadTextFragment>();
+        public List<string> SourceHandles { get; set; } = new List<string>();
     }
 
     public sealed class CadTableDetectionResult

@@ -31,6 +31,7 @@ type Props = {
   fields: ProjectField[];
   selectedTableId?: string;
   onExportXlsx?(table: ArchitectureTable): void;
+  onLocateCadSources?(drawingPath: string, handles: string[]): void;
   onSave(value: ArchitectureTable[]): void;
   onClose(): void;
 };
@@ -52,7 +53,7 @@ const newColumnKey = (table: ArchitectureTable) => {
   return `column${index}`;
 };
 
-export function ProfessionalTableEditor({ value, fields, selectedTableId, onExportXlsx, onSave, onClose }: Props) {
+export function ProfessionalTableEditor({ value, fields, selectedTableId, onExportXlsx, onLocateCadSources, onSave, onClose }: Props) {
   const initial = value.map(normalizeProfessionalTable);
   const [tables, setTables] = useState<ArchitectureTable[]>(initial);
   const [selectedId, setSelectedId] = useState(
@@ -541,6 +542,19 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onExpo
                     <span className="selection-count">
                       {selectedCellCount > 1 ? `已选择 ${selectedCellCount} 格` : "单格选择"}
                     </span>
+                    <button
+                      className="button compact"
+                      disabled={!onLocateCadSources || !activeCell.sourceHandles?.length}
+                      title={activeCell.sourceHandles?.length
+                        ? `定位 ${activeCell.sourceHandles.length} 个 CAD 来源对象`
+                        : "该单元格不是从 CAD 读取，或没有可用来源"}
+                      onClick={() => onLocateCadSources?.(
+                        selected.sourceDrawingPath ?? "",
+                        activeCell.sourceHandles ?? [],
+                      )}
+                    >
+                      定位 CAD 来源
+                    </button>
                     <label>
                       <span>绑定字段</span>
                       <select

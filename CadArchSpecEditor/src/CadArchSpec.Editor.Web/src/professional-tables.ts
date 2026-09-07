@@ -74,6 +74,7 @@ export function createEmptyCell(columnDefinition: ArchitectureTableColumn): Arch
     formula: "",
     state: "unknown",
     source: "",
+    sourceHandles: [],
     rowSpan: 1,
     columnSpan: 1,
   };

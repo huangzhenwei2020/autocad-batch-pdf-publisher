@@ -72,6 +72,15 @@ describe("architecture specification editor", () => {
     expect(message.payload).toEqual({ table: { tableId: "table-1" } });
   });
 
+  it("creates the CAD source locate bridge message", () => {
+    const message = createProjectMessage("cad.table.locate", {
+      drawingPath: "C:\\Project\\A.dwg",
+      handles: ["1A", "2B"],
+    });
+    expect(message.type).toBe("cad.table.locate");
+    expect(message.payload).toEqual({ drawingPath: "C:\\Project\\A.dwg", handles: ["1A", "2B"] });
+  });
+
   it("creates an editable custom table without applying a specialist template", () => {
     const table = createProfessionalTableTemplate("custom", "");
     expect(table.tableType).toBe("custom");
