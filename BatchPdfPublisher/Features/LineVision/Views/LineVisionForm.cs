@@ -29,10 +29,12 @@ namespace BatchPdfPublisher.Views
         private readonly CheckBox _buildPolylines = new CheckBox { Text = "连接为折线", Checked = true, AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
         private readonly CheckBox _detectWallFills = new CheckBox { Text = "识别墙体填充", Checked = true, AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
         private readonly ComboBox _ocrLanguage = DropDown(118);
+        private readonly ComboBox _ocrEngine = DropDown(190);
         private readonly TextBox _ocrConfidence = Box("0.70", 55), _maskExpansion = Box("2", 45);
         private readonly TextBox _wallMinimum = Box("3", 42), _wallMaximum = Box("80", 48);
         private readonly Label _range = new Label { Text = "范围：整张图片", AutoSize = true, ForeColor = Color.FromArgb(60, 75, 92), Margin = new Padding(8, 8, 0, 0) };
         private readonly Label _status = new Label { Text = "请选择图片。", AutoSize = true, ForeColor = Color.FromArgb(50, 65, 80), Margin = new Padding(0, 8, 0, 0) };
+        private readonly Label _ocrEngineStatus = new Label { AutoSize = true, ForeColor = Color.FromArgb(42, 92, 135), Margin = new Padding(8, 8, 0, 0) };
         private readonly ProgressBar _progress = new ProgressBar { Dock = DockStyle.Fill, Minimum = 0, Maximum = 100 };
         private readonly LineVisionPreviewControl _preview = new LineVisionPreviewControl();
         private readonly ListView _objects = new ListView { Dock = DockStyle.Fill, View = View.Details, CheckBoxes = true, FullRowSelect = true, GridLines = true, HideSelection = false };
@@ -56,7 +58,7 @@ namespace BatchPdfPublisher.Views
             _documentBinding = new ModelessDocumentBinding(this, document);
             Text = "图像转 CAD"; StartPosition = FormStartPosition.CenterScreen; ClientSize = new Size(1220, 760); MinimumSize = new Size(940, 610);
             Font = new Font("Microsoft YaHei UI", 9f); BackColor = Color.White;
-            Build(); LoadSettings();
+            Build(); LoadSettings(); UpdateOcrEngineStatus();
             FormClosed += (s, e) => { if (_cancellation != null) _cancellation.Cancel(); SaveSettings(); if (_result != null) _result.Dispose(); };
         }
 
@@ -67,6 +69,9 @@ namespace BatchPdfPublisher.Views
             _view.Items.AddRange(new object[] { "彩色识别结果", "原始图像", "黑白预处理" }); _view.SelectedIndex = 0;
             _vectorMode.Items.AddRange(new object[] { "建筑中心线", "保留轮廓", "混合识别", "兼容旧算法" }); _vectorMode.SelectedIndex = 0;
             _ocrLanguage.Items.AddRange(new object[] { "简体中文", "英文" }); _ocrLanguage.SelectedIndex = 0;
+            _ocrEngine.Items.AddRange(new object[] { "自动选择（推荐）", "PaddleOCR 增强", "Windows OCR 兼容" }); _ocrEngine.SelectedIndex = 0;
+            _ocrEngine.SelectedIndexChanged += (s, e) => UpdateOcrEngineStatus();
+            _recognizeText.CheckedChanged += (s, e) => { _ocrEngine.Enabled = _recognizeText.Checked; UpdateOcrEngineStatus(); };
             _view.SelectedIndexChanged += (s, e) =>
             {
                 _preview.PreviewMode = _view.SelectedIndex == 1 ? LineVisionPreviewMode.Original : _view.SelectedIndex == 2 ? LineVisionPreviewMode.Binary : LineVisionPreviewMode.Result;
@@ -98,8 +103,9 @@ namespace BatchPdfPublisher.Views
             var all = ButtonFor("全选"); all.Click += (s, e) => SetAll(true); scaleRow.Controls.Add(all);
             var none = ButtonFor("全不选"); none.Click += (s, e) => SetAll(false); scaleRow.Controls.Add(none);
             scaleRow.Controls.Add(new Label { Text = "横竖吸附范围外保持原角度；绿色水平 · 蓝色垂直 · 黄色斜线", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(12, 8, 0, 0) }); top.Controls.Add(scaleRow);
-            var ocrRow = Row(); ocrRow.Controls.Add(_recognizeText); Add(ocrRow, "语言", _ocrLanguage); Add(ocrRow, "最低置信度", _ocrConfidence); ocrRow.Controls.Add(_maskText); Add(ocrRow, "遮罩扩边(px)", _maskExpansion); ocrRow.Controls.Add(_insertText);
-            ocrRow.Controls.Add(new Label { Text = "文字可在右侧“文字”页校正后再插入", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(12, 8, 0, 0) }); top.Controls.Add(ocrRow);
+            var ocrRow = Row(); ocrRow.Controls.Add(_recognizeText); Add(ocrRow, "识别引擎", _ocrEngine); Add(ocrRow, "语言", _ocrLanguage); Add(ocrRow, "最低置信度", _ocrConfidence); ocrRow.Controls.Add(_maskText); Add(ocrRow, "遮罩扩边(px)", _maskExpansion); ocrRow.Controls.Add(_insertText); top.Controls.Add(ocrRow);
+            var ocrStatusRow = Row(); ocrStatusRow.Controls.Add(_ocrEngineStatus);
+            ocrStatusRow.Controls.Add(new Label { Text = "识别期间窗口可操作；可随时点击“取消分析”终止独立进程。文字可在右侧“文字”页校正。", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(12, 8, 0, 0) }); top.Controls.Add(ocrStatusRow);
             root.Controls.Add(top, 0, 0);
 
             _objects.Columns.Add("生成", 48); _objects.Columns.Add("类型", 72); _objects.Columns.Add("角度", 58); _objects.Columns.Add("长度(px)", 82); _objects.Columns.Add("置信度", 70); _objects.Columns.Add("坐标", 250);
@@ -227,8 +233,11 @@ namespace BatchPdfPublisher.Views
                 {
                     try
                     {
-                        ((IProgress<Tuple<int, string>>)progress).Report(Tuple.Create(4, "正在识别文字……"));
-                        var engine = LineVisionOcrEngineSelector.CreateAutomatic();
+                        var engine = LineVisionOcrEngineSelector.Create(SelectedOcrMode());
+                        var capability = engine.Capabilities;
+                        _progress.Style = ProgressBarStyle.Marquee; _progress.MarqueeAnimationSpeed = 28;
+                        _ocrEngineStatus.Text = "正在使用：" + capability.DisplayName + VersionSuffix(capability.EngineVersion);
+                        ((IProgress<Tuple<int, string>>)progress).Report(Tuple.Create(4, "正在识别文字，可点击“取消分析”……"));
                         recognized = await engine.RecognizeAsync(path, new LineVisionOcrOptions
                         {
                             Language = _ocrLanguage.SelectedIndex == 1 ? "en-US" : "zh-Hans-CN",
@@ -236,9 +245,13 @@ namespace BatchPdfPublisher.Views
                             SourceRegion = region,
                             MaskExpansionPixels = ParseInt(_maskExpansion, "遮罩扩边", 0, 50)
                         }, cancellation.Token);
+                        _progress.Style = ProgressBarStyle.Continuous; _progress.Value = 20;
+                        _ocrEngineStatus.Text = "本次使用：" + OcrEngineDisplayName(recognized.EngineId) + VersionSuffix(recognized.EngineVersion);
+                        _ocrEngineStatus.ForeColor = Color.FromArgb(28, 112, 73);
                     }
                     catch (OperationCanceledException) { throw; }
-                    catch (Exception exception) { ocrWarning = exception.Message; }
+                    catch (Exception exception) { ocrWarning = exception.Message; _ocrEngineStatus.Text = "OCR 未完成：" + exception.Message; _ocrEngineStatus.ForeColor = Color.FromArgb(190, 75, 45); }
+                    finally { _progress.Style = ProgressBarStyle.Continuous; _progress.MarqueeAnimationSpeed = 0; }
                 }
                 var textRegions = recognized.TextRegions;
                 var mask = _recognizeText.Checked && _maskText.Checked && string.IsNullOrEmpty(ocrWarning);
@@ -257,17 +270,19 @@ namespace BatchPdfPublisher.Views
                     catch (Exception exception) { result.VectorWarning = exception.Message; }
                 }
                 result.OcrWarning = ocrWarning;
+                result.OcrEngineId = recognized.EngineId;
+                result.OcrEngineVersion = recognized.EngineVersion;
                 if (cancellation.IsCancellationRequested || !string.Equals(path, _path.Text, StringComparison.OrdinalIgnoreCase)) { result.Dispose(); return; }
                 if (_result != null) _result.Dispose(); _result = result;
                 _preview.SetResult(result); _view.SelectedIndex = 0; SyncObjects(); SyncPolylines(); SyncWalls(); SyncCircles(); SyncArcs(); SyncTexts(); UpdateStatus();
             }
-            catch (OperationCanceledException) { _status.Text = "分析已取消。"; }
+            catch (OperationCanceledException) { _status.Text = "分析已取消。"; _ocrEngineStatus.Text = "OCR 已取消，未采用未完成结果。"; }
             catch (Exception exception) { _status.Text = "分析失败"; MessageBox.Show(this, "分析图像失败：\r\n" + exception.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Error); }
             finally
             {
                 if (ReferenceEquals(_cancellation, cancellation)) _cancellation = null;
                 cancellation.Dispose();
-                if (!IsDisposed) { _analyze.Enabled = true; _cancelAnalysis.Enabled = false; _progress.Value = 0; }
+                if (!IsDisposed) { _analyze.Enabled = true; _cancelAnalysis.Enabled = false; _progress.Style = ProgressBarStyle.Continuous; _progress.Value = 0; }
             }
         }
 
@@ -418,6 +433,7 @@ namespace BatchPdfPublisher.Views
             var walls = _result.WallRegions.Count(x => x.IsEnabled);
             _status.Text = "直线 " + _result.Segments.Count + " 根，折线 " + _result.Polylines.Count + " 条（选中 " + polylines + "），墙体候选 " + _result.WallRegions.Count + " 个（填充 " + walls + "），圆弧 " + _result.Arcs.Count + " 段，文字 " + _result.TextRegions.Count + " 个。";
             if (!string.IsNullOrWhiteSpace(_result.OcrWarning)) _status.Text += " OCR 未完成，已按纯线稿处理：" + _result.OcrWarning;
+            else if (!string.IsNullOrWhiteSpace(_result.OcrEngineId)) _status.Text += " OCR：" + OcrEngineDisplayName(_result.OcrEngineId) + VersionSuffix(_result.OcrEngineVersion) + "。";
             if (!string.IsNullOrWhiteSpace(_result.VectorWarning)) _status.Text += " 新矢量内核未完成，已保留兼容算法：" + _result.VectorWarning;
         }
 
@@ -432,7 +448,7 @@ namespace BatchPdfPublisher.Views
                     if (parts[0] == "threshold") _threshold.Text = parts[1]; else if (parts[0] == "minimum") _minimum.Text = parts[1]; else if (parts[0] == "closeGap") _closeGap.Text = parts[1];
                     else if (parts[0] == "collinear") _collinear.Text = parts[1]; else if (parts[0] == "mergeGap") _mergeGap.Text = parts[1]; else if (parts[0] == "scale") _scale.Text = parts[1]; else if (parts[0] == "diagonals") _diagonals.Checked = parts[1] == "1";
                     else if (parts[0] == "recognizeText") _recognizeText.Checked = parts[1] == "1"; else if (parts[0] == "maskText") _maskText.Checked = parts[1] == "1"; else if (parts[0] == "insertText") _insertText.Checked = parts[1] == "1";
-                    else if (parts[0] == "ocrLanguage") _ocrLanguage.SelectedIndex = parts[1] == "en-US" ? 1 : 0; else if (parts[0] == "ocrConfidence") _ocrConfidence.Text = parts[1]; else if (parts[0] == "maskExpansion") _maskExpansion.Text = parts[1]; else if (parts[0] == "orthogonalTolerance") _orthogonalTolerance.Text = parts[1]; else if (parts[0] == "buildPolylines") _buildPolylines.Checked = parts[1] == "1";
+                    else if (parts[0] == "ocrLanguage") _ocrLanguage.SelectedIndex = parts[1] == "en-US" ? 1 : 0; else if (parts[0] == "ocrConfidence") _ocrConfidence.Text = parts[1]; else if (parts[0] == "maskExpansion") _maskExpansion.Text = parts[1]; else if (parts[0] == "ocrEngine") _ocrEngine.SelectedIndex = parts[1] == "paddle" ? 1 : parts[1] == "windows" ? 2 : 0; else if (parts[0] == "orthogonalTolerance") _orthogonalTolerance.Text = parts[1]; else if (parts[0] == "buildPolylines") _buildPolylines.Checked = parts[1] == "1";
                     else if (parts[0] == "vectorMode") { int value; if (int.TryParse(parts[1], out value)) _vectorMode.SelectedIndex = Math.Max(0, Math.Min(3, value)); }
                     else if (parts[0] == "detectWallFills") _detectWallFills.Checked = parts[1] == "1"; else if (parts[0] == "wallMinimum") _wallMinimum.Text = parts[1]; else if (parts[0] == "wallMaximum") _wallMaximum.Text = parts[1];
                 }
@@ -445,12 +461,24 @@ namespace BatchPdfPublisher.Views
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath));
-                File.WriteAllLines(SettingsPath, new[] { "threshold=" + _threshold.Text, "minimum=" + _minimum.Text, "closeGap=" + _closeGap.Text, "collinear=" + _collinear.Text, "mergeGap=" + _mergeGap.Text, "orthogonalTolerance=" + _orthogonalTolerance.Text, "buildPolylines=" + (_buildPolylines.Checked ? "1" : "0"), "vectorMode=" + _vectorMode.SelectedIndex, "detectWallFills=" + (_detectWallFills.Checked ? "1" : "0"), "wallMinimum=" + _wallMinimum.Text, "wallMaximum=" + _wallMaximum.Text, "scale=" + _scale.Text, "diagonals=" + (_diagonals.Checked ? "1" : "0"), "recognizeText=" + (_recognizeText.Checked ? "1" : "0"), "maskText=" + (_maskText.Checked ? "1" : "0"), "insertText=" + (_insertText.Checked ? "1" : "0"), "ocrLanguage=" + (_ocrLanguage.SelectedIndex == 1 ? "en-US" : "zh-Hans-CN"), "ocrConfidence=" + _ocrConfidence.Text, "maskExpansion=" + _maskExpansion.Text });
+                File.WriteAllLines(SettingsPath, new[] { "threshold=" + _threshold.Text, "minimum=" + _minimum.Text, "closeGap=" + _closeGap.Text, "collinear=" + _collinear.Text, "mergeGap=" + _mergeGap.Text, "orthogonalTolerance=" + _orthogonalTolerance.Text, "buildPolylines=" + (_buildPolylines.Checked ? "1" : "0"), "vectorMode=" + _vectorMode.SelectedIndex, "detectWallFills=" + (_detectWallFills.Checked ? "1" : "0"), "wallMinimum=" + _wallMinimum.Text, "wallMaximum=" + _wallMaximum.Text, "scale=" + _scale.Text, "diagonals=" + (_diagonals.Checked ? "1" : "0"), "recognizeText=" + (_recognizeText.Checked ? "1" : "0"), "maskText=" + (_maskText.Checked ? "1" : "0"), "insertText=" + (_insertText.Checked ? "1" : "0"), "ocrEngine=" + (SelectedOcrMode() == LineVisionOcrMode.Paddle ? "paddle" : SelectedOcrMode() == LineVisionOcrMode.Windows ? "windows" : "automatic"), "ocrLanguage=" + (_ocrLanguage.SelectedIndex == 1 ? "en-US" : "zh-Hans-CN"), "ocrConfidence=" + _ocrConfidence.Text, "maskExpansion=" + _maskExpansion.Text });
             }
             catch { }
         }
 
         private static string DirectionText(LineVisionDirection direction) { return direction == LineVisionDirection.Horizontal ? "水平" : direction == LineVisionDirection.Vertical ? "垂直" : direction == LineVisionDirection.Diagonal ? "45°斜线" : direction == LineVisionDirection.Angled ? "原角度" : "待确认"; }
+        private LineVisionOcrMode SelectedOcrMode() { return _ocrEngine.SelectedIndex == 1 ? LineVisionOcrMode.Paddle : _ocrEngine.SelectedIndex == 2 ? LineVisionOcrMode.Windows : LineVisionOcrMode.Automatic; }
+        private void UpdateOcrEngineStatus()
+        {
+            if (!_recognizeText.Checked) { _ocrEngineStatus.Text = "文字识别已关闭。"; return; }
+            var engine = LineVisionOcrEngineSelector.Create(SelectedOcrMode());
+            var capability = engine.Capabilities;
+            _ocrEngineStatus.Text = (engine.IsAvailable ? "可用：" : "不可用：") + capability.DisplayName + VersionSuffix(capability.EngineVersion)
+                + (SelectedOcrMode() == LineVisionOcrMode.Automatic ? "；增强组件失败时自动回退 Windows OCR。" : string.Empty);
+            _ocrEngineStatus.ForeColor = engine.IsAvailable ? Color.FromArgb(28, 112, 73) : Color.FromArgb(190, 75, 45);
+        }
+        private static string OcrEngineDisplayName(string engineId) { return string.Equals(engineId, "paddleocr-worker", StringComparison.OrdinalIgnoreCase) ? "PaddleOCR 增强" : string.Equals(engineId, "windows-ocr-worker", StringComparison.OrdinalIgnoreCase) ? "Windows OCR 兼容" : string.IsNullOrWhiteSpace(engineId) ? "未使用" : engineId; }
+        private static string VersionSuffix(string version) { return string.IsNullOrWhiteSpace(version) ? string.Empty : " · " + version; }
         private static double LineAngle(LineVisionSegment line) { var value = Math.Atan2(-(line.Y2 - line.Y1), line.X2 - line.X1) * 180d / Math.PI; value %= 180d; if (value < 0d) value += 180d; return value; }
         private static int ParseInt(TextBox box, string name, int minimum, int maximum) { int value; if (!int.TryParse(box.Text, out value) || value < minimum || value > maximum) throw new InvalidOperationException(name + "必须为 " + minimum + "–" + maximum + " 的整数。"); return value; }
         private static double ParseDouble(TextBox box, string name, double minimum, double maximum) { double value; if (!double.TryParse(box.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out value) || value < minimum || value > maximum) throw new InvalidOperationException(name + "必须为 " + minimum.ToString(CultureInfo.InvariantCulture) + "–" + maximum.ToString(CultureInfo.InvariantCulture) + " 的数字。"); return value; }

@@ -89,6 +89,13 @@ namespace BatchPdfPublisher.Services
 
     internal static class LineVisionOcrEngineSelector
     {
+        public static ILineVisionOcrEngine Create(LineVisionOcrMode mode)
+        {
+            if (mode == LineVisionOcrMode.Paddle) return new LineVisionPaddleOcrWorkerClient();
+            if (mode == LineVisionOcrMode.Windows) return new LineVisionOcrWorkerClient();
+            return CreateAutomatic();
+        }
+
         public static ILineVisionOcrEngine CreateAutomatic()
         {
             return new LineVisionFallbackOcrEngine(new LineVisionPaddleOcrWorkerClient(), new LineVisionOcrWorkerClient());

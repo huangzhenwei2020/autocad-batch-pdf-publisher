@@ -33,6 +33,7 @@ internal static class LineVisionTests
         Run("MasksRecognizedTextBeforeLineDetection", MasksRecognizedTextBeforeLineDetection);
         Run("ExposesVersionedOcrEngineCapabilities", ExposesVersionedOcrEngineCapabilities);
         Run("FallsBackWhenEnhancedOcrFails", FallsBackWhenEnhancedOcrFails);
+        Run("SelectsRequestedOcrEngine", SelectsRequestedOcrEngine);
         var worker = Environment.GetEnvironmentVariable("WANLUO_LINEVISION_OCR_WORKER");
         if (!string.IsNullOrWhiteSpace(worker) && File.Exists(worker)) Run("RecognizesTextThroughIsolatedWorker", () => RecognizesTextThroughIsolatedWorker(worker));
         var paddleWorker = Environment.GetEnvironmentVariable("WANLUO_LINEVISION_PADDLE_WORKER");
@@ -310,6 +311,13 @@ internal static class LineVisionTests
         Equal("windows-ocr-worker", result.EngineId);
         Equal(1, primary.CallCount);
         Equal(1, fallback.CallCount);
+    }
+
+    private static void SelectsRequestedOcrEngine()
+    {
+        Equal("automatic-ocr", LineVisionOcrEngineSelector.Create(LineVisionOcrMode.Automatic).EngineId);
+        Equal("paddleocr-worker", LineVisionOcrEngineSelector.Create(LineVisionOcrMode.Paddle).EngineId);
+        Equal("windows-ocr-worker", LineVisionOcrEngineSelector.Create(LineVisionOcrMode.Windows).EngineId);
     }
 
     private static void VectorizesThroughIsolatedWorker(string workerPath)

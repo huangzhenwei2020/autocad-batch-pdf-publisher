@@ -17,6 +17,8 @@ namespace BatchPdfPublisher.Models
 
     internal enum LineVisionVectorMode { Legacy, Centerline, Outline, Hybrid }
 
+    internal enum LineVisionOcrMode { Automatic, Paddle, Windows }
+
     internal sealed class LineVisionSegment
     {
         public Guid Id { get; set; } = Guid.NewGuid();
@@ -115,6 +117,8 @@ namespace BatchPdfPublisher.Models
         public List<LineVisionWallRegion> WallRegions { get; set; } = new List<LineVisionWallRegion>();
         public List<LineVisionOcrTextRegion> TextRegions { get; set; } = new List<LineVisionOcrTextRegion>();
         public string OcrWarning { get; set; }
+        public string OcrEngineId { get; set; }
+        public string OcrEngineVersion { get; set; }
         public string VectorWarning { get; set; }
 
         public void Dispose()
