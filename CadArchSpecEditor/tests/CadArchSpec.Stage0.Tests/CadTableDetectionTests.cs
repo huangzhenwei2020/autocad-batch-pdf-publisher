@@ -57,6 +57,33 @@ namespace CadArchSpec.Stage0.Tests
         }
 
         [Fact]
+        public void AssignsBoundaryTextToCellWithMajorityBoundingBoxOverlap()
+        {
+            var input = Grid(new[] { 0d, 100d, 200d }, new[] { 0d, 50d });
+            var fragment = Text("靠左单元格", 100, 25, CadTextSourceKind.Standard, 5);
+            SetBounds(fragment, 70, 20, 110, 30);
+            input.TextFragments.Add(fragment);
+
+            var result = new OrthogonalCadTableDetector().Detect(input);
+
+            Assert.Equal("靠左单元格", result.Cells.Single(cell => cell.ColumnIndex == 0).Text);
+            Assert.Empty(result.UnassignedText);
+        }
+
+        [Fact]
+        public void KeepsEvenlySpanningBoundaryTextForManualReview()
+        {
+            var input = Grid(new[] { 0d, 100d, 200d }, new[] { 0d, 50d });
+            var fragment = Text("跨格文字", 100, 25, CadTextSourceKind.Standard, 5);
+            SetBounds(fragment, 90, 20, 110, 30);
+            input.TextFragments.Add(fragment);
+
+            var result = new OrthogonalCadTableDetector().Detect(input);
+
+            Assert.Single(result.UnassignedText);
+        }
+
+        [Fact]
         public void InfersHorizontalMergedCellFromMissingInternalDivider()
         {
             var input = new CadTableDetectionInput();
@@ -175,6 +202,17 @@ namespace CadArchSpec.Stage0.Tests
             return new CadTextFragment { Text = text, PlainText = text, Center = new CadTablePoint(x, y), Height = height, SourceKind = source, SourceHandle = "A1" };
         }
 
+        private static void SetBounds(CadTextFragment fragment, double left, double bottom, double right, double top)
+        {
+            fragment.HasBounds = true;
+            fragment.Left = left;
+            fragment.Bottom = bottom;
+            fragment.Right = right;
+            fragment.Top = top;
+            fragment.Width = right - left;
+            fragment.Height = top - bottom;
+        }
+
         private static CadTableDetectionInput Rotate(CadTableDetectionInput input, double degrees)
         {
             var radians = degrees * System.Math.PI / 180d;
@@ -193,6 +231,13 @@ namespace CadArchSpec.Stage0.Tests
                     Text = text.Text,
                     PlainText = text.PlainText,
                     Center = Rotate(text.Center, cosine, sine),
+                    HasBounds = text.HasBounds,
+                    Left = text.Left,
+                    Bottom = text.Bottom,
+                    Right = text.Right,
+                    Top = text.Top,
+                    Width = text.Width,
+                    Height = text.Height,
                     SourceKind = text.SourceKind,
                     SourceHandle = text.SourceHandle
                 });

@@ -53,7 +53,7 @@ namespace CadArchSpec.Host.Shared.CadTable
             var dbText = entity as DBText;
             if (dbText != null)
             {
-                AddText(result, dbText.TextString, dbText.TextString, Center(dbText, dbText.Position), dbText.Height, dbText.Rotation, sourceKind, sourceHandle, DxfName(dbText));
+                AddText(result, dbText.TextString, dbText.TextString, Center(dbText, dbText.Position), dbText.Height, dbText.Rotation, sourceKind, sourceHandle, DxfName(dbText), dbText);
                 return;
             }
 
@@ -61,14 +61,14 @@ namespace CadArchSpec.Host.Shared.CadTable
             if (mText != null)
             {
                 AddText(result, mText.Contents, MTextContentNormalizer.Normalize(mText.Contents, mText.Text),
-                    Center(mText, mText.Location), mText.TextHeight, mText.Rotation, sourceKind, sourceHandle, DxfName(mText));
+                    Center(mText, mText.Location), mText.TextHeight, mText.Rotation, sourceKind, sourceHandle, DxfName(mText), mText);
                 return;
             }
 
             var attribute = entity as AttributeReference;
             if (attribute != null)
             {
-                AddText(result, attribute.TextString, attribute.TextString, Center(attribute, attribute.Position), attribute.Height, attribute.Rotation, sourceKind, sourceHandle, DxfName(attribute));
+                AddText(result, attribute.TextString, attribute.TextString, Center(attribute, attribute.Position), attribute.Height, attribute.Rotation, sourceKind, sourceHandle, DxfName(attribute), attribute);
                 return;
             }
 
@@ -126,7 +126,7 @@ namespace CadArchSpec.Host.Shared.CadTable
                 {
                     var fallback = Center(entity, Point3d.Origin);
                     AddText(result, text, MTextContentNormalizer.Normalize(text, text), fallback,
-                        Height(entity), Rotation(entity), CadTextSourceKind.TianzhengProperty, sourceHandle, DxfName(entity));
+                        Height(entity), Rotation(entity), CadTextSourceKind.TianzhengProperty, sourceHandle, DxfName(entity), entity);
                     return;
                 }
             }
@@ -169,21 +169,45 @@ namespace CadArchSpec.Host.Shared.CadTable
             }
         }
 
-        private static void AddText(CadTableEntityReadResult result, string text, string plainText, Point3d center, double height, double rotationRadians, CadTextSourceKind sourceKind, string sourceHandle, string dxfName)
+        private static void AddText(CadTableEntityReadResult result, string text, string plainText,
+            Point3d center, double height, double rotationRadians, CadTextSourceKind sourceKind,
+            string sourceHandle, string dxfName, Entity boundsSource)
         {
             var normalized = (plainText ?? text ?? string.Empty).Trim();
             if (normalized.Length == 0) return;
+            Extents3d bounds;
+            var hasBounds = TryGetBounds(boundsSource, out bounds);
             result.Input.TextFragments.Add(new CadTextFragment
             {
                 Text = (text ?? normalized).Trim(),
                 PlainText = normalized,
                 Center = new CadTablePoint(center.X, center.Y),
+                HasBounds = hasBounds,
+                Left = hasBounds ? bounds.MinPoint.X : 0d,
+                Bottom = hasBounds ? bounds.MinPoint.Y : 0d,
+                Right = hasBounds ? bounds.MaxPoint.X : 0d,
+                Top = hasBounds ? bounds.MaxPoint.Y : 0d,
+                Width = hasBounds ? Math.Abs(bounds.MaxPoint.X - bounds.MinPoint.X) : 0d,
                 Height = Math.Abs(height),
                 RotationDegrees = rotationRadians * 180d / Math.PI,
                 SourceKind = sourceKind,
                 SourceHandle = sourceHandle,
                 SourceDxfName = dxfName
             });
+        }
+
+        private static bool TryGetBounds(Entity entity, out Extents3d bounds)
+        {
+            try
+            {
+                bounds = entity.GeometricExtents;
+                return bounds.MaxPoint.X > bounds.MinPoint.X && bounds.MaxPoint.Y > bounds.MinPoint.Y;
+            }
+            catch
+            {
+                bounds = new Extents3d();
+                return false;
+            }
         }
 
         private static void AddSegment(CadTableEntityReadResult result, Point3d start, Point3d end, string sourceHandle, string layer)

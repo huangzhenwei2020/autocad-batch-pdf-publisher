@@ -47,6 +47,7 @@ namespace CadArchSpec.Stage0.Tests
                         Assert.Contains("第一行", xml);
                         Assert.Contains("第二行", xml);
                         Assert.Contains("A2:B2", xml);
+                        Assert.Contains("<c r=\"B2\" s=\"2\" />", xml);
                         Assert.Contains("autoFilter", xml);
                         Assert.True(xml.IndexOf("<autoFilter", System.StringComparison.Ordinal) <
                             xml.IndexOf("<mergeCells", System.StringComparison.Ordinal));

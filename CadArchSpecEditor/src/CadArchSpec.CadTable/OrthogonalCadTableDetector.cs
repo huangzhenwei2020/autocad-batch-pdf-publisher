@@ -108,6 +108,9 @@ namespace CadArchSpec.CadTable
             foreach (var fragment in input.TextFragments ?? new List<CadTextFragment>())
             {
                 if (fragment == null || fragment.Center == null) continue;
+                var bounds = fragment.HasBounds
+                    ? RotateBounds(fragment.Left, fragment.Bottom, fragment.Right, fragment.Top, cosine, sine)
+                    : null;
                 result.TextFragments.Add(new CadTextFragment
                 {
                     Text = fragment.Text,
@@ -115,6 +118,11 @@ namespace CadArchSpec.CadTable
                     Center = Rotate(fragment.Center, cosine, sine),
                     Width = fragment.Width,
                     Height = fragment.Height,
+                    HasBounds = bounds != null,
+                    Left = bounds == null ? 0d : bounds[0],
+                    Bottom = bounds == null ? 0d : bounds[1],
+                    Right = bounds == null ? 0d : bounds[2],
+                    Top = bounds == null ? 0d : bounds[3],
                     RotationDegrees = fragment.RotationDegrees + degrees,
                     Confidence = fragment.Confidence,
                     SourceKind = fragment.SourceKind,
@@ -123,6 +131,20 @@ namespace CadArchSpec.CadTable
                 });
             }
             return result;
+        }
+
+        private static double[] RotateBounds(double left, double bottom, double right, double top,
+            double cosine, double sine)
+        {
+            var corners = new[]
+            {
+                Rotate(new CadTablePoint(left, bottom), cosine, sine),
+                Rotate(new CadTablePoint(left, top), cosine, sine),
+                Rotate(new CadTablePoint(right, bottom), cosine, sine),
+                Rotate(new CadTablePoint(right, top), cosine, sine)
+            };
+            return new[] { corners.Min(point => point.X), corners.Min(point => point.Y),
+                corners.Max(point => point.X), corners.Max(point => point.Y) };
         }
 
         private static CadTablePoint Rotate(CadTablePoint point, double cosine, double sine)
@@ -320,18 +342,16 @@ namespace CadArchSpec.CadTable
             foreach (var fragment in fragments)
             {
                 if (fragment == null || fragment.Center == null) continue;
-                var matches = result.Cells.Where(cell =>
-                    fragment.Center.X >= cell.Left - tolerance && fragment.Center.X <= cell.Right + tolerance &&
-                    fragment.Center.Y >= cell.Bottom - tolerance && fragment.Center.Y <= cell.Top + tolerance).ToList();
-                if (matches.Count != 1)
+                var target = FindTargetCell(result.Cells, fragment, tolerance);
+                if (target == null)
                 {
                     result.UnassignedText.Add(fragment);
                     continue;
                 }
-                matches[0].TextFragments.Add(fragment);
+                target.TextFragments.Add(fragment);
                 if (!string.IsNullOrWhiteSpace(fragment.SourceHandle) &&
-                    !matches[0].SourceHandles.Contains(fragment.SourceHandle, StringComparer.OrdinalIgnoreCase))
-                    matches[0].SourceHandles.Add(fragment.SourceHandle);
+                    !target.SourceHandles.Contains(fragment.SourceHandle, StringComparer.OrdinalIgnoreCase))
+                    target.SourceHandles.Add(fragment.SourceHandle);
             }
 
             foreach (var cell in result.Cells)
@@ -339,6 +359,40 @@ namespace CadArchSpec.CadTable
                 cell.TextFragments = cell.TextFragments.OrderByDescending(item => item.Center.Y).ThenBy(item => item.Center.X).ToList();
                 cell.Text = CombineTextFragments(cell.TextFragments, tolerance);
             }
+        }
+
+        private static DetectedCadTableCell FindTargetCell(IList<DetectedCadTableCell> cells,
+            CadTextFragment fragment, double tolerance)
+        {
+            var exactCenterMatches = cells.Where(cell =>
+                fragment.Center.X > cell.Left && fragment.Center.X < cell.Right &&
+                fragment.Center.Y > cell.Bottom && fragment.Center.Y < cell.Top).ToList();
+            if (exactCenterMatches.Count == 1) return exactCenterMatches[0];
+
+            if (fragment.HasBounds && fragment.Right > fragment.Left && fragment.Top > fragment.Bottom)
+            {
+                var ranked = cells.Select(cell => new { Cell = cell, Score = OverlapRatio(cell, fragment) })
+                    .Where(item => item.Score > 0d).OrderByDescending(item => item.Score).ToList();
+                if (ranked.Count > 0)
+                {
+                    var second = ranked.Count > 1 ? ranked[1].Score : 0d;
+                    if (ranked[0].Score >= 0.5d && ranked[0].Score - second >= 0.2d)
+                        return ranked[0].Cell;
+                }
+            }
+
+            var tolerantCenterMatches = cells.Where(cell =>
+                fragment.Center.X >= cell.Left - tolerance && fragment.Center.X <= cell.Right + tolerance &&
+                fragment.Center.Y >= cell.Bottom - tolerance && fragment.Center.Y <= cell.Top + tolerance).ToList();
+            return tolerantCenterMatches.Count == 1 ? tolerantCenterMatches[0] : null;
+        }
+
+        private static double OverlapRatio(DetectedCadTableCell cell, CadTextFragment fragment)
+        {
+            var width = Math.Max(0d, Math.Min(cell.Right, fragment.Right) - Math.Max(cell.Left, fragment.Left));
+            var height = Math.Max(0d, Math.Min(cell.Top, fragment.Top) - Math.Max(cell.Bottom, fragment.Bottom));
+            var area = (fragment.Right - fragment.Left) * (fragment.Top - fragment.Bottom);
+            return area <= 0d ? 0d : width * height / area;
         }
 
         private static string CombineTextFragments(IList<CadTextFragment> fragments, double tolerance)

@@ -132,10 +132,18 @@ namespace CadArchSpec.CadTable
             for (var columnIndex = 0; columnIndex < cells.Count; columnIndex++)
             {
                 var cell = cells[columnIndex];
-                if (cell == null || cell.RowSpan == 0 || cell.ColumnSpan == 0) continue;
+                if (cell == null) continue;
                 writer.WriteStartElement("c");
                 writer.WriteAttributeString("r", CellReference(rowNumber, columnIndex + 1));
                 writer.WriteAttributeString("s", styleIndex.ToString());
+                if (cell.RowSpan == 0 || cell.ColumnSpan == 0)
+                {
+                    // Excel builds a merged range's outside border from the
+                    // styles of every cell in that range, not only its anchor.
+                    // Keep covered cells empty but styled so no edge disappears.
+                    writer.WriteEndElement();
+                    continue;
+                }
                 writer.WriteAttributeString("t", "inlineStr");
                 writer.WriteStartElement("is");
                 writer.WriteStartElement("t");

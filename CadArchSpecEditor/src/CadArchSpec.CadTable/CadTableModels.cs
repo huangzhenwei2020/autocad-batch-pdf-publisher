@@ -43,6 +43,11 @@ namespace CadArchSpec.CadTable
         public CadTablePoint Center { get; set; } = new CadTablePoint();
         public double Width { get; set; }
         public double Height { get; set; }
+        public bool HasBounds { get; set; }
+        public double Left { get; set; }
+        public double Bottom { get; set; }
+        public double Right { get; set; }
+        public double Top { get; set; }
         public double RotationDegrees { get; set; }
         public double Confidence { get; set; } = 1d;
         public CadTextSourceKind SourceKind { get; set; }
