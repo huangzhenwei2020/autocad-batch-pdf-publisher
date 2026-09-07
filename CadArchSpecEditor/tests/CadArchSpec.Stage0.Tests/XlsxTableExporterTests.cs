@@ -48,6 +48,8 @@ namespace CadArchSpec.Stage0.Tests
                         Assert.Contains("第二行", xml);
                         Assert.Contains("A2:B2", xml);
                         Assert.Contains("autoFilter", xml);
+                        Assert.True(xml.IndexOf("<autoFilter", System.StringComparison.Ordinal) <
+                            xml.IndexOf("<mergeCells", System.StringComparison.Ordinal));
                         Assert.Contains("width=\"10.8\"", xml);
                         Assert.Contains("width=\"32.4\"", xml);
                         Assert.Contains("r=\"3\" ht=\"48\" customHeight=\"1\"", xml);

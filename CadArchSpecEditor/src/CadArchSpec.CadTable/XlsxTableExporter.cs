@@ -102,6 +102,9 @@ namespace CadArchSpec.CadTable
                         merges.Add(from + ":" + to);
                     }
                 }
+                writer.WriteStartElement("autoFilter");
+                writer.WriteAttributeString("ref", "A1:" + CellReference(Math.Max(1, table.Rows.Count + 1), table.Columns.Count));
+                writer.WriteEndElement();
                 if (merges.Count > 0)
                 {
                     writer.WriteStartElement("mergeCells");
@@ -114,9 +117,6 @@ namespace CadArchSpec.CadTable
                     }
                     writer.WriteEndElement();
                 }
-                writer.WriteStartElement("autoFilter");
-                writer.WriteAttributeString("ref", "A1:" + CellReference(Math.Max(1, table.Rows.Count + 1), table.Columns.Count));
-                writer.WriteEndElement();
                 writer.WriteEndElement();
                 writer.WriteEndDocument();
             }
