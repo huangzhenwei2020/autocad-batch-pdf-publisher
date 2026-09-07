@@ -128,8 +128,10 @@ namespace BatchPdfPublisher.Models
 
     internal interface ILineVisionOcrEngine
     {
+        string EngineId { get; }
         string DisplayName { get; }
         bool IsAvailable { get; }
+        LineVisionOcrEngineCapabilities Capabilities { get; }
         Task<LineVisionOcrPageResult> RecognizeAsync(string imagePath, LineVisionOcrOptions options, CancellationToken cancellationToken);
     }
 
@@ -144,6 +146,9 @@ namespace BatchPdfPublisher.Models
 
     internal sealed class LineVisionOcrPageResult
     {
+        public int ProtocolVersion { get; set; }
+        public string EngineId { get; set; }
+        public string EngineVersion { get; set; }
         public string Language { get; set; }
         public List<LineVisionOcrTextRegion> TextRegions { get; set; } = new List<LineVisionOcrTextRegion>();
     }
@@ -182,8 +187,10 @@ namespace BatchPdfPublisher.Models
 
     internal sealed class UnavailableLineVisionOcrEngine : ILineVisionOcrEngine
     {
+        public string EngineId { get { return "unavailable"; } }
         public string DisplayName { get { return "本地 OCR Worker（尚未安装）"; } }
         public bool IsAvailable { get { return false; } }
+        public LineVisionOcrEngineCapabilities Capabilities { get { return new LineVisionOcrEngineCapabilities { EngineId = EngineId, DisplayName = DisplayName, ProtocolVersion = LineVisionOcrProtocol.CurrentVersion }; } }
         public Task<LineVisionOcrPageResult> RecognizeAsync(string imagePath, LineVisionOcrOptions options, CancellationToken cancellationToken)
         {
             return Task.FromException<LineVisionOcrPageResult>(new InvalidOperationException("本地 OCR Worker 尚未安装。"));

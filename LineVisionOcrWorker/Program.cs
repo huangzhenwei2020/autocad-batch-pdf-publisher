@@ -12,11 +12,15 @@ using Windows.Graphics.Imaging;
 using Windows.Media.Ocr;
 using Windows.Storage;
 using Windows.Storage.Streams;
+using BatchPdfPublisher.Models;
 
 namespace Wanluo.LineVision.OcrWorker
 {
     internal static class Program
     {
+        private const string EngineId = "windows-ocr-worker";
+        private const string EngineVersion = "1";
+
         [STAThread]
         private static int Main(string[] args)
         {
@@ -28,34 +32,42 @@ namespace Wanluo.LineVision.OcrWorker
                     foreach (var installedLanguage in OcrEngine.AvailableRecognizerLanguages) Console.WriteLine(installedLanguage.LanguageTag + "|" + installedLanguage.DisplayName);
                     return 0;
                 }
-                var input = Value(args, "--input");
+                var requestPath = Value(args, "--request");
                 var output = Value(args, "--output");
-                var language = Value(args, "--language") ?? "zh-Hans-CN";
+                var request = Read<LineVisionOcrWorkerRequest>(requestPath);
+                if (request == null) throw new ArgumentException("缺少或无法读取 --request JSON 文件。");
+                if (request.ProtocolVersion != LineVisionOcrProtocol.CurrentVersion)
+                    throw new InvalidDataException("不支持的 OCR 协议版本：" + request.ProtocolVersion + "。");
+                var input = request.ImagePath;
+                var language = request.Language ?? "zh-Hans-CN";
                 if (string.IsNullOrWhiteSpace(input) || !File.Exists(input)) throw new FileNotFoundException("OCR 输入图片不存在。", input);
                 if (string.IsNullOrWhiteSpace(output)) throw new ArgumentException("缺少 --output 参数。");
-                var result = RecognizeAsync(input, language).GetAwaiter().GetResult();
+                var result = RecognizeAsync(input, language, request.RequestId).GetAwaiter().GetResult();
                 Write(output, result);
                 return result.Success ? 0 : 2;
             }
             catch (Exception exception)
             {
                 var output = Value(args, "--output");
-                var result = new WorkerResult { Success = false, Error = exception.GetBaseException().Message };
+                var request = Read<LineVisionOcrWorkerRequest>(Value(args, "--request"));
+                var result = NewResult(request == null ? null : request.RequestId);
+                result.Success = false;
+                result.Error = exception.GetBaseException().Message;
                 if (!string.IsNullOrWhiteSpace(output)) { try { Write(output, result); } catch { } }
                 Console.Error.WriteLine(result.Error);
                 return 1;
             }
         }
 
-        private static async Task<WorkerResult> RecognizeAsync(string path, string languageTag)
+        private static async Task<LineVisionOcrWorkerResult> RecognizeAsync(string path, string languageTag, string requestId)
         {
             var available = OcrEngine.AvailableRecognizerLanguages.ToList();
             var selected = available.FirstOrDefault(value => string.Equals(value.LanguageTag, languageTag, StringComparison.OrdinalIgnoreCase))
                 ?? available.FirstOrDefault(value => value.LanguageTag.StartsWith("zh-Hans", StringComparison.OrdinalIgnoreCase))
                 ?? available.FirstOrDefault(value => value.LanguageTag.StartsWith("en", StringComparison.OrdinalIgnoreCase));
-            if (selected == null) return new WorkerResult { Success = false, Error = "Windows 没有安装可用的 OCR 语言包。请在系统语言设置中安装中文或英文 OCR。" };
+            if (selected == null) { var missing = NewResult(requestId); missing.Error = "Windows 没有安装可用的 OCR 语言包。请在系统语言设置中安装中文或英文 OCR。"; return missing; }
             var engine = OcrEngine.TryCreateFromLanguage(new Language(selected.LanguageTag));
-            if (engine == null) return new WorkerResult { Success = false, Error = "无法创建 Windows OCR 引擎：" + selected.LanguageTag };
+            if (engine == null) { var missing = NewResult(requestId); missing.Error = "无法创建 Windows OCR 引擎：" + selected.LanguageTag; return missing; }
             var file = await StorageFile.GetFileFromPathAsync(Path.GetFullPath(path));
             using (IRandomAccessStream stream = await file.OpenAsync(FileAccessMode.Read))
             {
@@ -63,7 +75,8 @@ namespace Wanluo.LineVision.OcrWorker
                 using (var bitmap = await decoder.GetSoftwareBitmapAsync(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Ignore))
                 {
                     var recognized = await engine.RecognizeAsync(bitmap);
-                    var result = new WorkerResult { Success = true, Language = selected.LanguageTag, ImageWidth = (int)decoder.PixelWidth, ImageHeight = (int)decoder.PixelHeight };
+                    var result = NewResult(requestId);
+                    result.Success = true; result.Language = selected.LanguageTag; result.ImageWidth = (int)decoder.PixelWidth; result.ImageHeight = (int)decoder.PixelHeight;
                     foreach (var line in recognized.Lines)
                     {
                         if (line.Words.Count == 0) continue;
@@ -71,7 +84,7 @@ namespace Wanluo.LineVision.OcrWorker
                         var top = line.Words.Min(word => word.BoundingRect.Y);
                         var right = line.Words.Max(word => word.BoundingRect.X + word.BoundingRect.Width);
                         var bottom = line.Words.Max(word => word.BoundingRect.Y + word.BoundingRect.Height);
-                        result.TextRegions.Add(new WorkerTextRegion
+                        result.TextRegions.Add(new LineVisionOcrWorkerTextRegion
                         {
                             Text = string.Join(" ", line.Words.Select(word => word.Text)),
                             X = left, Y = top, Width = Math.Max(1d, right - left), Height = Math.Max(1d, bottom - top),
@@ -90,34 +103,24 @@ namespace Wanluo.LineVision.OcrWorker
             return null;
         }
 
-        private static void Write(string path, WorkerResult result)
+        private static LineVisionOcrWorkerResult NewResult(string requestId)
+        {
+            return new LineVisionOcrWorkerResult { ProtocolVersion = LineVisionOcrProtocol.CurrentVersion, RequestId = requestId, EngineId = EngineId, EngineVersion = EngineVersion };
+        }
+
+        private static T Read<T>(string path) where T : class
+        {
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return null;
+            try { var serializer = new DataContractJsonSerializer(typeof(T)); using (var stream = File.OpenRead(path)) return serializer.ReadObject(stream) as T; }
+            catch { return null; }
+        }
+
+        private static void Write(string path, LineVisionOcrWorkerResult result)
         {
             var directory = Path.GetDirectoryName(Path.GetFullPath(path)); if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
-            var serializer = new DataContractJsonSerializer(typeof(WorkerResult));
+            var serializer = new DataContractJsonSerializer(typeof(LineVisionOcrWorkerResult));
             using (var stream = File.Create(path)) serializer.WriteObject(stream, result);
         }
     }
 
-    [DataContract]
-    internal sealed class WorkerResult
-    {
-        [DataMember(Order = 1)] public bool Success { get; set; }
-        [DataMember(Order = 2)] public string Error { get; set; }
-        [DataMember(Order = 3)] public string Language { get; set; }
-        [DataMember(Order = 4)] public int ImageWidth { get; set; }
-        [DataMember(Order = 5)] public int ImageHeight { get; set; }
-        [DataMember(Order = 6)] public List<WorkerTextRegion> TextRegions { get; set; } = new List<WorkerTextRegion>();
-    }
-
-    [DataContract]
-    internal sealed class WorkerTextRegion
-    {
-        [DataMember(Order = 1)] public string Text { get; set; }
-        [DataMember(Order = 2)] public double X { get; set; }
-        [DataMember(Order = 3)] public double Y { get; set; }
-        [DataMember(Order = 4)] public double Width { get; set; }
-        [DataMember(Order = 5)] public double Height { get; set; }
-        [DataMember(Order = 6)] public double RotationDegrees { get; set; }
-        [DataMember(Order = 7)] public double Confidence { get; set; }
-    }
 }

@@ -30,6 +30,7 @@ internal static class LineVisionTests
         Run("CanDisablePolylineReconstruction", CanDisablePolylineReconstruction);
         Run("SnapsWorkerPolylineUsingUserTolerance", SnapsWorkerPolylineUsingUserTolerance);
         Run("MasksRecognizedTextBeforeLineDetection", MasksRecognizedTextBeforeLineDetection);
+        Run("ExposesVersionedOcrEngineCapabilities", ExposesVersionedOcrEngineCapabilities);
         var worker = Environment.GetEnvironmentVariable("WANLUO_LINEVISION_OCR_WORKER");
         if (!string.IsNullOrWhiteSpace(worker) && File.Exists(worker)) Run("RecognizesTextThroughIsolatedWorker", () => RecognizesTextThroughIsolatedWorker(worker));
         var vectorWorker = Environment.GetEnvironmentVariable("WANLUO_LINEVISION_VECTOR_WORKER");
@@ -253,11 +254,22 @@ internal static class LineVisionTests
             {
                 var engine = new LineVisionOcrWorkerClient(workerPath);
                 var result = engine.RecognizeAsync(path, new LineVisionOcrOptions { Language = "en-US", MinimumConfidence = 0.5 }, CancellationToken.None).GetAwaiter().GetResult();
+                Equal(LineVisionOcrProtocol.CurrentVersion, result.ProtocolVersion);
+                Equal("windows-ocr-worker", result.EngineId);
                 True(result.TextRegions.Any(), "独立 OCR Worker 没有返回文字区域");
                 True(result.TextRegions.Any(item => (item.Text ?? string.Empty).IndexOf("3600", StringComparison.OrdinalIgnoreCase) >= 0), "独立 OCR Worker 没有识别尺寸数字 3600");
             });
         }
         finally { UserDataPaths.TestRootDirectory = null; try { Directory.Delete(root, true); } catch { } }
+    }
+
+    private static void ExposesVersionedOcrEngineCapabilities()
+    {
+        var engine = new LineVisionOcrWorkerClient("missing-worker.exe");
+        Equal("windows-ocr-worker", engine.EngineId);
+        Equal(LineVisionOcrProtocol.CurrentVersion, engine.Capabilities.ProtocolVersion);
+        True(engine.Capabilities.SupportsRotation, "Windows OCR 能力信息没有声明页面旋转支持");
+        True(engine.Capabilities.Languages.Contains("zh-Hans-CN"), "Windows OCR 能力信息缺少简体中文");
     }
 
     private static void VectorizesThroughIsolatedWorker(string workerPath)

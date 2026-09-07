@@ -27,7 +27,9 @@ namespace BatchPdfPublisher.Services
         }
 
         public string DisplayName { get { return "Windows 本地 OCR（独立进程）"; } }
+        public string EngineId { get { return "windows-ocr-worker"; } }
         public bool IsAvailable { get { return File.Exists(_workerPath); } }
+        public LineVisionOcrEngineCapabilities Capabilities { get { return new LineVisionOcrEngineCapabilities { EngineId = EngineId, DisplayName = DisplayName, EngineVersion = "1", ProtocolVersion = LineVisionOcrProtocol.CurrentVersion, SupportsPolygon = false, SupportsConfidence = false, SupportsRotation = true, Languages = new List<string> { "zh-Hans-CN", "en-US" } }; } }
 
         public async Task<LineVisionOcrPageResult> RecognizeAsync(string imagePath, LineVisionOcrOptions options, CancellationToken cancellationToken)
         {
@@ -36,7 +38,7 @@ namespace BatchPdfPublisher.Services
             options = options ?? new LineVisionOcrOptions();
             var cachePath = Path.Combine(CacheDirectory, BuildCacheKey(imagePath, options) + ".json");
             var cached = TryRead(cachePath);
-            if (cached != null && cached.Success) return Convert(cached, options.MinimumConfidence);
+            if (cached != null && cached.Success && cached.ProtocolVersion == LineVisionOcrProtocol.CurrentVersion) return Convert(cached, options.MinimumConfidence);
 
             var operation = Path.Combine(UserDataPaths.TemporaryDirectory, "linevision-ocr-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(operation);
@@ -49,10 +51,13 @@ namespace BatchPdfPublisher.Services
                     SaveCrop(imagePath, options.SourceRegion.Value, input);
                 }
                 cancellationToken.ThrowIfCancellationRequested();
+                var request = new LineVisionOcrWorkerRequest { RequestId = Guid.NewGuid().ToString("N"), ImagePath = input, Language = options.Language };
+                var requestPath = Path.Combine(operation, "request.json");
+                Write(requestPath, request);
                 var start = new ProcessStartInfo
                 {
                     FileName = _workerPath,
-                    Arguments = "--input " + Quote(input) + " --output " + Quote(output) + " --language " + Quote(options.Language),
+                    Arguments = "--request " + Quote(requestPath) + " --output " + Quote(output),
                     WorkingDirectory = Path.GetDirectoryName(_workerPath),
                     UseShellExecute = false,
                     CreateNoWindow = true,
@@ -77,6 +82,8 @@ namespace BatchPdfPublisher.Services
                     var dto = TryRead(output);
                     if (dto == null) throw new InvalidDataException("OCR Worker 没有返回有效结果。" + (string.IsNullOrWhiteSpace(errorText) ? string.Empty : "\r\n" + errorText.Trim()));
                     if (!dto.Success) throw new InvalidOperationException(string.IsNullOrWhiteSpace(dto.Error) ? "OCR 识别失败。" : dto.Error);
+                    if (dto.ProtocolVersion != LineVisionOcrProtocol.CurrentVersion || !string.Equals(dto.RequestId, request.RequestId, StringComparison.Ordinal))
+                        throw new InvalidDataException("OCR Worker 返回的协议版本或任务编号不匹配，结果未采用。");
                     try { File.Copy(output, cachePath, true); } catch { }
                     return Convert(dto, options.MinimumConfidence);
                 }
@@ -84,10 +91,10 @@ namespace BatchPdfPublisher.Services
             finally { try { Directory.Delete(operation, true); } catch { } }
         }
 
-        private static LineVisionOcrPageResult Convert(WorkerResult dto, double minimumConfidence)
+        private static LineVisionOcrPageResult Convert(LineVisionOcrWorkerResult dto, double minimumConfidence)
         {
-            var result = new LineVisionOcrPageResult { Language = dto.Language };
-            foreach (var item in dto.TextRegions ?? new List<WorkerTextRegion>())
+            var result = new LineVisionOcrPageResult { ProtocolVersion = dto.ProtocolVersion, EngineId = dto.EngineId, EngineVersion = dto.EngineVersion, Language = dto.Language };
+            foreach (var item in dto.TextRegions ?? new List<LineVisionOcrWorkerTextRegion>())
             {
                 var text = Normalize(item.Text);
                 if (string.IsNullOrWhiteSpace(text)) continue;
@@ -130,36 +137,20 @@ namespace BatchPdfPublisher.Services
             }
         }
 
-        private static WorkerResult TryRead(string path)
+        private static LineVisionOcrWorkerResult TryRead(string path)
         {
             if (!File.Exists(path)) return null;
-            try { var serializer = new DataContractJsonSerializer(typeof(WorkerResult)); using (var stream = File.OpenRead(path)) return serializer.ReadObject(stream) as WorkerResult; }
+            try { var serializer = new DataContractJsonSerializer(typeof(LineVisionOcrWorkerResult)); using (var stream = File.OpenRead(path)) return serializer.ReadObject(stream) as LineVisionOcrWorkerResult; }
             catch { return null; }
+        }
+
+        private static void Write<T>(string path, T value)
+        {
+            var serializer = new DataContractJsonSerializer(typeof(T));
+            using (var stream = File.Create(path)) serializer.WriteObject(stream, value);
         }
 
         private static string Quote(string value) { return "\"" + (value ?? string.Empty).Replace("\"", "\\\"") + "\""; }
 
-        [DataContract]
-        private sealed class WorkerResult
-        {
-            [DataMember(Order = 1)] public bool Success { get; set; }
-            [DataMember(Order = 2)] public string Error { get; set; }
-            [DataMember(Order = 3)] public string Language { get; set; }
-            [DataMember(Order = 4)] public int ImageWidth { get; set; }
-            [DataMember(Order = 5)] public int ImageHeight { get; set; }
-            [DataMember(Order = 6)] public List<WorkerTextRegion> TextRegions { get; set; }
-        }
-
-        [DataContract]
-        private sealed class WorkerTextRegion
-        {
-            [DataMember(Order = 1)] public string Text { get; set; }
-            [DataMember(Order = 2)] public double X { get; set; }
-            [DataMember(Order = 3)] public double Y { get; set; }
-            [DataMember(Order = 4)] public double Width { get; set; }
-            [DataMember(Order = 5)] public double Height { get; set; }
-            [DataMember(Order = 6)] public double RotationDegrees { get; set; }
-            [DataMember(Order = 7)] public double Confidence { get; set; }
-        }
     }
 }
