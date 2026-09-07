@@ -44,6 +44,34 @@ namespace CadArchSpec.Stage0.Tests
         }
 
         [Fact]
+        public void IgnoresOpenDecorationLinesOutsideTheClosedTable()
+        {
+            var input = Grid(new[] { 0d, 100d }, new[] { 0d, 50d });
+            input.Segments.Add(Segment(220, 80, 300, 80));
+            input.Segments.Add(Segment(220, 80, 220, 120));
+
+            var result = new OrthogonalCadTableDetector().Detect(input);
+
+            Assert.Single(result.Cells);
+            Assert.Equal(new[] { 0d, 100d }, result.ColumnBoundaries);
+            Assert.Equal(new[] { 50d, 0d }, result.RowBoundaries);
+            Assert.Contains(result.Warnings, warning => warning.Contains("装饰线"));
+        }
+
+        [Fact]
+        public void IgnoresShortDecorationLineInsideACellWithoutCreatingRows()
+        {
+            var input = Grid(new[] { 0d, 100d }, new[] { 0d, 50d });
+            input.Segments.Add(Segment(20, 25, 80, 25));
+
+            var result = new OrthogonalCadTableDetector().Detect(input);
+
+            var cell = Assert.Single(result.Cells);
+            Assert.Equal(1, cell.RowSpan);
+            Assert.Equal(new[] { 50d, 0d }, result.RowBoundaries);
+        }
+
+        [Fact]
         public void KeepsAmbiguousBoundaryTextForManualReview()
         {
             var input = Grid(new[] { 0d, 100d, 200d }, new[] { 0d, 50d });

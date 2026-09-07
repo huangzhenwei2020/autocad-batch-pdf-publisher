@@ -58,6 +58,9 @@ namespace CadArchSpec.CadTable
             }
 
             DetectCells(result, horizontal, vertical, options);
+            var ignoredDecorationCount = PruneUnusedGridLines(result, horizontal, vertical, options);
+            if (ignoredDecorationCount > 0)
+                result.Warnings.Add("已忽略 " + ignoredDecorationCount + " 条未参与闭合单元格边界的装饰线。");
 
             AssignText(result, textFragments, options.CoordinateTolerance);
             if (result.Cells.Count == 0) result.Warnings.Add("检测到边界坐标，但没有形成闭合单元格。");
@@ -65,6 +68,38 @@ namespace CadArchSpec.CadTable
             if (mergedCount > 0) result.Warnings.Add("根据缺失的内部分隔线推断出 " + mergedCount + " 个合并单元格，请在预览中确认。");
             if (result.UnassignedText.Count > 0) result.Warnings.Add("有 " + result.UnassignedText.Count + " 段文字未能归入单元格，需要人工确认。");
             return result;
+        }
+
+        private static int PruneUnusedGridLines(CadTableDetectionResult result,
+            IList<AxisSegment> horizontal, IList<AxisSegment> vertical, CadTableDetectionOptions options)
+        {
+            if (result.Cells.Count == 0) return 0;
+            var usedHorizontalCoordinates = result.Cells.SelectMany(cell => new[] { cell.Top, cell.Bottom }).ToList();
+            var usedVerticalCoordinates = result.Cells.SelectMany(cell => new[] { cell.Left, cell.Right }).ToList();
+            var retainedHorizontal = horizontal.Where(line => usedHorizontalCoordinates.Any(value =>
+                Math.Abs(value - line.Fixed) <= options.CoordinateTolerance)).ToList();
+            var retainedVertical = vertical.Where(line => usedVerticalCoordinates.Any(value =>
+                Math.Abs(value - line.Fixed) <= options.CoordinateTolerance)).ToList();
+            var ignoredCount = horizontal.Count - retainedHorizontal.Count + vertical.Count - retainedVertical.Count;
+            if (ignoredCount == 0) return 0;
+
+            var refined = new CadTableDetectionResult
+            {
+                DetectedRotationDegrees = result.DetectedRotationDegrees,
+                ColumnBoundaries = Cluster(retainedVertical.Select(item => item.Fixed), options.CoordinateTolerance),
+                RowBoundaries = Cluster(retainedHorizontal.Select(item => item.Fixed), options.CoordinateTolerance)
+                    .OrderByDescending(value => value).ToList()
+            };
+            if (refined.ColumnBoundaries.Count < 2 || refined.RowBoundaries.Count < 2) return 0;
+            DetectCells(refined, retainedHorizontal, retainedVertical, options);
+            if (refined.Cells.Count == 0) return 0;
+
+            result.ColumnBoundaries = refined.ColumnBoundaries;
+            result.RowBoundaries = refined.RowBoundaries;
+            result.Cells = refined.Cells;
+            result.Warnings.RemoveAll(warning => warning.IndexOf("网格区域边界不完整", StringComparison.Ordinal) >= 0);
+            result.Warnings.AddRange(refined.Warnings);
+            return ignoredCount;
         }
 
         private static List<CadTextFragment> DeduplicateTextFragments(IEnumerable<CadTextFragment> source,
