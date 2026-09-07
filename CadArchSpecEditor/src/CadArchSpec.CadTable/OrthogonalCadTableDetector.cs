@@ -44,22 +44,87 @@ namespace CadArchSpec.CadTable
                 RowBoundaries = Cluster(horizontal.Select(item => item.Fixed), options.CoordinateTolerance)
                     .OrderByDescending(value => value).ToList()
             };
+            int duplicateTextCount;
+            var textFragments = DeduplicateTextFragments(normalizedInput.TextFragments ??
+                new List<CadTextFragment>(), options.CoordinateTolerance, out duplicateTextCount);
+            if (duplicateTextCount > 0)
+                result.Warnings.Add("已忽略 " + duplicateTextCount + " 段内容和位置均重合的重复文字。");
 
             if (result.ColumnBoundaries.Count < 2 || result.RowBoundaries.Count < 2)
             {
                 result.Warnings.Add("没有检测到完整的表格行列边界。");
-                result.UnassignedText.AddRange(normalizedInput.TextFragments ?? new List<CadTextFragment>());
+                result.UnassignedText.AddRange(textFragments);
                 return result;
             }
 
             DetectCells(result, horizontal, vertical, options);
 
-            AssignText(result, normalizedInput.TextFragments ?? new List<CadTextFragment>(), options.CoordinateTolerance);
+            AssignText(result, textFragments, options.CoordinateTolerance);
             if (result.Cells.Count == 0) result.Warnings.Add("检测到边界坐标，但没有形成闭合单元格。");
             var mergedCount = result.Cells.Count(cell => cell.RowSpan > 1 || cell.ColumnSpan > 1);
             if (mergedCount > 0) result.Warnings.Add("根据缺失的内部分隔线推断出 " + mergedCount + " 个合并单元格，请在预览中确认。");
             if (result.UnassignedText.Count > 0) result.Warnings.Add("有 " + result.UnassignedText.Count + " 段文字未能归入单元格，需要人工确认。");
             return result;
+        }
+
+        private static List<CadTextFragment> DeduplicateTextFragments(IEnumerable<CadTextFragment> source,
+            double tolerance, out int duplicateCount)
+        {
+            var retained = new List<CadTextFragment>();
+            duplicateCount = 0;
+            foreach (var fragment in source.Where(item => item != null && item.Center != null)
+                .OrderBy(item => SourcePriority(item.SourceKind)))
+            {
+                var duplicate = retained.Any(existing => SameVisibleText(existing, fragment) &&
+                    SameTextPosition(existing, fragment, tolerance));
+                if (duplicate)
+                {
+                    duplicateCount++;
+                    continue;
+                }
+                retained.Add(fragment);
+            }
+            return retained;
+        }
+
+        private static int SourcePriority(CadTextSourceKind sourceKind)
+        {
+            switch (sourceKind)
+            {
+                case CadTextSourceKind.Standard: return 0;
+                case CadTextSourceKind.TianzhengProperty: return 1;
+                case CadTextSourceKind.ExplodedClone: return 2;
+                case CadTextSourceKind.OcrFallback: return 3;
+                default: return 4;
+            }
+        }
+
+        private static bool SameVisibleText(CadTextFragment first, CadTextFragment second)
+        {
+            return string.Equals(ComparableText(first), ComparableText(second), StringComparison.Ordinal);
+        }
+
+        private static string ComparableText(CadTextFragment fragment)
+        {
+            var value = VisibleText(fragment).Replace("\r\n", "\n").Replace('\r', '\n');
+            return string.Join("\n", value.Split(new[] { '\n' }, StringSplitOptions.None)
+                .Select(line => line.Trim())).Trim();
+        }
+
+        private static bool SameTextPosition(CadTextFragment first, CadTextFragment second, double tolerance)
+        {
+            if (first.HasBounds && second.HasBounds)
+            {
+                var intersectionWidth = Math.Max(0d, Math.Min(first.Right, second.Right) - Math.Max(first.Left, second.Left));
+                var intersectionHeight = Math.Max(0d, Math.Min(first.Top, second.Top) - Math.Max(first.Bottom, second.Bottom));
+                var firstArea = Math.Max(0d, first.Right - first.Left) * Math.Max(0d, first.Top - first.Bottom);
+                var secondArea = Math.Max(0d, second.Right - second.Left) * Math.Max(0d, second.Top - second.Bottom);
+                var smallerArea = Math.Min(firstArea, secondArea);
+                if (smallerArea > 0d && intersectionWidth * intersectionHeight / smallerArea >= 0.85d) return true;
+            }
+            var positionTolerance = Math.Max(tolerance, Math.Max(first.Height, second.Height) * 0.25d);
+            return Math.Abs(first.Center.X - second.Center.X) <= positionTolerance &&
+                Math.Abs(first.Center.Y - second.Center.Y) <= positionTolerance;
         }
 
         private static double DetectOverallRotation(IEnumerable<CadTableSegment> segments)

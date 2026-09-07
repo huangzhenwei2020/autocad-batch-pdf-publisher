@@ -84,6 +84,43 @@ namespace CadArchSpec.Stage0.Tests
         }
 
         [Fact]
+        public void RemovesOnlySpatiallyOverlappingDuplicateText()
+        {
+            var input = Grid(new[] { 0d, 100d, 200d }, new[] { 0d, 50d });
+            var direct = Text("相同做法", 50, 25, CadTextSourceKind.TianzhengProperty, 5);
+            direct.SourceHandle = "T1";
+            SetBounds(direct, 30, 20, 70, 30);
+            var exploded = Text("相同做法", 50.2, 25.1, CadTextSourceKind.ExplodedClone, 5);
+            exploded.SourceHandle = "T1";
+            SetBounds(exploded, 30.2, 20.1, 70.2, 30.1);
+            var otherCell = Text("相同做法", 150, 25, CadTextSourceKind.Standard, 5);
+            otherCell.SourceHandle = "T2";
+            SetBounds(otherCell, 130, 20, 170, 30);
+            input.TextFragments.AddRange(new[] { exploded, direct, otherCell });
+
+            var result = new OrthogonalCadTableDetector().Detect(input);
+
+            Assert.Single(result.Cells.Single(cell => cell.ColumnIndex == 0).TextFragments);
+            Assert.Equal(CadTextSourceKind.TianzhengProperty,
+                result.Cells.Single(cell => cell.ColumnIndex == 0).TextFragments[0].SourceKind);
+            Assert.Single(result.Cells.Single(cell => cell.ColumnIndex == 1).TextFragments);
+            Assert.Contains(result.Warnings, warning => warning.Contains("1 段") && warning.Contains("重复文字"));
+        }
+
+        [Fact]
+        public void KeepsDifferentTextAtTheSamePosition()
+        {
+            var input = Grid(new[] { 0d, 100d }, new[] { 0d, 50d });
+            input.TextFragments.Add(Text("第一段", 50, 30, CadTextSourceKind.Standard, 5));
+            input.TextFragments.Add(Text("第二段", 50, 20, CadTextSourceKind.ExplodedClone, 5));
+
+            var result = new OrthogonalCadTableDetector().Detect(input);
+
+            Assert.Equal(2, result.Cells.Single().TextFragments.Count);
+            Assert.Equal("第一段" + System.Environment.NewLine + "第二段", result.Cells.Single().Text);
+        }
+
+        [Fact]
         public void InfersHorizontalMergedCellFromMissingInternalDivider()
         {
             var input = new CadTableDetectionInput();
