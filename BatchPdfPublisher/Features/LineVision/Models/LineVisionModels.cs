@@ -146,6 +146,7 @@ namespace BatchPdfPublisher.Models
         public Rectangle? SourceRegion { get; set; }
         public int TimeoutSeconds { get; set; } = 90;
         public int MaskExpansionPixels { get; set; } = 2;
+        public IProgress<LineVisionOcrWorkerProgress> Progress { get; set; }
     }
 
     internal sealed class LineVisionOcrPageResult

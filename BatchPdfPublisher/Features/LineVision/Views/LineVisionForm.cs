@@ -240,7 +240,7 @@ namespace BatchPdfPublisher.Views
                         var minimumConfidence = ParseDouble(_ocrConfidence, "最低置信度", 0d, 1d);
                         _lastOcrConfidenceThreshold = minimumConfidence;
                         _preview.LowConfidenceThreshold = minimumConfidence;
-                        _progress.Style = ProgressBarStyle.Marquee; _progress.MarqueeAnimationSpeed = 28;
+                        _progress.Style = ProgressBarStyle.Continuous; _progress.Value = 4;
                         _ocrEngineStatus.Text = "正在使用：" + capability.DisplayName + VersionSuffix(capability.EngineVersion);
                         ((IProgress<Tuple<int, string>>)progress).Report(Tuple.Create(4, "正在识别文字，可点击“取消分析”……"));
                         recognized = await engine.RecognizeAsync(path, new LineVisionOcrOptions
@@ -248,9 +248,14 @@ namespace BatchPdfPublisher.Views
                             Language = _ocrLanguage.SelectedIndex == 1 ? "en-US" : "zh-Hans-CN",
                             MinimumConfidence = minimumConfidence,
                             SourceRegion = region,
-                            MaskExpansionPixels = ParseInt(_maskExpansion, "遮罩扩边", 0, 50)
+                            MaskExpansionPixels = ParseInt(_maskExpansion, "遮罩扩边", 0, 50),
+                            Progress = new Progress<LineVisionOcrWorkerProgress>(value =>
+                            {
+                                var percent = 5 + Math.Max(0, Math.Min(100, value.Percent)) * 45 / 100;
+                                ((IProgress<Tuple<int, string>>)progress).Report(Tuple.Create(percent, "OCR · " + (string.IsNullOrWhiteSpace(value.Message) ? value.Stage : value.Message)));
+                            })
                         }, cancellation.Token);
-                        _progress.Style = ProgressBarStyle.Continuous; _progress.Value = 20;
+                        _progress.Value = 50;
                         _ocrEngineStatus.Text = "本次使用：" + OcrEngineDisplayName(recognized.EngineId) + VersionSuffix(recognized.EngineVersion);
                         _ocrEngineStatus.ForeColor = Color.FromArgb(28, 112, 73);
                     }
@@ -261,12 +266,14 @@ namespace BatchPdfPublisher.Views
                 var textRegions = recognized.TextRegions;
                 var mask = _recognizeText.Checked && _maskText.Checked && string.IsNullOrEmpty(ocrWarning);
                 var expansion = ParseInt(_maskExpansion, "遮罩扩边", 0, 50);
-                var result = await Task.Run(() => LineVisionProcessor.Analyze(path, region, settings, textRegions, mask, expansion, cancellation.Token, (percent, message) => ((IProgress<Tuple<int, string>>)progress).Report(Tuple.Create(percent, message))));
+                var processingStart = _recognizeText.Checked ? 50 : 5;
+                var processingSpan = _recognizeText.Checked ? 32 : 77;
+                var result = await Task.Run(() => LineVisionProcessor.Analyze(path, region, settings, textRegions, mask, expansion, cancellation.Token, (percent, message) => ((IProgress<Tuple<int, string>>)progress).Report(Tuple.Create(processingStart + Math.Max(0, Math.Min(100, percent)) * processingSpan / 100, message))));
                 if (settings.VectorMode != LineVisionVectorMode.Legacy)
                 {
                     try
                     {
-                        ((IProgress<Tuple<int, string>>)progress).Report(Tuple.Create(82, "正在运行骨架/VTracer矢量内核……"));
+                        ((IProgress<Tuple<int, string>>)progress).Report(Tuple.Create(84, "正在运行骨架/VTracer矢量内核……"));
                         var vector = await new LineVisionVectorWorkerClient().VectorizeAsync(path, region, settings, mask ? textRegions : null, expansion, cancellation.Token);
                         result.Polylines = vector.Polylines; result.WallRegions = vector.WallRegions;
                         result.Segments.Clear();

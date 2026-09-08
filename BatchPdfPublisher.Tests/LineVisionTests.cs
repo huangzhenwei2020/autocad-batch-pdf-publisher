@@ -33,6 +33,7 @@ internal static class LineVisionTests
         Run("MasksRecognizedTextBeforeLineDetection", MasksRecognizedTextBeforeLineDetection);
         Run("UsesPolygonInsteadOfBoundingBoxForTextMask", UsesPolygonInsteadOfBoundingBoxForTextMask);
         Run("ClassifiesLowConfidenceTextUsingUserThreshold", ClassifiesLowConfidenceTextUsingUserThreshold);
+        Run("AcceptsOnlyMatchingOcrProgressEvents", AcceptsOnlyMatchingOcrProgressEvents);
         Run("ExposesVersionedOcrEngineCapabilities", ExposesVersionedOcrEngineCapabilities);
         Run("FallsBackWhenEnhancedOcrFails", FallsBackWhenEnhancedOcrFails);
         Run("SelectsRequestedOcrEngine", SelectsRequestedOcrEngine);
@@ -96,6 +97,19 @@ internal static class LineVisionTests
         True(LineVisionOcrConfidence.IsLow(double.NaN, 0.70d), "无效置信度必须保守标记为待复核");
         Equal("待复核", LineVisionOcrConfidence.StatusText(0.30d, 0.70d));
         Equal("正常", LineVisionOcrConfidence.StatusText(0.95d, 0.70d));
+    }
+
+    private static void AcceptsOnlyMatchingOcrProgressEvents()
+    {
+        var matching = "{\"ProtocolVersion\":" + LineVisionOcrProtocol.CurrentVersion + ",\"RequestId\":\"job-1\",\"Type\":\"progress\",\"Percent\":130,\"Stage\":\"inference\",\"Message\":\"正在识别\"}";
+        var parsed = LineVisionOcrWorkerClient.TryParseProgressLine(matching, "job-1");
+        True(parsed != null, "当前任务的有效进度事件应被接受");
+        Equal(100, parsed.Percent);
+        Equal("inference", parsed.Stage);
+        True(LineVisionOcrWorkerClient.TryParseProgressLine(matching, "job-2") == null, "其他任务的进度不得污染当前 UI");
+        True(LineVisionOcrWorkerClient.TryParseProgressLine("Paddle runtime log", "job-1") == null, "第三方标准输出日志不应被当作进度");
+        var oldProtocol = matching.Replace("\"ProtocolVersion\":" + LineVisionOcrProtocol.CurrentVersion, "\"ProtocolVersion\":1");
+        True(LineVisionOcrWorkerClient.TryParseProgressLine(oldProtocol, "job-1") == null, "旧协议进度不得被接受");
     }
 
     private static void MergesSmallCollinearGap()
@@ -279,11 +293,14 @@ internal static class LineVisionTests
             }, path =>
             {
                 var engine = new LineVisionOcrWorkerClient(workerPath);
-                var result = engine.RecognizeAsync(path, new LineVisionOcrOptions { Language = "en-US", MinimumConfidence = 0.5 }, CancellationToken.None).GetAwaiter().GetResult();
+                var progress = new RecordingProgress<LineVisionOcrWorkerProgress>();
+                var result = engine.RecognizeAsync(path, new LineVisionOcrOptions { Language = "en-US", MinimumConfidence = 0.5, Progress = progress }, CancellationToken.None).GetAwaiter().GetResult();
                 Equal(LineVisionOcrProtocol.CurrentVersion, result.ProtocolVersion);
                 Equal("windows-ocr-worker", result.EngineId);
                 True(result.TextRegions.Any(), "独立 OCR Worker 没有返回文字区域");
                 True(result.TextRegions.Any(item => (item.Text ?? string.Empty).IndexOf("3600", StringComparison.OrdinalIgnoreCase) >= 0), "独立 OCR Worker 没有识别尺寸数字 3600");
+                True(progress.Snapshot().Any(item => item.Stage == "inference"), "Windows OCR Worker 没有报告推理阶段");
+                True(progress.Snapshot().Any(item => item.Percent == 100), "Windows OCR Worker 没有报告完成进度");
             });
         }
         finally { UserDataPaths.TestRootDirectory = null; try { Directory.Delete(root, true); } catch { } }
@@ -318,13 +335,16 @@ internal static class LineVisionTests
                 // The production client resolves the worker through the same
                 // environment variable that the release script sets here.
                 var engine = new LineVisionPaddleOcrWorkerClient();
-                var result = engine.RecognizeAsync(path, new LineVisionOcrOptions { Language = "en-US", MinimumConfidence = 0.5 }, CancellationToken.None).GetAwaiter().GetResult();
+                var progress = new RecordingProgress<LineVisionOcrWorkerProgress>();
+                var result = engine.RecognizeAsync(path, new LineVisionOcrOptions { Language = "en-US", MinimumConfidence = 0.5, Progress = progress }, CancellationToken.None).GetAwaiter().GetResult();
                 Equal(LineVisionOcrProtocol.CurrentVersion, result.ProtocolVersion);
                 Equal("paddleocr-worker", result.EngineId);
                 True(result.TextRegions.Any(), "PaddleOCR 用户组件没有返回文字区域");
                 True(result.TextRegions.Any(item => (item.Text ?? string.Empty).IndexOf("3600", StringComparison.OrdinalIgnoreCase) >= 0), "PaddleOCR 用户组件没有识别尺寸数字 3600");
                 True(result.TextRegions.All(item => item.Polygon != null && item.Polygon.Length == 4), "PaddleOCR 用户组件没有返回四点文字框");
                 True(result.TextRegions.All(item => !string.IsNullOrWhiteSpace(item.OriginalText)), "PaddleOCR 用户组件没有保留 OCR 原文");
+                True(progress.Snapshot().Any(item => item.Stage == "inference"), "PaddleOCR 用户组件没有报告推理阶段");
+                True(progress.Snapshot().Any(item => item.Percent == 100), "PaddleOCR 用户组件没有报告完成进度");
             });
         }
         finally { UserDataPaths.TestRootDirectory = null; try { Directory.Delete(root, true); } catch { } }
@@ -361,13 +381,14 @@ internal static class LineVisionTests
         Equal("windows-ocr-worker", engine.EngineId);
         Equal(LineVisionOcrProtocol.CurrentVersion, engine.Capabilities.ProtocolVersion);
         True(engine.Capabilities.SupportsRotation, "Windows OCR 能力信息没有声明页面旋转支持");
+        True(engine.Capabilities.SupportsProgress, "Windows OCR 能力信息没有声明分阶段进度支持");
         True(engine.Capabilities.Languages.Contains("zh-Hans-CN"), "Windows OCR 能力信息缺少简体中文");
     }
 
     private static void FallsBackWhenEnhancedOcrFails()
     {
         var primary = new FakeOcrEngine("paddleocr-worker", true, () => throw new InvalidOperationException("simulated Paddle failure"));
-        var fallback = new FakeOcrEngine("windows-ocr-worker", true, () => new LineVisionOcrPageResult { ProtocolVersion = 1, EngineId = "windows-ocr-worker" });
+        var fallback = new FakeOcrEngine("windows-ocr-worker", true, () => new LineVisionOcrPageResult { ProtocolVersion = LineVisionOcrProtocol.CurrentVersion, EngineId = "windows-ocr-worker" });
         var result = new LineVisionFallbackOcrEngine(primary, fallback)
             .RecognizeAsync("unused.png", new LineVisionOcrOptions(), CancellationToken.None).GetAwaiter().GetResult();
         Equal("windows-ocr-worker", result.EngineId);
@@ -507,5 +528,12 @@ internal static class LineVisionTests
             try { return Task.FromResult(_recognize()); }
             catch (Exception exception) { return Task.FromException<LineVisionOcrPageResult>(exception); }
         }
+    }
+
+    private sealed class RecordingProgress<T> : IProgress<T>
+    {
+        private readonly List<T> _values = new List<T>();
+        public void Report(T value) { lock (_values) _values.Add(value); }
+        public List<T> Snapshot() { lock (_values) return new List<T>(_values); }
     }
 }

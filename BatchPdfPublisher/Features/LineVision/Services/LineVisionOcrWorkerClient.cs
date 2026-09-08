@@ -29,7 +29,7 @@ namespace BatchPdfPublisher.Services
         public virtual string DisplayName { get { return "Windows 本地 OCR（独立进程）"; } }
         public virtual string EngineId { get { return "windows-ocr-worker"; } }
         public virtual bool IsAvailable { get { return File.Exists(_workerPath); } }
-        public virtual LineVisionOcrEngineCapabilities Capabilities { get { return new LineVisionOcrEngineCapabilities { EngineId = EngineId, DisplayName = DisplayName, EngineVersion = "1", ProtocolVersion = LineVisionOcrProtocol.CurrentVersion, SupportsPolygon = false, SupportsConfidence = false, SupportsRotation = true, Languages = new List<string> { "zh-Hans-CN", "en-US" } }; } }
+        public virtual LineVisionOcrEngineCapabilities Capabilities { get { return new LineVisionOcrEngineCapabilities { EngineId = EngineId, DisplayName = DisplayName, EngineVersion = "2", ProtocolVersion = LineVisionOcrProtocol.CurrentVersion, SupportsPolygon = false, SupportsConfidence = false, SupportsRotation = true, SupportsProgress = true, Languages = new List<string> { "zh-Hans-CN", "en-US" } }; } }
 
         public async Task<LineVisionOcrPageResult> RecognizeAsync(string imagePath, LineVisionOcrOptions options, CancellationToken cancellationToken)
         {
@@ -38,7 +38,11 @@ namespace BatchPdfPublisher.Services
             options = options ?? new LineVisionOcrOptions();
             var cachePath = Path.Combine(CacheDirectory, BuildCacheKey(imagePath, options) + ".json");
             var cached = TryRead(cachePath);
-            if (cached != null && cached.Success && cached.ProtocolVersion == LineVisionOcrProtocol.CurrentVersion) return Convert(cached, options.MinimumConfidence);
+            if (cached != null && cached.Success && cached.ProtocolVersion == LineVisionOcrProtocol.CurrentVersion)
+            {
+                ReportProgress(options, new LineVisionOcrWorkerProgress { ProtocolVersion = LineVisionOcrProtocol.CurrentVersion, Type = "progress", Percent = 100, Stage = "cache", Message = "已读取本机识别缓存" });
+                return Convert(cached, options.MinimumConfidence);
+            }
 
             var operation = Path.Combine(UserDataPaths.TemporaryDirectory, "linevision-ocr-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(operation);
@@ -67,20 +71,30 @@ namespace BatchPdfPublisher.Services
                 using (var process = Process.Start(start))
                 {
                     if (process == null) throw new InvalidOperationException("无法启动本地 OCR Worker。");
+                    var errorText = new StringBuilder();
+                    process.ErrorDataReceived += (sender, args) => { if (!string.IsNullOrWhiteSpace(args.Data)) lock (errorText) errorText.AppendLine(args.Data); };
+                    process.OutputDataReceived += (sender, args) =>
+                    {
+                        var workerProgress = TryParseProgressLine(args.Data, request.RequestId);
+                        if (workerProgress != null) ReportProgress(options, workerProgress);
+                    };
+                    process.BeginErrorReadLine();
+                    process.BeginOutputReadLine();
                     var started = DateTime.UtcNow;
                     while (!process.HasExited)
                     {
                         if (cancellationToken.IsCancellationRequested || DateTime.UtcNow - started > TimeSpan.FromSeconds(Math.Max(10, options.TimeoutSeconds)))
                         {
-                            try { process.Kill(); } catch { }
+                            try { process.Kill(); process.WaitForExit(); } catch { }
                             cancellationToken.ThrowIfCancellationRequested();
                             throw new TimeoutException("本地 OCR 超时，请裁剪较小范围后重试。");
                         }
-                        await Task.Delay(80, cancellationToken).ConfigureAwait(false);
+                        await Task.Delay(80).ConfigureAwait(false);
                     }
-                    var errorText = await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
+                    process.WaitForExit();
+                    string capturedError; lock (errorText) capturedError = errorText.ToString();
                     var dto = TryRead(output);
-                    if (dto == null) throw new InvalidDataException("OCR Worker 没有返回有效结果。" + (string.IsNullOrWhiteSpace(errorText) ? string.Empty : "\r\n" + errorText.Trim()));
+                    if (dto == null) throw new InvalidDataException("OCR Worker 没有返回有效结果。" + (string.IsNullOrWhiteSpace(capturedError) ? string.Empty : "\r\n" + capturedError.Trim()));
                     if (!dto.Success) throw new InvalidOperationException(string.IsNullOrWhiteSpace(dto.Error) ? "OCR 识别失败。" : dto.Error);
                     if (dto.ProtocolVersion != LineVisionOcrProtocol.CurrentVersion || !string.Equals(dto.RequestId, request.RequestId, StringComparison.Ordinal))
                         throw new InvalidDataException("OCR Worker 返回的协议版本或任务编号不匹配，结果未采用。");
@@ -143,6 +157,29 @@ namespace BatchPdfPublisher.Services
             if (!File.Exists(path)) return null;
             try { var serializer = new DataContractJsonSerializer(typeof(LineVisionOcrWorkerResult)); using (var stream = File.OpenRead(path)) return serializer.ReadObject(stream) as LineVisionOcrWorkerResult; }
             catch { return null; }
+        }
+
+        internal static LineVisionOcrWorkerProgress TryParseProgressLine(string line, string requestId)
+        {
+            if (string.IsNullOrWhiteSpace(line) || line[0] != '{') return null;
+            try
+            {
+                var bytes = Encoding.UTF8.GetBytes(line);
+                var serializer = new DataContractJsonSerializer(typeof(LineVisionOcrWorkerProgress));
+                using (var stream = new MemoryStream(bytes))
+                {
+                    var value = serializer.ReadObject(stream) as LineVisionOcrWorkerProgress;
+                    if (value == null || value.ProtocolVersion != LineVisionOcrProtocol.CurrentVersion || !string.Equals(value.RequestId, requestId, StringComparison.Ordinal) || !string.Equals(value.Type, "progress", StringComparison.OrdinalIgnoreCase)) return null;
+                    value.Percent = Math.Max(0, Math.Min(100, value.Percent));
+                    return value;
+                }
+            }
+            catch { return null; }
+        }
+
+        private static void ReportProgress(LineVisionOcrOptions options, LineVisionOcrWorkerProgress progress)
+        {
+            if (options != null && options.Progress != null && progress != null) options.Progress.Report(progress);
         }
 
         private static void Write<T>(string path, T value)

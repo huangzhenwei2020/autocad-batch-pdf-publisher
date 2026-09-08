@@ -10,10 +10,21 @@ import sys
 import traceback
 from typing import Any
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 ENGINE_ID = "paddleocr-worker"
 EXPECTED_PADDLEOCR_VERSION = "3.7.0"
 MODEL_VERSION = "PP-OCRv6-small"
+
+
+def emit_progress(request_id: str | None, percent: int, stage: str, message: str) -> None:
+    print(json.dumps({
+        "ProtocolVersion": PROTOCOL_VERSION,
+        "RequestId": request_id,
+        "Type": "progress",
+        "Percent": max(0, min(100, int(percent))),
+        "Stage": stage,
+        "Message": message,
+    }, ensure_ascii=False, separators=(",", ":")), flush=True)
 
 
 def worker_root() -> str:
@@ -109,6 +120,7 @@ def normalize_degrees(value: float) -> float:
 def recognize(request: dict[str, Any]) -> dict[str, Any]:
     request_id = request.get("RequestId", request.get("requestId"))
     output = result_template(request_id)
+    emit_progress(request_id, 8, "runtime", "正在加载 PaddleOCR 运行环境……")
     import paddleocr
     from PIL import Image
     from paddleocr import PaddleOCR
@@ -138,11 +150,15 @@ def recognize(request: dict[str, Any]) -> dict[str, Any]:
         "textline_orientation_model_dir": packaged_model("PP-LCNet_x1_0_textline_ori"),
     }
     pipeline_options.update(local_models)
+    emit_progress(request_id, 22, "models", "正在初始化检测、识别和方向模型……")
     pipeline = PaddleOCR(**pipeline_options)
+    emit_progress(request_id, 48, "image", "OCR 模型已就绪，正在读取图片……")
     image_path = request.get("ImagePath", request.get("imagePath"))
     with Image.open(image_path) as image:
         output["ImageWidth"], output["ImageHeight"] = image.size
+    emit_progress(request_id, 55, "inference", "正在检测并识别文字……")
     predictions = list(pipeline.predict(image_path))
+    emit_progress(request_id, 86, "geometry", "正在整理文字方向、位置和置信度……")
     for prediction in predictions:
         data = prediction_payload(prediction)
         texts = list(plain(data.get("rec_texts", [])))
@@ -173,6 +189,7 @@ def recognize(request: dict[str, Any]) -> dict[str, Any]:
     output["Success"] = True
     output["Language"] = language
     output["EngineVersion"] = installed + "/" + MODEL_VERSION
+    emit_progress(request_id, 100, "complete", "文字识别完成")
     return output
 
 
@@ -193,7 +210,7 @@ def main() -> int:
             "EngineId": ENGINE_ID, "DisplayName": "PaddleOCR 增强",
             "EngineVersion": EXPECTED_PADDLEOCR_VERSION + "/" + MODEL_VERSION,
             "ProtocolVersion": PROTOCOL_VERSION, "SupportsPolygon": True,
-            "SupportsConfidence": True, "SupportsRotation": True,
+            "SupportsConfidence": True, "SupportsRotation": True, "SupportsProgress": True,
             "Languages": ["zh-Hans-CN", "en-US"],
         }, ensure_ascii=False))
         return 0
@@ -202,6 +219,7 @@ def main() -> int:
     request: dict[str, Any] = {}
     try:
         request = read_request(args.request)
+        emit_progress(request.get("RequestId", request.get("requestId")), 3, "validate", "OCR 请求和图片校验完成")
         output = recognize(request)
         code = 0
     except Exception as exception:

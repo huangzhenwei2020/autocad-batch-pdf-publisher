@@ -46,6 +46,7 @@ namespace BatchPdfPublisher.Services
                     SupportsPolygon = true,
                     SupportsConfidence = true,
                     SupportsRotation = true,
+                    SupportsProgress = true,
                     Languages = new List<string> { "zh-Hans-CN", "en-US" }
                 };
             }
@@ -75,7 +76,12 @@ namespace BatchPdfPublisher.Services
             {
                 try { return await _primary.RecognizeAsync(imagePath, options, cancellationToken).ConfigureAwait(false); }
                 catch (OperationCanceledException) { throw; }
-                catch (Exception exception) { primaryFailure = exception; }
+                catch (Exception exception)
+                {
+                    primaryFailure = exception;
+                    if (options != null && options.Progress != null)
+                        options.Progress.Report(new LineVisionOcrWorkerProgress { ProtocolVersion = LineVisionOcrProtocol.CurrentVersion, Type = "progress", Percent = 0, Stage = "fallback", Message = "增强 OCR 未完成，正在回退 Windows OCR……" });
+                }
             }
 
             if (_fallback.IsAvailable)

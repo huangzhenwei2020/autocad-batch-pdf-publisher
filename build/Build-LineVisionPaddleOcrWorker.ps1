@@ -84,7 +84,7 @@ foreach ($entry in $licenseSources.GetEnumerator()) {
 }
 
 $capabilities = & $executable --capabilities | ConvertFrom-Json
-if ($LASTEXITCODE -ne 0 -or $capabilities.EngineId -ne 'paddleocr-worker' -or $capabilities.ProtocolVersion -ne 1) {
+if ($LASTEXITCODE -ne 0 -or $capabilities.EngineId -ne 'paddleocr-worker' -or $capabilities.ProtocolVersion -ne 2) {
     throw 'PaddleOCR Worker 能力探测失败。'
 }
 $files = @(Get-ChildItem -LiteralPath $packageRoot -Recurse -File | ForEach-Object {
@@ -96,7 +96,7 @@ $files = @(Get-ChildItem -LiteralPath $packageRoot -Recurse -File | ForEach-Obje
 })
 $manifest = [ordered]@{
     Component = 'LineVisionPaddleOcrWorker'
-    ProtocolVersion = 1
+    ProtocolVersion = 2
     PaddleOCR = '3.7.0'
     PaddlePaddle = '3.3.1'
     Model = 'PP-OCRv6-small'

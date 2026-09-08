@@ -5,7 +5,7 @@ namespace BatchPdfPublisher.Models
 {
     internal static class LineVisionOcrProtocol
     {
-        public const int CurrentVersion = 1;
+        public const int CurrentVersion = 2;
     }
 
     [DataContract]
@@ -19,6 +19,7 @@ namespace BatchPdfPublisher.Models
         [DataMember(Order = 6)] public bool SupportsConfidence { get; set; }
         [DataMember(Order = 7)] public bool SupportsRotation { get; set; }
         [DataMember(Order = 8)] public List<string> Languages { get; set; } = new List<string>();
+        [DataMember(Order = 9)] public bool SupportsProgress { get; set; }
     }
 
     [DataContract]
@@ -63,5 +64,16 @@ namespace BatchPdfPublisher.Models
     {
         [DataMember(Order = 1)] public double X { get; set; }
         [DataMember(Order = 2)] public double Y { get; set; }
+    }
+
+    [DataContract]
+    internal sealed class LineVisionOcrWorkerProgress
+    {
+        [DataMember(Order = 1)] public int ProtocolVersion { get; set; }
+        [DataMember(Order = 2)] public string RequestId { get; set; }
+        [DataMember(Order = 3)] public string Type { get; set; }
+        [DataMember(Order = 4)] public int Percent { get; set; }
+        [DataMember(Order = 5)] public string Stage { get; set; }
+        [DataMember(Order = 6)] public string Message { get; set; }
     }
 }
