@@ -21,6 +21,7 @@
     <Compile Include="..\CadArchSpec.Host.Shared\CadTable\CadTableEntityReader.cs" Link="CadTable\CadTableEntityReader.cs" />
     <Compile Include="..\CadArchSpec.Host.Shared\CadTable\CadTableExchange.cs" Link="CadTable\CadTableExchange.cs" />
     <Compile Include="..\CadArchSpec.Host.Shared\CadTable\CadTableXlsxExchange.cs" Link="CadTable\CadTableXlsxExchange.cs" />
+    <Compile Include="..\CadArchSpec.Host.Shared\CadTable\ImageTableExchange.cs" Link="CadTable\ImageTableExchange.cs" />
     <ProjectReference Include="..\CadArchSpec.CadTable\CadArchSpec.CadTable.csproj" />
     <ProjectReference Include="..\CadArchSpec.Host.Contracts\CadArchSpec.Host.Contracts.csproj" />
     <ProjectReference Include="..\CadArchSpec.EditorBridge\CadArchSpec.EditorBridge.csproj" />

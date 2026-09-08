@@ -275,6 +275,29 @@ namespace CadArchSpec.Stage0.Tests
             Assert.Equal(new[] { 40d, 120d, 80d }, widths);
         }
 
+        [Fact]
+        public void ExtractsGridLinesFromBinarizedScan()
+        {
+            const int width = 121;
+            const int height = 81;
+            var pixels = new bool[width * height];
+            foreach (var y in new[] { 10, 40, 70 })
+                for (var x = 10; x <= 110; x++) pixels[y * width + x] = true;
+            foreach (var x in new[] { 10, 60, 110 })
+                for (var y = 10; y <= 70; y++) pixels[y * width + x] = true;
+
+            var input = RasterTableGridExtractor.Extract(width, height, pixels);
+            var result = new OrthogonalCadTableDetector().Detect(input, new CadTableDetectionOptions
+            {
+                CoordinateTolerance = 1,
+                MaximumBorderGap = 2
+            });
+
+            Assert.Equal(3, result.ColumnBoundaries.Count);
+            Assert.Equal(3, result.RowBoundaries.Count);
+            Assert.Equal(4, result.Cells.Count);
+        }
+
         private static CadTableDetectionInput Grid(IEnumerable<double> xs, IEnumerable<double> ys)
         {
             var x = xs.ToArray();

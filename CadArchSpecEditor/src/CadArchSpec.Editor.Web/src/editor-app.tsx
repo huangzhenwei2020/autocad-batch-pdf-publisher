@@ -106,6 +106,8 @@ export function createProjectMessage(
     | "cad.frame.pick"
     | "cad.text.read"
     | "cad.table.read"
+    | "image.table.read"
+    | "image.table.cancel"
     | "cad.table.locate"
     | "table.xlsx.export"
     | "cad.section.insert",
@@ -279,6 +281,7 @@ export function ArchitectureSpecEditor() {
   const [standardsOpen, setStandardsOpen] = useState(false);
   const [cadLayoutOpen, setCadLayoutOpen] = useState(false);
   const [cadBusy, setCadBusy] = useState(false);
+  const [imageTableBusy, setImageTableBusy] = useState(false);
   const [includeHiddenCadLayers, setIncludeHiddenCadLayers] = useState(
     () => localStorage.getItem(includeHiddenCadLayersKey) === "true",
   );
@@ -502,16 +505,17 @@ export function ArchitectureSpecEditor() {
         setSaveState("dirty");
         setCadBusy(false);
         setProjectNotice(`已从 CAD 读取 ${Number(payload.count ?? 0)} 个文字对象`);
-      } else if (event.data.type === "cad.tableRead") {
+      } else if (event.data.type === "cad.tableRead" || event.data.type === "image.tableRead") {
+        if (event.data.type === "image.tableRead") setImageTableBusy(false);
         if (payload.cancelled === true) {
           setCadBusy(false);
-          setProjectNotice("已取消读取 CAD 表格");
+          setProjectNotice(event.data.type === "image.tableRead" ? "已取消读取图片表格" : "已取消读取 CAD 表格");
           return;
         }
         const imported = payload.table as ArchitectureTable | undefined;
         if (!imported?.tableId || !Array.isArray(imported.columns) || !Array.isArray(imported.rows)) {
           setCadBusy(false);
-          window.alert("CAD 表格识别结果不完整，未修改当前项目。");
+          window.alert("表格识别结果不完整，未修改当前项目。");
           return;
         }
         setWorkspace((current) => ({
@@ -524,7 +528,7 @@ export function ArchitectureSpecEditor() {
         setCadBusy(false);
         const warningCount = Array.isArray(payload.warnings) ? payload.warnings.length : 0;
         const skippedHiddenCount = Number(payload.skippedHiddenEntityCount ?? 0);
-        const sourceLabel = payload.nativeTable === true ? "AutoCAD 原生表格" : "CAD 线框表格";
+        const sourceLabel = payload.imageTable === true ? "扫描图片表格" : payload.nativeTable === true ? "AutoCAD 原生表格" : "CAD 线框表格";
         setProjectNotice(
           `已读取${sourceLabel}：${Number(payload.rowCount ?? imported.rows.length)} 行 × ${Number(payload.columnCount ?? imported.columns.length)} 列${skippedHiddenCount ? `，已忽略 ${skippedHiddenCount} 个隐藏对象` : ""}${warningCount ? `，有 ${warningCount} 项需要确认` : ""}；请检查后保存表格`,
         );
@@ -543,6 +547,7 @@ export function ArchitectureSpecEditor() {
         setSnapshotLoading(false);
         setReviewRunning(false);
         setCadBusy(false);
+        setImageTableBusy(false);
         window.alert(`项目操作失败：${String(payload.message ?? "未知错误")}`);
       }
     };
@@ -636,6 +641,8 @@ export function ArchitectureSpecEditor() {
       | "cad.frame.pick"
       | "cad.text.read"
       | "cad.table.read"
+      | "image.table.read"
+      | "image.table.cancel"
       | "cad.table.locate"
       | "table.xlsx.export"
       | "cad.section.insert",
@@ -712,6 +719,20 @@ export function ArchitectureSpecEditor() {
     setCadBusy(true);
     setProjectNotice("请在 CAD 中框选一张表格的线条和文字…");
     postProjectMessage("cad.table.read", { includeHiddenLayers: includeHiddenCadLayers });
+  };
+
+  const readTableFromImage = () => {
+    if (!requireCadHost()) return;
+    if (imageTableBusy) {
+      setProjectNotice("正在安全停止图片表格识别……");
+      postProjectMessage("image.table.cancel");
+      return;
+    }
+    if (cadBusy) return;
+    setCadBusy(true);
+    setImageTableBusy(true);
+    setProjectNotice("请选择一张边框清晰的有线表格图片；识别结果需要人工复核");
+    postProjectMessage("image.table.read");
   };
 
   const insertCurrentSectionToCad = () => {
@@ -922,6 +943,9 @@ export function ArchitectureSpecEditor() {
           <button className="button" onClick={() => setCadLayoutOpen(true)}>CAD 版面</button>
           <button className="button" disabled={cadBusy} onClick={readTextFromCad}>从 CAD 获取文字</button>
           <button className="button" disabled={cadBusy} onClick={readTableFromCad}>从 CAD 读取表格</button>
+          <button className="button" disabled={cadBusy && !imageTableBusy} onClick={readTableFromImage}>
+            {imageTableBusy ? "取消图片识别" : "从图片读取表格（实验）"}
+          </button>
           <label className="cad-table-layer-option" title="默认忽略关闭、冻结或设为不可见的图层对象">
             <input
               type="checkbox"
