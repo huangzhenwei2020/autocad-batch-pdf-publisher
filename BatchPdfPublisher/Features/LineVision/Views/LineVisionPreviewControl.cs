@@ -1,4 +1,5 @@
 using BatchPdfPublisher.Models;
+using BatchPdfPublisher.Services;
 using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -53,6 +54,7 @@ namespace BatchPdfPublisher.Views
         public int SelectedArcIndex { get; set; } = -1;
         public int SelectedPolylineIndex { get; set; } = -1;
         public int SelectedWallIndex { get; set; } = -1;
+        public double LowConfidenceThreshold { get; set; } = 0.7d;
 
         public LineVisionPreviewControl()
         {
@@ -205,10 +207,12 @@ namespace BatchPdfPublisher.Views
                     var points = (text.Polygon ?? new PointF[0]).Select(point => ToResultScreen(point.X, point.Y)).ToArray();
                     if (points.Length < 4) continue;
                     var selected = index == SelectedTextIndex;
-                    var color = !text.IsEnabled ? Color.FromArgb(190, 235, 80, 80) : selected ? Color.Magenta : Color.FromArgb(230, 190, 90, 255);
+                    var lowConfidence = LineVisionOcrConfidence.IsLow(text.Confidence, LowConfidenceThreshold);
+                    var color = selected ? Color.Magenta : lowConfidence ? Color.FromArgb(235, 145, 35) : !text.IsEnabled ? Color.FromArgb(190, 235, 80, 80) : Color.FromArgb(230, 190, 90, 255);
                     using (var fill = new SolidBrush(Color.FromArgb(selected ? 55 : 28, color))) e.Graphics.FillPolygon(fill, points);
-                    using (var pen = new Pen(color, selected ? 3f : 1.5f) { DashStyle = text.IsEnabled ? DashStyle.Solid : DashStyle.Dash })
+                    using (var pen = new Pen(color, selected ? 3f : lowConfidence ? 2.2f : 1.5f) { DashStyle = lowConfidence || !text.IsEnabled ? DashStyle.Dash : DashStyle.Solid })
                         e.Graphics.DrawPolygon(pen, points);
+                    if (lowConfidence) DrawLowConfidenceMarker(e.Graphics, points);
                 }
             }
             if (!_region.IsEmpty)
@@ -261,6 +265,26 @@ namespace BatchPdfPublisher.Views
             if (direction == LineVisionDirection.Vertical) return Color.DeepSkyBlue;
             if (direction == LineVisionDirection.Diagonal || direction == LineVisionDirection.Angled) return Color.Gold;
             return Color.Red;
+        }
+
+        private static void DrawLowConfidenceMarker(Graphics graphics, PointF[] points)
+        {
+            var left = points.Min(point => point.X);
+            var top = points.Min(point => point.Y);
+            var center = new PointF(left - 7f, top - 7f);
+            var triangle = new[]
+            {
+                new PointF(center.X, center.Y - 6f),
+                new PointF(center.X - 6f, center.Y + 5f),
+                new PointF(center.X + 6f, center.Y + 5f)
+            };
+            using (var brush = new SolidBrush(Color.FromArgb(245, 155, 35))) graphics.FillPolygon(brush, triangle);
+            using (var pen = new Pen(Color.FromArgb(115, 70, 10), 1f)) graphics.DrawPolygon(pen, triangle);
+            using (var pen = new Pen(Color.White, 1.5f))
+            {
+                graphics.DrawLine(pen, center.X, center.Y - 2.5f, center.X, center.Y + 1.5f);
+                graphics.DrawEllipse(pen, center.X - 0.5f, center.Y + 3f, 1f, 1f);
+            }
         }
 
         private void DrawCentered(Graphics graphics, string text, Color color)

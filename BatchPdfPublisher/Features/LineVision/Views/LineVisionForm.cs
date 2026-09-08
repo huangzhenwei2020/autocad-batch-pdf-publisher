@@ -46,6 +46,7 @@ namespace BatchPdfPublisher.Views
         private Rectangle? _region;
         private LineVisionResult _result;
         private bool _syncingObjects;
+        private double _lastOcrConfidenceThreshold = 0.7d;
         private CancellationTokenSource _cancellation;
         private readonly Button _analyze = ButtonFor("分析图像");
         private readonly Button _cancelAnalysis = ButtonFor("取消分析");
@@ -142,6 +143,7 @@ namespace BatchPdfPublisher.Views
             _texts.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Enabled", HeaderText = "生成", Width = 48 });
             _texts.Columns.Add(new DataGridViewTextBoxColumn { Name = "Text", HeaderText = "识别文字", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill });
             _texts.Columns.Add(new DataGridViewTextBoxColumn { Name = "Confidence", HeaderText = "置信度", Width = 68, ReadOnly = true });
+            _texts.Columns.Add(new DataGridViewTextBoxColumn { Name = "ReviewStatus", HeaderText = "状态", Width = 72, ReadOnly = true });
             _texts.Columns.Add(new DataGridViewTextBoxColumn { Name = "Position", HeaderText = "位置", Width = 95, ReadOnly = true });
             _texts.CurrentCellDirtyStateChanged += (s, e) => { if (_texts.IsCurrentCellDirty) _texts.CommitEdit(DataGridViewDataErrorContexts.Commit); };
             _texts.DataError += (s, e) => { e.ThrowException = false; };
@@ -235,13 +237,16 @@ namespace BatchPdfPublisher.Views
                     {
                         var engine = LineVisionOcrEngineSelector.Create(SelectedOcrMode());
                         var capability = engine.Capabilities;
+                        var minimumConfidence = ParseDouble(_ocrConfidence, "最低置信度", 0d, 1d);
+                        _lastOcrConfidenceThreshold = minimumConfidence;
+                        _preview.LowConfidenceThreshold = minimumConfidence;
                         _progress.Style = ProgressBarStyle.Marquee; _progress.MarqueeAnimationSpeed = 28;
                         _ocrEngineStatus.Text = "正在使用：" + capability.DisplayName + VersionSuffix(capability.EngineVersion);
                         ((IProgress<Tuple<int, string>>)progress).Report(Tuple.Create(4, "正在识别文字，可点击“取消分析”……"));
                         recognized = await engine.RecognizeAsync(path, new LineVisionOcrOptions
                         {
                             Language = _ocrLanguage.SelectedIndex == 1 ? "en-US" : "zh-Hans-CN",
-                            MinimumConfidence = ParseDouble(_ocrConfidence, "最低置信度", 0d, 1d),
+                            MinimumConfidence = minimumConfidence,
                             SourceRegion = region,
                             MaskExpansionPixels = ParseInt(_maskExpansion, "遮罩扩边", 0, 50)
                         }, cancellation.Token);
@@ -346,7 +351,15 @@ namespace BatchPdfPublisher.Views
             if (_result != null) foreach (var text in _result.TextRegions)
             {
                 var bounds = text.Bounds;
-                _texts.Rows.Add(text.IsEnabled, text.Text, text.Confidence.ToString("P0", CultureInfo.CurrentCulture), string.Format(CultureInfo.InvariantCulture, "{0:0},{1:0}", bounds.Left, bounds.Top));
+                var lowConfidence = LineVisionOcrConfidence.IsLow(text.Confidence, _lastOcrConfidenceThreshold);
+                var rowIndex = _texts.Rows.Add(text.IsEnabled, text.Text, text.Confidence.ToString("P0", CultureInfo.CurrentCulture), LineVisionOcrConfidence.StatusText(text.Confidence, _lastOcrConfidenceThreshold), string.Format(CultureInfo.InvariantCulture, "{0:0},{1:0}", bounds.Left, bounds.Top));
+                if (lowConfidence)
+                {
+                    var row = _texts.Rows[rowIndex];
+                    row.DefaultCellStyle.BackColor = Color.FromArgb(255, 248, 225);
+                    row.Cells["ReviewStatus"].Style.ForeColor = Color.FromArgb(190, 105, 0);
+                    row.Cells["ReviewStatus"].ToolTipText = "置信度低于当前阈值，默认不生成；请核对文字后再决定是否勾选。";
+                }
             }
             _syncingObjects = false;
         }
@@ -431,7 +444,9 @@ namespace BatchPdfPublisher.Views
             var arcs = _result.Arcs.Count(x => x.IsEnabled);
             var polylines = _result.Polylines.Count(x => x.IsEnabled);
             var walls = _result.WallRegions.Count(x => x.IsEnabled);
+            var lowConfidence = _result.TextRegions.Count(x => LineVisionOcrConfidence.IsLow(x.Confidence, _lastOcrConfidenceThreshold));
             _status.Text = "直线 " + _result.Segments.Count + " 根，折线 " + _result.Polylines.Count + " 条（选中 " + polylines + "），墙体候选 " + _result.WallRegions.Count + " 个（填充 " + walls + "），圆弧 " + _result.Arcs.Count + " 段，文字 " + _result.TextRegions.Count + " 个。";
+            if (lowConfidence > 0) _status.Text += " 其中 " + lowConfidence + " 项低置信度文字待复核（橙色标识）。";
             if (!string.IsNullOrWhiteSpace(_result.OcrWarning)) _status.Text += " OCR 未完成，已按纯线稿处理：" + _result.OcrWarning;
             else if (!string.IsNullOrWhiteSpace(_result.OcrEngineId)) _status.Text += " OCR：" + OcrEngineDisplayName(_result.OcrEngineId) + VersionSuffix(_result.OcrEngineVersion) + "。";
             if (!string.IsNullOrWhiteSpace(_result.VectorWarning)) _status.Text += " 新矢量内核未完成，已保留兼容算法：" + _result.VectorWarning;

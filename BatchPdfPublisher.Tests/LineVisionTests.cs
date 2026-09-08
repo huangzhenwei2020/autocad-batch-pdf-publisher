@@ -32,6 +32,7 @@ internal static class LineVisionTests
         Run("SnapsWorkerPolylineUsingUserTolerance", SnapsWorkerPolylineUsingUserTolerance);
         Run("MasksRecognizedTextBeforeLineDetection", MasksRecognizedTextBeforeLineDetection);
         Run("UsesPolygonInsteadOfBoundingBoxForTextMask", UsesPolygonInsteadOfBoundingBoxForTextMask);
+        Run("ClassifiesLowConfidenceTextUsingUserThreshold", ClassifiesLowConfidenceTextUsingUserThreshold);
         Run("ExposesVersionedOcrEngineCapabilities", ExposesVersionedOcrEngineCapabilities);
         Run("FallsBackWhenEnhancedOcrFails", FallsBackWhenEnhancedOcrFails);
         Run("SelectsRequestedOcrEngine", SelectsRequestedOcrEngine);
@@ -86,6 +87,15 @@ internal static class LineVisionTests
                 True(result.Segments.Any(x => x.Direction == LineVisionDirection.Horizontal && x.Length > 100), "裁剪范围内线段丢失");
             }
         });
+    }
+
+    private static void ClassifiesLowConfidenceTextUsingUserThreshold()
+    {
+        True(LineVisionOcrConfidence.IsLow(0.69d, 0.70d), "低于用户阈值的文字应标记为待复核");
+        True(!LineVisionOcrConfidence.IsLow(0.70d, 0.70d), "达到用户阈值的文字不应标记为低置信度");
+        True(LineVisionOcrConfidence.IsLow(double.NaN, 0.70d), "无效置信度必须保守标记为待复核");
+        Equal("待复核", LineVisionOcrConfidence.StatusText(0.30d, 0.70d));
+        Equal("正常", LineVisionOcrConfidence.StatusText(0.95d, 0.70d));
     }
 
     private static void MergesSmallCollinearGap()
