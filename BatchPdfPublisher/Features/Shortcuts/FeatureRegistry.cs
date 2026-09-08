@@ -18,6 +18,7 @@ namespace BatchPdfPublisher.Services
             F("attribute_batch", "批量改属性", "BPPATTR", "SBB", "图块与属性", "attribute", "框选不同类型的属性图块，按坐标排序、批量递增并写入同一属性标记。"),
             F("attribute_definition", "属性定义编辑", "BPPATTDEF", "BPA", "图块与属性", "attribute", "拾取图块后修改图块名称、属性 TAG、默认内容、字体、字高、宽度和对齐方式。"),
             F("architecture_spec", "建筑设计说明", "WLJZSM", "JZSM", "建筑工具", "spec", "打开万落建筑工具中的建筑设计说明助手。", "JZSM"),
+            F("cad_table_xlsx", "CAD表格转Excel", "WLCAD2XLSX", "CAD2XLSX", "建筑工具", "spec", "框选线框、文字或一张原生 CAD 表格，只读识别后直接导出 XLSX 文件。", "CAD2XLSX"),
             F("stair_detail", "楼梯大样", "WLLTDY", "LTDY", "建筑工具", "stair", "打开楼梯构件编辑器，按楼层、梯段和构造参数一键生成楼梯大样。", "LTDY"),
             F("drafting_standard", "制图标准", "BZS", "BZS", "制图与标注", "standard", "检查并补齐万落工具共用的图层、文字样式和标注样式。"),
             F("drawing_scale", "比例管理", "BL1", "BL1", "制图与标注", "scale", "把所选对象转换到指定图纸比例，并同步普通 CAD 与天正标注。"),

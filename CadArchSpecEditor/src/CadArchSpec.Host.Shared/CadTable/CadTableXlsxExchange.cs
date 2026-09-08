@@ -23,7 +23,8 @@ namespace CadArchSpec.Host.Shared.CadTable
                 FileName = SafeFileName(((string)source["tableNumber"] + " " + (string)source["title"]).Trim()) + ".xlsx"
             })
             {
-                if (dialog.ShowDialog(owner) != DialogResult.OK)
+                var dialogResult = owner == null ? dialog.ShowDialog() : dialog.ShowDialog(owner);
+                if (dialogResult != DialogResult.OK)
                     return new JObject { ["cancelled"] = true };
                 using (var stream = new FileStream(dialog.FileName, FileMode.Create, FileAccess.Write, FileShare.None))
                     new XlsxTableExporter().Write(stream, table);

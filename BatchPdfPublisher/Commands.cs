@@ -70,6 +70,20 @@ namespace BatchPdfPublisher
             if (document != null) document.SendStringToExecute("JZSM ", true, false, false);
         }
 
+        [CommandMethod("WLCAD2XLSX", CommandFlags.Session)]
+        public void ExportCadTableToXlsx()
+        {
+            var loaded = System.AppDomain.CurrentDomain.GetAssemblies().Any(x =>
+                x.GetName().Name.StartsWith("CadArchSpec.Host.AutoCAD", System.StringComparison.OrdinalIgnoreCase));
+            if (!loaded)
+            {
+                Application.ShowAlertDialog("CAD 表格转 Excel 组件尚未加载。\r\n\r\n请使用最新版“万落建筑工具启动器”重新安装完整组件。当前支持 AutoCAD 2021–2026。");
+                return;
+            }
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document != null) document.SendStringToExecute("CAD2XLSX ", true, false, false);
+        }
+
         [CommandMethod("WLLTDY", CommandFlags.Session)]
         public void OpenStairDetailAssistant()
         {

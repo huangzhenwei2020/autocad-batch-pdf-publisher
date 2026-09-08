@@ -15,6 +15,23 @@ namespace CadArchSpec.Host.Shared.CadTable
 {
     internal static class CadTableExchange
     {
+        public static JObject ExportSelectedTableToXlsx()
+        {
+            var recognized = ReadSelectedTableCore(false);
+            if ((bool?)recognized["cancelled"] == true) return recognized;
+
+            var exported = CadTableXlsxExchange.Export(recognized, null);
+            if ((bool?)exported["cancelled"] == true) return exported;
+
+            exported["rowCount"] = (int?)recognized["rowCount"] ?? 0;
+            exported["columnCount"] = (int?)recognized["columnCount"] ?? 0;
+            exported["nativeTable"] = (bool?)recognized["nativeTable"] ?? false;
+            exported["warnings"] = recognized["warnings"] == null
+                ? new JArray()
+                : recognized["warnings"].DeepClone();
+            return exported;
+        }
+
         public static async Task<JObject> ReadSelectedTableAsync(bool includeHiddenLayers = false)
         {
             JObject result = null;
