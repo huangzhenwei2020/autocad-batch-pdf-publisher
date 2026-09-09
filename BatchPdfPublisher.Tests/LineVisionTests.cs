@@ -6,7 +6,10 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
+using System.Runtime.Serialization.Json;
+using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -43,6 +46,8 @@ internal static class LineVisionTests
         Run("PlacesUpsideDownOcrTextFromPolygon", PlacesUpsideDownOcrTextFromPolygon);
         Run("DeduplicatesOverlappingOcrRegionsSafely", DeduplicatesOverlappingOcrRegionsSafely);
         Run("KeepsDistinctOrSeparatedOcrRegions", KeepsDistinctOrSeparatedOcrRegions);
+        Run("InstallsPaddleOcrComponentInCustomLocation", InstallsPaddleOcrComponentInCustomLocation);
+        Run("RejectsUnsafePaddleOcrPackage", RejectsUnsafePaddleOcrPackage);
         var worker = Environment.GetEnvironmentVariable("WANLUO_LINEVISION_OCR_WORKER");
         if (!string.IsNullOrWhiteSpace(worker) && File.Exists(worker)) Run("RecognizesTextThroughIsolatedWorker", () => RecognizesTextThroughIsolatedWorker(worker));
         var paddleWorker = Environment.GetEnvironmentVariable("WANLUO_LINEVISION_PADDLE_WORKER");
@@ -462,6 +467,81 @@ internal static class LineVisionTests
     private static LineVisionOcrTextRegion OcrRegion(string text, double confidence, PointF[] polygon)
     {
         return new LineVisionOcrTextRegion { Text = text, OriginalText = text, Confidence = confidence, Polygon = polygon, IsEnabled = true };
+    }
+
+    private static void InstallsPaddleOcrComponentInCustomLocation()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "WanluoPaddleComponentTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root); UserDataPaths.TestRootDirectory = root;
+        try
+        {
+            var source = Path.Combine(root, "source"); Directory.CreateDirectory(source);
+            var executable = Path.Combine(source, LineVisionPaddleOcrComponentService.ExecutableName);
+            var model = Path.Combine(source, "models", "model.bin"); Directory.CreateDirectory(Path.GetDirectoryName(model));
+            File.WriteAllText(executable, "worker"); File.WriteAllText(model, "model");
+            var manifest = new PaddleOcrComponentManifest
+            {
+                Component = LineVisionPaddleOcrComponentService.ComponentFolderName,
+                ProtocolVersion = LineVisionOcrProtocol.CurrentVersion,
+                PaddleOCR = "3.7.0", Model = "PP-OCRv6-small",
+                Files = new List<PaddleOcrComponentFile>
+                {
+                    ComponentFile(source, executable), ComponentFile(source, model)
+                }
+            };
+            using (var stream = File.Create(Path.Combine(source, LineVisionPaddleOcrComponentService.ManifestName)))
+                new DataContractJsonSerializer(typeof(PaddleOcrComponentManifest)).WriteObject(stream, manifest);
+            var package = Path.Combine(root, "component.zip");
+            ZipFile.CreateFromDirectory(source, package, CompressionLevel.NoCompression, true);
+            var customParent = Path.Combine(root, "custom-components");
+            LineVisionPaddleOcrComponentService.SetInstallParent(customParent);
+            True(File.Exists(Path.Combine(root, "运行文件", "linevision-paddle-component.path")), "本机组件路径没有写入运行目录");
+            True(!File.Exists(Path.Combine(root, "通用设置", "linevision-paddle-component.path")), "本机组件路径不应进入云同步设置");
+            LineVisionPaddleOcrComponentService.InstallPackage(package, null, CancellationToken.None);
+            var status = LineVisionPaddleOcrComponentService.GetStatus();
+            True(status.IsInstalled, "自定义位置安装后组件状态不可用");
+            True(status.CanUninstall, "用户安装的组件应该允许卸载");
+            Equal(Path.Combine(customParent, LineVisionPaddleOcrComponentService.ComponentFolderName), status.InstallDirectory);
+            Equal(status.ExecutablePath, LineVisionPaddleOcrComponentService.ResolveWorkerPath());
+            LineVisionPaddleOcrComponentService.Uninstall();
+            True(!Directory.Exists(status.InstallDirectory), "卸载后组件目录仍然存在");
+        }
+        finally { UserDataPaths.TestRootDirectory = null; try { Directory.Delete(root, true); } catch { } }
+    }
+
+    private static void RejectsUnsafePaddleOcrPackage()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "WanluoPaddleUnsafeTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root); UserDataPaths.TestRootDirectory = root;
+        try
+        {
+            var package = Path.Combine(root, "unsafe.zip");
+            using (var archive = ZipFile.Open(package, ZipArchiveMode.Create))
+            using (var writer = new StreamWriter(archive.CreateEntry("../outside.txt").Open())) writer.Write("unsafe");
+            var rejected = false;
+            try { LineVisionPaddleOcrComponentService.InstallPackage(package, null, CancellationToken.None); }
+            catch (InvalidDataException) { rejected = true; }
+            True(rejected, "越界 ZIP 路径没有被拒绝");
+            True(!File.Exists(Path.Combine(root, "outside.txt")), "越界 ZIP 写出了安装目录");
+        }
+        finally { UserDataPaths.TestRootDirectory = null; try { Directory.Delete(root, true); } catch { } }
+    }
+
+    private static PaddleOcrComponentFile ComponentFile(string root, string path)
+    {
+        return new PaddleOcrComponentFile
+        {
+            Path = path.Substring(root.TrimEnd(Path.DirectorySeparatorChar).Length + 1).Replace('\\', '/'),
+            Size = new FileInfo(path).Length,
+            Sha256 = Sha256(path)
+        };
+    }
+
+    private static string Sha256(string path)
+    {
+        using (var stream = File.OpenRead(path))
+        using (var algorithm = SHA256.Create())
+            return BitConverter.ToString(algorithm.ComputeHash(stream)).Replace("-", string.Empty);
     }
 
     private static void VectorizesThroughIsolatedWorker(string workerPath)

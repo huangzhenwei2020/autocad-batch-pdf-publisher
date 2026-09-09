@@ -16,8 +16,8 @@ namespace BatchPdfPublisher.Services
 
         private static string ResolveWorkerPath()
         {
-            var configured = Environment.GetEnvironmentVariable("WANLUO_LINEVISION_PADDLE_WORKER");
-            if (!string.IsNullOrWhiteSpace(configured) && File.Exists(configured)) return configured;
+            var managed = LineVisionPaddleOcrComponentService.ResolveWorkerPath();
+            if (!string.IsNullOrWhiteSpace(managed)) return managed;
             var assemblyDirectory = Path.GetDirectoryName(typeof(LineVisionPaddleOcrWorkerClient).Assembly.Location);
             var fileName = "LineVisionPaddleOcrWorker.exe";
             var candidates = new[]

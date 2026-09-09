@@ -22,6 +22,7 @@
     <Compile Include="..\BatchPdfPublisher\Features\LineVision\Services\LineVisionTextMasker.cs" Link="LineVisionTextMasker.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\LineVision\Services\LineVisionOcrConfidence.cs" Link="LineVisionOcrConfidence.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\LineVision\Services\LineVisionAutomaticOcrEngine.cs" Link="LineVisionAutomaticOcrEngine.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\LineVision\Services\LineVisionPaddleOcrComponentService.cs" Link="LineVisionPaddleOcrComponentService.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\LineVision\Services\LineVisionVectorWorkerClient.cs" Link="LineVisionVectorWorkerClient.cs" />
   </ItemGroup>
 </Project>

@@ -104,7 +104,11 @@ namespace BatchPdfPublisher.Views
             var all = ButtonFor("全选"); all.Click += (s, e) => SetAll(true); scaleRow.Controls.Add(all);
             var none = ButtonFor("全不选"); none.Click += (s, e) => SetAll(false); scaleRow.Controls.Add(none);
             scaleRow.Controls.Add(new Label { Text = "横竖吸附范围外保持原角度；绿色水平 · 蓝色垂直 · 黄色斜线", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(12, 8, 0, 0) }); top.Controls.Add(scaleRow);
-            var ocrRow = Row(); ocrRow.Controls.Add(_recognizeText); Add(ocrRow, "识别引擎", _ocrEngine); Add(ocrRow, "语言", _ocrLanguage); Add(ocrRow, "最低置信度", _ocrConfidence); ocrRow.Controls.Add(_maskText); Add(ocrRow, "遮罩扩边(px)", _maskExpansion); ocrRow.Controls.Add(_insertText); top.Controls.Add(ocrRow);
+            var ocrRow = Row(); ocrRow.Controls.Add(_recognizeText); Add(ocrRow, "识别引擎", _ocrEngine);
+            var manageOcr = ButtonFor("管理增强组件");
+            manageOcr.Click += (s, e) => { using (var dialog = new LineVisionPaddleOcrComponentForm()) dialog.ShowDialog(this); UpdateOcrEngineStatus(); };
+            ocrRow.Controls.Add(manageOcr);
+            Add(ocrRow, "语言", _ocrLanguage); Add(ocrRow, "最低置信度", _ocrConfidence); ocrRow.Controls.Add(_maskText); Add(ocrRow, "遮罩扩边(px)", _maskExpansion); ocrRow.Controls.Add(_insertText); top.Controls.Add(ocrRow);
             var ocrStatusRow = Row(); ocrStatusRow.Controls.Add(_ocrEngineStatus);
             ocrStatusRow.Controls.Add(new Label { Text = "识别期间窗口可操作；可随时点击“取消分析”终止独立进程。文字可在右侧“文字”页校正。", AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(12, 8, 0, 0) }); top.Controls.Add(ocrStatusRow);
             root.Controls.Add(top, 0, 0);
