@@ -21,7 +21,9 @@ namespace CadArchSpec.Host.Shared.CadTable
             {
                 var recognized = ReadSelectedTableCore(false);
                 if ((bool?)recognized["cancelled"] == true) return recognized;
-                using (var preview = new CadTablePreviewForm(recognized))
+                string currentTextStyle;
+                var textStyles = ReadTextStyles(out currentTextStyle);
+                using (var preview = new CadTablePreviewForm(recognized, textStyles, currentTextStyle))
                 {
                     preview.ShowDialog();
                     if (preview.SelectedAction == CadTablePreviewAction.Repick) continue;
@@ -52,20 +54,26 @@ namespace CadArchSpec.Host.Shared.CadTable
             var rows = (source == null ? null : source["rows"] as JArray) ?? new JArray();
             if (columns.Count == 0 || rows.Count == 0) throw new InvalidDataException("预览中没有可插入的表格数据。");
 
+            var options = payload["cadInsertOptions"] as JObject ?? new JObject();
+            var scale = Math.Max(.001d, (double?)options["scale"] ?? 1d);
+            var textHeight = Math.Max(.1d, (double?)options["textHeightMillimeters"] ?? 3.5d) * scale;
+            var textStyleName = ((string)options["textStyle"] ?? string.Empty).Trim();
+
             using (var transaction = document.Database.TransactionManager.StartTransaction())
             {
                 var currentSpace = (BlockTableRecord)transaction.GetObject(document.Database.CurrentSpaceId, OpenMode.ForWrite);
+                var textStyleId = ResolveTextStyle(document.Database, transaction, textStyleName);
                 var table = new Table();
                 table.SetDatabaseDefaults(document.Database);
                 table.Position = pointResult.Value;
                 table.SetSize(rows.Count, columns.Count);
-                table.SetRowHeight(8d);
-                table.SetColumnWidth(36d);
+                table.SetRowHeight(Math.Max(8d * scale, textHeight * 1.8d));
+                table.SetColumnWidth(36d * scale);
 
                 for (var columnIndex = 0; columnIndex < columns.Count; columnIndex++)
                 {
                     var column = columns[columnIndex] as JObject;
-                    table.Columns[columnIndex].Width = Math.Max(8d, (double?)column?["widthMillimeters"] ?? 36d);
+                    table.Columns[columnIndex].Width = Math.Max(8d * scale, ((double?)column?["widthMillimeters"] ?? 36d) * scale);
                 }
 
                 var merges = new List<CellRange>();
@@ -73,6 +81,8 @@ namespace CadArchSpec.Host.Shared.CadTable
                 {
                     var row = rows[rowIndex] as JObject;
                     var cells = (row == null ? null : row["cells"] as JArray) ?? new JArray();
+                    table.Rows[rowIndex].Height = Math.Max(textHeight * 1.8d,
+                        ((double?)row?["heightMillimeters"] ?? 8d) * scale);
                     for (var columnIndex = 0; columnIndex < Math.Min(cells.Count, columns.Count); columnIndex++)
                     {
                         var cell = cells[columnIndex] as JObject;
@@ -81,7 +91,9 @@ namespace CadArchSpec.Host.Shared.CadTable
                         var columnSpan = Math.Max(0, (int?)cell["columnSpan"] ?? 1);
                         if (rowSpan == 0 || columnSpan == 0) continue;
                         table.Cells[rowIndex, columnIndex].TextString = (string)cell["displayValue"] ?? string.Empty;
-                        table.Cells[rowIndex, columnIndex].Alignment = CellAlignment.MiddleCenter;
+                        table.Cells[rowIndex, columnIndex].TextHeight = textHeight;
+                        table.Cells[rowIndex, columnIndex].TextStyleId = textStyleId;
+                        table.Cells[rowIndex, columnIndex].Alignment = CadAlignment((string)cell["alignment"]);
                         if (rowSpan > 1 || columnSpan > 1)
                         {
                             var bottom = Math.Min(rows.Count - 1, rowIndex + rowSpan - 1);
@@ -101,6 +113,41 @@ namespace CadArchSpec.Host.Shared.CadTable
             var result = new JObject { ["action"] = "inserted" };
             CopyResultSummary(result, payload);
             return result;
+        }
+
+        private static List<string> ReadTextStyles(out string currentTextStyle)
+        {
+            currentTextStyle = "Standard";
+            var result = new List<string>();
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document == null) return result;
+            using (var transaction = document.Database.TransactionManager.StartOpenCloseTransaction())
+            {
+                var styles = (TextStyleTable)transaction.GetObject(document.Database.TextStyleTableId, OpenMode.ForRead);
+                foreach (ObjectId id in styles)
+                {
+                    var style = transaction.GetObject(id, OpenMode.ForRead) as TextStyleTableRecord;
+                    if (style != null && !string.IsNullOrWhiteSpace(style.Name)) result.Add(style.Name);
+                }
+                var current = transaction.GetObject(document.Database.Textstyle, OpenMode.ForRead) as TextStyleTableRecord;
+                if (current != null && !string.IsNullOrWhiteSpace(current.Name)) currentTextStyle = current.Name;
+                transaction.Commit();
+            }
+            return result.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(value => value).ToList();
+        }
+
+        private static ObjectId ResolveTextStyle(Database database, Transaction transaction, string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return database.Textstyle;
+            var styles = (TextStyleTable)transaction.GetObject(database.TextStyleTableId, OpenMode.ForRead);
+            return styles.Has(name) ? styles[name] : database.Textstyle;
+        }
+
+        private static CellAlignment CadAlignment(string value)
+        {
+            if (string.Equals(value, "left", StringComparison.OrdinalIgnoreCase)) return CellAlignment.MiddleLeft;
+            if (string.Equals(value, "right", StringComparison.OrdinalIgnoreCase)) return CellAlignment.MiddleRight;
+            return CellAlignment.MiddleCenter;
         }
 
         private static void CopyResultSummary(JObject target, JObject source)

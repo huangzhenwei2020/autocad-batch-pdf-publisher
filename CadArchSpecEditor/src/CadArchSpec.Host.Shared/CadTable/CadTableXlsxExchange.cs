@@ -48,7 +48,8 @@ namespace CadArchSpec.Host.Shared.CadTable
                     {
                         Value = (string)cell["displayValue"] ?? string.Empty,
                         RowSpan = Math.Max(0, (int?)cell["rowSpan"] ?? 1),
-                        ColumnSpan = Math.Max(0, (int?)cell["columnSpan"] ?? 1)
+                        ColumnSpan = Math.Max(0, (int?)cell["columnSpan"] ?? 1),
+                        Alignment = (string)cell["alignment"] ?? "center"
                     });
                 }
                 table.Rows.Add(row);

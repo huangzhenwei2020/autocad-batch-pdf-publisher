@@ -26,8 +26,8 @@ namespace CadArchSpec.Stage0.Tests
             {
                 Cells =
                 {
-                    new SpreadsheetCell { Value = "M02" },
-                    new SpreadsheetCell { Value = "第一行\n第二行\n第三行" }
+                    new SpreadsheetCell { Value = "M02", Alignment = "left" },
+                    new SpreadsheetCell { Value = "第一行\n第二行\n第三行", Alignment = "right" }
                 }
             });
 
@@ -47,7 +47,9 @@ namespace CadArchSpec.Stage0.Tests
                         Assert.Contains("第一行", xml);
                         Assert.Contains("第二行", xml);
                         Assert.Contains("A2:B2", xml);
-                        Assert.Contains("<c r=\"B2\" s=\"2\" />", xml);
+                        Assert.Contains("<c r=\"B2\" s=\"3\" />", xml);
+                        Assert.Contains("<c r=\"A3\" s=\"2\"", xml);
+                        Assert.Contains("<c r=\"B3\" s=\"4\"", xml);
                         Assert.Contains("autoFilter", xml);
                         Assert.True(xml.IndexOf("<autoFilter", System.StringComparison.Ordinal) <
                             xml.IndexOf("<mergeCells", System.StringComparison.Ordinal));
