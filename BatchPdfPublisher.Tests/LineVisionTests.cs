@@ -472,6 +472,8 @@ internal static class LineVisionTests
     private static void InstallsPaddleOcrComponentInCustomLocation()
     {
         var root = Path.Combine(Path.GetTempPath(), "WanluoPaddleComponentTests", Guid.NewGuid().ToString("N"));
+        var previousWorker = Environment.GetEnvironmentVariable("WANLUO_LINEVISION_PADDLE_WORKER");
+        Environment.SetEnvironmentVariable("WANLUO_LINEVISION_PADDLE_WORKER", null);
         Directory.CreateDirectory(root); UserDataPaths.TestRootDirectory = root;
         try
         {
@@ -506,7 +508,12 @@ internal static class LineVisionTests
             LineVisionPaddleOcrComponentService.Uninstall();
             True(!Directory.Exists(status.InstallDirectory), "卸载后组件目录仍然存在");
         }
-        finally { UserDataPaths.TestRootDirectory = null; try { Directory.Delete(root, true); } catch { } }
+        finally
+        {
+            Environment.SetEnvironmentVariable("WANLUO_LINEVISION_PADDLE_WORKER", previousWorker);
+            UserDataPaths.TestRootDirectory = null;
+            try { Directory.Delete(root, true); } catch { }
+        }
     }
 
     private static void RejectsUnsafePaddleOcrPackage()

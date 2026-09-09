@@ -76,6 +76,7 @@ namespace BatchPdfPublisher.Services
         internal const string ExecutableName = "LineVisionPaddleOcrWorker.exe";
         internal const string ManifestName = "component-manifest.json";
         private const string ReleasesApi = "https://api.github.com/repos/huangzhenwei2020/autocad-batch-pdf-publisher/releases?per_page=20";
+        private const string ReleasesPage = "https://github.com/huangzhenwei2020/autocad-batch-pdf-publisher/releases/latest";
         private static readonly object SettingsSync = new object();
 
         private static string LocationSettingsPath { get { return Path.Combine(UserDataPaths.RootDirectory, "运行文件", "linevision-paddle-component.path"); } }
@@ -275,6 +276,11 @@ namespace BatchPdfPublisher.Services
             var directory = GetInstallDirectory();
             Directory.CreateDirectory(directory);
             Process.Start(new ProcessStartInfo("explorer.exe", "\"" + directory + "\"") { UseShellExecute = true });
+        }
+
+        public static void OpenDownloadPage()
+        {
+            Process.Start(new ProcessStartInfo(ReleasesPage) { UseShellExecute = true });
         }
 
         internal static void ValidateComponent(string componentRoot, IProgress<PaddleOcrComponentProgress> progress, CancellationToken cancellationToken)

@@ -16,7 +16,8 @@ namespace BatchPdfPublisher.Views
         private readonly Label _detail = new Label { AutoSize = true, MaximumSize = new Size(650, 0), ForeColor = Color.DimGray };
         private readonly ProgressBar _progress = new ProgressBar { Dock = DockStyle.Fill, Minimum = 0, Maximum = 100 };
         private readonly Button _online = ButtonFor("在线安装/更新");
-        private readonly Button _offline = ButtonFor("选择离线安装包");
+        private readonly Button _downloadPage = ButtonFor("打开下载页");
+        private readonly Button _offline = ButtonFor("选择已下载安装包");
         private readonly Button _changeLocation = ButtonFor("更改安装位置");
         private readonly Button _open = ButtonFor("打开文件夹");
         private readonly Button _uninstall = ButtonFor("卸载");
@@ -64,13 +65,14 @@ namespace BatchPdfPublisher.Views
             root.Controls.Add(_progress, 0, 3);
 
             var actions = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, WrapContents = true, Margin = new Padding(0, 10, 0, 0) };
-            actions.Controls.Add(_online); actions.Controls.Add(_offline); actions.Controls.Add(_open);
+            actions.Controls.Add(_online); actions.Controls.Add(_downloadPage); actions.Controls.Add(_offline); actions.Controls.Add(_open);
             actions.Controls.Add(_uninstall); actions.Controls.Add(_cancel);
             var close = ButtonFor("关闭"); close.Click += (sender, args) => Close(); actions.Controls.Add(close);
             root.Controls.Add(actions, 0, 4);
             Controls.Add(root);
 
             _online.Click += async (sender, args) => await InstallOnlineAsync();
+            _downloadPage.Click += (sender, args) => { try { LineVisionPaddleOcrComponentService.OpenDownloadPage(); } catch (Exception exception) { ShowError(exception); } };
             _offline.Click += async (sender, args) => await InstallOfflineAsync();
             _changeLocation.Click += ChangeLocation;
             _open.Click += (sender, args) => { try { LineVisionPaddleOcrComponentService.OpenInstallDirectory(); } catch (Exception exception) { ShowError(exception); } };
@@ -162,7 +164,7 @@ namespace BatchPdfPublisher.Views
 
         private void SetBusy(bool busy)
         {
-            _online.Enabled = !busy; _offline.Enabled = !busy; _changeLocation.Enabled = !busy;
+            _online.Enabled = !busy; _downloadPage.Enabled = !busy; _offline.Enabled = !busy; _changeLocation.Enabled = !busy;
             _open.Enabled = !busy; _uninstall.Enabled = !busy && LineVisionPaddleOcrComponentService.GetStatus().CanUninstall;
             _cancel.Enabled = busy;
         }
