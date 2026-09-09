@@ -17,19 +17,98 @@ namespace CadArchSpec.Host.Shared.CadTable
     {
         public static JObject ExportSelectedTableToXlsx()
         {
-            var recognized = ReadSelectedTableCore(false);
-            if ((bool?)recognized["cancelled"] == true) return recognized;
+            while (true)
+            {
+                var recognized = ReadSelectedTableCore(false);
+                if ((bool?)recognized["cancelled"] == true) return recognized;
+                using (var preview = new CadTablePreviewForm(recognized))
+                {
+                    preview.ShowDialog();
+                    if (preview.SelectedAction == CadTablePreviewAction.Repick) continue;
+                    if (preview.SelectedAction == CadTablePreviewAction.Cancel)
+                        return new JObject { ["cancelled"] = true };
+                    if (preview.SelectedAction == CadTablePreviewAction.InsertCad)
+                        return InsertTable(preview.Payload);
 
-            var exported = CadTableXlsxExchange.Export(recognized, null);
-            if ((bool?)exported["cancelled"] == true) return exported;
+                    var exported = CadTableXlsxExchange.Export(preview.Payload, null);
+                    if ((bool?)exported["cancelled"] == true) return exported;
+                    CopyResultSummary(exported, preview.Payload);
+                    exported["action"] = "exported";
+                    return exported;
+                }
+            }
+        }
 
-            exported["rowCount"] = (int?)recognized["rowCount"] ?? 0;
-            exported["columnCount"] = (int?)recognized["columnCount"] ?? 0;
-            exported["nativeTable"] = (bool?)recognized["nativeTable"] ?? false;
-            exported["warnings"] = recognized["warnings"] == null
-                ? new JArray()
-                : recognized["warnings"].DeepClone();
-            return exported;
+        private static JObject InsertTable(JObject payload)
+        {
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document == null) throw new InvalidOperationException("当前没有活动的 CAD 图纸。");
+            document.Window.Focus();
+            var pointResult = document.Editor.GetPoint("\n指定重新插入 CAD 表格的位置：");
+            if (pointResult.Status != PromptStatus.OK) return new JObject { ["cancelled"] = true };
+
+            var source = payload["table"] as JObject;
+            var columns = (source == null ? null : source["columns"] as JArray) ?? new JArray();
+            var rows = (source == null ? null : source["rows"] as JArray) ?? new JArray();
+            if (columns.Count == 0 || rows.Count == 0) throw new InvalidDataException("预览中没有可插入的表格数据。");
+
+            using (var transaction = document.Database.TransactionManager.StartTransaction())
+            {
+                var currentSpace = (BlockTableRecord)transaction.GetObject(document.Database.CurrentSpaceId, OpenMode.ForWrite);
+                var table = new Table();
+                table.SetDatabaseDefaults(document.Database);
+                table.Position = pointResult.Value;
+                table.SetSize(rows.Count, columns.Count);
+                table.SetRowHeight(8d);
+                table.SetColumnWidth(36d);
+
+                for (var columnIndex = 0; columnIndex < columns.Count; columnIndex++)
+                {
+                    var column = columns[columnIndex] as JObject;
+                    table.Columns[columnIndex].Width = Math.Max(8d, (double?)column?["widthMillimeters"] ?? 36d);
+                }
+
+                var merges = new List<CellRange>();
+                for (var rowIndex = 0; rowIndex < rows.Count; rowIndex++)
+                {
+                    var row = rows[rowIndex] as JObject;
+                    var cells = (row == null ? null : row["cells"] as JArray) ?? new JArray();
+                    for (var columnIndex = 0; columnIndex < Math.Min(cells.Count, columns.Count); columnIndex++)
+                    {
+                        var cell = cells[columnIndex] as JObject;
+                        if (cell == null) continue;
+                        var rowSpan = Math.Max(0, (int?)cell["rowSpan"] ?? 1);
+                        var columnSpan = Math.Max(0, (int?)cell["columnSpan"] ?? 1);
+                        if (rowSpan == 0 || columnSpan == 0) continue;
+                        table.Cells[rowIndex, columnIndex].TextString = (string)cell["displayValue"] ?? string.Empty;
+                        table.Cells[rowIndex, columnIndex].Alignment = CellAlignment.MiddleCenter;
+                        if (rowSpan > 1 || columnSpan > 1)
+                        {
+                            var bottom = Math.Min(rows.Count - 1, rowIndex + rowSpan - 1);
+                            var right = Math.Min(columns.Count - 1, columnIndex + columnSpan - 1);
+                            if (bottom > rowIndex || right > columnIndex)
+                                merges.Add(CellRange.Create(table, rowIndex, columnIndex, bottom, right));
+                        }
+                    }
+                }
+                foreach (var merge in merges) table.MergeCells(merge);
+                table.GenerateLayout();
+                currentSpace.AppendEntity(table);
+                transaction.AddNewlyCreatedDBObject(table, true);
+                transaction.Commit();
+            }
+
+            var result = new JObject { ["action"] = "inserted" };
+            CopyResultSummary(result, payload);
+            return result;
+        }
+
+        private static void CopyResultSummary(JObject target, JObject source)
+        {
+            target["rowCount"] = (int?)source["rowCount"] ?? 0;
+            target["columnCount"] = (int?)source["columnCount"] ?? 0;
+            target["nativeTable"] = (bool?)source["nativeTable"] ?? false;
+            target["warnings"] = source["warnings"] == null ? new JArray() : source["warnings"].DeepClone();
         }
 
         public static async Task<JObject> ReadSelectedTableAsync(bool includeHiddenLayers = false)

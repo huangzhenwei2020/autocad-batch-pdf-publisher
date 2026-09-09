@@ -48,6 +48,11 @@ internal static class LineVisionTests
         Run("KeepsDistinctOrSeparatedOcrRegions", KeepsDistinctOrSeparatedOcrRegions);
         Run("InstallsPaddleOcrComponentInCustomLocation", InstallsPaddleOcrComponentInCustomLocation);
         Run("RejectsUnsafePaddleOcrPackage", RejectsUnsafePaddleOcrPackage);
+        Run("RejectsPaddleOcrInstallPathThatIsTooLong", RejectsPaddleOcrInstallPathThatIsTooLong);
+        var paddlePackage = Environment.GetEnvironmentVariable("WANLUO_PADDLE_COMPONENT_PACKAGE");
+        if (!string.IsNullOrWhiteSpace(paddlePackage) && File.Exists(paddlePackage))
+            Run("PublishedPaddleOcrPackageFitsDefaultInstallPath", () =>
+                LineVisionPaddleOcrComponentService.EnsurePackagePathsFit(paddlePackage, LineVisionPaddleOcrComponentService.DefaultInstallDirectory));
         var worker = Environment.GetEnvironmentVariable("WANLUO_LINEVISION_OCR_WORKER");
         if (!string.IsNullOrWhiteSpace(worker) && File.Exists(worker)) Run("RecognizesTextThroughIsolatedWorker", () => RecognizesTextThroughIsolatedWorker(worker));
         var paddleWorker = Environment.GetEnvironmentVariable("WANLUO_LINEVISION_PADDLE_WORKER");
@@ -532,6 +537,26 @@ internal static class LineVisionTests
             True(!File.Exists(Path.Combine(root, "outside.txt")), "越界 ZIP 写出了安装目录");
         }
         finally { UserDataPaths.TestRootDirectory = null; try { Directory.Delete(root, true); } catch { } }
+    }
+
+    private static void RejectsPaddleOcrInstallPathThatIsTooLong()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "WanluoPaddlePathTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var package = Path.Combine(root, "component.zip");
+            using (var archive = ZipFile.Open(package, ZipArchiveMode.Create))
+            using (var writer = new StreamWriter(archive.CreateEntry(
+                LineVisionPaddleOcrComponentService.ComponentFolderName + "/_internal/" + new string('a', 150) + ".dll").Open()))
+                writer.Write("test");
+            var rejected = false;
+            try { LineVisionPaddleOcrComponentService.EnsurePackagePathsFit(package, Path.Combine(root, new string('b', 90))); }
+            catch (PathTooLongException) { rejected = true; }
+            True(rejected, "PaddleOCR 过深安装目录没有在解压前被拒绝");
+            True(LineVisionPaddleOcrComponentService.DefaultInstallDirectory.Length < 100, "PaddleOCR 默认安装目录仍然过深");
+        }
+        finally { try { Directory.Delete(root, true); } catch { } }
     }
 
     private static PaddleOcrComponentFile ComponentFile(string root, string path)

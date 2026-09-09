@@ -117,6 +117,7 @@ namespace BatchPdfPublisher
 
         [CommandMethod("LINEVISION", CommandFlags.Session)]
         [CommandMethod("TXZCAD", CommandFlags.Session)]
+        [CommandMethod("TXC", CommandFlags.Session)]
         public void OpenLineVision()
         {
             var document = Application.DocumentManager.MdiActiveDocument;

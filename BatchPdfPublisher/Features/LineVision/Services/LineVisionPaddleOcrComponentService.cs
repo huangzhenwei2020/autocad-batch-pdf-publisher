@@ -80,7 +80,15 @@ namespace BatchPdfPublisher.Services
         private static readonly object SettingsSync = new object();
 
         private static string LocationSettingsPath { get { return Path.Combine(UserDataPaths.RootDirectory, "运行文件", "linevision-paddle-component.path"); } }
-        public static string DefaultInstallDirectory { get { return Path.Combine(UserDataPaths.RootDirectory, "运行文件", ComponentFolderName); } }
+        public static string DefaultInstallDirectory
+        {
+            get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WanLuo", "PaddleOCR"); }
+        }
+
+        private static string LegacyDefaultInstallDirectory
+        {
+            get { return Path.Combine(UserDataPaths.RootDirectory, "运行文件", ComponentFolderName); }
+        }
 
         public static string GetInstallDirectory()
         {
@@ -91,7 +99,14 @@ namespace BatchPdfPublisher.Services
                     if (File.Exists(LocationSettingsPath))
                     {
                         var configured = File.ReadAllText(LocationSettingsPath).Trim();
-                        if (!string.IsNullOrWhiteSpace(configured) && Path.IsPathRooted(configured)) return Path.GetFullPath(configured);
+                        if (!string.IsNullOrWhiteSpace(configured) && Path.IsPathRooted(configured))
+                        {
+                            configured = Path.GetFullPath(configured);
+                            var legacyInstalled = File.Exists(Path.Combine(configured, ExecutableName))
+                                && File.Exists(Path.Combine(configured, ManifestName));
+                            if (legacyInstalled || !PathsEqual(configured, LegacyDefaultInstallDirectory)) return configured;
+                            PersistInstallDirectory(DefaultInstallDirectory);
+                        }
                     }
                 }
                 catch { }
@@ -108,8 +123,7 @@ namespace BatchPdfPublisher.Services
                 ? parent : Path.Combine(parent, ComponentFolderName);
             lock (SettingsSync)
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(LocationSettingsPath));
-                File.WriteAllText(LocationSettingsPath, target, Encoding.UTF8);
+                PersistInstallDirectory(target);
             }
         }
 
@@ -229,8 +243,10 @@ namespace BatchPdfPublisher.Services
                 var parent = Path.GetDirectoryName(target);
                 if (string.IsNullOrWhiteSpace(parent)) throw new IOException("增强组件安装位置无效。 ");
                 Directory.CreateDirectory(parent);
-                var staging = Path.Combine(parent, "." + ComponentFolderName + ".stage-" + Guid.NewGuid().ToString("N"));
-                var backup = Path.Combine(parent, "." + ComponentFolderName + ".previous-" + Guid.NewGuid().ToString("N"));
+                EnsurePackagePathsFit(packagePath, target);
+                var suffix = Guid.NewGuid().ToString("N").Substring(0, 8);
+                var staging = Path.Combine(parent, ".pocr-" + suffix);
+                var backup = Path.Combine(parent, ".pold-" + suffix);
                 try
                 {
                     ExtractPackage(packagePath, staging, progress, cancellationToken);
@@ -324,6 +340,26 @@ namespace BatchPdfPublisher.Services
             }
         }
 
+        internal static void EnsurePackagePathsFit(string packagePath, string targetDirectory)
+        {
+            var finalRoot = Path.GetFullPath(targetDirectory).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            using (var archive = ZipFile.OpenRead(packagePath))
+            {
+                foreach (var entry in archive.Entries)
+                {
+                    if (string.IsNullOrEmpty(entry.Name)) continue;
+                    var relative = entry.FullName.Replace('/', Path.DirectorySeparatorChar);
+                    var marker = ComponentFolderName + Path.DirectorySeparatorChar;
+                    var markerIndex = relative.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+                    if (markerIndex >= 0) relative = relative.Substring(markerIndex + marker.Length);
+                    var candidate = Path.GetFullPath(Path.Combine(finalRoot, relative));
+                    var directory = Path.GetDirectoryName(candidate) ?? candidate;
+                    if (candidate.Length >= 260 || directory.Length >= 248)
+                        throw new PathTooLongException("PaddleOCR 安装目录过深。请点击“更改安装位置”，选择较短目录，例如 C:\\WanLuoOCR。");
+                }
+            }
+        }
+
         private static string FindComponentRoot(string staging)
         {
             var manifests = Directory.GetFiles(staging, ManifestName, SearchOption.AllDirectories);
@@ -379,6 +415,12 @@ namespace BatchPdfPublisher.Services
         private static bool PathsEqual(string left, string right)
         {
             return string.Equals(Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar), Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static void PersistInstallDirectory(string target)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(LocationSettingsPath));
+            File.WriteAllText(LocationSettingsPath, Path.GetFullPath(target), Encoding.UTF8);
         }
 
         private static void TryDeleteFile(string path) { try { if (File.Exists(path)) File.Delete(path); } catch { } }
