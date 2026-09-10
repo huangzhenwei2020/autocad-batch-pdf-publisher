@@ -180,6 +180,20 @@ namespace WL.Stair.Cad2022
             catch { }
         }
 
+        private static void WriteEditorTrace(string message)
+        {
+            try
+            {
+                var directory = Path.Combine(WanluoDataPaths.Root, "Logs");
+                Directory.CreateDirectory(directory);
+                File.AppendAllText(Path.Combine(directory, "stair-editor.log"),
+                    DateTime.Now.ToString("O", CultureInfo.InvariantCulture)
+                    + " " + message + Environment.NewLine,
+                    Encoding.UTF8);
+            }
+            catch { }
+        }
+
         private void TracePlatformOpeningPreview(string action)
         {
             if (!string.Equals(action, "preview", StringComparison.OrdinalIgnoreCase)
@@ -296,10 +310,12 @@ namespace WL.Stair.Cad2022
 
             if (message.Action == "edit-door-window-division")
             {
+                WriteEditorTrace("请求打开门窗分格编辑器：" + (message.Target ?? string.Empty));
                 _constraints.Normalize(_state.Project);
                 EditDoorWindowDivision(message.Target);
                 _constraints.Apply(_state.Project);
                 SendDoorWindowDivisionState(message.Target);
+                WriteEditorTrace("门窗分格编辑器已关闭并回填：" + (message.Target ?? string.Empty));
                 return;
             }
 
@@ -1118,7 +1134,12 @@ namespace WL.Stair.Cad2022
         private void EditDoorWindowDivision(string componentId)
         {
             var opening = FindPlatformOpening(componentId);
-            if (opening == null || opening.Type == WallOpeningType.None) return;
+            if (opening == null || opening.Type == WallOpeningType.None)
+            {
+                WriteEditorTrace("未打开门窗分格编辑器：目标不存在或类型为不插入，目标="
+                    + (componentId ?? string.Empty));
+                return;
+            }
             var bridgeType = AppDomain.CurrentDomain.GetAssemblies()
                 .Select(assembly => assembly.GetType(
                     "BatchPdfPublisher.Views.DoorWindowDivisionEditorBridge", false))
@@ -1129,6 +1150,10 @@ namespace WL.Stair.Cad2022
                 | System.Reflection.BindingFlags.Static);
             if (method == null)
                 throw new InvalidOperationException("当前门窗立面模块不支持共享分格编辑，请重新运行最新版启动器。");
+            WriteEditorTrace(string.Format(CultureInfo.InvariantCulture,
+                "调用共享门窗分格编辑器：目标={0}，类型={1}，尺寸={2:0.###}x{3:0.###}，桥接程序集={4}",
+                componentId, (int)opening.Type, opening.Width, opening.Height,
+                bridgeType.Assembly.GetName().Name));
             var result = method.Invoke(null, new object[]
             {
                 componentId,
