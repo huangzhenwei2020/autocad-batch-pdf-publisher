@@ -37,6 +37,7 @@ namespace CadArchSpec.Host.Shared.CadTable
         private static string LastScale = "1";
         private static string LastTextStyle = string.Empty;
         private static decimal LastTextHeight = 3.5m;
+        private bool _redirectingMergeSelection;
 
         public CadTablePreviewAction SelectedAction { get; private set; }
         public JObject Payload { get { return _payload; } }
@@ -119,7 +120,19 @@ namespace CadArchSpec.Host.Shared.CadTable
             _grid.SelectionMode = DataGridViewSelectionMode.CellSelect;
             _grid.MultiSelect = true;
             _grid.KeyDown += GridKeyDown;
-            _grid.SelectionChanged += (sender, args) => ShowCurrentColumnTitle();
+            _grid.SelectionChanged += (sender, args) =>
+            {
+                ShowCurrentColumnTitle();
+                _grid.Invalidate();
+            };
+            _grid.CellPainting += GridCellPainting;
+            _grid.Paint += GridPaint;
+            _grid.CellMouseDown += GridCellMouseDown;
+            _grid.CellDoubleClick += GridCellDoubleClick;
+            _grid.EditingControlShowing += GridEditingControlShowing;
+            _grid.Scroll += (sender, args) => _grid.Invalidate();
+            _grid.ColumnWidthChanged += (sender, args) => _grid.Invalidate();
+            _grid.RowHeightChanged += (sender, args) => _grid.Invalidate();
 
             var actions = new FlowLayoutPanel
             {
@@ -210,15 +223,113 @@ namespace CadArchSpec.Host.Shared.CadTable
             gridCell.ToolTipText = string.Empty;
             if (gridCell.ReadOnly)
             {
-                gridCell.Style.BackColor = Color.FromArgb(235, 238, 241);
-                gridCell.ToolTipText = "该位置属于合并单元格";
+                gridCell.ToolTipText = "该位置属于合并单元格，点击可编辑主单元格";
             }
             else if (rowSpan > 1 || columnSpan > 1)
             {
-                gridCell.Style.BackColor = Color.FromArgb(226, 242, 252);
                 gridCell.ToolTipText = string.Format("合并区域：{0} 行 × {1} 列", rowSpan, columnSpan);
             }
             gridCell.Style.Alignment = GridAlignment((string)cell["alignment"]);
+        }
+
+        private void GridCellPainting(object sender, DataGridViewCellPaintingEventArgs e)
+        {
+            if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
+            int[] merge;
+            if (!TryFindMerge(e.RowIndex, e.ColumnIndex, out merge)) return;
+
+            // The grid still owns hit testing and editing. Its merged cells are
+            // painted as one region below, so suppress every internal border.
+            using (var brush = new SolidBrush(_grid.BackgroundColor))
+                e.Graphics.FillRectangle(brush, e.CellBounds);
+            e.Handled = true;
+        }
+
+        private void GridPaint(object sender, PaintEventArgs e)
+        {
+            foreach (var merge in MergeRanges().ToList())
+            {
+                var rectangle = MergeDisplayRectangle(merge);
+                if (rectangle.Width <= 0 || rectangle.Height <= 0 || !rectangle.IntersectsWith(_grid.ClientRectangle)) continue;
+                var selected = MergeIsSelected(merge);
+                var anchorStyle = _grid.Rows[merge[0]].Cells[merge[2]].InheritedStyle;
+                var background = selected ? anchorStyle.SelectionBackColor : anchorStyle.BackColor;
+                var foreground = selected ? anchorStyle.SelectionForeColor : anchorStyle.ForeColor;
+                using (var brush = new SolidBrush(background)) e.Graphics.FillRectangle(brush, rectangle);
+                using (var pen = new Pen(_grid.GridColor)) e.Graphics.DrawRectangle(pen,
+                    rectangle.Left, rectangle.Top, Math.Max(0, rectangle.Width - 1), Math.Max(0, rectangle.Height - 1));
+
+                var anchor = Cell(merge[0], merge[2]);
+                var text = Convert.ToString(_grid.Rows[merge[0]].Cells[merge[2]].Value) ?? string.Empty;
+                var flags = TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak |
+                    TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix;
+                var alignment = (string)anchor["alignment"];
+                if (string.Equals(alignment, "left", StringComparison.OrdinalIgnoreCase)) flags |= TextFormatFlags.Left;
+                else if (string.Equals(alignment, "right", StringComparison.OrdinalIgnoreCase)) flags |= TextFormatFlags.Right;
+                else flags |= TextFormatFlags.HorizontalCenter;
+                var textBounds = Rectangle.Inflate(rectangle, -5, -2);
+                TextRenderer.DrawText(e.Graphics, text, _grid.Font, textBounds, foreground, flags);
+            }
+        }
+
+        private void GridCellMouseDown(object sender, DataGridViewCellMouseEventArgs e)
+        {
+            if (e.RowIndex < 0 || e.ColumnIndex < 0 || _redirectingMergeSelection) return;
+            int[] merge;
+            if (!TryFindMerge(e.RowIndex, e.ColumnIndex, out merge) ||
+                e.RowIndex == merge[0] && e.ColumnIndex == merge[2]) return;
+            _redirectingMergeSelection = true;
+            BeginInvoke(new Action(() =>
+            {
+                try { SelectCell(merge[0], merge[2]); }
+                finally { _redirectingMergeSelection = false; }
+            }));
+        }
+
+        private void GridCellDoubleClick(object sender, DataGridViewCellEventArgs e)
+        {
+            if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
+            int[] merge;
+            if (!TryFindMerge(e.RowIndex, e.ColumnIndex, out merge)) return;
+            BeginInvoke(new Action(() =>
+            {
+                SelectCell(merge[0], merge[2]);
+                _grid.BeginEdit(true);
+            }));
+        }
+
+        private void GridEditingControlShowing(object sender, DataGridViewEditingControlShowingEventArgs e)
+        {
+            if (_grid.CurrentCell == null) return;
+            int[] merge;
+            if (!TryFindMerge(_grid.CurrentCell.RowIndex, _grid.CurrentCell.ColumnIndex, out merge)) return;
+            BeginInvoke(new Action(() =>
+            {
+                var rectangle = Rectangle.Inflate(MergeDisplayRectangle(merge), -2, -2);
+                if (rectangle.Width > 0 && rectangle.Height > 0) e.Control.Bounds = rectangle;
+            }));
+        }
+
+        private Rectangle MergeDisplayRectangle(int[] merge)
+        {
+            var first = _grid.GetCellDisplayRectangle(merge[2], merge[0], true);
+            var last = _grid.GetCellDisplayRectangle(merge[3], merge[1], true);
+            return Rectangle.FromLTRB(first.Left, first.Top, last.Right, last.Bottom);
+        }
+
+        private bool MergeIsSelected(int[] merge)
+        {
+            for (var row = merge[0]; row <= merge[1]; row++)
+                for (var column = merge[2]; column <= merge[3]; column++)
+                    if (_grid.Rows[row].Cells[column].Selected) return true;
+            return false;
+        }
+
+        private bool TryFindMerge(int row, int column, out int[] result)
+        {
+            result = MergeRanges().FirstOrDefault(range =>
+                row >= range[0] && row <= range[1] && column >= range[2] && column <= range[3]);
+            return result != null;
         }
 
         private void CommitEdits()

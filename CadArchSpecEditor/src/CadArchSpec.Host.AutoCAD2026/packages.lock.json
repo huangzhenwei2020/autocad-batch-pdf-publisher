@@ -39,7 +39,7 @@
       "cadarchspec.editorbridge": {
         "type": "Project",
         "dependencies": {
-          "CadArchSpec.Domain": "[1.4.8, )",
+          "CadArchSpec.Domain": "[1.4.9, )",
           "Newtonsoft.Json": "[13.0.3, )"
         }
       },
@@ -49,7 +49,7 @@
       "cadarchspec.ruleengine": {
         "type": "Project",
         "dependencies": {
-          "CadArchSpec.Domain": "[1.4.8, )",
+          "CadArchSpec.Domain": "[1.4.9, )",
           "Newtonsoft.Json": "[13.0.3, )"
         }
       },
