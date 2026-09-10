@@ -4,6 +4,7 @@ using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
+using System.Threading;
 using System.Windows.Forms;
 using CadArchSpec.EditorBridge;
 using CadArchSpec.Host.Contracts;
@@ -26,6 +27,7 @@ namespace CadArchSpec.Host.AutoCAD2022
         private bool _initializationStarted;
         private bool _disposed;
         private string _currentProjectPath = string.Empty;
+        private CancellationTokenSource _imageTableCancellation;
 
         public EditorHostControl()
         {
@@ -95,6 +97,8 @@ namespace CadArchSpec.Host.AutoCAD2022
                 Load -= OnLoaded;
                 if (disposing)
                 {
+                    _imageTableCancellation?.Cancel();
+                    _imageTableCancellation?.Dispose();
                     _webView.Dispose();
                 }
             }
@@ -196,6 +200,37 @@ namespace CadArchSpec.Host.AutoCAD2022
                         break;
                     case "cad.text.read":
                         PostMessage("cad.textRead", await CadDrawingExchange.ReadSelectedTextAsync((string)message.Payload["sectionId"]));
+                        break;
+                    case "cad.table.read":
+                        PostMessage("cad.tableRead", await CadArchSpec.Host.Shared.CadTable.CadTableExchange.ReadSelectedTableAsync(
+                            (bool?)message.Payload["includeHiddenLayers"] == true));
+                        break;
+                    case "image.table.read":
+                        _imageTableCancellation?.Cancel();
+                        _imageTableCancellation?.Dispose();
+                        _imageTableCancellation = new CancellationTokenSource();
+                        try
+                        {
+                            PostMessage("image.tableRead", await CadArchSpec.Host.Shared.CadTable.ImageTableExchange.ReadImageTableAsync(this, _imageTableCancellation.Token));
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            PostMessage("image.tableRead", new JObject { ["cancelled"] = true });
+                        }
+                        finally
+                        {
+                            _imageTableCancellation.Dispose();
+                            _imageTableCancellation = null;
+                        }
+                        break;
+                    case "image.table.cancel":
+                        _imageTableCancellation?.Cancel();
+                        break;
+                    case "cad.table.locate":
+                        PostMessage("cad.tableLocated", await CadArchSpec.Host.Shared.CadTable.CadTableExchange.LocateSourcesAsync(message.Payload));
+                        break;
+                    case "table.xlsx.export":
+                        PostMessage("table.xlsxExported", CadArchSpec.Host.Shared.CadTable.CadTableXlsxExchange.Export(message.Payload, this));
                         break;
                     case "cad.section.insert":
                         PostMessage("cad.sectionInserted", await CadDrawingExchange.InsertSectionAsync(message.Payload));

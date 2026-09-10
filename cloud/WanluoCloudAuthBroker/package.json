@@ -1,0 +1,12 @@
+{
+  "name": "wanluo-cloud-auth-broker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260901.1",
+    "wrangler": "4.127.1"
+  }
+}

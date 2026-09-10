@@ -73,6 +73,7 @@ namespace BatchPdfPublisher.Services
         [DataMember] public bool PrefixIncrement { get; set; }
         [DataMember] public bool SuffixIncrement { get; set; }
         [DataMember] public int? NumberingStyle { get; set; }
+        [DataMember(EmitDefaultValue = false)] public string StartItem { get; set; }
 
         public static AttributeBatchSettings Load()
         {
@@ -109,6 +110,7 @@ namespace BatchPdfPublisher.Services
         [DataMember] public bool PrefixIncrement { get; set; }
         [DataMember] public bool SuffixIncrement { get; set; }
         [DataMember] public int? NumberingStyle { get; set; }
+        [DataMember(EmitDefaultValue = false)] public string StartItem { get; set; }
     }
 
     public static class AttributePresetStore
@@ -292,6 +294,46 @@ namespace BatchPdfPublisher.Services
             return prefixValue + (fixedContent ?? string.Empty) + suffixValue;
         }
 
+        public static string BuildComposedValue(string fixedContent, string prefix, string suffix, string startItem, int index,
+            bool increment, bool prefixIncrement, bool suffixIncrement, AttributeNumberingStyle style, int step = 1, bool reverse = false)
+        {
+            // Blank means a legacy preset/settings file. Preserve the old
+            // prefix/suffix-seed behavior exactly until the user explicitly
+            // chooses or types a numbering start item.
+            if (!increment || string.IsNullOrWhiteSpace(startItem))
+                return BuildComposedValue(fixedContent, prefix, suffix, index,
+                    increment, prefixIncrement, suffixIncrement, style, step, reverse);
+
+            var token = BuildValue(startItem.Trim(), index, true, style, step, reverse);
+            var content = (prefix ?? string.Empty) + (fixedContent ?? string.Empty) + (suffix ?? string.Empty);
+            return (prefixIncrement ? token : string.Empty) + content + (suffixIncrement ? token : string.Empty);
+        }
+
+        public static IList<string> GetNumberingStartItems(AttributeNumberingStyle style)
+        {
+            if (style == AttributeNumberingStyle.Arabic)
+                return new[] { "0", "1", "2", "5", "10", "20", "50", "100", "01", "001" };
+
+            var count = style == AttributeNumberingStyle.HeavenlyStems ? 10
+                : style == AttributeNumberingStyle.EarthlyBranches ? 12
+                : 20;
+            return Enumerable.Range(1, count)
+                .Select(value => FormatNumberingValue(value, style, 0))
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+        }
+
+        public static bool IsNumberingStartItem(string value, AttributeNumberingStyle style)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return false;
+            string prefix;
+            long number;
+            int padding;
+            return TryExtractNumberingToken(value.Trim(), style, out prefix, out number, out padding)
+                && prefix.Length == 0
+                && (style == AttributeNumberingStyle.Arabic ? number >= 0 : number >= 1);
+        }
+
         public static IList<string> RunRegressionChecks()
         {
             var failures = new List<string>();
@@ -312,6 +354,10 @@ namespace BatchPdfPublisher.Services
             Check(failures, "前缀递增", BuildComposedValue("图纸", "", "", 1, true, true, false, AttributeNumberingStyle.Arabic) == "2图纸");
             Check(failures, "前后缀递增", BuildComposedValue("图纸", "1", "1", 1, true, true, true, AttributeNumberingStyle.Arabic) == "2图纸2");
             Check(failures, "关闭递增", BuildComposedValue("图纸", "前", "后", 1, false, false, true, AttributeNumberingStyle.Arabic) == "前图纸后");
+            Check(failures, "自定义数字首项", BuildComposedValue("图纸", "建施-", "", "5", 1, true, false, true, AttributeNumberingStyle.Arabic) == "建施-图纸6");
+            Check(failures, "自定义带圈首项", BuildComposedValue("详图", "", "", "⑦", 1, true, true, false, AttributeNumberingStyle.CircledNumber) == "⑧详图");
+            Check(failures, "首项下拉候选", GetNumberingStartItems(AttributeNumberingStyle.HeavenlyStems).SequenceEqual(new[] { "甲", "乙", "丙", "丁", "戊", "己", "庚", "辛", "壬", "癸" }));
+            Check(failures, "手输首项校验", IsNumberingStartItem("027", AttributeNumberingStyle.Arabic) && IsNumberingStartItem("丙", AttributeNumberingStyle.HeavenlyStems) && !IsNumberingStartItem("丙", AttributeNumberingStyle.Arabic));
 
             var points = new[]
             {

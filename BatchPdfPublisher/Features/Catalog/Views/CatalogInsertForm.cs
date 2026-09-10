@@ -14,6 +14,7 @@ namespace BatchPdfPublisher.Views
     public sealed class CatalogInsertForm : DpiAwareForm
     {
         private readonly Document _document;
+        private readonly ModelessDocumentBinding _documentBinding;
         private readonly System.Collections.Generic.IList<SheetItem> _sheets;
         private readonly Action _done;
         private readonly CheckedListBox _buildings = new CheckedListBox();
@@ -31,6 +32,7 @@ namespace BatchPdfPublisher.Views
         {
             _document = document; _sheets = sheets; _done = done;
             Text = "插入图纸目录"; Width = 760; Height = 650; MinimumSize = new Size(660, 540); StartPosition = FormStartPosition.CenterParent;
+            _documentBinding = new ModelessDocumentBinding(this, document);
             Font = new Font("Microsoft YaHei UI", 9F); AutoScaleMode = AutoScaleMode.Dpi; SizeGripStyle = SizeGripStyle.Show; Build();
         }
 

@@ -36,6 +36,7 @@ namespace BatchPdfPublisher.Views
     internal sealed class TianzhengRoomRenameForm : DpiAwareForm
     {
         private readonly Document _document;
+        private readonly ModelessDocumentBinding _documentBinding;
         private TianzhengRoomInfo _sample;
         private readonly TextBox _sampleName = new TextBox();
         private readonly TextBox _sampleArea = new TextBox();
@@ -62,6 +63,7 @@ namespace BatchPdfPublisher.Views
             Height = 590;
             MinimumSize = new Size(720, 460);
             Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
+            _documentBinding = new ModelessDocumentBinding(this, document);
             Build();
             ScanCurrentSpace();
             FormClosed += (s, e) => { SaveSettings(); ClearHighlight(); };

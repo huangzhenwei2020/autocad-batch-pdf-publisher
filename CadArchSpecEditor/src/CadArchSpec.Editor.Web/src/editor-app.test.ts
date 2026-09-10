@@ -59,6 +59,36 @@ function createRuleIssue(ruleId: string, fieldPath: string) {
 }
 
 describe("architecture specification editor", () => {
+  it("creates the CAD table read bridge message", () => {
+    const message = createProjectMessage("cad.table.read", { includeHiddenLayers: true });
+    expect(message.type).toBe("cad.table.read");
+    expect(message.protocolVersion).toBe(1);
+    expect(message.payload).toEqual({ includeHiddenLayers: true });
+  });
+
+  it("creates the XLSX export bridge message", () => {
+    const message = createProjectMessage("table.xlsx.export", { table: { tableId: "table-1" } });
+    expect(message.type).toBe("table.xlsx.export");
+    expect(message.payload).toEqual({ table: { tableId: "table-1" } });
+  });
+
+  it("creates the CAD source locate bridge message", () => {
+    const message = createProjectMessage("cad.table.locate", {
+      drawingPath: "C:\\Project\\A.dwg",
+      handles: ["1A", "2B"],
+    });
+    expect(message.type).toBe("cad.table.locate");
+    expect(message.payload).toEqual({ drawingPath: "C:\\Project\\A.dwg", handles: ["1A", "2B"] });
+  });
+
+  it("creates an editable custom table without applying a specialist template", () => {
+    const table = createProfessionalTableTemplate("custom", "");
+    expect(table.tableType).toBe("custom");
+    expect(table.title).toBe("自定义表格");
+    expect(table.columns).toHaveLength(2);
+    expect(table.rows).toHaveLength(1);
+  });
+
   it("creates the first two professional table templates", () => {
     const indicators = createProfessionalTableTemplate("technicalEconomicIndicators", "表1");
     const waterproof = createProfessionalTableTemplate("waterproofDesign", "表2");

@@ -465,26 +465,34 @@
   background: #eaf2f5;
 }
 
-.professional-grid td.selected-range input.invalid {
+.professional-grid td.selected-range textarea.invalid {
   background: #fae9e5;
 }
 
-.professional-grid td input {
+.professional-grid td textarea {
+  box-sizing: border-box;
+  display: block;
   width: 100%;
-  height: 35px;
-  padding: 0 7px;
+  min-height: 35px;
+  padding: 7px;
   color: #243247;
   background: transparent;
   border: 0;
   border-radius: 0;
   outline: 0;
+  resize: vertical;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 20px;
+  font: inherit;
 }
 
-.professional-grid td input:focus {
+.professional-grid td textarea:focus {
   background: #f7fbfc;
 }
 
-.professional-grid td input.invalid {
+.professional-grid td textarea.invalid {
   background: #fff2ef;
 }
 
@@ -709,6 +717,21 @@ button:disabled {
 
 .connection-state.connected .state-dot {
   background: #2e9665;
+}
+
+.cad-table-layer-option {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  color: #536276;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.cad-table-layer-option input {
+  margin: 0;
 }
 
 .project-strip {

@@ -36,6 +36,22 @@ powershell -ExecutionPolicy Bypass -File .\build\Build-Release.ps1
 .\build\Build-Release.ps1 -Bands R24,R25
 ```
 
+正式用户包需要同时携带免安装 Python 的 PaddleOCR 增强组件时执行：
+
+```powershell
+.\build\Build-Release.ps1 -Bands R24,R25 -IncludePaddleOcr
+```
+
+该组件约 650 MB，只在发布根目录 `OcrEngine` 保存一份，不会在 R24/R25 目录中重复。构建机需要先按 `LineVisionPaddleOcrWorker\README.md` 准备固定版本的隔离构建环境和模型；用户电脑不需要 Python，也不会在识别时临时下载模型。
+
+需要单独发布、供用户在“图像转 CAD → 管理增强组件”中按需安装时执行：
+
+```powershell
+.\build\Build-PaddleOcrUserPackage.ps1
+```
+
+输出为 `dist\OptionalComponents\WanLuo-PaddleOCR-3.7.0.zip` 及对应 `.sha256` 文件。将 ZIP 作为 GitHub Release 资产发布后，插件可在线发现并校验 GitHub 提供的 SHA256 摘要；也可把同一 ZIP 交给用户离线安装。
+
 版本分组为：
 
 | 目录 | AutoCAD 版本 |
@@ -63,6 +79,7 @@ dist\WanLuoArchitectureTools\
 - Git 分支和提交号；
 - 构建时工作区是否有未提交修改；
 - 启动器及各 CAD 代际插件 DLL 的 SHA-256。
+- 是否包含 PaddleOCR，以及其入口程序 SHA-256。
 
 用以下命令比较当前提交：
 

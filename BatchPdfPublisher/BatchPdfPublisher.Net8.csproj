@@ -8,16 +8,24 @@
     <RootNamespace>BatchPdfPublisher</RootNamespace>
     <AssemblyName>BatchPdfPublisher</AssemblyName>
     <PlatformTarget>x64</PlatformTarget>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <NoWarn>$(NoWarn);CA1416</NoWarn>
     <DefaultItemExcludes>$(DefaultItemExcludes);obj\**;obj-*\**</DefaultItemExcludes>
     <AutoCadApiPath Condition="'$(AutoCadApiPath)' == ''">C:\Program Files\Autodesk\AutoCAD 2025</AutoCadApiPath>
+    <UseAutoCadNuGet Condition="'$(UseAutoCadNuGet)' == '' And !Exists('$(AutoCadApiPath)\acmgd.dll')">true</UseAutoCadNuGet>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="..\Shared\ProductVersion.cs" Link="Infrastructure\ProductVersion.cs" />
+    <Reference Include="PdfSharp" HintPath="..\PdfSharp.dll" Private="true" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(UseAutoCadNuGet)' != 'true'">
     <Reference Include="acmgd" HintPath="$(AutoCadApiPath)\acmgd.dll" Private="false" />
     <Reference Include="acdbmgd" HintPath="$(AutoCadApiPath)\acdbmgd.dll" Private="false" />
     <Reference Include="accoremgd" HintPath="$(AutoCadApiPath)\accoremgd.dll" Private="false" />
     <Reference Include="AdWindows" HintPath="$(AutoCadApiPath)\AdWindows.dll" Private="false" />
-    <Reference Include="PdfSharp" HintPath="..\PdfSharp.dll" Private="true" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(UseAutoCadNuGet)' == 'true'">
+    <PackageReference Include="AutoCAD.NET" Version="25.0.1" PrivateAssets="all" ExcludeAssets="runtime" />
   </ItemGroup>
 </Project>

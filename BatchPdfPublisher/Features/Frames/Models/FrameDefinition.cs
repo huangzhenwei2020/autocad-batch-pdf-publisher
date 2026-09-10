@@ -23,6 +23,11 @@ namespace BatchPdfPublisher.Models
         public string DefaultSheetNumber { get; set; }
         public string DefaultSheetName { get; set; }
         public string DefaultPrintScale { get; set; }
+        public bool HasLayoutRange { get; set; }
+        public double LayoutLeftMargin { get; set; }
+        public double LayoutRightMargin { get; set; }
+        public double LayoutTopMargin { get; set; }
+        public double LayoutBottomMargin { get; set; }
 
         public string PaperDisplay => string.IsNullOrWhiteSpace(Extension) ? PaperSize : PaperSize + "+" + PaperSizeCatalog.NormalizeExtension(Extension);
         public string DisplayName

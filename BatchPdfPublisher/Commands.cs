@@ -17,6 +17,7 @@ namespace BatchPdfPublisher
         private static PublisherForm _publisherForm;
         private static TianzhengRoomRenameForm _roomRenameForm;
         private static DoorWindowElevationForm _doorWindowElevationForm;
+        private static LineVisionForm _lineVisionForm;
         private static IList<SheetItem> _catalogSheets;
         private static CatalogSettings _catalogSettings;
         private static Action _catalogDone;
@@ -29,8 +30,10 @@ namespace BatchPdfPublisher
             MenuService.InstallWhenReady();
             ShortcutAliasService.InstallWhenReady();
             ProjectAutoSaveService.Install();
+            CloudSyncCoordinator.Install();
+            CadSaveCloudSyncService.Install();
         }
-        public void Terminate() { ProjectAutoSaveService.Remove(); ShortcutAliasService.Remove(); RibbonService.Remove(); MenuService.Remove(); }
+        public void Terminate() { CadSaveCloudSyncService.Remove(); CloudSyncCoordinator.Remove(); ProjectAutoSaveService.Remove(); ShortcutAliasService.Remove(); RibbonService.Remove(); MenuService.Remove(); }
 
         [CommandMethod("BPP")]
         public void BppCommand() => OpenPublisher();
@@ -39,6 +42,18 @@ namespace BatchPdfPublisher
         public void ConfigureShortcuts()
         {
             Application.ShowModalDialog(new ShortcutSettingsForm());
+        }
+
+        [CommandMethod("WLCLOUDSYNC", CommandFlags.Session)]
+        public void ConfigureCloudSync()
+        {
+            Application.ShowModalDialog(new CloudSyncSettingsForm());
+        }
+
+        [CommandMethod("WLCLOUDCENTER", CommandFlags.Session)]
+        public void OpenCloudSyncCenter()
+        {
+            Application.ShowModalDialog(new CloudSyncCenterForm());
         }
 
         [CommandMethod("WLJZSM", CommandFlags.Session)]
@@ -53,6 +68,20 @@ namespace BatchPdfPublisher
             }
             var document = Application.DocumentManager.MdiActiveDocument;
             if (document != null) document.SendStringToExecute("JZSM ", true, false, false);
+        }
+
+        [CommandMethod("WLCAD2XLSX", CommandFlags.Session)]
+        public void ExportCadTableToXlsx()
+        {
+            var loaded = System.AppDomain.CurrentDomain.GetAssemblies().Any(x =>
+                x.GetName().Name.StartsWith("CadArchSpec.Host.AutoCAD", System.StringComparison.OrdinalIgnoreCase));
+            if (!loaded)
+            {
+                Application.ShowAlertDialog("CAD 表格转 Excel 组件尚未加载。\r\n\r\n请使用最新版“万落建筑工具启动器”重新安装完整组件。当前支持 AutoCAD 2021–2026。");
+                return;
+            }
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document != null) document.SendStringToExecute("CAD2XLSX ", true, false, false);
         }
 
         [CommandMethod("WLLTDY", CommandFlags.Session)]
@@ -75,6 +104,33 @@ namespace BatchPdfPublisher
             var document = Application.DocumentManager.MdiActiveDocument;
             if (document == null) return;
             Application.ShowModelessDialog(new FrameCreationForm(document, null));
+        }
+
+        [CommandMethod("WLDYLayout")]
+        [CommandMethod("DYPB")]
+        public void OpenDetailLayout()
+        {
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document == null) return;
+            Application.ShowModelessDialog(new DetailLayoutForm(document));
+        }
+
+        [CommandMethod("LINEVISION", CommandFlags.Session)]
+        [CommandMethod("TXZCAD", CommandFlags.Session)]
+        [CommandMethod("TXC", CommandFlags.Session)]
+        public void OpenLineVision()
+        {
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document == null) return;
+            if (_lineVisionForm != null && !_lineVisionForm.IsDisposed)
+            {
+                _lineVisionForm.Show();
+                _lineVisionForm.Activate();
+                return;
+            }
+            _lineVisionForm = new LineVisionForm(document);
+            _lineVisionForm.FormClosed += (sender, args) => _lineVisionForm = null;
+            Application.ShowModelessDialog(_lineVisionForm);
         }
 
         [CommandMethod("FJGM")]

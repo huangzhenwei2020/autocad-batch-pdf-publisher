@@ -111,6 +111,7 @@ namespace CadArchSpec.Domain.Common
         EnergyEnvelope,
         GreenBuildingMeasures,
         SpecialistInterface,
-        StandardReferences
+        StandardReferences,
+        Custom
     }
 }

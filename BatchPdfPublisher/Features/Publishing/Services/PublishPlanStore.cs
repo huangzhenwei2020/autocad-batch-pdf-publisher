@@ -10,6 +10,7 @@ namespace BatchPdfPublisher.Services
     public sealed class PublishPlanStore
     {
         public static event Action FramesChanged;
+        public static string LastRecoveryNotice { get; private set; }
         private static readonly object FileWriteSync = new object();
         private const string ProjectsFileName = "项目列表.json";
         private const string ActiveProjectFileName = "当前项目.txt";
@@ -17,29 +18,58 @@ namespace BatchPdfPublisher.Services
 
         public List<ProjectProfile> LoadProjects()
         {
+            return LoadProjects(true);
+        }
+
+        public List<ProjectProfile> LoadProjects(bool persistNormalization)
+        {
             var path = ProjectsPath();
             if (File.Exists(path))
             {
                 try
                 {
-                    List<ProjectProfile> projects;
-                    using (var stream = File.OpenRead(path))
-                        projects = (List<ProjectProfile>)new DataContractJsonSerializer(typeof(List<ProjectProfile>)).ReadObject(stream);
-                    var migratedProjectFolders = projects != null && projects.Any(x => x != null && IsLegacyOwnedProjectFolder(x.ProjectFolder));
+                    var projects = ReadProjects(path);
+                    var normalizedProjectFolders = projects != null && projects.Any(x => x != null && NeedsProjectFolderNormalization(x.ProjectFolder));
                     Normalize(projects);
-                    if (FrameTemplateStore.MakePathsReadable(projects) || migratedProjectFolders) SaveProjects(projects);
+                    var projected = ProjectSyncProjectionStore.MergeInto(projects);
+                    var framePathsChanged = persistNormalization && FrameTemplateStore.MakePathsReadable(projects);
+                    if (persistNormalization && (framePathsChanged || normalizedProjectFolders || projected)) SaveProjects(projects);
                     return projects;
                 }
-                catch
+                catch (Exception primaryFailure)
                 {
-                    // A malformed project file should not prevent the plugin from opening.
+                    var backup = path + ".bak";
+                    try
+                    {
+                        if (File.Exists(backup))
+                        {
+                            var recovered = ReadProjects(backup);
+                            Quarantine(path);
+                            WriteAtomically(path, stream =>
+                                new DataContractJsonSerializer(typeof(List<ProjectProfile>)).WriteObject(stream, recovered));
+                            ReportRecovery("项目配置已从备份恢复：" + path);
+                            Normalize(recovered);
+                            ProjectSyncProjectionStore.MergeInto(recovered);
+                            return recovered;
+                        }
+                    }
+                    catch (Exception backupFailure)
+                    {
+                        ReportRecovery("项目配置和备份都无法读取：" + primaryFailure.Message + "；" + backupFailure.Message);
+                    }
+                    Quarantine(path);
+                    ReportRecovery("项目配置无法读取，已保留损坏文件并建立临时默认项目：" + primaryFailure.Message);
                 }
             }
 
             var migrated = new ProjectProfile { Name = "默认项目", Frames = LoadLegacyFrames() };
             var defaults = new List<ProjectProfile> { migrated };
-            SaveProjects(defaults);
-            SetActiveProject(migrated.Name);
+            ProjectSyncProjectionStore.MergeInto(defaults);
+            if (persistNormalization)
+            {
+                SaveProjects(defaults);
+                SetActiveProject(migrated.Name);
+            }
             return defaults;
         }
 
@@ -63,14 +93,15 @@ namespace BatchPdfPublisher.Services
             return projects.FirstOrDefault(x => string.Equals(x.Name, activeName, StringComparison.OrdinalIgnoreCase)) ?? projects[0];
         }
 
-        public ProjectProfile CreateProject(string name)
+        public ProjectProfile CreateProject(string name, string projectFolder = null)
         {
             var cleanName = (name ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(cleanName)) throw new ArgumentException("项目名称不能为空。", nameof(name));
             var projects = LoadProjects();
             var existing = projects.FirstOrDefault(x => string.Equals(x.Name, cleanName, StringComparison.OrdinalIgnoreCase));
             if (existing != null) return existing;
-            var project = new ProjectProfile { Name = cleanName, ProjectFolder = DefaultProjectFolder(cleanName) };
+            var project = new ProjectProfile { Name = cleanName, ProjectFolder = ResolveProjectFolder(projectFolder, cleanName) };
+            Directory.CreateDirectory(project.ProjectFolder);
             projects.Add(project);
             SaveProjects(projects);
             SetActiveProject(cleanName);
@@ -122,12 +153,15 @@ namespace BatchPdfPublisher.Services
             FramesChanged?.Invoke();
         }
 
-        private void SaveProjects(List<ProjectProfile> projects)
+        public void SaveProjects(List<ProjectProfile> projects)
         {
             Normalize(projects);
             var path = ProjectsPath();
             WriteAtomically(path, stream =>
                 new DataContractJsonSerializer(typeof(List<ProjectProfile>)).WriteObject(stream, projects));
+            ProjectSyncProjectionStore.Export(projects);
+            ProjectSyncProjectionStore.RefreshMappings(projects);
+            CloudSyncCoordinator.RequestSynchronization(false);
         }
 
         private static void WriteTextAtomically(string path, string value)
@@ -193,8 +227,8 @@ namespace BatchPdfPublisher.Services
             File.Copy(path, rollback, true);
             try
             {
+                File.Copy(rollback, backup, true);
                 File.Copy(temporary, path, true);
-                File.Copy(path, backup, true);
             }
             catch
             {
@@ -207,21 +241,46 @@ namespace BatchPdfPublisher.Services
             }
         }
 
+        private static List<ProjectProfile> ReadProjects(string path)
+        {
+            using (var stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                var projects = (List<ProjectProfile>)new DataContractJsonSerializer(typeof(List<ProjectProfile>)).ReadObject(stream);
+                if (projects == null) throw new InvalidDataException("项目配置内容为空。");
+                return projects;
+            }
+        }
+
+        private static void Quarantine(string path)
+        {
+            if (!File.Exists(path)) return;
+            var target = path + ".corrupt-" + DateTime.Now.ToString("yyyyMMdd-HHmmssfff");
+            try { File.Move(path, target); }
+            catch { try { File.Copy(path, target, false); File.Delete(path); } catch { } }
+        }
+
+        private static void ReportRecovery(string message)
+        {
+            LastRecoveryNotice = message;
+            try
+            {
+                File.AppendAllText(Path.Combine(UserDataPaths.LogsDirectory, "data-recovery.log"),
+                    DateTime.Now.ToString("O") + " " + message + Environment.NewLine);
+            }
+            catch { }
+        }
+
         private static void Normalize(List<ProjectProfile> projects)
         {
             if (projects == null) return;
             projects.RemoveAll(x => x == null || string.IsNullOrWhiteSpace(x.Name));
             foreach (var project in projects)
             {
-                if (string.IsNullOrWhiteSpace(project.ProjectFolder) || IsLegacyOwnedProjectFolder(project.ProjectFolder))
+                if (string.IsNullOrWhiteSpace(project.ProjectFolder))
                 {
-                    var previous = project.ProjectFolder; var portable = DefaultProjectFolder(project.Name);
-                    if (!string.IsNullOrWhiteSpace(previous) && Directory.Exists(previous) && !string.Equals(Path.GetFullPath(previous), Path.GetFullPath(portable), StringComparison.OrdinalIgnoreCase))
-                    {
-                        try { if (!Directory.Exists(portable)) Directory.Move(previous, portable); } catch { }
-                    }
-                    project.ProjectFolder = portable;
+                    project.ProjectFolder = DefaultProjectFolder(project.Name);
                 }
+                else if (!Path.IsPathRooted(project.ProjectFolder)) project.ProjectFolder = Path.GetFullPath(Path.Combine(UserDataPaths.RootDirectory, project.ProjectFolder));
                 if (project.Frames == null) project.Frames = new List<FrameDefinition>();
                 if (string.IsNullOrWhiteSpace(project.PlotStyle)) project.PlotStyle = "monochrome.ctb";
                 if (string.IsNullOrWhiteSpace(project.MarginMode)) project.MarginMode = "自动适配";
@@ -254,15 +313,18 @@ namespace BatchPdfPublisher.Services
         {
             var name = string.IsNullOrWhiteSpace(projectName) ? "默认项目" : projectName.Trim();
             foreach (var invalid in Path.GetInvalidFileNameChars()) name = name.Replace(invalid, '_');
-            return Path.Combine(UserDataPaths.ProjectsDirectory, name);
+            return Path.Combine(CloudProjectWorkspaceService.GetWorkspaceRoot(), name);
         }
-        private static bool IsLegacyOwnedProjectFolder(string path)
+        private static string ResolveProjectFolder(string requestedFolder, string projectName)
         {
-            if (string.IsNullOrWhiteSpace(path)) return false;
-            var normalized = path.Replace('/', '\\');
-            return normalized.IndexOf("\\BatchPdfPublisher\\Projects\\", StringComparison.OrdinalIgnoreCase) >= 0
-                || normalized.IndexOf("\\WanluoArchitectureTools\\Projects\\", StringComparison.OrdinalIgnoreCase) >= 0
-                || normalized.IndexOf("\\用户配置文件\\Projects\\", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (string.IsNullOrWhiteSpace(requestedFolder)) return DefaultProjectFolder(projectName);
+            var trimmed = requestedFolder.Trim();
+            if (!Path.IsPathRooted(trimmed)) throw new IOException("项目文件夹必须使用绝对路径。");
+            return Path.GetFullPath(trimmed).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        }
+        private static bool NeedsProjectFolderNormalization(string path)
+        {
+            return string.IsNullOrWhiteSpace(path) || !Path.IsPathRooted(path);
         }
     }
 }

@@ -11,6 +11,7 @@ import {
   sectionDocumentToPlainText,
   updateReviewIssueAction,
   type EditorWorkspace,
+  type ArchitectureTable,
   type CadLayoutProfile,
   type FieldChangeEntry,
   type FieldSourceType,
@@ -47,6 +48,7 @@ import { StandardLibraryDialog } from "./standard-library-dialog";
 
 export const protocolVersion = 1;
 const storageKey = "cad-arch-spec-editor.workspace.v1";
+const includeHiddenCadLayersKey = "cad-arch-spec-editor.include-hidden-cad-layers.v1";
 
 type HostReadyPayload = {
   productName: string;
@@ -103,6 +105,11 @@ export function createProjectMessage(
     | "review.run"
     | "cad.frame.pick"
     | "cad.text.read"
+    | "cad.table.read"
+    | "image.table.read"
+    | "image.table.cancel"
+    | "cad.table.locate"
+    | "table.xlsx.export"
     | "cad.section.insert",
   payload: Record<string, unknown> = {},
 ) {
@@ -274,6 +281,10 @@ export function ArchitectureSpecEditor() {
   const [standardsOpen, setStandardsOpen] = useState(false);
   const [cadLayoutOpen, setCadLayoutOpen] = useState(false);
   const [cadBusy, setCadBusy] = useState(false);
+  const [imageTableBusy, setImageTableBusy] = useState(false);
+  const [includeHiddenCadLayers, setIncludeHiddenCadLayers] = useState(
+    () => localStorage.getItem(includeHiddenCadLayersKey) === "true",
+  );
   const [previewZoomPercent, setPreviewZoomPercent] = useState(100);
   const [isCanvasPanning, setIsCanvasPanning] = useState(false);
   const [tableToInsert, setTableToInsert] = useState("");
@@ -494,6 +505,39 @@ export function ArchitectureSpecEditor() {
         setSaveState("dirty");
         setCadBusy(false);
         setProjectNotice(`已从 CAD 读取 ${Number(payload.count ?? 0)} 个文字对象`);
+      } else if (event.data.type === "cad.tableRead" || event.data.type === "image.tableRead") {
+        if (event.data.type === "image.tableRead") setImageTableBusy(false);
+        if (payload.cancelled === true) {
+          setCadBusy(false);
+          setProjectNotice(event.data.type === "image.tableRead" ? "已取消读取图片表格" : "已取消读取 CAD 表格");
+          return;
+        }
+        const imported = payload.table as ArchitectureTable | undefined;
+        if (!imported?.tableId || !Array.isArray(imported.columns) || !Array.isArray(imported.rows)) {
+          setCadBusy(false);
+          window.alert("表格识别结果不完整，未修改当前项目。");
+          return;
+        }
+        setWorkspace((current) => ({
+          ...current,
+          tables: [...(current.tables ?? []).filter((table) => table.tableId !== imported.tableId), imported],
+        }));
+        setSaveState("dirty");
+        setTableEditTargetId(imported.tableId);
+        setTablesOpen(true);
+        setCadBusy(false);
+        const warningCount = Array.isArray(payload.warnings) ? payload.warnings.length : 0;
+        const skippedHiddenCount = Number(payload.skippedHiddenEntityCount ?? 0);
+        const sourceLabel = payload.imageTable === true ? "扫描图片表格" : payload.nativeTable === true ? "AutoCAD 原生表格" : "CAD 线框表格";
+        setProjectNotice(
+          `已读取${sourceLabel}：${Number(payload.rowCount ?? imported.rows.length)} 行 × ${Number(payload.columnCount ?? imported.columns.length)} 列${skippedHiddenCount ? `，已忽略 ${skippedHiddenCount} 个隐藏对象` : ""}${warningCount ? `，有 ${warningCount} 项需要确认` : ""}；请检查后保存表格`,
+        );
+      } else if (event.data.type === "table.xlsxExported") {
+        setCadBusy(false);
+        setProjectNotice(payload.cancelled === true ? "已取消导出 XLSX" : `Excel 表格已导出：${String(payload.filePath ?? "")}`);
+      } else if (event.data.type === "cad.tableLocated") {
+        setCadBusy(false);
+        setProjectNotice(`已在 CAD 中定位 ${Number(payload.locatedCount ?? 0)} 个来源对象`);
       } else if (event.data.type === "cad.sectionInserted") {
         setCadBusy(false);
         const overflow = payload.overflow === true;
@@ -503,6 +547,7 @@ export function ArchitectureSpecEditor() {
         setSnapshotLoading(false);
         setReviewRunning(false);
         setCadBusy(false);
+        setImageTableBusy(false);
         window.alert(`项目操作失败：${String(payload.message ?? "未知错误")}`);
       }
     };
@@ -595,6 +640,11 @@ export function ArchitectureSpecEditor() {
       | "review.run"
       | "cad.frame.pick"
       | "cad.text.read"
+      | "cad.table.read"
+      | "image.table.read"
+      | "image.table.cancel"
+      | "cad.table.locate"
+      | "table.xlsx.export"
       | "cad.section.insert",
     payload: Record<string, unknown> = {},
   ) => window.chrome?.webview?.postMessage(createProjectMessage(type, payload));
@@ -662,6 +712,27 @@ export function ArchitectureSpecEditor() {
     setCadBusy(true);
     setProjectNotice("请在 CAD 中框选需要导入的文字…");
     postProjectMessage("cad.text.read", { sectionId: selectedSectionId });
+  };
+
+  const readTableFromCad = () => {
+    if (!requireCadHost() || cadBusy) return;
+    setCadBusy(true);
+    setProjectNotice("请在 CAD 中框选一张表格的线条和文字…");
+    postProjectMessage("cad.table.read", { includeHiddenLayers: includeHiddenCadLayers });
+  };
+
+  const readTableFromImage = () => {
+    if (!requireCadHost()) return;
+    if (imageTableBusy) {
+      setProjectNotice("正在安全停止图片表格识别……");
+      postProjectMessage("image.table.cancel");
+      return;
+    }
+    if (cadBusy) return;
+    setCadBusy(true);
+    setImageTableBusy(true);
+    setProjectNotice("请选择一张边框清晰的有线表格图片；识别结果需要人工复核");
+    postProjectMessage("image.table.read");
   };
 
   const insertCurrentSectionToCad = () => {
@@ -871,6 +942,22 @@ export function ArchitectureSpecEditor() {
           <button className="button" onClick={() => setConditionsOpen(true)}>项目条件</button>
           <button className="button" onClick={() => setCadLayoutOpen(true)}>CAD 版面</button>
           <button className="button" disabled={cadBusy} onClick={readTextFromCad}>从 CAD 获取文字</button>
+          <button className="button" disabled={cadBusy} onClick={readTableFromCad}>从 CAD 读取表格</button>
+          <button className="button" disabled={cadBusy && !imageTableBusy} onClick={readTableFromImage}>
+            {imageTableBusy ? "取消图片识别" : "从图片读取表格（实验）"}
+          </button>
+          <label className="cad-table-layer-option" title="默认忽略关闭、冻结或设为不可见的图层对象">
+            <input
+              type="checkbox"
+              checked={includeHiddenCadLayers}
+              onChange={(event) => {
+                const checked = event.target.checked;
+                setIncludeHiddenCadLayers(checked);
+                localStorage.setItem(includeHiddenCadLayersKey, String(checked));
+              }}
+            />
+            包含隐藏图层
+          </label>
           <button className="button" disabled={cadBusy} onClick={insertCurrentSectionToCad}>插入当前章节</button>
           <button className="button" onClick={() => setTablesOpen(true)}>
             专业表格{workspace.tables?.length ? ` (${workspace.tables.length})` : ""}
@@ -1335,6 +1422,16 @@ export function ArchitectureSpecEditor() {
           value={workspace.tables ?? []}
           fields={workspace.fields}
           selectedTableId={tableEditTargetId}
+          onExportXlsx={(table) => {
+            if (!requireCadHost() || cadBusy) return;
+            setCadBusy(true);
+            postProjectMessage("table.xlsx.export", { table });
+          }}
+          onLocateCadSources={(drawingPath, handles) => {
+            if (!requireCadHost() || cadBusy || handles.length === 0) return;
+            setCadBusy(true);
+            postProjectMessage("cad.table.locate", { drawingPath, handles });
+          }}
           onSave={(tables) => {
             const synchronized = editorHandle?.synchronizeTables(tables) ?? 0;
             changeWorkspace((current) => ({ ...current, tables }));

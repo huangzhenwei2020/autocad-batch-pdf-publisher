@@ -13,6 +13,7 @@
     </PackageReference>
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\src\CadArchSpec.CadTable\CadArchSpec.CadTable.csproj" />
     <ProjectReference Include="..\..\src\CadArchSpec.Application\CadArchSpec.Application.csproj" />
     <ProjectReference Include="..\..\src\CadArchSpec.Domain\CadArchSpec.Domain.csproj" />
     <ProjectReference Include="..\..\src\CadArchSpec.EditorBridge\CadArchSpec.EditorBridge.csproj" />

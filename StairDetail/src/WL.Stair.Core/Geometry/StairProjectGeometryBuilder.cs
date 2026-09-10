@@ -1,0 +1,2802 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using WL.Stair.Core.Calculation;
+using WL.Stair.Core.Domain;
+
+namespace WL.Stair.Core.Geometry
+{
+    public sealed class StairProjectGeometryBuilder
+    {
+        private const double WallHeightAboveHighestFloor = 1800.0;
+        private const double WallHeadAboveTopOpening = 300.0;
+        private const double AxisExtensionBeyondWall = 200.0;
+        private const double BaseWallThickness = 100.0;
+
+        public DrawingView BuildPlan(StairProjectDefinition project, StairProjectCalculationResult calculation, int storeyIndex)
+        {
+            if (project == null) throw new ArgumentNullException(nameof(project));
+            if (calculation == null) throw new ArgumentNullException(nameof(calculation));
+            if (storeyIndex < 0 || storeyIndex >= project.Storeys.Count) return new DrawingView("Plan", new DrawingLine[0]);
+            var storey = project.Storeys[storeyIndex];
+            var lines = new List<DrawingLine>();
+            var x = 0.0;
+            foreach (var flight in storey.Flights)
+            {
+                var run = Math.Max(1.0, flight.TreadDepth * Math.Max(1, flight.RiserCount - 1));
+                AddPlanRect(lines, x, 0, run, flight.Width, flight.Id);
+                x += run;
+                var landing = storey.Landings.FirstOrDefault(item => item.IncomingFlightId == flight.Id);
+                if (landing != null)
+                {
+                    AddPlanRect(lines, x, 0, landing.PlatformWidth, flight.Width, landing.Id);
+                    x += landing.PlatformWidth;
+                }
+            }
+            return new DrawingView("Plan-" + storey.Id, lines);
+        }
+
+        private static void AddPlanRect(List<DrawingLine> lines, double x, double y, double width, double height, string id)
+        {
+            lines.Add(new DrawingLine(new Point2D(x, y), new Point2D(x + width, y), StairLineRole.CutFlightProfile, false, id));
+            lines.Add(new DrawingLine(new Point2D(x + width, y), new Point2D(x + width, y + height), StairLineRole.CutFlightProfile, false, id));
+            lines.Add(new DrawingLine(new Point2D(x + width, y + height), new Point2D(x, y + height), StairLineRole.CutFlightProfile, false, id));
+            lines.Add(new DrawingLine(new Point2D(x, y + height), new Point2D(x, y), StairLineRole.CutFlightProfile, false, id));
+        }
+
+        public DrawingView BuildSection(
+            StairProjectDefinition project,
+            StairProjectCalculationResult calculation)
+        {
+            if (project == null) throw new ArgumentNullException(nameof(project));
+            if (calculation == null) throw new ArgumentNullException(nameof(calculation));
+
+            var lines = new List<DrawingLine>();
+            var texts = new List<DrawingText>();
+            var floorLevelTexts = new List<DrawingText>();
+            var dimensions = new List<DrawingDimension>();
+            var tables = new List<DrawingTable>();
+            var hatchRegions = new List<DrawingHatchRegion>();
+            var leaders = new List<DrawingLeader>();
+            var horizontalDimensionSpecs = new List<HorizontalDimensionSpec>();
+            var handrailBoundaryPoints = new Dictionary<string, List<HandrailBoundaryPoint>>(
+                StringComparer.OrdinalIgnoreCase);
+            var floors = project.Floors.ToDictionary(floor => floor.Id, StringComparer.OrdinalIgnoreCase);
+            var storeyResults = calculation.Storeys.ToDictionary(result => result.Id, StringComparer.OrdinalIgnoreCase);
+            var storeysByLowerFloor = project.Storeys
+                .Where(item => item != null && !string.IsNullOrWhiteSpace(item.LowerFloorId))
+                .GroupBy(item => item.LowerFloorId, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+            var physicalFloorElevations = BuildPhysicalFloorElevations(project);
+            var floorPositions = new Dictionary<string, ComponentPosition>(StringComparer.OrdinalIgnoreCase);
+            var floorSupportPositions = new Dictionary<string, List<FloorSupportPosition>>(StringComparer.OrdinalIgnoreCase);
+            var wallAnchors = new List<WallAnchor>();
+            var wallSpans = new List<WallSpan>();
+            var lowestElevation = calculation.Storeys.Min(result => result.LowerElevation);
+            var axisResolver = new StairwellAxisResolver();
+            var stairwellRanges = project.Storeys.Where(item => item != null)
+                .ToDictionary(item => item.Id, item => axisResolver.Resolve(project, item),
+                    StringComparer.OrdinalIgnoreCase);
+            var envelope = axisResolver.ResolveEnvelope(project);
+            var firstAxisX = envelope.LeftAxisX;
+            var secondAxisX = envelope.RightAxisX;
+            var floorDirections = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            foreach (var item in project.Storeys.Where(item => item.Flights.Count > 0))
+            {
+                if (!floorDirections.ContainsKey(item.LowerFloorId))
+                    floorDirections.Add(item.LowerFloorId, (int)item.Flights[0].Direction);
+                if (!floorDirections.ContainsKey(item.UpperFloorId))
+                    floorDirections.Add(item.UpperFloorId, -(int)item.Flights.Last().Direction);
+            }
+
+            foreach (var storey in project.Storeys)
+            {
+                var storeyResult = storeyResults[storey.Id];
+                var stairwellRange = stairwellRanges[storey.Id];
+                Func<int, double> axisForDirection = direction =>
+                    direction > 0 ? stairwellRange.LeftAxisX : stairwellRange.RightAxisX;
+                Func<int, double, double> connectionForBoundary = (direction, width) =>
+                    axisForDirection(direction) + (direction * width);
+                wallSpans.Add(new WallSpan("L", stairwellRange.LeftAxisX,
+                    storeyResult.LowerElevation, storeyResult.UpperElevation));
+                wallSpans.Add(new WallSpan("R", stairwellRange.RightAxisX,
+                    storeyResult.LowerElevation, storeyResult.UpperElevation));
+                StairFloorDefinition lowerFloor;
+                StairFloorDefinition upperFloor;
+                floors.TryGetValue(storey.LowerFloorId, out lowerFloor);
+                floors.TryGetValue(storey.UpperFloorId, out upperFloor);
+                var lowerDirection = lowerFloor == null
+                    ? (int)storey.Flights[0].Direction
+                    : floorDirections[lowerFloor.Id];
+                var lowerWidth = lowerFloor == null ? 0.0 : lowerFloor.PlatformWidth;
+                var lowerPosition = new ComponentPosition(
+                    connectionForBoundary(lowerDirection, lowerWidth),
+                    storeyResult.LowerElevation);
+                AddFloorSupport(floorSupportPositions, storey.LowerFloorId,
+                    new FloorSupportPosition(lowerPosition, stairwellRange, lowerDirection, storey.Id, true));
+                if (!floorPositions.ContainsKey(storey.LowerFloorId))
+                    floorPositions.Add(storey.LowerFloorId, lowerPosition);
+
+                var currentX = lowerPosition.X;
+                var currentElevation = lowerPosition.Elevation;
+                for (var index = 0; index < storey.Flights.Count; index++)
+                {
+                    var flight = storey.Flights[index];
+                    var flightResult = storeyResult.Flights[index];
+                    var direction = (double)flight.Direction;
+                    object sourceBoundary = index == 0
+                        ? (object)lowerFloor
+                        : storey.Landings[index - 1];
+                    object destinationBoundary = index < storey.Landings.Count
+                        ? (object)storey.Landings[index]
+                        : upperFloor;
+                    var destinationDirection = -(int)flight.Direction;
+                    var destinationWidth = index < storey.Landings.Count
+                        ? storey.Landings[index].PlatformWidth
+                        : upperFloor == null ? 0.0 : upperFloor.PlatformWidth;
+                    var boundaryConnectionX = connectionForBoundary(destinationDirection, destinationWidth);
+                    // If both sides of one flight permit closure, the lower
+                    // boundary wins: keep its position and close at the upper
+                    // destination. This makes bottom-up editing deterministic.
+                    var allowEndClosure = AllowsLowerFlightClosure(destinationBoundary);
+                    StairStoreyDefinition nextStorey;
+                    if (index == storey.Flights.Count - 1
+                        && upperFloor != null
+                        && storeysByLowerFloor.TryGetValue(upperFloor.Id, out nextStorey)
+                        && nextStorey != null
+                        && !string.Equals(nextStorey.Id, storey.Id,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        var nextRange = stairwellRanges[nextStorey.Id];
+                        var nextDirection = floorDirections[upperFloor.Id];
+                        var nextAxis = nextDirection > 0
+                            ? nextRange.LeftAxisX
+                            : nextRange.RightAxisX;
+                        var nextConnectionX = nextAxis
+                            + (nextDirection * upperFloor.PlatformWidth);
+                        var directFlightEndX = currentX
+                            + (direction * flightResult.HorizontalRun);
+                        var transitionClosureGap = direction
+                            * (nextConnectionX - directFlightEndX);
+                        if (transitionClosureGap > 0.001)
+                        {
+                            // At a changed stairwell range the upper storey's
+                            // single shared floor is the actual destination.
+                            // Reuse the existing lower-flight closure geometry
+                            // to bridge the final run to that floor platform.
+                            boundaryConnectionX = nextConnectionX;
+                            allowEndClosure = true;
+                        }
+                    }
+                    var allowStartClosure = !allowEndClosure
+                        && AllowsUpperFlightClosure(sourceBoundary);
+                    var flightStartX = allowStartClosure
+                        ? boundaryConnectionX - (direction * flightResult.HorizontalRun)
+                        : currentX;
+                    var flightEndX = flightStartX + (direction * flightResult.HorizontalRun);
+                    var startClosureGap = direction * (flightStartX - currentX);
+                    var endClosureGap = direction * (boundaryConnectionX - flightEndX);
+                    if ((allowStartClosure && startClosureGap < -0.01)
+                        || (allowEndClosure && endClosureGap < -0.01))
+                    {
+                        throw new InvalidOperationException(
+                            storey.Id + " 的梯段补齐距离不能为负，请调整踏步或平台宽度。");
+                    }
+                    if (!allowEndClosure
+                        && !allowStartClosure
+                        && Math.Abs(flightEndX - boundaryConnectionX) > 0.01)
+                    {
+                        throw new InvalidOperationException(
+                            storey.Id + " 的梯段必须直接连接楼板或休息平台。");
+                    }
+                    var isHidden = flight.SectionRepresentation == StairSectionRepresentation.Rear;
+                    var destinationSlabThickness = index < storey.Landings.Count
+                        ? storey.Landings[index].SlabThicknessOverride
+                            ?? project.Construction.LandingSlabThickness
+                        : upperFloor == null
+                            ? project.Construction.FloorSlabThickness
+                            : upperFloor.SlabThicknessOverride
+                                ?? project.Construction.FloorSlabThickness;
+                    AddFlightBoundary(
+                        lines,
+                        flightStartX,
+                        currentElevation,
+                        flightResult,
+                        direction,
+                        currentX,
+                        project.Construction.FlightSlabThickness,
+                        allowStartClosure,
+                        boundaryConnectionX,
+                        destinationSlabThickness,
+                        allowEndClosure,
+                        isHidden,
+                        Math.Abs(currentElevation - lowestElevation) < 0.001,
+                        flight.Id);
+
+                    var endElevation = currentElevation + flightResult.VerticalRise;
+                    AddHandrail(
+                        lines,
+                        flightStartX,
+                        flightEndX,
+                        currentElevation,
+                        endElevation,
+                        flightResult,
+                        direction,
+                        currentX,
+                        allowStartClosure,
+                        boundaryConnectionX,
+                        allowEndClosure,
+                        project.Construction.Railing);
+                    AddHandrailBoundaryPoint(
+                        handrailBoundaryPoints,
+                        GetBoundaryId(sourceBoundary),
+                        currentElevation,
+                        flightStartX);
+                    AddHandrailBoundaryPoint(
+                        handrailBoundaryPoints,
+                        GetBoundaryId(destinationBoundary),
+                        endElevation,
+                        flightEndX);
+                    horizontalDimensionSpecs.Add(new HorizontalDimensionSpec(
+                        flight.Id,
+                        Math.Min(flightStartX, flightEndX),
+                        Math.Max(flightStartX, flightEndX),
+                        currentElevation,
+                        endElevation,
+                        flightResult.TreadDepth,
+                        flight.RiserCount,
+                        stairwellRange.LeftAxisX,
+                        stairwellRange.RightAxisX));
+                    var scale = Math.Max(1, project.DrawingScale);
+                    dimensions.Add(new DrawingDimension(
+                        new Point2D(stairwellRange.LeftAxisX, currentElevation),
+                        new Point2D(stairwellRange.LeftAxisX, endElevation),
+                        new Point2D(stairwellRange.LeftAxisX - (6.0 * scale), (currentElevation + endElevation) / 2.0),
+                        FormatMillimeter(flightResult.RiserHeight) + "×" + flight.RiserCount
+                            + "=" + FormatMillimeter(flightResult.VerticalRise),
+                        flight.Id));
+                    if (project.InsertComponentSchedule)
+                        texts.Add(new DrawingText(
+                            new Point2D((flightStartX + flightEndX) / 2.0, (currentElevation + endElevation) / 2.0 + 180.0),
+                            flight.Id,
+                            90.0));
+                    currentX = boundaryConnectionX;
+                    currentElevation = endElevation;
+
+                    if (index < storey.Landings.Count)
+                    {
+                        var landing = storey.Landings[index];
+                        // currentX is the shared connection edge for the incoming
+                        // and outgoing flights. The landing's opposite end is its
+                        // fixed beam axis; neither flight starts from the axis end.
+                        AddLanding(
+                            lines,
+                            texts,
+                            landing,
+                            currentX,
+                            currentElevation,
+                            project.Construction,
+                            -destinationDirection,
+                            project.InsertComponentSchedule);
+                        var landingAxisX = axisForDirection(destinationDirection);
+                        wallAnchors.Add(new WallAnchor(
+                            landingAxisX,
+                            currentElevation,
+                            landing.BeamDepthOverride ?? project.Construction.LandingBeam.Depth,
+                            landing.Id));
+                    }
+                }
+
+                var upperDirection = upperFloor == null
+                    ? -(int)storey.Flights.Last().Direction
+                    : floorDirections[upperFloor.Id];
+                var upperWidth = upperFloor == null ? 0.0 : upperFloor.PlatformWidth;
+                var upperPosition = new ComponentPosition(
+                    connectionForBoundary(upperDirection, upperWidth),
+                    storeyResult.UpperElevation);
+                AddFloorSupport(floorSupportPositions, storey.UpperFloorId,
+                    new FloorSupportPosition(upperPosition, stairwellRange, upperDirection, storey.Id, false));
+                if (!floorPositions.ContainsKey(storey.UpperFloorId))
+                    floorPositions.Add(storey.UpperFloorId, upperPosition);
+            }
+
+            AddHandrailBoundaryConnections(
+                lines,
+                handrailBoundaryPoints,
+                project.Construction.Railing);
+
+            var drawingScale = Math.Max(1, project.DrawingScale);
+            var floorLevelTextX = secondAxisX + (18.0 * drawingScale);
+            foreach (var floor in project.Floors)
+            {
+                ComponentPosition position;
+                if (!floorPositions.TryGetValue(floor.Id, out position))
+                {
+                    continue;
+                }
+
+                double physicalElevation;
+                if (!physicalFloorElevations.TryGetValue(floor.Id, out physicalElevation))
+                    physicalElevation = position.Elevation;
+                StairStoreyDefinition representedStorey;
+                StairStoreyResult representedResult;
+                if (storeysByLowerFloor.TryGetValue(floor.Id, out representedStorey)
+                    && GetLogicalRepeatCount(representedStorey, floor) > 1
+                    && storeyResults.TryGetValue(representedStorey.Id, out representedResult))
+                {
+                    AddStandardFloorLevelTexts(floorLevelTexts, floor, representedStorey,
+                        representedResult, physicalElevation, floorLevelTextX);
+                }
+                else
+                {
+                    AddFloorLevelText(floorLevelTexts, floor, physicalElevation,
+                        position.Elevation, floorLevelTextX);
+                }
+
+                if (Math.Abs(position.Elevation - lowestElevation) < 0.001)
+                {
+                    continue;
+                }
+                var floorDirection = floorDirections.ContainsKey(floor.Id)
+                    ? floorDirections[floor.Id]
+                    : floor.ProjectionDirection;
+                List<FloorSupportPosition> supports;
+                if (!floorSupportPositions.TryGetValue(floor.Id, out supports)
+                    || supports.Count == 0)
+                {
+                    supports = new List<FloorSupportPosition>
+                    {
+                        new FloorSupportPosition(position, axisResolver.Resolve(project, null),
+                            floorDirection, string.Empty, true)
+                    };
+                }
+                var distinctSupports = supports.GroupBy(item => string.Join("|", new[]
+                    {
+                        Math.Round(item.Range.LeftAxisX, 3).ToString(CultureInfo.InvariantCulture),
+                        Math.Round(item.Range.RightAxisX, 3).ToString(CultureInfo.InvariantCulture),
+                        item.Direction.ToString(CultureInfo.InvariantCulture)
+                    })).Select(group => group.OrderByDescending(item => item.IsLowerBoundary).First()).ToArray();
+                var primarySupport = distinctSupports.FirstOrDefault(item => item.IsLowerBoundary)
+                    ?? distinctSupports[0];
+                foreach (var support in distinctSupports)
+                {
+                    var supportDirection = support.Direction;
+                    var supportAxis = supportDirection > 0
+                        ? support.Range.LeftAxisX
+                        : support.Range.RightAxisX;
+                    wallAnchors.Add(new WallAnchor(
+                        supportAxis,
+                        position.Elevation,
+                        floor.BeamDepthOverride ?? project.Construction.FloorBeam.Depth,
+                        floor.Id));
+                    if (project.Construction.OppositeSupportsEnabled
+                        && floor.OppositeSupportType != OppositeSupportType.None)
+                    {
+                        wallAnchors.Add(new WallAnchor(
+                            supportDirection > 0 ? support.Range.RightAxisX : support.Range.LeftAxisX,
+                            position.Elevation,
+                            floor.OppositeBeamDepthOverride ?? project.Construction.FloorBeam.Depth,
+                            floor.Id));
+                    }
+                }
+                AddFloor(lines, floor, primarySupport.Position, project.Construction,
+                    primarySupport.Direction, primarySupport.Range, true);
+                if (distinctSupports.Length > 1)
+                {
+                    foreach (var secondarySupport in distinctSupports.Where(item =>
+                        !ReferenceEquals(item, primarySupport)))
+                    {
+                        AddFloorTransitionSupportBeams(lines, floor, position.Elevation,
+                            secondarySupport, primarySupport, project.Construction);
+                    }
+                    AddFloorTransitionSlabs(lines, floor, position.Elevation,
+                        distinctSupports, primarySupport, project.Construction);
+                }
+            }
+
+            foreach (var storeyResult in calculation.Storeys)
+            {
+                var middle = (storeyResult.LowerElevation + storeyResult.UpperElevation) / 2.0;
+                var storey = project.Storeys.FirstOrDefault(item => item != null
+                    && string.Equals(item.Id, storeyResult.Id, StringComparison.OrdinalIgnoreCase));
+                StairFloorDefinition lowerFloor = null;
+                if (storey != null) floors.TryGetValue(storey.LowerFloorId, out lowerFloor);
+                var repeatCount = GetLogicalRepeatCount(storey, lowerFloor);
+                var storeyHeight = storeyResult.UpperElevation - storeyResult.LowerElevation;
+                var stairwellRange = storey == null
+                    ? envelope
+                    : stairwellRanges[storey.Id];
+                var dimensionText = repeatCount > 1
+                    ? FormatMillimeter(storeyHeight) + "×" + repeatCount + "="
+                        + FormatMillimeter(storeyHeight * repeatCount)
+                    : FormatMillimeter(storeyHeight);
+                dimensions.Add(new DrawingDimension(
+                    new Point2D(stairwellRange.LeftAxisX, storeyResult.LowerElevation),
+                    new Point2D(stairwellRange.LeftAxisX, storeyResult.UpperElevation),
+                    new Point2D(stairwellRange.LeftAxisX - (11.0 * drawingScale), middle),
+                    dimensionText,
+                    storeyResult.Id));
+                dimensions.Add(new DrawingDimension(
+                    new Point2D(stairwellRange.RightAxisX, storeyResult.LowerElevation),
+                    new Point2D(stairwellRange.RightAxisX, storeyResult.UpperElevation),
+                    new Point2D(stairwellRange.RightAxisX + (11.0 * drawingScale), middle),
+                    dimensionText,
+                    storeyResult.Id));
+            }
+
+            var highestElevation = calculation.Storeys.Max(result => result.UpperElevation);
+            var highestFloorId = floorPositions.OrderByDescending(pair => pair.Value.Elevation)
+                .Select(pair => pair.Key).FirstOrDefault();
+            var wallHeightAboveHighestFloor = GetWallHeightAboveHighestFloor(
+                project, highestFloorId);
+            AddStairwellWalls(
+                lines,
+                wallAnchors,
+                wallSpans,
+                lowestElevation,
+                highestElevation,
+                wallHeightAboveHighestFloor,
+                project.Construction,
+                project.WallOpenings,
+                floorPositions.OrderBy(pair => pair.Value.Elevation)
+                    .Select(pair => pair.Key).FirstOrDefault());
+            AddBaseWall(lines, envelope.LeftAxisX, envelope.RightAxisX, lowestElevation, drawingScale,
+                project.Construction);
+            AddTopBreakLine(lines, envelope.LeftAxisX, envelope.RightAxisX,
+                highestElevation + wallHeightAboveHighestFloor,
+                drawingScale,
+                project.Construction);
+            AddStandardFloorBreakLines(lines, project, calculation, drawingScale);
+            AddStairwellAxisLines(lines, wallSpans, lowestElevation,
+                highestElevation, wallHeightAboveHighestFloor);
+            AddHorizontalDimensions(
+                dimensions,
+                horizontalDimensionSpecs,
+                drawingScale);
+            AddOneHandrailHeightDimension(dimensions, lines, project.Construction.Railing, drawingScale,
+                firstAxisX, secondAxisX);
+            var guardrailFloorDirection = !string.IsNullOrWhiteSpace(highestFloorId)
+                && floorDirections.ContainsKey(highestFloorId)
+                ? -floorDirections[highestFloorId]
+                : 1;
+            AddTopGuardrail(lines, leaders, highestElevation, drawingScale,
+                project.Construction.Railing, guardrailFloorDirection);
+
+            var titleX = floorPositions.Count == 0 ? 0.0 : floorPositions.Values.Average(position => position.X);
+            // Match the door/window elevation title row: 8 paper mm for the
+            // outer annotation zone plus another 11 paper mm for the title.
+            var titleY = lowestElevation - (19.0 * Math.Max(1, drawingScale));
+            var drawingTitle = new DrawingTitle(
+                new Point2D(titleX, titleY),
+                (string.IsNullOrWhiteSpace(project.StairNumber) ? string.Empty : project.StairNumber + " ")
+                    + "楼梯大样",
+                drawingScale,
+                Math.Abs(secondAxisX - firstAxisX));
+            if (project.InsertComponentSchedule)
+            {
+                tables.Add(BuildComponentSchedule(
+                    project,
+                    calculation,
+                    new Point2D(secondAxisX + (24.0 * drawingScale), highestElevation)));
+            }
+            // Regions are derived before coincident cut edges are merged.  This
+            // preserves each component's complete closed boundary; the visible
+            // linework below is still merged to one line per shared edge.
+            hatchRegions.AddRange(BuildStructuralHatchRegions(lines, project.Construction.SectionHatch));
+            hatchRegions.AddRange(BuildWallHatchRegions(lines, project.Construction.WallHatch));
+            var mergedLines = MergeConnectedCutOutlines(lines).ToArray();
+            var alignedDimensions = AlignDimensionsToOuterOutline(
+                mergedLines,
+                dimensions,
+                drawingScale).ToArray();
+            var rightStoreyDimensionX = alignedDimensions
+                .Where(dimension => dimension.Orientation == DrawingDimensionOrientation.Vertical
+                    && project.Storeys.Any(storey => storey != null
+                        && string.Equals(storey.Id, dimension.ComponentId,
+                            StringComparison.OrdinalIgnoreCase)))
+                .Select(dimension => dimension.DimensionLinePoint.X)
+                .DefaultIfEmpty(secondAxisX + (11.0 * drawingScale))
+                .Max();
+            // Level text is a paper-space annotation.  Keep a full 10 mm clear
+            // of the outer storey dimension so its longer standard-floor labels
+            // cannot run back into the vertical dimension text.
+            var finalFloorTextX = rightStoreyDimensionX + (10.0 * drawingScale);
+            var floorLevelTextHeight = 3.5 * drawingScale;
+            texts.AddRange(floorLevelTexts.Select(text => new DrawingText(
+                new Point2D(finalFloorTextX, text.Position.Y), text.Content, floorLevelTextHeight)));
+            return RebaseSectionToLeftAxisLowerPoint(
+                mergedLines,
+                texts,
+                alignedDimensions,
+                tables,
+                hatchRegions,
+                drawingScale,
+                firstAxisX,
+                lowestElevation,
+                drawingTitle,
+                leaders,
+                project.ShowBold,
+                project.ShowFill);
+        }
+
+        private static IEnumerable<DrawingDimension> AlignDimensionsToOuterOutline(
+            IEnumerable<DrawingLine> sourceLines,
+            IEnumerable<DrawingDimension> sourceDimensions,
+            int scale)
+        {
+            var geometry = sourceLines
+                .Where(line => line.Role != StairLineRole.AxisLine
+                    && line.Role != StairLineRole.Handrail
+                    && line.Role != StairLineRole.BreakLine
+                    && line.Role != StairLineRole.HatchBoundary)
+                .ToArray();
+            if (geometry.Length == 0) return sourceDimensions.ToArray();
+            var leftOutline = geometry.SelectMany(line => new[] { line.Start.X, line.End.X }).Min();
+            var rightOutline = geometry.SelectMany(line => new[] { line.Start.X, line.End.X }).Max();
+            return sourceDimensions.Select(dimension =>
+            {
+                if (dimension.Orientation == DrawingDimensionOrientation.Horizontal
+                    || string.Equals(dimension.ComponentId, "RAILING", StringComparison.OrdinalIgnoreCase))
+                    return dimension;
+                var isLeft = dimension.DimensionLinePoint.X
+                    < (dimension.FirstExtensionOrigin.X + dimension.SecondExtensionOrigin.X) / 2.0;
+                var paperOffset = Math.Abs(
+                    dimension.DimensionLinePoint.X - dimension.FirstExtensionOrigin.X)
+                    / Math.Max(1, scale);
+                // One side uses one fixed outermost profile baseline. This
+                // keeps every extension origin co-linear and gives the inner
+                // and outer dimension rows equal extension lengths.
+                var firstX = isLeft ? leftOutline : rightOutline;
+                var secondX = firstX;
+                var dimensionX = isLeft
+                    ? leftOutline - (paperOffset * Math.Max(1, scale))
+                    : rightOutline + (paperOffset * Math.Max(1, scale));
+                return new DrawingDimension(
+                    new Point2D(firstX, dimension.FirstExtensionOrigin.Y),
+                    new Point2D(secondX, dimension.SecondExtensionOrigin.Y),
+                    new Point2D(dimensionX, dimension.DimensionLinePoint.Y),
+                    dimension.TextOverride,
+                    dimension.ComponentId,
+                    dimension.Orientation);
+            }).ToArray();
+        }
+
+        private static void AddHorizontalDimensions(
+            ICollection<DrawingDimension> dimensions,
+            IEnumerable<HorizontalDimensionSpec> source,
+            int scale)
+        {
+            var specs = source
+                .GroupBy(item => item.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.First())
+                .ToArray();
+            if (specs.Length == 0) return;
+            var lowestElevation = specs.Min(item => Math.Min(item.StartElevation, item.EndElevation));
+            var placedAtElevation = new Dictionary<double, int>();
+            foreach (var spec in specs
+                .OrderBy(item => Math.Min(item.StartElevation, item.EndElevation)))
+            {
+                var sourceElevation = Math.Min(spec.StartElevation, spec.EndElevation);
+                // The zone below the lowest floor is reserved for axis-grid
+                // dimensions.  Hang the lowest flight's chain from its arrival
+                // platform instead of placing it under the building section.
+                var anchorElevation = Math.Abs(sourceElevation - lowestElevation) < 0.001
+                    ? Math.Max(spec.StartElevation, spec.EndElevation)
+                    : sourceElevation;
+                var key = Math.Round(anchorElevation, 3);
+                int row;
+                placedAtElevation.TryGetValue(key, out row);
+                placedAtElevation[key] = row + 1;
+                // 除层高外，所有标注均以 1:1 下 6mm 的尺寸界线长度布置。
+                // 同一标高只保留一组横向尺寸链，因此不再额外外移分层。
+                var dimensionElevation = anchorElevation - (6.0 * Math.Max(1, scale));
+                var leftLength = spec.LeftEdge - spec.LeftAxisX;
+                var rightLength = spec.RightAxisX - spec.RightEdge;
+                if (leftLength > 0.001)
+                {
+                    dimensions.Add(new DrawingDimension(
+                        new Point2D(spec.LeftAxisX, anchorElevation),
+                        new Point2D(spec.LeftEdge, anchorElevation),
+                        new Point2D((spec.LeftAxisX + spec.LeftEdge) / 2.0, dimensionElevation),
+                        FormatMillimeter(leftLength),
+                        spec.ComponentId,
+                        DrawingDimensionOrientation.Horizontal));
+                }
+                dimensions.Add(new DrawingDimension(
+                    new Point2D(spec.LeftEdge, anchorElevation),
+                    new Point2D(spec.RightEdge, anchorElevation),
+                    new Point2D((spec.LeftEdge + spec.RightEdge) / 2.0, dimensionElevation),
+                    FormatMillimeter(spec.TreadDepth) + "×" + Math.Max(0, spec.RiserCount - 1)
+                        + "=" + FormatMillimeter(spec.RightEdge - spec.LeftEdge),
+                    spec.ComponentId,
+                    DrawingDimensionOrientation.Horizontal));
+                if (rightLength > 0.001)
+                {
+                    dimensions.Add(new DrawingDimension(
+                        new Point2D(spec.RightEdge, anchorElevation),
+                        new Point2D(spec.RightAxisX, anchorElevation),
+                        new Point2D((spec.RightEdge + spec.RightAxisX) / 2.0, dimensionElevation),
+                        FormatMillimeter(rightLength),
+                        spec.ComponentId,
+                        DrawingDimensionOrientation.Horizontal));
+                }
+            }
+        }
+
+        private static void AddOneHandrailHeightDimension(
+            ICollection<DrawingDimension> dimensions,
+            IEnumerable<DrawingLine> lines,
+            RailingDefaults railing,
+            int scale,
+            double firstAxisX,
+            double secondAxisX)
+        {
+            if (railing == null || !railing.Enabled || railing.Height <= 0.0) return;
+            var center = (firstAxisX + secondAxisX) / 2.0;
+            var post = lines
+                .Where(line => line.Role == StairLineRole.Handrail
+                    && Math.Abs(line.Start.X - line.End.X) < 0.001
+                    && Math.Abs(Math.Abs(line.End.Y - line.Start.Y) - railing.Height) < 0.001)
+                .OrderBy(line => Math.Abs(line.Start.X - center))
+                .FirstOrDefault();
+            if (post == null) return;
+            var bottom = post.Start.Y < post.End.Y ? post.Start : post.End;
+            var top = post.Start.Y < post.End.Y ? post.End : post.Start;
+            // 扶手高度属于内层标注，尺寸界线长度与梯段、横向尺寸统一为 6mm。
+            var lineX = bottom.X < center
+                ? bottom.X + (6.0 * Math.Max(1, scale))
+                : bottom.X - (6.0 * Math.Max(1, scale));
+            dimensions.Add(new DrawingDimension(
+                bottom,
+                top,
+                new Point2D(lineX, (bottom.Y + top.Y) / 2.0),
+                FormatMillimeter(railing.Height),
+                "RAILING"));
+        }
+
+        private static double FindOuterOutlineAtElevation(
+            IEnumerable<DrawingLine> lines,
+            double elevation,
+            bool findLeft,
+            double fallback)
+        {
+            const double tolerance = 0.001;
+            var intersections = new List<double>();
+            foreach (var line in lines)
+            {
+                var bottom = Math.Min(line.Start.Y, line.End.Y);
+                var top = Math.Max(line.Start.Y, line.End.Y);
+                if (elevation < bottom - tolerance || elevation > top + tolerance) continue;
+                var deltaY = line.End.Y - line.Start.Y;
+                if (Math.Abs(deltaY) < tolerance)
+                {
+                    if (Math.Abs(elevation - line.Start.Y) > tolerance) continue;
+                    intersections.Add(line.Start.X);
+                    intersections.Add(line.End.X);
+                    continue;
+                }
+                var factor = (elevation - line.Start.Y) / deltaY;
+                if (factor < -tolerance || factor > 1.0 + tolerance) continue;
+                intersections.Add(line.Start.X + factor * (line.End.X - line.Start.X));
+            }
+            if (intersections.Count == 0) return fallback;
+            return findLeft ? intersections.Min() : intersections.Max();
+        }
+
+        private static DrawingView RebaseSectionToLeftAxisLowerPoint(
+            IEnumerable<DrawingLine> lines,
+            IEnumerable<DrawingText> texts,
+            IEnumerable<DrawingDimension> dimensions,
+            IEnumerable<DrawingTable> tables,
+            IEnumerable<DrawingHatchRegion> hatchRegions,
+            int scale,
+            double leftAxisX,
+            double lowestElevation,
+            DrawingTitle title,
+            IEnumerable<DrawingLeader> leaders,
+            bool showBold,
+            bool showFill)
+        {
+            Func<Point2D, Point2D> translate = point => new Point2D(
+                point.X - leftAxisX,
+                point.Y - lowestElevation);
+            var rebasedLines = lines.Select(line => new DrawingLine(
+                translate(line.Start),
+                translate(line.End),
+                line.Role,
+                line.IsHidden,
+                line.ComponentId));
+            var rebasedTexts = texts.Select(text => new DrawingText(
+                translate(text.Position),
+                text.Content,
+                text.Height));
+            var rebasedDimensions = dimensions.Select(dimension => new DrawingDimension(
+                translate(dimension.FirstExtensionOrigin),
+                translate(dimension.SecondExtensionOrigin),
+                translate(dimension.DimensionLinePoint),
+                dimension.TextOverride,
+                dimension.ComponentId,
+                dimension.Orientation));
+            var rebasedTables = tables.Select(table => new DrawingTable(
+                translate(table.Position),
+                table.RowHeight,
+                table.ColumnWidths,
+                table.Rows));
+            var rebasedHatches = hatchRegions.Select(region => new DrawingHatchRegion(
+                region.Boundary.Select(translate),
+                region.ComponentId,
+                region.IsWall,
+                region.PatternName,
+                region.PatternScale,
+                region.Bold,
+                region.OpenEdges.Select(line => new DrawingLine(
+                    translate(line.Start), translate(line.End), line.Role,
+                    line.IsHidden, line.ComponentId))));
+            var rebasedTitle = title == null ? null : new DrawingTitle(
+                translate(title.Position), title.Text, title.Scale, title.TargetWidth);
+            var rebasedLeaders = leaders.Select(leader => new DrawingLeader(
+                leader.Vertices.Select(translate), leader.Text, leader.TextHeight));
+            return new DrawingView(
+                "ProjectSection",
+                rebasedLines,
+                rebasedTexts,
+                rebasedDimensions,
+                rebasedTables,
+                scale,
+                rebasedHatches,
+                rebasedTitle,
+                rebasedLeaders,
+                showBold,
+                showFill);
+        }
+
+        private static IEnumerable<DrawingHatchRegion> BuildStructuralHatchRegions(
+            IEnumerable<DrawingLine> source,
+            SectionHatchDefaults hatch)
+        {
+            if (hatch == null) return Enumerable.Empty<DrawingHatchRegion>();
+            var cutLines = source
+                .Where(line => !line.IsHidden
+                    && (line.Role == StairLineRole.CutBoundary
+                        || line.Role == StairLineRole.CutFlightProfile
+                        || line.Role == StairLineRole.HatchBoundary)
+                    && !string.IsNullOrWhiteSpace(line.ComponentId))
+                .ToArray();
+            var baseWallLines = cutLines.Where(line => string.Equals(line.ComponentId,
+                "BASE-WALL", StringComparison.OrdinalIgnoreCase)).ToArray();
+            var structuralLines = cutLines.Where(line => !string.Equals(line.ComponentId,
+                "BASE-WALL", StringComparison.OrdinalIgnoreCase)).ToArray();
+            // Treat every touching foreground flight, platform and floor as
+            // one graph. Shared edges cancel before loop tracing, so both the
+            // hatch and the inward bold offset use only the combined perimeter.
+            var unionBoundary = MergeConnectedCutOutlines(structuralLines);
+            var regions = TraceClosedLoops(unionBoundary)
+                .Where(loop => Math.Abs(PolygonArea(loop.Points)) > 1.0)
+                .Select(loop => new DrawingHatchRegion(loop.Points, loop.ComponentId, false,
+                    hatch.PatternName, hatch.PatternScale, true, loop.OpenEdges))
+                .ToList();
+            regions.AddRange(TraceClosedLoops(baseWallLines)
+                .Where(loop => Math.Abs(PolygonArea(loop.Points)) > 1.0)
+                .Select(loop => new DrawingHatchRegion(loop.Points, "BASE-WALL", false,
+                    hatch.PatternName, hatch.PatternScale)));
+            return regions;
+        }
+
+        private static IEnumerable<DrawingHatchRegion> BuildWallHatchRegions(
+            IEnumerable<DrawingLine> source,
+            SectionHatchDefaults hatch)
+        {
+            if (hatch == null) return Enumerable.Empty<DrawingHatchRegion>();
+            var walls = source.Where(line => line.Role == StairLineRole.WallBoundary && !line.IsHidden).ToArray();
+            var regions = new List<DrawingHatchRegion>();
+            foreach (var interval in walls.GroupBy(line => Math.Round(Math.Min(line.Start.Y, line.End.Y), 3)
+                    + ":" + Math.Round(Math.Max(line.Start.Y, line.End.Y), 3)))
+            {
+                var sides = interval.OrderBy(line => line.Start.X).ToArray();
+                for (var index = 0; index + 1 < sides.Length; index += 2)
+                {
+                    var left = sides[index];
+                    var right = sides[index + 1];
+                    var bottom = Math.Min(left.Start.Y, left.End.Y);
+                    var top = Math.Max(left.Start.Y, left.End.Y);
+                    if (right.Start.X - left.Start.X < 0.001 || top - bottom < 0.001) continue;
+                    regions.Add(new DrawingHatchRegion(new[]
+                    {
+                        new Point2D(left.Start.X, bottom), new Point2D(right.Start.X, bottom),
+                        new Point2D(right.Start.X, top), new Point2D(left.Start.X, top)
+                    }, left.ComponentId, true, hatch.PatternName, hatch.PatternScale));
+                }
+            }
+            return regions;
+        }
+
+        private static IEnumerable<TracedLoop> TraceClosedLoops(IEnumerable<DrawingLine> source)
+        {
+            var remaining = source.ToList();
+            while (remaining.Count > 0)
+            {
+            var first = remaining[0];
+            remaining.RemoveAt(0);
+            var points = new List<Point2D> { first.Start, first.End };
+            var openEdges = new List<DrawingLine>();
+            if (first.Role == StairLineRole.HatchBoundary) openEdges.Add(first);
+                var componentId = first.ComponentId;
+                var current = first.End;
+                while (!SamePoint(current, points[0]))
+                {
+                    var nextIndex = remaining.FindIndex(line => SamePoint(line.Start, current) || SamePoint(line.End, current));
+                    if (nextIndex < 0) break;
+                    var next = remaining[nextIndex];
+                    remaining.RemoveAt(nextIndex);
+                    if (next.Role == StairLineRole.HatchBoundary) openEdges.Add(next);
+                    current = SamePoint(next.Start, current) ? next.End : next.Start;
+                    points.Add(current);
+                    if (points.Count > 2048) break;
+                }
+                if (points.Count > 3 && SamePoint(points[0], points[points.Count - 1]))
+                {
+                    points.RemoveAt(points.Count - 1);
+                    yield return new TracedLoop(points, componentId, openEdges);
+                }
+            }
+        }
+
+        private static double PolygonArea(IReadOnlyList<Point2D> points)
+        {
+            var area = 0.0;
+            for (var index = 0; index < points.Count; index++)
+            {
+                var next = points[(index + 1) % points.Count];
+                area += points[index].X * next.Y - next.X * points[index].Y;
+            }
+            return area / 2.0;
+        }
+
+        private static bool SamePoint(Point2D first, Point2D second)
+        {
+            return Math.Abs(first.X - second.X) < 0.001 && Math.Abs(first.Y - second.Y) < 0.001;
+        }
+
+
+        private static void AddStairwellAxisLines(
+            ICollection<DrawingLine> lines,
+            IEnumerable<WallSpan> sourceSpans,
+            double lowestElevation,
+            double highestElevation,
+            double wallHeightAboveHighestFloor)
+        {
+            foreach (var span in MergeWallSpans(sourceSpans))
+            {
+                var bottom = span.Bottom;
+                var top = span.Top;
+                if (Math.Abs(bottom - lowestElevation) < 0.001)
+                    bottom -= AxisExtensionBeyondWall;
+                if (Math.Abs(top - highestElevation) < 0.001)
+                    top += wallHeightAboveHighestFloor + AxisExtensionBeyondWall;
+                lines.Add(new DrawingLine(
+                    new Point2D(span.AxisX, bottom),
+                    new Point2D(span.AxisX, top),
+                    StairLineRole.AxisLine,
+                    false,
+                    string.Empty));
+            }
+        }
+
+        private static IReadOnlyList<DrawingLine> MergeConnectedCutOutlines(
+            IReadOnlyList<DrawingLine> sourceLines)
+        {
+            var result = sourceLines.Where(line => !IsMergeCandidate(line)).ToList();
+            var candidates = sourceLines.Where(IsMergeCandidate).ToArray();
+
+            AddMergedAxisLines(result, candidates, true);
+            AddMergedAxisLines(result, candidates, false);
+            result.AddRange(candidates.Where(line => !IsHorizontal(line) && !IsVertical(line)));
+            return result;
+        }
+
+        private static void AddMergedAxisLines(
+            ICollection<DrawingLine> result,
+            IEnumerable<DrawingLine> candidates,
+            bool vertical)
+        {
+            var axisLines = candidates.Where(line => vertical ? IsVertical(line) : IsHorizontal(line));
+            foreach (var group in axisLines.GroupBy(line => AxisKey(line, vertical)))
+            {
+                var lines = group.ToArray();
+                var breaks = lines
+                    .SelectMany(line => new[] { AxisStart(line, vertical), AxisEnd(line, vertical) })
+                    .Distinct()
+                    .OrderBy(value => value)
+                    .ToArray();
+
+                for (var index = 0; index < breaks.Length - 1; index++)
+                {
+                    var start = breaks[index];
+                    var end = breaks[index + 1];
+                    if (end - start < 0.001) continue;
+                    var middle = (start + end) / 2.0;
+                    var owners = lines.Where(line => Covers(line, middle, vertical)).ToArray();
+                    if (owners.Length != 1) continue;
+
+                    var owner = owners[0];
+                    var fixedAxis = vertical ? owner.Start.X : owner.Start.Y;
+                    var first = vertical
+                        ? new Point2D(fixedAxis, start)
+                        : new Point2D(start, fixedAxis);
+                    var second = vertical
+                        ? new Point2D(fixedAxis, end)
+                        : new Point2D(end, fixedAxis);
+                    result.Add(new DrawingLine(
+                        first,
+                        second,
+                        owner.Role,
+                        owner.IsHidden,
+                        owner.ComponentId));
+                }
+            }
+        }
+
+        private static bool IsMergeCandidate(DrawingLine line)
+        {
+            return !line.IsHidden
+                && (line.Role == StairLineRole.CutBoundary
+                    || line.Role == StairLineRole.CutFlightProfile
+                    || line.Role == StairLineRole.HatchBoundary);
+        }
+
+        private static bool IsHorizontal(DrawingLine line)
+        {
+            return Math.Abs(line.Start.Y - line.End.Y) < 0.001;
+        }
+
+        private static bool IsVertical(DrawingLine line)
+        {
+            return Math.Abs(line.Start.X - line.End.X) < 0.001;
+        }
+
+        private static double AxisKey(DrawingLine line, bool vertical)
+        {
+            return Math.Round(vertical ? line.Start.X : line.Start.Y, 3);
+        }
+
+        private static double AxisStart(DrawingLine line, bool vertical)
+        {
+            return Math.Min(
+                vertical ? line.Start.Y : line.Start.X,
+                vertical ? line.End.Y : line.End.X);
+        }
+
+        private static double AxisEnd(DrawingLine line, bool vertical)
+        {
+            return Math.Max(
+                vertical ? line.Start.Y : line.Start.X,
+                vertical ? line.End.Y : line.End.X);
+        }
+
+        private static bool Covers(DrawingLine line, double value, bool vertical)
+        {
+            return value > AxisStart(line, vertical) - 0.001
+                && value < AxisEnd(line, vertical) + 0.001;
+        }
+
+        private static bool AllowsLowerFlightClosure(object boundary)
+        {
+            var floor = boundary as StairFloorDefinition;
+            if (floor != null) return floor.AllowLowerFlightClosure;
+            var landing = boundary as StairLandingDefinition;
+            return landing != null && landing.AllowLowerFlightClosure;
+        }
+
+        private static bool AllowsUpperFlightClosure(object boundary)
+        {
+            var floor = boundary as StairFloorDefinition;
+            if (floor != null) return floor.AllowUpperFlightClosure;
+            var landing = boundary as StairLandingDefinition;
+            return landing != null && landing.AllowUpperFlightClosure;
+        }
+
+        private static string GetBoundaryId(object boundary)
+        {
+            var floor = boundary as StairFloorDefinition;
+            if (floor != null) return floor.Id;
+            var landing = boundary as StairLandingDefinition;
+            return landing == null ? string.Empty : landing.Id;
+        }
+
+        private static void AddHandrailBoundaryPoint(
+            IDictionary<string, List<HandrailBoundaryPoint>> lookup,
+            string boundaryId,
+            double elevation,
+            double x)
+        {
+            if (lookup == null || string.IsNullOrWhiteSpace(boundaryId)) return;
+            List<HandrailBoundaryPoint> points;
+            if (!lookup.TryGetValue(boundaryId, out points))
+            {
+                points = new List<HandrailBoundaryPoint>();
+                lookup.Add(boundaryId, points);
+            }
+            points.Add(new HandrailBoundaryPoint(x, elevation));
+        }
+
+        private static void AddHandrailBoundaryConnections(
+            ICollection<DrawingLine> lines,
+            IDictionary<string, List<HandrailBoundaryPoint>> lookup,
+            RailingDefaults railing)
+        {
+            if (lines == null || lookup == null || railing == null
+                || !railing.Enabled || railing.Height <= 0.0)
+                return;
+
+            foreach (var boundary in lookup)
+            {
+                foreach (var level in boundary.Value.GroupBy(point =>
+                    Math.Round(point.Elevation, 3)))
+                {
+                    var points = level
+                        .GroupBy(point => Math.Round(point.X, 3))
+                        .Select(group => group.First())
+                        .OrderBy(point => point.X)
+                        .ToArray();
+                    if (points.Length < 2) continue;
+                    var firstX = points.First().X;
+                    var lastX = points.Last().X;
+                    if (Math.Abs(lastX - firstX) < 0.001) continue;
+                    var railElevation = points[0].Elevation + railing.Height;
+                    lines.Add(new DrawingLine(
+                        new Point2D(firstX, railElevation),
+                        new Point2D(lastX, railElevation),
+                        StairLineRole.Handrail,
+                        false,
+                        boundary.Key + "-RAILING-CONNECTION"));
+                }
+            }
+        }
+
+        private static void AddHandrail(
+            ICollection<DrawingLine> lines,
+            double flightStartX,
+            double flightEndX,
+            double startElevation,
+            double endElevation,
+            StairProjectFlightResult flight,
+            double direction,
+            double sourceConnectionX,
+            bool allowStartClosure,
+            double destinationConnectionX,
+            bool allowEndClosure,
+            RailingDefaults railing)
+        {
+            if (railing == null || !railing.Enabled || railing.Height <= 0.0 || flight.TreadCount <= 0)
+                return;
+            // The sloping rail starts above the front upper corner of the first
+            // tread, not above the source floor. Together with the arrival
+            // vertex this produces the same rise/run pitch as the stair and
+            // therefore keeps at least the configured vertical clearance over
+            // every tread, even when adjacent flights are horizontally offset.
+            var firstNosing = new Point2D(
+                flightStartX,
+                startElevation + flight.RiserHeight);
+            var lastNosing = new Point2D(flightEndX, endElevation);
+            var firstRail = new Point2D(firstNosing.X, firstNosing.Y + railing.Height);
+            var lastRail = new Point2D(lastNosing.X, lastNosing.Y + railing.Height);
+            var startClosureGap = direction * (flightStartX - sourceConnectionX);
+            if (allowStartClosure && startClosureGap > 0.001)
+            {
+                var platformRailElevation = startElevation + railing.Height;
+                lines.Add(new DrawingLine(
+                    new Point2D(sourceConnectionX, platformRailElevation),
+                    new Point2D(flightStartX, platformRailElevation),
+                    StairLineRole.Handrail,
+                    false,
+                    "RAILING"));
+            }
+            lines.Add(new DrawingLine(firstNosing, firstRail, StairLineRole.Handrail, false, "RAILING"));
+            if (!firstRail.Equals(lastRail))
+                lines.Add(new DrawingLine(firstRail, lastRail, StairLineRole.Handrail, false, "RAILING"));
+            lines.Add(new DrawingLine(lastNosing, lastRail, StairLineRole.Handrail, false, "RAILING"));
+            if (allowEndClosure
+                && direction * (destinationConnectionX - flightEndX) > 0.001)
+            {
+                lines.Add(new DrawingLine(
+                    lastRail,
+                    new Point2D(destinationConnectionX, endElevation + railing.Height),
+                    StairLineRole.Handrail,
+                    false,
+                    "RAILING"));
+            }
+        }
+
+        private static DrawingTable BuildComponentSchedule(
+            StairProjectDefinition project,
+            StairProjectCalculationResult calculation,
+            Point2D position)
+        {
+            var scale = Math.Max(1, project.DrawingScale);
+            var rows = new List<IEnumerable<string>>
+            {
+                new[] { "编号", "构件", "主要尺寸", "数量", "板厚", "梁/备注" }
+            };
+            var resultLookup = calculation.Storeys.ToDictionary(item => item.Id, StringComparer.OrdinalIgnoreCase);
+            foreach (var storey in project.Storeys)
+            {
+                StairStoreyResult storeyResult;
+                if (!resultLookup.TryGetValue(storey.Id, out storeyResult)) continue;
+                for (var index = 0; index < storey.Flights.Count; index++)
+                {
+                    var flight = storey.Flights[index];
+                    var result = storeyResult.Flights[index];
+                    rows.Add(new[]
+                    {
+                        flight.Id,
+                        "梯段",
+                        FormatMillimeter(result.TreadDepth) + "×" + FormatMillimeter(result.RiserHeight),
+                        result.TreadCount + "踏步/" + result.RiserCount + "级",
+                        FormatMillimeter(flight.SlabThicknessOverride ?? project.Construction.FlightSlabThickness),
+                        "净宽 " + FormatMillimeter(result.Width)
+                    });
+                }
+                foreach (var landing in storey.Landings)
+                {
+                    rows.Add(new[]
+                    {
+                        landing.Id,
+                        "休息平台",
+                        "宽 " + FormatMillimeter(landing.PlatformWidth),
+                        "1",
+                        FormatMillimeter(landing.SlabThicknessOverride ?? project.Construction.LandingSlabThickness),
+                        FormatMillimeter(landing.BeamWidthOverride ?? project.Construction.LandingBeam.Width)
+                            + "×" + FormatMillimeter(landing.BeamDepthOverride ?? project.Construction.LandingBeam.Depth)
+                    });
+                }
+            }
+            foreach (var floor in project.Floors)
+            {
+                rows.Add(new[]
+                {
+                    floor.Id,
+                    "楼板",
+                    "宽 " + FormatMillimeter(floor.PlatformWidth),
+                    "1",
+                    FormatMillimeter(floor.SlabThicknessOverride ?? project.Construction.FloorSlabThickness),
+                    FormatMillimeter(floor.BeamWidthOverride ?? project.Construction.FloorBeam.Width)
+                        + "×" + FormatMillimeter(floor.BeamDepthOverride ?? project.Construction.FloorBeam.Depth)
+                });
+            }
+            return new DrawingTable(
+                position,
+                7.0 * scale,
+                new[] { 24.0, 24.0, 38.0, 30.0, 20.0, 34.0 }.Select(value => value * scale),
+                rows);
+        }
+
+        private static void AddFlightBoundary(
+            ICollection<DrawingLine> lines,
+            double startX,
+            double startElevation,
+            StairProjectFlightResult flight,
+            double direction,
+            double sourceConnectionX,
+            double flightSlabThickness,
+            bool allowStartClosure,
+            double destinationConnectionX,
+            double destinationSlabThickness,
+            bool allowBridgeClosure,
+            bool isHidden,
+            bool startsAtFirstFloor,
+            string componentId)
+        {
+            var x = startX;
+            var elevation = startElevation;
+            var role = isHidden ? StairLineRole.SectionProfile : StairLineRole.CutFlightProfile;
+            for (var treadIndex = 0; treadIndex < flight.TreadCount; treadIndex++)
+            {
+                var nextElevation = elevation + flight.RiserHeight;
+                var riserBottom = treadIndex == 0 && !startsAtFirstFloor && !allowStartClosure
+                    ? elevation - flight.RiserHeight
+                    : elevation;
+                lines.Add(new DrawingLine(
+                    new Point2D(x, riserBottom),
+                    new Point2D(x, nextElevation),
+                    role,
+                    isHidden,
+                    componentId));
+                elevation = nextElevation;
+
+                var nextX = x + (direction * flight.TreadDepth);
+                lines.Add(new DrawingLine(
+                    new Point2D(x, elevation),
+                    new Point2D(nextX, elevation),
+                    role,
+                    isHidden,
+                    componentId));
+                x = nextX;
+            }
+
+            Point2D outlineStart;
+            if (startsAtFirstFloor)
+            {
+                outlineStart = new Point2D(
+                    startX + (direction * flight.TreadDepth),
+                    startElevation);
+                lines.Add(new DrawingLine(
+                    new Point2D(startX, startElevation),
+                    outlineStart,
+                    role,
+                    isHidden,
+                    componentId));
+            }
+            else
+            {
+                outlineStart = new Point2D(startX, startElevation - flight.RiserHeight);
+            }
+
+            var outlineEnd = new Point2D(x, elevation - flight.RiserHeight);
+            var sourceGap = direction * (startX - sourceConnectionX);
+            if (allowStartClosure && sourceGap > 0.001)
+            {
+                var closureUndersideElevation = startElevation - flightSlabThickness;
+                var soffitConnection = outlineStart;
+                var soffitRise = outlineEnd.Y - outlineStart.Y;
+                if (Math.Abs(soffitRise) > 0.001)
+                {
+                    var factor = (closureUndersideElevation - outlineStart.Y) / soffitRise;
+                    var candidate = new Point2D(
+                        outlineStart.X + (factor * (outlineEnd.X - outlineStart.X)),
+                        closureUndersideElevation);
+                    if (direction * (candidate.X - sourceConnectionX) > -0.001
+                        && direction * (outlineEnd.X - candidate.X) > -0.001)
+                    {
+                        soffitConnection = candidate;
+                    }
+                }
+                lines.Add(new DrawingLine(
+                    new Point2D(sourceConnectionX, startElevation),
+                    new Point2D(startX, startElevation),
+                    role,
+                    isHidden,
+                    componentId));
+                lines.Add(new DrawingLine(
+                    new Point2D(sourceConnectionX, startElevation),
+                    new Point2D(sourceConnectionX, closureUndersideElevation),
+                    role,
+                    isHidden,
+                    componentId));
+                lines.Add(new DrawingLine(
+                    new Point2D(sourceConnectionX, closureUndersideElevation),
+                    soffitConnection,
+                    role,
+                    isHidden,
+                    componentId));
+                lines.Add(new DrawingLine(
+                    soffitConnection,
+                    outlineEnd,
+                    role,
+                    isHidden,
+                    componentId));
+                lines.Add(new DrawingLine(
+                    new Point2D(x, elevation),
+                    outlineEnd,
+                    role,
+                    isHidden,
+                    componentId));
+                return;
+            }
+            var horizontalGap = direction * (destinationConnectionX - x);
+            if (allowBridgeClosure && horizontalGap > 0.001)
+            {
+                var destinationElevation = elevation + flight.RiserHeight;
+                var bridgeUndersideElevation = destinationElevation - destinationSlabThickness;
+                Point2D? soffitConnection = null;
+                var soffitRise = outlineEnd.Y - outlineStart.Y;
+                if (Math.Abs(soffitRise) > 0.001)
+                {
+                    // FILLET R=0 between the underside of the horizontal bridge
+                    // and the existing flight soffit: extend both to their exact
+                    // intersection without changing the linked tread depth.
+                    var factor = (bridgeUndersideElevation - outlineStart.Y) / soffitRise;
+                    var soffitIntersectionX = outlineStart.X
+                        + (factor * (outlineEnd.X - outlineStart.X));
+                    var intersectionAfterFlightEnd = direction * (soffitIntersectionX - x);
+                    var intersectionBeforeBoundary = direction
+                        * (destinationConnectionX - soffitIntersectionX);
+                    if (intersectionAfterFlightEnd > -0.001
+                        && intersectionBeforeBoundary > -0.001)
+                    {
+                        soffitConnection = new Point2D(
+                            soffitIntersectionX,
+                            bridgeUndersideElevation);
+                    }
+                }
+
+                lines.Add(new DrawingLine(
+                    new Point2D(x, elevation),
+                    new Point2D(x, destinationElevation),
+                    role,
+                    isHidden,
+                    componentId));
+                lines.Add(new DrawingLine(
+                    new Point2D(x, destinationElevation),
+                    new Point2D(destinationConnectionX, destinationElevation),
+                    role,
+                    isHidden,
+                    componentId));
+                // Duplicate the shared interface with the destination
+                // floor/landing. MergeConnectedCutOutlines removes the
+                // coincident copies, leaving one continuous outer boundary.
+                lines.Add(new DrawingLine(
+                    new Point2D(destinationConnectionX, destinationElevation),
+                    new Point2D(destinationConnectionX, bridgeUndersideElevation),
+                    role,
+                    isHidden,
+                    componentId));
+                if (soffitConnection.HasValue)
+                {
+                    lines.Add(new DrawingLine(
+                        new Point2D(destinationConnectionX, bridgeUndersideElevation),
+                        soffitConnection.Value,
+                        role,
+                        isHidden,
+                        componentId));
+                    lines.Add(new DrawingLine(
+                        soffitConnection.Value,
+                        outlineStart,
+                        role,
+                        isHidden,
+                        componentId));
+                }
+                else
+                {
+                    // When the remaining distance is too short for a valid
+                    // horizontal soffit intersection, redraw the underside as
+                    // one continuous diagonal to the destination slab. A short
+                    // extra diagonal at the flight end creates an unrealistic
+                    // kink in the structural stair profile.
+                    lines.Add(new DrawingLine(
+                        new Point2D(destinationConnectionX, bridgeUndersideElevation),
+                        outlineStart,
+                        role,
+                        isHidden,
+                        componentId));
+                }
+                return;
+            }
+
+            lines.Add(new DrawingLine(
+                new Point2D(x, elevation),
+                outlineEnd,
+                role,
+                isHidden,
+                componentId));
+            lines.Add(new DrawingLine(
+                outlineEnd,
+                outlineStart,
+                role,
+                isHidden,
+                componentId));
+        }
+
+        private static void AddLanding(
+            ICollection<DrawingLine> lines,
+            ICollection<DrawingText> texts,
+            StairLandingDefinition landing,
+            double connectionX,
+            double elevation,
+            StairConstructionDefaults defaults,
+            int drawingDirection,
+            bool showText)
+        {
+            var projection = drawingDirection;
+            var platformWidth = landing.PlatformWidth;
+            var thickness = landing.SlabThicknessOverride ?? defaults.LandingSlabThickness;
+            var beamWidth = landing.BeamWidthOverride ?? defaults.LandingBeam.Width;
+            var beamDepth = landing.BeamDepthOverride ?? defaults.LandingBeam.Depth;
+            var slabOverhang = landing.SlabOverhangOverride ?? defaults.SlabOverhang;
+            var closeOverhang = landing.CloseSlabOverhangEdgeOverride
+                ?? defaults.CloseSlabOverhangEdge;
+            AddPlatformOutline(
+                lines,
+                connectionX,
+                elevation,
+                projection,
+                landing.PlatformType,
+                platformWidth,
+                thickness,
+                beamWidth,
+                beamDepth,
+                slabOverhang,
+                closeOverhang,
+                StairLineRole.CutBoundary,
+                landing.Id);
+            AddPlatformDoorWindowElevation(lines, landing.DoorWindowElevation,
+                connectionX, elevation, projection, platformWidth, landing.Id);
+            if (showText)
+                texts.Add(new DrawingText(
+                    new Point2D(connectionX + (projection * platformWidth / 2.0), elevation + 150.0),
+                    landing.Id,
+                    90.0));
+        }
+
+        private static void AddFloor(
+            ICollection<DrawingLine> lines,
+            StairFloorDefinition floor,
+            ComponentPosition position,
+            StairConstructionDefaults defaults,
+            int logicalDirection,
+            StairwellAxisRange stairwellRange,
+            bool includeDoorWindow)
+        {
+            var platformWidth = floor.PlatformWidth;
+            var slabThickness = floor.SlabThicknessOverride ?? defaults.FloorSlabThickness;
+            var beamWidth = floor.BeamWidthOverride ?? defaults.FloorBeam.Width;
+            var beamDepth = floor.BeamDepthOverride ?? defaults.FloorBeam.Depth;
+            var slabOverhang = floor.SlabOverhangOverride ?? defaults.SlabOverhang;
+            var closeOverhang = floor.CloseSlabOverhangEdgeOverride
+                ?? defaults.CloseSlabOverhangEdge;
+            AddPlatformOutline(
+                lines,
+                position.X,
+                position.Elevation,
+                -logicalDirection,
+                floor.PlatformType,
+                platformWidth,
+                slabThickness,
+                beamWidth,
+                beamDepth,
+                slabOverhang,
+                closeOverhang,
+                StairLineRole.CutBoundary,
+                floor.Id);
+            AddOppositeSupport(lines, position.X, position.Elevation, -logicalDirection,
+                platformWidth, stairwellRange,
+                defaults.OppositeSupportsEnabled ? floor.OppositeSupportType : OppositeSupportType.None,
+                floor.OppositeSlabThicknessOverride ?? defaults.FloorSlabThickness,
+                floor.OppositeBeamWidthOverride ?? defaults.FloorBeam.Width,
+                floor.OppositeBeamDepthOverride ?? defaults.FloorBeam.Depth,
+                slabOverhang, closeOverhang, StairLineRole.CutBoundary, floor.Id);
+            if (includeDoorWindow)
+                AddPlatformDoorWindowElevation(lines, floor.DoorWindowElevation,
+                    position.X, position.Elevation, -logicalDirection, platformWidth, floor.Id);
+        }
+
+        private static void AddFloorTransitionSlabs(
+            ICollection<DrawingLine> lines,
+            StairFloorDefinition floor,
+            double elevation,
+            IEnumerable<FloorSupportPosition> sourceSupports,
+            FloorSupportPosition primarySupport,
+            StairConstructionDefaults defaults)
+        {
+            var supports = sourceSupports.Where(item => item != null && item.Range != null).ToArray();
+            if (supports.Length < 2 || primarySupport == null) return;
+            var thickness = floor.SlabThicknessOverride ?? defaults.FloorSlabThickness;
+            AddFloorTransitionSlabsForSide(lines, floor, elevation, thickness,
+                supports, primarySupport, defaults, true, floor.Id + "-SHIFT-L");
+            AddFloorTransitionSlabsForSide(lines, floor, elevation, thickness,
+                supports, primarySupport, defaults, false, floor.Id + "-SHIFT-R");
+        }
+
+        private static void AddFloorTransitionSupportBeams(
+            ICollection<DrawingLine> lines,
+            StairFloorDefinition floor,
+            double elevation,
+            FloorSupportPosition support,
+            FloorSupportPosition primarySupport,
+            StairConstructionDefaults defaults)
+        {
+            var slabThickness = floor.SlabThicknessOverride ?? defaults.FloorSlabThickness;
+            var primaryLeft = support.Direction > 0;
+            var primaryAxisX = primaryLeft
+                ? support.Range.LeftAxisX
+                : support.Range.RightAxisX;
+            if (!SupportHasBeamAtAxis(floor, primarySupport, defaults, primaryAxisX))
+            {
+                AddAttachedFloorBeam(lines,
+                    primaryAxisX,
+                    elevation,
+                    slabThickness,
+                    floor.BeamWidthOverride ?? defaults.FloorBeam.Width,
+                    floor.BeamDepthOverride ?? defaults.FloorBeam.Depth,
+                    floor.Id + "-SHIFT-BEAM-PRIMARY-" + support.StoreyId);
+            }
+            if (!defaults.OppositeSupportsEnabled || floor.OppositeSupportType == OppositeSupportType.None)
+                return;
+            var oppositeAxisX = primaryLeft
+                ? support.Range.RightAxisX
+                : support.Range.LeftAxisX;
+            if (Math.Abs(oppositeAxisX - primaryAxisX) < 0.001
+                || SupportHasBeamAtAxis(floor, primarySupport, defaults, oppositeAxisX))
+                return;
+            AddAttachedFloorBeam(lines,
+                oppositeAxisX,
+                elevation,
+                slabThickness,
+                floor.OppositeBeamWidthOverride ?? defaults.FloorBeam.Width,
+                floor.OppositeBeamDepthOverride ?? defaults.FloorBeam.Depth,
+                floor.Id + "-SHIFT-BEAM-OPPOSITE-" + support.StoreyId);
+        }
+
+        private static bool SupportHasBeamAtAxis(
+            StairFloorDefinition floor,
+            FloorSupportPosition support,
+            StairConstructionDefaults defaults,
+            double axisX)
+        {
+            if (support == null || support.Range == null) return false;
+            var primaryAxisX = support.Direction > 0
+                ? support.Range.LeftAxisX
+                : support.Range.RightAxisX;
+            if (Math.Abs(axisX - primaryAxisX) < 0.001) return true;
+            if (!defaults.OppositeSupportsEnabled
+                || floor.OppositeSupportType == OppositeSupportType.None)
+                return false;
+            var oppositeAxisX = support.Direction > 0
+                ? support.Range.RightAxisX
+                : support.Range.LeftAxisX;
+            return Math.Abs(axisX - oppositeAxisX) < 0.001;
+        }
+
+        private static void AddAttachedFloorBeam(
+            ICollection<DrawingLine> lines,
+            double axisX,
+            double elevation,
+            double slabThickness,
+            double beamWidth,
+            double beamDepth,
+            string componentId)
+        {
+            var halfWidth = Math.Max(0.5, beamWidth / 2.0);
+            var slabBottom = elevation - Math.Max(0.0, slabThickness);
+            var beamBottom = elevation - Math.Max(slabThickness, beamDepth);
+            var startX = axisX - halfWidth;
+            var endX = axisX + halfWidth;
+            // A freely shifted wall axis can put this beam partly inside an
+            // existing floor-end beam.  Drawing both complete rectangles makes
+            // their overlapping bottom edges disappear in the visible-outline
+            // merger.  Add only the still-uncovered beam-bottom intervals; the
+            // shared vertical edge then cancels and the two beams become one
+            // structural perimeter.
+            var uncovered = ResolveUncoveredHorizontalIntervals(
+                lines, beamBottom, startX, endX);
+            foreach (var interval in uncovered)
+            {
+                lines.Add(new DrawingLine(
+                    new Point2D(interval[0], slabBottom),
+                    new Point2D(interval[0], beamBottom),
+                    StairLineRole.CutBoundary, false, componentId));
+                lines.Add(new DrawingLine(
+                    new Point2D(interval[0], beamBottom),
+                    new Point2D(interval[1], beamBottom),
+                    StairLineRole.CutBoundary, false, componentId));
+                lines.Add(new DrawingLine(
+                    new Point2D(interval[1], beamBottom),
+                    new Point2D(interval[1], slabBottom),
+                    StairLineRole.CutBoundary, false, componentId));
+                // Duplicate the slab underside across only the new portion.
+                // The outline merger removes it wherever a slab is attached.
+                lines.Add(new DrawingLine(
+                    new Point2D(interval[1], slabBottom),
+                    new Point2D(interval[0], slabBottom),
+                    StairLineRole.CutBoundary, false, componentId));
+            }
+        }
+
+        private static IReadOnlyList<double[]> ResolveUncoveredHorizontalIntervals(
+            IEnumerable<DrawingLine> sourceLines,
+            double elevation,
+            double firstX,
+            double secondX)
+        {
+            var start = Math.Min(firstX, secondX);
+            var end = Math.Max(firstX, secondX);
+            var covered = sourceLines
+                .Where(line => !line.IsHidden
+                    && IsMergeCandidate(line)
+                    && Math.Abs(line.Start.Y - elevation) < 0.001
+                    && Math.Abs(line.End.Y - elevation) < 0.001
+                    && AxisEnd(line, false) > start + 0.001
+                    && AxisStart(line, false) < end - 0.001)
+                .Select(line => new[]
+                {
+                    Math.Max(start, AxisStart(line, false)),
+                    Math.Min(end, AxisEnd(line, false))
+                })
+                .Where(interval => interval[1] - interval[0] > 0.001)
+                .OrderBy(interval => interval[0])
+                .ToArray();
+            var result = new List<double[]>();
+            var cursor = start;
+            foreach (var interval in covered)
+            {
+                if (interval[0] > cursor + 0.001)
+                    result.Add(new[] { cursor, interval[0] });
+                cursor = Math.Max(cursor, interval[1]);
+                if (cursor >= end - 0.001) break;
+            }
+            if (cursor < end - 0.001)
+                result.Add(new[] { cursor, end });
+            return result;
+        }
+
+        private static void AddFloorTransitionSlabsForSide(
+            ICollection<DrawingLine> lines,
+            StairFloorDefinition floor,
+            double elevation,
+            double thickness,
+            IEnumerable<FloorSupportPosition> sourceSupports,
+            FloorSupportPosition primarySupport,
+            StairConstructionDefaults defaults,
+            bool leftSide,
+            string componentId)
+        {
+            var beamLocations = sourceSupports
+                .Select(support => new TransitionBeamLocation(
+                    leftSide ? support.Range.LeftAxisX : support.Range.RightAxisX,
+                    ResolveFloorBeamHalfWidth(floor, support, defaults, leftSide)))
+                .GroupBy(item => Math.Round(item.AxisX, 3))
+                .Select(group => new TransitionBeamLocation(
+                    group.First().AxisX,
+                    group.Max(item => item.HalfWidth)))
+                .OrderBy(item => item.AxisX)
+                .ToArray();
+            if (beamLocations.Length < 2) return;
+            var primaryAxisX = leftSide
+                ? primarySupport.Range.LeftAxisX
+                : primarySupport.Range.RightAxisX;
+
+            for (var index = 0; index < beamLocations.Length - 1; index++)
+            {
+                var left = beamLocations[index];
+                var right = beamLocations[index + 1];
+                var facingFirstX = left.AxisX + left.HalfWidth;
+                var facingSecondX = right.AxisX - right.HalfWidth;
+                if (facingSecondX - facingFirstX < 0.001) continue;
+
+                // The primary floor/support already owns its beam-and-slab
+                // perimeter.  A secondary wall beam is different: the infill
+                // slab must pass across its full width so the coincident slab
+                // underside and beam top cancel during outline merging.  This
+                // leaves one closed external beam/slab contour instead of a
+                // loose slab ending at the beam face.
+                var firstX = Math.Abs(left.AxisX - primaryAxisX) < 0.001
+                    ? facingFirstX
+                    : left.AxisX - left.HalfWidth;
+                var secondX = Math.Abs(right.AxisX - primaryAxisX) < 0.001
+                    ? facingSecondX
+                    : right.AxisX + right.HalfWidth;
+                double primarySlabStart;
+                double primarySlabEnd;
+                if (TryResolveFloorSlabInterval(floor, primarySupport, defaults,
+                        leftSide, out primarySlabStart, out primarySlabEnd))
+                {
+                    var primaryIsLeft = Math.Abs(left.AxisX - primaryAxisX) < 0.001;
+                    if (primaryIsLeft)
+                    {
+                        if (primarySlabEnd >= secondX - 0.001) continue;
+                        if (primarySlabEnd > firstX + 0.001)
+                            firstX = primarySlabEnd;
+                    }
+                    else
+                    {
+                        if (primarySlabStart <= firstX + 0.001) continue;
+                        if (primarySlabStart < secondX - 0.001)
+                            secondX = primarySlabStart;
+                    }
+                }
+                // A final flight that is allowed to close to the shared floor
+                // can already occupy exactly this transition strip.  Adding a
+                // second rectangle over it would make the outline merger erase
+                // their coincident top and underside.  Reuse that existing
+                // closed strip just as we reuse an unchanged-axis beam.
+                if (HorizontalBoundaryCoversInterval(lines, elevation, firstX, secondX)
+                    && HorizontalBoundaryCoversInterval(
+                        lines, elevation - thickness, firstX, secondX))
+                    continue;
+                AddTransitionSlab(lines, firstX, secondX, elevation, thickness,
+                    beamLocations.Length == 2 ? componentId : componentId + "-" + (index + 1));
+            }
+        }
+
+        private static bool HorizontalBoundaryCoversInterval(
+            IEnumerable<DrawingLine> sourceLines,
+            double elevation,
+            double firstX,
+            double secondX)
+        {
+            var start = Math.Min(firstX, secondX);
+            var end = Math.Max(firstX, secondX);
+            if (end - start < 0.001) return true;
+            var intervals = sourceLines
+                .Where(line => !line.IsHidden
+                    && IsMergeCandidate(line)
+                    && Math.Abs(line.Start.Y - elevation) < 0.001
+                    && Math.Abs(line.End.Y - elevation) < 0.001
+                    && AxisEnd(line, false) > start + 0.001
+                    && AxisStart(line, false) < end - 0.001)
+                .Select(line => new[]
+                {
+                    Math.Max(start, AxisStart(line, false)),
+                    Math.Min(end, AxisEnd(line, false))
+                })
+                .Where(interval => interval[1] - interval[0] > 0.001)
+                .OrderBy(interval => interval[0])
+                .ToArray();
+            var coveredUntil = start;
+            foreach (var interval in intervals)
+            {
+                if (interval[0] > coveredUntil + 0.001) return false;
+                coveredUntil = Math.Max(coveredUntil, interval[1]);
+                if (coveredUntil >= end - 0.001) return true;
+            }
+            return coveredUntil >= end - 0.001;
+        }
+
+        private static bool TryResolveFloorSlabInterval(
+            StairFloorDefinition floor,
+            FloorSupportPosition support,
+            StairConstructionDefaults defaults,
+            bool leftSide,
+            out double slabStart,
+            out double slabEnd)
+        {
+            var primarySide = leftSide ? support.Direction > 0 : support.Direction < 0;
+            if (primarySide)
+            {
+                var beamWidth = floor.BeamWidthOverride ?? defaults.FloorBeam.Width;
+                var outsideBeamOffset = floor.PlatformType == PlatformLayoutType.Platform1
+                    ? 0.0
+                    : beamWidth / 2.0;
+                var totalWidth = floor.PlatformType == PlatformLayoutType.Platform3
+                    ? floor.PlatformWidth + outsideBeamOffset
+                        + Math.Max(0.0, floor.SlabOverhangOverride ?? defaults.SlabOverhang)
+                    : floor.PlatformWidth + outsideBeamOffset;
+                var direction = -support.Direction;
+                slabStart = Math.Min(support.Position.X,
+                    support.Position.X + (direction * totalWidth));
+                slabEnd = Math.Max(support.Position.X,
+                    support.Position.X + (direction * totalWidth));
+            }
+            else
+            {
+                if (floor.OppositeSupportType != OppositeSupportType.BeamWithSlab)
+                {
+                    slabStart = 0.0;
+                    slabEnd = 0.0;
+                    return false;
+                }
+                var axisX = leftSide ? support.Range.LeftAxisX : support.Range.RightAxisX;
+                var halfBeam = Math.Max(0.5,
+                    (floor.OppositeBeamWidthOverride ?? defaults.FloorBeam.Width) / 2.0);
+                var outsideDirection = leftSide ? -1 : 1;
+                var extent = halfBeam
+                    + Math.Max(0.0, floor.SlabOverhangOverride ?? defaults.SlabOverhang);
+                slabStart = Math.Min(axisX + (outsideDirection * -halfBeam),
+                    axisX + (outsideDirection * extent));
+                slabEnd = Math.Max(axisX + (outsideDirection * -halfBeam),
+                    axisX + (outsideDirection * extent));
+            }
+            return true;
+        }
+
+        private static double ResolveFloorBeamHalfWidth(
+            StairFloorDefinition floor,
+            FloorSupportPosition support,
+            StairConstructionDefaults defaults,
+            bool leftSide)
+        {
+            var primarySide = leftSide ? support.Direction > 0 : support.Direction < 0;
+            var width = primarySide
+                ? floor.BeamWidthOverride ?? defaults.FloorBeam.Width
+                : floor.OppositeBeamWidthOverride ?? defaults.FloorBeam.Width;
+            return Math.Max(0.5, width / 2.0);
+        }
+
+        private static void AddTransitionSlab(
+            ICollection<DrawingLine> lines,
+            double firstX,
+            double secondX,
+            double elevation,
+            double thickness,
+            string componentId)
+        {
+            if (Math.Abs(secondX - firstX) < 0.001 || thickness <= 0.0) return;
+            AddRectangleBoundary(lines, Math.Min(firstX, secondX), Math.Max(firstX, secondX),
+                elevation, thickness, StairLineRole.CutBoundary, false, componentId);
+        }
+
+        private static void AddPlatformOutline(
+            ICollection<DrawingLine> lines,
+            double connectionX,
+            double topElevation,
+            int direction,
+            PlatformLayoutType platformType,
+            double platformWidth,
+            double slabThickness,
+            double beamWidth,
+            double beamHeight,
+            double slabOverhang,
+            bool closeSlabOverhangEdge,
+            StairLineRole role,
+            string componentId)
+        {
+            var outsideBeamOffset = platformType == PlatformLayoutType.Platform1
+                ? 0.0
+                : beamWidth / 2.0;
+            var totalWidth = platformType == PlatformLayoutType.Platform3
+                ? platformWidth + outsideBeamOffset + Math.Max(0.0, slabOverhang)
+                : platformWidth + outsideBeamOffset;
+            var points = new List<Point2D>
+            {
+                PlatformPoint(connectionX, topElevation, direction, 0.0, 0.0),
+                PlatformPoint(connectionX, topElevation, direction, totalWidth, 0.0),
+                PlatformPoint(connectionX, topElevation, direction, totalWidth, -slabThickness)
+            };
+
+            if (platformType != PlatformLayoutType.Platform1)
+            {
+                if (platformType == PlatformLayoutType.Platform3)
+                {
+                    points.Add(PlatformPoint(connectionX, topElevation, direction, platformWidth + outsideBeamOffset, -slabThickness));
+                }
+                points.Add(PlatformPoint(connectionX, topElevation, direction, platformWidth + outsideBeamOffset, -beamHeight));
+                points.Add(PlatformPoint(connectionX, topElevation, direction, platformWidth - outsideBeamOffset, -beamHeight));
+                points.Add(PlatformPoint(connectionX, topElevation, direction, platformWidth - outsideBeamOffset, -slabThickness));
+            }
+
+            points.Add(PlatformPoint(connectionX, topElevation, direction, beamWidth, -slabThickness));
+            points.Add(PlatformPoint(connectionX, topElevation, direction, beamWidth, -beamHeight));
+            points.Add(PlatformPoint(connectionX, topElevation, direction, 0.0, -beamHeight));
+
+            AddPolygonLines(lines, points, role, componentId,
+                platformType == PlatformLayoutType.Platform3 && !closeSlabOverhangEdge ? 1 : -1);
+        }
+
+        private static void AddOppositeSupport(
+            ICollection<DrawingLine> lines,
+            double connectionX,
+            double topElevation,
+            int platformDirection,
+            double platformWidth,
+            StairwellAxisRange stairwellRange,
+            OppositeSupportType supportType,
+            double slabThickness,
+            double beamWidth,
+            double beamDepth,
+            double slabOverhang,
+            bool closeSlabOverhangEdge,
+            StairLineRole role,
+            string componentId)
+        {
+            if (supportType == OppositeSupportType.None) return;
+            var platformAxisX = connectionX + platformDirection * platformWidth;
+            var oppositeAxisX = Math.Abs(platformAxisX - stairwellRange.LeftAxisX)
+                <= Math.Abs(platformAxisX - stairwellRange.RightAxisX)
+                ? stairwellRange.RightAxisX
+                : stairwellRange.LeftAxisX;
+            var outsideDirection = oppositeAxisX <= stairwellRange.CenterX ? -1 : 1;
+            var halfBeam = Math.Max(0.5, beamWidth / 2.0);
+            var points = new List<Point2D>();
+            if (supportType == OppositeSupportType.BeamWithSlab)
+            {
+                var slabEnd = halfBeam + Math.Max(0.0, slabOverhang);
+                points.Add(PlatformPoint(oppositeAxisX, topElevation, outsideDirection, -halfBeam, 0.0));
+                points.Add(PlatformPoint(oppositeAxisX, topElevation, outsideDirection, slabEnd, 0.0));
+                points.Add(PlatformPoint(oppositeAxisX, topElevation, outsideDirection, slabEnd, -slabThickness));
+                points.Add(PlatformPoint(oppositeAxisX, topElevation, outsideDirection, halfBeam, -slabThickness));
+                points.Add(PlatformPoint(oppositeAxisX, topElevation, outsideDirection, halfBeam, -beamDepth));
+                points.Add(PlatformPoint(oppositeAxisX, topElevation, outsideDirection, -halfBeam, -beamDepth));
+                AddPolygonLines(lines, points, role, componentId,
+                    closeSlabOverhangEdge ? -1 : 1);
+                return;
+            }
+            points.Add(PlatformPoint(oppositeAxisX, topElevation, outsideDirection, -halfBeam, 0.0));
+            points.Add(PlatformPoint(oppositeAxisX, topElevation, outsideDirection, halfBeam, 0.0));
+            points.Add(PlatformPoint(oppositeAxisX, topElevation, outsideDirection, halfBeam, -beamDepth));
+            points.Add(PlatformPoint(oppositeAxisX, topElevation, outsideDirection, -halfBeam, -beamDepth));
+            AddPolygonLines(lines, points, role, componentId, -1);
+        }
+
+        private static void AddPolygonLines(
+            ICollection<DrawingLine> lines,
+            IList<Point2D> points,
+            StairLineRole role,
+            string componentId,
+            int hatchOnlyEdgeIndex)
+        {
+            for (var index = 0; index < points.Count; index++)
+            {
+                var nextIndex = (index + 1) % points.Count;
+                if (AreSamePoint(points[index], points[nextIndex])) continue;
+                lines.Add(new DrawingLine(points[index], points[nextIndex],
+                    index == hatchOnlyEdgeIndex ? StairLineRole.HatchBoundary : role,
+                    false, componentId));
+            }
+        }
+
+        private static Point2D PlatformPoint(
+            double connectionX,
+            double topElevation,
+            int direction,
+            double localX,
+            double localY)
+        {
+            return new Point2D(connectionX + (direction * localX), topElevation + localY);
+        }
+
+        private static bool AreSamePoint(Point2D first, Point2D second)
+        {
+            return Math.Abs(first.X - second.X) < 0.001
+                && Math.Abs(first.Y - second.Y) < 0.001;
+        }
+
+        private static void AddStairwellWalls(
+            ICollection<DrawingLine> lines,
+            IEnumerable<WallAnchor> anchors,
+            IEnumerable<WallSpan> spans,
+            double lowestElevation,
+            double highestElevation,
+            double wallHeightAboveHighestFloor,
+            StairConstructionDefaults defaults,
+            IEnumerable<StairWallOpeningDefinition> openings,
+            string lowestSupportId)
+        {
+            if (defaults.Wall == null || defaults.Wall.Thickness <= 0.0)
+                return;
+
+            var positions = anchors.ToArray();
+            var wallSpans = MergeWallSpans(spans);
+            if (wallSpans.Count == 0) return;
+
+            var halfThickness = defaults.Wall.Thickness / 2.0;
+            var openingLookup = (openings ?? Enumerable.Empty<StairWallOpeningDefinition>())
+                .Where(item => item != null && !string.IsNullOrWhiteSpace(item.SegmentId))
+                .GroupBy(item => item.SegmentId, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.Last(), StringComparer.OrdinalIgnoreCase);
+            foreach (var wallSpan in wallSpans)
+            {
+                var axisAnchors = positions.Where(anchor =>
+                    Math.Abs(anchor.AxisX - wallSpan.AxisX) < 0.001).ToArray();
+                var top = Math.Abs(wallSpan.Top - highestElevation) < 0.001
+                    ? highestElevation + wallHeightAboveHighestFloor
+                    : wallSpan.Top;
+                var bottom = wallSpan.Bottom;
+                var beamIntervals = MergeIntervals(axisAnchors
+                    .Select(anchor => new ElevationInterval(
+                        anchor.TopElevation - anchor.BeamDepth,
+                        anchor.TopElevation,
+                        anchor.SupportId))
+                    .OrderBy(interval => interval.Bottom));
+                var cursor = bottom;
+                var floorAnchor = axisAnchors.FirstOrDefault(anchor =>
+                    Math.Abs(anchor.TopElevation - bottom) < 0.001);
+                var supportId = floorAnchor != null
+                    ? floorAnchor.SupportId
+                    : string.IsNullOrWhiteSpace(lowestSupportId) ? "BASE" : lowestSupportId;
+                foreach (var interval in beamIntervals)
+                {
+                    if (interval.Top < bottom - 0.001 || interval.Bottom > top + 0.001)
+                        continue;
+                    var clippedBottom = Math.Max(bottom, interval.Bottom);
+                    var clippedTop = Math.Min(top, interval.Top);
+                    if (clippedBottom > cursor + 0.001)
+                    {
+                        AddWallSegmentPair(lines, wallSpan.AxisX - halfThickness, wallSpan.AxisX + halfThickness,
+                            cursor, clippedBottom, WallSegmentId(wallSpan.Side, supportId), openingLookup);
+                    }
+                    if (clippedTop >= cursor - 0.001)
+                    {
+                        supportId = interval.SupportId;
+                    }
+                    cursor = Math.Max(cursor, clippedTop);
+                }
+                if (top > cursor + 0.001)
+                    AddWallSegmentPair(lines, wallSpan.AxisX - halfThickness, wallSpan.AxisX + halfThickness,
+                        cursor, top, WallSegmentId(wallSpan.Side, supportId), openingLookup);
+            }
+        }
+
+        private static IList<WallSpan> MergeWallSpans(IEnumerable<WallSpan> source)
+        {
+            var result = new List<WallSpan>();
+            foreach (var group in (source ?? Enumerable.Empty<WallSpan>())
+                .Where(item => item != null)
+                .GroupBy(item => item.Side + "|" + Math.Round(item.AxisX, 3)
+                    .ToString(CultureInfo.InvariantCulture)))
+            {
+                foreach (var span in group.OrderBy(item => item.Bottom))
+                {
+                    var last = result.LastOrDefault(item => item.Side == span.Side
+                        && Math.Abs(item.AxisX - span.AxisX) < 0.001);
+                    if (last == null || span.Bottom > last.Top + 0.001)
+                    {
+                        result.Add(new WallSpan(span.Side, span.AxisX, span.Bottom, span.Top));
+                    }
+                    else
+                    {
+                        last.Top = Math.Max(last.Top, span.Top);
+                    }
+                }
+            }
+            return result.OrderBy(item => item.AxisX).ThenBy(item => item.Bottom).ToList();
+        }
+
+        private static IList<ElevationInterval> MergeIntervals(IEnumerable<ElevationInterval> source)
+        {
+            var result = new List<ElevationInterval>();
+            foreach (var interval in source)
+            {
+                var last = result.LastOrDefault();
+                if (last == null || interval.Bottom > last.Top + 0.001)
+                {
+                    result.Add(new ElevationInterval(interval.Bottom, interval.Top, interval.SupportId));
+                }
+                else
+                {
+                    if (interval.Top >= last.Top)
+                    {
+                        last.Top = interval.Top;
+                        last.SupportId = interval.SupportId;
+                    }
+                }
+            }
+            return result;
+        }
+
+        private static string WallSegmentId(string side, string supportId)
+        {
+            return "WALL-" + side + "-" + (string.IsNullOrWhiteSpace(supportId) ? "BASE" : supportId);
+        }
+
+        private static void AddWallSegmentPair(
+            ICollection<DrawingLine> lines,
+            double firstFaceX,
+            double secondFaceX,
+            double bottom,
+            double top,
+            string componentId,
+            IDictionary<string, StairWallOpeningDefinition> openingLookup)
+        {
+            StairWallOpeningDefinition opening;
+            if (!openingLookup.TryGetValue(componentId, out opening)
+                || opening == null || opening.Type == WallOpeningType.None)
+            {
+                AddWallFace(lines, firstFaceX, bottom, top, componentId);
+                AddWallFace(lines, secondFaceX, bottom, top, componentId);
+                return;
+            }
+
+            var openingBottom = opening.Type == WallOpeningType.Window
+                ? bottom + Math.Max(0.0, opening.SillHeight)
+                : bottom;
+            var openingTop = openingBottom + Math.Max(1.0, opening.Height);
+            openingBottom = Math.Max(bottom, Math.Min(top, openingBottom));
+            openingTop = Math.Max(openingBottom, Math.Min(top, openingTop));
+            if (openingTop - openingBottom < 1.0)
+            {
+                AddWallFace(lines, firstFaceX, bottom, top, componentId);
+                AddWallFace(lines, secondFaceX, bottom, top, componentId);
+                return;
+            }
+
+            foreach (var faceX in new[] { firstFaceX, secondFaceX })
+            {
+                if (openingBottom > bottom + 0.001)
+                    AddWallFace(lines, faceX, bottom, openingBottom, componentId);
+                if (top > openingTop + 0.001)
+                    AddWallFace(lines, faceX, openingTop, top, componentId);
+            }
+            if (opening.Type == WallOpeningType.Window && openingBottom > bottom + 0.001)
+                AddWallCrossLine(lines, firstFaceX, secondFaceX, openingBottom, componentId,
+                    StairLineRole.WallOpeningLowerEdge);
+            if (openingTop < top - 0.001)
+                AddWallCrossLine(lines, firstFaceX, secondFaceX, openingTop, componentId,
+                    StairLineRole.WallOpeningUpperEdge);
+
+            AddOpeningSymbol(lines, firstFaceX, secondFaceX, openingBottom, openingTop,
+                componentId, opening.Type);
+        }
+
+        private static void AddWallFace(ICollection<DrawingLine> lines, double x,
+            double bottom, double top, string componentId)
+        {
+            if (top <= bottom + 0.001) return;
+            lines.Add(new DrawingLine(new Point2D(x, bottom), new Point2D(x, top),
+                StairLineRole.WallBoundary, false, componentId));
+        }
+
+        private static void AddWallCrossLine(ICollection<DrawingLine> lines, double firstX,
+            double secondX, double elevation, string componentId, StairLineRole role)
+        {
+            lines.Add(new DrawingLine(new Point2D(firstX, elevation),
+                new Point2D(secondX, elevation), role, false, componentId));
+        }
+
+        private static void AddOpeningSymbol(ICollection<DrawingLine> lines, double firstX,
+            double secondX, double bottom, double top, string componentId, WallOpeningType type)
+        {
+            var left = Math.Min(firstX, secondX);
+            var right = Math.Max(firstX, secondX);
+            // Doors and windows use the same four cyan elevation lines: the
+            // outer pair coincides exactly with the two wall faces, while the
+            // inner pair is centred and 50 mm apart.
+            var middle = (left + right) / 2.0;
+            var halfInnerGap = Math.Min(25.0, Math.Max(0.0, (right - left) / 2.0 - 0.5));
+            foreach (var x in new[] { left, middle - halfInnerGap, middle + halfInnerGap, right })
+                lines.Add(new DrawingLine(new Point2D(x, bottom),
+                    new Point2D(x, top), StairLineRole.OpeningBoundary, false, componentId));
+        }
+
+        private static void AddPlatformDoorWindowElevation(
+            ICollection<DrawingLine> lines,
+            StairPlatformOpeningDefinition opening,
+            double connectionX,
+            double platformElevation,
+            int direction,
+            double platformWidth,
+            string componentId)
+        {
+            if (opening == null || opening.Type == WallOpeningType.None) return;
+            var width = Math.Max(1.0, opening.Width);
+            var height = Math.Max(1.0, opening.Height);
+            var sill = opening.Type == WallOpeningType.Window ? Math.Max(0.0, opening.SillHeight) : 0.0;
+            var axisX = connectionX + direction * platformWidth;
+            var axisSide = axisX - direction * Math.Max(0.0, opening.DistanceFromWall);
+            var originX = axisSide - direction * width;
+            var originY = platformElevation + sill;
+            var parsed = ParseDoorWindowGeometry(opening.GeometryLines).ToArray();
+            if (parsed.Length == 0)
+            {
+                AddDefaultDoorWindowElevation(lines, originX, originY, direction,
+                    width, height, opening, componentId);
+                return;
+            }
+            foreach (var segment in parsed)
+            {
+                lines.Add(new DrawingLine(
+                    new Point2D(originX + direction * segment.X1, originY + segment.Y1),
+                    new Point2D(originX + direction * segment.X2, originY + segment.Y2),
+                    GetDoorWindowLineRole(segment.Role, UsesWindowAppearance(opening)),
+                    false, componentId));
+            }
+        }
+
+        private static StairLineRole GetDoorWindowLineRole(int sourceRole, bool windowAppearance)
+        {
+            // DoorWindowLineRole in the main plug-in:
+            // 0 Hole, 1 Frame, 2 Mullion, 3 SashFrame, 4 Opening, 5 Material.
+            if (sourceRole == 0 || sourceRole == 4)
+                return StairLineRole.DoorWindowOpeningHole;
+            if (sourceRole == 3)
+                return windowAppearance
+                    ? StairLineRole.DoorWindowWindowSash
+                    : StairLineRole.DoorWindowDoorSash;
+            return windowAppearance
+                ? StairLineRole.DoorWindowWindowMain
+                : StairLineRole.DoorWindowDoorMain;
+        }
+
+        private static bool UsesWindowAppearance(StairPlatformOpeningDefinition opening)
+        {
+            if (opening.Type == WallOpeningType.Window) return true;
+            if (opening.Type != WallOpeningType.Door) return false;
+            foreach (var record in (opening.CustomCellLayout ?? string.Empty).Split(
+                new[] { '|' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var parts = record.Split(',');
+                if (parts.Length > 7 && parts[5] != "1"
+                    && string.Equals(parts[7], "玻璃", StringComparison.Ordinal))
+                    return true;
+            }
+            return false;
+        }
+
+        private static void AddDefaultDoorWindowElevation(
+            ICollection<DrawingLine> lines,
+            double originX,
+            double originY,
+            int direction,
+            double width,
+            double height,
+            StairPlatformOpeningDefinition opening,
+            string componentId)
+        {
+            var mainRole = UsesWindowAppearance(opening)
+                ? StairLineRole.DoorWindowWindowMain
+                : StairLineRole.DoorWindowDoorMain;
+            Action<double, double, double, double> add = (x1, y1, x2, y2) =>
+                lines.Add(new DrawingLine(
+                    new Point2D(originX + direction * x1, originY + y1),
+                    new Point2D(originX + direction * x2, originY + y2),
+                    mainRole, false, componentId));
+            add(0, 0, width, 0); add(width, 0, width, height);
+            add(width, height, 0, height); add(0, height, 0, 0);
+            if (opening.HasOuterFrame)
+            {
+                var inset = Math.Min(Math.Max(0.0, opening.OuterFrameWidth),
+                    Math.Min(width, height) / 2.0);
+                if (inset > 0.001)
+                {
+                    add(inset, inset, width - inset, inset);
+                    add(width - inset, inset, width - inset, height - inset);
+                    add(width - inset, height - inset, inset, height - inset);
+                    add(inset, height - inset, inset, inset);
+                }
+            }
+        }
+
+        private static IEnumerable<DoorWindowGeometrySegment> ParseDoorWindowGeometry(string value)
+        {
+            foreach (var record in (value ?? string.Empty).Split(new[] { '|' },
+                StringSplitOptions.RemoveEmptyEntries))
+            {
+                var parts = record.Split(',');
+                double x1, y1, x2, y2;
+                if (parts.Length < 5
+                    || !double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out x1)
+                    || !double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out y1)
+                    || !double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out x2)
+                    || !double.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out y2))
+                    continue;
+                int role;
+                if (!int.TryParse(parts[4], NumberStyles.Integer,
+                    CultureInfo.InvariantCulture, out role)) role = 1;
+                yield return new DoorWindowGeometrySegment(x1, y1, x2, y2, role);
+            }
+        }
+
+        private static IDictionary<string, double> BuildPhysicalFloorElevations(
+            StairProjectDefinition project)
+        {
+            var result = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+            var elevation = project.BaseElevation;
+            foreach (var storey in project.Storeys.Where(item => item != null))
+            {
+                if (!string.IsNullOrWhiteSpace(storey.LowerFloorId))
+                    result[storey.LowerFloorId] = elevation;
+                var lowerFloor = project.Floors.FirstOrDefault(item => item != null
+                    && string.Equals(item.Id, storey.LowerFloorId,
+                        StringComparison.OrdinalIgnoreCase));
+                elevation += storey.Height * GetLogicalRepeatCount(storey, lowerFloor);
+                if (!string.IsNullOrWhiteSpace(storey.UpperFloorId))
+                    result[storey.UpperFloorId] = elevation;
+            }
+            return result;
+        }
+
+        private static int GetLogicalRepeatCount(
+            StairStoreyDefinition storey,
+            StairFloorDefinition lowerFloor)
+        {
+            return Math.Max(1, Math.Max(
+                storey == null ? 1 : storey.PlanRepeatCount,
+                lowerFloor == null ? 1 : lowerFloor.PlanRepeatCount));
+        }
+
+        private static void AddStandardFloorLevelTexts(
+            ICollection<DrawingText> texts,
+            StairFloorDefinition floor,
+            StairStoreyDefinition storey,
+            StairStoreyResult storeyResult,
+            double physicalLowerElevation,
+            double textX)
+        {
+            int firstFloor;
+            int lastFloor;
+            var repeatCount = GetLogicalRepeatCount(storey, floor);
+            if (!TryParseFloorRange(floor.PlanFloorLabel, out firstFloor, out lastFloor))
+            {
+                AddFloorLevelText(texts, floor, physicalLowerElevation,
+                    storeyResult.LowerElevation, textX);
+                return;
+            }
+            var direction = lastFloor >= firstFloor ? 1 : -1;
+            var drawingHeight = storeyResult.UpperElevation - storeyResult.LowerElevation;
+            for (var index = 0; index < repeatCount; index++)
+            {
+                var drawingElevation = storeyResult.LowerElevation
+                    + (drawingHeight * index / repeatCount);
+                var physicalElevation = physicalLowerElevation + (storey.Height * index);
+                var floorNumber = firstFloor + (direction * index);
+                texts.Add(new DrawingText(
+                    new Point2D(textX, drawingElevation),
+                    FormatLevelElevation(physicalElevation) + " (" + floorNumber + "F)",
+                    90.0));
+            }
+        }
+
+        private static bool TryParseFloorRange(string label, out int first, out int last)
+        {
+            first = 0;
+            last = 0;
+            var text = (label ?? string.Empty).Replace(" ", string.Empty)
+                .Replace("～", "~").Replace("—", "~")
+                .Replace("至", "~").Replace("到", "~");
+            var separator = text.IndexOf('~');
+            if (separator <= 0 || separator >= text.Length - 1) return false;
+            var left = new string(text.Substring(0, separator)
+                .TakeWhile(character => character == '-' || char.IsDigit(character)).ToArray());
+            var right = new string(text.Substring(separator + 1)
+                .TakeWhile(character => character == '-' || char.IsDigit(character)).ToArray());
+            return int.TryParse(left, NumberStyles.Integer, CultureInfo.InvariantCulture, out first)
+                && int.TryParse(right, NumberStyles.Integer, CultureInfo.InvariantCulture, out last);
+        }
+
+        private static void AddFloorLevelText(
+            ICollection<DrawingText> texts,
+            StairFloorDefinition floor,
+            double physicalElevation,
+            double drawingElevation,
+            double textX)
+        {
+            var label = !string.IsNullOrWhiteSpace(floor.PlanFloorLabel)
+                ? floor.PlanFloorLabel.Trim()
+                : !string.IsNullOrWhiteSpace(floor.Name)
+                    ? floor.Name.Trim()
+                    : floor.Id;
+            texts.Add(new DrawingText(
+                new Point2D(textX, drawingElevation),
+                FormatLevelElevation(physicalElevation) + " (" + FormatFloorMark(label) + ")",
+                90.0));
+        }
+
+        private static string FormatFloorMark(string label)
+        {
+            var text = (label ?? string.Empty).Trim();
+            var numeric = new string(text.TakeWhile(character => character == '-'
+                || char.IsDigit(character)).ToArray());
+            int floorNumber;
+            return int.TryParse(numeric, NumberStyles.Integer, CultureInfo.InvariantCulture,
+                out floorNumber)
+                ? floorNumber.ToString(CultureInfo.InvariantCulture) + "F"
+                : text;
+        }
+
+        private static void AddRectangleBoundary(
+            ICollection<DrawingLine> lines,
+            double startX,
+            double endX,
+            double topElevation,
+            double thickness,
+            StairLineRole role,
+            bool isHidden,
+            string componentId)
+        {
+            var bottom = topElevation - thickness;
+            lines.Add(new DrawingLine(new Point2D(startX, topElevation), new Point2D(endX, topElevation), role, isHidden, componentId));
+            lines.Add(new DrawingLine(new Point2D(endX, topElevation), new Point2D(endX, bottom), role, isHidden, componentId));
+            lines.Add(new DrawingLine(new Point2D(endX, bottom), new Point2D(startX, bottom), role, isHidden, componentId));
+            lines.Add(new DrawingLine(new Point2D(startX, bottom), new Point2D(startX, topElevation), role, isHidden, componentId));
+        }
+
+        private static void AddBeam(
+            ICollection<DrawingLine> lines,
+            double connectionX,
+            double topElevation,
+            double width,
+            double depth,
+            int structureDirection,
+            string componentId)
+        {
+            var left = structureDirection < 0 ? connectionX - width : connectionX;
+            var right = structureDirection < 0 ? connectionX : connectionX + width;
+            AddRectangleBoundary(
+                lines,
+                left,
+                right,
+                topElevation,
+                depth,
+                StairLineRole.BeamBoundary,
+                false,
+                componentId);
+        }
+
+        private static string FormatLevelElevation(double elevation)
+        {
+            if (Math.Abs(elevation) < 0.001)
+            {
+                return "±0.000";
+            }
+            return (elevation / 1000.0).ToString("0.000", CultureInfo.InvariantCulture);
+        }
+
+        private static void AddBaseWall(
+            ICollection<DrawingLine> lines,
+            double firstAxisX,
+            double secondAxisX,
+            double lowestElevation,
+            int drawingScale,
+            StairConstructionDefaults defaults)
+        {
+            var wallThickness = defaults.Wall == null ? 0.0 : Math.Max(0.0, defaults.Wall.Thickness);
+            var halfWall = wallThickness / 2.0;
+            var halfFloorBeam = defaults.FloorBeam == null
+                ? 0.0
+                : Math.Max(0.0, defaults.FloorBeam.Width) / 2.0;
+            var outsideAxis = Math.Max(halfWall,
+                halfFloorBeam + Math.Max(0.0, defaults.SlabOverhang));
+            var left = Math.Min(firstAxisX, secondAxisX) - outsideAxis;
+            var right = Math.Max(firstAxisX, secondAxisX) + outsideAxis;
+            AddRectangleBoundary(lines, left, right, lowestElevation, BaseWallThickness,
+                StairLineRole.HatchBoundary, false, "BASE-WALL");
+            lines.Add(new DrawingLine(new Point2D(left, lowestElevation),
+                new Point2D(right, lowestElevation), StairLineRole.StructuralEdge, false, "BASE-WALL-VISIBLE"));
+            lines.Add(new DrawingLine(new Point2D(left, lowestElevation - BaseWallThickness),
+                new Point2D(right, lowestElevation - BaseWallThickness), StairLineRole.StructuralEdge, false,
+                "BASE-WALL-VISIBLE"));
+        }
+
+        private static void AddTopGuardrail(
+            ICollection<DrawingLine> lines,
+            ICollection<DrawingLeader> leaders,
+            double highestElevation,
+            int drawingScale,
+            RailingDefaults railing,
+            int floorDirection)
+        {
+            if (railing == null || !railing.Enabled) return;
+            var handrailPoints = lines
+                .Where(line => line.Role == StairLineRole.Handrail)
+                .SelectMany(line => new[] { line.Start, line.End })
+                .ToArray();
+            if (handrailPoints.Length == 0) return;
+            var highestHandrailPoint = handrailPoints.OrderByDescending(point => point.Y).First();
+
+            const double guardrailHeight = 1100.0;
+            const double postWidth = 40.0;
+            // Move both the guardrail and its leader 50 mm into the highest
+            // floor, not merely the annotation text.
+            var x = highestHandrailPoint.X + Math.Sign(floorDirection) * 50.0;
+            var bottom = highestElevation;
+            var top = highestElevation + guardrailHeight;
+            var left = x - postWidth / 2.0;
+            var right = x + postWidth / 2.0;
+            lines.Add(new DrawingLine(new Point2D(left, bottom), new Point2D(left, top),
+                StairLineRole.Handrail, false, "TOP-GUARDRAIL"));
+            lines.Add(new DrawingLine(new Point2D(right, bottom), new Point2D(right, top),
+                StairLineRole.Handrail, false, "TOP-GUARDRAIL"));
+            lines.Add(new DrawingLine(new Point2D(left, top), new Point2D(right, top),
+                StairLineRole.Handrail, false, "TOP-GUARDRAIL"));
+
+            var scale = Math.Max(1, drawingScale);
+            var target = new Point2D(x, top);
+            var elbow = new Point2D(x - (6.0 * scale), top + (4.0 * scale));
+            var textPoint = new Point2D(x - (13.0 * scale), elbow.Y);
+            leaders.Add(new DrawingLeader(new[] { target, elbow, textPoint },
+                "栏杆 H=1.1m", 3.5 * scale));
+        }
+
+        private static void AddTopBreakLine(
+            ICollection<DrawingLine> lines,
+            double firstAxisX,
+            double secondAxisX,
+            double elevation,
+            int drawingScale,
+            StairConstructionDefaults defaults)
+        {
+            var wallThickness = defaults.Wall == null ? 0.0 : Math.Max(0.0, defaults.Wall.Thickness);
+            var halfWall = wallThickness / 2.0;
+            var extension = 4.0 * Math.Max(1, drawingScale);
+            var start = new Point2D(Math.Min(firstAxisX, secondAxisX) - halfWall - extension, elevation);
+            var end = new Point2D(Math.Max(firstAxisX, secondAxisX) + halfWall + extension, elevation);
+            var middle = new Point2D((start.X + end.X) / 2.0, elevation);
+
+            // QZ折断线 uses a six-vertex polyline. Its four middle points are
+            // obtained from the midpoint with the paired -104/+104 and
+            // +76/-76 degree vectors. A fixed plotted seed length keeps the
+            // break symbol legible without making its height depend on the
+            // full stairwell span.
+            var seedLength = 30.0 * Math.Max(1, drawingScale);
+            var offset = seedLength * 0.115;
+            var p3 = Polar(middle, -104.0, offset);
+            var p2 = Polar(p3, 104.0, offset);
+            var p4 = Polar(middle, 76.0, offset);
+            var p5 = Polar(p4, -76.0, offset);
+            var points = new[] { start, p2, p3, p4, p5, end };
+            for (var index = 0; index + 1 < points.Length; index++)
+                lines.Add(new DrawingLine(points[index], points[index + 1],
+                    StairLineRole.BreakLine, false, "TOP-BREAK"));
+        }
+
+        private static double GetWallHeightAboveHighestFloor(
+            StairProjectDefinition project,
+            string highestFloorId)
+        {
+            var floor = (project.Floors ?? new List<StairFloorDefinition>())
+                .FirstOrDefault(item => item != null && string.Equals(
+                    item.Id, highestFloorId, StringComparison.OrdinalIgnoreCase));
+            var opening = floor == null ? null : floor.DoorWindowElevation;
+            if (opening == null || opening.Type == WallOpeningType.None)
+                return WallHeightAboveHighestFloor;
+            var sill = opening.Type == WallOpeningType.Window
+                ? Math.Max(0.0, opening.SillHeight)
+                : 0.0;
+            var openingTop = sill + Math.Max(0.0, opening.Height);
+            return Math.Max(WallHeightAboveHighestFloor,
+                openingTop + WallHeadAboveTopOpening);
+        }
+
+        private static void AddStandardFloorBreakLines(
+            ICollection<DrawingLine> lines,
+            StairProjectDefinition project,
+            StairProjectCalculationResult calculation,
+            int drawingScale)
+        {
+            if (project == null || calculation == null) return;
+            var results = calculation.Storeys.ToDictionary(value => value.Id,
+                StringComparer.OrdinalIgnoreCase);
+            var floors = (project.Floors ?? new List<StairFloorDefinition>())
+                .Where(value => value != null).ToDictionary(value => value.Id,
+                    StringComparer.OrdinalIgnoreCase);
+            var axisResolver = new StairwellAxisResolver();
+            foreach (var storey in project.Storeys.Where(value => value != null))
+            {
+                StairFloorDefinition lowerFloor;
+                floors.TryGetValue(storey.LowerFloorId ?? string.Empty, out lowerFloor);
+                if (storey.PlanRepeatCount <= 1
+                    && (lowerFloor == null || lowerFloor.PlanRepeatCount <= 1)) continue;
+                StairStoreyResult result;
+                if (!results.TryGetValue(storey.Id, out result)) continue;
+                var range = axisResolver.Resolve(project, storey);
+                AddHorizontalBreakLine(lines, range.LeftAxisX, range.RightAxisX,
+                    result.LowerElevation + 1200.0, drawingScale,
+                    "STANDARD-BREAK-" + storey.Id + "-1");
+                AddHorizontalBreakLine(lines, range.LeftAxisX, range.RightAxisX,
+                    result.LowerElevation + 1300.0, drawingScale,
+                    "STANDARD-BREAK-" + storey.Id + "-2");
+            }
+        }
+
+        private static void AddHorizontalBreakLine(ICollection<DrawingLine> lines,
+            double firstAxisX, double secondAxisX, double elevation,
+            int drawingScale, string componentId)
+        {
+            var extension = 4.0 * Math.Max(1, drawingScale);
+            var start = new Point2D(Math.Min(firstAxisX, secondAxisX) - extension, elevation);
+            var end = new Point2D(Math.Max(firstAxisX, secondAxisX) + extension, elevation);
+            var middle = new Point2D((start.X + end.X) / 2.0, elevation);
+            var offset = 30.0 * Math.Max(1, drawingScale) * 0.115;
+            var points = new[] { start, Polar(Polar(middle, -104.0, offset), 104.0, offset),
+                Polar(middle, -104.0, offset), Polar(middle, 76.0, offset),
+                Polar(Polar(middle, 76.0, offset), -76.0, offset), end };
+            for (var index = 0; index + 1 < points.Length; index++)
+                lines.Add(new DrawingLine(points[index], points[index + 1],
+                    StairLineRole.BreakLine, false, componentId));
+        }
+
+        private static Point2D Polar(Point2D origin, double angleDegrees, double distance)
+        {
+            var radians = angleDegrees * Math.PI / 180.0;
+            return new Point2D(
+                origin.X + Math.Cos(radians) * distance,
+                origin.Y + Math.Sin(radians) * distance);
+        }
+
+        private static string FormatMillimeter(double value)
+        {
+            return Math.Abs(value - Math.Round(value)) < 0.05
+                ? Math.Round(value).ToString("0", CultureInfo.InvariantCulture)
+                : value.ToString("0.0", CultureInfo.InvariantCulture);
+        }
+
+        private static void AddFloorSupport(
+            IDictionary<string, List<FloorSupportPosition>> lookup,
+            string floorId,
+            FloorSupportPosition support)
+        {
+            if (lookup == null || string.IsNullOrWhiteSpace(floorId) || support == null) return;
+            List<FloorSupportPosition> values;
+            if (!lookup.TryGetValue(floorId, out values))
+            {
+                values = new List<FloorSupportPosition>();
+                lookup.Add(floorId, values);
+            }
+            values.Add(support);
+        }
+
+        private sealed class ComponentPosition
+        {
+            public ComponentPosition(double x, double elevation)
+            {
+                X = x;
+                Elevation = elevation;
+            }
+
+            public double X { get; }
+
+            public double Elevation { get; }
+        }
+
+        private sealed class FloorSupportPosition
+        {
+            public FloorSupportPosition(
+                ComponentPosition position,
+                StairwellAxisRange range,
+                int direction,
+                string storeyId,
+                bool isLowerBoundary)
+            {
+                Position = position;
+                Range = range;
+                Direction = direction;
+                StoreyId = storeyId ?? string.Empty;
+                IsLowerBoundary = isLowerBoundary;
+            }
+
+            public ComponentPosition Position { get; }
+
+            public StairwellAxisRange Range { get; }
+
+            public int Direction { get; }
+
+            public string StoreyId { get; }
+
+            public bool IsLowerBoundary { get; }
+        }
+
+        private sealed class HandrailBoundaryPoint
+        {
+            public HandrailBoundaryPoint(double x, double elevation)
+            {
+                X = x;
+                Elevation = elevation;
+            }
+
+            public double X { get; }
+
+            public double Elevation { get; }
+        }
+
+        private sealed class TransitionBeamLocation
+        {
+            public TransitionBeamLocation(double axisX, double halfWidth)
+            {
+                AxisX = axisX;
+                HalfWidth = halfWidth;
+            }
+
+            public double AxisX { get; }
+
+            public double HalfWidth { get; }
+        }
+
+        private sealed class WallSpan
+        {
+            public WallSpan(string side, double axisX, double bottom, double top)
+            {
+                Side = side ?? string.Empty;
+                AxisX = axisX;
+                Bottom = Math.Min(bottom, top);
+                Top = Math.Max(bottom, top);
+            }
+
+            public string Side { get; }
+
+            public double AxisX { get; }
+
+            public double Bottom { get; }
+
+            public double Top { get; set; }
+        }
+
+        private sealed class DoorWindowGeometrySegment
+        {
+            public DoorWindowGeometrySegment(double x1, double y1, double x2, double y2, int role)
+            {
+                X1 = x1; Y1 = y1; X2 = x2; Y2 = y2; Role = role;
+            }
+
+            public double X1 { get; }
+            public double Y1 { get; }
+            public double X2 { get; }
+            public double Y2 { get; }
+            public int Role { get; }
+        }
+
+        private sealed class TracedLoop
+        {
+            public TracedLoop(
+                IEnumerable<Point2D> points,
+                string componentId,
+                IEnumerable<DrawingLine> openEdges = null)
+            {
+                Points = points.ToArray();
+                ComponentId = componentId ?? string.Empty;
+                OpenEdges = (openEdges ?? Enumerable.Empty<DrawingLine>()).ToArray();
+            }
+
+            public IReadOnlyList<Point2D> Points { get; }
+            public string ComponentId { get; }
+            public IReadOnlyList<DrawingLine> OpenEdges { get; }
+        }
+
+        private sealed class HorizontalDimensionSpec
+        {
+            public HorizontalDimensionSpec(
+                string componentId,
+                double leftEdge,
+                double rightEdge,
+                double startElevation,
+                double endElevation,
+                double treadDepth,
+                int riserCount,
+                double leftAxisX,
+                double rightAxisX)
+            {
+                ComponentId = componentId;
+                LeftEdge = leftEdge;
+                RightEdge = rightEdge;
+                StartElevation = startElevation;
+                EndElevation = endElevation;
+                TreadDepth = treadDepth;
+                RiserCount = riserCount;
+                LeftAxisX = leftAxisX;
+                RightAxisX = rightAxisX;
+                Key = string.Join("|", new[]
+                {
+                    Math.Round(leftEdge, 3).ToString(CultureInfo.InvariantCulture),
+                    Math.Round(rightEdge - leftEdge, 3).ToString(CultureInfo.InvariantCulture),
+                    Math.Round(treadDepth, 3).ToString(CultureInfo.InvariantCulture),
+                    riserCount.ToString(CultureInfo.InvariantCulture),
+                    Math.Round(leftAxisX, 3).ToString(CultureInfo.InvariantCulture),
+                    Math.Round(rightAxisX, 3).ToString(CultureInfo.InvariantCulture)
+                });
+            }
+
+            public string ComponentId { get; }
+
+            public double LeftEdge { get; }
+
+            public double RightEdge { get; }
+
+            public double StartElevation { get; }
+
+            public double EndElevation { get; }
+
+            public double TreadDepth { get; }
+
+            public int RiserCount { get; }
+
+            public double LeftAxisX { get; }
+
+            public double RightAxisX { get; }
+
+            public string Key { get; }
+        }
+
+        private sealed class WallAnchor
+        {
+            public WallAnchor(double axisX, double topElevation, double beamDepth, string supportId)
+            {
+                AxisX = axisX;
+                TopElevation = topElevation;
+                BeamDepth = beamDepth;
+                SupportId = supportId ?? string.Empty;
+            }
+
+            public double AxisX { get; }
+
+            public double TopElevation { get; }
+
+            public double BeamDepth { get; }
+
+            public string SupportId { get; }
+        }
+
+        private sealed class ElevationInterval
+        {
+            public ElevationInterval(double bottom, double top, string supportId)
+            {
+                Bottom = bottom;
+                Top = top;
+                SupportId = supportId ?? string.Empty;
+            }
+
+            public double Bottom { get; }
+
+            public double Top { get; set; }
+
+            public string SupportId { get; set; }
+        }
+    }
+}

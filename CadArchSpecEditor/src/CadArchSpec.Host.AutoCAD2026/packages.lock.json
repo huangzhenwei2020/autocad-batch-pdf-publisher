@@ -8,13 +8,16 @@
         "resolved": "1.0.4078.44",
         "contentHash": "TQkHa/aOHUqFHnJIJ/2ZmJ4nLcQJi0Pc0rj9BAs7SP5sT/KtVtb8jFp9uqQL6cKzCRSrwjS/wEPA43NWUOzU+A=="
       },
+      "cadarchspec.cadtable": {
+        "type": "Project"
+      },
       "cadarchspec.domain": {
         "type": "Project"
       },
       "cadarchspec.editorbridge": {
         "type": "Project",
         "dependencies": {
-          "CadArchSpec.Domain": "[1.0.0, )",
+          "CadArchSpec.Domain": "[1.5.1, )",
           "Newtonsoft.Json": "[13.0.3, )"
         }
       },
@@ -24,7 +27,7 @@
       "cadarchspec.ruleengine": {
         "type": "Project",
         "dependencies": {
-          "CadArchSpec.Domain": "[1.0.0, )",
+          "CadArchSpec.Domain": "[1.5.1, )",
           "Newtonsoft.Json": "[13.0.3, )"
         }
       },

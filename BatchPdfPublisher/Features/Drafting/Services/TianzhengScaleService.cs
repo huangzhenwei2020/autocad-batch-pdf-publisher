@@ -73,6 +73,7 @@ namespace BatchPdfPublisher.Services
         {
             public ObjectId Id;
             public double Distance;
+            public double LayerCoordinate;
             public int Direction;
             public int Side;
             public Point3d Source1;
@@ -159,36 +160,57 @@ namespace BatchPdfPublisher.Services
                 try
                 {
                     var entity = transaction.GetObject(id, OpenMode.ForRead, false) as Entity;
-                    double distance; int direction; int side; Point3d source1; Point3d source2;
-                    if (entity != null && IsTianzhengDimension(entity) && TryMeasureDimensionGeometry(entity, out distance, out direction, out side, out source1, out source2))
+                    double distance; double layerCoordinate; int direction; int side; Point3d source1; Point3d source2;
+                    if (entity != null && IsTianzhengDimension(entity) && TryMeasureDimensionGeometry(entity, out distance, out layerCoordinate, out direction, out side, out source1, out source2))
                     {
                         // Preserve the side encoded by the original dimension
                         // itself. Axis labels on all four sides share the same
                         // grid coordinates, so trying to infer the side again
                         // from nearby labels can reassign top/left dimensions to
                         // the right/bottom sets.
-                        measured.Add(new MeasuredDimension { Id = id, Distance = distance, Direction = direction, Side = side, Source1 = source1, Source2 = source2 });
+                        measured.Add(new MeasuredDimension { Id = id, Distance = distance, LayerCoordinate = layerCoordinate, Direction = direction, Side = side, Source1 = source1, Source2 = source2 });
                     }
                 }
                 catch { }
             }
             var result = new Dictionary<ObjectId, DimensionGeometryTarget>();
+            var levelById = new Dictionary<ObjectId, int>();
+            // Determine row levels across both sides of the same orientation.
+            // Tianzheng can report one row with the opposite grip direction even
+            // though it belongs to the same visible stack. Direction remains
+            // useful for moving grips, but must not restart row numbering.
+            foreach (var orientationGroup in measured.GroupBy(x => x.Side / 10))
+            {
+                var orientation = orientationGroup.ToList();
+                var distanceSpan = orientation.Max(x => x.Distance) - orientation.Min(x => x.Distance);
+                var levelTolerance = Math.Max(0.1d, distanceSpan * 0.0001d);
+                var orientationLevels = new List<double>();
+                foreach (var distance in orientation.Select(x => x.Distance).OrderBy(x => x))
+                    if (orientationLevels.Count == 0 || Math.Abs(distance - orientationLevels[orientationLevels.Count - 1]) > levelTolerance) orientationLevels.Add(distance);
+                foreach (var item in orientation)
+                {
+                    var level = 0; var best = double.MaxValue;
+                    for (var i = 0; i < orientationLevels.Count; i++)
+                    {
+                        var difference = Math.Abs(item.Distance - orientationLevels[i]);
+                        if (difference < best) { best = difference; level = i; }
+                    }
+                    levelById[item.Id] = level;
+                }
+            }
             foreach (var sideGroup in measured.GroupBy(x => x.Side))
             {
                 var group = sideGroup.ToList();
-                var innermost = group.OrderBy(x => x.Distance).First();
+                var innermost = group.OrderBy(x => levelById[x.Id]).ThenBy(x => x.Distance).First();
                 var sharedSourcePoint = MidPoint(innermost.Source1, innermost.Source2);
-                var tolerance = Math.Max(0.1d, group.Max(x => x.Distance) * 0.02d);
-                var levels = new List<double>();
-                foreach (var distance in group.Select(x => x.Distance).OrderBy(x => x))
-                    if (levels.Count == 0 || Math.Abs(distance - levels[levels.Count - 1]) > tolerance) levels.Add(distance);
                 foreach (var item in group)
                 {
-                    var level = 0; var best = double.MaxValue;
-                    for (var i = 0; i < levels.Count; i++) { var difference = Math.Abs(item.Distance - levels[i]); if (difference < best) { best = difference; level = i; } }
+                    var level = levelById[item.Id];
                     double axisCoordinate;
                     var hasAxisReference = TryResolveAxisSourceCoordinate(item.Source1, item.Source2, item.Direction, axisFreeEndpoints, out axisCoordinate);
-                    result[item.Id] = new DimensionGeometryTarget { Distance = Math.Max(0d, settings.InnerExtensionLength + level * settings.DimensionSpacing) * targetScale, Direction = item.Direction, OriginalSource1 = item.Source1, OriginalSource2 = item.Source2, UseAxisSourceBaseline = hasAxisReference, AxisSourceCoordinate = axisCoordinate, UseSharedSourceBaseline = !hasAxisReference, SharedSourcePoint = sharedSourcePoint };
+                    var targetDistance = Math.Max(0d, settings.InnerExtensionLength + level * settings.DimensionSpacing) * targetScale;
+                    result[item.Id] = new DimensionGeometryTarget { Distance = targetDistance, Direction = item.Direction, OriginalSource1 = item.Source1, OriginalSource2 = item.Source2, UseAxisSourceBaseline = hasAxisReference, AxisSourceCoordinate = axisCoordinate, UseSharedSourceBaseline = !hasAxisReference, SharedSourcePoint = sharedSourcePoint };
+                    LogDimensionPlan(item, level, targetDistance, hasAxisReference);
                 }
             }
             return result;
@@ -336,9 +358,9 @@ namespace BatchPdfPublisher.Services
             document.SendStringToExecute(expression.ToString(), true, false, false);
         }
 
-        private static bool TryMeasureDimensionGeometry(Entity entity, out double distance, out int direction, out int side, out Point3d source1, out Point3d source2)
+        private static bool TryMeasureDimensionGeometry(Entity entity, out double distance, out double layerCoordinate, out int direction, out int side, out Point3d source1, out Point3d source2)
         {
-            distance = 0d; direction = 1; side = 0; source1 = Point3d.Origin; source2 = Point3d.Origin;
+            distance = 0d; layerCoordinate = 0d; direction = 1; side = 0; source1 = Point3d.Origin; source2 = Point3d.Origin;
             try
             {
                 var grips = new Point3dCollection(); var osnap = new IntegerCollection(); var geometry = new IntegerCollection();
@@ -353,6 +375,7 @@ namespace BatchPdfPublisher.Services
                 var sourceCoordinate = sourceIndices.Average(index => project(grips[index]));
                 distance = Math.Abs(sourceCoordinate - dimensionCoordinate);
                 direction = Math.Sign(dimensionCoordinate - sourceCoordinate); if (direction == 0) direction = 1;
+                layerCoordinate = direction * dimensionCoordinate;
                 side = (Math.Abs(tangent.X) >= Math.Abs(tangent.Y) ? 10 : 20) + (direction > 0 ? 1 : 2);
                 // A continuous Tianzheng dimension exposes every measured axis
                 // point as a grip on the same source baseline.  Keep the two
@@ -363,6 +386,20 @@ namespace BatchPdfPublisher.Services
                 return distance > 1e-8;
             }
             catch { return false; }
+        }
+
+        private static void LogDimensionPlan(MeasuredDimension item, int level, double targetDistance, bool hasAxisReference)
+        {
+            try
+            {
+                System.IO.File.AppendAllText(System.IO.Path.Combine(UserDataPaths.LogsDirectory, "tianzheng-scale.log"),
+                    DateTime.Now.ToString("O") + " handle=" + item.Id.Handle + " side=" + item.Side +
+                    " rawDistance=" + item.Distance.ToString("0.###", CultureInfo.InvariantCulture) +
+                    " layerCoordinate=" + item.LayerCoordinate.ToString("0.###", CultureInfo.InvariantCulture) +
+                    " level=" + level + " targetDistance=" + targetDistance.ToString("0.###", CultureInfo.InvariantCulture) +
+                    " axis=" + (hasAxisReference ? "1" : "0") + Environment.NewLine);
+            }
+            catch { }
         }
 
         private static bool ApplyDimensionGripGeometry(Entity entity, double targetDistance, int originalDirection, Point3d originalSource1, Point3d originalSource2, bool useAxisSourceBaseline, double plannedAxisSourceCoordinate, bool useSharedSourceBaseline, Point3d sharedSourcePoint, IList<AxisFreeEndpoint> axisFreeEndpoints)
