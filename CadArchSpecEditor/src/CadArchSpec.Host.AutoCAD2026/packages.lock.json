@@ -2,33 +2,11 @@
   "version": 2,
   "dependencies": {
     "net8.0-windows7.0": {
-      "AutoCAD.NET": {
-        "type": "Direct",
-        "requested": "[25.0.1, )",
-        "resolved": "25.0.1",
-        "contentHash": "57MbBZyhQh6nM16w/tF88uXPUascZygGfYBzE9QsuaXjM/baPArjaTnAJmvfnkzgKLsXtZrJAzr2rCtxVygPiQ==",
-        "dependencies": {
-          "AutoCAD.NET.Core": "[25.0.0]"
-        }
-      },
       "Microsoft.Web.WebView2": {
         "type": "Direct",
         "requested": "[1.0.4078.44, )",
         "resolved": "1.0.4078.44",
         "contentHash": "TQkHa/aOHUqFHnJIJ/2ZmJ4nLcQJi0Pc0rj9BAs7SP5sT/KtVtb8jFp9uqQL6cKzCRSrwjS/wEPA43NWUOzU+A=="
-      },
-      "AutoCAD.NET.Core": {
-        "type": "Transitive",
-        "resolved": "25.0.0",
-        "contentHash": "jPwsZgVs+4xqXtMLWJjgb4WSSzbb7YGbgn/BqT7LGPRthQb/93CmRZyuSgfjjSK8EgL+YsfRuRYVvYNGHrw3TA==",
-        "dependencies": {
-          "AutoCAD.NET.Model": "[25.0.0]"
-        }
-      },
-      "AutoCAD.NET.Model": {
-        "type": "Transitive",
-        "resolved": "25.0.0",
-        "contentHash": "XGKd/R/MZ5oHFEMOtxHh9L307ss6XSnW4S0JSC3UkRjvdgv8rTygXkqz+vGoRoUl8IWU/ooskfVT/qOikFfteA=="
       },
       "cadarchspec.cadtable": {
         "type": "Project"
@@ -39,7 +17,7 @@
       "cadarchspec.editorbridge": {
         "type": "Project",
         "dependencies": {
-          "CadArchSpec.Domain": "[1.4.9, )",
+          "CadArchSpec.Domain": "[1.5.1, )",
           "Newtonsoft.Json": "[13.0.3, )"
         }
       },
@@ -49,7 +27,7 @@
       "cadarchspec.ruleengine": {
         "type": "Project",
         "dependencies": {
-          "CadArchSpec.Domain": "[1.4.9, )",
+          "CadArchSpec.Domain": "[1.5.1, )",
           "Newtonsoft.Json": "[13.0.3, )"
         }
       },

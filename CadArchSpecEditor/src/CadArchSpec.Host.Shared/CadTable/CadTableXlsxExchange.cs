@@ -13,7 +13,7 @@ namespace CadArchSpec.Host.Shared.CadTable
         {
             var source = payload?["table"] as JObject;
             if (source == null) throw new InvalidDataException("没有收到可导出的表格数据。");
-            var table = Convert(source);
+            var table = Convert(payload);
             using (var dialog = new SaveFileDialog
             {
                 Title = "导出 Excel 表格",
@@ -32,9 +32,14 @@ namespace CadArchSpec.Host.Shared.CadTable
             }
         }
 
-        private static SpreadsheetTable Convert(JObject source)
+        private static SpreadsheetTable Convert(JObject payload)
         {
+            var source = payload["table"] as JObject ?? new JObject();
             var table = new SpreadsheetTable { Title = (string)source["title"] ?? "表格" };
+            var options = payload["cadInsertOptions"] as JObject ?? new JObject();
+            table.BorderColorRgb = (int?)options["borderColorRgb"];
+            table.FillColorRgb = (int?)options["fillColorRgb"];
+            table.TextColorRgb = (int?)options["textColorRgb"];
             var columns = ((JArray)source["columns"] ?? new JArray()).OfType<JObject>().ToList();
             table.Columns.AddRange(columns.Select(column => (string)column["title"] ?? string.Empty));
             table.ColumnWidthsMillimeters.AddRange(columns.Select(column =>
@@ -47,6 +52,7 @@ namespace CadArchSpec.Host.Shared.CadTable
                     row.Cells.Add(new SpreadsheetCell
                     {
                         Value = (string)cell["displayValue"] ?? string.Empty,
+                        Formula = (string)cell["formula"] ?? string.Empty,
                         RowSpan = Math.Max(0, (int?)cell["rowSpan"] ?? 1),
                         ColumnSpan = Math.Max(0, (int?)cell["columnSpan"] ?? 1),
                         Alignment = (string)cell["alignment"] ?? "center"

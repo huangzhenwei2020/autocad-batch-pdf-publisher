@@ -256,7 +256,7 @@ namespace CadArchSpec.Host.Shared.CadTable
                 .Select(i => Math.Abs(detected.ColumnBoundaries[i + 1] - detected.ColumnBoundaries[i])));
             var columns = new JArray(Enumerable.Range(0, columnCount).Select(i => new JObject
             {
-                ["key"] = "column" + (i + 1), ["title"] = "列" + (i + 1), ["unit"] = string.Empty,
+                ["key"] = "column" + (i + 1), ["title"] = ColumnName(i), ["unit"] = string.Empty,
                 ["widthMillimeters"] = widths[i], ["decimalPlaces"] = 0, ["required"] = false
             }));
             var rows = new JArray();
@@ -294,6 +294,14 @@ namespace CadArchSpec.Host.Shared.CadTable
                     ["columns"] = columns, ["rows"] = rows, ["formulaAudits"] = new JArray()
                 }
             };
+        }
+
+        private static string ColumnName(int index)
+        {
+            var value = index + 1;
+            var name = string.Empty;
+            while (value > 0) { value--; name = (char)('A' + value % 26) + name; value /= 26; }
+            return name;
         }
     }
 }

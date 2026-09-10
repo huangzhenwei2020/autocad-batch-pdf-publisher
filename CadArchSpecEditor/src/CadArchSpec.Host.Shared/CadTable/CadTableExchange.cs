@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Threading.Tasks;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
@@ -56,9 +57,16 @@ namespace CadArchSpec.Host.Shared.CadTable
 
             var options = payload["cadInsertOptions"] as JObject ?? new JObject();
             var scale = Math.Max(.001d, (double?)options["scale"] ?? 1d);
+            var useOriginalSize = (bool?)options["useOriginalCadSize"] == true && (bool?)payload["hasOriginalCadSize"] == true;
             var textHeight = Math.Max(.1d, (double?)options["textHeightMillimeters"] ?? 3.5d) * scale;
             var textStyleName = ((string)options["textStyle"] ?? string.Empty).Trim();
+            var insertAsTianzheng = string.Equals((string)options["insertType"], "tianzheng", StringComparison.OrdinalIgnoreCase);
+            var borderColor = ReadCadColor(options["borderColorRgb"]);
+            var fillColor = ReadCadColor(options["fillColorRgb"]);
+            var contentColor = ReadCadColor(options["textColorRgb"]);
 
+            var conversionIds = new List<ObjectId>();
+            var insertedTableId = ObjectId.Null;
             using (var transaction = document.Database.TransactionManager.StartTransaction())
             {
                 var currentSpace = (BlockTableRecord)transaction.GetObject(document.Database.CurrentSpaceId, OpenMode.ForWrite);
@@ -73,7 +81,9 @@ namespace CadArchSpec.Host.Shared.CadTable
                 for (var columnIndex = 0; columnIndex < columns.Count; columnIndex++)
                 {
                     var column = columns[columnIndex] as JObject;
-                    table.Columns[columnIndex].Width = Math.Max(8d * scale, ((double?)column?["widthMillimeters"] ?? 36d) * scale);
+                    var width = useOriginalSize ? (double?)column?["sourceWidthCadUnits"] : null;
+                    table.Columns[columnIndex].Width = width.HasValue && width.Value > 0.001d
+                        ? width.Value : Math.Max(8d * scale, ((double?)column?["widthMillimeters"] ?? 36d) * scale);
                 }
 
                 var merges = new List<CellRange>();
@@ -81,8 +91,9 @@ namespace CadArchSpec.Host.Shared.CadTable
                 {
                     var row = rows[rowIndex] as JObject;
                     var cells = (row == null ? null : row["cells"] as JArray) ?? new JArray();
-                    table.Rows[rowIndex].Height = Math.Max(textHeight * 1.8d,
-                        ((double?)row?["heightMillimeters"] ?? 8d) * scale);
+                    var originalRowHeight = useOriginalSize ? (double?)row?["sourceHeightCadUnits"] : null;
+                    table.Rows[rowIndex].Height = originalRowHeight.HasValue && originalRowHeight.Value > 0.001d
+                        ? originalRowHeight.Value : Math.Max(textHeight * 1.8d, ((double?)row?["heightMillimeters"] ?? 8d) * scale);
                     for (var columnIndex = 0; columnIndex < Math.Min(cells.Count, columns.Count); columnIndex++)
                     {
                         var cell = cells[columnIndex] as JObject;
@@ -91,9 +102,12 @@ namespace CadArchSpec.Host.Shared.CadTable
                         var columnSpan = Math.Max(0, (int?)cell["columnSpan"] ?? 1);
                         if (rowSpan == 0 || columnSpan == 0) continue;
                         table.Cells[rowIndex, columnIndex].TextString = (string)cell["displayValue"] ?? string.Empty;
-                        table.Cells[rowIndex, columnIndex].TextHeight = textHeight;
+                        var originalTextHeight = useOriginalSize ? (double?)cell["sourceTextHeightCadUnits"] : null;
+                        table.Cells[rowIndex, columnIndex].TextHeight = originalTextHeight.HasValue && originalTextHeight.Value > 0.001d
+                            ? originalTextHeight.Value : textHeight;
                         table.Cells[rowIndex, columnIndex].TextStyleId = textStyleId;
                         table.Cells[rowIndex, columnIndex].Alignment = CadAlignment((string)cell["alignment"]);
+                        ApplyCellColors(table.Cells[rowIndex, columnIndex], borderColor, fillColor, contentColor);
                         if (rowSpan > 1 || columnSpan > 1)
                         {
                             var bottom = Math.Min(rows.Count - 1, rowIndex + rowSpan - 1);
@@ -107,12 +121,140 @@ namespace CadArchSpec.Host.Shared.CadTable
                 table.GenerateLayout();
                 currentSpace.AppendEntity(table);
                 transaction.AddNewlyCreatedDBObject(table, true);
+                insertedTableId = table.ObjectId;
+                if (insertAsTianzheng)
+                {
+                    var exploded = new DBObjectCollection();
+                    table.Explode(exploded);
+                    foreach (DBObject item in exploded)
+                    {
+                        var entity = item as Entity;
+                        if (entity == null || !(entity is Line || entity is Polyline || entity is DBText || entity is MText))
+                        {
+                            item.Dispose();
+                            continue;
+                        }
+                        currentSpace.AppendEntity(entity);
+                        transaction.AddNewlyCreatedDBObject(entity, true);
+                        conversionIds.Add(entity.ObjectId);
+                    }
+                }
                 transaction.Commit();
             }
 
-            var result = new JObject { ["action"] = "inserted" };
+            if (insertAsTianzheng && conversionIds.Count > 0)
+            {
+                var converted = false;
+                var appendedIds = new List<ObjectId>();
+                ObjectEventHandler appended = (sender, args) =>
+                {
+                    if (args.DBObject is Entity && args.DBObject.ObjectId.IsValid)
+                        appendedIds.Add(args.DBObject.ObjectId);
+                };
+                try
+                {
+                    document.Database.ObjectAppended += appended;
+                    var selection = SelectionSet.FromObjectIds(conversionIds.ToArray());
+                    document.Editor.Command("TConverSheet", selection, "");
+                    converted = conversionIds.All(id => !id.IsValid || id.IsErased) ||
+                        appendedIds.Any(id => IsTianzhengConversionResult(document.Database, id));
+                }
+                catch (Exception ex)
+                {
+                    document.Editor.WriteMessage("\n天正表格转换未执行：" + ex.GetBaseException().Message);
+                }
+                finally
+                {
+                    document.Database.ObjectAppended -= appended;
+                }
+                if (converted)
+                {
+                    EraseObjects(document.Database, new[] { insertedTableId });
+                    EraseObjects(document.Database, conversionIds);
+                }
+                else
+                {
+                    EraseObjects(document.Database, conversionIds);
+                    System.Windows.Forms.MessageBox.Show(
+                        "天正没有完成表格转换，已自动清理临时线文并保留完整的 AutoCAD 原生表格。\n请确认当前图纸由天正 T20 打开后再试。",
+                        "CAD 表格转 Excel", System.Windows.Forms.MessageBoxButtons.OK,
+                        System.Windows.Forms.MessageBoxIcon.Information);
+                }
+            }
+
+            var result = new JObject { ["action"] = "inserted", ["insertType"] = insertAsTianzheng ? "tianzheng" : "autocad" };
             CopyResultSummary(result, payload);
             return result;
+        }
+
+        private static bool IsTianzhengConversionResult(Database database, ObjectId id)
+        {
+            if (!id.IsValid || id.IsErased) return false;
+            try
+            {
+                using (var transaction = database.TransactionManager.StartOpenCloseTransaction())
+                {
+                    var entity = transaction.GetObject(id, OpenMode.ForRead, false, true) as Entity;
+                    if (entity == null || entity is Table || entity is Line || entity is Polyline || entity is DBText || entity is MText)
+                        return false;
+                    transaction.Commit();
+                    return true;
+                }
+            }
+            catch { return false; }
+        }
+
+        private static void EraseObjects(Database database, IEnumerable<ObjectId> ids)
+        {
+            using (var transaction = database.TransactionManager.StartTransaction())
+            {
+                foreach (var id in ids.Where(value => value.IsValid && !value.IsErased))
+                {
+                    var value = transaction.GetObject(id, OpenMode.ForWrite, false, true);
+                    if (value != null && !value.IsErased) value.Erase();
+                }
+                transaction.Commit();
+            }
+        }
+
+        private static Autodesk.AutoCAD.Colors.Color ReadCadColor(JToken token)
+        {
+            var rgb = (int?)token;
+            if (!rgb.HasValue) return null;
+            return Autodesk.AutoCAD.Colors.Color.FromRgb(
+                (byte)((rgb.Value >> 16) & 0xFF), (byte)((rgb.Value >> 8) & 0xFF), (byte)(rgb.Value & 0xFF));
+        }
+
+        private static void ApplyCellColors(object cell, Autodesk.AutoCAD.Colors.Color border,
+            Autodesk.AutoCAD.Colors.Color fill, Autodesk.AutoCAD.Colors.Color content)
+        {
+            if (cell == null) return;
+            if (fill != null) TrySetProperty(cell, "BackgroundColor", fill);
+            if (content != null) TrySetProperty(cell, "ContentColor", content);
+            if (border == null) return;
+            var borders = TryGetProperty(cell, "Borders");
+            if (borders == null) return;
+            foreach (var name in new[] { "Top", "Bottom", "Left", "Right", "Horizontal", "Vertical" })
+            {
+                var edge = TryGetProperty(borders, name);
+                if (edge != null) TrySetProperty(edge, "Color", border);
+            }
+        }
+
+        private static object TryGetProperty(object target, string name)
+        {
+            try { return target.GetType().GetProperty(name, BindingFlags.Instance | BindingFlags.Public)?.GetValue(target, null); }
+            catch { return null; }
+        }
+
+        private static void TrySetProperty(object target, string name, object value)
+        {
+            try
+            {
+                var property = target.GetType().GetProperty(name, BindingFlags.Instance | BindingFlags.Public);
+                if (property != null && property.CanWrite) property.SetValue(target, value, null);
+            }
+            catch { }
         }
 
         private static List<string> ReadTextStyles(out string currentTextStyle)
@@ -326,16 +468,18 @@ namespace CadArchSpec.Host.Shared.CadTable
             var rowCount = detected.RowBoundaries.Count - 1;
             var tableId = "table-" + Guid.NewGuid().ToString("N");
             var columns = new JArray();
-            var displayWidths = CadTableColumnWidthNormalizer.Normalize(Enumerable.Range(0, columnCount)
-                .Select(index => Math.Abs(detected.ColumnBoundaries[index + 1] - detected.ColumnBoundaries[index])));
+            var sourceWidths = Enumerable.Range(0, columnCount)
+                .Select(index => Math.Abs(detected.ColumnBoundaries[index + 1] - detected.ColumnBoundaries[index])).ToList();
+            var displayWidths = CadTableColumnWidthNormalizer.Normalize(sourceWidths);
             for (var columnIndex = 0; columnIndex < columnCount; columnIndex++)
             {
                 columns.Add(new JObject
                 {
                     ["key"] = "column" + (columnIndex + 1),
-                    ["title"] = "列" + (columnIndex + 1),
+                    ["title"] = ColumnName(columnIndex),
                     ["unit"] = string.Empty,
                     ["widthMillimeters"] = displayWidths[columnIndex],
+                    ["sourceWidthCadUnits"] = sourceWidths[columnIndex],
                     ["decimalPlaces"] = 0,
                     ["required"] = false
                 });
@@ -366,6 +510,7 @@ namespace CadArchSpec.Host.Shared.CadTable
                         ["unit"] = string.Empty,
                         ["fieldPath"] = string.Empty,
                         ["formula"] = string.Empty,
+                        ["sourceTextHeightCadUnits"] = medianHeight,
                         ["state"] = string.IsNullOrWhiteSpace(value) ? "unknown" : "pending",
                         ["source"] = coveringCell == null ? "CAD边界待确认" : "CAD只读识别",
                         ["sourceHandles"] = coveringCell == null
@@ -380,6 +525,7 @@ namespace CadArchSpec.Host.Shared.CadTable
                     ["rowId"] = "row-" + Guid.NewGuid().ToString("N"),
                     ["rowType"] = "Data",
                     ["keepTogether"] = true,
+                    ["sourceHeightCadUnits"] = Math.Abs(detected.RowBoundaries[rowIndex + 1] - detected.RowBoundaries[rowIndex]),
                     ["cells"] = cells
                 });
             }
@@ -396,6 +542,7 @@ namespace CadArchSpec.Host.Shared.CadTable
                 ["rowCount"] = rowCount,
                 ["columnCount"] = columnCount,
                 ["nativeTable"] = false,
+                ["hasOriginalCadSize"] = true,
                 ["warnings"] = JArray.FromObject(warnings),
                 ["drawingPath"] = document.Name ?? string.Empty,
                 ["table"] = new JObject
@@ -437,9 +584,11 @@ namespace CadArchSpec.Host.Shared.CadTable
                     var columnSpan = isAnchor ? (merged ? mergeRange.RightColumn - mergeRange.LeftColumn + 1 : 1) : 0;
                     var value = isAnchor ? (sourceCell.TextString ?? string.Empty).Trim() : string.Empty;
                     cells.Add(CreateCell(columnIndex, value, rowSpan, columnSpan, "AutoCAD原生表格",
-                        new[] { SafeHandle(source) }));
+                        new[] { SafeHandle(source) }, sourceCell.TextHeight));
                 }
-                rows.Add(CreateRow(cells));
+                var row = CreateRow(cells);
+                row["sourceHeightCadUnits"] = source.Rows[rowIndex].Height;
+                rows.Add(row);
             }
             return CreatePayload(columns, rows, rowCount, columnCount, drawingPath,
                 new JArray(), 1, 0, 0, 0, "CAD原生表格", true);
@@ -448,15 +597,17 @@ namespace CadArchSpec.Host.Shared.CadTable
         private static JArray CreateColumns(int columnCount, IEnumerable<double> sourceWidths = null)
         {
             var columns = new JArray();
-            var displayWidths = CadTableColumnWidthNormalizer.Normalize(sourceWidths ?? Enumerable.Repeat(1d, columnCount));
+            var rawWidths = (sourceWidths ?? Enumerable.Repeat(1d, columnCount)).ToList();
+            var displayWidths = CadTableColumnWidthNormalizer.Normalize(rawWidths);
             for (var columnIndex = 0; columnIndex < columnCount; columnIndex++)
             {
                 columns.Add(new JObject
                 {
                     ["key"] = "column" + (columnIndex + 1),
-                    ["title"] = "列" + (columnIndex + 1),
+                    ["title"] = ColumnName(columnIndex),
                     ["unit"] = string.Empty,
                     ["widthMillimeters"] = displayWidths[columnIndex],
+                    ["sourceWidthCadUnits"] = rawWidths[columnIndex],
                     ["decimalPlaces"] = 0,
                     ["required"] = false
                 });
@@ -465,7 +616,7 @@ namespace CadArchSpec.Host.Shared.CadTable
         }
 
         private static JObject CreateCell(int columnIndex, string value, int rowSpan, int columnSpan,
-            string source, IEnumerable<string> sourceHandles = null)
+            string source, IEnumerable<string> sourceHandles = null, double? sourceTextHeight = null)
         {
             double numeric;
             var numericValue = double.TryParse((value ?? string.Empty).Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out numeric)
@@ -480,6 +631,7 @@ namespace CadArchSpec.Host.Shared.CadTable
                 ["unit"] = string.Empty,
                 ["fieldPath"] = string.Empty,
                 ["formula"] = string.Empty,
+                ["sourceTextHeightCadUnits"] = sourceTextHeight.HasValue ? (JToken)sourceTextHeight.Value : JValue.CreateNull(),
                 ["state"] = string.IsNullOrWhiteSpace(value) ? "unknown" : "pending",
                 ["source"] = source,
                 ["sourceHandles"] = JArray.FromObject((sourceHandles ?? Enumerable.Empty<string>())
@@ -515,6 +667,7 @@ namespace CadArchSpec.Host.Shared.CadTable
                 ["rowCount"] = rowCount,
                 ["columnCount"] = columnCount,
                 ["nativeTable"] = nativeTable,
+                ["hasOriginalCadSize"] = nativeTable,
                 ["warnings"] = warnings,
                 ["drawingPath"] = drawingPath ?? string.Empty,
                 ["table"] = new JObject
@@ -538,6 +691,14 @@ namespace CadArchSpec.Host.Shared.CadTable
         {
             try { return value.Handle.ToString(); }
             catch { return string.Empty; }
+        }
+
+        private static string ColumnName(int index)
+        {
+            var value = index + 1;
+            var name = string.Empty;
+            while (value > 0) { value--; name = (char)('A' + value % 26) + name; value /= 26; }
+            return name;
         }
     }
 }

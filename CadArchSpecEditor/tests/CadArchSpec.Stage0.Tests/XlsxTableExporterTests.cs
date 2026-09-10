@@ -97,5 +97,44 @@ namespace CadArchSpec.Stage0.Tests
                 }
             }
         }
+
+        [Fact]
+        public void PreservesFormulasAndConfiguredColors()
+        {
+            var table = new SpreadsheetTable
+            {
+                Title = "计算表",
+                BorderColorRgb = 0x112233,
+                FillColorRgb = 0xDDEEFF,
+                TextColorRgb = 0x445566
+            };
+            table.Columns.AddRange(new[] { "数量", "合计" });
+            table.Rows.Add(new SpreadsheetRow
+            {
+                Cells =
+                {
+                    new SpreadsheetCell { Value = "10" },
+                    new SpreadsheetCell { Value = "10", Formula = "=SUM(A1:A1)" }
+                }
+            });
+
+            using (var stream = new MemoryStream())
+            {
+                new XlsxTableExporter().Write(stream, table);
+                stream.Position = 0;
+                using (var archive = new ZipArchive(stream, ZipArchiveMode.Read, true))
+                {
+                    using (var reader = new StreamReader(archive.GetEntry("xl/worksheets/sheet1.xml").Open()))
+                        Assert.Contains("<f>SUM(A2:A2)</f>", reader.ReadToEnd());
+                    using (var reader = new StreamReader(archive.GetEntry("xl/styles.xml").Open()))
+                    {
+                        var styles = reader.ReadToEnd();
+                        Assert.Contains("FF112233", styles);
+                        Assert.Contains("FFDDEEFF", styles);
+                        Assert.Contains("FF445566", styles);
+                    }
+                }
+            }
+        }
     }
 }

@@ -4,6 +4,7 @@ using System.Drawing;
 using System.Globalization;
 using System.Linq;
 using System.Windows.Forms;
+using CadArchSpec.CadTable;
 using Newtonsoft.Json.Linq;
 
 namespace CadArchSpec.Host.Shared.CadTable
@@ -23,6 +24,23 @@ namespace CadArchSpec.Host.Shared.CadTable
         private readonly JObject _payload;
         private readonly ComboBox _scale = Combo(new[] { "1", "10", "20", "25", "50", "100" });
         private readonly ComboBox _textStyle = Combo(null);
+        private readonly ComboBox _insertType = Combo(new[] { "AutoCAD 原生表格", "天正表格（T20）" });
+        private readonly CheckBox _originalCadSize = new CheckBox
+        {
+            Text = "保持原 CAD 尺寸",
+            AutoSize = true,
+            Margin = new Padding(8, 7, 3, 0)
+        };
+        private readonly CheckBox _noFill = new CheckBox
+        {
+            Text = "无底色",
+            AutoSize = true,
+            Checked = true,
+            Margin = new Padding(3, 7, 3, 0)
+        };
+        private readonly Button _borderColor = new Button { Text = "边框颜色", AutoSize = true, Height = 30 };
+        private readonly Button _fillColor = new Button { Text = "单元格底色", AutoSize = true, Height = 30 };
+        private readonly Button _textColor = new Button { Text = "文字颜色", AutoSize = true, Height = 30 };
         private readonly TextBox _columnTitle = new TextBox { Width = 100, Margin = new Padding(3, 4, 3, 2) };
         private readonly NumericUpDown _textHeight = new NumericUpDown
         {
@@ -37,7 +55,16 @@ namespace CadArchSpec.Host.Shared.CadTable
         private static string LastScale = "1";
         private static string LastTextStyle = string.Empty;
         private static decimal LastTextHeight = 3.5m;
+        private static bool LastOriginalCadSize;
+        private static int? LastBorderColor;
+        private static int? LastFillColor;
+        private static int? LastTextColor;
+        private static string LastInsertType = "AutoCAD 原生表格";
+        private int? _borderColorRgb;
+        private int? _fillColorRgb;
+        private int? _textColorRgb;
         private bool _redirectingMergeSelection;
+        private FormulaBuilderForm _formulaBuilder;
 
         public CadTablePreviewAction SelectedAction { get; private set; }
         public JObject Payload { get { return _payload; } }
@@ -57,7 +84,13 @@ namespace CadArchSpec.Host.Shared.CadTable
                 ? LastTextStyle : currentTextStyle;
             _textStyle.Text = string.IsNullOrWhiteSpace(preferredStyle) ? "Standard" : preferredStyle;
             _scale.Text = LastScale;
+            _insertType.Text = LastInsertType;
             _textHeight.Value = Math.Max(_textHeight.Minimum, Math.Min(_textHeight.Maximum, LastTextHeight));
+            _originalCadSize.Checked = LastOriginalCadSize && (bool?)_payload["hasOriginalCadSize"] == true;
+            _borderColorRgb = LastBorderColor;
+            _fillColorRgb = LastFillColor;
+            _textColorRgb = LastTextColor;
+            _noFill.Checked = !_fillColorRgb.HasValue;
             BuildLayout();
             NormalizePayload();
             LoadTable();
@@ -73,7 +106,7 @@ namespace CadArchSpec.Host.Shared.CadTable
             var editorTools = new FlowLayoutPanel
             {
                 Dock = DockStyle.Top,
-                Height = 82,
+                Height = 116,
                 Padding = new Padding(8, 6, 8, 4),
                 WrapContents = true,
                 AutoScroll = true
@@ -85,6 +118,9 @@ namespace CadArchSpec.Host.Shared.CadTable
             editorTools.Controls.Add(Separator());
             editorTools.Controls.Add(ButtonFor("合并单元格", MergeSelection));
             editorTools.Controls.Add(ButtonFor("取消合并", UnmergeSelection));
+            editorTools.Controls.Add(ButtonFor("关联单元格", LinkSelection));
+            editorTools.Controls.Add(ButtonFor("取消关联", UnlinkSelection));
+            editorTools.Controls.Add(ButtonFor("fx 公式", ShowFormulaBuilder));
             editorTools.Controls.Add(Separator());
             editorTools.Controls.Add(ButtonFor("左对齐", () => SetAlignment("left")));
             editorTools.Controls.Add(ButtonFor("居中", () => SetAlignment("center")));
@@ -97,11 +133,35 @@ namespace CadArchSpec.Host.Shared.CadTable
             editorTools.Controls.Add(new Label { Text = "插入比例 1:", AutoSize = true, Margin = new Padding(6, 8, 0, 0) });
             _scale.Width = 68;
             editorTools.Controls.Add(_scale);
+            editorTools.Controls.Add(_originalCadSize);
+            editorTools.Controls.Add(new Label { Text = "插入类型", AutoSize = true, Margin = new Padding(8, 8, 0, 0) });
+            _insertType.Width = 145;
+            _insertType.DropDownStyle = ComboBoxStyle.DropDownList;
+            editorTools.Controls.Add(_insertType);
             editorTools.Controls.Add(new Label { Text = "CAD文字样式", AutoSize = true, Margin = new Padding(8, 8, 0, 0) });
             _textStyle.Width = 150;
             editorTools.Controls.Add(_textStyle);
             editorTools.Controls.Add(new Label { Text = "纸面字高(mm)", AutoSize = true, Margin = new Padding(8, 8, 0, 0) });
             editorTools.Controls.Add(_textHeight);
+            editorTools.Controls.Add(Separator());
+            editorTools.Controls.Add(_borderColor);
+            editorTools.Controls.Add(_fillColor);
+            editorTools.Controls.Add(_noFill);
+            editorTools.Controls.Add(_textColor);
+            editorTools.Controls.Add(ButtonFor("恢复默认颜色", ResetColors));
+            _borderColor.Click += (sender, args) => PickColor(ref _borderColorRgb, _borderColor, false);
+            _fillColor.Click += (sender, args) => PickColor(ref _fillColorRgb, _fillColor, true);
+            _textColor.Click += (sender, args) => PickColor(ref _textColorRgb, _textColor, false);
+            _noFill.CheckedChanged += (sender, args) =>
+            {
+                if (_noFill.Checked) _fillColorRgb = null;
+                else if (!_fillColorRgb.HasValue) _fillColorRgb = Color.White.ToArgb() & 0xFFFFFF;
+                UpdateColorButtons();
+                ApplyGridColors();
+            };
+            _originalCadSize.CheckedChanged += (sender, args) => UpdateSizeControls();
+            UpdateColorButtons();
+            UpdateSizeControls();
 
             _grid.Dock = DockStyle.Fill;
             _grid.AllowUserToAddRows = false;
@@ -120,9 +180,13 @@ namespace CadArchSpec.Host.Shared.CadTable
             _grid.SelectionMode = DataGridViewSelectionMode.CellSelect;
             _grid.MultiSelect = true;
             _grid.KeyDown += GridKeyDown;
+            _grid.CellBeginEdit += GridCellBeginEdit;
+            _grid.CellEndEdit += GridCellEndEdit;
             _grid.SelectionChanged += (sender, args) =>
             {
                 ShowCurrentColumnTitle();
+                if (_formulaBuilder != null && !_formulaBuilder.IsDisposed)
+                    _formulaBuilder.UpdateSelection(SelectedRangeAddress());
                 _grid.Invalidate();
             };
             _grid.CellPainting += GridCellPainting;
@@ -145,7 +209,7 @@ namespace CadArchSpec.Host.Shared.CadTable
             actions.Controls.Add(ButtonFor("关闭", () => Finish(CadTablePreviewAction.Cancel)));
             actions.Controls.Add(ButtonFor("按设置插入 CAD", () => Finish(CadTablePreviewAction.InsertCad)));
             actions.Controls.Add(ButtonFor("导出 Excel", () => Finish(CadTablePreviewAction.ExportExcel)));
-            actions.Controls.Add(ButtonFor("重新框选", () => Finish(CadTablePreviewAction.Repick)));
+            actions.Controls.Add(ButtonFor("拾取现有表格修改", () => Finish(CadTablePreviewAction.Repick)));
 
             Controls.Add(_grid);
             Controls.Add(editorTools);
@@ -170,6 +234,7 @@ namespace CadArchSpec.Host.Shared.CadTable
 
         private void LoadTable()
         {
+            RecalculateFormulas();
             _loading = true;
             try
             {
@@ -206,9 +271,10 @@ namespace CadArchSpec.Host.Shared.CadTable
                 }
                 var warnings = _payload["warnings"] as JArray;
                 var warningCount = warnings == null ? 0 : warnings.Count;
-                _summary.Text = string.Format("{0} 行 × {1} 列。可编辑文字、粘贴 Excel 区域、调整行列和合并关系。{2}",
+                _summary.Text = string.Format("{0} 行 × {1} 列。公式示例：=A1、=SUM(B2:B8)；关联组内任意一格修改都会同步。{2}",
                     rows.Count, columns.Count, warningCount == 0 ? string.Empty : "待复核提示 " + warningCount + " 项。 ");
                 ShowCurrentColumnTitle();
+                ApplyGridColors();
             }
             finally { _loading = false; }
         }
@@ -229,6 +295,8 @@ namespace CadArchSpec.Host.Shared.CadTable
             {
                 gridCell.ToolTipText = string.Format("合并区域：{0} 行 × {1} 列", rowSpan, columnSpan);
             }
+            if (!string.IsNullOrWhiteSpace((string)cell["linkGroupId"]))
+                gridCell.ToolTipText = (gridCell.ToolTipText + " 关联单元格：修改组内任意一格会同步").Trim();
             gridCell.Style.Alignment = GridAlignment((string)cell["alignment"]);
         }
 
@@ -356,7 +424,15 @@ namespace CadArchSpec.Host.Shared.CadTable
                 {
                     var cell = cells[columnIndex] as JObject;
                     if (cell == null || (int?)cell["rowSpan"] == 0 || (int?)cell["columnSpan"] == 0) continue;
-                    cell["displayValue"] = Convert.ToString(_grid.Rows[rowIndex].Cells[columnIndex].Value) ?? string.Empty;
+                    var gridValue = Convert.ToString(_grid.Rows[rowIndex].Cells[columnIndex].Value) ?? string.Empty;
+                    if (gridValue.TrimStart().StartsWith("=", StringComparison.Ordinal))
+                        cell["formula"] = gridValue.Trim();
+                    else if (string.IsNullOrWhiteSpace((string)cell["formula"]) ||
+                        !string.Equals(gridValue, (string)cell["displayValue"] ?? string.Empty, StringComparison.Ordinal))
+                    {
+                        cell["formula"] = string.Empty;
+                        cell["displayValue"] = gridValue;
+                    }
                 }
             }
             double scale;
@@ -365,9 +441,15 @@ namespace CadArchSpec.Host.Shared.CadTable
             _payload["cadInsertOptions"] = new JObject
             {
                 ["scale"] = scale,
+                ["useOriginalCadSize"] = _originalCadSize.Checked,
+                ["insertType"] = _insertType.SelectedIndex == 1 ? "tianzheng" : "autocad",
                 ["textStyle"] = _textStyle.Text.Trim(),
-                ["textHeightMillimeters"] = (double)_textHeight.Value
+                ["textHeightMillimeters"] = (double)_textHeight.Value,
+                ["borderColorRgb"] = _borderColorRgb.HasValue ? (JToken)_borderColorRgb.Value : JValue.CreateNull(),
+                ["fillColorRgb"] = _fillColorRgb.HasValue ? (JToken)_fillColorRgb.Value : JValue.CreateNull(),
+                ["textColorRgb"] = _textColorRgb.HasValue ? (JToken)_textColorRgb.Value : JValue.CreateNull()
             };
+            RecalculateFormulas();
             _payload["rowCount"] = rows.Count;
             _payload["columnCount"] = columns.Count;
         }
@@ -459,6 +541,90 @@ namespace CadArchSpec.Host.Shared.CadTable
             SelectCell(top, left);
         }
 
+        private void LinkSelection()
+        {
+            if (_grid.CurrentCell == null || _grid.SelectedCells.Count < 2)
+            {
+                MessageBox.Show(this, "请先选中两个或更多单元格；建立关联时采用当前单元格的内容。", Text);
+                return;
+            }
+            CommitEdits();
+            var sourceRow = _grid.CurrentCell.RowIndex;
+            var sourceColumn = _grid.CurrentCell.ColumnIndex;
+            var source = Cell(sourceRow, sourceColumn);
+            var groupId = (string)source["linkGroupId"];
+            if (string.IsNullOrWhiteSpace(groupId)) groupId = "link-" + Guid.NewGuid().ToString("N");
+            foreach (DataGridViewCell selected in _grid.SelectedCells)
+            {
+                var cell = Cell(selected.RowIndex, selected.ColumnIndex);
+                if ((int?)cell["rowSpan"] == 0 || (int?)cell["columnSpan"] == 0) continue;
+                cell["linkGroupId"] = groupId;
+                cell["formula"] = (string)source["formula"] ?? string.Empty;
+                cell["displayValue"] = (string)source["displayValue"] ?? string.Empty;
+            }
+            LoadTable();
+            SelectCell(sourceRow, sourceColumn);
+        }
+
+        private void UnlinkSelection()
+        {
+            if (_grid.SelectedCells.Count == 0) return;
+            CommitEdits();
+            foreach (DataGridViewCell selected in _grid.SelectedCells)
+                Cell(selected.RowIndex, selected.ColumnIndex)["linkGroupId"] = string.Empty;
+            LoadTable();
+        }
+
+        private void ShowFormulaBuilder()
+        {
+            if (_grid.CurrentCell == null)
+            {
+                MessageBox.Show(this, "请先选择要写入公式的目标单元格。", Text);
+                return;
+            }
+            if (_formulaBuilder != null && !_formulaBuilder.IsDisposed)
+            {
+                _formulaBuilder.Activate();
+                return;
+            }
+            CommitEdits();
+            var targetRow = _grid.CurrentCell.RowIndex;
+            var targetColumn = _grid.CurrentCell.ColumnIndex;
+            var target = Cell(targetRow, targetColumn);
+            var existing = (string)target["formula"] ?? string.Empty;
+            _formulaBuilder = new FormulaBuilderForm(targetRow, targetColumn, existing,
+                () => SelectedRangeAddress(), formula => ApplyFormula(targetRow, targetColumn, formula));
+            _formulaBuilder.FormClosed += (sender, args) => _formulaBuilder = null;
+            _formulaBuilder.Show(this);
+            _formulaBuilder.UpdateSelection(SelectedRangeAddress());
+        }
+
+        private void ApplyFormula(int row, int column, string formula)
+        {
+            if (row < 0 || column < 0 || row >= _grid.Rows.Count || column >= _grid.Columns.Count) return;
+            var cell = Cell(row, column);
+            var value = (formula ?? string.Empty).Trim();
+            if (!value.StartsWith("=", StringComparison.Ordinal)) value = "=" + value;
+            cell["formula"] = value;
+            PropagateLinkedCell(cell);
+            RecalculateFormulas();
+            RefreshCalculatedValues();
+            SelectCell(row, column);
+        }
+
+        private string SelectedRangeAddress()
+        {
+            if (_grid.SelectedCells.Count == 0) return string.Empty;
+            var selected = _grid.SelectedCells.Cast<DataGridViewCell>().ToList();
+            var top = selected.Min(cell => cell.RowIndex);
+            var bottom = selected.Max(cell => cell.RowIndex);
+            var left = selected.Min(cell => cell.ColumnIndex);
+            var right = selected.Max(cell => cell.ColumnIndex);
+            var first = SpreadsheetFormulaEngine.CellAddress(top, left);
+            var last = SpreadsheetFormulaEngine.CellAddress(bottom, right);
+            return first == last ? first : first + ":" + last;
+        }
+
         private void UnmergeSelection()
         {
             if (_grid.CurrentCell == null) return;
@@ -512,7 +678,17 @@ namespace CadArchSpec.Host.Shared.CadTable
             }
             else if (e.KeyCode == Keys.Delete)
             {
-                foreach (DataGridViewCell cell in _grid.SelectedCells) if (!cell.ReadOnly) cell.Value = string.Empty;
+                foreach (DataGridViewCell cell in _grid.SelectedCells)
+                    if (!cell.ReadOnly)
+                    {
+                        cell.Value = string.Empty;
+                        var target = Cell(cell.RowIndex, cell.ColumnIndex);
+                        target["formula"] = string.Empty;
+                        target["displayValue"] = string.Empty;
+                        PropagateLinkedCell(target);
+                    }
+                RecalculateFormulas();
+                RefreshCalculatedValues();
                 e.Handled = true;
             }
         }
@@ -538,7 +714,13 @@ namespace CadArchSpec.Host.Shared.CadTable
             UnmergeIntersecting(startRow, startRow + values.Length - 1, startColumn, neededColumns - 1);
             for (var rowOffset = 0; rowOffset < values.Length; rowOffset++)
                 for (var columnOffset = 0; columnOffset < values[rowOffset].Length; columnOffset++)
-                    Cell(startRow + rowOffset, startColumn + columnOffset)["displayValue"] = values[rowOffset][columnOffset];
+                {
+                    var target = Cell(startRow + rowOffset, startColumn + columnOffset);
+                    var value = values[rowOffset][columnOffset] ?? string.Empty;
+                    target["formula"] = value.TrimStart().StartsWith("=", StringComparison.Ordinal) ? value.Trim() : string.Empty;
+                    if (string.IsNullOrWhiteSpace((string)target["formula"])) target["displayValue"] = value;
+                    PropagateLinkedCell(target);
+                }
             LoadTable();
             SelectCell(startRow, startColumn);
         }
@@ -651,6 +833,7 @@ namespace CadArchSpec.Host.Shared.CadTable
                 ["unit"] = string.Empty,
                 ["fieldPath"] = string.Empty,
                 ["formula"] = string.Empty,
+                ["linkGroupId"] = string.Empty,
                 ["state"] = "unknown",
                 ["source"] = "手工编辑",
                 ["sourceHandles"] = new JArray(),
@@ -686,11 +869,156 @@ namespace CadArchSpec.Host.Shared.CadTable
                     LastScale = _scale.Text;
                     LastTextStyle = _textStyle.Text.Trim();
                     LastTextHeight = _textHeight.Value;
+                    LastOriginalCadSize = _originalCadSize.Checked;
+                    LastBorderColor = _borderColorRgb;
+                    LastFillColor = _fillColorRgb;
+                    LastTextColor = _textColorRgb;
+                    LastInsertType = _insertType.Text;
                 }
                 SelectedAction = action;
                 Close();
             }
             catch (Exception ex) { MessageBox.Show(this, ex.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+        }
+
+        private void GridCellBeginEdit(object sender, DataGridViewCellCancelEventArgs e)
+        {
+            if (_loading) return;
+            var formula = (string)Cell(e.RowIndex, e.ColumnIndex)["formula"];
+            if (!string.IsNullOrWhiteSpace(formula)) _grid.Rows[e.RowIndex].Cells[e.ColumnIndex].Value = formula;
+        }
+
+        private void GridCellEndEdit(object sender, DataGridViewCellEventArgs e)
+        {
+            if (_loading || e.RowIndex < 0 || e.ColumnIndex < 0) return;
+            var cell = Cell(e.RowIndex, e.ColumnIndex);
+            var value = Convert.ToString(_grid.Rows[e.RowIndex].Cells[e.ColumnIndex].Value) ?? string.Empty;
+            if (value.TrimStart().StartsWith("=", StringComparison.Ordinal)) cell["formula"] = value.Trim();
+            else { cell["formula"] = string.Empty; cell["displayValue"] = value; }
+            PropagateLinkedCell(cell);
+            BeginInvoke(new Action(() =>
+            {
+                if (!IsDisposed) { RecalculateFormulas(); RefreshCalculatedValues(); }
+            }));
+        }
+
+        private void RecalculateFormulas()
+        {
+            var table = EnsureTable();
+            var rows = EnsureArray(table, "rows").OfType<JObject>().ToList();
+            var columns = EnsureArray(table, "columns");
+            if (rows.Count == 0 || columns.Count == 0) return;
+            var contents = new string[rows.Count, columns.Count];
+            for (var row = 0; row < rows.Count; row++)
+            {
+                var cells = EnsureArray(rows[row], "cells");
+                for (var column = 0; column < columns.Count; column++)
+                {
+                    var cell = cells[column] as JObject;
+                    var formula = (string)cell?["formula"];
+                    contents[row, column] = string.IsNullOrWhiteSpace(formula)
+                        ? (string)cell?["displayValue"] ?? string.Empty : formula;
+                }
+            }
+            var calculated = SpreadsheetFormulaEngine.Calculate(contents);
+            for (var row = 0; row < rows.Count; row++)
+                for (var column = 0; column < columns.Count; column++)
+                {
+                    var cell = Cell(row, column);
+                    if (!string.IsNullOrWhiteSpace((string)cell["formula"])) cell["displayValue"] = calculated[row, column];
+                    double numeric;
+                    cell["numericValue"] = double.TryParse(calculated[row, column], NumberStyles.Float,
+                        CultureInfo.InvariantCulture, out numeric) ? (JToken)numeric : JValue.CreateNull();
+                }
+        }
+
+        private void PropagateLinkedCell(JObject source)
+        {
+            var groupId = (string)source["linkGroupId"];
+            if (string.IsNullOrWhiteSpace(groupId)) return;
+            foreach (var row in EnsureArray(EnsureTable(), "rows").OfType<JObject>())
+                foreach (var target in EnsureArray(row, "cells").OfType<JObject>())
+                {
+                    if (ReferenceEquals(target, source) || !string.Equals((string)target["linkGroupId"], groupId,
+                        StringComparison.Ordinal)) continue;
+                    target["formula"] = (string)source["formula"] ?? string.Empty;
+                    target["displayValue"] = (string)source["displayValue"] ?? string.Empty;
+                }
+        }
+
+        private void RefreshCalculatedValues()
+        {
+            _loading = true;
+            try
+            {
+                for (var row = 0; row < _grid.Rows.Count; row++)
+                    for (var column = 0; column < _grid.Columns.Count; column++)
+                        _grid.Rows[row].Cells[column].Value = (string)Cell(row, column)["displayValue"] ?? string.Empty;
+                _grid.Invalidate();
+            }
+            finally { _loading = false; }
+        }
+
+        private void PickColor(ref int? target, Button button, bool allowNone)
+        {
+            using (var dialog = new ColorDialog { FullOpen = true })
+            {
+                if (target.HasValue) dialog.Color = Color.FromArgb(unchecked((int)0xFF000000) | target.Value);
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                target = dialog.Color.ToArgb() & 0xFFFFFF;
+                if (allowNone) _noFill.Checked = false;
+            }
+            UpdateColorButtons();
+            ApplyGridColors();
+        }
+
+        private void UpdateColorButtons()
+        {
+            SetColorButton(_borderColor, _borderColorRgb, "边框颜色");
+            SetColorButton(_fillColor, _fillColorRgb, "单元格底色");
+            SetColorButton(_textColor, _textColorRgb, "文字颜色");
+        }
+
+        private void ResetColors()
+        {
+            _borderColorRgb = null;
+            _fillColorRgb = null;
+            _textColorRgb = null;
+            _noFill.Checked = true;
+            UpdateColorButtons();
+            ApplyGridColors();
+        }
+
+        private static void SetColorButton(Button button, int? rgb, string text)
+        {
+            button.Text = text;
+            button.BackColor = rgb.HasValue ? Color.FromArgb(unchecked((int)0xFF000000) | rgb.Value) : SystemColors.Control;
+            button.ForeColor = rgb.HasValue && Color.FromArgb(rgb.Value).GetBrightness() < .45f ? Color.White : Color.Black;
+            button.UseVisualStyleBackColor = !rgb.HasValue;
+        }
+
+        private void ApplyGridColors()
+        {
+            var fill = _fillColorRgb.HasValue ? Color.FromArgb(unchecked((int)0xFF000000) | _fillColorRgb.Value) : Color.White;
+            var text = _textColorRgb.HasValue ? Color.FromArgb(unchecked((int)0xFF000000) | _textColorRgb.Value) : Color.Black;
+            var border = _borderColorRgb.HasValue ? Color.FromArgb(unchecked((int)0xFF000000) | _borderColorRgb.Value) : SystemColors.ControlDark;
+            _grid.BackgroundColor = fill;
+            _grid.DefaultCellStyle.BackColor = fill;
+            _grid.DefaultCellStyle.ForeColor = text;
+            _grid.GridColor = border;
+            foreach (DataGridViewRow row in _grid.Rows)
+                foreach (DataGridViewCell cell in row.Cells) { cell.Style.BackColor = fill; cell.Style.ForeColor = text; }
+            _grid.Invalidate();
+        }
+
+        private void UpdateSizeControls()
+        {
+            var available = (bool?)_payload["hasOriginalCadSize"] == true;
+            _originalCadSize.Enabled = available;
+            if (!available) _originalCadSize.Checked = false;
+            _scale.Enabled = !_originalCadSize.Checked;
+            _textHeight.Enabled = !_originalCadSize.Checked;
+            _originalCadSize.Text = available ? "保持原 CAD 尺寸" : "原 CAD 尺寸不可用";
         }
 
         private static DataGridViewContentAlignment GridAlignment(string value)
@@ -715,6 +1043,132 @@ namespace CadArchSpec.Host.Shared.CadTable
         private static Button ButtonFor(string text, Action action)
         {
             var button = new Button { Text = text, AutoSize = true, Height = 30, Margin = new Padding(3, 2, 0, 2) };
+            button.Click += (sender, args) => action();
+            return button;
+        }
+    }
+
+    internal sealed class FormulaBuilderForm : Form
+    {
+        private readonly ComboBox _function = new ComboBox();
+        private readonly TextBox _formula = new TextBox();
+        private readonly Label _selection = new Label();
+        private readonly Func<string> _selectedRange;
+        private readonly Action<string> _apply;
+
+        public FormulaBuilderForm(int targetRow, int targetColumn, string existingFormula,
+            Func<string> selectedRange, Action<string> apply)
+        {
+            _selectedRange = selectedRange;
+            _apply = apply;
+            Text = "fx 插入公式";
+            StartPosition = FormStartPosition.CenterParent;
+            FormBorderStyle = FormBorderStyle.FixedToolWindow;
+            ShowInTaskbar = false;
+            ClientSize = new Size(470, 220);
+            Font = new Font("Microsoft YaHei UI", 9f);
+
+            var target = SpreadsheetFormulaEngine.CellAddress(targetRow, targetColumn);
+            var layout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                Padding = new Padding(12),
+                ColumnCount = 2,
+                RowCount = 5
+            };
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92));
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+            layout.Controls.Add(LabelFor("目标单元格"), 0, 0);
+            layout.Controls.Add(new Label { Text = target, AutoSize = true, Margin = new Padding(3, 8, 3, 3) }, 1, 0);
+            layout.Controls.Add(LabelFor("函数"), 0, 1);
+            _function.Dock = DockStyle.Fill;
+            _function.DropDownStyle = ComboBoxStyle.DropDownList;
+            _function.Items.AddRange(new object[]
+            {
+                "直接引用", "SUM 求和", "AVERAGE 平均值", "MIN 最小值", "MAX 最大值",
+                "COUNT 数量", "ROUND 四舍五入", "IF 条件"
+            });
+            _function.SelectedIndex = 1;
+            layout.Controls.Add(_function, 1, 1);
+
+            layout.Controls.Add(LabelFor("当前选区"), 0, 2);
+            var rangePanel = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Margin = new Padding(0) };
+            _selection.AutoSize = false;
+            _selection.Width = 215;
+            _selection.Height = 30;
+            _selection.TextAlign = ContentAlignment.MiddleLeft;
+            rangePanel.Controls.Add(_selection);
+            rangePanel.Controls.Add(Button("使用选区", UseSelection));
+            layout.Controls.Add(rangePanel, 1, 2);
+
+            layout.Controls.Add(LabelFor("公式"), 0, 3);
+            _formula.Dock = DockStyle.Fill;
+            _formula.Text = string.IsNullOrWhiteSpace(existingFormula) ? "=" : existingFormula;
+            layout.Controls.Add(_formula, 1, 3);
+
+            var actions = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                FlowDirection = FlowDirection.RightToLeft,
+                WrapContents = false,
+                Margin = new Padding(0, 5, 0, 0)
+            };
+            actions.Controls.Add(Button("应用", Apply));
+            actions.Controls.Add(Button("关闭", Close));
+            layout.Controls.Add(actions, 0, 4);
+            layout.SetColumnSpan(actions, 2);
+            Controls.Add(layout);
+        }
+
+        public void UpdateSelection(string range)
+        {
+            _selection.Text = string.IsNullOrWhiteSpace(range) ? "未选择" : range;
+        }
+
+        private void UseSelection()
+        {
+            var range = _selectedRange() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(range)) return;
+            var first = range.Split(':')[0];
+            switch (_function.SelectedIndex)
+            {
+                case 0: _formula.Text = "=" + first; break;
+                case 1: _formula.Text = "=SUM(" + range + ")"; break;
+                case 2: _formula.Text = "=AVERAGE(" + range + ")"; break;
+                case 3: _formula.Text = "=MIN(" + range + ")"; break;
+                case 4: _formula.Text = "=MAX(" + range + ")"; break;
+                case 5: _formula.Text = "=COUNT(" + range + ")"; break;
+                case 6: _formula.Text = "=ROUND(" + first + ",2)"; break;
+                case 7: _formula.Text = "=IF(" + first + ">0,1,0)"; break;
+            }
+            _formula.Focus();
+            _formula.SelectionStart = _formula.TextLength;
+        }
+
+        private void Apply()
+        {
+            if (string.IsNullOrWhiteSpace(_formula.Text) || _formula.Text.Trim() == "=")
+            {
+                MessageBox.Show(this, "请先选择单元格范围并生成公式。", Text);
+                return;
+            }
+            _apply(_formula.Text.Trim());
+        }
+
+        private static Label LabelFor(string text)
+        {
+            return new Label { Text = text, AutoSize = true, Margin = new Padding(3, 8, 3, 3) };
+        }
+
+        private static Button Button(string text, Action action)
+        {
+            var button = new Button { Text = text, AutoSize = true, Height = 29, Margin = new Padding(3, 1, 3, 1) };
             button.Click += (sender, args) => action();
             return button;
         }
