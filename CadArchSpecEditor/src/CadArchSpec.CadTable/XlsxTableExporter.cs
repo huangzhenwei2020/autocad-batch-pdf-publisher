@@ -38,7 +38,7 @@ namespace CadArchSpec.CadTable
     {
         private const string SpreadsheetNamespace = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 
-        public void Write(Stream output, SpreadsheetTable table)
+        public void Write(Stream output, SpreadsheetTable table, bool includeColumnHeader = true)
         {
             if (output == null) throw new ArgumentNullException(nameof(output));
             if (table == null) throw new ArgumentNullException(nameof(table));
@@ -50,11 +50,11 @@ namespace CadArchSpec.CadTable
                 WriteText(archive, "xl/workbook.xml", Workbook(SafeSheetName(table.Title)));
                 WriteText(archive, "xl/_rels/workbook.xml.rels", WorkbookRelationships());
                 WriteText(archive, "xl/styles.xml", Styles(table));
-                WriteWorksheet(archive, table);
+                WriteWorksheet(archive, table, includeColumnHeader);
             }
         }
 
-        private static void WriteWorksheet(ZipArchive archive, SpreadsheetTable table)
+        private static void WriteWorksheet(ZipArchive archive, SpreadsheetTable table, bool includeColumnHeader)
         {
             var excelColumnWidths = Enumerable.Range(0, table.Columns.Count)
                 .Select(index => ToExcelColumnWidth(index < table.ColumnWidthsMillimeters.Count
@@ -66,17 +66,20 @@ namespace CadArchSpec.CadTable
             {
                 writer.WriteStartDocument();
                 writer.WriteStartElement("worksheet", SpreadsheetNamespace);
-                writer.WriteStartElement("sheetViews");
-                writer.WriteStartElement("sheetView");
-                writer.WriteAttributeString("workbookViewId", "0");
-                writer.WriteStartElement("pane");
-                writer.WriteAttributeString("ySplit", "1");
-                writer.WriteAttributeString("topLeftCell", "A2");
-                writer.WriteAttributeString("activePane", "bottomLeft");
-                writer.WriteAttributeString("state", "frozen");
-                writer.WriteEndElement();
-                writer.WriteEndElement();
-                writer.WriteEndElement();
+                if (includeColumnHeader)
+                {
+                    writer.WriteStartElement("sheetViews");
+                    writer.WriteStartElement("sheetView");
+                    writer.WriteAttributeString("workbookViewId", "0");
+                    writer.WriteStartElement("pane");
+                    writer.WriteAttributeString("ySplit", "1");
+                    writer.WriteAttributeString("topLeftCell", "A2");
+                    writer.WriteAttributeString("activePane", "bottomLeft");
+                    writer.WriteAttributeString("state", "frozen");
+                    writer.WriteEndElement();
+                    writer.WriteEndElement();
+                    writer.WriteEndElement();
+                }
                 writer.WriteStartElement("cols");
                 for (var index = 0; index < table.Columns.Count; index++)
                 {
@@ -89,9 +92,11 @@ namespace CadArchSpec.CadTable
                 }
                 writer.WriteEndElement();
                 writer.WriteStartElement("sheetData");
-                WriteRow(writer, 1, table.Columns.Select(value => new SpreadsheetCell { Value = value }).ToList(), 1, 24d, false);
+                var firstDataRow = includeColumnHeader ? 2 : 1;
+                if (includeColumnHeader)
+                    WriteRow(writer, 1, table.Columns.Select(value => new SpreadsheetCell { Value = value }).ToList(), 1, 24d, false);
                 for (var rowIndex = 0; rowIndex < table.Rows.Count; rowIndex++)
-                    WriteRow(writer, rowIndex + 2, table.Rows[rowIndex].Cells, 2, rowHeights[rowIndex], true);
+                    WriteRow(writer, rowIndex + firstDataRow, table.Rows[rowIndex].Cells, 2, rowHeights[rowIndex], includeColumnHeader);
                 writer.WriteEndElement();
 
                 var merges = new List<string>();
@@ -102,14 +107,17 @@ namespace CadArchSpec.CadTable
                     {
                         var cell = cells[columnIndex];
                         if (cell.RowSpan <= 0 || cell.ColumnSpan <= 0 || cell.RowSpan == 1 && cell.ColumnSpan == 1) continue;
-                        var from = CellReference(rowIndex + 2, columnIndex + 1);
-                        var to = CellReference(rowIndex + 1 + cell.RowSpan, columnIndex + cell.ColumnSpan);
+                        var from = CellReference(rowIndex + firstDataRow, columnIndex + 1);
+                        var to = CellReference(rowIndex + firstDataRow + cell.RowSpan - 1, columnIndex + cell.ColumnSpan);
                         merges.Add(from + ":" + to);
                     }
                 }
-                writer.WriteStartElement("autoFilter");
-                writer.WriteAttributeString("ref", "A1:" + CellReference(Math.Max(1, table.Rows.Count + 1), table.Columns.Count));
-                writer.WriteEndElement();
+                if (includeColumnHeader)
+                {
+                    writer.WriteStartElement("autoFilter");
+                    writer.WriteAttributeString("ref", "A1:" + CellReference(Math.Max(1, table.Rows.Count + 1), table.Columns.Count));
+                    writer.WriteEndElement();
+                }
                 if (merges.Count > 0)
                 {
                     writer.WriteStartElement("mergeCells");

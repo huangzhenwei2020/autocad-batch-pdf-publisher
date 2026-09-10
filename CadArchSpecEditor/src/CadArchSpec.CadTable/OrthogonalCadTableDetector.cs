@@ -57,6 +57,12 @@ namespace CadArchSpec.CadTable
                 return result;
             }
 
+            int splitMultilineCount;
+            textFragments = SplitMultilineTextAtHorizontalBorders(textFragments, horizontal, options,
+                out splitMultilineCount);
+            if (splitMultilineCount > 0)
+                result.Warnings.Add("已按 CAD 横向分格线拆分 " + splitMultilineCount + " 段跨格多行文字。");
+
             DetectCells(result, horizontal, vertical, options);
             var ignoredDecorationCount = PruneUnusedGridLines(result, horizontal, vertical, options);
             if (ignoredDecorationCount > 0)
@@ -68,6 +74,64 @@ namespace CadArchSpec.CadTable
             var mergedCount = result.Cells.Count(cell => cell.RowSpan > 1 || cell.ColumnSpan > 1);
             if (mergedCount > 0) result.Warnings.Add("根据缺失的内部分隔线推断出 " + mergedCount + " 个合并单元格，请在预览中确认。");
             if (result.UnassignedText.Count > 0) result.Warnings.Add("有 " + result.UnassignedText.Count + " 段文字未能归入单元格，需要人工确认。");
+            return result;
+        }
+
+        private static List<CadTextFragment> SplitMultilineTextAtHorizontalBorders(
+            IEnumerable<CadTextFragment> fragments, IList<AxisSegment> horizontal,
+            CadTableDetectionOptions options, out int splitCount)
+        {
+            var result = new List<CadTextFragment>();
+            splitCount = 0;
+            foreach (var fragment in fragments)
+            {
+                var visible = VisibleText(fragment).Replace("\r\n", "\n").Replace('\r', '\n');
+                var lines = visible.Split(new[] { '\n' }, StringSplitOptions.None);
+                if (lines.Length < 2 || !fragment.HasBounds || fragment.Top <= fragment.Bottom)
+                {
+                    result.Add(fragment);
+                    continue;
+                }
+
+                var bandHeight = (fragment.Top - fragment.Bottom) / lines.Length;
+                var centers = Enumerable.Range(0, lines.Length)
+                    .Select(index => fragment.Top - (index + .5d) * bandHeight).ToList();
+                var crossesDivider = Enumerable.Range(0, centers.Count - 1).Any(index =>
+                    horizontal.Any(border => border.Fixed < centers[index] - options.CoordinateTolerance &&
+                        border.Fixed > centers[index + 1] + options.CoordinateTolerance &&
+                        border.Start <= fragment.Center.X + options.MaximumBorderGap &&
+                        border.End >= fragment.Center.X - options.MaximumBorderGap));
+                if (!crossesDivider)
+                {
+                    result.Add(fragment);
+                    continue;
+                }
+
+                splitCount++;
+                for (var index = 0; index < lines.Length; index++)
+                {
+                    var top = fragment.Top - index * bandHeight;
+                    var bottom = top - bandHeight;
+                    result.Add(new CadTextFragment
+                    {
+                        Text = lines[index],
+                        PlainText = lines[index],
+                        Center = new CadTablePoint(fragment.Center.X, centers[index]),
+                        Width = fragment.Width,
+                        Height = Math.Min(Math.Max(.001d, fragment.Height), bandHeight),
+                        HasBounds = true,
+                        Left = fragment.Left,
+                        Bottom = bottom,
+                        Right = fragment.Right,
+                        Top = top,
+                        RotationDegrees = fragment.RotationDegrees,
+                        Confidence = fragment.Confidence,
+                        SourceKind = fragment.SourceKind,
+                        SourceHandle = fragment.SourceHandle,
+                        SourceDxfName = fragment.SourceDxfName
+                    });
+                }
+            }
             return result;
         }
 

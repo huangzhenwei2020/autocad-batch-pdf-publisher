@@ -160,6 +160,7 @@ namespace CadArchSpec.Host.Shared.CadTable
                 ApplyGridColors();
             };
             _originalCadSize.CheckedChanged += (sender, args) => UpdateSizeControls();
+            _insertType.SelectedIndexChanged += (sender, args) => UpdateSizeControls();
             UpdateColorButtons();
             UpdateSizeControls();
 
@@ -1013,12 +1014,14 @@ namespace CadArchSpec.Host.Shared.CadTable
 
         private void UpdateSizeControls()
         {
-            var available = (bool?)_payload["hasOriginalCadSize"] == true;
+            var tianzheng = _insertType.SelectedIndex == 1;
+            var available = (bool?)_payload["hasOriginalCadSize"] == true && !tianzheng;
             _originalCadSize.Enabled = available;
             if (!available) _originalCadSize.Checked = false;
             _scale.Enabled = !_originalCadSize.Checked;
             _textHeight.Enabled = !_originalCadSize.Checked;
-            _originalCadSize.Text = available ? "保持原 CAD 尺寸" : "原 CAD 尺寸不可用";
+            _originalCadSize.Text = tianzheng ? "天正表格不支持原尺寸" :
+                available ? "保持原 CAD 尺寸" : "原 CAD 尺寸不可用";
         }
 
         private static DataGridViewContentAlignment GridAlignment(string value)

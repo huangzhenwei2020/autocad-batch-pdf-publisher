@@ -216,6 +216,34 @@ namespace CadArchSpec.Stage0.Tests
         }
 
         [Fact]
+        public void SplitsOneMultilineMTextWhenCadGridLineSeparatesItsLines()
+        {
+            var input = Grid(new[] { 0d, 100d }, new[] { 0d, 50d, 100d });
+            var multiline = Text("上半格\n下半格", 50, 50, CadTextSourceKind.Standard, 10);
+            SetBounds(multiline, 10, 20, 90, 80);
+            input.TextFragments.Add(multiline);
+
+            var result = new OrthogonalCadTableDetector().Detect(input);
+
+            Assert.Equal("上半格", result.Cells.Single(cell => cell.RowIndex == 0).Text);
+            Assert.Equal("下半格", result.Cells.Single(cell => cell.RowIndex == 1).Text);
+            Assert.Contains(result.Warnings, warning => warning.Contains("横向分格线") && warning.Contains("拆分"));
+        }
+
+        [Fact]
+        public void KeepsOneMultilineMTextTogetherWithoutAnInternalGridLine()
+        {
+            var input = Grid(new[] { 0d, 100d }, new[] { 0d, 100d });
+            var multiline = Text("第一行\n第二行", 50, 50, CadTextSourceKind.Standard, 10);
+            SetBounds(multiline, 10, 20, 90, 80);
+            input.TextFragments.Add(multiline);
+
+            var result = new OrthogonalCadTableDetector().Detect(input);
+
+            Assert.Equal("第一行\n第二行", result.Cells.Single().Text);
+        }
+
+        [Fact]
         public void DetectsTableAfterOverallRotationWithoutMutatingSourceCoordinates()
         {
             var input = Grid(new[] { 0d, 100d, 200d }, new[] { 0d, 50d, 100d });

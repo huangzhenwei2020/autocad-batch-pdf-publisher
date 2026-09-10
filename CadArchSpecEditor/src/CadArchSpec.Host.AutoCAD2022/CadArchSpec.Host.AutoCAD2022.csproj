@@ -27,6 +27,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Reference Include="Microsoft.CSharp" />
     <Reference Include="acmgd">
       <HintPath>$(AutoCadSdkPath)\acmgd.dll</HintPath>
       <Private>false</Private>

@@ -136,5 +136,36 @@ namespace CadArchSpec.Stage0.Tests
                 }
             }
         }
+
+        [Fact]
+        public void CanWriteTianzhengImportWorkbookWithoutSyntheticColumnHeader()
+        {
+            var table = new SpreadsheetTable { Title = "材料表" };
+            table.Columns.AddRange(new[] { "A", "B" });
+            table.Rows.Add(new SpreadsheetRow
+            {
+                Cells =
+                {
+                    new SpreadsheetCell { Value = "材料名称" },
+                    new SpreadsheetCell { Value = "规格" }
+                }
+            });
+
+            using (var stream = new MemoryStream())
+            {
+                new XlsxTableExporter().Write(stream, table, false);
+                stream.Position = 0;
+                using (var archive = new ZipArchive(stream, ZipArchiveMode.Read, true))
+                using (var reader = new StreamReader(archive.GetEntry("xl/worksheets/sheet1.xml").Open()))
+                {
+                    var xml = reader.ReadToEnd();
+                    Assert.Contains("<c r=\"A1\" s=\"3\"", xml);
+                    Assert.Contains("材料名称", xml);
+                    Assert.DoesNotContain("autoFilter", xml);
+                    Assert.DoesNotContain("ySplit", xml);
+                }
+            }
+        }
+
     }
 }

@@ -65,8 +65,9 @@ namespace CadArchSpec.Host.Shared.CadTable
             var fillColor = ReadCadColor(options["fillColorRgb"]);
             var contentColor = ReadCadColor(options["textColorRgb"]);
 
-            var conversionIds = new List<ObjectId>();
-            var insertedTableId = ObjectId.Null;
+            if (insertAsTianzheng)
+                return InsertTianzhengTable(payload, document, pointResult.Value);
+
             using (var transaction = document.Database.TransactionManager.StartTransaction())
             {
                 var currentSpace = (BlockTableRecord)transaction.GetObject(document.Database.CurrentSpaceId, OpenMode.ForWrite);
@@ -121,100 +122,55 @@ namespace CadArchSpec.Host.Shared.CadTable
                 table.GenerateLayout();
                 currentSpace.AppendEntity(table);
                 transaction.AddNewlyCreatedDBObject(table, true);
-                insertedTableId = table.ObjectId;
-                if (insertAsTianzheng)
-                {
-                    var exploded = new DBObjectCollection();
-                    table.Explode(exploded);
-                    foreach (DBObject item in exploded)
-                    {
-                        var entity = item as Entity;
-                        if (entity == null || !(entity is Line || entity is Polyline || entity is DBText || entity is MText))
-                        {
-                            item.Dispose();
-                            continue;
-                        }
-                        currentSpace.AppendEntity(entity);
-                        transaction.AddNewlyCreatedDBObject(entity, true);
-                        conversionIds.Add(entity.ObjectId);
-                    }
-                }
                 transaction.Commit();
             }
 
-            if (insertAsTianzheng && conversionIds.Count > 0)
-            {
-                var converted = false;
-                var appendedIds = new List<ObjectId>();
-                ObjectEventHandler appended = (sender, args) =>
-                {
-                    if (args.DBObject is Entity && args.DBObject.ObjectId.IsValid)
-                        appendedIds.Add(args.DBObject.ObjectId);
-                };
-                try
-                {
-                    document.Database.ObjectAppended += appended;
-                    var selection = SelectionSet.FromObjectIds(conversionIds.ToArray());
-                    document.Editor.Command("TConverSheet", selection, "");
-                    converted = conversionIds.All(id => !id.IsValid || id.IsErased) ||
-                        appendedIds.Any(id => IsTianzhengConversionResult(document.Database, id));
-                }
-                catch (Exception ex)
-                {
-                    document.Editor.WriteMessage("\n天正表格转换未执行：" + ex.GetBaseException().Message);
-                }
-                finally
-                {
-                    document.Database.ObjectAppended -= appended;
-                }
-                if (converted)
-                {
-                    EraseObjects(document.Database, new[] { insertedTableId });
-                    EraseObjects(document.Database, conversionIds);
-                }
-                else
-                {
-                    EraseObjects(document.Database, conversionIds);
-                    System.Windows.Forms.MessageBox.Show(
-                        "天正没有完成表格转换，已自动清理临时线文并保留完整的 AutoCAD 原生表格。\n请确认当前图纸由天正 T20 打开后再试。",
-                        "CAD 表格转 Excel", System.Windows.Forms.MessageBoxButtons.OK,
-                        System.Windows.Forms.MessageBoxIcon.Information);
-                }
-            }
-
-            var result = new JObject { ["action"] = "inserted", ["insertType"] = insertAsTianzheng ? "tianzheng" : "autocad" };
+            var result = new JObject { ["action"] = "inserted", ["insertType"] = "autocad" };
             CopyResultSummary(result, payload);
             return result;
         }
 
-        private static bool IsTianzhengConversionResult(Database database, ObjectId id)
+        private static JObject InsertTianzhengTable(JObject payload, Document document, Point3d insertionPoint)
         {
-            if (!id.IsValid || id.IsErased) return false;
+            var appendedIds = new List<ObjectId>();
+            ObjectEventHandler appended = (sender, args) =>
+            {
+                if (args.DBObject is Entity && args.DBObject.ObjectId.IsValid)
+                    appendedIds.Add(args.DBObject.ObjectId);
+            };
             try
             {
-                using (var transaction = database.TransactionManager.StartOpenCloseTransaction())
+                using (var excel = CadTableXlsxExchange.PrepareTianzhengImport(payload))
                 {
-                    var entity = transaction.GetObject(id, OpenMode.ForRead, false, true) as Entity;
-                    if (entity == null || entity is Table || entity is Line || entity is Polyline || entity is DBText || entity is MText)
-                        return false;
-                    transaction.Commit();
-                    return true;
+                    document.Window.Focus();
+                    Application.UpdateScreen();
+                    document.Editor.WriteMessage("\nExcel 已准备好。天正弹出询问时，请选择“是(Y)”新建表格。\n");
+                    CadTableXlsxExchange.WriteTianzhengLog("开始调用 Excel2Sheet；插入点=" +
+                        insertionPoint.X.ToString("R", CultureInfo.InvariantCulture) + "," +
+                        insertionPoint.Y.ToString("R", CultureInfo.InvariantCulture) + "," +
+                        insertionPoint.Z.ToString("R", CultureInfo.InvariantCulture));
+                    document.Database.ObjectAppended += appended;
+                    document.Editor.Command("Excel2Sheet", insertionPoint, "");
+                    CadTableXlsxExchange.WriteTianzhengLog("Excel2Sheet 已结束；新增实体数=" + appendedIds.Count);
+                    if (appendedIds.Count == 0)
+                        throw new InvalidOperationException("Excel2Sheet 已结束，但没有检测到新建的天正表格；可能在天正询问中选择了“否”或取消了命令。");
                 }
             }
-            catch { return false; }
-        }
-
-        private static void EraseObjects(Database database, IEnumerable<ObjectId> ids)
-        {
-            using (var transaction = database.TransactionManager.StartTransaction())
+            catch (Exception ex)
             {
-                foreach (var id in ids.Where(value => value.IsValid && !value.IsErased))
-                {
-                    var value = transaction.GetObject(id, OpenMode.ForWrite, false, true);
-                    if (value != null && !value.IsErased) value.Erase();
-                }
-                transaction.Commit();
+                CadTableXlsxExchange.WriteTianzhengLog("Excel2Sheet 调用失败", ex);
+                throw new InvalidOperationException("天正 Excel2Sheet 插入失败。请确认使用天正 T20 打开图纸、Microsoft Excel 可正常启动。" +
+                    "\r\n诊断日志：" + Path.Combine(CadArchSpec.EditorBridge.PortableDataPaths.DirectoryFor("Logs"),
+                        "cad-table-tianzheng.log"), ex);
             }
+            finally
+            {
+                document.Database.ObjectAppended -= appended;
+            }
+
+            var result = new JObject { ["action"] = "inserted", ["insertType"] = "tianzheng" };
+            CopyResultSummary(result, payload);
+            return result;
         }
 
         private static Autodesk.AutoCAD.Colors.Color ReadCadColor(JToken token)
