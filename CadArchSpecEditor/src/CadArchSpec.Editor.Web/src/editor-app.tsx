@@ -109,6 +109,12 @@ export function createProjectMessage(
     | "image.table.read"
     | "image.table.cancel"
     | "cad.table.locate"
+    | "cad.table.insert"
+    | "cad.table.repick"
+    | "cad.table.pick"
+    | "cad.table.cellObjects.pick"
+    | "cad.table.template.save"
+    | "cad.table.template.delete"
     | "table.xlsx.export"
     | "cad.section.insert",
   payload: Record<string, unknown> = {},
@@ -278,6 +284,8 @@ export function ArchitectureSpecEditor() {
   const [signoffOpen, setSignoffOpen] = useState(false);
   const [tablesOpen, setTablesOpen] = useState(false);
   const [tableEditTargetId, setTableEditTargetId] = useState("");
+  const [activeCadTablePayload, setActiveCadTablePayload] = useState<Record<string, unknown> | null>(null);
+  const [cadTableStandalone, setCadTableStandalone] = useState(false);
   const [standardsOpen, setStandardsOpen] = useState(false);
   const [cadLayoutOpen, setCadLayoutOpen] = useState(false);
   const [cadBusy, setCadBusy] = useState(false);
@@ -522,6 +530,8 @@ export function ArchitectureSpecEditor() {
           ...current,
           tables: [...(current.tables ?? []).filter((table) => table.tableId !== imported.tableId), imported],
         }));
+        setActiveCadTablePayload(payload);
+        setCadTableStandalone(payload.standaloneEditor === true);
         setSaveState("dirty");
         setTableEditTargetId(imported.tableId);
         setTablesOpen(true);
@@ -535,6 +545,22 @@ export function ArchitectureSpecEditor() {
       } else if (event.data.type === "table.xlsxExported") {
         setCadBusy(false);
         setProjectNotice(payload.cancelled === true ? "已取消导出 XLSX" : `Excel 表格已导出：${String(payload.filePath ?? "")}`);
+      } else if (event.data.type === "cad.tableInserted") {
+        setCadBusy(false);
+        if (payload.cancelled === true) {
+          setProjectNotice("已取消写入 CAD 表格");
+        } else {
+          const action = payload.action === "updated" ? "已更新当前" : "已插入";
+          const kind = payload.insertType === "tianzheng" ? "天正表格" : "AutoCAD 原生表格";
+          setProjectNotice(`${action}${kind}`);
+        }
+      } else if (event.data.type === "cad.table.templatesChanged") {
+        setCadBusy(false);
+        setActiveCadTablePayload((current) => current ? {
+          ...current,
+          cadTableTemplates: payload.cadTableTemplates,
+        } : current);
+        setProjectNotice(payload.savedId ? "常用表格已保存" : "常用表格已删除");
       } else if (event.data.type === "cad.tableLocated") {
         setCadBusy(false);
         setProjectNotice(`已在 CAD 中定位 ${Number(payload.locatedCount ?? 0)} 个来源对象`);
@@ -644,6 +670,12 @@ export function ArchitectureSpecEditor() {
       | "image.table.read"
       | "image.table.cancel"
       | "cad.table.locate"
+      | "cad.table.insert"
+      | "cad.table.repick"
+      | "cad.table.pick"
+      | "cad.table.cellObjects.pick"
+      | "cad.table.template.save"
+      | "cad.table.template.delete"
       | "table.xlsx.export"
       | "cad.section.insert",
     payload: Record<string, unknown> = {},
@@ -923,7 +955,7 @@ export function ArchitectureSpecEditor() {
   };
 
   return (
-    <main className="app-shell">
+    <main className={cadTableStandalone ? "app-shell cad-table-standalone" : "app-shell"}>
       <header className="app-header">
         <div className="brand-block">
           <div className="brand-mark">建</div>
@@ -1432,14 +1464,67 @@ export function ArchitectureSpecEditor() {
             setCadBusy(true);
             postProjectMessage("cad.table.locate", { drawingPath, handles });
           }}
+          cadBusy={cadBusy}
+          hasOriginalCadSize={activeCadTablePayload?.hasOriginalCadSize === true}
+          suggestedInsertType={activeCadTablePayload?.suggestedInsertType === "tianzheng" ? "tianzheng" : "autocad"}
+          cadStandalone={cadTableStandalone}
+          cadEditorPayload={activeCadTablePayload ?? undefined}
+          onRepickCadTable={() => {
+            if (!requireCadHost() || cadBusy) return;
+            setCadBusy(true);
+            postProjectMessage("cad.table.repick");
+          }}
+          onPickCadTable={() => {
+            if (!requireCadHost() || cadBusy) return;
+            setCadBusy(true);
+            postProjectMessage("cad.table.pick");
+          }}
+          onPickCadObjects={(table, row, column) => {
+            if (!requireCadHost() || cadBusy) return;
+            setCadBusy(true);
+            postProjectMessage("cad.table.cellObjects.pick", {
+              ...(activeCadTablePayload ?? {}), table,
+              pendingCadObjectRow: row,
+              pendingCadObjectColumn: column,
+            });
+          }}
+          onSaveCadTemplate={(name, table) => {
+            if (!requireCadHost() || cadBusy) return;
+            setCadBusy(true);
+            postProjectMessage("cad.table.template.save", {
+              name,
+              editorPayload: { ...(activeCadTablePayload ?? {}), table },
+            });
+          }}
+          onDeleteCadTemplate={(id) => {
+            if (!requireCadHost() || cadBusy) return;
+            setCadBusy(true);
+            postProjectMessage("cad.table.template.delete", { id });
+          }}
+          onOpenCadTemplate={(templatePayload) => {
+            setActiveCadTablePayload((current) => {
+              const { sourceEdit: _sourceEdit, ...withoutUpdateTarget } = current ?? {};
+              return { ...withoutUpdateTarget, ...templatePayload, standaloneEditor: true, sourceEdit: undefined };
+            });
+          }}
+          onInsertCad={(table, options) => {
+            if (!requireCadHost() || cadBusy) return;
+            setCadBusy(true);
+            postProjectMessage("cad.table.insert", {
+              ...(activeCadTablePayload ?? {}),
+              table,
+              cadInsertOptions: options,
+            });
+          }}
           onSave={(tables) => {
             const synchronized = editorHandle?.synchronizeTables(tables) ?? 0;
             changeWorkspace((current) => ({ ...current, tables }));
             setProjectNotice(`已保存 ${tables.length} 张专业表格${synchronized ? `，并更新正文中 ${synchronized} 处` : ""}，请保存项目文件`);
             setTablesOpen(false);
             setTableEditTargetId("");
+            setCadTableStandalone(false);
           }}
-          onClose={() => { setTablesOpen(false); setTableEditTargetId(""); }}
+          onClose={() => { setTablesOpen(false); setTableEditTargetId(""); setActiveCadTablePayload(null); setCadTableStandalone(false); }}
         />
       )}
 

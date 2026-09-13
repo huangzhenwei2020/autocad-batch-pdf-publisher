@@ -10,6 +10,7 @@ namespace CadArchSpec.CadTable
         public static string Normalize(string contents, string fallbackText = "")
         {
             if (string.IsNullOrEmpty(contents)) return NormalizeLines(fallbackText);
+            contents = TianzhengTextCodec.ToPlainText(contents);
             var output = new StringBuilder(contents.Length);
             for (var index = 0; index < contents.Length; index++)
             {
@@ -43,9 +44,11 @@ namespace CadArchSpec.CadTable
                 {
                     var end = contents.IndexOf(';', index + 1);
                     if (end < 0) end = contents.Length;
-                    var stacked = contents.Substring(index + 1, end - index - 1)
-                        .Replace('#', '/').Replace('^', '/');
-                    output.Append(stacked);
+                    var stacked = contents.Substring(index + 1, end - index - 1);
+                    var caret = stacked.IndexOf('^');
+                    if (caret >= 0 && caret == stacked.Length - 1)
+                        output.Append(TianzhengTextCodec.ToSuperscriptPlain(stacked.Substring(0, caret)));
+                    else output.Append(stacked.Replace('#', '/').Replace('^', '/'));
                     index = end;
                     continue;
                 }

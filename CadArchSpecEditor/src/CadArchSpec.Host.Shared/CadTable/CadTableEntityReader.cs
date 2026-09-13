@@ -190,10 +190,37 @@ namespace CadArchSpec.Host.Shared.CadTable
                 Width = hasBounds ? Math.Abs(bounds.MaxPoint.X - bounds.MinPoint.X) : 0d,
                 Height = Math.Abs(height),
                 RotationDegrees = rotationRadians * 180d / Math.PI,
+                Alignment = TextAlignment(boundsSource),
                 SourceKind = sourceKind,
                 SourceHandle = sourceHandle,
                 SourceDxfName = dxfName
             });
+        }
+
+        private static string TextAlignment(Entity entity)
+        {
+            var dbText = entity as DBText;
+            if (dbText != null)
+            {
+                if (dbText.HorizontalMode == TextHorizontalMode.TextLeft) return "left";
+                if (dbText.HorizontalMode == TextHorizontalMode.TextRight) return "right";
+                return "center";
+            }
+            var mText = entity as MText;
+            if (mText != null)
+            {
+                switch (mText.Attachment)
+                {
+                    case AttachmentPoint.TopLeft:
+                    case AttachmentPoint.MiddleLeft:
+                    case AttachmentPoint.BottomLeft: return "left";
+                    case AttachmentPoint.TopRight:
+                    case AttachmentPoint.MiddleRight:
+                    case AttachmentPoint.BottomRight: return "right";
+                    default: return "center";
+                }
+            }
+            return "center";
         }
 
         private static bool TryGetBounds(Entity entity, out Extents3d bounds)

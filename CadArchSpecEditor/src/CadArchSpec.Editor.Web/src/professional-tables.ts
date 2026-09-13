@@ -280,6 +280,7 @@ export function createProfessionalTableTemplate(
 
 export function normalizeProfessionalTable(table: ArchitectureTable): ArchitectureTable {
   const columns = table.columns.map((item, index) => ({
+    ...item,
     key: item.key || `column${index + 1}`,
     title: item.title || `列${index + 1}`,
     unit: item.unit ?? "",
@@ -573,6 +574,53 @@ export function splitMergedCell(
       ),
     })),
   };
+}
+
+type MergeRecord = { top: number; left: number; bottom: number; right: number; anchor: ArchitectureTableCell };
+
+function tableMerges(table: ArchitectureTable): MergeRecord[] {
+  const result: MergeRecord[] = [];
+  table.rows.forEach((row, top) => row.cells.forEach((cell, left) => {
+    if (cell.rowSpan > 1 || cell.columnSpan > 1) result.push({
+      top, left, bottom: top + cell.rowSpan - 1, right: left + cell.columnSpan - 1, anchor: { ...cell },
+    });
+  }));
+  return result;
+}
+
+function restoreMerges(table: ArchitectureTable, merges: MergeRecord[]): ArchitectureTable {
+  const rows = table.rows.map((row) => ({ ...row, cells: row.cells.map((cell) => ({ ...cell, rowSpan: 1, columnSpan: 1 })) }));
+  for (const merge of merges) {
+    if (merge.bottom < merge.top || merge.right < merge.left || !rows[merge.top]?.cells[merge.left]) continue;
+    const rowSpan = merge.bottom - merge.top + 1; const columnSpan = merge.right - merge.left + 1;
+    rows[merge.top].cells[merge.left] = { ...merge.anchor, columnKey: table.columns[merge.left].key, rowSpan, columnSpan };
+    for (let row = merge.top; row <= merge.bottom; row++) for (let column = merge.left; column <= merge.right; column++)
+      if (row !== merge.top || column !== merge.left) rows[row].cells[column] = { ...rows[row].cells[column], rowSpan: 0, columnSpan: 0 };
+  }
+  return { ...table, rows };
+}
+
+export function deleteTableRow(table: ArchitectureTable, deletedRow: number): ArchitectureTable {
+  if (table.rows.length <= 1) throw new Error("表格至少保留一行。");
+  const next = { ...table, rows: table.rows.filter((_, index) => index !== deletedRow) };
+  const merges = tableMerges(table).map((merge) => {
+    if (deletedRow < merge.top) return { ...merge, top: merge.top - 1, bottom: merge.bottom - 1 };
+    if (deletedRow > merge.bottom) return merge;
+    return { ...merge, bottom: merge.bottom - 1 };
+  }).filter((merge) => merge.bottom >= merge.top);
+  return restoreMerges(next, merges);
+}
+
+export function deleteTableColumn(table: ArchitectureTable, deletedColumn: number): ArchitectureTable {
+  if (table.columns.length <= 1) throw new Error("表格至少保留一列。");
+  const columns = table.columns.filter((_, index) => index !== deletedColumn);
+  const next = { ...table, columns, rows: table.rows.map((row) => ({ ...row, cells: row.cells.filter((_, index) => index !== deletedColumn).map((cell, index) => ({ ...cell, columnKey: columns[index].key })) })) };
+  const merges = tableMerges(table).map((merge) => {
+    if (deletedColumn < merge.left) return { ...merge, left: merge.left - 1, right: merge.right - 1 };
+    if (deletedColumn > merge.right) return merge;
+    return { ...merge, right: merge.right - 1 };
+  }).filter((merge) => merge.right >= merge.left);
+  return restoreMerges(next, merges);
 }
 
 type FormulaToken = {

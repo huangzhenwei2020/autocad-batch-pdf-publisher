@@ -14,6 +14,12 @@ namespace CadArchSpec.CadTable
             public List<string> SourceHandles { get; set; } = new List<string>();
         }
 
+        private sealed class GridSegment
+        {
+            public AxisSegment Segment { get; set; }
+            public bool Horizontal { get; set; }
+        }
+
         public CadTableDetectionResult Detect(CadTableDetectionInput input, CadTableDetectionOptions options = null)
         {
             if (input == null) throw new ArgumentNullException(nameof(input));
@@ -37,6 +43,8 @@ namespace CadArchSpec.CadTable
 
             horizontal = Merge(horizontal, options.CoordinateTolerance, options.MaximumBorderGap);
             vertical = Merge(vertical, options.CoordinateTolerance, options.MaximumBorderGap);
+            var ignoredNestedDecorationCount = PruneNestedDisconnectedGeometry(
+                horizontal, vertical, options);
             var result = new CadTableDetectionResult
             {
                 DetectedRotationDegrees = rotation,
@@ -44,6 +52,9 @@ namespace CadArchSpec.CadTable
                 RowBoundaries = Cluster(horizontal.Select(item => item.Fixed), options.CoordinateTolerance)
                     .OrderByDescending(value => value).ToList()
             };
+            if (ignoredNestedDecorationCount > 0)
+                result.Warnings.Add("已忽略 " + ignoredNestedDecorationCount +
+                    " 组位于表格内部且未连接主体网格的装饰线。" );
             int duplicateTextCount;
             var textFragments = DeduplicateTextFragments(normalizedInput.TextFragments ??
                 new List<CadTextFragment>(), options.CoordinateTolerance, out duplicateTextCount);
@@ -75,6 +86,101 @@ namespace CadArchSpec.CadTable
             if (mergedCount > 0) result.Warnings.Add("根据缺失的内部分隔线推断出 " + mergedCount + " 个合并单元格，请在预览中确认。");
             if (result.UnassignedText.Count > 0) result.Warnings.Add("有 " + result.UnassignedText.Count + " 段文字未能归入单元格，需要人工确认。");
             return result;
+        }
+
+        private static int PruneNestedDisconnectedGeometry(List<AxisSegment> horizontal,
+            List<AxisSegment> vertical, CadTableDetectionOptions options)
+        {
+            var all = horizontal.Select(segment => new GridSegment
+                { Segment = segment, Horizontal = true })
+                .Concat(vertical.Select(segment => new GridSegment
+                    { Segment = segment, Horizontal = false })).ToList();
+            if (all.Count < 5) return 0;
+
+            var remaining = new HashSet<GridSegment>(all);
+            var components = new List<List<GridSegment>>();
+            while (remaining.Count > 0)
+            {
+                var seed = remaining.First();
+                remaining.Remove(seed);
+                var component = new List<GridSegment>();
+                var pending = new Queue<GridSegment>();
+                pending.Enqueue(seed);
+                while (pending.Count > 0)
+                {
+                    var current = pending.Dequeue();
+                    component.Add(current);
+                    var connected = remaining.Where(candidate => GridSegmentsConnect(current,
+                        candidate, options)).ToList();
+                    foreach (var candidate in connected)
+                    {
+                        remaining.Remove(candidate);
+                        pending.Enqueue(candidate);
+                    }
+                }
+                components.Add(component);
+            }
+            if (components.Count < 2) return 0;
+
+            var candidates = components.Where(component =>
+                component.Any(item => item.Horizontal) && component.Any(item => !item.Horizontal))
+                .Select(component => new { Component = component, Bounds = GridBounds(component) })
+                .OrderByDescending(item => BoundsArea(item.Bounds))
+                .ThenByDescending(item => item.Component.Sum(value =>
+                    Math.Abs(value.Segment.End - value.Segment.Start))).ToList();
+            if (candidates.Count == 0) return 0;
+
+            var dominant = candidates[0];
+            var tolerance = Math.Max(options.CoordinateTolerance, options.MaximumBorderGap);
+            var nested = components.Where(component => !ReferenceEquals(component, dominant.Component))
+                .Where(component => BoundsInside(GridBounds(component), dominant.Bounds, tolerance))
+                .ToList();
+            if (nested.Count == 0) return 0;
+
+            var removed = new HashSet<GridSegment>(nested.SelectMany(component => component));
+            horizontal.RemoveAll(segment => removed.Any(item => item.Horizontal &&
+                ReferenceEquals(item.Segment, segment)));
+            vertical.RemoveAll(segment => removed.Any(item => !item.Horizontal &&
+                ReferenceEquals(item.Segment, segment)));
+            return nested.Count;
+        }
+
+        private static bool GridSegmentsConnect(GridSegment first, GridSegment second,
+            CadTableDetectionOptions options)
+        {
+            var tolerance = Math.Max(options.CoordinateTolerance, options.MaximumBorderGap);
+            if (first.Horizontal == second.Horizontal)
+                return Math.Abs(first.Segment.Fixed - second.Segment.Fixed) <= options.CoordinateTolerance &&
+                    first.Segment.Start <= second.Segment.End + tolerance &&
+                    second.Segment.Start <= first.Segment.End + tolerance;
+            var horizontal = first.Horizontal ? first.Segment : second.Segment;
+            var vertical = first.Horizontal ? second.Segment : first.Segment;
+            return vertical.Fixed >= horizontal.Start - tolerance &&
+                vertical.Fixed <= horizontal.End + tolerance &&
+                horizontal.Fixed >= vertical.Start - tolerance &&
+                horizontal.Fixed <= vertical.End + tolerance;
+        }
+
+        private static double[] GridBounds(IEnumerable<GridSegment> component)
+        {
+            var points = component.SelectMany(item => item.Horizontal
+                ? new[] { new CadTablePoint(item.Segment.Start, item.Segment.Fixed),
+                    new CadTablePoint(item.Segment.End, item.Segment.Fixed) }
+                : new[] { new CadTablePoint(item.Segment.Fixed, item.Segment.Start),
+                    new CadTablePoint(item.Segment.Fixed, item.Segment.End) }).ToList();
+            return new[] { points.Min(point => point.X), points.Min(point => point.Y),
+                points.Max(point => point.X), points.Max(point => point.Y) };
+        }
+
+        private static double BoundsArea(IList<double> bounds)
+        {
+            return Math.Max(0d, bounds[2] - bounds[0]) * Math.Max(0d, bounds[3] - bounds[1]);
+        }
+
+        private static bool BoundsInside(IList<double> inner, IList<double> outer, double tolerance)
+        {
+            return inner[0] > outer[0] + tolerance && inner[1] > outer[1] + tolerance &&
+                inner[2] < outer[2] - tolerance && inner[3] < outer[3] - tolerance;
         }
 
         private static List<CadTextFragment> SplitMultilineTextAtHorizontalBorders(

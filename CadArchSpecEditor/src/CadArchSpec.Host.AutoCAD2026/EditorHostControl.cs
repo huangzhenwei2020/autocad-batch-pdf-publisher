@@ -26,6 +26,8 @@ namespace CadArchSpec.Host.AutoCAD2026
         private static bool _nativeResolverConfigured;
         private bool _initializationStarted;
         private bool _disposed;
+        private bool _webReady;
+        private JObject _pendingCadTablePayload;
         private string _currentProjectPath = string.Empty;
         private CancellationTokenSource _imageTableCancellation;
 
@@ -52,6 +54,21 @@ namespace CadArchSpec.Host.AutoCAD2026
             Controls.Add(_webView);
             Controls.Add(_statusLabel);
             Load += OnLoaded;
+        }
+
+        public void StartCadTableEdit(JObject payload)
+        {
+            _pendingCadTablePayload = payload == null ? null : (JObject)payload.DeepClone();
+            if (_pendingCadTablePayload != null) _pendingCadTablePayload["standaloneEditor"] = true;
+            if (_webReady) ShowPendingCadTable();
+        }
+
+        private void ShowPendingCadTable()
+        {
+            if (_pendingCadTablePayload == null || !_webReady) return;
+            var payload = _pendingCadTablePayload;
+            _pendingCadTablePayload = null;
+            PostMessage("cad.tableRead", payload);
         }
 
         private static void ConfigureNativeDependencyResolution()
@@ -170,7 +187,9 @@ namespace CadArchSpec.Host.AutoCAD2026
                 switch (message.Type)
                 {
                     case "editor.ready":
+                        _webReady = true;
                         SendHostReady();
+                        ShowPendingCadTable();
                         break;
                     case "project.new":
                         _currentProjectPath = string.Empty;
@@ -209,6 +228,26 @@ namespace CadArchSpec.Host.AutoCAD2026
                     case "cad.table.read":
                         PostMessage("cad.tableRead", await CadArchSpec.Host.Shared.CadTable.CadTableExchange.ReadSelectedTableAsync(
                             (bool?)message.Payload["includeHiddenLayers"] == true));
+                        break;
+                    case "cad.table.insert":
+                        PostMessage("cad.tableInserted", await CadArchSpec.Host.Shared.CadTable.CadTableExchange.InsertTableAsync(message.Payload));
+                        break;
+                    case "cad.table.repick":
+                        PostMessage("cad.tableRead", CadArchSpec.Host.Shared.CadTable.CadTableExchange.PrepareStandaloneEditorPayload(
+                            await CadArchSpec.Host.Shared.CadTable.CadTableExchange.ReadSelectedTableForUpdateAsync(false)));
+                        break;
+                    case "cad.table.pick":
+                        PostMessage("cad.tableRead", CadArchSpec.Host.Shared.CadTable.CadTableExchange.PrepareStandaloneEditorPayload(
+                            await CadArchSpec.Host.Shared.CadTable.CadTableExchange.ReadSelectedTableAsync(false)));
+                        break;
+                    case "cad.table.cellObjects.pick":
+                        PostMessage("cad.tableRead", await CadArchSpec.Host.Shared.CadTable.CadTableExchange.CaptureCellCadObjectsAsync(message.Payload));
+                        break;
+                    case "cad.table.template.save":
+                        PostMessage("cad.table.templatesChanged", CadArchSpec.Host.Shared.CadTable.CadTableExchange.SaveTemplateForEditor(message.Payload));
+                        break;
+                    case "cad.table.template.delete":
+                        PostMessage("cad.table.templatesChanged", CadArchSpec.Host.Shared.CadTable.CadTableExchange.DeleteTemplateForEditor(message.Payload));
                         break;
                     case "image.table.read":
                         _imageTableCancellation?.Cancel();

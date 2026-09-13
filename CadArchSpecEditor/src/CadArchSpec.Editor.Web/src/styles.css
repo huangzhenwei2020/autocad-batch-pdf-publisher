@@ -9,6 +9,510 @@
   padding: 18px;
 }
 
+.cad-table-standalone > :not(.table-dialog-backdrop) {
+  display: none;
+}
+
+.cad-table-standalone .table-dialog-backdrop {
+  padding: 0;
+}
+
+.cad-table-standalone .professional-table-dialog {
+  width: 100vw;
+  height: 100vh;
+  border: 0;
+  box-shadow: none;
+}
+
+.cad-table-start-overlay {
+  position: absolute;
+  z-index: 20;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(32 43 55 / 46%);
+}
+
+.cad-table-start-dialog {
+  width: min(900px, 94vw);
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid #aeb9c6;
+  box-shadow: 0 18px 50px rgb(22 34 48 / 30%);
+}
+
+.cad-table-start-dialog > header {
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid #d7dde5;
+}
+
+.cad-table-start-dialog h3,
+.cad-table-start-dialog p { margin: 0; }
+.cad-table-start-dialog h3 { font-size: 20px; }
+.cad-table-start-dialog p { margin-top: 5px; color: #667386; font-size: 13px; }
+
+.cad-table-start-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  padding: 18px 20px 12px;
+}
+
+.cad-table-start-action {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 3px 10px;
+  min-height: 96px;
+  padding: 14px;
+  text-align: left;
+  color: #243247;
+  background: #f7f9fc;
+  border: 1px solid #cbd4df;
+  cursor: pointer;
+}
+
+.cad-table-start-action:hover { border-color: #3978bf; background: #f1f7fe; }
+.cad-table-start-action:disabled { opacity: .55; cursor: default; }
+.cad-table-start-action svg { grid-row: 1 / span 2; width: 28px; height: 28px; color: #1769aa; }
+.cad-table-start-action strong { font-size: 15px; }
+.cad-table-start-action span { color: #667386; font-size: 12px; line-height: 1.5; }
+
+.cad-table-start-library {
+  display: grid;
+  gap: 7px;
+  padding: 12px 20px 18px;
+}
+
+.cad-table-start-library label { font-weight: 700; }
+.cad-table-start-library > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.cad-table-start-library select { min-width: 0; height: 34px; }
+.cad-table-start-dialog > footer { display: flex; justify-content: flex-end; padding: 12px 20px; background: #f6f8fa; border-top: 1px solid #d7dde5; }
+
+@media (max-width: 820px) {
+  .cad-table-start-actions { grid-template-columns: 1fr; }
+}
+
+.cad-table-editor-dialog .cad-table-manager-body {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.cad-table-editor-dialog .table-workbench {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 0;
+  padding: 0;
+}
+
+.cad-table-editor-dialog .table-commandbar {
+  display: none;
+}
+
+.cad-table-editor-dialog .table-commandbar .command-separator,
+.cad-table-editor-dialog .project-table-only,
+.cad-table-editor-dialog .binding-sync-notice {
+  display: none;
+}
+
+.cad-table-editor-dialog .cell-settings {
+  display: none;
+}
+
+.cad-table-editor-dialog .cad-template-tools {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: 1px solid #d6dde5;
+}
+
+.cad-table-editor-dialog .cad-template-tools select,
+.cad-table-editor-dialog .cad-border-settings select {
+  min-width: 0;
+  height: 30px;
+}
+
+.two-button-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(74px, 1fr));
+  gap: 6px;
+}
+
+.button.icon-text {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+}
+
+.button.icon-text svg {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+}
+
+.cad-color-fields {
+  display: grid;
+  gap: 5px;
+}
+
+.cad-color-field {
+  display: grid !important;
+  grid-template-columns: 48px 22px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+}
+
+.cad-color-field i {
+  width: 20px;
+  height: 20px;
+  border: 1px solid #8995a3;
+}
+
+.cad-color-field input {
+  min-width: 0;
+}
+
+.cad-border-settings {
+  display: grid;
+  gap: 6px;
+  margin: 2px 0 0;
+  padding: 8px;
+  border: 1px solid #cfd7e1;
+}
+
+.cad-border-settings legend {
+  padding: 0 5px;
+  font-weight: 700;
+}
+
+.cad-cell-object-preview {
+  display: block;
+  width: 100%;
+  height: 58px;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.cad-cell-text-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(560px, 90vw);
+  min-height: 280px;
+  background: #fff;
+  border: 1px solid #aeb9c6;
+  box-shadow: 0 16px 42px rgb(25 37 49 / 28%);
+}
+
+.cad-cell-text-dialog header,
+.cad-cell-text-dialog footer {
+  padding: 12px;
+  border-bottom: 1px solid #d4dae2;
+}
+
+.cad-cell-text-dialog header h3 { margin: 0; }
+.cad-cell-text-dialog textarea { flex: 1; min-height: 170px; margin: 12px; padding: 9px; resize: vertical; }
+.cad-cell-text-dialog footer { display: flex; justify-content: flex-end; gap: 8px; border: 0; border-top: 1px solid #d4dae2; }
+
+.cad-formula-dialog { min-height: 330px; }
+.cad-formula-body { display: grid; grid-template-columns: 1fr auto; gap: 10px; padding: 14px; }
+.cad-formula-body label { grid-column: 1 / -1; display: grid; grid-template-columns: 100px minmax(0, 1fr); align-items: center; gap: 8px; }
+.cad-formula-body input,
+.cad-formula-body select { height: 32px; min-width: 0; }
+
+.cad-table-editor-dialog .alignment-controls {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.cad-table-editor-dialog .professional-grid-scroll {
+  grid-column: 1;
+  grid-row: 2;
+  min-height: 0;
+  border: 0;
+  outline: 0;
+}
+
+.professional-grid-zoom-layer {
+  display: inline-block;
+  min-width: max-content;
+  transform-origin: 0 0;
+}
+
+.cad-office-ribbon {
+  grid-column: 1;
+  grid-row: 1;
+  background: #f7f9fb;
+  border-bottom: 1px solid #bfc9d5;
+}
+
+.cad-ribbon-tabs {
+  display: flex;
+  gap: 2px;
+  min-height: 34px;
+  padding: 0 10px;
+  background: #fff;
+  border-bottom: 1px solid #ccd4de;
+}
+
+.cad-ribbon-tabs button {
+  min-width: 78px;
+  padding: 0 14px;
+  color: #43536a;
+  background: transparent;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  cursor: pointer;
+}
+
+.cad-ribbon-tabs button.active {
+  color: #125b91;
+  background: #f5f9fd;
+  border-bottom-color: #1673b8;
+  font-weight: 700;
+}
+
+.cad-ribbon-panel {
+  display: flex;
+  min-height: 88px;
+  align-items: stretch;
+  flex-wrap: wrap;
+  gap: 0;
+  padding: 6px 8px;
+  overflow: visible;
+}
+
+.cad-ribbon-panel fieldset {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  min-width: 0;
+  align-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 0;
+  padding: 8px 10px 20px;
+  border: 0;
+  border-right: 1px solid #d2d9e1;
+}
+
+.cad-ribbon-panel legend {
+  position: absolute;
+  right: 8px;
+  bottom: 2px;
+  left: 8px;
+  height: 14px;
+  color: #78869a;
+  font-size: 10px;
+  text-align: center;
+}
+
+.cad-ribbon-panel label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #526278;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.cad-ribbon-panel input,
+.cad-ribbon-panel select {
+  width: 76px;
+  height: 30px;
+  min-width: 0;
+  padding: 0 6px;
+  background: #fff;
+  border: 1px solid #b9c4d0;
+}
+
+.cad-ribbon-panel .button {
+  white-space: nowrap;
+}
+
+.ribbon-icon-button {
+  position: relative;
+  display: inline-grid;
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  padding: 0;
+  color: #33465d;
+  background: #fff;
+  border: 1px solid #b9c4d0;
+  cursor: pointer;
+}
+
+.ribbon-icon-button:hover:not(:disabled),
+.ribbon-icon-button.active {
+  color: #0d5f99;
+  background: #eaf3fb;
+  border-color: #6da7d0;
+}
+
+.ribbon-icon-button.danger { color: #a93a3a; }
+.ribbon-icon-button:disabled { opacity: .42; cursor: default; }
+.ribbon-icon-button > svg { width: 20px; height: 20px; }
+.ribbon-icon-button .ribbon-corner-icon {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 11px;
+  height: 11px;
+  padding: 1px;
+  color: #fff;
+  background: #1970ad;
+}
+
+.ribbon-icon-button::after {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 7px);
+  left: 50%;
+  display: none;
+  width: max-content;
+  max-width: 230px;
+  padding: 6px 8px;
+  content: attr(data-tooltip);
+  transform: translateX(-50%);
+  color: #fff;
+  background: #26384b;
+  box-shadow: 0 3px 8px rgb(24 38 54 / 25%);
+  font-size: 12px;
+  line-height: 1.4;
+  pointer-events: none;
+}
+
+.ribbon-icon-button:hover::after,
+.ribbon-icon-button:focus-visible::after { display: block; }
+
+.cad-ribbon-panel .alignment-controls {
+  display: grid;
+  grid-template-columns: repeat(3, auto);
+  gap: 3px;
+}
+
+.cad-ribbon-panel .formula-ribbon-group {
+  flex: 1 1 520px;
+}
+
+.cad-ribbon-panel .formula-field {
+  flex: 1 1 280px;
+}
+
+.cad-ribbon-panel .formula-field input {
+  width: 100%;
+}
+
+.cad-ribbon-panel .template-ribbon-group {
+  flex: 1 1 420px;
+}
+
+.cad-ribbon-panel .template-ribbon-group select {
+  flex: 1 1 170px;
+  width: auto;
+}
+
+.cad-ribbon-panel .cad-color-field i {
+  width: 20px;
+  height: 20px;
+  border: 1px solid #6d7885;
+}
+
+.ribbon-help {
+  color: #6c7a8d;
+  font-size: 11px;
+}
+
+.cad-table-editor-dialog > footer {
+  min-height: 50px;
+  flex-wrap: wrap;
+}
+
+.cad-table-editor-dialog .cad-table-insert-controls {
+  flex-wrap: wrap;
+}
+
+.cad-table-editor-dialog .professional-grid {
+  min-width: 0;
+}
+
+.cad-table-editor-dialog .professional-grid tbody th,
+.cad-table-editor-dialog .professional-grid td {
+  height: auto;
+}
+
+.cad-table-editor-dialog .professional-grid td textarea {
+  height: 100%;
+  min-height: 0;
+  padding-top: 2px;
+  padding-bottom: 2px;
+  resize: none;
+  overflow: hidden;
+}
+
+.cad-preview-statusbar {
+  grid-column: 1;
+  grid-row: 3;
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 3px 12px;
+  color: #5c6b7d;
+  background: #f7f9fb;
+  border-top: 1px solid #c8d1dc;
+  font-size: 12px;
+}
+
+.cad-preview-zoom {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.cad-preview-zoom button {
+  min-width: 28px;
+  height: 26px;
+  padding: 0 6px;
+  background: #fff;
+  border: 1px solid #b8c3cf;
+  cursor: pointer;
+}
+
+.cad-preview-zoom input[type="range"] { width: clamp(100px, 16vw, 220px); }
+.cad-preview-zoom input[type="number"] { width: 58px; height: 26px; text-align: right; }
+
+.cad-blank-table-dialog {
+  width: min(430px, 90vw);
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid #aeb9c6;
+  box-shadow: 0 16px 42px rgb(25 37 49 / 28%);
+}
+
+.cad-blank-table-dialog > header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  border-bottom: 1px solid #d4dae2;
+}
+
+.cad-blank-table-dialog > header svg { width: 28px; height: 28px; color: #1769aa; }
+.cad-blank-table-dialog h3,
+.cad-blank-table-dialog p { margin: 0; }
+.cad-blank-table-dialog p { margin-top: 4px; color: #667386; font-size: 12px; }
+.cad-blank-table-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 20px; }
+.cad-blank-table-fields label { display: grid; gap: 6px; }
+.cad-blank-table-fields input { height: 34px; min-width: 0; }
+.cad-blank-table-dialog > footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; background: #f6f8fa; border-top: 1px solid #d4dae2; }
+
 .professional-table-dialog {
   position: relative;
   display: flex;
@@ -124,6 +628,33 @@
   color: #69788b;
   font-size: 12px;
 }
+
+.cad-table-insert-controls {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.cad-table-insert-controls label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.cad-table-insert-controls select,
+.cad-table-insert-controls input[type="number"] {
+  height: 30px;
+  border: 1px solid #b8c3ce;
+  background: #fff;
+}
+
+.cad-table-insert-controls input[type="number"] { width: 68px; }
+
+.alignment-controls { display: flex; gap: 3px; }
+.alignment-controls .active { color: #fff; background: #2d6578; border-color: #2d6578; }
 
 .table-manager-body {
   display: grid;
@@ -416,6 +947,7 @@
 }
 
 .professional-grid thead th {
+  position: relative;
   padding: 5px 7px;
   background: #edf1f5;
   font-weight: 600;
@@ -450,6 +982,30 @@
   text-align: center;
   cursor: pointer;
 }
+
+.column-resize-handle {
+  position: absolute;
+  z-index: 4;
+  top: 0;
+  right: -4px;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.row-resize-handle {
+  position: absolute;
+  z-index: 4;
+  right: 0;
+  bottom: -4px;
+  left: 0;
+  height: 8px;
+  cursor: row-resize;
+  touch-action: none;
+}
+
+.professional-grid tbody th { position: sticky; }
 
 .professional-grid tbody th.selected-row {
   color: #244e5c;

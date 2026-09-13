@@ -16,6 +16,10 @@ namespace CadArchSpec.CadTable
         public int RowSpan { get; set; } = 1;
         public int ColumnSpan { get; set; } = 1;
         public string Alignment { get; set; } = "center";
+        public int? BorderColorRgb { get; set; }
+        public int? FillColorRgb { get; set; }
+        public int? TextColorRgb { get; set; }
+        public double HorizontalPaddingMillimeters { get; set; } = 1d;
     }
 
     public sealed class SpreadsheetRow
@@ -43,18 +47,20 @@ namespace CadArchSpec.CadTable
             if (output == null) throw new ArgumentNullException(nameof(output));
             if (table == null) throw new ArgumentNullException(nameof(table));
             if (table.Columns == null || table.Columns.Count == 0) throw new InvalidOperationException("表格没有可导出的列。");
+            var styles = BuildStyleCatalog(table);
             using (var archive = new ZipArchive(output, ZipArchiveMode.Create, true))
             {
                 WriteText(archive, "[Content_Types].xml", ContentTypes());
                 WriteText(archive, "_rels/.rels", RootRelationships());
                 WriteText(archive, "xl/workbook.xml", Workbook(SafeSheetName(table.Title)));
                 WriteText(archive, "xl/_rels/workbook.xml.rels", WorkbookRelationships());
-                WriteText(archive, "xl/styles.xml", Styles(table));
-                WriteWorksheet(archive, table, includeColumnHeader);
+                WriteText(archive, "xl/styles.xml", Styles(styles));
+                WriteWorksheet(archive, table, includeColumnHeader, styles);
             }
         }
 
-        private static void WriteWorksheet(ZipArchive archive, SpreadsheetTable table, bool includeColumnHeader)
+        private static void WriteWorksheet(ZipArchive archive, SpreadsheetTable table, bool includeColumnHeader,
+            IList<CellStyleSpec> styles)
         {
             var excelColumnWidths = Enumerable.Range(0, table.Columns.Count)
                 .Select(index => ToExcelColumnWidth(index < table.ColumnWidthsMillimeters.Count
@@ -94,9 +100,11 @@ namespace CadArchSpec.CadTable
                 writer.WriteStartElement("sheetData");
                 var firstDataRow = includeColumnHeader ? 2 : 1;
                 if (includeColumnHeader)
-                    WriteRow(writer, 1, table.Columns.Select(value => new SpreadsheetCell { Value = value }).ToList(), 1, 24d, false);
+                    WriteRow(writer, 1, table.Columns.Select(value => new SpreadsheetCell { Value = value }).ToList(),
+                        1, 24d, false, table, styles);
                 for (var rowIndex = 0; rowIndex < table.Rows.Count; rowIndex++)
-                    WriteRow(writer, rowIndex + firstDataRow, table.Rows[rowIndex].Cells, 2, rowHeights[rowIndex], includeColumnHeader);
+                    WriteRow(writer, rowIndex + firstDataRow, table.Rows[rowIndex].Cells, -1,
+                        rowHeights[rowIndex], includeColumnHeader, table, styles);
                 writer.WriteEndElement();
 
                 var merges = new List<string>();
@@ -136,7 +144,8 @@ namespace CadArchSpec.CadTable
         }
 
         private static void WriteRow(XmlWriter writer, int rowNumber, IList<SpreadsheetCell> cells,
-            int styleIndex, double heightPoints, bool shiftFormulaRows)
+            int styleIndex, double heightPoints, bool shiftFormulaRows, SpreadsheetTable table,
+            IList<CellStyleSpec> styles)
         {
             writer.WriteStartElement("row");
             writer.WriteAttributeString("r", rowNumber.ToString());
@@ -148,7 +157,7 @@ namespace CadArchSpec.CadTable
                 if (cell == null) continue;
                 writer.WriteStartElement("c");
                 writer.WriteAttributeString("r", CellReference(rowNumber, columnIndex + 1));
-                var effectiveStyle = styleIndex == 2 ? AlignmentStyle(cell.Alignment) : styleIndex;
+                var effectiveStyle = styleIndex >= 0 ? styleIndex : StyleIndex(CellStyle(cell, table), styles);
                 writer.WriteAttributeString("s", effectiveStyle.ToString());
                 if (cell.RowSpan == 0 || cell.ColumnSpan == 0)
                 {
@@ -250,13 +259,6 @@ namespace CadArchSpec.CadTable
         private static string RootRelationships() => "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.xml\"/></Relationships>";
         private static string WorkbookRelationships() => "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/><Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/></Relationships>";
         private static string Workbook(string sheetName) => "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets><sheet name=\"" + Escape(sheetName) + "\" sheetId=\"1\" r:id=\"rId1\"/></sheets><calcPr calcMode=\"auto\" fullCalcOnLoad=\"1\" forceFullCalc=\"1\"/></workbook>";
-        private static int AlignmentStyle(string value)
-        {
-            if (string.Equals(value, "left", StringComparison.OrdinalIgnoreCase)) return 2;
-            if (string.Equals(value, "right", StringComparison.OrdinalIgnoreCase)) return 4;
-            return 3;
-        }
-
         private static string ExcelFormula(string formula, bool shiftRows)
         {
             var value = (formula ?? string.Empty).Trim();
@@ -267,27 +269,118 @@ namespace CadArchSpec.CadTable
                     .ToString(CultureInfo.InvariantCulture), System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         }
 
-        private static string Styles(SpreadsheetTable table)
+        private static List<CellStyleSpec> BuildStyleCatalog(SpreadsheetTable table)
         {
-            var textColor = ColorXml(table.TextColorRgb);
-            var borderColor = ColorXml(table.BorderColorRgb);
-            var hasFill = table.FillColorRgb.HasValue;
-            var fillColor = hasFill ? "<fgColor rgb=\"" + Argb(table.FillColorRgb.Value) + "\"/><bgColor indexed=\"64\"/>" : string.Empty;
-            var fillId = hasFill ? "2" : "0";
-            var edgeColor = string.IsNullOrEmpty(borderColor) ? string.Empty : borderColor;
-            var border = "<border><left style=\"thin\">" + edgeColor + "</left><right style=\"thin\">" + edgeColor +
-                "</right><top style=\"thin\">" + edgeColor + "</top><bottom style=\"thin\">" + edgeColor + "</bottom></border>";
-            string Xf(string horizontal, string font) => "<xf numFmtId=\"0\" fontId=\"" + font + "\" fillId=\"" + fillId +
-                "\" borderId=\"1\" xfId=\"0\" applyAlignment=\"1\" applyFill=\"1\"><alignment horizontal=\"" + horizontal +
-                "\" vertical=\"center\" wrapText=\"1\"/></xf>";
+            var result = new List<CellStyleSpec>
+            {
+                new CellStyleSpec { Alignment = "center" },
+                new CellStyleSpec
+                {
+                    Alignment = "center", Bold = true, BorderColorRgb = table.BorderColorRgb,
+                    FillColorRgb = table.FillColorRgb, TextColorRgb = table.TextColorRgb,
+                    HorizontalPaddingMillimeters = 1d
+                },
+                LegacyDataStyle("left", table),
+                LegacyDataStyle("center", table),
+                LegacyDataStyle("right", table)
+            };
+            foreach (var cell in table.Rows.SelectMany(row => row.Cells))
+            {
+                var style = CellStyle(cell, table);
+                if (!result.Any(existing => existing.Key == style.Key)) result.Add(style);
+            }
+            return result;
+        }
+
+        private static CellStyleSpec LegacyDataStyle(string alignment, SpreadsheetTable table)
+        {
+            return new CellStyleSpec
+            {
+                Alignment = alignment,
+                BorderColorRgb = table.BorderColorRgb,
+                FillColorRgb = table.FillColorRgb,
+                TextColorRgb = table.TextColorRgb,
+                HorizontalPaddingMillimeters = 1d
+            };
+        }
+
+        private static CellStyleSpec CellStyle(SpreadsheetCell cell, SpreadsheetTable table)
+        {
+            return new CellStyleSpec
+            {
+                Alignment = string.IsNullOrWhiteSpace(cell.Alignment) ? "center" : cell.Alignment.ToLowerInvariant(),
+                BorderColorRgb = cell.BorderColorRgb ?? table.BorderColorRgb,
+                FillColorRgb = cell.FillColorRgb ?? table.FillColorRgb,
+                TextColorRgb = cell.TextColorRgb ?? table.TextColorRgb,
+                HorizontalPaddingMillimeters = Math.Max(0d, cell.HorizontalPaddingMillimeters)
+            };
+        }
+
+        private static int StyleIndex(CellStyleSpec style, IList<CellStyleSpec> styles)
+        {
+            for (var index = 0; index < styles.Count; index++) if (styles[index].Key == style.Key) return index;
+            return 0;
+        }
+
+        private static string Styles(IList<CellStyleSpec> styles)
+        {
+            var fonts = new StringBuilder();
+            var fills = new StringBuilder("<fill><patternFill patternType=\"none\"/></fill><fill><patternFill patternType=\"gray125\"/></fill>");
+            var borders = new StringBuilder("<border/>");
+            var xfs = new StringBuilder("<xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/>");
+            var fillIds = new int[styles.Count];
+            var borderIds = new int[styles.Count];
+            var nextFill = 2;
+            var nextBorder = 1;
+            for (var index = 0; index < styles.Count; index++)
+            {
+                var style = styles[index];
+                fonts.Append("<font>").Append(style.Bold ? "<b/>" : string.Empty)
+                    .Append("<sz val=\"11\"/><name val=\"等线\"/>").Append(ColorXml(style.TextColorRgb)).Append("</font>");
+                if (style.FillColorRgb.HasValue)
+                {
+                    fillIds[index] = nextFill++;
+                    fills.Append("<fill><patternFill patternType=\"solid\"><fgColor rgb=\"")
+                        .Append(Argb(style.FillColorRgb.Value)).Append("\"/><bgColor indexed=\"64\"/></patternFill></fill>");
+                }
+                if (index > 0)
+                {
+                    borderIds[index] = nextBorder++;
+                    var color = ColorXml(style.BorderColorRgb);
+                    borders.Append("<border><left style=\"thin\">").Append(color).Append("</left><right style=\"thin\">")
+                        .Append(color).Append("</right><top style=\"thin\">").Append(color)
+                        .Append("</top><bottom style=\"thin\">").Append(color).Append("</bottom></border>");
+                }
+            }
+            for (var index = 1; index < styles.Count; index++)
+            {
+                var style = styles[index];
+                var indent = Math.Max(0, Math.Min(15, (int)Math.Round(style.HorizontalPaddingMillimeters)));
+                xfs.Append("<xf numFmtId=\"0\" fontId=\"").Append(index).Append("\" fillId=\"").Append(fillIds[index])
+                    .Append("\" borderId=\"").Append(borderIds[index])
+                    .Append("\" xfId=\"0\" applyAlignment=\"1\" applyFill=\"1\"><alignment horizontal=\"")
+                    .Append(Escape(style.Alignment)).Append("\" vertical=\"center\" wrapText=\"1\"")
+                    .Append(indent > 0 && (style.Alignment == "left" || style.Alignment == "right")
+                        ? " indent=\"" + indent.ToString(CultureInfo.InvariantCulture) + "\"" : string.Empty)
+                    .Append("/></xf>");
+            }
             return "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">" +
-                "<fonts count=\"2\"><font><sz val=\"11\"/><name val=\"等线\"/>" + textColor + "</font><font><b/><sz val=\"11\"/><name val=\"等线\"/>" + textColor + "</font></fonts>" +
-                "<fills count=\"" + (hasFill ? "3" : "2") + "\"><fill><patternFill patternType=\"none\"/></fill><fill><patternFill patternType=\"gray125\"/></fill>" +
-                (hasFill ? "<fill><patternFill patternType=\"solid\">" + fillColor + "</patternFill></fill>" : string.Empty) + "</fills>" +
-                "<borders count=\"2\"><border/>" + border + "</borders><cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs>" +
-                "<cellXfs count=\"5\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/>" +
-                Xf("center", "1") + Xf("left", "0") + Xf("center", "0") + Xf("right", "0") +
+                "<fonts count=\"" + styles.Count + "\">" + fonts + "</fonts><fills count=\"" + nextFill + "\">" + fills +
+                "</fills><borders count=\"" + nextBorder + "\">" + borders +
+                "</borders><cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs>" +
+                "<cellXfs count=\"" + styles.Count + "\">" + xfs +
                 "</cellXfs><cellStyles count=\"1\"><cellStyle name=\"Normal\" xfId=\"0\" builtinId=\"0\"/></cellStyles></styleSheet>";
+        }
+
+        private sealed class CellStyleSpec
+        {
+            public string Alignment { get; set; }
+            public bool Bold { get; set; }
+            public int? BorderColorRgb { get; set; }
+            public int? FillColorRgb { get; set; }
+            public int? TextColorRgb { get; set; }
+            public double HorizontalPaddingMillimeters { get; set; }
+            public string Key { get { return Alignment + "|" + Bold + "|" + BorderColorRgb + "|" + FillColorRgb + "|" + TextColorRgb + "|" + HorizontalPaddingMillimeters.ToString("R", CultureInfo.InvariantCulture); } }
         }
 
         private static string ColorXml(int? rgb) => rgb.HasValue ? "<color rgb=\"" + Argb(rgb.Value) + "\"/>" : string.Empty;

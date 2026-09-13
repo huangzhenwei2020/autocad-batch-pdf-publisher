@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace CadArchSpec.CadTable
 {
@@ -49,6 +50,7 @@ namespace CadArchSpec.CadTable
         public double Right { get; set; }
         public double Top { get; set; }
         public double RotationDegrees { get; set; }
+        public string Alignment { get; set; } = "center";
         public double Confidence { get; set; } = 1d;
         public CadTextSourceKind SourceKind { get; set; }
         public string SourceHandle { get; set; } = string.Empty;
@@ -59,6 +61,23 @@ namespace CadArchSpec.CadTable
     {
         public List<CadTableSegment> Segments { get; set; } = new List<CadTableSegment>();
         public List<CadTextFragment> TextFragments { get; set; } = new List<CadTextFragment>();
+    }
+
+    public static class CadTableDetectionInputFilter
+    {
+        public static CadTableDetectionInput ExcludeSourceHandles(CadTableDetectionInput input,
+            IEnumerable<string> sourceHandles)
+        {
+            if (input == null) throw new ArgumentNullException(nameof(input));
+            var excluded = new HashSet<string>((sourceHandles ?? Enumerable.Empty<string>())
+                .Where(value => !string.IsNullOrWhiteSpace(value)), StringComparer.OrdinalIgnoreCase);
+            if (excluded.Count == 0) return input;
+            return new CadTableDetectionInput
+            {
+                Segments = input.Segments.Where(item => !excluded.Contains(item.SourceHandle)).ToList(),
+                TextFragments = input.TextFragments.Where(item => !excluded.Contains(item.SourceHandle)).ToList()
+            };
+        }
     }
 
     public sealed class CadTableEntityReadResult

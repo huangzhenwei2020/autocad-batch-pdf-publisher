@@ -244,6 +244,7 @@ export type ArchitectureTableColumn = {
   widthMillimeters: number;
   decimalPlaces: number;
   required: boolean;
+  sourceWidthCadUnits?: number;
 };
 
 export type ArchitectureTableCell = {
@@ -257,6 +258,16 @@ export type ArchitectureTableCell = {
   state: FieldState;
   source: string;
   sourceHandles?: string[];
+  alignment?: "left" | "center" | "right";
+  horizontalPaddingMillimeters?: number;
+  borderColorIndex?: number | null;
+  fillColorIndex?: number | null;
+  textColorIndex?: number | null;
+  linkGroupId?: string;
+  cadObjectAssetPath?: string;
+  cadObjectPreviewPath?: string;
+  cadObjectPreviewDataUrl?: string;
+  cadObjectCount?: number;
   rowSpan: number;
   columnSpan: number;
 };
@@ -266,6 +277,8 @@ export type ArchitectureTableRow = {
   rowType: "Data" | "Subtotal" | "Note";
   keepTogether: boolean;
   cells: ArchitectureTableCell[];
+  heightMillimeters?: number;
+  sourceHeightCadUnits?: number;
 };
 
 export type ArchitectureTable = {
@@ -275,6 +288,10 @@ export type ArchitectureTable = {
   tableNumber: string;
   title: string;
   sourceDrawingPath?: string;
+  outerBorderColorIndex?: number | null;
+  innerBorderColorIndex?: number | null;
+  outerBorderWeightMillimeters?: number;
+  innerBorderWeightMillimeters?: number;
   repeatHeader: boolean;
   allowSplitAcrossPages: boolean;
   columns: ArchitectureTableColumn[];

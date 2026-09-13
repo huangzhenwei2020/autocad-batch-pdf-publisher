@@ -62,6 +62,14 @@ namespace CadArchSpec.Host.AutoCAD2022
             }
         }
 
+        public static void ShowCadTableEditor(Newtonsoft.Json.Linq.JObject payload)
+        {
+            Show();
+            if (_window != null && !_window.IsDisposed)
+                _window.Text = "万落建筑工具 · CAD 表格编辑/Excel";
+            _hostControl?.StartCadTableEdit(payload);
+        }
+
         public static void Close()
         {
             var window = _window;

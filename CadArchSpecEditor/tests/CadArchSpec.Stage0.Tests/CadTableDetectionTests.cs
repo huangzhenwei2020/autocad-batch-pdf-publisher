@@ -72,6 +72,25 @@ namespace CadArchSpec.Stage0.Tests
         }
 
         [Fact]
+        public void IgnoresDisconnectedSymbolFramesInsideTableCells()
+        {
+            var input = Grid(new[] { 0d, 100d, 300d }, new[] { 0d, 40d, 80d, 120d });
+            input.Segments.AddRange(Grid(new[] { 10d, 35d }, new[] { 45d, 55d, 75d }).Segments);
+            input.Segments.AddRange(Grid(new[] { 15d, 45d }, new[] { 85d, 100d, 112d }).Segments);
+            input.TextFragments.Add(Text("当心触电", 65, 60, CadTextSourceKind.Standard));
+
+            var result = new OrthogonalCadTableDetector().Detect(input);
+
+            Assert.Equal(2, result.ColumnBoundaries.Count - 1);
+            Assert.Equal(3, result.RowBoundaries.Count - 1);
+            Assert.Equal(6, result.Cells.Count);
+            Assert.Equal("当心触电", result.Cells.Single(cell =>
+                cell.RowIndex == 1 && cell.ColumnIndex == 0).Text);
+            Assert.Contains(result.Warnings, warning => warning.Contains("主体网格") &&
+                warning.Contains("装饰线"));
+        }
+
+        [Fact]
         public void IgnoresDetachedEmptyClosedDecorationBesideTheMainTable()
         {
             var input = Grid(new[] { 0d, 100d, 200d }, new[] { 0d, 50d, 100d });
@@ -282,6 +301,23 @@ namespace CadArchSpec.Stage0.Tests
         }
 
         [Fact]
+        public void ConvertsTianzhengSuperscriptForPlainAndAutoCadText()
+        {
+            const string source = "建筑面积100m^U2^U，体积30m^U3^U";
+
+            Assert.Equal("建筑面积100m²，体积30m³", TianzhengTextCodec.ToPlainText(source));
+            Assert.Equal("建筑面积100m{\\S2^;}，体积30m{\\S3^;}",
+                TianzhengTextCodec.ToAutoCadMText(source));
+        }
+
+        [Fact]
+        public void ConvertsEditedUnicodeSuperscriptToAutoCadStack()
+        {
+            Assert.Equal("m{\\S3^;}", TianzhengTextCodec.ToAutoCadMText("m³"));
+            Assert.Equal("m³", MTextContentNormalizer.Normalize("m{\\S3^;}"));
+        }
+
+        [Fact]
         public void JoinsFragmentsOnTheSameVisualLineBeforeStartingTheNextLine()
         {
             var input = Grid(new[] { 0d, 100d }, new[] { 0d, 100d });
@@ -301,6 +337,39 @@ namespace CadArchSpec.Stage0.Tests
             var widths = CadTableColumnWidthNormalizer.Normalize(new[] { 20d, 60d, 40d });
 
             Assert.Equal(new[] { 40d, 120d, 80d }, widths);
+        }
+
+        [Fact]
+        public void ExcludesCellSymbolBlockGeometryFromGridDetection()
+        {
+            var input = Grid(new[] { 0d, 100d, 300d }, new[] { 0d, 40d, 80d, 120d });
+            foreach (var segment in input.Segments) segment.SourceHandle = "GRID";
+            var gridSegmentCount = input.Segments.Count;
+            input.Segments.AddRange(new[]
+            {
+                Segment(8, 42, 8, 78), Segment(22, 42, 22, 78),
+                Segment(8, 52, 22, 52), Segment(8, 66, 22, 66)
+            });
+            foreach (var segment in input.Segments.Skip(gridSegmentCount)) segment.SourceHandle = "WARNING_ICON";
+            input.TextFragments.Add(Text("当心火灾", 65, 60, CadTextSourceKind.Standard));
+            input.TextFragments.Add(new CadTextFragment
+            {
+                Text = "图标内部文字",
+                PlainText = "图标内部文字",
+                Center = new CadTablePoint(15, 60),
+                SourceHandle = "WARNING_ICON",
+                SourceKind = CadTextSourceKind.ExplodedClone
+            });
+
+            var filtered = CadTableDetectionInputFilter.ExcludeSourceHandles(input,
+                new[] { "warning_icon" });
+            var result = new OrthogonalCadTableDetector().Detect(filtered);
+
+            Assert.Equal(2, result.ColumnBoundaries.Count - 1);
+            Assert.Equal(3, result.RowBoundaries.Count - 1);
+            Assert.DoesNotContain(filtered.Segments, item => item.SourceHandle == "WARNING_ICON");
+            Assert.DoesNotContain(filtered.TextFragments, item => item.SourceHandle == "WARNING_ICON");
+            Assert.Contains(input.Segments, item => item.SourceHandle == "WARNING_ICON");
         }
 
         [Fact]

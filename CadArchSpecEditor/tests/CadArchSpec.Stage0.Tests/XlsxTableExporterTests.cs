@@ -138,6 +138,50 @@ namespace CadArchSpec.Stage0.Tests
         }
 
         [Fact]
+        public void PreservesIndependentCellColorsAndPadding()
+        {
+            var table = new SpreadsheetTable { Title = "单元格样式" };
+            table.Columns.AddRange(new[] { "A", "B" });
+            table.Rows.Add(new SpreadsheetRow
+            {
+                Cells =
+                {
+                    new SpreadsheetCell
+                    {
+                        Value = "左", Alignment = "left", BorderColorRgb = 0xFF0000,
+                        FillColorRgb = 0xFFFF00, TextColorRgb = 0x0000FF,
+                        HorizontalPaddingMillimeters = 2
+                    },
+                    new SpreadsheetCell
+                    {
+                        Value = "右", Alignment = "right", BorderColorRgb = 0x00FF00,
+                        TextColorRgb = 0xFF00FF, HorizontalPaddingMillimeters = 3
+                    }
+                }
+            });
+
+            using (var stream = new MemoryStream())
+            {
+                new XlsxTableExporter().Write(stream, table, false);
+                stream.Position = 0;
+                using (var archive = new ZipArchive(stream, ZipArchiveMode.Read, true))
+                {
+                    string styles;
+                    using (var reader = new StreamReader(archive.GetEntry("xl/styles.xml").Open())) styles = reader.ReadToEnd();
+                    Assert.Contains("FFFF0000", styles);
+                    Assert.Contains("FFFFFF00", styles);
+                    Assert.Contains("FF0000FF", styles);
+                    Assert.Contains("FF00FF00", styles);
+                    Assert.Contains("FFFF00FF", styles);
+                    Assert.Contains("horizontal=\"left\"", styles);
+                    Assert.Contains("horizontal=\"right\"", styles);
+                    Assert.Contains("indent=\"2\"", styles);
+                    Assert.Contains("indent=\"3\"", styles);
+                }
+            }
+        }
+
+        [Fact]
         public void CanWriteTianzhengImportWorkbookWithoutSyntheticColumnHeader()
         {
             var table = new SpreadsheetTable { Title = "材料表" };
