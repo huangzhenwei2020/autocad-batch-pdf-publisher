@@ -290,6 +290,8 @@ export function normalizeProfessionalTable(table: ArchitectureTable): Architectu
   }));
   return {
     ...table,
+    showInnerHorizontalLines: table.showInnerHorizontalLines !== false,
+    showInnerVerticalLines: table.showInnerVerticalLines !== false,
     columns,
     rows: table.rows.map((row) => ({
       ...row,

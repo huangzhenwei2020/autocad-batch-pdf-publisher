@@ -17,6 +17,14 @@ namespace CadArchSpec.CadTable
         public int ColumnSpan { get; set; } = 1;
         public string Alignment { get; set; } = "center";
         public int? BorderColorRgb { get; set; }
+        public int? LeftBorderColorRgb { get; set; }
+        public int? RightBorderColorRgb { get; set; }
+        public int? TopBorderColorRgb { get; set; }
+        public int? BottomBorderColorRgb { get; set; }
+        public bool LeftBorderVisible { get; set; } = true;
+        public bool RightBorderVisible { get; set; } = true;
+        public bool TopBorderVisible { get; set; } = true;
+        public bool BottomBorderVisible { get; set; } = true;
         public int? FillColorRgb { get; set; }
         public int? TextColorRgb { get; set; }
         public double HorizontalPaddingMillimeters { get; set; } = 1d;
@@ -34,6 +42,8 @@ namespace CadArchSpec.CadTable
         public List<double> ColumnWidthsMillimeters { get; set; } = new List<double>();
         public List<SpreadsheetRow> Rows { get; set; } = new List<SpreadsheetRow>();
         public int? BorderColorRgb { get; set; }
+        public int? OuterBorderColorRgb { get; set; }
+        public int? InnerBorderColorRgb { get; set; }
         public int? FillColorRgb { get; set; }
         public int? TextColorRgb { get; set; }
     }
@@ -310,6 +320,14 @@ namespace CadArchSpec.CadTable
             {
                 Alignment = string.IsNullOrWhiteSpace(cell.Alignment) ? "center" : cell.Alignment.ToLowerInvariant(),
                 BorderColorRgb = cell.BorderColorRgb ?? table.BorderColorRgb,
+                LeftBorderColorRgb = cell.LeftBorderColorRgb,
+                RightBorderColorRgb = cell.RightBorderColorRgb,
+                TopBorderColorRgb = cell.TopBorderColorRgb,
+                BottomBorderColorRgb = cell.BottomBorderColorRgb,
+                LeftBorderVisible = cell.LeftBorderVisible,
+                RightBorderVisible = cell.RightBorderVisible,
+                TopBorderVisible = cell.TopBorderVisible,
+                BottomBorderVisible = cell.BottomBorderVisible,
                 FillColorRgb = cell.FillColorRgb ?? table.FillColorRgb,
                 TextColorRgb = cell.TextColorRgb ?? table.TextColorRgb,
                 HorizontalPaddingMillimeters = Math.Max(0d, cell.HorizontalPaddingMillimeters)
@@ -346,10 +364,12 @@ namespace CadArchSpec.CadTable
                 if (index > 0)
                 {
                     borderIds[index] = nextBorder++;
-                    var color = ColorXml(style.BorderColorRgb);
-                    borders.Append("<border><left style=\"thin\">").Append(color).Append("</left><right style=\"thin\">")
-                        .Append(color).Append("</right><top style=\"thin\">").Append(color)
-                        .Append("</top><bottom style=\"thin\">").Append(color).Append("</bottom></border>");
+                    var fallback = style.BorderColorRgb;
+                    borders.Append("<border><left").Append(style.LeftBorderVisible ? " style=\"thin\">" + ColorXml(style.LeftBorderColorRgb ?? fallback) : ">")
+                        .Append("</left><right").Append(style.RightBorderVisible ? " style=\"thin\">" + ColorXml(style.RightBorderColorRgb ?? fallback) : ">")
+                        .Append("</right><top").Append(style.TopBorderVisible ? " style=\"thin\">" + ColorXml(style.TopBorderColorRgb ?? fallback) : ">")
+                        .Append("</top><bottom").Append(style.BottomBorderVisible ? " style=\"thin\">" + ColorXml(style.BottomBorderColorRgb ?? fallback) : ">")
+                        .Append("</bottom></border>");
                 }
             }
             for (var index = 1; index < styles.Count; index++)
@@ -377,10 +397,18 @@ namespace CadArchSpec.CadTable
             public string Alignment { get; set; }
             public bool Bold { get; set; }
             public int? BorderColorRgb { get; set; }
+            public int? LeftBorderColorRgb { get; set; }
+            public int? RightBorderColorRgb { get; set; }
+            public int? TopBorderColorRgb { get; set; }
+            public int? BottomBorderColorRgb { get; set; }
+            public bool LeftBorderVisible { get; set; } = true;
+            public bool RightBorderVisible { get; set; } = true;
+            public bool TopBorderVisible { get; set; } = true;
+            public bool BottomBorderVisible { get; set; } = true;
             public int? FillColorRgb { get; set; }
             public int? TextColorRgb { get; set; }
             public double HorizontalPaddingMillimeters { get; set; }
-            public string Key { get { return Alignment + "|" + Bold + "|" + BorderColorRgb + "|" + FillColorRgb + "|" + TextColorRgb + "|" + HorizontalPaddingMillimeters.ToString("R", CultureInfo.InvariantCulture); } }
+            public string Key { get { return Alignment + "|" + Bold + "|" + BorderColorRgb + "|" + LeftBorderColorRgb + "|" + RightBorderColorRgb + "|" + TopBorderColorRgb + "|" + BottomBorderColorRgb + "|" + LeftBorderVisible + "|" + RightBorderVisible + "|" + TopBorderVisible + "|" + BottomBorderVisible + "|" + FillColorRgb + "|" + TextColorRgb + "|" + HorizontalPaddingMillimeters.ToString("R", CultureInfo.InvariantCulture); } }
         }
 
         private static string ColorXml(int? rgb) => rgb.HasValue ? "<color rgb=\"" + Argb(rgb.Value) + "\"/>" : string.Empty;

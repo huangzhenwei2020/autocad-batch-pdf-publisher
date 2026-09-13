@@ -100,7 +100,7 @@
 .cad-table-editor-dialog .table-workbench {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   gap: 0;
   padding: 0;
 }
@@ -160,7 +160,8 @@
 
 .cad-color-field {
   display: grid !important;
-  grid-template-columns: 48px 22px minmax(0, 1fr);
+  position: relative;
+  grid-template-columns: max-content 74px 58px;
   align-items: center;
   gap: 6px;
 }
@@ -172,8 +173,36 @@
 }
 
 .cad-color-field input {
+  box-sizing: border-box;
+  width: 58px !important;
   min-width: 0;
 }
+
+.aci-color-trigger {
+  box-sizing: border-box; display: flex; align-items: center; gap: 6px; width: 74px; height: 30px; padding: 3px 7px;
+  border: 1px solid #aeb9c6; border-radius: 3px; background: #fff; cursor: pointer;
+}
+.aci-color-trigger i { width: 20px !important; height: 20px !important; flex: none; }
+.aci-color-trigger b { font-size: 12px; font-weight: 600; }
+.aci-color-palette {
+  position: absolute; z-index: 30; top: 34px; left: 0; display: grid; gap: 8px;
+  width: 438px; max-height: 330px; padding: 10px; overflow: auto;
+  border: 1px solid #8795a5; border-radius: 4px;
+  background: #fff; box-shadow: 0 8px 22px #20304035;
+}
+.aci-color-palette section { display: grid; gap: 4px; }
+.aci-color-palette section > strong { color: #526273; font-size: 11px; font-weight: 600; }
+.aci-swatch-row { display: grid; grid-template-columns: repeat(9, 18px); gap: 3px; }
+.aci-swatch-row.gray { grid-template-columns: repeat(6, 18px); }
+.aci-swatch-row.full { grid-template-columns: repeat(24, 15px); gap: 2px; }
+.aci-color-palette .aci-swatch-row button { width: 18px; height: 18px; padding: 0; border: 1px solid #8b96a3; cursor: pointer; }
+.aci-color-palette .aci-swatch-row.full button { width: 15px; height: 15px; }
+.aci-color-palette button.selected { outline: 2px solid #1675bd; outline-offset: 1px; }
+.aci-special-row { display: flex; gap: 6px; }
+.aci-special-row button.special { display: flex; align-items: center; gap: 5px; width: auto; height: 28px; padding: 3px 8px; border: 1px solid #aeb9c6; background: #fff; }
+.aci-special-row button.special i { width: 16px; height: 16px; }
+.cad-line-toggle { display: inline-flex !important; flex-direction: row !important; align-items: center; gap: 4px; }
+.cad-line-toggle input { width: auto !important; }
 
 .cad-border-settings {
   display: grid;
@@ -221,6 +250,8 @@
 .cad-formula-body label { grid-column: 1 / -1; display: grid; grid-template-columns: 100px minmax(0, 1fr); align-items: center; gap: 8px; }
 .cad-formula-body input,
 .cad-formula-body select { height: 32px; min-width: 0; }
+.cad-formula-help { grid-column: 1 / -1; margin: -4px 0 2px 108px; color: #627186; font-size: 12px; }
+.cad-formula-result { grid-column: 1 / -1; display: grid; grid-template-columns: 100px 1fr; gap: 8px; padding: 8px; background: #f2f7fa; border-radius: 4px; }
 
 .cad-table-editor-dialog .alignment-controls {
   display: grid;
@@ -229,7 +260,7 @@
 
 .cad-table-editor-dialog .professional-grid-scroll {
   grid-column: 1;
-  grid-row: 2;
+  grid-row: 3;
   min-height: 0;
   border: 0;
   outline: 0;
@@ -357,6 +388,8 @@
 .ribbon-icon-button.danger { color: #a93a3a; }
 .ribbon-icon-button:disabled { opacity: .42; cursor: default; }
 .ribbon-icon-button > svg { width: 20px; height: 20px; }
+.ribbon-icon-button.cad-clear-fill-button { width: 34px; height: 30px; }
+.ribbon-icon-button.cad-clear-fill-button > svg { width: 17px; height: 17px; }
 .ribbon-icon-button .ribbon-corner-icon {
   position: absolute;
   right: 2px;
@@ -457,7 +490,7 @@
 
 .cad-preview-statusbar {
   grid-column: 1;
-  grid-row: 3;
+  grid-row: 4;
   display: flex;
   min-height: 34px;
   align-items: center;
@@ -1021,6 +1054,69 @@
   background: #eaf2f5;
 }
 
+.cad-persistent-formula-bar {
+  grid-column: 1; grid-row: 2;
+  display: grid; grid-template-columns: 42px 54px minmax(180px, 1fr) 34px auto;
+  align-items: center; gap: 0; min-height: 36px; border: 1px solid #c8d1dc; border-width: 0 0 1px;
+  background: #f8fafc;
+}
+.cad-persistent-formula-bar > button,
+.cad-persistent-formula-bar > span { height: 32px; border: 0; border-right: 1px solid #c8d1dc; background: transparent; text-align: center; line-height: 32px; }
+.cad-persistent-formula-bar > button { cursor: pointer; font-weight: 700; color: #225873; }
+.cad-persistent-formula-bar > input { box-sizing: border-box; height: 32px; padding: 3px 9px; border: 0; outline: 0; font-family: Consolas, "Microsoft YaHei UI", sans-serif; }
+.cad-persistent-formula-bar > input:focus { box-shadow: inset 0 0 0 2px #2d7694; }
+.cad-persistent-formula-bar > em { padding: 0 8px; color: #b33a32; font-size: 11px; font-style: normal; }
+
+.cad-formula-range-picker {
+  grid-column: 1;
+  grid-row: 2;
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 10px;
+  border-bottom: 1px solid #83aabd;
+  background: #eaf5fa;
+  color: #244b61;
+}
+.cad-formula-range-picker > span { min-width: 90px; padding: 3px 8px; border: 1px solid #8fb1c1; background: #fff; font-family: Consolas, monospace; }
+.cad-formula-range-picker > small { flex: 1; color: #587080; }
+.cad-formula-range-picker .button { min-height: 28px; padding: 3px 12px; }
+.cad-formula-pick-range { grid-column: 1 / -1; }
+
+.professional-grid td { position: relative; }
+.cad-fill-handle {
+  position: absolute; z-index: 5; right: -4px; bottom: -4px; width: 8px; height: 8px;
+  border: 1px solid #fff; background: #1675bd; cursor: crosshair; touch-action: none;
+}
+
+.professional-grid td.fill-preview::after {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  content: "";
+  pointer-events: none;
+  background: rgb(22 117 189 / 10%);
+}
+.professional-grid td.fill-preview-left::after { border-left: 2px dashed #1675bd; }
+.professional-grid td.fill-preview-right::after { border-right: 2px dashed #1675bd; }
+.professional-grid td.fill-preview-bottom::after { border-bottom: 3px solid #1675bd; }
+.cad-fill-preview-label {
+  position: absolute;
+  z-index: 6;
+  right: 4px;
+  bottom: 4px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  color: #fff;
+  background: #126ba9;
+  box-shadow: 0 2px 5px rgb(0 0 0 / 22%);
+  font-size: 10px;
+  line-height: 16px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 .professional-grid td.selected-range textarea.invalid {
   background: #fae9e5;
 }
@@ -1045,7 +1141,7 @@
 }
 
 .professional-grid td textarea:focus {
-  background: #f7fbfc;
+  background: transparent;
 }
 
 .professional-grid td textarea.invalid {

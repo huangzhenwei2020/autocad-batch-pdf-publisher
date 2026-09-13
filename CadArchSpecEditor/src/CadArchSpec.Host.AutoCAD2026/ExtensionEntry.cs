@@ -9,6 +9,7 @@ namespace CadArchSpec.Host.AutoCAD2026
     {
         public void Initialize()
         {
+            EditorHostControl.WarmUpWebViewEnvironment();
         }
 
         public void Terminate()

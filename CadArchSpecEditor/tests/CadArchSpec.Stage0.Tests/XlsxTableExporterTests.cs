@@ -149,6 +149,7 @@ namespace CadArchSpec.Stage0.Tests
                     new SpreadsheetCell
                     {
                         Value = "左", Alignment = "left", BorderColorRgb = 0xFF0000,
+                        TopBorderColorRgb = 0x123456, BottomBorderColorRgb = 0x654321,
                         FillColorRgb = 0xFFFF00, TextColorRgb = 0x0000FF,
                         HorizontalPaddingMillimeters = 2
                     },
@@ -173,6 +174,8 @@ namespace CadArchSpec.Stage0.Tests
                     Assert.Contains("FF0000FF", styles);
                     Assert.Contains("FF00FF00", styles);
                     Assert.Contains("FFFF00FF", styles);
+                    Assert.Contains("FF123456", styles);
+                    Assert.Contains("FF654321", styles);
                     Assert.Contains("horizontal=\"left\"", styles);
                     Assert.Contains("horizontal=\"right\"", styles);
                     Assert.Contains("indent=\"2\"", styles);

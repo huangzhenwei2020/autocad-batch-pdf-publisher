@@ -1,8 +1,10 @@
 import {
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ButtonHTMLAttributes,
+  type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
@@ -20,7 +22,6 @@ import {
   ImagePlus,
   Link2,
   LocateFixed,
-  Merge,
   Pencil,
   Plus,
   Redo2,
@@ -28,7 +29,8 @@ import {
   Rows3,
   Save,
   Sigma,
-  Split,
+  TableCellsMerge,
+  TableCellsSplit,
   Table2,
   TableProperties,
   Trash2,
@@ -37,6 +39,7 @@ import {
 } from "lucide-react";
 import type {
   ArchitectureTable,
+  ArchitectureTableCell,
   ArchitectureTableColumn,
   ProjectField,
   ProfessionalTableType,
@@ -63,7 +66,7 @@ import {
   type TableSelection,
   validateProfessionalTable,
 } from "./professional-tables";
-import { recalculateSpreadsheetTable } from "./spreadsheet-formulas";
+import { recalculateSpreadsheetTable, translateSpreadsheetFormula } from "./spreadsheet-formulas";
 
 type Props = {
   value: ArchitectureTable[];
@@ -112,16 +115,133 @@ const newColumnKey = (table: ArchitectureTable) => {
   return spreadsheetColumnName(index);
 };
 
+const rgbHex = (red: number, green: number, blue: number) =>
+  `#${[red, green, blue].map((value) => Math.round(value).toString(16).padStart(2, "0")).join("")}`;
+
+/** AutoCAD ACI 1-255 palette (index 7 is rendered black on this light preview). */
 const aciColor = (value?: number | null) => {
-  const colors: Record<number, string> = { 1: "#ff0000", 2: "#ffff00", 3: "#00ff00", 4: "#00ffff", 5: "#0000ff", 6: "#ff00ff", 7: "#111111", 8: "#777777", 9: "#bbbbbb" };
-  return colors[value ?? 7] ?? `hsl(${((value ?? 7) * 137.508) % 360} 70% 42%)`;
+  const raw = Math.trunc(value ?? 7);
+  if (raw === 0) return "#ffffff";
+  if (raw === 256) return "#000000";
+  const index = Math.max(1, Math.min(255, raw));
+  const basic: Record<number, string> = {
+    1: "#ff0000", 2: "#ffff00", 3: "#00ff00", 4: "#00ffff", 5: "#0000ff",
+    6: "#ff00ff", 7: "#000000", 8: "#808080", 9: "#c0c0c0",
+  };
+  if (basic[index]) return basic[index];
+  if (index >= 250) return ["#333333", "#505050", "#696969", "#828282", "#bebebe", "#ffffff"][index - 250];
+  const group = Math.floor((index - 10) / 10);
+  const shade = (index - 10) % 10;
+  const hue = group * 15;
+  const saturation = shade % 2 === 0 ? 1 : .5;
+  const brightness = [1, 1, .65, .65, .5, .5, .3, .3, .15, .15][shade];
+  const chroma = brightness * saturation;
+  const part = chroma * (1 - Math.abs((hue / 60) % 2 - 1));
+  const [r1, g1, b1] = hue < 60 ? [chroma, part, 0] : hue < 120 ? [part, chroma, 0]
+    : hue < 180 ? [0, chroma, part] : hue < 240 ? [0, part, chroma]
+      : hue < 300 ? [part, 0, chroma] : [chroma, 0, part];
+  const offset = brightness - chroma;
+  return rgbHex((r1 + offset) * 255, (g1 + offset) * 255, (b1 + offset) * 255);
 };
+
+const aciLabel = (value: number) => value === 0 ? "随块" : value === 256 ? "随层" : String(value);
+const aciHuePalette = Array.from({ length: 10 }, (_, shade) =>
+  Array.from({ length: 24 }, (_, group) => 10 + group * 10 + shade)).flat();
+
+function AciColorPicker({ label, value, onChange, onPreview }: {
+  label: string; value?: number | null; onChange(value: number): void; onPreview?(value: number | null): void;
+}) {
+  const current = Math.max(0, Math.min(256, Math.trunc(value ?? 7)));
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLLabelElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: PointerEvent) => {
+      if (!root.current?.contains(event.target as Node)) { setOpen(false); onPreview?.(null); }
+    };
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
+  }, [open, onPreview]);
+  const choose = (index: number) => { onChange(index); onPreview?.(null); setOpen(false); };
+  const swatches = (indexes: number[], className = "") => <div className={`aci-swatch-row ${className}`.trim()}>
+    {indexes.map((index) => <button key={index} type="button" title={`ACI ${aciLabel(index)}`} aria-label={`ACI ${aciLabel(index)}`}
+      className={index === current ? "selected" : ""} style={{ background: aciColor(index) }}
+      onPointerEnter={() => onPreview?.(index)} onFocus={() => onPreview?.(index)} onClick={() => choose(index)} />)}
+  </div>;
+  return <label className="cad-color-field" ref={root}>
+    <span>{label}</span>
+    <button type="button" className="aci-color-trigger" aria-expanded={open} title="选择 AutoCAD 索引颜色" onClick={() => setOpen((currentOpen) => !currentOpen)}>
+      <i style={{ background: aciColor(current) }} /><b>{aciLabel(current)}</b>
+    </button>
+    <input aria-label={`${label} ACI 色号`} title="输入 0–256 色号" type="number" min="0" max="256" value={current}
+      onChange={(event) => onChange(Math.max(0, Math.min(256, Number(event.target.value) || 0)))} />
+    {open && <div className="aci-color-palette" role="listbox" aria-label={`${label}索引颜色`} onPointerLeave={() => onPreview?.(null)}>
+      <section><strong>常用颜色 1–9</strong>{swatches(Array.from({ length: 9 }, (_, index) => index + 1), "common")}</section>
+      <section><strong>灰度 250–255</strong>{swatches([250, 251, 252, 253, 254, 255], "gray")}</section>
+      <section><strong>特殊</strong><div className="aci-special-row">
+        {[256, 0].map((index) => <button key={index} type="button" className={index === current ? "selected special" : "special"}
+          onPointerEnter={() => onPreview?.(index)} onFocus={() => onPreview?.(index)} onClick={() => choose(index)}>
+          <i style={{ background: aciColor(index) }} />{aciLabel(index)} ({index})
+        </button>)}
+      </div></section>
+      <section><strong>完整 ACI 色谱 10–249</strong>{swatches(aciHuePalette, "full")}</section>
+    </div>}
+  </label>;
+}
 
 const spreadsheetColumnName = (index: number) => {
   let value = index + 1; let name = "";
   while (value > 0) { value--; name = String.fromCharCode(65 + value % 26) + name; value = Math.floor(value / 26); }
   return name;
 };
+
+const cellSelectionKey = (row: number, column: number) => `${row}:${column}`;
+const formulaHelp: Record<string, string> = {
+  REFERENCE: "直接取得一个单元格的数值。", SUM: "对所选单元格或区域求和。", AVERAGE: "计算算术平均值。",
+  MIN: "返回最小值。", MAX: "返回最大值。", COUNT: "统计数值单元格数量。",
+  ROUND: "按指定位数四舍五入。", IF: "按条件返回两个结果之一。",
+};
+
+const fillCellProperties = (source: ArchitectureTableCell, target: ArchitectureTableCell, formula: string, displayValue: string, numericValue: number | null): ArchitectureTableCell => ({
+  ...target,
+  displayValue,
+  numericValue,
+  formula,
+  unit: source.unit,
+  alignment: source.alignment,
+  horizontalPaddingMillimeters: source.horizontalPaddingMillimeters,
+  fillColorIndex: source.fillColorIndex,
+  textColorIndex: source.textColorIndex,
+});
+
+export function fillTableDown(table: ArchitectureTable, source: TableSelection, lastTargetRow: number) {
+  const bounds = getSelectionBounds(source);
+  if (lastTargetRow <= bounds.lastRow) return table;
+  const sourceHeight = bounds.lastRow - bounds.firstRow + 1;
+  const seriesByColumn = new Map<number, { first: number; step: number }>();
+  for (let column = bounds.firstColumn; column <= bounds.lastColumn; column++) {
+    const sourceCells = table.rows.slice(bounds.firstRow, bounds.lastRow + 1).map((row) => row.cells[column]);
+    const numbers = sourceCells.map((cell) => cell?.formula ? Number.NaN : Number(cell?.displayValue));
+    if (sourceHeight >= 2 && numbers.every(Number.isFinite))
+      seriesByColumn.set(column, { first: numbers[0], step: (numbers[numbers.length - 1] - numbers[0]) / (numbers.length - 1) });
+  }
+  const rows = table.rows.map((row) => ({ ...row, cells: row.cells.map((cell) => ({ ...cell })) }));
+  for (let row = bounds.lastRow + 1; row <= Math.min(lastTargetRow, rows.length - 1); row++) {
+    for (let column = bounds.firstColumn; column <= bounds.lastColumn; column++) {
+      const sourceRow = bounds.firstRow + ((row - bounds.firstRow) % sourceHeight);
+      const sourceCell = table.rows[sourceRow]?.cells[column];
+      const targetCell = rows[row]?.cells[column];
+      if (!sourceCell || !targetCell || targetCell.rowSpan === 0 || targetCell.columnSpan === 0) continue;
+      const series = seriesByColumn.get(column);
+      const formula = sourceCell.formula ? translateSpreadsheetFormula(sourceCell.formula, row - sourceRow, 0) : "";
+      const numericValue = series ? series.first + series.step * (row - bounds.firstRow) : sourceCell.numericValue;
+      const displayValue = series ? String(Number((numericValue as number).toFixed(8))) : sourceCell.displayValue;
+      rows[row].cells[column] = fillCellProperties(sourceCell, targetCell, formula, displayValue, numericValue);
+    }
+  }
+  const filled = { ...table, rows };
+  try { return recalculateSpreadsheetTable(filled); } catch { return filled; }
+}
 
 function RibbonIconButton({ label, children, className = "", ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { label: string; children: ReactNode }) {
   return <button {...props} className={`ribbon-icon-button ${className}`.trim()} aria-label={label} title={label} data-tooltip={label}>{children}</button>;
@@ -161,9 +281,17 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onExpo
   const [cellEditorValue, setCellEditorValue] = useState("");
   const [formulaBuilderOpen, setFormulaBuilderOpen] = useState(false);
   const [formulaFunction, setFormulaFunction] = useState("SUM");
+  const [formulaTargetCell, setFormulaTargetCell] = useState<{ row: number; column: number } | null>(null);
+  const [formulaArgumentSelection, setFormulaArgumentSelection] = useState<TableSelection | null>(null);
+  const [formulaRangePicking, setFormulaRangePicking] = useState(false);
   const [startChooserOpen, setStartChooserOpen] = useState(cadStandalone && cadEditorPayload?.showStartChooser === true);
   const [ribbonTab, setRibbonTab] = useState<"home" | "layout" | "format" | "formula" | "cad">("home");
   const [dragSelecting, setDragSelecting] = useState(false);
+  const [explicitSelection, setExplicitSelection] = useState<Set<string> | null>(null);
+  const [inlineEditingCell, setInlineEditingCell] = useState("");
+  const [inlineDraft, setInlineDraft] = useState("");
+  const [fillDrag, setFillDrag] = useState<{ source: TableSelection; targetRow: number } | null>(null);
+  const [colorPreview, setColorPreview] = useState<{ target: "fill" | "text" | "outer" | "inner"; value: number } | null>(null);
   const [previewZoom, setPreviewZoom] = useState(() => {
     const stored = Number(window.localStorage.getItem("cad-table-preview-zoom"));
     return Number.isFinite(stored) && stored >= 10 && stored <= 400 ? stored : 100;
@@ -172,6 +300,13 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onExpo
   const [blankRows, setBlankRows] = useState(8);
   const [blankColumns, setBlankColumns] = useState(4);
   const selected = tables.find((table) => table.tableId === selectedId) ?? null;
+  const fillPreviewBounds = fillDrag ? getSelectionBounds(fillDrag.source) : null;
+  const fillPreviewTable = useMemo(
+    () => selected && fillDrag && fillPreviewBounds && fillDrag.targetRow > fillPreviewBounds.lastRow
+      ? fillTableDown(selected, fillDrag.source, fillDrag.targetRow)
+      : null,
+    [selected, fillDrag, fillPreviewBounds?.firstRow, fillPreviewBounds?.lastRow, fillPreviewBounds?.firstColumn, fillPreviewBounds?.lastColumn],
+  );
   const issues = useMemo(
     () => (selected ? validateProfessionalTable(selected) : []),
     [selected],
@@ -199,6 +334,7 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onExpo
     commit([...tables, next]);
     setSelectedId(next.tableId);
     setSelectedCell({ row: 0, column: 0 });
+    setExplicitSelection(null);
     setSelection({ startRow: 0, startColumn: 0, endRow: 0, endColumn: 0 });
     setFormulaDraft("");
   };
@@ -268,12 +404,34 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onExpo
 
   const selectedColumn = selected?.columns[selectedCell.column];
   const activeCell = selected?.rows[selectedCell.row]?.cells[selectedCell.column];
-  const selectionBounds = getSelectionBounds(selection);
-  const selectedCellCount =
+  const rectangularBounds = getSelectionBounds(selection);
+  const selectionBounds = explicitSelection && explicitSelection.size
+    ? [...explicitSelection].reduce((bounds, key) => {
+        const [row, column] = key.split(":").map(Number);
+        return {
+          firstRow: Math.min(bounds.firstRow, row), lastRow: Math.max(bounds.lastRow, row),
+          firstColumn: Math.min(bounds.firstColumn, column), lastColumn: Math.max(bounds.lastColumn, column),
+        };
+      }, { firstRow: Number.MAX_SAFE_INTEGER, lastRow: 0, firstColumn: Number.MAX_SAFE_INTEGER, lastColumn: 0 })
+    : rectangularBounds;
+  const isSelectedCoordinate = (row: number, column: number) => explicitSelection
+    ? explicitSelection.has(cellSelectionKey(row, column))
+    : isCellInSelection(row, column, selection);
+  const selectedCellCount = explicitSelection?.size ??
     (selectionBounds.lastRow - selectionBounds.firstRow + 1) *
     (selectionBounds.lastColumn - selectionBounds.firstColumn + 1);
-  const selectionAddress = `${spreadsheetColumnName(selectionBounds.firstColumn)}${selectionBounds.firstRow + 1}` +
-    (selectedCellCount > 1 ? `:${spreadsheetColumnName(selectionBounds.lastColumn)}${selectionBounds.lastRow + 1}` : "");
+  const selectionAddress = explicitSelection
+    ? [...explicitSelection].map((key) => { const [row, column] = key.split(":").map(Number); return `${spreadsheetColumnName(column)}${row + 1}`; }).join(",")
+    : `${spreadsheetColumnName(selectionBounds.firstColumn)}${selectionBounds.firstRow + 1}` +
+      (selectedCellCount > 1 ? `:${spreadsheetColumnName(selectionBounds.lastColumn)}${selectionBounds.lastRow + 1}` : "");
+  const selectionToAddress = (range: TableSelection) => {
+    const bounds = getSelectionBounds(range);
+    const first = `${spreadsheetColumnName(bounds.firstColumn)}${bounds.firstRow + 1}`;
+    const last = `${spreadsheetColumnName(bounds.lastColumn)}${bounds.lastRow + 1}`;
+    return first === last ? first : `${first}:${last}`;
+  };
+  const formulaArgumentAddress = formulaArgumentSelection ? selectionToAddress(formulaArgumentSelection) : "";
+  const selectionIsContiguous = !explicitSelection;
 
   const cadTemplates = Array.isArray(cadEditorPayload?.cadTableTemplates)
     ? cadEditorPayload.cadTableTemplates as Array<{ id: string; name: string; updatedAt?: string; payload?: { table?: ArchitectureTable } }>
@@ -292,16 +450,21 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onExpo
     ]);
     setSelectedId(incoming.tableId);
     setSelectedCell({ row: 0, column: 0 });
+    setExplicitSelection(null);
     setSelection({ startRow: 0, startColumn: 0, endRow: 0, endColumn: 0 });
     if (cadEditorPayload?.showStartChooser !== true) setStartChooserOpen(false);
   }, [cadEditorPayload?.table, cadStandalone]);
 
   useEffect(() => {
+    if (cadStandalone && !formulaBuilderOpen && !formulaRangePicking) setFormulaDraft(activeCell?.formula ?? "");
+  }, [cadStandalone, activeCell?.cellId, activeCell?.formula, formulaBuilderOpen, formulaRangePicking]);
+
+  useEffect(() => {
     if (!cadStandalone) return;
     const handler = (event: KeyboardEvent) => {
-      if (!event.ctrlKey || event.key.toLowerCase() !== "z") return;
+      if (!event.ctrlKey || !["z", "y"].includes(event.key.toLowerCase())) return;
       event.preventDefault();
-      if (event.shiftKey) redo(); else undo();
+      if (event.key.toLowerCase() === "y" || event.shiftKey) redo(); else undo();
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
@@ -320,8 +483,7 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onExpo
       rows: table.rows.map((row, rowIndex) => ({
         ...row,
         cells: row.cells.map((cell, columnIndex) =>
-          rowIndex >= selectionBounds.firstRow && rowIndex <= selectionBounds.lastRow &&
-          columnIndex >= selectionBounds.firstColumn && columnIndex <= selectionBounds.lastColumn &&
+          isSelectedCoordinate(rowIndex, columnIndex) &&
           cell.rowSpan > 0 && cell.columnSpan > 0 ? { ...cell, ...patch } : cell),
       })),
     }));
@@ -348,6 +510,7 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onExpo
     commit([...tables, next]);
     setSelectedId(next.tableId);
     setSelectedCell({ row: 0, column: 0 });
+    setExplicitSelection(null);
     setSelection({ startRow: 0, startColumn: 0, endRow: 0, endColumn: 0 });
     setFormulaDraft("");
     setBlankTableOpen(false);
@@ -366,10 +529,19 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onExpo
     patchSelectedCells({ linkGroupId, displayValue: activeCell.displayValue, formula: activeCell.formula });
   };
 
-  const editCellValue = (value: string) => {
+  const editCellValue = (value: string, rowIndex = selectedCell.row, columnIndex = selectedCell.column) => {
     updateSelected((table) => {
-      let updated = setTableCellValue(table, selectedCell.row, selectedCell.column, value);
-      const source = updated.rows[selectedCell.row]?.cells[selectedCell.column];
+      const formulaInput = cadStandalone && value.trimStart().startsWith("=");
+      let updated = formulaInput
+        ? { ...table, rows: table.rows.map((row, currentRow) => ({ ...row, cells: row.cells.map((cell, currentColumn) =>
+            currentRow === rowIndex && currentColumn === columnIndex ? { ...cell, formula: value.trim() } : cell) })) }
+        : setTableCellValue(table, rowIndex, columnIndex, value);
+      if (cadStandalone && !formulaInput) updated = {
+        ...updated,
+        rows: updated.rows.map((row, currentRow) => ({ ...row, cells: row.cells.map((cell, currentColumn) =>
+          currentRow === rowIndex && currentColumn === columnIndex ? { ...cell, formula: "" } : cell) })),
+      };
+      const source = updated.rows[rowIndex]?.cells[columnIndex];
       if (source?.linkGroupId) updated = {
           ...updated,
           rows: updated.rows.map((row) => ({ ...row, cells: row.cells.map((cell) =>
@@ -380,17 +552,20 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onExpo
       if (!cadStandalone) return updated;
       try { return recalculateSpreadsheetTable(updated); } catch { return updated; }
     });
+    if (cadStandalone && rowIndex === selectedCell.row && columnIndex === selectedCell.column)
+      setFormulaDraft(value.trimStart().startsWith("=") ? value : "");
   };
 
-  const calculateFormula = () => {
+  const calculateFormula = (applyMode: "active" | "selection") => {
     try {
       updateSelected((table) => {
         if (!cadStandalone) return applyTableFormula(table, selectedCell.row, selectedCell.column, formulaDraft);
+        const normalizedFormula = formulaDraft.startsWith("=") ? formulaDraft : `=${formulaDraft}`;
         const withFormula = {
           ...table,
           rows: table.rows.map((row, rowIndex) => ({ ...row, cells: row.cells.map((cell, columnIndex) =>
-            rowIndex === selectedCell.row && columnIndex === selectedCell.column
-              ? { ...cell, formula: formulaDraft.startsWith("=") ? formulaDraft : `=${formulaDraft}` }
+            (applyMode === "selection" ? isSelectedCoordinate(rowIndex, columnIndex) : rowIndex === selectedCell.row && columnIndex === selectedCell.column)
+              ? { ...cell, formula: translateSpreadsheetFormula(normalizedFormula, rowIndex - selectedCell.row, columnIndex - selectedCell.column) }
               : cell) })),
         };
         return recalculateSpreadsheetTable(withFormula);
@@ -411,6 +586,7 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onExpo
     commit([opened]);
     setSelectedId(opened.tableId);
     setSelectedCell({ row: 0, column: 0 });
+    setExplicitSelection(null);
     setSelection({ startRow: 0, startColumn: 0, endRow: 0, endColumn: 0 });
     setStartChooserOpen(false);
     onOpenCadTemplate?.({ ...(template?.payload ?? {}), table: opened });
@@ -422,8 +598,7 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onExpo
       rows: table.rows.map((row, rowIndex) => ({
         ...row,
         cells: row.cells.map((cell, columnIndex) =>
-          rowIndex >= selectionBounds.firstRow && rowIndex <= selectionBounds.lastRow &&
-          columnIndex >= selectionBounds.firstColumn && columnIndex <= selectionBounds.lastColumn
+          isSelectedCoordinate(rowIndex, columnIndex)
             ? { ...cell, alignment }
             : cell,
         ),
@@ -509,10 +684,22 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onExpo
     row: number,
     column: number,
     extendSelection: boolean,
+    toggleSelection = false,
   ) => {
     setSelectedCell({ row, column });
+    if (toggleSelection) {
+      setExplicitSelection((current) => {
+        const next = current ? new Set(current) : new Set(Array.from(
+          { length: selectionBounds.lastRow - selectionBounds.firstRow + 1 }, (_, rowOffset) =>
+            Array.from({ length: selectionBounds.lastColumn - selectionBounds.firstColumn + 1 }, (_, columnOffset) =>
+              cellSelectionKey(selectionBounds.firstRow + rowOffset, selectionBounds.firstColumn + columnOffset))).flat());
+        const key = cellSelectionKey(row, column);
+        if (next.has(key) && next.size > 1) next.delete(key); else next.add(key);
+        return next;
+      });
+    } else setExplicitSelection(null);
     setSelection((current) =>
-      extendSelection
+      extendSelection && !toggleSelection
         ? { ...current, endRow: row, endColumn: column }
         : {
             startRow: row,
@@ -523,6 +710,141 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onExpo
     );
     setFormulaDraft(selected?.rows[row]?.cells[column]?.formula ?? "");
     setFormulaError("");
+  };
+
+  const activateCell = (row: number, column: number, extendSelection = false) => {
+    if (!selected) return;
+    const target = selected.rows[row]?.cells[column];
+    if (!target) return;
+    selectCell(row, column, extendSelection);
+    if (extendSelection) { setInlineEditingCell(""); return; }
+    setInlineEditingCell(target.cellId);
+    setInlineDraft(target.displayValue);
+    setTimeout(() => {
+      const input = document.querySelector<HTMLTextAreaElement>(`textarea[data-cell-id="${target.cellId}"]`);
+      input?.focus();
+      if (input) input.scrollTop = 0;
+    }, 0);
+  };
+
+  const openFormulaBuilder = () => {
+    setFormulaTargetCell({ ...selectedCell });
+    setFormulaArgumentSelection(null);
+    setFormulaRangePicking(false);
+    setFormulaBuilderOpen(true);
+  };
+
+  const buildFormulaForRange = (functionName: string, address: string) => {
+    const first = address.split(":")[0];
+    if (functionName === "REFERENCE") return `=${first}`;
+    if (functionName === "ROUND") return `=ROUND(${first},2)`;
+    if (functionName === "IF") return `=IF(${first}>0,1,0)`;
+    return `=${functionName}(${address})`;
+  };
+
+  const startFormulaRangePick = () => {
+    setFormulaBuilderOpen(false);
+    setFormulaRangePicking(true);
+    setInlineEditingCell("");
+    setExplicitSelection(null);
+  };
+
+  const finishFormulaRangePick = () => {
+    const picked = { ...selection };
+    const address = selectionToAddress(picked);
+    setFormulaArgumentSelection(picked);
+    setFormulaDraft(buildFormulaForRange(formulaFunction, address));
+    if (formulaTargetCell) setSelectedCell(formulaTargetCell);
+    setFormulaRangePicking(false);
+    setFormulaBuilderOpen(true);
+  };
+
+  const cancelFormulaRangePick = () => {
+    if (formulaTargetCell) setSelectedCell(formulaTargetCell);
+    setFormulaRangePicking(false);
+    setFormulaBuilderOpen(true);
+  };
+
+  const formulaPreview = useMemo(() => {
+    if (!cadStandalone || !selected || !activeCell || !formulaDraft.trim()) return "";
+    try {
+      const normalizedFormula = formulaDraft.startsWith("=") ? formulaDraft : `=${formulaDraft}`;
+      const preview = recalculateSpreadsheetTable({ ...selected, rows: selected.rows.map((row, rowIndex) => ({
+        ...row, cells: row.cells.map((cell, columnIndex) => rowIndex === selectedCell.row && columnIndex === selectedCell.column
+          ? { ...cell, formula: normalizedFormula } : cell),
+      })) });
+      return preview.rows[selectedCell.row]?.cells[selectedCell.column]?.displayValue ?? "";
+    } catch (error) { return error instanceof Error ? error.message : "公式无法计算"; }
+  }, [cadStandalone, selected, activeCell, formulaDraft, selectedCell.row, selectedCell.column]);
+
+  useEffect(() => {
+    if (!fillDrag) return;
+    const finish = () => {
+      const drag = fillDrag;
+      setFillDrag(null);
+      if (drag.targetRow <= getSelectionBounds(drag.source).lastRow) return;
+      updateSelected((table) => fillTableDown(table, drag.source, drag.targetRow));
+      const bounds = getSelectionBounds(drag.source);
+      setExplicitSelection(null);
+      setSelection({ ...drag.source, endRow: drag.targetRow, endColumn: bounds.lastColumn });
+      setSelectedCell({ row: drag.targetRow, column: bounds.lastColumn });
+    };
+    window.addEventListener("pointerup", finish, { once: true });
+    return () => window.removeEventListener("pointerup", finish);
+  }, [fillDrag]);
+
+  const copySelectionText = () => {
+    if (!selected) return "";
+    const lines: string[] = [];
+    for (let row = selectionBounds.firstRow; row <= selectionBounds.lastRow; row++) {
+      const values: string[] = [];
+      for (let column = selectionBounds.firstColumn; column <= selectionBounds.lastColumn; column++)
+        values.push(isSelectedCoordinate(row, column) ? selected.rows[row]?.cells[column]?.displayValue ?? "" : "");
+      lines.push(values.join("\t"));
+    }
+    return lines.join("\r\n");
+  };
+
+  const handleGridKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (!cadStandalone || !selected) return;
+    const control = event.ctrlKey || event.metaKey;
+    if (control && event.key.toLowerCase() === "a") {
+      event.preventDefault();
+      setExplicitSelection(null);
+      if (event.target instanceof HTMLElement) event.target.blur();
+      setInlineEditingCell("");
+      setSelection({ startRow: 0, startColumn: 0, endRow: selected.rows.length - 1, endColumn: selected.columns.length - 1 });
+      setSelectedCell({ row: 0, column: 0 });
+      return;
+    }
+    const arrows: Record<string, [number, number]> = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
+    if (!control && arrows[event.key]) {
+      event.preventDefault();
+      const [rowOffset, columnOffset] = arrows[event.key];
+      activateCell(
+        Math.max(0, Math.min(selected.rows.length - 1, selectedCell.row + rowOffset)),
+        Math.max(0, Math.min(selected.columns.length - 1, selectedCell.column + columnOffset)),
+        event.shiftKey,
+      );
+      return;
+    }
+    const editing = event.target instanceof HTMLTextAreaElement && !event.target.readOnly;
+    if (editing && event.key !== "Escape") return;
+    if (control && ["c", "x"].includes(event.key.toLowerCase())) {
+      event.preventDefault();
+      void navigator.clipboard?.writeText(copySelectionText());
+      if (event.key.toLowerCase() === "x") patchSelectedCells({ displayValue: "", numericValue: null, formula: "" });
+      return;
+    }
+    if (event.key === "Delete") {
+      event.preventDefault();
+      patchSelectedCells({ displayValue: "", numericValue: null, formula: "" });
+      return;
+    }
+    if (["Enter", "F2"].includes(event.key)) {
+      event.preventDefault();
+      activateCell(selectedCell.row, selectedCell.column);
+    } else if (event.key === "Escape") setInlineEditingCell("");
   };
 
   const applySyncResult = (result: TableBindingSyncResult) => {
@@ -643,6 +965,7 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onExpo
                   onClick={() => {
                     setSelectedId(table.tableId);
                     setSelectedCell({ row: 0, column: 0 });
+                    setExplicitSelection(null);
                     setSelection({ startRow: 0, startColumn: 0, endRow: 0, endColumn: 0 });
                     setFormulaDraft(table.rows[0]?.cells[0]?.formula ?? "");
                     setFormulaError("");
@@ -737,21 +1060,21 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onExpo
                       {ribbonTab === "home" && <>
                         <fieldset><legend>历史</legend><RibbonIconButton label="撤销 (Ctrl+Z)" disabled={!undoStack.length} onClick={undo}><Undo2 /></RibbonIconButton><RibbonIconButton label="重做 (Ctrl+Shift+Z)" disabled={!redoStack.length} onClick={redo}><Redo2 /></RibbonIconButton></fieldset>
                         <fieldset><legend>单元格</legend>
-                          <RibbonIconButton label="合并所选单元格" disabled={selectedCellCount < 2} onClick={() => {
+                          <RibbonIconButton label="合并所选单元格" disabled={selectedCellCount < 2 || !selectionIsContiguous} onClick={() => {
                             try { updateSelected((table) => mergeSelectedCells(table, selection)); }
                             catch (error) { window.alert(error instanceof Error ? error.message : "合并失败。"); }
-                          }}><Merge /></RibbonIconButton>
+                          }}><TableCellsMerge /></RibbonIconButton>
                           <RibbonIconButton label="拆分当前合并单元格" disabled={activeCell.rowSpan <= 1 && activeCell.columnSpan <= 1} onClick={() => {
                             try { updateSelected((table) => splitMergedCell(table, selectedCell.row, selectedCell.column)); }
                             catch (error) { window.alert(error instanceof Error ? error.message : "拆分失败。"); }
-                          }}><Split /></RibbonIconButton>
+                          }}><TableCellsSplit /></RibbonIconButton>
                         </fieldset>
                         <fieldset><legend>对齐</legend><div className="alignment-controls">
                           <RibbonIconButton label="左对齐" className={activeCell.alignment === "left" ? "active" : ""} onClick={() => setSelectedAlignment("left")}><AlignLeft /></RibbonIconButton>
                           <RibbonIconButton label="居中对齐" className={!activeCell.alignment || activeCell.alignment === "center" ? "active" : ""} onClick={() => setSelectedAlignment("center")}><AlignCenter /></RibbonIconButton>
                           <RibbonIconButton label="右对齐" className={activeCell.alignment === "right" ? "active" : ""} onClick={() => setSelectedAlignment("right")}><AlignRight /></RibbonIconButton>
                         </div></fieldset>
-                        <fieldset><legend>编辑</legend><RibbonIconButton label="修改单元格文字" onClick={() => { setCellEditorValue(activeCell.displayValue); setCellEditorOpen(true); }}><Pencil /></RibbonIconButton><RibbonIconButton label="恢复所选单元格默认样式" onClick={() => patchSelectedCells({ alignment: "center", horizontalPaddingMillimeters: 1, borderColorIndex: null, fillColorIndex: null, textColorIndex: null })}><RotateCcw /></RibbonIconButton></fieldset>
+                        <fieldset><legend>编辑</legend><RibbonIconButton label="修改单元格文字" onClick={() => { setCellEditorValue(activeCell.displayValue); setCellEditorOpen(true); }}><Pencil /></RibbonIconButton><RibbonIconButton label="恢复所选单元格默认样式" onClick={() => patchSelectedCells({ alignment: "center", horizontalPaddingMillimeters: 1, fillColorIndex: null, textColorIndex: null })}><RotateCcw /></RibbonIconButton></fieldset>
                       </>}
                       {ribbonTab === "layout" && <>
                         <fieldset><legend>行</legend>
@@ -769,19 +1092,22 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onExpo
                       </>}
                       {ribbonTab === "format" && <>
                         <fieldset><legend>内容</legend><label>左右留白 mm<input type="number" min="0" max="30" step="0.5" value={activeCell.horizontalPaddingMillimeters ?? 1} onChange={(event) => patchSelectedCells({ horizontalPaddingMillimeters: Math.max(0, Number(event.target.value) || 0) })} /></label>
-                          {(["边框", "底色", "文字"] as const).map((label, index) => { const property = (["borderColorIndex", "fillColorIndex", "textColorIndex"] as const)[index]; return <label key={property} className="cad-color-field"><span>{label}</span><i style={{ background: aciColor(activeCell[property]) }} /><input type="number" min="1" max="255" value={activeCell[property] ?? 7} onChange={(event) => patchSelectedCells({ [property]: Math.max(1, Math.min(255, Number(event.target.value) || 7)) })} /></label>; })}
-                          <RibbonIconButton label="清除所选单元格底色" onClick={() => patchSelectedCells({ fillColorIndex: null })}><ImageMinus /></RibbonIconButton>
+                          <AciColorPicker label="底色" value={activeCell.fillColorIndex} onChange={(value) => patchSelectedCells({ fillColorIndex: value })} onPreview={(value) => setColorPreview(value == null ? null : { target: "fill", value })} />
+                          <AciColorPicker label="文字" value={activeCell.textColorIndex} onChange={(value) => patchSelectedCells({ textColorIndex: value })} onPreview={(value) => setColorPreview(value == null ? null : { target: "text", value })} />
+                          <RibbonIconButton className="cad-clear-fill-button" label="清除所选单元格底色" onClick={() => patchSelectedCells({ fillColorIndex: null })}><ImageMinus /></RibbonIconButton>
                         </fieldset>
                         <fieldset><legend>表格线</legend>
-                          <label className="cad-color-field"><span>外框</span><i style={{ background: aciColor(selected.outerBorderColorIndex) }} /><input type="number" min="1" max="255" value={selected.outerBorderColorIndex ?? 7} onChange={(event) => updateSelected((table) => ({ ...table, outerBorderColorIndex: Math.max(1, Math.min(255, Number(event.target.value) || 7)) }))} /></label>
+                          <AciColorPicker label="表格外框" value={selected.outerBorderColorIndex} onChange={(value) => updateSelected((table) => ({ ...table, outerBorderColorIndex: value }))} onPreview={(value) => setColorPreview(value == null ? null : { target: "outer", value })} />
                           <label>线宽<select value={selected.outerBorderWeightMillimeters ?? .25} onChange={(event) => updateSelected((table) => ({ ...table, outerBorderWeightMillimeters: Number(event.target.value) }))}>{[.05,.09,.13,.18,.25,.35,.5,.7,1].map((value) => <option key={value}>{value}</option>)}</select></label>
-                          <label className="cad-color-field"><span>内框</span><i style={{ background: aciColor(selected.innerBorderColorIndex) }} /><input type="number" min="1" max="255" value={selected.innerBorderColorIndex ?? 7} onChange={(event) => updateSelected((table) => ({ ...table, innerBorderColorIndex: Math.max(1, Math.min(255, Number(event.target.value) || 7)) }))} /></label>
+                          <AciColorPicker label="表格内线" value={selected.innerBorderColorIndex} onChange={(value) => updateSelected((table) => ({ ...table, innerBorderColorIndex: value }))} onPreview={(value) => setColorPreview(value == null ? null : { target: "inner", value })} />
                           <label>线宽<select value={selected.innerBorderWeightMillimeters ?? .13} onChange={(event) => updateSelected((table) => ({ ...table, innerBorderWeightMillimeters: Number(event.target.value) }))}>{[.05,.09,.13,.18,.25,.35,.5,.7,1].map((value) => <option key={value}>{value}</option>)}</select></label>
+                          <label className="cad-line-toggle"><input type="checkbox" checked={selected.showInnerHorizontalLines !== false} onChange={(event) => updateSelected((table) => ({ ...table, showInnerHorizontalLines: event.target.checked }))} />横线</label>
+                          <label className="cad-line-toggle"><input type="checkbox" checked={selected.showInnerVerticalLines !== false} onChange={(event) => updateSelected((table) => ({ ...table, showInnerVerticalLines: event.target.checked }))} />竖线</label>
                         </fieldset>
                       </>}
                       {ribbonTab === "formula" && <>
                         <fieldset><legend>关联</legend><RibbonIconButton label="关联所选单元格" disabled={selectedCellCount < 2} onClick={linkSelectedCells}><Link2 /></RibbonIconButton><RibbonIconButton label="取消所选单元格关联" onClick={() => patchSelectedCells({ linkGroupId: "" })}><Unlink2 /></RibbonIconButton></fieldset>
-                        <fieldset className="formula-ribbon-group"><legend>公式</legend><label className="formula-field">fx<input value={formulaDraft} placeholder="例如 =SUM(B2:B8)" onChange={(event) => { setFormulaDraft(event.target.value); setFormulaError(""); }} /></label><RibbonIconButton label="打开函数向导" onClick={() => setFormulaBuilderOpen(true)}><Sigma /></RibbonIconButton><RibbonIconButton label="计算当前公式" disabled={!formulaDraft.trim()} onClick={calculateFormula}><Calculator /></RibbonIconButton>{formulaError && <em className="formula-error">{formulaError}</em>}</fieldset>
+                        <fieldset className="formula-ribbon-group"><legend>公式工具</legend><RibbonIconButton label="打开函数向导" onClick={openFormulaBuilder}><Sigma /></RibbonIconButton><RibbonIconButton label="计算当前公式" disabled={!formulaDraft.trim()} onClick={() => calculateFormula("active")}><Calculator /></RibbonIconButton>{formulaError && <em className="formula-error">{formulaError}</em>}</fieldset>
                       </>}
                       {ribbonTab === "cad" && <>
                         <fieldset><legend>来源</legend><RibbonIconButton label="创建空白表格" onClick={() => setBlankTableOpen(true)}><Table2 /></RibbonIconButton><RibbonIconButton label="框选 CAD 表格" disabled={!onPickCadTable || cadBusy} onClick={onPickCadTable}><BoxSelect /></RibbonIconButton><RibbonIconButton label="拾取现有表格并原位修改" disabled={!onRepickCadTable || cadBusy} onClick={onRepickCadTable}><TableProperties /></RibbonIconButton><RibbonIconButton label="在 CAD 中定位当前单元格来源" disabled={!onLocateCadSources || !activeCell.sourceHandles?.length} onClick={() => onLocateCadSources?.(selected.sourceDrawingPath ?? "", activeCell.sourceHandles ?? [])}><LocateFixed /></RibbonIconButton></fieldset>
@@ -792,6 +1118,22 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onExpo
                     </div>
                   </div>
                 )}
+
+                {cadStandalone && activeCell && (formulaRangePicking ? <div className="cad-formula-range-picker">
+                  <strong>正在框选函数参数范围</strong>
+                  <span>{selectionAddress}</span>
+                  <small>在下方表格中按住鼠标拖动选择范围</small>
+                  <button type="button" className="button" onClick={cancelFormulaRangePick}>取消</button>
+                  <button type="button" className="button primary" onClick={finishFormulaRangePick}>确认范围</button>
+                </div> : <div className="cad-persistent-formula-bar">
+                  <button type="button" title="打开函数向导" onClick={openFormulaBuilder}>fx</button>
+                  <span>{spreadsheetColumnName(selectedCell.column)}{selectedCell.row + 1}</span>
+                  <input aria-label="当前单元格完整公式" placeholder="输入公式，例如 =B1*C1" value={formulaDraft}
+                    onChange={(event) => { setFormulaDraft(event.target.value); setFormulaError(""); }}
+                    onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); calculateFormula("active"); } }} />
+                  <button type="button" disabled={!formulaDraft.trim()} onClick={() => calculateFormula("active")}>✓</button>
+                  {formulaError && <em>{formulaError}</em>}
+                </div>)}
 
                 <div className="table-commandbar">
                   <button className="button icon-text" disabled={undoStack.length === 0} onClick={undo}><Undo2 />撤销</button>
@@ -824,7 +1166,7 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onExpo
                   <span className="command-separator" />
                   <button
                     className="button icon-text"
-                    disabled={selectedCellCount < 2}
+                    disabled={selectedCellCount < 2 || !selectionIsContiguous}
                     onClick={() => {
                       try {
                         updateSelected((table) => mergeSelectedCells(table, selection));
@@ -843,7 +1185,7 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onExpo
                       }
                     }}
                   >
-                    <Merge />合并单元格
+                    <TableCellsMerge />合并单元格
                   </button>
                   <button
                     className="button icon-text"
@@ -858,7 +1200,7 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onExpo
                       }
                     }}
                   >
-                    <Split />拆分单元格
+                    <TableCellsSplit />拆分单元格
                   </button>
                   {cadStandalone && <>
                     <button className="button icon-text" disabled={selectedCellCount < 2} onClick={linkSelectedCells}><Link2 />关联单元格</button>
@@ -903,7 +1245,7 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onExpo
                     同步项目字段
                   </button>
                   <span className={cadStandalone ? "paste-hint project-table-only" : "paste-hint"}>
-                    Shift+单击可框选；可从 Excel 粘贴
+                    单击编辑；Shift 扩展；Ctrl 追加；Ctrl+A 全选；可从 Excel 粘贴
                   </span>
                 </div>
                 {syncNotice && <div className="binding-sync-notice">{syncNotice}</div>}
@@ -1029,20 +1371,12 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onExpo
                           onChange={(event) => patchSelectedCells({ horizontalPaddingMillimeters: Math.max(0, Number(event.target.value) || 0) })} />
                       </label>
                       <div className="cad-color-fields">
-                        {([
-                          ["边框", "borderColorIndex"],
-                          ["底色", "fillColorIndex"],
-                          ["文字", "textColorIndex"],
-                        ] as const).map(([label, property]) => <label key={property} className="cad-color-field">
-                          <span>{label}</span>
-                          <i style={{ background: aciColor(activeCell[property]) }} />
-                          <input type="number" min="1" max="255" value={activeCell[property] ?? 7}
-                            onChange={(event) => patchSelectedCells({ [property]: Math.max(1, Math.min(255, Number(event.target.value) || 7)) })} />
-                        </label>)}
+                        <AciColorPicker label="底色" value={activeCell.fillColorIndex} onChange={(value) => patchSelectedCells({ fillColorIndex: value })} onPreview={(value) => setColorPreview(value == null ? null : { target: "fill", value })} />
+                        <AciColorPicker label="文字" value={activeCell.textColorIndex} onChange={(value) => patchSelectedCells({ textColorIndex: value })} onPreview={(value) => setColorPreview(value == null ? null : { target: "text", value })} />
                       </div>
                       <div className="two-button-row">
                         <button className="button compact" onClick={() => patchSelectedCells({ fillColorIndex: null })}>清除底色</button>
-                        <button className="button compact" onClick={() => patchSelectedCells({ alignment: "center", horizontalPaddingMillimeters: 1, borderColorIndex: null, fillColorIndex: null, textColorIndex: null })}>恢复所选样式</button>
+                        <button className="button compact" onClick={() => patchSelectedCells({ alignment: "center", horizontalPaddingMillimeters: 1, fillColorIndex: null, textColorIndex: null })}>恢复所选样式</button>
                       </div>
                       <div className="two-button-row">
                         <button className="button compact" disabled={!onPickCadObjects || cadBusy}
@@ -1073,10 +1407,12 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onExpo
                       </div>
                       <fieldset className="cad-border-settings">
                         <legend>表格边框</legend>
-                        <label className="cad-color-field"><span>外边框</span><i style={{ background: aciColor(selected.outerBorderColorIndex) }} /><input type="number" min="1" max="255" value={selected.outerBorderColorIndex ?? 7} onChange={(event) => updateSelected((table) => ({ ...table, outerBorderColorIndex: Math.max(1, Math.min(255, Number(event.target.value) || 7)) }))} /></label>
+                        <AciColorPicker label="表格外框" value={selected.outerBorderColorIndex} onChange={(value) => updateSelected((table) => ({ ...table, outerBorderColorIndex: value }))} onPreview={(value) => setColorPreview(value == null ? null : { target: "outer", value })} />
                         <label><span>外框线宽</span><select value={selected.outerBorderWeightMillimeters ?? 0.25} onChange={(event) => updateSelected((table) => ({ ...table, outerBorderWeightMillimeters: Number(event.target.value) }))}>{[0.05,0.09,0.13,0.18,0.25,0.35,0.5,0.7,1].map((value) => <option key={value}>{value}</option>)}</select></label>
-                        <label className="cad-color-field"><span>内边框</span><i style={{ background: aciColor(selected.innerBorderColorIndex) }} /><input type="number" min="1" max="255" value={selected.innerBorderColorIndex ?? 7} onChange={(event) => updateSelected((table) => ({ ...table, innerBorderColorIndex: Math.max(1, Math.min(255, Number(event.target.value) || 7)) }))} /></label>
+                        <AciColorPicker label="表格内线" value={selected.innerBorderColorIndex} onChange={(value) => updateSelected((table) => ({ ...table, innerBorderColorIndex: value }))} onPreview={(value) => setColorPreview(value == null ? null : { target: "inner", value })} />
                         <label><span>内框线宽</span><select value={selected.innerBorderWeightMillimeters ?? 0.13} onChange={(event) => updateSelected((table) => ({ ...table, innerBorderWeightMillimeters: Number(event.target.value) }))}>{[0.05,0.09,0.13,0.18,0.25,0.35,0.5,0.7,1].map((value) => <option key={value}>{value}</option>)}</select></label>
+                        <label className="cad-line-toggle"><input type="checkbox" checked={selected.showInnerHorizontalLines !== false} onChange={(event) => updateSelected((table) => ({ ...table, showInnerHorizontalLines: event.target.checked }))} />显示横线</label>
+                        <label className="cad-line-toggle"><input type="checkbox" checked={selected.showInnerVerticalLines !== false} onChange={(event) => updateSelected((table) => ({ ...table, showInnerVerticalLines: event.target.checked }))} />显示竖线</label>
                       </fieldset>
                     </>}
                     <button
@@ -1134,11 +1470,11 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onExpo
                         }}
                       />
                     </label>
-                    {cadStandalone && <button className="button" onClick={() => setFormulaBuilderOpen(true)}>fx 插入公式</button>}
+                    {cadStandalone && <button className="button" onClick={openFormulaBuilder}>fx 插入公式</button>}
                     <button
                       className="button"
                       disabled={!formulaDraft.trim()}
-                      onClick={calculateFormula}
+                      onClick={() => calculateFormula("active")}
                     >
                       计算
                     </button>
@@ -1151,11 +1487,7 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onExpo
                   </div>
                 )}
 
-                <div className="professional-grid-scroll" tabIndex={0} onKeyDown={(event) => {
-                  if (!cadStandalone || event.key !== "Delete") return;
-                  event.preventDefault();
-                  patchSelectedCells({ displayValue: "", numericValue: null, formula: "" });
-                }} onPaste={(event) => {
+                <div className="professional-grid-scroll" tabIndex={0} onKeyDown={handleGridKeyDown} onPaste={(event) => {
                   if (!cadStandalone) return;
                   const text = event.clipboardData.getData("text/plain");
                   if (!text) return;
@@ -1223,11 +1555,24 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onExpo
                                 issue.rowId === row.rowId && issue.columnKey === column.key,
                             );
                             if (cell.rowSpan === 0 || cell.columnSpan === 0) return null;
-                            const inSelection = isCellInSelection(
-                              rowIndex,
-                              columnIndex,
-                              selection,
-                            );
+                            const inSelection = isSelectedCoordinate(rowIndex, columnIndex);
+                            const inFillPreview = !!fillPreviewBounds && !!fillPreviewTable &&
+                              rowIndex > fillPreviewBounds.lastRow && rowIndex <= fillDrag!.targetRow &&
+                              columnIndex >= fillPreviewBounds.firstColumn && columnIndex <= fillPreviewBounds.lastColumn;
+                            const previewCell = inFillPreview ? fillPreviewTable.rows[rowIndex]?.cells[columnIndex] ?? cell : cell;
+                            const fillPreviewBottom = inFillPreview && rowIndex === fillDrag!.targetRow;
+                            const fillPreviewLeft = inFillPreview && columnIndex === fillPreviewBounds!.firstColumn;
+                            const fillPreviewRight = inFillPreview && columnIndex === fillPreviewBounds!.lastColumn;
+                            const isFillCorner = cadStandalone && !explicitSelection &&
+                              rowIndex === selectionBounds.lastRow && columnIndex === selectionBounds.lastColumn;
+                            const outerColor = aciColor(colorPreview?.target === "outer" ? colorPreview.value : selected.outerBorderColorIndex);
+                            const innerColor = aciColor(colorPreview?.target === "inner" ? colorPreview.value : selected.innerBorderColorIndex);
+                            const outerWidth = Math.max(1, (selected.outerBorderWeightMillimeters ?? .25) * 4);
+                            const innerWidth = Math.max(1, (selected.innerBorderWeightMillimeters ?? .13) * 4);
+                            const topOuter = rowIndex === 0;
+                            const bottomOuter = rowIndex + Math.max(1, cell.rowSpan) >= selected.rows.length;
+                            const leftOuter = columnIndex === 0;
+                            const rightOuter = columnIndex + Math.max(1, cell.columnSpan) >= selected.columns.length;
                             return (
                               <td
                                 className={[
@@ -1236,6 +1581,10 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onExpo
                                   selectedCell.column === columnIndex
                                     ? "selected-cell"
                                     : "",
+                                  inFillPreview ? "fill-preview" : "",
+                                  fillPreviewBottom ? "fill-preview-bottom" : "",
+                                  fillPreviewLeft ? "fill-preview-left" : "",
+                                  fillPreviewRight ? "fill-preview-right" : "",
                                 ].filter(Boolean).join(" ")}
                                 key={cell.cellId}
                                 rowSpan={cell.rowSpan}
@@ -1243,34 +1592,45 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onExpo
                                 onPointerDown={(event) => {
                                   if (!cadStandalone || event.button !== 0) return;
                                   event.preventDefault();
-                                  selectCell(rowIndex, columnIndex, event.shiftKey);
+                                  selectCell(rowIndex, columnIndex, event.shiftKey, formulaRangePicking ? false : event.ctrlKey || event.metaKey);
                                   setDragSelecting(true);
                                   (event.currentTarget.closest(".professional-grid-scroll") as HTMLElement | null)?.focus();
                                 }}
-                                onPointerEnter={() => {
-                                  if (!cadStandalone || !dragSelecting) return;
+                                 onPointerEnter={() => {
+                                   if (fillDrag) { setFillDrag((current) => current ? { ...current, targetRow: rowIndex } : current); return; }
+                                   if (!cadStandalone || !dragSelecting) return;
                                   setSelectedCell({ row: rowIndex, column: columnIndex });
                                   setSelection((current) => ({ ...current, endRow: rowIndex, endColumn: columnIndex }));
                                 }}
-                                onClick={(event) => { if (!cadStandalone) selectCell(rowIndex, columnIndex, event.shiftKey); }}
+                                 onClick={(event) => {
+                                   if (!cadStandalone) selectCell(rowIndex, columnIndex, event.shiftKey, event.ctrlKey || event.metaKey);
+                                   else if (!formulaRangePicking && !event.shiftKey && !event.ctrlKey && !event.metaKey) {
+                                     activateCell(rowIndex, columnIndex);
+                                   }
+                                 }}
                                 onDoubleClick={() => {
+                                  if (formulaRangePicking) return;
                                   selectCell(rowIndex, columnIndex, false);
                                   setCellEditorValue(cell.displayValue);
                                   setCellEditorOpen(true);
                                 }}
                                 style={{
-                                  textAlign: cell.alignment ?? "center",
-                                  background: cell.fillColorIndex ? aciColor(cell.fillColorIndex) : undefined,
-                                  color: cell.textColorIndex ? aciColor(cell.textColorIndex) : undefined,
-                                  borderColor: cell.borderColorIndex ? aciColor(cell.borderColorIndex) : undefined,
-                                }}
-                              >
+                                  textAlign: previewCell.alignment ?? "center",
+                                   background: inSelection && colorPreview?.target === "fill" ? aciColor(colorPreview.value) : previewCell.fillColorIndex != null ? aciColor(previewCell.fillColorIndex) : undefined,
+                                   color: inSelection && colorPreview?.target === "text" ? aciColor(colorPreview.value) : previewCell.textColorIndex != null ? aciColor(previewCell.textColorIndex) : undefined,
+                                   borderTop: topOuter ? `${outerWidth}px solid ${outerColor}` : selected.showInnerHorizontalLines !== false ? `${innerWidth}px solid ${innerColor}` : "none",
+                                   borderBottom: bottomOuter ? `${outerWidth}px solid ${outerColor}` : selected.showInnerHorizontalLines !== false ? `${innerWidth}px solid ${innerColor}` : "none",
+                                   borderLeft: leftOuter ? `${outerWidth}px solid ${outerColor}` : selected.showInnerVerticalLines !== false ? `${innerWidth}px solid ${innerColor}` : "none",
+                                   borderRight: rightOuter ? `${outerWidth}px solid ${outerColor}` : selected.showInnerVerticalLines !== false ? `${innerWidth}px solid ${innerColor}` : "none",
+                                 }}
+                               >
                                 {(cell.cadObjectPreviewDataUrl || cell.cadObjectPreviewPath) && <img className="cad-cell-object-preview" src={cell.cadObjectPreviewDataUrl || `file:///${cell.cadObjectPreviewPath!.replace(/\\/g, "/")}`} alt="CAD 单元格对象" />}
-                                <textarea
+                                 <textarea
+                                   data-cell-id={cell.cellId}
                                   className={invalid ? "invalid" : ""}
-                                  readOnly={cadStandalone}
-                                  style={{ textAlign: cell.alignment ?? "center", paddingLeft: `${Math.max(3, (cell.horizontalPaddingMillimeters ?? 1) * 3)}px`, paddingRight: `${Math.max(3, (cell.horizontalPaddingMillimeters ?? 1) * 3)}px` }}
-                                  value={cell.displayValue}
+                                   readOnly={cadStandalone && inlineEditingCell !== cell.cellId}
+                                  style={{ textAlign: previewCell.alignment ?? "center", paddingLeft: `${Math.max(3, (previewCell.horizontalPaddingMillimeters ?? 1) * 3)}px`, paddingRight: `${Math.max(3, (previewCell.horizontalPaddingMillimeters ?? 1) * 3)}px` }}
+                                  value={inlineEditingCell === cell.cellId ? inlineDraft : previewCell.displayValue}
                                   rows={Math.min(
                                     8,
                                     Math.max(1, cell.displayValue.split(/\r?\n/).length),
@@ -1282,7 +1642,8 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onExpo
                                         issue.columnKey === column.key,
                                     )?.message ?? ""
                                   }
-                                  onChange={(event) => editCellValue(event.target.value)}
+                                  onChange={(event) => { setInlineDraft(event.target.value); editCellValue(event.target.value, rowIndex, columnIndex); }}
+                                   onBlur={() => setInlineEditingCell((current) => current === cell.cellId ? "" : current)}
                                   onPaste={(event) => {
                                     const text = event.clipboardData.getData("text/plain");
                                     if (!text.includes("\t") && !text.includes("\n")) return;
@@ -1291,8 +1652,14 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onExpo
                                       pasteTableCells(table, rowIndex, columnIndex, text),
                                     );
                                   }}
-                                />
-                              </td>
+                                 />
+                                 {fillPreviewBottom && fillPreviewRight && <span className="cad-fill-preview-label">填充至第 {rowIndex + 1} 行</span>}
+                                 {isFillCorner && <span className="cad-fill-handle" title="向下拖动：复制格式与内容、延续数字序列、调整公式引用"
+                                   onPointerDown={(event) => {
+                                     event.preventDefault(); event.stopPropagation(); setDragSelecting(false);
+                                     setFillDrag({ source: { ...selection }, targetRow: selectionBounds.lastRow });
+                                   }} />}
+                               </td>
                             );
                           })}
                         </tr>
@@ -1386,22 +1753,25 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onExpo
             <section className="cad-cell-text-dialog cad-formula-dialog" onMouseDown={(event) => event.stopPropagation()}>
               <header><h3>fx 插入公式</h3></header>
               <div className="cad-formula-body">
-                <label><span>目标单元格</span><strong>{spreadsheetColumnName(selectedCell.column)}{selectedCell.row + 1}</strong></label>
-                <label><span>函数</span><select value={formulaFunction} onChange={(event) => setFormulaFunction(event.target.value)}>
+                <label><span>结果写入</span><strong>{spreadsheetColumnName(formulaTargetCell?.column ?? selectedCell.column)}{(formulaTargetCell?.row ?? selectedCell.row) + 1}</strong></label>
+                <label><span>函数</span><select value={formulaFunction} onChange={(event) => {
+                  const nextFunction = event.target.value;
+                  setFormulaFunction(nextFunction);
+                  if (formulaArgumentAddress) setFormulaDraft(buildFormulaForRange(nextFunction, formulaArgumentAddress));
+                }}>
                   <option value="REFERENCE">直接引用</option><option value="SUM">SUM 求和</option><option value="AVERAGE">AVERAGE 平均值</option>
                   <option value="MIN">MIN 最小值</option><option value="MAX">MAX 最大值</option><option value="COUNT">COUNT 数量</option>
                   <option value="ROUND">ROUND 四舍五入</option><option value="IF">IF 条件</option>
                 </select></label>
-                <label><span>当前选区</span><strong>{selectionAddress}</strong></label>
+                <p className="cad-formula-help">{formulaHelp[formulaFunction]}</p>
+                <label><span>参数范围</span><strong>{formulaArgumentAddress || "尚未选择"}</strong></label>
                 <label><span>公式</span><input value={formulaDraft} onChange={(event) => setFormulaDraft(event.target.value)} /></label>
-                <button className="button" onClick={() => {
-                  const first = selectionAddress.split(":")[0];
-                  setFormulaDraft(formulaFunction === "REFERENCE" ? `=${first}` : formulaFunction === "ROUND" ? `=ROUND(${first},2)` : formulaFunction === "IF" ? `=IF(${first}>0,1,0)` : `=${formulaFunction}(${selectionAddress})`);
-                }}>使用当前选区</button>
+                <button className="button cad-formula-pick-range" onClick={startFormulaRangePick}>{formulaArgumentAddress ? "重新框选参数范围" : "框选参数范围"}</button>
+                <div className="cad-formula-result"><span>计算预览</span><strong>{formulaPreview || "—"}</strong></div>
               </div>
               <footer>
                 <button className="button" onClick={() => setFormulaBuilderOpen(false)}>关闭</button>
-                <button className="button primary" disabled={!formulaDraft.trim()} onClick={() => { if (calculateFormula()) setFormulaBuilderOpen(false); }}>应用公式</button>
+                <button className="button primary" disabled={!formulaDraft.trim()} onClick={() => { if (calculateFormula("active")) setFormulaBuilderOpen(false); }}>应用公式</button>
               </footer>
             </section>
           </div>

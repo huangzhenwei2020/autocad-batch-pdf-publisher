@@ -45,8 +45,9 @@ import { ReviewSignoffSettings } from "./review-signoff";
 import { ProfessionalTableEditor } from "./professional-table-editor";
 import { createProfessionalTableTemplate } from "./professional-tables";
 import { StandardLibraryDialog } from "./standard-library-dialog";
+import { createMessageId, createProjectMessage, createReadyMessage, protocolVersion, type HostCommand } from "./host-protocol";
 
-export const protocolVersion = 1;
+export { createProjectMessage, createReadyMessage, protocolVersion } from "./host-protocol";
 const storageKey = "cad-arch-spec-editor.workspace.v1";
 const includeHiddenCadLayersKey = "cad-arch-spec-editor.include-hidden-cad-layers.v1";
 
@@ -77,49 +78,6 @@ declare global {
       webview?: WebViewBridge;
     };
   }
-}
-
-function createMessageId() {
-  return globalThis.crypto?.randomUUID?.() ?? `editor-${Date.now()}`;
-}
-
-export function createReadyMessage(messageId: string) {
-  return {
-    protocolVersion,
-    messageId,
-    type: "editor.ready",
-    payload: { phase: 2 },
-  };
-}
-
-export function createProjectMessage(
-  type:
-    | "project.new"
-    | "project.open"
-    | "project.openRecent"
-    | "project.save"
-    | "project.saveAs"
-    | "project.historyList"
-    | "project.historyLoad"
-    | "project.historyRestore"
-    | "review.run"
-    | "cad.frame.pick"
-    | "cad.text.read"
-    | "cad.table.read"
-    | "image.table.read"
-    | "image.table.cancel"
-    | "cad.table.locate"
-    | "cad.table.insert"
-    | "cad.table.repick"
-    | "cad.table.pick"
-    | "cad.table.cellObjects.pick"
-    | "cad.table.template.save"
-    | "cad.table.template.delete"
-    | "table.xlsx.export"
-    | "cad.section.insert",
-  payload: Record<string, unknown> = {},
-) {
-  return { protocolVersion, messageId: createMessageId(), type, payload };
 }
 
 export function loadStoredWorkspace(storage: Pick<Storage, "getItem">): EditorWorkspace {
@@ -536,6 +494,9 @@ export function ArchitectureSpecEditor() {
         setTableEditTargetId(imported.tableId);
         setTablesOpen(true);
         setCadBusy(false);
+        if (payload.standaloneEditor === true) {
+          bridge.postMessage(createProjectMessage("cad.table.visible"));
+        }
         const warningCount = Array.isArray(payload.warnings) ? payload.warnings.length : 0;
         const skippedHiddenCount = Number(payload.skippedHiddenEntityCount ?? 0);
         const sourceLabel = payload.imageTable === true ? "扫描图片表格" : payload.nativeTable === true ? "AutoCAD 原生表格" : "CAD 线框表格";
@@ -654,30 +615,7 @@ export function ArchitectureSpecEditor() {
   };
 
   const postProjectMessage = (
-    type:
-      | "project.new"
-      | "project.open"
-      | "project.openRecent"
-      | "project.save"
-      | "project.saveAs"
-      | "project.historyList"
-      | "project.historyLoad"
-      | "project.historyRestore"
-      | "review.run"
-      | "cad.frame.pick"
-      | "cad.text.read"
-      | "cad.table.read"
-      | "image.table.read"
-      | "image.table.cancel"
-      | "cad.table.locate"
-      | "cad.table.insert"
-      | "cad.table.repick"
-      | "cad.table.pick"
-      | "cad.table.cellObjects.pick"
-      | "cad.table.template.save"
-      | "cad.table.template.delete"
-      | "table.xlsx.export"
-      | "cad.section.insert",
+    type: HostCommand,
     payload: Record<string, unknown> = {},
   ) => window.chrome?.webview?.postMessage(createProjectMessage(type, payload));
 
@@ -1524,7 +1462,16 @@ export function ArchitectureSpecEditor() {
             setTableEditTargetId("");
             setCadTableStandalone(false);
           }}
-          onClose={() => { setTablesOpen(false); setTableEditTargetId(""); setActiveCadTablePayload(null); setCadTableStandalone(false); }}
+          onClose={() => {
+            if (cadTableStandalone) {
+              postProjectMessage("cad.table.window.close");
+              return;
+            }
+            setTablesOpen(false);
+            setTableEditTargetId("");
+            setActiveCadTablePayload(null);
+            setCadTableStandalone(false);
+          }}
         />
       )}
 

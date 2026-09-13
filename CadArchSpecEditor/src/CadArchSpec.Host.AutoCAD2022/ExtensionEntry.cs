@@ -9,6 +9,10 @@ namespace CadArchSpec.Host.AutoCAD2022
     {
         public void Initialize()
         {
+            // Only the shared WebView2 environment is warmed up here. CE and the
+            // architecture assistant still create independent windows, controls and
+            // CoreWebView2 instances.
+            EditorHostControl.WarmUpWebViewEnvironment();
         }
 
         public void Terminate()

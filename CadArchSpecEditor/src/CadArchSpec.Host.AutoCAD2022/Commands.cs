@@ -18,6 +18,9 @@ namespace CadArchSpec.Host.AutoCAD2022
         {
             try
             {
+                // Build the initial payload while the CE command still owns the
+                // AutoCAD command context. Re-entering that context from the
+                // modeless window can remain pending after the command returns.
                 HostPalette.ShowCadTableEditor(CadTableExchange.CreateStandaloneEditorPayload());
             }
             catch (System.Exception exception)

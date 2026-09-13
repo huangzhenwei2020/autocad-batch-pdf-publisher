@@ -19,6 +19,8 @@ namespace CadArchSpec.Host.AutoCAD2026
     internal sealed class EditorHostControl : UserControl
     {
         private const string VirtualHostName = "cadarchspec.local";
+        private static readonly object WebViewEnvironmentSync = new object();
+        private static Task<CoreWebView2Environment> _webViewEnvironmentTask;
         private readonly Label _statusLabel;
         private readonly WebView2 _webView;
         private readonly JsonModelSerializer _serializer = new JsonModelSerializer();
@@ -27,7 +29,11 @@ namespace CadArchSpec.Host.AutoCAD2026
         private bool _initializationStarted;
         private bool _disposed;
         private bool _webReady;
+        private bool _waitingForCadTableVisible;
+        private bool _deferredStandalonePayloadLoading;
+        private int _cadTableRequestVersion;
         private JObject _pendingCadTablePayload;
+        private string _pendingCadTableError;
         private string _currentProjectPath = string.Empty;
         private CancellationTokenSource _imageTableCancellation;
 
@@ -39,7 +45,7 @@ namespace CadArchSpec.Host.AutoCAD2026
             _webView = new WebView2
             {
                 Dock = DockStyle.Fill,
-                Visible = false
+                Visible = true
             };
             _statusLabel = new Label
             {
@@ -58,17 +64,96 @@ namespace CadArchSpec.Host.AutoCAD2026
 
         public void StartCadTableEdit(JObject payload)
         {
+            _cadTableRequestVersion++;
+            _deferredStandalonePayloadLoading = false;
+            _pendingCadTableError = null;
             _pendingCadTablePayload = payload == null ? null : (JObject)payload.DeepClone();
             if (_pendingCadTablePayload != null) _pendingCadTablePayload["standaloneEditor"] = true;
-            if (_webReady) ShowPendingCadTable();
+            _waitingForCadTableVisible = _pendingCadTablePayload != null;
+            if (_waitingForCadTableVisible)
+            {
+                _statusLabel.Text = "正在准备 CAD 表格编辑/Excel…";
+                _statusLabel.Visible = true;
+                _statusLabel.BringToFront();
+            }
+            if (IsDeferredStandalonePayload(_pendingCadTablePayload))
+            {
+                QueueDeferredCadTablePayloadPreparation();
+            }
+            else if (_webReady)
+            {
+                ShowPendingCadTable();
+            }
+        }
+
+        private void RevealWebView()
+        {
+            _waitingForCadTableVisible = false;
+            _statusLabel.Visible = false;
+            _webView.Visible = true;
+            _webView.BringToFront();
         }
 
         private void ShowPendingCadTable()
         {
             if (_pendingCadTablePayload == null || !_webReady) return;
             var payload = _pendingCadTablePayload;
+            if (IsDeferredStandalonePayload(payload))
+            {
+                TryStartDeferredCadTablePayloadPreparation();
+                return;
+            }
             _pendingCadTablePayload = null;
             PostMessage("cad.tableRead", payload);
+            RevealWebView();
+        }
+
+        private static bool IsDeferredStandalonePayload(JObject payload)
+        {
+            return (bool?)payload?["deferredStandalonePayload"] == true;
+        }
+
+        private void QueueDeferredCadTablePayloadPreparation()
+        {
+            if (!_initializationStarted || !IsHandleCreated || _disposed) return;
+            BeginInvoke(new Action(TryStartDeferredCadTablePayloadPreparation));
+        }
+
+        private void TryStartDeferredCadTablePayloadPreparation()
+        {
+            if (_disposed || _deferredStandalonePayloadLoading ||
+                !IsDeferredStandalonePayload(_pendingCadTablePayload)) return;
+            _pendingCadTablePayload = null;
+            _deferredStandalonePayloadLoading = true;
+            var requestVersion = _cadTableRequestVersion;
+            PrepareDeferredCadTablePayloadAsync(requestVersion);
+        }
+
+        private async void PrepareDeferredCadTablePayloadAsync(int requestVersion)
+        {
+            try
+            {
+                var payload = await CadArchSpec.Host.Shared.CadTable.CadTableExchange.CreateStandaloneEditorPayloadAsync();
+                if (_disposed || requestVersion != _cadTableRequestVersion) return;
+                _deferredStandalonePayloadLoading = false;
+                _pendingCadTablePayload = payload;
+                if (_webReady) ShowPendingCadTable();
+            }
+            catch (Exception exception)
+            {
+                if (_disposed || requestVersion != _cadTableRequestVersion) return;
+                _deferredStandalonePayloadLoading = false;
+                _pendingCadTableError = "CAD 表格数据准备失败：" + exception.GetBaseException().Message;
+                if (_webReady) PostPendingCadTableError();
+            }
+        }
+
+        private void PostPendingCadTableError()
+        {
+            if (string.IsNullOrWhiteSpace(_pendingCadTableError) || !_webReady) return;
+            var message = _pendingCadTableError;
+            _pendingCadTableError = null;
+            PostMessage("project.error", new JObject { ["message"] = message });
         }
 
         private static void ConfigureNativeDependencyResolution()
@@ -138,6 +223,7 @@ namespace CadArchSpec.Host.AutoCAD2026
             _initializationStarted = true;
             try
             {
+                TryStartDeferredCadTablePayloadPreparation();
                 await InitializeWebViewAsync();
             }
             catch (Exception exception)
@@ -149,10 +235,7 @@ namespace CadArchSpec.Host.AutoCAD2026
         private async Task InitializeWebViewAsync()
         {
             var webAssetsPath = WebAssetLocator.Find(Assembly.GetExecutingAssembly().Location);
-            var userDataPath = Path.Combine(PortableDataPaths.DirectoryFor("WebView2"), "AutoCAD2026");
-            Directory.CreateDirectory(userDataPath);
-
-            var environment = await CoreWebView2Environment.CreateAsync(null, userDataPath);
+            var environment = await GetOrCreateWebViewEnvironmentAsync();
             await _webView.EnsureCoreWebView2Async(environment);
             if (_disposed || _webView.CoreWebView2 == null)
             {
@@ -167,10 +250,39 @@ namespace CadArchSpec.Host.AutoCAD2026
             _webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
             _webView.CoreWebView2.ProcessFailed += OnWebViewProcessFailed;
             _webView.CoreWebView2.WebMessageReceived += OnWebMessageReceived;
-            _webView.CoreWebView2.Navigate("https://" + VirtualHostName + "/index.html");
-            _statusLabel.Visible = false;
-            _webView.Visible = true;
-            _webView.BringToFront();
+            _webView.CoreWebView2.Navigate("https://" + VirtualHostName + "/index.html" +
+                (_waitingForCadTableVisible ? "?mode=cad-table" : string.Empty));
+            RevealWebView();
+        }
+
+        internal static void WarmUpWebViewEnvironment()
+        {
+            try
+            {
+                GetOrCreateWebViewEnvironmentAsync();
+            }
+            catch
+            {
+                // WebView2 initialization reports the actionable error when the window opens.
+            }
+        }
+
+        private static Task<CoreWebView2Environment> GetOrCreateWebViewEnvironmentAsync()
+        {
+            lock (WebViewEnvironmentSync)
+            {
+                if (_webViewEnvironmentTask == null ||
+                    _webViewEnvironmentTask.IsCanceled ||
+                    _webViewEnvironmentTask.IsFaulted)
+                {
+                    var userDataPath = Path.Combine(
+                        PortableDataPaths.DirectoryFor("WebView2"), "AutoCAD2026");
+                    Directory.CreateDirectory(userDataPath);
+                    _webViewEnvironmentTask = CoreWebView2Environment.CreateAsync(null, userDataPath);
+                }
+
+                return _webViewEnvironmentTask;
+            }
         }
 
         private void OnWebViewProcessFailed(object sender, CoreWebView2ProcessFailedEventArgs e)
@@ -189,7 +301,14 @@ namespace CadArchSpec.Host.AutoCAD2026
                     case "editor.ready":
                         _webReady = true;
                         SendHostReady();
+                        PostPendingCadTableError();
                         ShowPendingCadTable();
+                        break;
+                    case "cad.table.visible":
+                        RevealWebView();
+                        break;
+                    case "cad.table.window.close":
+                        HostPalette.CloseCadTableWindowFromHost();
                         break;
                     case "project.new":
                         _currentProjectPath = string.Empty;

@@ -19,6 +19,7 @@ namespace CadArchSpec.Host.Shared.CadTable
 {
     internal static class CadTableExchange
     {
+        private const string EditorMetadataRecordName = "WANLUO_CE_FORMULAS_V1";
         public static JObject ExportSelectedTableToXlsx()
         {
             JObject recognized = null;
@@ -101,6 +102,8 @@ namespace CadArchSpec.Host.Shared.CadTable
             var innerBorderColor = ReadCadIndexedColor(source["innerBorderColorIndex"]);
             var outerBorderWeight = (double?)source["outerBorderWeightMillimeters"] ?? .25d;
             var innerBorderWeight = (double?)source["innerBorderWeightMillimeters"] ?? .13d;
+            var showInnerHorizontalLines = (bool?)source["showInnerHorizontalLines"] != false;
+            var showInnerVerticalLines = (bool?)source["showInnerVerticalLines"] != false;
             var editedColumnTotal = columns.OfType<JObject>().Sum(column => Math.Max(.001d, (double?)column["widthMillimeters"] ?? 36d));
             var sourceColumnTotal = columns.OfType<JObject>().Sum(column => Math.Max(0d, (double?)column["sourceWidthCadUnits"] ?? 0d));
             var editedRowTotal = rows.OfType<JObject>().Sum(row => Math.Max(.001d, (double?)row["heightMillimeters"] ?? 8d));
@@ -159,13 +162,12 @@ namespace CadArchSpec.Host.Shared.CadTable
                         if (cell == null) continue;
                         var rowSpan = Math.Max(0, (int?)cell["rowSpan"] ?? 1);
                         var columnSpan = Math.Max(0, (int?)cell["columnSpan"] ?? 1);
-                        var borderColor = ReadCadIndexedColor(cell["borderColorIndex"]);
                         var fillColor = ReadCadIndexedColor(cell["fillColorIndex"]);
                         var contentColor = ReadCadIndexedColor(cell["textColorIndex"]);
                         ApplyCellColors(table.Cells[rowIndex, columnIndex], fillColor, contentColor);
-                        ApplyCellBorders(table.Cells[rowIndex, columnIndex], borderColor, outerBorderColor,
+                        ApplyCellBorders(table.Cells[rowIndex, columnIndex], outerBorderColor,
                             innerBorderColor, outerBorderWeight, innerBorderWeight, rowIndex, columnIndex,
-                            rows.Count, columns.Count);
+                            rows.Count, columns.Count, showInnerHorizontalLines, showInnerVerticalLines);
                         if (rowSpan == 0 || columnSpan == 0)
                         {
                             table.Cells[rowIndex, columnIndex].TextString = string.Empty;
@@ -213,6 +215,7 @@ namespace CadArchSpec.Host.Shared.CadTable
                     currentSpace.AppendEntity(table);
                     transaction.AddNewlyCreatedDBObject(table, true);
                 }
+                WriteEditorMetadata(transaction, table, source);
                 if (updateTarget != null)
                     foreach (var id in updateTarget.LooseEntityIds.Where(id => id.IsValid && !id.IsErased))
                     {
@@ -293,6 +296,29 @@ namespace CadArchSpec.Host.Shared.CadTable
             });
         }
 
+        public static JObject CreateDeferredStandaloneEditorPayload()
+        {
+            return new JObject
+            {
+                ["standaloneEditor"] = true,
+                ["deferredStandalonePayload"] = true
+            };
+        }
+
+        public static async Task<JObject> CreateStandaloneEditorPayloadAsync()
+        {
+            JObject result = null;
+            await Application.DocumentManager.ExecuteInCommandContextAsync(
+                async _ =>
+                {
+                    result = CreateStandaloneEditorPayload();
+                    await Task.CompletedTask;
+                }, null);
+            if (result == null)
+                throw new InvalidOperationException("CAD 表格编辑数据准备未返回结果。");
+            return result;
+        }
+
         private static void AttachCadObjectPreviewData(JObject table)
         {
             if (table == null) return;
@@ -315,11 +341,12 @@ namespace CadArchSpec.Host.Shared.CadTable
             if (table["innerBorderColorIndex"] == null) table["innerBorderColorIndex"] = defaults["innerBorderColorIndex"]?.DeepClone() ?? 7;
             if (table["outerBorderWeightMillimeters"] == null) table["outerBorderWeightMillimeters"] = (double?)defaults["outerBorderWeightMillimeters"] ?? .25d;
             if (table["innerBorderWeightMillimeters"] == null) table["innerBorderWeightMillimeters"] = (double?)defaults["innerBorderWeightMillimeters"] ?? .13d;
+            if (table["showInnerHorizontalLines"] == null) table["showInnerHorizontalLines"] = (bool?)defaults["showInnerHorizontalLines"] != false;
+            if (table["showInnerVerticalLines"] == null) table["showInnerVerticalLines"] = (bool?)defaults["showInnerVerticalLines"] != false;
             foreach (var row in (table["rows"] as JArray ?? new JArray()).OfType<JObject>())
                 foreach (var cell in (row["cells"] as JArray ?? new JArray()).OfType<JObject>())
                 {
                     if (cell["horizontalPaddingMillimeters"] == null) cell["horizontalPaddingMillimeters"] = (double?)defaults["horizontalPaddingMillimeters"] ?? 1d;
-                    if (cell["borderColorIndex"] == null && defaults["cellBorderColorIndex"] != null) cell["borderColorIndex"] = defaults["cellBorderColorIndex"].DeepClone();
                     if (cell["fillColorIndex"] == null && defaults["cellFillColorIndex"] != null) cell["fillColorIndex"] = defaults["cellFillColorIndex"].DeepClone();
                     if (cell["textColorIndex"] == null && defaults["cellTextColorIndex"] != null) cell["textColorIndex"] = defaults["cellTextColorIndex"].DeepClone();
                 }
@@ -339,13 +366,14 @@ namespace CadArchSpec.Host.Shared.CadTable
                 ["useOriginalCadSize"] = (bool?)options?["useOriginalCadSize"] == true,
                 ["insertType"] = (string)options?["insertType"] ?? "autocad",
                 ["horizontalPaddingMillimeters"] = (double?)firstCell?["horizontalPaddingMillimeters"] ?? 1d,
-                ["cellBorderColorIndex"] = firstCell?["borderColorIndex"]?.DeepClone(),
                 ["cellFillColorIndex"] = firstCell?["fillColorIndex"]?.DeepClone(),
                 ["cellTextColorIndex"] = firstCell?["textColorIndex"]?.DeepClone(),
                 ["outerBorderColorIndex"] = table["outerBorderColorIndex"]?.DeepClone() ?? 7,
                 ["innerBorderColorIndex"] = table["innerBorderColorIndex"]?.DeepClone() ?? 7,
                 ["outerBorderWeightMillimeters"] = (double?)table["outerBorderWeightMillimeters"] ?? .25d,
-                ["innerBorderWeightMillimeters"] = (double?)table["innerBorderWeightMillimeters"] ?? .13d
+                ["innerBorderWeightMillimeters"] = (double?)table["innerBorderWeightMillimeters"] ?? .13d,
+                ["showInnerHorizontalLines"] = (bool?)table["showInnerHorizontalLines"] != false,
+                ["showInnerVerticalLines"] = (bool?)table["showInnerVerticalLines"] != false
             });
         }
 
@@ -642,6 +670,7 @@ namespace CadArchSpec.Host.Shared.CadTable
                 LogTianzhengEntityCapabilities(document, appendedIds);
                 var visibleIds = CurrentSpaceEntityIds(document, appendedIds).ToList();
                 visibleIds.AddRange(InsertTianzhengCellObjects(payload, document, visibleIds));
+                WriteEditorMetadata(document, visibleIds, payload["table"] as JObject);
                 GroupInsertedTable(document, visibleIds);
                 if (updateTarget != null) EraseUpdateSource(document, updateTarget);
                 if (visibleIds.Count > 0) document.Editor.SetImpliedSelection(visibleIds.ToArray());
@@ -712,6 +741,133 @@ namespace CadArchSpec.Host.Shared.CadTable
                 transaction.Commit();
             }
             return result;
+        }
+
+        private static JObject BuildEditorMetadata(JObject table)
+        {
+            var formulas = new JArray();
+            var rows = table?["rows"] as JArray ?? new JArray();
+            for (var rowIndex = 0; rowIndex < rows.Count; rowIndex++)
+            {
+                var cells = rows[rowIndex]?["cells"] as JArray ?? new JArray();
+                for (var columnIndex = 0; columnIndex < cells.Count; columnIndex++)
+                {
+                    var cell = cells[columnIndex] as JObject;
+                    var formula = ((string)cell?["formula"] ?? string.Empty).Trim();
+                    if (formula.Length == 0) continue;
+                    formulas.Add(new JObject
+                    {
+                        ["row"] = rowIndex,
+                        ["column"] = columnIndex,
+                        ["formula"] = formula
+                    });
+                }
+            }
+            return new JObject
+            {
+                ["schemaVersion"] = 1,
+                ["rowCount"] = rows.Count,
+                ["columnCount"] = (table?["columns"] as JArray ?? new JArray()).Count,
+                ["formulas"] = formulas,
+                ["formulaAudits"] = table?["formulaAudits"]?.DeepClone() ?? new JArray(),
+                ["tableProperties"] = new JObject
+                {
+                    ["outerBorderColorIndex"] = table?["outerBorderColorIndex"]?.DeepClone(),
+                    ["innerBorderColorIndex"] = table?["innerBorderColorIndex"]?.DeepClone(),
+                    ["outerBorderWeightMillimeters"] = table?["outerBorderWeightMillimeters"]?.DeepClone(),
+                    ["innerBorderWeightMillimeters"] = table?["innerBorderWeightMillimeters"]?.DeepClone(),
+                    ["showInnerHorizontalLines"] = (bool?)table?["showInnerHorizontalLines"] != false,
+                    ["showInnerVerticalLines"] = (bool?)table?["showInnerVerticalLines"] != false
+                }
+            };
+        }
+
+        private static void WriteEditorMetadata(Document document, IEnumerable<ObjectId> entityIds, JObject table)
+        {
+            if (document == null || table == null) return;
+            try
+            {
+                using (var transaction = document.Database.TransactionManager.StartTransaction())
+                {
+                    foreach (var id in entityIds.Where(id => id.IsValid && !id.IsErased).Distinct())
+                    {
+                        try
+                        {
+                            var entity = transaction.GetObject(id, OpenMode.ForWrite, false) as Entity;
+                            if (entity != null) WriteEditorMetadata(transaction, entity, table);
+                        }
+                        catch { }
+                    }
+                    transaction.Commit();
+                }
+            }
+            catch (Exception ex) { CadTableXlsxExchange.WriteTianzhengLog("保存 CE 公式元数据失败", ex); }
+        }
+
+        private static void WriteEditorMetadata(Transaction transaction, Entity entity, JObject table)
+        {
+            if (transaction == null || entity == null || table == null) return;
+            if (entity.ExtensionDictionary.IsNull) entity.CreateExtensionDictionary();
+            var dictionary = transaction.GetObject(entity.ExtensionDictionary, OpenMode.ForWrite, false) as DBDictionary;
+            if (dictionary == null) return;
+            Xrecord record;
+            if (dictionary.Contains(EditorMetadataRecordName))
+                record = transaction.GetObject(dictionary.GetAt(EditorMetadataRecordName), OpenMode.ForWrite, false) as Xrecord;
+            else
+            {
+                record = new Xrecord();
+                dictionary.SetAt(EditorMetadataRecordName, record);
+                transaction.AddNewlyCreatedDBObject(record, true);
+            }
+            if (record == null) return;
+            var json = BuildEditorMetadata(table).ToString(Newtonsoft.Json.Formatting.None);
+            var values = new List<TypedValue>();
+            for (var offset = 0; offset < json.Length; offset += 240)
+                values.Add(new TypedValue((int)DxfCode.Text, json.Substring(offset, Math.Min(240, json.Length - offset))));
+            record.Data = new ResultBuffer(values.ToArray());
+        }
+
+        private static JObject ReadEditorMetadata(Transaction transaction, IEnumerable<ObjectId> entityIds)
+        {
+            foreach (var id in entityIds.Where(id => id.IsValid && !id.IsErased))
+            {
+                try
+                {
+                    var entity = transaction.GetObject(id, OpenMode.ForRead, false) as Entity;
+                    if (entity == null || entity.ExtensionDictionary.IsNull) continue;
+                    var dictionary = transaction.GetObject(entity.ExtensionDictionary, OpenMode.ForRead, false) as DBDictionary;
+                    if (dictionary == null || !dictionary.Contains(EditorMetadataRecordName)) continue;
+                    var record = transaction.GetObject(dictionary.GetAt(EditorMetadataRecordName), OpenMode.ForRead, false) as Xrecord;
+                    var data = record?.Data?.AsArray();
+                    if (data == null || data.Length == 0) continue;
+                    var json = string.Concat(data.Where(value => value.TypeCode == (int)DxfCode.Text).Select(value => value.Value as string));
+                    if (!string.IsNullOrWhiteSpace(json)) return JObject.Parse(json);
+                }
+                catch { }
+            }
+            return null;
+        }
+
+        private static void RestoreEditorMetadata(JObject payload, JObject metadata)
+        {
+            var table = payload?["table"] as JObject;
+            if (table == null || metadata == null) return;
+            var rows = table["rows"] as JArray ?? new JArray();
+            var columns = table["columns"] as JArray ?? new JArray();
+            if ((int?)metadata["rowCount"] != rows.Count || (int?)metadata["columnCount"] != columns.Count) return;
+            foreach (var item in (metadata["formulas"] as JArray ?? new JArray()).OfType<JObject>())
+            {
+                var row = (int?)item["row"] ?? -1;
+                var column = (int?)item["column"] ?? -1;
+                var cells = row >= 0 && row < rows.Count ? rows[row]?["cells"] as JArray : null;
+                var cell = cells != null && column >= 0 && column < cells.Count ? cells[column] as JObject : null;
+                if (cell != null) cell["formula"] = (string)item["formula"] ?? string.Empty;
+            }
+            table["formulaAudits"] = metadata["formulaAudits"]?.DeepClone() ?? new JArray();
+            var properties = metadata["tableProperties"] as JObject;
+            if (properties != null)
+                foreach (var property in properties.Properties()) table[property.Name] = property.Value.DeepClone();
+            payload["restoredFormulaCount"] = (metadata["formulas"] as JArray ?? new JArray()).Count;
         }
 
         private static IEnumerable<ObjectId> InsertTianzhengCellObjects(JObject payload, Document document,
@@ -840,9 +996,11 @@ namespace CadArchSpec.Host.Shared.CadTable
         private static Autodesk.AutoCAD.Colors.Color ReadCadIndexedColor(JToken token)
         {
             var index = (short?)token;
-            return index.HasValue && index.Value >= 1 && index.Value <= 255
-                ? Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, index.Value)
-                : null;
+            if (!index.HasValue || index.Value < 0 || index.Value > 256) return null;
+            var method = index.Value == 0 ? Autodesk.AutoCAD.Colors.ColorMethod.ByBlock
+                : index.Value == 256 ? Autodesk.AutoCAD.Colors.ColorMethod.ByLayer
+                : Autodesk.AutoCAD.Colors.ColorMethod.ByAci;
+            return Autodesk.AutoCAD.Colors.Color.FromColorIndex(method, index.Value);
         }
 
         private static void ApplyCellColors(object cell, Autodesk.AutoCAD.Colors.Color fill,
@@ -853,29 +1011,32 @@ namespace CadArchSpec.Host.Shared.CadTable
             if (content != null) TrySetProperty(cell, "ContentColor", content);
         }
 
-        private static void ApplyCellBorders(object cell, Autodesk.AutoCAD.Colors.Color cellColor,
-            Autodesk.AutoCAD.Colors.Color outerColor, Autodesk.AutoCAD.Colors.Color innerColor,
-            double outerWeight, double innerWeight, int row, int column, int rowCount, int columnCount)
+        private static void ApplyCellBorders(object cell, Autodesk.AutoCAD.Colors.Color outerColor,
+            Autodesk.AutoCAD.Colors.Color innerColor, double outerWeight, double innerWeight,
+            int row, int column, int rowCount, int columnCount,
+            bool showInnerHorizontalLines, bool showInnerVerticalLines)
         {
             if (cell == null) return;
             var borders = TryGetProperty(cell, "Borders");
             if (borders == null) return;
-            ApplyBorderEdge(borders, "Top", cellColor ?? (row == 0 ? outerColor : innerColor),
-                cellColor != null ? innerWeight : row == 0 ? outerWeight : innerWeight);
-            ApplyBorderEdge(borders, "Bottom", cellColor ?? (row == rowCount - 1 ? outerColor : innerColor),
-                cellColor != null ? innerWeight : row == rowCount - 1 ? outerWeight : innerWeight);
-            ApplyBorderEdge(borders, "Left", cellColor ?? (column == 0 ? outerColor : innerColor),
-                cellColor != null ? innerWeight : column == 0 ? outerWeight : innerWeight);
-            ApplyBorderEdge(borders, "Right", cellColor ?? (column == columnCount - 1 ? outerColor : innerColor),
-                cellColor != null ? innerWeight : column == columnCount - 1 ? outerWeight : innerWeight);
-            ApplyBorderEdge(borders, "Horizontal", cellColor ?? innerColor, cellColor != null ? innerWeight : innerWeight);
-            ApplyBorderEdge(borders, "Vertical", cellColor ?? innerColor, cellColor != null ? innerWeight : innerWeight);
+            ApplyBorderEdge(borders, "Top", row == 0 ? outerColor : innerColor,
+                row == 0 ? outerWeight : innerWeight, row == 0 || showInnerHorizontalLines);
+            ApplyBorderEdge(borders, "Bottom", row == rowCount - 1 ? outerColor : innerColor,
+                row == rowCount - 1 ? outerWeight : innerWeight, row == rowCount - 1 || showInnerHorizontalLines);
+            ApplyBorderEdge(borders, "Left", column == 0 ? outerColor : innerColor,
+                column == 0 ? outerWeight : innerWeight, column == 0 || showInnerVerticalLines);
+            ApplyBorderEdge(borders, "Right", column == columnCount - 1 ? outerColor : innerColor,
+                column == columnCount - 1 ? outerWeight : innerWeight, column == columnCount - 1 || showInnerVerticalLines);
+            ApplyBorderEdge(borders, "Horizontal", innerColor, innerWeight, showInnerHorizontalLines);
+            ApplyBorderEdge(borders, "Vertical", innerColor, innerWeight, showInnerVerticalLines);
         }
 
-        private static void ApplyBorderEdge(object borders, string name, Autodesk.AutoCAD.Colors.Color color, double weight)
+        private static void ApplyBorderEdge(object borders, string name, Autodesk.AutoCAD.Colors.Color color, double weight, bool visible)
         {
             var edge = TryGetProperty(borders, name);
             if (edge == null) return;
+            TrySetProperty(edge, "IsVisible", visible);
+            if (!visible) return;
             if (color != null) TrySetProperty(edge, "Color", color);
             TrySetEnumProperty(edge, "LineWeight", Math.Max(0, (int)Math.Round(weight * 100d)));
         }
@@ -1185,8 +1346,10 @@ namespace CadArchSpec.Host.Shared.CadTable
             var selectedIds = selection.Value.GetObjectIds();
             CadTableEntityReadResult read;
             var likelyTianzhengTable = false;
+            JObject editorMetadata;
             using (var transaction = document.Database.TransactionManager.StartTransaction())
             {
+                editorMetadata = ReadEditorMetadata(transaction, selectedIds);
                 var nativeTables = selectedIds.Select(id => transaction.GetObject(id, OpenMode.ForRead, false) as Table)
                     .Where(table => table != null).ToList();
                 if (nativeTables.Count > 1)
@@ -1194,6 +1357,7 @@ namespace CadArchSpec.Host.Shared.CadTable
                 if (nativeTables.Count == 1)
                 {
                     var nativeResult = BuildNativeTablePayload(nativeTables[0], document, markForUpdate);
+                    RestoreEditorMetadata(nativeResult, editorMetadata);
                     transaction.Commit();
                     return nativeResult;
                 }
@@ -1390,6 +1554,8 @@ namespace CadArchSpec.Host.Shared.CadTable
                     ["sourceDrawingPath"] = document.Name ?? string.Empty,
                     ["repeatHeader"] = true,
                     ["allowSplitAcrossPages"] = true,
+                    ["showInnerHorizontalLines"] = true,
+                    ["showInnerVerticalLines"] = true,
                     ["columns"] = columns,
                     ["rows"] = rows,
                     ["formulaAudits"] = new JArray()
@@ -1411,6 +1577,7 @@ namespace CadArchSpec.Host.Shared.CadTable
                 };
             AttachAutomaticallyDetectedCadObjects(payload, document, selectedIds, detected,
                 read.Input.TextFragments, medianHeight);
+            RestoreEditorMetadata(payload, editorMetadata);
             return payload;
         }
 
@@ -1798,8 +1965,10 @@ namespace CadArchSpec.Host.Shared.CadTable
 
         private static JToken CadColorIndex(Autodesk.AutoCAD.Colors.Color color)
         {
-            return color != null && color.ColorMethod == Autodesk.AutoCAD.Colors.ColorMethod.ByAci &&
-                color.ColorIndex >= 1 && color.ColorIndex <= 255
+            if (color == null) return JValue.CreateNull();
+            if (color.ColorMethod == Autodesk.AutoCAD.Colors.ColorMethod.ByBlock) return new JValue(0);
+            if (color.ColorMethod == Autodesk.AutoCAD.Colors.ColorMethod.ByLayer) return new JValue(256);
+            return color.ColorMethod == Autodesk.AutoCAD.Colors.ColorMethod.ByAci && color.ColorIndex >= 1 && color.ColorIndex <= 255
                 ? (JToken)color.ColorIndex : JValue.CreateNull();
         }
 

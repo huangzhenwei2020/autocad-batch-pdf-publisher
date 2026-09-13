@@ -292,6 +292,8 @@ export type ArchitectureTable = {
   innerBorderColorIndex?: number | null;
   outerBorderWeightMillimeters?: number;
   innerBorderWeightMillimeters?: number;
+  showInnerHorizontalLines?: boolean;
+  showInnerVerticalLines?: boolean;
   repeatHeader: boolean;
   allowSplitAcrossPages: boolean;
   columns: ArchitectureTableColumn[];

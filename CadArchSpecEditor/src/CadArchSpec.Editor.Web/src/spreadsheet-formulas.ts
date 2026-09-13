@@ -3,7 +3,7 @@ import type { ArchitectureTable } from "./editor-model";
 type Token = { type: "number" | "cell" | "name" | "operator" | "left" | "right" | "comma" | "colon"; value: string };
 type FormulaValue = number | number[];
 
-const cellAddress = /^([A-Z]+)([1-9]\d*)$/;
+const cellAddress = /^\$?([A-Z]+)\$?([1-9]\d*)$/;
 
 function tokens(source: string): Token[] {
   const result: Token[] = [];
@@ -13,7 +13,7 @@ function tokens(source: string): Token[] {
     if (whitespace) { value = value.slice(whitespace.length); continue; }
     const number = value.match(/^(?:\d+(?:\.\d*)?|\.\d+)/)?.[0];
     if (number) { result.push({ type: "number", value: number }); value = value.slice(number.length); continue; }
-    const word = value.match(/^[A-Za-z]+\d*/)?.[0];
+    const word = value.match(/^\$?[A-Za-z]+\$?[1-9]\d*/)?.[0] ?? value.match(/^[A-Za-z]+/)?.[0];
     if (word) {
       const upper = word.toUpperCase();
       result.push({ type: cellAddress.test(upper) ? "cell" : "name", value: upper });
@@ -37,6 +37,30 @@ function coordinates(address: string) {
   const match = address.match(cellAddress);
   if (!match) throw new Error(`单元格地址 ${address} 无效。`);
   return { row: Number(match[2]) - 1, column: columnIndex(match[1]) };
+}
+
+function columnName(index: number) {
+  let value = index + 1;
+  let name = "";
+  while (value > 0) {
+    value--;
+    name = String.fromCharCode(65 + value % 26) + name;
+    value = Math.floor(value / 26);
+  }
+  return name;
+}
+
+/** Moves only relative parts of A1 references, matching Excel copy/fill semantics. */
+export function translateSpreadsheetFormula(formula: string, rowOffset: number, columnOffset: number) {
+  return formula.replace(/(\$?)([A-Z]+)(\$?)([1-9]\d*)/gi, (_match, fixedColumn: string, letters: string, fixedRow: string, rowText: string) => {
+    const sourceColumn = columnIndex(letters.toUpperCase());
+    const sourceRow = Number(rowText) - 1;
+    const nextColumn = fixedColumn ? sourceColumn : sourceColumn + columnOffset;
+    const nextRow = fixedRow ? sourceRow : sourceRow + rowOffset;
+    return nextColumn < 0 || nextRow < 0
+      ? "#REF!"
+      : `${fixedColumn}${columnName(nextColumn)}${fixedRow}${nextRow + 1}`;
+  });
 }
 
 class Parser {

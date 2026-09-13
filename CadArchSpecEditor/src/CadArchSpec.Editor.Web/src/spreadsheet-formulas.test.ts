@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { ArchitectureTable } from "./editor-model";
 import { deleteTableColumn, deleteTableRow, normalizeProfessionalTable } from "./professional-tables";
-import { recalculateSpreadsheetTable } from "./spreadsheet-formulas";
+import { recalculateSpreadsheetTable, translateSpreadsheetFormula } from "./spreadsheet-formulas";
+import { fillTableDown } from "./professional-table-editor";
 
 const table = (): ArchitectureTable => ({
   tableId: "test", schemaVersion: 1, tableType: "custom", tableNumber: "", title: "test",
@@ -23,6 +24,16 @@ describe("CAD spreadsheet formulas", () => {
     source.rows[0].cells[0].formula = "=B1";
     source.rows[0].cells[1].formula = "=A1";
     expect(() => recalculateSpreadsheetTable(source)).toThrow(/循环引用/);
+  });
+
+  it("moves relative references but preserves absolute and mixed references", () => {
+    expect(translateSpreadsheetFormula("=A1+$B$2+C$3+$D4", 2, 1)).toBe("=B3+$B$2+D$3+$D6");
+  });
+
+  it("calculates formulas containing absolute references", () => {
+    const source = table();
+    source.rows[2].cells[2].formula = "=$A$1+B$2+$C1";
+    expect(recalculateSpreadsheetTable(source).rows[2].cells[2].displayValue).toBe("9");
   });
 });
 
@@ -54,5 +65,24 @@ describe("CAD source dimensions", () => {
     const normalized = normalizeProfessionalTable(source);
     expect(normalized.columns[0].sourceWidthCadUnits).toBe(1200);
     expect(normalized.rows[0].sourceHeightCadUnits).toBe(300);
+  });
+});
+
+describe("CAD fill handle", () => {
+  it("continues a two-number series and copies cell formatting", () => {
+    const source = table();
+    source.rows[0].cells[0] = { ...source.rows[0].cells[0], displayValue: "1", numericValue: 1, fillColorIndex: 3 };
+    source.rows[1].cells[0] = { ...source.rows[1].cells[0], displayValue: "2", numericValue: 2, fillColorIndex: 4 };
+    const result = fillTableDown(source, { startRow: 0, startColumn: 0, endRow: 1, endColumn: 0 }, 2);
+    expect(result.rows[2].cells[0]).toMatchObject({ displayValue: "3", numericValue: 3, fillColorIndex: 3 });
+  });
+
+  it("copies formulas with relative references adjusted", () => {
+    const source = table();
+    source.rows[0].cells[1].formula = "=A1";
+    const result = fillTableDown(source, { startRow: 0, startColumn: 1, endRow: 0, endColumn: 1 }, 2);
+    expect(result.rows[1].cells[1].formula).toBe("=A2");
+    expect(result.rows[2].cells[1].formula).toBe("=A3");
+    expect(result.rows[2].cells[1].displayValue).toBe("7");
   });
 });

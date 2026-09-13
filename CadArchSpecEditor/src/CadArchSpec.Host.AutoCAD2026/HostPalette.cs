@@ -12,50 +12,32 @@ namespace CadArchSpec.Host.AutoCAD2026
     // The editor itself is now an independent modeless window, like Stair Detail.
     internal static class HostPalette
     {
-        private static Form _window;
-        private static EditorHostControl _hostControl;
+        private static Form _architectureWindow;
+        private static EditorHostControl _architectureHostControl;
+        private static Form _cadTableWindow;
+        private static EditorHostControl _cadTableHostControl;
 
         public static void Show()
         {
             try
             {
                 WriteDiagnostic("JZSM entered");
-                if (_window != null && !_window.IsDisposed)
+                if (_architectureWindow != null && !_architectureWindow.IsDisposed)
                 {
-                    if (_window.WindowState == FormWindowState.Minimized)
-                        _window.WindowState = FormWindowState.Normal;
-                    _window.BringToFront();
-                    _window.Activate();
+                    Activate(_architectureWindow);
                     WriteDiagnostic("Existing editor window activated");
                     return;
                 }
 
-                WriteDiagnostic("Creating modeless editor window");
-                _hostControl = new EditorHostControl { Dock = DockStyle.Fill };
-                _window = new Form
-                {
-                    Text = "万落建筑工具 · 建筑设计说明助手",
-                    StartPosition = FormStartPosition.CenterScreen,
-                    Width = 1280,
-                    Height = 820,
-                    MinimumSize = new Size(640, 480),
-                    FormBorderStyle = FormBorderStyle.Sizable,
-                    MinimizeBox = true,
-                    MaximizeBox = true,
-                    ShowIcon = false,
-                    ShowInTaskbar = false,
-                    AutoScaleMode = AutoScaleMode.Dpi
-                };
-                RestoreWindowBounds(_window);
-                _window.Controls.Add(_hostControl);
-                _window.FormClosed += OnWindowClosed;
-                CadApplication.ShowModelessDialog(_window);
-                WriteDiagnostic("Modeless editor window visible");
+                WriteDiagnostic("Creating independent architecture editor window");
+                _architectureHostControl = new EditorHostControl { Dock = DockStyle.Fill };
+                _architectureWindow = CreateWindow("万落建筑工具 · 建筑设计说明助手", _architectureHostControl, "architecture-editor-window-bounds.txt", OnArchitectureWindowClosed);
+                CadApplication.ShowModelessDialog(_architectureWindow);
             }
             catch (Exception exception)
             {
-                WriteDiagnostic("Editor window open failed", exception);
-                Close();
+                WriteDiagnostic("Architecture editor window open failed", exception);
+                CloseArchitectureWindow();
                 CadApplication.ShowAlertDialog(
                     "建筑设计说明助手打开失败：\r\n" + exception.Message +
                     "\r\n\r\n诊断日志已保存到：\r\n" + DiagnosticLogPath());
@@ -64,46 +46,129 @@ namespace CadArchSpec.Host.AutoCAD2026
 
         public static void ShowCadTableEditor(Newtonsoft.Json.Linq.JObject payload)
         {
-            Show();
-            if (_window != null && !_window.IsDisposed)
-                _window.Text = "万落建筑工具 · CAD 表格编辑/Excel";
-            _hostControl?.StartCadTableEdit(payload);
+            try
+            {
+                WriteDiagnostic("CE entered");
+                if (_cadTableWindow != null && !_cadTableWindow.IsDisposed)
+                {
+                    _cadTableHostControl?.StartCadTableEdit(payload);
+                    Activate(_cadTableWindow);
+                    WriteDiagnostic("Existing independent CE window activated");
+                    return;
+                }
+
+                WriteDiagnostic("Creating independent CE window");
+                _cadTableHostControl = new EditorHostControl { Dock = DockStyle.Fill };
+                _cadTableHostControl.StartCadTableEdit(payload);
+                _cadTableWindow = CreateWindow("万落建筑工具 · CAD 表格编辑/Excel", _cadTableHostControl, "cad-table-editor-window-bounds.txt", OnCadTableWindowClosed);
+                CadApplication.ShowModelessDialog(_cadTableWindow);
+            }
+            catch (Exception exception)
+            {
+                WriteDiagnostic("CE window open failed", exception);
+                CloseCadTableWindow();
+                CadApplication.ShowAlertDialog(
+                    "CAD 表格编辑/Excel 打开失败：\r\n" + exception.Message +
+                    "\r\n\r\n诊断日志已保存到：\r\n" + DiagnosticLogPath());
+            }
         }
 
         public static void Close()
         {
-            var window = _window;
-            _window = null;
+            CloseArchitectureWindow();
+            CloseCadTableWindow();
+        }
+
+        internal static void CloseCadTableWindowFromHost()
+        {
+            CloseCadTableWindow();
+        }
+
+        private static Form CreateWindow(string title, EditorHostControl control, string boundsFileName, FormClosedEventHandler closedHandler)
+        {
+            var window = new Form
+            {
+                Text = title,
+                StartPosition = FormStartPosition.CenterScreen,
+                Width = 1280,
+                Height = 820,
+                MinimumSize = new Size(640, 480),
+                FormBorderStyle = FormBorderStyle.Sizable,
+                MinimizeBox = true,
+                MaximizeBox = true,
+                ShowIcon = false,
+                ShowInTaskbar = false,
+                AutoScaleMode = AutoScaleMode.Dpi
+            };
+            RestoreWindowBounds(window, boundsFileName);
+            window.Controls.Add(control);
+            window.FormClosed += closedHandler;
+            return window;
+        }
+
+        private static void Activate(Form window)
+        {
+            if (window.WindowState == FormWindowState.Minimized) window.WindowState = FormWindowState.Normal;
+            window.BringToFront();
+            window.Activate();
+        }
+
+        private static void CloseArchitectureWindow()
+        {
+            var window = _architectureWindow;
+            _architectureWindow = null;
             if (window != null && !window.IsDisposed)
             {
-                window.FormClosed -= OnWindowClosed;
-                SaveWindowBounds(window);
+                window.FormClosed -= OnArchitectureWindowClosed;
+                SaveWindowBounds(window, "architecture-editor-window-bounds.txt");
                 window.Close();
                 window.Dispose();
             }
-
-            _hostControl?.Dispose();
-            _hostControl = null;
+            _architectureHostControl?.Dispose();
+            _architectureHostControl = null;
         }
 
-        private static void OnWindowClosed(object sender, FormClosedEventArgs eventArgs)
+        private static void CloseCadTableWindow()
+        {
+            var window = _cadTableWindow;
+            _cadTableWindow = null;
+            if (window != null && !window.IsDisposed)
+            {
+                window.FormClosed -= OnCadTableWindowClosed;
+                SaveWindowBounds(window, "cad-table-editor-window-bounds.txt");
+                window.Close();
+                window.Dispose();
+            }
+            _cadTableHostControl?.Dispose();
+            _cadTableHostControl = null;
+        }
+
+        private static void OnArchitectureWindowClosed(object sender, FormClosedEventArgs eventArgs)
         {
             var window = sender as Form;
-            if (window != null) SaveWindowBounds(window);
-            _hostControl = null;
-            _window = null;
+            if (window != null) SaveWindowBounds(window, "architecture-editor-window-bounds.txt");
+            _architectureHostControl = null;
+            _architectureWindow = null;
         }
 
-        private static string WindowBoundsPath()
+        private static void OnCadTableWindowClosed(object sender, FormClosedEventArgs eventArgs)
         {
-            return Path.Combine(PortableDataPaths.DirectoryFor("Settings"), "editor-window-bounds.txt");
+            var window = sender as Form;
+            if (window != null) SaveWindowBounds(window, "cad-table-editor-window-bounds.txt");
+            _cadTableHostControl = null;
+            _cadTableWindow = null;
         }
 
-        private static void RestoreWindowBounds(Form window)
+        private static string WindowBoundsPath(string fileName)
+        {
+            return Path.Combine(PortableDataPaths.DirectoryFor("Settings"), fileName);
+        }
+
+        private static void RestoreWindowBounds(Form window, string fileName)
         {
             try
             {
-                var parts = File.ReadAllText(WindowBoundsPath()).Split(',');
+                var parts = File.ReadAllText(WindowBoundsPath(fileName)).Split(',');
                 if (parts.Length != 4) return;
                 int left, top, width, height;
                 if (!int.TryParse(parts[0], out left) || !int.TryParse(parts[1], out top)
@@ -121,13 +186,13 @@ namespace CadArchSpec.Host.AutoCAD2026
             }
         }
 
-        private static void SaveWindowBounds(Form window)
+        private static void SaveWindowBounds(Form window, string fileName)
         {
             try
             {
                 var bounds = window.WindowState == FormWindowState.Normal ? window.Bounds : window.RestoreBounds;
                 if (bounds.Width < 1 || bounds.Height < 1) return;
-                File.WriteAllText(WindowBoundsPath(), string.Join(",",
+                File.WriteAllText(WindowBoundsPath(fileName), string.Join(",",
                     bounds.Left, bounds.Top, bounds.Width, bounds.Height));
             }
             catch

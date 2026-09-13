@@ -89,25 +89,45 @@ namespace CadArchSpec.Host.Shared.CadTable
             var table = new SpreadsheetTable { Title = (string)source["title"] ?? "表格" };
             var options = payload["cadInsertOptions"] as JObject ?? new JObject();
             table.BorderColorRgb = (int?)options["borderColorRgb"];
+            table.OuterBorderColorRgb = AciRgb((short?)source["outerBorderColorIndex"]);
+            table.InnerBorderColorRgb = AciRgb((short?)source["innerBorderColorIndex"]);
             table.FillColorRgb = (int?)options["fillColorRgb"];
             table.TextColorRgb = (int?)options["textColorRgb"];
             var columns = ((JArray)source["columns"] ?? new JArray()).OfType<JObject>().ToList();
             table.Columns.AddRange(columns.Select(column => (string)column["title"] ?? string.Empty));
             table.ColumnWidthsMillimeters.AddRange(columns.Select(column =>
                 Math.Max(1d, (double?)column["widthMillimeters"] ?? 36d)));
-            foreach (var rowSource in ((JArray)source["rows"] ?? new JArray()).OfType<JObject>())
+            var rowSources = ((JArray)source["rows"] ?? new JArray()).OfType<JObject>().ToList();
+            var showInnerHorizontalLines = (bool?)source["showInnerHorizontalLines"] != false;
+            var showInnerVerticalLines = (bool?)source["showInnerVerticalLines"] != false;
+            for (var rowIndex = 0; rowIndex < rowSources.Count; rowIndex++)
             {
+                var rowSource = rowSources[rowIndex];
                 var row = new SpreadsheetRow();
-                foreach (var cell in ((JArray)rowSource["cells"] ?? new JArray()).OfType<JObject>())
+                var cells = ((JArray)rowSource["cells"] ?? new JArray()).OfType<JObject>().ToList();
+                for (var columnIndex = 0; columnIndex < cells.Count; columnIndex++)
                 {
+                    var cell = cells[columnIndex];
+                    var rowSpan = Math.Max(0, (int?)cell["rowSpan"] ?? 1);
+                    var columnSpan = Math.Max(0, (int?)cell["columnSpan"] ?? 1);
                     row.Cells.Add(new SpreadsheetCell
                     {
                         Value = SpreadsheetValue(cell, preserveTianzhengText),
-                        Formula = (string)cell["formula"] ?? string.Empty,
-                        RowSpan = Math.Max(0, (int?)cell["rowSpan"] ?? 1),
-                        ColumnSpan = Math.Max(0, (int?)cell["columnSpan"] ?? 1),
+                        // Excel2Sheet must receive the already calculated display value.
+                        // Formula definitions are persisted separately on the CAD entities.
+                        Formula = preserveTianzhengText ? string.Empty : (string)cell["formula"] ?? string.Empty,
+                        RowSpan = rowSpan,
+                        ColumnSpan = columnSpan,
                         Alignment = (string)cell["alignment"] ?? "center",
-                        BorderColorRgb = AciRgb((short?)cell["borderColorIndex"]),
+                        BorderColorRgb = table.InnerBorderColorRgb,
+                        LeftBorderColorRgb = columnIndex == 0 ? table.OuterBorderColorRgb : table.InnerBorderColorRgb,
+                        RightBorderColorRgb = columnIndex + Math.Max(1, columnSpan) >= columns.Count ? table.OuterBorderColorRgb : table.InnerBorderColorRgb,
+                        TopBorderColorRgb = rowIndex == 0 ? table.OuterBorderColorRgb : table.InnerBorderColorRgb,
+                        BottomBorderColorRgb = rowIndex + Math.Max(1, rowSpan) >= rowSources.Count ? table.OuterBorderColorRgb : table.InnerBorderColorRgb,
+                        LeftBorderVisible = columnIndex == 0 || showInnerVerticalLines,
+                        RightBorderVisible = columnIndex + Math.Max(1, columnSpan) >= columns.Count || showInnerVerticalLines,
+                        TopBorderVisible = rowIndex == 0 || showInnerHorizontalLines,
+                        BottomBorderVisible = rowIndex + Math.Max(1, rowSpan) >= rowSources.Count || showInnerHorizontalLines,
                         FillColorRgb = AciRgb((short?)cell["fillColorIndex"]),
                         TextColorRgb = AciRgb((short?)cell["textColorIndex"]),
                         HorizontalPaddingMillimeters = Math.Max(0d,
