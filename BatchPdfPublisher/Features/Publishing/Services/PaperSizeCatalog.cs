@@ -39,6 +39,11 @@ namespace BatchPdfPublisher.Services
             return SupportedExtensions.TryGetValue(paper ?? string.Empty, out var values) ? (string[])values.Clone() : new[] { "" };
         }
 
+        public static string DefaultOrientation(string paper)
+        {
+            return string.Equals(paper, "A4", StringComparison.OrdinalIgnoreCase) ? "纵向" : "横向";
+        }
+
         public static double[] GetSize(string paper, string extension, string orientation)
         {
             if (!BasicSizes.TryGetValue(paper ?? string.Empty, out var basic)) basic = BasicSizes["A3"];
@@ -62,12 +67,17 @@ namespace BatchPdfPublisher.Services
             var candidates = new[] { "A0", "A1", "A2", "A3", "A4" };
             foreach (var candidate in candidates)
                 foreach (var candidateExtension in GetSupportedExtensions(candidate))
-                    foreach (var candidateOrientation in new[] { "横向", "纵向" })
-                    {
-                        var size = GetSize(candidate, candidateExtension, candidateOrientation);
-                        if (Math.Abs(width - size[0]) <= 1.0 && Math.Abs(height - size[1]) <= 1.0)
-                        { paper = candidate; extension = candidateExtension; orientation = candidateOrientation; return true; }
-                    }
+                {
+                    var candidateOrientation = DefaultOrientation(candidate);
+                    var size = GetSize(candidate, candidateExtension, candidateOrientation);
+                    if (Math.Abs(width - size[0]) <= 1.0 && Math.Abs(height - size[1]) <= 1.0)
+                    { paper = candidate; extension = candidateExtension; orientation = candidateOrientation; return true; }
+                    // A source block may be physically rotated in CAD. Identify
+                    // the paper by the long/short sides, but keep the catalog
+                    // direction rule (A0-A3 horizontal, A4 vertical).
+                    if (Math.Abs(width - size[1]) <= 1.0 && Math.Abs(height - size[0]) <= 1.0)
+                    { paper = candidate; extension = candidateExtension; orientation = candidateOrientation; return true; }
+                }
             return false;
         }
 

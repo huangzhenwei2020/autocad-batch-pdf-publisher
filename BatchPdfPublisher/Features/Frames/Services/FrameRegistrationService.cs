@@ -308,7 +308,7 @@ namespace BatchPdfPublisher.Services
                 {
                     PaperSize = existing.PaperSize,
                     Extension = existing.Extension,
-                    PaperOrientation = string.IsNullOrWhiteSpace(existing.PaperOrientation) ? "横向" : existing.PaperOrientation,
+                    PaperOrientation = PaperSizeCatalog.DefaultOrientation(existing.PaperSize),
                     PrintScale = string.IsNullOrWhiteSpace(existing.DefaultPrintScale) ? "1:1" : existing.DefaultPrintScale,
                     MeasuredSize = "当前图中未找到该图块实例"
                 },
@@ -404,7 +404,7 @@ namespace BatchPdfPublisher.Services
                     ReferenceAspectRatio = context.AspectRatio,
                     PaperSize = context.Guess.PaperSize,
                     Extension = context.Guess.Extension,
-                    PaperOrientation = context.Guess.PaperOrientation,
+                    PaperOrientation = PaperSizeCatalog.DefaultOrientation(context.Guess.PaperSize),
                     Note = note,
                     BuildingAttributeTag = MatchAttributeTag(context.Attributes.Keys, "子项目名称", "楼栋", "BUILDING", "栋号", "SUBPROJECT", "SUBPROJECTNAME") ?? "子项目名称",
                     SheetNumberAttributeTag = MatchAttributeTag(context.Attributes.Keys, "图号", "SHEETNO", "SHEET_NO", "DRAWINGNO", "DRAWING_NO") ?? "图号",

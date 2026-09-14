@@ -91,7 +91,8 @@ type Props = {
 };
 
 export type CadTableInsertOptions = {
-  insertType: "autocad" | "tianzheng";
+  insertType: "autocad" | "tianzheng" | "exploded";
+  placementMode: "point" | "window";
   useOriginalCadSize: boolean;
   scale: number;
   textHeightMillimeters: number;
@@ -270,7 +271,8 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onExpo
   const [undoStack, setUndoStack] = useState<ArchitectureTable[][]>([]);
   const [redoStack, setRedoStack] = useState<ArchitectureTable[][]>([]);
   const [cadOptions, setCadOptions] = useState<CadTableInsertOptions>({
-    insertType: suggestedInsertType === "tianzheng" || cadDefaults.insertType === "tianzheng" ? "tianzheng" : "autocad",
+    insertType: cadDefaults.insertType === "exploded" ? "exploded" : suggestedInsertType === "tianzheng" || cadDefaults.insertType === "tianzheng" ? "tianzheng" : "autocad",
+    placementMode: cadDefaults.placementMode === "window" ? "window" : "point",
     useOriginalCadSize: hasOriginalCadSize && cadDefaults.useOriginalCadSize !== false,
     scale: Math.max(0.01, Number(cadDefaults.scale) || 1),
     textHeightMillimeters: Math.max(0.1, Number(cadDefaults.textHeightMillimeters) || 3.5),
@@ -1783,16 +1785,18 @@ export function ProfessionalTableEditor({ value, fields, selectedTableId, onExpo
               <select value={cadOptions.insertType} onChange={(event) => setCadOptions((current) => ({ ...current, insertType: event.target.value as CadTableInsertOptions["insertType"] }))}>
                 <option value="autocad">AutoCAD 原生表格</option>
                 <option value="tianzheng">天正表格</option>
+                <option value="exploded">打散实体（多段线 + 文字）</option>
               </select>
-              <label><input type="checkbox" checked={cadOptions.useOriginalCadSize} disabled={!hasOriginalCadSize} onChange={(event) => setCadOptions((current) => ({ ...current, useOriginalCadSize: event.target.checked }))} />保持原 CAD 尺寸</label>
-              <label>预设比例 <select value={cadOptions.scale} disabled={cadOptions.useOriginalCadSize} onChange={(event) => setCadOptions((current) => ({ ...current, scale: Number(event.target.value) }))}>{[1,2,5,10,20,50,100,200,500].map((scale) => <option key={scale} value={scale}>1:{scale}</option>)}</select></label>
+              {cadOptions.insertType === "exploded" && <label>定位方式 <select value={cadOptions.placementMode} onChange={(event) => setCadOptions((current) => ({ ...current, placementMode: event.target.value as CadTableInsertOptions["placementMode"], useOriginalCadSize: event.target.value === "window" ? false : current.useOriginalCadSize }))}><option value="point">指定插入点</option><option value="window">框选范围</option></select></label>}
+              <label><input type="checkbox" checked={cadOptions.useOriginalCadSize} disabled={!hasOriginalCadSize || cadOptions.insertType === "exploded" && cadOptions.placementMode === "window"} onChange={(event) => setCadOptions((current) => ({ ...current, useOriginalCadSize: event.target.checked }))} />保持原 CAD 尺寸</label>
+              <label>预设比例 <select value={cadOptions.scale} disabled={cadOptions.useOriginalCadSize || cadOptions.insertType === "exploded" && cadOptions.placementMode === "window"} onChange={(event) => setCadOptions((current) => ({ ...current, scale: Number(event.target.value) }))}>{[1,2,5,10,20,50,100,200,500].map((scale) => <option key={scale} value={scale}>1:{scale}</option>)}</select></label>
               <label>字高 <input type="number" min="0.1" step="0.1" value={cadOptions.textHeightMillimeters} onChange={(event) => setCadOptions((current) => ({ ...current, textHeightMillimeters: Math.max(0.1, Number(event.target.value) || 3.5) }))} /></label>
               {cadStandalone && <label>文字样式 <select value={cadOptions.textStyle} onChange={(event) => setCadOptions((current) => ({ ...current, textStyle: event.target.value }))}>{cadTextStyles.map((style) => <option key={style}>{style}</option>)}</select></label>}
             </div>
           ) : <span>表格将随项目文件保存；当前还未写入 CAD。</span>}
           <button className="button" onClick={onClose}>{cadStandalone ? "关闭" : "取消"}</button>
           {!cadStandalone && <button className="button primary" onClick={() => onSave(tables)}>保存表格</button>}
-          {onInsertCad && <button className="button primary" disabled={!selected || cadBusy} onClick={() => selected && onInsertCad(selected, cadOptions)}>{cadBusy ? "正在写入…" : cadEditorPayload?.sourceEdit ? "更新当前表格" : "按设置插入 CAD"}</button>}
+          {onInsertCad && <button className="button primary" disabled={!selected || cadBusy} onClick={() => selected && onInsertCad(selected, cadOptions)}>{cadBusy ? "正在写入…" : cadEditorPayload?.sourceEdit ? "更新当前表格" : cadOptions.insertType === "exploded" && cadOptions.placementMode === "window" ? "框选范围插入 CAD" : "按设置插入 CAD"}</button>}
         </footer>
       </section>
     </div>

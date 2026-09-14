@@ -30,10 +30,10 @@ namespace BatchPdfPublisher.Services
                 {
                     var projects = ReadProjects(path);
                     var normalizedProjectFolders = projects != null && projects.Any(x => x != null && NeedsProjectFolderNormalization(x.ProjectFolder));
-                    Normalize(projects);
+                    var normalizedFrameDirections = Normalize(projects);
                     var projected = ProjectSyncProjectionStore.MergeInto(projects);
                     var framePathsChanged = persistNormalization && FrameTemplateStore.MakePathsReadable(projects);
-                    if (persistNormalization && (framePathsChanged || normalizedProjectFolders || projected)) SaveProjects(projects);
+                    if (persistNormalization && (framePathsChanged || normalizedProjectFolders || normalizedFrameDirections || projected)) SaveProjects(projects);
                     return projects;
                 }
                 catch (Exception primaryFailure)
@@ -270,9 +270,10 @@ namespace BatchPdfPublisher.Services
             catch { }
         }
 
-        private static void Normalize(List<ProjectProfile> projects)
+        private static bool Normalize(List<ProjectProfile> projects)
         {
-            if (projects == null) return;
+            if (projects == null) return false;
+            var changed = false;
             projects.RemoveAll(x => x == null || string.IsNullOrWhiteSpace(x.Name));
             foreach (var project in projects)
             {
@@ -282,6 +283,15 @@ namespace BatchPdfPublisher.Services
                 }
                 else if (!Path.IsPathRooted(project.ProjectFolder)) project.ProjectFolder = Path.GetFullPath(Path.Combine(UserDataPaths.RootDirectory, project.ProjectFolder));
                 if (project.Frames == null) project.Frames = new List<FrameDefinition>();
+                foreach (var frame in project.Frames.Where(x => x != null))
+                {
+                    var direction = PaperSizeCatalog.DefaultOrientation(frame.PaperSize);
+                    if (!string.Equals(frame.PaperOrientation, direction, StringComparison.OrdinalIgnoreCase))
+                    {
+                        frame.PaperOrientation = direction;
+                        changed = true;
+                    }
+                }
                 if (string.IsNullOrWhiteSpace(project.PlotStyle)) project.PlotStyle = "monochrome.ctb";
                 if (string.IsNullOrWhiteSpace(project.MarginMode)) project.MarginMode = "自动适配";
                 if (string.IsNullOrWhiteSpace(project.OutputDirectory)) project.OutputDirectory = Path.Combine(project.ProjectFolder, "PDF输出");
@@ -293,6 +303,7 @@ namespace BatchPdfPublisher.Services
                 if (project.SelectedLayouts == null) project.SelectedLayouts = new List<string>();
             }
             if (projects.Count == 0) projects.Add(new ProjectProfile { Name = "默认项目" });
+            return changed;
         }
 
         private static List<FrameDefinition> LoadLegacyFrames()

@@ -43,7 +43,10 @@ namespace BatchPdfPublisher.Views
             Text = "创建 / 插入图框"; Width = 660; Height = 440; MinimumSize = new Size(620, 410);
             StartPosition = FormStartPosition.CenterParent; Font = new Font("Microsoft YaHei UI", 9F);
             _documentBinding = new ModelessDocumentBinding(this, document);
-            Build(); LoadSettings(); FormClosed += (s, e) => SaveSettings();
+            Build(); LoadSettings();
+            _orientation.Text = PaperSizeCatalog.DefaultOrientation(_paper.Text);
+            _orientation.Enabled = false;
+            FormClosed += (s, e) => SaveSettings();
         }
 
         private void Build()
@@ -54,12 +57,13 @@ namespace BatchPdfPublisher.Views
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); Controls.Add(root);
             root.Controls.Add(new Label { Text = "纸张规格", AutoSize = true, Margin = new Padding(0, 7, 0, 3) }, 0, 0);
             AddCombo(_paper, new[] { "A0", "A1", "A2", "A3", "A4" }, "A1", root, 1, 0);
-            _paper.SelectedIndexChanged += (s, e) => RefreshExtensionChoices();
+            _paper.SelectedIndexChanged += (s, e) => { RefreshExtensionChoices(); _orientation.Text = PaperSizeCatalog.DefaultOrientation(_paper.Text); _orientation.Enabled = false; };
             root.Controls.Add(new Label { Text = "加长", AutoSize = true, Margin = new Padding(0, 7, 0, 3) }, 0, 1);
             AddCombo(_extension, new[] { "无加长", "1/4", "1/2", "3/4", "1", "5/4", "3/2", "7/4", "2", "9/4", "5/2", "3", "7/2" }, "无加长", root, 1, 1);
             RefreshExtensionChoices();
             root.Controls.Add(new Label { Text = "方向", AutoSize = true, Margin = new Padding(0, 7, 0, 3) }, 0, 2);
             AddCombo(_orientation, new[] { "横向", "纵向" }, "横向", root, 1, 2);
+            _orientation.Enabled = false;
             root.Controls.Add(new Label { Text = "用户备注", AutoSize = true, Margin = new Padding(0, 7, 0, 3) }, 0, 3);
             _remark.Text = "自建图框"; _remark.Dock = DockStyle.Fill; _remark.Height = 30; root.Controls.Add(_remark, 1, 3);
             root.Controls.Add(new Label { Text = "属性文字", AutoSize = true, Margin = new Padding(0, 7, 0, 3) }, 0, 4);

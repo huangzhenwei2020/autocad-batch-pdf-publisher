@@ -75,16 +75,6 @@ namespace CadArchSpec.Host.Shared.CadTable
             var document = Application.DocumentManager.MdiActiveDocument;
             if (document == null) throw new InvalidOperationException("当前没有活动的 CAD 图纸。");
             document.Window.Focus();
-            var updateTarget = ResolveTableUpdateTarget(payload, document);
-            Point3d insertionPoint;
-            if (updateTarget != null) insertionPoint = updateTarget.Position;
-            else
-            {
-                var pointResult = document.Editor.GetPoint("\n指定重新插入 CAD 表格的位置：");
-                if (pointResult.Status != PromptStatus.OK) return new JObject { ["cancelled"] = true };
-                insertionPoint = pointResult.Value;
-            }
-
             var source = payload["table"] as JObject;
             var columns = (source == null ? null : source["columns"] as JArray) ?? new JArray();
             var rows = (source == null ? null : source["rows"] as JArray) ?? new JArray();
@@ -92,12 +82,41 @@ namespace CadArchSpec.Host.Shared.CadTable
 
             var options = payload["cadInsertOptions"] as JObject ?? new JObject();
             SaveEditorDefaults(source, options);
+            var insertType = ((string)options["insertType"] ?? "autocad").Trim();
+            var insertAsTianzheng = string.Equals(insertType, "tianzheng", StringComparison.OrdinalIgnoreCase);
+            var insertAsExploded = string.Equals(insertType, "exploded", StringComparison.OrdinalIgnoreCase);
+            var fitToWindow = insertAsExploded && string.Equals((string)options["placementMode"], "window", StringComparison.OrdinalIgnoreCase);
+            var updateTarget = ResolveTableUpdateTarget(payload, document);
+            Point3d insertionPoint;
+            double? targetWidth = null;
+            double? targetHeight = null;
+            if (updateTarget != null) insertionPoint = updateTarget.Position;
+            else
+            {
+                var pointResult = document.Editor.GetPoint(fitToWindow
+                    ? "\n指定打散表格范围的第一个角点："
+                    : "\n指定重新插入 CAD 表格的位置：");
+                if (pointResult.Status != PromptStatus.OK) return new JObject { ["cancelled"] = true };
+                insertionPoint = pointResult.Value;
+                if (fitToWindow)
+                {
+                    var cornerOptions = new PromptCornerOptions("\n指定打散表格范围的另一个角点：", insertionPoint);
+                    var cornerResult = document.Editor.GetCorner(cornerOptions);
+                    if (cornerResult.Status != PromptStatus.OK) return new JObject { ["cancelled"] = true };
+                    var firstCorner = insertionPoint;
+                    targetWidth = Math.Abs(firstCorner.X - cornerResult.Value.X);
+                    targetHeight = Math.Abs(firstCorner.Y - cornerResult.Value.Y);
+                    if (targetWidth <= .001d || targetHeight <= .001d)
+                        throw new InvalidOperationException("框选范围的宽度和高度必须大于零。");
+                    insertionPoint = new Point3d(Math.Min(firstCorner.X, cornerResult.Value.X),
+                        Math.Max(firstCorner.Y, cornerResult.Value.Y), firstCorner.Z);
+                }
+            }
             var useOriginalSize = (bool?)options["useOriginalCadSize"] == true && (bool?)payload["hasOriginalCadSize"] == true;
             var scale = Math.Max(.001d, (double?)options["scale"] ?? 1d);
             var contentScale = useOriginalSize ? ResolveOriginalCadScale(source) : scale;
             var textHeight = Math.Max(.1d, (double?)options["textHeightMillimeters"] ?? 3.5d) * contentScale;
             var textStyleName = ((string)options["textStyle"] ?? string.Empty).Trim();
-            var insertAsTianzheng = string.Equals((string)options["insertType"], "tianzheng", StringComparison.OrdinalIgnoreCase);
             var outerBorderColor = ReadCadIndexedColor(source["outerBorderColorIndex"]);
             var innerBorderColor = ReadCadIndexedColor(source["innerBorderColorIndex"]);
             var outerBorderWeight = (double?)source["outerBorderWeightMillimeters"] ?? .25d;
@@ -111,6 +130,12 @@ namespace CadArchSpec.Host.Shared.CadTable
 
             if (insertAsTianzheng)
                 return InsertTianzhengTable(payload, document, insertionPoint, updateTarget);
+
+            if (insertAsExploded)
+                return InsertExplodedTable(payload, document, insertionPoint, targetWidth, targetHeight, updateTarget,
+                    useOriginalSize, scale, contentScale, textHeight, textStyleName, outerBorderColor,
+                    innerBorderColor, outerBorderWeight, innerBorderWeight,
+                    showInnerHorizontalLines, showInnerVerticalLines);
 
             var cadObjectBlocks = ImportCellCadObjectBlocks(document.Database, source);
 
@@ -165,9 +190,6 @@ namespace CadArchSpec.Host.Shared.CadTable
                         var fillColor = ReadCadIndexedColor(cell["fillColorIndex"]);
                         var contentColor = ReadCadIndexedColor(cell["textColorIndex"]);
                         ApplyCellColors(table.Cells[rowIndex, columnIndex], fillColor, contentColor);
-                        ApplyCellBorders(table.Cells[rowIndex, columnIndex], outerBorderColor,
-                            innerBorderColor, outerBorderWeight, innerBorderWeight, rowIndex, columnIndex,
-                            rows.Count, columns.Count, showInnerHorizontalLines, showInnerVerticalLines);
                         if (rowSpan == 0 || columnSpan == 0)
                         {
                             table.Cells[rowIndex, columnIndex].TextString = string.Empty;
@@ -210,6 +232,8 @@ namespace CadArchSpec.Host.Shared.CadTable
                 }
 #pragma warning restore CS0618
                 table.GenerateLayout();
+                ApplyNativeTableGrid(table, outerBorderColor, innerBorderColor, outerBorderWeight,
+                    innerBorderWeight, showInnerHorizontalLines, showInnerVerticalLines);
                 if (!updateNative)
                 {
                     currentSpace.AppendEntity(table);
@@ -228,6 +252,313 @@ namespace CadArchSpec.Host.Shared.CadTable
             var result = new JObject { ["action"] = updateTarget == null ? "inserted" : "updated", ["insertType"] = "autocad" };
             CopyResultSummary(result, payload);
             return result;
+        }
+
+        private static JObject InsertExplodedTable(JObject payload, Document document, Point3d insertionPoint,
+            double? targetWidth, double? targetHeight, TableUpdateTarget updateTarget,
+            bool useOriginalSize, double scale, double contentScale, double textHeight, string textStyleName,
+            Autodesk.AutoCAD.Colors.Color outerBorderColor, Autodesk.AutoCAD.Colors.Color innerBorderColor,
+            double outerBorderWeight, double innerBorderWeight,
+            bool showInnerHorizontalLines, bool showInnerVerticalLines)
+        {
+            var source = payload["table"] as JObject;
+            var columns = (source?["columns"] as JArray ?? new JArray()).OfType<JObject>().ToList();
+            var rows = (source?["rows"] as JArray ?? new JArray()).OfType<JObject>().ToList();
+            var editedColumnTotal = columns.Sum(column => Math.Max(.001d, (double?)column["widthMillimeters"] ?? 36d));
+            var sourceColumnTotal = columns.Sum(column => Math.Max(0d, (double?)column["sourceWidthCadUnits"] ?? 0d));
+            var editedRowTotal = rows.Sum(row => Math.Max(.001d, (double?)row["heightMillimeters"] ?? 8d));
+            var sourceRowTotal = rows.Sum(row => Math.Max(0d, (double?)row["sourceHeightCadUnits"] ?? 0d));
+            var widths = columns.Select(column =>
+            {
+                var edited = Math.Max(.001d, (double?)column["widthMillimeters"] ?? 36d);
+                return useOriginalSize && sourceColumnTotal > .001d
+                    ? sourceColumnTotal * edited / editedColumnTotal : edited * scale;
+            }).ToArray();
+            var heights = rows.Select(row =>
+            {
+                var edited = Math.Max(.001d, (double?)row["heightMillimeters"] ?? 8d);
+                return useOriginalSize && sourceRowTotal > .001d
+                    ? sourceRowTotal * edited / editedRowTotal : Math.Max(textHeight * 1.8d, edited * scale);
+            }).ToArray();
+
+            var naturalWidth = widths.Sum();
+            var naturalHeight = heights.Sum();
+            var xFactor = targetWidth.HasValue ? targetWidth.Value / Math.Max(.001d, naturalWidth) : 1d;
+            var yFactor = targetHeight.HasValue ? targetHeight.Value / Math.Max(.001d, naturalHeight) : 1d;
+            for (var index = 0; index < widths.Length; index++) widths[index] *= xFactor;
+            for (var index = 0; index < heights.Length; index++) heights[index] *= yFactor;
+            var x = PrefixPositions(widths);
+            var y = PrefixPositions(heights);
+            var drawingScale = contentScale * Math.Min(xFactor, yFactor);
+            var actualTextHeight = Math.Max(.001d, textHeight * Math.Min(xFactor, yFactor));
+            var rotation = updateTarget == null ? 0d : updateTarget.RotationRadians;
+            var layerId = updateTarget == null ? ObjectId.Null : updateTarget.LayerId;
+            var cadObjectBlocks = ImportCellCadObjectBlocks(document.Database, source);
+            var insertedIds = new List<ObjectId>();
+
+            using (var transaction = document.Database.TransactionManager.StartTransaction())
+            {
+                var currentSpace = (BlockTableRecord)transaction.GetObject(document.Database.CurrentSpaceId, OpenMode.ForWrite);
+                var textStyleId = ResolveTextStyle(document.Database, transaction, textStyleName);
+                AppendExplodedPolyline(document.Database, transaction, currentSpace, insertedIds,
+                    new[] { new Point2d(0d, 0d), new Point2d(x[x.Length - 1], 0d),
+                        new Point2d(x[x.Length - 1], y[y.Length - 1]), new Point2d(0d, y[y.Length - 1]) },
+                    true, insertionPoint, rotation, layerId, outerBorderColor,
+                    Math.Max(0d, outerBorderWeight) * drawingScale);
+
+                if (showInnerHorizontalLines)
+                    for (var boundary = 1; boundary < rows.Count; boundary++)
+                        AppendVisibleHorizontalRuns(source, boundary, columns.Count, x, y[boundary],
+                            document.Database, transaction, currentSpace, insertedIds, insertionPoint,
+                            rotation, layerId, innerBorderColor, Math.Max(0d, innerBorderWeight) * drawingScale);
+                if (showInnerVerticalLines)
+                    for (var boundary = 1; boundary < columns.Count; boundary++)
+                        AppendVisibleVerticalRuns(source, boundary, rows.Count, y, x[boundary],
+                            document.Database, transaction, currentSpace, insertedIds, insertionPoint,
+                            rotation, layerId, innerBorderColor, Math.Max(0d, innerBorderWeight) * drawingScale);
+
+                for (var rowIndex = 0; rowIndex < rows.Count; rowIndex++)
+                {
+                    var cells = (rows[rowIndex]["cells"] as JArray ?? new JArray()).OfType<JObject>().ToList();
+                    for (var columnIndex = 0; columnIndex < Math.Min(columns.Count, cells.Count); columnIndex++)
+                    {
+                        var cell = cells[columnIndex];
+                        var rowSpan = Math.Max(0, (int?)cell["rowSpan"] ?? 1);
+                        var columnSpan = Math.Max(0, (int?)cell["columnSpan"] ?? 1);
+                        if (rowSpan == 0 || columnSpan == 0) continue;
+                        var rightColumn = Math.Min(columns.Count, columnIndex + columnSpan);
+                        var bottomRow = Math.Min(rows.Count, rowIndex + rowSpan);
+                        var left = x[columnIndex]; var right = x[rightColumn];
+                        var top = y[rowIndex]; var bottom = y[bottomRow];
+                        var assetPath = ((string)cell["cadObjectAssetPath"] ?? string.Empty).Trim();
+                        ObjectId blockId;
+                        if (assetPath.Length > 0 && cadObjectBlocks.TryGetValue(assetPath, out blockId))
+                        {
+                            AppendExplodedCellBlock(document.Database, transaction, currentSpace, insertedIds,
+                                blockId, left, top, right, bottom, insertionPoint, rotation, layerId);
+                            continue;
+                        }
+                        AppendExplodedCellText(document.Database, transaction, currentSpace, insertedIds,
+                            cell, left, top, right, bottom, insertionPoint, rotation, layerId,
+                            textStyleId, actualTextHeight, drawingScale);
+                    }
+                }
+
+                if (updateTarget != null)
+                {
+                    var oldIds = new List<ObjectId>();
+                    if (!updateTarget.NativeTableId.IsNull) oldIds.Add(updateTarget.NativeTableId);
+                    oldIds.AddRange(updateTarget.LooseEntityIds);
+                    foreach (var id in oldIds.Distinct().Where(id => id.IsValid && !id.IsErased))
+                    {
+                        var oldEntity = transaction.GetObject(id, OpenMode.ForWrite, false) as Entity;
+                        if (oldEntity != null) oldEntity.Erase();
+                    }
+                }
+                transaction.Commit();
+            }
+            WriteEditorMetadata(document, insertedIds, source);
+            GroupInsertedTable(document, insertedIds);
+            if (insertedIds.Count > 0) document.Editor.SetImpliedSelection(insertedIds.ToArray());
+            var result = new JObject
+            {
+                ["action"] = updateTarget == null ? "inserted" : "updated",
+                ["insertType"] = "exploded",
+                ["entityCount"] = insertedIds.Count
+            };
+            CopyResultSummary(result, payload);
+            return result;
+        }
+
+        private static double[] PrefixPositions(IList<double> values)
+        {
+            var result = new double[values.Count + 1];
+            for (var index = 0; index < values.Count; index++) result[index + 1] = result[index] + values[index];
+            return result;
+        }
+
+        private static Point3d ExplodedPoint(Point3d origin, double rotation, double x, double y)
+        {
+            return origin + new Vector3d(x, -y, 0d).RotateBy(rotation, Vector3d.ZAxis);
+        }
+
+        private static void AppendExplodedPolyline(Database database, Transaction transaction,
+            BlockTableRecord space, ICollection<ObjectId> ids, IEnumerable<Point2d> localPoints, bool closed,
+            Point3d origin, double rotation, ObjectId layerId, Autodesk.AutoCAD.Colors.Color color, double width)
+        {
+            var polyline = new Polyline();
+            polyline.SetDatabaseDefaults(database);
+            var index = 0;
+            foreach (var point in localPoints)
+            {
+                var world = ExplodedPoint(origin, rotation, point.X, point.Y);
+                polyline.AddVertexAt(index++, new Point2d(world.X, world.Y), 0d, width, width);
+            }
+            polyline.Closed = closed;
+            polyline.ConstantWidth = width;
+            if (color != null) polyline.Color = color;
+            if (!layerId.IsNull && layerId.IsValid) polyline.LayerId = layerId;
+            space.AppendEntity(polyline);
+            transaction.AddNewlyCreatedDBObject(polyline, true);
+            ids.Add(polyline.ObjectId);
+        }
+
+        private static void AppendVisibleHorizontalRuns(JObject table, int boundary, int columnCount,
+            double[] x, double y, Database database, Transaction transaction, BlockTableRecord space,
+            ICollection<ObjectId> ids, Point3d origin, double rotation, ObjectId layerId,
+            Autodesk.AutoCAD.Colors.Color color, double width)
+        {
+            var runStart = -1;
+            for (var column = 0; column <= columnCount; column++)
+            {
+                var visible = column < columnCount && !MergedAcrossHorizontalBoundary(table, boundary, column);
+                if (visible && runStart < 0) runStart = column;
+                if ((!visible || column == columnCount) && runStart >= 0)
+                {
+                    AppendExplodedPolyline(database, transaction, space, ids,
+                        new[] { new Point2d(x[runStart], y), new Point2d(x[column], y) }, false,
+                        origin, rotation, layerId, color, width);
+                    runStart = -1;
+                }
+            }
+        }
+
+        private static void AppendVisibleVerticalRuns(JObject table, int boundary, int rowCount,
+            double[] y, double x, Database database, Transaction transaction, BlockTableRecord space,
+            ICollection<ObjectId> ids, Point3d origin, double rotation, ObjectId layerId,
+            Autodesk.AutoCAD.Colors.Color color, double width)
+        {
+            var runStart = -1;
+            for (var row = 0; row <= rowCount; row++)
+            {
+                var visible = row < rowCount && !MergedAcrossVerticalBoundary(table, row, boundary);
+                if (visible && runStart < 0) runStart = row;
+                if ((!visible || row == rowCount) && runStart >= 0)
+                {
+                    AppendExplodedPolyline(database, transaction, space, ids,
+                        new[] { new Point2d(x, y[runStart]), new Point2d(x, y[row]) }, false,
+                        origin, rotation, layerId, color, width);
+                    runStart = -1;
+                }
+            }
+        }
+
+        private static bool MergedAcrossHorizontalBoundary(JObject table, int boundary, int column)
+        {
+            var rows = table?["rows"] as JArray ?? new JArray();
+            for (var row = 0; row < Math.Min(boundary, rows.Count); row++)
+            {
+                var cells = rows[row]?["cells"] as JArray ?? new JArray();
+                for (var col = 0; col < cells.Count; col++)
+                {
+                    var cell = cells[col] as JObject;
+                    var rowSpan = Math.Max(0, (int?)cell?["rowSpan"] ?? 1);
+                    var columnSpan = Math.Max(0, (int?)cell?["columnSpan"] ?? 1);
+                    if (rowSpan > 1 && row + rowSpan > boundary && col <= column && col + columnSpan > column) return true;
+                }
+            }
+            return false;
+        }
+
+        private static bool MergedAcrossVerticalBoundary(JObject table, int row, int boundary)
+        {
+            var rows = table?["rows"] as JArray ?? new JArray();
+            for (var anchorRow = 0; anchorRow <= row && anchorRow < rows.Count; anchorRow++)
+            {
+                var cells = rows[anchorRow]?["cells"] as JArray ?? new JArray();
+                for (var column = 0; column < Math.Min(boundary, cells.Count); column++)
+                {
+                    var cell = cells[column] as JObject;
+                    var rowSpan = Math.Max(0, (int?)cell?["rowSpan"] ?? 1);
+                    var columnSpan = Math.Max(0, (int?)cell?["columnSpan"] ?? 1);
+                    if (columnSpan > 1 && column + columnSpan > boundary &&
+                        anchorRow <= row && anchorRow + rowSpan > row) return true;
+                }
+            }
+            return false;
+        }
+
+        private static void AppendExplodedCellText(Database database, Transaction transaction,
+            BlockTableRecord space, ICollection<ObjectId> ids, JObject cell,
+            double left, double top, double right, double bottom, Point3d origin, double rotation,
+            ObjectId layerId, ObjectId textStyleId, double textHeight, double drawingScale)
+        {
+            var display = ((string)cell["displayValue"] ?? string.Empty).Replace("\r\n", "\n")
+                .Replace('\r', '\n').Replace("\\P", "\n");
+            if (display.Length == 0) return;
+            var padding = Math.Max(0d, (double?)cell["horizontalPaddingMillimeters"] ?? 1d) * drawingScale;
+            var alignment = ((string)cell["alignment"] ?? "center").ToLowerInvariant();
+            var anchorX = alignment == "left" ? left + padding : alignment == "right" ? right - padding : (left + right) * .5d;
+            var anchorY = (top + bottom) * .5d;
+            var location = ExplodedPoint(origin, rotation, anchorX, anchorY);
+            var color = ReadCadIndexedColor(cell["textColorIndex"]);
+            if (display.IndexOf('\n') < 0)
+            {
+                var text = new DBText
+                {
+                    TextString = display,
+                    Height = textHeight,
+                    TextStyleId = textStyleId,
+                    Rotation = rotation,
+                    VerticalMode = TextVerticalMode.TextVerticalMid,
+                    HorizontalMode = alignment == "left" ? TextHorizontalMode.TextLeft :
+                        alignment == "right" ? TextHorizontalMode.TextRight : TextHorizontalMode.TextCenter,
+                    Position = location,
+                    AlignmentPoint = location
+                };
+                text.SetDatabaseDefaults(database);
+                text.TextStyleId = textStyleId;
+                if (color != null) text.Color = color;
+                if (!layerId.IsNull && layerId.IsValid) text.LayerId = layerId;
+                space.AppendEntity(text); transaction.AddNewlyCreatedDBObject(text, true); ids.Add(text.ObjectId);
+            }
+            else
+            {
+                var text = new MText
+                {
+                    Contents = TianzhengTextCodec.ToAutoCadMText(display),
+                    TextHeight = textHeight,
+                    TextStyleId = textStyleId,
+                    Rotation = rotation,
+                    Location = location,
+                    Width = Math.Max(textHeight, right - left - padding * 2d),
+                    Attachment = alignment == "left" ? AttachmentPoint.MiddleLeft :
+                        alignment == "right" ? AttachmentPoint.MiddleRight : AttachmentPoint.MiddleCenter
+                };
+                text.SetDatabaseDefaults(database);
+                text.TextStyleId = textStyleId;
+                if (color != null) text.Color = color;
+                if (!layerId.IsNull && layerId.IsValid) text.LayerId = layerId;
+                space.AppendEntity(text); transaction.AddNewlyCreatedDBObject(text, true); ids.Add(text.ObjectId);
+            }
+        }
+
+        private static void AppendExplodedCellBlock(Database database, Transaction transaction,
+            BlockTableRecord space, ICollection<ObjectId> ids, ObjectId blockId,
+            double left, double top, double right, double bottom, Point3d origin, double rotation, ObjectId layerId)
+        {
+            var center = ExplodedPoint(origin, rotation, (left + right) * .5d, (top + bottom) * .5d);
+            var reference = new BlockReference(center, blockId) { Rotation = rotation };
+            reference.SetDatabaseDefaults(database);
+            if (!layerId.IsNull && layerId.IsValid) reference.LayerId = layerId;
+            var definition = (BlockTableRecord)transaction.GetObject(blockId, OpenMode.ForRead);
+            Extents3d? bounds = null;
+            foreach (ObjectId id in definition)
+            {
+                var entity = transaction.GetObject(id, OpenMode.ForRead, false) as Entity;
+                if (entity == null) continue;
+                try { if (!bounds.HasValue) bounds = entity.GeometricExtents; else { var value = bounds.Value; value.AddExtents(entity.GeometricExtents); bounds = value; } }
+                catch { }
+            }
+            if (bounds.HasValue)
+            {
+                var width = Math.Abs(bounds.Value.MaxPoint.X - bounds.Value.MinPoint.X);
+                var height = Math.Abs(bounds.Value.MaxPoint.Y - bounds.Value.MinPoint.Y);
+                var factor = Math.Min(width > .001d ? (right - left) * .82d / width : 1d,
+                    height > .001d ? (bottom - top) * .72d / height : 1d);
+                if (factor > .001d && !double.IsNaN(factor) && !double.IsInfinity(factor)) reference.ScaleFactors = new Scale3d(factor);
+            }
+            space.AppendEntity(reference); transaction.AddNewlyCreatedDBObject(reference, true); ids.Add(reference.ObjectId);
         }
 
         public static async Task<JObject> InsertTableAsync(JObject payload)
@@ -365,6 +696,7 @@ namespace CadArchSpec.Host.Shared.CadTable
                 ["textHeightMillimeters"] = (double?)options?["textHeightMillimeters"] ?? 3.5d,
                 ["useOriginalCadSize"] = (bool?)options?["useOriginalCadSize"] == true,
                 ["insertType"] = (string)options?["insertType"] ?? "autocad",
+                ["placementMode"] = (string)options?["placementMode"] ?? "point",
                 ["horizontalPaddingMillimeters"] = (double?)firstCell?["horizontalPaddingMillimeters"] ?? 1d,
                 ["cellFillColorIndex"] = firstCell?["fillColorIndex"]?.DeepClone(),
                 ["cellTextColorIndex"] = firstCell?["textColorIndex"]?.DeepClone(),
@@ -1031,6 +1363,49 @@ namespace CadArchSpec.Host.Shared.CadTable
             ApplyBorderEdge(borders, "Vertical", innerColor, innerWeight, showInnerVerticalLines);
         }
 
+        private static void ApplyNativeTableGrid(Table table, Autodesk.AutoCAD.Colors.Color outerColor,
+            Autodesk.AutoCAD.Colors.Color innerColor, double outerWeight, double innerWeight,
+            bool showInnerHorizontalLines, bool showInnerVerticalLines)
+        {
+            if (table == null) return;
+            var outerLineWeight = ClosestCadLineWeight(outerWeight);
+            var innerLineWeight = ClosestCadLineWeight(innerWeight);
+            for (var row = 0; row < table.Rows.Count; row++)
+                for (var column = 0; column < table.Columns.Count; column++)
+                {
+                    SetNativeGridEdge(table.Cells[row, column].Borders.Top,
+                        row == 0 || showInnerHorizontalLines, row == 0 ? outerColor : innerColor,
+                        row == 0 ? outerLineWeight : innerLineWeight);
+                    SetNativeGridEdge(table.Cells[row, column].Borders.Bottom,
+                        row == table.Rows.Count - 1 || showInnerHorizontalLines, row == table.Rows.Count - 1 ? outerColor : innerColor,
+                        row == table.Rows.Count - 1 ? outerLineWeight : innerLineWeight);
+                    SetNativeGridEdge(table.Cells[row, column].Borders.Left,
+                        column == 0 || showInnerVerticalLines, column == 0 ? outerColor : innerColor,
+                        column == 0 ? outerLineWeight : innerLineWeight);
+                    SetNativeGridEdge(table.Cells[row, column].Borders.Right,
+                        column == table.Columns.Count - 1 || showInnerVerticalLines, column == table.Columns.Count - 1 ? outerColor : innerColor,
+                        column == table.Columns.Count - 1 ? outerLineWeight : innerLineWeight);
+                }
+        }
+
+        private static void SetNativeGridEdge(CellBorder edge, bool visible,
+            Autodesk.AutoCAD.Colors.Color color, LineWeight lineWeight)
+        {
+            edge.IsVisible = visible;
+            if (!visible) return;
+            if (color != null) edge.Color = color;
+            edge.LineWeight = lineWeight;
+        }
+
+        private static LineWeight ClosestCadLineWeight(double millimeters)
+        {
+            var requested = Math.Max(0, (int)Math.Round(millimeters * 100d));
+            var supported = new[] { 0, 5, 9, 13, 15, 18, 20, 25, 30, 35, 40, 50,
+                53, 60, 70, 80, 90, 100, 106, 120, 140, 158, 200, 211 };
+            var closest = supported.OrderBy(value => Math.Abs(value - requested)).First();
+            return (LineWeight)closest;
+        }
+
         private static void ApplyBorderEdge(object borders, string name, Autodesk.AutoCAD.Colors.Color color, double weight, bool visible)
         {
             var edge = TryGetProperty(borders, name);
@@ -1576,7 +1951,7 @@ namespace CadArchSpec.Host.Shared.CadTable
                     ["rotationDegrees"] = detected.DetectedRotationDegrees
                 };
             AttachAutomaticallyDetectedCadObjects(payload, document, selectedIds, detected,
-                read.Input.TextFragments, medianHeight);
+                read.Input.TextFragments, medianHeight, selectedCompoundGraphicHandles);
             RestoreEditorMetadata(payload, editorMetadata);
             return payload;
         }
@@ -1660,7 +2035,8 @@ namespace CadArchSpec.Host.Shared.CadTable
 
         private static void AttachAutomaticallyDetectedCadObjects(JObject payload, Document document,
             IEnumerable<ObjectId> selectedIds, CadTableDetectionResult detected,
-            IEnumerable<CadTextFragment> textFragments, double medianTextHeight)
+            IEnumerable<CadTextFragment> textFragments, double medianTextHeight,
+            ISet<string> compoundGraphicHandles)
         {
             var borderHandles = new HashSet<string>(detected.Cells.SelectMany(cell => cell.SourceHandles)
                 .Where(value => !string.IsNullOrWhiteSpace(value)), StringComparer.OrdinalIgnoreCase);
@@ -1677,11 +2053,13 @@ namespace CadArchSpec.Host.Shared.CadTable
                     var entity = transaction.GetObject(id, OpenMode.ForRead, false) as Entity;
                     if (entity == null || IsTableTextEntity(entity) || entity is Table) continue;
                     var handle = SafeHandle(entity);
-                    // A Tianzheng/proxy text object is often exploded for reading. Its
-                    // top-level entity must not then be captured again as cell graphics.
-                    // Keep block references because symbol blocks may legitimately
-                    // contain text as part of a visual icon.
-                    if (textHandles.Contains(handle) && !(entity is BlockReference)) continue;
+                    // Pure Tianzheng text proxies are read as text and must not also
+                    // become a cell graphic. Compound annotations (for example an
+                    // elevation marker) expose both text and linework under the same
+                    // source handle; retain the complete top-level object so its
+                    // symbol is not lost during table editing and reinsertion.
+                    if (textHandles.Contains(handle) && !(entity is BlockReference) &&
+                        (compoundGraphicHandles == null || !compoundGraphicHandles.Contains(handle))) continue;
                     if (borderHandles.Contains(handle) && IsActualTableBoundary(entity, detected, tolerance)) continue;
                     Extents3d bounds;
                     try { bounds = entity.GeometricExtents; }

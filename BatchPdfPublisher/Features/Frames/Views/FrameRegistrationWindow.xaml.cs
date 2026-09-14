@@ -45,7 +45,8 @@ namespace BatchPdfPublisher.Views
                 : "检测到属性：" + string.Join("；", _attributeValues.Select(x => x.Key + " = " + (string.IsNullOrWhiteSpace(x.Value) ? "（空）" : x.Value.Trim())));
             MeasuredSizeText.Text = guess.MeasuredSize + "；建议 " + guess.PaperSize +
                                     (string.IsNullOrWhiteSpace(guess.Extension) ? string.Empty : "+" + guess.Extension) +
-                                    "，" + guess.PaperOrientation + "，打印比例 " + guess.PrintScale + "（均可修改）\n" + detectedAttributes;
+                                    "，登记方向 " + PaperSizeCatalog.DefaultOrientation(guess.PaperSize) +
+                                    "，打印比例 " + guess.PrintScale + "（纸张和比例可修改）\n" + detectedAttributes;
 
             var selectedTags = existing == null
                 ? Enumerable.Empty<string>()
@@ -57,7 +58,8 @@ namespace BatchPdfPublisher.Views
             SelectComboByText(PaperSizeBox, existing?.PaperSize ?? guess.PaperSize);
             PaperSizeBox_SelectionChanged(null, null);
             SelectComboByText(ExtensionBox, string.IsNullOrWhiteSpace(existing?.Extension ?? guess.Extension) ? "无加长" : existing?.Extension ?? guess.Extension);
-            SelectComboByText(OrientationBox, existing?.PaperOrientation ?? guess.PaperOrientation);
+            SelectComboByText(OrientationBox, PaperSizeCatalog.DefaultOrientation(existing?.PaperSize ?? guess.PaperSize));
+            OrientationBox.IsEnabled = false;
             NoteBox.Text = existing?.Note ?? string.Empty;
             PickLayoutRangeBox.IsChecked = existing == null || !FrameLayoutRangeService.HasValidRange(existing);
             LayoutRangeText.Text = "当前登记：" + FrameLayoutRangeService.Describe(existing) + "。范围按图框 1:1 纸面毫米保存，供大样和门窗排版共用。";
@@ -213,6 +215,8 @@ namespace BatchPdfPublisher.Views
         {
             if (ExtensionBox == null) return;
             var paper = ItemText(PaperSizeBox);
+            SelectComboByText(OrientationBox, PaperSizeCatalog.DefaultOrientation(paper));
+            OrientationBox.IsEnabled = false;
             var previous = ItemText(ExtensionBox);
             ExtensionBox.Items.Clear();
             ExtensionBox.Items.Add(new ComboBoxItem { Content = "无加长" });
