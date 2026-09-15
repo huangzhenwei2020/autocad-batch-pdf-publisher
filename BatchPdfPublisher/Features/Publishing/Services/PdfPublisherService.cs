@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
@@ -337,6 +338,7 @@ namespace BatchPdfPublisher.Services
             try
             {
                 ValidateDeclaredFrameRatio(sheet);
+                ValidateStandardPaper(sheet);
                 // PlotInfoValidator requires the PlotInfo layout to belong to
                 // the active MDI document. This is especially important when
                 // one publish operation contains several DWG files.
@@ -501,8 +503,7 @@ namespace BatchPdfPublisher.Services
                     throw new InvalidOperationException("临时 PDF 实际纸张为 " + FormatMillimeters(width, height)
                         + " mm，与登记目标 " + FormatMillimeters(target[0], target[1])
                         + " mm 不一致。请检查 PC3/PMP 介质配置，插件已阻止错误页面进入合并文件。");
-                var content = page.Contents == null ? null : page.Contents.CreateSingleContent();
-                var contentBytes = content?.Stream?.Length ?? 0L;
+                var contentBytes = MeasurePageContentBytes(page);
                 if (new FileInfo(path).Length < 4096L && contentBytes < 512L)
                     throw new InvalidOperationException("CAD 生成了空白单页 PDF。请检查该图框实例的打印范围和方向，空白页已阻止进入最终 PDF。");
                 WritePublishDiagnostic("单页PDF完成：发布序号=" + (index + 1)
@@ -516,10 +517,42 @@ namespace BatchPdfPublisher.Services
             }
         }
 
+        // NormalizeTemporaryPage 会把整页内容包成一个 Form XObject，页面自身的
+        // 内容流只剩几十字节的 "q ... cm /Fm0 Do Q"。只看页内容流会让“空白页”
+        // 判据在裁切路径上恒成立而退化，所以这里把页内 Form XObject 的字节一并
+        // 统计，才是这一页真实的图面数据量。
+        private static long MeasurePageContentBytes(PdfSharp.Pdf.PdfPage page)
+        {
+            long total = 0L;
+            try
+            {
+                var content = page.Contents == null ? null : page.Contents.CreateSingleContent();
+                total += content?.Stream?.Length ?? 0L;
+            }
+            catch { }
+            try
+            {
+                var resources = page.Elements.GetDictionary("/Resources");
+                var xobjects = resources?.Elements.GetDictionary("/XObject");
+                if (xobjects == null) return total;
+                foreach (var key in xobjects.Elements.Keys)
+                {
+                    var form = xobjects.Elements.GetDictionary(key);
+                    if (form == null) continue;
+                    if (!string.Equals(form.Elements.GetName("/Subtype"), "/Form", StringComparison.Ordinal)) continue;
+                    try { total += form.Stream.UnfilteredValue.Length; }
+                    catch { }
+                }
+            }
+            catch { }
+            return total;
+        }
+
         private static void NormalizeTemporaryPage(string path, SheetItem sheet, int index)
         {
             var target = TargetPaperSize(sheet);
             var stagingPath = path + "." + Guid.NewGuid().ToString("N") + ".normalized.pdf";
+            var cropDiagnostic = string.Empty;
             try
             {
                 using (var input = PdfSharp.Pdf.IO.PdfReader.Open(path, PdfSharp.Pdf.IO.PdfDocumentOpenMode.Import))
@@ -527,27 +560,40 @@ namespace BatchPdfPublisher.Services
                 {
                     if (input.PageCount != 1)
                         throw new InvalidOperationException("后备介质生成的临时 PDF 不是单页文件。");
-                    var source = input.Pages[0];
                     var page = output.AddPage();
                     page.Width = PdfSharp.Drawing.XUnit.FromMillimeter(target[0]);
                     page.Height = PdfSharp.Drawing.XUnit.FromMillimeter(target[1]);
                     page.Rotate = 0;
+                    // PdfSharp 的 DrawImage(图元, dest, src) 只把 src 当裁剪框，
+                    // 缩放矩阵按整张 form 铺满 dest。因此必须按 form 自己的坐标
+                    // 计算裁切区，并把 dest 反推成同一个系数；否则源页与目标页
+                    // 比例不同时会被非等比拉伸——纵向图框出到横向介质上会被
+                    // 压扁整整 2 倍（0.7063 / 1.4156），加长图纸则被压成细条。
                     using (var form = PdfSharp.Drawing.XPdfForm.FromFile(path))
                     using (var graphics = PdfSharp.Drawing.XGraphics.FromPdfPage(page))
                     {
                         form.PageNumber = 1;
-                        var crop = CenterCrop(source.Width.Point, source.Height.Point, target[0] / target[1]);
+                        var formWidth = form.PointWidth;
+                        var formHeight = form.PointHeight;
+                        var crop = CenterCrop(formWidth, formHeight, target[0] / target[1]);
+                        var scaleX = page.Width.Point / crop[2];
+                        var scaleY = page.Height.Point / crop[3];
+                        var scale = Math.Min(scaleX, scaleY);
                         graphics.DrawImage(form,
-                            new PdfSharp.Drawing.XRect(0d, 0d, page.Width.Point, page.Height.Point),
+                            new PdfSharp.Drawing.XRect(-crop[0] * scale, -crop[1] * scale, formWidth * scale, formHeight * scale),
                             new PdfSharp.Drawing.XRect(crop[0], crop[1], crop[2], crop[3]),
                             PdfSharp.Drawing.XGraphicsUnit.Point);
+                        cropDiagnostic = "；等比系数=" + FormatNumber(scaleX) + "/" + FormatNumber(scaleY)
+                            + "；源页毫米=" + FormatNumber(formWidth * 25.4d / 72d) + "×" + FormatNumber(formHeight * 25.4d / 72d)
+                            + "；裁切=" + FormatNumber(crop[0]) + "," + FormatNumber(crop[1]) + ","
+                                + FormatNumber(crop[2]) + "," + FormatNumber(crop[3]);
                     }
                     output.Save(stagingPath);
                 }
                 CommitStagedFile(stagingPath, path);
                 WritePublishDiagnostic("单页后备介质已矢量裁切：发布序号=" + (index + 1)
                     + "；图号=" + sheet.SheetNumber
-                    + "；目标毫米=" + FormatMillimeters(target[0], target[1]));
+                    + "；目标毫米=" + FormatMillimeters(target[0], target[1]) + cropDiagnostic);
             }
             finally
             {
@@ -644,9 +690,18 @@ namespace BatchPdfPublisher.Services
                                 var inset = PdfSharp.Drawing.XUnit.FromMillimeter(marginMillimeters).Point;
                                 var width = Math.Max(1d, page.Width.Point - inset * 2d);
                                 var height = Math.Max(1d, page.Height.Point - inset * 2d);
+                                // PdfSharp 的 DrawImage 会把整张 form 铺满 dest。两轴
+                                // 各自算一次缩放会把白边尺寸的差异变成非等比拉伸，
+                                // 所以这里用一个系数（并沿用 form 自身坐标），保证等比。
+                                var formWidth = form.PointWidth;
+                                var formHeight = form.PointHeight;
+                                var scale = Math.Min(width / formWidth, height / formHeight);
+                                var drawWidth = formWidth * scale;
+                                var drawHeight = formHeight * scale;
                                 graphics.DrawImage(form,
-                                    new PdfSharp.Drawing.XRect(inset, inset, width, height),
-                                    new PdfSharp.Drawing.XRect(0d, 0d, source.Width.Point, source.Height.Point),
+                                    new PdfSharp.Drawing.XRect((page.Width.Point - drawWidth) / 2d,
+                                        (page.Height.Point - drawHeight) / 2d, drawWidth, drawHeight),
+                                    new PdfSharp.Drawing.XRect(0d, 0d, formWidth, formHeight),
                                     PdfSharp.Drawing.XGraphicsUnit.Point);
                             }
                         }
@@ -740,7 +795,15 @@ namespace BatchPdfPublisher.Services
             }
             validator.RefreshLists(settings);
             ApplyPlotStep("设置毫米单位", () => validator.SetPlotPaperUnits(settings, PlotPaperUnit.Millimeters));
-            var mediaSize = ParseMediaSize(media);
+            // 以绘图仪真正回报的纸张尺寸为准来判断是否需要裁切。介质名
+            // （例如 "UserDefinedMetric (420.00 x 743.00毫米)"）不一定等于实际
+            // 出纸尺寸：AutoCAD 会按 PIA 里的 landscape_mode 旋转纸张，自带
+            // 毫米纸张库正是按横式登记的。只看名字会把本来精确匹配的介质误判成
+            // “需要裁切”，白白多走一次打印并放大线宽。
+            var actualPaper = settings.PlotPaperSize;
+            var mediaSize = actualPaper.X > 0d && actualPaper.Y > 0d
+                ? new[] { actualPaper.X, actualPaper.Y }
+                : ParseMediaSize(media);
             if (mediaSize != null)
             {
                 var direct = RelativeError(mediaSize[0], target[0]) + RelativeError(mediaSize[1], target[1]);
@@ -827,18 +890,38 @@ namespace BatchPdfPublisher.Services
 
         private static string ChooseMedia(PlotSettingsValidator validator, PlotSettings settings, double targetWidth, double targetHeight, string marginMode, bool requireExactSize)
         {
+            var candidates = validator.GetCanonicalMediaNameList(settings).Cast<string>().ToList();
+            // 第一轮只接受与目标同方向的介质。尺寸吻合但存储方向差 90° 的介质
+            // 会把纵向图框打到横向纸上，必须再走一次矢量裁切，而裁切后的等比
+            // 放大还会把线宽一起放大。只有确实没有同方向介质时才进入第二轮。
+            var exact = PickBestMedia(candidates, targetWidth, targetHeight, marginMode, requireExactSize, false);
+            if (!string.IsNullOrWhiteSpace(exact)) return exact;
+            return PickBestMedia(candidates, targetWidth, targetHeight, marginMode, requireExactSize, true);
+        }
+
+        private static string PickBestMedia(IEnumerable<string> mediaNames, double targetWidth, double targetHeight,
+            string marginMode, bool requireExactSize, bool allowRotated)
+        {
             string best = null;
             var bestScore = double.MaxValue;
-            foreach (string media in validator.GetCanonicalMediaNameList(settings))
+            foreach (string media in mediaNames)
             {
                 var size = ParseMediaSize(media);
                 if (size == null) continue;
                 var direct = RelativeError(size[0], targetWidth) + RelativeError(size[1], targetHeight);
                 var rotated = RelativeError(size[1], targetWidth) + RelativeError(size[0], targetHeight);
-                var score = Math.Min(direct, rotated);
+                if (allowRotated && rotated >= direct) continue;
+                var score = allowRotated ? rotated : direct;
                 if (requireExactSize && score > .003d) continue;
-                var fullBleed = media.IndexOf("full_bleed", StringComparison.OrdinalIgnoreCase) >= 0 || media.IndexOf("expand", StringComparison.OrdinalIgnoreCase) >= 0;
-                var bundledMedia = media.IndexOf("BPP_", StringComparison.OrdinalIgnoreCase) >= 0;
+                // AutoCAD 返回的 canonical media name 取自 PIA 的 name 字段，
+                // 自带毫米纸张显示为 "UserDefinedMetric (420.00 x 743.00毫米)"，
+                // 而不是 localized_name（BPP_A2_420x743_MM_FULL_BLEED）。只认
+                // "BPP_" 会让下面两条偏好永远失效——满幅模式反而给自带满幅纸张
+                // 加了 0.2 惩罚，把最该选的介质排到最后。
+                var bundledMedia = IsBundledMedia(media);
+                var fullBleed = media.IndexOf("full_bleed", StringComparison.OrdinalIgnoreCase) >= 0
+                    || media.IndexOf("expand", StringComparison.OrdinalIgnoreCase) >= 0
+                    || bundledMedia;
                 if (string.Equals(marginMode, "无白边（满幅）", StringComparison.OrdinalIgnoreCase) && !fullBleed) score += 0.2d;
                 // Prefer the millimetre, zero-margin media shipped with the plug-in.
                 // PdfMerger then applies the selected 0 mm or 3 mm edge policy.
@@ -846,6 +929,16 @@ namespace BatchPdfPublisher.Services
                 if (score < bestScore) { bestScore = score; best = media; }
             }
             return best;
+        }
+
+        // 自带毫米纸张库（BatchPdfPublisher.pmp）里的纸张都由 AutoCAD 以
+        // "UserDefinedMetric (W x H 毫米)" 的名字报出来，只有 localized_name
+        // 才是 BPP_* 形式，所以两种都要认。
+        private static bool IsBundledMedia(string media)
+        {
+            return !string.IsNullOrWhiteSpace(media)
+                && (media.IndexOf("BPP_", StringComparison.OrdinalIgnoreCase) >= 0
+                    || media.IndexOf("UserDefinedMetric", StringComparison.OrdinalIgnoreCase) >= 0);
         }
 
         private static string ChooseFallbackMedia(PlotSettingsValidator validator, PlotSettings settings,
@@ -898,6 +991,29 @@ namespace BatchPdfPublisher.Services
         private static double[] TargetPaperSize(SheetItem sheet)
         {
             return PaperSizeCatalog.GetSize(sheet.Frame, sheet.Extension, sheet.PaperOrientation);
+        }
+
+        // GB/T 50001-2017 第 3.1.3 条：图纸的短边尺寸不应加长，A0～A3 幅面长边
+        // 尺寸可加长，但应符合表 3.1.3 的规定。超出标准表的加长比例不能发布，
+        // 否则出图幅面既不合规，也无法与标准图框、折图装订尺寸对应。
+        private static void ValidateStandardPaper(SheetItem sheet)
+        {
+            var paper = sheet.Frame;
+            var extension = sheet.Extension;
+            if (PaperSizeCatalog.IsStandardExtension(paper, extension)) return;
+            var fraction = PaperSizeCatalog.ParseExtension(extension);
+            var message = new StringBuilder();
+            message.Append("图纸“").Append(sheet.SheetNumber).Append(' ').Append(sheet.SheetName)
+                .Append("”登记的幅面 ").Append(paper);
+            if (fraction > 0d) message.Append('+').Append(PaperSizeCatalog.FormatExtension(fraction));
+            message.Append(" 不符合 GB/T 50001-2017 第 3.1.3 条。");
+            if (fraction > 0d)
+                message.Append(paper).Append(" 允许的加长比例为：")
+                    .Append(PaperSizeCatalog.DescribeStandardExtensions(paper)).Append('。');
+            else
+                message.Append(paper).Append(" 不允许加长。");
+            message.Append("请在图框登记中改正后再发布。");
+            throw new InvalidOperationException(message.ToString());
         }
 
         private static void ValidateDeclaredFrameRatio(SheetItem sheet)
