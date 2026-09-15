@@ -82,6 +82,8 @@ namespace BatchPdfPublisher.Services
         public double OriginY { get; set; }
         [DataMember]
         public double OriginZ { get; set; }
+        [DataMember(EmitDefaultValue = false)]
+        public bool IsFireRescueVariant { get; set; }
 
         public Point3d Origin { get { return new Point3d(OriginX, OriginY, OriginZ); } }
 
@@ -121,13 +123,14 @@ namespace BatchPdfPublisher.Services
                 DrawingScale = scale,
                 OriginX = origin.X,
                 OriginY = origin.Y,
-                OriginZ = origin.Z
+                OriginZ = origin.Z,
+                IsFireRescueVariant = item.IsFireRescueVariant
             };
         }
 
         public DoorWindowScheduleItem ToItem()
         {
-            return new DoorWindowScheduleItem
+            var item = new DoorWindowScheduleItem
             {
                 Selected = true,
                 Code = Code,
@@ -162,6 +165,8 @@ namespace BatchPdfPublisher.Services
                 DrawingScale = DrawingScale,
                 Status = "参数完整，可生成"
             };
+            item.IsFireRescueVariant = IsFireRescueVariant;
+            return item;
         }
     }
 

@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="PublishPlanStoreTests.cs" />
+    <Compile Include="ProjectStoreStubs.cs" />
+    <Compile Include="UserDataPathsStub.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\Publishing\Services\PublishPlanStore.cs" Link="PublishPlanStore.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\Publishing\Models\ProjectProfile.cs" Link="ProjectProfile.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\Publishing\Models\SheetCatalogItem.cs" Link="SheetCatalogItem.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\Frames\Models\FrameDefinition.cs" Link="FrameDefinition.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\Publishing\Services\PaperSizeCatalog.cs" Link="PaperSizeCatalog.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Models\CloudSyncModels.cs" Link="CloudSyncModels.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncSettingsStore.cs" Link="CloudSyncSettingsStore.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncFolderDetector.cs" Link="CloudSyncFolderDetector.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudProjectWorkspaceService.cs" Link="CloudProjectWorkspaceService.cs" />
+  </ItemGroup>
+</Project>

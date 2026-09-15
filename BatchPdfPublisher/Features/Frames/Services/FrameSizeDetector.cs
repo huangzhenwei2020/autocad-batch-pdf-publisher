@@ -68,7 +68,7 @@ namespace BatchPdfPublisher.Services
             {
                 PaperSize = bestPaper,
                 Extension = PaperSizeCatalog.NormalizeExtension(bestExtension),
-                PaperOrientation = width >= height ? "横向" : "纵向",
+                PaperOrientation = PaperSizeCatalog.DefaultOrientation(bestPaper),
                 PrintScale = "1:" + bestScale,
                 MeasuredSize = Math.Round(width, 1) + " × " + Math.Round(height, 1)
             };

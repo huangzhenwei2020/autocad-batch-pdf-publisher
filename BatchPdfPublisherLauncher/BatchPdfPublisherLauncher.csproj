@@ -33,6 +33,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Program.cs" />
+    <Compile Include="..\Shared\ProductVersion.cs"><Link>ProductVersion.cs</Link></Compile>
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Content Include="BatchPdfPublisher.ico" />
     <EmbeddedResource Include="BatchPdfPublisherIcon.png" />

@@ -83,7 +83,10 @@ namespace BatchPdfPublisher.Services
                             Frame = frame.PaperSize,
                             Extension = frame.Extension,
                             FrameNote = frame.Note,
-                            PaperOrientation = string.IsNullOrWhiteSpace(frame.PaperOrientation) ? (extents.MaxPoint.X - extents.MinPoint.X >= extents.MaxPoint.Y - extents.MinPoint.Y ? "横向" : "纵向") : frame.PaperOrientation,
+                            // Registration uses a canonical orientation, but an
+                            // individual frame reference may be rotated in CAD.
+                            // The plotted page must follow that instance.
+                            PaperOrientation = extents.MaxPoint.X - extents.MinPoint.X >= extents.MaxPoint.Y - extents.MinPoint.Y ? "横向" : "纵向",
                             PrintScale = GetAttribute(attributes, frame.PrintScaleAttributeTag, frame.DefaultPrintScale, "1:1"),
                             PlotStyle = "使用输出设置",
                             SourceFile = sourceFile,

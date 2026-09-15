@@ -29,6 +29,7 @@ namespace BatchPdfPublisher.Services
                 }
             }
             catch { }
+            MigrateOldDefaults(values);
             return values;
         }
 
@@ -79,5 +80,16 @@ namespace BatchPdfPublisher.Services
         }
 
         public static bool IsValid(string value) { return ValidShortcut.IsMatch(Normalize(value)); }
+
+        private static void MigrateOldDefaults(IDictionary<string, string> values)
+        {
+            string shortcut;
+            if (values.TryGetValue("line_vision", out shortcut) && string.Equals(shortcut, "TXZCAD", StringComparison.OrdinalIgnoreCase)
+                && !values.Any(item => !string.Equals(item.Key, "line_vision", StringComparison.OrdinalIgnoreCase) && string.Equals(item.Value, "TXC", StringComparison.OrdinalIgnoreCase)))
+                values["line_vision"] = "TXC";
+            if (values.TryGetValue("cad_table_xlsx", out shortcut) && string.Equals(shortcut, "CAD2XLSX", StringComparison.OrdinalIgnoreCase)
+                && !values.Any(item => !string.Equals(item.Key, "cad_table_xlsx", StringComparison.OrdinalIgnoreCase) && string.Equals(item.Value, "CE", StringComparison.OrdinalIgnoreCase)))
+                values["cad_table_xlsx"] = "CE";
+        }
     }
 }

@@ -50,6 +50,10 @@ namespace BatchPdfPublisher.Models
     public sealed class DoorWindowScheduleItem
     {
         public bool Selected { get; set; } = true;
+        /// <summary>勾选后除普通立面外，再生成一份带消防救援窗口标识和说明的立面。</summary>
+        public bool GenerateFireRescueElevation { get; set; }
+        /// <summary>仅供本次排版/插入识别展开后的消防版本，不写入用户配置。</summary>
+        internal bool IsFireRescueVariant;
         public int Sequence { get; set; }
         public string Code { get; set; }
         public string SourceCategory { get; set; }
@@ -65,6 +69,8 @@ namespace BatchPdfPublisher.Models
         public string SourceNote { get; set; }
         public string Material { get; set; } = "无";
         public string AtlasName { get; set; }
+        /// <summary>区分用户在下拉框中的明确选择和旧版本自动推断值。</summary>
+        public bool AtlasNameExplicitlySelected { get; set; }
         public string Remarks { get; set; }
         public double SillHeight { get; set; }
         /// <summary>用户把离地高度设为"—"时置 true，表示不标注离地高度。</summary>
@@ -205,10 +211,12 @@ namespace BatchPdfPublisher.Models
         public string BayRightCellLayout { get; set; }
         public string Material { get; set; }
         public string AtlasName { get; set; }
+        public bool AtlasNameExplicitlySelected { get; set; }
         public string Remarks { get; set; }
         public double SillHeight { get; set; }
         public bool HasSillHeight { get; set; }
         public bool SillHeightSuppressed { get; set; }
+        public bool GenerateFireRescueElevation { get; set; }
     }
 
     public sealed class DoorWindowElevationSession
@@ -216,6 +224,7 @@ namespace BatchPdfPublisher.Models
         public string ProjectName { get; set; }
         public bool FloorStatistics { get; set; }
         public string BaseSourceHandle { get; set; }
+        public List<DoorWindowScheduleItem> BaseItems { get; set; } = new List<DoorWindowScheduleItem>();
         public List<DoorWindowFloorSourcePreference> FloorSources { get; set; } = new List<DoorWindowFloorSourcePreference>();
     }
 
@@ -224,6 +233,7 @@ namespace BatchPdfPublisher.Models
         public string FloorName { get; set; }
         public int FloorCount { get; set; } = 1;
         public string SourceHandle { get; set; }
+        public List<DoorWindowScheduleItem> Items { get; set; } = new List<DoorWindowScheduleItem>();
     }
 
     public sealed class DoorWindowElevationTemplate
@@ -255,6 +265,7 @@ namespace BatchPdfPublisher.Models
         public double BayRightDepth { get; set; } = 600d;
         public string BayLeftCellLayout { get; set; }
         public string BayRightCellLayout { get; set; }
+        public bool GenerateFireRescueElevation { get; set; }
         public DateTime UpdatedAt { get; set; }
 
         public void ApplyTo(DoorWindowScheduleItem item)
@@ -294,6 +305,7 @@ namespace BatchPdfPublisher.Models
             item.BayRightDepth = BayRightDepth;
             item.BayLeftCellLayout = ScaleBayLayout(BayLeftCellLayout, BayLeftDepth, item.BayLeftDepth, item.Height);
             item.BayRightCellLayout = ScaleBayLayout(BayRightCellLayout, BayRightDepth, item.BayRightDepth, item.Height);
+            item.GenerateFireRescueElevation = GenerateFireRescueElevation;
         }
 
         public static DoorWindowElevationTemplate FromItem(string name, DoorWindowScheduleItem item)
@@ -327,6 +339,7 @@ namespace BatchPdfPublisher.Models
                 BayRightDepth = item.BayRightDepth,
                 BayLeftCellLayout = item.BayLeftCellLayout,
                 BayRightCellLayout = item.BayRightCellLayout,
+                GenerateFireRescueElevation = item.GenerateFireRescueElevation,
                 UpdatedAt = DateTime.Now
             };
         }

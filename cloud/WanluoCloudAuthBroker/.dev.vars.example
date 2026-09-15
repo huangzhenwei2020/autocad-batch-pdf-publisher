@@ -1,0 +1,4 @@
+BAIDU_CLIENT_ID=replace-with-baidu-app-key
+BAIDU_CLIENT_SECRET=replace-with-baidu-secret
+BAIDU_REDIRECT_URI=https://your-worker.workers.dev/oauth/baidu/callback
+STATE_ENCRYPTION_KEY=replace-with-32-byte-base64url-key

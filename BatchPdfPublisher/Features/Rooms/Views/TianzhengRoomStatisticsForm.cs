@@ -25,6 +25,7 @@ namespace BatchPdfPublisher.Views
     internal sealed class TianzhengRoomStatisticsForm : DpiAwareForm
     {
         private readonly Document _document;
+        private readonly ModelessDocumentBinding _documentBinding;
         private readonly DataGridView _grid = new DataGridView();
         private readonly BindingList<TianzhengRoomStatisticsRow> _rows = new BindingList<TianzhengRoomStatisticsRow>();
         private readonly ComboBox _scale = new ComboBox();
@@ -38,6 +39,7 @@ namespace BatchPdfPublisher.Views
             StartPosition = FormStartPosition.CenterParent;
             Width = 820; Height = 530; MinimumSize = new Size(650, 420);
             Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
+            _documentBinding = new ModelessDocumentBinding(this, document);
             Build();
             Shown += (s, e) => BeginInvoke(new Action(SelectForStatistics));
         }
