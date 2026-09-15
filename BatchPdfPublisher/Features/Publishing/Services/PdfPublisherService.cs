@@ -380,33 +380,55 @@ namespace BatchPdfPublisher.Services
                     WriteDiagnosticState(document, sheet, requestedLayoutId, currentLayoutId, layout);
 
                     stage = "创建打印设置";
-                    using (var settings = CreateSettings(layout, sheet, defaultPlotStyle, marginMode, out normalizeToTargetPaper))
-                    using (var plotInfo = new PlotInfo { Layout = layout.ObjectId, OverrideSettings = settings })
+                    // 第 1 轮允许 CAD 用 90° 旋转把图直接铺满纸张；若打出来的页面方向
+                    // 仍与登记不符或打出空白页，第 2 轮强制 0° 并退回矢量裁切（已知可用）。
+                    // 这样任何纸张/方向组合都有确定结果，且绝不会比原来更差。
+                    for (var attempt = 0; attempt < 2; attempt++)
                     {
-                        stage = "校验打印信息";
-                        using (var validator = new PlotInfoValidator { MediaMatchingPolicy = MatchingPolicy.MatchEnabled })
-                            validator.Validate(plotInfo);
-                        WritePlotConfiguration(document, sheet, index, outputPath, settings);
-
-                        stage = "创建 PDF 打印引擎";
-                        using (var engine = PlotFactory.CreatePublishEngine())
+                        var appliedRotation = PlotRotation.Degrees000;
+                        try
                         {
-                            if (engine == null) throw new InvalidOperationException("AutoCAD 未能创建 PDF 打印引擎，请确认没有其他打印任务正在运行。");
-                            stage = "开始打印";
-                            engine.BeginPlot(null, null);
-                            engine.BeginDocument(plotInfo, document.Name, null, 1, true, outputPath);
-                            using (var pageInfo = new PlotPageInfo())
+                            using (var settings = CreateSettings(layout, sheet, defaultPlotStyle, marginMode, attempt == 0,
+                                       out normalizeToTargetPaper, out appliedRotation))
+                            using (var plotInfo = new PlotInfo { Layout = layout.ObjectId, OverrideSettings = settings })
                             {
-                                stage = "创建 PDF 页面";
-                                engine.BeginPage(pageInfo, plotInfo, true, null);
-                                stage = "生成页面图形";
-                                engine.BeginGenerateGraphics(null);
-                                engine.EndGenerateGraphics(null);
-                                engine.EndPage(null);
+                                stage = "校验打印信息";
+                                using (var validator = new PlotInfoValidator { MediaMatchingPolicy = MatchingPolicy.MatchEnabled })
+                                    validator.Validate(plotInfo);
+                                WritePlotConfiguration(document, sheet, index, outputPath, settings);
+
+                                stage = "创建 PDF 打印引擎";
+                                using (var engine = PlotFactory.CreatePublishEngine())
+                                {
+                                    if (engine == null) throw new InvalidOperationException("AutoCAD 未能创建 PDF 打印引擎，请确认没有其他打印任务正在运行。");
+                                    stage = "开始打印";
+                                    engine.BeginPlot(null, null);
+                                    engine.BeginDocument(plotInfo, document.Name, null, 1, true, outputPath);
+                                    using (var pageInfo = new PlotPageInfo())
+                                    {
+                                        stage = "创建 PDF 页面";
+                                        engine.BeginPage(pageInfo, plotInfo, true, null);
+                                        stage = "生成页面图形";
+                                        engine.BeginGenerateGraphics(null);
+                                        engine.EndGenerateGraphics(null);
+                                        engine.EndPage(null);
+                                    }
+                                    engine.EndDocument(null);
+                                    engine.EndPlot(null);
+                                }
                             }
-                            engine.EndDocument(null);
-                            engine.EndPlot(null);
                         }
+                        catch (Exception) when (attempt == 0)
+                        {
+                            // 第 1 轮的异常一律交给第 2 轮复现：如果是旋转本身引起的，
+                            // 0° 这一轮会正常完成；如果是真实故障，0° 这一轮会照样抛出
+                            // 并带上真正的错误信息，不会丢诊断。
+                            WritePublishRetry(index, sheet);
+                            continue;
+                        }
+                        if (appliedRotation == PlotRotation.Degrees000) break;
+                        if (TemporaryPageIsUsable(outputPath, sheet)) break;
+                        WritePublishRetry(index, sheet);
                     }
                     transaction.Commit();
                     }
@@ -484,6 +506,40 @@ namespace BatchPdfPublisher.Services
             catch (Exception exception)
             {
                 WritePublishDiagnostic("记录单页打印参数失败，但不影响发布：" + exception.Message);
+            }
+        }
+
+        // 自动旋转这一轮没成功时记一笔，便于排查是旋转不被支持还是纸张本身不匹配。
+        private static void WritePublishRetry(int index, SheetItem sheet)
+        {
+            WritePublishDiagnostic("CAD 旋转打印未得到可用整页，改用 0° 打印并矢量裁切重试：发布序号="
+                + (index + 1) + "；子项目=" + sheet.Building + "；图号=" + sheet.SheetNumber
+                + "；图名=" + sheet.SheetName + "；登记毫米="
+                + FormatMillimeters(TargetPaperSize(sheet)[0], TargetPaperSize(sheet)[1]));
+        }
+
+        // 判断刚打出来的临时 PDF 能否直接采用：必须是登记方向的整页，且确实有图面
+        // 内容。旋转打印这一轮只要不满足，就退回 0° + 矢量裁切，所以这里必须同时
+        // 覆盖“方向不对”和“打出空白页”两种失败。
+        private static bool TemporaryPageIsUsable(string path, SheetItem sheet)
+        {
+            try
+            {
+                if (!File.Exists(path)) return false;
+                if (new FileInfo(path).Length < 4096L) return false;
+                using (var input = PdfSharp.Pdf.IO.PdfReader.Open(path, PdfSharp.Pdf.IO.PdfDocumentOpenMode.Import))
+                {
+                    if (input.PageCount != 1) return false;
+                    var page = input.Pages[0];
+                    var target = TargetPaperSize(sheet);
+                    if (!SamePaperSizeInOrientation(PointsToMillimeters(page.Width.Point),
+                            PointsToMillimeters(page.Height.Point), target[0], target[1])) return false;
+                    return MeasurePageContentBytes(page) >= 512L;
+                }
+            }
+            catch
+            {
+                return false;
             }
         }
 
@@ -737,7 +793,7 @@ namespace BatchPdfPublisher.Services
         }
 
         private static PlotSettings CreateSettings(Layout layout, SheetItem sheet, string defaultPlotStyle, string marginMode,
-            out bool normalizeToTargetPaper)
+            bool allowRotation, out bool normalizeToTargetPaper, out PlotRotation appliedRotation)
         {
             var settings = new PlotSettings(layout.ModelType);
             settings.CopyFrom(layout);
@@ -809,12 +865,23 @@ namespace BatchPdfPublisher.Services
                 var direct = RelativeError(mediaSize[0], target[0]) + RelativeError(mediaSize[1], target[1]);
                 if (direct > .003d) normalizeToTargetPaper = true;
             }
-            // Keep CAD at zero rotation. AutoCAD 2022/TArch can create empty
-            // window plots when PlotRotation is 90/270. If the medium is stored
-            // in the opposite orientation, NormalizeTemporaryPage crops the
-            // centered plot to the instance orientation and writes an exact
-            // unrotated 1:1 page.
-            ApplyPlotStep("固定 CAD 打印方向", () => validator.SetPlotRotation(settings, PlotRotation.Degrees000));
+            // 介质方向与登记方向不一致时，优先让 CAD 直接把图旋转 90° 出到纸张长边
+            // 方向：内容能 1:1 铺满纸张，不必事后矢量裁切放大（放大还会连带放大线宽）。
+            // 历史上 AutoCAD 2022/TArch 在窗口打印下用 90°/270° 出现过空白页，所以
+            // 调用方会用 TemporaryPageIsUsable 验收这一轮，不通过就退回 0° + 裁切，
+            // 那是一条已验证可用的路径，因此这里不会比强制 0° 更差。
+            var needRotation = allowRotation
+                && mediaSize != null
+                && (mediaSize[0] > mediaSize[1]) != (target[0] > target[1]);
+            var rotation = needRotation ? PlotRotation.Degrees090 : PlotRotation.Degrees000;
+            appliedRotation = rotation;
+            if (needRotation)
+            {
+                // 旋转出图后页面应当直接等于登记纸张，不再走裁切；若实际没有等于，
+                // 调用方的可用性检查会发现并退回 0° + 裁切。
+                normalizeToTargetPaper = false;
+            }
+            ApplyPlotStep("设置 CAD 打印方向", () => validator.SetPlotRotation(settings, rotation));
             var style = string.IsNullOrWhiteSpace(sheet.PlotStyle) || string.Equals(sheet.PlotStyle, "使用输出设置", StringComparison.OrdinalIgnoreCase)
                 ? defaultPlotStyle
                 : sheet.PlotStyle;
