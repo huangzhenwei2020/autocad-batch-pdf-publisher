@@ -3,24 +3,25 @@ param(
     [string]$PmpPath
 )
 
-# 核对 BatchPdfPublisher.pmp 里的自定义纸张是否覆盖 GB/T 50001-2017 全集。
+# 核对 BatchPdfPublisher.pmp 里的自定义纸张是否覆盖 GB/T 50001-2017 全集，
+# 并检查每个条目的“规范介质名”与“实际可打印尺寸”是否一致。
 #
-# PIA/PMP 是 zlib 压缩的文本：[60 字节头][78 DA][raw deflate][adler32]。
-# 每个自定义纸张在文件里有两处记录，按同一个序号对齐：
+# PIA/PMP 是 zlib 压缩的文本：[60 字节头][78 DA][raw deflate][adler32]。解压后
+# 里面有两个**互相独立**的列表，块编号各自从 0 开始，**不能按编号配对**：
 #
-#   size{ N{ name="UserDefinedMetric (420.00 x 1338.00毫米)   <- 规范介质名
-#             localized_name="BPP_A2_420x1338_MM_FULL_BLEED  <- 下拉列表标签
-#             landscape_mode=FALSE } }
-#   description{ N{ name="UserDefinedMetric 纵向 420.00W x 1338.00H - ... =561960
+#   size{ N{ name="UserDefinedMetric (420.00 x 1338.00毫米)          <- 规范介质名
+#             localized_name="BPP_A2_420x1338_MM_FULL_BLEED         <- 下拉列表标签
+#             media_description_name="UserDefinedMetric 纵向 420.00W x 1338.00H - ..." } }
+#   description{ M{ name="UserDefinedMetric 纵向 420.00W x 1338.00H - ..."   <- 同一个描述名
 #                   media_bounds_urx=420.0
-#                   media_bounds_ury=1338.0 } }                  <- 真正的纸张尺寸
+#                   media_bounds_ury=1338.0 } }                     <- 实际纸张尺寸
 #
-# 插件调用 AutoCAD 的 GetCanonicalMediaNameList() 拿到的就是 size 里的
-# name 字符串，再从中解析宽高（发布日志里的 介质= 就是它）。所以：
-#   * 判断“缺哪些规格”要看 size.name —— 那才是插件看到的东西；
-#   * 如果 size.name 与 description 的 media_bounds 不一致（编辑已有纸张时
-#     AutoCAD 不一定会刷新 name 字符串），必须单独指出来，否则可能选到尺寸
-#     不符的纸张。本脚本两种都报。
+# 两个列表靠**描述名字符串**关联；删除/编辑过纸张后 size 与 description 的数量
+# 和编号都可能对不上（description 里会留下孤立块），所以必须按名字配对。
+#
+# 插件调用 AutoCAD 的 GetCanonicalMediaNameList() 拿到的就是 size 里的 name
+# 字符串，再从中解析宽高（发布日志里的 介质= 就是它），所以“缺哪些规格”按
+# size.name 判断。
 
 $ErrorActionPreference = 'Stop'
 
@@ -106,13 +107,12 @@ function Expand-Pia([string]$Path) {
     return [System.Text.Encoding]::Latin1.GetString($output.ToArray())
 }
 
-# 取出 "段名{" 之后、同一层级的所有 "N{ ... }" 块，返回 序号 -> 字段数组。
+# 取出 "段名{" 之后同一层级的所有 "N{ ... }" 块，返回 列表（保持文件顺序）。
 function Read-Section {
     param([string[]]$Lines, [string]$SectionName)
-    $result = @{}
+    $blocks = New-Object System.Collections.Generic.List[object]
     $started = $false
-    $current = -1
-    $fields = $null
+    $current = $null
     foreach ($line in $Lines) {
         $t = $line.Trim()
         if (-not $started) {
@@ -120,14 +120,14 @@ function Read-Section {
             continue
         }
         if ($t -eq '}') {
-            if ($current -ge 0) { $result[$current] = $fields; $current = -1; $fields = $null; continue }
+            if ($null -ne $current) { $blocks.Add($current); $current = $null; continue }
             break
         }
         $bm = [regex]::Match($t, '^(\d+)\{$')
-        if ($bm.Success) { $current = [int]$bm.Groups[1].Value; $fields = New-Object System.Collections.Generic.List[string]; continue }
-        if ($current -ge 0) { $fields.Add($t) }
+        if ($bm.Success) { $current = [pscustomobject]@{ Idx = [int]$bm.Groups[1].Value; Fields = @() }; continue }
+        if ($null -ne $current) { $current.Fields += $t }
     }
-    return $result
+    return $blocks
 }
 
 function Field-Value {
@@ -148,62 +148,62 @@ Write-Host "纸张库：$resolved"
 $text = Expand-Pia $resolved
 $lines = $text -split "`n"
 
-$sizeSection = Read-Section $lines 'size'
-$descSection = Read-Section $lines 'description'
+$sizeBlocks = Read-Section $lines 'size'
+$descBlocks = Read-Section $lines 'description'
+
+# 描述名 -> 描述块（可能一对多，编辑/删除后会长出孤立块）
+$descByName = @{}
+foreach ($d in $descBlocks) {
+    $n = Field-Value $d.Fields 'name'
+    if ($null -eq $n) { continue }
+    if (-not $descByName.ContainsKey($n)) { $descByName[$n] = New-Object System.Collections.Generic.List[object] }
+    $descByName[$n].Add($d)
+}
 
 $media = New-Object System.Collections.Generic.List[object]
-foreach ($idx in ($sizeSection.Keys | Sort-Object)) {
-    $fields = $sizeSection[$idx]
-    $canonical = Field-Value $fields 'name'
+$mismatched = New-Object System.Collections.Generic.List[object]
+foreach ($b in $sizeBlocks) {
+    $canonical = Field-Value $b.Fields 'name'
     if ($null -eq $canonical) { continue }
     $m = [regex]::Match($canonical, '\(([\d.]+) x ([\d.]+)')
     if (-not $m.Success) { continue }
-    $label = Field-Value $fields 'localized_name'
+    $label = Field-Value $b.Fields 'localized_name'
     if ($null -eq $label) { $label = '' }
-
-    $boundsW = $null; $boundsH = $null
-    if ($descSection.ContainsKey($idx)) {
-        $d = $descSection[$idx]
-        $rx = Field-Value $d 'media_bounds_urx'
-        $ry = Field-Value $d 'media_bounds_ury'
-        if ($rx) { $boundsW = [double]$rx }
-        if ($ry) { $boundsH = [double]$ry }
+    $descName = Field-Value $b.Fields 'media_description_name'
+    $boundsW = $null; $boundsH = $null; $found = 0
+    if ($null -ne $descName -and $descByName.ContainsKey($descName)) {
+        $hits = $descByName[$descName]
+        $found = $hits.Count
+        $rx = Field-Value $hits[0].Fields 'media_bounds_urx'
+        $ry = Field-Value $hits[0].Fields 'media_bounds_ury'
+        if ($rx) { $boundsW = [int][math]::Round([double]$rx) }
+        if ($ry) { $boundsH = [int][math]::Round([double]$ry) }
     }
-    $media.Add([pscustomobject]@{
-        Index     = $idx
-        NameW     = [int][math]::Round([double]$m.Groups[1].Value)
-        NameH     = [int][math]::Round([double]$m.Groups[2].Value)
-        BoundsW   = if ($null -ne $boundsW) { [int][math]::Round($boundsW) } else { $null }
-        BoundsH   = if ($null -ne $boundsH) { [int][math]::Round($boundsH) } else { $null }
-        Label     = $label
-        Canonical = $canonical
-    })
+    $entry = [pscustomobject]@{
+        NameW    = [int][math]::Round([double]$m.Groups[1].Value)
+        NameH    = [int][math]::Round([double]$m.Groups[2].Value)
+        BoundsW  = $boundsW
+        BoundsH  = $boundsH
+        Label    = $label
+        DescHits = $found
+    }
+    $media.Add($entry)
+    if ($null -eq $boundsW) { $mismatched.Add($entry) }
+    elseif ($boundsW -ne $entry.NameW -or $boundsH -ne $entry.NameH) { $mismatched.Add($entry) }
 }
 
 Write-Host ''
 Write-Host ("纸库里的自定义纸张（共 {0} 个）：" -f $media.Count)
-$stale = New-Object System.Collections.Generic.List[object]
-$labelBad = New-Object System.Collections.Generic.List[object]
-foreach ($item in ($media | Sort-Object NameW, NameH)) {
-    $notes = New-Object System.Collections.Generic.List[string]
-    if ($null -ne $item.BoundsW -and ($item.BoundsW -ne $item.NameW -or $item.BoundsH -ne $item.NameH)) {
-        $notes.Add(("库内部不一致：name 写 {0}x{1}，实际可打印 {2}x{3}" -f $item.NameW, $item.NameH, $item.BoundsW, $item.BoundsH))
-        $stale.Add($item)
-    }
-    $lm = [regex]::Match($item.Label, '(\d+)x(\d+)')
-    if ($lm.Success) {
-        $lw = [int]$lm.Groups[1].Value; $lh = [int]$lm.Groups[2].Value
-        $effW = if ($null -ne $item.BoundsW) { $item.BoundsW } else { $item.NameW }
-        $effH = if ($null -ne $item.BoundsH) { $item.BoundsH } else { $item.NameH }
-        if (-not (($lw -eq $effW -and $lh -eq $effH) -or ($lw -eq $effH -and $lh -eq $effW))) {
-            $notes.Add(("标签写 {0}x{1}，实际 {2}x{3}" -f $lw, $lh, $effW, $effH))
-            $labelBad.Add($item)
-        }
-    }
-    $tail = if ($notes.Count -gt 0) { '   <<< ' + ($notes -join '；') } else { '' }
-    $boundsMark = ''
-    if ($null -eq $item.BoundsW) { $boundsMark = '?' }
-    Write-Host ("  {0,5} x {1,-5} mm{2}  {3}{4}" -f $item.NameW, $item.NameH, $boundsMark, $item.Label, $tail)
+foreach ($item in ($media | Sort-Object NameW, NameH, Label)) {
+    $bounds = '（找不到描述块）'
+    if ($null -ne $item.BoundsW) { $bounds = "$($item.BoundsW)x$($item.BoundsH)" }
+    $verdict = 'OK'
+    if ($null -eq $item.BoundsW) { $verdict = '缺描述块' }
+    elseif ($item.BoundsW -ne $item.NameW -or $item.BoundsH -ne $item.NameH) { $verdict = '尺寸不符' }
+    $tail = ''
+    if ($verdict -ne 'OK') { $tail = "   <<< $verdict" }
+    if ($item.DescHits -gt 1) { $tail += "   （描述名被 $($item.DescHits) 个描述块共用）" }
+    Write-Host ("  {0,5} x {1,-5} mm  {2,-34} 实际 {3,-11}{4}" -f $item.NameW, $item.NameH, $item.Label, $bounds, $tail)
 }
 
 # 覆盖核对按 size.name 走 —— 那才是插件从 AutoCAD 拿到的规范介质名。
@@ -217,32 +217,41 @@ foreach ($item in $standard) {
 $requiredCount = ($standard | Where-Object { $_.Name -notmatch '^A[0-4]$' -and $_.Name -notlike '特殊*' }).Count
 
 Write-Host ''
-Write-Host ("GB/T 50001-2017 加长幅面核对（按插件读取的规范介质名）：应有 {0} 个，缺少 {1} 个。" -f $requiredCount, $missing.Count)
+Write-Host ("GB/T 50001-2017 加长幅面核对：应有 {0} 个，缺少 {1} 个。" -f $requiredCount, $missing.Count)
 if ($missing.Count -gt 0) {
     $missing | Sort-Object W, H | ForEach-Object { Write-Host ("  缺 {0,5} x {1,-5} mm   {2}" -f $_.W, $_.H, $_.Name) }
 }
 if ($missingOptional.Count -gt 0) {
     Write-Host ''
-    Write-Host '未加自定义条目的基本幅面/特殊幅面（AutoCAD 自带 ISO 纸张已覆盖基本幅面，特殊幅面插件登记选不到）：'
+    Write-Host '未加自定义条目的基本幅面/特殊幅面：'
     $missingOptional | Sort-Object W, H | ForEach-Object { Write-Host ("  {0,5} x {1,-5} mm   {2}" -f $_.W, $_.H, $_.Name) }
 }
 
-Write-Host ''
-if ($stale.Count -gt 0) {
-    Write-Host ("有 {0} 个条目的规范介质名与实际可打印尺寸不一致。" -f $stale.Count)
-    Write-Host '编辑已有的自定义纸张时 AutoCAD 不一定会刷新介质名字符串，而插件正是从这串'
-    Write-Host '名字里解析宽高。建议把这类条目删除后重新添加，让 AutoCAD 生成干净的介质名。'
+$usedDescNames = @{}
+foreach ($b in $sizeBlocks) {
+    $n = Field-Value $b.Fields 'media_description_name'
+    if ($null -ne $n) { $usedDescNames[$n] = $true }
 }
-if ($labelBad.Count -gt 0) {
-    Write-Host ("有 {0} 个条目的下拉标签写的尺寸与实际不符（仅显示问题，出图按实际尺寸走）。" -f $labelBad.Count)
+$orphans = @($descBlocks | Where-Object { $n = (Field-Value $_.Fields 'name'); $null -ne $n -and -not $usedDescNames.ContainsKey($n) })
+if ($orphans.Count -gt 0) {
+    Write-Host ''
+    Write-Host ("description 里有 {0} 个孤立块（没有纸张条目引用，编辑/删除后留下的，不影响出图）：" -f $orphans.Count)
+    foreach ($o in $orphans) {
+        Write-Host ("  idx {0}  {1}  实际 {2}x{3}" -f $o.Idx, (Field-Value $o.Fields 'name'), (Field-Value $o.Fields 'media_bounds_urx'), (Field-Value $o.Fields 'media_bounds_ury'))
+    }
+}
+
+Write-Host ''
+if ($mismatched.Count -gt 0) {
+    Write-Host ("有 {0} 个条目的规范介质名与实际可打印尺寸不一致。" -f $mismatched.Count)
+    Write-Host '插件是从介质名里解析宽高的，这类条目会被当成别的规格，必须删除后重新添加。'
 }
 if ($missing.Count -gt 0) {
-    Write-Host ''
     Write-Host '缺少的加长幅面在出图时会退回“打印到更大的备用纸 + 矢量裁切”：尺寸比例仍然正确，'
     Write-Host '但每张多一次打印往返，内容被等比放大（线宽也会一起放大）。请按'
     Write-Host 'docs\绘图仪纸张尺寸清单-GBT50001-2017.md 补齐。'
     exit 1
 }
-if ($stale.Count -gt 0) { Write-Host ''; Write-Host '加长幅面齐全，但有库内部不一致的条目需要重加。'; exit 2 }
-Write-Host '加长幅面齐全，横竖两个方向都能 1:1 出图。'
+if ($mismatched.Count -gt 0) { Write-Host ''; Write-Host '加长幅面齐全，但有尺寸不符的条目需要删除重加。'; exit 2 }
+Write-Host '加长幅面齐全，所有条目的介质名与实际尺寸一致，横竖两个方向都能 1:1 出图。'
 exit 0
