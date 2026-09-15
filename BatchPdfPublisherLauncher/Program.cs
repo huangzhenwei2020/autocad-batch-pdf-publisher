@@ -607,11 +607,34 @@ namespace BatchPdfPublisherLauncher
                 Directory.CreateDirectory(pmpDirectory);
                 var targetPc3 = Path.Combine(plotterDirectory, PlotterConfigName);
                 var targetPmp = Path.Combine(pmpDirectory, PlotterMediaName);
+                // 纸张库文件可能带只读属性（手工复制过来、用户自己设过、或从只读来源
+                // 复制时被继承）。只读会让 File.Copy 覆盖和 File.WriteAllBytes 抛
+                // UnauthorizedAccessException，整个启动器都起不来，所以部署前先清掉。
+                ClearReadOnly(targetPc3);
+                ClearReadOnly(targetPmp);
                 File.Copy(sourcePlotterConfig, targetPc3, true);
                 File.Copy(sourcePlotterMedia, targetPmp, true);
                 BindPmp(targetPc3, targetPmp);
                 BindPmpSelfPath(targetPmp);
                 Log("已部署毫米纸张库: " + plotterDirectory);
+            }
+        }
+
+        // 清掉只读属性。文件不存在、本来可写、或确实无权修改时都不抛异常：
+        // 前两种情况无需处理，最后一种留给后续写入抛出带着路径的原始错误。
+        private static void ClearReadOnly(string path)
+        {
+            try
+            {
+                if (!File.Exists(path)) return;
+                var attributes = File.GetAttributes(path);
+                if ((attributes & FileAttributes.ReadOnly) == 0) return;
+                File.SetAttributes(path, attributes & ~FileAttributes.ReadOnly);
+                Log("已清除纸张库文件的只读属性: " + path);
+            }
+            catch (Exception exception)
+            {
+                Log("清除只读属性失败，继续尝试部署: " + path + "；" + exception.Message);
             }
         }
 
@@ -697,6 +720,7 @@ namespace BatchPdfPublisherLauncher
             {
                 output.Write(prefix, 0, prefix.Length);
                 var payload = packed.ToArray(); output.Write(payload, 0, payload.Length);
+                ClearReadOnly(path);
                 File.WriteAllBytes(path, output.ToArray());
             }
         }
