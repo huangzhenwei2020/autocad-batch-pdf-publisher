@@ -103,25 +103,45 @@ Write-Host "纸张库：$resolved"
 $text = Expand-Pia $resolved
 
 $media = New-Object System.Collections.Generic.List[object]
-foreach ($m in [regex]::Matches($text, 'localized_name="([^"\r\n]*)"')) {
-    $name = $m.Groups[1].Value
-    $s = [regex]::Match($name, '(\d+)\s*x\s*(\d+)')
-    if (-not $s.Success) { continue }
-    $media.Add([pscustomobject]@{ Label = $name; W = [int]$s.Groups[1].Value; H = [int]$s.Groups[2].Value })
-}
-foreach ($m in [regex]::Matches($text, 'name="UserDefinedMetric \(([\d.]+) x ([\d.]+)')) {
-    $w = [int][double]$m.Groups[1].Value
-    $h = [int][double]$m.Groups[2].Value
-    if (-not ($media | Where-Object { $_.W -eq $w -and $_.H -eq $h })) {
-        $media.Add([pscustomobject]@{ Label = "UserDefinedMetric ($w x $h)"; W = $w; H = $h })
+# PIA 的字符串只有开头的引号（值以换行结束），所以按行配对
+#   name="UserDefinedMetric (420.00 x 891.00毫米)
+#   localized_name="BPP_A2_420x891_MM_FULL_BLEED
+# 同时保留两边的信息，用来核对“名称写的尺寸”和“实际宽高”是否一致。
+$pending = $null
+foreach ($line in ($text -split "`n")) {
+    $m = [regex]::Match($line, 'name="UserDefinedMetric \(([\d.]+) x ([\d.]+)')
+    if ($m.Success) {
+        $pending = [pscustomobject]@{
+            W     = [int][double]$m.Groups[1].Value
+            H     = [int][double]$m.Groups[2].Value
+            Label = ''
+        }
+        continue
+    }
+    $m = [regex]::Match($line, 'localized_name="([^"\r\n]*)')
+    if ($m.Success -and $null -ne $pending) {
+        $pending.Label = $m.Groups[1].Value
+        $media.Add($pending)
+        $pending = $null
     }
 }
 
+$mismatched = New-Object System.Collections.Generic.List[object]
 Write-Host ''
 Write-Host ("纸库里的自定义纸张（共 {0} 个）：" -f $media.Count)
 $media | Sort-Object W, H | ForEach-Object {
     $orient = if ($_.W -gt $_.H) { '横式' } else { '立式' }
-    Write-Host ("  {0,5} x {1,-5} mm  {2}  {3}" -f $_.W, $_.H, $orient, $_.Label)
+    $warn = ''
+    $lm = [regex]::Match($_.Label, '(\d+)x(\d+)')
+    if ($lm.Success) {
+        $lw = [int]$lm.Groups[1].Value
+        $lh = [int]$lm.Groups[2].Value
+        if (-not (($lw -eq $_.W -and $lh -eq $_.H) -or ($lw -eq $_.H -and $lh -eq $_.W))) {
+            $warn = "   <<< 名称写的是 ${lw}x${lh}，与实际宽高不符"
+            $mismatched.Add($_)
+        }
+    }
+    Write-Host ("  {0,5} x {1,-5} mm  {2}  {3}{4}" -f $_.W, $_.H, $orient, $_.Label, $warn)
 }
 
 $missing = New-Object System.Collections.Generic.List[object]
@@ -152,6 +172,10 @@ if ($missingOptional.Count -gt 0) {
 }
 
 Write-Host ''
+if ($mismatched.Count -gt 0) {
+    Write-Host ("有 {0} 个条目的名称与实际宽高不符（名称只是标签，出图按实际宽高走，但建议改正以免混淆）。" -f $mismatched.Count)
+}
+
 if ($missing.Count -gt 0) {
     Write-Host '缺少的加长幅面在出图时会退回“打印到更大的备用纸 + 矢量裁切”：尺寸比例仍然正确，'
     Write-Host '但每张多一次打印往返，内容被等比放大（线宽也会一起放大）。请按'
