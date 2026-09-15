@@ -762,8 +762,12 @@ namespace BatchPdfPublisher.Services
                             }
                         }
                         var finalPage = output.Pages[output.PageCount - 1];
-                        var finalWidth = PointsToMillimeters(finalPage.Width.Point);
-                        var finalHeight = PointsToMillimeters(finalPage.Height.Point);
+                        // 直接导入的页面就是临时页本身。这里不能再读 finalPage.Width：
+                        // 刚 AddPage 的页面取值是未应用 /Rotate 的 MediaBox，而旋转出图的
+                        // 整页正是靠 /Rotate 承载方向的（MediaBox 仍是被旋转前的那一边），
+                        // 直接读会把横向页记成竖向，日志就不可信了。
+                        var finalWidth = canImportOriginal ? sourceWidth : PointsToMillimeters(finalPage.Width.Point);
+                        var finalHeight = canImportOriginal ? sourceHeight : PointsToMillimeters(finalPage.Height.Point);
                         WritePublishDiagnostic("合并页完成：最终页码=" + (index + 1)
                             + "；子项目=" + sheets[index].Building
                             + "；图号=" + sheets[index].SheetNumber
