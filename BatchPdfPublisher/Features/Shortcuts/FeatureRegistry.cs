@@ -12,23 +12,27 @@ namespace BatchPdfPublisher.Services
     {
         private static readonly FeatureDefinition[] FixedItems =
         {
-            F("publisher", "批量 PDF 面板", "BPP", "BPP", "图纸与发布", "panel", "打开工程 DWG 管理、图框扫描和批量 PDF 发布面板。"),
-            F("frame", "创建图框", "TKK", "TKK", "图纸与发布", "frame", "创建标准图框，或选择已登记图框并按指定比例插入。"),
-            F("catalog", "插入目录", "ML1", "ML1", "图纸与发布", "catalog", "根据当前工程图纸顺序生成目录表并插入 CAD。"),
-            F("attribute_batch", "批量改属性", "BPPATTR", "SBB", "图块与属性", "attribute", "框选不同类型的属性图块，按坐标排序、批量递增并写入同一属性标记。"),
-            F("attribute_definition", "属性定义编辑", "BPPATTDEF", "BPA", "图块与属性", "attribute", "拾取图块后修改图块名称、属性 TAG、默认内容、字体、字高、宽度和对齐方式。"),
-            F("architecture_spec", "建筑设计说明", "WLJZSM", "JZSM", "建筑工具", "spec", "打开万落建筑工具中的建筑设计说明助手。", "JZSM"),
-            F("cad_table_xlsx", "CAD表格编辑/Excel", "WLCAD2XLSX", "CE", "建筑工具", "spec", "拾取线框、文字或现有 CAD 表格进行编辑，可导出 Excel 或重新插入 CAD。", "CE"),
-            F("stair_detail", "楼梯大样", "WLLTDY", "LTDY", "建筑工具", "stair", "打开楼梯构件编辑器，按楼层、梯段和构造参数一键生成楼梯大样。", "LTDY"),
-            F("drafting_standard", "制图标准", "BZS", "BZS", "制图与标注", "standard", "检查并补齐万落工具共用的图层、文字样式和标注样式。"),
-            F("layer_assignment", "归层", "GL", "GL", "图层工具", "standard", "把所选对象归到指定图层，可同时把颜色、线型、线宽设为随层，并处理块属性。"),
-            F("drawing_scale", "比例管理", "BL1", "BL1", "制图与标注", "scale", "把所选对象转换到指定图纸比例，并同步普通 CAD 与天正标注。"),
-            F("door_window", "门窗立面", "MCLM", "MCLM", "建筑工具", "doorwindow", "读取门窗表，校验编号和洞口尺寸，并批量设置门窗立面分格与开启参数。"),
-            F("detail_layout", "大样排版", "WLDYLAYOUT", "DYPB", "建筑工具", "detail", "逐个框选大样并自动计算边界，在登记图框中拖拽排序和分页排版。"),
-            F("line_vision", "图像转 CAD", "LINEVISION", "TXC", "建筑工具", "image", "识别建筑线稿、扫描图或截图中的线条，预览确认后生成可编辑 CAD 图元。", "TXC"),
-            F("room_rename", "房间改名", "FJGM", "FJGM", "建筑工具", "room", "以一个天正房间为样板，批量修改匹配房间的名称。"),
-            F("shortcut_settings", "快捷键设置", "WLHOTKEYS", "KJJPZ", "系统设置", "shortcut", "统一查看、修改和恢复万落建筑工具的快捷键。"),
-            F("cloud_sync", "云同步", "WLCLOUDSYNC", "YTB", "系统设置", "sync", "同步通用配置、跨项目方案库、图框模板和项目文件，并保留冲突副本与历史版本。")
+            // 参数依次为：id、完整名称、内部命令、默认快捷键、分组、图标字、说明、外置命令、四字简称。
+            // 图标字是功能区色块上那个白字；四字简称用于功能区按钮（网格排版要求等宽），
+            // 菜单栏、悬停提示和快捷键设置页仍显示完整名称，信息不丢。
+            F("publisher", "批量 PDF 面板", "BPP", "BPP", "图纸与发布", "打", "打开工程 DWG 管理、图框扫描和批量 PDF 发布面板。", null, "批量打印"),
+            F("frame", "创建图框", "TKK", "TKK", "图纸与发布", "框", "创建标准图框，或选择已登记图框并按指定比例插入。", null, "创建图框"),
+            F("catalog", "插入目录", "ML1", "ML1", "图纸与发布", "目", "根据当前工程图纸顺序生成目录表并插入 CAD。", null, "插入目录"),
+            F("attribute_batch", "批量改属性", "BPPATTR", "SBB", "图块与属性", "属", "框选不同类型的属性图块，按坐标排序、批量递增并写入同一属性标记。", null, "批改属性"),
+            F("attribute_definition", "属性定义编辑", "BPPATTDEF", "BPA", "图块与属性", "定", "拾取图块后修改图块名称、属性 TAG、默认内容、字体、字高、宽度和对齐方式。", null, "属性定义"),
+            F("architecture_spec", "建筑设计说明", "WLJZSM", "JZSM", "建筑工具", "说", "打开万落建筑工具中的建筑设计说明助手。", "JZSM", "建筑说明"),
+            F("cad_table_xlsx", "CAD表格编辑/Excel", "WLCAD2XLSX", "CE", "建筑工具", "表", "拾取线框、文字或现有 CAD 表格进行编辑，可导出 Excel 或重新插入 CAD。", "CE", "表格编辑"),
+            F("stair_detail", "楼梯大样", "WLLTDY", "LTDY", "建筑工具", "梯", "打开楼梯构件编辑器，按楼层、梯段和构造参数一键生成楼梯大样。", "LTDY", "楼梯大样"),
+            F("drafting_standard", "制图标准", "BZS", "BZS", "制图与标注", "标", "检查并补齐万落工具共用的图层、文字样式和标注样式。", null, "制图标准"),
+            F("layer_assignment", "归层", "GL", "GL", "图层工具", "层", "把所选对象归到指定图层，可同时把颜色、线型、线宽设为随层，并处理块属性。", null, "对象归层"),
+            F("drawing_scale", "比例管理", "BL1", "BL1", "制图与标注", "比", "把所选对象转换到指定图纸比例，并同步普通 CAD 与天正标注。", null, "比例管理"),
+            F("door_window", "门窗立面", "MCLM", "MCLM", "建筑工具", "窗", "读取门窗表，校验编号和洞口尺寸，并批量设置门窗立面分格与开启参数。", null, "门窗立面"),
+            F("detail_layout", "大样排版", "WLDYLAYOUT", "DYPB", "建筑工具", "排", "逐个框选大样并自动计算边界，在登记图框中拖拽排序和分页排版。", null, "大样排版"),
+            F("line_vision", "图像转 CAD", "LINEVISION", "TXC", "建筑工具", "绘", "识别建筑线稿、扫描图或截图中的线条，预览确认后生成可编辑 CAD 图元。", "TXC", "图像转绘"),
+            F("room_rename", "房间改名", "FJGM", "FJGM", "建筑工具", "房", "以一个天正房间为样板，批量修改匹配房间的名称。", null, "房间改名"),
+            F("shortcut_settings", "快捷键设置", "WLHOTKEYS", "KJJPZ", "系统设置", "键", "统一查看、修改和恢复万落建筑工具的快捷键。", null, "快捷设置"),
+            F("menubar", "菜单栏开关", "WLMENUBAR", "CDL", "系统设置", "菜", "显示或隐藏 AutoCAD 经典菜单栏；从隐藏切回显示时会自动把万落建筑工具下拉菜单挂回菜单栏。", null, "菜单开关"),
+            F("cloud_sync", "云同步", "WLCLOUDSYNC", "YTB", "系统设置", "云", "同步通用配置、跨项目方案库、图框模板和项目文件，并保留冲突副本与历史版本。", null, "云端同步")
         };
 
         /// <summary>固定功能。图层命令由 <see cref="All"/> 动态合成，不写在这里。</summary>
@@ -116,40 +120,9 @@ namespace BatchPdfPublisher.Services
             return (value ?? string.Empty).Replace("\\", "\\\\").Replace("\"", "\\\"");
         }
 
-        private static FeatureDefinition F(string id, string name, string command, string shortcut, string group, string icon, string description, string nativeCommand = null)
+        private static FeatureDefinition F(string id, string name, string command, string shortcut, string group, string icon, string description, string nativeCommand = null, string shortName = null)
         {
-            return new FeatureDefinition(id, name, command, shortcut, group, icon, description, nativeCommand);
+            return new FeatureDefinition(id, name, command, shortcut, group, icon, description, nativeCommand, null, shortName);
         }
-    }
-
-    public sealed class FeatureDefinition
-    {
-        public FeatureDefinition(string id, string name, string command, string defaultShortcut, string group, string icon, string description, string nativeCommand)
-            : this(id, name, command, defaultShortcut, group, icon, description, nativeCommand, null)
-        {
-        }
-
-        public FeatureDefinition(string id, string name, string command, string defaultShortcut, string group, string icon, string description, string nativeCommand, string lispInvocation)
-        {
-            Id = id; Name = name; Command = command; DefaultShortcut = defaultShortcut;
-            Group = group; Icon = icon; Description = description;
-            NativeCommand = nativeCommand;
-            LispInvocation = lispInvocation;
-        }
-
-        public string Id { get; private set; }
-        public string Name { get; private set; }
-        public string Command { get; private set; }
-        public string DefaultShortcut { get; private set; }
-        public string Group { get; private set; }
-        public string Icon { get; private set; }
-        public string Description { get; private set; }
-        /// <summary>外置组件真正注册的命令。快捷键与它相同时直接使用，不生成 AutoLISP 包装，避免递归。</summary>
-        public string NativeCommand { get; private set; }
-        /// <summary>
-        /// 该快捷键对应的 AutoLISP 表达式。非空时用它替代默认的 (command "内部命令")，
-        /// 让同一批命令可以带参数（图层直达命令即用此机制传递目标图层）。
-        /// </summary>
-        public string LispInvocation { get; private set; }
     }
 }

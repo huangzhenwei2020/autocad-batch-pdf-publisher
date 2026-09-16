@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Windows.Controls;
 using System.Windows.Input;
 using Autodesk.AutoCAD.ApplicationServices;
@@ -64,19 +65,14 @@ namespace BatchPdfPublisher.Services
                 if (existing != null) ribbon.Tabs.Remove(existing);
                 var tab = new RibbonTab { Id = TabId, Title = "万落建筑工具", IsVisible = true };
                 var shortcuts = ShortcutSettingsService.Load();
-                foreach (var group in FeatureRegistry.All.GroupBy(x => x.Group))
-                {
-                    var source = new RibbonPanelSource { Title = group.Key };
-                    foreach (var feature in group)
-                    {
-                        string shortcut; if (!shortcuts.TryGetValue(feature.Id, out shortcut)) shortcut = feature.DefaultShortcut;
-                        source.Items.Add(CreateButton(feature.Name + "（" + shortcut + "）", feature.Command + " ", feature.Icon, feature.Description));
-                    }
-                    tab.Panels.Add(new RibbonPanel { Source = source });
-                }
+                // 功能区只放固定功能。每图层直达归层命令是动态生成的、数量随图层表增长，
+                // 放进功能区会再次把面板撑成一条长龙；它们已经出现在菜单栏子菜单和快捷键上。
+                var features = FeatureRegistry.Items;
+                foreach (var panel in RibbonPanelPlanner.Plan(features))
+                    tab.Panels.Add(CreatePanel(panel.Title, panel.Features, shortcuts));
                 ribbon.Tabs.Add(tab);
                 _installed = true;
-                Trace("Ribbon 标签已创建：万落建筑工具，按钮数=" + FeatureRegistry.All.Count);
+                Trace("Ribbon 标签已创建：万落建筑工具，面板数=" + tab.Panels.Count + "，按钮数=" + features.Count);
                 return true;
             }
             catch (Exception exception)
@@ -91,14 +87,36 @@ namespace BatchPdfPublisher.Services
         {
             if (tab == null || tab.Panels.Count == 0) return false;
             var buttons = tab.Panels.Where(x => x.Source != null).SelectMany(x => x.Source.Items).OfType<RibbonButton>().ToList();
-            if (buttons.Count != FeatureRegistry.All.Count) return false;
+            var features = FeatureRegistry.Items;
+            if (buttons.Count != features.Count) return false;
+            // 按钮文字是「四字简称（当前快捷键）」。旧标签比对不上就会重建，
+            // 所以用户改了快捷键之后这里也自动跟着更新。
             var shortcuts = ShortcutSettingsService.Load();
-            foreach (var feature in FeatureRegistry.All)
+            foreach (var feature in features)
             {
+                var label = string.IsNullOrWhiteSpace(feature.ShortName) ? feature.Name : feature.ShortName;
                 string shortcut; if (!shortcuts.TryGetValue(feature.Id, out shortcut)) shortcut = feature.DefaultShortcut;
-                if (!buttons.Any(x => x.Text.IndexOf(feature.Name, StringComparison.OrdinalIgnoreCase) >= 0 && x.Text.IndexOf(shortcut, StringComparison.OrdinalIgnoreCase) >= 0)) return false;
+                if (!buttons.Any(x => string.Equals(x.Text, label + "（" + shortcut + "）", StringComparison.Ordinal))) return false;
             }
             return true;
+        }
+
+        /// <summary>
+        /// 按规划生成一个面板：每行 <see cref="RibbonPanelPlanner.ButtonsPerRow"/> 个，
+        /// 用 RibbonRowBreak 换行；单个面板的按钮上限由
+        /// <see cref="RibbonPanelPlanner"/> 负责拆分，这里只负责排版。
+        /// </summary>
+        private static RibbonPanel CreatePanel(string title, IList<FeatureDefinition> features, IDictionary<string, string> shortcuts)
+        {
+            var source = new RibbonPanelSource { Title = title };
+            for (var index = 0; index < features.Count; index++)
+            {
+                source.Items.Add(CreateButton(features[index], shortcuts));
+                // 每满一行换行；最后一行不加，避免多出一行空行。
+                if ((index + 1) % RibbonPanelPlanner.ButtonsPerRow == 0 && index + 1 < features.Count)
+                    source.Items.Add(new RibbonRowBreak());
+            }
+            return new RibbonPanel { Source = source };
         }
 
         private static void Trace(Exception exception)
@@ -124,109 +142,54 @@ namespace BatchPdfPublisher.Services
             if (tab != null) ribbon.Tabs.Remove(tab);
         }
 
-        private static RibbonButton CreateButton(string text, string command, string icon, string description)
+        private static RibbonButton CreateButton(FeatureDefinition feature, IDictionary<string, string> shortcuts)
         {
-            var image = CreateIcon(icon);
+            string shortcut; if (!shortcuts.TryGetValue(feature.Id, out shortcut)) shortcut = feature.DefaultShortcut;
+            var image = CreateIcon(feature);
+            // 功能区是网格排版，按钮文字用统一四字简称，并且带上当前快捷键。
+            // 完整名称放悬停提示第一行，信息不丢。
+            var label = string.IsNullOrWhiteSpace(feature.ShortName) ? feature.Name : feature.ShortName;
             return new RibbonButton
             {
-                Text = text,
-                ToolTip = description,
+                Text = label + "（" + shortcut + "）",
+                ToolTip = feature.Name + "\n" + feature.Description,
                 ShowText = true,
                 ShowImage = true,
                 Image = image,
                 LargeImage = image,
                 Size = RibbonItemSize.Standard,
                 Orientation = Orientation.Horizontal,
-                CommandParameter = command,
-                CommandHandler = new CommandHandler(command)
+                CommandParameter = feature.Command + " ",
+                CommandHandler = new CommandHandler(feature.Command + " ")
             };
         }
 
-        private static ImageSource CreateIcon(string kind)
+        /// <summary>
+        /// 生成图标：**按分组着色的圆角色块 + 一个白色汉字**。
+        ///
+        /// 原来是用同一支细蓝线画的小图形，16 px 下几乎分不出来。改成色块 + 汉字之后：
+        /// 颜色一眼分大类（图纸蓝 / 图块紫 / 建筑青 / 制图橙 / 图层绿 / 系统灰），
+        /// 汉字一眼分具体功能，而且汉字在 16 px 下比线条图形清楚得多。
+        /// 矢量绘制，缩放不会糊；图标字来自功能登记表，改功能时同步那一个字即可。
+        /// </summary>
+        private static ImageSource CreateIcon(FeatureDefinition feature)
         {
+            const double size = 16d;
             var group = new DrawingGroup();
-            var pen = new Pen(Brushes.DarkSlateBlue, 1.6);
-            var brush = new SolidColorBrush(Color.FromRgb(45, 112, 190));
-            if (kind == "stair")
-            {
-                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(2, 13), new WpfPoint(14, 13))));
-                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(2, 13), new WpfPoint(2, 10))));
-                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(2, 10), new WpfPoint(5, 10))));
-                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(5, 10), new WpfPoint(5, 7))));
-                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(5, 7), new WpfPoint(8, 7))));
-                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(8, 7), new WpfPoint(8, 4))));
-                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(8, 4), new WpfPoint(13, 4))));
-                group.Children.Add(new GeometryDrawing(brush, null, new EllipseGeometry(new WpfPoint(13, 4), 1.6, 1.6)));
-            }
-            else if (kind == "room")
-            {
-                group.Children.Add(new GeometryDrawing(null, pen, new RectangleGeometry(new WpfRect(2, 3, 12, 10))));
-                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(8, 3), new WpfPoint(8, 8))));
-                group.Children.Add(new GeometryDrawing(brush, null, new EllipseGeometry(new WpfPoint(8, 10), 2.2, 2.2)));
-            }
-            else if (kind == "doorwindow")
-            {
-                group.Children.Add(new GeometryDrawing(null, pen, new RectangleGeometry(new WpfRect(2, 2, 12, 12))));
-                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(8, 2), new WpfPoint(8, 14))));
-                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(2, 8), new WpfPoint(14, 8))));
-                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(2, 14), new WpfPoint(8, 8))));
-                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(14, 14), new WpfPoint(8, 8))));
-            }
-            else if (kind == "image")
-            {
-                group.Children.Add(new GeometryDrawing(Brushes.White, pen, new RectangleGeometry(new WpfRect(2, 3, 12, 10))));
-                group.Children.Add(new GeometryDrawing(brush, null, new EllipseGeometry(new WpfPoint(5, 6), 1.4, 1.4)));
-                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(3, 12), new WpfPoint(7, 8))));
-                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(7, 8), new WpfPoint(10, 11))));
-                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(10, 11), new WpfPoint(13, 7))));
-            }
-            else if (kind == "spec")
-            {
-                group.Children.Add(new GeometryDrawing(Brushes.White, pen, new RectangleGeometry(new WpfRect(3, 2, 10, 12))));
-                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(5, 5), new WpfPoint(11, 5))));
-                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(5, 8), new WpfPoint(11, 8))));
-                group.Children.Add(new GeometryDrawing(brush, null, new EllipseGeometry(new WpfPoint(11.5, 11.5), 2.5, 2.5)));
-            }
-            else if (kind == "frame")
-            {
-                group.Children.Add(new GeometryDrawing(null, pen, new RectangleGeometry(new WpfRect(2, 2, 12, 12))));
-                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(5, 5), new WpfPoint(11, 11))));
-                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(11, 5), new WpfPoint(5, 11))));
-            }
-            else if (kind == "catalog")
-            {
-                for (var y = 3; y <= 11; y += 4)
-                    group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(3, y), new WpfPoint(13, y))));
-                group.Children.Add(new GeometryDrawing(null, pen, new RectangleGeometry(new WpfRect(2, 2, 12, 12))));
-            }
-            else if (kind == "attribute")
-            {
-                group.Children.Add(new GeometryDrawing(brush, pen, new RectangleGeometry(new WpfRect(2, 2, 12, 12))));
-                group.Children.Add(new GeometryDrawing(Brushes.White, null, new LineGeometry(new WpfPoint(5, 6), new WpfPoint(11, 6))));
-                group.Children.Add(new GeometryDrawing(Brushes.White, null, new LineGeometry(new WpfPoint(5, 9), new WpfPoint(11, 9))));
-            }
-            else if (kind == "standard")
-            {
-                group.Children.Add(new GeometryDrawing(null, pen, new RectangleGeometry(new WpfRect(2, 2, 12, 12))));
-                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(2, 6), new WpfPoint(14, 6))));
-                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(2, 10), new WpfPoint(14, 10))));
-                group.Children.Add(new GeometryDrawing(brush, null, new EllipseGeometry(new WpfPoint(6, 6), 1.4, 1.4)));
-                group.Children.Add(new GeometryDrawing(brush, null, new EllipseGeometry(new WpfPoint(10, 10), 1.4, 1.4)));
-            }
-            else if (kind == "scale")
-            {
-                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(2, 12), new WpfPoint(14, 4))));
-                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(2, 9), new WpfPoint(2, 12))));
-                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(2, 12), new WpfPoint(5, 12))));
-                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(11, 4), new WpfPoint(14, 4))));
-                group.Children.Add(new GeometryDrawing(null, pen, new LineGeometry(new WpfPoint(14, 4), new WpfPoint(14, 7))));
-            }
-            else
-            {
-                group.Children.Add(new GeometryDrawing(brush, pen, new RectangleGeometry(new WpfRect(2, 2, 12, 12))));
-                group.Children.Add(new GeometryDrawing(Brushes.White, null, new LineGeometry(new WpfPoint(5, 6), new WpfPoint(11, 6))));
-                group.Children.Add(new GeometryDrawing(Brushes.White, null, new LineGeometry(new WpfPoint(5, 9), new WpfPoint(11, 9))));
-            }
+
+            var background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(RibbonIconTheme.ColorHex(feature.Group)));
+            group.Children.Add(new GeometryDrawing(background, null,
+                new RectangleGeometry(new WpfRect(0d, 0d, size, size), 3.5d, 3.5d)));
+
+            var glyph = RibbonIconTheme.GlyphFor(feature.Icon);
+            // 这里不 using System.Windows，避免 Application 与 AutoCAD 的 Application 撞名。
+            var typeface = new Typeface(new FontFamily("Microsoft YaHei"),
+                System.Windows.FontStyles.Normal, System.Windows.FontWeights.Bold, System.Windows.FontStretches.Normal);
+            var text = new FormattedText(glyph, System.Globalization.CultureInfo.CurrentUICulture,
+                System.Windows.FlowDirection.LeftToRight, typeface, size * 0.74d, Brushes.White, 96d);
+            var geometry = text.BuildGeometry(new WpfPoint((size - text.Width) / 2d, (size - text.Height) / 2d));
+            group.Children.Add(new GeometryDrawing(Brushes.White, null, geometry));
+
             return new DrawingImage(group);
         }
 

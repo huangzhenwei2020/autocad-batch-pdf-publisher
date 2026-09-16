@@ -44,6 +44,21 @@ namespace BatchPdfPublisher
             Application.ShowModalDialog(new ShortcutSettingsForm());
         }
 
+        /// <summary>
+        /// 显示/隐藏 AutoCAD 经典菜单栏。AutoCAD 2022～2025 都还支持菜单栏，
+        /// 只是 MENUBAR 初值为 0 默认隐藏，所以插件菜单加载了也看不见。
+        /// </summary>
+        [CommandMethod("WLMENUBAR")]
+        public void ToggleMenuBar()
+        {
+            var visible = MenuService.ToggleMenuBar();
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document == null) return;
+            document.Editor.WriteMessage(visible
+                ? "\n万落建筑工具：已显示菜单栏，本插件菜单位于菜单栏右侧（分隔线之后）。\n"
+                : "\n万落建筑工具：已隐藏菜单栏（再次输入 WLMENUBAR 可显示）。\n");
+        }
+
         [CommandMethod("WLCLOUDSYNC", CommandFlags.Session)]
         public void ConfigureCloudSync()
         {
