@@ -245,6 +245,9 @@ namespace BatchPdfPublisher
                     setByLayer = true;
                     includeBlockAttributes = true;
                     mergeSourceLayers = false;
+                    // 直达快捷键的路径不弹对话框，界面上必须留一句回执，
+                    // 否则用户只能靠"图层有没有变"猜命令到底走的是哪条路。
+                    document.Editor.WriteMessage("\n万落建筑工具：直达归层 → " + targetLayerName + "（不弹对话框）\n");
                 }
                 else
                 {
@@ -356,12 +359,44 @@ namespace BatchPdfPublisher
         }
 
         /// <summary>
+        /// 图层直达命令的"目标图层"暂存区，由 <see cref="SetPendingLayer"/> 写入。
+        /// </summary>
+        private static string _pendingLayerName;
+
+        /// <summary>
+        /// 供 AutoLISP 调用的图层暂存函数：<c>(wlsetlayer "WL-门窗-门")</c>。
+        ///
+        /// **为什么不用 setenv/getenv 传值**：AutoLISP 的 setenv 写的是 AutoCAD 自己的
+        /// 环境表，并不保证同步进 Windows 进程环境块，而 .NET 的
+        /// Environment.GetEnvironmentVariable 读的正是进程环境块。实测表现就是
+        /// "图层快捷键按下去弹的是 GL 对话框"—— 别名其实执行了，只是目标图层丢了。
+        /// 改成 AutoLISP 直接调用 .NET 的 LispFunction：同一个进程、直接传参，
+        /// 不存在任何环境变量同步问题。setenv 作为兼容通道保留（见
+        /// FeatureRegistry.LayerLispInvocation）。
+        /// </summary>
+        [LispFunction("WLSETLAYER")]
+        public object SetPendingLayer(ResultBuffer args)
+        {
+            try
+            {
+                var values = args == null ? null : args.AsArray();
+                _pendingLayerName = values != null && values.Length > 0
+                    ? Convert.ToString(values[0].Value)
+                    : null;
+            }
+            catch { _pendingLayerName = null; }
+            return null;
+        }
+
+        /// <summary>
         /// 读取并清除"图层直达快捷键"预置的目标图层。
-        /// 由 FeatureRegistry 生成的 AutoLISP 别名写入该环境变量，本命令读到后立即清空，
-        /// 这样同一次会话里后面的手动 GL 仍会正常弹对话框。
+        /// 读完立即清空，这样同一次会话里后面的手动 GL 仍会正常弹对话框。
         /// </summary>
         private static string ReadAndClearPresetLayer()
         {
+            var preset = _pendingLayerName;
+            _pendingLayerName = null;
+            if (!string.IsNullOrWhiteSpace(preset)) return preset.Trim();
             try
             {
                 var value = Environment.GetEnvironmentVariable(FeatureRegistry.LayerEnvironmentVariable);

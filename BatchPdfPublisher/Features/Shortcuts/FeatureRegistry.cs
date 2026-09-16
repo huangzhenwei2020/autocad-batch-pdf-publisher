@@ -53,17 +53,23 @@ namespace BatchPdfPublisher.Services
         {
             get
             {
-                List<FeatureDefinition> items;
-                try
+                var shortcuts = LayerShortcutStore.Load();
+                if (shortcuts.Count == 0) return FixedItems;
+                // 图层名来自制图标准，读一次盘给所有图层共用：LayerNameFor 每次调用都会
+                // LoadProfile()，逐个调用等于每个图层重读一遍标准文件。
+                DraftingStandardProfile profile = null;
+                try { profile = DraftingStandardService.LoadProfile(); }
+                catch { }
+                var items = new List<FeatureDefinition>(FixedItems);
+                foreach (var pair in shortcuts)
                 {
-                    var shortcuts = LayerShortcutStore.Load();
-                    if (shortcuts.Count == 0) return FixedItems;
-                    items = new List<FeatureDefinition>(FixedItems);
-                    foreach (var pair in shortcuts)
+                    // 逐个图层兜异常：早先是在循环外 catch 整个列表，一个图层读不出名字
+                    // 就会把**所有**图层直达命令一起吞掉，用户只看到"快捷键没反应"。
+                    try
                     {
                         var role = DraftingLayerRoles.Find(pair.Key);
                         var group = role == null ? "图层工具" : "图层工具-" + role.Group;
-                        var name = DraftingStandardService.LayerNameFor(pair.Key);
+                        var name = DraftingStandardService.LayerNameFor(pair.Key, profile);
                         items.Add(new FeatureDefinition(
                             LayerFeatureId(pair.Key),
                             "归层 → " + name,
@@ -73,12 +79,24 @@ namespace BatchPdfPublisher.Services
                             "standard",
                             "把所选对象直接归到“" + name + "”图层。",
                             null,
-                            LayerLispInvocation(pair.Key)));
+                            LayerLispInvocation(name)));
                     }
+                    catch { }
                 }
-                catch { return FixedItems; }
                 return items;
             }
+        }
+
+        /// <summary>本会话里已生成的图层直达命令，形如 <c>DOO→WL-门窗-门</c>，供日志与自检使用。</summary>
+        public static IList<string> DescribeLayerCommands()
+        {
+            var result = new List<string>();
+            foreach (var feature in All)
+            {
+                string layerKey;
+                if (TryGetLayerKey(feature.Id, out layerKey)) result.Add(feature.DefaultShortcut + "→" + feature.Name.Replace("归层 → ", string.Empty));
+            }
+            return result;
         }
 
         public static FeatureDefinition Find(string id)
@@ -103,22 +121,17 @@ namespace BatchPdfPublisher.Services
         }
 
         /// <summary>
-        /// 图层直达命令的 AutoLISP 调用：先把目标图层名放进环境变量，再调用统一的 GL 命令。
-        /// GL 读到该变量就直接归层、不弹对话框（见 Commands.AssignSelectedToLayer）。
+        /// 图层直达命令的 AutoLISP 调用。文本由 <see cref="LayerCommandLisp"/> 生成
+        /// （纯逻辑，离线可断言）；GL 拿到目标图层就直接归层、不弹对话框
+        /// （见 Commands.AssignSelectedToLayer）。
         /// 这样任意数量的图层共用**一个** [CommandMethod]，无需为每个图层注册命令。
         /// </summary>
-        private static string LayerLispInvocation(string layerKey)
+        private static string LayerLispInvocation(string layerName)
         {
-            var layerName = DraftingStandardService.LayerNameFor(layerKey);
-            return "(setenv \"" + LayerEnvironmentVariable + "\" \"" + EscapeLisp(layerName) + "\") (command \"GL\")";
+            return LayerCommandLisp.Build(layerName);
         }
 
-        internal const string LayerEnvironmentVariable = "WANLUO_TARGET_LAYER";
-
-        private static string EscapeLisp(string value)
-        {
-            return (value ?? string.Empty).Replace("\\", "\\\\").Replace("\"", "\\\"");
-        }
+        internal const string LayerEnvironmentVariable = LayerCommandLisp.EnvironmentVariable;
 
         private static FeatureDefinition F(string id, string name, string command, string shortcut, string group, string icon, string description, string nativeCommand = null, string shortName = null)
         {

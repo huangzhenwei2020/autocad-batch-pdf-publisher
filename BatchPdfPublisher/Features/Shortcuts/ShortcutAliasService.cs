@@ -71,6 +71,35 @@ namespace BatchPdfPublisher.Services
             _lastSignature = signature;
             _lastDocument = document;
             _lastSettingsWriteUtc = settingsWriteUtc;
+            TraceLayerCommands();
+        }
+
+        /// <summary>
+        /// 把本会话生成的图层直达命令写进 UI 日志。
+        /// 图层快捷键"按下去弹的是 GL 对话框"这类问题，光看界面分不清是别名没生成、
+        /// 还是目标图层没传进去；日志里有一行"快捷键→图层名"就能一眼定位。
+        /// </summary>
+        private static void TraceLayerCommands()
+        {
+            try
+            {
+                var commands = FeatureRegistry.DescribeLayerCommands();
+                TraceLine(commands.Count == 0
+                    ? "图层直达快捷键：无（图层快捷键表为空）"
+                    : "图层直达快捷键：" + string.Join("，", commands));
+            }
+            catch (Exception exception) { TraceLine("图层直达快捷键日志失败：" + exception.Message); }
+        }
+
+        private static void TraceLine(string message)
+        {
+            try
+            {
+                System.IO.File.AppendAllText(
+                    System.IO.Path.Combine(UserDataPaths.LogsDirectory, "BatchPdfPublisher.ui.log"),
+                    DateTime.Now.ToString("O") + " " + message + Environment.NewLine);
+            }
+            catch { }
         }
 
         public static void Refresh()

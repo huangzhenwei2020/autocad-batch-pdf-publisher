@@ -20,10 +20,20 @@ internal static class CuixPackageBuilderTests
         new FeatureDefinition("menubar", "菜单栏开关", "WLMENUBAR", "CDL", "系统设置", "菜", "显示或隐藏菜单栏。", null, null, "菜单开关"),
         // 图层直达命令：带 AutoLISP 表达式，宏必须用它而不是裸命令。
         new FeatureDefinition("layer_wall", "归层 → WL-墙面", "GL", "QM", "图层工具-墙体", "层", "把所选对象归到墙面图层。", null,
-            "(setenv \"WANLUO_TARGET_LAYER\" \"WL-墙面\") (command \"GL\")", "墙面归层"),
+            LayerInvocation("WL-墙面"), "墙面归层"),
         new FeatureDefinition("layer_floor", "归层 → WL-地面", "GL", "DM", "图层工具-墙体", "层", "把所选对象归到地面图层。", null,
-            "(setenv \"WANLUO_TARGET_LAYER\" \"WL-地面\") (command \"GL\")", "地面归层")
+            LayerInvocation("WL-地面"), "地面归层")
     };
+
+    /// <summary>
+    /// 与 FeatureRegistry.LayerLispInvocation 保持同形：整段一个 (progn ...)，
+    /// 主通道是 WLSETLAYER（LispFunction 同进程传值），setenv 只是兼容通道。
+    /// </summary>
+    private static string LayerInvocation(string layerName)
+    {
+        return "(progn (if wlsetlayer (wlsetlayer \"" + layerName + "\")) (setenv \"WANLUO_TARGET_LAYER\" \""
+            + layerName + "\") (command \"GL\"))";
+    }
 
     public static void RunAll()
     {
@@ -122,8 +132,16 @@ internal static class CuixPackageBuilderTests
     private static void LayerEntriesUseLispInvocation()
     {
         var text = Text(Parts(), "MenuGroup.cui");
-        Assert(text.Contains("^C^C(setenv &quot;WANLUO_TARGET_LAYER&quot; &quot;WL-墙面&quot;) (command &quot;GL&quot;)"),
-            "layer command macro should use its AutoLISP invocation");
+        // 主通道必须是 LispFunction：AutoLISP 直接调 .NET，同进程传值。
+        // 早先只用 (setenv ...)：AutoCAD 不保证把它同步进 Windows 进程环境块，
+        // 而 .NET 侧读的就是进程环境块——表现就是"按了图层快捷键却弹出 GL 对话框"。
+        Assert(text.Contains("(if wlsetlayer (wlsetlayer &quot;WL-墙面&quot;))"),
+            "layer command must pass the target layer through the WLSETLAYER LispFunction");
+        Assert(text.Contains("(setenv &quot;WANLUO_TARGET_LAYER&quot; &quot;WL-墙面&quot;)"),
+            "the setenv channel should stay as a fallback");
+        // 整段必须包成一个形式：菜单宏里多个散装 LISP 形式会被命令行拆开执行。
+        Assert(text.Contains("^C^C(progn (if wlsetlayer (wlsetlayer &quot;WL-墙面&quot;)) (setenv &quot;WANLUO_TARGET_LAYER&quot; &quot;WL-墙面&quot;) (command &quot;GL&quot;))"),
+            "layer command macro should be a single progn form");
         Assert(!text.Contains("^C^C_GL"), "layer command must not fall back to the bare GL command");
         Assert(text.Contains("^C^C_WLMENUBAR"), "plain feature should still use ^C^C_<command>");
         Console.WriteLine("PASS CuixLayerEntriesUseLispInvocation");

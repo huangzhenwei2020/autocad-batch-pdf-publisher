@@ -435,6 +435,21 @@ foreach ($line in $featureLines) {
 }
 Write-Host "功能简称校验通过：$($featureLines.Count) 个功能均为四字简称" -ForegroundColor DarkGray
 
+# 图层直达快捷键靠 AutoLISP 直接调用 .NET 的 LispFunction 传目标图层（setenv 只是兼容
+# 通道，AutoCAD 不保证它同步进 Windows 进程环境块）。函数名写在 LayerCommandLisp 里，
+# 注册写在 Commands.cs 的 [LispFunction(...)] 上——两边改名不同步就会静默失效，
+# 表现只是"图层快捷键按下去弹 GL 对话框"，很难查，所以在这里卡住。
+$layerLispSource = Join-Path $repositoryRoot 'BatchPdfPublisher\Features\Shortcuts\LayerCommandLisp.cs'
+if (-not (Test-Path -LiteralPath $layerLispSource)) { throw '缺少图层直达命令的 AutoLISP 生成器 LayerCommandLisp.cs。' }
+$layerLispText = Get-Content -LiteralPath $layerLispSource -Raw
+$setFunctionMatch = [regex]::Match($layerLispText, 'SetFunctionName\s*=\s*"([^"]+)"')
+if (-not $setFunctionMatch.Success) { throw '未能从 LayerCommandLisp.cs 解析出 SetFunctionName。' }
+$setFunction = $setFunctionMatch.Groups[1].Value
+if ($commandText -notmatch ('LispFunction\("' + [regex]::Escape($setFunction) + '"\)')) {
+    throw ('图层暂存函数名不一致：LayerCommandLisp.SetFunctionName = ' + $setFunction + '，但 Commands.cs 里没有 [LispFunction("' + $setFunction + '")]。')
+}
+Write-Host "图层直达命令校验通过：$setFunction LispFunction 已注册" -ForegroundColor DarkGray
+
 Write-Host ''
 Write-Host '干净发布完成：' -ForegroundColor Green
 Write-Host $OutputRoot

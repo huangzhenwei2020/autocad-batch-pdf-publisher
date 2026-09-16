@@ -9,6 +9,7 @@ internal static class PublishPlanStoreTests
     {
         PaperSizeCatalogTests.RunAll();
         CuixPackageBuilderTests.RunAll();
+        LayerCommandLispTests.RunAll();
         RibbonPanelPlannerTests.RunAll();
         RibbonIconThemeTests.RunAll();
         DraftingLayerRolesTests.RunAll();
