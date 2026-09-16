@@ -94,21 +94,76 @@ namespace BatchPdfPublisher.Services
             }
         }
 
+        /// <summary>箭头选择列表的缓存。按图块库文件时间戳失效。</summary>
+        private static List<string> _arrowChoiceCache;
+        private static DateTime _arrowChoiceStampUtc = DateTime.MinValue;
+
         public static List<string> GetArrowStyleChoices()
         {
-            var result = new List<string> { "图块：WS-cj", "图块：_ArchTick", "实心闭合", "空心闭合", "建筑标记", "建筑斜线", "点" }; var path = ArrowLibraryPath; if (!File.Exists(path)) return result;
+            // 这一项要 ReadDwgFile 打开箭头图块库，是"打开制图标准窗口"时最慢的一步
+            // （几十到几百毫秒，库放在网络盘或云同步目录时更久）。窗口每次打开都重读
+            // 一次纯属浪费，按文件时间戳缓存；换了库文件会自动重新读取。
+            var path = ArrowLibraryPath;
+            DateTime stamp;
+            try { stamp = File.Exists(path) ? File.GetLastWriteTimeUtc(path) : DateTime.MinValue; }
+            catch { stamp = DateTime.MinValue; }
+            if (_arrowChoiceCache != null && stamp == _arrowChoiceStampUtc) return new List<string>(_arrowChoiceCache);
+
+            var result = new List<string> { "图块：WS-cj", "图块：_ArchTick", "实心闭合", "空心闭合", "建筑标记", "建筑斜线", "点" }; if (!File.Exists(path)) return result;
             try { using (var source = new Database(false, true)) { source.ReadDwgFile(path, FileOpenMode.OpenForReadAndAllShare, true, ""); using (var tr = source.TransactionManager.StartOpenCloseTransaction()) { var table = (BlockTable)tr.GetObject(source.BlockTableId, OpenMode.ForRead); foreach (ObjectId id in table) { var block = (BlockTableRecord)tr.GetObject(id, OpenMode.ForRead); if (!block.IsAnonymous && !block.IsLayout && !block.Name.StartsWith("*", StringComparison.Ordinal)) result.Add("图块：" + block.Name); } } } } catch { }
-            return result.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var distinct = result.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            _arrowChoiceCache = distinct;
+            _arrowChoiceStampUtc = stamp;
+            return new List<string>(distinct);
+        }
+
+        // ------------------------------------------------------------------
+        // 设置文件的解析结果缓存。
+        //
+        // 为什么要缓存：FeatureRegistry.All → LayerNameFor → LoadProfile，而
+        // FeatureRegistry.All 被 Ribbon 的 Idle 检查、菜单生成、快捷键设置页反复调用。
+        // 每次读盘 + 解析，空闲时一秒能来几十上百次，CAD 界面就会发滞。
+        //
+        // 为什么缓存的是**解析结果**而不是 DraftingStandardProfile 本身：
+        // LoadProfile 的调用方会直接改返回的对象（制图标准窗口就是先取一份再就地编辑），
+        // 如果把同一个实例发出去，窗口里没保存的编辑就会污染"已保存"的缓存。
+        // 所以每次仍然新建 profile，只是不再读盘。
+        // ------------------------------------------------------------------
+        private static Dictionary<string, string> _settingsCache;
+        private static DateTime _settingsCacheStampUtc = DateTime.MinValue;
+
+        private static Dictionary<string, string> LoadSettingsData()
+        {
+            DateTime stamp;
+            try { stamp = File.Exists(SettingsPath) ? File.GetLastWriteTimeUtc(SettingsPath) : DateTime.MinValue; }
+            catch { stamp = DateTime.MinValue; }
+            var cached = _settingsCache;
+            if (cached != null && stamp == _settingsCacheStampUtc) return cached;
+            var data = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                if (File.Exists(SettingsPath))
+                    foreach (var line in File.ReadAllLines(SettingsPath)) { var i = line.IndexOf('='); if (i > 0 && !line.TrimStart().StartsWith("#")) data[line.Substring(0, i).Trim()] = line.Substring(i + 1).Trim(); }
+            }
+            catch { }
+            _settingsCache = data;
+            _settingsCacheStampUtc = stamp;
+            return data;
+        }
+
+        internal static void InvalidateSettingsCache()
+        {
+            _settingsCache = null;
+            _settingsCacheStampUtc = DateTime.MinValue;
         }
 
         public static DraftingStandardProfile LoadProfile()
         {
             var profile = DraftingStandardProfile.CreateDefault();
-            if (!File.Exists(SettingsPath)) return profile;
+            var data = LoadSettingsData();
+            if (data.Count == 0) return profile;
             try
             {
-                var data = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                foreach (var line in File.ReadAllLines(SettingsPath)) { var i = line.IndexOf('='); if (i > 0 && !line.TrimStart().StartsWith("#")) data[line.Substring(0, i).Trim()] = line.Substring(i + 1).Trim(); }
                 foreach (var x in profile.Layers) { x.Name = Read(data, "Layer." + x.Key + ".Name", x.Name); x.ColorIndex = ReadShort(data, "Layer." + x.Key + ".Color", x.ColorIndex); x.TrueColorRgb = ReadInt(data, "Layer." + x.Key + ".ColorRgb", x.TrueColorRgb); x.LineWeight = ReadInt(data, "Layer." + x.Key + ".LineWeight", x.LineWeight); x.LineType = Read(data, "Layer." + x.Key + ".LineType", x.LineType); x.IsPlottable = Read(data, "Layer." + x.Key + ".Plottable", x.IsPlottable ? "1" : "0") == "1"; x.CreateOnApply = Read(data, "Layer." + x.Key + ".Create", "1") == "1"; x.SyncExisting = Read(data, "Layer." + x.Key + ".Sync", "1") == "1"; }
                 int layerCount; if (int.TryParse(Read(data, "Layer.Count", "0"), out layerCount) && layerCount > 0)
                 {
@@ -179,6 +234,7 @@ namespace BatchPdfPublisher.Services
             lines.Add("Dimension.TextVertical=" + profile.DimensionTextVertical); lines.Add("Dimension.TextHorizontal=" + profile.DimensionTextHorizontal); lines.Add("Dimension.TextAlign=" + profile.DimensionTextAlign); lines.Add("Dimension.TextMovement=" + profile.DimensionTextMovement);
             lines.Add("Leader.Create=" + (profile.LeaderCreateOnApply ? "1" : "0")); lines.Add("Leader.Name=" + profile.LeaderStyleName); lines.Add("Leader.LineType=" + profile.LeaderLineType); lines.Add("Leader.LineColor=" + profile.LeaderLineColor); lines.Add("Leader.TextColor=" + profile.LeaderTextColor); lines.Add("Leader.LineWeight=" + profile.LeaderLineWeight); lines.Add("Leader.ArrowStyle=" + profile.LeaderArrowStyle); lines.Add("Leader.ArrowSize=" + profile.LeaderArrowSize.ToString(CultureInfo.InvariantCulture)); lines.Add("Leader.TextHeight=" + profile.LeaderTextHeight.ToString(CultureInfo.InvariantCulture)); lines.Add("Leader.LandingGap=" + profile.LeaderLandingGap.ToString(CultureInfo.InvariantCulture)); lines.Add("Leader.DoglegLength=" + profile.LeaderDoglegLength.ToString(CultureInfo.InvariantCulture)); lines.Add("Leader.EnableLanding=" + (profile.LeaderEnableLanding ? "1" : "0")); lines.Add("Leader.EnableDogleg=" + (profile.LeaderEnableDogleg ? "1" : "0")); lines.Add("Leader.FrameText=" + (profile.LeaderFrameText ? "1" : "0"));
             File.WriteAllLines(SettingsPath, lines.ToArray(), System.Text.Encoding.UTF8);
+            InvalidateSettingsCache();
         }
 
         public static DraftingStandardResources EnsureAll(Database db, Transaction tr) { var p = LoadProfile(); return EnsureAll(db, tr, p, p.UpdateExisting); }

@@ -14,31 +14,47 @@ namespace BatchPdfPublisher.Services
     public static class RibbonService
     {
         private const string TabId = "BPP_BATCH_PDF_TAB";
+        /// <summary>
+        /// Idle 检查的最小间隔。Application.Idle 在消息队列一空就触发，空闲时一秒能来
+        /// 几十上百次；每次检查都要读功能表与快捷键表来判断标签是否过期，还会碰 WPF
+        /// 功能区树。加了节流之后 CAD 界面（尤其是模态窗口）不发滞，而工作空间重建后
+        /// 最多晚 1.2 秒把标签补回来，用户察觉不到。显式刷新（InstallWhenReady /
+        /// RefreshNow）不走节流，立刻生效。
+        /// </summary>
+        private static readonly TimeSpan IdleCheckInterval = TimeSpan.FromMilliseconds(1200);
+
         private static EventHandler _idleHandler;
         private static bool _installed;
+        private static DateTime _lastIdleCheckUtc = DateTime.MinValue;
 
         public static void InstallWhenReady()
         {
-            if (_idleHandler == null)
-            {
-                _idleHandler = (sender, args) =>
-                {
-                    // Workspaces and vertical products (such as T20) can rebuild
-                    // the Ribbon after our assembly has loaded.  Keep this cheap
-                    // check on Idle so the tab is restored when that happens.
-                    TryInstallRibbon(false);
-                };
-                Application.Idle += _idleHandler;
-            }
+            EnsureIdleHook();
             // A freshly started AutoCAD may already have a Ribbon when NETLOAD
             // completes; install immediately as well as on subsequent idle ticks.
-            TryInstallRibbon(true);
+            RefreshNow();
         }
 
         public static bool RefreshNow()
         {
-            InstallWhenReady();
+            _lastIdleCheckUtc = DateTime.UtcNow;
             return TryInstallRibbon(true);
+        }
+
+        private static void EnsureIdleHook()
+        {
+            if (_idleHandler != null) return;
+            _idleHandler = (sender, args) =>
+            {
+                // Workspaces and vertical products (such as T20) can rebuild
+                // the Ribbon after our assembly has loaded.  Keep this cheap
+                // check on Idle so the tab is restored when that happens.
+                var now = DateTime.UtcNow;
+                if (now - _lastIdleCheckUtc < IdleCheckInterval) return;
+                _lastIdleCheckUtc = now;
+                TryInstallRibbon(false);
+            };
+            Application.Idle += _idleHandler;
         }
 
         private static bool TryInstallRibbon(bool traceNotReady)
@@ -137,6 +153,7 @@ namespace BatchPdfPublisher.Services
                 _idleHandler = null;
             }
             _installed = false;
+            _lastIdleCheckUtc = DateTime.MinValue;
             var ribbon = ComponentManager.Ribbon;
             var tab = ribbon?.FindTab(TabId);
             if (tab != null) ribbon.Tabs.Remove(tab);

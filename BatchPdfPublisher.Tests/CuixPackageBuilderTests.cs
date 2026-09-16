@@ -27,12 +27,13 @@ internal static class CuixPackageBuilderTests
 
     /// <summary>
     /// 与 FeatureRegistry.LayerLispInvocation 保持同形：整段一个 (progn ...)，
-    /// 主通道是 WLSETLAYER（LispFunction 同进程传值），setenv 只是兼容通道。
+    /// 主通道是 WLSETLAYER / WLSETSELECTION（LispFunction 同进程传值），
+    /// setenv 只是兼容通道。
     /// </summary>
     private static string LayerInvocation(string layerName)
     {
-        return "(progn (if wlsetlayer (wlsetlayer \"" + layerName + "\")) (setenv \"WANLUO_TARGET_LAYER\" \""
-            + layerName + "\") (command \"GL\"))";
+        return "(progn (if WLSETSELECTION (WLSETSELECTION (ssget \"_I\"))) (if WLSETLAYER (WLSETLAYER \""
+            + layerName + "\")) (setenv \"WANLUO_TARGET_LAYER\" \"" + layerName + "\") (command \"GL\"))";
     }
 
     public static void RunAll()
@@ -135,12 +136,14 @@ internal static class CuixPackageBuilderTests
         // 主通道必须是 LispFunction：AutoLISP 直接调 .NET，同进程传值。
         // 早先只用 (setenv ...)：AutoCAD 不保证把它同步进 Windows 进程环境块，
         // 而 .NET 侧读的就是进程环境块——表现就是"按了图层快捷键却弹出 GL 对话框"。
-        Assert(text.Contains("(if wlsetlayer (wlsetlayer &quot;WL-墙面&quot;))"),
+        Assert(text.Contains("(if WLSETLAYER (WLSETLAYER &quot;WL-墙面&quot;))"),
             "layer command must pass the target layer through the WLSETLAYER LispFunction");
+        Assert(text.Contains("(if WLSETSELECTION (WLSETSELECTION (ssget &quot;_I&quot;)))"),
+            "layer command must hand over the preselection so it does not ask again");
         Assert(text.Contains("(setenv &quot;WANLUO_TARGET_LAYER&quot; &quot;WL-墙面&quot;)"),
             "the setenv channel should stay as a fallback");
         // 整段必须包成一个形式：菜单宏里多个散装 LISP 形式会被命令行拆开执行。
-        Assert(text.Contains("^C^C(progn (if wlsetlayer (wlsetlayer &quot;WL-墙面&quot;)) (setenv &quot;WANLUO_TARGET_LAYER&quot; &quot;WL-墙面&quot;) (command &quot;GL&quot;))"),
+        Assert(text.Contains("^C^C(progn (if WLSETSELECTION (WLSETSELECTION (ssget &quot;_I&quot;))) (if WLSETLAYER (WLSETLAYER &quot;WL-墙面&quot;)) (setenv &quot;WANLUO_TARGET_LAYER&quot; &quot;WL-墙面&quot;) (command &quot;GL&quot;))"),
             "layer command macro should be a single progn form");
         Assert(!text.Contains("^C^C_GL"), "layer command must not fall back to the bare GL command");
         Assert(text.Contains("^C^C_WLMENUBAR"), "plain feature should still use ^C^C_<command>");

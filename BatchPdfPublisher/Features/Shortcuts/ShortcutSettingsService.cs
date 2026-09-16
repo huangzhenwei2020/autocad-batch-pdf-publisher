@@ -33,21 +33,44 @@ namespace BatchPdfPublisher.Services
         public static IDictionary<string, string> Load()
         {
             var values = FixedFeatures.ToDictionary(x => x.Id, x => x.DefaultShortcut, StringComparer.OrdinalIgnoreCase);
-            try
-            {
-                if (!File.Exists(SettingsPath)) return values;
-                foreach (var line in File.ReadAllLines(SettingsPath, Encoding.UTF8))
-                {
-                    var split = line.IndexOf('=');
-                    if (split <= 0) continue;
-                    var id = line.Substring(0, split).Trim();
-                    var shortcut = Normalize(line.Substring(split + 1));
-                    if (values.ContainsKey(id) && IsValid(shortcut)) values[id] = shortcut;
-                }
-            }
-            catch { }
+            foreach (var pair in LoadFileValues())
+                if (values.ContainsKey(pair.Key) && IsValid(pair.Value)) values[pair.Key] = pair.Value;
             MigrateOldDefaults(values);
             return values;
+        }
+
+        // ------------------------------------------------------------------
+        // 快捷键文件的解析结果缓存。
+        //
+        // 为什么需要：Ribbon 的 Idle 检查（判断标签上的快捷键文字是否过期）每秒会调
+        // Load() 好几次，Load() 又会经 FeatureRegistry.All 去读制图标准。空闲时反复
+        // 读盘会让 CAD 界面发滞，所以按文件时间戳缓存解析结果。
+        // ------------------------------------------------------------------
+        private static Dictionary<string, string> _fileCache;
+        private static DateTime _fileCacheStampUtc = DateTime.MinValue;
+
+        private static Dictionary<string, string> LoadFileValues()
+        {
+            DateTime stamp;
+            try { stamp = File.Exists(SettingsPath) ? File.GetLastWriteTimeUtc(SettingsPath) : DateTime.MinValue; }
+            catch { stamp = DateTime.MinValue; }
+            var cached = _fileCache;
+            if (cached != null && stamp == _fileCacheStampUtc) return cached;
+            var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                if (File.Exists(SettingsPath))
+                    foreach (var line in File.ReadAllLines(SettingsPath, Encoding.UTF8))
+                    {
+                        var split = line.IndexOf('=');
+                        if (split <= 0) continue;
+                        result[line.Substring(0, split).Trim()] = Normalize(line.Substring(split + 1));
+                    }
+            }
+            catch { }
+            _fileCache = result;
+            _fileCacheStampUtc = stamp;
+            return result;
         }
 
         public static string ShortcutFor(FeatureDefinition feature)
@@ -84,6 +107,8 @@ namespace BatchPdfPublisher.Services
             }
             var lines = FixedFeatures.Select(x => x.Id + "=" + normalized[x.Id]).ToArray();
             File.WriteAllLines(SettingsPath, lines, new UTF8Encoding(false));
+            _fileCache = null;
+            _fileCacheStampUtc = DateTime.MinValue;
         }
 
         public static IDictionary<string, string> Defaults()

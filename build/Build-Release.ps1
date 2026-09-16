@@ -435,20 +435,39 @@ foreach ($line in $featureLines) {
 }
 Write-Host "功能简称校验通过：$($featureLines.Count) 个功能均为四字简称" -ForegroundColor DarkGray
 
-# 图层直达快捷键靠 AutoLISP 直接调用 .NET 的 LispFunction 传目标图层（setenv 只是兼容
-# 通道，AutoCAD 不保证它同步进 Windows 进程环境块）。函数名写在 LayerCommandLisp 里，
-# 注册写在 Commands.cs 的 [LispFunction(...)] 上——两边改名不同步就会静默失效，
-# 表现只是"图层快捷键按下去弹 GL 对话框"，很难查，所以在这里卡住。
+# 图层直达快捷键靠 AutoLISP 直接调用 .NET 的 LispFunction 传目标图层和预选集
+# （setenv 只是兼容通道，AutoCAD 不保证它同步进 Windows 进程环境块）。函数名写在
+# LayerCommandLisp 里，注册写在 Commands.cs 的 [LispFunction(...)] 上——两边改名
+# 不同步就会静默失效，表现只是"图层快捷键按下去弹 GL 对话框"，很难查，所以在这里卡住。
 $layerLispSource = Join-Path $repositoryRoot 'BatchPdfPublisher\Features\Shortcuts\LayerCommandLisp.cs'
 if (-not (Test-Path -LiteralPath $layerLispSource)) { throw '缺少图层直达命令的 AutoLISP 生成器 LayerCommandLisp.cs。' }
 $layerLispText = Get-Content -LiteralPath $layerLispSource -Raw
-$setFunctionMatch = [regex]::Match($layerLispText, 'SetFunctionName\s*=\s*"([^"]+)"')
-if (-not $setFunctionMatch.Success) { throw '未能从 LayerCommandLisp.cs 解析出 SetFunctionName。' }
-$setFunction = $setFunctionMatch.Groups[1].Value
-if ($commandText -notmatch ('LispFunction\("' + [regex]::Escape($setFunction) + '"\)')) {
-    throw ('图层暂存函数名不一致：LayerCommandLisp.SetFunctionName = ' + $setFunction + '，但 Commands.cs 里没有 [LispFunction("' + $setFunction + '")]。')
+foreach ($constantName in @('SetFunctionName', 'SelectionFunctionName')) {
+    $match = [regex]::Match($layerLispText, $constantName + '\s*=\s*"([^"]+)"')
+    if (-not $match.Success) { throw "未能从 LayerCommandLisp.cs 解析出 $constantName。" }
+    $functionName = $match.Groups[1].Value
+    if ($commandText -notmatch ('LispFunction\("' + [regex]::Escape($functionName) + '"\)')) {
+        throw ('图层暂存函数名不一致：LayerCommandLisp.' + $constantName + ' = ' + $functionName + '，但 Commands.cs 里没有 [LispFunction("' + $functionName + '")]。')
+    }
 }
-Write-Host "图层直达命令校验通过：$setFunction LispFunction 已注册" -ForegroundColor DarkGray
+Write-Host "图层直达命令校验通过：WLSETLAYER / WLSETSELECTION LispFunction 均已注册" -ForegroundColor DarkGray
+
+# 图层命令的功能 id 前缀不能和固定功能的 id 撞车：固定功能里有一个 id 就叫
+# layer_assignment（归层 GL），前缀若是 "layer_" 就会被当成"图层命令 assignment"，
+# 于是归层的快捷键在设置窗口里改不了、统计图层命令时还会多出一条假的 "GL→归层"。
+$layerIdsSource = Join-Path $repositoryRoot 'BatchPdfPublisher\Features\Shortcuts\LayerFeatureIds.cs'
+if (-not (Test-Path -LiteralPath $layerIdsSource)) { throw '缺少图层命令 id 约定 LayerFeatureIds.cs。' }
+$layerIdsText = Get-Content -LiteralPath $layerIdsSource -Raw
+$prefixMatch = [regex]::Match($layerIdsText, 'Prefix\s*=\s*"([^"]+)"')
+if (-not $prefixMatch.Success) { throw '未能从 LayerFeatureIds.cs 解析出 Prefix。' }
+$layerPrefix = $prefixMatch.Groups[1].Value
+$fixedIds = [regex]::Matches($featureText, 'F\("([^"]+)"') | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique
+foreach ($fixedId in $fixedIds) {
+    if ($fixedId.StartsWith($layerPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw ('固定功能 id 与图层命令前缀 "' + $layerPrefix + '" 撞车：' + $fixedId + '。请改 LayerFeatureIds.Prefix 或这个功能 id。')
+    }
+}
+Write-Host "图层功能 id 校验通过：$($fixedIds.Count) 个固定功能 id 都不以「$layerPrefix」开头" -ForegroundColor DarkGray
 
 Write-Host ''
 Write-Host '干净发布完成：' -ForegroundColor Green

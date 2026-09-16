@@ -107,17 +107,13 @@ namespace BatchPdfPublisher.Services
         /// <summary>图层命令的功能 id，与快捷键文件、设置界面共用同一约定。</summary>
         public static string LayerFeatureId(string layerKey)
         {
-            return "layer_" + (layerKey ?? string.Empty).Trim();
+            return LayerFeatureIds.For(layerKey);
         }
 
         /// <summary>图层键是否属于动态合成的图层命令。</summary>
         public static bool TryGetLayerKey(string featureId, out string layerKey)
         {
-            layerKey = null;
-            if (string.IsNullOrWhiteSpace(featureId)) return false;
-            if (!featureId.StartsWith("layer_", StringComparison.OrdinalIgnoreCase)) return false;
-            layerKey = featureId.Substring("layer_".Length);
-            return layerKey.Length > 0;
+            return LayerFeatureIds.TryParse(featureId, out layerKey);
         }
 
         /// <summary>

@@ -19,6 +19,7 @@
     <Compile Include="..\BatchPdfPublisher\Shell\RibbonIconTheme.cs" Link="RibbonIconTheme.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\Shortcuts\FeatureDefinition.cs" Link="FeatureDefinition.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\Shortcuts\LayerCommandLisp.cs" Link="LayerCommandLisp.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\Shortcuts\LayerFeatureIds.cs" Link="LayerFeatureIds.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\Drafting\Services\DraftingLayerRoles.cs" Link="DraftingLayerRoles.cs" />
     <Compile Include="ProjectStoreStubs.cs" />
     <Compile Include="UserDataPathsStub.cs" />

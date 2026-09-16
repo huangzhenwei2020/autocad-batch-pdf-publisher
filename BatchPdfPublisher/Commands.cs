@@ -230,14 +230,26 @@ namespace BatchPdfPublisher
             if (document == null) return;
             try
             {
-                var ids = LayerAssignmentService.ResolveSelection(document, "\n选择要归层的对象：");
+                // 优先用图层直达快捷键带来的预选集：用户已经选好了对象，不该再问一次。
+                // 没有预选（手动输入 GL）时才走"有预选用预选、没有就提示选择"的常规路径。
+                var ids = TakePendingSelection();
+                if (ids != null)
+                {
+                    // 这份预选集 AutoCAD 没有消费过，手动清掉，免得后面别的命令又拿它干活。
+                    try { document.Editor.SetImpliedSelection(new ObjectId[0]); } catch { }
+                }
+                else
+                {
+                    ids = LayerAssignmentService.ResolveSelection(document, "\n选择要归层的对象：");
+                }
                 if (ids == null || ids.Length == 0) { document.Editor.WriteMessage("\n未选择任何对象。\n"); return; }
 
                 string targetLayerName;
                 bool setByLayer, includeBlockAttributes, mergeSourceLayers;
 
-                // 图层的直达快捷键不经对话框：AutoLISP 别名先把目标图层写进环境变量，
-                // 再调用本命令。这里读到就直接用，读完立即清掉，避免影响下一次手动调用。
+                // 图层的直达快捷键不经对话框：AutoLISP 别名先用 LispFunction 把目标图层
+                // 交给本命令，再调用本命令（见 LayerCommandLisp）。这里读到就直接用，
+                // 读完立即清掉，避免影响下一次手动调用。
                 var presetLayer = ReadAndClearPresetLayer();
                 if (!string.IsNullOrWhiteSpace(presetLayer))
                 {
@@ -364,6 +376,12 @@ namespace BatchPdfPublisher
         private static string _pendingLayerName;
 
         /// <summary>
+        /// 图层直达命令的"预选对象"暂存区，由 <see cref="SetPendingSelection"/> 写入。
+        /// null = 没有预选（GL 照常提示用户选择）。
+        /// </summary>
+        private static ObjectId[] _pendingSelection;
+
+        /// <summary>
         /// 供 AutoLISP 调用的图层暂存函数：<c>(wlsetlayer "WL-门窗-门")</c>。
         ///
         /// **为什么不用 setenv/getenv 传值**：AutoLISP 的 setenv 写的是 AutoCAD 自己的
@@ -386,6 +404,39 @@ namespace BatchPdfPublisher
             }
             catch { _pendingLayerName = null; }
             return null;
+        }
+
+        /// <summary>
+        /// 供 AutoLISP 调用的预选集暂存函数：<c>(wlsetselection (ssget "_I"))</c>。
+        ///
+        /// 用户按图层直达快捷键之前往往已经选好了对象，这时应该直接生效、不要再问一次
+        /// "选择对象"。预选集（pickfirst）本来也能在命令里用 Editor.SelectImplied 读到，
+        /// 但本命令是由 LISP 的 (command "GL") 发起的，不能假定预选集在两种调用路径下
+        /// 行为一致；所以让 LISP 在调 GL 之前先把 (ssget "_I") 的结果交过来。
+        /// 参数为 nil（没有预选）时清空暂存，GL 会照常提示选择。
+        /// </summary>
+        [LispFunction("WLSETSELECTION")]
+        public object SetPendingSelection(ResultBuffer args)
+        {
+            try
+            {
+                var values = args == null ? null : args.AsArray();
+                var set = values != null && values.Length > 0
+                    ? values[0].Value as Autodesk.AutoCAD.EditorInput.SelectionSet
+                    : null;
+                var ids = set == null ? null : set.GetObjectIds();
+                _pendingSelection = ids != null && ids.Length > 0 ? ids : null;
+            }
+            catch { _pendingSelection = null; }
+            return null;
+        }
+
+        /// <summary>取走并清空预选集合暂存区；没有预选时返回 null。</summary>
+        private static ObjectId[] TakePendingSelection()
+        {
+            var ids = _pendingSelection;
+            _pendingSelection = null;
+            return ids != null && ids.Length > 0 ? ids : null;
         }
 
         /// <summary>

@@ -70,7 +70,7 @@ namespace BatchPdfPublisher.Views
             _dimensionLineColor.Click += delegate { PickDimensionColor(_dimensionLineColor); }; _extensionLineColor.Click += delegate { PickDimensionColor(_extensionLineColor); }; _dimensionTextColor.Click += delegate { PickDimensionColor(_dimensionTextColor); }; _leaderLineColor.Click += delegate { PickDimensionColor(_leaderLineColor); }; _leaderTextColor.Click += delegate { PickDimensionColor(_leaderTextColor); }; foreach (var x in LineWeightChoices()) _leaderLineWeight.Items.Add(x); ReloadArrowChoices();
             var intro = new Label { Dock = DockStyle.Top, Height = 52, Padding = new Padding(16, 13, 12, 0), Text = "统一管理万落建筑工具使用的图层、文字样式和标注样式。保存后，图框、目录和楼梯等功能将采用该标准。", ForeColor = Color.FromArgb(45, 55, 70) };
             var tabs = new TabControl { Dock = DockStyle.Fill, Padding = new Point(15, 5) };
-            tabs.TabPages.Add(MakeLayersTab()); tabs.TabPages.Add(MakeTextTab()); tabs.TabPages.Add(MakeDimensionTab()); tabs.TabPages.Add(MakeLeaderTab()); tabs.TabPages.Add(MakeLayerShortcutTab());
+            tabs.TabPages.Add(MakeLayersTab()); tabs.TabPages.Add(MakeTextTab()); tabs.TabPages.Add(MakeDimensionTab()); tabs.TabPages.Add(MakeLeaderTab());
             var footer = new Panel { Dock = DockStyle.Bottom, Height = 70, Padding = new Padding(16, 10, 16, 10), BackColor = Color.FromArgb(247, 248, 250) };
             _status.Location = new Point(17, 14); footer.Controls.Add(_status);
             var close = Button("关闭", 88); close.DialogResult = DialogResult.Cancel;
@@ -91,6 +91,9 @@ namespace BatchPdfPublisher.Views
             _layers.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "打印", Width = 62 });
             _layers.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "创建", Width = 62 });
             _layers.Columns.Add(ReadOnly("当前图纸", 90));
+            // 图层快捷键直接写在图层表里（原来是单独一个页签）。填了就生成"选中对象 → 按这个键
+            // 直接归到本图层"的直达命令，留空就不生成，不会和别的功能抢键。
+            _layers.Columns.Add(TextColumn("快捷键", 96));
             _layers.Columns.Add(TextColumn("备注", 210));
             _layers.CellContentClick += LayerCellContentClick;
             _layers.CellPainting += LayerCellPainting;
@@ -103,7 +106,15 @@ namespace BatchPdfPublisher.Views
             var create = Button("创建勾选图层", 120); create.Click += delegate { Save(true, ApplyScope.Layers); };
             var update = Button("更新当前图纸图层", 145); update.Click += delegate { Save(true, ApplyScope.LayersForceUpdate); };
             footer.Controls.Add(add); footer.Controls.Add(remove); footer.Controls.Add(all); footer.Controls.Add(none); footer.Controls.Add(create); footer.Controls.Add(update);
-            page.Controls.Add(_layers); page.Controls.Add(footer); return page;
+            var tip = new Label
+            {
+                Dock = DockStyle.Bottom, Height = 42, Padding = new Padding(2, 4, 2, 0),
+                Text = "“快捷键”列填上键位后，选中对象按该键就把对象直接归到这一层（不弹对话框）；留空表示不生成命令。"
+                     + "规则与“快捷键设置”一致：字母开头，只含大写字母、数字、连字符或下划线，长度 2–16 位，不能与已有功能重名。"
+                     + "“创建勾选图层”“更新当前图纸图层”和底部的保存按钮都会同时保存快捷键。悬停图层名可看该图层被哪些功能使用。",
+                ForeColor = Color.FromArgb(75, 85, 100)
+            };
+            page.Controls.Add(_layers); page.Controls.Add(tip); page.Controls.Add(footer); return page;
         }
         private TabPage MakeTextTab()
         {
@@ -143,84 +154,58 @@ namespace BatchPdfPublisher.Views
         }
 
         /// <summary>
-        /// 每图层直达归层命令的快捷键。留空的图层不生成命令，
-        /// 因此不会与固定功能抢同一组快捷键。
+        /// 从图层表的"快捷键"列收集每图层直达归层命令的快捷键。
+        /// 留空的图层不生成命令，因此不会与固定功能抢同一组快捷键。
+        /// 校验（重名、与内部命令冲突）由 <see cref="LayerShortcutStore.Save"/> 负责，
+        /// 不合法会抛异常，调用方把它当成保存失败处理。
         /// </summary>
-        private TabPage MakeLayerShortcutTab()
+        private Dictionary<string, string> CollectLayerShortcuts()
         {
-            var page = Page("图层快捷键");
-            var grid = new DataGridView
+            _layers.EndEdit();
+            var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (DataGridViewRow row in _layers.Rows)
             {
-                Dock = DockStyle.Fill, AutoGenerateColumns = false, AllowUserToAddRows = false,
-                AllowUserToDeleteRows = false, RowHeadersVisible = false, BackgroundColor = Color.White,
-                BorderStyle = BorderStyle.FixedSingle, SelectionMode = DataGridViewSelectionMode.CellSelect,
-                MultiSelect = false, ColumnHeadersHeight = 32, RowTemplate = { Height = 28 },
-                DefaultCellStyle = { SelectionBackColor = Color.White, SelectionForeColor = Color.FromArgb(35, 35, 35) }
-            };
-            grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "分组", Width = 90, ReadOnly = true });
-            grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "系统标签", Width = 150, ReadOnly = true });
-            grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "图层名称", Width = 170, ReadOnly = true });
-            grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "快捷键", Width = 110 });
-            grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "使用方（每个图层都必须有）", Width = 330, ReadOnly = true });
-
-            var existing = LayerShortcutStore.Load();
-            var profile = DraftingStandardService.LoadProfile();
-            foreach (var role in DraftingLayerRoles.All)
-            {
-                string shortcut;
-                existing.TryGetValue(role.Key, out shortcut);
-                grid.Rows.Add(role.Group, role.Key, DraftingStandardService.LayerNameFor(role.Key, profile),
-                    shortcut ?? string.Empty, DraftingLayerRoles.DescribeConsumers(role.Key));
+                if (row.IsNewRow) continue;
+                // 用行上挂着的图层设置对象取键，而不是按行号去索引 _profile.Layers：
+                // 行号一旦和列表顺序错位（比如表格被排序过），按行号取会把快捷键写到
+                // 别的图层上。颜色列的 Tag 里一直存着对应的 DraftingLayerSetting。
+                var setting = row.Cells[1].Tag as DraftingLayerSetting;
+                if (setting == null || string.IsNullOrWhiteSpace(setting.Key)) continue;
+                var shortcut = Convert.ToString(row.Cells[7].Value);
+                if (string.IsNullOrWhiteSpace(shortcut)) continue;
+                values[setting.Key] = shortcut.Trim();
             }
-            page.Controls.Add(grid);
-
-            var footer = new Panel { Dock = DockStyle.Bottom, Height = 76 };
-            var tip = new Label
-            {
-                Location = new Point(0, 6), Size = new Size(940, 36),
-                Text = "给图层填快捷键后，选中对象按该键即可直接归到对应图层（不弹对话框）。"
-                     + "留空表示不生成命令。快捷键规则与“快捷键设置”一致：字母开头，只能含大写字母、数字、连字符或下划线，长度 2–16 位。"
-                     + "“使用方”列如实反映该图层被哪些功能使用——空白即为无人使用的装饰图层。",
-                ForeColor = Color.FromArgb(75, 85, 100)
-            };
-            var save = Button("保存图层快捷键", 140); save.Location = new Point(0, 44);
-            save.Click += delegate { SaveLayerShortcuts(grid); };
-            footer.Controls.Add(tip); footer.Controls.Add(save);
-            page.Controls.Add(footer);
-            return page;
+            return values;
         }
 
-        private void SaveLayerShortcuts(DataGridView grid)
+        /// <summary>
+        /// 保存图层快捷键并立即生效。返回是否真的改了内容——没改就不用重载菜单，
+        /// 少一次刷新也就少一次"关窗后界面自己动一下"。
+        /// </summary>
+        private bool SaveLayerShortcuts(IDictionary<string, string> values)
         {
-            try
-            {
-                grid.EndEdit();
-                var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                foreach (DataGridViewRow row in grid.Rows)
-                {
-                    if (row.IsNewRow) continue;
-                    var key = Convert.ToString(row.Cells[1].Value);
-                    var shortcut = Convert.ToString(row.Cells[3].Value);
-                    if (string.IsNullOrWhiteSpace(key)) continue;
-                    if (!string.IsNullOrWhiteSpace(shortcut)) values[key.Trim()] = shortcut.Trim();
-                }
-                LayerShortcutStore.Save(values);
-                // 重新生成 AutoLISP 别名，并刷新 Ribbon / 经典菜单里的快捷键文字。
-                ShortcutAliasService.Refresh();
-                _status.Text = values.Count == 0
-                    ? "图层快捷键已清空；所有图层恢复为只能通过 GL 对话框归层。"
-                    : "已保存 " + values.Count + " 个图层快捷键，并已在当前 CAD 生效。";
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(this, "保存图层快捷键失败：\r\n" + ex.Message, "图层快捷键", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            }
+            var before = LayerShortcutStore.Load();
+            if (before.Count == values.Count && values.All(x => before.TryGetValue(x.Key, out var old) && string.Equals(old, x.Value, StringComparison.OrdinalIgnoreCase)))
+                return false;
+            LayerShortcutStore.Save(values);
+            // 重新生成 AutoLISP 别名，并刷新 Ribbon / 经典菜单里的快捷键文字。
+            ShortcutAliasService.Refresh();
+            return true;
         }
 
         private void LoadProfile(DraftingStandardProfile profile)
         {
             _profile = profile; _layers.Rows.Clear(); _texts.Rows.Clear();
-            var layerNames = ExistingNames(true); foreach (var x in profile.Layers) { var row = _layers.Rows[_layers.Rows.Add(x.Name, ColorCaption(x), WeightChoice(x.LineWeight), x.LineType, x.IsPlottable, x.CreateOnApply, layerNames.Contains(x.Name) ? "已存在" : "待创建", x.Purpose)]; row.Cells[1].Tag = x; }
+            var layerNames = ExistingNames(true); var layerShortcuts = LayerShortcutStore.Load();
+            foreach (var x in profile.Layers)
+            {
+                string shortcut; layerShortcuts.TryGetValue(x.Key, out shortcut);
+                var row = _layers.Rows[_layers.Rows.Add(x.Name, ColorCaption(x), WeightChoice(x.LineWeight), x.LineType, x.IsPlottable, x.CreateOnApply, layerNames.Contains(x.Name) ? "已存在" : "待创建", shortcut ?? string.Empty, x.Purpose)];
+                row.Cells[1].Tag = x;
+                // "使用方"原来单独占一个页签的一列。页签去掉了，但"每个图层都必须有作用"
+                // 这条信息不能丢，挂到行提示里。
+                row.Cells[0].ToolTipText = DraftingLayerRoles.DescribeConsumers(x.Key);
+            }
             var fonts = (DataGridViewComboBoxColumn)_texts.Columns[2]; var bigFonts = (DataGridViewComboBoxColumn)_texts.Columns[3]; var heights = (DataGridViewComboBoxColumn)_texts.Columns[4]; foreach (var x in profile.TextStyles) { AddComboValue(fonts, x.FontFile); AddComboValue(bigFonts, x.BigFontFile ?? ""); AddComboValue(heights, x.TextHeight.ToString(CultureInfo.InvariantCulture)); }
             var textNames = ExistingNames(false); foreach (var x in profile.TextStyles) { var row = _texts.Rows[_texts.Rows.Add(x.Name, string.IsNullOrWhiteSpace(x.FontType) ? FontType(x.FontFile) : x.FontType, x.FontFile, x.BigFontFile ?? "", x.TextHeight.ToString(CultureInfo.InvariantCulture), x.WidthFactor.ToString(CultureInfo.InvariantCulture), x.CreateOnApply, textNames.Contains(x.Name) ? "已存在" : "待创建", x.Purpose)]; row.Tag = x.Key; }
             _dimensionStylePrefix.Text = profile.DimensionStylePrefix; _createDimension.Checked = profile.DimensionCreateOnApply; _dimTextHeight.Text = profile.DimensionTextHeight.ToString(CultureInfo.InvariantCulture); _arrowSize.Text = profile.DimensionArrowSize.ToString(CultureInfo.InvariantCulture); _dimensionLineExtension.Text = profile.DimensionLineExtension.ToString(CultureInfo.InvariantCulture); _baselineSpacing.Text = profile.BaselineSpacing.ToString(CultureInfo.InvariantCulture); _extensionBeyond.Text = profile.ExtensionBeyond.ToString(CultureInfo.InvariantCulture); _extensionOriginOffset.Text = profile.ExtensionOriginOffset.ToString(CultureInfo.InvariantCulture); _useFixedExtensionLength.Checked = profile.UseFixedExtensionLength; _fixedExtensionLength.Text = profile.FixedExtensionLength.ToString(CultureInfo.InvariantCulture); _dimensionTextGap.Text = profile.DimensionTextGap.ToString(CultureInfo.InvariantCulture); _dimensionPrecision.Text = profile.DimensionPrecision.ToString(CultureInfo.InvariantCulture); _dimensionRounding.Text = profile.DimensionRounding.ToString(CultureInfo.InvariantCulture); SetColorButton(_dimensionLineColor, profile.DimensionLineColor); SetColorButton(_extensionLineColor, profile.ExtensionLineColor); SetColorButton(_dimensionTextColor, profile.DimensionTextColor); _updateExisting.Checked = profile.UpdateExisting;
@@ -234,14 +219,22 @@ namespace BatchPdfPublisher.Views
             try
             {
                 _layers.EndEdit(); _texts.EndEdit();
-                for (var i = 0; i < _profile.Layers.Count; i++) { var row = _layers.Rows[i]; var x = _profile.Layers[i]; x.Name = Cell(row,0); Autodesk.AutoCAD.DatabaseServices.SymbolUtilityServices.ValidateSymbolName(x.Name, false); x.LineWeight = ResolveLineWeight(row.Cells[2]); x.LineType = Cell(row,3); x.IsPlottable = Convert.ToBoolean(row.Cells[4].Value); x.CreateOnApply = true; x.SyncExisting = Convert.ToBoolean(row.Cells[5].Value); x.Purpose = Cell(row,7); }
+                // 图层快捷键跟图层表一起保存。先验证再落盘：LayerShortcutStore.Save 会
+                // 拒绝重名和与内部命令冲突，抛出时下面统一的 catch 会提示，标准文件不会
+                // 被写成"一半新一半旧"。
+                var layerShortcuts = CollectLayerShortcuts();
+                var shortcutsChanged = SaveLayerShortcuts(layerShortcuts);
+                for (var i = 0; i < _profile.Layers.Count; i++) { var row = _layers.Rows[i]; var x = _profile.Layers[i]; x.Name = Cell(row,0); Autodesk.AutoCAD.DatabaseServices.SymbolUtilityServices.ValidateSymbolName(x.Name, false); x.LineWeight = ResolveLineWeight(row.Cells[2]); x.LineType = Cell(row,3); x.IsPlottable = Convert.ToBoolean(row.Cells[4].Value); x.CreateOnApply = true; x.SyncExisting = Convert.ToBoolean(row.Cells[5].Value); x.Purpose = Cell(row,8); }
                 var textStyles = new List<DraftingTextStyleSetting>(); for (var i = 0; i < _texts.Rows.Count; i++) { var row = _texts.Rows[i]; var name = Cell(row,0); Autodesk.AutoCAD.DatabaseServices.SymbolUtilityServices.ValidateSymbolName(name, false); var font = Cell(row,2); var fontType = FontType(font); textStyles.Add(new DraftingTextStyleSetting { Key = Convert.ToString(row.Tag), Purpose = Cell(row,8), Name = name, FontType = fontType, FontFile = font, BigFontFile = fontType == "Windows 字体" ? string.Empty : Convert.ToString(row.Cells[3].Value).Trim(), TextHeight = ParseNonNegative(Cell(row,4), "文字字高"), WidthFactor = ParsePositive(Cell(row,5), "文字宽度因子"), CreateOnApply = Convert.ToBoolean(row.Cells[6].Value) }); } _profile.TextStyles = textStyles;
                 _profile.DimensionScales = new List<int> { 1 }; _profile.DimensionStylePrefix = _dimensionStylePrefix.Text.Trim(); if (_profile.DimensionStylePrefix.Length == 0) throw new InvalidOperationException("标注样式名称前缀不能为空。"); _profile.DimensionCreateOnApply = _createDimension.Checked; _profile.DimensionTextHeight = ParsePositive(_dimTextHeight.Text, "标注文字高度"); _profile.DimensionArrowSize = ParsePositive(_arrowSize.Text, "箭头大小"); _profile.DimensionLineExtension = ParseNonNegative(_dimensionLineExtension.Text, "尺寸线超出"); _profile.BaselineSpacing = ParsePositive(_baselineSpacing.Text, "基线间距"); _profile.ExtensionBeyond = ParseNonNegative(_extensionBeyond.Text, "界线超出尺寸线"); _profile.ExtensionOriginOffset = ParseNonNegative(_extensionOriginOffset.Text, "起点偏移量"); _profile.UseFixedExtensionLength = _useFixedExtensionLength.Checked; _profile.FixedExtensionLength = ParsePositive(_fixedExtensionLength.Text, "固定界线长度"); _profile.DimensionTextGap = ParseNonNegative(_dimensionTextGap.Text, "文字间距"); _profile.DimensionPrecision = ParseInteger(_dimensionPrecision.Text, "数值精度", 0, 8); _profile.DimensionRounding = ParseNonNegative(_dimensionRounding.Text, "四舍五入"); _profile.DimensionLineColor = ColorIndex(_dimensionLineColor); _profile.ExtensionLineColor = ColorIndex(_extensionLineColor); _profile.DimensionTextColor = ColorIndex(_dimensionTextColor); _profile.UpdateExisting = _updateExisting.Checked;
                 _profile.DimensionArrowStyle = _dimensionArrowStyle.Text; _profile.CenterMarkStyle = _centerMarkStyle.Text; _profile.CenterMarkSize = ParseNonNegative(_centerMarkSize.Text, "圆心标记大小"); _profile.ArcLengthSymbol = _arcLengthSymbol.Text; _profile.JogAngle = ParsePositive(_jogAngle.Text, "折弯角度");
                 _profile.DimensionTextVertical = _dimensionTextVertical.Text; _profile.DimensionTextHorizontal = _dimensionTextHorizontal.Text; _profile.DimensionTextAlign = _dimensionTextAlign.Text; _profile.DimensionTextMovement = _dimensionTextMovement.Text;
                 _profile.LeaderStyleName = _leaderStyleName.Text.Trim(); Autodesk.AutoCAD.DatabaseServices.SymbolUtilityServices.ValidateSymbolName(_profile.LeaderStyleName, false); _profile.LeaderCreateOnApply = _createLeader.Checked; _profile.LeaderLineType = _leaderLineType.Text; _profile.LeaderArrowStyle = _leaderArrowStyle.Text; _profile.LeaderArrowSize = ParsePositive(_leaderArrowSize.Text, "引线箭头大小"); _profile.LeaderTextHeight = ParsePositive(_leaderTextHeight.Text, "引线文字高度"); _profile.LeaderLandingGap = ParseNonNegative(_leaderLandingGap.Text, "引线基线间隙"); _profile.LeaderDoglegLength = ParseNonNegative(_leaderDoglegLength.Text, "引线折线段长度"); var leaderWeight = _leaderLineWeight.SelectedItem as LineWeightChoice; if (leaderWeight == null) throw new InvalidOperationException("请选择有效的引线线宽。"); _profile.LeaderLineWeight = leaderWeight.Value; _profile.LeaderEnableLanding = _leaderLanding.Checked; _profile.LeaderEnableDogleg = _leaderDogleg.Checked; _profile.LeaderFrameText = _leaderFrameText.Checked; _profile.LeaderLineColor = ColorIndex(_leaderLineColor); _profile.LeaderTextColor = ColorIndex(_leaderTextColor); DraftingStandardService.SaveProfile(_profile);
                 if (apply && _document != null) using (_document.LockDocument()) using (var tr = _document.Database.TransactionManager.StartTransaction()) { if (scope == ApplyScope.LayersForceUpdate) DraftingStandardService.ApplyAllConfiguredLayersToCurrentDrawing(_document.Database, tr, _profile); else if (scope == ApplyScope.Layers) DraftingStandardService.ApplyConfiguredLayers(_document.Database, tr, _profile, _profile.UpdateExisting); else if (scope == ApplyScope.TextStyles) DraftingStandardService.ApplyConfiguredTextStyles(_document.Database, tr, _profile, _profile.UpdateExisting); else if (scope == ApplyScope.Dimension) DraftingStandardService.ApplyConfiguredDimensionStyle(_document.Database, tr, _profile, _profile.UpdateExisting); else if (scope == ApplyScope.Leader) DraftingStandardService.ApplyConfiguredLeaderStyle(_document.Database, tr, _profile, _profile.UpdateExisting); else DraftingStandardService.ApplyConfiguredResources(_document.Database, tr, _profile, _profile.UpdateExisting); tr.Commit(); }
-                _status.Text = apply ? "已保存，并已在当前图纸创建勾选资源。" : "已保存，后续万落工具将使用此标准。"; LoadProfile(DraftingStandardService.LoadProfile());
+                _status.Text = (apply ? "已保存，并已在当前图纸创建勾选资源。" : "已保存，后续万落工具将使用此标准。")
+                    + (shortcutsChanged ? "图层快捷键已更新并在当前 CAD 生效。" : string.Empty)
+                    + "设置文件：" + DraftingStandardService.SettingsPath;
+                LoadProfile(DraftingStandardService.LoadProfile());
             }
             catch (Exception ex) { MessageBox.Show(this, "保存制图标准失败：\r\n" + ex.Message, "制图标准", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
         }
@@ -259,7 +252,7 @@ namespace BatchPdfPublisher.Views
         private void AddLayerRow()
         {
             var setting = new DraftingLayerSetting { Key = "CustomLayer_" + Guid.NewGuid().ToString("N"), Purpose = "自定义图层", Name = "WL-自定义-新图层", ColorIndex = 7, TrueColorRgb = -1, LineWeight = 18, LineType = "Continuous", IsPlottable = true, CreateOnApply = true }; _profile.Layers.Add(setting);
-            var index = _layers.Rows.Add(setting.Name, ColorCaption(setting), WeightChoice(setting.LineWeight), setting.LineType, true, true, "待创建", setting.Purpose); _layers.Rows[index].Cells[1].Tag = setting; _layers.CurrentCell = _layers.Rows[index].Cells[0]; _layers.BeginEdit(true);
+            var index = _layers.Rows.Add(setting.Name, ColorCaption(setting), WeightChoice(setting.LineWeight), setting.LineType, true, true, "待创建", string.Empty, setting.Purpose); _layers.Rows[index].Cells[1].Tag = setting; _layers.CurrentCell = _layers.Rows[index].Cells[0]; _layers.BeginEdit(true);
         }
         private void RemoveLayerRow()
         {
@@ -282,8 +275,16 @@ namespace BatchPdfPublisher.Views
                 : "Windows 字体";
         }
 
+        /// <summary>
+        /// 可用字体清单。枚举系统已安装字体 + 扫描 ACADPREFIX 支持路径是"打开窗口时"
+        /// 最慢的两件事之一（InstalledFontCollection 要建 GDI 上下文，支持路径里可能有
+        /// 网络盘）。字体在 CAD 运行期间不会变，缓存一次即可。
+        /// </summary>
+        private static List<string> _fontCache;
+
         private static List<string> GetAvailableFontFiles()
         {
+            if (_fontCache != null) return _fontCache;
             var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
                 "宋体", "黑体", "微软雅黑", "仿宋", "楷体", "Arial",
@@ -317,7 +318,7 @@ namespace BatchPdfPublisher.Views
                 }
                 catch { }
             }
-            return result.OrderBy(x => FontType(x)).ThenBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+            return _fontCache = result.OrderBy(x => FontType(x)).ThenBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
         }
         private void LayerCellContentClick(object sender, DataGridViewCellEventArgs e)
         {
@@ -440,6 +441,9 @@ namespace BatchPdfPublisher.Views
             // 颜色按钮弹出 AutoCAD 色板时，表格不再保留大片系统蓝色选区；当前单元格仍有焦点框。
             grid.DefaultCellStyle.SelectionBackColor = Color.White;
             grid.DefaultCellStyle.SelectionForeColor = Color.FromArgb(35, 35, 35);
+            // 保存时是按下标把行和 _profile 的列表一一对应的，点表头排序会让行序和列表序错位，
+            // 结果就是把 A 图层的参数写到 B 图层上。直接禁掉排序。
+            grid.ColumnAdded += delegate(object sender, DataGridViewColumnEventArgs e) { e.Column.SortMode = DataGridViewColumnSortMode.NotSortable; };
             return grid;
         }
         private static DataGridViewTextBoxColumn ReadOnly(string name,int width) { return new DataGridViewTextBoxColumn { HeaderText=name,Width=width,ReadOnly=true }; } private static DataGridViewTextBoxColumn TextColumn(string name,int width) { return new DataGridViewTextBoxColumn { HeaderText=name,Width=width }; }

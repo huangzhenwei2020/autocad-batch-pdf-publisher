@@ -54,16 +54,16 @@ namespace BatchPdfPublisher.Services
         /// <summary>重新加载菜单（快捷键或图层表变更后调用），返回菜单是否已挂上。</summary>
         public static bool RefreshNow()
         {
-            var document = Application.DocumentManager.MdiActiveDocument;
-            if (document != null)
-            {
-                try { document.SendStringToExecute("_.-MENUUNLOAD\n" + MenuGroup + "\n", true, false, false); }
-                catch (Exception exception) { Trace(exception); }
-            }
+            // 这里**不再**单独发一行 "-MENUUNLOAD\nBPP\n"。
+            // BuildLoadExpression 里已经带了"先卸载再加载"的守卫，而且整段是一个
+            // AutoLISP 形式。按行裸发时，只要 -MENUUNLOAD 没把 BPP 这一行吃掉，
+            // 残留的 BPP 就会落到命令行上被当成命令执行——而 BPP 正是打开批量打印
+            // 面板的命令。用户看到的就是"改完快捷键、关掉设置窗口，BPP 自己打开了"。
             _mnuRequested = false;
             _installAttempts = 0;
             ArmRetry();
             Install();
+            TraceLine("菜单已请求重新加载（快捷键或图层表变更）");
             return _mnuRequested;
         }
 

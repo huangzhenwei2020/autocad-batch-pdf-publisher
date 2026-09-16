@@ -12,7 +12,15 @@ namespace BatchPdfPublisher.Services
         private static Document _lastDocument;
         private static EventHandler _idleHandler;
         private static DateTime _lastSettingsWriteUtc;
+        private static DateTime _lastPollUtc = DateTime.MinValue;
         private static readonly HashSet<string> InstalledAliases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Idle 上轮询快捷键文件的最小间隔。Application.Idle 触发极频繁，而每次轮询都要
+        /// 问一次文件时间戳；节流之后空闲时几乎不产生文件系统调用。改了快捷键是主动调用
+        /// Refresh() 的，不走这里，所以延迟上限 1 秒不影响"改完立刻生效"。
+        /// </summary>
+        private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(1000);
 
         public static void InstallWhenReady()
         {
@@ -27,13 +35,19 @@ namespace BatchPdfPublisher.Services
         public static void Remove()
         {
             if (_idleHandler != null) { Application.Idle -= _idleHandler; _idleHandler = null; }
-            _lastDocument = null; _lastSignature = null; InstalledAliases.Clear();
+            _lastDocument = null; _lastSignature = null; _lastPollUtc = DateTime.MinValue; InstalledAliases.Clear();
         }
 
         public static void Install(Document document = null, bool force = false)
         {
             document = document ?? Application.DocumentManager.MdiActiveDocument;
             if (document == null) return;
+            if (!force)
+            {
+                var now = DateTime.UtcNow;
+                if (now - _lastPollUtc < PollInterval) return;
+                _lastPollUtc = now;
+            }
             DateTime settingsWriteUtc;
             try { settingsWriteUtc = System.IO.File.Exists(ShortcutSettingsService.SettingsPath) ? System.IO.File.GetLastWriteTimeUtc(ShortcutSettingsService.SettingsPath) : DateTime.MinValue; }
             catch { settingsWriteUtc = DateTime.MinValue; }
@@ -107,6 +121,7 @@ namespace BatchPdfPublisher.Services
             _lastSignature = null;
             _lastDocument = null;
             _lastSettingsWriteUtc = DateTime.MinValue;
+            _lastPollUtc = DateTime.MinValue;
             Install(null, true);
             RibbonService.RefreshNow();
             MenuService.RefreshNow();
