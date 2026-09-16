@@ -23,7 +23,7 @@ namespace BatchPdfPublisher.Views
 
         private void BuildUi()
         {
-            var hint = new Label { Dock = DockStyle.Top, Height = 50, Padding = new Padding(12, 10, 12, 4), Text = "修改后立即在当前 CAD 生效。新功能只需加入统一功能登记表，就会自动出现在这里。快捷键必须以字母开头，长度 2–16 位。" };
+            var hint = new Label { Dock = DockStyle.Top, Height = 50, Padding = new Padding(12, 10, 12, 4), Text = "修改后立即在当前 CAD 生效。新功能只需加入统一功能登记表，就会自动出现在这里。快捷键必须以字母开头，只能包含大写字母、数字、连字符或下划线（例如 GC、WL-GC），长度 2–16 位，且不能与其他功能重复。" };
             _grid.Dock = DockStyle.Fill; _grid.AutoGenerateColumns = false; _grid.AllowUserToAddRows = false; _grid.AllowUserToDeleteRows = false;
             _grid.RowHeadersVisible = false; _grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect; _grid.MultiSelect = false;
             _grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill; _grid.DataSource = _source;
@@ -41,7 +41,11 @@ namespace BatchPdfPublisher.Views
 
         private void LoadRows(IDictionary<string, string> values)
         {
-            var rows = BatchPdfPublisher.Services.FeatureRegistry.All.Select(x => new ShortcutRow
+            // 每图层直达命令的快捷键在制图标准（BZS）的图层页里设置，
+            // 这里只列固定功能，避免同一组键在两处各有一份而不同步。
+            var rows = BatchPdfPublisher.Services.FeatureRegistry.All
+                .Where(x => !BatchPdfPublisher.Services.FeatureRegistry.TryGetLayerKey(x.Id, out _))
+                .Select(x => new ShortcutRow
             {
                 Id = x.Id, Group = x.Group, Name = x.Name, Command = x.Command,
                 Shortcut = values.ContainsKey(x.Id) ? values[x.Id] : x.DefaultShortcut
