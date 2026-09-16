@@ -17,7 +17,12 @@ namespace BatchPdfPublisher.Views
             AutoScaleMode = AutoScaleMode.Dpi;
             AutoScaleDimensions = new SizeF(96F, 96F);
             SizeGripStyle = SizeGripStyle.Show;
-            Load += (sender, args) => ApplyScreenBounds();
+            // 这些窗口都是"一个 Form 挂一堆 Dock 子控件"，默认不双缓冲时拖动边框改大小、
+            // 拉动表格滚动条都会一闪一闪、感觉发滞。窗口自己开一次，Load 时再把整棵
+            // 控件树都开一遍（表格是最吃重绘的），插件里所有窗口一起受益。
+            DoubleBuffered = true;
+            SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
+            Load += (sender, args) => { UiPerformance.BufferedTree(this); ApplyScreenBounds(); };
             Shown += (sender, args) => ApplyScreenBounds();
             DpiChanged += (sender, args) => BeginInvoke(new Action(ApplyScreenBounds));
         }

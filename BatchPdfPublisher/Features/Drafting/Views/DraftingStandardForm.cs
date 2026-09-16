@@ -69,9 +69,9 @@ namespace BatchPdfPublisher.Views
             _document = document; Text = "制图标注设置（BZS）"; StartPosition = FormStartPosition.CenterScreen; MinimumSize = new Size(940, 650); Size = new Size(1040, 760); Font = new System.Drawing.Font("Microsoft YaHei UI", 9F); BackColor = Color.White; FormBorderStyle = FormBorderStyle.Sizable;
             _dimensionLineColor.Click += delegate { PickDimensionColor(_dimensionLineColor); }; _extensionLineColor.Click += delegate { PickDimensionColor(_extensionLineColor); }; _dimensionTextColor.Click += delegate { PickDimensionColor(_dimensionTextColor); }; _leaderLineColor.Click += delegate { PickDimensionColor(_leaderLineColor); }; _leaderTextColor.Click += delegate { PickDimensionColor(_leaderTextColor); }; foreach (var x in LineWeightChoices()) _leaderLineWeight.Items.Add(x); ReloadArrowChoices();
             var intro = new Label { Dock = DockStyle.Top, Height = 52, Padding = new Padding(16, 13, 12, 0), Text = "统一管理万落建筑工具使用的图层、文字样式和标注样式。保存后，图框、目录和楼梯等功能将采用该标准。", ForeColor = Color.FromArgb(45, 55, 70) };
-            var tabs = new TabControl { Dock = DockStyle.Fill, Padding = new Point(15, 5) };
+            var tabs = new TabControl { Dock = DockStyle.Fill, Padding = new Point(15, 5) }.Buffered();
             tabs.TabPages.Add(MakeLayersTab()); tabs.TabPages.Add(MakeTextTab()); tabs.TabPages.Add(MakeDimensionTab()); tabs.TabPages.Add(MakeLeaderTab());
-            var footer = new Panel { Dock = DockStyle.Bottom, Height = 70, Padding = new Padding(16, 10, 16, 10), BackColor = Color.FromArgb(247, 248, 250) };
+            var footer = new Panel { Dock = DockStyle.Bottom, Height = 70, Padding = new Padding(16, 10, 16, 10), BackColor = Color.FromArgb(247, 248, 250) }.Buffered();
             _status.Location = new Point(17, 14); footer.Controls.Add(_status);
             var close = Button("关闭", 88); close.DialogResult = DialogResult.Cancel;
             var defaults = Button("恢复默认", 96); defaults.Click += delegate { LoadProfile(DraftingStandardProfile.CreateDefault()); _status.Text = "已载入默认值，点击保存后才会生效。"; };
@@ -84,17 +84,19 @@ namespace BatchPdfPublisher.Views
 
         private TabPage MakeLayersTab()
         {
-            var page = Page("图层标准"); _layers.Dock = DockStyle.Fill; _layers.Columns.Add(TextColumn("图层名称", 250));
-            _layers.Columns.Add(new DataGridViewButtonColumn { HeaderText = "颜色", Width = 112, FlatStyle = FlatStyle.Flat, UseColumnTextForButtonValue = false });
-            var weights = new DataGridViewComboBoxColumn { HeaderText = "线宽", Width = 110, FlatStyle = FlatStyle.Flat, DisplayStyle = DataGridViewComboBoxDisplayStyle.ComboBox }; foreach (var x in LineWeightChoices()) weights.Items.Add(x); _layers.Columns.Add(weights);
-            var types = new DataGridViewComboBoxColumn { HeaderText = "线型", Width = 125, FlatStyle = FlatStyle.Flat }; types.Items.AddRange("Continuous", "HIDDEN", "CENTER", "DASHED"); _layers.Columns.Add(types);
-            _layers.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "打印", Width = 62 });
-            _layers.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "创建", Width = 62 });
-            _layers.Columns.Add(ReadOnly("当前图纸", 90));
+            // 列宽刻意收窄，并把最后一列设成自动填满：原来九列加起来 1117 px，比窗口还宽，
+            // 底下多一条横向滚动条——横向滚动会让整张表重绘，拉起来就更卡了。
+            var page = Page("图层标准"); _layers.Dock = DockStyle.Fill; _layers.Columns.Add(TextColumn("图层名称", 220));
+            _layers.Columns.Add(new DataGridViewButtonColumn { HeaderText = "颜色", Width = 100, FlatStyle = FlatStyle.Flat, UseColumnTextForButtonValue = false });
+            var weights = new DataGridViewComboBoxColumn { HeaderText = "线宽", Width = 96, FlatStyle = FlatStyle.Flat, DisplayStyle = DataGridViewComboBoxDisplayStyle.ComboBox }; foreach (var x in LineWeightChoices()) weights.Items.Add(x); _layers.Columns.Add(weights);
+            var types = new DataGridViewComboBoxColumn { HeaderText = "线型", Width = 108, FlatStyle = FlatStyle.Flat }; types.Items.AddRange("Continuous", "HIDDEN", "CENTER", "DASHED"); _layers.Columns.Add(types);
+            _layers.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "打印", Width = 54 });
+            _layers.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "创建", Width = 54 });
+            _layers.Columns.Add(ReadOnly("当前图纸", 78));
             // 图层快捷键直接写在图层表里（原来是单独一个页签）。填了就生成"选中对象 → 按这个键
             // 直接归到本图层"的直达命令，留空就不生成，不会和别的功能抢键。
-            _layers.Columns.Add(TextColumn("快捷键", 96));
-            _layers.Columns.Add(TextColumn("备注", 210));
+            _layers.Columns.Add(TextColumn("快捷键", 88));
+            _layers.Columns.Add(FillColumn("备注", 140));
             _layers.CellContentClick += LayerCellContentClick;
             _layers.CellPainting += LayerCellPainting;
             _layers.DataError += delegate(object sender, DataGridViewDataErrorEventArgs e) { e.ThrowException = false; };
@@ -118,13 +120,13 @@ namespace BatchPdfPublisher.Views
         }
         private TabPage MakeTextTab()
         {
-            var page = Page("文字样式"); _texts.Dock = DockStyle.Fill; _texts.Columns.Add(TextColumn("样式名称", 190));
-            var fontTypes = new DataGridViewComboBoxColumn { HeaderText = "字体类型", Width = 135, FlatStyle = FlatStyle.Flat }; fontTypes.Items.AddRange("Windows 字体", "CAD 字体（SHX）"); _texts.Columns.Add(fontTypes);
+            var page = Page("文字样式"); _texts.Dock = DockStyle.Fill; _texts.Columns.Add(TextColumn("样式名称", 170));
+            var fontTypes = new DataGridViewComboBoxColumn { HeaderText = "字体类型", Width = 118, FlatStyle = FlatStyle.Flat }; fontTypes.Items.AddRange("Windows 字体", "CAD 字体（SHX）"); _texts.Columns.Add(fontTypes);
             var availableFonts = GetAvailableFontFiles();
-            var fonts = new DataGridViewComboBoxColumn { HeaderText = "字体文件", Width = 175, FlatStyle = FlatStyle.Flat }; foreach (var font in availableFonts) fonts.Items.Add(font); _texts.Columns.Add(fonts);
-            var bigFonts = new DataGridViewComboBoxColumn { HeaderText = "大字体（可空）", Width = 135, FlatStyle = FlatStyle.Flat }; bigFonts.Items.Add(""); foreach (var font in availableFonts.Where(x => x.EndsWith(".shx", StringComparison.OrdinalIgnoreCase))) bigFonts.Items.Add(font); _texts.Columns.Add(bigFonts);
-            var heights = new DataGridViewComboBoxColumn { HeaderText = "字高（1:1）", Width = 100, FlatStyle = FlatStyle.Flat }; heights.Items.AddRange("0", "1.5", "2.5", "3.5", "5", "7", "10", "14", "20"); _texts.Columns.Add(heights);
-            var width = new DataGridViewComboBoxColumn { HeaderText = "宽度因子", Width = 95, FlatStyle = FlatStyle.Flat }; width.Items.AddRange("0.5", "0.7", "0.8", "1"); _texts.Columns.Add(width); _texts.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "创建", Width = 58 }); _texts.Columns.Add(ReadOnly("当前图纸", 82)); _texts.Columns.Add(TextColumn("备注", 170));
+            var fonts = new DataGridViewComboBoxColumn { HeaderText = "字体文件", Width = 150, FlatStyle = FlatStyle.Flat }; foreach (var font in availableFonts) fonts.Items.Add(font); _texts.Columns.Add(fonts);
+            var bigFonts = new DataGridViewComboBoxColumn { HeaderText = "大字体（可空）", Width = 118, FlatStyle = FlatStyle.Flat }; bigFonts.Items.Add(""); foreach (var font in availableFonts.Where(x => x.EndsWith(".shx", StringComparison.OrdinalIgnoreCase))) bigFonts.Items.Add(font); _texts.Columns.Add(bigFonts);
+            var heights = new DataGridViewComboBoxColumn { HeaderText = "字高（1:1）", Width = 88, FlatStyle = FlatStyle.Flat }; heights.Items.AddRange("0", "1.5", "2.5", "3.5", "5", "7", "10", "14", "20"); _texts.Columns.Add(heights);
+            var width = new DataGridViewComboBoxColumn { HeaderText = "宽度因子", Width = 84, FlatStyle = FlatStyle.Flat }; width.Items.AddRange("0.5", "0.7", "0.8", "1"); _texts.Columns.Add(width); _texts.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "创建", Width = 52 }); _texts.Columns.Add(ReadOnly("当前图纸", 74)); _texts.Columns.Add(FillColumn("备注", 120));
             _texts.CellValueChanged += delegate(object sender, DataGridViewCellEventArgs e) { if (e.RowIndex >= 0 && e.ColumnIndex == 2) { var font = Cell(_texts.Rows[e.RowIndex], 2); _texts.Rows[e.RowIndex].Cells[1].Value = FontType(font); } };
             var footer = new Panel { Dock = DockStyle.Bottom, Height = 72 };
             var add = Button("添加文字样式", 112); add.Location = new Point(0, 7); add.Click += delegate { AddTextStyleRow(); };
@@ -135,7 +137,7 @@ namespace BatchPdfPublisher.Views
         }
         private TabPage MakeDimensionTab()
         {
-            var page = Page("标注样式"); var tabs = new TabControl { Dock = DockStyle.Fill };
+            var page = Page("标注样式"); var tabs = new TabControl { Dock = DockStyle.Fill }.Buffered();
             var basic = SubPage("基本"); var p1 = SettingPanel(4); AddPair(p1, 0, "样式名称前缀", _dimensionStylePrefix, "创建标注样式", _createDimension); AddPair(p1, 1, "数值精度", _dimensionPrecision, "四舍五入", _dimensionRounding); AddPair(p1, 2, "已有资源处理", _updateExisting, "", new Label { Text = "基础样式始终按 1:1 保存。", AutoSize = true, ForeColor = Color.FromArgb(75, 85, 100) }); basic.Controls.Add(p1);
             var lines = SubPage("尺寸线与界线"); var p2 = SettingPanel(5); AddPair(p2, 0, "尺寸线颜色", _dimensionLineColor, "尺寸界线颜色", _extensionLineColor); AddPair(p2, 1, "尺寸线超出", _dimensionLineExtension, "基线间距", _baselineSpacing); AddPair(p2, 2, "界线超出尺寸线", _extensionBeyond, "起点偏移量", _extensionOriginOffset); AddPair(p2, 3, "固定长度界线", _useFixedExtensionLength, "固定长度", _fixedExtensionLength); lines.Controls.Add(p2);
             var text = SubPage("文字"); var p3 = SettingPanel(5); AddPair(p3, 0, "文字高度（1:1）", _dimTextHeight, "文字颜色", _dimensionTextColor); AddPair(p3, 1, "文字与尺寸线间距", _dimensionTextGap, "文字样式", new Label { Text = "使用“标注”文字样式", AutoSize = true }); AddPair(p3, 2, "垂直位置", _dimensionTextVertical, "水平位置", _dimensionTextHorizontal); AddPair(p3, 3, "文字对齐", _dimensionTextAlign, "文字位置", _dimensionTextMovement); text.Controls.Add(p3);
@@ -145,7 +147,7 @@ namespace BatchPdfPublisher.Views
         }
 
         private TabPage MakeLeaderTab()        {
-            var page = Page("引线样式"); var tabs = new TabControl { Dock = DockStyle.Fill };
+            var page = Page("引线样式"); var tabs = new TabControl { Dock = DockStyle.Fill }.Buffered();
             var basic = SubPage("基本"); var p1 = SettingPanel(5); AddPair(p1, 0, "引线样式名称", _leaderStyleName, "创建引线样式", _createLeader); AddPair(p1, 1, "引线类型", _leaderLineType, "引线线宽", _leaderLineWeight); AddPair(p1, 2, "引线颜色", _leaderLineColor, "启用水平基线", _leaderLanding); AddPair(p1, 3, "基线间隙", _leaderLandingGap, "启用折线段", _leaderDogleg); AddPair(p1, 4, "折线段长度", _leaderDoglegLength, "", new Label()); basic.Controls.Add(p1);
             var arrow = SubPage("符号和箭头"); var p2 = SettingPanel(3); AddPair(p2, 0, "箭头形式", _leaderArrowStyle, "箭头大小（1:1）", _leaderArrowSize); var refresh = Button("重新读取当前库", 130); refresh.Click += delegate { ReloadArrowChoices(); }; var openLibrary = Button("打开实际库位置", 130); openLibrary.Click += delegate { OpenArrowLibraryFolder(); }; AddPair(p2, 1, "自定义箭头库", refresh, "实际使用文件", openLibrary); AddPair(p2, 2, "当前文件", new Label { Text = DraftingStandardService.ArrowLibraryFileName, AutoSize = true }, "修改后操作", new Label { Text = "保存 DWG，再重新读取", AutoSize = true }); arrow.Controls.Add(p2);
             var text = SubPage("文字"); var p3 = SettingPanel(4); AddPair(p3, 0, "文字高度（1:1）", _leaderTextHeight, "文字颜色", _leaderTextColor); AddPair(p3, 1, "文字边框", _leaderFrameText, "文字样式", new Label { Text = "使用“标注”文字样式", AutoSize = true }); text.Controls.Add(p3);
@@ -350,6 +352,12 @@ namespace BatchPdfPublisher.Views
                 _layers.InvalidateCell(1, e.RowIndex);
             }
         }
+        // 绘制颜色单元格用的笔刷/画笔：每次重绘都会用到（拉滚动条时一秒几十次），
+        // 原来在绘制里 new 出来再 Dispose，一屏二十几行就是几十次分配。
+        // 改成复用同一个对象、只改颜色。单元格是串行绘制的，不存在并发。
+        private readonly SolidBrush _swatchBrush = new SolidBrush(Color.White);
+        private static readonly Pen SwatchBorder = new Pen(Color.DimGray);
+
         private void LayerCellPainting(object sender, DataGridViewCellPaintingEventArgs e)
         {
             if (e.RowIndex < 0 || e.ColumnIndex != 1 || (e.PaintParts & DataGridViewPaintParts.ContentForeground) == 0) return;
@@ -358,9 +366,12 @@ namespace BatchPdfPublisher.Views
             if (setting != null)
             {
                 var swatch = new Rectangle(e.CellBounds.Left + 7, e.CellBounds.Top + 7, 18, Math.Max(10, e.CellBounds.Height - 14));
-                using (var brush = new SolidBrush(DisplayColor(setting))) e.Graphics.FillRectangle(brush, swatch);
-                e.Graphics.DrawRectangle(Pens.DimGray, swatch);
-                TextRenderer.DrawText(e.Graphics, ColorCaption(setting), _layers.Font, new Rectangle(e.CellBounds.Left + 31, e.CellBounds.Top, e.CellBounds.Width - 34, e.CellBounds.Height), _layers.ForeColor, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                _swatchBrush.Color = DisplayColor(setting);
+                e.Graphics.FillRectangle(_swatchBrush, swatch);
+                e.Graphics.DrawRectangle(SwatchBorder, swatch);
+                TextRenderer.DrawText(e.Graphics, ColorCaption(setting), e.CellStyle.Font ?? _layers.Font,
+                    new Rectangle(e.CellBounds.Left + 31, e.CellBounds.Top, e.CellBounds.Width - 34, e.CellBounds.Height),
+                    _layers.ForeColor, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
             }
             e.Handled = true;
         }
@@ -447,9 +458,14 @@ namespace BatchPdfPublisher.Views
             return grid;
         }
         private static DataGridViewTextBoxColumn ReadOnly(string name,int width) { return new DataGridViewTextBoxColumn { HeaderText=name,Width=width,ReadOnly=true }; } private static DataGridViewTextBoxColumn TextColumn(string name,int width) { return new DataGridViewTextBoxColumn { HeaderText=name,Width=width }; }
-        private static TabPage Page(string text) { return new TabPage(text) { BackColor=Color.White,Padding=new Padding(14) }; } private static ComboBox Combo(string[] values) { var x=new ComboBox { DropDownStyle=ComboBoxStyle.DropDown,Width=160 }; x.Items.AddRange(values); return x; }
-        private static TabPage SubPage(string text) { return new TabPage(text) { BackColor = Color.White, Padding = new Padding(8) }; }
-        private static TableLayoutPanel SettingPanel(int rows) { var panel = new TableLayoutPanel { Dock = DockStyle.Top, Height = Math.Max(120, rows * 48 + 28), Padding = new Padding(18), ColumnCount = 4, RowCount = rows }; panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 145)); panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50)); panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 145)); panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50)); return panel; }
+        /// <summary>
+        /// 自动填满剩余宽度的列（放在表格最后一列）。有了它表格宽度永远刚好等于可视宽度，
+        /// 不会出现横向滚动条——横向滚动会触发整表重绘，是拉窗口/拉滚动条发滞的一大来源。
+        /// </summary>
+        private static DataGridViewTextBoxColumn FillColumn(string name, int minimumWidth) { return new DataGridViewTextBoxColumn { HeaderText = name, AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, MinimumWidth = minimumWidth }; }
+        private static TabPage Page(string text) { return new TabPage(text) { BackColor=Color.White,Padding=new Padding(14) }.Buffered(); } private static ComboBox Combo(string[] values) { var x=new ComboBox { DropDownStyle=ComboBoxStyle.DropDown,Width=160 }; x.Items.AddRange(values); return x; }
+        private static TabPage SubPage(string text) { return new TabPage(text) { BackColor = Color.White, Padding = new Padding(8) }.Buffered(); }
+        private static TableLayoutPanel SettingPanel(int rows) { var panel = new TableLayoutPanel { Dock = DockStyle.Top, Height = Math.Max(120, rows * 48 + 28), Padding = new Padding(18), ColumnCount = 4, RowCount = rows }; panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 145)); panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50)); panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 145)); panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50)); return panel.Buffered(); }
         private static Button ColorButton() { return new Button { Width = 160, Height = 28, FlatStyle = FlatStyle.Standard, UseVisualStyleBackColor = false }; }
         private static Button Button(string text,int width) { return new Button { Text=text,Width=width,Height=32,Margin=new Padding(6,3,0,3),FlatStyle=FlatStyle.Standard }; }
         private static void AddRow(TableLayoutPanel p,int row,string label,Control control) { p.RowStyles.Add(new RowStyle(SizeType.Absolute,row==4?72:40)); p.Controls.Add(new Label { Text=label,AutoSize=true,Anchor=AnchorStyles.Left },0,row); control.Anchor=AnchorStyles.Left|AnchorStyles.Right; p.Controls.Add(control,1,row); }
