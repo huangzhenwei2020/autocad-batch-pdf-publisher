@@ -106,6 +106,7 @@ namespace WL.Stair.Tests
         private static int Main()
         {
             var failed = 0;
+            var executed = 0;
 
             foreach (var test in Tests)
             {
@@ -119,9 +120,20 @@ namespace WL.Stair.Tests
                     failed++;
                     Console.Error.WriteLine("FAIL " + test.Method.Name + ": " + exception.Message);
                 }
+                executed++;
             }
 
-            Console.WriteLine(string.Format("Executed {0} tests; {1} failed.", Tests.Count, failed));
+            try
+            {
+                executed += DraftingStandardBridgeTests.Run();
+            }
+            catch (Exception exception)
+            {
+                failed++;
+                Console.Error.WriteLine("FAIL DraftingStandardBridgeTests: " + exception.Message);
+            }
+
+            Console.WriteLine(string.Format("Executed {0} tests; {1} failed.", executed, failed));
             return failed == 0 ? 0 : 1;
         }
 

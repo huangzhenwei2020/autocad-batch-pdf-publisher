@@ -24,7 +24,7 @@
     <DebugType>pdbonly</DebugType>
     <Optimize>true</Optimize>
     <OutputPath>bin\Release\</OutputPath>
-    <DefineConstants>TRACE</DefineConstants>
+    <DefineConstants>TRACE;WL_STAIR_TEST</DefineConstants>
     <WarningLevel>4</WarningLevel>
   </PropertyGroup>
   <ItemGroup>
@@ -34,6 +34,10 @@
   <ItemGroup>
     <Compile Include="Program.cs" />
     <Compile Include="TestAssert.cs" />
+    <Compile Include="DraftingStandardBridgeTests.cs" />
+    <Compile Include="..\..\src\WL.Stair.CadShared\DraftingStandardBridge.cs">
+      <Link>DraftingStandardBridge.cs</Link>
+    </Compile>
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>
