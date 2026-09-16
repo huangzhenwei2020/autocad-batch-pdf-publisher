@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [string[]]$Bands,
     [string]$OutputRoot,
@@ -176,7 +176,11 @@ if (-not $available.ContainsKey('R25')) {
 }
 
 if (-not $Bands -or $Bands.Count -eq 0) { $Bands = @($available.Keys | Sort-Object) }
-$Bands = @($Bands | ForEach-Object { $_.Trim().ToUpperInvariant() } | Select-Object -Unique)
+# Accept the documented "-Bands R24,R25" form. A [string[]] parameter binds the
+# command-line token as one element (PowerShell only splits commas in argument
+# *lists*, not in a single token), so each element is split again here.
+$Bands = @($Bands | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim().ToUpperInvariant() } |
+    Where-Object { $_ } | Select-Object -Unique)
 foreach ($band in $Bands) {
     if ($band -notin @('R24','R25')) { throw "不支持的 API 组：$band。当前仅支持 AutoCAD 2021-2026。" }
     if (-not $available.ContainsKey($band)) { throw "本机没有可用于 $band 的 AutoCAD API。R24 需要安装对应 CAD。" }

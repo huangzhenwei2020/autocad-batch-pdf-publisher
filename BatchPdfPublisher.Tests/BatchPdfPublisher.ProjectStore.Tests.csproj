@@ -8,6 +8,9 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="PublishPlanStoreTests.cs" />
+    <Compile Include="PaperSizeCatalogTests.cs" />
+    <Compile Include="DraftingLayerRolesTests.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\Drafting\Services\DraftingLayerRoles.cs" Link="DraftingLayerRoles.cs" />
     <Compile Include="ProjectStoreStubs.cs" />
     <Compile Include="UserDataPathsStub.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\Publishing\Services\PublishPlanStore.cs" Link="PublishPlanStore.cs" />
@@ -17,6 +20,7 @@
     <Compile Include="..\BatchPdfPublisher\Features\Publishing\Services\PaperSizeCatalog.cs" Link="PaperSizeCatalog.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Models\CloudSyncModels.cs" Link="CloudSyncModels.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncSettingsStore.cs" Link="CloudSyncSettingsStore.cs" />
+    <Compile Include="CloudSyncTransactionStub.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncFolderDetector.cs" Link="CloudSyncFolderDetector.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudProjectWorkspaceService.cs" Link="CloudProjectWorkspaceService.cs" />
   </ItemGroup>

@@ -34,7 +34,8 @@ finally {
 }
 if (-not (Test-Path -LiteralPath $webIndex)) { throw "建筑设计说明 Web 编译后缺少入口页面：$webIndex" }
 
-foreach ($band in @($Bands | Select-Object -Unique)) {
+foreach ($band in @($Bands | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim().ToUpperInvariant() } |
+    Where-Object { $_ } | Select-Object -Unique)) {
     $isR25 = $band -eq 'R25'
     $apiPath = if ($isR25) { $R25ApiPath } else { $R24ApiPath }
     if ([string]::IsNullOrWhiteSpace($apiPath) -and -not $isR25) { throw "未提供 $band 的 AutoCAD API 路径。" }

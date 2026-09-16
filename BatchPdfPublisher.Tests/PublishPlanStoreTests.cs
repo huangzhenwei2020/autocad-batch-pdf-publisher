@@ -7,6 +7,8 @@ internal static class PublishPlanStoreTests
 {
     private static void Main()
     {
+        PaperSizeCatalogTests.RunAll();
+        DraftingLayerRolesTests.RunAll();
         var root = Path.Combine(Path.GetTempPath(), "WanluoPublishPlanStoreTests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try

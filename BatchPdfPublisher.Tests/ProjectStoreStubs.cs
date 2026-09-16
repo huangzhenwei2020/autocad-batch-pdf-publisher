@@ -11,6 +11,12 @@ namespace BatchPdfPublisher.Services
         public static List<CloudSyncProjectMapping> BuildMappings(IEnumerable<ProjectProfile> projects,
             IEnumerable<CloudSyncProjectMapping> previous)
         {
+            return BuildMappings(projects, previous, null);
+        }
+
+        public static List<CloudSyncProjectMapping> BuildMappings(IEnumerable<ProjectProfile> projects,
+            IEnumerable<CloudSyncProjectMapping> previous, string workspaceRoot)
+        {
             var result = new List<CloudSyncProjectMapping>();
             foreach (var project in projects)
                 result.Add(new CloudSyncProjectMapping { ProjectName = project.Name, CloudId = project.Name, LocalFolder = project.ProjectFolder });
