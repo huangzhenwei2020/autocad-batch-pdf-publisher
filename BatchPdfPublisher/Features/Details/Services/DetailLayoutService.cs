@@ -540,28 +540,14 @@ namespace BatchPdfPublisher.Services
 
         private static ObjectId EnsureSeparatorLayer(Database database, Transaction transaction)
         {
-            var lineType = ObjectId.Null;
-            var lineTypes = (LinetypeTable)transaction.GetObject(database.LinetypeTableId, OpenMode.ForRead);
-            foreach (var name in new[] { "DASHED", "DASH" })
-            {
-                if (!lineTypes.Has(name)) { try { database.LoadLineTypeFile(name, "acadiso.lin"); } catch { } lineTypes = (LinetypeTable)transaction.GetObject(database.LinetypeTableId, OpenMode.ForRead); }
-                if (lineTypes.Has(name)) { lineType = lineTypes[name]; break; }
-            }
-            var layers = (LayerTable)transaction.GetObject(database.LayerTableId, OpenMode.ForRead);
-            if (layers.Has("WL-大样-分隔")) return layers["WL-大样-分隔"];
-            layers.UpgradeOpen();
-            var layer = new LayerTableRecord { Name = "WL-大样-分隔", Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 8), LineWeight = LineWeight.LineWeight013 };
-            if (!lineType.IsNull) layer.LinetypeObjectId = lineType;
-            var id = layers.Add(layer); transaction.AddNewlyCreatedDBObject(layer, true); return id;
+            // 分隔图层改由制图标准提供，不再写死颜色与线宽；
+            // 线型也随标准（默认 Continuous），如需虚线请在 BZS 里改该图层的线型。
+            return DraftingStandardService.EnsureLayerFor(database, transaction, DraftingStandardProfile.DetailSeparatorLayerKey);
         }
 
         private static ObjectId EnsureIndexLayer(Database database, Transaction transaction)
         {
-            var layers = (LayerTable)transaction.GetObject(database.LayerTableId, OpenMode.ForRead);
-            if (layers.Has("WL-大样-索引")) return layers["WL-大样-索引"];
-            layers.UpgradeOpen();
-            var layer = new LayerTableRecord { Name = "WL-大样-索引", Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 7), LineWeight = LineWeight.LineWeight018 };
-            var id = layers.Add(layer); transaction.AddNewlyCreatedDBObject(layer, true); return id;
+            return DraftingStandardService.EnsureLayerFor(database, transaction, DraftingStandardProfile.DetailIndexLayerKey);
         }
 
         private static void AddGrid(BlockTableRecord space, Transaction transaction, Point3d pageOrigin, DetailLayoutPlan plan, ObjectId layer)

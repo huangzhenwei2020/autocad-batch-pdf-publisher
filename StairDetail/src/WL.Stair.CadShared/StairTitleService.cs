@@ -11,6 +11,11 @@ namespace WL.Stair.CadShared
         private const string DrawingNameDxfName = "TCH_DRAWINGNAME";
         private const string DrawingNameComName = "TDbDrawingName";
         private static readonly object TemplateSync = new object();
+        // 文字样式取自制图标准（BZS），读不到时回退内置名——行为与改造前一致。
+        private static readonly string _titleTextStyleName =
+            DraftingStandardBridge.TextStyleName("Title", "WL-文字-标题");
+        private static readonly string _annotationTextStyleName =
+            DraftingStandardBridge.TextStyleName("Annotation", "WL-文字-标注");
         private static Database _templateDatabase;
         private static ObjectId _templateId = ObjectId.Null;
         private static readonly string[] TitleTextCandidates =
@@ -97,7 +102,7 @@ namespace WL.Stair.CadShared
                 Location = center,
                 Attachment = AttachmentPoint.MiddleCenter,
                 TextHeight = titleHeight,
-                TextStyleId = FindTextStyle(database, transaction, "WL-文字-标题"),
+                TextStyleId = FindTextStyle(database, transaction, _titleTextStyleName),
                 Layer = layerName
             };
             Append(space, transaction, text);
@@ -117,7 +122,7 @@ namespace WL.Stair.CadShared
                 Location = new Point3d(center.X, underlineY - titleHeight * 0.62, center.Z),
                 Attachment = AttachmentPoint.MiddleCenter,
                 TextHeight = noteHeight,
-                TextStyleId = FindTextStyle(database, transaction, "WL-文字-标注"),
+                TextStyleId = FindTextStyle(database, transaction, _annotationTextStyleName),
                 Layer = layerName
             };
             Append(space, transaction, ratio);

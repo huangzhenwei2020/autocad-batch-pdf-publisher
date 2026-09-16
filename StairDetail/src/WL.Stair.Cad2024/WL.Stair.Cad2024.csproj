@@ -57,6 +57,15 @@
     <Compile Include="..\WL.Stair.CadShared\StairTitleService.cs">
       <Link>StairTitleService.cs</Link>
     </Compile>
+    <!-- StairTitleService.cs uses WL.Stair.CadShared.WanluoDataPaths, which is an
+         internal type in the same shared folder. CAD 2022 already links it; this
+         project was missing the include and could not compile on its own. -->
+    <Compile Include="..\WL.Stair.CadShared\WanluoDataPaths.cs">
+      <Link>WanluoDataPaths.cs</Link>
+    </Compile>
+    <Compile Include="..\WL.Stair.CadShared\DraftingStandardBridge.cs">
+      <Link>DraftingStandardBridge.cs</Link>
+    </Compile>
     <Compile Include="Commands.cs" />
     <Compile Include="PromptService.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />

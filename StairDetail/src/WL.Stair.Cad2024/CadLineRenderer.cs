@@ -14,20 +14,26 @@ namespace WL.Stair.Cad2024
 {
     internal sealed class CadLineRenderer
     {
-        private const string OutlineLayer = "WL_楼梯_轮廓";
-        private const string TreadLayer = "WL_楼梯_踏步";
-        private const string StructuralLayer = "WL_楼梯_剖面";
-        private const string HiddenLayer = "WL-楼梯侧面";
-        private const string AuxiliaryLayer = "WL_剖面墙";
-        private const string HandrailLayer = "WL_扶手";
-        private const string AnnotationTextLayer = "WL-注释-文字";
-        private const string AnnotationDimensionLayer = "WL-注释-标注";
-        private const string CutHatchLayer = "WL_楼梯_剖切填充";
-        private const string BreakLineLayer = "WL_折断线";
-        private const string AxisLayer = "A_DOTE";
-        private const string DoorWindowWindowLayer = "WL-门窗-窗";
-        private const string DoorWindowDoorLayer = "WL-门窗-门";
-        private const string DoorWindowOpeningLayer = "WL-门窗-开启洞口";
+        // 图层名一律从制图标准（BZS）读取：用户在标准面板里改名/改颜色即生效。
+        // 第二个参数是内置回退名——标准不可用时行为与改造前一致。
+        // 注意：这些字段在类型初始化时解析一次；在 BZS 中改完名后需重载插件或重启 CAD。
+        private static readonly string OutlineLayer = DraftingStandardBridge.LayerName("StairOutline", "WL_楼梯_轮廓");
+        private static readonly string TreadLayer = DraftingStandardBridge.LayerName("StairTread", "WL_楼梯_踏步");
+        private static readonly string StructuralLayer = DraftingStandardBridge.LayerName("StairSection", "WL_楼梯_剖面");
+        private static readonly string HiddenLayer = DraftingStandardBridge.LayerName("StairSide", "WL-楼梯侧面");
+        private static readonly string AuxiliaryLayer = DraftingStandardBridge.LayerName("StairWall", "WL_剖面墙");
+        private static readonly string HandrailLayer = DraftingStandardBridge.LayerName("StairHandrail", "WL_扶手");
+        private static readonly string AnnotationTextLayer = DraftingStandardBridge.LayerName("AnnotationTextLayer", "WL-注释-文字");
+        private static readonly string AnnotationDimensionLayer = DraftingStandardBridge.LayerName("AnnotationDimensionLayer", "WL-注释-标注");
+        private static readonly string CutHatchLayer = DraftingStandardBridge.LayerName("StairCutHatch", "WL_楼梯_剖切填充");
+        private static readonly string BreakLineLayer = DraftingStandardBridge.LayerName("StairBreakLine", "WL_折断线");
+        private static readonly string AxisLayer = DraftingStandardBridge.LayerName("StairAxis", "A_DOTE");
+        private static readonly string DoorWindowWindowLayer = DraftingStandardBridge.LayerName("DoorWindowWindow", "WL-门窗-窗");
+        private static readonly string DoorWindowDoorLayer = DraftingStandardBridge.LayerName("DoorWindowDoor", "WL-门窗-门");
+        private static readonly string DoorWindowOpeningLayer = DraftingStandardBridge.LayerName("DoorWindowOpening", "WL-门窗-开启洞口");
+        // 文字样式与标注样式前缀同样取自制图标准，读不到时回退内置默认值。
+        private static readonly string AnnotationTextStyleName = DraftingStandardBridge.TextStyleName("Annotation", "WL-文字-标注");
+        private static readonly string DimensionStylePrefix = DraftingStandardBridge.DimensionStylePrefix("WL-标注-1_");
         private const string HiddenLineType = "HIDDEN";
         private const string AxisLineType = "DASHDOT2";
         private static string _hatchPatternDirectory;
@@ -241,7 +247,7 @@ namespace WL.Stair.Cad2024
                 Location = textPoint,
                 Attachment = AttachmentPoint.MiddleRight,
                 TextHeight = source.TextHeight,
-                TextStyleId = FindTextStyle(space.Database, transaction, "WL-文字-标注"),
+                TextStyleId = FindTextStyle(space.Database, transaction, AnnotationTextStyleName),
                 Layer = AnnotationTextLayer
             };
             space.AppendEntity(text);
@@ -638,13 +644,13 @@ namespace WL.Stair.Cad2024
         {
             var sharedStyle = TryEnsureSharedDimensionStyle(database, transaction, scale);
             if (!sharedStyle.IsNull) return sharedStyle;
-            var name = "WL-标注-1_" + Math.Max(1, scale);
+            var name = DimensionStylePrefix + Math.Max(1, scale);
             var table = (DimStyleTable)transaction.GetObject(database.DimStyleTableId, OpenMode.ForRead);
             if (table.Has(name)) return table[name];
             table.UpgradeOpen();
             var textStyles = (TextStyleTable)transaction.GetObject(database.TextStyleTableId, OpenMode.ForRead);
-            var annotationTextStyle = textStyles.Has("WL-文字-标注")
-                ? textStyles["WL-文字-标注"]
+            var annotationTextStyle = textStyles.Has(AnnotationTextStyleName)
+                ? textStyles[AnnotationTextStyleName]
                 : database.Textstyle;
             var record = new DimStyleTableRecord
             {

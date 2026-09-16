@@ -42,6 +42,7 @@
     <Compile Include="..\WL.Stair.Cad2022\StairEditorPage.cs" Link="StairEditorPage.cs" />
     <Compile Include="..\WL.Stair.CadShared\StairTitleService.cs" Link="StairTitleService.cs" />
     <Compile Include="..\WL.Stair.CadShared\WanluoDataPaths.cs" Link="WanluoDataPaths.cs" />
+    <Compile Include="..\WL.Stair.CadShared\DraftingStandardBridge.cs" Link="DraftingStandardBridge.cs" />
     <Compile Include="..\WL.Stair.CadShared\JsonDataSerializer.cs" Link="JsonDataSerializer.cs" />
     <Compile Include="..\WL.Stair.CadShared\PlanCapture\StairPlanCaptureService.cs" Link="PlanCapture\StairPlanCaptureService.cs" />
     <Compile Include="..\WL.Stair.CadShared\PlanCapture\StairPlanCacheService.cs" Link="PlanCapture\StairPlanCacheService.cs" />

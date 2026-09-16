@@ -34,6 +34,9 @@ namespace BatchPdfPublisher.Services
             using (var transaction = document.Database.TransactionManager.StartTransaction())
             {
                 var layers = EnsureLayers(document.Database, transaction);
+                // 文字使用制图标准里的"标注"文字样式，而不是图形当前的默认样式；
+                // 这样图像转 CAD 的结果与其他模块的文字保持一致。
+                var textStyle = DraftingStandardService.EnsureAll(document.Database, transaction).AnnotationTextStyleId;
                 var space = (BlockTableRecord)transaction.GetObject(document.Database.CurrentSpaceId, OpenMode.ForWrite);
                 foreach (var segment in enabled)
                 {
@@ -82,7 +85,6 @@ namespace BatchPdfPublisher.Services
                     space.AppendEntity(entity); transaction.AddNewlyCreatedDBObject(entity, true);
                     inserted.ArcCount++;
                 }
-                var textLayer = EnsureLayer(document.Database, transaction, "LV-TEXT", 6);
                 foreach (var region in textRegions)
                 {
                     var placement = LineVisionOcrGeometry.GetPlacement(region);
@@ -94,8 +96,8 @@ namespace BatchPdfPublisher.Services
                         Height = Math.Max(unitsPerPixel, placement.TextHeightPixels * unitsPerPixel * 0.78d),
                         Rotation = -placement.RotationDegrees * Math.PI / 180d,
                         TextString = region.Text.Trim(),
-                        LayerId = textLayer,
-                        TextStyleId = document.Database.Textstyle
+                        LayerId = layers.Text,
+                        TextStyleId = textStyle
                     };
                     text.TransformBy(ucsToWorld);
                     space.AppendEntity(text); transaction.AddNewlyCreatedDBObject(text, true);
@@ -112,7 +114,12 @@ namespace BatchPdfPublisher.Services
             return new Point3d(insertion.X + x * scale, insertion.Y + (imageHeight - y) * scale, insertion.Z);
         }
 
-        private sealed class LayerIds : Dictionary<LineVisionDirection, ObjectId> { public ObjectId WallBoundary; public ObjectId WallFill; }
+        private sealed class LayerIds : Dictionary<LineVisionDirection, ObjectId>
+        {
+            public ObjectId WallBoundary;
+            public ObjectId WallFill;
+            public ObjectId Text;
+        }
 
         private static ObjectId AppendBoundary(BlockTableRecord space, Transaction transaction, IList<System.Drawing.PointF> points, Point3d insertion, double imageHeight, double scale, Matrix3d transform, ObjectId layer)
         {
@@ -121,26 +128,29 @@ namespace BatchPdfPublisher.Services
             entity.TransformBy(transform); space.AppendEntity(entity); transaction.AddNewlyCreatedDBObject(entity, true); return entity.ObjectId;
         }
 
+        /// <summary>
+        /// 图层全部取自制图标准（BZS），不再写死 LV-* 名与颜色：
+        /// 用户在标准里改图层名或颜色，图像转 CAD 的输出随之变化。
+        /// 想让输出沿用旧的 LV-* 命名，把标准里对应图层的"名称"改回 LV-* 即可。
+        /// </summary>
         private static LayerIds EnsureLayers(Database database, Transaction transaction)
         {
             var result = new LayerIds();
-            result[LineVisionDirection.Horizontal] = EnsureLayer(database, transaction, "LV-LINE-H", 3);
-            result[LineVisionDirection.Vertical] = EnsureLayer(database, transaction, "LV-LINE-V", 5);
-            result[LineVisionDirection.Diagonal] = EnsureLayer(database, transaction, "LV-LINE-DIAG", 2);
+            result[LineVisionDirection.Horizontal] = EnsureStandardLayer(database, transaction, DraftingStandardProfile.OutlineKey);
+            result[LineVisionDirection.Vertical] = EnsureStandardLayer(database, transaction, DraftingStandardProfile.StructureKey);
+            result[LineVisionDirection.Diagonal] = EnsureStandardLayer(database, transaction, DraftingStandardProfile.HiddenKey);
             result[LineVisionDirection.Angled] = result[LineVisionDirection.Diagonal];
-            result[LineVisionDirection.Uncertain] = EnsureLayer(database, transaction, "LV-CURVE", 4);
-            result.WallBoundary = EnsureLayer(database, transaction, "LV-WALL-BOUNDARY", 1);
-            result.WallFill = EnsureLayer(database, transaction, "LV-WALL-FILL", 8);
+            // 无法判定方向的曲线归入"建筑细线"，不再单开一个游离图层。
+            result[LineVisionDirection.Uncertain] = EnsureStandardLayer(database, transaction, DraftingStandardProfile.FineKey);
+            result.WallBoundary = EnsureStandardLayer(database, transaction, DraftingStandardProfile.OutlineKey);
+            result.WallFill = EnsureStandardLayer(database, transaction, DraftingStandardProfile.HatchKey);
+            result.Text = EnsureStandardLayer(database, transaction, DraftingStandardProfile.AnnotationTextLayerKey);
             return result;
         }
 
-        private static ObjectId EnsureLayer(Database database, Transaction transaction, string name, short color)
+        private static ObjectId EnsureStandardLayer(Database database, Transaction transaction, string key)
         {
-            var table = (LayerTable)transaction.GetObject(database.LayerTableId, OpenMode.ForRead);
-            if (table.Has(name)) return table[name];
-            table.UpgradeOpen();
-            var record = new LayerTableRecord { Name = name, Color = Color.FromColorIndex(ColorMethod.ByAci, color) };
-            var id = table.Add(record); transaction.AddNewlyCreatedDBObject(record, true); return id;
+            return DraftingStandardService.EnsureLayerFor(database, transaction, key);
         }
     }
 }

@@ -666,36 +666,14 @@ namespace BatchPdfPublisher.Services
 
         private static DoorWindowLayers EnsureDoorWindowLayers(Database database, Transaction transaction)
         {
-            var dash = EnsureDashLineType(database, transaction);
+            // 三个图层改由制图标准提供，颜色/线型/线宽随标准变化，
+            // 用户在 BZS 里改门窗图层即可影响立面输出。
             return new DoorWindowLayers
             {
-                Window = EnsureLayer(database, transaction, "WL-门窗-窗", 4, ObjectId.Null, LineWeight.LineWeight025),
-                Door = EnsureLayer(database, transaction, "WL-门窗-门", 7, ObjectId.Null, LineWeight.LineWeight025),
-                OpeningHole = EnsureLayer(database, transaction, "WL-门窗-开启洞口", 8, dash, LineWeight.LineWeight013)
+                Window = DraftingStandardService.EnsureLayerFor(database, transaction, DraftingStandardProfile.DoorWindowWindowLayerKey),
+                Door = DraftingStandardService.EnsureLayerFor(database, transaction, DraftingStandardProfile.DoorWindowDoorLayerKey),
+                OpeningHole = DraftingStandardService.EnsureLayerFor(database, transaction, DraftingStandardProfile.DoorWindowOpeningLayerKey)
             };
-        }
-
-        private static ObjectId EnsureDashLineType(Database database, Transaction transaction)
-        {
-            var table = (LinetypeTable)transaction.GetObject(database.LinetypeTableId, OpenMode.ForRead);
-            foreach (var name in new[] { "DASH", "DASHED" })
-            {
-                if (table.Has(name)) return table[name];
-                try { database.LoadLineTypeFile(name, "acadiso.lin"); } catch { try { database.LoadLineTypeFile(name, "acad.lin"); } catch { } }
-                table = (LinetypeTable)transaction.GetObject(database.LinetypeTableId, OpenMode.ForRead);
-                if (table.Has(name)) return table[name];
-            }
-            return ObjectId.Null;
-        }
-
-        private static ObjectId EnsureLayer(Database database, Transaction transaction, string name, short colorIndex, ObjectId lineType, LineWeight lineWeight)
-        {
-            var table = (LayerTable)transaction.GetObject(database.LayerTableId, OpenMode.ForRead); LayerTableRecord record;
-            if (table.Has(name)) record = (LayerTableRecord)transaction.GetObject(table[name], OpenMode.ForWrite);
-            else { table.UpgradeOpen(); record = new LayerTableRecord { Name = name }; table.Add(record); transaction.AddNewlyCreatedDBObject(record, true); }
-            record.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, colorIndex); record.LineWeight = lineWeight;
-            if (!lineType.IsNull) record.LinetypeObjectId = lineType;
-            return record.ObjectId;
         }
 
         private static void InsertContinuous(IList<ElevationPlacement> elevations, Point3d origin, int scale, BlockTableRecord space, Transaction transaction, DraftingStandardResources resources, ObjectId dimensionStyle, DoorWindowLayers doorWindowLayers, Action<int, int, string> progress, bool useTianzhengTitle = true)
