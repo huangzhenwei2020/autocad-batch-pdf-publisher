@@ -208,8 +208,12 @@ foreach ($band in $Bands) {
     $bandOutput = Join-Path $OutputRoot "CadApi\$band"
     $bandObject = Join-Path $artifactRoot "obj-$band\"
     New-Item -ItemType Directory -Path $bandOutput, $bandObject -Force | Out-Null
-    $apiDescription = if ([string]::IsNullOrWhiteSpace($installation.Path)) { $installation.Source } else { $installation.Path }
-    Write-Host "[$band] AutoCAD $($installation.Year): $apiDescription" -ForegroundColor Cyan
+    # 发布清单会被用户看到（也是排障依据），因此不写入本机安装路径这类
+    # 机器特定信息：它对用户没有意义，还会暴露构建机的目录结构。
+    # 只在控制台输出路径，便于构建者自己核对用的是哪一套 API。
+    $apiPathForLog = if ([string]::IsNullOrWhiteSpace($installation.Path)) { $installation.Source } else { $installation.Path }
+    $apiSource = if ([string]::IsNullOrWhiteSpace($installation.Path)) { 'AutoCAD.NET NuGet（通用引用，不依赖本机 CAD）' } else { '本机已安装的 AutoCAD' }
+    Write-Host "[$band] AutoCAD $($installation.Year): $apiPathForLog" -ForegroundColor Cyan
 
     if ($band -eq 'R25') {
         $dotnet = Find-DotNet8
@@ -249,7 +253,7 @@ foreach ($band in $Bands) {
     $buildRecords += [pscustomobject]@{
         Band = $band
         AutoCadYear = $installation.Year
-        ApiPath = $apiDescription
+        ApiSource = $apiSource
         PluginSha256 = (Get-FileHash -LiteralPath $plugin -Algorithm SHA256).Hash
     }
 }
