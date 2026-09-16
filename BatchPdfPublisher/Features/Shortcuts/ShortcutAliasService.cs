@@ -50,6 +50,14 @@ namespace BatchPdfPublisher.Services
                 if (!shortcuts.TryGetValue(feature.Id, out shortcut)) shortcut = feature.DefaultShortcut;
                 shortcut = ShortcutSettingsService.Normalize(shortcut);
                 if (!ShortcutSettingsService.IsValid(shortcut)) continue;
+                // 带参数的快捷键（图层直达归层）用登记好的 AutoLISP 表达式，
+                // 而不是默认的 (command "内部命令")——这样多个图层可以共用一个命令。
+                if (!string.IsNullOrWhiteSpace(feature.LispInvocation))
+                {
+                    lisp.Append("(defun c:").Append(shortcut).Append(" () ").Append(feature.LispInvocation).Append(" (princ)) ");
+                    InstalledAliases.Add(shortcut);
+                    continue;
+                }
                 // 快捷键与固定内部命令相同时直接使用 .NET 命令，避免生成自调用别名。
                 if (string.Equals(shortcut, feature.Command, StringComparison.OrdinalIgnoreCase)) continue;
                 // 建筑说明、楼梯等外置组件已经注册 JZSM/LTDY；覆盖它们会让包装命令递归调用自己。

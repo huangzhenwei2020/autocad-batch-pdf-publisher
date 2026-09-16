@@ -207,6 +207,156 @@ namespace BatchPdfPublisher
             catch (System.Exception exception) { Application.ShowAlertDialog("应用制图标准失败：\r\n" + exception.Message); }
         }
 
+        [CommandMethod("GL")]
+        [CommandMethod("WLLAYER")]
+        public void AssignSelectedToLayer()
+        {
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document == null) return;
+            try
+            {
+                var ids = LayerAssignmentService.ResolveSelection(document, "\n选择要归层的对象：");
+                if (ids == null || ids.Length == 0) { document.Editor.WriteMessage("\n未选择任何对象。\n"); return; }
+
+                string targetLayerName;
+                bool setByLayer, includeBlockAttributes, mergeSourceLayers;
+
+                // 图层的直达快捷键不经对话框：AutoLISP 别名先把目标图层写进环境变量，
+                // 再调用本命令。这里读到就直接用，读完立即清掉，避免影响下一次手动调用。
+                var presetLayer = ReadAndClearPresetLayer();
+                if (!string.IsNullOrWhiteSpace(presetLayer))
+                {
+                    targetLayerName = presetLayer;
+                    setByLayer = true;
+                    includeBlockAttributes = true;
+                    mergeSourceLayers = false;
+                }
+                else
+                {
+                    using (var form = new LayerAssignmentForm(document.Database, ids))
+                    {
+                        if (Application.ShowModalDialog(form) != System.Windows.Forms.DialogResult.OK) return;
+                        targetLayerName = form.TargetLayerName;
+                        setByLayer = form.SetByLayer;
+                        includeBlockAttributes = form.IncludeBlockAttributes;
+                        mergeSourceLayers = form.MergeSourceLayers;
+                    }
+                    if (string.IsNullOrWhiteSpace(targetLayerName)) return;
+                }
+
+                // 合并模式需要知道所选对象现在都在哪些图层上，先只读收集一次。
+                var sourceLayers = mergeSourceLayers
+                    ? LayerAssignmentService.GetLayersOfObjects(document, ids)
+                    : new List<string>();
+
+                using (document.LockDocument())
+                using (var transaction = document.Database.TransactionManager.StartTransaction())
+                {
+                    var targetLayer = EnsureLayerForAssignment(document.Database, transaction, targetLayerName);
+                    string reason;
+                    if (!LayerAssignmentService.CanTargetLayer(transaction, document.Database, targetLayer, out reason))
+                    {
+                        transaction.Abort();
+                        Application.ShowAlertDialog(reason);
+                        return;
+                    }
+
+                    if (mergeSourceLayers && sourceLayers.Count > 0)
+                    {
+                        // 破坏性操作，先确认。清空的旧图层会被删除。
+                        var question = "将把以下 " + sourceLayers.Count + " 个图层上的所有对象合并到“" + targetLayerName + "”：\r\n\r\n"
+                            + string.Join("、", sourceLayers.ToArray())
+                            + "\r\n\r\n清空的旧图层会被删除，此操作可用 AutoCAD 撤销。是否继续？";
+                        if (System.Windows.Forms.MessageBox.Show(question, "归层",
+                                System.Windows.Forms.MessageBoxButtons.YesNo,
+                                System.Windows.Forms.MessageBoxIcon.Warning) != System.Windows.Forms.DialogResult.Yes)
+                        {
+                            transaction.Abort();
+                            return;
+                        }
+                        var merge = LayerAssignmentService.MergeLayers(document, transaction, sourceLayers, targetLayer, true);
+                        transaction.Commit();
+                        document.Editor.WriteMessage("\n" + merge.Describe() + "\n");
+                    }
+                    else
+                    {
+                        var outcome = LayerAssignmentService.MoveToLayer(document, transaction, ids, targetLayer, setByLayer, includeBlockAttributes);
+                        transaction.Commit();
+                        document.Editor.WriteMessage("\n" + outcome.Describe() + "\n");
+                        if (outcome.Locked > 0)
+                            document.Editor.WriteMessage("提示：部分对象所在图层已锁定，未处理。解锁后可重试。\n");
+                    }
+                }
+                document.Editor.Regen();
+            }
+            catch (System.Exception exception)
+            {
+                try { System.IO.File.AppendAllText(System.IO.Path.Combine(UserDataPaths.LogsDirectory, "layer-assignment.log"), DateTime.Now.ToString("O") + " " + exception + Environment.NewLine); } catch { }
+                Application.ShowAlertDialog("归层失败：\r\n" + exception.Message);
+            }
+        }
+
+        /// <summary>
+        /// 取目标图层；不存在则按制图标准创建（含颜色、线型、线宽），
+        /// 标准里也没有就用中性默认值，避免用户必须先手工建层。
+        /// </summary>
+        private static ObjectId EnsureLayerForAssignment(Database database, Transaction transaction, string layerName)
+        {
+            var table = (LayerTable)transaction.GetObject(database.LayerTableId, OpenMode.ForRead);
+            if (table.Has(layerName)) return table[layerName];
+
+            var color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 7);
+            var lineWeight = LineWeight.ByLineWeightDefault;
+            var lineTypeId = ObjectId.Null;
+            try
+            {
+                var profile = DraftingStandardService.LoadProfile();
+                var setting = profile.Layers.FirstOrDefault(x => string.Equals(x.Name, layerName, StringComparison.OrdinalIgnoreCase));
+                if (setting != null)
+                {
+                    color = setting.TrueColorRgb >= 0
+                        ? Autodesk.AutoCAD.Colors.Color.FromRgb((byte)((setting.TrueColorRgb >> 16) & 255), (byte)((setting.TrueColorRgb >> 8) & 255), (byte)(setting.TrueColorRgb & 255))
+                        : Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, setting.ColorIndex);
+                    lineWeight = (LineWeight)setting.LineWeight;
+                    if (!string.Equals(setting.LineType, "Continuous", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var lineTypes = (LinetypeTable)transaction.GetObject(database.LinetypeTableId, OpenMode.ForRead);
+                        if (!lineTypes.Has(setting.LineType))
+                        {
+                            try { database.LoadLineTypeFile(setting.LineType, "acadiso.lin"); } catch { }
+                            lineTypes = (LinetypeTable)transaction.GetObject(database.LinetypeTableId, OpenMode.ForRead);
+                        }
+                        if (lineTypes.Has(setting.LineType)) lineTypeId = lineTypes[setting.LineType];
+                    }
+                }
+            }
+            catch { }
+
+            table.UpgradeOpen();
+            var record = new LayerTableRecord { Name = layerName, Color = color, LineWeight = lineWeight };
+            if (!lineTypeId.IsNull) record.LinetypeObjectId = lineTypeId;
+            var id = table.Add(record);
+            transaction.AddNewlyCreatedDBObject(record, true);
+            return id;
+        }
+
+        /// <summary>
+        /// 读取并清除"图层直达快捷键"预置的目标图层。
+        /// 由 FeatureRegistry 生成的 AutoLISP 别名写入该环境变量，本命令读到后立即清空，
+        /// 这样同一次会话里后面的手动 GL 仍会正常弹对话框。
+        /// </summary>
+        private static string ReadAndClearPresetLayer()
+        {
+            try
+            {
+                var value = Environment.GetEnvironmentVariable(FeatureRegistry.LayerEnvironmentVariable);
+                if (string.IsNullOrWhiteSpace(value)) return null;
+                Environment.SetEnvironmentVariable(FeatureRegistry.LayerEnvironmentVariable, null);
+                return value.Trim();
+            }
+            catch { return null; }
+        }
+
         [CommandMethod("BZSINITARROWLIB")]
         public void InitializeArrowLibrary()
         {
