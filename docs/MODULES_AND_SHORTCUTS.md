@@ -20,9 +20,26 @@
 
 用户执行 `KJJPZ`（默认快捷键）或固定命令 `WLHOTKEYS` 可打开快捷键设置。快捷键保存到：
 
-`%APPDATA%/WanluoArchitectureTools/Settings/shortcuts.ini`
+`%APPDATA%\WanluoArchitectureTools\用户配置文件\通用设置\shortcuts.ini`
 
-快捷键通过当前 CAD 会话中的 AutoLISP 命令别名生效，不修改用户 `acad.pgp`，保存后无需重启 CAD。
+快捷键通过当前 CAD 会话中的 AutoLISP 命令别名生效，不修改用户 `acad.pgp`，保存后无需重启 CAD。快捷键必须以字母开头，只能包含大写字母、数字、连字符或下划线（例如 `GC`、`WL-GC`），长度 2–16 位，且不能与其他功能重复。
+
+### 动态合成的图层命令
+
+除了上表的固定功能，`FeatureRegistry.All` 还会**动态合成**“每图层直达归层命令”：
+
+- 来源是 `LayerShortcutStore`（`%APPDATA%\WanluoArchitectureTools\用户配置文件\通用设置\layer-shortcuts.ini`），
+  在“制图标准（`BZS`）→ 图层快捷键”页维护。
+- **只有填了快捷键的图层才会生成命令**，留空即不生成，因此不会与固定功能抢键。
+- 所有图层命令共用内部命令 `GL`（登记在 `Commands.cs`），目标图层经环境变量
+  `WANLUO_TARGET_LAYER` 传入，读完即清空。这样无需为每个图层注册 `[CommandMethod]`，
+  `Build-Release.ps1` 的命令登记校验依然通过。
+- 图层快捷键与固定功能快捷键**分开校验唯一性**，两套命名空间互不干扰。
+- 相应地，`ShortcutSettingsForm` 只列出固定功能；图层键只在 `BZS` 面板设置，避免两处各存一份而不同步。
+
+新增图层时还应同步维护 `Features/Drafting/Services/DraftingLayerRoles.cs`：
+登记分组与**使用方**。`DraftingLayerRolesTests` 会断言每个图层都有使用方，
+没有接任何功能的“装饰图层”会让测试失败。
 
 启动器把以下内容作为一个完整产品安装：
 
