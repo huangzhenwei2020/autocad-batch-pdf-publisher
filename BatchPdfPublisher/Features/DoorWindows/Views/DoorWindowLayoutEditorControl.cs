@@ -197,6 +197,19 @@ namespace BatchPdfPublisher.Views
             e.Graphics.DrawImageUnscaled(_renderCache, 0, 0);
         }
 
+        // 绘制用到的 GDI+ 对象：这个控件把渲染缓存在 _renderCache 里，但拖动分隔线/门窗时
+        // 每一帧都会置脏并重画，原来每帧都要 new 一批 Pen/Brush/Font。
+        // 这里用**实例**字段（每个控件一份）而不是静态字段，因为其中 pen/selectedPen/outerPen
+        // 在绘制过程中会被改虚线样式再改回来，实例作用域可避免意外的跨实例残留。
+        private readonly SolidBrush _selectedCellBrush = new SolidBrush(Color.FromArgb(30, 34, 128, 190));
+        private readonly Pen _cellPen = new Pen(Color.FromArgb(35, 49, 64), 1.6f);
+        private readonly Pen _selectedCellPen = new Pen(Color.FromArgb(22, 112, 180), 2.5f);
+        private readonly Pen _outerPen = new Pen(Color.Black, 2f);
+        private readonly Pen _openingPen = new Pen(Color.FromArgb(35, 125, 190), 1.5f) { DashStyle = DashStyle.Dash };
+        private readonly Pen _sashPen = new Pen(Color.FromArgb(150, 150, 150), 1.25f);
+        private readonly Font _cellFont = new Font("Microsoft YaHei UI", 8.5f);
+        private readonly Font _doorFont = new Font("Microsoft YaHei UI", 9f, FontStyle.Bold);
+
         private void Render(Graphics graphics)
         {
             graphics.Clear(BackColor);
@@ -211,45 +224,37 @@ namespace BatchPdfPublisher.Views
             _drawingArea = new RectangleF(usable.Left + (usable.Width - drawWidth) / 2f, usable.Top + (usable.Height - drawHeight) / 2f, drawWidth, drawHeight);
             _leftBayRect = _hasBayReturns ? new RectangleF(ToPixelX(-visibleLeft), ToPixelY(_frameHeight), ToPixelX(0d) - ToPixelX(-visibleLeft), drawHeight) : RectangleF.Empty;
             _rightBayRect = _hasBayReturns ? new RectangleF(ToPixelX(_frameWidth), ToPixelY(_frameHeight), ToPixelX(_frameWidth + visibleRight) - ToPixelX(_frameWidth), drawHeight) : RectangleF.Empty;
-            using (var selectedBrush = new SolidBrush(Color.FromArgb(30, 34, 128, 190)))
-            using (var pen = new Pen(Color.FromArgb(35, 49, 64), 1.6f))
-            using (var selectedPen = new Pen(Color.FromArgb(22, 112, 180), 2.5f))
-            using (var outerPen = new Pen(Color.Black, 2f))
-            using (var font = new Font("Microsoft YaHei UI", 8.5f))
-            using (var doorFont = new Font("Microsoft YaHei UI", 9f, FontStyle.Bold))
-            using (var openingPen = new Pen(Color.FromArgb(35, 125, 190), 1.5f) { DashStyle = DashStyle.Dash })
-            using (var sashPen = new Pen(Color.FromArgb(150, 150, 150), 1.25f))
             {
                 var displayOrder = OrderedCells.Select((cell, index) => new { cell, number = index + 1 }).ToDictionary(x => x.cell, x => x.number);
-                DrawBayReturn(graphics, _leftBayRect, true, _bayLeftSide, _bayLeftDepth, selectedPen, pen, openingPen, font);
-                DrawBayReturn(graphics, _rightBayRect, false, _bayRightSide, _bayRightDepth, selectedPen, pen, openingPen, font);
+                DrawBayReturn(graphics, _leftBayRect, true, _bayLeftSide, _bayLeftDepth, _selectedCellPen, _cellPen, _openingPen, _cellFont);
+                DrawBayReturn(graphics, _rightBayRect, false, _bayRightSide, _bayRightDepth, _selectedCellPen, _cellPen, _openingPen, _cellFont);
                 for (var index = 0; index < _cells.Count; index++)
                 {
-                    var rect = ToPixels(_cells[index]); if (_selectedIndices.Contains(index)) graphics.FillRectangle(selectedBrush, rect);
-                    var drawPen = _selectedIndices.Contains(index) ? selectedPen : pen; if (_cells[index].IsDeleted) drawPen.DashStyle = DashStyle.Dash;
+                    var rect = ToPixels(_cells[index]); if (_selectedIndices.Contains(index)) graphics.FillRectangle(_selectedCellBrush, rect);
+                    var drawPen = _selectedIndices.Contains(index) ? _selectedCellPen : _cellPen; if (_cells[index].IsDeleted) drawPen.DashStyle = DashStyle.Dash;
                     DrawCellBoundary(graphics, drawPen, _cells[index]); drawPen.DashStyle = DashStyle.Solid;
-                    if (!_cells[index].IsDeleted) DrawProfileRectangle(graphics, pen, _cells[index]);
-                    if (!_cells[index].IsDeleted) DrawMaterialSymbol(graphics, openingPen, _cells[index]);
+                    if (!_cells[index].IsDeleted) DrawProfileRectangle(graphics, _cellPen, _cells[index]);
+                    if (!_cells[index].IsDeleted) DrawMaterialSymbol(graphics, _openingPen, _cells[index]);
                     if (!_cells[index].IsDeleted)
                     {
                         var openingRect = OpeningRectangle(_cells[index]);
-                        if (IsOperable(_cells[index].Opening) && _doorFrameWidth > 0d && openingRect.Width > 2f && openingRect.Height > 2f) graphics.DrawRectangle(sashPen, openingRect.X, openingRect.Y, openingRect.Width, openingRect.Height);
-                        DrawOpeningSymbol(graphics, openingPen, openingRect, _cells[index].Opening, (_cells[index].Left + _cells[index].Right) / 2d <= _frameWidth / 2d);
+                        if (IsOperable(_cells[index].Opening) && _doorFrameWidth > 0d && openingRect.Width > 2f && openingRect.Height > 2f) graphics.DrawRectangle(_sashPen, openingRect.X, openingRect.Y, openingRect.Width, openingRect.Height);
+                        DrawOpeningSymbol(graphics, _openingPen, openingRect, _cells[index].Opening, (_cells[index].Left + _cells[index].Right) / 2d <= _frameWidth / 2d);
                     }
                     var text = displayOrder[_cells[index]] + "  " + (_cells[index].Right - _cells[index].Left).ToString("0.##") + "×" + (_cells[index].Top - _cells[index].Bottom).ToString("0.##") + "\n" + (_cells[index].Opening ?? "固定") + " / " + (string.IsNullOrWhiteSpace(_cells[index].Material) ? "无" : _cells[index].Material);
                     if (_cells[index].IsDeleted) text = displayOrder[_cells[index]] + "  已删除（可恢复）";
-                    TextRenderer.DrawText(graphics, text, font, Rectangle.Round(rect), Color.FromArgb(45, 55, 65), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
-                    if (_cells[index].IsDoor && !_cells[index].IsDeleted) TextRenderer.DrawText(graphics, "门", doorFont, new Rectangle((int)rect.X + 4, (int)rect.Y + 4, 28, 22), Color.FromArgb(190, 105, 30));
+                    TextRenderer.DrawText(graphics, text, _cellFont, Rectangle.Round(rect), Color.FromArgb(45, 55, 65), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
+                    if (_cells[index].IsDoor && !_cells[index].IsDeleted) TextRenderer.DrawText(graphics, "门", _doorFont, new Rectangle((int)rect.X + 4, (int)rect.Y + 4, 28, 22), Color.FromArgb(190, 105, 30));
                 }
-                outerPen.Color = Color.FromArgb(165, 175, 185); outerPen.DashStyle = DashStyle.Dash;
+                _outerPen.Color = Color.FromArgb(165, 175, 185); _outerPen.DashStyle = DashStyle.Dash;
                 if (_hasInstallationGap && _installationGap > 0d)
                 {
                     var active = _cells.Where(x => !x.IsDeleted).Select(x => new DoorWindowCell(x.Left, x.Bottom, x.Right, x.Top)).ToList();
                     foreach (var segment in DoorWindowElevationGeometryBuilder.BuildInstallationGapOutline(active, _installationGap))
-                        graphics.DrawLine(outerPen, ToPixelX(segment.X1), ToPixelY(segment.Y1), ToPixelX(segment.X2), ToPixelY(segment.Y2));
+                        graphics.DrawLine(_outerPen, ToPixelX(segment.X1), ToPixelY(segment.Y1), ToPixelX(segment.X2), ToPixelY(segment.Y2));
                 }
                 var hint = _hasBayReturns ? "双击转折面可切换墙/窗" : "拖动分隔线调整";
-                TextRenderer.DrawText(graphics, hint, font, new Rectangle(4, Height - 28, Math.Max(1, Width - 8), 22), Color.DimGray,
+                TextRenderer.DrawText(graphics, hint, _cellFont, new Rectangle(4, Height - 28, Math.Max(1, Width - 8), 22), Color.DimGray,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
             }
         }
@@ -258,7 +263,14 @@ namespace BatchPdfPublisher.Views
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing && _renderCache != null) { _renderCache.Dispose(); _renderCache = null; }
+            if (disposing)
+            {
+                if (_renderCache != null) { _renderCache.Dispose(); _renderCache = null; }
+                // 上面那些绘制对象现在是控件级的长生命周期资源，随控件一起释放。
+                _selectedCellBrush.Dispose(); _cellPen.Dispose(); _selectedCellPen.Dispose();
+                _outerPen.Dispose(); _openingPen.Dispose(); _sashPen.Dispose();
+                _cellFont.Dispose(); _doorFont.Dispose();
+            }
             base.Dispose(disposing);
         }
 

@@ -41,6 +41,11 @@ namespace BatchPdfPublisher.Views
             var backups = ButtonFor("打开备份文件夹"); backups.Click += OpenBackupFolder;
             footer.Controls.Add(close); footer.Controls.Add(refresh); footer.Controls.Add(backups);
             Controls.Add(tabs); Controls.Add(_syncProgress); Controls.Add(_summary); Controls.Add(footer);
+            // 这个窗口是本文件里少数不继承 DpiAwareForm 的窗口，所以双缓冲要自己开。
+            // 五张 ListView 是重绘大头：它是原生控件，双缓冲的窗口样式必须在句柄创建**之前**
+            // 设好，构造函数里正好还没建句柄。
+            DoubleBuffered = true;
+            UiPerformance.BufferedTree(this);
             Shown += delegate { CloudSyncCoordinator.SynchronizationProgress += OnSynchronizationProgress; CloudSyncCoordinator.SynchronizationCompleted += OnSynchronizationCompleted; ReloadData(); };
             FormClosed += delegate { CloudSyncCoordinator.SynchronizationProgress -= OnSynchronizationProgress; CloudSyncCoordinator.SynchronizationCompleted -= OnSynchronizationCompleted; };
         }

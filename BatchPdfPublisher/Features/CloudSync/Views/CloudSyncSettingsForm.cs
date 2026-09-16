@@ -148,6 +148,11 @@ namespace BatchPdfPublisher.Views
             actions.Controls.Add(_close); actions.Controls.Add(center); actions.Controls.Add(_syncNow); actions.Controls.Add(save);
             root.Controls.Add(actions);
 
+            // 这个窗口不继承 DpiAwareForm，双缓冲自己开。控件树里有一个
+            // HorizontalScrollbar 的 ListBox 和一个常显的进度条，都是拖窗口时会闪的。
+            DoubleBuffered = true;
+            UiPerformance.BufferedTree(this);
+
             Load += delegate { LoadSettings(); CloudSyncCoordinator.SynchronizationCompleted += OnSynchronizationCompleted; };
             FormClosed += delegate
             {

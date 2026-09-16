@@ -182,18 +182,20 @@ namespace BatchPdfPublisher.Views
             // 用独立内存位图绘制，再一次性贴回控件。AutoCAD 宿主下 WinForms
             // 控件的 e.Graphics 可能在嵌套消息泵中被提前释放（此时任何 GDI+
             // 调用都抛“参数无效”），改用自管生命周期的 Graphics 彻底规避。
+            //
+            // 位图**复用**：原来每次重绘都 new 一张与控件等大的 Bitmap，一张 1000×700
+            // 就是 2.8 MB，拖动/缩放时一秒几十次重绘，光分配和清零就够卡的。
+            // 只在尺寸变化时重建（下方 Resize 会 Invalidate，尺寸变化必然走到重建）。
             if (Width <= 0 || Height <= 0) return;
             try
             {
-                using (var buffer = new Bitmap(Width, Height))
+                EnsureBuffer();
+                using (var bufferGraphics = Graphics.FromImage(_buffer))
                 {
-                    using (var bufferGraphics = Graphics.FromImage(buffer))
-                    {
-                        bufferGraphics.Clear(Color.White);
-                        PaintPreview(bufferGraphics);
-                    }
-                    e.Graphics.DrawImage(buffer, 0, 0, Width, Height);
+                    bufferGraphics.Clear(Color.White);
+                    PaintPreview(bufferGraphics);
                 }
+                e.Graphics.DrawImage(_buffer, 0, 0, Width, Height);
             }
             catch (Exception exception)
             {
@@ -201,6 +203,22 @@ namespace BatchPdfPublisher.Views
                 LogDrawError(exception);
                 try { if (ClientRectangle.Width > 0 && ClientRectangle.Height > 0) DrawCentered(e.Graphics, _statusText, ClientRectangle, Color.Firebrick, 9F); } catch { }
             }
+        }
+
+        private Bitmap _buffer;
+
+        private void EnsureBuffer()
+        {
+            if (_buffer != null && _buffer.Width == Width && _buffer.Height == Height) return;
+            var previous = _buffer;
+            _buffer = new Bitmap(Width, Height);
+            if (previous != null) previous.Dispose();
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && _buffer != null) { _buffer.Dispose(); _buffer = null; }
+            base.Dispose(disposing);
         }
 
         private void LogDrawError(Exception exception)
@@ -220,77 +238,76 @@ namespace BatchPdfPublisher.Views
             catch { }
         }
 
+        // 预览绘制用到的画笔/笔刷/字体都是**常量**，且绘制是逐槽位、逐页循环的
+        // （一屏几十上百个槽位，拖动时一秒几十次重绘）。原来整套对象每次重绘都 new 一遍，
+        // 锁标记那两个笔刷和字体还是在循环体内 new 的——每个锁定槽位都要分配一次。
+        // 全部提成静态只读字段，进程内共用一份。绘制不会并发，静态共用是安全的。
+        private static readonly Pen PagePen = new Pen(Color.FromArgb(70, 90, 110), 1.6f);
+        private static readonly Pen ContentPen = new Pen(Color.FromArgb(150, 160, 175), 1f) { DashStyle = DashStyle.Dash };
+        private static readonly Pen SlotPen = new Pen(Color.FromArgb(30, 110, 175), 1.3f);
+        private static readonly Pen DragPen = new Pen(Color.FromArgb(200, 90, 60), 1.6f);
+        private static readonly Pen SelectedPen = new Pen(Color.FromArgb(220, 120, 30), 2f);
+        private static readonly Pen HighlightPen = new Pen(Color.FromArgb(220, 90, 60), 2f) { DashStyle = DashStyle.Dash };
+        private static readonly SolidBrush DragFill = new SolidBrush(Color.FromArgb(40, 245, 180, 160));
+        private static readonly SolidBrush SlotBrush = new SolidBrush(Color.FromArgb(25, 36, 48));
+        private static readonly SolidBrush HighlightFill = new SolidBrush(Color.FromArgb(50, 255, 180, 60));
+        private static readonly SolidBrush LockBrush = new SolidBrush(Color.FromArgb(170, 80, 20));
+        private static readonly SolidBrush LockBackground = new SolidBrush(Color.FromArgb(235, 250, 240));
+        private static readonly Font SlotFont = new Font("Microsoft YaHei UI", 8.5f);
+        private static readonly Font LockFont = new Font("Microsoft YaHei UI", 7.5f);
+
         private void PaintPreview(Graphics graphics)
         {
             graphics.SmoothingMode = SmoothingMode.AntiAlias;
             if (_frame == null) { DrawCentered(graphics, "请选择排版图框", ClientRectangle, Color.Gray, 11F); return; }
             if (_plan == null) { DrawCentered(graphics, string.IsNullOrWhiteSpace(_statusText) ? "排版失败" : _statusText, ClientRectangle, Color.Firebrick, 10F); return; }
 
-            using (var pagePen = new Pen(Color.FromArgb(70, 90, 110), 1.6f))
-            using (var contentPen = new Pen(Color.FromArgb(150, 160, 175), 1f) { DashStyle = DashStyle.Dash })
-            using (var slotPen = new Pen(Color.FromArgb(30, 110, 175), 1.3f))
-            using (var dragPen = new Pen(Color.FromArgb(200, 90, 60), 1.6f))
-            using (var selectedPen = new Pen(Color.FromArgb(220, 120, 30), 2f))
-            using (var dragFill = new SolidBrush(Color.FromArgb(40, 245, 180, 160)))
-            using (var font = new Font("Microsoft YaHei UI", 8.5f))
-            using (var brush = new SolidBrush(Color.FromArgb(25, 36, 48)))
+            for (var page = 0; page < _plan.PageCount; page++)
             {
-                for (var page = 0; page < _plan.PageCount; page++)
+                var rect = PageRect(page);
+                if (rect.Width <= 0f || rect.Height <= 0f) continue;
+                graphics.FillRectangle(Brushes.White, rect);
+                DrawRectSafe(graphics, PagePen, rect.X, rect.Y, rect.Width, rect.Height, "page");
+                var contentLeft = Safe(rect.X + (float)_plan.ContentLeft * _zoom, rect.X);
+                var contentTop = Safe(rect.Y + (float)(_plan.PageHeight - _plan.ContentTop) * _zoom, rect.Y);
+                var contentW = Safe((float)(_plan.ContentRight - _plan.ContentLeft) * _zoom, 0f);
+                var contentH = Safe((float)(_plan.ContentTop - _plan.ContentBottom) * _zoom, 0f);
+                if (contentW > 0f && contentH > 0f) DrawRectSafe(graphics, ContentPen, contentLeft, contentTop, contentW, contentH, "content");
+                DrawCentered(graphics, "第 " + (page + 1) + " 页", new RectangleF(rect.X, Math.Max(2f, rect.Y - 22), rect.Width, 20), Color.FromArgb(60, 75, 92), 9F);
+            }
+            foreach (var slot in _plan.Slots)
+            {
+                var rect = SlotRect(slot);
+                if (rect.Width <= 0f || rect.Height <= 0f) continue;
+                var index = _items.IndexOf(slot.Item);
+                var isDragging = index == _draggingIndex;
+                var isSelected = _selectedSlot != null && ReferenceEquals(_selectedSlot.Item, slot.Item);
+                var isLocked = slot.Item != null && slot.Item.LockedPage > 0;
+                var pen = isDragging ? DragPen : isSelected ? SelectedPen : SlotPen;
+                DrawRectSafe(graphics, pen, rect.X, rect.Y, rect.Width, rect.Height, "slot");
+                if (isDragging) graphics.FillRectangle(DragFill, rect);
+                // 锁定标记：槽位左上角显示小锁+所在页号。
+                if (isLocked)
                 {
-                    var rect = PageRect(page);
-                    if (rect.Width <= 0f || rect.Height <= 0f) continue;
-                    graphics.FillRectangle(Brushes.White, rect);
-                    DrawRectSafe(graphics, pagePen, rect.X, rect.Y, rect.Width, rect.Height, "page");
-                    var contentLeft = Safe(rect.X + (float)_plan.ContentLeft * _zoom, rect.X);
-                    var contentTop = Safe(rect.Y + (float)(_plan.PageHeight - _plan.ContentTop) * _zoom, rect.Y);
-                    var contentW = Safe((float)(_plan.ContentRight - _plan.ContentLeft) * _zoom, 0f);
-                    var contentH = Safe((float)(_plan.ContentTop - _plan.ContentBottom) * _zoom, 0f);
-                    if (contentW > 0f && contentH > 0f) DrawRectSafe(graphics, contentPen, contentLeft, contentTop, contentW, contentH, "content");
-                    DrawCentered(graphics, "第 " + (page + 1) + " 页", new RectangleF(rect.X, Math.Max(2f, rect.Y - 22), rect.Width, 20), Color.FromArgb(60, 75, 92), 9F);
+                    var lockText = "锁定" + slot.Item.LockedPage;
+                    var lockSize = graphics.MeasureString(lockText, LockFont);
+                    var lx = Math.Max(rect.X + 2f, rect.X + 2f);
+                    var ly = Math.Max(rect.Y + 1f, rect.Y + 1f);
+                    graphics.FillRectangle(LockBackground, lx, ly, lockSize.Width + 4f, lockSize.Height + 2f);
+                    graphics.DrawString(lockText, LockFont, LockBrush, lx + 2f, ly + 1f);
                 }
-                foreach (var slot in _plan.Slots)
+                // 槽位内绘制该门窗的实际立面图（含图名/比例/标注，分区布局避免重叠）。
+                DrawItemElevation(graphics, slot.Item, rect, index + 1);
+            }
+            DrawAttachmentPreviews(graphics, PagePen, ContentPen);
+            // 目标插入位置高亮框：拖动时指示门窗将被移动到的槽位。
+            if (_hoverSlot != null && _draggingIndex >= 0)
+            {
+                var targetRect = SlotRect(_hoverSlot);
+                if (targetRect.Width > 0f && targetRect.Height > 0f)
                 {
-                    var rect = SlotRect(slot);
-                    if (rect.Width <= 0f || rect.Height <= 0f) continue;
-                    var index = _items.IndexOf(slot.Item);
-                    var isDragging = index == _draggingIndex;
-                    var isSelected = _selectedSlot != null && ReferenceEquals(_selectedSlot.Item, slot.Item);
-                    var isLocked = slot.Item != null && slot.Item.LockedPage > 0;
-                    var pen = isDragging ? dragPen : isSelected ? selectedPen : slotPen;
-                    DrawRectSafe(graphics, pen, rect.X, rect.Y, rect.Width, rect.Height, "slot");
-                    if (isDragging) graphics.FillRectangle(dragFill, rect);
-                    // 锁定标记：槽位左上角显示小锁+所在页号。
-                    if (isLocked)
-                    {
-                        using (var lockBrush = new SolidBrush(Color.FromArgb(170, 80, 20)))
-                        using (var lockBackground = new SolidBrush(Color.FromArgb(235, 250, 240)))
-                        using (var lockFont = new Font("Microsoft YaHei UI", 7.5f))
-                        {
-                            var lockText = "锁定" + slot.Item.LockedPage;
-                            var lockSize = graphics.MeasureString(lockText, lockFont);
-                            var lx = Math.Max(rect.X + 2f, rect.X + 2f);
-                            var ly = Math.Max(rect.Y + 1f, rect.Y + 1f);
-                            graphics.FillRectangle(lockBackground, lx, ly, lockSize.Width + 4f, lockSize.Height + 2f);
-                            graphics.DrawString(lockText, lockFont, lockBrush, lx + 2f, ly + 1f);
-                        }
-                    }
-                    // 槽位内绘制该门窗的实际立面图（含图名/比例/标注，分区布局避免重叠）。
-                    DrawItemElevation(graphics, slot.Item, rect, index + 1);
-                }
-                DrawAttachmentPreviews(graphics, pagePen, contentPen);
-                // 目标插入位置高亮框：拖动时指示门窗将被移动到的槽位。
-                if (_hoverSlot != null && _draggingIndex >= 0)
-                {
-                    var targetRect = SlotRect(_hoverSlot);
-                    if (targetRect.Width > 0f && targetRect.Height > 0f)
-                    {
-                        using (var highlight = new Pen(Color.FromArgb(220, 90, 60), 2f) { DashStyle = DashStyle.Dash })
-                        using (var fill = new SolidBrush(Color.FromArgb(50, 255, 180, 60)))
-                        {
-                            graphics.FillRectangle(fill, targetRect);
-                            graphics.DrawRectangle(highlight, targetRect.X, targetRect.Y, targetRect.Width, targetRect.Height);
-                        }
-                    }
+                    graphics.FillRectangle(HighlightFill, targetRect);
+                    graphics.DrawRectangle(HighlightPen, targetRect.X, targetRect.Y, targetRect.Width, targetRect.Height);
                 }
             }
             var hintY = Math.Max(2f, Height - 22);

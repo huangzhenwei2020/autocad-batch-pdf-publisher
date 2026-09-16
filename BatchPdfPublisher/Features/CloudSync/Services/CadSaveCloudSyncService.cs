@@ -76,6 +76,9 @@ namespace BatchPdfPublisher.Services
 
         private static void OnIdle(object sender, EventArgs args)
         {
+            // 没有待处理的快照就直接返回。Application.Idle 一秒触发几十上百次，
+            // 原来每次都要问一遍 CMDNAMES 系统变量、再建两个空集合，纯属白干。
+            lock (PendingSnapshots) { if (PendingSnapshots.Count == 0) return; }
             try
             {
                 if (!string.IsNullOrWhiteSpace(Convert.ToString(Application.GetSystemVariable("CMDNAMES")))) return;

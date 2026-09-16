@@ -33,6 +33,21 @@ namespace BatchPdfPublisher.Views
             if (Font == null || Font.Size < 8F) Font = new Font("Microsoft YaHei UI", 9F);
         }
 
+        /// <summary>
+        /// 句柄创建**之前**给整棵控件树开双缓冲。
+        ///
+        /// 时机很关键：DataGridView 这类自绘控件随时设 DoubleBuffered 都有效，但
+        /// ListView / TreeView 是原生控件，要靠 WinForms 在 OnHandleCreated 里把
+        /// LVS_EX_DOUBLEBUFFER / TVS_EX_DOUBLEBUFFER 风格的位设上去——句柄建好之后再设
+        /// 就不生效了。所以在 CreateHandle 里先设、再 base。
+        /// （Load 时还会再走一遍，兜住那些运行时才加进来的控件。）
+        /// </summary>
+        protected override void CreateHandle()
+        {
+            UiPerformance.BufferedTree(this);
+            base.CreateHandle();
+        }
+
         private void ApplyScreenBounds()
         {
             if (IsDisposed || !IsHandleCreated) return;

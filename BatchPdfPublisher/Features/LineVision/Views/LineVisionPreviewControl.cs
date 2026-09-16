@@ -148,6 +148,24 @@ namespace BatchPdfPublisher.Views
             if (RegionSelected != null) RegionSelected(this, new LineVisionRegionEventArgs(region));
         }
 
+        // ------------------------------------------------------------------
+        // 绘制用的 GDI+ 对象统一复用。
+        //
+        // 结果视图里的线段、圆、圆弧、多段线、墙体、文字动辄成百上千个，原来是**每个实体
+        // new 一个 Pen/SolidBrush/GraphicsPath 再 Dispose**，一次重绘就是上千次 GDI+ 对象
+        // 分配；而平移、缩放、鼠标划过都会触发重绘，界面就明显发滞。
+        // 现在复用一个对象、每次只改颜色/线宽/虚线样式。WinForms 的绘制不会重入，
+        // 实例字段足够安全。（下面各循环里剩下的 new PointF[] 是托管数组，代价比
+        // GDI+ 对象小几个数量级，不值得为它引入缓冲区的尺寸管理。）
+        // ------------------------------------------------------------------
+        private readonly Pen _strokePen = new Pen(Color.Black);
+        private readonly SolidBrush _fillBrush = new SolidBrush(Color.Black);
+        private readonly GraphicsPath _wallPath = new GraphicsPath(FillMode.Alternate);
+        private readonly Font _centeredFont = new Font("Microsoft YaHei UI", 10f);
+        private readonly SolidBrush _textBrush = new SolidBrush(Color.Black);
+        private readonly StringFormat _centeredFormat = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+        private readonly PointF[] _markerTriangle = new PointF[3];
+
         protected override void OnPaint(PaintEventArgs e)
         {
             base.OnPaint(e); e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
@@ -161,8 +179,10 @@ namespace BatchPdfPublisher.Views
                 {
                     var segment = _result.Segments[index]; if (!segment.IsEnabled) continue;
                     var selected = index == SelectedSegmentIndex;
-                    using (var pen = new Pen(selected ? Color.Magenta : ColorFor(segment.Direction), selected ? 3.2f : Math.Max(1.2f, Math.Min(3f, _zoom * 0.65f))))
-                        e.Graphics.DrawLine(pen, ToResultScreen(segment.X1, segment.Y1), ToResultScreen(segment.X2, segment.Y2));
+                    _strokePen.Color = selected ? Color.Magenta : ColorFor(segment.Direction);
+                    _strokePen.Width = selected ? 3.2f : Math.Max(1.2f, Math.Min(3f, _zoom * 0.65f));
+                    _strokePen.DashStyle = DashStyle.Solid;
+                    e.Graphics.DrawLine(_strokePen, ToResultScreen(segment.X1, segment.Y1), ToResultScreen(segment.X2, segment.Y2));
                 }
                 for (var index = 0; index < _result.Circles.Count; index++)
                 {
@@ -170,36 +190,43 @@ namespace BatchPdfPublisher.Views
                     var center = ToResultScreen(circle.CenterX, circle.CenterY);
                     var radius = (float)(circle.Radius * _result.SourcePreviewScale * _zoom);
                     var selected = index == SelectedCircleIndex;
-                    using (var pen = new Pen(selected ? Color.Magenta : Color.Orange, selected ? 3.2f : Math.Max(1.5f, _zoom * 0.75f))) e.Graphics.DrawEllipse(pen, center.X - radius, center.Y - radius, radius * 2f, radius * 2f);
+                    _strokePen.Color = selected ? Color.Magenta : Color.Orange;
+                    _strokePen.Width = selected ? 3.2f : Math.Max(1.5f, _zoom * 0.75f);
+                    _strokePen.DashStyle = DashStyle.Solid;
+                    e.Graphics.DrawEllipse(_strokePen, center.X - radius, center.Y - radius, radius * 2f, radius * 2f);
                 }
                 for (var index = 0; index < _result.Arcs.Count; index++)
                 {
                     var arc = _result.Arcs[index]; if (!arc.IsEnabled) continue;
                     var center = ToResultScreen(arc.CenterX, arc.CenterY); var radius = (float)(arc.Radius * _result.SourcePreviewScale * _zoom);
                     var selected = index == SelectedArcIndex;
-                    using (var pen = new Pen(selected ? Color.Magenta : Color.Cyan, selected ? 3.2f : Math.Max(1.5f, _zoom * 0.75f)))
-                        e.Graphics.DrawArc(pen, center.X - radius, center.Y - radius, radius * 2f, radius * 2f, (float)arc.StartAngleDegrees, (float)arc.SweepAngleDegrees);
+                    _strokePen.Color = selected ? Color.Magenta : Color.Cyan;
+                    _strokePen.Width = selected ? 3.2f : Math.Max(1.5f, _zoom * 0.75f);
+                    _strokePen.DashStyle = DashStyle.Solid;
+                    e.Graphics.DrawArc(_strokePen, center.X - radius, center.Y - radius, radius * 2f, radius * 2f, (float)arc.StartAngleDegrees, (float)arc.SweepAngleDegrees);
                 }
                 for (var index = 0; index < _result.Polylines.Count; index++)
                 {
                     var polyline = _result.Polylines[index]; if (!polyline.IsEnabled || polyline.Points.Count < 2) continue;
                     var points = polyline.Points.Select(point => ToResultScreen(point.X, point.Y)).ToArray(); var selected = index == SelectedPolylineIndex;
-                    using (var pen = new Pen(selected ? Color.Magenta : Color.FromArgb(255, 255, 150, 30), selected ? 3.2f : 2f))
-                    {
-                        e.Graphics.DrawLines(pen, points); if (polyline.IsClosed && points.Length > 2) e.Graphics.DrawLine(pen, points[points.Length - 1], points[0]);
-                    }
+                    _strokePen.Color = selected ? Color.Magenta : Color.FromArgb(255, 255, 150, 30);
+                    _strokePen.Width = selected ? 3.2f : 2f;
+                    _strokePen.DashStyle = DashStyle.Solid;
+                    e.Graphics.DrawLines(_strokePen, points); if (polyline.IsClosed && points.Length > 2) e.Graphics.DrawLine(_strokePen, points[points.Length - 1], points[0]);
                 }
                 for (var index = 0; index < _result.WallRegions.Count; index++)
                 {
                     var wall = _result.WallRegions[index]; if (wall.Outer.Count < 3) continue;
-                    using (var path = new GraphicsPath(FillMode.Alternate))
-                    {
-                        path.AddPolygon(wall.Outer.Select(point => ToResultScreen(point.X, point.Y)).ToArray());
-                        foreach (var hole in wall.Holes.Where(value => value.Count >= 3)) path.AddPolygon(hole.Select(point => ToResultScreen(point.X, point.Y)).ToArray());
-                        var selected = index == SelectedWallIndex;
-                        using (var brush = new SolidBrush(Color.FromArgb(selected ? 105 : wall.IsEnabled ? 65 : 18, 220, 55, 55))) e.Graphics.FillPath(brush, path);
-                        using (var pen = new Pen(selected ? Color.Magenta : wall.IsEnabled ? Color.Red : Color.FromArgb(135, 220, 90, 90), selected ? 3f : wall.IsEnabled ? 1.5f : 1f) { DashStyle = wall.IsEnabled ? DashStyle.Solid : DashStyle.Dash }) e.Graphics.DrawPath(pen, path);
-                    }
+                    var selected = index == SelectedWallIndex;
+                    _wallPath.Reset();
+                    _wallPath.AddPolygon(wall.Outer.Select(point => ToResultScreen(point.X, point.Y)).ToArray());
+                    foreach (var hole in wall.Holes.Where(value => value.Count >= 3)) _wallPath.AddPolygon(hole.Select(point => ToResultScreen(point.X, point.Y)).ToArray());
+                    _fillBrush.Color = Color.FromArgb(selected ? 105 : wall.IsEnabled ? 65 : 18, 220, 55, 55);
+                    e.Graphics.FillPath(_fillBrush, _wallPath);
+                    _strokePen.Color = selected ? Color.Magenta : wall.IsEnabled ? Color.Red : Color.FromArgb(135, 220, 90, 90);
+                    _strokePen.Width = selected ? 3f : wall.IsEnabled ? 1.5f : 1f;
+                    _strokePen.DashStyle = wall.IsEnabled ? DashStyle.Solid : DashStyle.Dash;
+                    e.Graphics.DrawPath(_strokePen, _wallPath);
                 }
                 for (var index = 0; index < _result.TextRegions.Count; index++)
                 {
@@ -209,22 +236,32 @@ namespace BatchPdfPublisher.Views
                     var selected = index == SelectedTextIndex;
                     var lowConfidence = LineVisionOcrConfidence.IsLow(text.Confidence, LowConfidenceThreshold);
                     var color = selected ? Color.Magenta : lowConfidence ? Color.FromArgb(235, 145, 35) : !text.IsEnabled ? Color.FromArgb(190, 235, 80, 80) : Color.FromArgb(230, 190, 90, 255);
-                    using (var fill = new SolidBrush(Color.FromArgb(selected ? 55 : 28, color))) e.Graphics.FillPolygon(fill, points);
-                    using (var pen = new Pen(color, selected ? 3f : lowConfidence ? 2.2f : 1.5f) { DashStyle = lowConfidence || !text.IsEnabled ? DashStyle.Dash : DashStyle.Solid })
-                        e.Graphics.DrawPolygon(pen, points);
+                    _fillBrush.Color = Color.FromArgb(selected ? 55 : 28, color);
+                    e.Graphics.FillPolygon(_fillBrush, points);
+                    _strokePen.Color = color;
+                    _strokePen.Width = selected ? 3f : lowConfidence ? 2.2f : 1.5f;
+                    _strokePen.DashStyle = lowConfidence || !text.IsEnabled ? DashStyle.Dash : DashStyle.Solid;
+                    e.Graphics.DrawPolygon(_strokePen, points);
                     if (lowConfidence) DrawLowConfidenceMarker(e.Graphics, points);
                 }
             }
             if (!_region.IsEmpty)
             {
                 var screen = ToScreen(_region);
-                using (var fill = new SolidBrush(Color.FromArgb(35, 255, 145, 35))) e.Graphics.FillRectangle(fill, screen);
-                using (var pen = new Pen(Color.Orange, 2f) { DashStyle = DashStyle.Dash }) e.Graphics.DrawRectangle(pen, screen.X, screen.Y, screen.Width, screen.Height);
+                _fillBrush.Color = Color.FromArgb(35, 255, 145, 35);
+                e.Graphics.FillRectangle(_fillBrush, screen);
+                _strokePen.Color = Color.Orange;
+                _strokePen.Width = 2f;
+                _strokePen.DashStyle = DashStyle.Dash;
+                e.Graphics.DrawRectangle(_strokePen, screen.X, screen.Y, screen.Width, screen.Height);
             }
             if (_calibrationStart.HasValue)
             {
                 var point = ToResultScreen(_calibrationStart.Value.X, _calibrationStart.Value.Y);
-                using (var pen = new Pen(Color.Magenta, 2f)) { e.Graphics.DrawEllipse(pen, point.X - 5, point.Y - 5, 10, 10); }
+                _strokePen.Color = Color.Magenta;
+                _strokePen.Width = 2f;
+                _strokePen.DashStyle = DashStyle.Solid;
+                e.Graphics.DrawEllipse(_strokePen, point.X - 5, point.Y - 5, 10, 10);
             }
         }
 
@@ -267,32 +304,35 @@ namespace BatchPdfPublisher.Views
             return Color.Red;
         }
 
-        private static void DrawLowConfidenceMarker(Graphics graphics, PointF[] points)
+        /// <summary>
+        /// 低置信度标记。这个方法在文字循环里被逐个调用（一屏可能有几百个低置信度文字），
+        /// 所以同样复用上面的画笔/笔刷，不再每次 new。
+        /// </summary>
+        private void DrawLowConfidenceMarker(Graphics graphics, PointF[] points)
         {
             var left = points.Min(point => point.X);
             var top = points.Min(point => point.Y);
             var center = new PointF(left - 7f, top - 7f);
-            var triangle = new[]
-            {
-                new PointF(center.X, center.Y - 6f),
-                new PointF(center.X - 6f, center.Y + 5f),
-                new PointF(center.X + 6f, center.Y + 5f)
-            };
-            using (var brush = new SolidBrush(Color.FromArgb(245, 155, 35))) graphics.FillPolygon(brush, triangle);
-            using (var pen = new Pen(Color.FromArgb(115, 70, 10), 1f)) graphics.DrawPolygon(pen, triangle);
-            using (var pen = new Pen(Color.White, 1.5f))
-            {
-                graphics.DrawLine(pen, center.X, center.Y - 2.5f, center.X, center.Y + 1.5f);
-                graphics.DrawEllipse(pen, center.X - 0.5f, center.Y + 3f, 1f, 1f);
-            }
+            _markerTriangle[0] = new PointF(center.X, center.Y - 6f);
+            _markerTriangle[1] = new PointF(center.X - 6f, center.Y + 5f);
+            _markerTriangle[2] = new PointF(center.X + 6f, center.Y + 5f);
+            _fillBrush.Color = Color.FromArgb(245, 155, 35);
+            graphics.FillPolygon(_fillBrush, _markerTriangle);
+            _strokePen.Color = Color.FromArgb(115, 70, 10);
+            _strokePen.Width = 1f;
+            _strokePen.DashStyle = DashStyle.Solid;
+            graphics.DrawPolygon(_strokePen, _markerTriangle);
+            _strokePen.Color = Color.White;
+            _strokePen.Width = 1.5f;
+            graphics.DrawLine(_strokePen, center.X, center.Y - 2.5f, center.X, center.Y + 1.5f);
+            graphics.DrawEllipse(_strokePen, center.X - 0.5f, center.Y + 3f, 1f, 1f);
         }
 
+        /// <summary>空状态提示。只在没有图片时调用，但仍然复用字体/笔刷/格式对象。</summary>
         private void DrawCentered(Graphics graphics, string text, Color color)
         {
-            using (var font = new Font("Microsoft YaHei UI", 10f))
-            using (var brush = new SolidBrush(color))
-            using (var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
-                graphics.DrawString(text, font, brush, ClientRectangle, format);
+            _textBrush.Color = color;
+            graphics.DrawString(text, _centeredFont, _textBrush, ClientRectangle, _centeredFormat);
         }
     }
 }

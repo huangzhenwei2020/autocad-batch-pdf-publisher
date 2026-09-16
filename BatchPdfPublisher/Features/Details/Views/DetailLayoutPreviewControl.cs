@@ -134,6 +134,40 @@ namespace BatchPdfPublisher.Views
             Invalidate();
         }
 
+        // ------------------------------------------------------------------
+        // 预览绘制用到的 GDI+ 对象。
+        //
+        // 这个控件是按"页 × 槽位"循环绘制的，每个槽位里还要画它自带的最多 2500 段图元；
+        // 原来每页、每槽位、每次 DrawCentered 都要 new 一批 Pen/Brush/Font/StringFormat。
+        // 拖动排序、滚轮缩放时一秒重绘几十次，这些分配纯属浪费。
+        // 颜色和字号都是常量（字号只有有限几种），所以提成静态字段 + 一个按字号缓存的字体表。
+        // 绘制只在 UI 线程发生，静态共用是安全的。
+        // ------------------------------------------------------------------
+        private static readonly Pen PagePen = new Pen(Color.FromArgb(80, 92, 108), 1.4f);
+        private static readonly Pen RangePen = new Pen(Color.FromArgb(145, 155, 168), 1f) { DashStyle = DashStyle.Dash };
+        private static readonly Pen SelectedPen = new Pen(Color.FromArgb(220, 115, 25), 2f);
+        private static readonly Pen HoverPen = new Pen(Color.FromArgb(220, 85, 45), 2f) { DashStyle = DashStyle.Dash };
+        private static readonly Pen IndexPen = new Pen(Color.FromArgb(45, 62, 78), 1f);
+        private static readonly Pen GeometryPen = new Pen(Color.FromArgb(45, 62, 78), 0.8f);
+        private static readonly Pen ProxyPen = new Pen(Color.FromArgb(135, 145, 155), 0.7f) { DashStyle = DashStyle.Dot };
+        private static readonly SolidBrush DragFill = new SolidBrush(Color.FromArgb(45, 240, 165, 105));
+        private static readonly SolidBrush ItemTextBrush = new SolidBrush(Color.FromArgb(65, 78, 92));
+        private static readonly Font ItemTextFont = new Font("Microsoft YaHei UI", 6.5f);
+        private static readonly SolidBrush CenteredBrush = new SolidBrush(Color.Black);
+        private static readonly StringFormat CenteredFormat = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+        private static readonly Dictionary<int, Font> CenteredFonts = new Dictionary<int, Font>();
+
+        /// <summary>按字号取一个复用的字体；字号只有有限几种，第一次用到时创建。</summary>
+        private static Font CenteredFont(float size)
+        {
+            var key = (int)Math.Round(Math.Max(1f, size) * 10f);
+            Font font;
+            if (CenteredFonts.TryGetValue(key, out font)) return font;
+            font = new Font("Microsoft YaHei UI", key / 10f);
+            CenteredFonts[key] = font;
+            return font;
+        }
+
         protected override void OnPaint(PaintEventArgs e)
         {
             base.OnPaint(e);
@@ -144,56 +178,50 @@ namespace BatchPdfPublisher.Views
                 DrawCentered(graphics, string.IsNullOrWhiteSpace(_error) ? "点击“添加大样”或“框选平面”开始" : _error, ClientRectangle, Color.FromArgb(90, 100, 112), 10f);
                 return;
             }
-            using (var pagePen = new Pen(Color.FromArgb(80, 92, 108), 1.4f))
-            using (var rangePen = new Pen(Color.FromArgb(145, 155, 168), 1f) { DashStyle = DashStyle.Dash })
-            using (var selectedPen = new Pen(Color.FromArgb(220, 115, 25), 2f))
-            using (var dragFill = new SolidBrush(Color.FromArgb(45, 240, 165, 105)))
+            for (var page = 0; page < _plan.PageCount; page++)
             {
-                for (var page = 0; page < _plan.PageCount; page++)
+                var rect = PageRect(page);
+                graphics.FillRectangle(Brushes.White, rect);
+                graphics.DrawRectangle(PagePen, rect.X, rect.Y, rect.Width, rect.Height);
+                var range = new RectangleF(rect.X + (float)_plan.ContentLeft * _zoom,
+                    rect.Y + (float)(_plan.PageHeight - _plan.ContentTop) * _zoom,
+                    (float)(_plan.ContentRight - _plan.ContentLeft) * _zoom,
+                    (float)(_plan.ContentTop - _plan.ContentBottom) * _zoom);
+                graphics.DrawRectangle(RangePen, range.X, range.Y, range.Width, range.Height);
+                var gridX = range.Left;
+                for (var column = 0; column < _plan.Columns - 1; column++)
                 {
-                    var rect = PageRect(page);
-                    graphics.FillRectangle(Brushes.White, rect);
-                    graphics.DrawRectangle(pagePen, rect.X, rect.Y, rect.Width, rect.Height);
-                    var range = new RectangleF(rect.X + (float)_plan.ContentLeft * _zoom,
-                        rect.Y + (float)(_plan.PageHeight - _plan.ContentTop) * _zoom,
-                        (float)(_plan.ContentRight - _plan.ContentLeft) * _zoom,
-                        (float)(_plan.ContentTop - _plan.ContentBottom) * _zoom);
-                    graphics.DrawRectangle(rangePen, range.X, range.Y, range.Width, range.Height);
-                    var gridX = range.Left;
-                    for (var column = 0; column < _plan.Columns - 1; column++)
-                    {
-                        gridX += (float)_plan.ColumnWidths[column] * _zoom;
-                        graphics.DrawLine(rangePen, gridX, range.Top, gridX, range.Bottom);
-                    }
-                    var gridY = range.Top;
-                    for (var row = 0; row < _plan.Rows - 1; row++)
-                    {
-                        gridY += (float)_plan.RowHeights[row] * _zoom;
-                        graphics.DrawLine(rangePen, range.Left, gridY, range.Right, gridY);
-                    }
-                    DrawCentered(graphics, "第 " + (page + 1) + " 页", new RectangleF(rect.X, rect.Y - 24f, rect.Width, 20f), Color.FromArgb(55, 68, 84), 9f);
+                    gridX += (float)_plan.ColumnWidths[column] * _zoom;
+                    graphics.DrawLine(RangePen, gridX, range.Top, gridX, range.Bottom);
                 }
-                foreach (var slot in _plan.Slots)
+                var gridY = range.Top;
+                for (var row = 0; row < _plan.Rows - 1; row++)
                 {
-                    var rect = SlotRect(slot);
-                    var cell = CellRect(slot);
-                    var index = _items.IndexOf(slot.Item);
-                    var selected = index == SelectedIndex;
-                    var dragging = index == _dragIndex;
-                    if (dragging) graphics.FillRectangle(dragFill, cell);
-                    if (selected) graphics.DrawRectangle(selectedPen, cell.X, cell.Y, cell.Width, cell.Height);
-                    DrawDetail(graphics, slot.Item, rect, index);
-                    if (slot.Item.AddIndexNumber)
-                    {
-                        var number = _items.Take(index + 1).Count(item => item.AddIndexNumber);
-                        DrawIndexMarker(graphics, slot, number);
-                    }
+                    gridY += (float)_plan.RowHeights[row] * _zoom;
+                    graphics.DrawLine(RangePen, range.Left, gridY, range.Right, gridY);
                 }
-                if (_dragIndex >= 0 && _hoverSlot != null)
+                DrawCentered(graphics, "第 " + (page + 1) + " 页", new RectangleF(rect.X, rect.Y - 24f, rect.Width, 20f), Color.FromArgb(55, 68, 84), 9f);
+            }
+            foreach (var slot in _plan.Slots)
+            {
+                var rect = SlotRect(slot);
+                var cell = CellRect(slot);
+                var index = _items.IndexOf(slot.Item);
+                var selected = index == SelectedIndex;
+                var dragging = index == _dragIndex;
+                if (dragging) graphics.FillRectangle(DragFill, cell);
+                if (selected) graphics.DrawRectangle(SelectedPen, cell.X, cell.Y, cell.Width, cell.Height);
+                DrawDetail(graphics, slot.Item, rect, index);
+                if (slot.Item.AddIndexNumber)
                 {
-                    var rect = CellRect(_hoverSlot);
-                    using (var hover = new Pen(Color.FromArgb(220, 85, 45), 2f) { DashStyle = DashStyle.Dash }) graphics.DrawRectangle(hover, rect.X, rect.Y, rect.Width, rect.Height);
+                    var number = _items.Take(index + 1).Count(item => item.AddIndexNumber);
+                    DrawIndexMarker(graphics, slot, number);
                 }
+            }
+            if (_dragIndex >= 0 && _hoverSlot != null)
+            {
+                var rect = CellRect(_hoverSlot);
+                graphics.DrawRectangle(HoverPen, rect.X, rect.Y, rect.Width, rect.Height);
             }
             DrawCentered(graphics, "拖动大样调整顺序；滚轮缩放预览", new RectangleF(0, Height - 24f, Width, 20f), Color.DimGray, 8.5f);
         }
@@ -230,14 +258,11 @@ namespace BatchPdfPublisher.Views
             var centerX = page.X + (float)(slot.X - Math.Max(4d * _scale, 40d)) * _zoom;
             var centerY = page.Y + (float)(_plan.PageHeight - slot.Y - Math.Max(3.5d * _scale, 35d)) * _zoom;
             var shownRadius = Math.Max(4f, Math.Min(14f, (float)radius * _zoom));
-            using (var pen = new Pen(Color.FromArgb(45, 62, 78), 1f))
-            {
-                graphics.DrawEllipse(pen, centerX - shownRadius, centerY - shownRadius, shownRadius * 2f, shownRadius * 2f);
-            }
+            graphics.DrawEllipse(IndexPen, centerX - shownRadius, centerY - shownRadius, shownRadius * 2f, shownRadius * 2f);
             DrawCentered(graphics, number.ToString(), new RectangleF(centerX - shownRadius, centerY - shownRadius, shownRadius * 2f, shownRadius * 2f), Color.FromArgb(35, 50, 68), Math.Max(6f, shownRadius * 0.9f));
         }
 
-        private static void DrawDetail(Graphics graphics, DetailLayoutItem item, RectangleF rect, int index)
+        private void DrawDetail(Graphics graphics, DetailLayoutItem item, RectangleF rect, int index)
         {
             if (item == null || rect.Width < 4f || rect.Height < 4f) return;
             var header = Math.Min(18f, Math.Max(10f, rect.Height * 0.16f));
@@ -245,27 +270,21 @@ namespace BatchPdfPublisher.Views
             var factor = Math.Min(drawing.Width / (float)Math.Max(1e-6d, item.Width), drawing.Height / (float)Math.Max(1e-6d, item.Height));
             var x0 = drawing.X + (drawing.Width - (float)item.Width * factor) / 2f;
             var y0 = drawing.Bottom - (drawing.Height - (float)item.Height * factor) / 2f;
-            using (var geometryPen = new Pen(Color.FromArgb(45, 62, 78), 0.8f))
-            using (var proxyPen = new Pen(Color.FromArgb(135, 145, 155), 0.7f) { DashStyle = DashStyle.Dot })
-            using (var textBrush = new SolidBrush(Color.FromArgb(65, 78, 92)))
-            using (var textFont = new Font("Microsoft YaHei UI", 6.5f))
+            foreach (var primitive in item.Preview.Take(2500))
             {
-                foreach (var primitive in item.Preview.Take(2500))
+                var x1 = x0 + (float)(primitive.X1 - item.MinPoint.X) * factor;
+                var y1 = y0 - (float)(primitive.Y1 - item.MinPoint.Y) * factor;
+                var x2 = x0 + (float)(primitive.X2 - item.MinPoint.X) * factor;
+                var y2 = y0 - (float)(primitive.Y2 - item.MinPoint.Y) * factor;
+                if (primitive.Kind == DetailPreviewPrimitiveKind.Line) graphics.DrawLine(GeometryPen, x1, y1, x2, y2);
+                else
                 {
-                    var x1 = x0 + (float)(primitive.X1 - item.MinPoint.X) * factor;
-                    var y1 = y0 - (float)(primitive.Y1 - item.MinPoint.Y) * factor;
-                    var x2 = x0 + (float)(primitive.X2 - item.MinPoint.X) * factor;
-                    var y2 = y0 - (float)(primitive.Y2 - item.MinPoint.Y) * factor;
-                    if (primitive.Kind == DetailPreviewPrimitiveKind.Line) graphics.DrawLine(geometryPen, x1, y1, x2, y2);
-                    else
-                    {
-                        var box = RectangleF.FromLTRB(Math.Min(x1, x2), Math.Min(y1, y2), Math.Max(x1, x2), Math.Max(y1, y2));
-                        if (box.Width < 1f) box.Width = 1f; if (box.Height < 1f) box.Height = 1f;
-                        if (primitive.Kind == DetailPreviewPrimitiveKind.Ellipse) graphics.DrawEllipse(geometryPen, box);
-                        else if (primitive.Kind == DetailPreviewPrimitiveKind.Text && box.Width > 8f && box.Height > 5f)
-                            graphics.DrawString(primitive.Text ?? string.Empty, textFont, textBrush, box);
-                        else graphics.DrawRectangle(proxyPen, box.X, box.Y, box.Width, box.Height);
-                    }
+                    var box = RectangleF.FromLTRB(Math.Min(x1, x2), Math.Min(y1, y2), Math.Max(x1, x2), Math.Max(y1, y2));
+                    if (box.Width < 1f) box.Width = 1f; if (box.Height < 1f) box.Height = 1f;
+                    if (primitive.Kind == DetailPreviewPrimitiveKind.Ellipse) graphics.DrawEllipse(GeometryPen, box);
+                    else if (primitive.Kind == DetailPreviewPrimitiveKind.Text && box.Width > 8f && box.Height > 5f)
+                        graphics.DrawString(primitive.Text ?? string.Empty, ItemTextFont, ItemTextBrush, box);
+                    else graphics.DrawRectangle(ProxyPen, box.X, box.Y, box.Width, box.Height);
                 }
             }
             DrawCentered(graphics, item.Name + "  " + (string.IsNullOrWhiteSpace(item.ScaleText) ? "" : item.ScaleText), new RectangleF(rect.X + 2f, rect.Y + 1f, Math.Max(1f, rect.Width - 4f), header), Color.FromArgb(30, 52, 72), 7.5f);
@@ -274,10 +293,8 @@ namespace BatchPdfPublisher.Views
         private static void DrawCentered(Graphics graphics, string text, RectangleF rect, Color color, float size)
         {
             if (rect.Width <= 0f || rect.Height <= 0f) return;
-            using (var font = new Font("Microsoft YaHei UI", size))
-            using (var brush = new SolidBrush(color))
-            using (var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
-                graphics.DrawString(text ?? string.Empty, font, brush, rect, format);
+            CenteredBrush.Color = color;
+            graphics.DrawString(text ?? string.Empty, CenteredFont(size), CenteredBrush, rect, CenteredFormat);
         }
         private static void DrawCentered(Graphics graphics, string text, Rectangle rect, Color color, float size) { DrawCentered(graphics, text, (RectangleF)rect, color, size); }
     }

@@ -522,6 +522,13 @@ namespace BatchPdfPublisher.Views
             _progressTrack.Invalidate();
         }
 
+        // 进度条的底色、进度色和描边：进度每更新一次就重绘一次，扫描/发布时一秒几十次，
+        // 原来每次都 new 两个笔刷加一支画笔，纯属浪费。三个颜色都是常量，提成静态字段。
+        private static readonly System.Drawing.SolidBrush ProgressTrackBrush = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(232, 236, 242));
+        private static readonly System.Drawing.SolidBrush ProgressScanBrush = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(64, 139, 220));
+        private static readonly System.Drawing.SolidBrush ProgressPublishBrush = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(40, 165, 72));
+        private static readonly System.Drawing.Pen ProgressBorderPen = new System.Drawing.Pen(System.Drawing.Color.FromArgb(205, 213, 224));
+
         private void PaintProgressTrack(object sender, PaintEventArgs args)
         {
             var bounds = new System.Drawing.Rectangle(0, Math.Max(0, (_progressTrack.Height - 5) / 2), Math.Max(1, _progressTrack.Width - 1), 5);
@@ -530,14 +537,10 @@ namespace BatchPdfPublisher.Views
                 : _viewModel.IsPublishing ? Math.Max(_viewModel.PublishProgressMaximum, 1) : Math.Max(_viewModel.Sheets.Count, 1);
             var value = _viewModel.IsScanning ? _viewModel.ScanProgressValue : _viewModel.PublishProgressValue;
             var ratio = Math.Max(0, Math.Min(1, value / (double)maximum));
-            using (var track = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(232, 236, 242)))
-            using (var fill = new System.Drawing.SolidBrush(_viewModel.IsScanning ? System.Drawing.Color.FromArgb(64, 139, 220) : System.Drawing.Color.FromArgb(40, 165, 72)))
-            using (var border = new System.Drawing.Pen(System.Drawing.Color.FromArgb(205, 213, 224)))
-            {
-                args.Graphics.FillRectangle(track, bounds);
-                if (ratio > 0) args.Graphics.FillRectangle(fill, new System.Drawing.Rectangle(bounds.X, bounds.Y, Math.Max(1, (int)(bounds.Width * ratio)), bounds.Height));
-                args.Graphics.DrawRectangle(border, bounds);
-            }
+            var fill = _viewModel.IsScanning ? ProgressScanBrush : ProgressPublishBrush;
+            args.Graphics.FillRectangle(ProgressTrackBrush, bounds);
+            if (ratio > 0) args.Graphics.FillRectangle(fill, new System.Drawing.Rectangle(bounds.X, bounds.Y, Math.Max(1, (int)(bounds.Width * ratio)), bounds.Height));
+            args.Graphics.DrawRectangle(ProgressBorderPen, bounds);
         }
 
         private static System.Drawing.Drawing2D.GraphicsPath RoundedRectangle(System.Drawing.Rectangle rectangle, int radius)
@@ -732,12 +735,15 @@ namespace BatchPdfPublisher.Views
             RefreshSheets();
         }
 
+        // 这两个画笔是拖动图框列表时的插入指示线，只在被拖到的那一行绘制；
+        // 但拖动过程中行会被反复重绘，所以提成静态字段、不再每次 new。
+        private static readonly System.Drawing.Pen SheetDragPen = new System.Drawing.Pen(System.Drawing.Color.FromArgb(28, 105, 184), 3F);
+
         private void SheetsRowPostPaint(object sender, DataGridViewRowPostPaintEventArgs e)
         {
             if (e.RowIndex != _dragTargetRowIndex) return;
             var y = _dragInsertAfter ? e.RowBounds.Bottom - 2 : e.RowBounds.Top;
-            using (var pen = new System.Drawing.Pen(System.Drawing.Color.FromArgb(28, 105, 184), 3F))
-                e.Graphics.DrawLine(pen, e.RowBounds.Left, y, e.RowBounds.Right, y);
+            e.Graphics.DrawLine(SheetDragPen, e.RowBounds.Left, y, e.RowBounds.Right, y);
         }
 
         private void ClearSheetDragIndicator()
@@ -1213,6 +1219,11 @@ namespace BatchPdfPublisher.Views
             if (combo != null) combo.IntegralHeight = false;
         }
 
+        // 分隔条上的抓手图案：分隔条在鼠标划过、拖动、窗口缩放时都会重绘，
+        // 两个画笔提成静态字段，不再每次重绘 new。
+        private static readonly System.Drawing.Pen SplitterLinePen = new System.Drawing.Pen(System.Drawing.Color.FromArgb(150, 169, 194));
+        private static readonly System.Drawing.Pen SplitterGripPen = new System.Drawing.Pen(System.Drawing.Color.FromArgb(67, 113, 174), 1.5F);
+
         private static void AddHeightDragIndicator(SplitContainer splitter)
         {
             splitter.BackColor = System.Drawing.Color.FromArgb(248, 250, 253);
@@ -1221,13 +1232,9 @@ namespace BatchPdfPublisher.Views
                 var splitterBounds = splitter.SplitterRectangle;
                 var centerX = splitterBounds.Left + splitterBounds.Width / 2;
                 var centerY = splitterBounds.Top + splitterBounds.Height / 2;
-                using (var line = new System.Drawing.Pen(System.Drawing.Color.FromArgb(150, 169, 194)))
-                using (var grip = new System.Drawing.Pen(System.Drawing.Color.FromArgb(67, 113, 174), 1.5F))
-                {
-                    args.Graphics.DrawLine(line, 8, centerY, splitter.Width - 8, centerY);
-                    for (var offset = -6; offset <= 6; offset += 6)
-                        args.Graphics.DrawLine(grip, centerX + offset - 2, centerY - 2, centerX + offset + 2, centerY + 2);
-                }
+                args.Graphics.DrawLine(SplitterLinePen, 8, centerY, splitter.Width - 8, centerY);
+                for (var offset = -6; offset <= 6; offset += 6)
+                    args.Graphics.DrawLine(SplitterGripPen, centerX + offset - 2, centerY - 2, centerX + offset + 2, centerY + 2);
             };
         }
 
