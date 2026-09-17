@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" Condition="false" />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{5BC1E851-65C2-4C62-9E9E-BD2B7045843A}</ProjectGuid>
+    <OutputType>Library</OutputType>
+    <RootNamespace>WL.Stair.Core</RootNamespace>
+    <AssemblyName>WL.Stair.Core</AssemblyName>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <LangVersion>latest</LangVersion>
+    <Deterministic>true</Deterministic>
+    <FileAlignment>512</FileAlignment>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Calculation\StairCalculationOutcome.cs" />
+    <Compile Include="Calculation\StairCalculationResult.cs" />
+    <Compile Include="Calculation\StairCalculator.cs" />
+    <Compile Include="Calculation\StairFlightResult.cs" />
+    <Compile Include="Calculation\StairProjectCalculator.cs" />
+    <Compile Include="Calculation\StairProjectConstraintService.cs" />
+    <Compile Include="Calculation\StairwellAxisResolver.cs" />
+    <Compile Include="Domain\FlightSplitPreference.cs" />
+    <Compile Include="Domain\StairDefinition.cs" />
+    <Compile Include="Domain\StairProjectDefinition.cs" />
+    <Compile Include="Domain\StairRuleSet.cs" />
+    <Compile Include="Geometry\DrawingLine.cs" />
+    <Compile Include="Geometry\DrawingLeader.cs" />
+    <Compile Include="Geometry\DrawingDimension.cs" />
+    <Compile Include="Geometry\DrawingHatchRegion.cs" />
+    <Compile Include="Geometry\DrawingTable.cs" />
+    <Compile Include="Geometry\DrawingText.cs" />
+    <Compile Include="Geometry\DrawingTitle.cs" />
+    <Compile Include="Geometry\DrawingView.cs" />
+    <Compile Include="Geometry\Point2D.cs" />
+    <Compile Include="Geometry\PlanPolygonClipper.cs" />
+    <Compile Include="Geometry\StairGeometryBuilder.cs" />
+    <Compile Include="Geometry\StairProjectGeometryBuilder.cs" />
+    <Compile Include="Geometry\StairLineRole.cs" />
+    <Compile Include="Geometry\StairPlanLevel.cs" />
+    <Compile Include="Layout\StairCombinedLayout.cs" />
+    <Compile Include="Validation\ValidationIssue.cs" />
+    <Compile Include="Validation\ValidationSeverity.cs" />
+    <Compile Include="Validation\StairClearanceValidator.cs" />
+    <Compile Include="Properties\AssemblyInfo.cs" />
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>

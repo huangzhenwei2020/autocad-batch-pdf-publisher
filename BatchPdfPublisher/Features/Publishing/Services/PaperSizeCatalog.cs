@@ -39,6 +39,42 @@ namespace BatchPdfPublisher.Services
             return SupportedExtensions.TryGetValue(paper ?? string.Empty, out var values) ? (string[])values.Clone() : new[] { "" };
         }
 
+        // GB/T 50001-2017 第 3.1.3 条：图纸的短边尺寸不应加长，A0～A3 幅面长边
+        // 尺寸可加长，但应符合表 3.1.3 的规定。表 3.1.3 未列出的加长比例都不是
+        // 标准幅面，不能按“L + 分数×L”自行推算，否则会做出 2376×594 这类标准
+        // 里并不存在的规格——那样出图既不合规，也会让整套图纸的幅面失控。
+        public static bool IsStandardExtension(string paper, string extension)
+        {
+            var fraction = ParseExtension(extension);
+            if (fraction <= 0d) return true;                                   // 基本幅面（含 A4，A4 不加长）
+            return ExtendedLongSides.TryGetValue(paper ?? string.Empty, out var lengths) && lengths.ContainsKey(fraction);
+        }
+
+        // 供校验消息直接列出该幅面允许的加长比例。
+        public static string DescribeStandardExtensions(string paper)
+        {
+            var values = GetSupportedExtensions(paper);
+            var extended = new List<string>();
+            foreach (var value in values)
+                if (!string.IsNullOrWhiteSpace(value)) extended.Add(value);
+            return extended.Count == 0 ? "无（该幅面短边不应加长）" : string.Join("、", extended.ToArray());
+        }
+
+        // 只有通过表 3.1.3 校验的规格才给出尺寸；否则返回 false，让调用方报错
+        // 而不是悄悄使用一个不合规的幅面。
+        public static bool TryGetStandardSize(string paper, string extension, string orientation, out double[] size)
+        {
+            size = null;
+            if (!IsStandardExtension(paper, extension)) return false;
+            size = GetSize(paper, extension, orientation);
+            return true;
+        }
+
+        public static string DefaultOrientation(string paper)
+        {
+            return string.Equals(paper, "A4", StringComparison.OrdinalIgnoreCase) ? "纵向" : "横向";
+        }
+
         public static double[] GetSize(string paper, string extension, string orientation)
         {
             if (!BasicSizes.TryGetValue(paper ?? string.Empty, out var basic)) basic = BasicSizes["A3"];
@@ -62,12 +98,17 @@ namespace BatchPdfPublisher.Services
             var candidates = new[] { "A0", "A1", "A2", "A3", "A4" };
             foreach (var candidate in candidates)
                 foreach (var candidateExtension in GetSupportedExtensions(candidate))
-                    foreach (var candidateOrientation in new[] { "横向", "纵向" })
-                    {
-                        var size = GetSize(candidate, candidateExtension, candidateOrientation);
-                        if (Math.Abs(width - size[0]) <= 1.0 && Math.Abs(height - size[1]) <= 1.0)
-                        { paper = candidate; extension = candidateExtension; orientation = candidateOrientation; return true; }
-                    }
+                {
+                    var candidateOrientation = DefaultOrientation(candidate);
+                    var size = GetSize(candidate, candidateExtension, candidateOrientation);
+                    if (Math.Abs(width - size[0]) <= 1.0 && Math.Abs(height - size[1]) <= 1.0)
+                    { paper = candidate; extension = candidateExtension; orientation = candidateOrientation; return true; }
+                    // A source block may be physically rotated in CAD. Identify
+                    // the paper by the long/short sides, but keep the catalog
+                    // direction rule (A0-A3 horizontal, A4 vertical).
+                    if (Math.Abs(width - size[1]) <= 1.0 && Math.Abs(height - size[0]) <= 1.0)
+                    { paper = candidate; extension = candidateExtension; orientation = candidateOrientation; return true; }
+                }
             return false;
         }
 

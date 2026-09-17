@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="PublishPlanStoreTests.cs" />
+    <Compile Include="PaperSizeCatalogTests.cs" />
+    <Compile Include="CuixPackageBuilderTests.cs" />
+    <Compile Include="LayerCommandLispTests.cs" />
+    <Compile Include="RibbonPanelPlannerTests.cs" />
+    <Compile Include="RibbonIconThemeTests.cs" />
+    <Compile Include="DraftingLayerRolesTests.cs" />
+    <Compile Include="..\BatchPdfPublisher\Shell\CuixPackageBuilder.cs" Link="CuixPackageBuilder.cs" />
+    <Compile Include="..\BatchPdfPublisher\Shell\RibbonPanelPlanner.cs" Link="RibbonPanelPlanner.cs" />
+    <Compile Include="..\BatchPdfPublisher\Shell\RibbonIconTheme.cs" Link="RibbonIconTheme.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\Shortcuts\FeatureDefinition.cs" Link="FeatureDefinition.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\Shortcuts\LayerCommandLisp.cs" Link="LayerCommandLisp.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\Shortcuts\LayerFeatureIds.cs" Link="LayerFeatureIds.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\Drafting\Services\DraftingLayerRoles.cs" Link="DraftingLayerRoles.cs" />
+    <Compile Include="ProjectStoreStubs.cs" />
+    <Compile Include="UserDataPathsStub.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\Publishing\Services\PublishPlanStore.cs" Link="PublishPlanStore.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\Publishing\Models\ProjectProfile.cs" Link="ProjectProfile.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\Publishing\Models\SheetCatalogItem.cs" Link="SheetCatalogItem.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\Frames\Models\FrameDefinition.cs" Link="FrameDefinition.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\Publishing\Services\PaperSizeCatalog.cs" Link="PaperSizeCatalog.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Models\CloudSyncModels.cs" Link="CloudSyncModels.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncSettingsStore.cs" Link="CloudSyncSettingsStore.cs" />
+    <Compile Include="CloudSyncTransactionStub.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncFolderDetector.cs" Link="CloudSyncFolderDetector.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudProjectWorkspaceService.cs" Link="CloudProjectWorkspaceService.cs" />
+  </ItemGroup>
+</Project>

@@ -13,12 +13,71 @@ namespace BatchPdfPublisher.Services
     {
         public const string ArrowLibraryFileName = "WanLuoArrowSymbols.dwg";
         public static readonly string ArrowLibraryRelativePath = Path.Combine("Resources", "Blocks", ArrowLibraryFileName);
-        public const string FrameLayer = "WL-图框", CatalogLayer = "WL-目录", ArchitectureOutlineLayer = "WL-建筑-轮廓", ArchitectureFineLayer = "WL-建筑-细线", ArchitectureStructureLayer = "WL-建筑-结构", ArchitectureHiddenLayer = "WL-建筑-隐藏", ArchitectureHatchLayer = "WL-建筑-填充", AnnotationTextLayer = "WL-注释-文字", AnnotationDimensionLayer = "WL-注释-标注";
+        public const string FrameLayer = "WL-图框", CatalogLayer = "WL-目录", ArchitectureOutlineLayer = "WL-建筑-轮廓", ArchitectureFineLayer = "WL-建筑-细线", ArchitectureStructureLayer = "WL-建筑-结构", ArchitectureHiddenLayer = "WL-建筑-隐藏", ArchitectureHatchLayer = "WL-建筑-填充", AnnotationTextLayer = "WL-注释-文字", AnnotationDimensionLayer = "WL-注释-标注", StairAxisLayer = "A_DOTE", StairOutlineLayer = "WL_楼梯_轮廓", StairTreadLayer = "WL_楼梯_踏步", StairSectionLayer = "WL_楼梯_剖面", StairWallLayer = "WL_剖面墙", StairSideLayer = "WL-楼梯侧面", StairHandrailLayer = "WL_扶手", StairCutHatchLayer = "WL_楼梯_剖切填充", StairBreakLineLayer = "WL_折断线", DoorWindowWindowLayer = "WL-门窗-窗", DoorWindowDoorLayer = "WL-门窗-门", DoorWindowOpeningLayer = "WL-门窗-开启洞口", DetailSeparatorLayer = "WL-大样-分隔", DetailIndexLayer = "WL-大样-索引";
         public const string BodyTextStyle = "WL-文字-正文", TitleTextStyle = "WL-文字-标题", AnnotationTextStyle = "WL-文字-标注", DimensionStyle50 = "WL-标注-1_50";
 
         public static string SettingsPath { get { return UserDataPaths.SettingsFile("drafting-standard.ini", Path.Combine("WanluoArchitectureTools", "drafting-standard.ini")); } }
         public static string GetLayerName(string key) { return LoadProfile().Layer(key).Name; }
         public static string GetTextStyleName(string key) { return LoadProfile().Text(key).Name; }
+
+        // 供"标准里还没有该键"时兜底：插件自己的功能不能因为标准缺项就写死图层名。
+        private static readonly Dictionary<string, string> FallbackLayerNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            { DraftingStandardProfile.FrameKey, FrameLayer },
+            { DraftingStandardProfile.CatalogKey, CatalogLayer },
+            { DraftingStandardProfile.OutlineKey, ArchitectureOutlineLayer },
+            { DraftingStandardProfile.FineKey, ArchitectureFineLayer },
+            { DraftingStandardProfile.StructureKey, ArchitectureStructureLayer },
+            { DraftingStandardProfile.HiddenKey, ArchitectureHiddenLayer },
+            { DraftingStandardProfile.HatchKey, ArchitectureHatchLayer },
+            { DraftingStandardProfile.AnnotationTextLayerKey, AnnotationTextLayer },
+            { DraftingStandardProfile.AnnotationDimensionLayerKey, AnnotationDimensionLayer },
+            { DraftingStandardProfile.StairBreakLineLayerKey, StairBreakLineLayer },
+            { DraftingStandardProfile.DoorWindowWindowLayerKey, DoorWindowWindowLayer },
+            { DraftingStandardProfile.DoorWindowDoorLayerKey, DoorWindowDoorLayer },
+            { DraftingStandardProfile.DoorWindowOpeningLayerKey, DoorWindowOpeningLayer },
+            { DraftingStandardProfile.DetailSeparatorLayerKey, DetailSeparatorLayer },
+            { DraftingStandardProfile.DetailIndexLayerKey, DetailIndexLayer }
+        };
+
+        /// <summary>
+        /// 按标准键（= 系统标签）取图层名。取不到时回退内置默认名，
+        /// 使消费方不必再写死图层名，同时保证"标准缺项"不会让功能失效。
+        /// </summary>
+        public static string LayerNameFor(string key, DraftingStandardProfile profile = null)
+        {
+            profile = profile ?? LoadProfile();
+            var setting = profile.Layers.FirstOrDefault(x => string.Equals(x.Key, key, StringComparison.OrdinalIgnoreCase));
+            if (setting != null && !string.IsNullOrWhiteSpace(setting.Name)) return setting.Name;
+            string fallback;
+            return FallbackLayerNames.TryGetValue(key ?? string.Empty, out fallback) ? fallback : key;
+        }
+
+        /// <summary>
+        /// 按标准键创建/取得图层，参数（颜色、线宽、线型、打印）全部来自标准。
+        /// updateExisting 默认 false：只补齐缺失的图层，不改动用户图纸里已有的同名图层，
+        /// 避免插件在出图过程中悄悄改掉用户的图层设置。
+        /// </summary>
+        public static ObjectId EnsureLayerFor(Database db, Transaction tr, string key,
+            DraftingStandardProfile profile = null, bool updateExisting = false)
+        {
+            if (db == null) throw new ArgumentNullException("db");
+            if (tr == null) throw new ArgumentNullException("tr");
+            profile = profile ?? LoadProfile();
+            var setting = profile.Layers.FirstOrDefault(x => string.Equals(x.Key, key, StringComparison.OrdinalIgnoreCase));
+            if (setting == null)
+            {
+                // 标准里没有该键：用内置默认名与中性参数建层，保证调用方始终拿到有效图层。
+                var name = LayerNameFor(key, profile);
+                return EnsureLayer(db, tr, name, Autodesk.AutoCAD.Colors.Color.FromColorIndex(ColorMethod.ByAci, 7),
+                    (LineWeight)LineWeight.ByLineWeightDefault, ObjectId.Null, true, updateExisting);
+            }
+            var lineType = string.Equals(setting.LineType, "Continuous", StringComparison.OrdinalIgnoreCase)
+                ? ObjectId.Null
+                : EnsureLineType(db, tr, setting.LineType);
+            return EnsureLayer(db, tr, setting.Name, LayerColor(setting), (LineWeight)setting.LineWeight, lineType,
+                setting.IsPlottable, updateExisting);
+        }
         public static string ArrowLibraryPath
         {
             get
@@ -35,26 +94,81 @@ namespace BatchPdfPublisher.Services
             }
         }
 
+        /// <summary>箭头选择列表的缓存。按图块库文件时间戳失效。</summary>
+        private static List<string> _arrowChoiceCache;
+        private static DateTime _arrowChoiceStampUtc = DateTime.MinValue;
+
         public static List<string> GetArrowStyleChoices()
         {
-            var result = new List<string> { "实心闭合", "空心闭合", "建筑标记", "建筑斜线", "点" }; var path = ArrowLibraryPath; if (!File.Exists(path)) return result;
+            // 这一项要 ReadDwgFile 打开箭头图块库，是"打开制图标准窗口"时最慢的一步
+            // （几十到几百毫秒，库放在网络盘或云同步目录时更久）。窗口每次打开都重读
+            // 一次纯属浪费，按文件时间戳缓存；换了库文件会自动重新读取。
+            var path = ArrowLibraryPath;
+            DateTime stamp;
+            try { stamp = File.Exists(path) ? File.GetLastWriteTimeUtc(path) : DateTime.MinValue; }
+            catch { stamp = DateTime.MinValue; }
+            if (_arrowChoiceCache != null && stamp == _arrowChoiceStampUtc) return new List<string>(_arrowChoiceCache);
+
+            var result = new List<string> { "图块：WS-cj", "图块：_ArchTick", "实心闭合", "空心闭合", "建筑标记", "建筑斜线", "点" }; if (!File.Exists(path)) return result;
             try { using (var source = new Database(false, true)) { source.ReadDwgFile(path, FileOpenMode.OpenForReadAndAllShare, true, ""); using (var tr = source.TransactionManager.StartOpenCloseTransaction()) { var table = (BlockTable)tr.GetObject(source.BlockTableId, OpenMode.ForRead); foreach (ObjectId id in table) { var block = (BlockTableRecord)tr.GetObject(id, OpenMode.ForRead); if (!block.IsAnonymous && !block.IsLayout && !block.Name.StartsWith("*", StringComparison.Ordinal)) result.Add("图块：" + block.Name); } } } } catch { }
-            return result.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var distinct = result.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            _arrowChoiceCache = distinct;
+            _arrowChoiceStampUtc = stamp;
+            return new List<string>(distinct);
+        }
+
+        // ------------------------------------------------------------------
+        // 设置文件的解析结果缓存。
+        //
+        // 为什么要缓存：FeatureRegistry.All → LayerNameFor → LoadProfile，而
+        // FeatureRegistry.All 被 Ribbon 的 Idle 检查、菜单生成、快捷键设置页反复调用。
+        // 每次读盘 + 解析，空闲时一秒能来几十上百次，CAD 界面就会发滞。
+        //
+        // 为什么缓存的是**解析结果**而不是 DraftingStandardProfile 本身：
+        // LoadProfile 的调用方会直接改返回的对象（制图标准窗口就是先取一份再就地编辑），
+        // 如果把同一个实例发出去，窗口里没保存的编辑就会污染"已保存"的缓存。
+        // 所以每次仍然新建 profile，只是不再读盘。
+        // ------------------------------------------------------------------
+        private static Dictionary<string, string> _settingsCache;
+        private static DateTime _settingsCacheStampUtc = DateTime.MinValue;
+
+        private static Dictionary<string, string> LoadSettingsData()
+        {
+            DateTime stamp;
+            try { stamp = File.Exists(SettingsPath) ? File.GetLastWriteTimeUtc(SettingsPath) : DateTime.MinValue; }
+            catch { stamp = DateTime.MinValue; }
+            var cached = _settingsCache;
+            if (cached != null && stamp == _settingsCacheStampUtc) return cached;
+            var data = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                if (File.Exists(SettingsPath))
+                    foreach (var line in File.ReadAllLines(SettingsPath)) { var i = line.IndexOf('='); if (i > 0 && !line.TrimStart().StartsWith("#")) data[line.Substring(0, i).Trim()] = line.Substring(i + 1).Trim(); }
+            }
+            catch { }
+            _settingsCache = data;
+            _settingsCacheStampUtc = stamp;
+            return data;
+        }
+
+        internal static void InvalidateSettingsCache()
+        {
+            _settingsCache = null;
+            _settingsCacheStampUtc = DateTime.MinValue;
         }
 
         public static DraftingStandardProfile LoadProfile()
         {
             var profile = DraftingStandardProfile.CreateDefault();
-            if (!File.Exists(SettingsPath)) return profile;
+            var data = LoadSettingsData();
+            if (data.Count == 0) return profile;
             try
             {
-                var data = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                foreach (var line in File.ReadAllLines(SettingsPath)) { var i = line.IndexOf('='); if (i > 0 && !line.TrimStart().StartsWith("#")) data[line.Substring(0, i).Trim()] = line.Substring(i + 1).Trim(); }
-                foreach (var x in profile.Layers) { x.Name = Read(data, "Layer." + x.Key + ".Name", x.Name); x.ColorIndex = ReadShort(data, "Layer." + x.Key + ".Color", x.ColorIndex); x.TrueColorRgb = ReadInt(data, "Layer." + x.Key + ".ColorRgb", x.TrueColorRgb); x.LineWeight = ReadInt(data, "Layer." + x.Key + ".LineWeight", x.LineWeight); x.LineType = Read(data, "Layer." + x.Key + ".LineType", x.LineType); x.IsPlottable = Read(data, "Layer." + x.Key + ".Plottable", x.IsPlottable ? "1" : "0") == "1"; x.CreateOnApply = Read(data, "Layer." + x.Key + ".Create", "1") == "1"; }
+                foreach (var x in profile.Layers) { x.Name = Read(data, "Layer." + x.Key + ".Name", x.Name); x.ColorIndex = ReadShort(data, "Layer." + x.Key + ".Color", x.ColorIndex); x.TrueColorRgb = ReadInt(data, "Layer." + x.Key + ".ColorRgb", x.TrueColorRgb); x.LineWeight = ReadInt(data, "Layer." + x.Key + ".LineWeight", x.LineWeight); x.LineType = Read(data, "Layer." + x.Key + ".LineType", x.LineType); x.IsPlottable = Read(data, "Layer." + x.Key + ".Plottable", x.IsPlottable ? "1" : "0") == "1"; x.CreateOnApply = Read(data, "Layer." + x.Key + ".Create", "1") == "1"; x.SyncExisting = Read(data, "Layer." + x.Key + ".Sync", "1") == "1"; }
                 int layerCount; if (int.TryParse(Read(data, "Layer.Count", "0"), out layerCount) && layerCount > 0)
                 {
                     profile.Layers.Clear();
-                    for (var i = 0; i < layerCount; i++) { var prefix = "LayerItem." + i + "."; profile.Layers.Add(new DraftingLayerSetting { Key = Read(data, prefix + "Key", "CustomLayer_" + i), Purpose = Read(data, prefix + "Purpose", "自定义图层"), Name = Read(data, prefix + "Name", "WL-自定义-" + (i + 1)), ColorIndex = ReadShort(data, prefix + "Color", 7), TrueColorRgb = ReadInt(data, prefix + "ColorRgb", -1), LineWeight = ReadInt(data, prefix + "LineWeight", 18), LineType = Read(data, prefix + "LineType", "Continuous"), IsPlottable = Read(data, prefix + "Plottable", "1") == "1", CreateOnApply = Read(data, prefix + "Create", "1") == "1" }); }
+                    for (var i = 0; i < layerCount; i++) { var prefix = "LayerItem." + i + "."; profile.Layers.Add(new DraftingLayerSetting { Key = Read(data, prefix + "Key", "CustomLayer_" + i), Purpose = Read(data, prefix + "Purpose", "自定义图层"), Name = Read(data, prefix + "Name", "WL-自定义-" + (i + 1)), ColorIndex = ReadShort(data, prefix + "Color", 7), TrueColorRgb = ReadInt(data, prefix + "ColorRgb", -1), LineWeight = ReadInt(data, prefix + "LineWeight", 18), LineType = Read(data, prefix + "LineType", "Continuous"), IsPlottable = Read(data, prefix + "Plottable", "1") == "1", CreateOnApply = Read(data, prefix + "Create", "1") == "1", SyncExisting = Read(data, prefix + "Sync", "1") == "1" }); }
                 }
                 int textCount; if (int.TryParse(Read(data, "Text.Count", "0"), out textCount) && textCount > 0)
                 {
@@ -75,30 +189,66 @@ namespace BatchPdfPublisher.Services
                 profile.DimensionLineColor = ReadShort(data, "Dimension.LineColor", profile.DimensionLineColor); profile.ExtensionLineColor = ReadShort(data, "Dimension.ExtensionColor", profile.ExtensionLineColor); profile.DimensionTextColor = ReadShort(data, "Dimension.TextColor", profile.DimensionTextColor);
                 profile.DimensionLineExtension = ReadDouble(data, "Dimension.LineExtension", profile.DimensionLineExtension); profile.BaselineSpacing = ReadDouble(data, "Dimension.BaselineSpacing", profile.BaselineSpacing); profile.ExtensionBeyond = ReadDouble(data, "Dimension.ExtensionBeyond", profile.ExtensionBeyond); profile.ExtensionOriginOffset = ReadDouble(data, "Dimension.ExtensionOriginOffset", profile.ExtensionOriginOffset); profile.FixedExtensionLength = ReadDouble(data, "Dimension.FixedExtensionLength", profile.FixedExtensionLength); profile.UseFixedExtensionLength = Read(data, "Dimension.UseFixedExtensionLength", "0") == "1"; profile.DimensionTextGap = ReadDouble(data, "Dimension.TextGap", profile.DimensionTextGap); profile.DimensionPrecision = ReadInt(data, "Dimension.Precision", profile.DimensionPrecision); profile.DimensionRounding = ReadDouble(data, "Dimension.Rounding", profile.DimensionRounding);
                 profile.DimensionArrowStyle = Read(data, "Dimension.ArrowStyle", profile.DimensionArrowStyle); profile.CenterMarkStyle = Read(data, "Dimension.CenterMarkStyle", profile.CenterMarkStyle); profile.CenterMarkSize = ReadDouble(data, "Dimension.CenterMarkSize", profile.CenterMarkSize); profile.ArcLengthSymbol = Read(data, "Dimension.ArcLengthSymbol", profile.ArcLengthSymbol); profile.JogAngle = ReadDouble(data, "Dimension.JogAngle", profile.JogAngle);
-                profile.DimensionTextVertical = Read(data, "Dimension.TextVertical", profile.DimensionTextVertical); profile.DimensionTextHorizontal = Read(data, "Dimension.TextHorizontal", profile.DimensionTextHorizontal); profile.DimensionTextAlign = Read(data, "Dimension.TextAlign", profile.DimensionTextAlign);
+                profile.DimensionTextVertical = Read(data, "Dimension.TextVertical", profile.DimensionTextVertical); profile.DimensionTextHorizontal = Read(data, "Dimension.TextHorizontal", profile.DimensionTextHorizontal); profile.DimensionTextAlign = Read(data, "Dimension.TextAlign", profile.DimensionTextAlign); profile.DimensionTextMovement = Read(data, "Dimension.TextMovement", profile.DimensionTextMovement);
                 profile.LeaderCreateOnApply = Read(data, "Leader.Create", "1") == "1"; profile.LeaderStyleName = Read(data, "Leader.Name", profile.LeaderStyleName); profile.LeaderLineType = Read(data, "Leader.LineType", profile.LeaderLineType); profile.LeaderLineColor = ReadShort(data, "Leader.LineColor", profile.LeaderLineColor); profile.LeaderTextColor = ReadShort(data, "Leader.TextColor", profile.LeaderTextColor); profile.LeaderLineWeight = ReadInt(data, "Leader.LineWeight", profile.LeaderLineWeight); profile.LeaderArrowStyle = Read(data, "Leader.ArrowStyle", profile.LeaderArrowStyle); profile.LeaderArrowSize = ReadDouble(data, "Leader.ArrowSize", profile.LeaderArrowSize); profile.LeaderTextHeight = ReadDouble(data, "Leader.TextHeight", profile.LeaderTextHeight); profile.LeaderLandingGap = ReadDouble(data, "Leader.LandingGap", profile.LeaderLandingGap); profile.LeaderDoglegLength = ReadDouble(data, "Leader.DoglegLength", profile.LeaderDoglegLength); profile.LeaderEnableLanding = Read(data, "Leader.EnableLanding", "1") == "1"; profile.LeaderEnableDogleg = Read(data, "Leader.EnableDogleg", "1") == "1"; profile.LeaderFrameText = Read(data, "Leader.FrameText", "0") == "1";
                 profile.UpdateExisting = Read(data, "General.UpdateExisting", "0") == "1";
                 UpgradeLegacyTextDefaults(profile);
+                UpgradeLegacyDraftingDefaults(profile, ReadInt(data, "General.DefaultsVersion", 1));
+                EnsureRequiredStairLayers(profile);
+                RefreshRequiredLayers(profile, "DoorWindow");
+                RefreshRequiredLayers(profile, "Detail");
             }
             catch { return DraftingStandardProfile.CreateDefault(); }
             return profile;
         }
 
+        private static void EnsureRequiredStairLayers(DraftingStandardProfile profile)
+        {
+            RefreshRequiredLayers(profile, "Stair");
+        }
+
+        /// <summary>
+        /// 补齐"插件必需"的图层行。老用户的 drafting-standard.ini 里没有新版新增的键，
+        /// 若只按前缀补 Stair，门窗与大样的图层就会在旧配置上永远缺失，
+        /// 导致这些功能退化到硬编码图层名。这里统一按前缀补齐。
+        /// </summary>
+        private static void RefreshRequiredLayers(DraftingStandardProfile profile, string keyPrefix)
+        {
+            var defaults = DraftingStandardProfile.CreateDefault();
+            foreach (var required in defaults.Layers.Where(item => item.Key.StartsWith(keyPrefix, StringComparison.OrdinalIgnoreCase)))
+            {
+                if (profile.Layers.Any(item => string.Equals(item.Key, required.Key, StringComparison.OrdinalIgnoreCase))) continue;
+                profile.Layers.Add(required);
+            }
+        }
+
         public static void SaveProfile(DraftingStandardProfile profile)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath));
-            var lines = new List<string> { "# 万落建筑工具制图标准 v1", "General.UpdateExisting=" + (profile.UpdateExisting ? "1" : "0") };
-            lines.Add("Layer.Count=" + profile.Layers.Count); for (var i = 0; i < profile.Layers.Count; i++) { var x = profile.Layers[i]; var prefix = "LayerItem." + i + "."; lines.Add(prefix + "Key=" + x.Key); lines.Add(prefix + "Purpose=" + x.Purpose); lines.Add(prefix + "Name=" + x.Name); lines.Add(prefix + "Color=" + x.ColorIndex); lines.Add(prefix + "ColorRgb=" + x.TrueColorRgb); lines.Add(prefix + "LineWeight=" + x.LineWeight); lines.Add(prefix + "LineType=" + x.LineType); lines.Add(prefix + "Plottable=" + (x.IsPlottable ? "1" : "0")); lines.Add(prefix + "Create=" + (x.CreateOnApply ? "1" : "0")); }
+            var lines = new List<string> { "# 万落建筑工具制图标准 v4", "General.DefaultsVersion=4", "General.UpdateExisting=" + (profile.UpdateExisting ? "1" : "0") };
+            lines.Add("Layer.Count=" + profile.Layers.Count); for (var i = 0; i < profile.Layers.Count; i++) { var x = profile.Layers[i]; var prefix = "LayerItem." + i + "."; lines.Add(prefix + "Key=" + x.Key); lines.Add(prefix + "Purpose=" + x.Purpose); lines.Add(prefix + "Name=" + x.Name); lines.Add(prefix + "Color=" + x.ColorIndex); lines.Add(prefix + "ColorRgb=" + x.TrueColorRgb); lines.Add(prefix + "LineWeight=" + x.LineWeight); lines.Add(prefix + "LineType=" + x.LineType); lines.Add(prefix + "Plottable=" + (x.IsPlottable ? "1" : "0")); lines.Add(prefix + "Create=" + (x.CreateOnApply ? "1" : "0")); lines.Add(prefix + "Sync=" + (x.SyncExisting ? "1" : "0")); }
             lines.Add("Text.Count=" + profile.TextStyles.Count);
             for (var i = 0; i < profile.TextStyles.Count; i++) { var x = profile.TextStyles[i]; var prefix = "Text." + i + "."; lines.Add(prefix + "Key=" + x.Key); lines.Add(prefix + "Purpose=" + x.Purpose); lines.Add(prefix + "Name=" + x.Name); lines.Add(prefix + "FontType=" + x.FontType); lines.Add(prefix + "Font=" + x.FontFile); lines.Add(prefix + "BigFont=" + (x.BigFontFile ?? "")); lines.Add(prefix + "Height=" + x.TextHeight.ToString(CultureInfo.InvariantCulture)); lines.Add(prefix + "Width=" + x.WidthFactor.ToString(CultureInfo.InvariantCulture)); lines.Add(prefix + "Create=" + (x.CreateOnApply ? "1" : "0")); }
             lines.Add("Dimension.Scales=" + string.Join(",", profile.DimensionScales.Select(x => x.ToString(CultureInfo.InvariantCulture)))); lines.Add("Dimension.Create=" + (profile.DimensionCreateOnApply ? "1" : "0")); lines.Add("Dimension.StylePrefix=" + profile.DimensionStylePrefix); lines.Add("Dimension.TextHeight=" + profile.DimensionTextHeight.ToString(CultureInfo.InvariantCulture)); lines.Add("Dimension.ArrowSize=" + profile.DimensionArrowSize.ToString(CultureInfo.InvariantCulture)); lines.Add("Dimension.LineColor=" + profile.DimensionLineColor); lines.Add("Dimension.ExtensionColor=" + profile.ExtensionLineColor); lines.Add("Dimension.TextColor=" + profile.DimensionTextColor); lines.Add("Dimension.LineExtension=" + profile.DimensionLineExtension.ToString(CultureInfo.InvariantCulture)); lines.Add("Dimension.BaselineSpacing=" + profile.BaselineSpacing.ToString(CultureInfo.InvariantCulture)); lines.Add("Dimension.ExtensionBeyond=" + profile.ExtensionBeyond.ToString(CultureInfo.InvariantCulture)); lines.Add("Dimension.ExtensionOriginOffset=" + profile.ExtensionOriginOffset.ToString(CultureInfo.InvariantCulture)); lines.Add("Dimension.UseFixedExtensionLength=" + (profile.UseFixedExtensionLength ? "1" : "0")); lines.Add("Dimension.FixedExtensionLength=" + profile.FixedExtensionLength.ToString(CultureInfo.InvariantCulture)); lines.Add("Dimension.TextGap=" + profile.DimensionTextGap.ToString(CultureInfo.InvariantCulture)); lines.Add("Dimension.Precision=" + profile.DimensionPrecision); lines.Add("Dimension.Rounding=" + profile.DimensionRounding.ToString(CultureInfo.InvariantCulture));
             lines.Add("Dimension.ArrowStyle=" + profile.DimensionArrowStyle); lines.Add("Dimension.CenterMarkStyle=" + profile.CenterMarkStyle); lines.Add("Dimension.CenterMarkSize=" + profile.CenterMarkSize.ToString(CultureInfo.InvariantCulture)); lines.Add("Dimension.ArcLengthSymbol=" + profile.ArcLengthSymbol); lines.Add("Dimension.JogAngle=" + profile.JogAngle.ToString(CultureInfo.InvariantCulture));
-            lines.Add("Dimension.TextVertical=" + profile.DimensionTextVertical); lines.Add("Dimension.TextHorizontal=" + profile.DimensionTextHorizontal); lines.Add("Dimension.TextAlign=" + profile.DimensionTextAlign);
+            lines.Add("Dimension.TextVertical=" + profile.DimensionTextVertical); lines.Add("Dimension.TextHorizontal=" + profile.DimensionTextHorizontal); lines.Add("Dimension.TextAlign=" + profile.DimensionTextAlign); lines.Add("Dimension.TextMovement=" + profile.DimensionTextMovement);
             lines.Add("Leader.Create=" + (profile.LeaderCreateOnApply ? "1" : "0")); lines.Add("Leader.Name=" + profile.LeaderStyleName); lines.Add("Leader.LineType=" + profile.LeaderLineType); lines.Add("Leader.LineColor=" + profile.LeaderLineColor); lines.Add("Leader.TextColor=" + profile.LeaderTextColor); lines.Add("Leader.LineWeight=" + profile.LeaderLineWeight); lines.Add("Leader.ArrowStyle=" + profile.LeaderArrowStyle); lines.Add("Leader.ArrowSize=" + profile.LeaderArrowSize.ToString(CultureInfo.InvariantCulture)); lines.Add("Leader.TextHeight=" + profile.LeaderTextHeight.ToString(CultureInfo.InvariantCulture)); lines.Add("Leader.LandingGap=" + profile.LeaderLandingGap.ToString(CultureInfo.InvariantCulture)); lines.Add("Leader.DoglegLength=" + profile.LeaderDoglegLength.ToString(CultureInfo.InvariantCulture)); lines.Add("Leader.EnableLanding=" + (profile.LeaderEnableLanding ? "1" : "0")); lines.Add("Leader.EnableDogleg=" + (profile.LeaderEnableDogleg ? "1" : "0")); lines.Add("Leader.FrameText=" + (profile.LeaderFrameText ? "1" : "0"));
             File.WriteAllLines(SettingsPath, lines.ToArray(), System.Text.Encoding.UTF8);
+            InvalidateSettingsCache();
         }
 
         public static DraftingStandardResources EnsureAll(Database db, Transaction tr) { var p = LoadProfile(); return EnsureAll(db, tr, p, p.UpdateExisting); }
+        public static ObjectId EnsureFrameLayer(Database db, Transaction tr)
+        {
+            if (db == null) throw new ArgumentNullException("db");
+            if (tr == null) throw new ArgumentNullException("tr");
+            var profile = LoadProfile();
+            var frame = profile.Layer(DraftingStandardProfile.FrameKey);
+            var lineType = string.Equals(frame.LineType, "Continuous", StringComparison.OrdinalIgnoreCase)
+                ? ObjectId.Null
+                : EnsureLineType(db, tr, frame.LineType);
+            return EnsureLayer(db, tr, frame.Name, LayerColor(frame), (LineWeight)frame.LineWeight, lineType, frame.IsPlottable, profile.UpdateExisting);
+        }
         public static DraftingStandardResources EnsureAll(Database db, Transaction tr, DraftingStandardProfile profile, bool updateExisting)
         {
             if (db == null) throw new ArgumentNullException("db"); if (tr == null) throw new ArgumentNullException("tr"); profile = profile ?? DraftingStandardProfile.CreateDefault();
@@ -150,10 +300,18 @@ namespace BatchPdfPublisher.Services
 
         public static void ApplyConfiguredLayers(Database db, Transaction tr, DraftingStandardProfile profile, bool updateExisting)
         {
-            foreach (var x in profile.Layers.Where(x => x.CreateOnApply))
+            // "创建"与"覆盖"必须分开判断。以前整体用 CreateOnApply 过滤，导致
+            // 取消勾选"创建"的行即使勾了"同步更新图中已有的同名图层"也不会被覆盖，
+            // 用户设置的参数落不到场景里的同名图层上。现在：不存在则按 CreateOnApply
+            // 决定是否新建；已存在则按 SyncExisting 决定是否覆盖参数。
+            var table = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+            foreach (var x in profile.Layers)
             {
+                var exists = table.Has(x.Name);
+                if (exists) { if (!x.SyncExisting) continue; }
+                else if (!x.CreateOnApply) continue;
                 var lt = string.Equals(x.LineType, "Continuous", StringComparison.OrdinalIgnoreCase) ? ObjectId.Null : EnsureLineType(db, tr, x.LineType);
-                EnsureLayer(db, tr, x.Name, LayerColor(x), (LineWeight)x.LineWeight, lt, x.IsPlottable, updateExisting);
+                EnsureLayer(db, tr, x.Name, LayerColor(x), (LineWeight)x.LineWeight, lt, x.IsPlottable, exists && updateExisting);
             }
         }
 
@@ -225,7 +383,7 @@ namespace BatchPdfPublisher.Services
         private static ObjectId EnsureDimStyle(Database db, Transaction tr, string name, int scale, ObjectId textStyle, DraftingStandardProfile profile, bool update)
         {
             var table = (DimStyleTable)tr.GetObject(db.DimStyleTableId, OpenMode.ForRead); DimStyleTableRecord x; if (table.Has(name)) { if (!update) return table[name]; x = (DimStyleTableRecord)tr.GetObject(table[name], OpenMode.ForWrite); } else { table.UpgradeOpen(); x = new DimStyleTableRecord { Name = name }; var id = table.Add(x); tr.AddNewlyCreatedDBObject(x, true); }
-            x.Dimscale = scale; x.Dimtxt = profile.DimensionTextHeight; x.Dimasz = profile.DimensionArrowSize; x.Dimtsz = 0; x.Dimblk = EnsureArrowBlock(db, tr, profile.DimensionArrowStyle); x.Dimdle = profile.DimensionLineExtension; x.Dimdli = profile.BaselineSpacing; x.Dimexe = profile.ExtensionBeyond; x.Dimexo = profile.ExtensionOriginOffset; x.DimfxlenOn = profile.UseFixedExtensionLength; x.Dimfxlen = profile.FixedExtensionLength; x.Dimgap = profile.DimensionTextGap; x.Dimdec = Math.Max(0, Math.Min(8, profile.DimensionPrecision)); x.Dimrnd = Math.Max(0, profile.DimensionRounding); x.Dimclrd = Color.FromColorIndex(ColorMethod.ByAci, profile.DimensionLineColor); x.Dimclre = Color.FromColorIndex(ColorMethod.ByAci, profile.ExtensionLineColor); x.Dimclrt = Color.FromColorIndex(ColorMethod.ByAci, profile.DimensionTextColor); x.Dimcen = profile.CenterMarkStyle == "无" ? 0 : profile.CenterMarkStyle == "中心线" ? -profile.CenterMarkSize : profile.CenterMarkSize; x.Dimarcsym = profile.ArcLengthSymbol == "前置" ? 0 : profile.ArcLengthSymbol == "上方" ? 1 : 2; x.Dimjogang = profile.JogAngle * Math.PI / 180d; x.Dimtad = profile.DimensionTextVertical == "尺寸线居中" ? 0 : profile.DimensionTextVertical == "尺寸线下方" ? 4 : 1; x.Dimjust = profile.DimensionTextHorizontal == "靠第一界线" ? 1 : profile.DimensionTextHorizontal == "靠第二界线" ? 2 : 0; x.Dimtih = profile.DimensionTextAlign == "水平"; x.Dimtoh = x.Dimtih; x.Dimtxsty = textStyle; return x.ObjectId;
+            x.Dimscale = scale; x.Dimtxt = profile.DimensionTextHeight; x.Dimasz = profile.DimensionArrowSize; x.Dimtsz = 0; x.Dimblk = EnsureArrowBlock(db, tr, profile.DimensionArrowStyle); x.Dimdle = profile.DimensionLineExtension; x.Dimdli = profile.BaselineSpacing; x.Dimexe = profile.ExtensionBeyond; x.Dimexo = profile.ExtensionOriginOffset; x.DimfxlenOn = profile.UseFixedExtensionLength; x.Dimfxlen = profile.FixedExtensionLength; x.Dimgap = profile.DimensionTextGap; x.Dimdec = Math.Max(0, Math.Min(8, profile.DimensionPrecision)); x.Dimrnd = Math.Max(0, profile.DimensionRounding); x.Dimclrd = Color.FromColorIndex(ColorMethod.ByAci, profile.DimensionLineColor); x.Dimclre = Color.FromColorIndex(ColorMethod.ByAci, profile.ExtensionLineColor); x.Dimclrt = Color.FromColorIndex(ColorMethod.ByAci, profile.DimensionTextColor); x.Dimcen = profile.CenterMarkStyle == "无" ? 0 : profile.CenterMarkStyle == "中心线" ? -profile.CenterMarkSize : profile.CenterMarkSize; x.Dimarcsym = profile.ArcLengthSymbol == "前置" ? 0 : profile.ArcLengthSymbol == "上方" ? 1 : 2; x.Dimjogang = profile.JogAngle * Math.PI / 180d; x.Dimtad = profile.DimensionTextVertical == "尺寸线居中" ? 0 : profile.DimensionTextVertical == "尺寸线下方" ? 4 : 1; x.Dimjust = profile.DimensionTextHorizontal == "靠第一界线" ? 1 : profile.DimensionTextHorizontal == "靠第二界线" ? 2 : 0; x.Dimtih = profile.DimensionTextAlign == "水平"; x.Dimtoh = x.Dimtih; x.Dimtmove = profile.DimensionTextMovement == "尺寸线旁边" ? 0 : profile.DimensionTextMovement == "尺寸线上方，带引线" ? 1 : 2; x.Dimtxsty = textStyle; return x.ObjectId;
         }
 
         private static ObjectId EnsureArrowBlock(Database db, Transaction tr, string style)
@@ -241,7 +399,9 @@ namespace BatchPdfPublisher.Services
         }
         private static ObjectId ImportArrowBlock(Database db, Transaction tr, string blockName)
         {
-            var target = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead); if (target.Has(blockName)) return target[blockName]; var path = ArrowLibraryPath; if (!File.Exists(path)) throw new FileNotFoundException("未找到箭头图块库：" + path);
+            var target = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead); if (target.Has(blockName)) return target[blockName];
+            if (string.Equals(blockName, "_ArchTick", StringComparison.OrdinalIgnoreCase)) return CreateArchitecturalTickBlock(target, tr, blockName);
+            var path = ArrowLibraryPath; if (!File.Exists(path)) throw new FileNotFoundException("未找到箭头图块库：" + path);
             using (var source = new Database(false, true))
             {
                 source.ReadDwgFile(path, FileOpenMode.OpenForReadAndAllShare, true, ""); ObjectId sourceId;
@@ -249,6 +409,14 @@ namespace BatchPdfPublisher.Services
                 var ids = new ObjectIdCollection { sourceId }; var mapping = new IdMapping(); source.WblockCloneObjects(ids, db.BlockTableId, mapping, DuplicateRecordCloning.Ignore, false);
             }
             target = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead); if (!target.Has(blockName)) throw new InvalidOperationException("无法从箭头图块库导入：“" + blockName + "”。"); return target[blockName];
+        }
+        private static ObjectId CreateArchitecturalTickBlock(BlockTable table, Transaction tr, string blockName)
+        {
+            table.UpgradeOpen();
+            var block = new BlockTableRecord { Name = blockName };
+            var id = table.Add(block); tr.AddNewlyCreatedDBObject(block, true);
+            Append(block, tr, new Line(new Point3d(-.5, -.5, 0), new Point3d(.5, .5, 0)));
+            return id;
         }
 
         public static void CreateDefaultArrowLibrary(string path)
@@ -276,25 +444,57 @@ namespace BatchPdfPublisher.Services
                 Math.Abs(setting.TextHeight) > .000001d || Math.Abs(setting.WidthFactor - width) > .000001d) return;
             setting.TextHeight = height;
         }
+        private static void UpgradeLegacyDraftingDefaults(DraftingStandardProfile profile, int defaultsVersion)
+        {
+            if (defaultsVersion < 2)
+            {
+                UpgradeLegacyFontName(profile, DraftingStandardProfile.BodyTextKey, BodyTextStyle, "simsun.ttc", "宋体");
+                UpgradeLegacyFontName(profile, DraftingStandardProfile.TitleTextKey, TitleTextStyle, "simhei.ttf", "黑体");
+                UpgradeLegacyFontName(profile, DraftingStandardProfile.AnnotationTextKey, AnnotationTextStyle, "simsun.ttc", "宋体");
+                if (string.Equals(profile.DimensionArrowStyle, "实心闭合", StringComparison.Ordinal)) profile.DimensionArrowStyle = "图块：_ArchTick";
+            }
+            if (defaultsVersion < 3)
+                UpgradeLegacyLayerColor(profile, DraftingStandardProfile.StructureKey, ArchitectureStructureLayer, 1, 2);
+            if (defaultsVersion < 4
+                && string.Equals(profile.DimensionArrowStyle, "图块：_ArchTick", StringComparison.OrdinalIgnoreCase))
+                profile.DimensionArrowStyle = "图块：WS-cj";
+            EnsureRequiredLayer(profile, DraftingStandardProfile.StairAxisLayerKey);
+        }
+        private static void UpgradeLegacyLayerColor(DraftingStandardProfile profile, string key, string name, short oldColor, short newColor)
+        {
+            var setting = profile.Layers.FirstOrDefault(x => string.Equals(x.Key, key, StringComparison.OrdinalIgnoreCase));
+            if (setting != null && string.Equals(setting.Name, name, StringComparison.OrdinalIgnoreCase) && setting.TrueColorRgb < 0 && setting.ColorIndex == oldColor) setting.ColorIndex = newColor;
+        }
+        private static void EnsureRequiredLayer(DraftingStandardProfile profile, string key)
+        {
+            if (profile.Layers.Any(x => string.Equals(x.Key, key, StringComparison.OrdinalIgnoreCase))) return;
+            var setting = DraftingStandardProfile.CreateDefault().Layers.First(x => string.Equals(x.Key, key, StringComparison.OrdinalIgnoreCase));
+            profile.Layers.Add(setting);
+        }
+        private static void UpgradeLegacyFontName(DraftingStandardProfile profile, string key, string name, string oldFont, string newFont)
+        {
+            var setting = profile.TextStyles.FirstOrDefault(x => string.Equals(x.Key, key, StringComparison.OrdinalIgnoreCase));
+            if (setting != null && string.Equals(setting.Name, name, StringComparison.OrdinalIgnoreCase) && string.Equals(setting.FontFile, oldFont, StringComparison.OrdinalIgnoreCase)) setting.FontFile = newFont;
+        }
         private static string InferFontType(string font) { return string.Equals(Path.GetExtension(font ?? ""), ".shx", StringComparison.OrdinalIgnoreCase) ? "CAD 字体（SHX）" : "Windows 字体"; }
         public static List<int> ParseScales(string value) { var r = (value ?? "").Split(new[] { ',', '，', ';', '；', ' ' }, StringSplitOptions.RemoveEmptyEntries).Select(x => { int n; return int.TryParse(x.Trim().Replace("1:", "").Replace("1：", ""), out n) ? n : 0; }).Where(x => x > 0).Distinct().OrderBy(x => x).ToList(); return r.Count == 0 ? new List<int> { 50 } : r; }
     }
 
     public sealed class DraftingStandardProfile
     {
-        public const string FrameKey = "Frame", CatalogKey = "Catalog", OutlineKey = "Outline", FineKey = "Fine", StructureKey = "Structure", HiddenKey = "Hidden", HatchKey = "Hatch", AnnotationTextLayerKey = "AnnotationTextLayer", AnnotationDimensionLayerKey = "AnnotationDimensionLayer", BodyTextKey = "Body", TitleTextKey = "Title", AnnotationTextKey = "Annotation";
-        public List<DraftingLayerSetting> Layers = new List<DraftingLayerSetting>(); public List<DraftingTextStyleSetting> TextStyles = new List<DraftingTextStyleSetting>(); public List<int> DimensionScales = new List<int>(); public double DimensionTextHeight = 2.5, DimensionArrowSize = 2.5, DimensionLineExtension = 0, BaselineSpacing = 3.75, ExtensionBeyond = 1.25, ExtensionOriginOffset = .625, FixedExtensionLength = 5, DimensionTextGap = .625, DimensionRounding = 0, CenterMarkSize = 2.5, JogAngle = 45; public short DimensionLineColor = 0, ExtensionLineColor = 0, DimensionTextColor = 2; public int DimensionPrecision = 0; public bool UseFixedExtensionLength, DimensionCreateOnApply = true, UpdateExisting; public string DimensionStylePrefix = "WL-标注-1_", DimensionArrowStyle = "实心闭合", CenterMarkStyle = "中心标记", ArcLengthSymbol = "前置", DimensionTextVertical = "尺寸线上方", DimensionTextHorizontal = "尺寸线居中", DimensionTextAlign = "与尺寸线对齐";
+        public const string FrameKey = "Frame", CatalogKey = "Catalog", OutlineKey = "Outline", FineKey = "Fine", StructureKey = "Structure", HiddenKey = "Hidden", HatchKey = "Hatch", AnnotationTextLayerKey = "AnnotationTextLayer", AnnotationDimensionLayerKey = "AnnotationDimensionLayer", StairAxisLayerKey = "StairAxis", StairOutlineLayerKey = "StairOutline", StairTreadLayerKey = "StairTread", StairSectionLayerKey = "StairSection", StairWallLayerKey = "StairWall", StairSideLayerKey = "StairSide", StairHandrailLayerKey = "StairHandrail", StairCutHatchLayerKey = "StairCutHatch", StairBreakLineLayerKey = "StairBreakLine", DoorWindowWindowLayerKey = "DoorWindowWindow", DoorWindowDoorLayerKey = "DoorWindowDoor", DoorWindowOpeningLayerKey = "DoorWindowOpening", DetailSeparatorLayerKey = "DetailSeparator", DetailIndexLayerKey = "DetailIndex", BodyTextKey = "Body", TitleTextKey = "Title", AnnotationTextKey = "Annotation";
+        public List<DraftingLayerSetting> Layers = new List<DraftingLayerSetting>(); public List<DraftingTextStyleSetting> TextStyles = new List<DraftingTextStyleSetting>(); public List<int> DimensionScales = new List<int>(); public double DimensionTextHeight = 2.5, DimensionArrowSize = 2.5, DimensionLineExtension = 0, BaselineSpacing = 3.75, ExtensionBeyond = 1.25, ExtensionOriginOffset = .625, FixedExtensionLength = 5, DimensionTextGap = .625, DimensionRounding = 0, CenterMarkSize = 2.5, JogAngle = 45; public short DimensionLineColor = 0, ExtensionLineColor = 0, DimensionTextColor = 2; public int DimensionPrecision = 0; public bool UseFixedExtensionLength, DimensionCreateOnApply = true, UpdateExisting; public string DimensionStylePrefix = "WL-标注-1_", DimensionArrowStyle = "图块：WS-cj", CenterMarkStyle = "中心标记", ArcLengthSymbol = "前置", DimensionTextVertical = "尺寸线上方", DimensionTextHorizontal = "尺寸线居中", DimensionTextAlign = "与尺寸线对齐", DimensionTextMovement = "尺寸线上方，不带引线";
         public bool LeaderCreateOnApply = true, LeaderEnableLanding = true, LeaderEnableDogleg = true, LeaderFrameText; public string LeaderStyleName = "WL-引线-1_1", LeaderLineType = "直线", LeaderArrowStyle = "实心闭合"; public short LeaderLineColor = 0, LeaderTextColor = 2; public int LeaderLineWeight = (int)LineWeight.ByLineWeightDefault; public double LeaderArrowSize = 2.5, LeaderTextHeight = 2.5, LeaderLandingGap = .625, LeaderDoglegLength = 3.75;
-        public static DraftingStandardProfile CreateDefault() { var p = new DraftingStandardProfile(); p.Layers.AddRange(new[] { L(FrameKey,"图框",DraftingStandardService.FrameLayer,7,30,"Continuous"), L(CatalogKey,"图纸目录",DraftingStandardService.CatalogLayer,7,18,"Continuous"), L(OutlineKey,"建筑轮廓",DraftingStandardService.ArchitectureOutlineLayer,7,30,"Continuous"), L(FineKey,"建筑细线",DraftingStandardService.ArchitectureFineLayer,2,13,"Continuous"), L(StructureKey,"建筑结构",DraftingStandardService.ArchitectureStructureLayer,1,35,"Continuous"), L(HiddenKey,"建筑隐藏",DraftingStandardService.ArchitectureHiddenLayer,8,13,"HIDDEN"), L(HatchKey,"建筑填充",DraftingStandardService.ArchitectureHatchLayer,8,9,"Continuous"), L(AnnotationTextLayerKey,"注释文字",DraftingStandardService.AnnotationTextLayer,7,18,"Continuous"), L(AnnotationDimensionLayerKey,"注释标注",DraftingStandardService.AnnotationDimensionLayer,3,13,"Continuous") }); p.TextStyles.AddRange(new[] { T(BodyTextKey,"正文",DraftingStandardService.BodyTextStyle,"simsun.ttc",2.5,.7), T(TitleTextKey,"标题",DraftingStandardService.TitleTextStyle,"simhei.ttf",7,1), T(AnnotationTextKey,"标注",DraftingStandardService.AnnotationTextStyle,"simsun.ttc",3.5,.7) }); p.DimensionScales.Add(1); return p; }
-        private static DraftingLayerSetting L(string k,string purpose,string name,short color,int weight,string lt) { return new DraftingLayerSetting { Key=k,Purpose=purpose,Name=name,ColorIndex=color,TrueColorRgb=-1,LineWeight=weight,LineType=lt,IsPlottable=true,CreateOnApply=true }; } private static DraftingTextStyleSetting T(string k,string purpose,string name,string font,double height,double width) { return new DraftingTextStyleSetting { Key=k,Purpose=purpose,Name=name,FontType=string.Equals(Path.GetExtension(font),".shx",StringComparison.OrdinalIgnoreCase)?"CAD 字体（SHX）":"Windows 字体",FontFile=font,BigFontFile="",TextHeight=height,WidthFactor=width,CreateOnApply=true }; }
+        public static DraftingStandardProfile CreateDefault() { var p = new DraftingStandardProfile(); p.Layers.AddRange(new[] { L(FrameKey,"图框",DraftingStandardService.FrameLayer,4,30,"Continuous"), L(CatalogKey,"图纸目录",DraftingStandardService.CatalogLayer,7,18,"Continuous"), L(OutlineKey,"建筑轮廓",DraftingStandardService.ArchitectureOutlineLayer,7,30,"Continuous"), L(FineKey,"建筑细线",DraftingStandardService.ArchitectureFineLayer,2,13,"Continuous"), L(StructureKey,"建筑结构",DraftingStandardService.ArchitectureStructureLayer,2,35,"Continuous"), L(HiddenKey,"建筑隐藏",DraftingStandardService.ArchitectureHiddenLayer,8,13,"HIDDEN"), L(HatchKey,"建筑填充",DraftingStandardService.ArchitectureHatchLayer,8,9,"Continuous"), L(AnnotationTextLayerKey,"注释文字",DraftingStandardService.AnnotationTextLayer,2,18,"Continuous"), L(AnnotationDimensionLayerKey,"注释标注",DraftingStandardService.AnnotationDimensionLayer,3,13,"Continuous"), L(StairAxisLayerKey,"楼梯轴线",DraftingStandardService.StairAxisLayer,1,13,"DASHDOT2"), L(StairOutlineLayerKey,"楼梯轮廓",DraftingStandardService.StairOutlineLayer,7,30,"Continuous"), L(StairTreadLayerKey,"楼梯踏步",DraftingStandardService.StairTreadLayer,2,18,"Continuous"), L(StairSectionLayerKey,"楼梯剖面",DraftingStandardService.StairSectionLayer,2,35,"Continuous"), L(StairWallLayerKey,"剖面墙",DraftingStandardService.StairWallLayer,7,30,"Continuous"), L(StairSideLayerKey,"楼梯侧面",DraftingStandardService.StairSideLayer,4,13,"HIDDEN"), L(StairHandrailLayerKey,"楼梯扶手",DraftingStandardService.StairHandrailLayer,4,18,"Continuous"), L(StairCutHatchLayerKey,"楼梯剖切填充",DraftingStandardService.StairCutHatchLayer,1,9,"Continuous"), L(StairBreakLineLayerKey,"楼梯折断线",DraftingStandardService.StairBreakLineLayer,3,13,"Continuous"), L(DoorWindowWindowLayerKey,"门窗-窗",DraftingStandardService.DoorWindowWindowLayer,4,25,"Continuous"), L(DoorWindowDoorLayerKey,"门窗-门",DraftingStandardService.DoorWindowDoorLayer,7,25,"Continuous"), L(DoorWindowOpeningLayerKey,"门窗-开启洞口",DraftingStandardService.DoorWindowOpeningLayer,8,13,"DASHED"), L(DetailSeparatorLayerKey,"大样-分隔",DraftingStandardService.DetailSeparatorLayer,8,13,"Continuous"), L(DetailIndexLayerKey,"大样-索引",DraftingStandardService.DetailIndexLayer,7,18,"Continuous") }); p.TextStyles.AddRange(new[] { T(BodyTextKey,"正文",DraftingStandardService.BodyTextStyle,"宋体",2.5,.7), T(TitleTextKey,"标题",DraftingStandardService.TitleTextStyle,"黑体",7,1), T(AnnotationTextKey,"标注",DraftingStandardService.AnnotationTextStyle,"宋体",3.5,.7) }); p.DimensionScales.Add(1); return p; }
+        private static DraftingLayerSetting L(string k,string purpose,string name,short color,int weight,string lt) { return new DraftingLayerSetting { Key=k,Purpose=purpose,Name=name,ColorIndex=k==StairCutHatchLayerKey?(short)8:color,TrueColorRgb=-1,LineWeight=weight,LineType=lt,IsPlottable=true,CreateOnApply=true }; } private static DraftingTextStyleSetting T(string k,string purpose,string name,string font,double height,double width) { return new DraftingTextStyleSetting { Key=k,Purpose=purpose,Name=name,FontType=string.Equals(Path.GetExtension(font),".shx",StringComparison.OrdinalIgnoreCase)?"CAD 字体（SHX）":"Windows 字体",FontFile=font,BigFontFile="",TextHeight=height,WidthFactor=width,CreateOnApply=true }; }
         public DraftingLayerSetting Layer(string key) { return Layers.First(x => x.Key == key); } public DraftingTextStyleSetting Text(string key) { return TextStyles.First(x => x.Key == key); } public string DimensionStyleName(int scale) { return (string.IsNullOrWhiteSpace(DimensionStylePrefix) ? "WL-标注-1_" : DimensionStylePrefix) + Math.Max(1, scale); }
     }
-    public sealed class DraftingLayerSetting { public string Key, Purpose, Name, LineType; public short ColorIndex; public int TrueColorRgb = -1; public int LineWeight; public bool IsPlottable = true, CreateOnApply = true; }
+    public sealed class DraftingLayerSetting { public string Key, Purpose, Name, LineType; public short ColorIndex; public int TrueColorRgb = -1; public int LineWeight; public bool IsPlottable = true, CreateOnApply = true, SyncExisting = true; }
     public sealed class DraftingTextStyleSetting { public string Key, Purpose, Name, FontType, FontFile, BigFontFile; public double TextHeight, WidthFactor; public bool CreateOnApply = true; }
     public sealed class DraftingStandardResources
     {
         public DraftingStandardProfile Profile; public readonly Dictionary<string,ObjectId> LayerIds = new Dictionary<string,ObjectId>(); public readonly Dictionary<string,ObjectId> TextStyleIds = new Dictionary<string,ObjectId>(); public readonly Dictionary<int,ObjectId> DimensionStyleIds = new Dictionary<int,ObjectId>();
-        public ObjectId FrameLayerId { get { return LayerIds[DraftingStandardProfile.FrameKey]; } } public ObjectId CatalogLayerId { get { return LayerIds[DraftingStandardProfile.CatalogKey]; } } public ObjectId ArchitectureOutlineLayerId { get { return LayerIds[DraftingStandardProfile.OutlineKey]; } } public ObjectId ArchitectureFineLayerId { get { return LayerIds[DraftingStandardProfile.FineKey]; } } public ObjectId ArchitectureStructureLayerId { get { return LayerIds[DraftingStandardProfile.StructureKey]; } } public ObjectId ArchitectureHiddenLayerId { get { return LayerIds[DraftingStandardProfile.HiddenKey]; } } public ObjectId ArchitectureHatchLayerId { get { return LayerIds[DraftingStandardProfile.HatchKey]; } } public ObjectId AnnotationTextLayerId { get { return LayerIds[DraftingStandardProfile.AnnotationTextLayerKey]; } } public ObjectId AnnotationDimensionLayerId { get { return LayerIds[DraftingStandardProfile.AnnotationDimensionLayerKey]; } }
+        public ObjectId FrameLayerId { get { return LayerIds[DraftingStandardProfile.FrameKey]; } } public ObjectId CatalogLayerId { get { return LayerIds[DraftingStandardProfile.CatalogKey]; } } public ObjectId ArchitectureOutlineLayerId { get { return LayerIds[DraftingStandardProfile.OutlineKey]; } } public ObjectId ArchitectureFineLayerId { get { return LayerIds[DraftingStandardProfile.FineKey]; } } public ObjectId ArchitectureStructureLayerId { get { return LayerIds[DraftingStandardProfile.StructureKey]; } } public ObjectId ArchitectureHiddenLayerId { get { return LayerIds[DraftingStandardProfile.HiddenKey]; } } public ObjectId ArchitectureHatchLayerId { get { return LayerIds[DraftingStandardProfile.HatchKey]; } } public ObjectId AnnotationTextLayerId { get { return LayerIds[DraftingStandardProfile.AnnotationTextLayerKey]; } } public ObjectId AnnotationDimensionLayerId { get { return LayerIds[DraftingStandardProfile.AnnotationDimensionLayerKey]; } } public ObjectId StairAxisLayerId { get { return LayerIds[DraftingStandardProfile.StairAxisLayerKey]; } }
         public ObjectId BodyTextStyleId { get { return TextStyleIds[DraftingStandardProfile.BodyTextKey]; } } public ObjectId TitleTextStyleId { get { return TextStyleIds[DraftingStandardProfile.TitleTextKey]; } } public ObjectId AnnotationTextStyleId { get { return TextStyleIds[DraftingStandardProfile.AnnotationTextKey]; } } public ObjectId DimensionStyle50Id { get { ObjectId x; return DimensionStyleIds.TryGetValue(50,out x) ? x : ObjectId.Null; } }
     }
 }

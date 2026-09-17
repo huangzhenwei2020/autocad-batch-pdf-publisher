@@ -17,7 +17,12 @@ namespace BatchPdfPublisher.Views
             AutoScaleMode = AutoScaleMode.Dpi;
             AutoScaleDimensions = new SizeF(96F, 96F);
             SizeGripStyle = SizeGripStyle.Show;
-            Load += (sender, args) => ApplyScreenBounds();
+            // 这些窗口都是"一个 Form 挂一堆 Dock 子控件"，默认不双缓冲时拖动边框改大小、
+            // 拉动表格滚动条都会一闪一闪、感觉发滞。窗口自己开一次，Load 时再把整棵
+            // 控件树都开一遍（表格是最吃重绘的），插件里所有窗口一起受益。
+            DoubleBuffered = true;
+            SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
+            Load += (sender, args) => { UiPerformance.BufferedTree(this); ApplyScreenBounds(); };
             Shown += (sender, args) => ApplyScreenBounds();
             DpiChanged += (sender, args) => BeginInvoke(new Action(ApplyScreenBounds));
         }
@@ -26,6 +31,21 @@ namespace BatchPdfPublisher.Views
         {
             base.OnFontChanged(e);
             if (Font == null || Font.Size < 8F) Font = new Font("Microsoft YaHei UI", 9F);
+        }
+
+        /// <summary>
+        /// 句柄创建**之前**给整棵控件树开双缓冲。
+        ///
+        /// 时机很关键：DataGridView 这类自绘控件随时设 DoubleBuffered 都有效，但
+        /// ListView / TreeView 是原生控件，要靠 WinForms 在 OnHandleCreated 里把
+        /// LVS_EX_DOUBLEBUFFER / TVS_EX_DOUBLEBUFFER 风格的位设上去——句柄建好之后再设
+        /// 就不生效了。所以在 CreateHandle 里先设、再 base。
+        /// （Load 时还会再走一遍，兜住那些运行时才加进来的控件。）
+        /// </summary>
+        protected override void CreateHandle()
+        {
+            UiPerformance.BufferedTree(this);
+            base.CreateHandle();
         }
 
         private void ApplyScreenBounds()

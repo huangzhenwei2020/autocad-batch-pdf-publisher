@@ -1,0 +1,152 @@
+using System;
+using System.IO;
+using System.Runtime.Serialization.Json;
+
+namespace BatchPdfPublisher.Services
+{
+    public sealed class CloudSyncSettingsStore
+    {
+        public static string LastRecoveryNotice { get; private set; }
+        private static readonly object FileSync = new object();
+        private readonly string _settingsPath;
+        private readonly string _statePath;
+        internal string StatePath { get { return Path.GetFullPath(_statePath); } }
+
+        public CloudSyncSettingsStore()
+            : this(UserDataPaths.SettingsFile("cloud-sync.settings.json"),
+                Path.Combine(UserDataPaths.RootDirectory, ".cloud-sync", "state.json"))
+        {
+        }
+
+        internal CloudSyncSettingsStore(string settingsPath, string statePath)
+        {
+            _settingsPath = settingsPath;
+            _statePath = statePath;
+        }
+
+        public CloudSyncSettings LoadSettings()
+        {
+            var settings = Load(_settingsPath, new CloudSyncSettings());
+            if (string.IsNullOrWhiteSpace(settings.Provider) ||
+                (string.Equals(settings.Provider, "LocalFolder", StringComparison.OrdinalIgnoreCase) &&
+                 string.IsNullOrWhiteSpace(settings.SyncFolder)))
+                settings.Provider = "BaiduNetdisk";
+            settings.SyncFolder = CloudSyncFolderDetector.ResolveUsableFolder(settings.SyncFolder);
+            if (settings.ProjectMappings == null) settings.ProjectMappings = new System.Collections.Generic.List<CloudSyncProjectMapping>();
+            if (settings.SystemPackageIntervalMinutes < 1) settings.SystemPackageIntervalMinutes = 30;
+            return settings;
+        }
+
+        public void SaveSettings(CloudSyncSettings settings)
+        {
+            if (settings == null) throw new ArgumentNullException("settings");
+            if (string.IsNullOrWhiteSpace(settings.DeviceName)) settings.DeviceName = Environment.MachineName;
+            if (settings.HistoryRetentionDays < 1) settings.HistoryRetentionDays = 30;
+            if (settings.KeepVersionsPerFile < 1) settings.KeepVersionsPerFile = 20;
+            if (settings.SystemPackageIntervalMinutes < 1) settings.SystemPackageIntervalMinutes = 30;
+            if (settings.ProjectMappings == null) settings.ProjectMappings = new System.Collections.Generic.List<CloudSyncProjectMapping>();
+            Save(_settingsPath, settings);
+        }
+
+        public CloudSyncState LoadState()
+        {
+            var state = Load(_statePath, new CloudSyncState());
+            if (state.Files == null) state.Files = new System.Collections.Generic.List<CloudSyncFileState>();
+            return state;
+        }
+
+        public void SaveState(CloudSyncState state)
+        {
+            if (state == null) throw new ArgumentNullException("state");
+            Save(_statePath, state);
+        }
+
+        private static T Load<T>(string path, T fallback)
+        {
+            lock (FileSync)
+            {
+                try
+                {
+                    if (!File.Exists(path)) return fallback;
+                    using (var stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+                    {
+                        var value = (T)new DataContractJsonSerializer(typeof(T)).ReadObject(stream);
+                        if ((object)value == null) throw new InvalidDataException("同步配置内容为空。");
+                        return value;
+                    }
+                }
+                catch
+                {
+                    var backup = path + ".bak";
+                    try
+                    {
+                        if (File.Exists(backup))
+                        {
+                            T recovered;
+                            using (var stream = File.Open(backup, FileMode.Open, FileAccess.Read, FileShare.Read))
+                                recovered = (T)new DataContractJsonSerializer(typeof(T)).ReadObject(stream);
+                            if ((object)recovered == null) throw new InvalidDataException("同步配置备份内容为空。");
+                            Quarantine(path);
+                            Save(path, recovered);
+                            ReportRecovery("云同步配置已从备份恢复：" + path);
+                            return recovered;
+                        }
+                    }
+                    catch (Exception exception)
+                    {
+                        ReportRecovery("云同步配置和备份都无法读取：" + exception.Message);
+                    }
+                    Quarantine(path);
+                    ReportRecovery("云同步配置无法读取，已隔离损坏文件并暂时使用默认值。");
+                    return fallback;
+                }
+            }
+        }
+
+        private static void Quarantine(string path)
+        {
+            if (!File.Exists(path)) return;
+            var target = path + ".corrupt-" + DateTime.Now.ToString("yyyyMMdd-HHmmssfff");
+            try { File.Move(path, target); }
+            catch { try { File.Copy(path, target, false); File.Delete(path); } catch { } }
+        }
+
+        internal static void ReportRecovery(string message)
+        {
+            LastRecoveryNotice = message;
+            try
+            {
+                File.AppendAllText(Path.Combine(UserDataPaths.LogsDirectory, "data-recovery.log"),
+                    DateTime.Now.ToString("O") + " " + message + Environment.NewLine);
+            }
+            catch { }
+        }
+
+        private static void Save<T>(string path, T value)
+        {
+            lock (FileSync)
+            {
+                var directory = Path.GetDirectoryName(path);
+                if (string.IsNullOrWhiteSpace(directory)) throw new IOException("同步配置目录无效。");
+                Directory.CreateDirectory(directory);
+                var expectedBefore = CloudSyncTransaction.Hash(path);
+                var temporary = Path.Combine(directory, "." + Path.GetFileName(path) + "." + Guid.NewGuid().ToString("N") + ".tmp");
+                try
+                {
+                    using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                    {
+                        new DataContractJsonSerializer(typeof(T)).WriteObject(stream, value);
+                        stream.Flush(true);
+                    }
+                    CloudSyncTransaction.BeforeReplace(path, expectedBefore, CloudSyncTransaction.Hash(temporary));
+                    if (File.Exists(path)) File.Replace(temporary, path, path + ".bak", true);
+                    else File.Move(temporary, path);
+                }
+                finally
+                {
+                    try { if (File.Exists(temporary)) File.Delete(temporary); } catch { }
+                }
+            }
+        }
+    }
+}

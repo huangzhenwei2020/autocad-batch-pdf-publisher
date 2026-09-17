@@ -29,13 +29,19 @@ namespace BatchPdfPublisher.Services
             catch { return null; }
         }
 
-        public void SaveSession(bool floorStatistics, string baseSourceHandle, IEnumerable<DoorWindowFloorSourcePreference> floorSources)
+        public void SaveSession(bool floorStatistics, string baseSourceHandle, IEnumerable<DoorWindowScheduleItem> baseItems, IEnumerable<DoorWindowFloorSourcePreference> floorSources)
         {
+            var projectName = new PublishPlanStore().GetActiveProject()?.Name ?? "默认项目";
+            var items = (baseItems ?? Enumerable.Empty<DoorWindowScheduleItem>()).Where(x => x != null).ToList();
+            var existing = LoadSession();
+            if (items.Count == 0 && existing != null && existing.BaseItems != null && existing.BaseItems.Count > 0)
+                items = existing.BaseItems;
             var session = new DoorWindowElevationSession
             {
-                ProjectName = new PublishPlanStore().GetActiveProject()?.Name ?? "默认项目",
+                ProjectName = projectName,
                 FloorStatistics = floorStatistics,
                 BaseSourceHandle = baseSourceHandle,
+                BaseItems = items,
                 FloorSources = (floorSources ?? Enumerable.Empty<DoorWindowFloorSourcePreference>()).ToList()
             };
             using (var stream = File.Create(SessionPathName)) new DataContractJsonSerializer(typeof(DoorWindowElevationSession)).WriteObject(stream, session);
@@ -89,10 +95,12 @@ namespace BatchPdfPublisher.Services
                 preference.BayRightCellLayout = item.BayRightCellLayout;
                 preference.Material = item.Material;
                 preference.AtlasName = item.AtlasName;
+                preference.AtlasNameExplicitlySelected = item.AtlasNameExplicitlySelected;
                 preference.Remarks = item.Remarks;
                 preference.SillHeight = item.SillHeight;
                 preference.HasSillHeight = true;
                 preference.SillHeightSuppressed = item.SillHeightSuppressed;
+                preference.GenerateFireRescueElevation = item.GenerateFireRescueElevation;
                 /*
                     ElevationType = item.ElevationType,
                     DivisionPreset = item.DivisionPreset,

@@ -15,6 +15,16 @@ using BatchPdfPublisher.Views;
 
 namespace BatchPdfPublisher.ViewModels
 {
+    public enum SheetSortMode
+    {
+        Custom,
+        SheetNumberAscending,
+        SheetNumberDescending,
+        SheetNameAscending,
+        SheetNameDescending,
+        SourceFileAscending
+    }
+
     public sealed class PublisherViewModel : INotifyPropertyChanged, IDisposable
     {
         private readonly DrawingScanner _scanner = new DrawingScanner();
@@ -81,6 +91,8 @@ namespace BatchPdfPublisher.ViewModels
             var activeName = _store.LoadActiveProjectName();
             SelectedProject = Projects.FirstOrDefault(x => string.Equals(x.Name, activeName, StringComparison.OrdinalIgnoreCase)) ?? Projects.FirstOrDefault();
             RefreshPlotStyles();
+            if (!string.IsNullOrWhiteSpace(PublishPlanStore.LastRecoveryNotice))
+                Status = "数据恢复提醒：" + PublishPlanStore.LastRecoveryNotice;
         }
 
         public ObservableCollection<ProjectProfile> Projects { get; }
@@ -158,11 +170,13 @@ namespace BatchPdfPublisher.ViewModels
             {
                 if (string.Equals(_selectedBuilding, value, StringComparison.Ordinal)) return;
                 _selectedBuilding = value;
-                OnPropertyChanged();
                 SheetView.Refresh();
                 var visible = VisibleSheets().ToList();
                 if (_selectedSheet == null || !visible.Contains(_selectedSheet)) SelectedSheet = visible.FirstOrDefault();
                 else UpdatePreview();
+                // Notify the WinForms host only after the filtered view is ready.
+                // Otherwise it briefly binds the old rows and immediately binds again.
+                OnPropertyChanged();
             }
         }
         public SheetItem SelectedSheet
@@ -183,8 +197,8 @@ namespace BatchPdfPublisher.ViewModels
         {
             var document = Application.DocumentManager.MdiActiveDocument;
             if (document == null) { Status = "没有打开的图纸。"; return; }
-            var sourceFile = string.IsNullOrWhiteSpace(document.Database.Filename) ? document.Name : document.Database.Filename;
-            AddCadFiles(new[] { document.Database.Filename });
+            var sourceFile = PreferredDocumentPath(document);
+            AddCadFiles(new[] { sourceFile });
             ScanCadFiles(new[] { sourceFile });
         }
 
@@ -197,9 +211,8 @@ namespace BatchPdfPublisher.ViewModels
                 .ToList();
             if (paths.Count == 0) { Status = "没有选择可读取的 DWG 文件。"; return; }
 
-            var active = Application.DocumentManager.MdiActiveDocument;
-            var activePath = active == null ? null : active.Database.Filename;
             var previousBuilding = SelectedBuilding;
+            var previousSheets = Sheets.ToList();
             _preview.Clear();
             var failures = new System.Collections.Generic.List<string>();
             var tianzhengFiles = new System.Collections.Generic.List<string>();
@@ -213,12 +226,19 @@ namespace BatchPdfPublisher.ViewModels
             {
                 try
                 {
-                    if (active != null && string.Equals(path, activePath, StringComparison.OrdinalIgnoreCase))
+                    var openDocument = FindOpenDocument(path);
+                    WriteScanStage("开始扫描：" + path + "；图框规则=" + Frames.Count + "；来源="
+                        + (openDocument == null ? "磁盘只读" : "已打开文档")
+                        + (openDocument == null ? string.Empty : "；Name=" + openDocument.Name + "；Database=" + openDocument.Database?.Filename));
+                    var beforeCount = scannedSheets.Count;
+                    if (openDocument != null)
                     {
-                        using (active.LockDocument())
+                        using (openDocument.LockDocument())
                         {
-                            if (CadCompatibilityService.IsTianzhengDrawing(active.Database)) tianzhengFiles.Add(path);
-                            scannedSheets.AddRange(_scanner.Scan(active, Frames, ScanModelSpace, ScanAllLayouts, _selectedProject?.SelectedLayouts));
+                            if (CadCompatibilityService.IsTianzhengDrawing(openDocument.Database)) tianzhengFiles.Add(path);
+                            // Keep the project DWG path as the catalog source even when
+                            // AutoCAD currently exposes an autosave .sv$ database path.
+                            scannedSheets.AddRange(_scanner.Scan(openDocument.Database, path, Frames, ScanModelSpace, ScanAllLayouts, _selectedProject?.SelectedLayouts));
                         }
                     }
                     else
@@ -233,10 +253,12 @@ namespace BatchPdfPublisher.ViewModels
                     var cadItem = CadFiles.FirstOrDefault(x => string.Equals(x.Path, path, StringComparison.OrdinalIgnoreCase));
                     if (cadItem != null) cadItem.IsTianzheng = tianzhengFiles.Contains(path, StringComparer.OrdinalIgnoreCase);
                     successfulPaths.Add(path);
+                    WriteScanStage("扫描完成：" + path + "；识别=" + (scannedSheets.Count - beforeCount) + " 张");
                 }
                 catch (System.Exception exception)
                 {
                     failures.Add(System.IO.Path.GetFileName(path) + "（" + exception.Message + "）");
+                    WriteScanStage("扫描失败：" + path + "；" + exception);
                 }
                 ScanProgressValue++;
                 Status = "正在扫描 CAD：" + ScanProgressValue + " / " + ScanProgressMaximum + " · " + System.IO.Path.GetFileName(path);
@@ -284,8 +306,9 @@ namespace BatchPdfPublisher.ViewModels
                 orphanedCount++;
                 return false;
             }).ToList();
+            var mergedSheets = MergeRescannedSheets(previousSheets, retained, scannedSheets);
             Sheets.Clear();
-            foreach (var item in retained.Concat(scannedSheets)) Sheets.Add(item);
+            foreach (var item in mergedSheets) Sheets.Add(item);
             NormalizeSheetOrder();
             RebuildBuildings(previousBuilding);
             SaveCurrentProject();
@@ -382,9 +405,7 @@ namespace BatchPdfPublisher.ViewModels
         {
             var selected = SelectedSheet;
             var ordered = Sheets.OrderBy(x => x.Building)
-                .ThenBy(RequiredTitlePriority)
                 .ThenBy(x => x.Order)
-                .ThenBy(x => x.SheetNumber)
                 .ToList();
             for (var target = 0; target < ordered.Count; target++)
             {
@@ -396,16 +417,7 @@ namespace BatchPdfPublisher.ViewModels
             RebuildBuildings(preferredBuilding);
             SelectedSheet = selected;
             SaveCurrentProject();
-            Status = "图纸列表已保存；封面和目录保持在当前子项目前面。";
-        }
-
-        private static int RequiredTitlePriority(SheetItem sheet)
-        {
-            var note = sheet?.FrameNote ?? string.Empty;
-            if (note.IndexOf("封面", StringComparison.OrdinalIgnoreCase) >= 0) return 0;
-            if (note.IndexOf("目录", StringComparison.OrdinalIgnoreCase) >= 0) return 1;
-            if (note.IndexOf("总平图", StringComparison.OrdinalIgnoreCase) >= 0 || (sheet?.SheetNumber ?? string.Empty).IndexOf("总平图", StringComparison.OrdinalIgnoreCase) >= 0) return 2;
-            return 3;
+            Status = "图纸列表和自定义发布顺序已保存。";
         }
 
         private void StartFrameRegistration()
@@ -440,13 +452,23 @@ namespace BatchPdfPublisher.ViewModels
             CreateOrSelectProject(NewProjectName);
         }
 
-        public bool CreateOrSelectProject(string requestedName)
+        public bool CreateOrSelectProject(string requestedName, string projectFolder = null)
         {
             var name = (requestedName ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(name)) { Status = "请输入工程名称。"; return false; }
             var existing = Projects.FirstOrDefault(x => string.Equals(x.Name, name, StringComparison.OrdinalIgnoreCase));
             if (existing != null) { SelectedProject = existing; Status = "已切换到已有工程：" + name; return true; }
-            var project = _store.CreateProject(name);
+            ProjectProfile project;
+            try
+            {
+                project = _store.CreateProject(name, projectFolder);
+                System.IO.Directory.CreateDirectory(_store.GetProjectFolder(project));
+            }
+            catch (System.Exception exception)
+            {
+                Status = "创建工程失败：" + exception.Message;
+                return false;
+            }
             Projects.Add(project);
             SelectedProject = project;
             NewProjectName = "新工程";
@@ -489,12 +511,109 @@ namespace BatchPdfPublisher.ViewModels
             return _store.GetProjectFolder(project ?? SelectedProject);
         }
 
-        public void SetProjectFolder(string folder)
+        public bool SetProjectFolder(string folder)
         {
-            if (SelectedProject == null || string.IsNullOrWhiteSpace(folder)) return;
-            SelectedProject.ProjectFolder = folder.Trim();
-            SaveCurrentProject();
-            Status = "项目文件夹已更新。";
+            if (SelectedProject == null) { Status = "请先选择工程。"; return false; }
+            if (string.IsNullOrWhiteSpace(folder)) { Status = "项目文件夹不能为空。"; return false; }
+            try
+            {
+                var requested = folder.Trim();
+                if (!System.IO.Path.IsPathRooted(requested)) { Status = "项目文件夹必须使用绝对路径。"; return false; }
+                var previous = GetProjectFolder();
+                var resolved = System.IO.Path.GetFullPath(requested).TrimEnd(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar);
+                System.IO.Directory.CreateDirectory(resolved);
+                var previousDefaultOutput = System.IO.Path.Combine(previous, "PDF输出");
+                var followsProjectFolder = string.IsNullOrWhiteSpace(SelectedProject.OutputDirectory)
+                    || string.Equals(System.IO.Path.GetFullPath(SelectedProject.OutputDirectory), System.IO.Path.GetFullPath(previousDefaultOutput), StringComparison.OrdinalIgnoreCase);
+                SelectedProject.ProjectFolder = resolved;
+                if (followsProjectFolder) OutputDirectory = System.IO.Path.Combine(resolved, "PDF输出");
+                SaveCurrentProject();
+                Status = "项目文件夹已更新：" + resolved;
+                return true;
+            }
+            catch (System.Exception exception)
+            {
+                Status = "项目文件夹更新失败：" + exception.Message;
+                return false;
+            }
+        }
+
+        public bool MigrateProjectFolder(string folder)
+        {
+            if (SelectedProject == null) { Status = "请先选择工程。"; return false; }
+            if (string.IsNullOrWhiteSpace(folder)) { Status = "请选择新的项目文件夹。"; return false; }
+            var previous = GetProjectFolder();
+            try
+            {
+                var source = System.IO.Path.GetFullPath(previous).TrimEnd(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar);
+                var target = System.IO.Path.GetFullPath(folder.Trim()).TrimEnd(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar);
+                if (string.Equals(source, target, StringComparison.OrdinalIgnoreCase)) { Status = "新旧项目文件夹相同，无需迁移。"; return false; }
+                var sourcePrefix = source + System.IO.Path.DirectorySeparatorChar;
+                var targetPrefix = target + System.IO.Path.DirectorySeparatorChar;
+                if (targetPrefix.StartsWith(sourcePrefix, StringComparison.OrdinalIgnoreCase) ||
+                    sourcePrefix.StartsWith(targetPrefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    Status = "新旧项目文件夹不能互相包含。";
+                    return false;
+                }
+                if (!System.IO.Directory.Exists(source)) { Status = "原项目文件夹不存在：" + source; return false; }
+                if (System.IO.Directory.Exists(target) && System.IO.Directory.EnumerateFileSystemEntries(target).Any())
+                {
+                    Status = "为防止覆盖文件，请选择一个空文件夹进行迁移。";
+                    return false;
+                }
+                System.IO.Directory.CreateDirectory(target);
+                foreach (var directory in System.IO.Directory.GetDirectories(source, "*", System.IO.SearchOption.AllDirectories))
+                {
+                    var relative = directory.Substring(sourcePrefix.Length);
+                    System.IO.Directory.CreateDirectory(System.IO.Path.Combine(target, relative));
+                }
+                foreach (var file in System.IO.Directory.GetFiles(source, "*", System.IO.SearchOption.AllDirectories))
+                {
+                    var relative = file.Substring(sourcePrefix.Length);
+                    var destination = System.IO.Path.Combine(target, relative);
+                    System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(destination));
+                    System.IO.File.Copy(file, destination, false);
+                    if (new System.IO.FileInfo(file).Length != new System.IO.FileInfo(destination).Length)
+                        throw new System.IO.IOException("复制后文件大小不一致：" + relative);
+                }
+
+                SelectedProject.ProjectFolder = target;
+                SelectedProject.CadFiles = RemapProjectPaths(SelectedProject.CadFiles, source, target);
+                SelectedProject.SelectedCadFiles = RemapProjectPaths(SelectedProject.SelectedCadFiles, source, target);
+                foreach (var sheet in SelectedProject.SavedSheets ?? new System.Collections.Generic.List<SheetCatalogItem>())
+                    sheet.SourceFile = RemapProjectPath(sheet.SourceFile, source, target);
+                OutputDirectory = RemapProjectPath(OutputDirectory, source, target);
+                SaveCurrentProject();
+                LoadProjectIntoEditor(SelectedProject);
+                Status = "项目已复制迁移到：" + target + "。原目录已保留，请确认新目录正常后再自行删除。";
+                return true;
+            }
+            catch (System.Exception exception)
+            {
+                Status = "项目迁移失败，原项目未切换：" + exception.Message;
+                return false;
+            }
+        }
+
+        private static System.Collections.Generic.List<string> RemapProjectPaths(
+            System.Collections.Generic.IEnumerable<string> paths, string source, string target)
+        {
+            return (paths ?? Enumerable.Empty<string>()).Select(path => RemapProjectPath(path, source, target)).ToList();
+        }
+
+        private static string RemapProjectPath(string path, string source, string target)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return path;
+            try
+            {
+                var full = System.IO.Path.GetFullPath(path);
+                var prefix = source.TrimEnd(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar) + System.IO.Path.DirectorySeparatorChar;
+                return full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                    ? System.IO.Path.Combine(target, full.Substring(prefix.Length))
+                    : path;
+            }
+            catch { return path; }
         }
 
         public bool SaveCurrentCadToProjectFolder(out string destination, out string error)
@@ -513,6 +632,7 @@ namespace BatchPdfPublisher.ViewModels
                 using (document.LockDocument()) document.Database.SaveAs(destination, DwgVersion.Current);
                 AddCadFiles(new[] { destination });
                 SaveCurrentProject();
+                CloudSyncCoordinator.RequestSynchronization(false);
                 Status = "已将当前 CAD 保存到工程文件夹：" + destination;
                 return true;
             }
@@ -589,7 +709,7 @@ namespace BatchPdfPublisher.ViewModels
 
         private void NormalizeSheetOrder()
         {
-            var ordered = Sheets.OrderBy(x => x.Building).ThenBy(RequiredTitlePriority).ThenBy(x => x.Order).ThenBy(x => x.SheetNumber).ToList();
+            var ordered = Sheets.OrderBy(x => x.Building).ThenBy(x => x.Order).ToList();
             for (var target = 0; target < ordered.Count; target++)
             {
                 var current = Sheets.IndexOf(ordered[target]);
@@ -682,6 +802,148 @@ namespace BatchPdfPublisher.ViewModels
             ApplySheetEdits();
         }
 
+        private static string SheetIdentity(SheetItem sheet)
+        {
+            if (sheet == null) return string.Empty;
+            string source;
+            try { source = System.IO.Path.GetFullPath(sheet.SourceFile ?? string.Empty); }
+            catch { source = sheet.SourceFile ?? string.Empty; }
+            var handle = sheet.BlockHandle;
+            if (string.IsNullOrWhiteSpace(handle))
+                handle = sheet.MinX.ToString("R", System.Globalization.CultureInfo.InvariantCulture) + ","
+                    + sheet.MinY.ToString("R", System.Globalization.CultureInfo.InvariantCulture) + ","
+                    + sheet.MaxX.ToString("R", System.Globalization.CultureInfo.InvariantCulture) + ","
+                    + sheet.MaxY.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+            return source + "|" + (sheet.SourceLayout ?? string.Empty) + "|" + handle;
+        }
+
+        private static System.Collections.Generic.List<SheetItem> MergeRescannedSheets(
+            System.Collections.Generic.IList<SheetItem> previousSheets,
+            System.Collections.Generic.IList<SheetItem> retainedSheets,
+            System.Collections.Generic.IList<SheetItem> scannedSheets)
+        {
+            var retained = new System.Collections.Generic.HashSet<SheetItem>(retainedSheets);
+            var availableScanned = scannedSheets
+                .GroupBy(SheetIdentity, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => new Queue<SheetItem>(group), StringComparer.OrdinalIgnoreCase);
+            var used = new System.Collections.Generic.HashSet<SheetItem>();
+            var result = new System.Collections.Generic.List<SheetItem>();
+
+            // Existing rows are the stable skeleton. A successful rescan only
+            // replaces their current data object; it never changes their order.
+            foreach (var previous in previousSheets)
+            {
+                if (retained.Contains(previous))
+                {
+                    result.Add(previous);
+                    continue;
+                }
+                Queue<SheetItem> matches;
+                if (!availableScanned.TryGetValue(SheetIdentity(previous), out matches) || matches.Count == 0) continue;
+                var replacement = matches.Dequeue();
+                used.Add(replacement);
+                result.Add(replacement);
+            }
+
+            // Insert genuinely new frames beside the nearest frame that the
+            // scanner saw before/after them. This adds and removes rows without
+            // disturbing the relative order the user previously arranged.
+            for (var scanIndex = 0; scanIndex < scannedSheets.Count; scanIndex++)
+            {
+                var added = scannedSheets[scanIndex];
+                if (used.Contains(added)) continue;
+                var insertionIndex = -1;
+                for (var before = scanIndex - 1; before >= 0; before--)
+                {
+                    var anchor = scannedSheets[before];
+                    if (!SameBuilding(anchor, added)) continue;
+                    var anchorIndex = result.IndexOf(anchor);
+                    if (anchorIndex < 0) continue;
+                    insertionIndex = anchorIndex + 1;
+                    break;
+                }
+                if (insertionIndex < 0)
+                {
+                    for (var after = scanIndex + 1; after < scannedSheets.Count; after++)
+                    {
+                        var anchor = scannedSheets[after];
+                        if (!SameBuilding(anchor, added)) continue;
+                        var anchorIndex = result.IndexOf(anchor);
+                        if (anchorIndex < 0) continue;
+                        insertionIndex = anchorIndex;
+                        break;
+                    }
+                }
+                if (insertionIndex < 0)
+                {
+                    insertionIndex = result.FindLastIndex(sheet => SameBuilding(sheet, added));
+                    insertionIndex = insertionIndex < 0 ? result.Count : insertionIndex + 1;
+                }
+                result.Insert(insertionIndex, added);
+                used.Add(added);
+            }
+
+            foreach (var group in result.GroupBy(sheet => sheet.Building ?? string.Empty, StringComparer.Ordinal))
+            {
+                var order = 1;
+                foreach (var sheet in group) sheet.Order = order++;
+            }
+            return result;
+        }
+
+        private static bool SameBuilding(SheetItem left, SheetItem right)
+        {
+            return string.Equals(left?.Building ?? string.Empty, right?.Building ?? string.Empty, StringComparison.Ordinal);
+        }
+
+        public void MoveSheet(SheetItem source, SheetItem target, bool insertAfter)
+        {
+            if (source == null || ReferenceEquals(source, target)) return;
+            var visible = VisibleSheets().ToList();
+            if (!visible.Remove(source)) return;
+            var targetIndex = target == null ? visible.Count : visible.IndexOf(target);
+            if (targetIndex < 0) return;
+            if (insertAfter && target != null) targetIndex++;
+            visible.Insert(Math.Min(targetIndex, visible.Count), source);
+            ApplyVisibleOrder(visible, source, "已保存拖动后的自定义图纸顺序。");
+        }
+
+        public void SortVisibleSheets(SheetSortMode mode)
+        {
+            if (mode == SheetSortMode.Custom) return;
+            var visible = VisibleSheets().ToList();
+            var comparer = NaturalTextComparer.Instance;
+            IEnumerable<SheetItem> ordered;
+            switch (mode)
+            {
+                case SheetSortMode.SheetNumberDescending:
+                    ordered = visible.OrderByDescending(x => x.SheetNumber, comparer).ThenBy(x => x.SheetName, comparer);
+                    break;
+                case SheetSortMode.SheetNameAscending:
+                    ordered = visible.OrderBy(x => x.SheetName, comparer).ThenBy(x => x.SheetNumber, comparer);
+                    break;
+                case SheetSortMode.SheetNameDescending:
+                    ordered = visible.OrderByDescending(x => x.SheetName, comparer).ThenBy(x => x.SheetNumber, comparer);
+                    break;
+                case SheetSortMode.SourceFileAscending:
+                    ordered = visible.OrderBy(x => x.SourceFileName, comparer).ThenBy(x => x.SourceLayout, comparer).ThenBy(x => x.Order);
+                    break;
+                default:
+                    ordered = visible.OrderBy(x => x.SheetNumber, comparer).ThenBy(x => x.SheetName, comparer);
+                    break;
+            }
+            ApplyVisibleOrder(ordered.ToList(), SelectedSheet, "图纸已按所选字段排列，可继续拖动微调。");
+        }
+
+        private void ApplyVisibleOrder(System.Collections.Generic.IList<SheetItem> visible, SheetItem selected, string status)
+        {
+            for (var index = 0; index < visible.Count; index++) visible[index].Order = index + 1;
+            ApplySheetEdits();
+            SelectedSheet = selected;
+            Status = status;
+            OnPropertyChanged(nameof(Sheets));
+        }
+
         private bool CanMove(int delta)
         {
             if (SelectedSheet == null) return false;
@@ -694,6 +956,43 @@ namespace BatchPdfPublisher.ViewModels
         private System.Collections.Generic.IEnumerable<SheetItem> VisibleSheets()
         {
             return Sheets.Where(x => string.IsNullOrEmpty(SelectedBuilding) || x.Building == SelectedBuilding);
+        }
+
+        private sealed class NaturalTextComparer : System.Collections.Generic.IComparer<string>
+        {
+            public static readonly NaturalTextComparer Instance = new NaturalTextComparer();
+
+            public int Compare(string left, string right)
+            {
+                left = left ?? string.Empty;
+                right = right ?? string.Empty;
+                var leftIndex = 0;
+                var rightIndex = 0;
+                while (leftIndex < left.Length && rightIndex < right.Length)
+                {
+                    if (char.IsDigit(left[leftIndex]) && char.IsDigit(right[rightIndex]))
+                    {
+                        var leftStart = leftIndex;
+                        var rightStart = rightIndex;
+                        while (leftIndex < left.Length && char.IsDigit(left[leftIndex])) leftIndex++;
+                        while (rightIndex < right.Length && char.IsDigit(right[rightIndex])) rightIndex++;
+                        var leftDigits = left.Substring(leftStart, leftIndex - leftStart).TrimStart('0');
+                        var rightDigits = right.Substring(rightStart, rightIndex - rightStart).TrimStart('0');
+                        if (leftDigits.Length == 0) leftDigits = "0";
+                        if (rightDigits.Length == 0) rightDigits = "0";
+                        var lengthResult = leftDigits.Length.CompareTo(rightDigits.Length);
+                        if (lengthResult != 0) return lengthResult;
+                        var digitResult = string.CompareOrdinal(leftDigits, rightDigits);
+                        if (digitResult != 0) return digitResult;
+                        continue;
+                    }
+                    var leftCharacter = char.ToUpperInvariant(left[leftIndex++]);
+                    var rightCharacter = char.ToUpperInvariant(right[rightIndex++]);
+                    var characterResult = leftCharacter.CompareTo(rightCharacter);
+                    if (characterResult != 0) return characterResult;
+                }
+                return left.Length.CompareTo(right.Length);
+            }
         }
 
         private void UpdatePreview()
@@ -1084,6 +1383,33 @@ namespace BatchPdfPublisher.ViewModels
                 return string.IsNullOrWhiteSpace(document.Database.Filename) ? document.Name : document.Database.Filename;
             }
             catch { return string.Empty; }
+        }
+
+        private static string PreferredDocumentPath(Document document)
+        {
+            if (document == null) return string.Empty;
+            foreach (var candidate in OpenDocumentAliases(document).OrderBy(path =>
+                string.Equals(System.IO.Path.GetExtension(path), ".dwg", StringComparison.OrdinalIgnoreCase) ? 0 : 1))
+            {
+                try
+                {
+                    if (string.Equals(System.IO.Path.GetExtension(candidate), ".dwg", StringComparison.OrdinalIgnoreCase)
+                        && System.IO.Path.IsPathRooted(candidate) && System.IO.File.Exists(candidate))
+                        return System.IO.Path.GetFullPath(candidate);
+                }
+                catch { }
+            }
+            return SafeDocumentPath(document);
+        }
+
+        private static void WriteScanStage(string message)
+        {
+            try
+            {
+                System.IO.File.AppendAllText(System.IO.Path.Combine(UserDataPaths.LogsDirectory, "BatchPdfPublisher.scan.log"),
+                    DateTime.Now.ToString("O") + " " + message + Environment.NewLine);
+            }
+            catch { }
         }
 
         private static Document FindOpenDocument(string sourcePath)

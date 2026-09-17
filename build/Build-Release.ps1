@@ -1,8 +1,9 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [string[]]$Bands,
     [string]$OutputRoot,
-    [switch]$KeepIntermediate
+    [switch]$KeepIntermediate,
+    [switch]$IncludePaddleOcr
 )
 
 $ErrorActionPreference = 'Stop'
@@ -128,8 +129,33 @@ function Invoke-Checked([scriptblock]$Command, [string]$Description) {
 Assert-ChildPath $OutputRoot $distRoot '发布输出目录'
 Assert-ChildPath $artifactRoot (Join-Path $repositoryRoot '.artifacts') '中间目录'
 
+# Capture source identity before any packaging step regenerates tracked payloads.
+$sourceGitCommit = ''
+$sourceGitBranch = ''
+$sourceGitDirty = $false
+if (Test-Path -LiteralPath (Join-Path $repositoryRoot '.git')) {
+    $sourceGitCommit = (& git -C $repositoryRoot rev-parse HEAD 2>$null | Select-Object -First 1)
+    $sourceGitBranch = (& git -C $repositoryRoot branch --show-current 2>$null | Select-Object -First 1)
+    $sourceGitDirty = [bool](& git -C $repositoryRoot status --porcelain 2>$null | Select-Object -First 1)
+}
+
+$productVersionSource = Join-Path $repositoryRoot 'Shared\ProductVersion.cs'
+$productVersionText = Get-Content -LiteralPath $productVersionSource -Raw
+$productVersionMatch = [regex]::Match($productVersionText, 'Semantic\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"')
+if (-not $productVersionMatch.Success) { throw '无法从 Shared\ProductVersion.cs 读取产品版本。' }
+$productVersion = $productVersionMatch.Groups[1].Value
+foreach ($versionedFile in @(
+    'StairDetail\src\WL.Stair.Core\Properties\AssemblyInfo.cs',
+    'StairDetail\src\WL.Stair.Cad2022\Properties\AssemblyInfo.cs',
+    'StairDetail\packaging\PackageContents.2022.xml',
+    'CadArchSpecEditor\Directory.Build.props')) {
+    $versionedText = Get-Content -LiteralPath (Join-Path $repositoryRoot $versionedFile) -Raw
+    if ($versionedText -notmatch [regex]::Escape($productVersion)) {
+        throw "组件版本未与 $productVersion 同步：$versionedFile"
+    }
+}
+
 $installations = @(Find-AutoCadInstallations)
-if ($installations.Count -eq 0) { throw '未找到安装了 .NET API 的 AutoCAD 2021-2026。' }
 
 $available = @{}
 foreach ($installation in $installations) {
@@ -139,14 +165,35 @@ foreach ($installation in $installations) {
     }
 }
 
-if (-not $Bands -or $Bands.Count -eq 0) { $Bands = @($available.Keys | Sort-Object) }
-$Bands = @($Bands | ForEach-Object { $_.Trim().ToUpperInvariant() } | Select-Object -Unique)
-foreach ($band in $Bands) {
-    if ($band -notin @('R24','R25')) { throw "不支持的 API 组：$band。当前仅支持 AutoCAD 2021-2026。" }
-    if (-not $available.ContainsKey($band)) { throw "本机没有可用于 $band 的 AutoCAD API。请安装对应 CAD，或使用 build\AutodeskSdk 方案。" }
+# R25 targets .NET 8. Autodesk's official compile-time package allows a full
+# R25 build on an R24-only workstation. AutoCAD still supplies runtime APIs.
+if (-not $available.ContainsKey('R25')) {
+    $available['R25'] = [pscustomobject]@{
+        Year = 2026
+        Path = ''
+        Source = 'AutoCAD.NET 25.0.1'
+    }
 }
 
-if (Test-Path -LiteralPath $OutputRoot) { Remove-Item -LiteralPath $OutputRoot -Recurse -Force }
+if (-not $Bands -or $Bands.Count -eq 0) { $Bands = @($available.Keys | Sort-Object) }
+# Accept the documented "-Bands R24,R25" form. A [string[]] parameter binds the
+# command-line token as one element (PowerShell only splits commas in argument
+# *lists*, not in a single token), so each element is split again here.
+$Bands = @($Bands | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim().ToUpperInvariant() } |
+    Where-Object { $_ } | Select-Object -Unique)
+foreach ($band in $Bands) {
+    if ($band -notin @('R24','R25')) { throw "不支持的 API 组：$band。当前仅支持 AutoCAD 2021-2026。" }
+    if (-not $available.ContainsKey($band)) { throw "本机没有可用于 $band 的 AutoCAD API。R24 需要安装对应 CAD。" }
+}
+
+if (Test-Path -LiteralPath $OutputRoot) {
+    # User projects, registrations and settings must survive an in-place update.
+    # Clean only generated payloads and leave the legacy portable data available
+    # for the new version's one-time migration to the stable AppData location.
+    Get-ChildItem -LiteralPath $OutputRoot -Force |
+        Where-Object { $_.Name -ne '用户配置文件' } |
+        Remove-Item -Recurse -Force
+}
 if (-not $KeepIntermediate -and (Test-Path -LiteralPath $artifactRoot)) { Remove-Item -LiteralPath $artifactRoot -Recurse -Force }
 New-Item -ItemType Directory -Path $OutputRoot, $artifactRoot -Force | Out-Null
 
@@ -161,17 +208,32 @@ foreach ($band in $Bands) {
     $bandOutput = Join-Path $OutputRoot "CadApi\$band"
     $bandObject = Join-Path $artifactRoot "obj-$band\"
     New-Item -ItemType Directory -Path $bandOutput, $bandObject -Force | Out-Null
-    Write-Host "[$band] AutoCAD $($installation.Year): $($installation.Path)" -ForegroundColor Cyan
+    # 发布清单会被用户看到（也是排障依据），因此不写入本机安装路径这类
+    # 机器特定信息：它对用户没有意义，还会暴露构建机的目录结构。
+    # 只在控制台输出路径，便于构建者自己核对用的是哪一套 API。
+    $apiPathForLog = if ([string]::IsNullOrWhiteSpace($installation.Path)) { $installation.Source } else { $installation.Path }
+    $apiSource = if ([string]::IsNullOrWhiteSpace($installation.Path)) { 'AutoCAD.NET NuGet（通用引用，不依赖本机 CAD）' } else { '本机已安装的 AutoCAD' }
+    Write-Host "[$band] AutoCAD $($installation.Year): $apiPathForLog" -ForegroundColor Cyan
 
     if ($band -eq 'R25') {
         $dotnet = Find-DotNet8
         $project = Join-Path $repositoryRoot 'BatchPdfPublisher\BatchPdfPublisher.Net8.csproj'
-        Invoke-Checked {
-            & $dotnet build $project -c Release --nologo `
-                "-p:AutoCadApiPath=$($installation.Path)" `
-                "-p:OutputPath=$bandOutput\" `
-                "-p:BaseIntermediateOutputPath=$bandObject"
-        } "编译 $band"
+        if ([string]::IsNullOrWhiteSpace($installation.Path)) {
+            Invoke-Checked {
+                & $dotnet build $project -c Release --nologo `
+                    '-p:UseAutoCadNuGet=true' `
+                    "-p:OutputPath=$bandOutput\" `
+                    "-p:BaseIntermediateOutputPath=$bandObject"
+            } "编译 $band"
+        }
+        else {
+            Invoke-Checked {
+                & $dotnet build $project -c Release --nologo `
+                    "-p:AutoCadApiPath=$($installation.Path)" `
+                    "-p:OutputPath=$bandOutput\" `
+                    "-p:BaseIntermediateOutputPath=$bandObject"
+            } "编译 $band"
+        }
     }
     else {
         $project = Join-Path $repositoryRoot 'BatchPdfPublisher\BatchPdfPublisher.csproj'
@@ -191,12 +253,101 @@ foreach ($band in $Bands) {
     $buildRecords += [pscustomobject]@{
         Band = $band
         AutoCadYear = $installation.Year
-        ApiPath = $installation.Path
+        ApiSource = $apiSource
         PluginSha256 = (Get-FileHash -LiteralPath $plugin -Algorithm SHA256).Hash
     }
 }
 
+$windowsMetadata = Get-ChildItem (Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\UnionMetadata') -Filter Windows.winmd -Recurse -ErrorAction SilentlyContinue |
+    Where-Object { $_.Directory.Name -match '^10\.' } | Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+if (-not $windowsMetadata) { throw '找不到 Windows 10/11 SDK 的 Windows.winmd，无法编译本地 OCR Worker。' }
+$ocrWorkerProject = Join-Path $repositoryRoot 'LineVisionOcrWorker\LineVisionOcrWorker.csproj'
+$ocrWorkerOutput = Join-Path $artifactRoot 'linevision-ocr-worker'
+New-Item -ItemType Directory -Path $ocrWorkerOutput -Force | Out-Null
+Invoke-Checked {
+    & $msbuild $ocrWorkerProject /t:Rebuild /p:Configuration=Release `
+        "/p:TargetFrameworkVersion=$framework" `
+        "/p:WindowsMetadataPath=$windowsMetadata" `
+        "/p:OutputPath=$ocrWorkerOutput\" /v:minimal
+} '编译图像转 CAD 本地 OCR Worker'
+$ocrWorker = Join-Path $ocrWorkerOutput 'LineVisionOcrWorker.exe'
+if (-not (Test-Path -LiteralPath $ocrWorker)) { throw '本地 OCR Worker 没有生成。' }
+foreach ($band in $Bands) { Copy-Item -LiteralPath $ocrWorker -Destination (Join-Path $OutputRoot "CadApi\$band\LineVisionOcrWorker.exe") -Force }
+
+# PaddleOCR is a large shared component. Keep one copy at the product root
+# instead of duplicating roughly 650 MB into every AutoCAD version folder.
+$paddleOcrWorker = $null
+if ($IncludePaddleOcr) {
+    $paddleOutput = Join-Path $OutputRoot 'OcrEngine'
+    & (Join-Path $repositoryRoot 'build\Build-LineVisionPaddleOcrWorker.ps1') -OutputRoot $paddleOutput
+    if ($LASTEXITCODE -ne 0) { throw "PaddleOCR 用户组件打包失败，退出代码 $LASTEXITCODE" }
+    $paddleOcrWorker = Join-Path $paddleOutput 'LineVisionPaddleOcrWorker\LineVisionPaddleOcrWorker.exe'
+    if (-not (Test-Path -LiteralPath $paddleOcrWorker)) { throw "PaddleOCR 用户组件没有生成：$paddleOcrWorker" }
+}
+
+$vectorWorkerProject = Join-Path $repositoryRoot 'LineVisionVectorWorker\LineVisionVectorWorker.csproj'
+$vectorWorkerOutput = Join-Path $artifactRoot 'linevision-vector-worker'
+$vectorWorkerObject = Join-Path $artifactRoot 'obj-linevision-vector-worker\'
+New-Item -ItemType Directory -Path $vectorWorkerOutput, $vectorWorkerObject -Force | Out-Null
+Invoke-Checked {
+    & $msbuild $vectorWorkerProject /t:Rebuild /p:Configuration=Release `
+        "/p:TargetFrameworkVersion=$framework" "/p:OutputPath=$vectorWorkerOutput\" `
+        "/p:BaseIntermediateOutputPath=$vectorWorkerObject" /v:minimal
+} '编译图像转 CAD 矢量化 Worker'
+$vectorWorker = Join-Path $vectorWorkerOutput 'LineVisionVectorWorker.exe'
+$vtracer = Join-Path $repositoryRoot 'ThirdParty\VTracer\win-x64\vtracer.exe'
+if (-not (Test-Path -LiteralPath $vectorWorker) -or -not (Test-Path -LiteralPath $vtracer)) { throw '矢量化 Worker 或 vtracer.exe 没有生成。' }
+foreach ($band in $Bands) {
+    $bandPath = Join-Path $OutputRoot "CadApi\$band"
+    Copy-Item -LiteralPath $vectorWorker, $vtracer -Destination $bandPath -Force
+    Copy-Item -LiteralPath (Join-Path $repositoryRoot 'ThirdParty\VTracer\LICENSE.txt') -Destination (Join-Path $bandPath 'VTracer-LICENSE.txt') -Force
+    Copy-Item -LiteralPath (Join-Path $repositoryRoot 'ThirdParty\SkeletonTracing\LICENSE.txt') -Destination (Join-Path $bandPath 'SkeletonTracing-LICENSE.txt') -Force
+}
+
+$lineVisionTests = Join-Path $repositoryRoot 'BatchPdfPublisher.Tests\BatchPdfPublisher.LineVision.Tests.csproj'
+$testDotNet = Find-DotNet8
+Invoke-Checked {
+    $previousWorker = $env:WANLUO_LINEVISION_OCR_WORKER
+    $previousPaddleWorker = $env:WANLUO_LINEVISION_PADDLE_WORKER
+    $previousVectorWorker = $env:WANLUO_LINEVISION_VECTOR_WORKER
+    try {
+        Copy-Item -LiteralPath $vtracer -Destination $vectorWorkerOutput -Force
+        $env:WANLUO_LINEVISION_OCR_WORKER = $ocrWorker
+        $env:WANLUO_LINEVISION_PADDLE_WORKER = $paddleOcrWorker
+        $env:WANLUO_LINEVISION_VECTOR_WORKER = $vectorWorker
+        & $testDotNet run --project $lineVisionTests -c Release --nologo
+    }
+    finally {
+        $env:WANLUO_LINEVISION_OCR_WORKER = $previousWorker
+        $env:WANLUO_LINEVISION_PADDLE_WORKER = $previousPaddleWorker
+        $env:WANLUO_LINEVISION_VECTOR_WORKER = $previousVectorWorker
+    }
+} '图像转 CAD 算法和 OCR 测试'
+
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'Resources') -Destination (Join-Path $OutputRoot 'Resources') -Recurse -Force
+
+# Custom hatch definitions are user-visible, portable resources. Keep the
+# canonical copies under the plugin's user configuration folder so moving the
+# entire plugin directory to another computer preserves the stair materials.
+$hatchPatternSource = Join-Path $repositoryRoot 'StairDetail\assets\HatchPatterns'
+$hatchPatternTarget = Join-Path $OutputRoot '用户配置文件\填充素材'
+New-Item -ItemType Directory -Path $hatchPatternTarget -Force | Out-Null
+Copy-Item -Path (Join-Path $hatchPatternSource '*.pat') -Destination $hatchPatternTarget -Force
+
+# Rebuild the stair payload from the same source revision as the main plug-in.
+if ($Bands -contains 'R24') {
+    & (Join-Path $repositoryRoot 'build\Build-StairDetail-R24.ps1') -Configuration Release -AutoCadApiPath $available['R24'].Path
+}
+if ($Bands -contains 'R25') {
+    $r25DotNet = Find-DotNet8
+    & (Join-Path $repositoryRoot 'build\Build-StairDetail-R25.ps1') -Configuration Release `
+        -AutoCadApiPath $available['R25'].Path -DotNetPath $r25DotNet
+}
+$payloadDotNet = Find-DotNet8
+& (Join-Path $repositoryRoot 'build\Build-CadArchSpecPayload.ps1') -Bands $Bands `
+    -R24ApiPath $(if ($available.ContainsKey('R24')) { $available['R24'].Path } else { '' }) `
+    -R25ApiPath $(if ($available.ContainsKey('R25')) { $available['R25'].Path } else { '' }) `
+    -DotNetPath $payloadDotNet
 
 $launcherProject = Join-Path $repositoryRoot 'BatchPdfPublisherLauncher\BatchPdfPublisherLauncher.csproj'
 $launcherObject = Join-Path $artifactRoot 'obj-launcher\'
@@ -220,23 +371,21 @@ Copy-Item -LiteralPath (Join-Path $repositoryRoot 'COMPATIBILITY.md') -Destinati
 if (Test-Path -LiteralPath (Join-Path $repositoryRoot 'docs\BUILD_AND_INSTALL.md')) {
     Copy-Item -LiteralPath (Join-Path $repositoryRoot 'docs\BUILD_AND_INSTALL.md') -Destination (Join-Path $OutputRoot '构建与安装说明.md') -Force
 }
+if (Test-Path -LiteralPath (Join-Path $repositoryRoot 'docs\用户版安装说明.md')) {
+    Copy-Item -LiteralPath (Join-Path $repositoryRoot 'docs\用户版安装说明.md') -Destination (Join-Path $OutputRoot '用户版安装说明.md') -Force
+}
 
 # 源码发布目录可不携带 .git（便于用户只保留可编辑源码）。无 Git 时仍必须能完整构建。
-$gitCommit = ''
-$gitBranch = ''
-$gitDirty = $false
-if (Test-Path -LiteralPath (Join-Path $repositoryRoot '.git')) {
-    $gitCommit = (& git -C $repositoryRoot rev-parse HEAD 2>$null | Select-Object -First 1)
-    $gitBranch = (& git -C $repositoryRoot branch --show-current 2>$null | Select-Object -First 1)
-    $gitDirty = [bool](& git -C $repositoryRoot status --porcelain 2>$null | Select-Object -First 1)
-}
 $manifest = [ordered]@{
     Product = '万落建筑工具'
+    ProductVersion = $productVersion
     BuiltAt = (Get-Date).ToString('o')
-    GitCommit = $gitCommit
-    GitBranch = $gitBranch
-    GitDirty = $gitDirty
+    GitCommit = $sourceGitCommit
+    GitBranch = $sourceGitBranch
+    GitDirty = $sourceGitDirty
     LauncherSha256 = (Get-FileHash -LiteralPath $launcher -Algorithm SHA256).Hash
+    PaddleOcrIncluded = [bool]$IncludePaddleOcr
+    PaddleOcrSha256 = $(if ($paddleOcrWorker) { (Get-FileHash -LiteralPath $paddleOcrWorker -Algorithm SHA256).Hash } else { $null })
     Bands = $buildRecords
 }
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $OutputRoot 'build-info.json') -Encoding UTF8
@@ -268,6 +417,57 @@ foreach ($registeredCommand in $registeredCommands) {
         throw "统一功能登记表中的命令未在主插件注册：$registeredCommand"
     }
 }
+
+# 功能区是网格排版，按钮文字统一用四字简称（见 FeatureRegistry.F 的最后一个参数）。
+# 名字长短不一排版就不齐整，而"不齐整"在代码评审里看不出来，只有装上才看得见，
+# 所以在这里卡住：每个 F(...) 调用的最后一个字符串参数必须是恰好四个字。
+$featureLines = $featureText -split "`r?`n" | Where-Object { $_ -match '^\s*F\("' }
+if ($featureLines.Count -eq 0) { throw '未能从功能登记表里解析出 F(...) 条目。' }
+foreach ($line in $featureLines) {
+    $shortName = [regex]::Match($line, ',\s*"([^"]*)"\s*\)\s*,?\s*$')
+    if (-not $shortName.Success) {
+        throw "功能登记表条目缺少四字简称（F(...) 的最后一个字符串参数）：$($line.Trim())"
+    }
+    $text = $shortName.Groups[1].Value
+    if ($text.Length -ne 4) {
+        throw "功能简称必须是四个字，实际为「$text」（$($text.Length) 个字）：$($line.Trim())"
+    }
+}
+Write-Host "功能简称校验通过：$($featureLines.Count) 个功能均为四字简称" -ForegroundColor DarkGray
+
+# 图层直达快捷键靠 AutoLISP 直接调用 .NET 的 LispFunction 传目标图层和预选集
+# （setenv 只是兼容通道，AutoCAD 不保证它同步进 Windows 进程环境块）。函数名写在
+# LayerCommandLisp 里，注册写在 Commands.cs 的 [LispFunction(...)] 上——两边改名
+# 不同步就会静默失效，表现只是"图层快捷键按下去弹 GL 对话框"，很难查，所以在这里卡住。
+$layerLispSource = Join-Path $repositoryRoot 'BatchPdfPublisher\Features\Shortcuts\LayerCommandLisp.cs'
+if (-not (Test-Path -LiteralPath $layerLispSource)) { throw '缺少图层直达命令的 AutoLISP 生成器 LayerCommandLisp.cs。' }
+$layerLispText = Get-Content -LiteralPath $layerLispSource -Raw
+foreach ($constantName in @('SetFunctionName', 'SelectionFunctionName')) {
+    $match = [regex]::Match($layerLispText, $constantName + '\s*=\s*"([^"]+)"')
+    if (-not $match.Success) { throw "未能从 LayerCommandLisp.cs 解析出 $constantName。" }
+    $functionName = $match.Groups[1].Value
+    if ($commandText -notmatch ('LispFunction\("' + [regex]::Escape($functionName) + '"\)')) {
+        throw ('图层暂存函数名不一致：LayerCommandLisp.' + $constantName + ' = ' + $functionName + '，但 Commands.cs 里没有 [LispFunction("' + $functionName + '")]。')
+    }
+}
+Write-Host "图层直达命令校验通过：WLSETLAYER / WLSETSELECTION LispFunction 均已注册" -ForegroundColor DarkGray
+
+# 图层命令的功能 id 前缀不能和固定功能的 id 撞车：固定功能里有一个 id 就叫
+# layer_assignment（归层 GL），前缀若是 "layer_" 就会被当成"图层命令 assignment"，
+# 于是归层的快捷键在设置窗口里改不了、统计图层命令时还会多出一条假的 "GL→归层"。
+$layerIdsSource = Join-Path $repositoryRoot 'BatchPdfPublisher\Features\Shortcuts\LayerFeatureIds.cs'
+if (-not (Test-Path -LiteralPath $layerIdsSource)) { throw '缺少图层命令 id 约定 LayerFeatureIds.cs。' }
+$layerIdsText = Get-Content -LiteralPath $layerIdsSource -Raw
+$prefixMatch = [regex]::Match($layerIdsText, 'Prefix\s*=\s*"([^"]+)"')
+if (-not $prefixMatch.Success) { throw '未能从 LayerFeatureIds.cs 解析出 Prefix。' }
+$layerPrefix = $prefixMatch.Groups[1].Value
+$fixedIds = [regex]::Matches($featureText, 'F\("([^"]+)"') | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique
+foreach ($fixedId in $fixedIds) {
+    if ($fixedId.StartsWith($layerPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw ('固定功能 id 与图层命令前缀 "' + $layerPrefix + '" 撞车：' + $fixedId + '。请改 LayerFeatureIds.Prefix 或这个功能 id。')
+    }
+}
+Write-Host "图层功能 id 校验通过：$($fixedIds.Count) 个固定功能 id 都不以「$layerPrefix」开头" -ForegroundColor DarkGray
 
 Write-Host ''
 Write-Host '干净发布完成：' -ForegroundColor Green

@@ -6,11 +6,12 @@
   "compilationOptions": {},
   "targets": {
     ".NETCoreApp,Version=v8.0": {
-      "CadArchSpec.Host.AutoCAD2026/1.0.0": {
+      "CadArchSpec.Host.AutoCAD2026/1.5.6": {
         "dependencies": {
-          "CadArchSpec.EditorBridge": "1.0.0",
-          "CadArchSpec.Host.Contracts": "1.0.0",
-          "CadArchSpec.RuleEngine": "1.0.0",
+          "CadArchSpec.CadTable": "1.5.6",
+          "CadArchSpec.EditorBridge": "1.5.6",
+          "CadArchSpec.Host.Contracts": "1.5.6",
+          "CadArchSpec.RuleEngine": "1.5.6",
           "Microsoft.Web.WebView2": "1.0.4078.44",
           "Microsoft.Web.WebView2.Core": "1.0.4078.44",
           "Microsoft.Web.WebView2.WinForms": "1.0.4078.44",
@@ -47,43 +48,51 @@
           }
         }
       },
-      "CadArchSpec.Domain/1.0.0": {
+      "CadArchSpec.CadTable/1.5.6": {
         "runtime": {
-          "CadArchSpec.Domain.dll": {
-            "assemblyVersion": "1.0.0",
-            "fileVersion": "1.0.0.0"
+          "CadArchSpec.CadTable.dll": {
+            "assemblyVersion": "1.5.6",
+            "fileVersion": "1.5.6.0"
           }
         }
       },
-      "CadArchSpec.EditorBridge/1.0.0": {
+      "CadArchSpec.Domain/1.5.6": {
+        "runtime": {
+          "CadArchSpec.Domain.dll": {
+            "assemblyVersion": "1.5.6",
+            "fileVersion": "1.5.6.0"
+          }
+        }
+      },
+      "CadArchSpec.EditorBridge/1.5.6": {
         "dependencies": {
-          "CadArchSpec.Domain": "1.0.0",
+          "CadArchSpec.Domain": "1.5.6",
           "Newtonsoft.Json": "13.0.3"
         },
         "runtime": {
           "CadArchSpec.EditorBridge.dll": {
-            "assemblyVersion": "1.0.0",
-            "fileVersion": "1.0.0.0"
+            "assemblyVersion": "1.5.6",
+            "fileVersion": "1.5.6.0"
           }
         }
       },
-      "CadArchSpec.Host.Contracts/1.0.0": {
+      "CadArchSpec.Host.Contracts/1.5.6": {
         "runtime": {
           "CadArchSpec.Host.Contracts.dll": {
-            "assemblyVersion": "1.0.0",
-            "fileVersion": "1.0.0.0"
+            "assemblyVersion": "1.5.6",
+            "fileVersion": "1.5.6.0"
           }
         }
       },
-      "CadArchSpec.RuleEngine/1.0.0": {
+      "CadArchSpec.RuleEngine/1.5.6": {
         "dependencies": {
-          "CadArchSpec.Domain": "1.0.0",
+          "CadArchSpec.Domain": "1.5.6",
           "Newtonsoft.Json": "13.0.3"
         },
         "runtime": {
           "CadArchSpec.RuleEngine.dll": {
-            "assemblyVersion": "1.0.0",
-            "fileVersion": "1.0.0.0"
+            "assemblyVersion": "1.5.6",
+            "fileVersion": "1.5.6.0"
           }
         }
       },
@@ -114,7 +123,7 @@
     }
   },
   "libraries": {
-    "CadArchSpec.Host.AutoCAD2026/1.0.0": {
+    "CadArchSpec.Host.AutoCAD2026/1.5.6": {
       "type": "project",
       "serviceable": false,
       "sha512": ""
@@ -133,22 +142,27 @@
       "path": "newtonsoft.json/13.0.3",
       "hashPath": "newtonsoft.json.13.0.3.nupkg.sha512"
     },
-    "CadArchSpec.Domain/1.0.0": {
+    "CadArchSpec.CadTable/1.5.6": {
       "type": "project",
       "serviceable": false,
       "sha512": ""
     },
-    "CadArchSpec.EditorBridge/1.0.0": {
+    "CadArchSpec.Domain/1.5.6": {
       "type": "project",
       "serviceable": false,
       "sha512": ""
     },
-    "CadArchSpec.Host.Contracts/1.0.0": {
+    "CadArchSpec.EditorBridge/1.5.6": {
       "type": "project",
       "serviceable": false,
       "sha512": ""
     },
-    "CadArchSpec.RuleEngine/1.0.0": {
+    "CadArchSpec.Host.Contracts/1.5.6": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "CadArchSpec.RuleEngine/1.5.6": {
       "type": "project",
       "serviceable": false,
       "sha512": ""

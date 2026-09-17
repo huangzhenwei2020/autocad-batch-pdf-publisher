@@ -1,9 +1,11 @@
 using System;
+using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
+using System.Threading;
 using System.Windows.Forms;
 using CadArchSpec.EditorBridge;
 using CadArchSpec.Host.Contracts;
@@ -18,14 +20,26 @@ namespace CadArchSpec.Host.AutoCAD2022
     internal sealed class EditorHostControl : UserControl
     {
         private const string VirtualHostName = "cadarchspec.local";
+        private static readonly object WebViewEnvironmentSync = new object();
         private static IntPtr _webViewLoaderHandle;
+        private static Task<CoreWebView2Environment> _webViewEnvironmentTask;
         private readonly Label _statusLabel;
         private readonly WebView2 _webView;
         private readonly JsonModelSerializer _serializer = new JsonModelSerializer();
         private readonly ProjectFileService _projectFiles = new ProjectFileService();
         private bool _initializationStarted;
         private bool _disposed;
+        private bool _webReady;
+        private bool _waitingForCadTableVisible;
+        private bool _deferredStandalonePayloadLoading;
+        private System.Windows.Forms.Timer _cadTableRevealFallback;
+        private readonly Stopwatch _startupStopwatch = Stopwatch.StartNew();
+        private string _startupSessionId = Guid.NewGuid().ToString("N").Substring(0, 8);
+        private int _cadTableRequestVersion;
+        private JObject _pendingCadTablePayload;
+        private string _pendingCadTableError;
         private string _currentProjectPath = string.Empty;
+        private CancellationTokenSource _imageTableCancellation;
 
         public EditorHostControl()
         {
@@ -34,7 +48,10 @@ namespace CadArchSpec.Host.AutoCAD2022
             _webView = new WebView2
             {
                 Dock = DockStyle.Fill,
-                Visible = false
+                // Keep the browser compositor active behind the status label. A hidden
+                // WebView may throttle JavaScript/timers and made the CE ready handshake
+                // routinely fall through to its two-second fallback.
+                Visible = true
             };
             _statusLabel = new Label
             {
@@ -49,6 +66,163 @@ namespace CadArchSpec.Host.AutoCAD2022
             Controls.Add(_webView);
             Controls.Add(_statusLabel);
             Load += OnLoaded;
+        }
+
+        public void StartCadTableEdit(JObject payload)
+        {
+            _startupSessionId = Guid.NewGuid().ToString("N").Substring(0, 8);
+            _startupStopwatch.Restart();
+            _cadTableRequestVersion++;
+            _deferredStandalonePayloadLoading = false;
+            _pendingCadTableError = null;
+            _pendingCadTablePayload = payload == null ? null : (JObject)payload.DeepClone();
+            if (_pendingCadTablePayload != null) _pendingCadTablePayload["standaloneEditor"] = true;
+            _waitingForCadTableVisible = _pendingCadTablePayload != null;
+            WriteStartupDiagnostic("CE payload queued");
+            if (_waitingForCadTableVisible)
+            {
+                _statusLabel.Text = "正在准备 CAD 表格编辑/Excel…";
+                _statusLabel.Visible = true;
+                _statusLabel.BringToFront();
+            }
+            if (IsDeferredStandalonePayload(_pendingCadTablePayload))
+            {
+                QueueDeferredCadTablePayloadPreparation();
+            }
+            else if (_webReady)
+            {
+                ShowPendingCadTable();
+            }
+        }
+
+        private void RevealWebView()
+        {
+            _waitingForCadTableVisible = false;
+            _cadTableRevealFallback?.Stop();
+            _statusLabel.Visible = false;
+            _webView.Visible = true;
+            _webView.BringToFront();
+            WriteStartupDiagnostic("CE WebView revealed");
+        }
+
+        private void ShowPendingCadTable()
+        {
+            if (_pendingCadTablePayload == null || !_webReady) return;
+            var payload = _pendingCadTablePayload;
+            if (IsDeferredStandalonePayload(payload))
+            {
+                TryStartDeferredCadTablePayloadPreparation();
+                return;
+            }
+            _pendingCadTablePayload = null;
+            WriteStartupDiagnostic("Posting cad.tableRead payload");
+            PostMessage("cad.tableRead", payload);
+            WriteStartupDiagnostic("cad.tableRead payload posted");
+            // The CE page renders its own lightweight loading state while it
+            // receives the payload; do not wait for a second visibility handshake.
+            RevealWebView();
+        }
+
+        private static bool IsDeferredStandalonePayload(JObject payload)
+        {
+            return (bool?)payload?["deferredStandalonePayload"] == true;
+        }
+
+        private void QueueDeferredCadTablePayloadPreparation()
+        {
+            if (!_initializationStarted || !IsHandleCreated || _disposed) return;
+            BeginInvoke(new Action(TryStartDeferredCadTablePayloadPreparation));
+        }
+
+        private void TryStartDeferredCadTablePayloadPreparation()
+        {
+            if (_disposed || _deferredStandalonePayloadLoading ||
+                !IsDeferredStandalonePayload(_pendingCadTablePayload)) return;
+            _pendingCadTablePayload = null;
+            _deferredStandalonePayloadLoading = true;
+            var requestVersion = _cadTableRequestVersion;
+            WriteStartupDiagnostic("Deferred CE payload preparation started");
+            PrepareDeferredCadTablePayloadAsync(requestVersion);
+        }
+
+        private async void PrepareDeferredCadTablePayloadAsync(int requestVersion)
+        {
+            try
+            {
+                var payload = await CadArchSpec.Host.Shared.CadTable.CadTableExchange.CreateStandaloneEditorPayloadAsync();
+                if (_disposed || requestVersion != _cadTableRequestVersion) return;
+                _deferredStandalonePayloadLoading = false;
+                _pendingCadTablePayload = payload;
+                WriteStartupDiagnostic("Deferred CE payload preparation completed");
+                if (_webReady) ShowPendingCadTable();
+            }
+            catch (Exception exception)
+            {
+                if (_disposed || requestVersion != _cadTableRequestVersion) return;
+                _deferredStandalonePayloadLoading = false;
+                WriteStartupDiagnostic("Deferred CE payload preparation failed");
+                _pendingCadTableError = "CAD 表格数据准备失败：" + exception.GetBaseException().Message;
+                if (_webReady) PostPendingCadTableError();
+            }
+        }
+
+        private void PostPendingCadTableError()
+        {
+            if (string.IsNullOrWhiteSpace(_pendingCadTableError) || !_webReady) return;
+            var message = _pendingCadTableError;
+            _pendingCadTableError = null;
+            PostMessage("project.error", new JObject { ["message"] = message });
+        }
+
+        private void ArmCadTableRevealFallback()
+        {
+            _cadTableRevealFallback?.Stop();
+            _cadTableRevealFallback?.Dispose();
+            _cadTableRevealFallback = new System.Windows.Forms.Timer { Interval = 2000 };
+            _cadTableRevealFallback.Tick += (sender, args) =>
+            {
+                _cadTableRevealFallback.Stop();
+                if (_waitingForCadTableVisible) RevealWebView();
+            };
+            _cadTableRevealFallback.Start();
+        }
+
+        internal static void WarmUpWebViewEnvironment()
+        {
+            try
+            {
+                EnsureWebViewLoaderLoaded();
+                var warmUpTask = GetOrCreateWebViewEnvironmentAsync();
+                warmUpTask.ContinueWith(
+                    task => TryWriteStartupDiagnostic("prewarm", 0,
+                        "WebView2 environment prewarm failed", task.Exception),
+                    CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted,
+                    TaskScheduler.Default);
+            }
+            catch (Exception exception)
+            {
+                TryWriteStartupDiagnostic("prewarm", 0,
+                    "WebView2 environment prewarm failed", exception);
+            }
+        }
+
+        private static Task<CoreWebView2Environment> GetOrCreateWebViewEnvironmentAsync()
+        {
+            lock (WebViewEnvironmentSync)
+            {
+                if (_webViewEnvironmentTask == null ||
+                    _webViewEnvironmentTask.IsCanceled ||
+                    _webViewEnvironmentTask.IsFaulted)
+                {
+                    var userDataPath = Path.Combine(
+                        PortableDataPaths.DirectoryFor("WebView2"), "AutoCAD2022");
+                    Directory.CreateDirectory(userDataPath);
+                    _webViewEnvironmentTask = CoreWebView2Environment.CreateAsync(null, userDataPath);
+                }
+
+                return _webViewEnvironmentTask;
+            }
         }
 
         private static void EnsureWebViewLoaderLoaded()
@@ -95,6 +269,10 @@ namespace CadArchSpec.Host.AutoCAD2022
                 Load -= OnLoaded;
                 if (disposing)
                 {
+                    _imageTableCancellation?.Cancel();
+                    _imageTableCancellation?.Dispose();
+                    _cadTableRevealFallback?.Stop();
+                    _cadTableRevealFallback?.Dispose();
                     _webView.Dispose();
                 }
             }
@@ -110,8 +288,10 @@ namespace CadArchSpec.Host.AutoCAD2022
             }
 
             _initializationStarted = true;
+            WriteStartupDiagnostic("Host control loaded; WebView2 initialization started");
             try
             {
+                TryStartDeferredCadTablePayloadPreparation();
                 await InitializeWebViewAsync();
             }
             catch (Exception exception)
@@ -123,11 +303,12 @@ namespace CadArchSpec.Host.AutoCAD2022
         private async Task InitializeWebViewAsync()
         {
             var webAssetsPath = WebAssetLocator.Find(Assembly.GetExecutingAssembly().Location);
-            var userDataPath = Path.Combine(PortableDataPaths.DirectoryFor("WebView2"), "AutoCAD2022");
-            Directory.CreateDirectory(userDataPath);
+            WriteStartupDiagnostic("Web assets resolved");
 
-            var environment = await CoreWebView2Environment.CreateAsync(null, userDataPath);
+            var environment = await GetOrCreateWebViewEnvironmentAsync();
+            WriteStartupDiagnostic("WebView2 environment ready");
             await _webView.EnsureCoreWebView2Async(environment);
+            WriteStartupDiagnostic("WebView2 controller ready");
             if (_disposed || _webView.CoreWebView2 == null)
             {
                 return;
@@ -141,10 +322,22 @@ namespace CadArchSpec.Host.AutoCAD2022
             _webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
             _webView.CoreWebView2.ProcessFailed += OnWebViewProcessFailed;
             _webView.CoreWebView2.WebMessageReceived += OnWebMessageReceived;
-            _webView.CoreWebView2.Navigate("https://" + VirtualHostName + "/index.html");
-            _statusLabel.Visible = false;
-            _webView.Visible = true;
-            _webView.BringToFront();
+            _webView.CoreWebView2.NavigationCompleted += OnNavigationCompleted;
+            _webView.CoreWebView2.Navigate("https://" + VirtualHostName + "/index.html" +
+                (_waitingForCadTableVisible ? "?mode=cad-table" : string.Empty));
+            WriteStartupDiagnostic("CE page navigation requested");
+            // Reveal as soon as navigation is requested. The dedicated CE page
+            // owns its loading screen and can initialize while the document loads.
+            RevealWebView();
+        }
+
+        private void OnNavigationCompleted(object sender, CoreWebView2NavigationCompletedEventArgs e)
+        {
+            WriteStartupDiagnostic(e.IsSuccess
+                ? "CE page navigation completed"
+                : "CE page navigation failed: " + e.WebErrorStatus);
+            // Navigation completion is diagnostic only; the page was revealed as
+            // soon as navigation started so startup never waits for this callback.
         }
 
         private void OnWebViewProcessFailed(object sender, CoreWebView2ProcessFailedEventArgs e)
@@ -161,7 +354,18 @@ namespace CadArchSpec.Host.AutoCAD2022
                 switch (message.Type)
                 {
                     case "editor.ready":
+                        WriteStartupDiagnostic("editor.ready received");
+                        _webReady = true;
                         SendHostReady();
+                        PostPendingCadTableError();
+                        ShowPendingCadTable();
+                        break;
+                    case "cad.table.visible":
+                        WriteStartupDiagnostic("cad.table.visible received");
+                        RevealWebView();
+                        break;
+                    case "cad.table.window.close":
+                        HostPalette.CloseCadTableWindowFromHost();
                         break;
                     case "project.new":
                         _currentProjectPath = string.Empty;
@@ -196,6 +400,57 @@ namespace CadArchSpec.Host.AutoCAD2022
                         break;
                     case "cad.text.read":
                         PostMessage("cad.textRead", await CadDrawingExchange.ReadSelectedTextAsync((string)message.Payload["sectionId"]));
+                        break;
+                    case "cad.table.read":
+                        PostMessage("cad.tableRead", await CadArchSpec.Host.Shared.CadTable.CadTableExchange.ReadSelectedTableAsync(
+                            (bool?)message.Payload["includeHiddenLayers"] == true));
+                        break;
+                    case "cad.table.insert":
+                        PostMessage("cad.tableInserted", await CadArchSpec.Host.Shared.CadTable.CadTableExchange.InsertTableAsync(message.Payload));
+                        break;
+                    case "cad.table.repick":
+                        PostMessage("cad.tableRead", CadArchSpec.Host.Shared.CadTable.CadTableExchange.PrepareStandaloneEditorPayload(
+                            await CadArchSpec.Host.Shared.CadTable.CadTableExchange.ReadSelectedTableForUpdateAsync(false)));
+                        break;
+                    case "cad.table.pick":
+                        PostMessage("cad.tableRead", CadArchSpec.Host.Shared.CadTable.CadTableExchange.PrepareStandaloneEditorPayload(
+                            await CadArchSpec.Host.Shared.CadTable.CadTableExchange.ReadSelectedTableAsync(false)));
+                        break;
+                    case "cad.table.cellObjects.pick":
+                        PostMessage("cad.tableRead", await CadArchSpec.Host.Shared.CadTable.CadTableExchange.CaptureCellCadObjectsAsync(message.Payload));
+                        break;
+                    case "cad.table.template.save":
+                        PostMessage("cad.table.templatesChanged", CadArchSpec.Host.Shared.CadTable.CadTableExchange.SaveTemplateForEditor(message.Payload));
+                        break;
+                    case "cad.table.template.delete":
+                        PostMessage("cad.table.templatesChanged", CadArchSpec.Host.Shared.CadTable.CadTableExchange.DeleteTemplateForEditor(message.Payload));
+                        break;
+                    case "image.table.read":
+                        _imageTableCancellation?.Cancel();
+                        _imageTableCancellation?.Dispose();
+                        _imageTableCancellation = new CancellationTokenSource();
+                        try
+                        {
+                            PostMessage("image.tableRead", await CadArchSpec.Host.Shared.CadTable.ImageTableExchange.ReadImageTableAsync(this, _imageTableCancellation.Token));
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            PostMessage("image.tableRead", new JObject { ["cancelled"] = true });
+                        }
+                        finally
+                        {
+                            _imageTableCancellation.Dispose();
+                            _imageTableCancellation = null;
+                        }
+                        break;
+                    case "image.table.cancel":
+                        _imageTableCancellation?.Cancel();
+                        break;
+                    case "cad.table.locate":
+                        PostMessage("cad.tableLocated", await CadArchSpec.Host.Shared.CadTable.CadTableExchange.LocateSourcesAsync(message.Payload));
+                        break;
+                    case "table.xlsx.export":
+                        PostMessage("table.xlsxExported", CadArchSpec.Host.Shared.CadTable.CadTableXlsxExchange.Export(message.Payload, this));
                         break;
                     case "cad.section.insert":
                         PostMessage("cad.sectionInserted", await CadDrawingExchange.InsertSectionAsync(message.Payload));
@@ -432,6 +687,35 @@ namespace CadArchSpec.Host.AutoCAD2022
             catch
             {
                 // 诊断写入失败不能继续影响 AutoCAD 宿主。
+            }
+        }
+
+        private void WriteStartupDiagnostic(string phase)
+        {
+            TryWriteStartupDiagnostic(_startupSessionId, _startupStopwatch.ElapsedMilliseconds,
+                phase, null);
+        }
+
+        private static void TryWriteStartupDiagnostic(
+            string sessionId, long elapsedMilliseconds, string phase, Exception exception)
+        {
+            try
+            {
+                var logDirectory = PortableDataPaths.DirectoryFor("Logs");
+                var logPath = Path.Combine(logDirectory,
+                    "ce-startup-" + DateTime.Now.ToString("yyyyMMdd") + ".log");
+                lock (WebViewEnvironmentSync)
+                {
+                    File.AppendAllText(logPath,
+                        DateTime.Now.ToString("O") + " | " + sessionId + " | +" +
+                        elapsedMilliseconds + " ms | " + phase +
+                        (exception == null ? string.Empty : Environment.NewLine + exception) +
+                        Environment.NewLine);
+                }
+            }
+            catch
+            {
+                // Startup diagnostics must never delay or prevent the editor opening.
             }
         }
     }

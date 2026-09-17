@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
@@ -113,7 +114,7 @@ namespace BatchPdfPublisher.Services
             ProjectProfile project, Action<SheetItem> pagePublished, Action<SheetItem, string> pageFailed)
         {
             if (document == null || document.Database == null) throw new InvalidOperationException("没有打开的图纸。");
-            var sheets = sourceSheets?.Where(x => x != null).OrderBy(PublishPriority).ThenBy(x => x.Order).ToList() ?? new List<SheetItem>();
+            var sheets = sourceSheets?.Where(x => x != null).OrderBy(x => x.Order).ToList() ?? new List<SheetItem>();
             if (PlotFactory.ProcessPlotState != ProcessPlotState.NotPlotting)
                 throw new InvalidOperationException("AutoCAD 正在执行其他打印任务，请稍后再试。");
 
@@ -160,7 +161,7 @@ namespace BatchPdfPublisher.Services
             string engineeringFolder, Action<int, int, SheetItem> progress = null)
         {
             var pages = sourcePages?.Where(x => x?.Sheet != null && !string.IsNullOrWhiteSpace(x.TemporaryPath) && File.Exists(x.TemporaryPath))
-                .OrderBy(x => x.Sheet.Building).ThenBy(x => PublishPriority(x.Sheet)).ThenBy(x => x.Sheet.Order).ToList()
+                .OrderBy(x => x.Sheet.Building).ThenBy(x => x.Sheet.Order).ToList()
                 ?? new List<PreparedPdfPage>();
             var result = new PdfPublishResult();
             var completed = 0;
@@ -271,7 +272,7 @@ namespace BatchPdfPublisher.Services
             string defaultPlotStyle, string marginMode, bool overwrite, Action<PdfPublishProgress> progress = null)
         {
             if (document == null || document.Database == null) throw new InvalidOperationException("没有打开的图纸。");
-            var sheets = sourceSheets?.Where(x => x != null).OrderBy(PublishPriority).ThenBy(x => x.Order).ToList() ?? new List<SheetItem>();
+            var sheets = sourceSheets?.Where(x => x != null).OrderBy(x => x.Order).ToList() ?? new List<SheetItem>();
             if (sheets.Count == 0) throw new InvalidOperationException("尚未框选有效的已登记图框。");
             if (string.IsNullOrWhiteSpace(requestedOutputPath)) throw new InvalidOperationException("请设置 PDF 保存位置。");
             if (PlotFactory.ProcessPlotState != ProcessPlotState.NotPlotting)
@@ -333,9 +334,11 @@ namespace BatchPdfPublisher.Services
             var label = string.Join(" · ", new[] { Path.GetFileName(sheet.SourceFile), sheet.Building, sheet.SheetNumber, sheet.SheetName }.Where(x => !string.IsNullOrWhiteSpace(x)));
             var stage = "检查图框尺寸";
             Database previousWorkingDatabase = null;
+            var normalizeToTargetPaper = false;
             try
             {
                 ValidateDeclaredFrameRatio(sheet);
+                ValidateStandardPaper(sheet);
                 // PlotInfoValidator requires the PlotInfo layout to belong to
                 // the active MDI document. This is especially important when
                 // one publish operation contains several DWG files.
@@ -377,36 +380,63 @@ namespace BatchPdfPublisher.Services
                     WriteDiagnosticState(document, sheet, requestedLayoutId, currentLayoutId, layout);
 
                     stage = "创建打印设置";
-                    using (var settings = CreateSettings(layout, sheet, defaultPlotStyle, marginMode))
-                    using (var plotInfo = new PlotInfo { Layout = layout.ObjectId, OverrideSettings = settings })
+                    // 第 1 轮允许 CAD 用 90° 旋转把图直接铺满纸张；若打出来的页面方向
+                    // 仍与登记不符或打出空白页，第 2 轮强制 0° 并退回矢量裁切（已知可用）。
+                    // 这样任何纸张/方向组合都有确定结果，且绝不会比原来更差。
+                    for (var attempt = 0; attempt < 2; attempt++)
                     {
-                        stage = "校验打印信息";
-                        using (var validator = new PlotInfoValidator { MediaMatchingPolicy = MatchingPolicy.MatchEnabled })
-                            validator.Validate(plotInfo);
-                        WritePlotConfiguration(document, sheet, index, outputPath, settings);
-
-                        stage = "创建 PDF 打印引擎";
-                        using (var engine = PlotFactory.CreatePublishEngine())
+                        var appliedRotation = PlotRotation.Degrees000;
+                        try
                         {
-                            if (engine == null) throw new InvalidOperationException("AutoCAD 未能创建 PDF 打印引擎，请确认没有其他打印任务正在运行。");
-                            stage = "开始打印";
-                            engine.BeginPlot(null, null);
-                            engine.BeginDocument(plotInfo, document.Name, null, 1, true, outputPath);
-                            using (var pageInfo = new PlotPageInfo())
+                            using (var settings = CreateSettings(layout, sheet, defaultPlotStyle, marginMode, attempt == 0,
+                                       out normalizeToTargetPaper, out appliedRotation))
+                            using (var plotInfo = new PlotInfo { Layout = layout.ObjectId, OverrideSettings = settings })
                             {
-                                stage = "创建 PDF 页面";
-                                engine.BeginPage(pageInfo, plotInfo, true, null);
-                                stage = "生成页面图形";
-                                engine.BeginGenerateGraphics(null);
-                                engine.EndGenerateGraphics(null);
-                                engine.EndPage(null);
+                                stage = "校验打印信息";
+                                using (var validator = new PlotInfoValidator { MediaMatchingPolicy = MatchingPolicy.MatchEnabled })
+                                    validator.Validate(plotInfo);
+                                WritePlotConfiguration(document, sheet, index, outputPath, settings);
+
+                                stage = "创建 PDF 打印引擎";
+                                using (var engine = PlotFactory.CreatePublishEngine())
+                                {
+                                    if (engine == null) throw new InvalidOperationException("AutoCAD 未能创建 PDF 打印引擎，请确认没有其他打印任务正在运行。");
+                                    stage = "开始打印";
+                                    engine.BeginPlot(null, null);
+                                    engine.BeginDocument(plotInfo, document.Name, null, 1, true, outputPath);
+                                    using (var pageInfo = new PlotPageInfo())
+                                    {
+                                        stage = "创建 PDF 页面";
+                                        engine.BeginPage(pageInfo, plotInfo, true, null);
+                                        stage = "生成页面图形";
+                                        engine.BeginGenerateGraphics(null);
+                                        engine.EndGenerateGraphics(null);
+                                        engine.EndPage(null);
+                                    }
+                                    engine.EndDocument(null);
+                                    engine.EndPlot(null);
+                                }
                             }
-                            engine.EndDocument(null);
-                            engine.EndPlot(null);
                         }
+                        catch (Exception) when (attempt == 0)
+                        {
+                            // 第 1 轮的异常一律交给第 2 轮复现：如果是旋转本身引起的，
+                            // 0° 这一轮会正常完成；如果是真实故障，0° 这一轮会照样抛出
+                            // 并带上真正的错误信息，不会丢诊断。
+                            WritePublishRetry(index, sheet);
+                            continue;
+                        }
+                        if (appliedRotation == PlotRotation.Degrees000) break;
+                        if (TemporaryPageIsUsable(outputPath, sheet)) break;
+                        WritePublishRetry(index, sheet);
                     }
                     transaction.Commit();
                     }
+                }
+                if (normalizeToTargetPaper)
+                {
+                    stage = "调整 PDF 至登记纸张";
+                    NormalizeTemporaryPage(outputPath, sheet, index);
                 }
                 ValidateTemporaryPage(outputPath, sheet, index);
             }
@@ -462,7 +492,8 @@ namespace BatchPdfPublisher.Services
                         + FormatNumber(sheet.MaxX) + "," + FormatNumber(sheet.MaxY) + "]"
                     + "；DCS窗口=[" + FormatNumber(plotWindow.MinPoint.X) + "," + FormatNumber(plotWindow.MinPoint.Y) + "]-["
                         + FormatNumber(plotWindow.MaxPoint.X) + "," + FormatNumber(plotWindow.MaxPoint.Y) + "]"
-                    + "；登记纸张=" + sheet.FrameDisplay + " " + sheet.PaperOrientation
+                    + "；登记规格=" + sheet.FrameDisplay
+                    + "；CAD实例方向=" + sheet.PaperOrientation
                     + "；目标毫米=" + FormatMillimeters(target[0], target[1])
                     + "；图纸标注比例=" + sheet.PrintScale
                     + "；介质=" + settings.CanonicalMediaName
@@ -475,6 +506,40 @@ namespace BatchPdfPublisher.Services
             catch (Exception exception)
             {
                 WritePublishDiagnostic("记录单页打印参数失败，但不影响发布：" + exception.Message);
+            }
+        }
+
+        // 自动旋转这一轮没成功时记一笔，便于排查是旋转不被支持还是纸张本身不匹配。
+        private static void WritePublishRetry(int index, SheetItem sheet)
+        {
+            WritePublishDiagnostic("CAD 旋转打印未得到可用整页，改用 0° 打印并矢量裁切重试：发布序号="
+                + (index + 1) + "；子项目=" + sheet.Building + "；图号=" + sheet.SheetNumber
+                + "；图名=" + sheet.SheetName + "；登记毫米="
+                + FormatMillimeters(TargetPaperSize(sheet)[0], TargetPaperSize(sheet)[1]));
+        }
+
+        // 判断刚打出来的临时 PDF 能否直接采用：必须是登记方向的整页，且确实有图面
+        // 内容。旋转打印这一轮只要不满足，就退回 0° + 矢量裁切，所以这里必须同时
+        // 覆盖“方向不对”和“打出空白页”两种失败。
+        private static bool TemporaryPageIsUsable(string path, SheetItem sheet)
+        {
+            try
+            {
+                if (!File.Exists(path)) return false;
+                if (new FileInfo(path).Length < 4096L) return false;
+                using (var input = PdfSharp.Pdf.IO.PdfReader.Open(path, PdfSharp.Pdf.IO.PdfDocumentOpenMode.Import))
+                {
+                    if (input.PageCount != 1) return false;
+                    var page = input.Pages[0];
+                    var target = TargetPaperSize(sheet);
+                    if (!SamePaperSizeInOrientation(PointsToMillimeters(page.Width.Point),
+                            PointsToMillimeters(page.Height.Point), target[0], target[1])) return false;
+                    return MeasurePageContentBytes(page) >= 512L;
+                }
+            }
+            catch
+            {
+                return false;
             }
         }
 
@@ -494,14 +559,113 @@ namespace BatchPdfPublisher.Services
                     throw new InvalidOperationException("临时 PDF 实际纸张为 " + FormatMillimeters(width, height)
                         + " mm，与登记目标 " + FormatMillimeters(target[0], target[1])
                         + " mm 不一致。请检查 PC3/PMP 介质配置，插件已阻止错误页面进入合并文件。");
+                var contentBytes = MeasurePageContentBytes(page);
+                if (new FileInfo(path).Length < 4096L && contentBytes < 512L)
+                    throw new InvalidOperationException("CAD 生成了空白单页 PDF。请检查该图框实例的打印范围和方向，空白页已阻止进入最终 PDF。");
                 WritePublishDiagnostic("单页PDF完成：发布序号=" + (index + 1)
                     + "；子项目=" + sheet.Building
                     + "；图号=" + sheet.SheetNumber
                     + "；图名=" + sheet.SheetName
                     + "；实际毫米=" + FormatMillimeters(width, height)
+                    + "；内容流字节=" + contentBytes
                     + "；字节=" + new FileInfo(path).Length
                     + "；临时PDF=" + path);
             }
+        }
+
+        // NormalizeTemporaryPage 会把整页内容包成一个 Form XObject，页面自身的
+        // 内容流只剩几十字节的 "q ... cm /Fm0 Do Q"。只看页内容流会让“空白页”
+        // 判据在裁切路径上恒成立而退化，所以这里把页内 Form XObject 的字节一并
+        // 统计，才是这一页真实的图面数据量。
+        private static long MeasurePageContentBytes(PdfSharp.Pdf.PdfPage page)
+        {
+            long total = 0L;
+            try
+            {
+                var content = page.Contents == null ? null : page.Contents.CreateSingleContent();
+                total += content?.Stream?.Length ?? 0L;
+            }
+            catch { }
+            try
+            {
+                var resources = page.Elements.GetDictionary("/Resources");
+                var xobjects = resources?.Elements.GetDictionary("/XObject");
+                if (xobjects == null) return total;
+                foreach (var key in xobjects.Elements.Keys)
+                {
+                    var form = xobjects.Elements.GetDictionary(key);
+                    if (form == null) continue;
+                    if (!string.Equals(form.Elements.GetName("/Subtype"), "/Form", StringComparison.Ordinal)) continue;
+                    try { total += form.Stream.UnfilteredValue.Length; }
+                    catch { }
+                }
+            }
+            catch { }
+            return total;
+        }
+
+        private static void NormalizeTemporaryPage(string path, SheetItem sheet, int index)
+        {
+            var target = TargetPaperSize(sheet);
+            var stagingPath = path + "." + Guid.NewGuid().ToString("N") + ".normalized.pdf";
+            var cropDiagnostic = string.Empty;
+            try
+            {
+                using (var input = PdfSharp.Pdf.IO.PdfReader.Open(path, PdfSharp.Pdf.IO.PdfDocumentOpenMode.Import))
+                using (var output = new PdfSharp.Pdf.PdfDocument())
+                {
+                    if (input.PageCount != 1)
+                        throw new InvalidOperationException("后备介质生成的临时 PDF 不是单页文件。");
+                    var page = output.AddPage();
+                    page.Width = PdfSharp.Drawing.XUnit.FromMillimeter(target[0]);
+                    page.Height = PdfSharp.Drawing.XUnit.FromMillimeter(target[1]);
+                    page.Rotate = 0;
+                    // PdfSharp 的 DrawImage(图元, dest, src) 只把 src 当裁剪框，
+                    // 缩放矩阵按整张 form 铺满 dest。因此必须按 form 自己的坐标
+                    // 计算裁切区，并把 dest 反推成同一个系数；否则源页与目标页
+                    // 比例不同时会被非等比拉伸——纵向图框出到横向介质上会被
+                    // 压扁整整 2 倍（0.7063 / 1.4156），加长图纸则被压成细条。
+                    using (var form = PdfSharp.Drawing.XPdfForm.FromFile(path))
+                    using (var graphics = PdfSharp.Drawing.XGraphics.FromPdfPage(page))
+                    {
+                        form.PageNumber = 1;
+                        var formWidth = form.PointWidth;
+                        var formHeight = form.PointHeight;
+                        var crop = CenterCrop(formWidth, formHeight, target[0] / target[1]);
+                        var scaleX = page.Width.Point / crop[2];
+                        var scaleY = page.Height.Point / crop[3];
+                        var scale = Math.Min(scaleX, scaleY);
+                        graphics.DrawImage(form,
+                            new PdfSharp.Drawing.XRect(-crop[0] * scale, -crop[1] * scale, formWidth * scale, formHeight * scale),
+                            new PdfSharp.Drawing.XRect(crop[0], crop[1], crop[2], crop[3]),
+                            PdfSharp.Drawing.XGraphicsUnit.Point);
+                        cropDiagnostic = "；等比系数=" + FormatNumber(scaleX) + "/" + FormatNumber(scaleY)
+                            + "；源页毫米=" + FormatNumber(formWidth * 25.4d / 72d) + "×" + FormatNumber(formHeight * 25.4d / 72d)
+                            + "；裁切=" + FormatNumber(crop[0]) + "," + FormatNumber(crop[1]) + ","
+                                + FormatNumber(crop[2]) + "," + FormatNumber(crop[3]);
+                    }
+                    output.Save(stagingPath);
+                }
+                CommitStagedFile(stagingPath, path);
+                WritePublishDiagnostic("单页后备介质已矢量裁切：发布序号=" + (index + 1)
+                    + "；图号=" + sheet.SheetNumber
+                    + "；目标毫米=" + FormatMillimeters(target[0], target[1]) + cropDiagnostic);
+            }
+            finally
+            {
+                TryDelete(stagingPath);
+            }
+        }
+
+        private static double[] CenterCrop(double width, double height, double targetRatio)
+        {
+            if (width / height > targetRatio)
+            {
+                var cropWidth = height * targetRatio;
+                return new[] { (width - cropWidth) / 2d, 0d, cropWidth, height };
+            }
+            var cropHeight = width / targetRatio;
+            return new[] { 0d, (height - cropHeight) / 2d, width, cropHeight };
         }
 
         internal static void WritePublishDiagnostic(string message)
@@ -549,9 +713,19 @@ namespace BatchPdfPublisher.Services
                                 + " " + sheets[index].SheetName + "”的临时 PDF 纸张 "
                                 + FormatMillimeters(sourceWidth, sourceHeight) + " mm 与目标 "
                                 + FormatMillimeters(target[0], target[1]) + " mm 不一致。");
+                        // The page emitted by CAD is authoritative.  A plot
+                        // device may expose the same paper as landscape while
+                        // AutoCAD emits the selected window as portrait (or
+                        // vice versa).  Never rotate or swap the page merely
+                        // to match the catalog orientation; that is what was
+                        // producing sideways drawings in the merged PDF.
                         var canImportOriginal = marginMillimeters <= 0d
-                            && Math.Abs(sourceWidth - target[0]) <= .2d
-                            && Math.Abs(sourceHeight - target[1]) <= .2d;
+                            && SamePaperSizeInOrientation(sourceWidth, sourceHeight, target[0], target[1]);
+                        if (marginMillimeters <= 0d && !canImportOriginal)
+                            throw new InvalidOperationException("CAD 输出页面方向与登记方向不一致：实际为 "
+                                + FormatMillimeters(sourceWidth, sourceHeight) + " mm，登记为 "
+                                + FormatMillimeters(target[0], target[1])
+                                + " mm。已阻止合并，避免把图纸横竖方向改乱；请检查 CAD 打印方向。 ");
                         if (canImportOriginal)
                         {
                             // Zero-margin pages already have the exact requested
@@ -563,22 +737,37 @@ namespace BatchPdfPublisher.Services
                         else
                         {
                             var page = output.AddPage();
-                            page.Width = PdfSharp.Drawing.XUnit.FromMillimeter(target[0]);
-                            page.Height = PdfSharp.Drawing.XUnit.FromMillimeter(target[1]);
+                            page.Width = source.Width;
+                            page.Height = source.Height;
                             using (var form = PdfSharp.Drawing.XPdfForm.FromFile(files[index]))
                             using (var graphics = PdfSharp.Drawing.XGraphics.FromPdfPage(page))
                             {
                                 form.PageNumber = 1;
-                                var crop = CenterCrop(source.Width.Point, source.Height.Point, target[0] / target[1]);
                                 var inset = PdfSharp.Drawing.XUnit.FromMillimeter(marginMillimeters).Point;
                                 var width = Math.Max(1d, page.Width.Point - inset * 2d);
                                 var height = Math.Max(1d, page.Height.Point - inset * 2d);
-                                graphics.DrawImage(form, new PdfSharp.Drawing.XRect(inset, inset, width, height), new PdfSharp.Drawing.XRect(crop[0], crop[1], crop[2], crop[3]), PdfSharp.Drawing.XGraphicsUnit.Point);
+                                // PdfSharp 的 DrawImage 会把整张 form 铺满 dest。两轴
+                                // 各自算一次缩放会把白边尺寸的差异变成非等比拉伸，
+                                // 所以这里用一个系数（并沿用 form 自身坐标），保证等比。
+                                var formWidth = form.PointWidth;
+                                var formHeight = form.PointHeight;
+                                var scale = Math.Min(width / formWidth, height / formHeight);
+                                var drawWidth = formWidth * scale;
+                                var drawHeight = formHeight * scale;
+                                graphics.DrawImage(form,
+                                    new PdfSharp.Drawing.XRect((page.Width.Point - drawWidth) / 2d,
+                                        (page.Height.Point - drawHeight) / 2d, drawWidth, drawHeight),
+                                    new PdfSharp.Drawing.XRect(0d, 0d, formWidth, formHeight),
+                                    PdfSharp.Drawing.XGraphicsUnit.Point);
                             }
                         }
                         var finalPage = output.Pages[output.PageCount - 1];
-                        var finalWidth = PointsToMillimeters(finalPage.Width.Point);
-                        var finalHeight = PointsToMillimeters(finalPage.Height.Point);
+                        // 直接导入的页面就是临时页本身。这里不能再读 finalPage.Width：
+                        // 刚 AddPage 的页面取值是未应用 /Rotate 的 MediaBox，而旋转出图的
+                        // 整页正是靠 /Rotate 承载方向的（MediaBox 仍是被旋转前的那一边），
+                        // 直接读会把横向页记成竖向，日志就不可信了。
+                        var finalWidth = canImportOriginal ? sourceWidth : PointsToMillimeters(finalPage.Width.Point);
+                        var finalHeight = canImportOriginal ? sourceHeight : PointsToMillimeters(finalPage.Height.Point);
                         WritePublishDiagnostic("合并页完成：最终页码=" + (index + 1)
                             + "；子项目=" + sheets[index].Building
                             + "；图号=" + sheets[index].SheetNumber
@@ -605,19 +794,10 @@ namespace BatchPdfPublisher.Services
                     + "；最终字节=" + new FileInfo(outputPath).Length);
             }
 
-            private static double[] CenterCrop(double width, double height, double targetRatio)
-            {
-                if (width / height > targetRatio)
-                {
-                    var cropWidth = height * targetRatio;
-                    return new[] { (width - cropWidth) / 2d, 0d, cropWidth, height };
-                }
-                var cropHeight = width / targetRatio;
-                return new[] { 0d, (height - cropHeight) / 2d, width, cropHeight };
-            }
         }
 
-        private static PlotSettings CreateSettings(Layout layout, SheetItem sheet, string defaultPlotStyle, string marginMode)
+        private static PlotSettings CreateSettings(Layout layout, SheetItem sheet, string defaultPlotStyle, string marginMode,
+            bool allowRotation, out bool normalizeToTargetPaper, out PlotRotation appliedRotation)
         {
             var settings = new PlotSettings(layout.ModelType);
             settings.CopyFrom(layout);
@@ -644,9 +824,17 @@ namespace BatchPdfPublisher.Services
             // mode before asking for, and applying, the custom media.
             ApplyPlotStep("初始化毫米单位", () => validator.SetPlotPaperUnits(settings, PlotPaperUnit.Millimeters));
             var target = TargetPaperSize(sheet);
-            var media = ChooseMedia(validator, settings, target[0], target[1], marginMode, !string.IsNullOrWhiteSpace(sheet.Extension));
+            var media = ChooseMedia(validator, settings, target[0], target[1], marginMode, true);
+            normalizeToTargetPaper = false;
             if (string.IsNullOrWhiteSpace(media))
-                throw new InvalidOperationException($"当前 PDF 绘图仪没有 {PaperSizeCatalog.Describe(sheet.Frame, sheet.Extension, sheet.PaperOrientation)} 的精确纸张。请先关闭 CAD，再双击启动器让它重新部署 BatchPdfPublisher.pc3/pmp；当前进程不会自动刷新绘图仪介质列表。加长图纸不会降级为普通 A1/A0。 ");
+            {
+                media = ChooseFallbackMedia(validator, settings, target[0], target[1], marginMode);
+                if (string.IsNullOrWhiteSpace(media))
+                    throw new InvalidOperationException("当前 PDF 绘图仪没有可用的毫米纸张。");
+                normalizeToTargetPaper = true;
+                WritePublishDiagnostic("目标纸张 " + FormatMillimeters(target[0], target[1])
+                    + " mm 不在绘图仪列表中，改用后备介质“" + media + "”打印后矢量裁切。 ");
+            }
             // SetPlotConfigurationName 同时写入设备和有效介质，避免留下一个
             // 设备有效但介质为空的 PlotSettings（AutoCAD 2022 会报 eInvalidPlotInfo）。
             try
@@ -667,26 +855,37 @@ namespace BatchPdfPublisher.Services
             }
             validator.RefreshLists(settings);
             ApplyPlotStep("设置毫米单位", () => validator.SetPlotPaperUnits(settings, PlotPaperUnit.Millimeters));
-            var mediaSize = ParseMediaSize(media);
-            var mediaLandscape = mediaSize != null && mediaSize[0] > mediaSize[1];
-            // Derive the requested orientation from the normalized target
-            // dimensions, not only from the display text.  This keeps edited
-            // rows and custom media (whose canonical name may be portrait)
-            // consistent: 1051x594 always requires a 90-degree rotation when
-            // the available media is stored as 594x1051.
-            var desiredLandscape = target[0] > target[1];
-            try
+            // 以绘图仪真正回报的纸张尺寸为准来判断是否需要裁切。介质名
+            // （例如 "UserDefinedMetric (420.00 x 743.00毫米)"）不一定等于实际
+            // 出纸尺寸：AutoCAD 会按 PIA 里的 landscape_mode 旋转纸张，自带
+            // 毫米纸张库正是按横式登记的。只看名字会把本来精确匹配的介质误判成
+            // “需要裁切”，白白多走一次打印并放大线宽。
+            var actualPaper = settings.PlotPaperSize;
+            var mediaSize = actualPaper.X > 0d && actualPaper.Y > 0d
+                ? new[] { actualPaper.X, actualPaper.Y }
+                : ParseMediaSize(media);
+            if (mediaSize != null)
             {
-                validator.SetPlotRotation(settings, desiredLandscape == mediaLandscape ? PlotRotation.Degrees000 : PlotRotation.Degrees090);
+                var direct = RelativeError(mediaSize[0], target[0]) + RelativeError(mediaSize[1], target[1]);
+                if (direct > .003d) normalizeToTargetPaper = true;
             }
-            catch (Autodesk.AutoCAD.Runtime.Exception rotationError)
+            // 介质方向与登记方向不一致时，优先让 CAD 直接把图旋转 90° 出到纸张长边
+            // 方向：内容能 1:1 铺满纸张，不必事后矢量裁切放大（放大还会连带放大线宽）。
+            // 历史上 AutoCAD 2022/TArch 在窗口打印下用 90°/270° 出现过空白页，所以
+            // 调用方会用 TemporaryPageIsUsable 验收这一轮，不通过就退回 0° + 裁切，
+            // 那是一条已验证可用的路径，因此这里不会比强制 0° 更差。
+            var needRotation = allowRotation
+                && mediaSize != null
+                && (mediaSize[0] > mediaSize[1]) != (target[0] > target[1]);
+            var rotation = needRotation ? PlotRotation.Degrees090 : PlotRotation.Degrees000;
+            appliedRotation = rotation;
+            if (needRotation)
             {
-                // Some AutoCAD/TArch PDF drivers reject a rotation on a
-                // user-defined PMP medium even though the medium itself is
-                // valid. Keep the page and let ScaleToFit fit the window;
-                // the merger later restores the requested paper orientation.
-                WriteDiagnostic($"打印纸张 {media} 拒绝方向旋转，已使用默认方向：{rotationError.Message}", rotationError);
+                // 旋转出图后页面应当直接等于登记纸张，不再走裁切；若实际没有等于，
+                // 调用方的可用性检查会发现并退回 0° + 裁切。
+                normalizeToTargetPaper = false;
             }
+            ApplyPlotStep("设置 CAD 打印方向", () => validator.SetPlotRotation(settings, rotation));
             var style = string.IsNullOrWhiteSpace(sheet.PlotStyle) || string.Equals(sheet.PlotStyle, "使用输出设置", StringComparison.OrdinalIgnoreCase)
                 ? defaultPlotStyle
                 : sheet.PlotStyle;
@@ -762,18 +961,38 @@ namespace BatchPdfPublisher.Services
 
         private static string ChooseMedia(PlotSettingsValidator validator, PlotSettings settings, double targetWidth, double targetHeight, string marginMode, bool requireExactSize)
         {
+            var candidates = validator.GetCanonicalMediaNameList(settings).Cast<string>().ToList();
+            // 第一轮只接受与目标同方向的介质。尺寸吻合但存储方向差 90° 的介质
+            // 会把纵向图框打到横向纸上，必须再走一次矢量裁切，而裁切后的等比
+            // 放大还会把线宽一起放大。只有确实没有同方向介质时才进入第二轮。
+            var exact = PickBestMedia(candidates, targetWidth, targetHeight, marginMode, requireExactSize, false);
+            if (!string.IsNullOrWhiteSpace(exact)) return exact;
+            return PickBestMedia(candidates, targetWidth, targetHeight, marginMode, requireExactSize, true);
+        }
+
+        private static string PickBestMedia(IEnumerable<string> mediaNames, double targetWidth, double targetHeight,
+            string marginMode, bool requireExactSize, bool allowRotated)
+        {
             string best = null;
             var bestScore = double.MaxValue;
-            foreach (string media in validator.GetCanonicalMediaNameList(settings))
+            foreach (string media in mediaNames)
             {
                 var size = ParseMediaSize(media);
                 if (size == null) continue;
                 var direct = RelativeError(size[0], targetWidth) + RelativeError(size[1], targetHeight);
                 var rotated = RelativeError(size[1], targetWidth) + RelativeError(size[0], targetHeight);
-                var score = Math.Min(direct, rotated);
+                if (allowRotated && rotated >= direct) continue;
+                var score = allowRotated ? rotated : direct;
                 if (requireExactSize && score > .003d) continue;
-                var fullBleed = media.IndexOf("full_bleed", StringComparison.OrdinalIgnoreCase) >= 0 || media.IndexOf("expand", StringComparison.OrdinalIgnoreCase) >= 0;
-                var bundledMedia = media.IndexOf("BPP_", StringComparison.OrdinalIgnoreCase) >= 0;
+                // AutoCAD 返回的 canonical media name 取自 PIA 的 name 字段，
+                // 自带毫米纸张显示为 "UserDefinedMetric (420.00 x 743.00毫米)"，
+                // 而不是 localized_name（BPP_A2_420x743_MM_FULL_BLEED）。只认
+                // "BPP_" 会让下面两条偏好永远失效——满幅模式反而给自带满幅纸张
+                // 加了 0.2 惩罚，把最该选的介质排到最后。
+                var bundledMedia = IsBundledMedia(media);
+                var fullBleed = media.IndexOf("full_bleed", StringComparison.OrdinalIgnoreCase) >= 0
+                    || media.IndexOf("expand", StringComparison.OrdinalIgnoreCase) >= 0
+                    || bundledMedia;
                 if (string.Equals(marginMode, "无白边（满幅）", StringComparison.OrdinalIgnoreCase) && !fullBleed) score += 0.2d;
                 // Prefer the millimetre, zero-margin media shipped with the plug-in.
                 // PdfMerger then applies the selected 0 mm or 3 mm edge policy.
@@ -781,6 +1000,43 @@ namespace BatchPdfPublisher.Services
                 if (score < bestScore) { bestScore = score; best = media; }
             }
             return best;
+        }
+
+        // 自带毫米纸张库（BatchPdfPublisher.pmp）里的纸张都由 AutoCAD 以
+        // "UserDefinedMetric (W x H 毫米)" 的名字报出来，只有 localized_name
+        // 才是 BPP_* 形式，所以两种都要认。
+        private static bool IsBundledMedia(string media)
+        {
+            return !string.IsNullOrWhiteSpace(media)
+                && (media.IndexOf("BPP_", StringComparison.OrdinalIgnoreCase) >= 0
+                    || media.IndexOf("UserDefinedMetric", StringComparison.OrdinalIgnoreCase) >= 0);
+        }
+
+        private static string ChooseFallbackMedia(PlotSettingsValidator validator, PlotSettings settings,
+            double targetWidth, double targetHeight, string marginMode)
+        {
+            string best = null;
+            var bestScore = double.MaxValue;
+            var desiredLandscape = targetWidth > targetHeight;
+            foreach (string media in validator.GetCanonicalMediaNameList(settings))
+            {
+                var size = ParseMediaSize(media);
+                if (size == null) continue;
+                var longSide = Math.Max(size[0], size[1]);
+                var shortSide = Math.Min(size[0], size[1]);
+                var width = desiredLandscape ? longSide : shortSide;
+                var height = desiredLandscape ? shortSide : longSide;
+                if (width + .2d < targetWidth || height + .2d < targetHeight) continue;
+                var areaScore = width * height / Math.Max(1d, targetWidth * targetHeight);
+                var ratioScore = Math.Abs(width / height - targetWidth / targetHeight);
+                var score = areaScore + ratioScore;
+                var fullBleed = media.IndexOf("full_bleed", StringComparison.OrdinalIgnoreCase) >= 0
+                    || media.IndexOf("expand", StringComparison.OrdinalIgnoreCase) >= 0;
+                if (string.Equals(marginMode, "无白边（满幅）", StringComparison.OrdinalIgnoreCase) && !fullBleed) score += .2d;
+                if (score < bestScore) { bestScore = score; best = media; }
+            }
+            if (!string.IsNullOrWhiteSpace(best)) return best;
+            return ChooseMedia(validator, settings, targetWidth, targetHeight, marginMode, false);
         }
 
         private static double[] ParseMediaSize(string media)
@@ -808,6 +1064,29 @@ namespace BatchPdfPublisher.Services
             return PaperSizeCatalog.GetSize(sheet.Frame, sheet.Extension, sheet.PaperOrientation);
         }
 
+        // GB/T 50001-2017 第 3.1.3 条：图纸的短边尺寸不应加长，A0～A3 幅面长边
+        // 尺寸可加长，但应符合表 3.1.3 的规定。超出标准表的加长比例不能发布，
+        // 否则出图幅面既不合规，也无法与标准图框、折图装订尺寸对应。
+        private static void ValidateStandardPaper(SheetItem sheet)
+        {
+            var paper = sheet.Frame;
+            var extension = sheet.Extension;
+            if (PaperSizeCatalog.IsStandardExtension(paper, extension)) return;
+            var fraction = PaperSizeCatalog.ParseExtension(extension);
+            var message = new StringBuilder();
+            message.Append("图纸“").Append(sheet.SheetNumber).Append(' ').Append(sheet.SheetName)
+                .Append("”登记的幅面 ").Append(paper);
+            if (fraction > 0d) message.Append('+').Append(PaperSizeCatalog.FormatExtension(fraction));
+            message.Append(" 不符合 GB/T 50001-2017 第 3.1.3 条。");
+            if (fraction > 0d)
+                message.Append(paper).Append(" 允许的加长比例为：")
+                    .Append(PaperSizeCatalog.DescribeStandardExtensions(paper)).Append('。');
+            else
+                message.Append(paper).Append(" 不允许加长。");
+            message.Append("请在图框登记中改正后再发布。");
+            throw new InvalidOperationException(message.ToString());
+        }
+
         private static void ValidateDeclaredFrameRatio(SheetItem sheet)
         {
             var target = TargetPaperSize(sheet);
@@ -821,15 +1100,6 @@ namespace BatchPdfPublisher.Services
             var actual = Math.Max(width, height) / Math.Min(width, height);
             if (Math.Abs(actual - expected) / expected > .02d)
                 throw new InvalidOperationException($"图纸“{sheet.SheetNumber} {sheet.SheetName}”的实际图框比例为 {actual:0.###}，但登记的 {sheet.FrameDisplay} 页面比例为 {expected:0.###}。请在图框登记中改正纸张规格或加长比例后再发布，不能用标准 A1 代替加长图纸。");
-        }
-
-        private static int PublishPriority(SheetItem sheet)
-        {
-            var note = sheet?.FrameNote ?? string.Empty;
-            if (note.IndexOf("封面", StringComparison.OrdinalIgnoreCase) >= 0) return 0;
-            if (note.IndexOf("目录", StringComparison.OrdinalIgnoreCase) >= 0) return 1;
-            if (note.IndexOf("总平图", StringComparison.OrdinalIgnoreCase) >= 0 || (sheet?.SheetNumber ?? string.Empty).IndexOf("总平图", StringComparison.OrdinalIgnoreCase) >= 0) return 2;
-            return 3;
         }
 
         private static double ParseExtension(string value)
@@ -940,12 +1210,18 @@ namespace BatchPdfPublisher.Services
                 || (SameDimension(actualWidth, expectedHeight) && SameDimension(actualHeight, expectedWidth));
         }
 
+        private static bool SamePaperSizeInOrientation(double actualWidth, double actualHeight, double expectedWidth, double expectedHeight)
+        {
+            return SameDimension(actualWidth, expectedWidth) && SameDimension(actualHeight, expectedHeight);
+        }
+
         private static bool SameDimension(double actual, double expected)
         {
             return Math.Abs(actual - expected) <= Math.Max(3d, expected * .01d);
         }
 
         private static double PointsToMillimeters(double points) => points * 25.4d / 72d;
+
         private static string FormatNumber(double value) => value.ToString("0.###", CultureInfo.InvariantCulture);
         private static string FormatMillimeters(double width, double height) =>
             FormatNumber(width) + "×" + FormatNumber(height);
