@@ -1220,7 +1220,14 @@ namespace BatchPdfPublisherLauncher
             Text = "万落建筑工具 · 启动器";
             Icon = LoadIcon();
             AutoScaleMode = AutoScaleMode.Dpi;
-            ClientSize = new Size(660, 488); MinimumSize = new Size(600, 460);
+            // 基准必须显式给 96。只设 AutoScaleMode.Dpi 而沿用字体基准 (6,13) 时，
+            // 行高与控件高度的缩放比例不一致：底部按钮行高 72、内边距 14+14，
+            // 留给按钮 44，而按钮 40 加默认上下 margin 各 3 共需 46——已经超出 2px，
+            // 字体或 DPI 稍一放大就表现为几个按钮不在同一水平线上。
+            AutoScaleDimensions = new SizeF(96F, 96F);
+            // 高度 488 → 500：底部按钮行从 72 加高到 84，同步补上这 12px，
+            // 中部卡片区保持原有高度不被压缩。
+            ClientSize = new Size(660, 500); MinimumSize = new Size(600, 472);
             FormBorderStyle = FormBorderStyle.Sizable; MaximizeBox = false; MinimizeBox = false; StartPosition = FormStartPosition.CenterScreen;
             BackColor = Canvas; Font = new Font("Microsoft YaHei UI", 9F);
             Padding = new Padding(0);
@@ -1228,7 +1235,9 @@ namespace BatchPdfPublisherLauncher
             var root = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1, BackColor = Color.White };
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 116));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
+            // 84 而不是 72：给 40 高的按钮留出 14+14 内边距 + 上下 margin 各 3 之后
+            // 仍有富余，避免缩放时被行高挤出对齐位置。
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 84));
 
             var header = new Panel { Dock = DockStyle.Fill, BackColor = Navy, Padding = new Padding(28, 18, 24, 16) };
             var emblem = new PictureBox
@@ -1320,22 +1329,30 @@ namespace BatchPdfPublisherLauncher
             bodyHost.Controls.Add(card);
             root.Controls.Add(bodyHost, 0, 1);
 
-            var footer = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(28, 14, 28, 14), ColumnCount = 5, BackColor = Color.White };
+            var footer = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(28, 16, 28, 16), ColumnCount = 5, BackColor = Color.White };
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            // 四个按钮统一锚定为垂直居中。TableLayoutPanel 默认 Anchor 是 Top|Left，
+            // 只要单元格高度与按钮高度不整除，各列就会各自贴顶，看起来不在同一水平线上。
+            // 列宽是 AutoSize（宽度恰好等于按钮），横向不起作用，因此只设 Left 表达这一点。
+            const AnchorStyles FooterAnchor = AnchorStyles.Left;
             _startButton = CreateButton("启动并加载", 124, Cyan, Color.White);
             _startButton.DialogResult = DialogResult.OK;
             _startButton.Enabled = platforms.Count > 0;
+            _startButton.Anchor = FooterAnchor;
             var browseButton = CreateButton("手动选择程序", 112, Color.White, Navy);
             browseButton.Margin = new Padding(10, 0, 0, 0);
+            browseButton.Anchor = FooterAnchor;
             browseButton.Click += (s, e) => AddManualProgram();
             var cancelButton = CreateButton("取消", 88, Color.White, Navy);
             cancelButton.DialogResult = DialogResult.Cancel;
             cancelButton.Margin = new Padding(10, 0, 0, 0);
+            cancelButton.Anchor = FooterAnchor;
             _uninstallButton = CreateButton("卸载插件", 102, Color.White, Color.FromArgb(157, 66, 61));
+            _uninstallButton.Anchor = FooterAnchor;
             _uninstallButton.Click += (s, e) => { UninstallRequested = true; DialogResult = DialogResult.OK; };
             footer.Controls.Add(_uninstallButton, 0, 0); footer.Controls.Add(browseButton, 1, 0); footer.Controls.Add(_startButton, 3, 0); footer.Controls.Add(cancelButton, 4, 0); root.Controls.Add(footer, 0, 2); Controls.Add(root);
 

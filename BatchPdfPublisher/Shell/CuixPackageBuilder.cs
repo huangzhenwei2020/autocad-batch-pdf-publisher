@@ -22,15 +22,61 @@ namespace BatchPdfPublisher.Services
     ///   _rels/.rels              声明 Header.cui / MenuGroup.cui / PopMenuRoot.cui
     ///   Header.cui               文件版本头（UTF-8 无 BOM）
     ///   MenuGroup.cui            宏定义 MenuMacro（UID 即被 MacroRef 引用的 ID）
-    ///   PopMenuRoot.cui          下拉菜单树（Alias=POP16 → menucmd "P16=+BPP.POP16"）
+    ///   PopMenuRoot.cui          下拉菜单树（顶层 Alias=BPP_MAIN → menucmd "P13=+BPP.BPP_MAIN"）
     ///   Menu_Package_Info.xml    部件清单（UTF-8 带 BOM）
+    ///
+    /// 挂载位置这一项与 acetmain 不同：acetmain 的弹菜单别名直接取菜单栏槽位名 POP1，
+    /// 并靠 workspace 里的 WSPop 引用出现；本插件在运行时生成局部菜单，因此改用
+    /// menucmd 的菜单栏**绝对位置**挂载，别名与位置解耦。详见 MenuBarPosition 的说明。
     /// </summary>
     public static class CuixPackageBuilder
     {
         public const string MenuGroupName = "BPP";
         public const string MenuGroupDisplayName = "万落建筑工具";
-        /// <summary>弹菜单别名。menucmd "P16=+BPP.POP16" 依赖它，不能随意改。</summary>
-        public const string PopupAlias = "POP16";
+
+        /// <summary>
+        /// 顶层弹菜单在**本菜单组内**的别名。与 <see cref="MenuBarPosition"/> 是两件事：
+        /// 别名只是组内标识，位置才是挂到菜单栏哪一格。两者解耦，改位置不必改别名。
+        /// </summary>
+        public const string PopupAlias = "BPP_MAIN";
+
+        /// <summary>
+        /// 菜单栏插入位置。menucmd 的 "Pn" 是**菜单栏绝对位置**，合法范围只到 16，
+        /// 而 AutoCAD 默认 12 个主菜单占用 P1–P12（FILE、EDIT…HELP）。
+        ///
+        /// 这里踩过的坑：曾用 P16 挂载，结果菜单永远不出现，日志却显示"已请求加载"——
+        /// 因为 **P16 在默认菜单栏上根本不存在**，menucmd 静默失败。
+        /// 对照本机 acad.CUIX：菜单栏槽位是 POP0（光标菜单）、POP1–POP12（主菜单）、
+        /// POP5xx（对象/夹点上下文菜单），没有 POP16。
+        ///
+        /// 取 13 而不是 1：P1 会插到"文件"之前把既有菜单顶开；13 是默认 12 个菜单之后
+        /// 的第一格，本机还装有天正等第三方菜单（合计约 15 个），用 "+" 追加语义时
+        /// 即便该位置已被占用也只是在那一格插入，不会顶掉任何现有菜单。
+        /// </summary>
+        public const int MenuBarPosition = 13;
+
+        /// <summary>挂载用的 menucmd 片段，供测试与菜单服务共用，避免两处各写一份。</summary>
+        public static string MountExpression(int menuBarPosition)
+        {
+            return "menucmd \"P" + menuBarPosition.ToString() + "=+" + MenuGroupName + "." + PopupAlias + "\"";
+        }
+
+        /// <summary>
+        /// 依次尝试若干合法菜单栏位置的挂载表达式片段。
+        ///
+        /// 为什么用 (or ...) 逐个试：menucmd 在位置上挂不上时返回 nil，而在某个
+        /// **真实存在**的位置上"+"是追加语义，不会顶掉原有菜单。所以从期望位置往后
+        /// 顺序试，第一个能挂上的位置胜出；全都失败也不会报错中断。
+        /// </summary>
+        public static string MountExpressionChain()
+        {
+            var builder = new StringBuilder("(or ");
+            for (var position = MenuBarPosition; position <= 16; position++)
+                builder.Append(MountExpression(position)).Append(' ');
+            builder.Append(')');
+            return builder.ToString();
+        }
+
         public const string PackageFileName = "BPP_万落建筑工具.cuix";
 
         private const string TopMenuUid = "ID_BPP_MENU";
@@ -73,13 +119,16 @@ namespace BatchPdfPublisher.Services
         /// <summary>
         /// 生成"加载局部菜单并把弹菜单挂上菜单栏"的 AutoLISP 表达式。
         ///
-        /// 两个要点，都是踩过的坑：
+        /// 三个要点，都是踩过的坑：
         /// 1. **先卸载同名菜单组再加载**。AutoCAD 对已加载的菜单组再执行 -MENULOAD
         ///    是空操作，会继续用上一次的定义——菜单改了却在 CAD 里看不到最新样子，
         ///    就是这个原因。用 (menugroup "BPP") 判断是否已加载，避免无谓的卸载报错。
         /// 2. **整段包成一个形式**，路径与组名都作为 (command ...) 的参数，绝不按行裸发。
         ///    按行发的时候，一旦 -MENULOAD 没按预期消费掉这些输入，残留的 "BPP" 就会
         ///    落到命令行上被当成命令执行——BPP 正是打开批量打印面板的命令。
+        /// 3. **挂载位置必须是菜单栏上真实存在的那一格**（见 MenuBarPosition 的说明）。
+        ///    这里挂一串候选位置逐个尝试，避免某一个位置在特定菜单栏布局下不存在
+        ///    就整个挂不上。
         /// </summary>
         public static string BuildLoadExpression(string path)
         {
@@ -87,7 +136,7 @@ namespace BatchPdfPublisher.Services
             return "(progn "
                 + "(if (menugroup \"" + MenuGroupName + "\") (command \"_.-MENUUNLOAD\" \"" + MenuGroupName + "\")) "
                 + "(command \"_.-MENULOAD\" \"" + escaped + "\" \"" + MenuGroupName + "\") "
-                + "(menucmd \"P16=+" + MenuGroupName + "." + PopupAlias + "\") "
+                + MountExpressionChain() + " "
                 + "(princ))";
         }
 
