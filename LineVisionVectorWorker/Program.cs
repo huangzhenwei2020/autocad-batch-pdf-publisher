@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
@@ -31,6 +32,7 @@ namespace Wanluo.LineVision.VectorWorker
                         result.WallRegions = WallRegionDetector.Detect(result.Outlines, ParseDouble(Value(args, "--wall-min"), 3d), ParseDouble(Value(args, "--wall-max"), 80d));
                         var patternScale = ParseDouble(Value(args, "--wall-pattern-scale"), 1d);
                         foreach (var wall in result.WallRegions) wall.PatternScale = patternScale;
+                        if (HasFlag(args, "--diagnose-wall-overlap")) ReportWallOverlap(result);
                     }
                     Write(output, result); return 0;
                 }
@@ -64,7 +66,48 @@ namespace Wanluo.LineVision.VectorWorker
         }
 
         private static string Value(string[] args, string name) { for (var index = 0; index < args.Length - 1; index++) if (string.Equals(args[index], name, StringComparison.OrdinalIgnoreCase)) return args[index + 1]; return null; }
-        private static int ParseInt(string value, int fallback) { int result; return int.TryParse(value, out result) ? result : fallback; }
+
+        /// <summary>开关型参数：只要出现即视为开启（不需要跟值）。</summary>
+        private static bool HasFlag(string[] args, string name)
+        {
+            foreach (var argument in args) if (string.Equals(argument, name, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
+        /// <summary>
+        /// 诊断用：统计有多少中心线落在墙体区域内——这些会在主程序里被丢弃，
+        /// 因为它们和"墙体边框+填充"重复，叠在一起会让同一堵墙看起来成一条粗线。
+        /// </summary>
+        private static void ReportWallOverlap(VectorResult result)
+        {
+            if (result.WallRegions.Count == 0) { Console.Error.WriteLine("[overlap] 没有墙体区域"); return; }
+            var dropped = 0; var droppedPoints = 0; var outside = 0;
+            foreach (var line in result.Centerlines)
+            {
+                if (line.Points.Count < 2) continue;
+                var inside = 0;
+                foreach (var point in line.Points)
+                    foreach (var wall in result.WallRegions)
+                        if (ContainsPoint(wall.Outer, point)) { inside++; break; }
+                if (inside >= line.Points.Count * 0.8d) { dropped++; droppedPoints += line.Points.Count; }
+                else outside++;
+            }
+            Console.Error.WriteLine("[overlap] 中心线 " + result.Centerlines.Count + " 条"
+                + "；会被丢弃（整条落在墙内）" + dropped + " 条，共 " + droppedPoints + " 个顶点"
+                + "；保留 " + outside + " 条；墙体区域 " + result.WallRegions.Count + " 个");
+        }
+
+        private static bool ContainsPoint(List<VectorPoint> polygon, VectorPoint point)
+        {
+            var inside = false;
+            for (var index = 0; index < polygon.Count; index++)
+            {
+                var a = polygon[index]; var b = polygon[(index + polygon.Count - 1) % polygon.Count];
+                var dy = b.Y - a.Y; if (Math.Abs(dy) < 1e-9d) dy = 1e-9d;
+                if ((a.Y > point.Y) != (b.Y > point.Y) && point.X < (b.X - a.X) * (point.Y - a.Y) / dy + a.X) inside = !inside;
+            }
+            return inside;
+        }        private static int ParseInt(string value, int fallback) { int result; return int.TryParse(value, out result) ? result : fallback; }
         private static double ParseDouble(string value, double fallback) { double result; return double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out result) ? result : fallback; }
         private static string Quote(string value) { return "\"" + value.Replace("\"", "\\\"") + "\""; }
     }

@@ -133,6 +133,68 @@ namespace Wanluo.LineVision.Diagnostics
 
             CompareMasks(options, ink, report);
             if (!string.IsNullOrWhiteSpace(options.OverlayPath)) WriteOverlay(options, ink, report);
+            if (!string.IsNullOrWhiteSpace(options.WallOverlayPath)) WriteWallOverlay(options, report);
+        }
+
+        /// <summary>
+        /// 把"墙体检测"单独画出来：绿=墙体边框(Outer)、青=孔洞、半透明红=会被填充的实心区域。
+        /// 用于判断"边框+填充"到底是双线还是实心块——图画法里同一件事用两种画法表达时，
+        /// 只看最终 CAD 很难分辨，必须把中间数据摊开看。
+        /// </summary>
+        private static void WriteWallOverlay(Options options, StringBuilder report)
+        {
+            report.AppendLine();
+            report.AppendLine("=== 墙体检测可视化 ===");
+            try
+            {
+                var client = new LineVisionVectorWorkerClient(options.WorkerPath);
+                var settings = new LineVisionSettings
+                {
+                    Threshold = options.Threshold,
+                    MinimumLineLengthPixels = 5,
+                    MergeGapPixels = 5,
+                    CollinearTolerancePixels = 3,
+                    VectorMode = LineVisionVectorMode.Hybrid,
+                    DetectWallFills = true,
+                    MinimumWallThicknessPixels = 3d,
+                    MaximumWallThicknessPixels = 80d,
+                    WallFillMode = LineVisionWallFillMode.Solid
+                };
+                var vector = client.VectorizeAsync(options.ImagePath, options.Region, settings, null, 0, CancellationToken.None)
+                    .GetAwaiter().GetResult();
+                var walls = vector.WallRegions.Where(value => value.Outer.Count >= 3).ToList();
+                var polylineCount = vector.Polylines.Count;
+
+                using (var source = new Bitmap(options.ImagePath))
+                using (var canvas = new Bitmap(source.Width, source.Height, PixelFormat.Format24bppRgb))
+                {
+                    using (var graphics = Graphics.FromImage(canvas))
+                    {
+                        graphics.DrawImage(source, 0, 0, source.Width, source.Height);
+                        // 会被填充的实心区域：半透明红
+                        using (var fill = new SolidBrush(Color.FromArgb(90, 255, 0, 0)))
+                            foreach (var wall in walls)
+                                graphics.FillPolygon(fill, wall.Outer.ToArray());
+                        // 边界线：绿=外圈，青=孔洞
+                        using (var outerPen = new Pen(Color.FromArgb(255, 0, 200, 0), 2f))
+                        using (var holePen = new Pen(Color.FromArgb(255, 0, 200, 255), 2f))
+                        {
+                            foreach (var wall in walls)
+                            {
+                                graphics.DrawPolygon(outerPen, wall.Outer.ToArray());
+                                foreach (var hole in wall.Holes.Where(value => value.Count >= 3)) graphics.DrawPolygon(holePen, hole.ToArray());
+                            }
+                        }
+                    }
+                    canvas.Save(options.WallOverlayPath, ImageFormat.Png);
+                }
+                report.AppendLine("  绿框=墙体边框，青框=孔洞，半透明红=会被填充的实心区域");
+                report.AppendLine("  墙体区域 " + walls.Count.ToString(CultureInfo.InvariantCulture) + " 个，其中带孔洞 "
+                    + walls.Count(value => value.Holes.Count > 0).ToString(CultureInfo.InvariantCulture) + " 个");
+                report.AppendLine("  同图中心线折线 " + polylineCount.ToString(CultureInfo.InvariantCulture) + " 条");
+                report.AppendLine("  已写入: " + options.WallOverlayPath);
+            }
+            catch (Exception exception) { report.AppendLine("  墙体可视化失败：" + exception.Message); }
         }
 
         /// <summary>
@@ -436,6 +498,7 @@ namespace Wanluo.LineVision.Diagnostics
         public string WorkerPath { get; private set; }
         public string OutputPath { get; private set; }
         public string OverlayPath { get; private set; }
+        public string WallOverlayPath { get; private set; }
         public bool ProbeMask { get; private set; }
 
         public static Options Parse(string[] args, StringBuilder report)
@@ -453,6 +516,8 @@ namespace Wanluo.LineVision.Diagnostics
                 report.AppendLine("  --output   <路径>   把报告同时写入该文件");
                 report.AppendLine("  --overlay  <路径>   输出漏检可视化 PNG：红=有墨迹但无任何线覆盖");
                 report.AppendLine("  --probe-mask        只检查二值化：直方图、Otsu 阈值、反转判据");
+
+                report.AppendLine("  --wall-overlay <路径> 输出墙体检测可视化：绿=边框 青=孔洞 红=被填充区域");
                 report.AppendLine();
                 report.AppendLine("指标说明：");
                 report.AppendLine("  覆盖率%    = 墨迹像素中，落在某条已识别线 2px 邻域内的比例（越高说明漏得越少）");
@@ -472,6 +537,7 @@ namespace Wanluo.LineVision.Diagnostics
                     case "--worker": options.WorkerPath = value; index++; break;
                     case "--output": options.OutputPath = value; index++; break;
                     case "--overlay": options.OverlayPath = value; index++; break;
+                    case "--wall-overlay": options.WallOverlayPath = value; index++; break;
                     case "--probe-mask": options.ProbeMask = true; break;
                     case "--region":
                         {
@@ -727,3 +793,4 @@ namespace Wanluo.LineVision.Diagnostics
         }
     }
 }
+

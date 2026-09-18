@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
+using System.Linq;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
 using System.Threading;
@@ -78,7 +79,45 @@ namespace BatchPdfPublisher.Services
                 foreach (var hole in wall.Holes ?? new List<List<VectorPoint>>()) { var points = new List<PointF>(); foreach (var point in hole) points.Add(new PointF((float)point.X, (float)point.Y)); converted.Holes.Add(points); }
                 if (converted.Outer.Count >= 3) result.WallRegions.Add(converted);
             }
+
+            // 墙身内部不再保留骨架中线。墙是一段粗笔画，骨架会在墙身正中画出一条线；
+            // 而墙体本身已经有"边框 + 填充"两套几何。两者叠在一起，同一堵墙就被画了两遍，
+            // 视觉上就成了一条粗线（用户反馈的"墙线还是变成一条了"）。建筑图里墙身中间
+            // 本来也不该有中线。只丢弃落在墙体区域内的中线段，其余骨架照旧保留。
+            if (settings.DetectWallFills && settings.DropCenterlinesInsideWalls && result.WallRegions.Count > 0)
+                result.Polylines = result.Polylines
+                    .Where(polyline => polyline.Source != "骨架中心线" || !LiesInsideAnyWall(polyline, result.WallRegions))
+                    .ToList();
             return result;
+        }
+
+        /// <summary>整条折线是否落在某个墙体区域内部（按顶点比例判定）。</summary>
+        private static bool LiesInsideAnyWall(LineVisionPolyline polyline, IList<LineVisionWallRegion> walls)
+        {
+            if (polyline.Points == null || polyline.Points.Count < 2) return false;
+            foreach (var wall in walls)
+            {
+                if (wall.Outer.Count < 3) continue;
+                var inside = 0;
+                foreach (var point in polyline.Points) if (ContainsPoint(wall.Outer, point)) inside++;
+                if (inside >= polyline.Points.Count * 0.8d) return true;
+            }
+            return false;
+        }
+
+        /// <summary>射线法判断点是否在多边形内。</summary>
+        private static bool ContainsPoint(IList<PointF> polygon, PointF point)
+        {
+            var inside = false;
+            for (var index = 0; index < polygon.Count; index++)
+            {
+                var a = polygon[index];
+                var b = polygon[(index + polygon.Count - 1) % polygon.Count];
+                if ((a.Y > point.Y) != (b.Y > point.Y) &&
+                    point.X < (b.X - a.X) * (point.Y - a.Y) / (Math.Abs(b.Y - a.Y) < 1e-9f ? 1e-9f : b.Y - a.Y) + a.X)
+                    inside = !inside;
+            }
+            return inside;
         }
 
         internal static void SnapOrthogonal(LineVisionPolyline polyline, double toleranceDegrees)

@@ -118,6 +118,11 @@ namespace BatchPdfPublisher.Models
         /// None 只画边框、不填充；Solid 实心；Pattern 用 HatchPatternName 指定的图案。
         /// </summary>
         public LineVisionWallFillMode WallFillMode { get; set; } = LineVisionWallFillMode.None;
+        /// <summary>
+        /// 是否丢弃落在墙体区域内的骨架中线。墙是一段粗笔画，骨架会在墙身正中画出一条线，
+        /// 而墙体本身已经有"边框 + 填充"，两者叠加会让同一堵墙被画两遍、看起来成一条粗线。
+        /// </summary>
+        public bool DropCenterlinesInsideWalls { get; set; } = true;
         public string WallHatchPatternName { get; set; } = "ANSI31";
         public double WallHatchPatternScale { get; set; } = 1d;
         public double CadUnitsPerPixel { get; set; } = 1d;
