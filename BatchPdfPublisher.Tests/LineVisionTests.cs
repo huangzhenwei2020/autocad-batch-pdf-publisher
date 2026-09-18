@@ -581,7 +581,18 @@ internal static class LineVisionTests
         var root = Path.Combine(Path.GetTempPath(), "WanluoLineVisionVectorTests", Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root); UserDataPaths.TestRootDirectory = root;
         try
         {
-            WithImage(360, 260, graphics => { using (var pen = new Pen(Color.Black, 7f)) { graphics.DrawRectangle(pen, 35, 35, 285, 185); graphics.DrawLine(pen, 175, 35, 175, 220); } }, path =>
+            // 图里有两类东西：一个 7px 粗的矩形框（墙体图画法：外轮廓是细长条、内部是空洞，
+            // 以前会被误判成"厚 7px 的墙"），以及右侧一条 12x200px 的实心长条（真正的墙）。
+            // 墙体判据必须能分开这两者。
+            WithImage(380, 260, graphics =>
+            {
+                using (var pen = new Pen(Color.Black, 7f))
+                {
+                    graphics.DrawRectangle(pen, 30, 30, 250, 180);
+                    graphics.DrawLine(pen, 155, 30, 155, 210);
+                    graphics.DrawRectangle(pen, 320, 30, 11, 199);
+                }
+            }, path =>
             {
                 var settings = Settings(); settings.VectorMode = LineVisionVectorMode.Centerline;
                 var center = new LineVisionVectorWorkerClient(workerPath).VectorizeAsync(path, null, settings, null, 0, CancellationToken.None).GetAwaiter().GetResult();
@@ -589,10 +600,15 @@ internal static class LineVisionTests
                 settings.VectorMode = LineVisionVectorMode.Hybrid;
                 var hybrid = new LineVisionVectorWorkerClient(workerPath).VectorizeAsync(path, null, settings, null, 0, CancellationToken.None).GetAwaiter().GetResult();
                 True(hybrid.Polylines.Any(item => item.Source == "VTracer轮廓" && !item.IsEnabled), "混合模式没有返回默认关闭的 VTracer 候选");
-                // 墙体填充必须是「已启用」：用户勾了「识别墙体填充」才走到这里，而预览与写图都要求
-                // IsEnabled。此前写死 false，导致勾了也看不到任何填充（实测平面图 84 个区域全被丢弃）。
+                // 墙体候选必须是「已启用」：用户勾了「识别墙体」才走到这里，而预览与写图都要求
+                // IsEnabled。此前写死 false，导致勾了也看不到任何墙体（实测平面图 84 个区域全被丢弃）。
                 // VTracer 轮廓仍默认关闭——那是「保留轮廓」这个独立选项的产物，避免默认叠加双轮廓。
-                True(hybrid.WallRegions.Any(item => item.Outer.Count >= 3 && item.IsEnabled), "勾选识别墙体填充后，墙体候选应当直接可用");
+                True(hybrid.WallRegions.Any(item => item.Outer.Count >= 3 && item.IsEnabled), "勾选识别墙体后，墙体候选应当直接可用");
+                // 真墙要被认出来：至少能检出右侧那条长条。
+                True(hybrid.WallRegions.Any(item => item.AverageThickness >= 3d && item.AverageThickness <= 30d), "12x200px 的实心长条应当被判定为墙");
+                // 而矩形框与十字的"边"都是 22:1 的长条，若判据只看厚度就会把它们也当墙；
+                // 这里断言数量很少，防止"把整张图的每条长边都当成墙"的退化行为。
+                True(hybrid.WallRegions.Count <= 4, "墙体候选数量异常偏多（" + hybrid.WallRegions.Count + " 个），判据可能退化成把每条长边都当墙");
             });
         }
         finally { UserDataPaths.TestRootDirectory = null; try { Directory.Delete(root, true); } catch { } }
