@@ -21,7 +21,7 @@ namespace BatchPdfPublisher.Views
         private readonly ComboBox _profile = DropDown(150);
         private readonly ComboBox _view = DropDown(118);
         private readonly ComboBox _vectorMode = DropDown(132);
-        private readonly TextBox _threshold = Box("0", 55), _minimum = Box("18", 55), _closeGap = Box("2", 55), _collinear = Box("3", 55), _mergeGap = Box("5", 55), _orthogonalTolerance = Box("2", 45), _scale = Box("1", 82);
+        private readonly TextBox _threshold = Box("0", 55), _minimum = Box("5", 55), _closeGap = Box("2", 55), _collinear = Box("3", 55), _mergeGap = Box("5", 55), _orthogonalTolerance = Box("2", 45), _scale = Box("1", 82);
         private readonly CheckBox _diagonals = new CheckBox { Text = "保留任意角度线", Checked = true, AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
         private readonly CheckBox _recognizeText = new CheckBox { Text = "识别文字", Checked = true, AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
         private readonly CheckBox _maskText = new CheckBox { Text = "线稿中遮罩文字", Checked = true, AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
@@ -339,9 +339,12 @@ namespace BatchPdfPublisher.Views
 
         private void ApplyProfileDefaults()
         {
-            if (_profile.SelectedIndex == 1) { _minimum.Text = "12"; _closeGap.Text = "1"; _collinear.Text = "2"; _mergeGap.Text = "3"; }
-            else if (_profile.SelectedIndex == 2) { _minimum.Text = "10"; _closeGap.Text = "4"; _collinear.Text = "5"; _mergeGap.Text = "8"; }
-            else { _minimum.Text = "18"; _closeGap.Text = "2"; _collinear.Text = "3"; _mergeGap.Text = "5"; }
+            // 数值来自 LineVisionDiagnostics 在 1473x976 立面图与 1448x1086 平面图上的实测：
+            // 短于 18px 的墨迹段占 54.5% / 96.6%，把“最短线”定在 18 会丢掉一半以上的图。
+            // 5 是碎渣与墨迹总长之间的拐点，作为默认；需要更干净的线稿再往上调。
+            if (_profile.SelectedIndex == 1) { _minimum.Text = "8"; _closeGap.Text = "1"; _collinear.Text = "2"; _mergeGap.Text = "3"; }
+            else if (_profile.SelectedIndex == 2) { _minimum.Text = "8"; _closeGap.Text = "4"; _collinear.Text = "5"; _mergeGap.Text = "8"; }
+            else { _minimum.Text = "5"; _closeGap.Text = "2"; _collinear.Text = "3"; _mergeGap.Text = "5"; }
         }
 
         private void SyncObjects()
@@ -468,9 +471,18 @@ namespace BatchPdfPublisher.Views
             if (!File.Exists(SettingsPath)) return;
             try
             {
+                // 参数会被保存到设置文件并在下次打开时读回，所以光改代码里的默认值，老用户
+                // 仍然会带着旧值跑。这里做一次性迁移：把历史默认的「最短线 18」换掉，因为它
+                // 会把一半以上的图当噪声丢掉（实测短于 18px 的墨迹段占 54.5% / 96.6%）。
+                var migrated = false;
                 foreach (var line in File.ReadAllLines(SettingsPath))
                 {
                     var parts = line.Split(new[] { '=' }, 2); if (parts.Length != 2) continue;
+                    if (parts[0] == "minimum")
+                    {
+                        int saved;
+                        if (int.TryParse(parts[1], out saved) && saved == 18) { parts[1] = "5"; migrated = true; }
+                    }
                     if (parts[0] == "threshold") _threshold.Text = parts[1]; else if (parts[0] == "minimum") _minimum.Text = parts[1]; else if (parts[0] == "closeGap") _closeGap.Text = parts[1];
                     else if (parts[0] == "collinear") _collinear.Text = parts[1]; else if (parts[0] == "mergeGap") _mergeGap.Text = parts[1]; else if (parts[0] == "scale") _scale.Text = parts[1]; else if (parts[0] == "diagonals") _diagonals.Checked = parts[1] == "1";
                     else if (parts[0] == "recognizeText") _recognizeText.Checked = parts[1] == "1"; else if (parts[0] == "maskText") _maskText.Checked = parts[1] == "1"; else if (parts[0] == "insertText") _insertText.Checked = parts[1] == "1";
@@ -478,6 +490,7 @@ namespace BatchPdfPublisher.Views
                     else if (parts[0] == "vectorMode") { int value; if (int.TryParse(parts[1], out value)) _vectorMode.SelectedIndex = Math.Max(0, Math.Min(3, value)); }
                     else if (parts[0] == "detectWallFills") _detectWallFills.Checked = parts[1] == "1"; else if (parts[0] == "wallMinimum") _wallMinimum.Text = parts[1]; else if (parts[0] == "wallMaximum") _wallMaximum.Text = parts[1];
                 }
+                if (migrated) SaveSettings();
             }
             catch { }
         }

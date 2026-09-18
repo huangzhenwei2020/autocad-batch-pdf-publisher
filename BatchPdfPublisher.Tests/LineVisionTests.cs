@@ -589,7 +589,10 @@ internal static class LineVisionTests
                 settings.VectorMode = LineVisionVectorMode.Hybrid;
                 var hybrid = new LineVisionVectorWorkerClient(workerPath).VectorizeAsync(path, null, settings, null, 0, CancellationToken.None).GetAwaiter().GetResult();
                 True(hybrid.Polylines.Any(item => item.Source == "VTracer轮廓" && !item.IsEnabled), "混合模式没有返回默认关闭的 VTracer 候选");
-                True(hybrid.WallRegions.Any(item => item.Outer.Count >= 3 && !item.IsEnabled), "混合模式没有返回默认关闭的墙体填充候选");
+                // 墙体填充必须是「已启用」：用户勾了「识别墙体填充」才走到这里，而预览与写图都要求
+                // IsEnabled。此前写死 false，导致勾了也看不到任何填充（实测平面图 84 个区域全被丢弃）。
+                // VTracer 轮廓仍默认关闭——那是「保留轮廓」这个独立选项的产物，避免默认叠加双轮廓。
+                True(hybrid.WallRegions.Any(item => item.Outer.Count >= 3 && item.IsEnabled), "勾选识别墙体填充后，墙体候选应当直接可用");
             });
         }
         finally { UserDataPaths.TestRootDirectory = null; try { Directory.Delete(root, true); } catch { } }

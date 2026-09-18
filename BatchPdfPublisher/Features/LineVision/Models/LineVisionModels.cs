@@ -87,7 +87,10 @@ namespace BatchPdfPublisher.Models
     {
         public int Threshold { get; set; }
         public int CloseGapPixels { get; set; } = 2;
-        public int MinimumLineLengthPixels { get; set; } = 18;
+        // 实测（1473x976 立面图 / 1448x1086 平面图）：短于 18px 的水平墨迹段分别占 54.5% 与 96.6%。
+        // 原来定在 18，等于把一半以上的图当噪声丢掉，是「很多地方没识别到」的主因。
+        // 5 是实测曲线的拐点：碎渣（<6px 折线）从 3,677 降到 505，而墨迹总长几乎不降。
+        public int MinimumLineLengthPixels { get; set; } = 5;
         public int CollinearTolerancePixels { get; set; } = 3;
         public int MergeGapPixels { get; set; } = 5;
         public bool DetectDiagonals { get; set; } = true;
