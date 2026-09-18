@@ -9,6 +9,13 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
 
+# MSBuild 默认会把被复用的编译节点留在后台。实测的害处有两个：一是这些常驻节点继续
+# 占着 dist 里刚生成的 exe，于是紧接着再跑一次发布就会 "Access to the path ... denied"；
+# 二是跨调用复用节点时，同一份源码会在不同次调用里编译出不同字节，嵌入载荷的哈希因此
+# 每次都变，发布包无法复核（关掉节点复用后连续两次发布产出完全一致的三个载荷）。
+# 发布构建要的是可复现，所以关掉节点复用。
+$env:MSBUILDDISABLENODEREUSE = '1'
+
 $repositoryRoot = [System.IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent))
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
     $OutputRoot = Join-Path $repositoryRoot 'dist\WanLuoArchitectureTools'
@@ -22,6 +29,29 @@ function Assert-ChildPath([string]$Path, [string]$Parent, [string]$Description) 
     $fullParent = [System.IO.Path]::GetFullPath($Parent).TrimEnd('\') + '\'
     if (-not $fullPath.StartsWith($fullParent, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "$Description 必须位于 $Parent 之下，实际为 $Path"
+    }
+}
+
+# 刚被写入的 dist 产物可能被扫描程序或收尾中的编译进程短暂占用，于是紧接着再跑一次
+# 发布就会 "Access to the path ... denied"。这类锁会自己消失，重试几次通常就过去了；
+# 重试仍失败时跳过该条目并把路径报出来，而不是让整个发布失败——真正要紧的是发布包里
+# 不能混进旧的 DLL，那件事由后面的"历史后缀 DLL"检查兜住。
+function Remove-PathResilient([string]$Path, [int]$Attempts = 6, [switch]$SkipLocked) {
+    for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+        try {
+            Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+            return $true
+        }
+        catch {
+            if ($attempt -eq $Attempts) {
+                if ($SkipLocked) {
+                    Write-Warning "清理 $Path 失败，将跳过（后续会用重建覆盖它）：$($_.Exception.Message)"
+                    return $false
+                }
+                throw "无法清理 $Path：$($_.Exception.Message)。请先关闭占用该目录的 AutoCAD 或万落建筑工具启动器，然后重试。"
+            }
+            Start-Sleep -Milliseconds (400 * $attempt)
+        }
     }
 }
 
@@ -192,9 +222,9 @@ if (Test-Path -LiteralPath $OutputRoot) {
     # for the new version's one-time migration to the stable AppData location.
     Get-ChildItem -LiteralPath $OutputRoot -Force |
         Where-Object { $_.Name -ne '用户配置文件' } |
-        Remove-Item -Recurse -Force
+        ForEach-Object { [void](Remove-PathResilient $_.FullName -SkipLocked) }
 }
-if (-not $KeepIntermediate -and (Test-Path -LiteralPath $artifactRoot)) { Remove-Item -LiteralPath $artifactRoot -Recurse -Force }
+if (-not $KeepIntermediate -and (Test-Path -LiteralPath $artifactRoot)) { Remove-PathResilient $artifactRoot }
 New-Item -ItemType Directory -Path $OutputRoot, $artifactRoot -Force | Out-Null
 
 $msbuild = Find-MSBuild
@@ -223,7 +253,8 @@ foreach ($band in $Bands) {
                 & $dotnet build $project -c Release --nologo `
                     '-p:UseAutoCadNuGet=true' `
                     "-p:OutputPath=$bandOutput\" `
-                    "-p:BaseIntermediateOutputPath=$bandObject"
+                    "-p:BaseIntermediateOutputPath=$bandObject" `
+                    '-p:UseSharedCompilation=false'
             } "编译 $band"
         }
         else {
@@ -231,7 +262,8 @@ foreach ($band in $Bands) {
                 & $dotnet build $project -c Release --nologo `
                     "-p:AutoCadApiPath=$($installation.Path)" `
                     "-p:OutputPath=$bandOutput\" `
-                    "-p:BaseIntermediateOutputPath=$bandObject"
+                    "-p:BaseIntermediateOutputPath=$bandObject" `
+                    '-p:UseSharedCompilation=false'
             } "编译 $band"
         }
     }
@@ -244,6 +276,7 @@ foreach ($band in $Bands) {
                 "/p:AutoCadApiPath=$($installation.Path)" `
                 "/p:OutputPath=$bandOutput\" `
                 "/p:BaseIntermediateOutputPath=$bandObject" `
+                "/p:UseSharedCompilation=false" `
                 "/p:DefineConstants=$defineConstants" /v:minimal
         } "编译 $band"
     }
@@ -268,6 +301,7 @@ Invoke-Checked {
     & $msbuild $ocrWorkerProject /t:Rebuild /p:Configuration=Release `
         "/p:TargetFrameworkVersion=$framework" `
         "/p:WindowsMetadataPath=$windowsMetadata" `
+        "/p:UseSharedCompilation=false" `
         "/p:OutputPath=$ocrWorkerOutput\" /v:minimal
 } '编译图像转 CAD 本地 OCR Worker'
 $ocrWorker = Join-Path $ocrWorkerOutput 'LineVisionOcrWorker.exe'
@@ -292,7 +326,8 @@ New-Item -ItemType Directory -Path $vectorWorkerOutput, $vectorWorkerObject -For
 Invoke-Checked {
     & $msbuild $vectorWorkerProject /t:Rebuild /p:Configuration=Release `
         "/p:TargetFrameworkVersion=$framework" "/p:OutputPath=$vectorWorkerOutput\" `
-        "/p:BaseIntermediateOutputPath=$vectorWorkerObject" /v:minimal
+        "/p:BaseIntermediateOutputPath=$vectorWorkerObject" `
+        "/p:UseSharedCompilation=false" /v:minimal
 } '编译图像转 CAD 矢量化 Worker'
 $vectorWorker = Join-Path $vectorWorkerOutput 'LineVisionVectorWorker.exe'
 $vtracer = Join-Path $repositoryRoot 'ThirdParty\VTracer\win-x64\vtracer.exe'
@@ -355,7 +390,8 @@ Invoke-Checked {
     & $msbuild $launcherProject /t:Rebuild /p:Configuration=Release `
         "/p:TargetFrameworkVersion=$framework" `
         "/p:OutputPath=$OutputRoot\" `
-        "/p:BaseIntermediateOutputPath=$launcherObject" /v:minimal
+        "/p:BaseIntermediateOutputPath=$launcherObject" `
+        "/p:UseSharedCompilation=false" /v:minimal
 } '编译启动器'
 
 $launcher = Join-Path $OutputRoot '万落建筑工具启动器.exe'
@@ -395,8 +431,11 @@ $unexpected = Get-ChildItem (Join-Path $OutputRoot 'CadApi') -Recurse -Filter 'B
 if ($unexpected) { throw "发布目录含历史后缀 DLL：$($unexpected.FullName -join ', ')" }
 
 # 发布前核对启动器必需的嵌入模块，避免主 DLL 能运行但建筑说明或楼梯漏装。
-$launcherAssembly = [System.Reflection.Assembly]::LoadFrom($launcher)
-$embeddedNames = @($launcherAssembly.GetManifestResourceNames())
+# 这里必须从字节加载，不能用 Assembly::LoadFrom：在 .NET 上 LoadFrom 会把程序集文件
+# 锁到当前进程结束，于是本次发布一切正常，紧接着再跑一次就会在这行之后的每处覆盖或
+# 删除上报 "Access to the path ... denied"。Load(byte[]) 只读内容，不持有文件锁。
+$embeddedNames = @([System.Reflection.Assembly]::Load(
+    [System.IO.File]::ReadAllBytes($launcher)).GetManifestResourceNames())
 foreach ($requiredResource in @(
     'WanluoArchitectureTools.CadArchSpecEditor.bundle.zip',
     'WanluoArchitectureTools.StairDetail.R24.zip',
