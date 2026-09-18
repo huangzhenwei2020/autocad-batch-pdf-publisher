@@ -29,11 +29,22 @@
 除了上表的固定功能，`FeatureRegistry.All` 还会**动态合成**“每图层直达归层命令”：
 
 - 来源是 `LayerShortcutStore`（`%APPDATA%\WanluoArchitectureTools\用户配置文件\通用设置\layer-shortcuts.ini`），
-  在“制图标准（`BZS`）→ 图层快捷键”页维护。
+  在“制图标准（`BZS`）→ 图层标准”表的**「快捷键」列**就地维护（原“图层快捷键”独立页已取消）。
 - **只有填了快捷键的图层才会生成命令**，留空即不生成，因此不会与固定功能抢键。
-- 所有图层命令共用内部命令 `GL`（登记在 `Commands.cs`），目标图层经环境变量
-  `WANLUO_TARGET_LAYER` 传入，读完即清空。这样无需为每个图层注册 `[CommandMethod]`，
-  `Build-Release.ps1` 的命令登记校验依然通过。
+- 所有图层命令共用内部命令 `GL`（登记在 `Commands.cs`）。目标图层由别名现场传给
+  `[LispFunction]`，不依赖环境变量（`setenv` 改的是 AutoLISP 自己的环境，到不了 .NET 侧，
+  只作为兼容通道保留）。实际生成的别名形如：
+
+  ```lisp
+  (progn (if WLSETSELECTION (WLSETSELECTION (ssget "_I")))
+         (if WLSETLAYER (WLSETLAYER "<目标图层名>"))
+         (setenv "WANLUO_TARGET_LAYER" "<目标图层名>")
+         (command "GL"))
+  ```
+
+  `(if WLSETLAYER ...)` 是防御：万一函数没注册，别名也不会整条中断。目标值读完即清，
+  同一会话里后面的手动 `GL` 照常弹选层对话框。这样无需为每个图层注册 `[CommandMethod]`，
+  `Build-Release.ps1` 的命令登记校验依然通过（并额外校验两个 LispFunction 已注册）。
 - 图层快捷键与固定功能快捷键**分开校验唯一性**，两套命名空间互不干扰。
 - 相应地，`ShortcutSettingsForm` 只列出固定功能；图层键只在 `BZS` 面板设置，避免两处各存一份而不同步。
 
