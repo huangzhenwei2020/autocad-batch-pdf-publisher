@@ -47,13 +47,20 @@ if ([string]::IsNullOrWhiteSpace($DotNetPath)) {
 $project = Join-Path $repositoryRoot 'StairDetail\src\WL.Stair.Cad2026\WL.Stair.Cad2026.csproj'
 $stagingRoot = Join-Path $repositoryRoot '.artifacts\stair-r25-payload'
 $buildOutput = Join-Path $repositoryRoot '.artifacts\stair-r25-build'
+# R25 的载荷编译必须有自己的中间目录。此前它和 R24 的载荷共用工程目录下的 obj：
+# R24 那条路用 MSBuild 编译整个 WanLuoArchitecture.sln，R25 这条用 dotnet build 编译
+# 同一个共享的 WL.Stair.Core，两边把中间产物写进同一处，谁先谁后就决定最终字节，
+# 于是同一份源码在不同次运行里产出不同的 DLL，嵌进启动器的载荷哈希跟着漂移。
+# 独立中间目录把两条路彻底隔开，产出只由源码决定。
+$buildObject = Join-Path $repositoryRoot '.artifacts\stair-r25-object'
 $payload = Join-Path $repositoryRoot 'BatchPdfPublisherLauncher\Modules\StairDetail\StairDetail.R25.zip'
-foreach ($directory in @($stagingRoot, $buildOutput)) {
+foreach ($directory in @($stagingRoot, $buildOutput, $buildObject)) {
     if (Test-Path -LiteralPath $directory) { Remove-Item -LiteralPath $directory -Recurse -Force }
     New-Item -ItemType Directory -Path $directory -Force | Out-Null
 }
 
-$buildArguments = @('build', $project, '-c', $Configuration, '--nologo', '-o', $buildOutput)
+$buildArguments = @('build', $project, '-c', $Configuration, '--nologo', '-o', $buildOutput,
+    "-p:BaseIntermediateOutputPath=$buildObject\")
 if ([string]::IsNullOrWhiteSpace($AutoCadApiPath)) { $buildArguments += '-p:UseAutoCadNuGet=true' }
 else { $buildArguments += "-p:AutoCadApiPath=$AutoCadApiPath" }
 & $DotNetPath @buildArguments
