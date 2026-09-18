@@ -11,9 +11,16 @@ Set-StrictMode -Version 2.0
 
 # MSBuild 默认会把被复用的编译节点留在后台。实测的害处有两个：一是这些常驻节点继续
 # 占着 dist 里刚生成的 exe，于是紧接着再跑一次发布就会 "Access to the path ... denied"；
-# 二是跨调用复用节点时，同一份源码会在不同次调用里编译出不同字节，嵌入载荷的哈希因此
-# 每次都变，发布包无法复核（关掉节点复用后连续两次发布产出完全一致的三个载荷）。
-# 发布构建要的是可复现，所以关掉节点复用。
+# 二是跨调用复用节点时，同一份源码会在不同次调用里编译出不同字节。发布构建要的是可
+# 复现，所以关掉节点复用。
+#
+# 尚未解决：嵌入载荷（CadArchSpecEditor.bundle.zip、StairDetail.R25.zip）的 ZIP 哈希
+# 在冷启动的首次构建里仍可能与上一次不同，之后同一会话内的重复构建则稳定。已排除的
+# 原因：Compress-Archive 的目录条目时间戳（见各载荷脚本里的 New-DeterministicZip）、
+# 启动器 exe 被 Assembly::LoadFrom 锁住、R25 载荷与 R24 共用中间目录。剩下的差异表现为
+# 编译产出的 DLL 字节不同，怀疑与多个编译步骤共用工程目录下的 obj/bin 有关，尚未定位。
+# 这不影响发布件的正确性——每次构建的 dist 与其内嵌载荷始终自洽，build-info.json 里的
+# GitDirty 会如实反映"构建时工作区是否有改动"。
 $env:MSBUILDDISABLENODEREUSE = '1'
 
 $repositoryRoot = [System.IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent))
