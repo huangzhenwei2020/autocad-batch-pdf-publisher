@@ -30,6 +30,8 @@ namespace BatchPdfPublisher.Services
             if (picked.Status != PromptStatus.OK) return inserted;
             var insertion = picked.Value;
             var ucsToWorld = document.Editor.CurrentUserCoordinateSystem;
+            // 统计被跳过的坏对象：单个图形本身有缺陷时只跳过它，不让整次插入失败。
+            var skipped = 0;
             using (document.LockDocument())
             using (var transaction = document.Database.TransactionManager.StartTransaction())
             {
@@ -59,53 +61,81 @@ namespace BatchPdfPublisher.Services
                 }
                 foreach (var wall in walls)
                 {
-                    var boundaries = new List<ObjectId>();
-                    boundaries.Add(AppendBoundary(space, transaction, wall.Outer, insertion, result.Height, unitsPerPixel, ucsToWorld, layers.WallBoundary));
-                    foreach (var hole in wall.Holes.Where(value => value.Count >= 3)) boundaries.Add(AppendBoundary(space, transaction, hole, insertion, result.Height, unitsPerPixel, ucsToWorld, layers.WallBoundary));
-                    var hatch = new Hatch { LayerId = layers.WallFill, Associative = true }; space.AppendEntity(hatch); transaction.AddNewlyCreatedDBObject(hatch, true);
-                    hatch.SetHatchPattern(HatchPatternType.PreDefined, "SOLID");
-                    hatch.AppendLoop(HatchLoopTypes.Outermost, new ObjectIdCollection { boundaries[0] });
-                    for (var index = 1; index < boundaries.Count; index++) hatch.AppendLoop(HatchLoopTypes.Default, new ObjectIdCollection { boundaries[index] });
-                    hatch.EvaluateHatch(true); inserted.WallFillCount++;
+                    // 一处墙体失败不应该让整次插入回滚：其余直线、折线、文字都是有效的。
+                    // 之前这里没有任何保护，一个坏区域就抛出 eNotInDatabase 让整个命令失败。
+                    try
+                    {
+                        var boundaries = new List<ObjectId>();
+                        boundaries.Add(AppendBoundary(space, transaction, wall.Outer, insertion, result.Height, unitsPerPixel, ucsToWorld, layers.WallBoundary));
+                        foreach (var hole in wall.Holes.Where(value => value.Count >= 3)) boundaries.Add(AppendBoundary(space, transaction, hole, insertion, result.Height, unitsPerPixel, ucsToWorld, layers.WallBoundary));
+                        // 写法对齐楼梯模块里已验证可用的填充（CadLineRenderer）：
+                        // 必须先 SetDatabaseDefaults，且用非关联填充。缺了前者会抛 eNotInDatabase。
+                        var hatch = new Hatch { LayerId = layers.WallFill, Associative = false };
+                        hatch.SetDatabaseDefaults(document.Database);
+                        space.AppendEntity(hatch); transaction.AddNewlyCreatedDBObject(hatch, true);
+                        hatch.AppendLoop(HatchLoopTypes.Outermost, new ObjectIdCollection { boundaries[0] });
+                        for (var index = 1; index < boundaries.Count; index++) hatch.AppendLoop(HatchLoopTypes.Default, new ObjectIdCollection { boundaries[index] });
+                        hatch.SetHatchPattern(HatchPatternType.PreDefined, "SOLID");
+                        hatch.EvaluateHatch(true);
+                        inserted.WallFillCount++;
+                    }
+                    catch (System.Exception)
+                    {
+                        // 填充失败就跳过这一个区域，边界线仍留在图上，不影响其余内容。
+                        skipped++;
+                    }
                 }
                 foreach (var circle in circles)
                 {
-                    var center = ToCad(circle.CenterX, circle.CenterY, insertion, result.Height, unitsPerPixel).TransformBy(ucsToWorld);
-                    var entity = new Circle(center, ucsToWorld.CoordinateSystem3d.Zaxis, circle.Radius * unitsPerPixel) { LayerId = layers[LineVisionDirection.Uncertain] };
-                    space.AppendEntity(entity); transaction.AddNewlyCreatedDBObject(entity, true);
-                    inserted.CircleCount++;
+                    try
+                    {
+                        var center = ToCad(circle.CenterX, circle.CenterY, insertion, result.Height, unitsPerPixel).TransformBy(ucsToWorld);
+                        var entity = new Circle(center, ucsToWorld.CoordinateSystem3d.Zaxis, circle.Radius * unitsPerPixel) { LayerId = layers[LineVisionDirection.Uncertain] };
+                        space.AppendEntity(entity); transaction.AddNewlyCreatedDBObject(entity, true);
+                        inserted.CircleCount++;
+                    }
+                    catch (System.Exception) { skipped++; }
                 }
                 foreach (var arc in arcs)
                 {
-                    var center = ToCad(arc.CenterX, arc.CenterY, insertion, result.Height, unitsPerPixel);
-                    var startAngle = -(arc.StartAngleDegrees + arc.SweepAngleDegrees) * Math.PI / 180d;
-                    var endAngle = -arc.StartAngleDegrees * Math.PI / 180d;
-                    var entity = new Arc(center, arc.Radius * unitsPerPixel, startAngle, endAngle) { LayerId = layers[LineVisionDirection.Uncertain] };
-                    entity.TransformBy(ucsToWorld);
-                    space.AppendEntity(entity); transaction.AddNewlyCreatedDBObject(entity, true);
-                    inserted.ArcCount++;
+                    try
+                    {
+                        var center = ToCad(arc.CenterX, arc.CenterY, insertion, result.Height, unitsPerPixel);
+                        var startAngle = -(arc.StartAngleDegrees + arc.SweepAngleDegrees) * Math.PI / 180d;
+                        var endAngle = -arc.StartAngleDegrees * Math.PI / 180d;
+                        var entity = new Arc(center, arc.Radius * unitsPerPixel, startAngle, endAngle) { LayerId = layers[LineVisionDirection.Uncertain] };
+                        entity.TransformBy(ucsToWorld);
+                        space.AppendEntity(entity); transaction.AddNewlyCreatedDBObject(entity, true);
+                        inserted.ArcCount++;
+                    }
+                    catch (System.Exception) { skipped++; }
                 }
                 foreach (var region in textRegions)
                 {
-                    var placement = LineVisionOcrGeometry.GetPlacement(region);
-                    if (placement.TextHeightPixels < 1d) continue;
-                    var position = ToCad(placement.BaselineOrigin.X, placement.BaselineOrigin.Y, insertion, result.Height, unitsPerPixel);
-                    var text = new DBText
+                    try
                     {
-                        Position = position,
-                        Height = Math.Max(unitsPerPixel, placement.TextHeightPixels * unitsPerPixel * 0.78d),
-                        Rotation = -placement.RotationDegrees * Math.PI / 180d,
-                        TextString = region.Text.Trim(),
-                        LayerId = layers.Text,
-                        TextStyleId = textStyle
-                    };
-                    text.TransformBy(ucsToWorld);
-                    space.AppendEntity(text); transaction.AddNewlyCreatedDBObject(text, true);
-                    inserted.TextCount++;
+                        var placement = LineVisionOcrGeometry.GetPlacement(region);
+                        if (placement.TextHeightPixels < 1d) continue;
+                        var position = ToCad(placement.BaselineOrigin.X, placement.BaselineOrigin.Y, insertion, result.Height, unitsPerPixel);
+                        var text = new DBText
+                        {
+                            Position = position,
+                            Height = Math.Max(unitsPerPixel, placement.TextHeightPixels * unitsPerPixel * 0.78d),
+                            Rotation = -placement.RotationDegrees * Math.PI / 180d,
+                            TextString = region.Text.Trim(),
+                            LayerId = layers.Text,
+                            TextStyleId = textStyle
+                        };
+                        text.TransformBy(ucsToWorld);
+                        space.AppendEntity(text); transaction.AddNewlyCreatedDBObject(text, true);
+                        inserted.TextCount++;
+                    }
+                    catch (System.Exception) { skipped++; }
                 }
                 transaction.Commit();
             }
-            document.Editor.WriteMessage("\n图像转 CAD 完成，共插入 " + inserted.LineCount + " 根直线、" + inserted.PolylineCount + " 条折线、" + inserted.WallFillCount + " 个墙体填充、" + inserted.ArcCount + " 段圆弧、" + inserted.CircleCount + " 个圆、" + inserted.TextCount + " 个文字。\n");
+            document.Editor.WriteMessage("\n图像转 CAD 完成，共插入 " + inserted.LineCount + " 根直线、" + inserted.PolylineCount + " 条折线、" + inserted.WallFillCount + " 个墙体填充、" + inserted.ArcCount + " 段圆弧、" + inserted.CircleCount + " 个圆、" + inserted.TextCount + " 个文字。"
+                + (skipped > 0 ? "（有 " + skipped + " 个对象本身有缺陷，已跳过，未影响其余内容）" : string.Empty) + "\n");
             return inserted;
         }
 
