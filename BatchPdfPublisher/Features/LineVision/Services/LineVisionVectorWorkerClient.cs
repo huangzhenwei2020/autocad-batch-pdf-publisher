@@ -58,8 +58,14 @@ namespace BatchPdfPublisher.Services
 
         private static LineVisionVectorResult Convert(VectorResult dto, LineVisionSettings settings, double orthogonalTolerance)
         {
-            var result = new LineVisionVectorResult(); Add(result.Polylines, dto.Centerlines, "骨架中心线", true);
-            Add(result.Polylines, dto.Outlines, "VTracer轮廓", settings.VectorMode == LineVisionVectorMode.Outline);
+            var result = new LineVisionVectorResult();
+            // 轮廓是"闭合的形状"，粗黑笔画（墙身、实心构件）只有靠它才能被框住并填实。
+            // 骨架给的是中心线——遇到粗黑块会收成一条线，形状对但没填实。
+            // 所以只要用户显式选了「保留轮廓」，就必须启用轮廓；此前这里写成"等于 Outline 模式"，
+            // 而 DetectWallFills 会把模式提成 hybrid，于是选了保留轮廓也拿不到轮廓。
+            var keepOutlines = settings.VectorMode == LineVisionVectorMode.Outline;
+            Add(result.Polylines, dto.Centerlines, "骨架中心线", !keepOutlines);
+            Add(result.Polylines, dto.Outlines, "VTracer轮廓", keepOutlines);
             foreach (var polyline in result.Polylines) SnapOrthogonal(polyline, orthogonalTolerance);
             // 墙体边框线是识别结果，默认启用；填充做法由 WallFillMode 单独控制，
             // 所以旧的 IsEnabled=false（写死默认关闭）会让边框线也一并消失——实测平面图
@@ -88,7 +94,54 @@ namespace BatchPdfPublisher.Services
                 result.Polylines = result.Polylines
                     .Where(polyline => polyline.Source != "骨架中心线" || !LiesInsideAnyWall(polyline, result.WallRegions))
                     .ToList();
+            // 轮廓已经完整描出了粗黑块的边界，再叠一层骨架中线只会让它看起来像一条线。
+            // 但细线、文字笔画在轮廓里表现很差，绝不能一起丢——所以只丢弃"落在粗黑块轮廓内部"
+            // 的中线。判定门槛不能用中位面积：实测轮廓面积中位只有 38px²，那是细线描出来的细长条，
+            // 拿它当门槛等于把细线也一起丢。这里要求轮廓面积达到绝对下限，并且明显大于中位。
+            if (keepOutlines && settings.DropCenterlinesInsideOutlines)
+            {
+                var outlines = result.Polylines.Where(value => value.Source == "VTracer轮廓").ToList();
+                var areas = outlines.Select(value => Math.Abs(SignedArea(value.Points))).Where(value => value > 0d).OrderBy(value => value).ToList();
+                if (areas.Count > 0)
+                {
+                    var median = areas[areas.Count / 2];
+                    var threshold = Math.Max(MinimumSolidOutlineArea, median * 4d);
+                    var solid = outlines.Where(value => Math.Abs(SignedArea(value.Points)) >= threshold).ToList();
+                    if (solid.Count > 0)
+                        result.Polylines = result.Polylines
+                            .Where(value => value.Source != "骨架中心线" || !LiesInsideAnyPolygon(value, solid))
+                            .ToList();
+                }
+            }
             return result;
+        }
+
+        /// <summary>只有面积达到这个值的轮廓才被视为"粗黑块"。低于它的当作细线轮廓，不参与丢弃中线。</summary>
+        private const double MinimumSolidOutlineArea = 400d;
+
+        private static double SignedArea(IList<PointF> points)
+        {
+            if (points == null || points.Count < 3) return 0d;
+            var area = 0d;
+            for (var index = 0; index < points.Count; index++)
+            {
+                var a = points[index]; var b = points[(index + 1) % points.Count];
+                area += a.X * b.Y - b.X * a.Y;
+            }
+            return area * 0.5d;
+        }
+
+        private static bool LiesInsideAnyPolygon(LineVisionPolyline polyline, IList<LineVisionPolyline> polygons)
+        {
+            if (polyline.Points == null || polyline.Points.Count < 2) return false;
+            foreach (var polygon in polygons)
+            {
+                if (polygon.Points.Count < 3) continue;
+                var inside = 0;
+                foreach (var point in polyline.Points) if (ContainsPoint(polygon.Points, point)) inside++;
+                if (inside >= polyline.Points.Count * 0.8d) return true;
+            }
+            return false;
         }
 
         /// <summary>整条折线是否落在某个墙体区域内部（按顶点比例判定）。</summary>

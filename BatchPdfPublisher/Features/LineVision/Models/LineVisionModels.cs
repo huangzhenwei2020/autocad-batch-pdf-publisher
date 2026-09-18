@@ -123,6 +123,11 @@ namespace BatchPdfPublisher.Models
         /// 而墙体本身已经有"边框 + 填充"，两者叠加会让同一堵墙被画两遍、看起来成一条粗线。
         /// </summary>
         public bool DropCenterlinesInsideWalls { get; set; } = true;
+        /// <summary>
+        /// 选「保留轮廓」时，是否丢弃落在较大闭合轮廓内部的骨架中线。
+        /// 轮廓已经把粗黑块的边界描全，再叠中线会看起来像一条线；细线仍保留。
+        /// </summary>
+        public bool DropCenterlinesInsideOutlines { get; set; } = true;
         public string WallHatchPatternName { get; set; } = "ANSI31";
         public double WallHatchPatternScale { get; set; } = 1d;
         public double CadUnitsPerPixel { get; set; } = 1d;
