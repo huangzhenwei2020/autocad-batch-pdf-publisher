@@ -21,6 +21,8 @@ namespace Wanluo.LineVision.VectorWorker
         [DataMember(Name = "holes", Order = 2)] public List<List<VectorPoint>> Holes { get; set; } = new List<List<VectorPoint>>();
         [DataMember(Name = "averageThickness", Order = 3)] public double AverageThickness { get; set; }
         [DataMember(Name = "confidence", Order = 4)] public double Confidence { get; set; }
+        /// <summary>图案填充比例。由内核从 --wall-pattern-scale 带入，写图时使用。</summary>
+        [DataMember(Name = "patternScale", Order = 5)] public double PatternScale { get; set; } = 1d;
     }
 
     [DataContract] internal sealed class VectorPolyline

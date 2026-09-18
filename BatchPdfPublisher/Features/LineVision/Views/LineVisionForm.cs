@@ -27,7 +27,9 @@ namespace BatchPdfPublisher.Views
         private readonly CheckBox _maskText = new CheckBox { Text = "线稿中遮罩文字", Checked = true, AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
         private readonly CheckBox _insertText = new CheckBox { Text = "生成CAD文字", Checked = true, AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
         private readonly CheckBox _buildPolylines = new CheckBox { Text = "连接为折线", Checked = true, AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
-        private readonly CheckBox _detectWallFills = new CheckBox { Text = "识别墙体填充", Checked = true, AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
+        private readonly CheckBox _detectWallFills = new CheckBox { Text = "识别墙体（画边框）", Checked = true, AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
+        private readonly ComboBox _wallFillMode = DropDown(96);
+        private readonly TextBox _wallHatchPattern = Box("ANSI31", 72), _wallHatchScale = Box("1", 42);
         private readonly ComboBox _ocrLanguage = DropDown(118);
         private readonly ComboBox _ocrEngine = DropDown(190);
         private readonly TextBox _ocrConfidence = Box("0.70", 55), _maskExpansion = Box("2", 45);
@@ -59,7 +61,7 @@ namespace BatchPdfPublisher.Views
             _documentBinding = new ModelessDocumentBinding(this, document);
             Text = "图像转 CAD"; StartPosition = FormStartPosition.CenterScreen; ClientSize = new Size(1220, 760); MinimumSize = new Size(940, 610);
             Font = new Font("Microsoft YaHei UI", 9f); BackColor = Color.White;
-            Build(); LoadSettings(); UpdateOcrEngineStatus();
+            Build(); LoadSettings(); UpdateOcrEngineStatus(); UpdateWallFillControls();
             FormClosed += (s, e) => { if (_cancellation != null) _cancellation.Cancel(); SaveSettings(); if (_result != null) _result.Dispose(); };
         }
 
@@ -69,6 +71,11 @@ namespace BatchPdfPublisher.Views
             _profile.SelectedIndexChanged += (s, e) => ApplyProfileDefaults();
             _view.Items.AddRange(new object[] { "彩色识别结果", "原始图像", "黑白预处理" }); _view.SelectedIndex = 0;
             _vectorMode.Items.AddRange(new object[] { "建筑中心线", "保留轮廓", "混合识别", "兼容旧算法" }); _vectorMode.SelectedIndex = 0;
+            // 墙体边框总是画出来；这里只选边框内部怎么填。默认不填，保持与原图观感一致，
+            // 想要实心或斜线图案再自己选。
+            _wallFillMode.Items.AddRange(new object[] { "不填充(只画边框)", "实心填充", "图案填充" }); _wallFillMode.SelectedIndex = 0;
+            _wallFillMode.SelectedIndexChanged += (s, e) => UpdateWallFillControls();
+            _wallHatchPattern.TextChanged += (s, e) => { if (_result != null) _preview.Invalidate(); };
             _ocrLanguage.Items.AddRange(new object[] { "简体中文", "英文" }); _ocrLanguage.SelectedIndex = 0;
             _ocrEngine.Items.AddRange(new object[] { "自动选择（推荐）", "PaddleOCR 增强", "Windows OCR 兼容" }); _ocrEngine.SelectedIndex = 0;
             _ocrEngine.SelectedIndexChanged += (s, e) => UpdateOcrEngineStatus();
@@ -94,7 +101,13 @@ namespace BatchPdfPublisher.Views
             var parameterRow = Row();
             Add(parameterRow, "阈值(0自动)", _threshold); Add(parameterRow, "最短线", _minimum); Add(parameterRow, "补断线", _closeGap); Add(parameterRow, "共线容差", _collinear); Add(parameterRow, "合并间隙", _mergeGap);
             Add(parameterRow, "横竖吸附(°)", _orthogonalTolerance);
-            parameterRow.Controls.Add(_diagonals); parameterRow.Controls.Add(_buildPolylines); parameterRow.Controls.Add(_detectWallFills); Add(parameterRow, "墙厚(px)", _wallMinimum); parameterRow.Controls.Add(LabelFor("至")); parameterRow.Controls.Add(_wallMaximum); parameterRow.Controls.Add(LabelFor("预览")); parameterRow.Controls.Add(_view);
+            parameterRow.Controls.Add(_diagonals); parameterRow.Controls.Add(_buildPolylines); parameterRow.Controls.Add(_detectWallFills);
+            Add(parameterRow, "墙厚(px)", _wallMinimum); parameterRow.Controls.Add(LabelFor("至")); parameterRow.Controls.Add(_wallMaximum);
+            // 边框线总是画；这里只决定边框内怎么填。填充与边框解耦，用户可以只要边框不要填充。
+            Add(parameterRow, "填充", _wallFillMode);
+            parameterRow.Controls.Add(LabelFor("图案")); parameterRow.Controls.Add(_wallHatchPattern);
+            parameterRow.Controls.Add(LabelFor("比例")); parameterRow.Controls.Add(_wallHatchScale);
+            parameterRow.Controls.Add(LabelFor("预览")); parameterRow.Controls.Add(_view);
             _analyze.BackColor = Color.FromArgb(32, 113, 196); _analyze.ForeColor = Color.White; _analyze.Click += async (s, e) => await AnalyzeAsync(); parameterRow.Controls.Add(_analyze);
             _cancelAnalysis.Enabled = false; _cancelAnalysis.Click += (s, e) => { if (_cancellation != null) _cancellation.Cancel(); }; parameterRow.Controls.Add(_cancelAnalysis); top.Controls.Add(parameterRow);
 
@@ -334,7 +347,18 @@ namespace BatchPdfPublisher.Views
                 OrthogonalToleranceDegrees = ParseDouble(_orthogonalTolerance, "横竖吸附角度", 0d, 15d), BuildPolylines = _buildPolylines.Checked,
                 VectorMode = _vectorMode.SelectedIndex == 1 ? LineVisionVectorMode.Outline : _vectorMode.SelectedIndex == 2 ? LineVisionVectorMode.Hybrid : _vectorMode.SelectedIndex == 3 ? LineVisionVectorMode.Legacy : LineVisionVectorMode.Centerline
                 , DetectWallFills = _detectWallFills.Checked, MinimumWallThicknessPixels = ParseDouble(_wallMinimum, "最小墙厚", 1d, 500d), MaximumWallThicknessPixels = ParseDouble(_wallMaximum, "最大墙厚", 2d, 2000d)
+                , WallFillMode = _wallFillMode.SelectedIndex == 1 ? LineVisionWallFillMode.Solid : _wallFillMode.SelectedIndex == 2 ? LineVisionWallFillMode.Pattern : LineVisionWallFillMode.None
+                , WallHatchPatternName = string.IsNullOrWhiteSpace(_wallHatchPattern.Text) ? "ANSI31" : _wallHatchPattern.Text.Trim()
+                , WallHatchPatternScale = ParseDouble(_wallHatchScale, "图案比例", 0.001d, 1000d)
             };
+        }
+
+        /// <summary>图案名与比例只在选了"图案填充"时才有意义。</summary>
+        private void UpdateWallFillControls()
+        {
+            var pattern = _wallFillMode.SelectedIndex == 2;
+            _wallHatchPattern.Enabled = pattern;
+            _wallHatchScale.Enabled = pattern;
         }
 
         private void ApplyProfileDefaults()
@@ -489,6 +513,8 @@ namespace BatchPdfPublisher.Views
                     else if (parts[0] == "ocrLanguage") _ocrLanguage.SelectedIndex = parts[1] == "en-US" ? 1 : 0; else if (parts[0] == "ocrConfidence") _ocrConfidence.Text = parts[1]; else if (parts[0] == "maskExpansion") _maskExpansion.Text = parts[1]; else if (parts[0] == "ocrEngine") _ocrEngine.SelectedIndex = parts[1] == "paddle" ? 1 : parts[1] == "windows" ? 2 : 0; else if (parts[0] == "orthogonalTolerance") _orthogonalTolerance.Text = parts[1]; else if (parts[0] == "buildPolylines") _buildPolylines.Checked = parts[1] == "1";
                     else if (parts[0] == "vectorMode") { int value; if (int.TryParse(parts[1], out value)) _vectorMode.SelectedIndex = Math.Max(0, Math.Min(3, value)); }
                     else if (parts[0] == "detectWallFills") _detectWallFills.Checked = parts[1] == "1"; else if (parts[0] == "wallMinimum") _wallMinimum.Text = parts[1]; else if (parts[0] == "wallMaximum") _wallMaximum.Text = parts[1];
+                    else if (parts[0] == "wallFillMode") { int value; if (int.TryParse(parts[1], out value)) _wallFillMode.SelectedIndex = Math.Max(0, Math.Min(2, value)); }
+                    else if (parts[0] == "wallHatchPattern") _wallHatchPattern.Text = parts[1]; else if (parts[0] == "wallHatchScale") _wallHatchScale.Text = parts[1];
                 }
                 if (migrated) SaveSettings();
             }
@@ -500,7 +526,7 @@ namespace BatchPdfPublisher.Views
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath));
-                File.WriteAllLines(SettingsPath, new[] { "threshold=" + _threshold.Text, "minimum=" + _minimum.Text, "closeGap=" + _closeGap.Text, "collinear=" + _collinear.Text, "mergeGap=" + _mergeGap.Text, "orthogonalTolerance=" + _orthogonalTolerance.Text, "buildPolylines=" + (_buildPolylines.Checked ? "1" : "0"), "vectorMode=" + _vectorMode.SelectedIndex, "detectWallFills=" + (_detectWallFills.Checked ? "1" : "0"), "wallMinimum=" + _wallMinimum.Text, "wallMaximum=" + _wallMaximum.Text, "scale=" + _scale.Text, "diagonals=" + (_diagonals.Checked ? "1" : "0"), "recognizeText=" + (_recognizeText.Checked ? "1" : "0"), "maskText=" + (_maskText.Checked ? "1" : "0"), "insertText=" + (_insertText.Checked ? "1" : "0"), "ocrEngine=" + (SelectedOcrMode() == LineVisionOcrMode.Paddle ? "paddle" : SelectedOcrMode() == LineVisionOcrMode.Windows ? "windows" : "automatic"), "ocrLanguage=" + (_ocrLanguage.SelectedIndex == 1 ? "en-US" : "zh-Hans-CN"), "ocrConfidence=" + _ocrConfidence.Text, "maskExpansion=" + _maskExpansion.Text });
+                File.WriteAllLines(SettingsPath, new[] { "threshold=" + _threshold.Text, "minimum=" + _minimum.Text, "closeGap=" + _closeGap.Text, "collinear=" + _collinear.Text, "mergeGap=" + _mergeGap.Text, "orthogonalTolerance=" + _orthogonalTolerance.Text, "buildPolylines=" + (_buildPolylines.Checked ? "1" : "0"), "vectorMode=" + _vectorMode.SelectedIndex, "detectWallFills=" + (_detectWallFills.Checked ? "1" : "0"), "wallMinimum=" + _wallMinimum.Text, "wallMaximum=" + _wallMaximum.Text, "wallFillMode=" + _wallFillMode.SelectedIndex, "wallHatchPattern=" + _wallHatchPattern.Text, "wallHatchScale=" + _wallHatchScale.Text, "scale=" + _scale.Text, "diagonals=" + (_diagonals.Checked ? "1" : "0"), "recognizeText=" + (_recognizeText.Checked ? "1" : "0"), "maskText=" + (_maskText.Checked ? "1" : "0"), "insertText=" + (_insertText.Checked ? "1" : "0"), "ocrEngine=" + (SelectedOcrMode() == LineVisionOcrMode.Paddle ? "paddle" : SelectedOcrMode() == LineVisionOcrMode.Windows ? "windows" : "automatic"), "ocrLanguage=" + (_ocrLanguage.SelectedIndex == 1 ? "en-US" : "zh-Hans-CN"), "ocrConfidence=" + _ocrConfidence.Text, "maskExpansion=" + _maskExpansion.Text });
             }
             catch { }
         }

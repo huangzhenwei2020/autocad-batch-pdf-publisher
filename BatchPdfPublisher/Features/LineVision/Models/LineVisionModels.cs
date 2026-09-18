@@ -17,6 +17,9 @@ namespace BatchPdfPublisher.Models
 
     internal enum LineVisionVectorMode { Legacy, Centerline, Outline, Hybrid }
 
+    /// <summary>墙体边框内部的填充做法。None 表示只画边框线、不填充。</summary>
+    internal enum LineVisionWallFillMode { None, Solid, Pattern }
+
     internal enum LineVisionOcrMode { Automatic, Paddle, Windows }
 
     internal sealed class LineVisionSegment
@@ -80,7 +83,17 @@ namespace BatchPdfPublisher.Models
         public List<List<PointF>> Holes { get; set; } = new List<List<PointF>>();
         public double AverageThickness { get; set; }
         public double Confidence { get; set; }
+        /// <summary>是否把这块墙的边框线画出来。这是真正的墙体识别结果，默认启用。</summary>
         public bool IsEnabled { get; set; }
+        /// <summary>
+        /// 是否在边框内填充。与边框线解耦：用户完全可以只要边框、不要填充。
+        /// 以前只有一个 IsEnabled 同时管着"画不画"和"填不填"，导致要么两者都没有、要么只能全填。
+        /// </summary>
+        public LineVisionWallFillMode FillMode { get; set; } = LineVisionWallFillMode.Solid;
+        /// <summary>图案填充的图案名（FillMode 为 Pattern 时使用）。</summary>
+        public string HatchPatternName { get; set; } = "ANSI31";
+        /// <summary>图案填充比例（CAD 单位）。</summary>
+        public double HatchPatternScale { get; set; } = 1d;
     }
 
     internal sealed class LineVisionSettings
@@ -100,6 +113,13 @@ namespace BatchPdfPublisher.Models
         public bool DetectWallFills { get; set; } = true;
         public double MinimumWallThicknessPixels { get; set; } = 3d;
         public double MaximumWallThicknessPixels { get; set; } = 80d;
+        /// <summary>
+        /// 墙体边框内的填充做法。边框线与该选项无关——边框是识别结果，总是画出来。
+        /// None 只画边框、不填充；Solid 实心；Pattern 用 HatchPatternName 指定的图案。
+        /// </summary>
+        public LineVisionWallFillMode WallFillMode { get; set; } = LineVisionWallFillMode.None;
+        public string WallHatchPatternName { get; set; } = "ANSI31";
+        public double WallHatchPatternScale { get; set; } = 1d;
         public double CadUnitsPerPixel { get; set; } = 1d;
     }
 
@@ -190,7 +210,9 @@ namespace BatchPdfPublisher.Models
         public int ArcCount { get; set; }
         public int PolylineCount { get; set; }
         public int WallFillCount { get; set; }
-        public int TotalCount { get { return LineCount + CircleCount + ArcCount + PolylineCount + WallFillCount + TextCount; } }
+        /// <summary>画出的墙体边框线条数。与填充数分开统计，因为"只要边框不要填充"是常见选择。</summary>
+        public int WallBoundaryCount { get; set; }
+        public int TotalCount { get { return LineCount + CircleCount + ArcCount + PolylineCount + WallBoundaryCount + WallFillCount + TextCount; } }
     }
 
     internal sealed class UnavailableLineVisionOcrEngine : ILineVisionOcrEngine

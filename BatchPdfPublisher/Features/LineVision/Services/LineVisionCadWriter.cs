@@ -61,13 +61,20 @@ namespace BatchPdfPublisher.Services
                 }
                 foreach (var wall in walls)
                 {
-                    // 一处墙体失败不应该让整次插入回滚：其余直线、折线、文字都是有效的。
-                    // 之前这里没有任何保护，一个坏区域就抛出 eNotInDatabase 让整个命令失败。
+                    // 边框线与填充是两件事：边框是识别结果，先独立画出来；填充失败或用户选择不填充，
+                    // 边框都必须留在图上。之前两者绑在一起，填充一出错连边框都没有。
+                    var boundaries = new List<ObjectId>();
                     try
                     {
-                        var boundaries = new List<ObjectId>();
                         boundaries.Add(AppendBoundary(space, transaction, wall.Outer, insertion, result.Height, unitsPerPixel, ucsToWorld, layers.WallBoundary));
                         foreach (var hole in wall.Holes.Where(value => value.Count >= 3)) boundaries.Add(AppendBoundary(space, transaction, hole, insertion, result.Height, unitsPerPixel, ucsToWorld, layers.WallBoundary));
+                        inserted.WallBoundaryCount++;
+                    }
+                    catch (System.Exception) { skipped++; continue; }
+
+                    if (wall.FillMode == LineVisionWallFillMode.None) continue;
+                    try
+                    {
                         // 写法对齐楼梯模块里已验证可用的填充（CadLineRenderer）：
                         // 必须先 SetDatabaseDefaults，且用非关联填充。缺了前者会抛 eNotInDatabase。
                         var hatch = new Hatch { LayerId = layers.WallFill, Associative = false };
@@ -75,13 +82,27 @@ namespace BatchPdfPublisher.Services
                         space.AppendEntity(hatch); transaction.AddNewlyCreatedDBObject(hatch, true);
                         hatch.AppendLoop(HatchLoopTypes.Outermost, new ObjectIdCollection { boundaries[0] });
                         for (var index = 1; index < boundaries.Count; index++) hatch.AppendLoop(HatchLoopTypes.Default, new ObjectIdCollection { boundaries[index] });
-                        hatch.SetHatchPattern(HatchPatternType.PreDefined, "SOLID");
+                        if (wall.FillMode == LineVisionWallFillMode.Solid)
+                        {
+                            hatch.SetHatchPattern(HatchPatternType.PreDefined, "SOLID");
+                        }
+                        else
+                        {
+                            var patternName = string.IsNullOrWhiteSpace(wall.HatchPatternName) ? "ANSI31" : wall.HatchPatternName.Trim();
+                            try { hatch.SetHatchPattern(HatchPatternType.PreDefined, patternName); }
+                            catch (System.Exception)
+                            {
+                                // 图案名不存在时退回 ANSI31，而不是让这块墙整体失败。
+                                hatch.SetHatchPattern(HatchPatternType.PreDefined, "ANSI31");
+                            }
+                            hatch.PatternScale = Math.Max(0.001d, wall.HatchPatternScale);
+                        }
                         hatch.EvaluateHatch(true);
                         inserted.WallFillCount++;
                     }
                     catch (System.Exception)
                     {
-                        // 填充失败就跳过这一个区域，边界线仍留在图上，不影响其余内容。
+                        // 填充失败就跳过这一个区域，边框线已经画上了，不影响其余内容。
                         skipped++;
                     }
                 }
@@ -134,7 +155,9 @@ namespace BatchPdfPublisher.Services
                 }
                 transaction.Commit();
             }
-            document.Editor.WriteMessage("\n图像转 CAD 完成，共插入 " + inserted.LineCount + " 根直线、" + inserted.PolylineCount + " 条折线、" + inserted.WallFillCount + " 个墙体填充、" + inserted.ArcCount + " 段圆弧、" + inserted.CircleCount + " 个圆、" + inserted.TextCount + " 个文字。"
+            document.Editor.WriteMessage("\n图像转 CAD 完成，共插入 " + inserted.LineCount + " 根直线、" + inserted.PolylineCount + " 条折线、"
+                + inserted.WallBoundaryCount + " 条墙体边框、" + inserted.WallFillCount + " 个墙体填充、" + inserted.ArcCount + " 段圆弧、"
+                + inserted.CircleCount + " 个圆、" + inserted.TextCount + " 个文字。"
                 + (skipped > 0 ? "（有 " + skipped + " 个对象本身有缺陷，已跳过，未影响其余内容）" : string.Empty) + "\n");
             return inserted;
         }

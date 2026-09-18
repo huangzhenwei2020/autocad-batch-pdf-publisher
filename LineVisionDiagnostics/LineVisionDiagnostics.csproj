@@ -13,6 +13,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="Program.cs" />
+    <Compile Include="MaskProbe.cs" />
     <Compile Include="..\BatchPdfPublisher.Tests\UserDataPathsStub.cs" Link="UserDataPathsStub.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\LineVision\Models\LineVisionModels.cs" Link="LineVisionModels.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\LineVision\Models\LineVisionOcrProtocol.cs" Link="LineVisionOcrProtocol.cs" />

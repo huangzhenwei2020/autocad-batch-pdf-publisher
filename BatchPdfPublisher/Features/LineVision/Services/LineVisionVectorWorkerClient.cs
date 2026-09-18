@@ -26,14 +26,19 @@ namespace BatchPdfPublisher.Services
             try
             {
                 if (region.HasValue || textRegions != null) { input = Path.Combine(operation, "prepared.png"); SavePrepared(imagePath, region, textRegions, maskExpansion, input); }
-                var mode = settings.VectorMode == LineVisionVectorMode.Outline ? "outline" : settings.VectorMode == LineVisionVectorMode.Hybrid || settings.DetectWallFills ? "hybrid" : "centerline";
+                var mode = settings.VectorMode == LineVisionVectorMode.Outline ? "outline" : settings.VectorMode == LineVisionVectorMode.Hybrid ? "hybrid" : "centerline";
+                // 钩上「识别墙体填充」就要检测墙体，而墙体来自闭合轮廓，必须让内核跑一次 outline 分支。
+                // 以前这里把 DetectWallFills 也算成 hybrid，等于只要勾着开关就无条件白跑一遍 VTracer；
+                // 现在只有真正需要墙体时才把 mode 提到 hybrid。
+                if (settings.DetectWallFills && mode == "centerline") mode = "hybrid";
                 // 这些参数以前没有传给内核，于是界面上调“最短线/合并间隙/共线容差”对最终结果毫无影响。
                 var culture = System.Globalization.CultureInfo.InvariantCulture;
                 var start = new ProcessStartInfo { FileName = _workerPath, Arguments = "--input " + Quote(input) + " --output " + Quote(output) + " --mode " + mode + " --threshold " + settings.Threshold
                     + " --minimum " + settings.MinimumLineLengthPixels.ToString(culture)
                     + " --merge-gap " + settings.MergeGapPixels.ToString(culture)
                     + " --collinear " + settings.CollinearTolerancePixels.ToString(culture)
-                    + " --wall-min " + settings.MinimumWallThicknessPixels.ToString(culture) + " --wall-max " + settings.MaximumWallThicknessPixels.ToString(culture), WorkingDirectory = Path.GetDirectoryName(_workerPath), UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true };
+                    + " --wall-min " + settings.MinimumWallThicknessPixels.ToString(culture) + " --wall-max " + settings.MaximumWallThicknessPixels.ToString(culture)
+                    + " --wall-pattern-scale " + settings.WallHatchPatternScale.ToString(culture), WorkingDirectory = Path.GetDirectoryName(_workerPath), UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true };
                 using (var process = Process.Start(start))
                 {
                     if (process == null) throw new InvalidOperationException("无法启动矢量化 Worker。"); var started = DateTime.UtcNow;
@@ -55,12 +60,20 @@ namespace BatchPdfPublisher.Services
             var result = new LineVisionVectorResult(); Add(result.Polylines, dto.Centerlines, "骨架中心线", true);
             Add(result.Polylines, dto.Outlines, "VTracer轮廓", settings.VectorMode == LineVisionVectorMode.Outline);
             foreach (var polyline in result.Polylines) SnapOrthogonal(polyline, orthogonalTolerance);
-            // 墙体填充默认启用。此前这里写死 IsEnabled = false，而预览与写图都要求 IsEnabled，
-            // 于是用户勾着「识别墙体填充」也看不到任何填充——实测平面图内核能认出 84 个墙体区域，
-            // 全部被这一行丢掉。用户若不需要，可在「墙体填充」列表里逐项取消。
+            // 墙体边框线是识别结果，默认启用；填充做法由 WallFillMode 单独控制，
+            // 所以旧的 IsEnabled=false（写死默认关闭）会让边框线也一并消失——实测平面图
+            // 认出 84 个墙体区域，用户界面上一个都看不到。现在边框总是启用，填不填由用户选。
             if (settings.DetectWallFills) foreach (var wall in dto.WallRegions ?? new List<VectorWallRegion>())
             {
-                var converted = new LineVisionWallRegion { AverageThickness = wall.AverageThickness, Confidence = wall.Confidence, IsEnabled = true };
+                var converted = new LineVisionWallRegion
+                {
+                    AverageThickness = wall.AverageThickness,
+                    Confidence = wall.Confidence,
+                    IsEnabled = true,
+                    FillMode = settings.WallFillMode,
+                    HatchPatternName = string.IsNullOrWhiteSpace(settings.WallHatchPatternName) ? "ANSI31" : settings.WallHatchPatternName,
+                    HatchPatternScale = wall.PatternScale > 0d ? wall.PatternScale : 1d
+                };
                 foreach (var point in wall.Outer ?? new List<VectorPoint>()) converted.Outer.Add(new PointF((float)point.X, (float)point.Y));
                 foreach (var hole in wall.Holes ?? new List<List<VectorPoint>>()) { var points = new List<PointF>(); foreach (var point in hole) points.Add(new PointF((float)point.X, (float)point.Y)); converted.Holes.Add(points); }
                 if (converted.Outer.Count >= 3) result.WallRegions.Add(converted);
@@ -119,7 +132,7 @@ namespace BatchPdfPublisher.Services
         [DataContract] private sealed class VectorResult { [DataMember(Name = "success")] public bool Success { get; set; } [DataMember(Name = "error")] public string Error { get; set; } [DataMember(Name = "centerlines")] public List<VectorPolyline> Centerlines { get; set; } [DataMember(Name = "outlines")] public List<VectorPolyline> Outlines { get; set; } [DataMember(Name = "wallRegions")] public List<VectorWallRegion> WallRegions { get; set; } }
         [DataContract] private sealed class VectorPolyline { [DataMember(Name = "points")] public List<VectorPoint> Points { get; set; } [DataMember(Name = "closed")] public bool Closed { get; set; } [DataMember(Name = "confidence")] public double Confidence { get; set; } }
         [DataContract] private sealed class VectorPoint { [DataMember(Name = "x")] public double X { get; set; } [DataMember(Name = "y")] public double Y { get; set; } }
-        [DataContract] private sealed class VectorWallRegion { [DataMember(Name = "outer")] public List<VectorPoint> Outer { get; set; } [DataMember(Name = "holes")] public List<List<VectorPoint>> Holes { get; set; } [DataMember(Name = "averageThickness")] public double AverageThickness { get; set; } [DataMember(Name = "confidence")] public double Confidence { get; set; } }
+        [DataContract] private sealed class VectorWallRegion { [DataMember(Name = "outer")] public List<VectorPoint> Outer { get; set; } [DataMember(Name = "holes")] public List<List<VectorPoint>> Holes { get; set; } [DataMember(Name = "averageThickness")] public double AverageThickness { get; set; } [DataMember(Name = "confidence")] public double Confidence { get; set; } [DataMember(Name = "patternScale")] public double PatternScale { get; set; } }
     }
 
     internal sealed class LineVisionVectorResult { public List<LineVisionPolyline> Polylines { get; set; } = new List<LineVisionPolyline>(); public List<LineVisionWallRegion> WallRegions { get; set; } = new List<LineVisionWallRegion>(); }

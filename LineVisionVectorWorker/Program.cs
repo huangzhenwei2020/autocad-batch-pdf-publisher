@@ -29,6 +29,8 @@ namespace Wanluo.LineVision.VectorWorker
                     {
                         result.Outlines = RunVTracer(input, output, args);
                         result.WallRegions = WallRegionDetector.Detect(result.Outlines, ParseDouble(Value(args, "--wall-min"), 3d), ParseDouble(Value(args, "--wall-max"), 80d));
+                        var patternScale = ParseDouble(Value(args, "--wall-pattern-scale"), 1d);
+                        foreach (var wall in result.WallRegions) wall.PatternScale = patternScale;
                     }
                     Write(output, result); return 0;
                 }

@@ -26,6 +26,7 @@ namespace Wanluo.LineVision.Diagnostics
             {
                 var options = Options.Parse(args, console);
                 if (options == null) { Console.Write(console.ToString()); return 1; }
+                if (options.ProbeMask) { MaskProbe.Run(options.ImagePath, options.Threshold); return 0; }
                 Run(options, console);
                 Console.Write(console.ToString());
                 if (!string.IsNullOrWhiteSpace(options.OutputPath))
@@ -49,6 +50,8 @@ namespace Wanluo.LineVision.Diagnostics
             report.AppendLine("二值化阈值: " + (options.Threshold > 0 ? options.Threshold.ToString(CultureInfo.InvariantCulture) : "0（自动 Otsu）"));
             report.AppendLine("矢量内核  : " + options.WorkerPath);
             report.AppendLine("内核可用  : " + (File.Exists(options.WorkerPath) ? "是" : "否（骨架部分将被跳过）"));
+            if (!string.IsNullOrWhiteSpace(options.OverlayPath))
+                report.AppendLine("漏检可视化: " + options.OverlayPath + "（红=有墨迹但没有任何线覆盖）");
             report.AppendLine();
 
             // ── 1. 真正的墨迹底图：用与 LineVisionProcessor 相同的二值化规则，作为覆盖率分母。
@@ -129,6 +132,77 @@ namespace Wanluo.LineVision.Diagnostics
                 + "，耗时 " + baselineWatch.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture) + "ms");
 
             CompareMasks(options, ink, report);
+            if (!string.IsNullOrWhiteSpace(options.OverlayPath)) WriteOverlay(options, ink, report);
+        }
+
+        /// <summary>
+        /// 把「有墨迹、但没有任何已识别线覆盖」的像素标红，直接看出是哪几条线没出来。
+        /// 覆盖率是个总数，看不出位置；这张图能直接指出漏在哪。
+        /// </summary>
+        private static void WriteOverlay(Options options, InkMask ink, StringBuilder report)
+        {
+            report.AppendLine();
+            report.AppendLine("=== 漏检可视化 ===");
+            try
+            {
+                var polylines = RunWorker(options, 5, 5d);
+                var covered = new bool[ink.Width * ink.Height];
+                foreach (var line in polylines)
+                {
+                    var points = line.Points;
+                    for (var index = 1; index < points.Count; index++)
+                        RasterizeLine(points[index - 1], points[index], covered, ink.Width, ink.Height, 2);
+                    if (line.Closed && points.Count > 1)
+                        RasterizeLine(points[points.Count - 1], points[0], covered, ink.Width, ink.Height, 2);
+                }
+                var missed = 0;
+                using (var canvas = new Bitmap(ink.Width, ink.Height, PixelFormat.Format24bppRgb))
+                {
+                    using (var graphics = Graphics.FromImage(canvas)) graphics.Clear(Color.White);
+                    var data = canvas.LockBits(new Rectangle(0, 0, ink.Width, ink.Height), ImageLockMode.WriteOnly, PixelFormat.Format24bppRgb);
+                    try
+                    {
+                        unsafe
+                        {
+                            var start = (byte*)data.Scan0;
+                            for (var y = 0; y < ink.Height; y++)
+                            {
+                                var row = start + y * data.Stride;
+                                for (var x = 0; x < ink.Width; x++)
+                                {
+                                    var index = y * ink.Width + x;
+                                    byte r, g, b;
+                                    if (!ink.Dark[index]) { r = g = b = 255; }
+                                    else if (covered[index]) { r = g = b = 225; }          // 已识别的墨迹（含线周边）：很浅
+                                    else { r = 230; g = 60; b = 60; missed++; }            // 漏掉的墨迹：红
+                                    row[x * 3] = b; row[x * 3 + 1] = g; row[x * 3 + 2] = r;
+                                }
+                            }
+                        }
+                    }
+                    finally { canvas.UnlockBits(data); }
+
+                    // 把识别出的折线本身画成橙色，直接看清"认出了哪条、漏了哪条"。
+                    using (var graphics = Graphics.FromImage(canvas))
+                    using (var pen = new Pen(Color.FromArgb(255, 140, 0), 1f))
+                    {
+                        foreach (var line in polylines)
+                        {
+                            var points = line.Points.Select(point => new PointF(point.X, point.Y)).ToArray();
+                            if (points.Length >= 2) graphics.DrawLines(pen, points);
+                            if (line.Closed && points.Length > 2) graphics.DrawLine(pen, points[points.Length - 1], points[0]);
+                        }
+                    }
+                    canvas.Save(options.OverlayPath, ImageFormat.Png);
+                }
+                report.AppendLine("  橙线 = 已识别出的几何；红色 = 有墨迹但没有任何线经过；浅灰 = 已被线覆盖的墨迹");
+                report.AppendLine("  漏掉的墨迹像素: " + missed.ToString("N0", CultureInfo.InvariantCulture)
+                    + " / " + ink.DarkCount.ToString("N0", CultureInfo.InvariantCulture)
+                    + "（" + (ink.DarkCount == 0 ? "0" : (100d * missed / ink.DarkCount).ToString("0.0", CultureInfo.InvariantCulture)) + "%）");
+                report.AppendLine("  注意：实心填黑的墙体内部不会被任何\"线\"覆盖，这部分也会计入红色，属于测量口径而非漏识别。");
+                report.AppendLine("  已写入: " + options.OverlayPath);
+            }
+            catch (Exception exception) { report.AppendLine("  可视化失败：" + exception.Message); }
         }
 
         /// <summary>
@@ -361,6 +435,8 @@ namespace Wanluo.LineVision.Diagnostics
         public int Threshold { get; private set; }
         public string WorkerPath { get; private set; }
         public string OutputPath { get; private set; }
+        public string OverlayPath { get; private set; }
+        public bool ProbeMask { get; private set; }
 
         public static Options Parse(string[] args, StringBuilder report)
         {
@@ -375,6 +451,8 @@ namespace Wanluo.LineVision.Diagnostics
                 report.AppendLine("  --threshold <0-254> 二值化阈值，0 表示自动（默认 0）");
                 report.AppendLine("  --worker   <路径>   矢量内核 exe，默认取 dist 下的 R24 版本");
                 report.AppendLine("  --output   <路径>   把报告同时写入该文件");
+                report.AppendLine("  --overlay  <路径>   输出漏检可视化 PNG：红=有墨迹但无任何线覆盖");
+                report.AppendLine("  --probe-mask        只检查二值化：直方图、Otsu 阈值、反转判据");
                 report.AppendLine();
                 report.AppendLine("指标说明：");
                 report.AppendLine("  覆盖率%    = 墨迹像素中，落在某条已识别线 2px 邻域内的比例（越高说明漏得越少）");
@@ -393,6 +471,8 @@ namespace Wanluo.LineVision.Diagnostics
                     case "--threshold": options.Threshold = ParseInt(value, 0); index++; break;
                     case "--worker": options.WorkerPath = value; index++; break;
                     case "--output": options.OutputPath = value; index++; break;
+                    case "--overlay": options.OverlayPath = value; index++; break;
+                    case "--probe-mask": options.ProbeMask = true; break;
                     case "--region":
                         {
                             var parts = (value ?? string.Empty).Split(',');
