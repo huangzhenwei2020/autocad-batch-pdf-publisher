@@ -143,7 +143,10 @@ namespace BatchPdfPublisher.Views
                 var targetIndex = _items.IndexOf(target.Item);
                 var list = _items.ToList();
                 list.RemoveAt(_draggingIndex);
-                var insertAt = targetIndex;
+                // 先 RemoveAt 再 Insert：被拖项之后的索引整体前移 1，所以目标在拖拽项之后时
+                // 要减 1，否则向下拖会落到目标槽位的**后面**（而向上拖落在前面），
+                // 同一个高亮框对应的落点上下不一致。
+                var insertAt = targetIndex > _draggingIndex ? targetIndex - 1 : targetIndex;
                 if (insertAt < 0) insertAt = 0;
                 list.Insert(insertAt, dragItem);
                 _items = list;

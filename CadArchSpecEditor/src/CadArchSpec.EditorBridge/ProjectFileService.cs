@@ -115,6 +115,12 @@ namespace CadArchSpec.EditorBridge
 
             var savedAt = DateTimeOffset.Now.ToString("O");
             var snapshotPath = string.Empty;
+            if (File.Exists(normalizedPath))
+            {
+                // 每次保存都先留一份"上一版"（固定文件名，只保留一份，不会越攒越多）。
+                // 这样即使下面的写入被中断，也始终有一个完整可回退的文件。
+                CreatePreviousVersionCopy(normalizedPath);
+            }
             if (createSnapshot && File.Exists(normalizedPath))
             {
                 snapshotPath = CreateSnapshot(normalizedPath);
@@ -129,7 +135,7 @@ namespace CadArchSpec.EditorBridge
                 ["savedAt"] = savedAt,
                 ["workspace"] = savedWorkspace
             };
-            File.WriteAllText(normalizedPath, envelope.ToString(Formatting.Indented));
+            WriteProjectFileAtomically(normalizedPath, envelope.ToString(Formatting.Indented));
 
             return new ProjectSaveResult
             {
@@ -180,6 +186,10 @@ namespace CadArchSpec.EditorBridge
             var projectName = Path.GetFileNameWithoutExtension(normalizedProjectPath);
             return Directory
                 .EnumerateFiles(historyDirectory, projectName + "-*" + ProjectExtension)
+                // "-previous" 是每次保存前留下的"上一版"灾备副本，不是历史版本：
+                // 它不出现在版本列表里（否则永远排在最新一项，看着像"最新版本"）。
+                .Where(path => !string.Equals(Path.GetFileName(path),
+                    projectName + "-previous" + ProjectExtension, StringComparison.OrdinalIgnoreCase))
                 .Select(TryReadSnapshotInfo)
                 .Where(item => item != null)
                 .OrderByDescending(item => item.CreatedAt, StringComparer.Ordinal)
@@ -248,6 +258,67 @@ namespace CadArchSpec.EditorBridge
             }
             File.Copy(projectPath, snapshotPath, false);
             return snapshotPath;
+        }
+
+        /// <summary>
+        /// 原子写入项目文件：先写同目录临时文件，回读确认能解析，再安全替换正式文件。
+        /// 直接 File.WriteAllText 覆盖时，写到一半断电或被杀进程就会毁掉唯一项目文件。
+        /// </summary>
+        private static void WriteProjectFileAtomically(string projectPath, string contents)
+        {
+            var directory = Path.GetDirectoryName(projectPath);
+            if (!string.IsNullOrWhiteSpace(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            var temporaryPath = projectPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                File.WriteAllText(temporaryPath, contents);
+                // 回读校验：临时文件必须是一份能解析的完整项目文件，才允许替换正式文件。
+                ReadWorkspace(temporaryPath);
+                if (!File.Exists(projectPath))
+                {
+                    File.Move(temporaryPath, projectPath);
+                    return;
+                }
+
+                try
+                {
+                    File.Replace(temporaryPath, projectPath, null, true);
+                }
+                catch (PlatformNotSupportedException)
+                {
+                    // File.Replace 在个别文件系统上不可用；此时"上一版"备份已存在，退化为复制。
+                    File.Copy(temporaryPath, projectPath, true);
+                }
+                catch (IOException)
+                {
+                    File.Copy(temporaryPath, projectPath, true);
+                }
+            }
+            finally
+            {
+                try { if (File.Exists(temporaryPath)) File.Delete(temporaryPath); } catch { }
+            }
+        }
+
+        /// <summary>把当前项目文件复制成固定名字的"上一版"备份，只保留一份，不会越攒越多。</summary>
+        private static void CreatePreviousVersionCopy(string projectPath)
+        {
+            try
+            {
+                var historyDirectory = GetHistoryDirectory(projectPath);
+                Directory.CreateDirectory(historyDirectory);
+                var previousPath = Path.Combine(historyDirectory,
+                    Path.GetFileNameWithoutExtension(projectPath) + "-previous" + ProjectExtension);
+                File.Copy(projectPath, previousPath, true);
+            }
+            catch
+            {
+                // 备份失败不应阻断保存本身。
+            }
         }
 
         private static string GetHistoryDirectory(string projectPath)

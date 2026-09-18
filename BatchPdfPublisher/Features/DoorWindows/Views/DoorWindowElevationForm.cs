@@ -240,8 +240,11 @@ namespace BatchPdfPublisher.Views
             var savedScale = preferences.Select(x => x.DrawingScale).FirstOrDefault(x => x > 0); if (savedScale > 0) _drawingScale.Text = "1:" + savedScale;
             foreach (var item in source.Items)
             {
+                // 先按"编号 + 宽 + 高"精确匹配，匹配不到再退回"只按编号"匹配 ——
+                // 编号没变、洞口尺寸调整过的门窗也要沿用上次保存的类型/分格/开启等设置。
+                // （这一处曾只剩一个孤立的分号：续行被误删，导致尺寸改过就不再回填。）
                 var preference = preferences.FirstOrDefault(x => string.Equals(x.Code, item.Code, StringComparison.OrdinalIgnoreCase) && Math.Abs(x.Width - item.Width) < 0.01 && Math.Abs(x.Height - item.Height) < 0.01)
-                    ;
+                    ?? preferences.FirstOrDefault(x => string.Equals(x.Code, item.Code, StringComparison.OrdinalIgnoreCase));
                 if (preference != null)
                 {
                     item.ElevationType = preference.ElevationType; item.DivisionPreset = preference.DivisionPreset; item.OpeningMode = preference.OpeningMode;
@@ -305,8 +308,9 @@ namespace BatchPdfPublisher.Views
         private void ApplyPreferences(DoorWindowScheduleItem item)
         {
             var preferences = _store.LoadForActiveProject();
+            // 同 LoadSchedule：精确匹配失败时退回"只按编号"匹配（分层统计重建时同样适用）。
             var preference = preferences.FirstOrDefault(x => string.Equals(x.Code, item.Code, StringComparison.OrdinalIgnoreCase) && Math.Abs(x.Width - item.Width) < 0.01 && Math.Abs(x.Height - item.Height) < 0.01)
-                ;
+                ?? preferences.FirstOrDefault(x => string.Equals(x.Code, item.Code, StringComparison.OrdinalIgnoreCase));
             if (preference == null) return;
             item.ElevationType = preference.ElevationType; item.DivisionPreset = preference.DivisionPreset; item.OpeningMode = preference.OpeningMode;
             item.HasInstallationGap = preference.HasInstallationGap; item.InstallationGap = preference.InstallationGap > 0 ? preference.InstallationGap : 20d;

@@ -559,6 +559,21 @@ namespace BatchPdfPublisher.Models
             // 开启线取门扇边框的外轮廓：先扣除固定外框/分隔框，再不扣 50 mm 门扇内框。
             // 因而两条开启线只连接可动门扇的上点、下点与对侧中点，不会落到固定框或内框上。
             var sashOuter = FixedFrameArea(geometry, item, cell);
+            // 没有外框、没有分隔框、也没有门扇内框时，"门扇外轮廓"恰好等于本格边界，
+            // 开启线会与框线完全重合（在 CAD 里表现为一条多余的重复线）。
+            // 这种情形按最小内缩收一点：最多 6 mm，且不超过本格短边的 1%。
+            if (Math.Abs(sashOuter.Left - cell.Left) < .05d && Math.Abs(sashOuter.Right - cell.Right) < .05d
+                && Math.Abs(sashOuter.Bottom - cell.Bottom) < .05d && Math.Abs(sashOuter.Top - cell.Top) < .05d)
+            {
+                var clearance = Math.Min(6d, Math.Min(cell.Right - cell.Left, cell.Top - cell.Bottom) * .01d);
+                if (clearance > 0d && cell.Right - cell.Left > clearance * 2d && cell.Top - cell.Bottom > clearance * 2d)
+                    sashOuter = new DoorWindowCell(cell.Left + clearance, cell.Bottom + clearance, cell.Right - clearance, cell.Top - clearance)
+                    {
+                        Opening = cell.Opening,
+                        Material = cell.Material,
+                        IsDoor = cell.IsDoor
+                    };
+            }
             return new DoorWindowCell(sashOuter.Left, sashOuter.Bottom, sashOuter.Right, sashOuter.Top)
             {
                 Opening = cell.Opening,

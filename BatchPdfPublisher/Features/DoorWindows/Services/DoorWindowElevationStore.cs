@@ -57,7 +57,9 @@ namespace BatchPdfPublisher.Services
         {
             var projectName = new PublishPlanStore().GetActiveProject()?.Name ?? "默认项目";
             var all = LoadAll();
-            foreach (var item in items.Where(x => !string.IsNullOrWhiteSpace(x.Code)))
+            // 先把要保存的行物化一次：下面既用于 upsert，也用于清理过期记录。
+            var incoming = items.Where(x => !string.IsNullOrWhiteSpace(x.Code)).ToList();
+            foreach (var item in incoming)
             {
                 var preference = all.FirstOrDefault(x => string.Equals(x.ProjectName, projectName, StringComparison.OrdinalIgnoreCase)
                     && string.Equals(x.Code, item.Code.Trim(), StringComparison.OrdinalIgnoreCase)
@@ -136,6 +138,15 @@ namespace BatchPdfPublisher.Services
                     SillHeightSuppressed = item.SillHeightSuppressed
                 });*/
             }
+            // 清理"同一编号下洞口尺寸已经不在本次网格里"的旧记录。
+            // 主线改成按 (项目, 编号, 宽, 高) upsert 之后，尺寸一改就会新增一条记录，
+            // 旧尺寸那条永远留着；等哪天尺寸改回旧值，过期设置会突然"复活"。
+            // 旧线是每次保存把整个项目的记录清空重建，但那会把界面上没出现的编号也删掉，
+            // 所以这里只删"编号在本次清单里、但该尺寸已不存在"的记录。
+            all.RemoveAll(x => string.Equals(x.ProjectName, projectName, StringComparison.OrdinalIgnoreCase)
+                && incoming.Any(i => string.Equals(i.Code.Trim(), x.Code, StringComparison.OrdinalIgnoreCase))
+                && !incoming.Any(i => string.Equals(i.Code.Trim(), x.Code, StringComparison.OrdinalIgnoreCase)
+                    && Math.Abs(i.Width - x.Width) < .01d && Math.Abs(i.Height - x.Height) < .01d));
             using (var stream = File.Create(PathName))
                 new DataContractJsonSerializer(typeof(List<DoorWindowElevationPreference>)).WriteObject(stream, all);
         }
