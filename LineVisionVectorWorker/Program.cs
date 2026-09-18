@@ -21,7 +21,10 @@ namespace Wanluo.LineVision.VectorWorker
                 using (var source = new Bitmap(input))
                 {
                     var result = new VectorResult { Success = true, Mode = mode, Width = source.Width, Height = source.Height };
-                    if (mode == "centerline" || mode == "hybrid") result.Centerlines = SkeletonVectorizer.Vectorize(source, ParseInt(Value(args, "--threshold"), 0), ParseInt(Value(args, "--chunk-size"), 10));
+                    if (mode == "centerline" || mode == "hybrid") result.Centerlines = SkeletonVectorizer.Vectorize(source,
+                        ParseInt(Value(args, "--threshold"), 0), ParseInt(Value(args, "--chunk-size"), 10),
+                        ParseDouble(Value(args, "--minimum"), 0d), ParseDouble(Value(args, "--merge-gap"), 0d),
+                        ParseDouble(Value(args, "--collinear"), 3d), Value(args, "--dump-mask"));
                     if (mode == "outline" || mode == "hybrid")
                     {
                         result.Outlines = RunVTracer(input, output, args);

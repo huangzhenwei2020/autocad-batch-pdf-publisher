@@ -27,7 +27,13 @@ namespace BatchPdfPublisher.Services
             {
                 if (region.HasValue || textRegions != null) { input = Path.Combine(operation, "prepared.png"); SavePrepared(imagePath, region, textRegions, maskExpansion, input); }
                 var mode = settings.VectorMode == LineVisionVectorMode.Outline ? "outline" : settings.VectorMode == LineVisionVectorMode.Hybrid || settings.DetectWallFills ? "hybrid" : "centerline";
-                var start = new ProcessStartInfo { FileName = _workerPath, Arguments = "--input " + Quote(input) + " --output " + Quote(output) + " --mode " + mode + " --threshold " + settings.Threshold + " --wall-min " + settings.MinimumWallThicknessPixels.ToString(System.Globalization.CultureInfo.InvariantCulture) + " --wall-max " + settings.MaximumWallThicknessPixels.ToString(System.Globalization.CultureInfo.InvariantCulture), WorkingDirectory = Path.GetDirectoryName(_workerPath), UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true };
+                // 这些参数以前没有传给内核，于是界面上调“最短线/合并间隙/共线容差”对最终结果毫无影响。
+                var culture = System.Globalization.CultureInfo.InvariantCulture;
+                var start = new ProcessStartInfo { FileName = _workerPath, Arguments = "--input " + Quote(input) + " --output " + Quote(output) + " --mode " + mode + " --threshold " + settings.Threshold
+                    + " --minimum " + settings.MinimumLineLengthPixels.ToString(culture)
+                    + " --merge-gap " + settings.MergeGapPixels.ToString(culture)
+                    + " --collinear " + settings.CollinearTolerancePixels.ToString(culture)
+                    + " --wall-min " + settings.MinimumWallThicknessPixels.ToString(culture) + " --wall-max " + settings.MaximumWallThicknessPixels.ToString(culture), WorkingDirectory = Path.GetDirectoryName(_workerPath), UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true };
                 using (var process = Process.Start(start))
                 {
                     if (process == null) throw new InvalidOperationException("无法启动矢量化 Worker。"); var started = DateTime.UtcNow;
