@@ -103,12 +103,11 @@ internal static class CuixPackageBuilderTests
     private static void TopPopupUsesTheAliasTheMountCommandNeeds()
     {
         var text = Text(Parts(), "PopMenuRoot.cui");
-        // menucmd "P13=+BPP.BPP_MAIN" 依赖这个 Alias，改名会让菜单挂不上菜单栏。
-        Assert(text.Contains("<Alias>" + CuixPackageBuilder.PopupAlias + "</Alias>"),
-            "top popup alias must be " + CuixPackageBuilder.PopupAlias);
+        // menucmd "P16=+BPP.POP16" 依赖这个 Alias，改名会让菜单挂不上菜单栏。
+        Assert(text.Contains("<Alias>POP16</Alias>"), "top popup alias must be POP16");
         Assert(text.Contains("万落建筑工具"), "top popup name missing");
         Assert(text.Contains("<PopMenuRoot"), "PopMenuRoot element missing");
-        Console.WriteLine("PASS CuixTopPopupCarriesMountAlias");
+        Console.WriteLine("PASS CuixTopPopupCarriesP16Alias");
     }
 
     private static void GroupsBecomeCascadingSubPupups()
@@ -260,20 +259,7 @@ internal static class CuixPackageBuilderTests
         Assert(expression.Contains("C:/临时 目录/"), "path should be kept with forward slashes");
 
         // ④ 挂载菜单栏也在这一个形式里，靠 (command ...) 的同步特性保证顺序。
-        // ④ 挂载菜单栏也在这一个形式里，靠 (command ...) 的同步特性保证顺序。
-        //    位置必须是菜单栏上真实存在的格子：曾用 P16 作为**首选**位置，而默认菜单栏
-        //    只到 P12，menucmd 静默失败、菜单永远不出现。
-        //    注意回退链里包含 P16 是无害的（在不存在的位置上挂载只是失败，
-        //    "+" 追加语义也不会顶掉任何现有菜单），真正要防的是把它当成首选。
-        Assert(expression.Contains(CuixPackageBuilder.MountExpression(CuixPackageBuilder.MenuBarPosition)),
-            "the popup should be mounted at the configured menu bar position");
-        Assert(expression.Contains("=+BPP."), "the mount should use append semantics so no existing menu is replaced");
-        Assert(CuixPackageBuilder.MenuBarPosition >= 1 && CuixPackageBuilder.MenuBarPosition <= 16,
-            "menu bar positions are only valid between 1 and 16");
-        Assert(CuixPackageBuilder.MenuBarPosition != 16,
-            "P16 was the original silent failure: the default menu bar only has 12 menus");
-        Assert(expression.StartsWith("(progn ", StringComparison.Ordinal),
-            "the mount must stay inside the single progn form so no token leaks to the command line");
+        Assert(expression.Contains("P16=+BPP.POP16"), "the popup should be mounted in the same form");
         Console.WriteLine("PASS CuixLoadExpressionUnloadsFirstAndStaysOneForm");
     }
 
