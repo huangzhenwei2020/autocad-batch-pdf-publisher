@@ -9,9 +9,11 @@
     <NoWarn>$(NoWarn);CA1416</NoWarn>
   </PropertyGroup>
   <ItemGroup>
+    <EmbeddedResource Include="..\BatchPdfPublisherLauncher\BatchPdfPublisherIcon.png" LogicalName="BatchPdfPublisherLauncher.BatchPdfPublisherIcon.png" />
     <Compile Include="LauncherProjectManagerTests.cs" />
     <Compile Include="UserDataPathsStub.cs" />
     <Compile Include="..\BatchPdfPublisherLauncher\ProjectManagerForm.cs" Link="ProjectManagerForm.cs" />
+    <Compile Include="..\BatchPdfPublisherLauncher\LauncherUi.cs" Link="LauncherUi.cs" />
     <!-- UserDataPaths 由 UserDataPathsStub.cs 提供（测试写临时目录，绝不碰真实用户配置）。 -->
     <Compile Include="..\BatchPdfPublisher\Infrastructure\FileHash.cs" Link="Shared\FileHash.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\Publishing\Models\ProjectProfile.cs" Link="Shared\ProjectProfile.cs" />

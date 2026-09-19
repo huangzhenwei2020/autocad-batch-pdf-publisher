@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
@@ -18,7 +18,7 @@ namespace BatchPdfPublisherLauncher
     ///
     /// 前提：AutoCAD 必须关闭。CAD 内存里有一份项目列表，边跑边改会被它覆盖回去。
     /// </summary>
-    internal sealed class ProjectManagerForm : Form
+    internal sealed class ProjectManagerForm : AdaptiveForm
     {
         private static readonly Color Navy = Color.FromArgb(18, 52, 91);
         private static readonly Color Cyan = Color.FromArgb(24, 167, 201);
@@ -29,21 +29,21 @@ namespace BatchPdfPublisherLauncher
 
         private readonly ProjectManagementService _service = new ProjectManagementService();
         private readonly ListBox _projects = new ListBox();
-        private readonly Label _cadBanner = new Label();
-        private readonly Button _retestButton = new Button();
+        private readonly ToolTip _projectTip = new ToolTip();
+        private readonly Label _cadBanner = new WrapLabel();
+        private readonly Button _retestButton = new RoundedButton();
         private readonly TextBox _nameBox = new TextBox();
         private readonly TextBox _folderBox = new TextBox();
-        private readonly Label _cloudLabel = new Label();
-        private readonly Label _countLabel = new Label();
-        private readonly ListView _files = new ListView();
+        private readonly Label _cloudLabel = new WrapLabel();
+        private readonly Label _countLabel = new WrapLabel();
+        private readonly ListView _files = new BufferedListView();
         private readonly TextBox _newNameBox = new TextBox();
         private readonly TextBox _newFolderBox = new TextBox();
-        private readonly CheckBox _renameFolderBox = new CheckBox();
-        private readonly CheckBox _recycleBox = new CheckBox();
-        private readonly Label _status = new Label();
+        private readonly CheckBox _renameFolderBox = new WrapCheckBox();
+        private readonly CheckBox _recycleBox = new WrapCheckBox();
+        private readonly Label _status = new WrapLabel();
         private readonly List<Button> _guardedButtons = new List<Button>();
         private List<ProjectProfile> _projectsCache = new List<ProjectProfile>();
-        private SplitContainer _split;
         private bool _loading;
         private bool _cadRunning;
 
@@ -53,255 +53,192 @@ namespace BatchPdfPublisherLauncher
             Icon = LoadIcon();
             AutoScaleMode = AutoScaleMode.Dpi;
             AutoScaleDimensions = new SizeF(96F, 96F);
-            ClientSize = new Size(980, 640);
-            MinimumSize = new Size(880, 560);
+            ClientSize = new Size(1120, 760);
+            MinimumSize = new Size(420, 360);
             StartPosition = FormStartPosition.CenterScreen;
             BackColor = Canvas;
-            Font = new Font("Microsoft YaHei UI", 9F);
+            Font = new Font("Microsoft YaHei UI", 9.5F);
             Build();
             RefreshCadState();
             ReloadProjects();
         }
 
+        protected override void Dispose(bool disposing) { if (disposing) _projectTip.Dispose(); base.Dispose(disposing); }
+        private void ShowAppearance() { using (var form = new AdaptiveForm { Text = "颜色模式", ClientSize = new Size(300, 140) }) { var body = LauncherUi.Stack(24); LauncherUi.Add(body, LauncherUi.Text("颜色模式", 16, true)); LauncherUi.Add(body, LauncherShell.ThemeControls()); form.Controls.Add(body); form.ShowDialog(this); } }
         private void Build()
         {
-            var root = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 4, ColumnCount = 1, BackColor = Canvas, Padding = new Padding(16, 14, 16, 12) };
+            var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, Padding = new Padding(24), BackColor = Canvas };
+            root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            Controls.Add(root);
-
-            // ── CAD 运行提示条 ────────────────────────────────────────────────
-            var banner = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 2, BackColor = WarnBack, Padding = new Padding(12, 8, 12, 8), Margin = new Padding(0, 0, 0, 10) };
+            var shell = new LauncherShell("projects", () => Close(), () => { }, () => ShowAppearance());
+            Controls.Add(shell); shell.Body.Controls.Add(root);
+            root.Controls.Add(LauncherShell.PageHeading("项目管理", "选择项目，查看文件和项目信息。"), 0, 0);
+            var banner = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 2, BackColor = Color.FromArgb(233, 239, 252), Padding = new Padding(12), Margin = new Padding(0, 6, 0, 14) };
             banner.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             banner.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             _cadBanner.AutoSize = true;
-            _cadBanner.ForeColor = WarnText;
-            _cadBanner.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
-            _cadBanner.Text = "检测到 AutoCAD 正在运行：请先关闭 CAD，否则改名会被 CAD 里的项目列表覆盖。";
+            _cadBanner.Dock = DockStyle.Fill;
+            _cadBanner.Margin = new Padding(0, 0, 12, 0);
             _retestButton.Text = "重新检测";
             _retestButton.AutoSize = true;
-            _retestButton.Height = 28;
+            _retestButton.Padding = new Padding(8, 5, 8, 5);
             _retestButton.FlatStyle = FlatStyle.Flat;
+            _retestButton.FlatAppearance.BorderColor = LauncherUi.Line;
             _retestButton.BackColor = Color.White;
-            _retestButton.ForeColor = WarnText;
-            _retestButton.FlatAppearance.BorderColor = Color.FromArgb(224, 178, 128);
             _retestButton.Click += (s, e) => { RefreshCadState(); ReloadProjects(); };
             banner.Controls.Add(_cadBanner, 0, 0);
             banner.Controls.Add(_retestButton, 1, 0);
-            root.Controls.Add(banner, 0, 0);
+            root.Controls.Add(banner, 0, 1);
 
-            // ── 主体：左项目列表 / 右详情 ─────────────────────────────────────
-            // 注意：SplitContainer 的 Panel1MinSize / Panel2MinSize / SplitterDistance
-            // 只能在控件已经拿到真实宽度之后设置，构造期设会抛
-            // “SplitterDistance 必须在 Panel1MinSize 和 Width - Panel2MinSize 之间”。
-            // 因此这里只建控件，尺寸在 OnLoad 的 ApplySplitLayout 里给。
-            var split = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, SplitterWidth = 8, BackColor = Canvas };
-            _split = split;
-            split.SizeChanged += (s, e) => ApplySplitLayout();
-            root.Controls.Add(split, 0, 1);
-
-            var left = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1, BackColor = Color.White, Padding = new Padding(14, 12, 14, 12), Margin = new Padding(0, 0, 8, 0) };
+            var left = new Surface { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, BackColor = Color.White, Padding = new Padding(8), Margin = Padding.Empty };
+            left.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             left.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             left.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             left.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            left.Controls.Add(Title("项目列表"), 0, 0);
+            left.Controls.Add(LauncherUi.Text("我的项目", 12, true), 0, 0);
             _projects.Dock = DockStyle.Fill;
             _projects.IntegralHeight = false;
-            _projects.BorderStyle = BorderStyle.FixedSingle;
+            _projects.BorderStyle = BorderStyle.None;
+            _projects.HorizontalScrollbar = false;
+            _projects.DrawMode = DrawMode.OwnerDrawFixed;
+            _projects.FontChanged += (s, e) => _projects.ItemHeight = _projects.Font.Height + LogicalToDeviceUnits(20);
+            _projects.DrawItem += (s, e) => {
+                if (e.Index < 0) return; bool selected = (e.State & DrawItemState.Selected) != 0;
+                using (var fill = new SolidBrush(selected ? LauncherTheme.Sidebar : LauncherTheme.Card)) e.Graphics.FillRectangle(fill, e.Bounds);
+                if (selected) using (var pen = new Pen(LauncherUi.Accent, 3)) e.Graphics.DrawLine(pen, e.Bounds.Left + 2, e.Bounds.Top + 6, e.Bounds.Left + 2, e.Bounds.Bottom - 6);
+                TextRenderer.DrawText(e.Graphics, Convert.ToString(_projects.Items[e.Index]), _projects.Font, new Rectangle(e.Bounds.Left + 10, e.Bounds.Top, Math.Max(1, e.Bounds.Width - 16), e.Bounds.Height), LauncherTheme.Foreground, TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+            };
+            _projects.Font = new Font("Microsoft YaHei UI", 10.5F);
             _projects.SelectedIndexChanged += (s, e) => ShowSelectedProject();
-            left.Controls.Add(_projects, 0, 1);
+            _projects.MouseMove += (s, e) => {
+                int index = _projects.IndexFromPoint(e.Location);
+                string name = index >= 0 ? Convert.ToString(_projects.Items[index]) : string.Empty;
+                if (_projectTip.GetToolTip(_projects) != name) _projectTip.SetToolTip(_projects, name);
+            };
+            left.Controls.Add(LauncherUi.RoundedHost(_projects), 0, 1);
             var refresh = CreateButton("刷新列表", false);
-            refresh.Margin = new Padding(0, 8, 0, 0);
             refresh.Click += (s, e) => ReloadProjects();
             left.Controls.Add(refresh, 0, 2);
-            split.Panel1.Controls.Add(left);
+            shell.SidebarContent.Controls.Add(left);
 
-            var right = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 4, ColumnCount = 1, BackColor = Color.White, Padding = new Padding(16, 12, 16, 12) };
-            right.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            right.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            right.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            right.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            split.Panel2.Controls.Add(right);
+            var tabs = new ThemedTabControl { Dock = DockStyle.Fill, Padding = new Point(12, 8), Multiline = false, Margin = Padding.Empty };
+            tabs.DrawItem += (s, e) => { using (var brush = new SolidBrush(e.Index == tabs.SelectedIndex ? LauncherTheme.Card : LauncherTheme.Sidebar)) e.Graphics.FillRectangle(brush, e.Bounds); TextRenderer.DrawText(e.Graphics, tabs.TabPages[e.Index].Text, tabs.Font, e.Bounds, LauncherTheme.Foreground, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter); };
+            root.Controls.Add(tabs, 0, 2);
+            var filePage = new TabPage("项目文件") { BackColor = Color.White, Padding = new Padding(0, 12, 0, 0) };
+            var infoPage = new TabPage("项目信息") { BackColor = Canvas };
+            var newPage = new TabPage("新建项目") { BackColor = Canvas };
+            tabs.TabPages.AddRange(new[] { filePage, infoPage, newPage });
 
-            // 工程信息
-            right.Controls.Add(Title("项目信息与重命名"), 0, 0);
-            var info = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 4, Margin = new Padding(0, 0, 0, 6) };
-            info.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 76));
-            info.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            info.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            info.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            info.Controls.Add(FieldLabel("项目名称"), 0, 0);
-            _nameBox.Dock = DockStyle.Fill;
-            _nameBox.Height = 28;
-            _nameBox.Margin = new Padding(0, 3, 8, 3);
-            info.Controls.Add(_nameBox, 1, 0);
-            var rename = CreateButton("重命名项目", true);
-            rename.Margin = new Padding(0, 2, 6, 2);
-            rename.Click += (s, e) => RenameSelectedProject();
-            _guardedButtons.Add(rename);
-            info.Controls.Add(rename, 2, 0);
-            var openFolder = CreateButton("打开文件夹", false);
-            openFolder.Margin = new Padding(0, 2, 0, 2);
-            openFolder.Click += (s, e) => OpenProjectFolder();
-            info.Controls.Add(openFolder, 3, 0);
-            info.Controls.Add(FieldLabel("项目文件夹"), 0, 1);
-            _folderBox.Dock = DockStyle.Fill;
-            _folderBox.ReadOnly = true;
-            _folderBox.BackColor = Color.FromArgb(248, 250, 252);
-            _folderBox.Height = 28;
-            _folderBox.Margin = new Padding(0, 3, 8, 3);
-            info.Controls.Add(_folderBox, 1, 1);
-            info.SetColumnSpan(_folderBox, 3);
-            _cloudLabel.AutoSize = true;
-            _cloudLabel.ForeColor = Muted;
-            _cloudLabel.Margin = new Padding(0, 2, 0, 0);
-            info.Controls.Add(FieldLabel("同步状态"), 0, 2);
-            info.Controls.Add(_cloudLabel, 1, 2);
-            info.SetColumnSpan(_cloudLabel, 3);
-            _renameFolderBox.Text = "重命名项目时连同磁盘文件夹一起改（推荐）";
-            _renameFolderBox.Checked = true;
-            _renameFolderBox.AutoSize = true;
-            _renameFolderBox.ForeColor = Color.FromArgb(47, 63, 78);
-            _renameFolderBox.Margin = new Padding(0, 4, 0, 0);
-            info.Controls.Add(_renameFolderBox, 1, 3);
-            info.SetColumnSpan(_renameFolderBox, 3);
-            right.Controls.Add(info, 0, 1);
-
-            // 新建 / 删除
-            var operations = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 4, Margin = new Padding(0, 6, 0, 6) };
-            operations.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 76));
-            operations.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            operations.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            operations.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            operations.Controls.Add(FieldLabel("新建项目"), 0, 0);
-            _newNameBox.Dock = DockStyle.Fill;
-            _newNameBox.Height = 28;
-            _newNameBox.Margin = new Padding(0, 3, 8, 3);
-            operations.Controls.Add(_newNameBox, 1, 0);
-            var create = CreateButton("新建项目", false);
-            create.Margin = new Padding(0, 2, 6, 2);
-            create.Click += (s, e) => CreateProject();
-            _guardedButtons.Add(create);
-            var browse = CreateButton("选择目录…", false);
-            browse.Margin = new Padding(0, 2, 0, 2);
-            browse.Click += (s, e) => ChooseNewFolder();
-            operations.Controls.Add(create, 2, 0);
-            operations.Controls.Add(browse, 3, 0);
-            operations.Controls.Add(FieldLabel("文件夹"), 0, 1);
-            _newFolderBox.Dock = DockStyle.Fill;
-            _newFolderBox.Height = 28;
-            _newFolderBox.Margin = new Padding(0, 3, 8, 3);
-            operations.Controls.Add(_newFolderBox, 1, 1);
-            operations.SetColumnSpan(_newFolderBox, 3);
-            var folderHint = new Label { Text = "文件夹留空时，使用工作区目录（我的文档\\万落建筑项目）下的同名文件夹。", AutoSize = true, ForeColor = Muted, Margin = new Padding(0, 2, 0, 0) };
-            operations.Controls.Add(folderHint, 1, 2);
-            operations.SetColumnSpan(folderHint, 3);
-            _recycleBox.Text = "删除项目时把项目文件夹移到回收站（可还原）";
-            _recycleBox.AutoSize = true;
-            _recycleBox.ForeColor = Color.FromArgb(47, 63, 78);
-            _recycleBox.Margin = new Padding(0, 6, 0, 0);
-            operations.Controls.Add(_recycleBox, 1, 3);
-            operations.SetColumnSpan(_recycleBox, 2);
-            var delete = CreateButton("删除项目", false);
-            delete.ForeColor = Color.FromArgb(157, 66, 61);
-            delete.Margin = new Padding(0, 2, 0, 2);
-            delete.Click += (s, e) => DeleteSelectedProject();
-            _guardedButtons.Add(delete);
-            operations.Controls.Add(delete, 3, 3);
-            right.Controls.Add(operations, 0, 2);
-
-            // 项目文件
-            var filesHost = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1, Margin = new Padding(0, 4, 0, 0) };
+            var filesHost = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3 };
+            filesHost.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             filesHost.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             filesHost.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             filesHost.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             _countLabel.AutoSize = true;
-            _countLabel.Font = new Font("Microsoft YaHei UI", 10.5F, FontStyle.Bold);
+            _countLabel.Dock = DockStyle.Top;
             _countLabel.ForeColor = Navy;
-            _countLabel.Margin = new Padding(0, 0, 0, 6);
+            _countLabel.Margin = new Padding(0, 0, 0, 12);
             filesHost.Controls.Add(_countLabel, 0, 0);
             _files.Dock = DockStyle.Fill;
             _files.View = View.Details;
             _files.FullRowSelect = true;
             _files.MultiSelect = false;
             _files.HideSelection = false;
-            _files.BorderStyle = BorderStyle.FixedSingle;
-            _files.Columns.Add("文件", 380);
-            _files.Columns.Add("大小", 84, HorizontalAlignment.Right);
-            _files.Columns.Add("状态", 132);
-            _files.Columns.Add("修改时间", 132);
+            _files.BorderStyle = BorderStyle.None;
+            _files.Columns.Add("文件", 260);
+            _files.OwnerDraw = true;
+            _files.DrawColumnHeader += (s, e) => { using (var brush = new SolidBrush(LauncherTheme.Sidebar)) e.Graphics.FillRectangle(brush, e.Bounds); TextRenderer.DrawText(e.Graphics, e.Header.Text, _files.Font, e.Bounds, LauncherTheme.Foreground, TextFormatFlags.VerticalCenter | TextFormatFlags.Left); };
+            _files.DrawSubItem += (s, e) => e.DrawDefault = true;
+            _files.DrawItem += (s, e) => { if (_files.View != View.Details) e.DrawDefault = true; };
+            _files.Columns.Add("大小", 76, HorizontalAlignment.Right);
+            _files.Columns.Add("状态", 108);
+            _files.Columns.Add("修改时间", 130);
             _files.DoubleClick += (s, e) => RenameSelectedFile();
-            filesHost.Controls.Add(_files, 0, 1);
-            var fileButtons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true, Margin = new Padding(0, 8, 0, 0) };
+            _files.SizeChanged += (s, e) => SizeFileColumns();
+            _files.FontChanged += (s, e) => MeasureFileColumns();
+            _files.ShowItemToolTips = true;
+            filesHost.Controls.Add(LauncherUi.RoundedHost(_files), 0, 1);
             var renameFile = CreateButton("重命名文件", true);
             renameFile.Click += (s, e) => RenameSelectedFile();
             _guardedButtons.Add(renameFile);
-            var revealFile = CreateButton("打开所在文件夹", false);
-            revealFile.Click += (s, e) => RevealSelectedFile();
+            var reveal = CreateButton("打开所在文件夹", false);
+            reveal.Click += (s, e) => RevealSelectedFile();
             var refreshFiles = CreateButton("刷新文件", false);
             refreshFiles.Click += (s, e) => RefreshFiles();
-            fileButtons.Controls.Add(renameFile);
-            fileButtons.Controls.Add(revealFile);
-            fileButtons.Controls.Add(refreshFiles);
-            fileButtons.Controls.Add(new Label { Text = "双击文件也可改名；只能改项目文件夹里的文件，外部登记的图纸不受影响。", AutoSize = true, ForeColor = Muted, Margin = new Padding(6, 9, 0, 0) });
-            filesHost.Controls.Add(fileButtons, 0, 2);
-            right.Controls.Add(filesHost, 0, 3);
+            filesHost.Controls.Add(LauncherUi.Actions(renameFile, reveal, refreshFiles), 0, 2);
+            filePage.Controls.Add(filesHost);
 
-            // ── 状态栏 ────────────────────────────────────────────────────────
-            var footer = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 2, Margin = new Padding(0, 8, 0, 0) };
+            var info = LauncherUi.Card("项目信息", "选中左侧项目后，可在这里修改名称或打开项目文件夹。");
+            infoPage.Controls.Add(LauncherUi.Scroll(info));
+            LauncherUi.Field(info, "项目名称", _nameBox);
+            _folderBox.ReadOnly = true;
+            _folderBox.BackColor = Canvas;
+            LauncherUi.Field(info, "项目文件夹", _folderBox);
+            _cloudLabel.AutoSize = true;
+            _cloudLabel.ForeColor = Muted;
+            LauncherUi.Field(info, "同步状态", _cloudLabel);
+            _renameFolderBox.Text = "重命名时同步修改磁盘文件夹名称";
+            _renameFolderBox.Checked = true;
+            _renameFolderBox.AutoSize = true;
+            _renameFolderBox.Dock = DockStyle.Top;
+            LauncherUi.Add(info, _renameFolderBox);
+            var rename = CreateButton("重命名项目", true);
+            rename.Click += (s, e) => RenameSelectedProject();
+            _guardedButtons.Add(rename);
+            var open = CreateButton("打开文件夹", false);
+            open.Click += (s, e) => OpenProjectFolder();
+            LauncherUi.Add(info, LauncherUi.Actions(rename, open));
+            var danger = LauncherUi.Text("移除项目", 11, true);
+            danger.Margin = new Padding(0, 24, 0, 8);
+            LauncherUi.Add(info, danger);
+            _recycleBox.Text = "同时将项目文件夹移到回收站（可还原）";
+            _recycleBox.AutoSize = true;
+            _recycleBox.Dock = DockStyle.Top;
+            LauncherUi.Add(info, _recycleBox);
+            var delete = CreateButton("删除项目", false);
+            delete.ForeColor = Color.FromArgb(165, 61, 65);
+            delete.Click += (s, e) => DeleteSelectedProject();
+            _guardedButtons.Add(delete);
+            LauncherUi.Add(info, LauncherUi.Actions(delete));
+
+            var createCard = LauncherUi.Card("建立新的项目", "项目名称与文件夹统一管理，后续可直接在 CAD 中使用。");
+            newPage.Controls.Add(LauncherUi.Scroll(createCard));
+            LauncherUi.Field(createCard, "项目名称", _newNameBox);
+            LauncherUi.Field(createCard, "项目文件夹（可选）", _newFolderBox);
+            LauncherUi.Add(createCard, LauncherUi.Text("留空时，在工作区中创建同名文件夹。", 9.5F, false, Muted));
+            var browse = CreateButton("选择目录…", false);
+            browse.Click += (s, e) => ChooseNewFolder();
+            var create = CreateButton("新建项目", true);
+            create.Click += (s, e) => CreateProject();
+            _guardedButtons.Add(create);
+            LauncherUi.Add(createCard, LauncherUi.Actions(create, browse));
+
+            var footer = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 2, Margin = new Padding(0, 12, 0, 0) };
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             _status.AutoSize = true;
+            _status.Dock = DockStyle.Fill;
             _status.ForeColor = Muted;
-            _status.MaximumSize = new Size(760, 48);
+            _status.Margin = new Padding(0, 0, 12, 0);
             footer.Controls.Add(_status, 0, 0);
             var close = CreateButton("关闭", false);
             close.DialogResult = DialogResult.OK;
-            close.Margin = new Padding(8, 0, 0, 0);
             footer.Controls.Add(close, 1, 0);
-            root.Controls.Add(footer, 0, 2);
+            root.Controls.Add(footer, 0, 3);
             CancelButton = close;
-            AcceptButton = close;
         }
-
-        protected override void OnLoad(EventArgs e)
-        {
-            base.OnLoad(e);
-            ApplySplitLayout();
-        }
-
-        /// <summary>按当前宽度给左右分栏设最小宽度与初始位置（宽度不够时保持默认，绝不让它抛异常）。</summary>
-        private void ApplySplitLayout()
-        {
-            if (_split == null) return;
-            var width = _split.ClientSize.Width;
-            if (width <= 0) return;
-            try
-            {
-                const int panel1Min = 200;
-                var panel2Min = Math.Max(240, Math.Min(440, width - panel1Min - _split.SplitterWidth - 40));
-                _split.Panel1MinSize = panel1Min;
-                _split.Panel2MinSize = panel2Min;
-                var max = width - panel2Min - _split.SplitterWidth;
-                if (max <= panel1Min) return;
-                var desired = (int)(width * 0.28);
-                _split.SplitterDistance = Math.Max(panel1Min, Math.Min(max, desired));
-            }
-            catch (InvalidOperationException) { }
-            catch (ArgumentOutOfRangeException) { }
-        }
-
-        // ── 状态 ─────────────────────────────────────────────────────────────
 
         private void RefreshCadState()
         {
             _cadRunning = ProjectManagementService.IsCadRunning();
             _cadBanner.Text = _cadRunning
                 ? "检测到 AutoCAD 正在运行：请先关闭 CAD 再改名，否则 CAD 里的项目列表会把改动覆盖回去。"
-                : "AutoCAD 未运行，可以安全修改项目。修改完成后进入 CAD 会自动读取新配置。";
-            _cadBanner.ForeColor = _cadRunning ? WarnText : Color.FromArgb(32, 106, 62);
+                : "AutoCAD 未运行 · 可以编辑项目";
+            _cadBanner.Tag = _cadRunning ? "warning" : "success";
+            LauncherTheme.Apply(_cadBanner);
             foreach (var button in _guardedButtons) button.Enabled = !_cadRunning;
             _status.Text = _cadRunning ? "已锁定：请先关闭 AutoCAD。" : "准备就绪。";
         }
@@ -318,7 +255,8 @@ namespace BatchPdfPublisherLauncher
                     _projects.Items.Add(project.Name);
                 if (_projects.Items.Count > 0)
                     _projects.SelectedIndex = Math.Max(0, _projects.Items.IndexOf(selectedName ?? string.Empty));
-                _status.Text = "共 " + _projects.Items.Count + " 个项目。项目配置：" + Path.Combine(_service.UserRoot, "通用设置", "项目列表.json");
+                _status.Text = "共 " + _projects.Items.Count + " 个项目 · 与 CAD 共用项目配置";
+                _status.AccessibleDescription = Path.Combine(_service.UserRoot, "通用设置", "项目列表.json");
             }
             catch (Exception exception)
             {
@@ -363,13 +301,46 @@ namespace BatchPdfPublisherLauncher
                     item.SubItems.Add(entry.StateText);
                     item.SubItems.Add(entry.ModifiedUtc == DateTime.MinValue ? string.Empty : entry.ModifiedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm"));
                     item.Tag = entry;
+                    item.ToolTipText = entry.RelativePath + "\n" + entry.SizeText + " · " + entry.StateText + "\n" + item.SubItems[3].Text;
                     _files.Items.Add(item);
                 }
                 _countLabel.Text = "项目文件（" + entries.Count + " 个）";
             }
-            finally { _files.EndUpdate(); }
+            finally { _files.EndUpdate(); MeasureFileColumns(); }
         }
 
+        private readonly int[] _metadataWidths = new int[3];
+        private bool _sizingColumns;
+        private void MeasureFileColumns()
+        {
+            if (_files.Columns.Count < 4) return;
+            for (int column = 1; column < 4; column++)
+            {
+                int width = TextRenderer.MeasureText(_files.Columns[column].Text, _files.Font).Width;
+                foreach (ListViewItem item in _files.Items)
+                    if (item.SubItems.Count > column) width = Math.Max(width, TextRenderer.MeasureText(item.SubItems[column].Text, _files.Font).Width);
+                _metadataWidths[column - 1] = width + LogicalToDeviceUnits(18);
+            }
+            SizeFileColumns();
+        }
+        private void SizeFileColumns()
+        {
+            if (_files.Columns.Count < 4 || _sizingColumns) return;
+            _sizingColumns = true;
+            try
+            {
+                int remaining = _files.ClientSize.Width;
+                for (int column = 1; column < 4; column++)
+                {
+                    int width = Math.Max(40, _metadataWidths[column - 1]);
+                    if (_files.Columns[column].Width != width) _files.Columns[column].Width = width;
+                    remaining -= width;
+                }
+                int first = Math.Max(LogicalToDeviceUnits(190), remaining);
+                if (_files.Columns[0].Width != first) _files.Columns[0].Width = first;
+            }
+            finally { _sizingColumns = false; }
+        }
         private ProjectProfile CurrentProject()
         {
             var name = SelectedProjectName();
@@ -531,22 +502,7 @@ namespace BatchPdfPublisherLauncher
 
         private static Button CreateButton(string text, bool accent)
         {
-            var button = new Button
-            {
-                Text = text,
-                AutoSize = true,
-                Height = 30,
-                MinimumSize = new Size(96, 30),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = accent ? Cyan : Color.White,
-                ForeColor = accent ? Color.White : Navy,
-                Font = new Font("Microsoft YaHei UI", 9F, accent ? FontStyle.Bold : FontStyle.Regular),
-                Cursor = Cursors.Hand,
-                Margin = new Padding(0, 2, 6, 2)
-            };
-            button.FlatAppearance.BorderColor = accent ? Cyan : Color.FromArgb(202, 213, 222);
-            button.FlatAppearance.MouseOverBackColor = accent ? Color.FromArgb(19, 143, 174) : Color.FromArgb(244, 247, 250);
-            return button;
+            return LauncherUi.Button(text, accent);
         }
 
         private static void OpenInExplorer(string path)
@@ -566,7 +522,7 @@ namespace BatchPdfPublisherLauncher
         }
 
         /// <summary>输入一行文字的简单对话框（改名用）。</summary>
-        private sealed class TextPromptForm : Form
+        private sealed class TextPromptForm : AdaptiveForm
         {
             private readonly TextBox _box = new TextBox();
             public string Value { get { return _box.Text.Trim(); } }
@@ -574,42 +530,27 @@ namespace BatchPdfPublisherLauncher
             public TextPromptForm(string title, string caption, string label, string value)
             {
                 Text = title;
-                AutoScaleMode = AutoScaleMode.Dpi;
-                AutoScaleDimensions = new SizeF(96F, 96F);
-                ClientSize = new Size(460, 170);
-                MinimumSize = new Size(420, 170);
+                ClientSize = new Size(520, 300);
+                MinimumSize = new Size(360, 240);
                 StartPosition = FormStartPosition.CenterParent;
-                FormBorderStyle = FormBorderStyle.FixedDialog;
                 MaximizeBox = false;
                 MinimizeBox = false;
-                BackColor = Color.White;
-                Font = new Font("Microsoft YaHei UI", 9F);
-                var root = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 4, ColumnCount = 2, Padding = new Padding(16, 14, 16, 12) };
-                root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 76));
+                var root = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1 };
                 root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-                root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-                root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
                 root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
                 root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-                var captionLabel = new Label { Text = caption, AutoSize = true, ForeColor = Muted, MaximumSize = new Size(400, 40), Margin = new Padding(0, 0, 0, 8) };
-                root.Controls.Add(captionLabel, 0, 0);
-                root.SetColumnSpan(captionLabel, 2);
-                root.Controls.Add(FieldLabel(label), 0, 1);
-                _box.Dock = DockStyle.Fill;
-                _box.Height = 28;
+                var content = LauncherUi.Stack(20);
+                LauncherUi.Add(content, LauncherUi.Text(caption, 9.5F, false, Muted));
                 _box.Text = value ?? string.Empty;
-                _box.Margin = new Padding(0, 3, 0, 3);
-                _box.SelectAll();
-                root.Controls.Add(_box, 1, 1);
-                var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.RightToLeft, Margin = new Padding(0, 8, 0, 0) };
+                LauncherUi.Field(content, label, _box);
+                root.Controls.Add(LauncherUi.Scroll(content), 0, 0);
                 var cancel = CreateButton("取消", false);
                 cancel.DialogResult = DialogResult.Cancel;
                 var ok = CreateButton("确定", true);
                 ok.DialogResult = DialogResult.OK;
-                buttons.Controls.Add(cancel);
-                buttons.Controls.Add(ok);
-                root.Controls.Add(buttons, 0, 3);
-                root.SetColumnSpan(buttons, 2);
+                var actions = LauncherUi.Actions(ok, cancel);
+                actions.Padding = new Padding(20, 8, 20, 8);
+                root.Controls.Add(actions, 0, 1);
                 Controls.Add(root);
                 AcceptButton = ok;
                 CancelButton = cancel;

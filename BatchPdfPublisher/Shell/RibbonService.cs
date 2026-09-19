@@ -5,6 +5,10 @@ using System.Windows.Input;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.Windows;
 using System.Linq;
+using System.Windows;
+using System.Windows.Media;
+using Autodesk.Internal.Windows;
+using Application = Autodesk.AutoCAD.ApplicationServices.Application;
 
 namespace BatchPdfPublisher.Services
 {
@@ -99,10 +103,10 @@ namespace BatchPdfPublisher.Services
         private static bool IsCurrentTab(RibbonTab tab)
         {
             if (tab == null || tab.Panels.Count == 0) return false;
-            var buttons = tab.Panels.Where(x => x.Source != null).SelectMany(x => x.Source.Items).OfType<RibbonButton>().ToList();
+            var buttons = tab.Panels.Where(x => x.Source != null).SelectMany(x => x.Source.Items).ToList();
             var features = FeatureRegistry.Items;
             if (buttons.Count != features.Count) return false;
-            // 样式版本让旧的汉字色块标签自动重建；快捷键更新仍同步到提示。
+            // 样式版本让旧的汉字色块标签自动重建；快捷键更新同步到常显标签与提示。
             var shortcuts = ShortcutSettingsService.Load();
             foreach (var feature in features)
             {
@@ -110,13 +114,14 @@ namespace BatchPdfPublisher.Services
                 string shortcut; if (!shortcuts.TryGetValue(feature.Id, out shortcut)) shortcut = feature.DefaultShortcut;
                 if (!buttons.Any(x => x.Id == RibbonIconAssets.StyleVersion + feature.Id
                     && string.Equals(x.Text, label, StringComparison.Ordinal)
+                    && string.Equals(x.Tag as string, BadgeThemeKey(), StringComparison.Ordinal)
                     && string.Equals(x.ToolTip as string, ButtonToolTip(feature, shortcut), StringComparison.Ordinal))) return false;
             }
             return true;
         }
 
         /// <summary>
-        /// 使用原生大按钮，图标在上、名称在下；沿用面板规划以保证所有功能保留。
+        /// 使用 Ribbon 内容宿主，图标在上、名称与快捷键标签在下；保留全部功能面板。
         /// </summary>
         private static RibbonPanel CreatePanel(string title, IList<FeatureDefinition> features, IDictionary<string, string> shortcuts)
         {
@@ -152,28 +157,78 @@ namespace BatchPdfPublisher.Services
             if (tab != null) ribbon.Tabs.Remove(tab);
         }
 
-        private static RibbonButton CreateButton(FeatureDefinition feature, IDictionary<string, string> shortcuts)
+        private static string BadgeThemeKey()
+        {
+            try { return ReadCadTheme(); }
+            catch { return "dark"; }
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static string ReadCadTheme() { return Convert.ToInt32(Application.GetSystemVariable("COLORTHEME")) == 0 ? "dark" : "light"; }
+
+        private static RibbonItem CreateButton(FeatureDefinition feature, IDictionary<string, string> shortcuts)
         {
             string shortcut; if (!shortcuts.TryGetValue(feature.Id, out shortcut)) shortcut = feature.DefaultShortcut;
-            var image = RibbonIconAssets.ForFeature(feature.Id);
-            // 与确认稿一致：图形图标 + 简称，完整名称和当前快捷键放入提示。
             var label = string.IsNullOrWhiteSpace(feature.ShortName) ? feature.Name : feature.ShortName;
-            return new RibbonButton
+            var dark = BadgeThemeKey() == "dark";
+            var button = CreateBadgeButton(label, shortcut, RibbonIconAssets.ForScaledFeature(feature.Id), dark);
+            button.Command = new CommandHandler(feature.Command + " ");
+            button.CommandParameter = feature.Command + " ";
+            button.ToolTip = ButtonToolTip(feature, shortcut);
+            System.Windows.Automation.AutomationProperties.SetName(button, feature.Name + " " + shortcut);
+            // Composite hosts WPF content without forcing the entire caption into a 32px image slot.
+            return new RibbonCompositeItem
             {
                 Id = RibbonIconAssets.StyleVersion + feature.Id,
                 Text = label,
+                Tag = dark ? "dark" : "light",
                 ToolTip = ButtonToolTip(feature, shortcut),
-                ShowText = true,
-                ShowImage = true,
-                Image = RibbonIconAssets.SmallForFeature(feature.Id),
-                LargeImage = image,
                 Size = RibbonItemSize.Large,
-                Orientation = Orientation.Vertical,
-                CommandParameter = feature.Command + " ",
-                CommandHandler = new CommandHandler(feature.Command + " ")
+                Content = button
             };
         }
 
+        internal static System.Windows.Controls.Button CreateBadgeButton(string label, string shortcut, ImageSource image, bool dark)
+        {
+            var foreground = new SolidColorBrush(dark ? Color.FromRgb(240, 246, 255) : Color.FromRgb(22, 37, 60));
+            var accent = new SolidColorBrush(dark ? Color.FromRgb(101, 192, 255) : Color.FromRgb(0, 112, 237));
+            var stack = new StackPanel { Orientation = Orientation.Vertical, Margin = new Thickness(5, 2, 5, 2) };
+            stack.Children.Add(new System.Windows.Controls.Image { Source = image, Width = 32, Height = 32, Stretch = Stretch.Uniform, Margin = new Thickness(0, 0, 0, 5) });
+            var row = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center };
+            row.Children.Add(new TextBlock { Text = label, FontSize = 12, Foreground = foreground, VerticalAlignment = VerticalAlignment.Center });
+            if (!string.IsNullOrWhiteSpace(shortcut))
+                row.Children.Add(new Border
+                {
+                    CornerRadius = new CornerRadius(4), BorderThickness = new Thickness(.7), BorderBrush = accent,
+                    Background = new SolidColorBrush(dark ? Color.FromRgb(24, 49, 76) : Color.FromRgb(228, 245, 255)),
+                    Padding = new Thickness(4, 1, 4, 1), Margin = new Thickness(5, 0, 0, 0),
+                    Child = new TextBlock { Text = shortcut, FontFamily = new FontFamily("Segoe UI"), FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = accent }
+                });
+            stack.Children.Add(row);
+            var button = new System.Windows.Controls.Button
+            {
+                Content = stack, Background = Brushes.Transparent, BorderBrush = Brushes.Transparent,
+                BorderThickness = new Thickness(1), Padding = new Thickness(1), Cursor = Cursors.Hand,
+                UseLayoutRounding = true, SnapsToDevicePixels = true, FontFamily = new FontFamily("Microsoft YaHei UI")
+            };
+            var border = new FrameworkElementFactory(typeof(Border)); border.Name = "Chrome";
+            border.SetValue(Border.CornerRadiusProperty, new CornerRadius(5));
+            border.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+            border.SetValue(Border.BorderBrushProperty, Brushes.Transparent);
+            border.SetValue(Border.BackgroundProperty, Brushes.Transparent);
+            var presenter = new FrameworkElementFactory(typeof(ContentPresenter));
+            presenter.SetValue(ContentPresenter.ContentProperty, new System.Windows.Data.Binding("Content") { RelativeSource = new System.Windows.Data.RelativeSource(System.Windows.Data.RelativeSourceMode.TemplatedParent) });
+            border.AppendChild(presenter);
+            var template = new ControlTemplate(typeof(System.Windows.Controls.Button)) { VisualTree = border };
+            foreach (var property in new[] { UIElement.IsMouseOverProperty, UIElement.IsKeyboardFocusWithinProperty })
+            {
+                var trigger = new Trigger { Property = property, Value = true };
+                trigger.Setters.Add(new Setter(Border.BackgroundProperty, new SolidColorBrush(dark ? Color.FromRgb(47, 69, 93) : Color.FromRgb(220, 238, 255)), "Chrome"));
+                trigger.Setters.Add(new Setter(Border.BorderBrushProperty, accent, "Chrome")); template.Triggers.Add(trigger);
+            }
+            button.Template = template;
+            return button;
+        }
         private static string ButtonToolTip(FeatureDefinition feature, string shortcut)
         {
             return feature.Name + "（" + shortcut + "）\n" + feature.Description;

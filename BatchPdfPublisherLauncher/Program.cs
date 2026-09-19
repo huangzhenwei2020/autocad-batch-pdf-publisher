@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -39,6 +39,7 @@ namespace BatchPdfPublisherLauncher
         {
             try
             {
+                AdaptiveForm.InitializeDpiAwareness();
                 Environment.SetEnvironmentVariable("WANLUO_ARCHITECTURE_TOOLS_ROOT", PackageRoot, EnvironmentVariableTarget.Process);
                 Environment.SetEnvironmentVariable("WANLUO_ARCHITECTURE_TOOLS_USER_DATA_ROOT", UserDataRoot, EnvironmentVariableTarget.Process);
                 Application.EnableVisualStyles();
@@ -1193,7 +1194,7 @@ namespace BatchPdfPublisherLauncher
         public bool InstallPermanently { get; set; }
     }
 
-    internal sealed class PlatformPicker : Form
+    internal sealed class PlatformPicker : AdaptiveForm
     {
         private static readonly Color Navy = Color.FromArgb(18, 52, 91);
         private static readonly Color Cyan = Color.FromArgb(24, 167, 201);
@@ -1204,7 +1205,6 @@ namespace BatchPdfPublisherLauncher
         private readonly ComboBox _cadBox;
         private readonly CheckBox _runningCad;
         private readonly CheckBox _permanentInstall;
-        private readonly Button _uninstallButton;
         private readonly Button _startButton;
         public bool UninstallRequested { get; private set; }
         public LauncherOptions Options => new LauncherOptions
@@ -1217,167 +1217,79 @@ namespace BatchPdfPublisherLauncher
         public PlatformPicker(IList<PlatformOption> platforms, string lastPlatform, bool hasRunningCad)
         {
             _platforms = platforms;
-            Text = "万落建筑工具 · 启动器";
+            Text = "万落建筑工具";
             Icon = LoadIcon();
-            AutoScaleMode = AutoScaleMode.Dpi;
-            // 基准必须显式给 96。只设 AutoScaleMode.Dpi 而沿用字体基准 (6,13) 时，
-            // 行高与控件高度的缩放比例不一致：底部按钮行高 72、内边距 14+14，
-            // 留给按钮 44，而按钮 40 加默认上下 margin 各 3 共需 46——已经超出 2px，
-            // 字体或 DPI 稍一放大就表现为几个按钮不在同一水平线上。
-            AutoScaleDimensions = new SizeF(96F, 96F);
-            // 高度 488 → 500：底部按钮行从 72 加高到 84，同步补上这 12px，
-            // 中部卡片区保持原有高度不被压缩。
-            ClientSize = new Size(660, 500); MinimumSize = new Size(600, 472);
-            FormBorderStyle = FormBorderStyle.Sizable; MaximizeBox = false; MinimizeBox = false; StartPosition = FormStartPosition.CenterScreen;
-            BackColor = Canvas; Font = new Font("Microsoft YaHei UI", 9F);
-            Padding = new Padding(0);
-
-            var root = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1, BackColor = Color.White };
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 116));
-            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            // 84 而不是 72：给 40 高的按钮留出 14+14 内边距 + 上下 margin 各 3 之后
-            // 仍有富余，避免缩放时被行高挤出对齐位置。
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 84));
-
-            var header = new Panel { Dock = DockStyle.Fill, BackColor = Navy, Padding = new Padding(28, 18, 24, 16) };
-            var emblem = new PictureBox
-            {
-                Location = new Point(28, 18),
-                Size = new Size(78, 78),
-                SizeMode = PictureBoxSizeMode.Zoom,
-                Image = LoadBrandImage(),
-                BackColor = Color.Transparent
-            };
-            var title = new Label
-            {
-                Location = new Point(126, 24),
-                AutoSize = true,
-                Text = "万落建筑工具",
-                Font = new Font("Microsoft YaHei UI", 20F, FontStyle.Bold),
-                ForeColor = Color.White
-            };
-            var subtitle = new Label
-            {
-                Location = new Point(129, 69),
-                AutoSize = true,
-                Text = "图纸发布、图框工具与建筑设计说明的一体化 CAD 插件",
-                Font = new Font("Microsoft YaHei UI", 9.5F),
-                ForeColor = Color.FromArgb(197, 222, 236)
-            };
-            var detected = new Label
-            {
-                AutoSize = false,
-                Size = new Size(104, 28),
-                Location = new Point(526, 25),
-                TextAlign = ContentAlignment.MiddleCenter,
-                Text = platforms.Count > 0 ? "已识别 " + platforms.Count + " 项" : "未识别平台",
-                ForeColor = platforms.Count > 0 ? Color.FromArgb(211, 247, 255) : Color.FromArgb(255, 220, 214),
-                BackColor = platforms.Count > 0 ? Color.FromArgb(27, 85, 118) : Color.FromArgb(112, 55, 55),
-                Font = new Font("Microsoft YaHei UI", 8.5F, FontStyle.Bold)
-            };
-            header.Controls.Add(emblem);
-            header.Controls.Add(title);
-            header.Controls.Add(subtitle);
-            header.Controls.Add(detected);
-            root.Controls.Add(header, 0, 0);
-
-            var bodyHost = new Panel { Dock = DockStyle.Fill, BackColor = Canvas, Padding = new Padding(28, 24, 28, 18) };
-            var card = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                BackColor = Color.White,
-                Padding = new Padding(24, 18, 24, 16),
-                ColumnCount = 2,
-                RowCount = 6,
-                CellBorderStyle = TableLayoutPanelCellBorderStyle.None
-            };
-            card.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 124));
-            card.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            card.RowStyles.Add(new RowStyle(SizeType.Absolute, 56));
-            card.RowStyles.Add(new RowStyle(SizeType.Absolute, 56));
-            card.RowStyles.Add(new RowStyle(SizeType.Absolute, 45));
-            card.RowStyles.Add(new RowStyle(SizeType.Absolute, 45));
-            card.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
-            card.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-
-            var tzLabel = CreateFieldLabel("天正产品");
-            _tianzhengBox = CreateComboBox();
-            var cadLabel = CreateFieldLabel("AutoCAD 版本");
-            _cadBox = CreateComboBox();
+            ClientSize = new Size(1000, 710);
+            MinimumSize = new Size(420, 360);
+            MaximizeBox = true;
+            var shell = new LauncherShell("home", () => { }, () => OpenProjectManager(), () => ShowLauncherSettings());
+            Controls.Add(shell);
+            var content = LauncherUi.Stack(24);
+            shell.Body.Controls.Add(LauncherUi.Scroll(content));
+            LauncherUi.Add(content, LauncherShell.PageHeading("启动工作台", "选择环境，继续设计。"));
+            var card = LauncherUi.Card("", ""); card.Controls.Clear(); card.RowStyles.Clear(); card.RowCount = 0;
+            card.Name = "EnvironmentCard";
+            var environment = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2, Margin = Padding.Empty };
+            environment.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 140)); environment.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            var illustration = LauncherUi.Stack(); LauncherUi.Add(illustration, LauncherUi.Text("工作环境", 15, true)); LauncherUi.Add(illustration, new Blueprint());
+            var fields = LauncherUi.Stack();
+            environment.Controls.Add(illustration, 0, 0); environment.Controls.Add(fields, 1, 0); LauncherUi.Add(card, environment); LauncherUi.Add(content, card);
+            environment.SizeChanged += (s, e) => { bool narrow = environment.Width < Math.Max(LogicalToDeviceUnits(500), Font.Height * 30); illustration.Visible = !narrow; environment.ColumnStyles[0].Width = narrow ? 0 : LogicalToDeviceUnits(140); };
+            _tianzhengBox = CreateComboBox(); _cadBox = CreateComboBox();
             foreach (var value in platforms.Select(x => x.TianzhengName).Distinct(StringComparer.OrdinalIgnoreCase)) _tianzhengBox.Items.Add(value);
             var last = platforms.FirstOrDefault(x => string.Equals(x.Id, lastPlatform, StringComparison.OrdinalIgnoreCase));
             _tianzhengBox.SelectedIndexChanged += (s, e) => RefreshCadOptions(last?.CadName);
             if (_tianzhengBox.Items.Count > 0) _tianzhengBox.SelectedItem = last?.TianzhengName ?? _tianzhengBox.Items[0];
-            _runningCad = CreateOptionCheckBox(hasRunningCad ? "加载到当前已启动的 CAD" : "加载到当前已启动的 CAD（当前未检测到）", hasRunningCad, hasRunningCad);
-            _permanentInstall = CreateOptionCheckBox("永久安装（不勾选则直接从当前目录便携运行）", false, true);
-            card.Controls.Add(tzLabel, 0, 0); card.Controls.Add(_tianzhengBox, 1, 0);
-            card.Controls.Add(cadLabel, 0, 1); card.Controls.Add(_cadBox, 1, 1);
-            card.Controls.Add(_runningCad, 1, 2); card.Controls.Add(_permanentInstall, 1, 3);
-            var separator = new Panel { Dock = DockStyle.Top, Height = 1, BackColor = Color.FromArgb(224, 231, 237), Margin = new Padding(0, 10, 0, 0) };
-            card.Controls.Add(separator, 0, 4); card.SetColumnSpan(separator, 2);
-            var tip = new Label
+            LauncherUi.InlineField(fields, "天正产品", _tianzhengBox); LauncherUi.InlineField(fields, "AutoCAD 版本", _cadBox);
+            _runningCad = new ToggleSwitch { Text = "连接已运行的 CAD", Checked = hasRunningCad, Enabled = hasRunningCad, AccessibleDescription = hasRunningCad ? "加载插件到已运行的 CAD" : "当前没有运行的 CAD" };
+            _permanentInstall = new ToggleSwitch { Text = "随 CAD 自动加载" };
+            LauncherUi.Add(fields, _runningCad); LauncherUi.Add(fields, _permanentInstall);
+            _startButton = LauncherUi.Button("启动 CAD  →", true); _startButton.MinimumSize = new Size(0, 48); _startButton.Padding = new Padding(44, 10, 44, 10); _startButton.Enabled = platforms.Count > 0; _startButton.DialogResult = DialogResult.OK;
+            var browse = LauncherUi.Button("手动选择程序"); browse.Click += (s, e) => AddManualProgram();
+            LauncherUi.Add(fields, LauncherUi.Actions(_startButton, browse));
+            if (platforms.Count == 0) LauncherUi.Add(fields, LauncherUi.Text("未识别到 CAD，请手动选择程序。", 9, false, LauncherUi.Muted));
+            var recentTitle = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2, Margin = new Padding(0, 5, 0, 10) }; recentTitle.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); recentTitle.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize)); recentTitle.Controls.Add(LauncherUi.Text("最近项目", 13, true), 0, 0);
+            var all = LauncherUi.Button("查看全部  ›"); all.Click += (s, e) => OpenProjectManager(); recentTitle.Controls.Add(all, 1, 0); LauncherUi.Add(content, recentTitle);
+            var recent = LauncherUi.Card("", ""); recent.Controls.Clear(); recent.RowStyles.Clear(); recent.RowCount = 0; recent.Padding = new Padding(8);
+            try
             {
-                Dock = DockStyle.Fill,
-                Text = platforms.Count > 0
-                    ? "已按本机实际安装目录识别平台。天正名称会完整显示 T20/T30、专业及版本；AutoCAD 显示产品年份。"
-                    : "没有识别到可用的 AutoCAD。请确认 AutoCAD 已正确安装，或以管理员身份修复其注册信息。",
-                ForeColor = platforms.Count > 0 ? Muted : Color.FromArgb(181, 66, 49),
-                AutoSize = false,
-                Padding = new Padding(0, 8, 0, 0)
-            };
-            card.Controls.Add(tip, 0, 5); card.SetColumnSpan(tip, 2);
-            bodyHost.Controls.Add(card);
-            root.Controls.Add(bodyHost, 0, 1);
+                var items = new BatchPdfPublisher.Services.ProjectManagementService().LoadProjects().OrderByDescending(x => Directory.Exists(x.ProjectFolder) ? Directory.GetLastWriteTimeUtc(x.ProjectFolder) : DateTime.MinValue).Take(2).ToList();
+                if (items.Count == 0) LauncherUi.Add(recent, LauncherUi.Text("还没有项目，前往项目管理创建。", 10, false, LauncherUi.Muted));
+                foreach (var project in items)
+                {
+                    var item = new ProjectShortcutButton { Text = project.Name, FolderPath = string.IsNullOrWhiteSpace(project.ProjectFolder) ? "默认项目文件夹" : project.ProjectFolder, AccessibleDescription = project.ProjectFolder, Font = new Font("Microsoft YaHei UI", 10) }; item.Dock = DockStyle.Top; item.TextAlign = ContentAlignment.MiddleLeft; item.Click += (s, e) => OpenProjectManager(); LauncherUi.Add(recent, item);
 
-            var footer = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(28, 16, 28, 16), ColumnCount = 6, BackColor = Color.White };
-            footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            // 四个按钮统一锚定为垂直居中。TableLayoutPanel 默认 Anchor 是 Top|Left，
-            // 只要单元格高度与按钮高度不整除，各列就会各自贴顶，看起来不在同一水平线上。
-            // 列宽是 AutoSize（宽度恰好等于按钮），横向不起作用，因此只设 Left 表达这一点。
-            const AnchorStyles FooterAnchor = AnchorStyles.Left;
-            _startButton = CreateButton("启动并加载", 124, Cyan, Color.White);
-            _startButton.DialogResult = DialogResult.OK;
-            _startButton.Enabled = platforms.Count > 0;
-            _startButton.Anchor = FooterAnchor;
-            var browseButton = CreateButton("手动选择程序", 112, Color.White, Navy);
-            browseButton.Margin = new Padding(10, 0, 0, 0);
-            browseButton.Anchor = FooterAnchor;
-            browseButton.Click += (s, e) => AddManualProgram();
-            var projectButton = CreateButton("项目管理", 96, Color.White, Navy);
-            projectButton.Margin = new Padding(10, 0, 0, 0);
-            projectButton.Anchor = FooterAnchor;
-            projectButton.Click += (s, e) => OpenProjectManager();
-            var cancelButton = CreateButton("取消", 88, Color.White, Navy);
-            cancelButton.DialogResult = DialogResult.Cancel;
-            cancelButton.Margin = new Padding(10, 0, 0, 0);
-            cancelButton.Anchor = FooterAnchor;
-            _uninstallButton = CreateButton("卸载插件", 102, Color.White, Color.FromArgb(157, 66, 61));
-            _uninstallButton.Anchor = FooterAnchor;
-            _uninstallButton.Click += (s, e) => { UninstallRequested = true; DialogResult = DialogResult.OK; };
-            footer.Controls.Add(_uninstallButton, 0, 0); footer.Controls.Add(browseButton, 1, 0); footer.Controls.Add(projectButton, 2, 0); footer.Controls.Add(_startButton, 4, 0); footer.Controls.Add(cancelButton, 5, 0); root.Controls.Add(footer, 0, 2); Controls.Add(root);
-
-            var toolTip = new ToolTip { AutoPopDelay = 10000, InitialDelay = 350, ReshowDelay = 150, ShowAlways = true };
-            toolTip.SetToolTip(_tianzhengBox, "选择要启动的天正专业和版本；不使用天正时选择“无天正”。");
-            toolTip.SetToolTip(_cadBox, "选择插件要加载到的 AutoCAD 产品年份。");
-            toolTip.SetToolTip(_runningCad, "将插件直接载入已经打开的本机 AutoCAD，不再启动新的 CAD 进程。");
-            toolTip.SetToolTip(_permanentInstall, "默认不安装程序文件，直接从启动器所在目录加载；勾选后写入 Autodesk ApplicationPlugins，以后启动 CAD 时自动加载。");
-            toolTip.SetToolTip(_uninstallButton, "删除本插件的自动加载配置和安装副本，不会删除工程文件或 DWG 图纸。");
-            toolTip.SetToolTip(browseButton, "自动识别失败时，手动选择 acad.exe 或天正启动程序；安装盘符和目录不受限制。");
-            toolTip.SetToolTip(projectButton, "不进入 CAD 就能新建、重命名、删除项目，以及重命名项目文件夹里的文件；需要在 AutoCAD 关闭时使用。");
-            AcceptButton = _startButton; CancelButton = cancelButton;
+                }
+            }
+            catch (Exception) { LauncherUi.Add(recent, LauncherUi.Text("项目列表暂时无法读取，请在项目管理中检查。", 9)); }
+            LauncherUi.Add(content, recent);
+            AcceptButton = _startButton;
         }
-
         /// <summary>打开“项目管理”窗口：不进入 CAD 就能整理项目（改名会同步改写扫描结果与云同步登记）。</summary>
         private void OpenProjectManager()
         {
             using (var manager = new ProjectManagerForm()) manager.ShowDialog(this);
         }
 
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        { if (keyData == Keys.Escape && !_tianzhengBox.DroppedDown && !_cadBox.DroppedDown) { DialogResult = DialogResult.Cancel; Close(); return true; } return base.ProcessCmdKey(ref msg, keyData); }
+
+        private void ShowLauncherSettings()
+        {
+            using (var dialog = new AdaptiveForm { Text = "万落建筑工具 · 设置", ClientSize = new Size(520, 370) })
+            {
+                var body = LauncherUi.Stack(24);
+                LauncherUi.Add(body, LauncherUi.Text("设置", 22, true));
+                LauncherUi.Add(body, LauncherUi.Text("颜色模式", 12, true));
+                LauncherUi.Add(body, LauncherShell.ThemeControls());
+                LauncherUi.Add(body, LauncherUi.Text("日间与夜间模式会自动保存，下次启动继续使用。", 10));
+                LauncherUi.Add(body, LauncherUi.Text("插件安装", 12, true));
+                var uninstall = LauncherUi.Button("卸载插件");
+                uninstall.Click += (s, e) => { dialog.Close(); UninstallRequested = true; DialogResult = DialogResult.OK; };
+                LauncherUi.Add(body, LauncherUi.Actions(uninstall));
+                dialog.Controls.Add(LauncherUi.Scroll(body)); dialog.ShowDialog(this);
+            }
+        }
         private void AddManualProgram()
         {
             using (var dialog = new OpenFileDialog { Filter = "CAD/天正启动程序 (*.exe)|*.exe", Title = "选择 acad.exe 或天正启动程序" })
@@ -1460,7 +1372,7 @@ namespace BatchPdfPublisherLauncher
 
         private static ComboBox CreateComboBox()
         {
-            return new ComboBox
+            return new ThemedComboBox
             {
                 Dock = DockStyle.Fill,
                 DropDownStyle = ComboBoxStyle.DropDownList,

@@ -10,7 +10,7 @@ namespace BatchPdfPublisher.Services
     /// <summary>The approved iOS artwork is embedded in both CAD runtime builds.</summary>
     internal static class RibbonIconAssets
     {
-        internal const string StyleVersion = "WL_IOS_2_";
+        internal const string StyleVersion = "WL_IOS_BADGE_3_";
         private static readonly string[] FeatureIds =
         {
             "publisher", "frame", "catalog", "architecture_spec", "stair_detail", "door_window",
@@ -18,6 +18,7 @@ namespace BatchPdfPublisher.Services
             "attribute_batch", "attribute_definition", "cad_table_xlsx", "room_rename", "shortcut_settings", "menubar"
         };
         private static readonly Dictionary<string, BitmapSource> SmallImages = new Dictionary<string, BitmapSource>(StringComparer.Ordinal);
+        private static readonly Dictionary<string, BitmapSource> ScaledImages = new Dictionary<string, BitmapSource>(StringComparer.Ordinal);
         private static readonly Dictionary<string, BitmapSource> Images = Load();
         // The exported atlas includes outer margins. These measured sprite bounds
         // keep the original artwork centered without including adjacent glow.
@@ -27,6 +28,8 @@ namespace BatchPdfPublisher.Services
             BitmapSource image;
             return Images.TryGetValue(featureId ?? string.Empty, out image) ? image : Images["shortcut_settings"];
         }
+
+        internal static BitmapSource ForScaledFeature(string id) { BitmapSource image; return ScaledImages.TryGetValue(id ?? string.Empty, out image) ? image : ScaledImages["shortcut_settings"]; }
 
         internal static BitmapSource SmallForFeature(string featureId)
         {
@@ -71,6 +74,7 @@ namespace BatchPdfPublisher.Services
                     var row = index / 6;
                     var image = new CroppedBitmap(atlas, new Int32Rect(columns[column], rows[row], 258, 258));
                     image.Freeze();
+                    ScaledImages.Add(FeatureIds[index], Rasterize(image, 128));
                     images.Add(FeatureIds[index], Rasterize(image, 32));
                     SmallImages.Add(FeatureIds[index], Rasterize(image, 16));
                 }

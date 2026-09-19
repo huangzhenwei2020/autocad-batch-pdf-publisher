@@ -39,6 +39,8 @@
     <Compile Include="Program.cs" />
     <Compile Include="CloudSyncCoordinatorStub.cs" />
     <Compile Include="ProjectManagerForm.cs" />
+    <Compile Include="LauncherUi.cs" />
+    <None Include="app.config" />
     <Compile Include="..\Shared\ProductVersion.cs"><Link>ProductVersion.cs</Link></Compile>
     <Compile Include="Properties\AssemblyInfo.cs" />
     <!--
