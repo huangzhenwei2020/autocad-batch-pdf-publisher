@@ -10,7 +10,7 @@ namespace BatchPdfPublisher.Services
     /// <summary>The approved iOS artwork is embedded in both CAD runtime builds.</summary>
     internal static class RibbonIconAssets
     {
-        internal const string StyleVersion = "WL_IOS_BADGE_3_";
+        internal const string StyleVersion = "WL_IOS_NATIVE_BADGE_6_";
         private static readonly string[] FeatureIds =
         {
             "publisher", "frame", "catalog", "architecture_spec", "stair_detail", "door_window",
