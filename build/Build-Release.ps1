@@ -366,6 +366,11 @@ Invoke-Checked {
     }
 } '图像转 CAD 算法和 OCR 测试'
 
+# 启动器“项目管理”窗口是纯 WinForms 装配，只有真正构造并显示一次才能发现
+# 布局期异常（例如 SplitContainer 在拿到宽度前设 SplitterDistance 会抛异常）。
+$launcherTests = Join-Path $repositoryRoot 'BatchPdfPublisher.Tests\BatchPdfPublisher.Launcher.Tests.csproj'
+Invoke-Checked { & $testDotNet run --project $launcherTests -c Release --nologo } '启动器项目管理窗口冒烟测试'
+
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'Resources') -Destination (Join-Path $OutputRoot 'Resources') -Recurse -Force
 
 # Custom hatch definitions are user-visible, portable resources. Keep the

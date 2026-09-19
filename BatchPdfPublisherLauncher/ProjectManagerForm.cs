@@ -43,6 +43,7 @@ namespace BatchPdfPublisherLauncher
         private readonly Label _status = new Label();
         private readonly List<Button> _guardedButtons = new List<Button>();
         private List<ProjectProfile> _projectsCache = new List<ProjectProfile>();
+        private SplitContainer _split;
         private bool _loading;
         private bool _cadRunning;
 
@@ -92,7 +93,13 @@ namespace BatchPdfPublisherLauncher
             root.Controls.Add(banner, 0, 0);
 
             // ── 主体：左项目列表 / 右详情 ─────────────────────────────────────
-            var split = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, SplitterWidth = 8, SplitterDistance = 268, Panel1MinSize = 210, Panel2MinSize = 520, BackColor = Canvas };
+            // 注意：SplitContainer 的 Panel1MinSize / Panel2MinSize / SplitterDistance
+            // 只能在控件已经拿到真实宽度之后设置，构造期设会抛
+            // “SplitterDistance 必须在 Panel1MinSize 和 Width - Panel2MinSize 之间”。
+            // 因此这里只建控件，尺寸在 OnLoad 的 ApplySplitLayout 里给。
+            var split = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, SplitterWidth = 8, BackColor = Canvas };
+            _split = split;
+            split.SizeChanged += (s, e) => ApplySplitLayout();
             root.Controls.Add(split, 0, 1);
 
             var left = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1, BackColor = Color.White, Padding = new Padding(14, 12, 14, 12), Margin = new Padding(0, 0, 8, 0) };
@@ -257,6 +264,33 @@ namespace BatchPdfPublisherLauncher
             root.Controls.Add(footer, 0, 2);
             CancelButton = close;
             AcceptButton = close;
+        }
+
+        protected override void OnLoad(EventArgs e)
+        {
+            base.OnLoad(e);
+            ApplySplitLayout();
+        }
+
+        /// <summary>按当前宽度给左右分栏设最小宽度与初始位置（宽度不够时保持默认，绝不让它抛异常）。</summary>
+        private void ApplySplitLayout()
+        {
+            if (_split == null) return;
+            var width = _split.ClientSize.Width;
+            if (width <= 0) return;
+            try
+            {
+                const int panel1Min = 200;
+                var panel2Min = Math.Max(240, Math.Min(440, width - panel1Min - _split.SplitterWidth - 40));
+                _split.Panel1MinSize = panel1Min;
+                _split.Panel2MinSize = panel2Min;
+                var max = width - panel2Min - _split.SplitterWidth;
+                if (max <= panel1Min) return;
+                var desired = (int)(width * 0.28);
+                _split.SplitterDistance = Math.Max(panel1Min, Math.Min(max, desired));
+            }
+            catch (InvalidOperationException) { }
+            catch (ArgumentOutOfRangeException) { }
         }
 
         // ── 状态 ─────────────────────────────────────────────────────────────

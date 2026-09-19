@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="LauncherProjectManagerTests.cs" />
+    <Compile Include="UserDataPathsStub.cs" />
+    <Compile Include="..\BatchPdfPublisherLauncher\ProjectManagerForm.cs" Link="ProjectManagerForm.cs" />
+    <!-- UserDataPaths 由 UserDataPathsStub.cs 提供（测试写临时目录，绝不碰真实用户配置）。 -->
+    <Compile Include="..\BatchPdfPublisher\Infrastructure\FileHash.cs" Link="Shared\FileHash.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\Publishing\Models\ProjectProfile.cs" Link="Shared\ProjectProfile.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\Publishing\Models\SheetCatalogItem.cs" Link="Shared\SheetCatalogItem.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\Frames\Models\FrameDefinition.cs" Link="Shared\FrameDefinition.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\Frames\Services\FrameTemplatePaths.cs" Link="Shared\FrameTemplatePaths.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\Publishing\Services\PaperSizeCatalog.cs" Link="Shared\PaperSizeCatalog.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\Publishing\Services\PublishPlanStore.cs" Link="Shared\PublishPlanStore.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\Publishing\Services\ProjectSyncProjectionStore.cs" Link="Shared\ProjectSyncProjectionStore.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Models\CloudSyncModels.cs" Link="Shared\CloudSyncModels.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncSettingsStore.cs" Link="Shared\CloudSyncSettingsStore.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncFolderDetector.cs" Link="Shared\CloudSyncFolderDetector.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncTransaction.cs" Link="Shared\CloudSyncTransaction.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudProjectWorkspaceService.cs" Link="Shared\CloudProjectWorkspaceService.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\Projects\Models\ProjectManagementModels.cs" Link="Shared\ProjectManagementModels.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\Projects\Services\ProjectManagementService.cs" Link="Shared\ProjectManagementService.cs" />
+  </ItemGroup>
+</Project>
