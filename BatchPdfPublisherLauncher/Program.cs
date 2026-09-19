@@ -12,6 +12,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace BatchPdfPublisherLauncher
@@ -33,7 +34,8 @@ namespace BatchPdfPublisherLauncher
         private static readonly string UserDataRoot = ResolveUserDataRoot();
         private static readonly string LaunchLogPath = Path.Combine(EnsureDirectory(Path.Combine(UserDataRoot, "Logs")), "launcher.log");
         private static readonly string LoadReceiptPath = Path.Combine(EnsureDirectory(Path.Combine(UserDataRoot, "Temp")), "WanluoArchitectureTools.loaded.log");
-
+        private static readonly Stopwatch StartupWatch = Stopwatch.StartNew();
+        internal static long StartupMilliseconds { get { return StartupWatch.ElapsedMilliseconds; } }
         [STAThread]
         private static void Main()
         {
@@ -46,10 +48,20 @@ namespace BatchPdfPublisherLauncher
                 Application.SetCompatibleTextRenderingDefault(false);
                 Log("启动器开始运行");
                 var launcherDirectory = AppDomain.CurrentDomain.BaseDirectory;
-                var platforms = FindPlatforms();
+                var lastPlatform = LoadLastPlatform();
+                // Draw a useful first frame after the fast registry lookup. Tianzheng
+                // shortcuts, COM probing and recent projects are completed after the
+                // window is visible, so slow disks and stale shortcuts cannot block it.
+                var platforms = FindAutoCadPlatforms();
+                var initialPlatforms = platforms.ToList();
+                Log("快速环境检测完成（" + StartupMilliseconds + " ms）");
                 LauncherOptions options;
-                using (var picker = new PlatformPicker(platforms, LoadLastPlatform(), HasRunningCad()))
+                using (var picker = new PlatformPicker(platforms, lastPlatform, HasRunningCadProcess()))
                 {
+                    picker.BeginBackgroundDiscovery(
+                        () => CompletePlatformDiscovery(initialPlatforms),
+                        HasRunningCad);
+                    Log("启动窗口构造完成（" + StartupMilliseconds + " ms）");
                     if (picker.ShowDialog() != DialogResult.OK) return;
                     if (picker.UninstallRequested)
                     {
@@ -102,22 +114,28 @@ namespace BatchPdfPublisherLauncher
             }
         }
 
-        private static List<PlatformOption> FindPlatforms()
+        private static List<PlatformOption> FindAutoCadPlatforms()
         {
             var result = new List<PlatformOption>();
+            foreach (var version in FindAutoCadInstallations())
+                result.Add(new PlatformOption(version.DisplayName, "acad-" + version.Release, version.Executable, "/nologo /p \"<<Unnamed Profile>>\"", version.WorkingDirectory, version.ProgId, "无天正", version.DisplayName, version.Release));
+            return result;
+        }
+
+        private static List<PlatformOption> FindPlatforms()
+        {
+            return CompletePlatformDiscovery(FindAutoCadPlatforms());
+        }
+
+        private static List<PlatformOption> CompletePlatformDiscovery(IList<PlatformOption> cadPlatforms)
+        {
+            var result = new List<PlatformOption>(cadPlatforms ?? new PlatformOption[0]);
             // The machine may have T20 as the default AutoCAD profile. Force
             // the unnamed vanilla profile so launching plain AutoCAD cannot
             // pull the T20 ARX/LSP startup chain into the session.
-            var cadPlatforms = new List<PlatformOption>();
-            foreach (var version in FindAutoCadInstallations())
-            {
-                cadPlatforms.Add(new PlatformOption(version.DisplayName, "acad-" + version.Release, version.Executable, "/nologo /p \"<<Unnamed Profile>>\"", version.WorkingDirectory, version.ProgId, "无天正", version.DisplayName, version.Release));
-            }
-            result.AddRange(cadPlatforms);
             foreach (var tz in FindTianzhengInstallations())
                 foreach (var cad in cadPlatforms)
                     result.Add(new PlatformOption(tz.Name + " + " + cad.CadName, tz.Id + "-" + cad.Id, tz.Executable, "", Path.GetDirectoryName(tz.Executable), cad.ProgId, tz.Name, cad.CadName, cad.Release));
-            if (result.Count == 0 && cadPlatforms.Count > 0) result.AddRange(cadPlatforms);
             return result;
         }
 
@@ -278,8 +296,11 @@ namespace BatchPdfPublisherLauncher
                 if (!Directory.Exists(root)) continue;
                 try
                 {
-                    foreach (var link in Directory.GetFiles(root, "*.lnk", SearchOption.AllDirectories))
+                    foreach (var link in Directory.EnumerateFiles(root, "*.lnk", SearchOption.AllDirectories))
                     {
+                        // Resolving a shortcut creates a WScript COM object. Most Start Menu
+                        // links are unrelated, so filter their paths before paying that cost.
+                        if (!Regex.IsMatch(link, "天正|T20|T30|Tangent", RegexOptions.IgnoreCase)) continue;
                         var target = ResolveShortcut(link);
                         if (!string.IsNullOrWhiteSpace(target) && File.Exists(target)) AddTianzheng(result, target, link);
                     }
@@ -328,7 +349,7 @@ namespace BatchPdfPublisherLauncher
             if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root)) return;
             try
             {
-                foreach (var file in Directory.GetFiles(root, "*.exe", SearchOption.AllDirectories))
+                foreach (var file in Directory.EnumerateFiles(root, "*.exe", SearchOption.AllDirectories))
                 {
                     var name = Path.GetFileNameWithoutExtension(file).ToLowerInvariant();
                     if (!(name.Contains("tgstart") || name.Contains("t20start") || name.Contains("t30start") || name.Contains("telec") || name.Contains("tmelec") || name.Contains("tarch"))) continue;
@@ -519,10 +540,16 @@ namespace BatchPdfPublisherLauncher
 
         private static bool HasRunningCad()
         {
-            if (Process.GetProcessesByName("acad").Length > 0) return true;
+            if (HasRunningCadProcess()) return true;
             foreach (var progId in KnownProgIds())
                 try { if (Marshal.GetActiveObject(progId) != null) return true; } catch { }
             return false;
+        }
+
+        private static bool HasRunningCadProcess()
+        {
+            try { return Process.GetProcessesByName("acad").Length > 0; }
+            catch { return false; }
         }
 
         private static bool TrySendLoad(string progId, IList<string> installedAssemblies)
@@ -571,9 +598,9 @@ namespace BatchPdfPublisherLauncher
             document.GetType().InvokeMember("SendCommand", BindingFlags.InvokeMethod, null, document, new object[] { command });
         }
 
-        private static void Log(string message)
+        internal static void Log(string message)
         {
-            try { File.AppendAllText(LaunchLogPath, DateTime.Now.ToString("s") + " " + message + Environment.NewLine); } catch { }
+            try { File.AppendAllText(LaunchLogPath, DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss.fff") + " " + message + Environment.NewLine); } catch { }
         }
 
         private static string LoadLastPlatform()
@@ -1201,11 +1228,20 @@ namespace BatchPdfPublisherLauncher
         private static readonly Color Canvas = Color.FromArgb(244, 247, 250);
         private static readonly Color Muted = Color.FromArgb(92, 108, 124);
         private readonly IList<PlatformOption> _platforms;
-        private readonly ComboBox _tianzhengBox;
-        private readonly ComboBox _cadBox;
-        private readonly CheckBox _runningCad;
-        private readonly CheckBox _permanentInstall;
-        private readonly Button _startButton;
+        private ComboBox _tianzhengBox;
+        private ComboBox _cadBox;
+        private CheckBox _runningCad;
+        private CheckBox _permanentInstall;
+        private Button _startButton;
+        private BufferedScrollPanel _mainScroll;
+        private TableLayoutPanel _content;
+        private TableLayoutPanel _recent;
+        private readonly LauncherShell _shell;
+        private readonly string _lastPlatform;
+        private readonly bool _initialHasRunningCad;
+        private Func<List<PlatformOption>> _discoverPlatforms;
+        private Func<bool> _detectRunningCad;
+        private bool _discoveryStarted;
         public bool UninstallRequested { get; private set; }
         public LauncherOptions Options => new LauncherOptions
         {
@@ -1217,54 +1253,175 @@ namespace BatchPdfPublisherLauncher
         public PlatformPicker(IList<PlatformOption> platforms, string lastPlatform, bool hasRunningCad)
         {
             _platforms = platforms;
+            _lastPlatform = lastPlatform;
+            _initialHasRunningCad = hasRunningCad;
             Text = "万落建筑工具";
             Icon = LoadIcon();
-            ClientSize = new Size(1000, 710);
+            ClientSize = new Size(1000, 780);
             MinimumSize = new Size(420, 360);
             MaximizeBox = true;
-            var shell = new LauncherShell("home", () => { }, () => OpenProjectManager(), () => ShowLauncherSettings());
-            Controls.Add(shell);
-            var content = LauncherUi.Stack(24);
-            shell.Body.Controls.Add(LauncherUi.Scroll(content));
-            LauncherUi.Add(content, LauncherShell.PageHeading("启动工作台", "选择环境，继续设计。"));
+            _shell = new LauncherShell("home", () => { }, () => OpenProjectManager(), () => ShowLauncherSettings());
+            var loading = LauncherUi.Stack(24);
+            LauncherUi.Add(loading, LauncherShell.PageHeading("启动工作台", "正在准备工作环境…"));
+            _shell.Body.Controls.Add(LauncherUi.Scroll(loading));
+            Controls.Add(_shell);
+        }
+
+        private void BuildHomeContent()
+        {
+            if (_content != null || IsDisposed) return;
+            SuspendLayout();
+            _content = LauncherUi.Stack(24);
+            _content.SuspendLayout();
+            _mainScroll = (BufferedScrollPanel)LauncherUi.Scroll(_content);
+            LauncherUi.Add(_content, LauncherShell.PageHeading("启动工作台", "选择环境，继续设计。"));
             var card = LauncherUi.Card("", ""); card.Controls.Clear(); card.RowStyles.Clear(); card.RowCount = 0;
             card.Name = "EnvironmentCard";
             var environment = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2, Margin = Padding.Empty };
             environment.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 140)); environment.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             var illustration = LauncherUi.Stack(); LauncherUi.Add(illustration, LauncherUi.Text("工作环境", 15, true)); LauncherUi.Add(illustration, new Blueprint());
             var fields = LauncherUi.Stack();
-            environment.Controls.Add(illustration, 0, 0); environment.Controls.Add(fields, 1, 0); LauncherUi.Add(card, environment); LauncherUi.Add(content, card);
+            environment.Controls.Add(illustration, 0, 0); environment.Controls.Add(fields, 1, 0); LauncherUi.Add(card, environment); LauncherUi.Add(_content, card);
             environment.SizeChanged += (s, e) => { bool narrow = environment.Width < Math.Max(LogicalToDeviceUnits(500), Font.Height * 30); illustration.Visible = !narrow; environment.ColumnStyles[0].Width = narrow ? 0 : LogicalToDeviceUnits(140); };
             _tianzhengBox = CreateComboBox(); _cadBox = CreateComboBox();
-            foreach (var value in platforms.Select(x => x.TianzhengName).Distinct(StringComparer.OrdinalIgnoreCase)) _tianzhengBox.Items.Add(value);
-            var last = platforms.FirstOrDefault(x => string.Equals(x.Id, lastPlatform, StringComparison.OrdinalIgnoreCase));
+            foreach (var value in _platforms.Select(x => x.TianzhengName).Distinct(StringComparer.OrdinalIgnoreCase)) _tianzhengBox.Items.Add(value);
+            var last = _platforms.FirstOrDefault(x => string.Equals(x.Id, _lastPlatform, StringComparison.OrdinalIgnoreCase));
             _tianzhengBox.SelectedIndexChanged += (s, e) => RefreshCadOptions(last?.CadName);
             if (_tianzhengBox.Items.Count > 0) _tianzhengBox.SelectedItem = last?.TianzhengName ?? _tianzhengBox.Items[0];
             LauncherUi.InlineField(fields, "天正产品", _tianzhengBox); LauncherUi.InlineField(fields, "AutoCAD 版本", _cadBox);
-            _runningCad = new ToggleSwitch { Text = "连接已运行的 CAD", Checked = hasRunningCad, Enabled = hasRunningCad, AccessibleDescription = hasRunningCad ? "加载插件到已运行的 CAD" : "当前没有运行的 CAD" };
+            _runningCad = new ToggleSwitch { Text = "连接已运行的 CAD", Checked = _initialHasRunningCad, Enabled = _initialHasRunningCad, AccessibleDescription = _initialHasRunningCad ? "加载插件到已运行的 CAD" : "当前没有运行的 CAD" };
             _permanentInstall = new ToggleSwitch { Text = "随 CAD 自动加载" };
             LauncherUi.Add(fields, _runningCad); LauncherUi.Add(fields, _permanentInstall);
-            _startButton = LauncherUi.Button("启动 CAD  →", true); _startButton.MinimumSize = new Size(0, 48); _startButton.Padding = new Padding(44, 10, 44, 10); _startButton.Enabled = platforms.Count > 0; _startButton.DialogResult = DialogResult.OK;
+            _startButton = LauncherUi.Button("启动 CAD  →", true); _startButton.MinimumSize = new Size(0, 48); _startButton.Padding = new Padding(44, 10, 44, 10); _startButton.Enabled = _platforms.Count > 0; _startButton.DialogResult = DialogResult.OK;
             var browse = LauncherUi.Button("手动选择程序"); browse.Click += (s, e) => AddManualProgram();
             LauncherUi.Add(fields, LauncherUi.Actions(_startButton, browse));
-            if (platforms.Count == 0) LauncherUi.Add(fields, LauncherUi.Text("未识别到 CAD，请手动选择程序。", 9, false, LauncherUi.Muted));
+            if (_platforms.Count == 0) LauncherUi.Add(fields, LauncherUi.Text("未识别到 CAD，请手动选择程序。", 9, false, LauncherUi.Muted));
             var recentTitle = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2, Margin = new Padding(0, 5, 0, 10) }; recentTitle.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); recentTitle.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize)); recentTitle.Controls.Add(LauncherUi.Text("最近项目", 13, true), 0, 0);
-            var all = LauncherUi.Button("查看全部  ›"); all.Click += (s, e) => OpenProjectManager(); recentTitle.Controls.Add(all, 1, 0); LauncherUi.Add(content, recentTitle);
-            var recent = LauncherUi.Card("", ""); recent.Controls.Clear(); recent.RowStyles.Clear(); recent.RowCount = 0; recent.Padding = new Padding(8);
-            try
-            {
-                var items = new BatchPdfPublisher.Services.ProjectManagementService().LoadProjects().OrderByDescending(x => Directory.Exists(x.ProjectFolder) ? Directory.GetLastWriteTimeUtc(x.ProjectFolder) : DateTime.MinValue).Take(2).ToList();
-                if (items.Count == 0) LauncherUi.Add(recent, LauncherUi.Text("还没有项目，前往项目管理创建。", 10, false, LauncherUi.Muted));
-                foreach (var project in items)
-                {
-                    var item = new ProjectShortcutButton { Text = project.Name, FolderPath = string.IsNullOrWhiteSpace(project.ProjectFolder) ? "默认项目文件夹" : project.ProjectFolder, AccessibleDescription = project.ProjectFolder, Font = new Font("Microsoft YaHei UI", 10) }; item.Dock = DockStyle.Top; item.TextAlign = ContentAlignment.MiddleLeft; item.Click += (s, e) => OpenProjectManager(); LauncherUi.Add(recent, item);
-
-                }
-            }
-            catch (Exception) { LauncherUi.Add(recent, LauncherUi.Text("项目列表暂时无法读取，请在项目管理中检查。", 9)); }
-            LauncherUi.Add(content, recent);
+            var all = LauncherUi.Button("查看全部  ›"); all.Click += (s, e) => OpenProjectManager(); recentTitle.Controls.Add(all, 1, 0); LauncherUi.Add(_content, recentTitle);
+            _recent = LauncherUi.Card("", ""); _recent.Controls.Clear(); _recent.RowStyles.Clear(); _recent.RowCount = 0; _recent.Padding = new Padding(8);
+            LauncherUi.Add(_recent, LauncherUi.Text("正在读取最近项目…", 9, false, LauncherUi.Muted));
+            LauncherUi.Add(_content, _recent);
             AcceptButton = _startButton;
+            _content.ResumeLayout(false);
+            _shell.Body.Controls.Clear();
+            _shell.Body.Controls.Add(_mainScroll);
+            ResumeLayout(false);
+            LauncherTheme.Apply(this);
+            Program.Log("启动页内容已就绪（" + Program.StartupMilliseconds + " ms）");
         }
+
+        internal void BeginBackgroundDiscovery(Func<List<PlatformOption>> discoverPlatforms, Func<bool> detectRunningCad)
+        {
+            _discoverPlatforms = discoverPlatforms;
+            _detectRunningCad = detectRunningCad;
+        }
+
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            Program.Log("首屏已显示（" + Program.StartupMilliseconds + " ms）");
+            if (_discoveryStarted) return;
+            _discoveryStarted = true;
+            BeginInvoke(new Action(() =>
+            {
+                BuildHomeContent();
+                GrowToFitContent();
+                StartBackgroundDiscovery();
+            }));
+        }
+
+        private void StartBackgroundDiscovery()
+        {
+            if (IsDisposed) return;
+            var discoverPlatforms = _discoverPlatforms;
+            var detectRunningCad = _detectRunningCad;
+            Task.Run(() =>
+            {
+                List<PlatformOption> discovered = null;
+                bool runningCad = false;
+                List<BatchPdfPublisher.Models.ProjectProfile> recentProjects = null;
+                try { if (discoverPlatforms != null) discovered = discoverPlatforms(); } catch { }
+                try { if (detectRunningCad != null) runningCad = detectRunningCad(); } catch { }
+                try
+                {
+                    recentProjects = new BatchPdfPublisher.Services.ProjectManagementService().LoadProjects()
+                        .OrderByDescending(x => Directory.Exists(x.ProjectFolder) ? Directory.GetLastWriteTimeUtc(x.ProjectFolder) : DateTime.MinValue)
+                        .Take(2).ToList();
+                }
+                catch { }
+                if (IsDisposed || !IsHandleCreated) return;
+                try { BeginInvoke(new Action(() => ApplyBackgroundDiscovery(discovered, runningCad, recentProjects))); }
+                catch (InvalidOperationException) { }
+            });
+        }
+
+        private void ApplyBackgroundDiscovery(List<PlatformOption> discovered, bool runningCad, List<BatchPdfPublisher.Models.ProjectProfile> recentProjects)
+        {
+            if (IsDisposed) return;
+            var selectedTianzheng = _tianzhengBox.SelectedItem as string;
+            var selectedCad = _cadBox.SelectedItem as string;
+            if (discovered != null && discovered.Count > 0)
+            {
+                _platforms.Clear();
+                foreach (var option in discovered) _platforms.Add(option);
+                var remembered = _platforms.FirstOrDefault(x => string.Equals(x.Id, _lastPlatform, StringComparison.OrdinalIgnoreCase));
+                _tianzhengBox.BeginUpdate();
+                _tianzhengBox.Items.Clear();
+                foreach (var value in _platforms.Select(x => x.TianzhengName).Distinct(StringComparer.OrdinalIgnoreCase)) _tianzhengBox.Items.Add(value);
+                _tianzhengBox.EndUpdate();
+                var preferredTianzheng = _tianzhengBox.Items.Cast<object>().Select(x => x as string)
+                    .FirstOrDefault(x => string.Equals(x, selectedTianzheng, StringComparison.OrdinalIgnoreCase)) ?? remembered?.TianzhengName;
+                if (_tianzhengBox.Items.Count > 0) _tianzhengBox.SelectedItem = preferredTianzheng ?? _tianzhengBox.Items[0];
+                RefreshCadOptions(selectedCad ?? remembered?.CadName);
+                _startButton.Enabled = _platforms.Count > 0;
+            }
+            _runningCad.Enabled = runningCad;
+            _runningCad.Checked = runningCad;
+            _runningCad.AccessibleDescription = runningCad ? "加载插件到已运行的 CAD" : "当前没有运行的 CAD";
+
+            _recent.SuspendLayout();
+            _recent.Controls.Clear();
+            _recent.RowStyles.Clear();
+            _recent.RowCount = 0;
+            if (recentProjects == null)
+                LauncherUi.Add(_recent, LauncherUi.Text("项目列表暂时无法读取，请在项目管理中检查。", 9));
+            else if (recentProjects.Count == 0)
+                LauncherUi.Add(_recent, LauncherUi.Text("还没有项目，前往项目管理创建。", 10, false, LauncherUi.Muted));
+            else foreach (var project in recentProjects)
+            {
+                var item = new ProjectShortcutButton
+                {
+                    Text = project.Name,
+                    FolderPath = string.IsNullOrWhiteSpace(project.ProjectFolder) ? "默认项目文件夹" : project.ProjectFolder,
+                    AccessibleDescription = project.ProjectFolder,
+                    Font = new Font("Microsoft YaHei UI", 10),
+                    Dock = DockStyle.Top,
+                    TextAlign = ContentAlignment.MiddleLeft
+                };
+                item.Click += (s, e) => OpenProjectManager();
+                LauncherUi.Add(_recent, item);
+            }
+            _recent.ResumeLayout(true);
+            GrowToFitContent();
+        }
+
+        private void GrowToFitContent()
+        {
+            if (IsDisposed || WindowState != FormWindowState.Normal || _mainScroll.ClientSize.Height <= 0) return;
+            PerformLayout();
+            var preferred = _content.GetPreferredSize(new Size(Math.Max(1, _mainScroll.ClientSize.Width), 0));
+            var overflow = preferred.Height - _mainScroll.ClientSize.Height;
+            if (overflow <= LogicalToDeviceUnits(2)) return;
+            var work = Screen.FromControl(this).WorkingArea;
+            var gap = Math.Min(LogicalToDeviceUnits(12), Math.Min(work.Width, work.Height) / 20);
+            var maximumHeight = Math.Max(Height, work.Height - gap * 2);
+            var targetHeight = Math.Min(maximumHeight, Height + overflow + LogicalToDeviceUnits(4));
+            if (targetHeight <= Height) return;
+            var targetTop = Math.Max(work.Top + gap, Math.Min(Top - (targetHeight - Height) / 2, work.Bottom - gap - targetHeight));
+            SetBounds(Left, targetTop, Width, targetHeight);
+            PerformLayout();
+        }
+
         /// <summary>打开“项目管理”窗口：不进入 CAD 就能整理项目（改名会同步改写扫描结果与云同步登记）。</summary>
         private void OpenProjectManager()
         {
@@ -1272,7 +1429,11 @@ namespace BatchPdfPublisherLauncher
         }
 
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
-        { if (keyData == Keys.Escape && !_tianzhengBox.DroppedDown && !_cadBox.DroppedDown) { DialogResult = DialogResult.Cancel; Close(); return true; } return base.ProcessCmdKey(ref msg, keyData); }
+        {
+            if (keyData == Keys.Escape && (_tianzhengBox == null || !_tianzhengBox.DroppedDown) && (_cadBox == null || !_cadBox.DroppedDown))
+            { DialogResult = DialogResult.Cancel; Close(); return true; }
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
 
         private void ShowLauncherSettings()
         {

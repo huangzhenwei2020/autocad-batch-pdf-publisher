@@ -520,6 +520,22 @@ foreach ($fixedId in $fixedIds) {
 }
 Write-Host "图层功能 id 校验通过：$($fixedIds.Count) 个固定功能 id 都不以「$layerPrefix」开头" -ForegroundColor DarkGray
 
+# Explorer caches icons by full path. A release overwrites the same launcher name,
+# so notify the shell immediately instead of leaving the previous icon in Details/List views.
+if (-not ('WanluoShellIconRefresh' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class WanluoShellIconRefresh
+{
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    private static extern void SHChangeNotify(uint eventId, uint flags, string item1, IntPtr item2);
+    public static void Refresh(string path) { SHChangeNotify(0x00002000, 0x00001005, path, IntPtr.Zero); }
+}
+'@
+}
+[WanluoShellIconRefresh]::Refresh($launcher)
+
 Write-Host ''
 Write-Host '干净发布完成：' -ForegroundColor Green
 Write-Host $OutputRoot
