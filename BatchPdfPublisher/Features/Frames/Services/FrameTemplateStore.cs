@@ -19,7 +19,7 @@ namespace BatchPdfPublisher.Services
                 if (string.IsNullOrWhiteSpace(frame.RegistrationId)) frame.RegistrationId = Guid.NewGuid().ToString("N");
                 var oldPath = UserDataPaths.ResolveFromRoot(frame.TemplateRelativePath);
                 var project = new PublishPlanStore().GetActiveProject();
-                var path = ReadablePath(project == null ? "默认项目" : project.Name, frame, oldPath);
+                var path = FrameTemplatePaths.ReadablePath(project == null ? "默认项目" : project.Name, frame, oldPath);
                 using (var transaction = document.Database.TransactionManager.StartTransaction())
                 {
                     var reference = transaction.GetObject(referenceId, OpenMode.ForRead, false) as BlockReference;
@@ -44,25 +44,13 @@ namespace BatchPdfPublisher.Services
             catch (Exception exception) { error = exception.Message; return false; }
         }
 
+        /// <summary>
+        /// 纯文件操作部分已抽到 <see cref="FrameTemplatePaths"/>（启动器要共用同一份实现，
+        /// 而本文件依赖 AutoCAD 无法被启动器编译），这里保留同名入口以免调用方改动。
+        /// </summary>
         public static bool MakePathsReadable(System.Collections.Generic.IEnumerable<ProjectProfile> projects)
         {
-            var changed = false;
-            foreach (var project in projects ?? new ProjectProfile[0])
-            foreach (var frame in project.Frames ?? new System.Collections.Generic.List<FrameDefinition>())
-            {
-                var source = UserDataPaths.ResolveFromRoot(frame.TemplateRelativePath);
-                if (string.IsNullOrWhiteSpace(source) || !File.Exists(source)) continue;
-                var destination = ReadablePath(project.Name, frame, source);
-                if (string.Equals(Path.GetFullPath(source), Path.GetFullPath(destination), StringComparison.OrdinalIgnoreCase)) continue;
-                try
-                {
-                    Directory.CreateDirectory(Path.GetDirectoryName(destination));
-                    if (!File.Exists(destination)) File.Move(source, destination); else File.Delete(source);
-                    frame.TemplateRelativePath = UserDataPaths.RelativeToRoot(destination); changed = true;
-                }
-                catch { }
-            }
-            return changed;
+            return FrameTemplatePaths.MakeReadable(projects);
         }
 
         public static bool DeleteIfUnused(FrameDefinition removed, System.Collections.Generic.IEnumerable<FrameDefinition> remaining, out string error)
@@ -82,25 +70,6 @@ namespace BatchPdfPublisher.Services
                 return true;
             }
             catch (Exception exception) { error = exception.Message; return false; }
-        }
-
-        private static string ReadablePath(string projectName, FrameDefinition frame, string currentPath)
-        {
-            var folder = Path.Combine(UserDataPaths.FrameTemplatesDirectory, SafeName(projectName, "默认项目"));
-            Directory.CreateDirectory(folder);
-            var baseName = SafeName((frame.PaperDisplay ?? "图框") + "_" + (frame.BlockName ?? "未命名图框"), "图框");
-            if (!string.IsNullOrWhiteSpace(currentPath) && File.Exists(currentPath) && string.Equals(Path.GetDirectoryName(Path.GetFullPath(currentPath)), Path.GetFullPath(folder), StringComparison.OrdinalIgnoreCase) && Path.GetFileNameWithoutExtension(currentPath).StartsWith(baseName, StringComparison.OrdinalIgnoreCase)) return currentPath;
-            var candidate = Path.Combine(folder, baseName + ".dwg"); var version = 2;
-            while (File.Exists(candidate) && !SameFile(candidate, currentPath)) candidate = Path.Combine(folder, baseName + "_版本" + version++ + ".dwg");
-            return candidate;
-        }
-
-        private static bool SameFile(string left, string right) { try { return !string.IsNullOrWhiteSpace(right) && string.Equals(Path.GetFullPath(left), Path.GetFullPath(right), StringComparison.OrdinalIgnoreCase); } catch { return false; } }
-        private static string SafeName(string value, string fallback)
-        {
-            var result = string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
-            foreach (var invalid in Path.GetInvalidFileNameChars()) result = result.Replace(invalid, '_');
-            return string.IsNullOrWhiteSpace(result) ? fallback : result;
         }
 
         public static void EnsureAvailable(Database database, FrameDefinition frame)

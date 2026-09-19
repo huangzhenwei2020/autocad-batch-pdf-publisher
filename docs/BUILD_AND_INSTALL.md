@@ -90,6 +90,12 @@ Get-Content .\dist\WanLuoArchitectureTools\build-info.json
 
 正式交付时，两个提交号应一致，且 `GitDirty` 应为 `false`。发布目录中不会包含带 `fix`、日期、`test` 等后缀的历史 DLL；每个 `CadApi\Rxx` 只使用正式的 `BatchPdfPublisher.dll`。
 
+启动器的“项目管理”与主插件共用同一份项目读写逻辑，但**不新增 DLL**：这些源文件由
+`BatchPdfPublisherLauncher.csproj` 以 `<Compile Include="..\BatchPdfPublisher\…">` 源码链接方式编译
+（与 `Shared\ProductVersion.cs` 同一做法），因此安装清单、自动加载清单和上面的 DLL 白名单校验都不需要改。
+代价是：改动这些共享文件会同时影响主插件与启动器，新增共享文件必须同时补进启动器的 `Compile` 清单
+（清单见 [功能模块与快捷键](MODULES_AND_SHORTCUTS.md) 末尾）。
+
 ## 5. 安装与更新
 
 1. 关闭全部 AutoCAD/天正进程，避免旧 DLL 被占用。

@@ -32,7 +32,7 @@ namespace BatchPdfPublisher.Services
                     var normalizedProjectFolders = projects != null && projects.Any(x => x != null && NeedsProjectFolderNormalization(x.ProjectFolder));
                     var normalizedFrameDirections = Normalize(projects);
                     var projected = ProjectSyncProjectionStore.MergeInto(projects);
-                    var framePathsChanged = persistNormalization && FrameTemplateStore.MakePathsReadable(projects);
+                    var framePathsChanged = persistNormalization && FrameTemplatePaths.MakeReadable(projects);
                     if (persistNormalization && (framePathsChanged || normalizedProjectFolders || normalizedFrameDirections || projected)) SaveProjects(projects);
                     return projects;
                 }
@@ -156,6 +156,9 @@ namespace BatchPdfPublisher.Services
         public void SaveProjects(List<ProjectProfile> projects)
         {
             Normalize(projects);
+            // CloudId 必须在写盘前定下来：项目改名后要从旧映射/旧目录继承身份，
+            // 否则同步引擎会把整个项目当成新项目全量重传。
+            ProjectSyncProjectionStore.AssignIdentities(projects);
             var path = ProjectsPath();
             WriteAtomically(path, stream =>
                 new DataContractJsonSerializer(typeof(List<ProjectProfile>)).WriteObject(stream, projects));

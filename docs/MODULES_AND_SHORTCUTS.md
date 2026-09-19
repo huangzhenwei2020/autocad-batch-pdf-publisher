@@ -61,4 +61,17 @@
 
 启动器内嵌模块统一存放在 `BatchPdfPublisherLauncher/Modules`，建筑说明和楼梯不再散落在不同工程的 `Payload` 目录。
 
+### 项目管理不在 CAD 里，没有 CAD 快捷键
+
+新建 / 重命名 / 删除项目、重命名项目内文件都由**启动器**完成（主窗口底部“项目管理”按钮），
+因此它不占用功能快捷键，也不需要 `FeatureRegistry` 登记。启动器要求 AutoCAD 已关闭，
+理由与完整说明见 [新增功能：启动器里的项目管理](history/修复记录-2026-09-19-启动器项目管理.md)。
+
+为共用同一份读写逻辑，启动器以源码链接方式编译主插件的这些文件（`BatchPdfPublisherLauncher.csproj`）：
+`UserDataPaths`、`FileHash`、`ProjectProfile`、`SheetCatalogItem`、`FrameDefinition`、`FrameTemplatePaths`、
+`PaperSizeCatalog`、`PublishPlanStore`、`ProjectSyncProjectionStore`、`CloudSyncModels`、
+`CloudSyncSettingsStore`、`CloudSyncFolderDetector`、`CloudSyncTransaction`、
+`ProjectManagementModels`、`ProjectManagementService`。**改动这些文件会同时影响主插件与启动器**；
+新增共享文件时要同时补进启动器的 `<Compile Include>`。
+
 对于 R24/R25，任何必需组件缺失都会停止安装并明确提示缺失模块，不再静默跳过。

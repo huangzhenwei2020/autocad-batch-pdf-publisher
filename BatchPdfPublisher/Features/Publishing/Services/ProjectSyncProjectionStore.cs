@@ -30,12 +30,68 @@ namespace BatchPdfPublisher.Services
                 foreach (var project in projects.Where(item => item != null && !string.IsNullOrWhiteSpace(item.Name)))
                 {
                     var portable = CreatePortable(project);
-                    var path = ProjectionPath(project.Name);
+                    var path = ProjectionPath(ProjectId(project));
                     var bytes = Serialize(portable);
                     if (File.Exists(path) && BytesEqual(File.ReadAllBytes(path), bytes)) continue;
                     WriteAtomically(path, bytes);
                 }
             }
+        }
+
+        /// <summary>
+        /// 项目在云同步里的身份。已持久化的 <see cref="ProjectProfile.CloudId"/> 优先；
+        /// 没有（旧配置）时按项目名派生，与旧版算法完全一致。
+        /// </summary>
+        public static string ProjectId(ProjectProfile project)
+        {
+            if (project == null) return StableProjectId(null);
+            return string.IsNullOrWhiteSpace(project.CloudId) ? StableProjectId(project.Name) : project.CloudId.Trim();
+        }
+
+        /// <summary>
+        /// 决定并回填每个项目的 CloudId：① 项目里已记住的 → ② 旧映射里同名的 → ③ 旧映射里同目录的
+        /// → ④ 按项目名派生。必须在写 <c>项目列表.json</c> **之前**调用，否则改名当次写盘还是旧值。
+        /// 返回是否有项目被补齐/纠正。
+        /// </summary>
+        public static bool AssignIdentities(IEnumerable<ProjectProfile> projects)
+        {
+            var list = (projects ?? Enumerable.Empty<ProjectProfile>()).Where(item => item != null && !string.IsNullOrWhiteSpace(item.Name)).ToList();
+            if (list.Count == 0) return false;
+            List<CloudSyncProjectMapping> previous;
+            try { previous = new CloudSyncSettingsStore().LoadSettings().ProjectMappings ?? new List<CloudSyncProjectMapping>(); }
+            catch { previous = new List<CloudSyncProjectMapping>(); }
+            var byName = Index(previous, item => item.ProjectName);
+            var byFolder = Index(previous, item => NormalizeFolder(item.LocalFolder));
+            var changed = false;
+            foreach (var project in list)
+            {
+                if (!string.IsNullOrWhiteSpace(project.CloudId)) { project.CloudId = project.CloudId.Trim(); continue; }
+                CloudSyncProjectMapping match;
+                byName.TryGetValue(project.Name.Trim(), out match);
+                if (match == null && !string.IsNullOrWhiteSpace(project.ProjectFolder)) byFolder.TryGetValue(NormalizeFolder(project.ProjectFolder), out match);
+                project.CloudId = match != null && !string.IsNullOrWhiteSpace(match.CloudId) ? match.CloudId.Trim() : StableProjectId(project.Name);
+                changed = true;
+            }
+            return changed;
+        }
+
+        private static Dictionary<string, CloudSyncProjectMapping> Index(IEnumerable<CloudSyncProjectMapping> mappings, Func<CloudSyncProjectMapping, string> key)
+        {
+            var result = new Dictionary<string, CloudSyncProjectMapping>(StringComparer.OrdinalIgnoreCase);
+            foreach (var mapping in (mappings ?? Enumerable.Empty<CloudSyncProjectMapping>()).Where(item => item != null))
+            {
+                var value = key(mapping);
+                if (string.IsNullOrWhiteSpace(value)) continue;
+                result[value.Trim()] = mapping;
+            }
+            return result;
+        }
+
+        private static string NormalizeFolder(string folder)
+        {
+            if (string.IsNullOrWhiteSpace(folder)) return null;
+            try { return Path.GetFullPath(folder).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar); }
+            catch { return folder.Trim(); }
         }
 
         public static bool MergeInto(IList<ProjectProfile> projects)
@@ -67,6 +123,8 @@ namespace BatchPdfPublisher.Services
                     var localExternalCad = existing == null ? new List<string>() : ExternalPaths(existing.CadFiles, localFolder);
                     var localExternalSelected = existing == null ? new List<string>() : ExternalPaths(existing.SelectedCadFiles, localFolder);
                     RestoreLocalPaths(remote, localFolder, localOutput, localExternalCad, localExternalSelected);
+                    // 目录名就是云端身份，直接采用，避免别处按名字重算出不同 CloudId。
+                    remote.CloudId = cloudId;
                     if (existing == null) projects.Add(remote);
                     else projects[projects.IndexOf(existing)] = remote;
                     changed = true;
@@ -84,25 +142,29 @@ namespace BatchPdfPublisher.Services
         public static List<CloudSyncProjectMapping> BuildMappings(IEnumerable<ProjectProfile> projects,
             IEnumerable<CloudSyncProjectMapping> previous, string workspaceRoot)
         {
+            var list = (projects ?? Enumerable.Empty<ProjectProfile>())
+                .Where(item => item != null && !string.IsNullOrWhiteSpace(item.Name)).ToList();
+            // 身份必须在建映射前定下来（可能因项目改名而从旧映射/旧目录继承）。
+            AssignIdentities(list);
             var old = (previous ?? Enumerable.Empty<CloudSyncProjectMapping>())
-                .Where(item => item != null && !string.IsNullOrWhiteSpace(item.ProjectName))
-                .GroupBy(item => item.ProjectName, StringComparer.OrdinalIgnoreCase)
+                .Where(item => item != null && (!string.IsNullOrWhiteSpace(item.ProjectName) || !string.IsNullOrWhiteSpace(item.CloudId)))
+                .GroupBy(item => string.IsNullOrWhiteSpace(item.ProjectName) ? item.CloudId : item.ProjectName, StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(group => group.Key, group => group.Last(), StringComparer.OrdinalIgnoreCase);
             var result = new List<CloudSyncProjectMapping>();
             var archived = new HashSet<string>(LoadArchivedProjectIds(), StringComparer.OrdinalIgnoreCase);
-            foreach (var project in (projects ?? Enumerable.Empty<ProjectProfile>())
-                .Where(item => item != null && !string.IsNullOrWhiteSpace(item.Name)))
+            foreach (var project in list)
             {
                 CloudSyncProjectMapping existing;
-                old.TryGetValue(project.Name, out existing);
+                old.TryGetValue(project.CloudId, out existing);
+                if (existing == null) old.TryGetValue(project.Name, out existing);
                 var localFolder = string.IsNullOrWhiteSpace(project.ProjectFolder) ? DefaultProjectFolder(project.Name) : project.ProjectFolder;
-                var archivedProject = archived.Contains(StableProjectId(project.Name));
+                var archivedProject = archived.Contains(project.CloudId);
                 var selectedByDefault = !string.IsNullOrWhiteSpace(workspaceRoot) &&
                     CloudProjectWorkspaceService.IsUnderWorkspace(localFolder, workspaceRoot);
                 result.Add(new CloudSyncProjectMapping
                 {
                     ProjectName = project.Name,
-                    CloudId = StableProjectId(project.Name),
+                    CloudId = project.CloudId,
                     LocalFolder = localFolder,
                     Enabled = !archivedProject && (existing != null && existing.SelectionConfirmed
                         ? existing.Enabled : selectedByDefault),
@@ -235,9 +297,9 @@ namespace BatchPdfPublisher.Services
             return candidate.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? candidate : null;
         }
 
-        private static string ProjectionPath(string name)
+        private static string ProjectionPath(string projectId)
         {
-            return Path.Combine(ProjectionDirectory, StableProjectId(name), "项目.json");
+            return Path.Combine(ProjectionDirectory, projectId, "项目.json");
         }
 
         public static string StableProjectId(string name)

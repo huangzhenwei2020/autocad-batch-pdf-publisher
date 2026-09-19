@@ -28,7 +28,7 @@ namespace BatchPdfPublisher.Services
             _current = this;
         }
 
-        internal static string Hash(string path) { return File.Exists(path) ? LocalFolderSyncEngine.ComputeHash(path) : null; }
+        internal static string Hash(string path) { return File.Exists(path) ? FileHash.ComputeSha256Upper(path) : null; }
         internal static void BeforeReplace(string target, string expectedBefore, string after)
         {
             if (!string.Equals(Hash(target), expectedBefore, StringComparison.OrdinalIgnoreCase))

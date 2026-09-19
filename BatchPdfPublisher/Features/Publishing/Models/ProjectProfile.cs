@@ -5,6 +5,14 @@ namespace BatchPdfPublisher.Models
     public sealed class ProjectProfile
     {
         public string Name { get; set; }
+        /// <summary>
+        /// 云同步里的项目身份：同步目录 <c>项目配置\同步项目\&lt;CloudId&gt;</c> 与同步路径
+        /// <c>项目文件/&lt;CloudId&gt;/…</c> 都用它。首次由项目名派生
+        /// （<see cref="ProjectSyncProjectionStore.StableProjectId"/>），之后**改项目名不再重算**——
+        /// 重算会让同步引擎把整个项目当成新项目全量重传，云端还会留下同名旧目录。
+        /// 旧配置没有这个字段，载入时会按项目名补齐，取值与旧版算法完全一致。
+        /// </summary>
+        public string CloudId { get; set; }
         // Empty means the standard per-user project directory is used.
         public string ProjectFolder { get; set; }
         public List<FrameDefinition> Frames { get; set; } = new List<FrameDefinition>();

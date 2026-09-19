@@ -1329,7 +1329,8 @@ namespace BatchPdfPublisherLauncher
             bodyHost.Controls.Add(card);
             root.Controls.Add(bodyHost, 0, 1);
 
-            var footer = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(28, 16, 28, 16), ColumnCount = 5, BackColor = Color.White };
+            var footer = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(28, 16, 28, 16), ColumnCount = 6, BackColor = Color.White };
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -1347,6 +1348,10 @@ namespace BatchPdfPublisherLauncher
             browseButton.Margin = new Padding(10, 0, 0, 0);
             browseButton.Anchor = FooterAnchor;
             browseButton.Click += (s, e) => AddManualProgram();
+            var projectButton = CreateButton("项目管理", 96, Color.White, Navy);
+            projectButton.Margin = new Padding(10, 0, 0, 0);
+            projectButton.Anchor = FooterAnchor;
+            projectButton.Click += (s, e) => OpenProjectManager();
             var cancelButton = CreateButton("取消", 88, Color.White, Navy);
             cancelButton.DialogResult = DialogResult.Cancel;
             cancelButton.Margin = new Padding(10, 0, 0, 0);
@@ -1354,7 +1359,7 @@ namespace BatchPdfPublisherLauncher
             _uninstallButton = CreateButton("卸载插件", 102, Color.White, Color.FromArgb(157, 66, 61));
             _uninstallButton.Anchor = FooterAnchor;
             _uninstallButton.Click += (s, e) => { UninstallRequested = true; DialogResult = DialogResult.OK; };
-            footer.Controls.Add(_uninstallButton, 0, 0); footer.Controls.Add(browseButton, 1, 0); footer.Controls.Add(_startButton, 3, 0); footer.Controls.Add(cancelButton, 4, 0); root.Controls.Add(footer, 0, 2); Controls.Add(root);
+            footer.Controls.Add(_uninstallButton, 0, 0); footer.Controls.Add(browseButton, 1, 0); footer.Controls.Add(projectButton, 2, 0); footer.Controls.Add(_startButton, 4, 0); footer.Controls.Add(cancelButton, 5, 0); root.Controls.Add(footer, 0, 2); Controls.Add(root);
 
             var toolTip = new ToolTip { AutoPopDelay = 10000, InitialDelay = 350, ReshowDelay = 150, ShowAlways = true };
             toolTip.SetToolTip(_tianzhengBox, "选择要启动的天正专业和版本；不使用天正时选择“无天正”。");
@@ -1363,7 +1368,14 @@ namespace BatchPdfPublisherLauncher
             toolTip.SetToolTip(_permanentInstall, "默认不安装程序文件，直接从启动器所在目录加载；勾选后写入 Autodesk ApplicationPlugins，以后启动 CAD 时自动加载。");
             toolTip.SetToolTip(_uninstallButton, "删除本插件的自动加载配置和安装副本，不会删除工程文件或 DWG 图纸。");
             toolTip.SetToolTip(browseButton, "自动识别失败时，手动选择 acad.exe 或天正启动程序；安装盘符和目录不受限制。");
+            toolTip.SetToolTip(projectButton, "不进入 CAD 就能新建、重命名、删除项目，以及重命名项目文件夹里的文件；需要在 AutoCAD 关闭时使用。");
             AcceptButton = _startButton; CancelButton = cancelButton;
+        }
+
+        /// <summary>打开“项目管理”窗口：不进入 CAD 就能整理项目（改名会同步改写扫描结果与云同步登记）。</summary>
+        private void OpenProjectManager()
+        {
+            using (var manager = new ProjectManagerForm()) manager.ShowDialog(this);
         }
 
         private void AddManualProgram()

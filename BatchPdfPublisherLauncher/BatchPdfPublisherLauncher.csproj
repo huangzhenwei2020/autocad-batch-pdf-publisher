@@ -29,12 +29,42 @@
     <Reference Include="System.Security" />
     <Reference Include="System.Drawing" />
     <Reference Include="System.IO.Compression" />
+    <Reference Include="System.Runtime.Serialization" />
+    <Reference Include="System.Xml" />
     <Reference Include="System.Windows.Forms" />
+    <!-- 删项目时的“移到回收站”用 Microsoft.VisualBasic.FileIO（与主插件同一做法）。 -->
+    <Reference Include="Microsoft.VisualBasic" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Program.cs" />
+    <Compile Include="CloudSyncCoordinatorStub.cs" />
+    <Compile Include="ProjectManagerForm.cs" />
     <Compile Include="..\Shared\ProductVersion.cs"><Link>ProductVersion.cs</Link></Compile>
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <!--
+      共享源码：项目管理要在 AutoCAD 之外运行，必须与主插件用**同一份**项目文件读写与
+      改名逻辑（否则两边对 项目列表.json / CloudId / 云同步映射的理解会漂移）。
+      这里按源码链接编译，不新增 DLL —— 发布脚本对 CadApi 目录下的 DLL 有白名单校验
+      （build\Build-Release.ps1 的“历史后缀 DLL 检查”），新增独立 DLL 会连带改安装器。
+      下列文件全部**不依赖 AutoCAD**；依赖 AutoCAD 的 CloudSyncCoordinator 由
+      CloudSyncCoordinatorStub.cs 顶替。改动其中任何一个文件时，主插件与启动器同时生效。
+    -->
+    <Compile Include="..\BatchPdfPublisher\Infrastructure\UserDataPaths.cs"><Link>Shared\UserDataPaths.cs</Link></Compile>
+    <Compile Include="..\BatchPdfPublisher\Infrastructure\FileHash.cs"><Link>Shared\FileHash.cs</Link></Compile>
+    <Compile Include="..\BatchPdfPublisher\Features\Publishing\Models\ProjectProfile.cs"><Link>Shared\ProjectProfile.cs</Link></Compile>
+    <Compile Include="..\BatchPdfPublisher\Features\Publishing\Models\SheetCatalogItem.cs"><Link>Shared\SheetCatalogItem.cs</Link></Compile>
+    <Compile Include="..\BatchPdfPublisher\Features\Frames\Models\FrameDefinition.cs"><Link>Shared\FrameDefinition.cs</Link></Compile>
+    <Compile Include="..\BatchPdfPublisher\Features\Frames\Services\FrameTemplatePaths.cs"><Link>Shared\FrameTemplatePaths.cs</Link></Compile>
+    <Compile Include="..\BatchPdfPublisher\Features\Publishing\Services\PaperSizeCatalog.cs"><Link>Shared\PaperSizeCatalog.cs</Link></Compile>
+    <Compile Include="..\BatchPdfPublisher\Features\Publishing\Services\PublishPlanStore.cs"><Link>Shared\PublishPlanStore.cs</Link></Compile>
+    <Compile Include="..\BatchPdfPublisher\Features\Publishing\Services\ProjectSyncProjectionStore.cs"><Link>Shared\ProjectSyncProjectionStore.cs</Link></Compile>
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Models\CloudSyncModels.cs"><Link>Shared\CloudSyncModels.cs</Link></Compile>
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncSettingsStore.cs"><Link>Shared\CloudSyncSettingsStore.cs</Link></Compile>
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncFolderDetector.cs"><Link>Shared\CloudSyncFolderDetector.cs</Link></Compile>
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncTransaction.cs"><Link>Shared\CloudSyncTransaction.cs</Link></Compile>
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudProjectWorkspaceService.cs"><Link>Shared\CloudProjectWorkspaceService.cs</Link></Compile>
+    <Compile Include="..\BatchPdfPublisher\Features\Projects\Models\ProjectManagementModels.cs"><Link>Shared\ProjectManagementModels.cs</Link></Compile>
+    <Compile Include="..\BatchPdfPublisher\Features\Projects\Services\ProjectManagementService.cs"><Link>Shared\ProjectManagementService.cs</Link></Compile>
     <Content Include="BatchPdfPublisher.ico" />
     <EmbeddedResource Include="BatchPdfPublisherIcon.png" />
     <EmbeddedResource Include="Modules\ArchitectureAssistant\CadArchSpecEditor.bundle.zip">

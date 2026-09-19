@@ -9,7 +9,7 @@ internal static class ProjectSyncProjectionTests
 {
     private static void Main()
     {
-        try { Execute(); }
+        try { Execute(); ProjectManagementTests.Run(); }
         catch (Exception exception)
         {
             Console.Error.WriteLine("FAIL " + exception);

@@ -421,19 +421,8 @@ namespace BatchPdfPublisher.Services
 
         internal static string ComputeHash(string path, CancellationToken cancellationToken)
         {
-            using (var algorithm = SHA256.Create())
-            using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
-            {
-                var buffer = new byte[1024 * 1024];
-                int read;
-                while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    algorithm.TransformBlock(buffer, 0, read, null, 0);
-                }
-                algorithm.TransformFinalBlock(new byte[0], 0, 0);
-                return BitConverter.ToString(algorithm.Hash).Replace("-", string.Empty);
-            }
+            // 实现在 FileHash（启动器要编译云同步事务，必须共用同一份口径）。
+            return FileHash.ComputeSha256Upper(path, cancellationToken);
         }
 
         private static void CopyFile(string source, string target, bool overwrite, CancellationToken cancellationToken)

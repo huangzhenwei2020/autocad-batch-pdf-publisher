@@ -13,6 +13,18 @@ namespace BatchPdfPublisher.Services
         public static string TemporaryDirectory { get { var path = Path.Combine(RootDirectory, "Temp"); Directory.CreateDirectory(path); return path; } }
         public static string PluginDirectory { get { return RootDirectory; } }
         public static string SettingsFile(string fileName, params string[] legacy) { Directory.CreateDirectory(SettingsDirectory); return Path.Combine(SettingsDirectory, fileName); }
+        // 与真实 UserDataPaths 同语义（图框模板路径、项目管理都依赖这两个换算）。
+        public static string RelativeToRoot(string absolutePath)
+        {
+            var root = RootDirectory.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            var full = Path.GetFullPath(absolutePath);
+            return full.StartsWith(root, System.StringComparison.OrdinalIgnoreCase) ? full.Substring(root.Length) : full;
+        }
+
+        public static string ResolveFromRoot(string path)
+        {
+            return string.IsNullOrWhiteSpace(path) ? null : Path.IsPathRooted(path) ? path : Path.Combine(RootDirectory, path);
+        }
     }
 
     public static class CloudSyncCoordinator
