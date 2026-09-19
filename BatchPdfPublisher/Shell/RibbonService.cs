@@ -4,9 +4,6 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.Windows;
-using System.Windows.Media;
-using WpfRect = System.Windows.Rect;
-using WpfPoint = System.Windows.Point;
 using System.Linq;
 
 namespace BatchPdfPublisher.Services
@@ -105,32 +102,28 @@ namespace BatchPdfPublisher.Services
             var buttons = tab.Panels.Where(x => x.Source != null).SelectMany(x => x.Source.Items).OfType<RibbonButton>().ToList();
             var features = FeatureRegistry.Items;
             if (buttons.Count != features.Count) return false;
-            // 按钮文字是「四字简称（当前快捷键）」。旧标签比对不上就会重建，
-            // 所以用户改了快捷键之后这里也自动跟着更新。
+            // 样式版本让旧的汉字色块标签自动重建；快捷键更新仍同步到提示。
             var shortcuts = ShortcutSettingsService.Load();
             foreach (var feature in features)
             {
                 var label = string.IsNullOrWhiteSpace(feature.ShortName) ? feature.Name : feature.ShortName;
                 string shortcut; if (!shortcuts.TryGetValue(feature.Id, out shortcut)) shortcut = feature.DefaultShortcut;
-                if (!buttons.Any(x => string.Equals(x.Text, label + "（" + shortcut + "）", StringComparison.Ordinal))) return false;
+                if (!buttons.Any(x => x.Id == RibbonIconAssets.StyleVersion + feature.Id
+                    && string.Equals(x.Text, label, StringComparison.Ordinal)
+                    && string.Equals(x.ToolTip as string, ButtonToolTip(feature, shortcut), StringComparison.Ordinal))) return false;
             }
             return true;
         }
 
         /// <summary>
-        /// 按规划生成一个面板：每行 <see cref="RibbonPanelPlanner.ButtonsPerRow"/> 个，
-        /// 用 RibbonRowBreak 换行；单个面板的按钮上限由
-        /// <see cref="RibbonPanelPlanner"/> 负责拆分，这里只负责排版。
+        /// 使用原生大按钮，图标在上、名称在下；沿用面板规划以保证所有功能保留。
         /// </summary>
         private static RibbonPanel CreatePanel(string title, IList<FeatureDefinition> features, IDictionary<string, string> shortcuts)
         {
-            var source = new RibbonPanelSource { Title = title };
+            var source = new RibbonPanelSource { Title = title == "建筑工具 (2)" ? "建筑编辑" : title };
             for (var index = 0; index < features.Count; index++)
             {
                 source.Items.Add(CreateButton(features[index], shortcuts));
-                // 每满一行换行；最后一行不加，避免多出一行空行。
-                if ((index + 1) % RibbonPanelPlanner.ButtonsPerRow == 0 && index + 1 < features.Count)
-                    source.Items.Add(new RibbonRowBreak());
             }
             return new RibbonPanel { Source = source };
         }
@@ -162,52 +155,28 @@ namespace BatchPdfPublisher.Services
         private static RibbonButton CreateButton(FeatureDefinition feature, IDictionary<string, string> shortcuts)
         {
             string shortcut; if (!shortcuts.TryGetValue(feature.Id, out shortcut)) shortcut = feature.DefaultShortcut;
-            var image = CreateIcon(feature);
-            // 功能区是网格排版，按钮文字用统一四字简称，并且带上当前快捷键。
-            // 完整名称放悬停提示第一行，信息不丢。
+            var image = RibbonIconAssets.ForFeature(feature.Id);
+            // 与确认稿一致：图形图标 + 简称，完整名称和当前快捷键放入提示。
             var label = string.IsNullOrWhiteSpace(feature.ShortName) ? feature.Name : feature.ShortName;
             return new RibbonButton
             {
-                Text = label + "（" + shortcut + "）",
-                ToolTip = feature.Name + "\n" + feature.Description,
+                Id = RibbonIconAssets.StyleVersion + feature.Id,
+                Text = label,
+                ToolTip = ButtonToolTip(feature, shortcut),
                 ShowText = true,
                 ShowImage = true,
-                Image = image,
+                Image = RibbonIconAssets.SmallForFeature(feature.Id),
                 LargeImage = image,
-                Size = RibbonItemSize.Standard,
-                Orientation = Orientation.Horizontal,
+                Size = RibbonItemSize.Large,
+                Orientation = Orientation.Vertical,
                 CommandParameter = feature.Command + " ",
                 CommandHandler = new CommandHandler(feature.Command + " ")
             };
         }
 
-        /// <summary>
-        /// 生成图标：**按分组着色的圆角色块 + 一个白色汉字**。
-        ///
-        /// 原来是用同一支细蓝线画的小图形，16 px 下几乎分不出来。改成色块 + 汉字之后：
-        /// 颜色一眼分大类（图纸蓝 / 图块紫 / 建筑青 / 制图橙 / 图层绿 / 系统灰），
-        /// 汉字一眼分具体功能，而且汉字在 16 px 下比线条图形清楚得多。
-        /// 矢量绘制，缩放不会糊；图标字来自功能登记表，改功能时同步那一个字即可。
-        /// </summary>
-        private static ImageSource CreateIcon(FeatureDefinition feature)
+        private static string ButtonToolTip(FeatureDefinition feature, string shortcut)
         {
-            const double size = 16d;
-            var group = new DrawingGroup();
-
-            var background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(RibbonIconTheme.ColorHex(feature.Group)));
-            group.Children.Add(new GeometryDrawing(background, null,
-                new RectangleGeometry(new WpfRect(0d, 0d, size, size), 3.5d, 3.5d)));
-
-            var glyph = RibbonIconTheme.GlyphFor(feature.Icon);
-            // 这里不 using System.Windows，避免 Application 与 AutoCAD 的 Application 撞名。
-            var typeface = new Typeface(new FontFamily("Microsoft YaHei"),
-                System.Windows.FontStyles.Normal, System.Windows.FontWeights.Bold, System.Windows.FontStretches.Normal);
-            var text = new FormattedText(glyph, System.Globalization.CultureInfo.CurrentUICulture,
-                System.Windows.FlowDirection.LeftToRight, typeface, size * 0.74d, Brushes.White, 96d);
-            var geometry = text.BuildGeometry(new WpfPoint((size - text.Width) / 2d, (size - text.Height) / 2d));
-            group.Children.Add(new GeometryDrawing(Brushes.White, null, geometry));
-
-            return new DrawingImage(group);
+            return feature.Name + "（" + shortcut + "）\n" + feature.Description;
         }
 
         private sealed class CommandHandler : ICommand

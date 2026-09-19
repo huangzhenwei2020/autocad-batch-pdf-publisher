@@ -53,5 +53,10 @@
     <Compile Include="Features\Frames\Views\FrameRegistrationWindow.xaml.cs"><DependentUpon>FrameRegistrationWindow.xaml</DependentUpon></Compile>
     <Page Include="Features\Frames\Views\FrameRegistrationWindow.xaml" />
   </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="..\Resources\Ribbon\ios-icons.png">
+      <LogicalName>Wanluo.Ribbon.IosIcons.png</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

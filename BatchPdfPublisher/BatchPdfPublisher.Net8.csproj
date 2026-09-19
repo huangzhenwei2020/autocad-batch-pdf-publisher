@@ -16,6 +16,7 @@
     <UseAutoCadNuGet Condition="'$(UseAutoCadNuGet)' == '' And !Exists('$(AutoCadApiPath)\acmgd.dll')">true</UseAutoCadNuGet>
   </PropertyGroup>
   <ItemGroup>
+    <EmbeddedResource Include="..\Resources\Ribbon\ios-icons.png" LogicalName="Wanluo.Ribbon.IosIcons.png" />
     <Compile Include="..\Shared\ProductVersion.cs" Link="Infrastructure\ProductVersion.cs" />
     <Reference Include="PdfSharp" HintPath="..\PdfSharp.dll" Private="true" />
   </ItemGroup>
