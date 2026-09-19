@@ -49,15 +49,12 @@ namespace BatchPdfPublisherLauncher
                 Log("启动器开始运行");
                 var launcherDirectory = AppDomain.CurrentDomain.BaseDirectory;
                 var lastPlatform = LoadLastPlatform();
-                // Build the complete form while disk/registry discovery runs in parallel.
-                // Results are applied before ShowDialog, so the user never sees a partial
-                // page or a product selector that changes after the window appears.
-                var platformDiscovery = Task.Run(() => FindPlatforms());
-                var platforms = new List<PlatformOption>();
+                // Cached platform discovery is cheaper than starting the thread pool on a
+                // cold .NET Framework process. Complete it first, then build one final frame.
+                var platforms = FindPlatforms();
                 LauncherOptions options;
                 using (var picker = new PlatformPicker(platforms, lastPlatform, false))
                 {
-                    picker.ApplyInitialPlatforms(platformDiscovery.GetAwaiter().GetResult());
                     Log("环境检测和完整界面准备完成（" + StartupMilliseconds + " ms）");
                     picker.BeginBackgroundDiscovery(null, HasRunningCad);
                     Log("启动窗口构造完成（" + StartupMilliseconds + " ms）");
@@ -123,7 +120,47 @@ namespace BatchPdfPublisherLauncher
 
         private static List<PlatformOption> FindPlatforms()
         {
-            return CompletePlatformDiscovery(FindAutoCadPlatforms());
+            var cached = ReadPlatformCache();
+            if (cached.Count > 0) return cached;
+            var result = CompletePlatformDiscovery(FindAutoCadPlatforms());
+            WritePlatformCache(result);
+            return result;
+        }
+
+        private static List<PlatformOption> ReadPlatformCache()
+        {
+            var result = new List<PlatformOption>();
+            try
+            {
+                var path = Path.Combine(UserDataRoot, "Settings", "launcher-platforms.cache");
+                if (!File.Exists(path) || DateTime.UtcNow - File.GetLastWriteTimeUtc(path) > TimeSpan.FromDays(7)) return result;
+                foreach (var line in File.ReadAllLines(path, Encoding.UTF8))
+                {
+                    var parts = line.Split('\t');
+                    if (parts.Length != 9) continue;
+                    var values = parts.Select(x => Encoding.UTF8.GetString(Convert.FromBase64String(x))).ToArray();
+                    if (!File.Exists(values[2])) { result.Clear(); return result; }
+                    result.Add(new PlatformOption(values[0], values[1], values[2], values[3], values[4], values[5], values[6], values[7], values[8]));
+                }
+            }
+            catch { result.Clear(); }
+            return result;
+        }
+
+        private static void WritePlatformCache(IList<PlatformOption> platforms)
+        {
+            if (platforms == null || platforms.Count == 0) return;
+            try
+            {
+                var directory = EnsureDirectory(Path.Combine(UserDataRoot, "Settings"));
+                var lines = platforms.Select(x => string.Join("\t", new[]
+                {
+                    x.DisplayName, x.Id, x.Executable, x.Arguments, x.WorkingDirectory,
+                    x.ProgId, x.TianzhengName, x.CadName, x.Release
+                }.Select(value => Convert.ToBase64String(Encoding.UTF8.GetBytes(value ?? string.Empty)))));
+                File.WriteAllLines(Path.Combine(directory, "launcher-platforms.cache"), lines, Encoding.UTF8);
+            }
+            catch { }
         }
 
         private static List<PlatformOption> CompletePlatformDiscovery(IList<PlatformOption> cadPlatforms)
@@ -1343,15 +1380,7 @@ namespace BatchPdfPublisherLauncher
             var recentTitle = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2, Margin = new Padding(0, 5, 0, 10) }; recentTitle.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); recentTitle.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize)); recentTitle.Controls.Add(LauncherUi.Text("最近项目", 13, true), 0, 0);
             var all = LauncherUi.Button("查看全部  ›"); all.Click += (s, e) => OpenProjectManager(); recentTitle.Controls.Add(all, 1, 0); LauncherUi.Add(_content, recentTitle);
             _recent = LauncherUi.Card("", ""); _recent.Controls.Clear(); _recent.RowStyles.Clear(); _recent.RowCount = 0; _recent.Padding = new Padding(8);
-            try
-            {
-                var recentProjects = new BatchPdfPublisher.Services.ProjectManagementService().LoadProjects()
-                    .OrderByDescending(x => Directory.Exists(x.ProjectFolder) ? Directory.GetLastWriteTimeUtc(x.ProjectFolder) : DateTime.MinValue)
-                    .Take(2).ToList();
-                if (recentProjects.Count == 0) LauncherUi.Add(_recent, LauncherUi.Text("还没有项目，前往项目管理创建。", 10, false, LauncherUi.Muted));
-                foreach (var project in recentProjects) AddRecentProject(project);
-            }
-            catch { LauncherUi.Add(_recent, LauncherUi.Text("项目列表暂时无法读取，请在项目管理中检查。", 9)); }
+            PopulateRecentProjects(LoadRecentProjectsForStartup());
             LauncherUi.Add(_content, _recent);
             AcceptButton = _startButton;
             _content.ResumeLayout(false);
@@ -1367,11 +1396,6 @@ namespace BatchPdfPublisherLauncher
         {
             _discoverPlatforms = discoverPlatforms;
             _detectRunningCad = detectRunningCad;
-        }
-
-        internal void ApplyInitialPlatforms(List<PlatformOption> platforms)
-        {
-            ApplyBackgroundDiscovery(platforms, false);
         }
 
         protected override void OnShown(EventArgs e)
@@ -1398,6 +1422,7 @@ namespace BatchPdfPublisherLauncher
                 bool runningCad = false;
                 try { if (discoverPlatforms != null) discovered = discoverPlatforms(); } catch { }
                 try { if (detectRunningCad != null) runningCad = detectRunningCad(); } catch { }
+                try { WriteRecentProjectCache(LoadRecentProjects()); } catch { }
                 if (IsDisposed || !IsHandleCreated) return;
                 try { BeginInvoke(new Action(() => ApplyBackgroundDiscovery(discovered, runningCad))); }
                 catch (InvalidOperationException) { }
@@ -1430,19 +1455,87 @@ namespace BatchPdfPublisherLauncher
             _runningCad.AccessibleDescription = runningCad ? "加载插件到已运行的 CAD" : "当前没有运行的 CAD";
         }
 
-        private void AddRecentProject(BatchPdfPublisher.Models.ProjectProfile project)
+        private void PopulateRecentProjects(IList<RecentProjectEntry> projects)
+        {
+            _recent.SuspendLayout();
+            _recent.Controls.Clear(); _recent.RowStyles.Clear(); _recent.RowCount = 0;
+            if (projects == null) LauncherUi.Add(_recent, LauncherUi.Text("项目列表暂时无法读取，请在项目管理中检查。", 9));
+            else if (projects.Count == 0) LauncherUi.Add(_recent, LauncherUi.Text("还没有项目，前往项目管理创建。", 10, false, LauncherUi.Muted));
+            else foreach (var project in projects) AddRecentProject(project);
+            _recent.ResumeLayout(true);
+        }
+
+        private void AddRecentProject(RecentProjectEntry project)
         {
             var item = new ProjectShortcutButton
             {
                 Text = project.Name,
-                FolderPath = string.IsNullOrWhiteSpace(project.ProjectFolder) ? "默认项目文件夹" : project.ProjectFolder,
-                AccessibleDescription = project.ProjectFolder,
+                FolderPath = string.IsNullOrWhiteSpace(project.Folder) ? "默认项目文件夹" : project.Folder,
+                AccessibleDescription = project.Folder,
                 Font = new Font("Microsoft YaHei UI", 10),
                 Dock = DockStyle.Top,
                 TextAlign = ContentAlignment.MiddleLeft
             };
             item.Click += (s, e) => OpenProjectManager();
             LauncherUi.Add(_recent, item);
+        }
+
+        private static List<RecentProjectEntry> LoadRecentProjectsForStartup()
+        {
+            var cached = ReadRecentProjectCache();
+            if (cached.Count > 0) return cached;
+            try
+            {
+                var projects = LoadRecentProjects();
+                WriteRecentProjectCache(projects);
+                return projects;
+            }
+            catch { return null; }
+        }
+
+        private static List<RecentProjectEntry> LoadRecentProjects()
+        {
+            return new BatchPdfPublisher.Services.ProjectManagementService().LoadProjects()
+                .OrderByDescending(x => Directory.Exists(x.ProjectFolder) ? Directory.GetLastWriteTimeUtc(x.ProjectFolder) : DateTime.MinValue)
+                .Take(2)
+                .Select(x => new RecentProjectEntry(x.Name, x.ProjectFolder))
+                .ToList();
+        }
+
+        private static List<RecentProjectEntry> ReadRecentProjectCache()
+        {
+            var result = new List<RecentProjectEntry>();
+            try
+            {
+                var path = Path.Combine(BatchPdfPublisher.Services.UserDataPaths.SettingsDirectory, "launcher-recent-projects.cache");
+                if (!File.Exists(path)) return result;
+                foreach (var line in File.ReadAllLines(path, Encoding.UTF8))
+                {
+                    var parts = line.Split('\t');
+                    if (parts.Length != 2) continue;
+                    result.Add(new RecentProjectEntry(
+                        Encoding.UTF8.GetString(Convert.FromBase64String(parts[0])),
+                        Encoding.UTF8.GetString(Convert.FromBase64String(parts[1]))));
+                }
+            }
+            catch { result.Clear(); }
+            return result;
+        }
+
+        private static void WriteRecentProjectCache(IList<RecentProjectEntry> projects)
+        {
+            if (projects == null) return;
+            var lines = projects.Select(x => string.Join("\t",
+                Convert.ToBase64String(Encoding.UTF8.GetBytes(x.Name ?? string.Empty)),
+                Convert.ToBase64String(Encoding.UTF8.GetBytes(x.Folder ?? string.Empty))));
+            File.WriteAllLines(Path.Combine(BatchPdfPublisher.Services.UserDataPaths.SettingsDirectory, "launcher-recent-projects.cache"), lines, Encoding.UTF8);
+        }
+
+        private sealed class RecentProjectEntry
+        {
+            internal RecentProjectEntry(string name, string folder) { Name = name; Folder = folder; }
+            internal string Name { get; }
+            internal string Folder { get; }
         }
 
         private void GrowToFitContent()
@@ -1466,6 +1559,14 @@ namespace BatchPdfPublisherLauncher
         private void OpenProjectManager()
         {
             using (var manager = new ProjectManagerForm()) manager.ShowDialog(this);
+            try
+            {
+                var projects = LoadRecentProjects();
+                WriteRecentProjectCache(projects);
+                PopulateRecentProjects(projects);
+                GrowToFitContent();
+            }
+            catch { }
         }
 
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
