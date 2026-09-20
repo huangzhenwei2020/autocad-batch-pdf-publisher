@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace BatchPdfPublisher.Views
@@ -22,7 +23,7 @@ namespace BatchPdfPublisher.Views
             // 控件树都开一遍（表格是最吃重绘的），插件里所有窗口一起受益。
             DoubleBuffered = true;
             SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
-            Load += (sender, args) => { UiPerformance.BufferedTree(this); ApplyScreenBounds(); };
+            Load += (sender, args) => { UiPerformance.BufferedTree(this); ApplyNativeDarkTheme(this); ApplyScreenBounds(); };
             Shown += (sender, args) => ApplyScreenBounds();
             DpiChanged += (sender, args) => BeginInvoke(new Action(ApplyScreenBounds));
         }
@@ -46,6 +47,46 @@ namespace BatchPdfPublisher.Views
         {
             UiPerformance.BufferedTree(this);
             base.CreateHandle();
+            ApplyTitleBarTheme();
+        }
+
+        private void ApplyTitleBarTheme()
+        {
+            // Windows 10 1809 uses attribute 19; current Windows uses 20.
+            // The call is ignored on older systems.  Applying it once when the
+            // handle is created has no resize/scroll performance cost.
+            if (BackColor.GetBrightness() >= 0.42F) return;
+            var enabled = 1;
+            try
+            {
+                if (DwmSetWindowAttribute(Handle, 20, ref enabled, sizeof(int)) != 0)
+                    DwmSetWindowAttribute(Handle, 19, ref enabled, sizeof(int));
+            }
+            catch (DllNotFoundException) { }
+            catch (EntryPointNotFoundException) { }
+        }
+
+        [DllImport("dwmapi.dll")]
+        private static extern int DwmSetWindowAttribute(IntPtr window, int attribute, ref int value, int valueSize);
+
+        [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
+        private static extern int SetWindowTheme(IntPtr window, string subAppName, string subIdList);
+
+        private static void ApplyNativeDarkTheme(Control root)
+        {
+            if (root == null || root.IsDisposed || root.FindForm() == null || root.FindForm().BackColor.GetBrightness() >= 0.42F) return;
+            foreach (Control child in root.Controls)
+            {
+                if (child.IsHandleCreated &&
+                    (child is ListBox || child is ComboBox || child is DataGridView ||
+                     (child is ScrollableControl && ((ScrollableControl)child).AutoScroll)))
+                {
+                    try { SetWindowTheme(child.Handle, "DarkMode_Explorer", null); }
+                    catch (DllNotFoundException) { }
+                    catch (EntryPointNotFoundException) { }
+                }
+                if (child.HasChildren) ApplyNativeDarkTheme(child);
+            }
         }
 
         private void ApplyScreenBounds()
