@@ -23,17 +23,20 @@ namespace BatchPdfPublisher.Views
         // Flat, opaque colours keep painting cheap inside AutoCAD while matching
         // the launcher.  Do not use transparency or per-frame gradients here:
         // this window regularly displays hundreds of drawings.
-        private static readonly System.Drawing.Color Canvas = System.Drawing.Color.FromArgb(21, 29, 39);
-        private static readonly System.Drawing.Color Surface = System.Drawing.Color.FromArgb(28, 40, 53);
-        private static readonly System.Drawing.Color SurfaceRaised = System.Drawing.Color.FromArgb(32, 46, 61);
-        private static readonly System.Drawing.Color Border = System.Drawing.Color.FromArgb(52, 73, 94);
-        private static readonly System.Drawing.Color TextPrimary = System.Drawing.Color.FromArgb(244, 247, 251);
-        private static readonly System.Drawing.Color TextSecondary = System.Drawing.Color.FromArgb(158, 176, 197);
-        private static readonly System.Drawing.Color Accent = System.Drawing.Color.FromArgb(10, 124, 255);
-        private static readonly System.Drawing.Color AccentHover = System.Drawing.Color.FromArgb(31, 139, 255);
-        private static readonly System.Drawing.Color AccentPressed = System.Drawing.Color.FromArgb(0, 99, 216);
+        private static readonly System.Drawing.Color Canvas = System.Drawing.Color.FromArgb(14, 25, 35);
+        private static readonly System.Drawing.Color Surface = System.Drawing.Color.FromArgb(20, 35, 47);
+        private static readonly System.Drawing.Color SurfaceRaised = System.Drawing.Color.FromArgb(26, 45, 60);
+        private static readonly System.Drawing.Color Border = System.Drawing.Color.FromArgb(45, 69, 88);
+        private static readonly System.Drawing.Color TextPrimary = System.Drawing.Color.FromArgb(232, 240, 247);
+        private static readonly System.Drawing.Color TextSecondary = System.Drawing.Color.FromArgb(145, 165, 182);
+        private static readonly System.Drawing.Color Accent = System.Drawing.Color.FromArgb(19, 151, 255);
+        private static readonly System.Drawing.Color AccentHover = System.Drawing.Color.FromArgb(45, 166, 255);
+        private static readonly System.Drawing.Color AccentPressed = System.Drawing.Color.FromArgb(0, 118, 214);
+        private static readonly System.Drawing.Color Success = System.Drawing.Color.FromArgb(77, 205, 108);
+        private static readonly System.Drawing.Color Warning = System.Drawing.Color.FromArgb(255, 151, 32);
+        private static readonly System.Drawing.Color Danger = System.Drawing.Color.FromArgb(255, 73, 73);
         private readonly PublisherViewModel _viewModel = new PublisherViewModel();
-        private readonly ComboBox _projects = new ComboBox();
+        private readonly ComboBox _projects = new ThemedComboBox();
         private readonly TextBox _newProjectName = new TextBox();
         private readonly Label _projectSummary = new Label();
         private readonly ListBox _buildings = new ListBox();
@@ -42,9 +45,11 @@ namespace BatchPdfPublisher.Views
         private readonly DataGridView _sheets = new BufferedDataGridView();
         private readonly BindingList<SheetItem> _sheetRows = new BindingList<SheetItem>();
         private readonly BindingSource _sheetSource = new BindingSource();
-        private readonly ComboBox _sheetSort = new ComboBox();
-        private readonly ComboBox _plotStyle = new ComboBox();
-        private readonly ComboBox _marginMode = new ComboBox();
+        private readonly ComboBox _sheetSort = new ThemedComboBox();
+        private readonly TextBox _sheetSearch = new TextBox();
+        private readonly Label _sheetCount = new Label();
+        private readonly ComboBox _plotStyle = new ThemedComboBox();
+        private readonly ComboBox _marginMode = new ThemedComboBox();
         private readonly TextBox _outputDirectory = new TextBox();
         private readonly Label _actualOutputDirectories = new Label();
         private readonly CheckedListBox _publishBuildings = new CheckedListBox();
@@ -58,12 +63,25 @@ namespace BatchPdfPublisher.Views
         private readonly Panel _progressTrack = new Panel();
         private readonly Label _publishProgressText = new Label();
         private readonly ToolTip _toolTip = new ToolTip();
+        private readonly DwgSheetPreviewPanel _sheetPreview = new DwgSheetPreviewPanel();
+        private readonly Label _previewTitle = new Label();
+        private readonly Label _previewPosition = new Label();
+        private readonly Label _previewPaper = new Label();
+        private readonly Label _previewDirection = new Label();
+        private readonly Label _previewScale = new Label();
+        private readonly Label _previewFrame = new Label();
+        private readonly Label _previewNotice = new Label();
+        private readonly Label _quickFrameValue = new Label();
+        private readonly Label _quickPaperValue = new Label();
+        private readonly ComboBox _quickOrientation = new ThemedComboBox();
+        private readonly TextBox _quickScale = new TextBox();
+        private bool _updatingQuickSheetSettings;
         private bool _refreshing;
         private bool _gridCommitPending;
         private SplitContainer _leftSplitter;
         private SplitContainer _rightSplitter;
-        private int _savedLeftPanelWidth = 300;
-        private int _savedRightPanelWidth = 350;
+        private int _savedLeftPanelWidth = 230;
+        private int _savedRightPanelWidth = 420;
         private readonly List<string> _savedSheetColumnOrder = new List<string>();
         private SheetItem _dragCandidate;
         private System.Drawing.Point _dragStart;
@@ -73,13 +91,13 @@ namespace BatchPdfPublisher.Views
         public PublisherForm()
         {
             Text = "万落建筑工具 · 批量 PDF 发布  " + WanluoArchitectureTools.ProductVersion.Display;
-            Width = 1180;
-            Height = 760;
-            MinimumSize = new System.Drawing.Size(900, 590);
+            Width = 1460;
+            Height = 900;
+            MinimumSize = new System.Drawing.Size(1080, 680);
             StartPosition = FormStartPosition.CenterParent;
             AutoScaleMode = AutoScaleMode.Dpi;
             SizeGripStyle = SizeGripStyle.Show;
-            Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
+            Font = new System.Drawing.Font("Microsoft YaHei UI", 9.5F);
 
             LoadUiLayoutSettings();
             BuildInterface();
@@ -92,37 +110,40 @@ namespace BatchPdfPublisher.Views
             BackColor = Canvas;
             ApplyInputStyle(_projects);
             ApplyInputStyle(_newProjectName);
+            ApplyInputStyle(_sheetSearch);
             ApplyInputStyle(_plotStyle);
             ApplyInputStyle(_marginMode);
             ApplyInputStyle(_outputDirectory);
-            var root = new BufferedTableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(0), RowCount = 4, ColumnCount = 1 };
+            ApplyInputStyle(_quickOrientation);
+            ApplyInputStyle(_quickScale);
+
+            var root = new BufferedTableLayoutPanel { Dock = DockStyle.Fill, Padding = Padding.Empty, RowCount = 3, ColumnCount = 1 };
             root.BackColor = Canvas;
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 78));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 64));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 66));
             Controls.Add(root);
 
-            var header = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, Padding = Padding.Empty, BackColor = Canvas };
+            var header = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Padding = new Padding(12, 8, 14, 8), BackColor = Surface };
+            header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 224));
             header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            var heading = new Panel { Dock = DockStyle.Fill, Padding = Padding.Empty, BackColor = Canvas };
-            heading.Controls.Add(new Label { Text = "批量 PDF 发布", ForeColor = TextPrimary, Font = new System.Drawing.Font(Font.FontFamily, 17F, System.Drawing.FontStyle.Bold), AutoSize = true, Location = new System.Drawing.Point(24, 8) });
-            heading.Controls.Add(new Label { Text = "整理图纸，一次发布", ForeColor = TextSecondary, Font = new System.Drawing.Font(Font.FontFamily, 9F), AutoSize = true, Location = new System.Drawing.Point(286, 16) });
-            header.Controls.Add(heading, 0, 0);
-            root.Controls.Add(header, 0, 0);
-
-            var projectBar = new FlowLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(20, 10, 18, 10), BackColor = Surface, WrapContents = false };
-            projectBar.Controls.Add(new Label { Text = "当前项目", ForeColor = TextPrimary, AutoSize = false, Width = 76, Height = 36, TextAlign = System.Drawing.ContentAlignment.MiddleLeft, Font = new System.Drawing.Font(Font, System.Drawing.FontStyle.Bold), Margin = Padding.Empty });
-            _projects.Width = 270; _projects.Height = 36; _projects.DropDownStyle = ComboBoxStyle.DropDownList; _projects.Margin = new Padding(0, 0, 10, 0);
+            var brand = new Panel { Dock = DockStyle.Fill, BackColor = Surface, Margin = Padding.Empty };
+            brand.Controls.Add(new Label { Text = "图纸审校台", ForeColor = TextPrimary, Font = new System.Drawing.Font(Font.FontFamily, 16F, System.Drawing.FontStyle.Bold), AutoSize = true, Location = new System.Drawing.Point(8, 5) });
+            brand.Controls.Add(new Label { Text = WanluoArchitectureTools.ProductVersion.Display, ForeColor = TextSecondary, Font = new System.Drawing.Font(Font.FontFamily, 9F), AutoSize = true, Location = new System.Drawing.Point(144, 14) });
+            header.Controls.Add(brand, 0, 0);
+            var projectBar = new FlowLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(0, 8, 0, 0), BackColor = Surface, WrapContents = false, Margin = Padding.Empty };
+            projectBar.Controls.Add(new Label { Text = "当前项目", ForeColor = TextPrimary, AutoSize = false, Width = 74, Height = 36, TextAlign = System.Drawing.ContentAlignment.MiddleLeft, Font = new System.Drawing.Font(Font, System.Drawing.FontStyle.Bold), Margin = Padding.Empty });
+            _projects.Width = 245; _projects.Height = 36; _projects.DropDownStyle = ComboBoxStyle.DropDownList; _projects.Margin = new Padding(0, 0, 12, 0);
             projectBar.Controls.Add(_projects);
             projectBar.Controls.Add(ToolbarButton("项目管理", UiIcon.Gear, OpenProjectManager));
             projectBar.Controls.Add(ToolbarButton("插入目录", UiIcon.List, OpenCatalogInsert));
             projectBar.Controls.Add(ToolbarButton("存入工程", UiIcon.Save, SaveCurrentCad));
             projectBar.Controls.Add(ToolbarButton("目录打印", UiIcon.Publish, PrintProjectFolder));
-            root.Controls.Add(projectBar, 0, 1);
+            header.Controls.Add(projectBar, 1, 0);
+            root.Controls.Add(header, 0, 0);
 
-            var body = new BufferedPanel { Dock = DockStyle.Fill, Padding = new Padding(14, 14, 14, 10), BackColor = Canvas };
-            root.Controls.Add(body, 0, 2);
+            var body = new BufferedPanel { Dock = DockStyle.Fill, Padding = new Padding(8), BackColor = Canvas };
+            root.Controls.Add(body, 0, 1);
 
             var leftSplitter = _leftSplitter = new BufferedSplitContainer
             {
@@ -153,15 +174,11 @@ namespace BatchPdfPublisher.Views
             AddHeightDragIndicator(buildingFrameSplit);
             cadBuildingSplit.Panel2.Controls.Add(buildingFrameSplit);
 
-            var cadPane = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = Padding.Empty, RowCount = 4, ColumnCount = 1, BackColor = Surface };
-            cadPane.RowStyles.Add(new RowStyle(SizeType.Absolute, 42)); cadPane.RowStyles.Add(new RowStyle(SizeType.AutoSize)); cadPane.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); cadPane.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            var leftTabs = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, BackColor = SurfaceRaised, Margin = Padding.Empty, Padding = new Padding(4) };
-            leftTabs.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50)); leftTabs.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-            var filesTab = SegmentButton("工程图纸", true); var framesTab = SegmentButton("图框登记", false);
-            leftTabs.Controls.Add(filesTab, 0, 0); leftTabs.Controls.Add(framesTab, 1, 0); cadPane.Controls.Add(leftTabs, 0, 0);
-            cadPane.Controls.Add(SectionHeader("工程文件（双击打开）"), 0, 1);
-            _cadFiles.Dock = DockStyle.Fill; _cadFiles.Margin = new Padding(8, 8, 8, 4); _cadFiles.CheckOnClick = true; _cadFiles.HorizontalScrollbar = true; cadPane.Controls.Add(_cadFiles, 0, 2);
-            var cadButtons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true, Margin = new Padding(8, 0, 8, 6) };
+            var cadPane = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = Padding.Empty, RowCount = 3, ColumnCount = 1, BackColor = Surface };
+            cadPane.RowStyles.Add(new RowStyle(SizeType.Absolute, 42)); cadPane.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); cadPane.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            cadPane.Controls.Add(SectionHeader("CAD 文件"), 0, 0);
+            _cadFiles.Dock = DockStyle.Fill; _cadFiles.Margin = new Padding(8, 7, 8, 4); _cadFiles.CheckOnClick = true; _cadFiles.HorizontalScrollbar = true; cadPane.Controls.Add(_cadFiles, 0, 1);
+            var cadButtons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true, Margin = new Padding(5, 0, 5, 5), Padding = Padding.Empty };
             cadButtons.Controls.Add(IconButton("添加文件", UiIcon.Plus, ChooseCadFiles)); cadButtons.Controls.Add(IconButton("移除文件", UiIcon.Remove, RemoveCadFile));
             cadButtons.Controls.Add(IconButton("全部保存", UiIcon.SaveAll, SaveAllCadFiles));
             cadButtons.Controls.Add(IconAccentButton("扫描当前", UiIcon.Refresh, () => { _viewModel.ScanCommand.Execute(null); RefreshAll(); }));
@@ -169,12 +186,12 @@ namespace BatchPdfPublisher.Views
             cadButtons.Controls.Add(IconButton("框选发布", UiIcon.Select, OpenCurrentSelectionPublisher)); cadPane.Controls.Add(cadButtons, 0, 3);
             cadBuildingSplit.Panel1.Controls.Add(cadPane);
 
-            var buildingPane = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = Padding.Empty, RowCount = 3, ColumnCount = 1 };
+            var buildingPane = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = Padding.Empty, RowCount = 3, ColumnCount = 1, BackColor = Surface };
             buildingPane.RowStyles.Add(new RowStyle(SizeType.AutoSize)); buildingPane.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); buildingPane.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            buildingPane.Controls.Add(SectionHeader("子项目名称"), 0, 0); _buildings.Dock = DockStyle.Fill; _buildings.Margin = new Padding(8, 8, 8, 4); buildingPane.Controls.Add(_buildings, 0, 1);
+            buildingPane.Controls.Add(SectionHeader("子项目"), 0, 0); _buildings.Dock = DockStyle.Fill; _buildings.Margin = new Padding(8, 7, 8, 4); buildingPane.Controls.Add(_buildings, 0, 1);
             var frameToggle = new CheckBox
             {
-                Text = "▶ 图框登记（点击展开后可修改）",
+                Text = "▶ 图框登记",
                 AutoSize = false,
                 Dock = DockStyle.Fill,
                 Height = 40,
@@ -205,45 +222,105 @@ namespace BatchPdfPublisher.Views
             frameToggle.CheckedChanged += (sender, args) =>
             {
                 buildingFrameSplit.Panel2Collapsed = !frameToggle.Checked;
-                frameToggle.Text = frameToggle.Checked ? "▼ 图框登记（点击折叠）" : "▶ 图框登记（点击展开后可修改）";
-                if (frameToggle.Checked && buildingFrameSplit.Height > 360)
+                frameToggle.Text = frameToggle.Checked ? "▼ 图框登记" : "▶ 图框登记";
+                if (frameToggle.Checked)
                 {
-                    var preferredBuildingHeight = Math.Max(buildingFrameSplit.Panel1MinSize, buildingFrameSplit.Height * 3 / 5);
-                    buildingFrameSplit.SplitterDistance = Math.Min(preferredBuildingHeight, buildingFrameSplit.Height - buildingFrameSplit.Panel2MinSize - buildingFrameSplit.SplitterWidth);
+                    SetSplitterLayoutSafe(
+                        buildingFrameSplit,
+                        buildingFrameSplit.Height * 3 / 5,
+                        150,
+                        180);
                 }
             };
-            filesTab.Click += (sender, args) => { frameToggle.Checked = false; SetSegmentSelection(filesTab, framesTab, true); };
-            framesTab.Click += (sender, args) => { frameToggle.Checked = true; SetSegmentSelection(filesTab, framesTab, false); };
-            frameToggle.CheckedChanged += (sender, args) => SetSegmentSelection(filesTab, framesTab, !frameToggle.Checked);
-            var leftRail = new RoundedPanel { Dock = DockStyle.Fill, Padding = new Padding(10), BackColor = Surface, BorderColor = Border, CornerRadius = 10 };
-            ApplyRoundedRegion(leftRail, 5);
+            var leftRail = new RoundedPanel { Dock = DockStyle.Fill, Padding = Padding.Empty, BackColor = Surface, BorderColor = Border, CornerRadius = 6 };
             leftRail.Controls.Add(cadBuildingSplit);
             leftSplitter.Panel1.Controls.Add(leftRail);
 
-            var center = Card(3, new Padding(12, 12, 12, 0)); center.Margin = new Padding(0, 0, 10, 0);
-            center.RowStyles.Add(new RowStyle(SizeType.AutoSize)); center.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); center.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            var sheetHeader = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = false, Height = 42, WrapContents = false, BackColor = SurfaceRaised, Padding = new Padding(0, 5, 0, 3) };
-            var sheetTitle = SectionHeader("图纸列表"); sheetTitle.Width = 105; sheetTitle.Height = 30; sheetHeader.Controls.Add(sheetTitle);
-            var sortLabel = new Label { Text = "排列", AutoSize = true, TextAlign = System.Drawing.ContentAlignment.MiddleLeft, Margin = new Padding(8, 7, 4, 0), ForeColor = TextSecondary };
-            sheetHeader.Controls.Add(sortLabel);
+            var center = new RoundedTableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Padding = Padding.Empty, BackColor = Surface, BorderColor = Border, CornerRadius = 6, Margin = new Padding(0, 0, 8, 0) };
+            center.RowStyles.Add(new RowStyle(SizeType.Absolute, 88)); center.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            var sheetHeader = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, BackColor = Surface, Padding = new Padding(10, 4, 10, 6), Margin = Padding.Empty };
+            sheetHeader.RowStyles.Add(new RowStyle(SizeType.Absolute, 36)); sheetHeader.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+            var titleRow = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, BackColor = Surface, Margin = Padding.Empty };
+            titleRow.Controls.Add(new Label { Text = "图纸列表", AutoSize = false, Width = 96, Height = 32, TextAlign = System.Drawing.ContentAlignment.MiddleLeft, Font = new System.Drawing.Font(Font.FontFamily, 11F, System.Drawing.FontStyle.Bold), ForeColor = TextPrimary, Margin = Padding.Empty });
+            _sheetCount.AutoSize = true; _sheetCount.ForeColor = TextSecondary; _sheetCount.Margin = new Padding(0, 8, 14, 0); titleRow.Controls.Add(_sheetCount);
+            titleRow.Controls.Add(new Label { Text = "拖动行可调整发布顺序", AutoSize = true, ForeColor = TextSecondary, Margin = new Padding(4, 8, 0, 0) });
+            sheetHeader.Controls.Add(titleRow, 0, 0);
+            var sheetTools = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, BackColor = Surface, Margin = Padding.Empty, Padding = Padding.Empty };
+            _sheetSearch.Width = 210; _sheetSearch.Height = 36; _sheetSearch.Margin = new Padding(0, 0, 8, 0); sheetTools.Controls.Add(_sheetSearch);
             _sheetSort.DropDownStyle = ComboBoxStyle.DropDownList;
-            _sheetSort.Width = 120;
-            _sheetSort.Margin = new Padding(0, 2, 8, 2);
+            _sheetSort.Width = 116;
+            _sheetSort.Height = 36;
+            _sheetSort.Margin = new Padding(0, 0, 8, 0);
             _sheetSort.Items.AddRange(new object[] { "自定义顺序", "图号升序", "图号降序", "图名升序", "图名降序", "按 CAD 文件" });
             _sheetSort.SelectedIndex = 0;
-            sheetHeader.Controls.Add(_sheetSort);
-            _previewEnabled.Text = "显示当前子项目预览"; _previewEnabled.AutoSize = true; _previewEnabled.ForeColor = TextSecondary; _previewEnabled.Checked = false; _previewEnabled.Margin = new Padding(14, 6, 8, 2);
-            sheetHeader.Controls.Add(_previewEnabled);
-            sheetHeader.Controls.Add(IconButton("更新预览", UiIcon.Refresh, () => _viewModel.RefreshPreview()));
-            sheetHeader.Controls.Add(IconButton("上移", UiIcon.Up, () => { _viewModel.MoveUpCommand.Execute(null); RefreshSheets(); }));
-            sheetHeader.Controls.Add(IconButton("下移", UiIcon.Down, () => { _viewModel.MoveDownCommand.Execute(null); RefreshSheets(); }));
+            sheetTools.Controls.Add(_sheetSort);
+            sheetTools.Controls.Add(IconButton("更新预览", UiIcon.Refresh, () => { RefreshSelectedSheetReview(); _viewModel.RefreshPreview(); }));
+            sheetTools.Controls.Add(IconButton("上移", UiIcon.Up, () => { _viewModel.MoveUpCommand.Execute(null); RefreshSheets(); }));
+            sheetTools.Controls.Add(IconButton("下移", UiIcon.Down, () => { _viewModel.MoveDownCommand.Execute(null); RefreshSheets(); }));
+            sheetHeader.Controls.Add(sheetTools, 0, 1);
             center.Controls.Add(sheetHeader, 0, 0);
-            ConfigureGrid(); center.Controls.Add(_sheets, 0, 1);
-            center.Margin = Padding.Empty;
+            ConfigureGrid();
+            var gridHost = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 2, Margin = Padding.Empty, Padding = Padding.Empty, BackColor = Surface };
+            gridHost.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            gridHost.RowStyles.Add(new RowStyle(SizeType.Absolute, 14));
+            gridHost.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            gridHost.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 14));
+            gridHost.Controls.Add(_sheets, 0, 0);
+            gridHost.Controls.Add(new DarkGridScrollBar(_sheets, false) { Dock = DockStyle.Fill }, 0, 1);
+            gridHost.Controls.Add(new DarkGridScrollBar(_sheets, true) { Dock = DockStyle.Fill }, 1, 0);
+            gridHost.Controls.Add(new Panel { Dock = DockStyle.Fill, BackColor = Canvas, Margin = Padding.Empty }, 1, 1);
+            center.Controls.Add(gridHost, 0, 1);
             rightSplitter.Panel1.Controls.Add(center);
 
-            var right = Card(20, new Padding(10, 10, 10, 0));
-            right.AutoScroll = true;
+            var reviewShell = new RoundedTableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Padding = Padding.Empty, BackColor = Surface, BorderColor = Border, CornerRadius = 6, Margin = Padding.Empty };
+            reviewShell.RowStyles.Add(new RowStyle(SizeType.Absolute, 50)); reviewShell.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            var reviewTabs = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 1, ColumnCount = 2, BackColor = SurfaceRaised, Padding = new Padding(4), Margin = Padding.Empty };
+            reviewTabs.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50)); reviewTabs.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            var previewTab = SegmentButton("图纸预览", true);
+            var settingsTab = SegmentButton("输出设置", false);
+            reviewTabs.Controls.Add(previewTab, 0, 0); reviewTabs.Controls.Add(settingsTab, 1, 0);
+            reviewShell.Controls.Add(reviewTabs, 0, 0);
+
+            var previewPage = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 5, ColumnCount = 1, BackColor = Surface, Padding = new Padding(10), Margin = Padding.Empty };
+            previewPage.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+            previewPage.RowStyles.Add(new RowStyle(SizeType.Percent, 48));
+            previewPage.RowStyles.Add(new RowStyle(SizeType.Absolute, 92));
+            previewPage.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));
+            previewPage.RowStyles.Add(new RowStyle(SizeType.Absolute, 132));
+            var previewHeading = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Margin = Padding.Empty, BackColor = Surface };
+            previewHeading.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); previewHeading.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 64));
+            _previewTitle.Dock = DockStyle.Fill; _previewTitle.ForeColor = TextPrimary; _previewTitle.Font = new System.Drawing.Font(Font.FontFamily, 10.5F, System.Drawing.FontStyle.Bold); _previewTitle.TextAlign = System.Drawing.ContentAlignment.MiddleLeft; _previewTitle.AutoEllipsis = true;
+            _previewPosition.Dock = DockStyle.Fill; _previewPosition.ForeColor = TextSecondary; _previewPosition.TextAlign = System.Drawing.ContentAlignment.MiddleRight;
+            previewHeading.Controls.Add(_previewTitle, 0, 0); previewHeading.Controls.Add(_previewPosition, 1, 0);
+            previewPage.Controls.Add(previewHeading, 0, 0);
+            _sheetPreview.Dock = DockStyle.Fill; _sheetPreview.Margin = new Padding(0, 4, 0, 8); previewPage.Controls.Add(_sheetPreview, 0, 1);
+
+            var sheetFacts = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, Padding = new Padding(0, 6, 0, 4), BackColor = Surface, Margin = Padding.Empty };
+            sheetFacts.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 55)); sheetFacts.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 45));
+            sheetFacts.RowStyles.Add(new RowStyle(SizeType.Percent, 50)); sheetFacts.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
+            ConfigureFactLabel(_previewPaper); ConfigureFactLabel(_previewDirection); ConfigureFactLabel(_previewScale); ConfigureFactLabel(_previewFrame);
+            sheetFacts.Controls.Add(_previewPaper, 0, 0); sheetFacts.Controls.Add(_previewDirection, 1, 0); sheetFacts.Controls.Add(_previewScale, 0, 1); sheetFacts.Controls.Add(_previewFrame, 1, 1);
+            previewPage.Controls.Add(sheetFacts, 0, 2);
+            _previewNotice.Dock = DockStyle.Fill; _previewNotice.AutoEllipsis = true; _previewNotice.TextAlign = System.Drawing.ContentAlignment.MiddleLeft; _previewNotice.Padding = new Padding(12, 0, 8, 0); _previewNotice.Margin = new Padding(0, 4, 0, 4); _previewNotice.BackColor = System.Drawing.Color.FromArgb(62, 46, 25); _previewNotice.ForeColor = Warning;
+            previewPage.Controls.Add(_previewNotice, 0, 3);
+
+            var quickSettings = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, RowCount = 3, BackColor = Surface, Padding = new Padding(0, 6, 0, 0), Margin = Padding.Empty };
+            for (var column = 0; column < 4; column++) quickSettings.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
+            quickSettings.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
+            quickSettings.RowStyles.Add(new RowStyle(SizeType.Absolute, 25));
+            quickSettings.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+            var quickTitle = SectionLabel("快速设置（当前图纸）"); quickTitle.Dock = DockStyle.Fill; quickSettings.Controls.Add(quickTitle, 0, 0); quickSettings.SetColumnSpan(quickTitle, 4);
+            quickSettings.Controls.Add(QuickLabel("图框"), 0, 1);
+            quickSettings.Controls.Add(QuickLabel("PDF 尺寸"), 1, 1);
+            quickSettings.Controls.Add(QuickLabel("方向"), 2, 1);
+            quickSettings.Controls.Add(QuickLabel("比例"), 3, 1);
+            ConfigureQuickValueLabel(_quickFrameValue); quickSettings.Controls.Add(_quickFrameValue, 0, 2);
+            ConfigureQuickValueLabel(_quickPaperValue); quickSettings.Controls.Add(_quickPaperValue, 1, 2);
+            _quickOrientation.DropDownStyle = ComboBoxStyle.DropDownList; _quickOrientation.Items.AddRange(new object[] { "横向", "纵向" }); _quickOrientation.Dock = DockStyle.Fill; _quickOrientation.Margin = new Padding(3); quickSettings.Controls.Add(_quickOrientation, 2, 2);
+            _quickScale.Dock = DockStyle.Fill; _quickScale.Margin = new Padding(3); quickSettings.Controls.Add(_quickScale, 3, 2);
+            previewPage.Controls.Add(quickSettings, 0, 4);
+
+            var right = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 20, ColumnCount = 1, Padding = new Padding(12, 10, 12, 0), BackColor = Surface, AutoScroll = true, Margin = Padding.Empty };
             right.Controls.Add(SectionHeader("输出设置")); right.Controls.Add(Label("CAD 打印样式"));
             _plotStyle.DropDownStyle = ComboBoxStyle.DropDown; _plotStyle.Dock = DockStyle.Top;
             right.Controls.Add(_plotStyle);
@@ -274,7 +351,24 @@ namespace BatchPdfPublisher.Views
             _includeProjectName.Text = "文件名包含工程名"; _includeProjectName.AutoSize = true; right.Controls.Add(_includeProjectName);
             _includeBuildingName.Text = "文件名包含子项目名"; _includeBuildingName.AutoSize = true; right.Controls.Add(_includeBuildingName);
             _overwriteExisting.Text = "同名 PDF 直接覆盖"; _overwriteExisting.AutoSize = true; right.Controls.Add(_overwriteExisting);
-            rightSplitter.Panel2.Controls.Add(right);
+            _previewEnabled.Text = "在 CAD 中显示当前图框范围"; _previewEnabled.AutoSize = true; _previewEnabled.ForeColor = TextSecondary; _previewEnabled.Margin = new Padding(3, 8, 3, 3); right.Controls.Add(_previewEnabled);
+
+            var reviewContent = new Panel { Dock = DockStyle.Fill, BackColor = Surface, Margin = Padding.Empty };
+            reviewContent.Controls.Add(right);
+            reviewContent.Controls.Add(previewPage);
+            reviewShell.Controls.Add(reviewContent, 0, 1);
+            Action<bool> showPreview = show =>
+            {
+                previewPage.Visible = show;
+                right.Visible = !show;
+                SetSegmentSelection(previewTab, settingsTab, show);
+                if (show) { previewPage.BringToFront(); RefreshSelectedSheetReview(); }
+                else right.BringToFront();
+            };
+            previewTab.Click += (sender, args) => showPreview(true);
+            settingsTab.Click += (sender, args) => showPreview(false);
+            showPreview(true);
+            rightSplitter.Panel2.Controls.Add(reviewShell);
             ConfigureSmoothSplitter(leftSplitter);
             ConfigureSmoothSplitter(rightSplitter);
             ConfigureSmoothSplitter(cadBuildingSplit);
@@ -282,37 +376,65 @@ namespace BatchPdfPublisher.Views
 
             Shown += (sender, args) =>
             {
-                leftSplitter.Panel1MinSize = Math.Min(290, Math.Max(240, leftSplitter.Width - 470 - leftSplitter.SplitterWidth));
-                leftSplitter.Panel2MinSize = Math.Min(470, Math.Max(320, leftSplitter.Width - leftSplitter.Panel1MinSize - leftSplitter.SplitterWidth));
-                var leftMaximum = leftSplitter.Width - leftSplitter.Panel2MinSize - leftSplitter.SplitterWidth;
-                leftSplitter.SplitterDistance = Clamp(_savedLeftPanelWidth, leftSplitter.Panel1MinSize, leftMaximum);
-                // CAD file list keeps a practical default height; the project
-                // list receives all remaining height while frame registration
-                // is collapsed. Both dividers remain user-draggable.
-                cadBuildingSplit.Panel1MinSize = 260; cadBuildingSplit.Panel2MinSize = 170;
-                cadBuildingSplit.SplitterDistance = Math.Min(410, Math.Max(300, cadBuildingSplit.Height * 53 / 100));
-                buildingFrameSplit.Panel1MinSize = 150; buildingFrameSplit.Panel2MinSize = 180;
+                var desiredLeft = Clamp(_savedLeftPanelWidth, 210, 280);
+                SetSplitterLayoutSafe(leftSplitter, desiredLeft, 198, 760);
+                SetSplitterLayoutSafe(
+                    cadBuildingSplit,
+                    Math.Min(390, Math.Max(280, cadBuildingSplit.Height * 47 / 100)),
+                    240,
+                    170);
 
-                rightSplitter.Panel1MinSize = Math.Min(420, Math.Max(180, rightSplitter.Width - 340 - rightSplitter.SplitterWidth));
-                rightSplitter.Panel2MinSize = Math.Min(340, Math.Max(250, rightSplitter.Width - rightSplitter.Panel1MinSize - rightSplitter.SplitterWidth));
-                var rightMaximum = rightSplitter.Width - rightSplitter.Panel1MinSize - rightSplitter.SplitterWidth;
-                var rightPanelWidth = Clamp(_savedRightPanelWidth, rightSplitter.Panel2MinSize, rightMaximum);
-                rightSplitter.SplitterDistance = rightSplitter.Width - rightPanelWidth - rightSplitter.SplitterWidth;
+                var desiredRightWidth = Math.Max(390, _savedRightPanelWidth);
+                var desiredRightDistance = rightSplitter.Width - desiredRightWidth - rightSplitter.SplitterWidth;
+                SetSplitterLayoutSafe(rightSplitter, desiredRightDistance, 480, 350);
+                SendMessageText(_sheetSearch.Handle, EmSetCueBanner, IntPtr.Zero, "搜索图号、图名或关键词...");
+                RefreshSelectedSheetReview();
             };
 
-            var footer = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = Surface, Padding = new Padding(16, 8, 16, 8), ColumnCount = 4, RowCount = 1 };
-            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 280));
+            var footer = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = Surface, Padding = new Padding(10, 8, 10, 8), ColumnCount = 6, RowCount = 1 };
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 260));
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 88));
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 64));
-            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 160));
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 112));
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 176));
             footer.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            _status.AutoSize = false; _status.AutoEllipsis = true; _status.Dock = DockStyle.Fill; _status.ForeColor = TextSecondary; _status.TextAlign = System.Drawing.ContentAlignment.MiddleLeft; _status.Margin = new Padding(0, 0, 12, 0); footer.Controls.Add(_status, 0, 0);
-            _progressTrack.Dock = DockStyle.Fill; _progressTrack.Margin = new Padding(0, 19, 12, 19); _progressTrack.BackColor = System.Drawing.Color.Transparent; _progressTrack.Paint += PaintProgressTrack; footer.Controls.Add(_progressTrack, 1, 0);
-            _publishProgressText.AutoSize = false; _publishProgressText.Dock = DockStyle.Fill; _publishProgressText.TextAlign = System.Drawing.ContentAlignment.MiddleCenter; _publishProgressText.ForeColor = TextSecondary; _publishProgressText.Text = "0 / 0"; _publishProgressText.Margin = Padding.Empty; footer.Controls.Add(_publishProgressText, 2, 0);
-            var footerPublish = PrimaryButton("发布 PDF", UiIcon.Publish, PublishPdf); footerPublish.Dock = DockStyle.Fill; footerPublish.AutoSize = false; footerPublish.Margin = new Padding(4, 4, 0, 4); footer.Controls.Add(footerPublish, 3, 0);
-            root.Controls.Add(footer, 0, 3);
+            var collapseSource = IconButton("收起侧栏", UiIcon.List, null); collapseSource.Dock = DockStyle.Fill; collapseSource.AutoSize = false; collapseSource.Margin = new Padding(0, 3, 8, 3);
+            collapseSource.Click += (sender, args) => { leftSplitter.Panel1Collapsed = !leftSplitter.Panel1Collapsed; collapseSource.Text = leftSplitter.Panel1Collapsed ? "展开侧栏" : "收起侧栏"; };
+            footer.Controls.Add(collapseSource, 0, 0);
+            _status.AutoSize = false; _status.AutoEllipsis = true; _status.Dock = DockStyle.Fill; _status.ForeColor = TextSecondary; _status.TextAlign = System.Drawing.ContentAlignment.MiddleLeft; _status.Margin = new Padding(0, 0, 12, 0); footer.Controls.Add(_status, 1, 0);
+            footer.Controls.Add(new Label { Text = "发布进度", Dock = DockStyle.Fill, TextAlign = System.Drawing.ContentAlignment.MiddleLeft, ForeColor = TextPrimary, Font = new System.Drawing.Font(Font, System.Drawing.FontStyle.Bold), Margin = Padding.Empty }, 2, 0);
+            _progressTrack.Dock = DockStyle.Fill; _progressTrack.Margin = new Padding(0, 19, 12, 19); _progressTrack.BackColor = System.Drawing.Color.Transparent; _progressTrack.Paint += PaintProgressTrack; footer.Controls.Add(_progressTrack, 3, 0);
+            _publishProgressText.AutoSize = false; _publishProgressText.Dock = DockStyle.Fill; _publishProgressText.TextAlign = System.Drawing.ContentAlignment.MiddleCenter; _publishProgressText.ForeColor = TextSecondary; _publishProgressText.Text = "已准备 0 / 0"; _publishProgressText.Margin = Padding.Empty; footer.Controls.Add(_publishProgressText, 4, 0);
+            var footerPublish = PrimaryButton("发布 PDF", UiIcon.Publish, PublishPdf); footerPublish.Dock = DockStyle.Fill; footerPublish.AutoSize = false; footerPublish.Margin = new Padding(4, 4, 0, 4); footer.Controls.Add(footerPublish, 5, 0);
+            root.Controls.Add(footer, 0, 2);
             ApplyDarkControlStyles(this);
             ApplyTooltips(this);
+        }
+
+        private static void ConfigureFactLabel(Label label)
+        {
+            label.Dock = DockStyle.Fill;
+            label.ForeColor = TextSecondary;
+            label.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
+            label.AutoEllipsis = true;
+            label.Margin = new Padding(2, 0, 4, 0);
+        }
+
+        private static Label QuickLabel(string text)
+        {
+            return new Label { Text = text, Dock = DockStyle.Fill, TextAlign = System.Drawing.ContentAlignment.BottomLeft, ForeColor = TextSecondary, Margin = new Padding(3, 0, 3, 2) };
+        }
+
+        private static void ConfigureQuickValueLabel(Label label)
+        {
+            label.Dock = DockStyle.Fill;
+            label.ForeColor = TextPrimary;
+            label.BackColor = SurfaceRaised;
+            label.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
+            label.Padding = new Padding(9, 0, 4, 0);
+            label.Margin = new Padding(3);
+            label.AutoEllipsis = true;
         }
 
         private void ConfigureGrid()
@@ -322,23 +444,26 @@ namespace BatchPdfPublisher.Views
             _sheets.AllowDrop = true;
             _sheets.AllowUserToOrderColumns = true;
             _sheets.BorderStyle = BorderStyle.None; _sheets.BackgroundColor = Surface;
+            _sheets.ScrollBars = ScrollBars.None;
             _sheets.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None;
             _sheets.AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.None;
             _sheets.AllowUserToResizeRows = false;
             _sheets.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
             _sheets.ShowCellToolTips = false;
-            _sheets.EnableHeadersVisualStyles = false; _sheets.ColumnHeadersHeight = 34; _sheets.RowTemplate.Height = 30;
+            _sheets.EnableHeadersVisualStyles = false; _sheets.ColumnHeadersHeight = 36; _sheets.RowTemplate.Height = 31;
             _sheets.ColumnHeadersDefaultCellStyle.BackColor = SurfaceRaised;
             _sheets.ColumnHeadersDefaultCellStyle.ForeColor = TextPrimary;
             _sheets.ColumnHeadersDefaultCellStyle.Font = new System.Drawing.Font(Font, System.Drawing.FontStyle.Bold);
             _sheets.DefaultCellStyle.BackColor = Surface;
             _sheets.DefaultCellStyle.ForeColor = TextPrimary;
-            _sheets.DefaultCellStyle.SelectionBackColor = System.Drawing.Color.FromArgb(34, 82, 132);
+            _sheets.DefaultCellStyle.SelectionBackColor = System.Drawing.Color.FromArgb(18, 91, 153);
             _sheets.DefaultCellStyle.SelectionForeColor = TextPrimary;
             _sheets.AlternatingRowsDefaultCellStyle.BackColor = System.Drawing.Color.FromArgb(25, 37, 49);
             _sheets.GridColor = Border;
             _sheets.RowHeadersVisible = false;
-            AddColumn("Order", "序", 42, true); AddComboColumn("Building", "子项目", 100, _viewModel.Buildings.Concat(new[] { "未分组" }));
+            AddColumn("Order", "#", 38, true);
+            _sheets.Columns.Add(new DataGridViewTextBoxColumn { Name = "ReviewStatusColumn", HeaderText = "状态", Width = 86, ReadOnly = true, SortMode = DataGridViewColumnSortMode.NotSortable });
+            AddComboColumn("Building", "子项目", 88, _viewModel.Buildings.Concat(new[] { "未分组" }));
             AddColumn("SheetNumber", "图号", 90, false); AddColumn("SheetName", "图名", 150, false);
             AddColumn("FrameDisplay", "图框", 78, true);
             AddColumn("OutputPaperSize", "PDF 尺寸", 112, true);
@@ -355,6 +480,8 @@ namespace BatchPdfPublisher.Views
                 column.SortMode = column.DataPropertyName == "SheetNumber" || column.DataPropertyName == "SheetName" || column.DataPropertyName == "SourceFileName"
                     ? DataGridViewColumnSortMode.Programmatic : DataGridViewColumnSortMode.NotSortable;
             RestoreSheetColumnOrder();
+            var reviewStatusColumn = _sheets.Columns["ReviewStatusColumn"];
+            if (reviewStatusColumn != null) reviewStatusColumn.DisplayIndex = Math.Min(1, _sheets.Columns.Count - 1);
         }
 
         private void AddColumn(string property, string title, int width, bool readOnly)
@@ -371,7 +498,8 @@ namespace BatchPdfPublisher.Views
                 HeaderText = title,
                 Width = width,
                 FlatStyle = FlatStyle.Flat,
-                DisplayStyle = DataGridViewComboBoxDisplayStyle.DropDownButton
+                DisplayStyle = DataGridViewComboBoxDisplayStyle.DropDownButton,
+                DisplayStyleForCurrentCellOnly = true
             };
             foreach (var item in items.Distinct(StringComparer.OrdinalIgnoreCase)) column.Items.Add(item);
             _sheets.Columns.Add(column);
@@ -412,7 +540,13 @@ namespace BatchPdfPublisher.Views
                 if (item != null) _viewModel.OpenCadFile(item.Path);
             };
             _frames.DoubleClick += (s, e) => EditFrame();
-            _sheets.SelectionChanged += (s, e) => { if (_refreshing) return; _viewModel.SelectedSheet = CurrentSheet(); };
+            _sheets.SelectionChanged += (s, e) =>
+            {
+                if (_refreshing) return;
+                _viewModel.SelectedSheet = CurrentSheet();
+                RefreshSelectedSheetReview();
+            };
+            _sheetSearch.TextChanged += (s, e) => { if (!_refreshing) RefreshSheets(); };
             _sheetSort.SelectedIndexChanged += (s, e) =>
             {
                 if (_refreshing || _sheetSort.SelectedIndex <= 0) return;
@@ -431,6 +565,7 @@ namespace BatchPdfPublisher.Views
             _sheets.DragDrop += SheetsDragDrop;
             _sheets.DragLeave += (s, e) => ClearSheetDragIndicator();
             _sheets.RowPostPaint += SheetsRowPostPaint;
+            _sheets.CellPainting += PaintReviewStatusCell;
             _sheets.CellEndEdit += (s, e) =>
             {
                 if (_refreshing || _gridCommitPending) return;
@@ -471,6 +606,14 @@ namespace BatchPdfPublisher.Views
                 }));
             };
             _previewEnabled.CheckedChanged += (s, e) => { if (!_refreshing) _viewModel.PreviewEnabled = _previewEnabled.Checked; };
+            _quickOrientation.SelectedIndexChanged += (s, e) => CommitQuickSheetSettings(false);
+            _quickScale.Leave += (s, e) => CommitQuickSheetSettings(true);
+            _quickScale.KeyDown += (s, e) =>
+            {
+                if (e.KeyCode != Keys.Enter) return;
+                e.SuppressKeyPress = true;
+                CommitQuickSheetSettings(true);
+            };
             _viewModel.PropertyChanged += ViewModelPropertyChanged;
             _viewModel.Frames.CollectionChanged += (s, e) => RefreshFramesSafely();
             FormClosing += (s, e) =>
@@ -511,7 +654,7 @@ namespace BatchPdfPublisher.Views
                 try { _buildings.SelectedItem = _viewModel.SelectedBuilding; RefreshSheetsCore(); }
                 finally { _refreshing = false; }
             }
-            if (e.PropertyName == "SelectedSheet") SelectCurrentSheetRow();
+            if (e.PropertyName == "SelectedSheet") { SelectCurrentSheetRow(); RefreshSelectedSheetReview(); }
             if (e.PropertyName == "PublishProgressValue" || e.PropertyName == "PublishProgressMaximum" || e.PropertyName == "IsPublishing" || e.PropertyName == "ScanProgressValue" || e.PropertyName == "ScanProgressMaximum" || e.PropertyName == "IsScanning") RefreshPublishProgress();
         }
 
@@ -536,7 +679,13 @@ namespace BatchPdfPublisher.Views
                 : _viewModel.IsPublishing ? Math.Max(_viewModel.PublishProgressMaximum, 1) : Math.Max(_viewModel.Sheets.Count, 1);
             var value = _viewModel.IsScanning ? _viewModel.ScanProgressValue : _viewModel.PublishProgressValue;
             value = Math.Min(Math.Max(value, 0), maximum);
-            _publishProgressText.Text = value + " / " + maximum;
+            if (_viewModel.IsScanning) _publishProgressText.Text = "扫描 " + value + " / " + maximum;
+            else if (_viewModel.IsPublishing) _publishProgressText.Text = "发布 " + value + " / " + maximum;
+            else
+            {
+                var ready = _viewModel.Sheets.Count(sheet => sheet.MaxX > sheet.MinX && sheet.MaxY > sheet.MinY);
+                _publishProgressText.Text = "已准备 " + ready + " / " + _viewModel.Sheets.Count;
+            }
             _progressTrack.Invalidate();
         }
 
@@ -553,7 +702,9 @@ namespace BatchPdfPublisher.Views
             var maximum = _viewModel.IsScanning
                 ? Math.Max(_viewModel.ScanProgressMaximum, 1)
                 : _viewModel.IsPublishing ? Math.Max(_viewModel.PublishProgressMaximum, 1) : Math.Max(_viewModel.Sheets.Count, 1);
-            var value = _viewModel.IsScanning ? _viewModel.ScanProgressValue : _viewModel.PublishProgressValue;
+            var value = _viewModel.IsScanning ? _viewModel.ScanProgressValue
+                : _viewModel.IsPublishing ? _viewModel.PublishProgressValue
+                : _viewModel.Sheets.Count(sheet => sheet.MaxX > sheet.MinX && sheet.MaxY > sheet.MinY);
             var ratio = Math.Max(0, Math.Min(1, value / (double)maximum));
             var fill = _viewModel.IsScanning ? ProgressScanBrush : ProgressPublishBrush;
             args.Graphics.FillRectangle(ProgressTrackBrush, bounds);
@@ -598,6 +749,7 @@ namespace BatchPdfPublisher.Views
                 _status.Text = _viewModel.Status;
                 RefreshPublishProgress();
                 RefreshSheetsCore();
+                RefreshSelectedSheetReview();
             }
             finally { _refreshing = false; }
         }
@@ -630,6 +782,15 @@ namespace BatchPdfPublisher.Views
                 }
             }
             var visible = _viewModel.SheetView.Cast<SheetItem>().ToList();
+            var query = (_sheetSearch.Text ?? string.Empty).Trim();
+            if (query.Length > 0)
+                visible = visible.Where(item => new[]
+                {
+                    item.Building, item.SheetNumber, item.SheetName, item.FrameDisplay,
+                    item.OutputPaperSize, item.SourceFileName, item.SourceLayout
+                }.Any(value => !string.IsNullOrWhiteSpace(value)
+                    && value.IndexOf(query, StringComparison.CurrentCultureIgnoreCase) >= 0)).ToList();
+            _sheetCount.Text = "共 " + visible.Count + " 张图纸";
             var rowsChanged = _sheetRows.Count != visible.Count;
             if (!rowsChanged)
                 for (var index = 0; index < visible.Count; index++)
@@ -654,6 +815,122 @@ namespace BatchPdfPublisher.Views
             }
             if (_viewModel.SelectedSheet != null)
                 foreach (DataGridViewRow row in _sheets.Rows) if (ReferenceEquals(row.DataBoundItem, _viewModel.SelectedSheet)) { row.Selected = true; break; }
+        }
+
+        private void RefreshSelectedSheetReview()
+        {
+            if (IsDisposed || Disposing) return;
+            var sheet = _viewModel.SelectedSheet ?? CurrentSheet();
+            _updatingQuickSheetSettings = true;
+            try
+            {
+                var hasSheet = sheet != null;
+                _quickOrientation.Enabled = hasSheet;
+                _quickScale.Enabled = hasSheet;
+                if (!hasSheet)
+                {
+                    _previewTitle.Text = "请选择一张图纸";
+                    _previewPosition.Text = string.Empty;
+                    _previewPaper.Text = "纸张：—";
+                    _previewDirection.Text = "方向：—";
+                    _previewScale.Text = "比例：—";
+                    _previewFrame.Text = "图框：—";
+                    _previewNotice.Text = "选择图纸后可在此核对纸张、方向和打印比例。";
+                    _previewNotice.BackColor = System.Drawing.Color.FromArgb(30, 53, 68);
+                    _previewNotice.ForeColor = TextSecondary;
+                    _quickFrameValue.Text = "—";
+                    _quickPaperValue.Text = "—";
+                    _quickOrientation.SelectedIndex = -1;
+                    _quickScale.Text = string.Empty;
+                    _sheetPreview.ShowSheet(null);
+                    return;
+                }
+
+                _previewTitle.Text = string.Join("  ", new[] { sheet.SheetNumber, sheet.SheetName }.Where(value => !string.IsNullOrWhiteSpace(value)));
+                var visibleIndex = _sheetRows.IndexOf(sheet);
+                _previewPosition.Text = visibleIndex >= 0 ? (visibleIndex + 1) + " / " + _sheetRows.Count : string.Empty;
+                _previewPaper.Text = "纸张：" + (string.IsNullOrWhiteSpace(sheet.OutputPaperSize) ? "未设置" : sheet.OutputPaperSize);
+                _previewDirection.Text = "方向：" + (string.IsNullOrWhiteSpace(sheet.PaperOrientation) ? "未设置" : sheet.PaperOrientation + "（跟随 CAD）");
+                _previewScale.Text = "比例：" + (string.IsNullOrWhiteSpace(sheet.PrintScale) ? "未设置" : sheet.PrintScale);
+                _previewFrame.Text = "图框：" + (string.IsNullOrWhiteSpace(sheet.FrameDisplay) ? "未登记" : sheet.FrameDisplay);
+                _quickFrameValue.Text = string.IsNullOrWhiteSpace(sheet.FrameDisplay) ? "未登记" : sheet.FrameDisplay;
+                _quickPaperValue.Text = string.IsNullOrWhiteSpace(sheet.OutputPaperSize) ? "未设置" : sheet.OutputPaperSize;
+                _quickOrientation.SelectedItem = sheet.PaperOrientation;
+                _quickScale.Text = sheet.PrintScale ?? string.Empty;
+
+                System.Drawing.Color statusColor;
+                var reviewStatus = SheetReviewStatus(sheet, out statusColor);
+                if (reviewStatus == "正常")
+                {
+                    _previewNotice.Text = "当前图框范围、纸张和方向已就绪，可以发布。";
+                    _previewNotice.BackColor = System.Drawing.Color.FromArgb(26, 61, 48);
+                    _previewNotice.ForeColor = Success;
+                }
+                else
+                {
+                    _previewNotice.Text = reviewStatus == "空白风险"
+                        ? "当前图框没有有效范围，发布前请重新扫描或检查图框登记。"
+                        : "当前图纸信息不完整，请核对图框、纸张、方向和比例后再发布。";
+                    _previewNotice.BackColor = reviewStatus == "空白风险"
+                        ? System.Drawing.Color.FromArgb(66, 35, 35)
+                        : System.Drawing.Color.FromArgb(62, 46, 25);
+                    _previewNotice.ForeColor = statusColor;
+                }
+                _sheetPreview.ShowSheet(sheet);
+            }
+            finally { _updatingQuickSheetSettings = false; }
+        }
+
+        private void CommitQuickSheetSettings(bool includeScale)
+        {
+            if (_refreshing || _updatingQuickSheetSettings) return;
+            var sheet = _viewModel.SelectedSheet ?? CurrentSheet();
+            if (sheet == null) return;
+            if (!string.IsNullOrWhiteSpace(_quickOrientation.Text)) sheet.PaperOrientation = _quickOrientation.Text;
+            if (includeScale && !string.IsNullOrWhiteSpace(_quickScale.Text)) sheet.PrintScale = _quickScale.Text.Trim();
+            _viewModel.SelectedSheet = sheet;
+            _viewModel.ApplySheetEdits();
+            RefreshSheets();
+            RefreshSelectedSheetReview();
+        }
+
+        private void PaintReviewStatusCell(object sender, DataGridViewCellPaintingEventArgs e)
+        {
+            if (e.RowIndex < 0 || e.ColumnIndex < 0 || _sheets.Columns[e.ColumnIndex].Name != "ReviewStatusColumn") return;
+            var sheet = _sheets.Rows[e.RowIndex].DataBoundItem as SheetItem;
+            System.Drawing.Color color;
+            var status = SheetReviewStatus(sheet, out color);
+            e.PaintBackground(e.ClipBounds, true);
+            var dotSize = 8;
+            var dotX = e.CellBounds.Left + 9;
+            var dotY = e.CellBounds.Top + (e.CellBounds.Height - dotSize) / 2;
+            using (var brush = new System.Drawing.SolidBrush(color)) e.Graphics.FillEllipse(brush, dotX, dotY, dotSize, dotSize);
+            var textBounds = new System.Drawing.Rectangle(dotX + 14, e.CellBounds.Top, Math.Max(0, e.CellBounds.Width - 24), e.CellBounds.Height);
+            TextRenderer.DrawText(e.Graphics, status, e.CellStyle.Font, textBounds,
+                e.CellStyle.ForeColor, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+            using (var pen = new System.Drawing.Pen(_sheets.GridColor))
+            {
+                e.Graphics.DrawLine(pen, e.CellBounds.Right - 1, e.CellBounds.Top, e.CellBounds.Right - 1, e.CellBounds.Bottom);
+                e.Graphics.DrawLine(pen, e.CellBounds.Left, e.CellBounds.Bottom - 1, e.CellBounds.Right, e.CellBounds.Bottom - 1);
+            }
+            e.Handled = true;
+        }
+
+        private static string SheetReviewStatus(SheetItem sheet, out System.Drawing.Color color)
+        {
+            if (sheet == null || sheet.MaxX <= sheet.MinX || sheet.MaxY <= sheet.MinY)
+            {
+                color = Danger;
+                return "空白风险";
+            }
+            if (string.IsNullOrWhiteSpace(sheet.FrameDisplay) || string.IsNullOrWhiteSpace(sheet.OutputPaperSize)
+                || string.IsNullOrWhiteSpace(sheet.PaperOrientation) || string.IsNullOrWhiteSpace(sheet.PrintScale))
+            {
+                color = Warning;
+                return "需检查";
+            }
+            color = Success;
+            return "正常";
         }
 
         private void SetSheetSort(int selectedIndex)
@@ -822,7 +1099,7 @@ namespace BatchPdfPublisher.Views
 
         private Button ProjectManagerButton()
         {
-            var button = new Button
+            var button = new RoundedButton
             {
                 Width = 38,
                 Height = 30,
@@ -1098,7 +1375,7 @@ namespace BatchPdfPublisher.Views
             var button = IconButton(text, icon, action);
             var preferredWidth = button.PreferredSize.Width;
             button.AutoSize = true;
-            button.MinimumSize = new System.Drawing.Size(Math.Max(140, preferredWidth + 16), 36);
+            button.MinimumSize = new System.Drawing.Size(Math.Max(112, preferredWidth + 16), 36);
             button.Height = 36;
             button.Margin = new Padding(0, 0, 6, 0);
             return button;
@@ -1167,14 +1444,14 @@ namespace BatchPdfPublisher.Views
 
         private static Button Button(string text, Action action)
         {
-            var button = new Button
+            var button = new RoundedButton
             {
                 Text = text,
                 AutoSize = true,
-                Height = 34,
+                Height = 36,
                 Margin = new Padding(3, 0, 3, 4),
                 Padding = new Padding(7, 2, 7, 2),
-                MinimumSize = new System.Drawing.Size(0, 34),
+                MinimumSize = new System.Drawing.Size(0, 36),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = SurfaceRaised,
                 ForeColor = TextPrimary,
@@ -1396,6 +1673,46 @@ namespace BatchPdfPublisher.Views
             return Math.Max(minimum, Math.Min(maximum, value));
         }
 
+        private static void SetSplitterLayoutSafe(
+            SplitContainer splitter,
+            int desiredDistance,
+            int desiredPanel1MinSize,
+            int desiredPanel2MinSize)
+        {
+            if (splitter == null || splitter.IsDisposed) return;
+
+            var extent = splitter.Orientation == Orientation.Vertical
+                ? splitter.ClientSize.Width
+                : splitter.ClientSize.Height;
+            var available = extent - splitter.SplitterWidth;
+            if (available <= 0) return;
+
+            // At startup WinForms can expose a temporarily narrow split
+            // container, especially with high DPI scaling. Keep a small range
+            // for the divider even when the requested minimums do not fit.
+            var minimumBudget = Math.Max(0, available - 2);
+            var panel1MinSize = Math.Max(0, desiredPanel1MinSize);
+            var panel2MinSize = Math.Max(0, desiredPanel2MinSize);
+            var requestedMinimum = panel1MinSize + panel2MinSize;
+            if (requestedMinimum > minimumBudget && requestedMinimum > 0)
+            {
+                panel1MinSize = (int)((long)minimumBudget * panel1MinSize / requestedMinimum);
+                panel2MinSize = minimumBudget - panel1MinSize;
+            }
+
+            var minimumDistance = panel1MinSize;
+            var maximumDistance = available - panel2MinSize;
+            var distance = Clamp(desiredDistance, minimumDistance, maximumDistance);
+
+            // Clear the previous constraints before moving the divider. Saved
+            // widths from a larger monitor may otherwise reject the new value.
+            splitter.Panel1MinSize = 0;
+            splitter.Panel2MinSize = 0;
+            splitter.SplitterDistance = distance;
+            splitter.Panel1MinSize = Math.Min(panel1MinSize, distance);
+            splitter.Panel2MinSize = Math.Min(panel2MinSize, available - distance);
+        }
+
         private static TableLayoutPanel Card(int rows, Padding padding)
         {
             var card = new RoundedTableLayoutPanel
@@ -1450,7 +1767,7 @@ namespace BatchPdfPublisher.Views
 
         private static Button SegmentButton(string text, bool selected)
         {
-            var button = new Button
+            var button = new RoundedButton
             {
                 Text = text,
                 Dock = DockStyle.Fill,
@@ -1498,6 +1815,9 @@ namespace BatchPdfPublisher.Views
                     comboBox.ForeColor = TextPrimary;
                     comboBox.FlatStyle = FlatStyle.Flat;
                 }
+                if (child is DataGridView || child is ListBox || child is CheckedListBox
+                    || (child is ScrollableControl && ((ScrollableControl)child).AutoScroll))
+                    NativeScrollTheme.Attach(child);
                 var listBox = child as ListBox;
                 if (listBox != null)
                 {
@@ -1535,14 +1855,461 @@ namespace BatchPdfPublisher.Views
 
         private static void ApplyRoundedRegion(Control control, int radius)
         {
-            // Intentionally left square: the publisher uses a compact, native
-            // WinForms layout and avoids clipped corners at different DPI scales.
+            Action update = () =>
+            {
+                if (control.Width < 2 || control.Height < 2) return;
+                using (var path = RoundedRectangle(new System.Drawing.Rectangle(0, 0, control.Width, control.Height), radius))
+                    control.Region = new System.Drawing.Region(path);
+            };
+            control.HandleCreated += (sender, args) => update();
+            control.SizeChanged += (sender, args) => update();
+            if (control.IsHandleCreated) update();
         }
 
         private const int WmSetRedraw = 0x000B;
+        private const int EmSetCueBanner = 0x1501;
 
         [DllImport("user32.dll")]
         private static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wordParameter, IntPtr longParameter);
+
+        [DllImport("user32.dll", EntryPoint = "SendMessageW", CharSet = CharSet.Unicode)]
+        private static extern IntPtr SendMessageText(IntPtr window, int message, IntPtr wordParameter, string longParameter);
+
+        private sealed class RoundedButton : Button
+        {
+            private bool _hovered;
+            private bool _pressed;
+
+            public RoundedButton()
+            {
+                SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint
+                    | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+                UseVisualStyleBackColor = false;
+                FlatStyle = FlatStyle.Flat;
+                FlatAppearance.BorderSize = 0;
+            }
+
+            protected override void OnMouseEnter(EventArgs e) { _hovered = true; Invalidate(); base.OnMouseEnter(e); }
+            protected override void OnMouseLeave(EventArgs e) { _hovered = false; _pressed = false; Invalidate(); base.OnMouseLeave(e); }
+            protected override void OnMouseDown(MouseEventArgs e) { _pressed = e.Button == MouseButtons.Left; Invalidate(); base.OnMouseDown(e); }
+            protected override void OnMouseUp(MouseEventArgs e) { _pressed = false; Invalidate(); base.OnMouseUp(e); }
+            protected override void OnEnabledChanged(EventArgs e) { base.OnEnabledChanged(e); Invalidate(); }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                e.Graphics.Clear(Parent == null ? Canvas : Parent.BackColor);
+                var bounds = new System.Drawing.Rectangle(1, 1, Math.Max(1, Width - 3), Math.Max(1, Height - 3));
+                var fillColor = _pressed ? FlatAppearance.MouseDownBackColor
+                    : _hovered ? FlatAppearance.MouseOverBackColor : BackColor;
+                if (fillColor == System.Drawing.Color.Empty) fillColor = BackColor;
+                var borderColor = Focused ? Accent
+                    : FlatAppearance.BorderColor == System.Drawing.Color.Empty ? Border : FlatAppearance.BorderColor;
+                using (var path = RoundedRectangle(bounds, Math.Min(6, bounds.Height / 2)))
+                using (var fill = new System.Drawing.SolidBrush(fillColor))
+                using (var pen = new System.Drawing.Pen(borderColor))
+                {
+                    e.Graphics.FillPath(fill, path);
+                    e.Graphics.DrawPath(pen, path);
+                }
+
+                var content = System.Drawing.Rectangle.Inflate(bounds, -5, -2);
+                var color = Enabled ? ForeColor : TextSecondary;
+                if (Image != null)
+                {
+                    var imageY = content.Top + (content.Height - Image.Height) / 2;
+                    e.Graphics.DrawImage(Image, content.Left, imageY, Image.Width, Image.Height);
+                    content.X += Image.Width + 4;
+                    content.Width = Math.Max(1, content.Width - Image.Width - 4);
+                }
+                var flags = TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis;
+                if (TextAlign == System.Drawing.ContentAlignment.MiddleLeft || Image != null) flags |= TextFormatFlags.Left;
+                else flags |= TextFormatFlags.HorizontalCenter;
+                TextRenderer.DrawText(e.Graphics, Text, Font, content, color, flags);
+            }
+        }
+
+        private sealed class ThemedComboBox : ComboBox
+        {
+            public ThemedComboBox()
+            {
+                DrawMode = DrawMode.OwnerDrawFixed;
+                FlatStyle = FlatStyle.Flat;
+                ItemHeight = Font.Height + 10;
+            }
+
+            protected override CreateParams CreateParams
+            {
+                get
+                {
+                    var parameters = base.CreateParams;
+                    parameters.Style &= ~0x00800000;
+                    parameters.ExStyle &= ~0x00000200;
+                    return parameters;
+                }
+            }
+
+            protected override void OnFontChanged(EventArgs e)
+            {
+                base.OnFontChanged(e);
+                ItemHeight = Font.Height + 10;
+            }
+
+            protected override void OnDropDown(EventArgs e)
+            {
+                base.OnDropDown(e);
+                NativeScrollTheme.AttachDropdown(this);
+            }
+
+            protected override void OnDrawItem(DrawItemEventArgs e)
+            {
+                var selected = (e.State & DrawItemState.Selected) != 0;
+                using (var fill = new System.Drawing.SolidBrush(selected ? System.Drawing.Color.FromArgb(25, 78, 137) : SurfaceRaised))
+                    e.Graphics.FillRectangle(fill, e.Bounds);
+                var text = e.Index >= 0 && e.Index < Items.Count ? GetItemText(Items[e.Index]) : Text;
+                TextRenderer.DrawText(e.Graphics, text, Font,
+                    new System.Drawing.Rectangle(e.Bounds.X + 8, e.Bounds.Y, Math.Max(1, e.Bounds.Width - 16), e.Bounds.Height),
+                    TextPrimary, TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+            }
+
+            protected override void WndProc(ref Message m)
+            {
+                if (m.Msg == 0x83 || m.Msg == 0x85) { m.Result = IntPtr.Zero; return; }
+                base.WndProc(ref m);
+                if (m.Msg != 0xF && m.Msg != 0x317 && m.Msg != 0x318) return;
+                using (var graphics = (m.Msg == 0x317 || m.Msg == 0x318) && m.WParam != IntPtr.Zero
+                    ? System.Drawing.Graphics.FromHdc(m.WParam) : System.Drawing.Graphics.FromHwnd(Handle))
+                {
+                    graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                    graphics.Clear(Parent == null ? Surface : Parent.BackColor);
+                    var bounds = new System.Drawing.Rectangle(0, 0, Math.Max(1, Width - 1), Math.Max(1, Height - 1));
+                    using (var path = RoundedRectangle(bounds, Math.Min(6, Height / 2)))
+                    using (var fill = new System.Drawing.SolidBrush(SurfaceRaised))
+                    using (var pen = new System.Drawing.Pen(Focused ? Accent : Border))
+                    {
+                        graphics.FillPath(fill, path);
+                        graphics.DrawPath(pen, path);
+                    }
+                    var arrowWidth = 28;
+                    TextRenderer.DrawText(graphics, Text, Font,
+                        new System.Drawing.Rectangle(10, 0, Math.Max(1, Width - arrowWidth - 12), Height),
+                        Enabled ? TextPrimary : TextSecondary,
+                        TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                    var centerX = Width - 15;
+                    var centerY = Height / 2;
+                    using (var pen = new System.Drawing.Pen(Enabled ? TextPrimary : TextSecondary, 1.5F))
+                        graphics.DrawLines(pen, new[]
+                        {
+                            new System.Drawing.Point(centerX - 4, centerY - 2),
+                            new System.Drawing.Point(centerX, centerY + 2),
+                            new System.Drawing.Point(centerX + 4, centerY - 2)
+                        });
+                }
+            }
+        }
+
+        // Keep native wheel/drag/accessibility behaviour and repaint only the
+        // scrollbar chrome so no light Windows bars leak into the dark editor.
+        private sealed class NativeScrollTheme : NativeWindow
+        {
+            private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Control, NativeScrollTheme> Windows
+                = new System.Runtime.CompilerServices.ConditionalWeakTable<Control, NativeScrollTheme>();
+            private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Control, NativeScrollTheme> Dropdowns
+                = new System.Runtime.CompilerServices.ConditionalWeakTable<Control, NativeScrollTheme>();
+            private bool _painting;
+            private bool _queuedPaint;
+            private const int RepaintScrollbars = 0x8000 + 421;
+            private readonly Timer _trackingPaint = new Timer { Interval = 30 };
+
+            [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr handle, int message, IntPtr word, IntPtr longValue);
+            [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)] private static extern int SetWindowTheme(IntPtr handle, string application, string identifier);
+            [DllImport("user32.dll")] private static extern bool GetScrollBarInfo(IntPtr handle, int identifier, ref ScrollInfo info);
+            [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr handle, out NativeRect rectangle);
+            [DllImport("user32.dll")] private static extern IntPtr GetWindowDC(IntPtr handle);
+            [DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr handle, IntPtr deviceContext);
+            [DllImport("user32.dll")] private static extern bool RedrawWindow(IntPtr handle, IntPtr rectangle, IntPtr region, uint flags);
+            [DllImport("user32.dll")] private static extern bool GetComboBoxInfo(IntPtr handle, ref ComboInfo info);
+
+            [StructLayout(LayoutKind.Sequential)]
+            private struct NativeRect { public int Left, Top, Right, Bottom; }
+
+            [StructLayout(LayoutKind.Sequential)]
+            private struct ScrollInfo
+            {
+                public int Size;
+                public NativeRect Bounds;
+                public int Arrow, ThumbStart, ThumbEnd, Reserved;
+                [MarshalAs(UnmanagedType.ByValArray, SizeConst = 6)] public int[] States;
+            }
+
+            [StructLayout(LayoutKind.Sequential)]
+            private struct ComboInfo
+            {
+                public int Size;
+                public NativeRect Item, Button;
+                public int State;
+                public IntPtr Combo, Edit, List;
+            }
+
+            private NativeScrollTheme(Control owner, bool popup)
+            {
+                _trackingPaint.Tick += (sender, args) =>
+                {
+                    if (Handle == IntPtr.Zero) { _trackingPaint.Stop(); return; }
+                    var pointerOverBar = false;
+                    foreach (var vertical in new[] { true, false })
+                    {
+                        ScrollInfo info;
+                        NativeRect window;
+                        if (Read(Handle, vertical, out info, out window)
+                            && System.Drawing.Rectangle.FromLTRB(info.Bounds.Left, info.Bounds.Top, info.Bounds.Right, info.Bounds.Bottom).Contains(Cursor.Position))
+                            pointerOverBar = true;
+                    }
+                    PaintBars(IntPtr.Zero);
+                    if (!pointerOverBar && Control.MouseButtons == MouseButtons.None) _trackingPaint.Stop();
+                };
+                if (!popup)
+                {
+                    owner.HandleCreated += (sender, args) => Bind(owner.Handle);
+                    if (owner.IsHandleCreated) Bind(owner.Handle);
+                }
+                owner.HandleDestroyed += (sender, args) => { _trackingPaint.Stop(); if (Handle != IntPtr.Zero) ReleaseHandle(); };
+                owner.Disposed += (sender, args) => { _trackingPaint.Dispose(); if (Handle != IntPtr.Zero) ReleaseHandle(); };
+            }
+
+            private void Bind(IntPtr handle)
+            {
+                if (Handle == handle) return;
+                if (Handle != IntPtr.Zero) ReleaseHandle();
+                if (handle == IntPtr.Zero) return;
+                AssignHandle(handle);
+                SetWindowTheme(handle, string.Empty, string.Empty);
+            }
+
+            public static void Attach(Control control)
+            {
+                var window = Windows.GetValue(control, item => new NativeScrollTheme(item, false));
+                if (window.Handle != IntPtr.Zero) RedrawWindow(window.Handle, IntPtr.Zero, IntPtr.Zero, 0x401);
+            }
+
+            public static void AttachDropdown(ComboBox combo)
+            {
+                var info = new ComboInfo { Size = Marshal.SizeOf(typeof(ComboInfo)) };
+                if (GetComboBoxInfo(combo.Handle, ref info) && info.List != IntPtr.Zero)
+                    Dropdowns.GetValue(combo, item => new NativeScrollTheme(item, true)).Bind(info.List);
+            }
+
+            private static bool Read(IntPtr handle, bool vertical, out ScrollInfo info, out NativeRect window)
+            {
+                info = new ScrollInfo { Size = Marshal.SizeOf(typeof(ScrollInfo)), States = new int[6] };
+                window = new NativeRect();
+                return GetWindowRect(handle, out window)
+                    && GetScrollBarInfo(handle, vertical ? -5 : -6, ref info)
+                    && (info.States[0] & 0x18000) == 0
+                    && info.Bounds.Right > info.Bounds.Left && info.Bounds.Bottom > info.Bounds.Top;
+            }
+
+            protected override void WndProc(ref Message m)
+            {
+                if (m.Msg == RepaintScrollbars)
+                {
+                    _queuedPaint = false;
+                    if (!_painting && Handle != IntPtr.Zero) PaintBars(IntPtr.Zero);
+                    m.Result = IntPtr.Zero;
+                    return;
+                }
+                if (m.Msg == 0xA0 || m.Msg == 0xA1 || m.Msg == 0xA3) _trackingPaint.Start();
+                base.WndProc(ref m);
+                if (_painting || Handle == IntPtr.Zero) return;
+                if ((m.Msg == 5 || m.Msg == 0x47 || m.Msg == 0x7D) && !_queuedPaint)
+                {
+                    _queuedPaint = true;
+                    PostMessage(Handle, RepaintScrollbars, IntPtr.Zero, IntPtr.Zero);
+                }
+                if (m.Msg == 0x85 || m.Msg == 0xF || m.Msg == 0x114 || m.Msg == 0x115
+                    || m.Msg == 0xA0 || m.Msg == 0x200 || m.Msg == 0x202 || m.Msg == 0x20A
+                    || m.Msg == 0xA2 || m.Msg == 0x317 || m.Msg == 0x2A2 || m.Msg == 0x113)
+                {
+                    _painting = true;
+                    try { PaintBars(m.Msg == 0x317 ? m.WParam : IntPtr.Zero); }
+                    finally { _painting = false; }
+                }
+            }
+
+            private void PaintBars(IntPtr printDeviceContext)
+            {
+                var deviceContext = printDeviceContext == IntPtr.Zero ? GetWindowDC(Handle) : printDeviceContext;
+                if (deviceContext == IntPtr.Zero) return;
+                try
+                {
+                    using (var graphics = System.Drawing.Graphics.FromHdc(deviceContext))
+                    {
+                        graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                        var vertical = DrawBar(graphics, true);
+                        var horizontal = DrawBar(graphics, false);
+                        if (!vertical.IsEmpty && !horizontal.IsEmpty)
+                            using (var fill = new System.Drawing.SolidBrush(Canvas))
+                                graphics.FillRectangle(fill, vertical.Left, horizontal.Top, vertical.Width, horizontal.Height);
+                    }
+                }
+                finally { if (printDeviceContext == IntPtr.Zero) ReleaseDC(Handle, deviceContext); }
+            }
+
+            private System.Drawing.Rectangle DrawBar(System.Drawing.Graphics graphics, bool vertical)
+            {
+                ScrollInfo info;
+                NativeRect window;
+                if (!Read(Handle, vertical, out info, out window)) return System.Drawing.Rectangle.Empty;
+                var bounds = new System.Drawing.Rectangle(info.Bounds.Left - window.Left, info.Bounds.Top - window.Top,
+                    info.Bounds.Right - info.Bounds.Left, info.Bounds.Bottom - info.Bounds.Top);
+                using (var fill = new System.Drawing.SolidBrush(Canvas))
+                    graphics.FillRectangle(fill, System.Drawing.Rectangle.Inflate(bounds, 1, 1));
+                var thickness = vertical ? bounds.Width : bounds.Height;
+                var inset = Math.Max(3, thickness / 4);
+                var thumb = vertical
+                    ? new System.Drawing.Rectangle(bounds.Left + inset, bounds.Top + info.ThumbStart,
+                        Math.Max(1, bounds.Width - inset * 2), info.ThumbEnd - info.ThumbStart)
+                    : new System.Drawing.Rectangle(bounds.Left + info.ThumbStart, bounds.Top + inset,
+                        info.ThumbEnd - info.ThumbStart, Math.Max(1, bounds.Height - inset * 2));
+                if (thumb.Width > 0 && thumb.Height > 0 && (info.States[3] & 0x8001) == 0)
+                    using (var path = RoundedRectangle(thumb, Math.Max(1, Math.Min(thumb.Width, thumb.Height) / 2)))
+                    using (var fill = new System.Drawing.SolidBrush(TextSecondary)) graphics.FillPath(fill, path);
+                return bounds;
+            }
+        }
+
+        private sealed class DarkGridScrollBar : Control
+        {
+            private readonly DataGridView _grid;
+            private readonly bool _vertical;
+            private bool _dragging;
+            private int _dragStart;
+            private int _valueStart;
+
+            public DarkGridScrollBar(DataGridView grid, bool vertical)
+            {
+                _grid = grid;
+                _vertical = vertical;
+                Margin = Padding.Empty;
+                BackColor = Canvas;
+                Cursor = vertical ? Cursors.SizeNS : Cursors.SizeWE;
+                SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint
+                    | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+                _grid.Scroll += (sender, args) => Invalidate();
+                _grid.Resize += (sender, args) => Invalidate();
+                _grid.ColumnWidthChanged += (sender, args) => Invalidate();
+                _grid.ColumnDisplayIndexChanged += (sender, args) => Invalidate();
+                _grid.RowsAdded += (sender, args) => Invalidate();
+                _grid.RowsRemoved += (sender, args) => Invalidate();
+                _grid.DataBindingComplete += (sender, args) => Invalidate();
+            }
+
+            private int Maximum
+            {
+                get
+                {
+                    if (_vertical)
+                    {
+                        if (_grid.Rows.Count == 0) return 0;
+                        var displayed = Math.Max(1, _grid.DisplayedRowCount(false));
+                        return Math.Max(0, _grid.Rows.Count - displayed);
+                    }
+                    var total = _grid.Columns.Cast<DataGridViewColumn>().Where(column => column.Visible).Sum(column => column.Width);
+                    return Math.Max(0, total - Math.Max(1, _grid.DisplayRectangle.Width));
+                }
+            }
+
+            private int Value
+            {
+                get
+                {
+                    if (_vertical)
+                        return _grid.Rows.Count == 0 || _grid.FirstDisplayedScrollingRowIndex < 0
+                            ? 0 : Math.Min(Maximum, _grid.FirstDisplayedScrollingRowIndex);
+                    return Math.Min(Maximum, Math.Max(0, _grid.HorizontalScrollingOffset));
+                }
+                set
+                {
+                    var next = Math.Max(0, Math.Min(Maximum, value));
+                    try
+                    {
+                        if (_vertical)
+                        {
+                            if (_grid.Rows.Count > 0 && next < _grid.Rows.Count)
+                                _grid.FirstDisplayedScrollingRowIndex = next;
+                        }
+                        else _grid.HorizontalScrollingOffset = next;
+                    }
+                    catch (InvalidOperationException) { }
+                    Invalidate();
+                }
+            }
+
+            private System.Drawing.Rectangle ThumbBounds()
+            {
+                var maximum = Maximum;
+                var length = _vertical ? Height : Width;
+                var thickness = _vertical ? Width : Height;
+                if (maximum <= 0 || length <= 0 || thickness <= 0) return System.Drawing.Rectangle.Empty;
+                var viewport = _vertical ? Math.Max(1, _grid.DisplayedRowCount(false)) : Math.Max(1, _grid.DisplayRectangle.Width);
+                var content = _vertical ? Math.Max(1, _grid.Rows.Count) : viewport + maximum;
+                var thumbLength = Math.Max(24, Math.Min(length, (int)Math.Round(length * viewport / (double)content)));
+                var travel = Math.Max(1, length - thumbLength);
+                var position = (int)Math.Round(travel * Value / (double)maximum);
+                return _vertical
+                    ? new System.Drawing.Rectangle(3, position, Math.Max(1, thickness - 6), thumbLength)
+                    : new System.Drawing.Rectangle(position, 3, thumbLength, Math.Max(1, thickness - 6));
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                e.Graphics.Clear(Canvas);
+                var thumb = ThumbBounds();
+                if (thumb.IsEmpty) return;
+                e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                using (var path = RoundedRectangle(thumb, Math.Max(2, Math.Min(thumb.Width, thumb.Height) / 2)))
+                using (var fill = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(91, 119, 140)))
+                    e.Graphics.FillPath(fill, path);
+            }
+
+            protected override void OnMouseDown(MouseEventArgs e)
+            {
+                base.OnMouseDown(e);
+                if (e.Button != MouseButtons.Left || Maximum <= 0) return;
+                var thumb = ThumbBounds();
+                var coordinate = _vertical ? e.Y : e.X;
+                if (thumb.Contains(e.Location))
+                {
+                    _dragging = true;
+                    _dragStart = coordinate;
+                    _valueStart = Value;
+                    Capture = true;
+                    return;
+                }
+                var before = _vertical ? coordinate < thumb.Top : coordinate < thumb.Left;
+                var page = _vertical ? Math.Max(1, _grid.DisplayedRowCount(false) - 1) : Math.Max(40, _grid.DisplayRectangle.Width - 40);
+                Value += before ? -page : page;
+            }
+
+            protected override void OnMouseMove(MouseEventArgs e)
+            {
+                base.OnMouseMove(e);
+                if (!_dragging || Maximum <= 0) return;
+                var thumb = ThumbBounds();
+                var length = _vertical ? Height : Width;
+                var thumbLength = _vertical ? thumb.Height : thumb.Width;
+                var travel = Math.Max(1, length - thumbLength);
+                var coordinate = _vertical ? e.Y : e.X;
+                Value = _valueStart + (int)Math.Round((coordinate - _dragStart) * Maximum / (double)travel);
+            }
+
+            protected override void OnMouseUp(MouseEventArgs e)
+            {
+                _dragging = false;
+                Capture = false;
+                base.OnMouseUp(e);
+            }
+        }
 
         private sealed class BufferedDataGridView : DataGridView
         {
@@ -1619,6 +2386,113 @@ namespace BatchPdfPublisher.Views
             {
                 graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
                 graphics.DrawPath(pen, path);
+            }
+        }
+
+        private sealed class DwgSheetPreviewPanel : BufferedPanel
+        {
+            private SheetItem _sheet;
+            private System.Drawing.Bitmap _thumbnail;
+            private string _thumbnailPath;
+
+            public DwgSheetPreviewPanel()
+            {
+                BackColor = System.Drawing.Color.FromArgb(10, 18, 25);
+                BorderStyle = BorderStyle.FixedSingle;
+            }
+
+            public void ShowSheet(SheetItem sheet)
+            {
+                _sheet = sheet;
+                var sourcePath = sheet == null ? string.Empty : sheet.SourceFile;
+                if (!string.Equals(sourcePath, _thumbnailPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (_thumbnail != null) _thumbnail.Dispose();
+                    _thumbnail = LoadThumbnail(sourcePath);
+                    _thumbnailPath = sourcePath;
+                }
+                Invalidate();
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                base.OnPaint(e);
+                e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                e.Graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                var available = new System.Drawing.Rectangle(14, 14, Math.Max(1, Width - 28), Math.Max(1, Height - 28));
+                if (_sheet == null)
+                {
+                    TextRenderer.DrawText(e.Graphics, "选择图纸后显示 DWG 缩略图", Font, available, TextSecondary,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
+                    return;
+                }
+
+                var drawingWidth = _sheet.MaxX - _sheet.MinX;
+                var drawingHeight = _sheet.MaxY - _sheet.MinY;
+                var aspect = drawingWidth > 0 && drawingHeight > 0
+                    ? drawingWidth / drawingHeight
+                    : string.Equals(_sheet.PaperOrientation, "纵向", StringComparison.Ordinal) ? 0.707 : 1.414;
+                aspect = Math.Max(0.45, Math.Min(3.5, aspect));
+                var page = FitRectangle(available, aspect);
+                using (var pageBrush = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(245, 247, 249))) e.Graphics.FillRectangle(pageBrush, page);
+                using (var borderPen = new System.Drawing.Pen(System.Drawing.Color.FromArgb(122, 139, 151), 1F)) e.Graphics.DrawRectangle(borderPen, page);
+
+                var imageBounds = System.Drawing.Rectangle.Inflate(page, -10, -10);
+                if (_thumbnail != null && imageBounds.Width > 0 && imageBounds.Height > 0)
+                {
+                    var thumbnailAspect = _thumbnail.Width / (double)Math.Max(1, _thumbnail.Height);
+                    var target = FitRectangle(imageBounds, thumbnailAspect);
+                    e.Graphics.DrawImage(_thumbnail, target);
+                }
+                else
+                {
+                    TextRenderer.DrawText(e.Graphics, "DWG 没有保存缩略图\r\n可在 CAD 中查看图框范围", Font, imageBounds,
+                        System.Drawing.Color.FromArgb(105, 119, 130), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
+                }
+            }
+
+            protected override void Dispose(bool disposing)
+            {
+                if (disposing && _thumbnail != null) { _thumbnail.Dispose(); _thumbnail = null; }
+                base.Dispose(disposing);
+            }
+
+            private static System.Drawing.Rectangle FitRectangle(System.Drawing.Rectangle bounds, double aspect)
+            {
+                var width = bounds.Width;
+                var height = (int)Math.Round(width / Math.Max(0.01, aspect));
+                if (height > bounds.Height)
+                {
+                    height = bounds.Height;
+                    width = (int)Math.Round(height * aspect);
+                }
+                return new System.Drawing.Rectangle(
+                    bounds.Left + Math.Max(0, (bounds.Width - width) / 2),
+                    bounds.Top + Math.Max(0, (bounds.Height - height) / 2),
+                    Math.Max(1, width),
+                    Math.Max(1, height));
+            }
+
+            private static System.Drawing.Bitmap LoadThumbnail(string sourcePath)
+            {
+                if (string.IsNullOrWhiteSpace(sourcePath) || !File.Exists(sourcePath)) return null;
+                try
+                {
+                    var active = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
+                    if (active != null && string.Equals(Path.GetFullPath(active.Name), Path.GetFullPath(sourcePath), StringComparison.OrdinalIgnoreCase))
+                    {
+                        var activeThumbnail = active.Database.ThumbnailBitmap;
+                        return activeThumbnail == null ? null : new System.Drawing.Bitmap(activeThumbnail);
+                    }
+                    using (var database = new Autodesk.AutoCAD.DatabaseServices.Database(false, true))
+                    {
+                        database.ReadDwgFile(sourcePath, Autodesk.AutoCAD.DatabaseServices.FileOpenMode.OpenForReadAndAllShare, true, string.Empty);
+                        database.CloseInput(true);
+                        var thumbnail = database.ThumbnailBitmap;
+                        return thumbnail == null ? null : new System.Drawing.Bitmap(thumbnail);
+                    }
+                }
+                catch { return null; }
             }
         }
 
