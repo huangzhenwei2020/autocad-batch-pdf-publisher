@@ -134,19 +134,24 @@ namespace BatchPdfPublisher.Services
             var source = useLocalCopy ? item.LocalCopyPath : item.RemoteCopyPath;
             if (string.IsNullOrWhiteSpace(source) || !File.Exists(source))
                 throw new IOException(useLocalCopy ? "本机冲突副本不存在。" : "共享冲突副本不存在。");
-            if (string.IsNullOrEmpty(_mirrorRoot) || !IsWithin(source, Path.Combine(_mirrorRoot, "冲突文件")))
-                throw new IOException("冲突副本不在当前同步范围内。");
             string localPath;
             if (!TryResolveLocal(item.LogicalPath, out localPath)) throw new IOException("找不到冲突文件的本机映射。");
-            if (CloudSyncPendingFileService.ShouldDefer(localPath)) throw new IOException("该 DWG 正在 AutoCAD 中打开，请关闭图纸后再解决冲突。");
             var remotePath = ResolveRemote(item.LogicalPath);
+            var conflictRoot = string.IsNullOrEmpty(_mirrorRoot) ? null : Path.Combine(_mirrorRoot, "冲突文件");
+            var expected = useLocalCopy ? localPath : remotePath;
+            var legacyConflictCopy = !string.IsNullOrEmpty(conflictRoot) && IsWithin(source, conflictRoot);
+            if (!legacyConflictCopy && !PathsEqual(source, expected))
+                throw new IOException("冲突副本不在当前同步范围内。");
+            if (!legacyConflictCopy) EnsureConflictHeadsUnchanged(item.LogicalPath);
+            if (CloudSyncPendingFileService.ShouldDefer(localPath)) throw new IOException("该 DWG 正在 AutoCAD 中打开，请关闭图纸后再解决冲突。");
             BackupBeforeAction(localPath, item.LogicalPath, "冲突解决前-本机");
             BackupBeforeAction(remotePath, item.LogicalPath, "冲突解决前-共享");
             var hash = LocalFolderSyncEngine.ComputeHash(source);
             CopyAtomically(source, localPath, hash);
             CopyAtomically(source, remotePath, hash);
-            ImmutableCloudJournal.RecordResolution(_mirrorRoot, item.LogicalPath, hash, source);
-            MarkResolved(item.LocalCopyPath); MarkResolved(item.RemoteCopyPath);
+            ImmutableCloudJournal.RecordResolution(_mirrorRoot, item.LogicalPath, hash, legacyConflictCopy ? source : null);
+            MarkAllConflictCopiesResolved(conflictRoot, item.LogicalPath);
+            MarkStateResolved(item.LogicalPath, hash);
             CloudSyncCoordinator.RequestSynchronization(false);
         }
 
@@ -196,18 +201,19 @@ namespace BatchPdfPublisher.Services
         {
             if (string.IsNullOrWhiteSpace(_mirrorRoot)) return;
             var root = Path.Combine(_mirrorRoot, "冲突文件");
-            if (!Directory.Exists(root)) return;
-            var files = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
-                .Where(path => path.EndsWith(".local-conflict", StringComparison.OrdinalIgnoreCase) ||
-                               path.EndsWith(".remote-conflict", StringComparison.OrdinalIgnoreCase)).ToList();
-            foreach (var group in files.GroupBy(path => ConflictKey(root, path), StringComparer.OrdinalIgnoreCase))
+            var files = Directory.Exists(root)
+                ? Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+                    .Where(path => path.EndsWith(".local-conflict", StringComparison.OrdinalIgnoreCase) ||
+                                   path.EndsWith(".remote-conflict", StringComparison.OrdinalIgnoreCase)).ToList()
+                : new List<string>();
+            foreach (var group in files.GroupBy(path => ConflictLogicalPath(root, path), StringComparer.OrdinalIgnoreCase))
             {
-                var local = group.FirstOrDefault(path => path.EndsWith(".local-conflict", StringComparison.OrdinalIgnoreCase));
-                var remote = group.FirstOrDefault(path => path.EndsWith(".remote-conflict", StringComparison.OrdinalIgnoreCase));
+                var local = group.Where(path => path.EndsWith(".local-conflict", StringComparison.OrdinalIgnoreCase))
+                    .OrderByDescending(SafeWriteTime).FirstOrDefault();
+                var remote = group.Where(path => path.EndsWith(".remote-conflict", StringComparison.OrdinalIgnoreCase))
+                    .OrderByDescending(SafeWriteTime).FirstOrDefault();
                 var sample = local ?? remote;
-                var relative = group.Key;
-                var slash = relative.IndexOf('/');
-                var logical = slash >= 0 ? relative.Substring(slash + 1) : relative;
+                var logical = group.Key;
                 target.Add(new CloudSyncConflictItem
                 {
                     LogicalPath = logical,
@@ -218,6 +224,36 @@ namespace BatchPdfPublisher.Services
                     Purpose = PurposeFor(logical),
                     DisplayPath = DisplayPathFor(logical)
                 });
+            }
+
+            // Versioned providers keep conflict branches in immutable commit archives. Those
+            // branches are not always materialized as legacy *.local/remote-conflict files, so
+            // also expose unresolved state using the two current, hash-verified working copies.
+            // This keeps the Conflict tab actionable instead of reporting a conflict that the
+            // user cannot select and resolve.
+            var listed = new HashSet<string>(target.Select(item => item.LogicalPath), StringComparer.OrdinalIgnoreCase);
+            var state = new CloudSyncSettingsStore().LoadState();
+            foreach (var fileState in state.Files ?? new List<CloudSyncFileState>())
+            {
+                if (fileState == null || string.IsNullOrWhiteSpace(fileState.LogicalPath) ||
+                    string.IsNullOrWhiteSpace(fileState.ConflictHeads) || IsSynchronized(fileState) ||
+                    listed.Contains(fileState.LogicalPath)) continue;
+                string localPath;
+                if (!TryResolveLocal(fileState.LogicalPath, out localPath)) continue;
+                var remotePath = ResolveRemote(fileState.LogicalPath);
+                if (!File.Exists(localPath) && !File.Exists(remotePath)) continue;
+                var modified = new[] { SafeWriteTime(localPath), SafeWriteTime(remotePath) }.Max();
+                target.Add(new CloudSyncConflictItem
+                {
+                    LogicalPath = fileState.LogicalPath,
+                    LocalCopyPath = File.Exists(localPath) ? localPath : null,
+                    RemoteCopyPath = File.Exists(remotePath) ? remotePath : null,
+                    ModifiedAt = modified,
+                    Category = CategoryFor(fileState.LogicalPath),
+                    Purpose = PurposeFor(fileState.LogicalPath),
+                    DisplayPath = DisplayPathFor(fileState.LogicalPath)
+                });
+                listed.Add(fileState.LogicalPath);
             }
         }
 
@@ -407,6 +443,54 @@ namespace BatchPdfPublisher.Services
             return CloudSyncSource.NormalizeLogicalPath(relative);
         }
 
+        private static string ConflictLogicalPath(string root, string path)
+        {
+            var key = ConflictKey(root, path);
+            var slash = key.IndexOf('/');
+            return slash >= 0 ? key.Substring(slash + 1) : key;
+        }
+
+        private static void MarkAllConflictCopiesResolved(string conflictRoot, string logicalPath)
+        {
+            if (string.IsNullOrWhiteSpace(conflictRoot) || !Directory.Exists(conflictRoot)) return;
+            var matches = Directory.EnumerateFiles(conflictRoot, "*", SearchOption.AllDirectories)
+                .Where(path => (path.EndsWith(".local-conflict", StringComparison.OrdinalIgnoreCase) ||
+                                path.EndsWith(".remote-conflict", StringComparison.OrdinalIgnoreCase)) &&
+                               string.Equals(ConflictLogicalPath(conflictRoot, path), logicalPath, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            foreach (var path in matches) MarkResolved(path);
+        }
+
+        private static void MarkStateResolved(string logicalPath, string hash)
+        {
+            var store = new CloudSyncSettingsStore();
+            var state = store.LoadState();
+            var changed = false;
+            foreach (var item in state.Files ?? new List<CloudSyncFileState>())
+            {
+                if (item == null || !string.Equals(item.LogicalPath, logicalPath, StringComparison.OrdinalIgnoreCase)) continue;
+                item.BaseHash = hash;
+                item.LocalHash = hash;
+                item.RemoteHash = hash;
+                item.ConflictHeads = null;
+                item.LastSynchronizedAtUtc = DateTime.UtcNow.ToString("O");
+                changed = true;
+            }
+            if (changed) store.SaveState(state);
+        }
+
+        private void EnsureConflictHeadsUnchanged(string logicalPath)
+        {
+            var state = new CloudSyncSettingsStore().LoadState();
+            var item = (state.Files ?? new List<CloudSyncFileState>()).LastOrDefault(candidate => candidate != null &&
+                string.Equals(candidate.LogicalPath, logicalPath, StringComparison.OrdinalIgnoreCase));
+            var current = ImmutableCloudJournal.HeadStamp(_mirrorRoot, logicalPath);
+            if (string.IsNullOrWhiteSpace(current)) return;
+            if (item == null || string.IsNullOrWhiteSpace(item.ConflictHeads) ||
+                !string.Equals(item.ConflictHeads, current, StringComparison.Ordinal))
+                throw new IOException("云端冲突分支已经更新，请先点击“核对并同步”，再重新选择版本。");
+        }
+
         private static void MarkResolved(string path)
         {
             if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return;
@@ -419,6 +503,25 @@ namespace BatchPdfPublisher.Services
             var full = Path.GetFullPath(path);
             var prefix = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
             return full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool PathsEqual(string left, string right)
+        {
+            if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right)) return false;
+            return string.Equals(Path.GetFullPath(left), Path.GetFullPath(right), StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsSynchronized(CloudSyncFileState state)
+        {
+            return state != null && !string.IsNullOrWhiteSpace(state.BaseHash) &&
+                   string.Equals(state.BaseHash, state.LocalHash, StringComparison.OrdinalIgnoreCase) &&
+                   string.Equals(state.BaseHash, state.RemoteHash, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static DateTime SafeWriteTime(string path)
+        {
+            try { return !string.IsNullOrWhiteSpace(path) && File.Exists(path) ? File.GetLastWriteTime(path) : DateTime.MinValue; }
+            catch { return DateTime.MinValue; }
         }
 
         private static long SafeLength(string path)

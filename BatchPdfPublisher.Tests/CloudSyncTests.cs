@@ -25,6 +25,8 @@ internal static class CloudSyncTests
         Run("UsesNewerLocalFile", UsesNewerLocalFile);
         Run("UsesNewerRemoteFile", UsesNewerRemoteFile);
         Run("ReportsCloudProjectDownloadWhenRemoteIsNewer", ReportsCloudProjectDownloadWhenRemoteIsNewer);
+        Run("ReportsSynchronizedProjectFromHashesDespiteCacheTimestamp", ReportsSynchronizedProjectFromHashesDespiteCacheTimestamp);
+        Run("ReportsCloudProjectConflict", ReportsCloudProjectConflict);
         Run("DoesNotClaimUploadBeforeCloudInventoryIsKnown", DoesNotClaimUploadBeforeCloudInventoryIsKnown);
         Run("DoesNotRetryConfigurationErrors", DoesNotRetryConfigurationErrors);
         Run("IgnoresWatcherEventsCreatedBySynchronization", IgnoresWatcherEventsCreatedBySynchronization);
@@ -46,6 +48,7 @@ internal static class CloudSyncTests
         Run("ListsWorkFilesAndTheirHistory", ListsWorkFilesAndTheirHistory);
         Run("RestoresProjectHistoryIntoUnifiedWorkspace", RestoresProjectHistoryIntoUnifiedWorkspace);
         Run("ResolvesConflictUsingLocalCopy", ResolvesConflictUsingLocalCopy);
+        Run("ListsAndResolvesVersionedConflictWithoutLegacyCopies", ListsAndResolvesVersionedConflictWithoutLegacyCopies);
         Run("CreatesProviderWithoutChangingLocalMode", CreatesProviderWithoutChangingLocalMode);
         Run("NewInstallationDefaultsToBaidu", NewInstallationDefaultsToBaidu);
         Run("EmptyLocalFolderMigratesToBaidu", EmptyLocalFolderMigratesToBaidu);
@@ -223,6 +226,55 @@ internal static class CloudSyncTests
                 new string[0], new CloudSyncState());
             Equal(CloudProjectSyncDirection.Checking, status.Direction);
             Equal("等待核对云端", status.Text);
+        }
+        finally { try { Directory.Delete(root, true); } catch { } }
+    }
+
+    private static void ReportsSynchronizedProjectFromHashesDespiteCacheTimestamp()
+    {
+        var root = NewRoot();
+        try
+        {
+            var local = Path.Combine(root, "local");
+            var provider = Path.Combine(root, "provider");
+            var cache = Path.Combine(provider, "万落建筑云同步", "项目文件", "sample");
+            Directory.CreateDirectory(local); Directory.CreateDirectory(cache);
+            var localFile = Path.Combine(local, "drawing.dwg");
+            var remoteFile = Path.Combine(cache, "drawing.dwg");
+            File.WriteAllText(localFile, "same"); File.SetLastWriteTimeUtc(localFile, DateTime.UtcNow.AddDays(-2));
+            File.WriteAllText(remoteFile, "same"); File.SetLastWriteTimeUtc(remoteFile, DateTime.UtcNow);
+            var hash = LocalFolderSyncEngine.ComputeHash(localFile);
+            var state = new CloudSyncState();
+            state.Files.Add(new CloudSyncFileState { LogicalPath = "项目文件/sample/drawing.dwg", BaseHash = hash, LocalHash = hash, RemoteHash = hash });
+            var status = CloudProjectSyncStatusService.Evaluate("sample", local, provider, true, true,
+                new[] { "项目文件/sample/drawing.dwg" }, state);
+            Equal(CloudProjectSyncDirection.Synchronized, status.Direction);
+            Equal("已是最新", status.Text);
+        }
+        finally { try { Directory.Delete(root, true); } catch { } }
+    }
+
+    private static void ReportsCloudProjectConflict()
+    {
+        var root = NewRoot();
+        try
+        {
+            var local = Path.Combine(root, "local");
+            var provider = Path.Combine(root, "provider");
+            var cache = Path.Combine(provider, "万落建筑云同步", "项目文件", "sample");
+            Directory.CreateDirectory(local); Directory.CreateDirectory(cache);
+            File.WriteAllText(Path.Combine(local, "drawing.dwg"), "local");
+            File.WriteAllText(Path.Combine(cache, "drawing.dwg"), "cloud");
+            var state = new CloudSyncState();
+            state.Files.Add(new CloudSyncFileState
+            {
+                LogicalPath = "项目文件/sample/drawing.dwg",
+                BaseHash = "base", LocalHash = "local", RemoteHash = "cloud", ConflictHeads = "heads"
+            });
+            var status = CloudProjectSyncStatusService.Evaluate("sample", local, provider, true, true,
+                new[] { "项目文件/sample/drawing.dwg" }, state);
+            Equal(CloudProjectSyncDirection.Conflict, status.Direction);
+            Equal("存在冲突，请到“冲突”页处理", status.Text);
         }
         finally { try { Directory.Delete(root, true); } catch { } }
     }
@@ -534,12 +586,49 @@ internal static class CloudSyncTests
             File.WriteAllText(localFile, "base"); engine.Synchronize(settings, catalog);
             File.WriteAllText(localFile, "local-choice"); File.WriteAllText(remoteFile, "remote-choice");
             Equal(1, engine.Synchronize(settings, catalog).Conflicts);
+            var mirrorRoot = Directory.GetParent(Directory.GetParent(remoteFile).FullName).FullName;
+            var conflictRoot = Path.Combine(mirrorRoot, "冲突文件");
+            var existingCopies = Directory.GetFiles(conflictRoot, "*", SearchOption.AllDirectories)
+                .Where(path => path.EndsWith(".local-conflict", StringComparison.OrdinalIgnoreCase) ||
+                               path.EndsWith(".remote-conflict", StringComparison.OrdinalIgnoreCase)).ToArray();
+            var duplicate = Path.Combine(conflictRoot, "20990101-000000-000-OTHER", "通用配置");
+            Directory.CreateDirectory(duplicate);
+            foreach (var copy in existingCopies) File.Copy(copy, Path.Combine(duplicate, Path.GetFileName(copy)));
             var center = new CloudSyncCenterService();
             var conflict = center.Load().Conflicts.Single();
             center.ResolveConflict(conflict, true);
             Equal("local-choice", File.ReadAllText(localFile));
             Equal("local-choice", File.ReadAllText(remoteFile));
             Equal(0, center.Load().Conflicts.Count);
+            Equal(0, Directory.GetFiles(conflictRoot, "*", SearchOption.AllDirectories).Count(path =>
+                path.EndsWith(".local-conflict", StringComparison.OrdinalIgnoreCase) ||
+                path.EndsWith(".remote-conflict", StringComparison.OrdinalIgnoreCase)));
+        });
+    }
+
+    private static void ListsAndResolvesVersionedConflictWithoutLegacyCopies()
+    {
+        WithDefaultWorkspace((root, settings, engine, catalog, localFile, remoteFile) =>
+        {
+            File.WriteAllText(localFile, "base"); engine.Synchronize(settings, catalog);
+            File.WriteAllText(localFile, "local-choice");
+            File.WriteAllText(remoteFile, "remote-choice");
+            var store = new CloudSyncSettingsStore();
+            var state = store.LoadState();
+            var fileState = state.Files.Single(item => string.Equals(item.LogicalPath, "通用配置/settings.json", StringComparison.OrdinalIgnoreCase));
+            fileState.LocalHash = LocalFolderSyncEngine.ComputeHash(localFile);
+            fileState.RemoteHash = LocalFolderSyncEngine.ComputeHash(remoteFile);
+            fileState.ConflictHeads = "immutable-heads";
+            store.SaveState(state);
+
+            var center = new CloudSyncCenterService();
+            var conflict = center.Load().Conflicts.Single();
+            Equal(Path.GetFullPath(localFile), Path.GetFullPath(conflict.LocalCopyPath));
+            Equal(Path.GetFullPath(remoteFile), Path.GetFullPath(conflict.RemoteCopyPath));
+            center.ResolveConflict(conflict, false);
+            Equal("remote-choice", File.ReadAllText(localFile));
+            Equal("remote-choice", File.ReadAllText(remoteFile));
+            True(File.Exists(localFile) && File.Exists(remoteFile), "formal conflict files must not be renamed as resolved copies");
         });
     }
 

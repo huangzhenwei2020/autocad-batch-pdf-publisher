@@ -225,6 +225,7 @@ namespace BatchPdfPublisher.Views
                 else if (!unified || syncStatus.Direction == CloudProjectSyncDirection.Download ||
                          syncStatus.Direction == CloudProjectSyncDirection.Upload ||
                          syncStatus.Direction == CloudProjectSyncDirection.Bidirectional ||
+                         syncStatus.Direction == CloudProjectSyncDirection.Conflict ||
                          syncStatus.Direction == CloudProjectSyncDirection.Checking) item.ForeColor = Color.DarkOrange;
                 _projects.Items.Add(item);
             }
@@ -279,7 +280,18 @@ namespace BatchPdfPublisher.Views
                     _syncProgress.Style = ProgressBarStyle.Continuous;
                     _syncProgress.Value = failure == null ? 100 : 0;
                     if (failure != null) { _summary.Text = "同步失败：" + failure.Message; _summary.ForeColor = Color.Firebrick; }
-                    else if (result != null) { _summary.Text = "同步完成：" + result.Summary; _summary.ForeColor = result.Errors > 0 || result.Warnings > 0 ? Color.DarkOrange : Color.FromArgb(34, 120, 72); ReloadProjects(); }
+                    else if (result != null)
+                    {
+                        var guidance = result.Conflicts > 0
+                            ? "；有 " + result.Conflicts + " 项因两端都修改而未覆盖，请到“冲突”页选择版本"
+                            : result.Pending > 0
+                                ? "；有 " + result.Pending + " 项因 CAD 正在使用而延后应用"
+                                : string.Empty;
+                        _summary.Text = "同步完成：" + result.Summary + guidance;
+                        _summary.ForeColor = result.Errors > 0 || result.Warnings > 0 || result.Conflicts > 0 || result.Pending > 0
+                            ? Color.DarkOrange : Color.FromArgb(34, 120, 72);
+                        ReloadProjects();
+                    }
                 });
             }
             catch { }

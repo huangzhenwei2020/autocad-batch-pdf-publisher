@@ -53,6 +53,7 @@ namespace BatchPdfPublisher.Services
             var upload = false;
             var download = false;
             var uncertain = false;
+            var conflict = false;
             foreach (var logical in new HashSet<string>(local.Keys.Concat(remote), StringComparer.OrdinalIgnoreCase))
             {
                 string localPath;
@@ -61,6 +62,18 @@ namespace BatchPdfPublisher.Services
                 if (localExists && !remoteExists) { upload = true; continue; }
                 if (!localExists && remoteExists) { download = true; continue; }
                 if (!localExists) continue;
+
+                CloudSyncFileState fileState;
+                synchronized.TryGetValue(logical, out fileState);
+                // The transfer engine compares hashes and is authoritative. Timestamps in the
+                // provider cache describe the download/copy time and can differ even when both
+                // copies are byte-for-byte synchronized.
+                if (IsSynchronized(fileState)) continue;
+                if (fileState != null && !string.IsNullOrWhiteSpace(fileState.ConflictHeads))
+                {
+                    conflict = true;
+                    continue;
+                }
 
                 string cachePath;
                 if (!cached.TryGetValue(logical, out cachePath) || !File.Exists(cachePath))
@@ -75,14 +88,10 @@ namespace BatchPdfPublisher.Services
                 if (delta > TimestampTolerance) upload = true;
                 else if (delta < -TimestampTolerance) download = true;
                 else if (localInfo.Length != remoteInfo.Length) uncertain = true;
-                else
-                {
-                    CloudSyncFileState fileState;
-                    if (!synchronized.TryGetValue(logical, out fileState) || !IsSynchronized(fileState))
-                        uncertain = true; // Equal metadata is not proof of equal content; the engine will hash it.
-                }
+                else uncertain = true; // Equal metadata is not proof of equal content; the engine will hash it.
             }
 
+            if (conflict) return Status(CloudProjectSyncDirection.Conflict, "存在冲突，请到“冲突”页处理");
             if (upload && download) return Status(CloudProjectSyncDirection.Bidirectional, "双向有更新，按各文件最新同步");
             if (download && !upload) return Status(CloudProjectSyncDirection.Download, "云端较新，等待下载");
             if (upload && !download) return Status(CloudProjectSyncDirection.Upload, "本机较新，等待上传");
