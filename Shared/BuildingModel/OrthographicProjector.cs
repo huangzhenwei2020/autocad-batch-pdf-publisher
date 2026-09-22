@@ -69,11 +69,12 @@ namespace BatchPdfPublisher.BuildingModel
 
             var rects = new List<Rect>();
             var cutRects = new List<Rect>();
+            var extraLines = new List<ViewLine>();
 
             foreach (var wall in model.Walls ?? new List<WallModel>())
             {
                 if (wall == null || !Include(includeAll, view.StoreyIds, wall.StoreyId)) continue;
-                AddWall(model, wall, frame, isSection, cutProj, view.ViewDepth, rects, cutRects, document.Warnings);
+                AddWall(model, wall, frame, isSection, cutProj, view.ViewDepth, rects, cutRects, extraLines, document.Warnings);
             }
             foreach (var column in model.Columns ?? new List<ColumnModel>())
             {
@@ -93,7 +94,8 @@ namespace BatchPdfPublisher.BuildingModel
                 EmitRectEdges(rect, nearer, document.Lines);
                 nearer.Add(rect);
             }
-            foreach (var cut in cutRects) document.Hatches.Add(CreateHatch(cut));
+            foreach (var cut in cutRects) document.Hatches.Add(CreateHatch(cut, view));
+            document.Lines.AddRange(extraLines);      // 剖面上的窗台线/窗顶线（在剖切面之内，不必再遮挡）
 
             AddLevelAnnotations(model, view, document);
             AddTitle(document, view);
@@ -179,7 +181,7 @@ namespace BatchPdfPublisher.BuildingModel
         // ───────────────────────────── 墙 ─────────────────────────────
 
         private static void AddWall(BuildingModelDocument model, WallModel wall, Frame frame, bool isSection,
-            double cutProj, double viewDepth, List<Rect> rects, List<Rect> cutRects, List<string> warnings)
+            double cutProj, double viewDepth, List<Rect> rects, List<Rect> cutRects, List<ViewLine> extraLines, List<string> warnings)
         {
             var dx = wall.X2 - wall.X1;
             var dy = wall.Y2 - wall.Y1;
@@ -216,11 +218,37 @@ namespace BatchPdfPublisher.BuildingModel
                     double[] ps, us;
                     ToPlane(corners, frame, out ps, out us);
                     double u0, u1;
-                    if (TryClipAtP(ps, us, cutProj, out u0, out u1))
+                    if (!TryClipAtP(ps, us, cutProj, out u0, out u1)) return;
+
+                    // 剖切面穿过这道墙时，墙上的洞口会把断面"断开"：
+                    // 断面上应看到窗台线与窗顶线，中间是洞口（不能一律画成实心墙）。
+                    var bands = new List<Interval> { new Interval(zBase, zTop) };
+                    var axisParameter = AxisParameterAtCut(wall, frame, cutProj);
+                    if (axisParameter.HasValue)
                     {
+                        foreach (var opening in model.Openings ?? new List<OpeningModel>())
+                        {
+                            if (opening == null || !string.Equals(opening.HostWallId, wall.Id, StringComparison.OrdinalIgnoreCase)) continue;
+                            var halfWidth = opening.Width / 2d;
+                            if (axisParameter.Value < opening.Offset - halfWidth - Epsilon
+                                || axisParameter.Value > opening.Offset + halfWidth + Epsilon) continue;
+                            var bottom = Math.Max(zBase + opening.Sill, zBase);
+                            var top = Math.Min(bottom + opening.Height, zTop);
+                            if (top - bottom < 0.5d) continue;
+                            bands = SubtractIntervals(bands, bottom, top);
+                            var label = string.IsNullOrWhiteSpace(opening.Code) ? opening.Kind : opening.Code;
+                            extraLines.Add(new ViewLine { Layer = ViewLayers.Opening, X1 = u0, Y1 = bottom, X2 = u1, Y2 = bottom });
+                            extraLines.Add(new ViewLine { Layer = ViewLayers.Opening, X1 = u0, Y1 = top, X2 = u1, Y2 = top });
+                            if (!string.IsNullOrWhiteSpace(label) && !warnings.Contains(SectionOpeningWarning))
+                                warnings.Add(SectionOpeningWarning);
+                        }
+                    }
+                    foreach (var band in bands)
+                    {
+                        if (band.B - band.A < 0.5d) continue;
                         var cut = new Rect
                         {
-                            U0 = u0, U1 = u1, Z0 = zBase, Z1 = zTop,
+                            U0 = u0, U1 = u1, Z0 = band.A, Z1 = band.B,
                             Depth = double.MaxValue - 1d,     // 剖切面最靠前
                             Layer = ViewLayers.Cut,
                             IsCut = true
@@ -279,6 +307,26 @@ namespace BatchPdfPublisher.BuildingModel
         }
 
         private const string ObliqueWarning = "斜墙按投影包围盒近似（P0 只保证正交墙的立面轮廓精确）。";
+        private const string SectionOpeningWarning = "剖面里的门窗洞按参数断开显示（P0 只画窗台/窗顶线，不做窗框分格）。";
+
+        /// <summary>
+        /// 剖切面与墙轴线的交点，用"沿墙轴线到起点的距离"表示。
+        /// 注意用**视线方向**投影求解（墙轴平行于视线时才有唯一解）；
+        /// 墙轴与视线垂直（墙贴着剖切面）时返回 null——那种情形不做洞口断开。
+        /// </summary>
+        private static double? AxisParameterAtCut(WallModel wall, Frame frame, double cutProj)
+        {
+            var dx = wall.X2 - wall.X1;
+            var dy = wall.Y2 - wall.Y1;
+            var length = Math.Sqrt(dx * dx + dy * dy);
+            if (length < 1d) return null;
+            var ux = dx / length;
+            var uy = dy / length;
+            var denominator = ux * frame.Vx + uy * frame.Vy;      // 轴线在视线方向的投影
+            if (Math.Abs(denominator) < 1e-9d) return null;
+            var start = frame.P(wall.X1, wall.Y1);
+            return (cutProj - start) / denominator;
+        }
 
         // ───────────────────────────── 柱 / 楼板 ─────────────────────────────
 
@@ -420,12 +468,22 @@ namespace BatchPdfPublisher.BuildingModel
             return result;
         }
 
-        private static ViewHatch CreateHatch(Rect rect)
+        /// <summary>
+        /// 剖切填充：默认 45° 细线，间距按出图比例换算成模型尺寸
+        /// （1:50 → 75mm ≈ 图上 1.5mm；1:100 → 150mm ≈ 图上 1.5mm）。
+        /// 实心（SOLID）会把断面盖成一块灰板、又看不出材料，所以不用它。
+        /// 图案与间距将来由材质决定（P5 接制图标准与填充素材）。
+        /// </summary>
+        private static ViewHatch CreateHatch(Rect rect, ViewDefinitionModel view)
         {
+            var scale = Math.Max(1, view.Scale);
             return new ViewHatch
             {
                 Layer = ViewLayers.CutHatch,
-                Pattern = "SOLID",
+                Pattern = "ANSI31",
+                Spacing = Math.Max(30d, scale * 1.5d),
+                Angle = 45d,
+                Scale = 0d,
                 Boundary = new List<PointModel>
                 {
                     new PointModel(rect.U0, rect.Z0),

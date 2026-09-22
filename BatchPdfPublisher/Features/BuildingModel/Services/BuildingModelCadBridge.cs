@@ -56,6 +56,7 @@ namespace BatchPdfPublisher.Services
             var anchor = pointResult.Value;
 
             var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var hatchIds = new List<ObjectId>();
             using (document.LockDocument())
             using (var transaction = document.Database.TransactionManager.StartTransaction())
             {
@@ -97,23 +98,34 @@ namespace BatchPdfPublisher.Services
                     transaction.AddNewlyCreatedDBObject(entity, true);
                     entity.SetDatabaseDefaults(document.Database);
                     ApplyLayer(entity, hatch.Layer);
-                    var pattern = string.IsNullOrWhiteSpace(hatch.Pattern) ? "SOLID" : hatch.Pattern;
-                    try { entity.SetHatchPattern(HatchPatternType.PreDefined, pattern); }
-                    catch { entity.SetHatchPattern(HatchPatternType.PreDefined, "SOLID"); }
-                    entity.PatternScale = hatch.Scale > 0.01d ? hatch.Scale : 1d;
-                    entity.PatternAngle = hatch.Angle;
+                    ApplyHatchPattern(entity, hatch, editor);
                     var loop = new Point2dCollection();
                     foreach (var point in hatch.Boundary) loop.Add(new Point2d(anchor.X + point.X, anchor.Y + point.Y));
                     try
                     {
                         entity.AppendLoop(HatchLoopTypes.External, loop, new DoubleCollection());
                         entity.EvaluateHatch(true);
+                        hatchIds.Add(entity.ObjectId);
                         Bump(counts, hatch.Layer);
                     }
                     catch (Exception exception)
                     {
                         entity.Erase();
                         editor.WriteMessage("\n一处剖切填充失败已跳过：" + exception.Message);
+                    }
+                }
+
+                // 填充压到最底层：否则实心/图案会把断面轮廓线盖住，看着"糊成一团"。
+                if (hatchIds.Count > 0)
+                {
+                    try
+                    {
+                        var order = (DrawOrderTable)transaction.GetObject(space.DrawOrderTableId, OpenMode.ForWrite);
+                        order.MoveToBottom(new ObjectIdCollection(hatchIds.ToArray()));
+                    }
+                    catch (Exception exception)
+                    {
+                        editor.WriteMessage("\n提示：填充置底未成功（不影响出图）：" + exception.Message);
                     }
                 }
                 transaction.Commit();
@@ -290,6 +302,45 @@ namespace BatchPdfPublisher.Services
                 return record.Name;
             }
             catch { return string.Empty; }
+        }
+
+        /// <summary>
+        /// 设置填充图案。
+        /// 优先用"用户定义 45° 细线 + 模型单位间距"——图纸上看起来就是常规的剖面斜线填充，
+        /// 而且间距是我们自己给的毫米值，不依赖图案自身的基准间距；失败则退到预定义图案，最后退到实心。
+        /// </summary>
+        private static void ApplyHatchPattern(Hatch entity, ViewHatch hatch, Editor editor)
+        {
+            var pattern = string.IsNullOrWhiteSpace(hatch.Pattern) ? "ANSI31" : hatch.Pattern;
+            if (hatch.Spacing > 0.01d)
+            {
+                try
+                {
+                    entity.SetHatchPattern(HatchPatternType.UserDefined, pattern);
+                    entity.PatternAngle = hatch.Angle != 0d ? hatch.Angle * Math.PI / 180d : Math.PI / 4d;
+                    entity.PatternSpace = hatch.Spacing;
+                    entity.PatternDouble = false;
+                    entity.PatternScale = 1d;
+                    return;
+                }
+                catch (Exception exception)
+                {
+                    editor.WriteMessage("\n提示：用户定义填充不可用，改用预定义图案：" + exception.Message);
+                }
+            }
+            try
+            {
+                entity.SetHatchPattern(HatchPatternType.PreDefined, pattern);
+                // ANSI31 的基准间距约 0.125 图形单位，按目标间距反算比例
+                entity.PatternScale = hatch.Scale > 0.01d
+                    ? hatch.Scale
+                    : Math.Max(1d, hatch.Spacing > 0.01d ? hatch.Spacing / 0.125d : 1d);
+                entity.PatternAngle = hatch.Angle * Math.PI / 180d;
+            }
+            catch
+            {
+                entity.SetHatchPattern(HatchPatternType.PreDefined, "SOLID");
+            }
         }
 
         private static void EnsureViewLayers(Database database, Transaction transaction)

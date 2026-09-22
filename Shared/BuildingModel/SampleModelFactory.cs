@@ -89,7 +89,9 @@ namespace BatchPdfPublisher.BuildingModel
                 new ViewDefinitionModel
                 {
                     Id = "section-1", Title = "1-1 剖面图", Kind = ViewKind.Section, Scale = 50,
-                    CutAxis = SectionAxis.CutX, CutPosition = 3600d, ViewSign = 1, ViewDepth = 12000d
+                    // 剖在 X = 2200：正好穿过一层南墙的窗（中心 2200、宽 1500），
+                    // 这样样例剖面能看到"洞口处断面断开 + 窗台线/窗顶线"。
+                    CutAxis = SectionAxis.CutX, CutPosition = 2200d, ViewSign = 1, ViewDepth = 12000d
                 }
             };
         }

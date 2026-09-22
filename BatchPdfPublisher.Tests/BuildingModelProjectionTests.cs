@@ -143,14 +143,28 @@ internal static class BuildingModelProjectionTests
         Assert(wallCut > 0, "剖面里没有「240 宽 × 3600 高」的墙断面，实际断面：" + Describe(sizes));
         var slabCut = sizes.Count(s => Math.Abs(s[0] - 5400d) < Tolerance && Math.Abs(s[1] - 120d) < Tolerance);
         Assert(slabCut > 0, "剖面里没有「5400 宽 × 120 厚」的楼板断面，实际断面：" + Describe(sizes));
+        // 剖切面穿过一层南墙的窗（中心 2200、宽 1500、窗台 900、高 1800）：
+        // 墙断面应在洞口处断开 → 出现「240 宽 × 900 高」（窗台下）与「240 × 900」（窗顶到层顶）
+        Assert(sizes.Any(s => Math.Abs(s[0] - 240d) < Tolerance && Math.Abs(s[1] - 900d) < Tolerance),
+            "洞口处的墙断面没有断开（应出现 240×900 的窗台下断面），实际断面：" + Describe(sizes));
+        var sillLines = view.Lines.Where(l => l.Layer == ViewLayers.Opening
+            && Math.Abs(l.Y1 - 900d) < Tolerance && Math.Abs(l.Y2 - 900d) < Tolerance).ToList();
+        var headLines = view.Lines.Where(l => l.Layer == ViewLayers.Opening
+            && Math.Abs(l.Y1 - 2700d) < Tolerance && Math.Abs(l.Y2 - 2700d) < Tolerance).ToList();
+        Assert(sillLines.Count > 0 && headLines.Count > 0, "剖面里缺少窗台线（900）或窗顶线（2700）");
+        // 填充是 45° 细线且间距按比例换算，不再用实心
+        Assert(view.Hatches.All(h => h.Pattern == "ANSI31" && h.Spacing > 0d && Math.Abs(h.Angle - 45d) < Tolerance),
+            "剖切填充应统一为 ANSI31 45° 细线并按比例给间距");
         // 剖切面之后的东墙应作为背景出现
         Assert(view.Lines.Any(l => l.Layer == ViewLayers.Elevation), "剖面缺少背景投影");
-        // 剖切面之前的西墙不应出现（西墙自身也会在剖切面之前，但它与剖切面平行、位于 x=0）
         var maxU = cut.Max(l => Math.Max(l.X1, l.X2));
         Assert(maxU < 6000d, "剖切断面的水平范围异常：" + maxU);
 
         Console.WriteLine("PASS 剖面：剖切线 " + cut.Count + " 条、填充 " + view.Hatches.Count
-            + " 块（墙断面 " + wallCut + " 个、板断面 " + slabCut + " 个）");
+            + " 块（墙断面 " + wallCut + " 个、板断面 " + slabCut + " 个、洞口处断开 "
+            + sizes.Count(s => Math.Abs(s[0] - 240d) < Tolerance && Math.Abs(s[1] - 900d) < Tolerance)
+            + " 处，窗台/窗顶线 " + sillLines.Count + "/" + headLines.Count + " 条，间距 "
+            + view.Hatches[0].Spacing.ToString("0") + "mm）");
     }
 
     /// <summary>填充边界的包围盒尺寸（宽, 高）。</summary>

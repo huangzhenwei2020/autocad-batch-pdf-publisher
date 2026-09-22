@@ -218,10 +218,17 @@ namespace BatchPdfPublisher.BuildingModel
     public sealed class ViewHatch
     {
         public string Layer { get; set; }
-        /// <summary>填充图案名（CAD 里的 PAT 名；P0 用 SOLID 或 ANSI31）。</summary>
-        public string Pattern { get; set; } = "SOLID";
+        /// <summary>填充图案名（CAD 里的 PAT 名；P0 用 ANSI31 = 45° 细线）。</summary>
+        public string Pattern { get; set; } = "ANSI31";
+        /// <summary>预定义图案的比例（Spacing &gt; 0 时不用它）。</summary>
         public double Scale { get; set; } = 1d;
         public double Angle { get; set; }
+        /// <summary>
+        /// 模型单位（mm）下的建议线间距；&gt; 0 时插件按"用户定义图案"用这个间距填充。
+        /// 用它而不是图案比例，是因为比例依赖图案自身的基准间距，很难一眼算对；
+        /// 直接给"图上 1.5mm 左右"的间距更可靠。
+        /// </summary>
+        public double Spacing { get; set; }
         /// <summary>边界多边形（视图平面坐标，闭合；不必重复首点）。</summary>
         public List<PointModel> Boundary { get; set; } = new List<PointModel>();
     }
