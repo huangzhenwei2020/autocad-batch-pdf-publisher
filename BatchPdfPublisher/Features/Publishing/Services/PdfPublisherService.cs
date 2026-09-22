@@ -63,9 +63,12 @@ namespace BatchPdfPublisher.Services
                 var actual = Math.Max(width, height) / Math.Min(width, height);
                 if (Math.Abs(actual - expected) / expected <= .02d)
                 {
-                    // The ratio is valid; derive orientation from the geometry
-                    // so a frame rotated by 90 degrees needs no manual edit.
-                    sheet.PaperOrientation = width >= height ? "横向" : "纵向";
+                    // Scanning already derives the CAD direction. Keep a valid
+                    // explicit user override from the quick settings instead of
+                    // silently changing it again immediately before publishing.
+                    if (!string.Equals(sheet.PaperOrientation, "横向", StringComparison.Ordinal) &&
+                        !string.Equals(sheet.PaperOrientation, "纵向", StringComparison.Ordinal))
+                        sheet.PaperOrientation = width >= height ? "横向" : "纵向";
                     continue;
                 }
 
@@ -73,7 +76,7 @@ namespace BatchPdfPublisher.Services
                     new Point3d(sheet.MinX, sheet.MinY, 0d),
                     new Point3d(sheet.MaxX, sheet.MaxY, 0d)), sheet.PrintScale);
                 var suggestedFrame = guess.PaperSize + (string.IsNullOrWhiteSpace(guess.Extension) ? string.Empty : "+" + guess.Extension);
-                issues.Add(new SheetValidationIssue
+                if (string.IsNullOrWhiteSpace(sheet.BlockHandle)) issues.Add(new SheetValidationIssue
                 {
                     Sheet = sheet,
                     Message = $"实际长宽比 {actual:0.###} 与登记的 {sheet.FrameDisplay}（{expected:0.###}）不一致。建议把图框规格改为 {suggestedFrame}、方向改为{guess.PaperOrientation}、打印比例检查为 {guess.PrintScale}；如果建议不对，请双击对应图框登记修改纸张或加长倍数。"
@@ -155,6 +158,41 @@ namespace BatchPdfPublisher.Services
                 try { Autodesk.AutoCAD.ApplicationServices.Application.SetSystemVariable("BACKGROUNDPLOT", previousBackgroundPlot); } catch { }
             }
             return pages;
+        }
+
+        public string PreparePreviewPage(Document document, SheetItem sheet, ProjectProfile project)
+        {
+            if (document == null || document.Database == null) throw new InvalidOperationException("没有打开的图纸。");
+            if (sheet == null) throw new InvalidOperationException("请先选择一张图纸。");
+            if (PlotFactory.ProcessPlotState != ProcessPlotState.NotPlotting)
+                throw new InvalidOperationException("AutoCAD 正在执行其他打印任务，请稍后再试。");
+
+            var previewId = Guid.NewGuid().ToString("N");
+            var rawPath = Path.Combine(UserDataPaths.TemporaryDirectory, "BatchPdfPreviewRaw_" + previewId + ".pdf");
+            var finalPath = Path.Combine(UserDataPaths.TemporaryDirectory, "BatchPdfPreview_" + previewId + ".pdf");
+            var previousBackgroundPlot = Autodesk.AutoCAD.ApplicationServices.Application.GetSystemVariable("BACKGROUNDPLOT");
+            Autodesk.AutoCAD.ApplicationServices.Application.SetSystemVariable("BACKGROUNDPLOT", 0);
+            try
+            {
+                PlotSinglePage(document, sheet, rawPath, project?.PlotStyle, project?.MarginMode, 0);
+                // Preview the same finalized page that publishing writes. This
+                // deliberately includes the configured margin policy and any
+                // paper normalization instead of showing CAD's intermediate
+                // plot and then producing a visually different final PDF.
+                PdfMerger.Merge(new List<string> { rawPath }, new List<SheetItem> { sheet },
+                    finalPath, project?.MarginMode, null);
+                return finalPath;
+            }
+            catch
+            {
+                TryDelete(finalPath);
+                throw;
+            }
+            finally
+            {
+                TryDelete(rawPath);
+                try { Autodesk.AutoCAD.ApplicationServices.Application.SetSystemVariable("BACKGROUNDPLOT", previousBackgroundPlot); } catch { }
+            }
         }
 
         public PdfPublishResult FinalizePreparedPages(IEnumerable<PreparedPdfPage> sourcePages, ProjectProfile project,
@@ -337,7 +375,6 @@ namespace BatchPdfPublisher.Services
             var normalizeToTargetPaper = false;
             try
             {
-                ValidateDeclaredFrameRatio(sheet);
                 ValidateStandardPaper(sheet);
                 // PlotInfoValidator requires the PlotInfo layout to belong to
                 // the active MDI document. This is especially important when
@@ -377,6 +414,8 @@ namespace BatchPdfPublisher.Services
                     var layout = transaction.GetObject(currentLayoutId, OpenMode.ForRead) as Layout;
                     if (layout == null)
                         throw new InvalidOperationException("当前空间没有有效的打印布局。");
+                    RegisteredPaperRangeService.TryRefresh(document.Database, sheet, transaction);
+                    ValidateDeclaredFrameRatio(sheet);
                     WriteDiagnosticState(document, sheet, requestedLayoutId, currentLayoutId, layout);
 
                     stage = "创建打印设置";

@@ -57,6 +57,14 @@
     <EmbeddedResource Include="..\Resources\Ribbon\ios-icons.png">
       <LogicalName>Wanluo.Ribbon.IosIcons.png</LogicalName>
     </EmbeddedResource>
+    <Content Include="..\ThirdParty\Pdfium\pdfium.dll">
+      <Link>pdfium.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\ThirdParty\Pdfium\LICENSES\**\*">
+      <Link>licenses\Pdfium\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

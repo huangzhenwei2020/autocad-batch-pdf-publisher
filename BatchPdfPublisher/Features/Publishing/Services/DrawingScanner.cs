@@ -72,6 +72,11 @@ namespace BatchPdfPublisher.Services
                             FrameIdentityService.DefinitionSignature(reference, transaction),
                             FrameIdentityService.AspectRatio(extents));
                         if (frame == null) continue;
+                        var paper = PaperSizeCatalog.GetSize(frame.PaperSize, frame.Extension,
+                            string.IsNullOrWhiteSpace(frame.PaperOrientation) ? "横向" : frame.PaperOrientation);
+                        Extents3d registeredPaperExtents;
+                        var plotExtents = RegisteredPaperRangeService.TryResolve(reference, paper, transaction, out registeredPaperExtents)
+                            ? registeredPaperExtents : extents;
                         result.Add(new SheetItem
                         {
                         BlockId = reference.ObjectId,
@@ -86,15 +91,15 @@ namespace BatchPdfPublisher.Services
                             // Registration uses a canonical orientation, but an
                             // individual frame reference may be rotated in CAD.
                             // The plotted page must follow that instance.
-                            PaperOrientation = extents.MaxPoint.X - extents.MinPoint.X >= extents.MaxPoint.Y - extents.MinPoint.Y ? "横向" : "纵向",
+                            PaperOrientation = plotExtents.MaxPoint.X - plotExtents.MinPoint.X >= plotExtents.MaxPoint.Y - plotExtents.MinPoint.Y ? "横向" : "纵向",
                             PrintScale = GetAttribute(attributes, frame.PrintScaleAttributeTag, frame.DefaultPrintScale, "1:1"),
                             PlotStyle = "使用输出设置",
                             SourceFile = sourceFile,
                             SourceLayout = SpaceName(space, transaction),
-                            MinX = extents.MinPoint.X,
-                            MinY = extents.MinPoint.Y,
-                            MaxX = extents.MaxPoint.X,
-                            MaxY = extents.MaxPoint.Y
+                            MinX = plotExtents.MinPoint.X,
+                            MinY = plotExtents.MinPoint.Y,
+                            MaxX = plotExtents.MaxPoint.X,
+                            MaxY = plotExtents.MaxPoint.Y
                         });
                     }
                     catch (Autodesk.AutoCAD.Runtime.Exception)

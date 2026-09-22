@@ -5,9 +5,15 @@ obj-*/
 *.user
 *.suo
 *.dll
+!ThirdParty/Pdfium/pdfium.dll
 *.pdb
 *.exe
 __pycache__/
+.tmp/
+**/.tmp/
+design-qa/
+design-qa.md
+plot.log
 *.pyc
 *.dwl
 *.dwl2

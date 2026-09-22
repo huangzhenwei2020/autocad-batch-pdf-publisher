@@ -33,6 +33,9 @@ foreach ($band in $Bands) {
     New-Item -ItemType Directory -Path $targetBand -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $sourceBand 'BatchPdfPublisher.dll') -Destination $targetBand -Force
     Copy-Item -LiteralPath (Join-Path $sourceBand 'PdfSharp.dll') -Destination $targetBand -Force
+    Copy-Item -LiteralPath (Join-Path $sourceBand 'pdfium.dll') -Destination $targetBand -Force
+    $pdfiumLicenses = Join-Path $sourceBand 'licenses\Pdfium'
+    if (Test-Path -LiteralPath $pdfiumLicenses) { Copy-Item -LiteralPath $pdfiumLicenses -Destination (Join-Path $targetBand 'licenses') -Recurse -Force }
     $ocrWorker = Join-Path $sourceBand 'LineVisionOcrWorker.exe'
     if (Test-Path -LiteralPath $ocrWorker) { Copy-Item -LiteralPath $ocrWorker -Destination $targetBand -Force }
     foreach ($file in @('LineVisionVectorWorker.exe','vtracer.exe','VTracer-LICENSE.txt','SkeletonTracing-LICENSE.txt')) { $source = Join-Path $sourceBand $file; if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination $targetBand -Force } }

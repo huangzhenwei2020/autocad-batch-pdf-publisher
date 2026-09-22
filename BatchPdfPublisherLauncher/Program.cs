@@ -21,6 +21,7 @@ namespace BatchPdfPublisherLauncher
     {
         private const string PluginAssemblyName = "BatchPdfPublisher.dll";
         private const string PdfDependencyName = "PdfSharp.dll";
+        private const string PdfPreviewDependencyName = "pdfium.dll";
         private const string ArrowLibraryName = "WanLuoArrowSymbols.dwg";
         private static readonly string ArrowLibraryRelativePath = Path.Combine("Resources", "Blocks", ArrowLibraryName);
         private static readonly string PlotterResourceDirectory = Path.Combine("Resources", "Plotters");
@@ -37,7 +38,7 @@ namespace BatchPdfPublisherLauncher
         private static readonly Stopwatch StartupWatch = Stopwatch.StartNew();
         internal static long StartupMilliseconds { get { return StartupWatch.ElapsedMilliseconds; } }
         [STAThread]
-        private static void Main()
+        private static void Main(string[] args)
         {
             try
             {
@@ -47,6 +48,16 @@ namespace BatchPdfPublisherLauncher
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
                 Log("启动器开始运行");
+                if (args != null && args.Any(argument => string.Equals(argument, "--cloud-sync-agent", StringComparison.OrdinalIgnoreCase)))
+                {
+                    using (var mutex = new Mutex(true, @"Local\WanluoArchitectureTools.CloudSyncAgent", out var ownsMutex))
+                    {
+                        if (!ownsMutex) return;
+                        Application.Run(new CloudSyncAgentContext());
+                    }
+                    return;
+                }
+                EnsureCloudSyncAgentRunning();
                 var launcherDirectory = AppDomain.CurrentDomain.BaseDirectory;
                 var lastPlatform = LoadLastPlatform();
                 // Cached platform discovery is cheaper than starting the thread pool on a
@@ -107,6 +118,27 @@ namespace BatchPdfPublisherLauncher
             {
                 Log("启动失败: " + exception);
                 MessageBox.Show(exception.Message, "万落建筑工具启动失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private static void EnsureCloudSyncAgentRunning()
+        {
+            try
+            {
+                var executable = Assembly.GetExecutingAssembly().Location;
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = executable,
+                    Arguments = "--cloud-sync-agent",
+                    WorkingDirectory = AppDomain.CurrentDomain.BaseDirectory,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    WindowStyle = ProcessWindowStyle.Hidden
+                });
+            }
+            catch (Exception exception)
+            {
+                Log("后台云同步启动失败: " + exception.Message);
             }
         }
 
@@ -271,18 +303,20 @@ namespace BatchPdfPublisherLauncher
                 || File.GetLastWriteTimeUtc(sideBySideAssembly) > File.GetLastWriteTimeUtc(assembly)))
                 assembly = sideBySideAssembly;
             var dependency = Path.Combine(bandDirectory, PdfDependencyName);
+            var previewDependency = Path.Combine(bandDirectory, PdfPreviewDependencyName);
             var arrowLibrary = ResolveResourceFile(launcherDirectory, Path.Combine("Resources", "Blocks"), ArrowLibraryName);
             if (string.Equals(band, "R24", StringComparison.OrdinalIgnoreCase) && !File.Exists(assembly))
             {
                 assembly = Path.Combine(launcherDirectory, PluginAssemblyName);
                 dependency = Path.Combine(launcherDirectory, PdfDependencyName);
+                previewDependency = Path.Combine(launcherDirectory, PdfPreviewDependencyName);
             }
-            if (!File.Exists(assembly) || !File.Exists(dependency) || !File.Exists(arrowLibrary))
+            if (!File.Exists(assembly) || !File.Exists(dependency) || !File.Exists(previewDependency) || !File.Exists(arrowLibrary))
                 throw new FileNotFoundException(
                     "已识别 " + FormatRelease(release) + "，但发布包中缺少对应的 " + band + " 插件组件。\r\n\r\n"
                     + "预期目录：" + bandDirectory + "\r\n"
                     + "请使用包含 AutoCAD 2021–2026 分代 DLL 的完整发布包。");
-            return new PluginPayload(band, assembly, dependency, arrowLibrary);
+            return new PluginPayload(band, assembly, dependency, previewDependency, arrowLibrary);
         }
 
         private static string ResolveResourceFile(string launcherDirectory, string resourceDirectory, string fileName)
@@ -846,6 +880,9 @@ namespace BatchPdfPublisherLauncher
             if (!File.Exists(installedAssembly) || new FileInfo(installedAssembly).Length != new FileInfo(payload.AssemblyPath).Length)
                 File.Copy(payload.AssemblyPath, installedAssembly, true);
             File.Copy(payload.PdfDependencyPath, Path.Combine(contentsDirectory, PdfDependencyName), true);
+            File.Copy(payload.PdfPreviewDependencyPath, Path.Combine(contentsDirectory, PdfPreviewDependencyName), true);
+            var previewLicenses = Path.Combine(Path.GetDirectoryName(payload.PdfPreviewDependencyPath), "licenses", "Pdfium");
+            if (Directory.Exists(previewLicenses)) CopyDirectory(previewLicenses, Path.Combine(contentsDirectory, "licenses", "Pdfium"));
             File.WriteAllText(Path.Combine(contentsDirectory, "portable-root.txt"), PackageRoot, Encoding.UTF8);
             var resourceDirectory = Path.Combine(contentsDirectory, "Resources", "Blocks");
             Directory.CreateDirectory(resourceDirectory);
@@ -1147,6 +1184,11 @@ namespace BatchPdfPublisherLauncher
             Directory.CreateDirectory(contents);
             File.Copy(installedAssembly, Path.Combine(contents, PluginAssemblyName), true);
             File.Copy(sourcePdfDependency, Path.Combine(contents, PdfDependencyName), true);
+            var sourcePreviewDependency = Path.Combine(Path.GetDirectoryName(installedAssembly), PdfPreviewDependencyName);
+            if (!File.Exists(sourcePreviewDependency)) throw new FileNotFoundException("永久安装缺少打印预览组件。", sourcePreviewDependency);
+            File.Copy(sourcePreviewDependency, Path.Combine(contents, PdfPreviewDependencyName), true);
+            var previewLicenses = Path.Combine(Path.GetDirectoryName(installedAssembly), "licenses", "Pdfium");
+            if (Directory.Exists(previewLicenses)) CopyDirectory(previewLicenses, Path.Combine(contents, "licenses", "Pdfium"));
             File.WriteAllText(Path.Combine(contents, "portable-root.txt"), PackageRoot, Encoding.UTF8);
             var installedArrowLibrary = Path.Combine(Path.GetDirectoryName(installedAssembly), ArrowLibraryRelativePath);
             if (!File.Exists(installedArrowLibrary)) installedArrowLibrary = Path.Combine(Path.GetDirectoryName(installedAssembly), ArrowLibraryName);
@@ -1200,7 +1242,7 @@ namespace BatchPdfPublisherLauncher
         private static void ValidateBundleContents(string contents, string band)
         {
             var missing = new List<string>();
-            foreach (var file in new[] { PluginAssemblyName, PdfDependencyName, ArrowLibraryRelativePath })
+            foreach (var file in new[] { PluginAssemblyName, PdfDependencyName, PdfPreviewDependencyName, ArrowLibraryRelativePath })
                 if (!File.Exists(Path.Combine(contents, file))) missing.Add(file);
             if (string.Equals(band, "R24", StringComparison.OrdinalIgnoreCase))
             {
@@ -1261,13 +1303,14 @@ namespace BatchPdfPublisherLauncher
 
     internal sealed class PluginPayload
     {
-        public PluginPayload(string band, string assemblyPath, string pdfDependencyPath, string arrowLibraryPath)
+        public PluginPayload(string band, string assemblyPath, string pdfDependencyPath, string pdfPreviewDependencyPath, string arrowLibraryPath)
         {
-            Band = band; AssemblyPath = assemblyPath; PdfDependencyPath = pdfDependencyPath; ArrowLibraryPath = arrowLibraryPath;
+            Band = band; AssemblyPath = assemblyPath; PdfDependencyPath = pdfDependencyPath; PdfPreviewDependencyPath = pdfPreviewDependencyPath; ArrowLibraryPath = arrowLibraryPath;
         }
         public string Band { get; }
         public string AssemblyPath { get; }
         public string PdfDependencyPath { get; }
+        public string PdfPreviewDependencyPath { get; }
         public string ArrowLibraryPath { get; }
     }
 

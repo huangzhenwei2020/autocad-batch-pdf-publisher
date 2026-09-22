@@ -31,6 +31,13 @@ $OutputRoot = [System.IO.Path]::GetFullPath($OutputRoot)
 $distRoot = [System.IO.Path]::GetFullPath((Join-Path $repositoryRoot 'dist'))
 $artifactRoot = Join-Path $repositoryRoot '.artifacts\release'
 
+# The standalone tray agent executes the launcher binary itself. Stop only that
+# command-line mode before replacing dist; the normal launcher/CAD processes are
+# left untouched. The rebuilt launcher starts the agent again on its next run.
+Get-CimInstance Win32_Process -Filter "Name='万落建筑工具启动器.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -match '(?i)--cloud-sync-agent' } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+
 function Assert-ChildPath([string]$Path, [string]$Parent, [string]$Description) {
     $fullPath = [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
     $fullParent = [System.IO.Path]::GetFullPath($Parent).TrimEnd('\') + '\'

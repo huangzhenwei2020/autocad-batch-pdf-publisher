@@ -19,6 +19,8 @@
     <EmbeddedResource Include="..\Resources\Ribbon\ios-icons.png" LogicalName="Wanluo.Ribbon.IosIcons.png" />
     <Compile Include="..\Shared\ProductVersion.cs" Link="Infrastructure\ProductVersion.cs" />
     <Reference Include="PdfSharp" HintPath="..\PdfSharp.dll" Private="true" />
+    <None Include="..\ThirdParty\Pdfium\pdfium.dll" Link="pdfium.dll" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\ThirdParty\Pdfium\LICENSES\**\*" Link="licenses\Pdfium\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup Condition="'$(UseAutoCadNuGet)' != 'true'">
     <Reference Include="acmgd" HintPath="$(AutoCadApiPath)\acmgd.dll" Private="false" />

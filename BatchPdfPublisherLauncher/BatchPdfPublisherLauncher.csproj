@@ -29,6 +29,8 @@
     <Reference Include="System.Security" />
     <Reference Include="System.Drawing" />
     <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
+    <Reference Include="System.Net.Http" />
     <Reference Include="System.Runtime.Serialization" />
     <Reference Include="System.Xml" />
     <Reference Include="System.Windows.Forms" />
@@ -37,6 +39,8 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Program.cs" />
+    <Compile Include="CloudSyncAgentContext.cs" />
+    <Compile Include="CloudSyncHistoryForm.cs" />
     <Compile Include="CloudSyncCoordinatorStub.cs" />
     <Compile Include="ProjectManagerForm.cs" />
     <Compile Include="LauncherUi.cs" />
@@ -65,6 +69,20 @@
     <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncFolderDetector.cs"><Link>Shared\CloudSyncFolderDetector.cs</Link></Compile>
     <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncTransaction.cs"><Link>Shared\CloudSyncTransaction.cs</Link></Compile>
     <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudProjectWorkspaceService.cs"><Link>Shared\CloudProjectWorkspaceService.cs</Link></Compile>
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Providers\CloudSyncProviders.cs"><Link>Shared\CloudSyncProviders.cs</Link></Compile>
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Providers\BaiduNetdiskClient.cs"><Link>Shared\BaiduNetdiskClient.cs</Link></Compile>
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Providers\BaiduBrokerAuthClient.cs"><Link>Shared\BaiduBrokerAuthClient.cs</Link></Compile>
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Providers\WanluoCloudBrokerConfiguration.cs"><Link>Shared\WanluoCloudBrokerConfiguration.cs</Link></Compile>
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncCatalog.cs"><Link>Shared\CloudSyncCatalog.cs</Link></Compile>
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudBackupService.cs"><Link>Shared\CloudBackupService.cs</Link></Compile>
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncCredentialStore.cs"><Link>Shared\CloudSyncCredentialStore.cs</Link></Compile>
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncRemoteInventoryStore.cs"><Link>Shared\CloudSyncRemoteInventoryStore.cs</Link></Compile>
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncRetryPolicy.cs"><Link>Shared\CloudSyncRetryPolicy.cs</Link></Compile>
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncPendingFileService.cs"><Link>Shared\CloudSyncPendingFileService.cs</Link></Compile>
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSyncSavedDrawingSnapshotStore.cs"><Link>Shared\CloudSyncSavedDrawingSnapshotStore.cs</Link></Compile>
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\CloudSystemPackageService.cs"><Link>Shared\CloudSystemPackageService.cs</Link></Compile>
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\ImmutableCloudJournal.cs"><Link>Shared\ImmutableCloudJournal.cs</Link></Compile>
+    <Compile Include="..\BatchPdfPublisher\Features\CloudSync\Services\LocalFolderSyncEngine.cs"><Link>Shared\LocalFolderSyncEngine.cs</Link></Compile>
     <Compile Include="..\BatchPdfPublisher\Features\Projects\Models\ProjectManagementModels.cs"><Link>Shared\ProjectManagementModels.cs</Link></Compile>
     <Compile Include="..\BatchPdfPublisher\Features\Projects\Services\ProjectManagementService.cs"><Link>Shared\ProjectManagementService.cs</Link></Compile>
     <Content Include="BatchPdfPublisher.ico" />

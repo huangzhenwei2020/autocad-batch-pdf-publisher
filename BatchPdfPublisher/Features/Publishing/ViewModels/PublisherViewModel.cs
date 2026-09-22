@@ -1298,6 +1298,105 @@ namespace BatchPdfPublisher.ViewModels
             catch (Exception exception) { Application.ShowAlertDialog("无法定位图框：" + exception.Message); }
         }
 
+        public async System.Threading.Tasks.Task<string> CreatePrintPreviewAsync(SheetItem sheet)
+        {
+            if (sheet == null) throw new InvalidOperationException("请先选择一张图纸。");
+            var initialDocument = Application.DocumentManager.MdiActiveDocument;
+            Document sourceDocument = null;
+            var openedForPreview = false;
+            try
+            {
+                sourceDocument = FindOpenDocument(sheet.SourceFile);
+                if (sourceDocument == null && !string.IsNullOrWhiteSpace(sheet.SourceFile) && System.IO.File.Exists(sheet.SourceFile))
+                {
+                    sourceDocument = Application.DocumentManager.Open(sheet.SourceFile, true);
+                    openedForPreview = true;
+                }
+                if (sourceDocument == null || sourceDocument.Database == null)
+                    throw new InvalidOperationException("找不到对应 DWG：" + sheet.SourceFile);
+                Application.DocumentManager.MdiActiveDocument = sourceDocument;
+                string previewPath = null;
+                await CadCommandContext.ExecuteAsync(() => previewPath = _publisher.PreparePreviewPage(sourceDocument, sheet, _selectedProject));
+                return previewPath;
+            }
+            finally
+            {
+                if (openedForPreview && sourceDocument != null)
+                    try { sourceDocument.CloseAndDiscard(); } catch { }
+                TryRestoreActiveDocument(initialDocument);
+            }
+        }
+
+        public async System.Threading.Tasks.Task CreatePrintPreviewsAsync(
+            System.Collections.Generic.IEnumerable<SheetItem> sourceSheets,
+            System.Action<int, int, SheetItem, string, System.Exception> completed)
+        {
+            var sheets = (sourceSheets ?? Enumerable.Empty<SheetItem>()).Where(x => x != null).ToList();
+            if (sheets.Count == 0) return;
+            var initialDocument = Application.DocumentManager.MdiActiveDocument;
+            var processed = 0;
+            try
+            {
+                foreach (var group in sheets.GroupBy(x => x.SourceFile ?? string.Empty, StringComparer.OrdinalIgnoreCase))
+                {
+                    var groupSheets = group.ToList();
+                    Document sourceDocument = null;
+                    var openedForPreview = false;
+                    var groupProcessed = 0;
+                    try
+                    {
+                        sourceDocument = FindOpenDocument(group.Key);
+                        if (sourceDocument == null && !string.IsNullOrWhiteSpace(group.Key) && System.IO.File.Exists(group.Key))
+                        {
+                            sourceDocument = Application.DocumentManager.Open(group.Key, true);
+                            openedForPreview = true;
+                        }
+                        if (sourceDocument == null || sourceDocument.Database == null)
+                        {
+                            foreach (var sheet in groupSheets)
+                            {
+                                processed++;
+                                groupProcessed++;
+                                completed?.Invoke(processed, sheets.Count, sheet, null,
+                                    new InvalidOperationException("找不到对应 DWG：" + sheet.SourceFile));
+                            }
+                            continue;
+                        }
+
+                        Application.DocumentManager.MdiActiveDocument = sourceDocument;
+                        foreach (var sheet in groupSheets)
+                        {
+                            string previewPath = null;
+                            System.Exception error = null;
+                            try
+                            {
+                                await CadCommandContext.ExecuteAsync(() =>
+                                    previewPath = _publisher.PreparePreviewPage(sourceDocument, sheet, _selectedProject));
+                            }
+                            catch (System.Exception exception) { error = exception; }
+                            processed++;
+                            groupProcessed++;
+                            completed?.Invoke(processed, sheets.Count, sheet, previewPath, error);
+                        }
+                    }
+                    catch (System.Exception exception)
+                    {
+                        foreach (var sheet in groupSheets.Skip(groupProcessed))
+                        {
+                            processed++;
+                            completed?.Invoke(processed, sheets.Count, sheet, null, exception);
+                        }
+                    }
+                    finally
+                    {
+                        if (openedForPreview && sourceDocument != null)
+                            try { sourceDocument.CloseAndDiscard(); } catch { }
+                    }
+                }
+            }
+            finally { TryRestoreActiveDocument(initialDocument); }
+        }
+
         private void EditValidationIssue(SheetValidationIssue issue)
         {
             var sheet = issue?.Sheet;
@@ -1362,7 +1461,7 @@ namespace BatchPdfPublisher.ViewModels
         {
             if (!PreviewEnabled)
             {
-                Status = "请先勾选“显示当前子项目预览”。";
+                Status = "请先勾选“在 CAD 中显示当前子项目图框范围”。";
                 return;
             }
             UpdatePreview();

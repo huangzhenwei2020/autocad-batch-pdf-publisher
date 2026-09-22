@@ -17,63 +17,98 @@ namespace BatchPdfPublisher.Views
         private readonly ModelessDocumentBinding _documentBinding;
         private readonly System.Collections.Generic.IList<SheetItem> _sheets;
         private readonly Action _done;
-        private readonly CheckedListBox _buildings = new CheckedListBox();
+        private readonly CadToggleCheckedListBox _buildings = new CadToggleCheckedListBox();
         private readonly CheckBox[] _columnChecks = { Check("序号", true), Check("图号", true), Check("图名", true), Check("图框", true), Check("比例", true) };
         private readonly TextBox _rows = Box("30"), _rowHeight = Box("7");
-        private readonly ComboBox _textHeight = Preset("1.5", "2.5", "3.5", "5", "7", "10", "14", "20");
+        private readonly PublisherForm.ThemedComboBox _textHeight = Preset("1.5", "2.5", "3.5", "5", "7", "10", "14", "20");
         // 目录插入比例是图纸比例：1:20、1:50、1:100；可直接编辑输入自定义比例。
-        private readonly ComboBox _insertScale = RatioPreset("1:1", "1:20", "1:50", "1:100", "1:200", "1:500");
+        private readonly PublisherForm.ThemedComboBox _insertScale = RatioPreset("1:1", "1:20", "1:50", "1:100", "1:200", "1:500");
         private readonly TextBox[] _widthBoxes = { Box("20"), Box("30"), Box("70"), Box("24"), Box("24") };
-        private readonly ComboBox _font = new ComboBox();
-        private readonly Button _color = new Button();
+        private readonly PublisherForm.ThemedComboBox _font = new PublisherForm.ThemedComboBox();
+        private readonly CadRoundedButton _color = new CadRoundedButton();
         private AcColor _acColor = AcColor.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 7);
 
         public CatalogInsertForm(Document document, System.Collections.Generic.IList<SheetItem> sheets, Action done)
         {
             _document = document; _sheets = sheets; _done = done;
-            Text = "插入图纸目录"; Width = 760; Height = 650; MinimumSize = new Size(660, 540); StartPosition = FormStartPosition.CenterParent;
+            Text = "插入图纸目录"; Width = 980; Height = 700; MinimumSize = new Size(820, 580); StartPosition = FormStartPosition.CenterParent;
             _documentBinding = new ModelessDocumentBinding(this, document);
             Font = new Font("Microsoft YaHei UI", 9F); AutoScaleMode = AutoScaleMode.Dpi; SizeGripStyle = SizeGripStyle.Show; Build();
         }
 
         private void Build()
         {
-            BackColor = Color.FromArgb(247, 249, 252);
-            var outer = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Padding = new Padding(16) };
-            outer.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); outer.RowStyles.Add(new RowStyle(SizeType.AutoSize)); Controls.Add(outer);
-            var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 8 };
-            root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 145)); root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            for (var row = 1; row < 8; row++) root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            outer.Controls.Add(root, 0, 0);
-            var selectionLabel = FieldLabel("选择子项目"); selectionLabel.TextAlign = ContentAlignment.TopLeft; selectionLabel.Padding = new Padding(0, 8, 0, 0);
-            root.Controls.Add(selectionLabel, 0, 0);
-            var buildingPicker = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Margin = new Padding(0) };
-            buildingPicker.RowStyles.Add(new RowStyle(SizeType.AutoSize)); buildingPicker.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            var buildingActions = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 0, 0, 6) };
-            buildingActions.Controls.Add(Button("全部勾选", (s, e) => SetAllBuildings(true)));
-            buildingActions.Controls.Add(Button("全部取消", (s, e) => SetAllBuildings(false)));
-            buildingPicker.Controls.Add(buildingActions, 0, 0);
-            _buildings.CheckOnClick = true; _buildings.IntegralHeight = false; _buildings.MinimumSize = new Size(0, 130); _buildings.Dock = DockStyle.Fill;
+            BackColor = CadDialogTheme.Canvas;
+            ForeColor = CadDialogTheme.Text;
+            var outer = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1, Padding = new Padding(12), BackColor = CadDialogTheme.Canvas };
+            outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
+            outer.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
+            Controls.Add(outer);
+            var heading = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, BackColor = CadDialogTheme.Canvas };
+            heading.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); heading.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            heading.Controls.Add(CadDialogTheme.Heading("插入图纸目录"), 0, 0);
+            heading.Controls.Add(new Label { Text = "选择子项目并设置目录排版", AutoSize = true, ForeColor = CadDialogTheme.Muted, Margin = new Padding(0, 12, 4, 0) }, 1, 0);
+            outer.Controls.Add(heading, 0, 0);
+
+            var workspace = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, BackColor = CadDialogTheme.Canvas };
+            workspace.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 280)); workspace.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, CadDialogTheme.Gap)); workspace.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            outer.Controls.Add(workspace, 0, 1);
+
+            var buildingCard = CadDialogTheme.Card();
+            var buildingPicker = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1, BackColor = CadDialogTheme.Surface };
+            buildingPicker.RowStyles.Add(new RowStyle(SizeType.Absolute, 42)); buildingPicker.RowStyles.Add(new RowStyle(SizeType.Absolute, 44)); buildingPicker.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            buildingPicker.Controls.Add(CadDialogTheme.Heading("选择子项目"), 0, 0);
+            var buildingActions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, BackColor = CadDialogTheme.Surface };
+            buildingActions.Controls.Add(CadDialogTheme.Button("全部选择", () => SetAllBuildings(true)));
+            buildingActions.Controls.Add(CadDialogTheme.Button("全部取消", () => SetAllBuildings(false)));
+            buildingPicker.Controls.Add(buildingActions, 0, 1);
             foreach (var name in _sheets.Select(s => string.IsNullOrWhiteSpace(s.Building) ? "未分组" : s.Building).Distinct()) _buildings.Items.Add(name, true);
-            buildingPicker.Controls.Add(_buildings, 0, 1);
-            root.Controls.Add(buildingPicker, 1, 0);
-            root.Controls.Add(FieldLabel("目录列"), 0, 1); var columnPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true }; columnPanel.Controls.AddRange(_columnChecks); root.Controls.Add(columnPanel, 1, 1);
-            Add(root, "每页行数", _rows, 2); Add(root, "行高", _rowHeight, 3);
-            root.Controls.Add(FieldLabel("列宽（分别设置）"), 0, 4);
-            var widths = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true };
+            buildingPicker.Controls.Add(new CadListHost(_buildings), 0, 2);
+            buildingCard.Controls.Add(buildingPicker); workspace.Controls.Add(buildingCard, 0, 0);
+
+            var settingsCard = CadDialogTheme.Card();
+            var settings = new TableLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, RowCount = 9, ColumnCount = 1, BackColor = CadDialogTheme.Surface };
+            settings.Controls.Add(CadDialogTheme.Heading("目录内容"), 0, 0);
+            var columnPanel = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, WrapContents = true, BackColor = CadDialogTheme.Surface };
+            foreach (var check in _columnChecks) { check.Width = 110; columnPanel.Controls.Add(check); }
+            settings.Controls.Add(columnPanel, 0, 1);
+            settings.Controls.Add(CadDialogTheme.Heading("分页与尺寸"), 0, 2);
+            var metrics = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 4, BackColor = CadDialogTheme.Surface };
+            metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 86)); metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50)); metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 70)); metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            metrics.Controls.Add(CadDialogTheme.FieldLabel("每页行数"), 0, 0); metrics.Controls.Add(CadDialogTheme.Input(_rows), 1, 0);
+            metrics.Controls.Add(CadDialogTheme.FieldLabel("行高"), 2, 0); metrics.Controls.Add(CadDialogTheme.Input(_rowHeight), 3, 0);
+            settings.Controls.Add(metrics, 0, 3);
+            settings.Controls.Add(new Label { Text = "列宽", Dock = DockStyle.Top, Height = 28, ForeColor = CadDialogTheme.Muted, TextAlign = ContentAlignment.MiddleLeft }, 0, 4);
+            var widths = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 5, BackColor = CadDialogTheme.Surface };
             var labels = new[] { "序号", "图号", "图名", "图框", "比例" };
-            for (var i = 0; i < _widthBoxes.Length; i++) { var panel = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 0, 8, 0) }; panel.Controls.Add(new Label { Text = labels[i], AutoSize = true, Margin = new Padding(0, 7, 3, 0) }); panel.Controls.Add(_widthBoxes[i]); widths.Controls.Add(panel); }
-            root.Controls.Add(widths, 1, 4);
-            Add(root, "文字高度", _textHeight, 5); Add(root, "插入比例", _insertScale, 6);
+            for (var i = 0; i < 5; i++)
+            {
+                widths.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20));
+                var cell = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, BackColor = CadDialogTheme.Surface, Margin = new Padding(0, 0, 8, 0) };
+                cell.Controls.Add(new Label { Text = labels[i], Dock = DockStyle.Top, Height = 24, ForeColor = CadDialogTheme.Muted }, 0, 0);
+                cell.Controls.Add(CadDialogTheme.Input(_widthBoxes[i]), 0, 1);
+                widths.Controls.Add(cell, i, 0);
+            }
+            settings.Controls.Add(widths, 0, 5);
+            settings.Controls.Add(CadDialogTheme.Heading("文字与插入"), 0, 6);
+            var typography = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 4, RowCount = 2, BackColor = CadDialogTheme.Surface };
+            typography.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 86)); typography.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50)); typography.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 86)); typography.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            _textHeight.DropDownStyle = ComboBoxStyle.DropDownList; _insertScale.DropDownStyle = ComboBoxStyle.DropDown;
+            typography.Controls.Add(CadDialogTheme.FieldLabel("文字高度"), 0, 0); typography.Controls.Add(_textHeight, 1, 0);
+            typography.Controls.Add(CadDialogTheme.FieldLabel("插入比例"), 2, 0); typography.Controls.Add(_insertScale, 3, 0);
+            _font.DropDownStyle = ComboBoxStyle.DropDownList; _font.Items.AddRange(FrameCreationService.GetTextStyleNames(_document)); _font.SelectedItem = DraftingStandardService.GetTextStyleName(DraftingStandardProfile.BodyTextKey); if (_font.SelectedIndex < 0 && _font.Items.Count > 0) _font.SelectedIndex = 0;
+            typography.Controls.Add(CadDialogTheme.FieldLabel("字体样式"), 0, 1); typography.Controls.Add(_font, 1, 1);
+            typography.Controls.Add(CadDialogTheme.FieldLabel("颜色"), 2, 1);
+            _color.Text = string.Empty; _color.Width = 52; _color.Height = CadDialogTheme.ControlHeight; _color.MinimumSize = new Size(52, CadDialogTheme.ControlHeight); _color.BackColor = DisplayColor(_acColor); _color.BorderColor = CadDialogTheme.Border; _color.Click += (s, e) => ChooseColor();
+            var colorHost = new FlowLayoutPanel { Dock = DockStyle.Fill, BackColor = CadDialogTheme.Surface }; colorHost.Controls.Add(_color); typography.Controls.Add(colorHost, 3, 1);
+            settings.Controls.Add(typography, 0, 7);
+            settings.Controls.Add(new Label { Text = "插入后可在 CAD 中继续调整表格位置和样式。", Dock = DockStyle.Top, Height = 36, ForeColor = CadDialogTheme.Muted, TextAlign = ContentAlignment.MiddleLeft }, 0, 8);
+            settingsCard.Controls.Add(settings); workspace.Controls.Add(settingsCard, 2, 0);
             LoadSettings();
-            root.Controls.Add(FieldLabel("字体样式 / 颜色"), 0, 7);
-            var styleLine = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = false };
-            _font.DropDownStyle = ComboBoxStyle.DropDownList; _font.Width = 210; _font.Items.AddRange(FrameCreationService.GetTextStyleNames(_document)); _font.SelectedItem = DraftingStandardService.GetTextStyleName(DraftingStandardProfile.BodyTextKey); if (_font.SelectedIndex < 0 && _font.Items.Count > 0) _font.SelectedIndex = 0;
-            _color.Text = string.Empty; _color.Width = 32; _color.Height = 30; _color.MinimumSize = new Size(32, 30); _color.Margin = new Padding(3, 0, 3, 0); _color.FlatStyle = FlatStyle.Flat; _color.BackColor = DisplayColor(_acColor); _color.Click += (s, e) => ChooseColor(); styleLine.Controls.Add(_font); styleLine.Controls.Add(_color);
-            root.Controls.Add(styleLine, 1, 7);
-            var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(0, 10, 0, 0) };
-            actions.Controls.Add(Button("关闭", (s, e) => Close())); actions.Controls.Add(Button("插入目录", (s, e) => Insert(), true)); outer.Controls.Add(actions, 0, 1);
+
+            var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, WrapContents = false, Padding = new Padding(0, 9, 0, 0), BackColor = CadDialogTheme.Canvas };
+            actions.Controls.Add(CadDialogTheme.Button("关闭", Close)); actions.Controls.Add(CadDialogTheme.Button("插入目录", Insert, true)); outer.Controls.Add(actions, 0, 2);
         }
 
         private void SetAllBuildings(bool selected)
@@ -113,10 +148,10 @@ namespace BatchPdfPublisher.Views
             var aci = color.ColorIndex; var map = new[] { Color.Black, Color.Red, Color.Yellow, Color.Green, Color.Cyan, Color.Blue, Color.Magenta, Color.White, Color.Gray, Color.LightGray };
             return aci >= 0 && aci < map.Length ? map[aci] : Color.White;
         }
-        private static TextBox Box(string text) { return new TextBox { Text = text, Height = 30, Width = 70 }; }
-        private static CheckBox Check(string text, bool value) { return new CheckBox { Text = text, Checked = value, AutoSize = true, Margin = new Padding(3, 5, 10, 3) }; }
-        private static ComboBox Preset(params string[] values) { var box = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 90, Height = 30 }; box.Items.AddRange(values); box.SelectedIndex = 0; return box; }
-        private static ComboBox RatioPreset(params string[] values) { var box = new ComboBox { DropDownStyle = ComboBoxStyle.DropDown, Width = 100, Height = 30, AutoCompleteMode = AutoCompleteMode.SuggestAppend, AutoCompleteSource = AutoCompleteSource.ListItems }; box.Items.AddRange(values); box.SelectedIndex = 3; return box; }
+        private static TextBox Box(string text) { return new TextBox { Text = text }; }
+        private static CheckBox Check(string text, bool value) { return new CadToggleSwitch { Text = text, Checked = value }; }
+        private static PublisherForm.ThemedComboBox Preset(params string[] values) { var box = new PublisherForm.ThemedComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 110 }; box.Items.AddRange(values); box.SelectedIndex = 0; return box; }
+        private static PublisherForm.ThemedComboBox RatioPreset(params string[] values) { var box = new PublisherForm.ThemedComboBox { DropDownStyle = ComboBoxStyle.DropDown, Width = 120 }; box.Items.AddRange(values); box.SelectedIndex = 3; return box; }
         private static bool TryParseDrawingScale(string text, out double scale)
         {
             scale = 0;
