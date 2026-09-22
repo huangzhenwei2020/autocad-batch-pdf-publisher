@@ -18,6 +18,11 @@
   <ItemGroup>
     <EmbeddedResource Include="..\Resources\Ribbon\ios-icons.png" LogicalName="Wanluo.Ribbon.IosIcons.png" />
     <Compile Include="..\Shared\ProductVersion.cs" Link="Infrastructure\ProductVersion.cs" />
+    <!-- 建筑模型的纯逻辑层：与建模程序、测试工程共用同一份源码。 -->
+    <Compile Include="..\Shared\BuildingModel\ModelTypes.cs" Link="Features\BuildingModel\Shared\ModelTypes.cs" />
+    <Compile Include="..\Shared\BuildingModel\BuildingModelJson.cs" Link="Features\BuildingModel\Shared\BuildingModelJson.cs" />
+    <Compile Include="..\Shared\BuildingModel\OrthographicProjector.cs" Link="Features\BuildingModel\Shared\OrthographicProjector.cs" />
+    <Compile Include="..\Shared\BuildingModel\SampleModelFactory.cs" Link="Features\BuildingModel\Shared\SampleModelFactory.cs" />
     <Reference Include="PdfSharp" HintPath="..\PdfSharp.dll" Private="true" />
     <None Include="..\ThirdParty\Pdfium\pdfium.dll" Link="pdfium.dll" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\ThirdParty\Pdfium\LICENSES\**\*" Link="licenses\Pdfium\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />

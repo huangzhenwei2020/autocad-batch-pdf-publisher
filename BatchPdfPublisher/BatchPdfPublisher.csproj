@@ -45,6 +45,11 @@
   <ItemGroup>
     <Compile Include="AssemblyInfo.cs" />
     <Compile Include="..\Shared\ProductVersion.cs"><Link>Infrastructure\ProductVersion.cs</Link></Compile>
+    <!-- 建筑模型的纯逻辑层：与建模程序、测试工程共用同一份源码（改这里会同时影响两边）。 -->
+    <Compile Include="..\Shared\BuildingModel\ModelTypes.cs"><Link>Features\BuildingModel\Shared\ModelTypes.cs</Link></Compile>
+    <Compile Include="..\Shared\BuildingModel\BuildingModelJson.cs"><Link>Features\BuildingModel\Shared\BuildingModelJson.cs</Link></Compile>
+    <Compile Include="..\Shared\BuildingModel\OrthographicProjector.cs"><Link>Features\BuildingModel\Shared\OrthographicProjector.cs</Link></Compile>
+    <Compile Include="..\Shared\BuildingModel\SampleModelFactory.cs"><Link>Features\BuildingModel\Shared\SampleModelFactory.cs</Link></Compile>
     <Compile Include="Compatibility\Net40Polyfills.cs" />
     <Compile Include="Commands.cs" />
     <Compile Include="Infrastructure\**\*.cs" />

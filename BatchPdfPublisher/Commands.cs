@@ -130,6 +130,26 @@ namespace BatchPdfPublisher
             Application.ShowModelessDialog(new DetailLayoutForm(document));
         }
 
+        /// <summary>
+        /// 建筑模型的两个搬运工（见 docs\建筑模型与立面剖面生成-开发计划.md §5.0）：
+        /// 模型与投影都在独立程序里，插件只负责"进出"——提取图纸、落图。
+        /// </summary>
+        [CommandMethod("TQTZ")]
+        public void ExportDrawingForBuildingModel()
+        {
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document == null) return;
+            BuildingModelCadBridge.ExportDrawing(document);
+        }
+
+        [CommandMethod("LTTZ")]
+        public void PlaceBuildingModelView()
+        {
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document == null) return;
+            BuildingModelCadBridge.PlaceView(document);
+        }
+
         [CommandMethod("LINEVISION", CommandFlags.Session)]
         [CommandMethod("TXZCAD", CommandFlags.Session)]
         [CommandMethod("TXC", CommandFlags.Session)]

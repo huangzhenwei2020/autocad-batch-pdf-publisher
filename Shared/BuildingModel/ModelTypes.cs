@@ -1,0 +1,337 @@
+using System;
+using System.Collections.Generic;
+
+namespace BatchPdfPublisher.BuildingModel
+{
+    /// <summary>
+    /// 建筑模型的 P0 数据约定：楼层 + 墙 + 洞口 + 楼板 + 柱。
+    ///
+    /// 这一层**故意不依赖 AutoCAD**：它同时被两边的程序共用——
+    /// 建模程序（读模型、算投影、写视图）与主插件的"落图"命令（读视图、写成实体）。
+    /// 用源码链接的方式编进两个工程（见 BatchPdfPublisher*.csproj 与 BuildingModelStudio.csproj），
+    /// 因此**改这里会同时影响程序与插件**。
+    ///
+    /// 单位统一：毫米（mm），双精度；坐标是建筑坐标（平面 X/Y + 竖向 Z=标高）。
+    /// </summary>
+    public static class BuildingModelSchema
+    {
+        /// <summary>中间格式版本。程序与插件版本不一致时靠它给出明确提示。</summary>
+        public const int Version = 1;
+    }
+
+    public sealed class PointModel
+    {
+        public double X { get; set; }
+        public double Y { get; set; }
+
+        public PointModel() { }
+        public PointModel(double x, double y) { X = x; Y = y; }
+    }
+
+    /// <summary>楼层：立面/剖面的竖向基准，也是"层高"的唯一来源。</summary>
+    public sealed class StoreyModel
+    {
+        public string Id { get; set; }
+        public string Name { get; set; }
+        /// <summary>结构标高（mm）。</summary>
+        public double Elevation { get; set; }
+        /// <summary>层高（mm）。</summary>
+        public double Height { get; set; }
+    }
+
+    /// <summary>墙：轴线两端 + 厚度 + 高度（从所属楼层的标高起算）。</summary>
+    public sealed class WallModel
+    {
+        public string Id { get; set; }
+        public string StoreyId { get; set; }
+        public double X1 { get; set; }
+        public double Y1 { get; set; }
+        public double X2 { get; set; }
+        public double Y2 { get; set; }
+        public double Thickness { get; set; } = 200d;
+        /// <summary>墙高；0 表示取所属楼层的层高。</summary>
+        public double Height { get; set; }
+        public string Material { get; set; }
+    }
+
+    /// <summary>洞口（门窗）：挂在某道墙上，沿墙轴线的定位 + 宽高 + 窗台高。</summary>
+    public sealed class OpeningModel
+    {
+        public string Id { get; set; }
+        public string HostWallId { get; set; }
+        /// <summary>门窗编号（对应现有门窗参数库的类型）。</summary>
+        public string Code { get; set; }
+        /// <summary>窗 / 门 / 洞口。</summary>
+        public string Kind { get; set; } = "窗";
+        /// <summary>洞口中心沿墙轴线到墙起点的距离（mm）。</summary>
+        public double Offset { get; set; }
+        public double Width { get; set; }
+        public double Height { get; set; }
+        /// <summary>窗台高（相对所属楼层标高，mm）。</summary>
+        public double Sill { get; set; }
+    }
+
+    /// <summary>楼板：闭合轮廓 + 板厚 + 板顶标高。</summary>
+    public sealed class SlabModel
+    {
+        public string Id { get; set; }
+        public string StoreyId { get; set; }
+        public List<PointModel> Outline { get; set; } = new List<PointModel>();
+        public double Thickness { get; set; } = 120d;
+        /// <summary>板顶标高（mm）。</summary>
+        public double TopElevation { get; set; }
+    }
+
+    /// <summary>柱：平面矩形 + 高度（从所属楼层标高起算）。</summary>
+    public sealed class ColumnModel
+    {
+        public string Id { get; set; }
+        public string StoreyId { get; set; }
+        public double X { get; set; }
+        public double Y { get; set; }
+        public double Width { get; set; } = 400d;
+        public double Depth { get; set; } = 400d;
+        /// <summary>柱高；0 表示取所属楼层的层高。</summary>
+        public double Height { get; set; }
+    }
+
+    /// <summary>整个建筑模型（P0 只含体量所必需的构件）。</summary>
+    public sealed class BuildingModelDocument
+    {
+        public int SchemaVersion { get; set; } = BuildingModelSchema.Version;
+        public string Name { get; set; }
+        public List<StoreyModel> Storeys { get; set; } = new List<StoreyModel>();
+        public List<WallModel> Walls { get; set; } = new List<WallModel>();
+        public List<OpeningModel> Openings { get; set; } = new List<OpeningModel>();
+        public List<SlabModel> Slabs { get; set; } = new List<SlabModel>();
+        public List<ColumnModel> Columns { get; set; } = new List<ColumnModel>();
+
+        public StoreyModel FindStorey(string id)
+        {
+            if (string.IsNullOrWhiteSpace(id)) return null;
+            foreach (var storey in Storeys)
+                if (storey != null && string.Equals(storey.Id, id, StringComparison.OrdinalIgnoreCase)) return storey;
+            return null;
+        }
+
+        /// <summary>墙的底标高（= 所属楼层标高）；找不到楼层时按 0。</summary>
+        public double BaseElevationOf(WallModel wall)
+        {
+            var storey = wall == null ? null : FindStorey(wall.StoreyId);
+            return storey == null ? 0d : storey.Elevation;
+        }
+
+        /// <summary>墙高：显式给了就用它，否则取层高，再不行按 3000。</summary>
+        public double HeightOf(WallModel wall)
+        {
+            if (wall == null) return 0d;
+            if (wall.Height > 0.5d) return wall.Height;
+            var storey = FindStorey(wall.StoreyId);
+            if (storey != null && storey.Height > 0.5d) return storey.Height;
+            return 3000d;
+        }
+
+        public double HeightOf(ColumnModel column)
+        {
+            if (column == null) return 0d;
+            if (column.Height > 0.5d) return column.Height;
+            var storey = FindStorey(column.StoreyId);
+            if (storey != null && storey.Height > 0.5d) return storey.Height;
+            return 3000d;
+        }
+    }
+
+    // ───────────────────────── 视图（抽象视图的载体） ─────────────────────────
+
+    public enum ViewKind
+    {
+        Elevation = 0,
+        Section = 1
+    }
+
+    /// <summary>立面方向：南 = 从南往北看（默认取"从 -Y 看向 +Y"）。</summary>
+    public enum ElevationDirection
+    {
+        South = 0,
+        North = 1,
+        East = 2,
+        West = 3
+    }
+
+    /// <summary>剖切线的走向：沿 Y 的竖直线（切 X=常数）或沿 X 的水平线（切 Y=常数）。</summary>
+    public enum SectionAxis
+    {
+        CutX = 0,
+        CutY = 1
+    }
+
+    /// <summary>视图定义：从哪看 / 在哪剖 / 比例多少。可重建，不存几何。</summary>
+    public sealed class ViewDefinitionModel
+    {
+        public string Id { get; set; }
+        public string Title { get; set; }
+        public ViewKind Kind { get; set; } = ViewKind.Elevation;
+        /// <summary>视图比例的分母（1:100 → 100）。</summary>
+        public int Scale { get; set; } = 100;
+
+        // 立面
+        public ElevationDirection Direction { get; set; } = ElevationDirection.South;
+
+        // 剖面
+        public SectionAxis CutAxis { get; set; } = SectionAxis.CutX;
+        /// <summary>剖切线位置（mm）。</summary>
+        public double CutPosition { get; set; }
+        /// <summary>剖视方向：+1 表示看向坐标增大的一侧，-1 表示减小。</summary>
+        public int ViewSign { get; set; } = 1;
+        /// <summary>只投影剖切面以外这个深度内的构件（mm，0 = 不限）。</summary>
+        public double ViewDepth { get; set; }
+        /// <summary>参与投影的楼层；空 = 全部。</summary>
+        public List<string> StoreyIds { get; set; } = new List<string>();
+        /// <summary>model = 跟随模型重算；drawing = 已手工深化，不再自动重算。</summary>
+        public string State { get; set; } = "model";
+    }
+
+    /// <summary>视图里的一条线（已投影到视图平面：U 水平、Z 竖向、单位 mm）。</summary>
+    public sealed class ViewLine
+    {
+        public string Layer { get; set; }
+        public double X1 { get; set; }
+        public double Y1 { get; set; }
+        public double X2 { get; set; }
+        public double Y2 { get; set; }
+        /// <summary>可选：线型名（如 HIDDEN）；空 = 随层。</summary>
+        public string LineType { get; set; }
+    }
+
+    /// <summary>视图里的一行文字（标高、图名、编号等）。</summary>
+    public sealed class ViewText
+    {
+        public string Layer { get; set; }
+        public string Text { get; set; }
+        public double X { get; set; }
+        public double Y { get; set; }
+        /// <summary>字高（mm，已按出图比例换算到模型空间）。</summary>
+        public double Height { get; set; } = 250d;
+    }
+
+    /// <summary>视图里的一块填充（剖面剖切填充）。</summary>
+    public sealed class ViewHatch
+    {
+        public string Layer { get; set; }
+        /// <summary>填充图案名（CAD 里的 PAT 名；P0 用 SOLID 或 ANSI31）。</summary>
+        public string Pattern { get; set; } = "SOLID";
+        public double Scale { get; set; } = 1d;
+        public double Angle { get; set; }
+        /// <summary>边界多边形（视图平面坐标，闭合；不必重复首点）。</summary>
+        public List<PointModel> Boundary { get; set; } = new List<PointModel>();
+    }
+
+    /// <summary>一张视图的产物：线 + 文字 + 填充。插件"落图"命令按图层把它们建成 CAD 实体。</summary>
+    public sealed class ViewDocument
+    {
+        public int SchemaVersion { get; set; } = BuildingModelSchema.Version;
+        public string Id { get; set; }
+        public string Title { get; set; }
+        public int Scale { get; set; } = 100;
+        public ViewKind Kind { get; set; }
+        /// <summary>视图平面原点对应的模型坐标（插件用它在 DWG 里定位）。</summary>
+        public double OriginX { get; set; }
+        public double OriginY { get; set; }
+        public List<ViewLine> Lines { get; set; } = new List<ViewLine>();
+        public List<ViewText> Texts { get; set; } = new List<ViewText>();
+        public List<ViewHatch> Hatches { get; set; } = new List<ViewHatch>();
+        /// <summary>生成时用到的模型版本，便于判断是否需要重算。</summary>
+        public string ModelRevision { get; set; }
+        /// <summary>投影过程中的提示（例如斜墙按包围盒近似）。</summary>
+        public List<string> Warnings { get; set; } = new List<string>();
+    }
+
+    // ───────────────────────── "提取图纸"的中间格式 ─────────────────────────
+
+    /// <summary>从 DWG 提取出来的一条图元（P0 只取后续识别需要的类型）。</summary>
+    public sealed class DrawingEntityModel
+    {
+        /// <summary>LINE / LWPOLYLINE / POLYLINE / ARC / CIRCLE / INSERT / TEXT / MTEXT。</summary>
+        public string Type { get; set; }
+        public string Layer { get; set; }
+        /// <summary>块参照的块名（INSERT 才有）。</summary>
+        public string BlockName { get; set; }
+        /// <summary>顶点（LINE 两端、多段线各顶点、弧的起点/终点）。</summary>
+        public List<PointModel> Points { get; set; } = new List<PointModel>();
+        public double X { get; set; }
+        public double Y { get; set; }
+        public double Rotation { get; set; }
+        public double Scale { get; set; } = 1d;
+        /// <summary>半径（ARC/CIRCLE）。</summary>
+        public double Radius { get; set; }
+        /// <summary>文字内容（TEXT/MTEXT）。</summary>
+        public string Text { get; set; }
+        public double TextHeight { get; set; }
+        /// <summary>图元在图纸上的句柄，便于回写与核对。</summary>
+        public string Handle { get; set; }
+    }
+
+    public sealed class LayerInfoModel
+    {
+        public string Name { get; set; }
+        public short Color { get; set; }
+        public string LineType { get; set; }
+    }
+
+    /// <summary>"提取图纸"的产物：图层清单 + 图元清单。识别（P3）在程序侧做。</summary>
+    public sealed class DrawingImportDocument
+    {
+        public int SchemaVersion { get; set; } = BuildingModelSchema.Version;
+        public string DrawingName { get; set; }
+        public string DrawingPath { get; set; }
+        /// <summary>提取时间（本地时间，ISO 8601）。</summary>
+        public string ExtractedAt { get; set; }
+        public List<LayerInfoModel> Layers { get; set; } = new List<LayerInfoModel>();
+        public List<DrawingEntityModel> Entities { get; set; } = new List<DrawingEntityModel>();
+    }
+
+    /// <summary>
+    /// 视图图层键与默认样式。
+    ///
+    /// P0 先在这里硬编码（插件"落图"时若图层不存在就按这里的颜色/线型创建）；
+    /// P5 会把它接到制图标准（`DraftingStandardService`）上，让用户能改名字和颜色。
+    /// </summary>
+    public static class ViewLayers
+    {
+        public const string Cut = "WL-模型-剖到";
+        public const string Elevation = "WL-模型-立面";
+        public const string Opening = "WL-模型-门窗";
+        public const string Ground = "WL-模型-地坪";
+        public const string CutHatch = "WL-模型-剖切填充";
+        public const string LevelText = "WL-模型-标高";
+        public const string Title = "WL-模型-图名";
+
+        public sealed class Style
+        {
+            public string Name;
+            public short Color;
+            public string LineType;
+            /// <summary>线宽（mm×100，CAD 的 LineWeight 用百分之一毫米）。</summary>
+            public int LineWeight;
+            public string Description;
+        }
+
+        public static readonly Style[] All =
+        {
+            new Style { Name = Cut, Color = 7, LineType = "Continuous", LineWeight = 50, Description = "剖切到的构件轮廓（粗）" },
+            new Style { Name = Elevation, Color = 7, LineType = "Continuous", LineWeight = 25, Description = "立面上可见的轮廓（中）" },
+            new Style { Name = Opening, Color = 7, LineType = "Continuous", LineWeight = 18, Description = "门窗洞口与分格（细）" },
+            new Style { Name = Ground, Color = 7, LineType = "Continuous", LineWeight = 70, Description = "室外地坪线（特粗）" },
+            new Style { Name = CutHatch, Color = 8, LineType = "Continuous", LineWeight = 13, Description = "剖切填充" },
+            new Style { Name = LevelText, Color = 7, LineType = "Continuous", LineWeight = 13, Description = "标高符号与数值" },
+            new Style { Name = Title, Color = 7, LineType = "Continuous", LineWeight = 25, Description = "图名与比例" }
+        };
+
+        public static Style Find(string name)
+        {
+            foreach (var style in All)
+                if (string.Equals(style.Name, name, StringComparison.OrdinalIgnoreCase)) return style;
+            return null;
+        }
+    }
+}
