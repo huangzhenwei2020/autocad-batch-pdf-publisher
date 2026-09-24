@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
-using System.Windows.Interop;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
@@ -55,7 +54,7 @@ namespace BatchPdfPublisher.Services
                     MessageBox.Show("旧登记已保留，并已补建便携图框模板。以后复制整个插件文件夹即可使用。", "登记图框", MessageBoxButton.OK, MessageBoxImage.Information);
                     return;
                 }
-                MessageBox.Show("图块“" + context.BlockName + "”的这个版本已经登记。请在图框库中双击对应项进行修改。", "重复图框", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show("图块“" + context.BlockName + "”的这个版本已经登记。请在图框登记窗口中选择对应项修改。", "重复图框", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
             if (sameName.Count > 0 && MessageBox.Show("已存在同名图框，但当前图块的属性或几何定义不同。是否把它登记为同名图块的另一个版本？", "同名图框版本", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
@@ -100,19 +99,21 @@ namespace BatchPdfPublisher.Services
 
         private static FrameDefinition ShowDialog(Document document, FrameContext context, FrameDefinition existing)
         {
-            var dialog = new FrameRegistrationWindow(context.BlockName, context.Guess, context.Attributes, existing,
+            using (var dialog = new FrameRegistrationEditorForm(context.BlockName, context.Guess, context.Attributes, existing,
                 context.AttributeTagSignature, context.DefinitionSignature, context.AspectRatio,
-                () => ScanProjectCadFiles(document, context.BlockName));
-            new WindowInteropHelper(dialog).Owner = Autodesk.AutoCAD.ApplicationServices.Application.MainWindow.Handle;
-            var accepted = dialog.ShowDialog() == true;
-            if (dialog.RequestedIssues.Count > 0) ScheduleIssueAction(dialog.RequestedIssues, dialog.OpenAllRequested);
-            if (!accepted) return null;
-            if (dialog.PickLayoutRangeRequested)
+                () => ScanProjectCadFiles(document, context.BlockName)))
             {
-                try { PromptLayoutRange(document, dialog.Definition); }
-                catch (Exception exception) { MessageBox.Show("排版范围未写入：" + exception.Message, "登记图框", MessageBoxButton.OK, MessageBoxImage.Warning); }
+                var accepted = Autodesk.AutoCAD.ApplicationServices.Application.ShowModalDialog(dialog)
+                    == System.Windows.Forms.DialogResult.OK;
+                if (dialog.RequestedIssues.Count > 0) ScheduleIssueAction(dialog.RequestedIssues, dialog.OpenAllRequested);
+                if (!accepted) return null;
+                if (dialog.PickLayoutRangeRequested)
+                {
+                    try { PromptLayoutRange(document, dialog.Definition); }
+                    catch (Exception exception) { MessageBox.Show("排版范围未写入：" + exception.Message, "登记图框", MessageBoxButton.OK, MessageBoxImage.Warning); }
+                }
+                return dialog.Definition;
             }
-            return dialog.Definition;
         }
 
         private static bool PromptLayoutRange(Document document, FrameDefinition definition)

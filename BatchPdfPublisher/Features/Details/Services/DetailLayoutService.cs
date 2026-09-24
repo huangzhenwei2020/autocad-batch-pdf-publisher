@@ -164,7 +164,7 @@ namespace BatchPdfPublisher.Services
             if (document == null) throw new ArgumentNullException("document");
             if (frame == null || string.IsNullOrWhiteSpace(frame.BlockName)) throw new InvalidOperationException("请选择登记图框。");
             scale = Math.Max(1, scale);
-            FrameTemplateStore.EnsureAvailable(document.Database, frame);
+            FrameTemplateStore.EnsureAvailable(document, frame);
             var point = document.Editor.GetPoint("\n指定大样排版图框的左下角插入点: ");
             if (point.Status != PromptStatus.OK) return null;
             var anchor = new DetailLayoutFrameAnchor { Origin = point.Value, FrameRegistrationId = frame.RegistrationId, FrameBlockName = frame.BlockName, Scale = scale };
@@ -218,7 +218,7 @@ namespace BatchPdfPublisher.Services
         {
             if (document == null) throw new ArgumentNullException("document");
             var plan = ComputeLayout(items, frame, scale, options);
-            FrameTemplateStore.EnsureAvailable(document.Database, frame);
+            FrameTemplateStore.EnsureAvailable(document, frame);
             var point = document.Editor.GetPoint("\n指定正式大样排版第一张图框的左下角插入点: ");
             if (point.Status != PromptStatus.OK) return 0;
             return InsertPlan(document, plan, frame, scale, options, point.Value, true);
@@ -469,7 +469,7 @@ namespace BatchPdfPublisher.Services
                 throw new InvalidOperationException("当前图框尚未登记排版范围。");
             scale = Math.Max(1, scale);
             pageCount = Math.Max(1, pageCount);
-            FrameTemplateStore.EnsureAvailable(document.Database, frame);
+            FrameTemplateStore.EnsureAvailable(document, frame);
             var paper = PaperSizeCatalog.GetSize(frame.PaperSize, frame.Extension,
                 string.IsNullOrWhiteSpace(frame.PaperOrientation) ? "横向" : frame.PaperOrientation);
             var pageWidth = paper[0] * scale;

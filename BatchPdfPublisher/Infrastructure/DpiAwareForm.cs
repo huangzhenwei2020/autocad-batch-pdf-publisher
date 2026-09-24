@@ -13,8 +13,9 @@ namespace BatchPdfPublisher.Views
     {
         private bool _screenBoundsApplied;
 
-        protected DpiAwareForm()
+        public DpiAwareForm()
         {
+            Icon = CadBrandIcon.CreateWindowIcon();
             AutoScaleMode = AutoScaleMode.Dpi;
             AutoScaleDimensions = new SizeF(96F, 96F);
             SizeGripStyle = SizeGripStyle.Show;

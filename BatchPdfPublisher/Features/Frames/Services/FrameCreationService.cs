@@ -39,7 +39,7 @@ namespace BatchPdfPublisher.Services
             if (document == null) return false;
             var editor = document.Editor; var point = editor.GetPoint("\n指定图框左下角插入点: ");
             if (point.Status != PromptStatus.OK) return false;
-            using (document.LockDocument()) using (var tr = document.Database.TransactionManager.StartTransaction())
+            using (AcquireWriteLock(document)) using (var tr = document.Database.TransactionManager.StartTransaction())
             {
                 DraftingStandardService.EnsureAll(document.Database, tr);
                 var space = (BlockTableRecord)tr.GetObject(document.Database.CurrentSpaceId, OpenMode.ForWrite);
@@ -56,13 +56,13 @@ namespace BatchPdfPublisher.Services
             if (drawingScale <= 0) throw new InvalidOperationException("图框比例必须是大于 0 的整数。");
 
             var templateTiming = System.Diagnostics.Stopwatch.StartNew();
-            FrameTemplateStore.EnsureAvailable(document.Database, frame);
+            FrameTemplateStore.EnsureAvailable(document, frame);
             var templateMilliseconds = templateTiming.ElapsedMilliseconds;
             var point = document.Editor.GetPoint("\n指定登记图框左下角插入点: ");
             if (point.Status != PromptStatus.OK) return false;
 
             var insertionTiming = System.Diagnostics.Stopwatch.StartNew();
-            using (document.LockDocument())
+            using (AcquireWriteLock(document))
             using (var transaction = document.Database.TransactionManager.StartTransaction())
             {
                 var database = document.Database;
@@ -116,7 +116,7 @@ namespace BatchPdfPublisher.Services
             var second = editor.GetCorner(new PromptCornerOptions("\n指定属性文字框对角点: ", first.Value));
             if (second.Status != PromptStatus.OK) return false;
             var center = new Point3d((first.Value.X + second.Value.X) / 2d, (first.Value.Y + second.Value.Y) / 2d, first.Value.Z);
-            using (document.LockDocument()) using (var tr = document.Database.TransactionManager.StartTransaction())
+            using (AcquireWriteLock(document)) using (var tr = document.Database.TransactionManager.StartTransaction())
             {
                 var style = FindTextStyle(document.Database, tr, font);
                 var text = new AttributeDefinition { Position = center, Height = height, WidthFactor = widthFactor, TextString = property, Tag = property, Prompt = property, Layer = DraftingStandardService.GetLayerName(DraftingStandardProfile.AnnotationTextLayerKey), TextStyleId = style, HorizontalMode = TextHorizontalMode.TextCenter, VerticalMode = TextVerticalMode.TextVerticalMid, AlignmentPoint = center, Constant = false, Verifiable = false };
@@ -155,7 +155,7 @@ namespace BatchPdfPublisher.Services
             catch (Exception exception) { error = "无法读取所选对象范围：" + exception.Message; return null; }
             var actualWidth = Math.Abs(extents.MaxPoint.X - extents.MinPoint.X); var actualHeight = Math.Abs(extents.MaxPoint.Y - extents.MinPoint.Y);
             if (!PaperSizeCatalog.TryIdentify(actualWidth, actualHeight, out detectedPaper, out detectedExtension, out detectedOrientation)) { error = "所选对象的实际尺寸为 " + Math.Round(actualWidth) + " × " + Math.Round(actualHeight) + " mm，不属于图框数据库中的 A0～A4 或常用加长尺寸，不能创建图框块。"; return null; }
-            using (document.LockDocument()) using (var tr = document.Database.TransactionManager.StartTransaction())
+            using (AcquireWriteLock(document)) using (var tr = document.Database.TransactionManager.StartTransaction())
             {
                 var blocks = (BlockTable)tr.GetObject(document.Database.BlockTableId, OpenMode.ForWrite);
                 var paperDisplay = detectedPaper + (string.IsNullOrWhiteSpace(detectedExtension) ? string.Empty : "+" + detectedExtension);
@@ -221,6 +221,14 @@ namespace BatchPdfPublisher.Services
                     DateTime.Now.ToString("O") + " " + message + Environment.NewLine);
             }
             catch { }
+        }
+
+        private static DocumentLock AcquireWriteLock(Document document)
+        {
+            var mode = document.LockMode();
+            return mode == DocumentLockMode.Write || mode == DocumentLockMode.ExclusiveWrite
+                || mode == DocumentLockMode.ProtectedAutoWrite || mode == DocumentLockMode.AutoWrite
+                ? null : document.LockDocument();
         }
 
         private static string SafeName(string value)
