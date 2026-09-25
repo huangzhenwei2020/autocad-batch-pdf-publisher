@@ -3234,7 +3234,7 @@ namespace BatchPdfPublisher.Views
             }
         }
 
-        private sealed class DarkGridScrollBar : Control
+        internal sealed class DarkGridScrollBar : Control
         {
             private readonly DataGridView _grid;
             private readonly bool _vertical;
@@ -3330,6 +3330,7 @@ namespace BatchPdfPublisher.Views
             protected override void OnPaint(PaintEventArgs e)
             {
                 e.Graphics.Clear(Parent == null ? Surface : Parent.BackColor);
+                if (Maximum <= 0) return;
                 using (var track = new System.Drawing.Pen(System.Drawing.Color.FromArgb(40, 61, 78), 2F))
                 {
                     if (_vertical) e.Graphics.DrawLine(track, Width / 2, 3, Width / 2, Height - 4);
@@ -3400,7 +3401,7 @@ namespace BatchPdfPublisher.Views
             }
         }
 
-        private sealed class BufferedDataGridView : DataGridView
+        internal sealed class BufferedDataGridView : DataGridView
         {
             public BufferedDataGridView()
             {

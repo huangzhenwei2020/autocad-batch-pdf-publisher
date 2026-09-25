@@ -10,12 +10,12 @@ using BatchPdfPublisher.Services;
 
 namespace BatchPdfPublisher.Views
 {
-    public sealed class AttributeBatchForm : DpiAwareForm
+    public sealed partial class AttributeBatchForm : CadAttributeWindow
     {
         private readonly Document _document;
-        private readonly ComboBox _sort = new ComboBox();
-        private readonly ComboBox _scope = new ComboBox();
-        private readonly ComboBox _tag = new ComboBox();
+        private readonly PublisherForm.ThemedComboBox _sort = new PublisherForm.ThemedComboBox();
+        private readonly PublisherForm.ThemedComboBox _scope = new PublisherForm.ThemedComboBox();
+        private readonly PublisherForm.ThemedComboBox _tag = new PublisherForm.ThemedComboBox();
         private readonly TextBox _seed = new TextBox();
         private readonly CheckBox _increment = new CheckBox();
         private readonly CheckBox _letters = new CheckBox();
@@ -23,16 +23,17 @@ namespace BatchPdfPublisher.Views
         private readonly TextBox _suffix = new TextBox();
         private readonly TextBox _tolerance = new TextBox();
         private readonly NumericUpDown _step = new NumericUpDown();
+        private readonly TextBox _stepText = new TextBox();
         private readonly CheckBox _reverse = new CheckBox();
         private readonly CheckBox _prefixIncrement = new CheckBox();
         private readonly CheckBox _suffixIncrement = new CheckBox();
-        private readonly ComboBox _presets = new ComboBox();
-        private readonly ComboBox _incrementMode = new ComboBox();
-        private readonly ComboBox _incrementStart = new ComboBox();
-        private readonly ComboBox _incrementPosition = new ComboBox();
-        private readonly ComboBox _direction = new ComboBox();
-        private readonly FlowLayoutPanel _advancedPanel = new FlowLayoutPanel();
-        private readonly DataGridView _grid = new DataGridView();
+        private readonly PublisherForm.ThemedComboBox _presets = new PublisherForm.ThemedComboBox();
+        private readonly PublisherForm.ThemedComboBox _incrementMode = new PublisherForm.ThemedComboBox();
+        private readonly PublisherForm.ThemedComboBox _incrementStart = new PublisherForm.ThemedComboBox();
+        private readonly PublisherForm.ThemedComboBox _incrementPosition = new PublisherForm.ThemedComboBox();
+        private readonly PublisherForm.ThemedComboBox _direction = new PublisherForm.ThemedComboBox();
+        private readonly TableLayoutPanel _advancedPanel = new TableLayoutPanel();
+        private readonly DataGridView _grid = new PublisherForm.BufferedDataGridView();
         private readonly Label _status = new Label();
         private readonly BindingList<AttributePreviewRow> _previewRows = new BindingList<AttributePreviewRow>();
         private List<AttributeTarget> _targets = new List<AttributeTarget>();
@@ -47,117 +48,15 @@ namespace BatchPdfPublisher.Views
         private bool _loadingOptions;
 
         public AttributeBatchForm(Document document)
+            : base("批量修改图块属性  " + WanluoArchitectureTools.ProductVersion.Display,
+                new System.Drawing.Size(1360, 760), new System.Drawing.Size(1100, 650))
         {
             _document = document;
             _settings = AttributeBatchSettings.Load();
             _presetItems = AttributePresetStore.Load();
             _registeredBlockNames = new HashSet<string>(new PublishPlanStore().LoadFrames().Select(x => x.BlockName).Where(x => !string.IsNullOrWhiteSpace(x)), StringComparer.OrdinalIgnoreCase);
-            Text = "批量修改图块属性  " + WanluoArchitectureTools.ProductVersion.Display; Width = 1040; Height = 620; StartPosition = FormStartPosition.CenterParent;
             Build();
-            FormClosed += (s, e) => _markers.Dispose();
-        }
-
-        private void Build()
-        {
-            var root = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1, Padding = Padding.Empty };
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize)); root.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
-            Controls.Add(root);
-            var top = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, RowCount = 3, ColumnCount = 1, Padding = new Padding(8, 6, 8, 4), BackColor = System.Drawing.Color.FromArgb(247, 249, 252) };
-            var schemeRow = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, WrapContents = false };
-            schemeRow.Controls.Add(LabelFor("命名方案")); _presets.Width = 150; _presets.DropDownStyle = ComboBoxStyle.DropDownList; schemeRow.Controls.Add(_presets);
-            var loadPreset = new Button { Text = "载入", AutoSize = true }; loadPreset.Click += (s, e) => LoadPreset(); Tip(loadPreset, "把选中的命名方案载入到起始值、递增方式、排序和前后缀设置中。"); schemeRow.Controls.Add(loadPreset);
-            var savePreset = new Button { Text = "保存", AutoSize = true }; savePreset.Click += (s, e) => SavePreset(); Tip(savePreset, "把当前编号规则保存为可重复使用的命名方案。"); schemeRow.Controls.Add(savePreset);
-            var deletePreset = new Button { Text = "删除", AutoSize = true }; deletePreset.Click += (s, e) => DeletePreset(); Tip(deletePreset, "删除当前选中的命名方案，不影响图块属性。"); schemeRow.Controls.Add(deletePreset);
-            var select = new Button { Text = "框选图块", AutoSize = true, Margin = new Padding(18, 0, 3, 0) }; select.Click += (s, e) => SelectBlocks(); Tip(select, "返回 CAD 框选图块，读取所有不同图块定义中的属性标记和值。"); schemeRow.Controls.Add(select);
-            schemeRow.Controls.Add(LabelFor("属性标记")); _tag.Width = 135; _tag.DropDownStyle = ComboBoxStyle.DropDownList; _tag.SelectedIndexChanged += (s, e) => RefreshGrid(); schemeRow.Controls.Add(_tag);
-            top.Controls.Add(schemeRow, 0, 0);
-
-            var commonRow = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, WrapContents = true, Padding = new Padding(0, 5, 0, 0) };
-            commonRow.Controls.Add(LabelFor("固定内容")); _seed.Width = 135; _seed.TextChanged += (s, e) => RefreshGrid(); commonRow.Controls.Add(_seed);
-            var useFirst = new Button { Text = "取首项", AutoSize = true }; useFirst.Click += (s, e) => UseFirstValue(); Tip(useFirst, "把排序后第一项的现有属性值作为新的起始值。"); commonRow.Controls.Add(useFirst);
-            commonRow.Controls.Add(LabelFor("编号方式")); _incrementMode.Width = 205; _incrementMode.DropDownStyle = ComboBoxStyle.DropDownList; _incrementMode.MaxDropDownItems = 24;
-            _incrementMode.Items.AddRange(new object[]
-            {
-                "不递增",
-                "数字：1, 2, 3…（支持01/001）",
-                "字母大写：A, B, C…",
-                "字母小写：a, b, c…",
-                "罗马大写：I, II, III…",
-                "罗马小写：i, ii, iii…",
-                "中文数字：一, 二, 三…",
-                "中文大写：壹, 贰, 叁…",
-                "带圈数字：①, ②, ③…",
-                "括号数字：⑴, ⑵, ⑶…",
-                "黑圈数字：❶, ❷, ❸…",
-                "双圈数字：⓵, ⓶, ⓷…",
-                "实心圈数字：➊, ➋, ➌…",
-                "半角括号：(1), (2), (3)…",
-                "全角括号：（1）,（2）,（3）…",
-                "方括号：[1], [2], [3]…",
-                "中文括号：（一）,（二）,（三）…",
-                "带圈大写：Ⓐ, Ⓑ, Ⓒ…",
-                "带圈小写：ⓐ, ⓑ, ⓒ…",
-                "括号字母：⒜, ⒝, ⒞…",
-                "半角字母：(A), (B), (C)…",
-                "天干：甲, 乙, 丙…",
-                "地支：子, 丑, 寅…",
-                "中文序数：第一, 第二, 第三…"
-            });
-            var savedStyle = _settings.NumberingStyle.HasValue && _settings.NumberingStyle.Value >= 0 && _settings.NumberingStyle.Value <= (int)AttributeNumberingStyle.ChineseOrdinal
-                ? _settings.NumberingStyle.Value
-                : (_settings.Letters ? (int)AttributeNumberingStyle.LatinUpper : (int)AttributeNumberingStyle.Arabic);
-            _incrementMode.SelectedIndex = !_settings.Increment ? 0 : savedStyle + 1; _incrementMode.SelectedIndexChanged += (s, e) => SyncIncrementMode(); commonRow.Controls.Add(_incrementMode);
-            commonRow.Controls.Add(LabelFor("递增首项")); _incrementStart.Width = 88; _incrementStart.DropDownStyle = ComboBoxStyle.DropDown; _incrementStart.MaxDropDownItems = 20;
-            UpdateIncrementStartItems(_settings.StartItem); _incrementStart.Enabled = _incrementMode.SelectedIndex > 0;
-            _incrementStart.TextChanged += (s, e) => { if (_loadingOptions) return; _settings.StartItem = _incrementStart.Text; SaveSettings(); RefreshGrid(); };
-            Tip(_incrementStart, "可从列表选择难输入的编号，也可直接输入任意首项，例如 5、01、⑦、丙或 C。"); commonRow.Controls.Add(_incrementStart);
-            commonRow.Controls.Add(LabelFor("递增位置")); _incrementPosition.Width = 105; _incrementPosition.DropDownStyle = ComboBoxStyle.DropDownList; _incrementPosition.Items.AddRange(new object[] { "后缀递增", "前缀递增", "前后缀递增" });
-            var incrementPosition = _settings.PrefixIncrement && _settings.SuffixIncrement ? 2 : _settings.PrefixIncrement ? 1 : 0;
-            _prefixIncrement.Checked = incrementPosition != 0; _suffixIncrement.Checked = incrementPosition != 1;
-            _incrementPosition.SelectedIndex = incrementPosition; _incrementPosition.Enabled = _incrementMode.SelectedIndex > 0; _incrementPosition.SelectedIndexChanged += (s, e) => SyncIncrementPosition(); commonRow.Controls.Add(_incrementPosition);
-            commonRow.Controls.Add(LabelFor("方向")); _direction.Width = 90; _direction.DropDownStyle = ComboBoxStyle.DropDownList; _direction.Items.AddRange(new object[] { "正向", "反向" }); _direction.SelectedIndex = _settings.Reverse ? 1 : 0; _direction.SelectedIndexChanged += (s, e) => SyncDirection(); commonRow.Controls.Add(_direction);
-            commonRow.Controls.Add(LabelFor("步长")); _step.Minimum = 1; _step.Maximum = 9999; _step.Width = 62; _step.Value = Math.Max(1, Math.Min(9999, _settings.Step)); _step.ValueChanged += (s, e) => { if (_loadingOptions) return; _settings.Step = (int)_step.Value; SaveSettings(); RefreshGrid(); }; commonRow.Controls.Add(_step);
-            commonRow.Controls.Add(LabelFor("排序")); _sort.Width = 130; _sort.DropDownStyle = ComboBoxStyle.DropDownList; _sort.Items.AddRange(new object[] { "先左右后上下", "先上下后左右" }); _sort.SelectedIndex = Math.Max(0, Math.Min(1, _settings.Sort)); _sort.SelectedIndexChanged += (s, e) => { if (_loadingOptions) return; _settings.Sort = _sort.SelectedIndex; SaveSettings(); ReSort(); }; commonRow.Controls.Add(_sort);
-            commonRow.Controls.Add(LabelFor("前缀")); _prefix.Width = 85; _prefix.TextChanged += (s, e) => RefreshGrid(); commonRow.Controls.Add(_prefix);
-            commonRow.Controls.Add(LabelFor("后缀")); _suffix.Width = 85; _suffix.TextChanged += (s, e) => RefreshGrid(); commonRow.Controls.Add(_suffix);
-            var advancedToggle = new Button { Text = "高级设置 ▼", AutoSize = true }; advancedToggle.Click += (s, e) => ToggleAdvanced(advancedToggle); Tip(advancedToggle, "展开作用范围、行列分组容差和坐标信息。"); commonRow.Controls.Add(advancedToggle);
-            top.Controls.Add(commonRow, 0, 1);
-
-            _advancedPanel.Dock = DockStyle.Top; _advancedPanel.AutoSize = true; _advancedPanel.Visible = false; _advancedPanel.Padding = new Padding(4, 5, 0, 2); _advancedPanel.BackColor = System.Drawing.Color.FromArgb(235, 240, 247);
-            _advancedPanel.Controls.Add(LabelFor("作用范围")); _scope.Width = 150; _scope.DropDownStyle = ComboBoxStyle.DropDownList; _scope.Items.AddRange(new object[] { "所有框选属性图块", "仅登记图框" }); _scope.SelectedIndex = Math.Max(0, Math.Min(1, _settings.Scope)); _scope.SelectedIndexChanged += (s, e) => { _settings.Scope = _scope.SelectedIndex; SaveSettings(); }; _advancedPanel.Controls.Add(_scope);
-            _advancedPanel.Controls.Add(LabelFor("行列容差")); _tolerance.Width = 75; _tolerance.Text = _settings.Tolerance ?? string.Empty; _tolerance.TextChanged += (s, e) => { if (_loadingOptions) return; _settings.Tolerance = _tolerance.Text; SaveSettings(); ReSort(); }; _advancedPanel.Controls.Add(_tolerance);
-            top.Controls.Add(_advancedPanel, 0, 2);
-            root.Controls.Add(top, 0, 0);
-            _grid.Dock = DockStyle.Fill; _grid.AllowUserToAddRows = false; _grid.AllowUserToDeleteRows = false; _grid.AutoGenerateColumns = false; _grid.ReadOnly = false; _grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect; _grid.BackgroundColor = System.Drawing.Color.White; _grid.AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.None; _grid.ColumnHeadersVisible = true; _grid.ColumnHeadersHeight = 34; _grid.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing; _grid.EnableHeadersVisualStyles = false; _grid.ColumnHeadersDefaultCellStyle.BackColor = System.Drawing.Color.FromArgb(225, 232, 242); _grid.ColumnHeadersDefaultCellStyle.ForeColor = System.Drawing.Color.FromArgb(31, 48, 74); _grid.ColumnHeadersDefaultCellStyle.Font = new System.Drawing.Font(Font, System.Drawing.FontStyle.Bold); _grid.AlternatingRowsDefaultCellStyle.BackColor = System.Drawing.Color.FromArgb(247, 249, 252); _grid.RowHeadersVisible = false;
-            _grid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "写入", DataPropertyName = "Selected", Width = 52, ReadOnly = false, Frozen = true });
-            _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "排序序号", DataPropertyName = "Sequence", Width = 70, ReadOnly = true, Frozen = true });
-            _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "图块名称", DataPropertyName = "BlockName", Width = 160, ReadOnly = true });
-            _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "属性标记（TAG）", DataPropertyName = "Tag", Width = 130, ReadOnly = true });
-            _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "修改前属性值", DataPropertyName = "OldValue", Width = 165, ReadOnly = true });
-            _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "NewValue", HeaderText = "修改后属性值（可编辑）", DataPropertyName = "NewValue", Width = 180, ReadOnly = false });
-            _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "State", HeaderText = "检查结果", DataPropertyName = "State", Width = 90, ReadOnly = true });
-            _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "X", HeaderText = "图块插入点 X", DataPropertyName = "X", Width = 110, ReadOnly = true, Visible = false });
-            _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Y", HeaderText = "图块插入点 Y", DataPropertyName = "Y", Width = 110, ReadOnly = true, Visible = false });
-            _grid.DataSource = _previewRows;
-            _grid.CurrentCellDirtyStateChanged += (s, e) => { if (_grid.IsCurrentCellDirty) _grid.CommitEdit(DataGridViewDataErrorContexts.Commit); };
-            _grid.CellValueChanged += (s, e) => { if (!_updatingPreview && e.RowIndex >= 0 && e.ColumnIndex == 0) { RememberPreviewSelection(e.RowIndex); UpdatePreviewStates(); } };
-            _grid.CellEndEdit += GridCellEndEdit;
-            _grid.CellDoubleClick += GridCellDoubleClick;
-            _grid.CellFormatting += GridCellFormatting;
-            root.Controls.Add(_grid, 0, 1);
-            var bottom = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(8) };
-            var apply = new Button { Text = "写入属性", AutoSize = true }; apply.Click += (s, e) => Apply(); Tip(apply, "把预览表中已勾选的修改后值写入 CAD；写入后可用 AutoCAD 撤销。"); bottom.Controls.Add(apply);
-            var close = new Button { Text = "关闭", AutoSize = true }; close.Click += (s, e) => Close(); Tip(close, "关闭批量属性面板并清除临时 CAD 标记。"); bottom.Controls.Add(close);
-            var clearAll = new Button { Text = "取消全选", AutoSize = true }; clearAll.Click += (s, e) => SetPreviewSelection(false); Tip(clearAll, "取消所有预览行的写入勾选，保留预览内容。"); bottom.Controls.Add(clearAll);
-            var selectAll = new Button { Text = "全选", AutoSize = true }; selectAll.Click += (s, e) => SetPreviewSelection(true); Tip(selectAll, "勾选当前属性标记下的全部预览行参与写入。"); bottom.Controls.Add(selectAll);
-            var resetValues = new Button { Text = "恢复自动编号", AutoSize = true }; resetValues.Click += (s, e) => ResetManualValues(); Tip(resetValues, "清除表格中的手工改值，按当前起始值和递增规则重新计算。"); bottom.Controls.Add(resetValues);
-            var next = new Button { Text = "下一项", AutoSize = true }; next.Click += (s, e) => LocateAdjacent(1); Tip(next, "定位排序后的下一图块，并在属性文字附近显示红色标记。"); bottom.Controls.Add(next);
-            var locate = new Button { Text = "定位当前", AutoSize = true }; locate.Click += (s, e) => LocateCurrent(); Tip(locate, "缩放到预览表当前行的图块，并标出对应属性文字。"); bottom.Controls.Add(locate);
-            var previous = new Button { Text = "上一项", AutoSize = true }; previous.Click += (s, e) => LocateAdjacent(-1); Tip(previous, "定位排序后的上一图块，并在属性文字附近显示红色标记。"); bottom.Controls.Add(previous);
-            var more = new Button { Text = "更多 ▾", AutoSize = true }; var menu = BuildMoreMenu(); more.Click += (s, e) => menu.Show(more, 0, more.Height); Tip(more, "打开 CSV 导出、异常定位、全部序号标记和失败日志等辅助功能。"); bottom.Controls.Add(more);
-            _status.AutoSize = true; _status.Margin = new Padding(8, 7, 15, 0); bottom.Controls.Add(_status);
-            root.Controls.Add(bottom, 0, 2);
-            RefreshPresets();
+            FormClosed += (s, e) => { _markers.Dispose(); _toolTip.Dispose(); };
         }
 
         private void SelectBlocks()
@@ -245,7 +144,6 @@ namespace BatchPdfPublisher.Views
 
         private void SaveSettings() { _settings.Save(); }
         private void Tip(Control control, string text) { _toolTip.SetToolTip(control, text); }
-        private static Label LabelFor(string text) => new Label { Text = text, AutoSize = true, Padding = new Padding(5, 7, 0, 0) };
         private void SyncIncrementMode()
         {
             _increment.Checked = _incrementMode.SelectedIndex > 0;
@@ -299,18 +197,14 @@ namespace BatchPdfPublisher.Views
         private void ToggleAdvanced(Button button)
         {
             _advancedPanel.Visible = !_advancedPanel.Visible; button.Text = _advancedPanel.Visible ? "高级设置 ▲" : "高级设置 ▼";
+            if (_advancedRow != null) _advancedRow.Height = _advancedPanel.Visible ? 146 : 58;
+            if (_advancedContentRow != null) _advancedContentRow.Height = _advancedPanel.Visible ? 88 : 0;
+            if (_ruleSidebar != null)
+            {
+                _ruleSidebar.MinimumSize = new System.Drawing.Size(0, _advancedPanel.Visible ? 512 : 424);
+                _ruleSidebar.Parent?.PerformLayout();
+            }
             _grid.Columns["X"].Visible = _advancedPanel.Visible; _grid.Columns["Y"].Visible = _advancedPanel.Visible;
-        }
-        private ContextMenuStrip BuildMoreMenu()
-        {
-            var menu = new ContextMenuStrip();
-            menu.Items.Add("导出预览 CSV", null, (s, e) => ExportPreview());
-            menu.Items.Add("定位下一异常", null, (s, e) => LocateNextWarning());
-            menu.Items.Add("显示全部序号", null, (s, e) => ShowAllOrderMarkers());
-            menu.Items.Add("清除 CAD 标记", null, (s, e) => _markers.Clear());
-            menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add("打开失败日志", null, (s, e) => OpenFailureLog());
-            return menu;
         }
         private void LocateCurrent()
         {
@@ -328,7 +222,7 @@ namespace BatchPdfPublisher.Views
             _presets.Items.Clear(); foreach (var preset in _presetItems.OrderBy(x => x.Name, StringComparer.CurrentCultureIgnoreCase)) _presets.Items.Add(preset.Name);
             if (!string.IsNullOrWhiteSpace(selected))
             {
-                var index = _presets.Items.Cast<string>().ToList().FindIndex(x => string.Equals(x, selected, StringComparison.OrdinalIgnoreCase));
+                var index = _presets.Items.Values.Cast<string>().ToList().FindIndex(x => string.Equals(x, selected, StringComparison.OrdinalIgnoreCase));
                 if (index >= 0) _presets.SelectedIndex = index;
             }
             if (_presets.SelectedIndex < 0 && _presets.Items.Count > 0) _presets.SelectedIndex = 0;
@@ -362,7 +256,7 @@ namespace BatchPdfPublisher.Views
         }
         private void SavePreset()
         {
-            var name = Microsoft.VisualBasic.Interaction.InputBox("请输入方案名称：", "保存命名方案", _presets.SelectedItem as string ?? string.Empty).Trim();
+            var name = CadAttributePrompt.Ask(this, "保存命名方案", _presets.SelectedItem as string ?? string.Empty);
             if (string.IsNullOrWhiteSpace(name)) return;
             var preset = _presetItems.FirstOrDefault(x => string.Equals(x.Name, name, StringComparison.OrdinalIgnoreCase));
             if (preset == null) { preset = new AttributeBatchPreset(); _presetItems.Add(preset); }
@@ -438,6 +332,8 @@ namespace BatchPdfPublisher.Views
         }
         private void UpdateStatusText()
         {
+            if (_selectedCount != null)
+                _selectedCount.Text = "已选 " + _previewRows.Count(x => x.Selected) + " 个属性";
             var tag = _tag.SelectedItem as string;
             var toleranceText = string.IsNullOrWhiteSpace(_tolerance.Text) ? "自动容差" : (CurrentTolerance().HasValue ? "容差 " + _tolerance.Text : "容差输入无效，已自动判断");
             var changed = _previewRows.Count(x => x.Selected && x.State == "将修改");
@@ -450,7 +346,10 @@ namespace BatchPdfPublisher.Views
         {
             if (e.RowIndex < 0) return;
             var row = _grid.Rows[e.RowIndex].DataBoundItem as AttributePreviewRow; if (row == null) return;
-            var color = row.State == "空值" ? System.Drawing.Color.MistyRose : row.State == "重复" ? System.Drawing.Color.LemonChiffon : row.State == "将修改" ? System.Drawing.Color.Honeydew : row.State == "未选" ? System.Drawing.Color.White : System.Drawing.Color.WhiteSmoke;
+            var color = row.State == "空值" ? System.Drawing.Color.FromArgb(76, 40, 48)
+                : row.State == "重复" ? System.Drawing.Color.FromArgb(79, 65, 36)
+                : row.State == "将修改" ? System.Drawing.Color.FromArgb(25, 53, 52)
+                : CadDialogTheme.Surface;
             e.CellStyle.BackColor = color;
         }
         private void LocateNextWarning()
