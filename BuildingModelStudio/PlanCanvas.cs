@@ -98,15 +98,48 @@ namespace Wanluo.BuildingModelStudio
 
         // ───────────────────────── 视图变换 ─────────────────────────
 
+        /// <summary>交给 GDI+ 的屏幕坐标上限（GDI+ 超过 int32 就抛 OverflowException，实测 1e9 可以、2e9 就抛）。</summary>
+        private const double MaxScreenCoordinate = 1e8d;
+
         private PointF ToScreen(double x, double y)
         {
-            return new PointF((float)(_offsetX + x * _scale), (float)(_offsetY - y * _scale));
+            return new PointF((float)ClampScreen(_offsetX + x * _scale), (float)ClampScreen(_offsetY - y * _scale));
+        }
+
+        /// <summary>
+        /// 任何屏幕坐标都先夹进 GDI+ 能接受的范围：
+        /// GDI+ 的 DrawLine 拿到 ±∞ / NaN / 超过 1e9 的坐标就抛 System.OverflowException（"Overflow error."）。
+        /// 屏幕外的构件被夹到边界上，反正也看不见。
+        /// </summary>
+        private static double ClampScreen(double screen)
+        {
+            if (double.IsNaN(screen)) return 0d;
+            if (screen > MaxScreenCoordinate) return MaxScreenCoordinate;
+            if (screen < -MaxScreenCoordinate) return -MaxScreenCoordinate;
+            return screen;
         }
 
         private void ToModel(Point screen, out double x, out double y)
         {
             x = (screen.X - _offsetX) / _scale;
             y = (_offsetY - screen.Y) / _scale;
+        }
+
+        /// <summary>视图变换还能不能用（比例非有限、偏移非有限都会让整块画布画不出来）。</summary>
+        private bool ViewportUsable()
+        {
+            return PlanGrid.IsFinite(_scale) && _scale > 0d
+                && PlanGrid.IsFinite(_offsetX) && PlanGrid.IsFinite(_offsetY);
+        }
+
+        /// <summary>
+        /// 能安全交给 GDI+ 的模型坐标：有限、而且不超出合理范围。
+        /// 模型是从 json 读进来的，文件坏掉或坐标被改成天文数字时，这里挡住就不会再抛 OverflowException。
+        /// </summary>
+        private static bool Sane(double x, double y)
+        {
+            return PlanGrid.IsFinite(x) && PlanGrid.IsFinite(y)
+                && Math.Abs(x) <= 1e9d && Math.Abs(y) <= 1e9d;
         }
 
         public void ZoomExtents()
@@ -122,6 +155,8 @@ namespace Wanluo.BuildingModelStudio
                 points.Add(new PointModel(column.X, column.Y));
             foreach (var slab in _model.Slabs ?? new List<SlabModel>())
                 foreach (var point in slab.Outline ?? new List<PointModel>()) points.Add(point);
+            // 坏数据（NaN / ∞）不能参与取范围，否则比例会变成 NaN，整块画布都画不出来
+            points = points.Where(p => p != null && Sane(p.X, p.Y)).ToList();
             if (points.Count == 0)
             {
                 _scale = 0.08d;
@@ -155,10 +190,38 @@ namespace Wanluo.BuildingModelStudio
 
         protected override void OnPaint(PaintEventArgs e)
         {
-            var g = e.Graphics;
+            // 绘制出错绝不能把整个程序带走（历史上出过一次 OverflowException 弹"未经处理的异常"）。
+            SafeRender(e.Graphics);
+        }
+
+        /// <summary>带兜底的绘制：出错只提示，不抛给 WinForms（画布自检也走这里）。</summary>
+        internal void SafeRender(Graphics g)
+        {
+            try
+            {
+                Render(g);
+                _lastPaintError = null;
+            }
+            catch (Exception exception)
+            {
+                ReportPaintError(g, exception);
+            }
+        }
+
+        /// <summary>把当前视图画到任意 Graphics（画布自检、以后做缩略图都用同一个入口）。</summary>
+        internal void Render(Graphics g)
+        {
+            if (g == null) return;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.Clear(BackColor);
             if (_model == null) { DrawHint(g, "还没有模型：点右侧「新建样例模型」或「打开模型」"); return; }
+            if (!ViewportUsable())
+            {
+                // 比例/偏移坏掉时自愈：恢复默认视图，下一次绘制就正常了
+                DrawHint(g, "视图变换异常，已恢复默认视图。");
+                ZoomExtents();
+                return;
+            }
 
             DrawGrid(g);
             DrawSlabs(g);
@@ -169,22 +232,57 @@ namespace Wanluo.BuildingModelStudio
             DrawGrips(g);
         }
 
+        /// <summary>自检用：直接摆好视图变换，不走鼠标。</summary>
+        internal void SetViewport(double scale, double offsetX, double offsetY)
+        {
+            _scale = scale;
+            _offsetX = offsetX;
+            _offsetY = offsetY;
+            Invalidate();
+        }
+
+        /// <summary>上一次绘制失败的原因；自检拿它判断有没有被兜底救下来。</summary>
+        internal string LastPaintError { get { return _lastPaintError; } }
+
+        /// <summary>自检用：当前视图比例（像素/毫米）。</summary>
+        internal double ViewScale { get { return _scale; } }
+
+        private string _lastPaintError;
+
+        private void ReportPaintError(Graphics g, Exception exception)
+        {
+            var message = exception.GetType().Name + "：" + exception.Message;
+            if (!string.Equals(message, _lastPaintError, StringComparison.Ordinal))
+            {
+                _lastPaintError = message;
+                StatusChanged?.Invoke("显示出错，已跳过本次绘制：" + message);
+            }
+            try
+            {
+                g.Clear(BackColor);
+                DrawHint(g, "显示出错，已跳过本次绘制：" + message);
+            }
+            catch
+            {
+                // 连提示都画不出来就只能算了，别再抛一次
+            }
+        }
+
         private void DrawGrid(Graphics g)
         {
-            // 轴网/网格：1000mm 淡线，5000mm 稍亮
+            // 轴网/网格：1000mm 淡线，每 5 条稍亮。
+            // 线的位置由 PlanGrid 算好（纯逻辑、有数量上限、绝不产生 ∞ / NaN），这里只管画。
+            var lines = PlanGrid.Compute(Width, Height, _scale, _offsetX, _offsetY);
+            if (lines.Count == 0) return;
             using (var thin = new Pen(Color.FromArgb(38, 42, 48)))
             using (var thick = new Pen(Color.FromArgb(58, 64, 72)))
             {
-                var step = 1000d;
-                while (step * _scale < 12d) step *= 5d;
-                for (var x = 0d; ToScreen(x, 0).X < Width + 200; x += step)
-                    g.DrawLine(Math.Abs(Math.IEEERemainder(x, step * 5)) < 0.01 ? thick : thin, ToScreen(x, 0).X, 0, ToScreen(x, 0).X, Height);
-                for (var x = 0d - step; ToScreen(x, 0).X > -200; x -= step)
-                    g.DrawLine(Math.Abs(Math.IEEERemainder(x, step * 5)) < 0.01 ? thick : thin, ToScreen(x, 0).X, 0, ToScreen(x, 0).X, Height);
-                for (var y = 0d; ToScreen(0, y).Y < Height + 200; y += step)
-                    g.DrawLine(Math.Abs(Math.IEEERemainder(y, step * 5)) < 0.01 ? thick : thin, 0, ToScreen(0, y).Y, Width, ToScreen(0, y).Y);
-                for (var y = -step; ToScreen(0, y).Y > -200; y -= step)
-                    g.DrawLine(Math.Abs(Math.IEEERemainder(y, step * 5)) < 0.01 ? thick : thin, 0, ToScreen(0, y).Y, Width, ToScreen(0, y).Y);
+                foreach (var line in lines)
+                {
+                    var pen = line.Major ? thick : thin;
+                    if (line.Vertical) g.DrawLine(pen, line.Screen, 0f, line.Screen, Height);
+                    else g.DrawLine(pen, 0f, line.Screen, Width, line.Screen);
+                }
             }
         }
 
@@ -195,6 +293,7 @@ namespace Wanluo.BuildingModelStudio
             {
                 var outline = slab.Outline ?? new List<PointModel>();
                 if (outline.Count < 3) continue;
+                if (outline.Any(p => p == null || !Sane(p.X, p.Y))) continue;
                 var points = outline.Select(p => ToScreen(p.X, p.Y)).ToArray();
                 g.FillPolygon(fill, points);
             }
@@ -204,6 +303,7 @@ namespace Wanluo.BuildingModelStudio
         {
             foreach (var wall in (_model.Walls ?? new List<WallModel>()).Where(w => Same(w.StoreyId, _storeyId)))
             {
+                if (!Sane(wall.X1, wall.Y1) || !Sane(wall.X2, wall.Y2)) continue;
                 var selected = _selection != null && _selection.Kind == "wall" && Same(_selection.Id, wall.Id);
                 var corners = WallCorners(wall);
                 using (var brush = new SolidBrush(selected ? Color.FromArgb(96, 160, 210) : Color.FromArgb(150, 156, 166)))
@@ -230,6 +330,7 @@ namespace Wanluo.BuildingModelStudio
         {
             foreach (var column in (_model.Columns ?? new List<ColumnModel>()).Where(c => Same(c.StoreyId, _storeyId)))
             {
+                if (!Sane(column.X, column.Y)) continue;
                 var selected = _selection != null && _selection.Kind == "column" && Same(_selection.Id, column.Id);
                 var halfW = Math.Max(1d, column.Width) / 2d;
                 var halfD = Math.Max(1d, column.Depth) / 2d;
@@ -255,6 +356,7 @@ namespace Wanluo.BuildingModelStudio
                 var selected = _selection != null && _selection.Kind == "opening" && Same(_selection.Id, opening.Id);
                 double ax, ay, bx, by;
                 PlanEditing.OpeningSpan(wall, opening, out ax, out ay, out bx, out by);
+                if (!Sane(ax, ay) || !Sane(bx, by)) continue;
                 PlanEditing.WallDirection(wall, out var ux, out var uy);
                 var half = Math.Max(1d, wall.Thickness) / 2d;
                 var nx = -uy * half;

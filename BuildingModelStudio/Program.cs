@@ -19,6 +19,9 @@ namespace Wanluo.BuildingModelStudio
     /// </summary>
     internal static class Program
     {
+        /// <summary>命令行模式（生成/自检）：出错只写日志，不弹对话框。</summary>
+        internal static bool Headless;
+
         [STAThread]
         private static void Main(string[] args)
         {
@@ -26,6 +29,7 @@ namespace Wanluo.BuildingModelStudio
             //   dotnet 万落建筑模型.dll --generate [<项目文件夹>] [<模型名称>]
             if (args != null && args.Length > 0 && string.Equals(args[0], "--generate", StringComparison.OrdinalIgnoreCase))
             {
+                Headless = true;
                 var folder = args.Length > 1 && !string.IsNullOrWhiteSpace(args[1])
                     ? args[1]
                     : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "万落建筑项目", "建筑模型样例");
@@ -46,10 +50,34 @@ namespace Wanluo.BuildingModelStudio
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
+            // 界面线程兜底：以后任何没被处理的异常都写日志 + 中文提示，
+            // 不再弹 .NET 那串"应用程序的组件中发生了未经处理的异常"英文堆栈。
+            Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+            Application.ThreadException += (sender, args) => CrashLog.Report(args.Exception);
+            AppDomain.CurrentDomain.UnhandledException += (sender, args) => CrashLog.Report(args.ExceptionObject as Exception);
+
+            // 画布自检：不弹窗口，把平面画布真正画到离屏位图上（含极端比例、坏模型、坏 Graphics）。
+            //   dotnet 万落建筑模型.dll --selftest-canvas
+            if (args != null && args.Length > 0 && string.Equals(args[0], "--selftest-canvas", StringComparison.OrdinalIgnoreCase))
+            {
+                Headless = true;
+                try
+                {
+                    CanvasSelfTest.Run(Console.WriteLine);
+                }
+                catch (Exception exception)
+                {
+                    Console.Error.WriteLine("FAIL " + exception);
+                    Environment.ExitCode = 1;
+                }
+                return;
+            }
+
             // 自检模式：把主窗口真正构造并显示一次，确认布局与画布不会抛异常。
             //   dotnet 万落建筑模型.dll --selftest
             if (args != null && args.Length > 0 && string.Equals(args[0], "--selftest", StringComparison.OrdinalIgnoreCase))
             {
+                Headless = true;
                 try
                 {
                     using (var form = new MainForm())
@@ -60,8 +88,14 @@ namespace Wanluo.BuildingModelStudio
                         if (canvas == null) throw new InvalidOperationException("主窗口里没有找到画布控件。");
                         if (canvas.Model == null) throw new InvalidOperationException("画布没有加载模型。");
                         if (canvas.Model.Storeys.Count == 0) throw new InvalidOperationException("模型没有楼层。");
+                        // 真正走一次窗口绘制（WM_PAINT）：以前 DrawGrid 会在这里死循环并抛 OverflowException
+                        canvas.Refresh();
+                        Application.DoEvents();
+                        if (canvas.LastPaintError != null)
+                            throw new InvalidOperationException("画布真实绘制失败：" + canvas.LastPaintError);
                         Console.WriteLine("PASS 主窗口构造与画布装载：楼层 " + canvas.Model.Storeys.Count
-                            + "、墙 " + canvas.Model.Walls.Count + "、洞口 " + canvas.Model.Openings.Count);
+                            + "、墙 " + canvas.Model.Walls.Count + "、洞口 " + canvas.Model.Openings.Count
+                            + "（已真实绘制一次，无异常）");
                         form.Close();
                     }
                 }
