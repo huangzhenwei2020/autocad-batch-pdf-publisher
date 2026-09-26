@@ -145,6 +145,15 @@ namespace BatchPdfPublisher.BuildingModel
             };
         }
 
+        /// <summary>门窗表视图的定义（表格类视图：没有方向/剖切位置，只有图名与比例）。</summary>
+        public static ViewDefinitionModel CreateScheduleView(string name)
+        {
+            return new ViewDefinitionModel
+            {
+                Id = "schedule", Title = "门窗表", Kind = ViewKind.Schedule, Scale = 100
+            };
+        }
+
         private static ViewDefinitionModel Elevation(string id, string title, ElevationDirection direction)
         {
             return new ViewDefinitionModel

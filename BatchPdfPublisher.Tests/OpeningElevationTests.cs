@@ -27,7 +27,65 @@ internal static class OpeningElevationTests
         SimplifiesAtHundredthScale();
         FallsBackWhenParametersInvalid();
         AnchorsAndLabels();
-        Console.WriteLine("PASS 立面门窗：分格与开启线 / 背立面镜像 / 遮挡裁剪 / 自定义分格 / 1:100-1:50 详简 / 参数兜底 / 可点选锚点与编号");
+        DimensionsAndSchedule();
+        Console.WriteLine("PASS 立面门窗：分格与开启线 / 背立面镜像 / 遮挡裁剪 / 自定义分格 / 1:100-1:50 详简 / 参数兜底 / 可点选锚点与编号 / 尺寸与门窗表");
+    }
+
+    // ───────────────────────── 8. 竖向尺寸与门窗表 ─────────────────────────
+
+    /// <summary>
+    /// 竖向尺寸两条链 + 总高，以及按编号汇总的门窗表：数值、位置、汇总数都要对得上模型与类型库。
+    /// </summary>
+    private static void DimensionsAndSchedule()
+    {
+        var model = SampleModelFactory.CreateTwoStoreyHouse();
+        var library = SampleModelFactory.CreateDemoOpeningLibrary();
+        var definition = SampleModelFactory.CreateDefaultViews(model.Name)[0];      // 南立面，1:100
+        var view = OrthographicProjector.Project(model, definition, library);
+
+        var minU = view.Lines.Min(l => Math.Min(l.X1, l.X2)) + view.OriginX;
+        var maxU = view.Lines.Max(l => Math.Max(l.X1, l.X2)) + view.OriginX;
+        var storeyDimensions = view.Dimensions.Where(d => d.Note != null && d.Note.StartsWith("层高", StringComparison.Ordinal)).ToList();
+        Assert(storeyDimensions.Count == 2, "两层应各有 1 条层高尺寸，实际 " + storeyDimensions.Count);
+        Assert(storeyDimensions.Any(d => Math.Abs(d.From - 0d) < Tolerance && Math.Abs(d.To - 3600d) < Tolerance),
+            "一层层高尺寸应为 0→3600");
+        Assert(storeyDimensions.Any(d => Math.Abs(d.From - 3600d) < Tolerance && Math.Abs(d.To - 6900d) < Tolerance),
+            "二层层高尺寸应为 3600→6900");
+        Assert(storeyDimensions.All(d => Math.Abs(d.LinePosition - (maxU + 2000d)) < Tolerance),
+            "层高尺寸应画在立面右侧 maxU+2000 处");
+
+        var total = view.Dimensions.FirstOrDefault(d => d.Note == "总高");
+        Assert(total != null, "缺少总高尺寸");
+        Assert(Math.Abs(total.From - 0d) < Tolerance && Math.Abs(total.To - 6900d) < Tolerance
+            && Math.Abs(total.LinePosition - (maxU + 3000d)) < Tolerance, "总高应为 0→6900，画在 maxU+3000 处");
+
+        // 一层南墙有 1500×1800@900 的窗与 900×2100 的门 → 定位链 0→900→2100→2700
+        //（注意只算这张图上画出来的洞口：北面/东面的窗不该出现在南立面的尺寸链里）
+        var firstFloor = view.Dimensions.Where(d => d.Note != null
+            && d.Note.StartsWith("洞口定位", StringComparison.Ordinal)
+            && d.Note.IndexOf("一层", StringComparison.Ordinal) >= 0).ToList();
+        Assert(firstFloor.Count == 3, "一层洞口定位链应有 3 段（0-900-2100-2700），实际 " + firstFloor.Count);
+        Assert(firstFloor.Any(d => Math.Abs(d.From - 0d) < Tolerance && Math.Abs(d.To - 900d) < Tolerance), "缺少窗台 900 那一段");
+        Assert(firstFloor.Any(d => Math.Abs(d.From - 900d) < Tolerance && Math.Abs(d.To - 2100d) < Tolerance), "缺少 900→2100 那一段");
+        Assert(firstFloor.Any(d => Math.Abs(d.From - 2100d) < Tolerance && Math.Abs(d.To - 2700d) < Tolerance), "缺少 2100→2700 那一段");
+        Assert(firstFloor.All(d => Math.Abs(d.LinePosition - (minU - 1200d)) < Tolerance), "一层定位链应画在立面左侧 minU-1200 处");
+        Assert(firstFloor.All(d => string.IsNullOrEmpty(d.Text)), "尺寸文字应留给 CAD 自己量（Text 留空）");
+
+        // 门窗表：按编号汇总（样例里 C1215×2、C1518×2、M0921×1）
+        var schedule = OrthographicProjector.ProjectSchedule(model, library, "门窗表");
+        Assert(schedule.Kind == ViewKind.Schedule, "门窗表应是 Schedule 类型视图");
+        var texts = schedule.Texts.Select(t => t.Text).ToList();
+        foreach (var header in new[] { "编号", "类型", "洞口尺寸", "窗台/落地", "樘数", "做法（分格 / 开启）" })
+            Assert(texts.Contains(header), "门窗表缺少表头：" + header);
+        Assert(texts.Contains("C1215") && texts.Contains("C1518") && texts.Contains("M0921"), "门窗表缺少编号行");
+        Assert(texts.Contains("1200×1500") && texts.Contains("1500×1800") && texts.Contains("900×2100"), "门窗表尺寸列不对");
+        Assert(texts.Count(t => t == "2") == 2 && texts.Count(t => t == "1") == 1, "门窗表樘数统计不对（C1215/C1518 各 2、M0921 为 1）");
+        Assert(texts.Any(t => t != null && t.IndexOf("双扇等分 / 双向推拉", StringComparison.Ordinal) >= 0), "门窗表的做法列应来自类型库");
+        Assert(texts.Any(t => t != null && t.IndexOf("类型库里没有这一条", StringComparison.Ordinal) >= 0) == false, "样例里的编号都应在类型库中");
+        var width = schedule.Lines.Max(l => Math.Max(l.X1, l.X2)) - schedule.Lines.Min(l => Math.Min(l.X1, l.X2));
+        Assert(Math.Abs(width - 14800d) < Tolerance, "门窗表总宽应为 14800（各列之和），实际 " + width);
+        Console.WriteLine("   尺寸与门窗表：层高 2 段 + 总高 6900、一层定位链 3 段（0-900-2100-2700）、门窗表 3 行（宽 "
+            + Math.Round(width) + "）");
     }
 
     // ───────────────────────── 7. 可点选锚点与洞口编号 ─────────────────────────

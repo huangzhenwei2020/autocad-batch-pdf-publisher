@@ -115,9 +115,271 @@ namespace BatchPdfPublisher.BuildingModel
             foreach (var detail in openingDetails) EmitOpeningDetail(detail, rects, document.Lines);
 
             AddLevelAnnotations(model, view, document);
+            AddDimensions(model, view, document);
             AddTitle(document, view);
             Normalize(document);
             return document;
+        }
+
+        // ───────────────────────────── 尺寸标注 ─────────────────────────────
+
+        /// <summary>
+        /// 立面/剖面的竖向尺寸（两条链 + 一条总高）：
+        /// 左侧（靠建筑）是**洞口定位链**（每层从楼面到窗台、窗台到窗顶，只取该层实际用到的标高值），
+        /// 右侧依次是**层高链**与**总高**。数值留给 CAD 自己量（`Text` 留空），预览按测量值显示。
+        /// 剖面只标层高与总高 —— 剖切面之外的洞口定位没有意义。
+        /// </summary>
+        private static void AddDimensions(BuildingModelDocument model, ViewDefinitionModel view, ViewDocument document)
+        {
+            if (document.Lines.Count == 0) return;
+            var frame = BuildFrame(view);
+            var usable = (model.Storeys ?? new List<StoreyModel>())
+                .Where(s => s != null && Include(view.StoreyIds == null || view.StoreyIds.Count == 0, view.StoreyIds, s.Id))
+                .OrderBy(s => s.Elevation)
+                .ToList();
+            if (usable.Count == 0) return;
+
+            var minU = document.Lines.Min(l => Math.Min(l.X1, l.X2));
+            var maxU = document.Lines.Max(l => Math.Max(l.X1, l.X2));
+            var baseZ = usable[0].Elevation;
+            var topZ = usable.Max(s => s.Elevation + (s.Height > 0.5d ? s.Height : 3000d));
+
+            // 左侧：每层的洞口定位链。
+            // 只算"这张图上真的画出来、而且朝着观察者那一面外墙"上的洞口 ——
+            // 立面图的尺寸标的是这个立面的门窗，不能把背面的窗也标进来。
+            if (view.Kind != ViewKind.Section)
+            {
+                var drawn = new HashSet<string>(
+                    (document.Anchors ?? new List<ViewAnchor>())
+                        .Where(a => a != null && string.Equals(a.Kind, "opening", StringComparison.OrdinalIgnoreCase))
+                        .Select(a => a.ElementId ?? string.Empty),
+                    StringComparer.OrdinalIgnoreCase);
+                var offsets = new double[] { -1200d, -2000d };
+                for (var index = 0; index < usable.Count; index++)
+                {
+                    var storey = usable[index];
+                    var storeyHeight = storey.Height > 0.5d ? storey.Height : 3000d;
+                    // 该层所有"朝观察者的外墙"上的洞口，取最近的那一道墙（近的就是这个立面）
+                    var candidates = new List<KeyValuePair<OpeningModel, WallModel>>();
+                    foreach (var opening in model.Openings ?? new List<OpeningModel>())
+                    {
+                        if (opening == null || !drawn.Contains(opening.Id ?? string.Empty)) continue;
+                        var host = FindHostWall(model, opening);
+                        if (host == null || !string.Equals(host.StoreyId, storey.Id, StringComparison.OrdinalIgnoreCase)) continue;
+                        if (!FacesViewer(host, frame)) continue;
+                        candidates.Add(new KeyValuePair<OpeningModel, WallModel>(opening, host));
+                    }
+                    if (candidates.Count == 0) continue;
+                    var nearest = candidates.Max(c => frame.Depth((c.Value.X1 + c.Value.X2) / 2d, (c.Value.Y1 + c.Value.Y2) / 2d));
+                    var values = new List<double> { storey.Elevation };
+                    foreach (var pair in candidates)
+                    {
+                        var depth = frame.Depth((pair.Value.X1 + pair.Value.X2) / 2d, (pair.Value.Y1 + pair.Value.Y2) / 2d);
+                        if (depth < nearest - 1d) continue;                 // 不是最近的那道墙：属于别的立面
+                        var sill = Math.Max(0d, pair.Key.Sill);
+                        var head = Math.Min(sill + Math.Max(0d, pair.Key.Height), storeyHeight);
+                        values.Add(storey.Elevation + sill);
+                        values.Add(storey.Elevation + head);
+                    }
+                    values = values.Where(IsFinite).Distinct().OrderBy(v => v).ToList();
+                    if (values.Count < 2) continue;
+                    var linePosition = minU + offsets[Math.Min(index, offsets.Length - 1)];
+                    for (var i = 0; i + 1 < values.Count; i++)
+                    {
+                        if (values[i + 1] - values[i] < 1d) continue;
+                        document.Dimensions.Add(new ViewDimension
+                        {
+                            Layer = ViewLayers.Dimension, Vertical = true,
+                            From = values[i], To = values[i + 1],
+                            AnchorPosition = minU, LinePosition = linePosition,
+                            Note = "洞口定位（" + (storey.Name ?? storey.Id) + "）"
+                        });
+                    }
+                }
+            }
+
+            // 右侧：层高链 + 总高
+            var storeyLinePosition = maxU + 2000d;
+            var totalLinePosition = maxU + 3000d;
+            foreach (var storey in usable)
+            {
+                var top = storey.Elevation + (storey.Height > 0.5d ? storey.Height : 3000d);
+                if (top - storey.Elevation < 1d) continue;
+                document.Dimensions.Add(new ViewDimension
+                {
+                    Layer = ViewLayers.Dimension, Vertical = true,
+                    From = storey.Elevation, To = top,
+                    AnchorPosition = maxU, LinePosition = storeyLinePosition,
+                    Note = "层高（" + (storey.Name ?? storey.Id) + "）"
+                });
+            }
+            if (topZ - baseZ > 1d)
+            {
+                document.Dimensions.Add(new ViewDimension
+                {
+                    Layer = ViewLayers.Dimension, Vertical = true,
+                    From = baseZ, To = topZ,
+                    AnchorPosition = maxU, LinePosition = totalLinePosition,
+                    Note = "总高"
+                });
+            }
+        }
+
+        /// <summary>墙是不是"朝着观察者"（墙轴与视线方向垂直 → 这面墙就是当前立面）。</summary>
+        private static bool FacesViewer(WallModel wall, Frame frame)
+        {
+            var dx = wall.X2 - wall.X1;
+            var dy = wall.Y2 - wall.Y1;
+            var length = Math.Sqrt(dx * dx + dy * dy);
+            if (length < 1d) return false;
+            return Math.Abs((dx / length) * frame.Vx + (dy / length) * frame.Vy) < 0.02d;
+        }
+
+        private static WallModel FindHostWall(BuildingModelDocument model, OpeningModel opening)        {
+            if (model == null || opening == null) return null;
+            var wanted = opening.HostWallId ?? string.Empty;
+            foreach (var wall in model.Walls ?? new List<WallModel>())
+                if (wall != null && string.Equals(wall.Id ?? string.Empty, wanted, StringComparison.OrdinalIgnoreCase)) return wall;
+            return null;
+        }
+
+        private static bool IsFinite(double value)
+        {
+            return !double.IsNaN(value) && !double.IsInfinity(value);
+        }
+
+        // ───────────────────────────── 门窗表 ─────────────────────────────
+
+        /// <summary>
+        /// 门窗表：按编号汇总模型里的洞口（宽高、樘数、做法取自类型库），画成表格线 + 文字。
+        /// 与立面同理 —— 数据全部从模型与类型库现算，手改一次模型这里就跟着变，不用重新录表。
+        /// </summary>
+        public static ViewDocument ProjectSchedule(BuildingModelDocument model, OpeningTypeLibraryDocument library, string title)
+        {
+            if (model == null) throw new ArgumentNullException(nameof(model));
+            var document = new ViewDocument
+            {
+                Id = "schedule",
+                Title = string.IsNullOrWhiteSpace(title) ? "门窗表" : title,
+                Kind = ViewKind.Schedule,
+                Scale = 100
+            };
+
+            var rows = new List<ScheduleRow>();
+            foreach (var opening in model.Openings ?? new List<OpeningModel>())
+            {
+                if (opening == null) continue;
+                var code = string.IsNullOrWhiteSpace(opening.Code) ? "未编号" : opening.Code.Trim();
+                var row = rows.FirstOrDefault(r => string.Equals(r.Code, code, StringComparison.OrdinalIgnoreCase));
+                if (row == null)
+                {
+                    row = new ScheduleRow { Code = code, Kind = opening.Kind, Width = opening.Width, Height = opening.Height, Sill = opening.Sill };
+                    rows.Add(row);
+                }
+                row.Count++;
+            }
+            rows = rows.OrderBy(r => r.Code, StringComparer.OrdinalIgnoreCase).ToList();
+            if (rows.Count == 0)
+            {
+                document.Texts.Add(new ViewText { Layer = ViewLayers.Schedule, Text = "模型里还没有门窗。", X = 0d, Y = 0d, Height = 300d });
+                Normalize(document);
+                return document;
+            }
+
+            const double textHeight = 250d;
+            const double rowHeight = 700d;
+            var columns = new[] { 2400d, 2000d, 2800d, 2000d, 1400d, 4200d };
+            var headers = new[] { "编号", "类型", "洞口尺寸", "窗台/落地", "樘数", "做法（分格 / 开启）" };
+            var tableWidth = columns.Sum();
+            var tableHeight = rowHeight * (rows.Count + 1);
+
+            // 表名
+            document.Texts.Add(new ViewText
+            {
+                Layer = ViewLayers.Schedule, Text = document.Title, X = 0d, Y = tableHeight + 700d, Height = 400d
+            });
+
+            // 表格线：外框 + 每行横线 + 每列竖线
+            AddScheduleRectangle(document, 0d, 0d, tableWidth, tableHeight);
+            for (var row = 1; row <= rows.Count; row++)
+                AddScheduleLine(document, 0d, rowHeight * row, tableWidth, rowHeight * row);
+            var x = 0d;
+            for (var column = 0; column < columns.Length; column++)
+            {
+                x += columns[column];
+                if (column < columns.Length - 1) AddScheduleLine(document, x, 0d, x, tableHeight);
+            }
+
+            // 表头与内容（文字左下角定位：竖直居中，左右各留 150 的边距）
+            var headerY = tableHeight - rowHeight + (rowHeight - textHeight) / 2d;
+            x = 0d;
+            for (var column = 0; column < headers.Length; column++)
+            {
+                document.Texts.Add(new ViewText
+                {
+                    Layer = ViewLayers.Schedule, Text = headers[column],
+                    X = x + 150d, Y = headerY, Height = textHeight
+                });
+                x += columns[column];
+            }
+            for (var index = 0; index < rows.Count; index++)
+            {
+                var row = rows[index];
+                var type = library == null ? null : library.FindType(row.Code);
+                var cells = new[]
+                {
+                    row.Code,
+                    string.IsNullOrWhiteSpace(row.Kind) ? "—" : row.Kind,
+                    Math.Round(row.Width) + "×" + Math.Round(row.Height),
+                    row.Sill > 0.5d ? Math.Round(row.Sill).ToString("0") : "落地",
+                    row.Count.ToString(),
+                    DescribeType(type)
+                };
+                var y = tableHeight - rowHeight * (index + 2) + (rowHeight - textHeight) / 2d;
+                x = 0d;
+                for (var column = 0; column < cells.Length; column++)
+                {
+                    document.Texts.Add(new ViewText
+                    {
+                        Layer = ViewLayers.Schedule, Text = cells[column],
+                        X = x + 150d, Y = y, Height = textHeight
+                    });
+                    x += columns[column];
+                }
+            }
+
+            document.Warnings.Add("门窗表由模型与类型库现算：改模型或改类型库后「生成全部视图」重算即可。");
+            Normalize(document);
+            return document;
+        }
+
+        private sealed class ScheduleRow
+        {
+            public string Code;
+            public string Kind;
+            public double Width, Height, Sill;
+            public int Count;
+        }
+
+        private static string DescribeType(OpeningTypeModel type)
+        {
+            if (type == null) return "类型库里没有这一条";
+            var division = string.IsNullOrWhiteSpace(type.DivisionPreset) ? "—" : type.DivisionPreset;
+            var mode = string.IsNullOrWhiteSpace(type.OpeningMode) ? "—" : type.OpeningMode;
+            return division + " / " + mode + (string.IsNullOrWhiteSpace(type.Material) ? "" : "，" + type.Material);
+        }
+
+        private static void AddScheduleLine(ViewDocument document, double x1, double y1, double x2, double y2)
+        {
+            document.Lines.Add(new ViewLine { Layer = ViewLayers.Schedule, X1 = x1, Y1 = y1, X2 = x2, Y2 = y2 });
+        }
+
+        private static void AddScheduleRectangle(ViewDocument document, double x, double y, double width, double height)
+        {
+            AddScheduleLine(document, x, y, x + width, y);
+            AddScheduleLine(document, x + width, y, x + width, y + height);
+            AddScheduleLine(document, x + width, y + height, x, y + height);
+            AddScheduleLine(document, x, y + height, x, y);
         }
 
         // ───────────────────────────── 视图坐标系 ─────────────────────────────

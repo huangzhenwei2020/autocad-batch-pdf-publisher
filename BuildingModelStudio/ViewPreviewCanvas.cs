@@ -42,10 +42,11 @@ namespace Wanluo.BuildingModelStudio
             Cursor = Cursors.Cross;
         }
 
-        /// <summary>自检用：上一次绘制画了多少条线/文字/填充（证明"真的画了"）。</summary>
+        /// <summary>自检用：上一次绘制画了多少条线/文字/填充/尺寸（证明"真的画了"）。</summary>
         internal int LastLineCount { get; private set; }
         internal int LastTextCount { get; private set; }
         internal int LastHatchCount { get; private set; }
+        internal int LastDimensionCount { get; private set; }
         internal string LastPaintError { get { return _lastPaintError; } }
         internal double ViewScale { get { return _scale; } }
 
@@ -129,11 +130,15 @@ namespace Wanluo.BuildingModelStudio
         /// 等控件真正有尺寸再"缩放适应"一次 —— 否则用户切到预览页看到的会是一片空白。
         /// </summary>
         private bool _needsFit;
+        /// <summary>当前取景是不是"自动适应"状态；是的话窗口一改大小就重新适应（用户手动缩放/平移后就不再自动改）。</summary>
+        private bool _autoFit = true;
 
         protected override void OnSizeChanged(EventArgs e)
         {
             base.OnSizeChanged(e);
             FitIfNeeded();
+            // 窗口大小变了：如果是自动适应状态，就按新尺寸重新适应一次
+            if (_autoFit && _view != null && Width > 0 && Height > 0) ZoomExtents();
         }
 
         private void FitIfNeeded()
@@ -165,6 +170,7 @@ namespace Wanluo.BuildingModelStudio
 
         public void ZoomExtents()
         {
+            _autoFit = true;
             if (_view == null || Width <= 0 || Height <= 0)
             {
                 _needsFit = _view != null;      // 还没尺寸：等 OnSizeChanged 再适应
@@ -227,6 +233,24 @@ namespace Wanluo.BuildingModelStudio
                 Include(text.X, text.Y - height);                     // 文字左下角在 (X, Y)
                 Include(text.X + width, text.Y);
             }
+            foreach (var dimension in view.Dimensions ?? new List<ViewDimension>())
+            {
+                if (dimension == null) continue;
+                if (!DrawGuard.Sane(dimension.From, dimension.To)) continue;
+                var outer = Math.Max(dimension.AnchorPosition, dimension.LinePosition);
+                var inner = Math.Min(dimension.AnchorPosition, dimension.LinePosition);
+                // 尺寸线比建筑轮廓还靠外，不算进来的话会被裁掉
+                if (dimension.Vertical)
+                {
+                    Include(inner, Math.Min(dimension.From, dimension.To));
+                    Include(outer, Math.Max(dimension.From, dimension.To));
+                }
+                else
+                {
+                    Include(Math.Min(dimension.From, dimension.To), inner);
+                    Include(Math.Max(dimension.From, dimension.To), outer);
+                }
+            }
             if (!found) return null;
             return RectangleF.FromLTRB((float)minX, (float)minY, (float)maxX, (float)maxY);
 
@@ -264,6 +288,7 @@ namespace Wanluo.BuildingModelStudio
                 _offsetX += e.X - _lastMouse.X;
                 _offsetY += e.Y - _lastMouse.Y;
                 _lastMouse = e.Location;
+                _autoFit = false;               // 手动平移过就不再自动适应
                 Invalidate();
             }
             if (ViewportUsable())
@@ -290,6 +315,7 @@ namespace Wanluo.BuildingModelStudio
             _scale = Math.Max(0.002d, Math.Min(2d, _scale * (e.Delta > 0 ? 1.15d : 1d / 1.15d)));
             _offsetX = e.X - beforeX * _scale;      // 让光标下的那个点不动
             _offsetY = e.Y + beforeY * _scale;
+            _autoFit = false;                       // 手动缩放过就不再自动适应
             Invalidate();
             RaiseStatus();
         }
@@ -369,6 +395,7 @@ namespace Wanluo.BuildingModelStudio
             LastLineCount = 0;
             LastTextCount = 0;
             LastHatchCount = 0;
+            LastDimensionCount = 0;
             FitIfNeeded();      // 控件刚拿到尺寸时，先把视图摆正再画（否则切过来可能是一片空白）
 
             if (_view == null)
@@ -385,9 +412,90 @@ namespace Wanluo.BuildingModelStudio
 
             DrawHatches(g);
             DrawLines(g);
+            DrawDimensions(g);
             DrawTexts(g);
             DrawSelection(g);
             DrawLegend(g);
+        }
+
+        /// <summary>
+        /// 尺寸标注：界线 + 尺寸线 + 建筑标记（45° 斜短线）+ 数值。
+        /// CAD 里这些是**真的标注**（可拉伸、可改）；预览按同一套位置画出来，好核对层高与洞口定位。
+        /// </summary>
+        private void DrawDimensions(Graphics g)
+        {
+            foreach (var dimension in _view.Dimensions ?? new List<ViewDimension>())
+            {
+                if (dimension == null) continue;
+                if (!DrawGuard.IsFinite(dimension.From) || !DrawGuard.IsFinite(dimension.To)
+                    || !DrawGuard.IsFinite(dimension.AnchorPosition) || !DrawGuard.IsFinite(dimension.LinePosition)) continue;
+                var layer = string.IsNullOrWhiteSpace(dimension.Layer) ? ViewLayers.Dimension : dimension.Layer;
+                var style = ViewLayers.Find(layer);
+                var color = ColorFor(layer, style);
+                var text = string.IsNullOrWhiteSpace(dimension.Text)
+                    ? Math.Round(Math.Abs(dimension.To - dimension.From)).ToString("0")
+                    : dimension.Text;
+                using (var pen = new Pen(color, Math.Max(0.9f, WidthFor(layer, style))))
+                {
+                    if (dimension.Vertical)
+                    {
+                        var anchorX = ToScreen(dimension.AnchorPosition, 0d).X;
+                        var lineX = ToScreen(dimension.LinePosition, 0d).X;
+                        var fromY = ToScreen(0d, dimension.From).Y;
+                        var toY = ToScreen(0d, dimension.To).Y;
+                        g.DrawLine(pen, anchorX, fromY, lineX, fromY);
+                        g.DrawLine(pen, anchorX, toY, lineX, toY);
+                        g.DrawLine(pen, lineX, fromY, lineX, toY);
+                        DrawTick(g, pen, lineX, fromY);
+                        DrawTick(g, pen, lineX, toY);
+                        DrawDimensionText(g, text, lineX, (fromY + toY) / 2f, true, color);
+                    }
+                    else
+                    {
+                        var anchorY = ToScreen(0d, dimension.AnchorPosition).Y;
+                        var lineY = ToScreen(0d, dimension.LinePosition).Y;
+                        var fromX = ToScreen(dimension.From, 0d).X;
+                        var toX = ToScreen(dimension.To, 0d).X;
+                        g.DrawLine(pen, fromX, anchorY, fromX, lineY);
+                        g.DrawLine(pen, toX, anchorY, toX, lineY);
+                        g.DrawLine(pen, fromX, lineY, toX, lineY);
+                        DrawTick(g, pen, fromX, lineY);
+                        DrawTick(g, pen, toX, lineY);
+                        DrawDimensionText(g, text, (fromX + toX) / 2f, lineY, false, color);
+                    }
+                }
+                LastDimensionCount++;
+            }
+        }
+
+        /// <summary>建筑标记：尺寸线端部的 45° 斜短线。</summary>
+        private static void DrawTick(Graphics g, Pen pen, float x, float y)
+        {
+            const float size = 4f;
+            g.DrawLine(pen, x - size, y + size, x + size, y - size);
+        }
+
+        private void DrawDimensionText(Graphics g, string text, float x, float y, bool vertical, Color color)
+        {
+            if (string.IsNullOrEmpty(text)) return;
+            var pixels = (float)Math.Max(7d, Math.Min(18d, 250d * _scale));
+            using (var font = new Font("Microsoft YaHei UI", pixels, GraphicsUnit.Pixel))
+            using (var brush = new SolidBrush(color))
+            {
+                var state = g.Save();
+                try
+                {
+                    g.TranslateTransform(x, y);
+                    if (vertical) g.RotateTransform(-90f);
+                    var size = g.MeasureString(text, font);
+                    // 竖直尺寸：文字贴在尺寸线左侧；水平尺寸：文字压在尺寸线上方
+                    g.DrawString(text, font, brush, -size.Width / 2f, vertical ? 3f : -size.Height - 2f);
+                }
+                finally
+                {
+                    g.Restore(state);
+                }
+            }
         }
 
         /// <summary>选中高亮：虚线框套住点中的那个洞口，配合右侧类型库就知道在改哪一樘。</summary>

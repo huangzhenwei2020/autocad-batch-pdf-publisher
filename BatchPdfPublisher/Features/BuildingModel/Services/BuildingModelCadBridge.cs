@@ -91,9 +91,43 @@ namespace BatchPdfPublisher.Services
                     Bump(counts, text.Layer);
                 }
 
-                foreach (var hatch in view.Hatches ?? new List<ViewHatch>())
+                // 尺寸标注：建成**真的 CAD 标注**（可拉伸、可改），不是拆成线 +
+                // 文字。样式用插件统一的"万落建筑工具 1:N 标注样式"，与门窗立面一致。
+                if (view.Dimensions != null && view.Dimensions.Count > 0)
                 {
-                    if (hatch.Boundary == null || hatch.Boundary.Count < 3) continue;
+                    ObjectId dimensionStyle;
+                    try
+                    {
+                        dimensionStyle = DraftingStandardService.EnsureDimensionStyleForScale(
+                            document.Database, transaction, Math.Max(1, view.Scale));
+                    }
+                    catch (Exception exception)
+                    {
+                        dimensionStyle = document.Database.Dimstyle;
+                        editor.WriteMessage("\n标注样式创建失败，改用当前标注样式：" + exception.Message);
+                    }
+                    foreach (var dimension in view.Dimensions)
+                    {
+                        if (dimension == null) continue;
+                        var span = Math.Abs(dimension.To - dimension.From);
+                        if (span < 0.5d) continue;
+                        try
+                        {
+                            var entity = CreateDimension(dimension, anchor, dimensionStyle);
+                            ApplyLayer(entity, string.IsNullOrWhiteSpace(dimension.Layer) ? ViewLayers.Dimension : dimension.Layer);
+                            space.AppendEntity(entity);
+                            transaction.AddNewlyCreatedDBObject(entity, true);
+                            Bump(counts, string.IsNullOrWhiteSpace(dimension.Layer) ? ViewLayers.Dimension : dimension.Layer);
+                        }
+                        catch (Exception exception)
+                        {
+                            editor.WriteMessage("\n一条尺寸标注失败已跳过（" + dimension.Note + "）：" + exception.Message);
+                        }
+                    }
+                }
+
+                foreach (var hatch in view.Hatches ?? new List<ViewHatch>())
+                {                    if (hatch.Boundary == null || hatch.Boundary.Count < 3) continue;
                     var entity = new Hatch { Associative = false };
                     space.AppendEntity(entity);
                     transaction.AddNewlyCreatedDBObject(entity, true);
@@ -517,6 +551,33 @@ namespace BatchPdfPublisher.Services
                 table.Add(record);
                 transaction.AddNewlyCreatedDBObject(record, true);
             }
+        }
+
+        /// <summary>
+        /// 把一条视图尺寸变成 CAD 的 `RotatedDimension`：
+        /// 竖直尺寸旋转 90°（量 Z），水平尺寸旋转 0°（量 U）；
+        /// 两个被量点在 (AnchorPosition, From/To)，尺寸线摆在 LinePosition 处。
+        /// 文字留空 → CAD 按实际距离自己量出数值（改了模型重算视图，数值也跟着对）。
+        /// </summary>
+        private static RotatedDimension CreateDimension(ViewDimension dimension, Point3d anchor, ObjectId dimensionStyle)
+        {
+            Point3d first, second, linePoint;
+            double rotation;
+            if (dimension.Vertical)
+            {
+                rotation = Math.PI / 2d;
+                first = new Point3d(anchor.X + dimension.AnchorPosition, anchor.Y + dimension.From, 0d);
+                second = new Point3d(anchor.X + dimension.AnchorPosition, anchor.Y + dimension.To, 0d);
+                linePoint = new Point3d(anchor.X + dimension.LinePosition, anchor.Y + (dimension.From + dimension.To) / 2d, 0d);
+            }
+            else
+            {
+                rotation = 0d;
+                first = new Point3d(anchor.X + dimension.From, anchor.Y + dimension.AnchorPosition, 0d);
+                second = new Point3d(anchor.X + dimension.To, anchor.Y + dimension.AnchorPosition, 0d);
+                linePoint = new Point3d(anchor.X + (dimension.From + dimension.To) / 2d, anchor.Y + dimension.LinePosition, 0d);
+            }
+            return new RotatedDimension(rotation, first, second, linePoint, dimension.Text ?? string.Empty, dimensionStyle);
         }
 
         private static void ApplyLayer(Entity entity, string layer)

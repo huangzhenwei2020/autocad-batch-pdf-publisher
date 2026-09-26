@@ -205,6 +205,7 @@ internal static class BuildingModelProjectionTests
             Assert(reloadedView.Lines.Count == view.Lines.Count, "视图线条数量在往返后不一致");
             Assert(reloadedView.Texts.Count == view.Texts.Count, "视图文字数量在往返后不一致");
             Assert(reloadedView.Anchors.Count == view.Anchors.Count, "视图锚点数量在往返后不一致");
+            Assert(reloadedView.Dimensions.Count == view.Dimensions.Count, "视图尺寸数量在往返后不一致");
             Assert(reloadedView.Hatches.Count == view.Hatches.Count, "视图填充数量在往返后不一致");
             Assert(reloadedView.SchemaVersion == BuildingModelSchema.Version, "视图版本号不正确");
 

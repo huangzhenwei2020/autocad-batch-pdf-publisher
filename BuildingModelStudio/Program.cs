@@ -178,6 +178,18 @@ namespace Wanluo.BuildingModelStudio
                         var preview = FindControl<ViewPreviewCanvas>(form);
                         if (preview != null) preview.Refresh();
                         Application.DoEvents();
+                        // 第三个参数可以指定要看哪一张（视图 id，例如 schedule = 门窗表）
+                        if (args.Length > 2) form.SelectViewForTest(args[2]);
+                        Application.DoEvents();
+                        // 布局还没完全稳定时（脚本里 Show 完马上截图）重新适应一次，保证整张图都在画面里
+                        form.PerformLayout();
+                        if (preview != null)
+                        {
+                            preview.PerformLayout();
+                            preview.ZoomExtents();
+                            preview.Refresh();
+                        }
+                        Application.DoEvents();
                         // 截图里顺手点中第一樘门窗，好把"点选高亮 + 信息行"一起拍进去
                         if (preview != null && preview.View != null)
                         {
@@ -192,13 +204,18 @@ namespace Wanluo.BuildingModelStudio
                         var path = args.Length > 1 && !string.IsNullOrWhiteSpace(args[1])
                             ? args[1]
                             : Path.Combine(Path.GetTempPath(), "万落建筑模型-界面.png");
-                        using (var bitmap = new Bitmap(form.Width, form.Height))
+                        // 按**客户区**尺寸截：用窗口尺寸截会把右边和下边截掉（截图里画布看着被切了一半）
+                        var client = form.ClientSize;
+                        using (var bitmap = new Bitmap(client.Width, client.Height))
                         {
-                            form.DrawToBitmap(bitmap, new Rectangle(0, 0, form.Width, form.Height));
+                            form.DrawToBitmap(bitmap, new Rectangle(0, 0, client.Width, client.Height));
                             bitmap.Save(path, System.Drawing.Imaging.ImageFormat.Png);
                         }
                         Console.WriteLine("界面快照：" + path + "（预览 "
-                            + (preview == null ? "未找到" : preview.LastLineCount + " 条线") + "）");
+                            + (preview == null ? "未找到" : preview.LastLineCount + " 条线")
+                            + (preview == null ? "" : "；画布 " + preview.Width + "×" + preview.Height
+                                + "，1px≈" + Math.Round(1d / Math.Max(1e-9d, preview.ViewScale), 1) + "mm")
+                            + "）");
                         form.Close();
                     }
                 }
@@ -235,9 +252,13 @@ namespace Wanluo.BuildingModelStudio
 
             using (var canvas = new ViewPreviewCanvas { Size = new Size(1500, 1000) })
             {
-                foreach (var definition in SampleModelFactory.CreateDefaultViews(modelName))
+                var definitions = SampleModelFactory.CreateDefaultViews(modelName);
+                definitions.Add(SampleModelFactory.CreateScheduleView(modelName));
+                foreach (var definition in definitions)
                 {
-                    var view = OrthographicProjector.Project(model, definition, library);
+                    var view = definition.Kind == ViewKind.Schedule
+                        ? OrthographicProjector.ProjectSchedule(model, library, definition.Title)
+                        : OrthographicProjector.Project(model, definition, library);
                     canvas.View = view;
                     using (var bitmap = new Bitmap(canvas.Width, canvas.Height))
                     {
@@ -245,7 +266,7 @@ namespace Wanluo.BuildingModelStudio
                         var path = Path.Combine(outputFolder, definition.Title + ".png");
                         bitmap.Save(path, System.Drawing.Imaging.ImageFormat.Png);
                         log("快照：" + path + "（线 " + view.Lines.Count + "、文字 " + view.Texts.Count
-                            + "、填充 " + view.Hatches.Count + "）");
+                            + "、尺寸 " + view.Dimensions.Count + "、填充 " + view.Hatches.Count + "）");
                     }
                 }
             }
@@ -369,9 +390,18 @@ namespace Wanluo.BuildingModelStudio
                 total += view.Lines.Count;
                 var openingLines = view.Lines.Count(line => line.Layer == ViewLayers.Opening);
                 log("视图：" + view.Title + " → 线 " + view.Lines.Count + "（门窗 " + openingLines + "）、文字 "
-                    + view.Texts.Count + "、填充 " + view.Hatches.Count + " → " + Path.GetFileName(path));
+                    + view.Texts.Count + "、填充 " + view.Hatches.Count + "、尺寸 " + view.Dimensions.Count
+                    + " → " + Path.GetFileName(path));
                 foreach (var warning in view.Warnings) log("  提示：" + warning);
             }
+
+            // 门窗表：按编号汇总模型里的洞口（做法取自类型库），与立面/剖面一样落图
+            var schedule = OrthographicProjector.ProjectSchedule(model, library, "门窗表");
+            var schedulePath = BuildingModelJson.ViewFilePath(projectFolder, modelName, schedule.Id);
+            BuildingModelJson.SaveView(schedulePath, schedule);
+            total += schedule.Lines.Count;
+            log("视图：" + schedule.Title + " → 线 " + schedule.Lines.Count + "、文字 " + schedule.Texts.Count
+                + "（按编号汇总，做法来自类型库）→ " + Path.GetFileName(schedulePath));
             return total;
         }
     }
@@ -405,6 +435,9 @@ namespace Wanluo.BuildingModelStudio
             Font = new Font("Microsoft YaHei UI", 9F);
 
             var root = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1 };
+            // 单列必须显式占满：默认按内容取宽（AutoSize）时，只要有一行内容偏宽，
+            // 整个窗口里的画布就会跟着变宽（右边被侧栏盖住），预览的"缩放适应"也会算错。
+            root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -676,6 +709,21 @@ namespace Wanluo.BuildingModelStudio
         internal string ViewInfoForTest { get { return _viewInfo.Text; } }
         internal OpeningTypeLibraryDocument OpeningLibraryForTest { get { return _openingLibrary; } }
 
+        /// <summary>自检/截图用：按视图 id 选中预览的下拉项（例如 "schedule" 门窗表）。</summary>
+        internal void SelectViewForTest(string viewId)
+        {
+            if (string.IsNullOrWhiteSpace(viewId)) return;
+            for (var index = 0; index < _viewChooser.Items.Count; index++)
+            {
+                var choice = _viewChooser.Items[index] as ViewChoice;
+                if (choice != null && string.Equals(choice.Definition.Id, viewId, StringComparison.OrdinalIgnoreCase))
+                {
+                    _viewChooser.SelectedIndex = index;
+                    return;
+                }
+            }
+        }
+
         /// <summary>自检用：在右侧类型库里选中第 index 条（等于用户点列表）。</summary>
         internal void SelectOpeningTypeForTest(int index)
         {
@@ -722,6 +770,9 @@ namespace Wanluo.BuildingModelStudio
             var hint = new Label
             {
                 AutoSize = true,
+                // 关键：不给最大宽度的话，这行长提示会把整页撑得比窗口还宽，
+                // 里面的预览画布跟着变宽（右边被侧栏盖住），"缩放适应"就会按错误的宽度算。
+                MaximumSize = new Size(620, 0),
                 ForeColor = Color.FromArgb(105, 112, 122),
                 Padding = new Padding(8, 2, 8, 4),
                 Text = "预览用的是 CAD 落图读的那份视图数据：这里看到什么，LTTZ 落到 DWG 里就是什么。"
@@ -729,6 +780,7 @@ namespace Wanluo.BuildingModelStudio
                     + "　中键/右键拖动：平移　滚轮：缩放"
             };
             _viewInfo.AutoSize = true;
+            _viewInfo.MaximumSize = new Size(620, 0);
             _viewInfo.ForeColor = Color.FromArgb(150, 200, 170);
             _viewInfo.Padding = new Padding(8, 2, 8, 0);
             _viewInfo.Text = "还没有视图：点「重算当前视图」。";
@@ -750,6 +802,7 @@ namespace Wanluo.BuildingModelStudio
             _viewChooser.Items.Clear();
             foreach (var definition in SampleModelFactory.CreateDefaultViews(ModelName))
                 _viewChooser.Items.Add(new ViewChoice(definition));
+            _viewChooser.Items.Add(new ViewChoice(SampleModelFactory.CreateScheduleView(ModelName)));   // 门窗表也能预览
             if (_viewChooser.Items.Count == 0) return;
             for (var index = 0; index < _viewChooser.Items.Count; index++)
                 if (!string.IsNullOrEmpty(wanted)
@@ -779,7 +832,9 @@ namespace Wanluo.BuildingModelStudio
             if (choice == null) return;
             try
             {
-                var view = OrthographicProjector.Project(_model, choice.Definition, _openingLibrary);
+                var view = choice.Definition.Kind == ViewKind.Schedule
+                    ? OrthographicProjector.ProjectSchedule(_model, _openingLibrary, choice.Definition.Title)
+                    : OrthographicProjector.Project(_model, choice.Definition, _openingLibrary);
                 _viewPreview.View = view;
                 var openingLines = view.Lines.Count(line => line.Layer == ViewLayers.Opening);
                 // 之前选中的那一樘如果还在这张视图里，继续显示它的信息（改完做法看得见效果）

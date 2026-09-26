@@ -146,7 +146,9 @@ namespace BatchPdfPublisher.BuildingModel
     public enum ViewKind
     {
         Elevation = 0,
-        Section = 1
+        Section = 1,
+        /// <summary>表格类视图（门窗表）：同样是"视图产物 = 线 + 文字"，落图命令不用特殊处理。</summary>
+        Schedule = 2
     }
 
     /// <summary>立面方向：南 = 从南往北看（默认取"从 -Y 看向 +Y"）。</summary>
@@ -253,6 +255,11 @@ namespace BatchPdfPublisher.BuildingModel
         /// 只是"索引"，不影响画出来的几何，插件落图时忽略它。
         /// </summary>
         public List<ViewAnchor> Anchors { get; set; } = new List<ViewAnchor>();
+        /// <summary>
+        /// 尺寸标注：落图时由插件建成**真的 CAD 标注**（`RotatedDimension`，可拉伸、可改），
+        /// 预览里按"界线 + 尺寸线 + 建筑标记 + 数值"画出来。空 = 不标。
+        /// </summary>
+        public List<ViewDimension> Dimensions { get; set; } = new List<ViewDimension>();
         /// <summary>生成时用到的模型版本，便于判断是否需要重算。</summary>
         public string ModelRevision { get; set; }
         /// <summary>投影过程中的提示（例如斜墙按包围盒近似）。</summary>
@@ -273,6 +280,33 @@ namespace BatchPdfPublisher.BuildingModel
         public double Y1 { get; set; }
         public double X2 { get; set; }
         public double Y2 { get; set; }
+    }
+
+    /// <summary>
+    /// 一条尺寸标注。竖直尺寸量 Z（立面层高/洞口定位），水平尺寸量 U（洞口定位）。
+    ///
+    /// 字段与 CAD 的 <c>RotatedDimension</c> 一一对应：
+    /// 两个"被量点"在 (AnchorPosition, From) 与 (AnchorPosition, To)，
+    /// 尺寸线画在 LinePosition 处（竖直尺寸给 X、水平尺寸给 Y）。
+    /// <see cref="Text"/> 留空 = 让 CAD 自己量出真实数值（推荐）；填了就用填的。
+    /// </summary>
+    public sealed class ViewDimension
+    {
+        public string Layer { get; set; }
+        /// <summary>true = 竖直尺寸（量 Z），false = 水平尺寸（量 U）。</summary>
+        public bool Vertical { get; set; } = true;
+        /// <summary>被量范围的起点（竖直：Z；水平：U）。</summary>
+        public double From { get; set; }
+        /// <summary>被量范围的终点。</summary>
+        public double To { get; set; }
+        /// <summary>尺寸界线的起点所在的另一坐标（竖直：X；水平：Y）。</summary>
+        public double AnchorPosition { get; set; }
+        /// <summary>尺寸线位置（竖直：X；水平：Y）。</summary>
+        public double LinePosition { get; set; }
+        /// <summary>文字覆盖值；空 = 让 CAD 按实际距离量。</summary>
+        public string Text { get; set; }
+        /// <summary>这条尺寸是什么（层高 / 洞口定位 / 总高…），只用于提示与日志。</summary>
+        public string Note { get; set; }
     }
 
     // ───────────────────────── "提取图纸"的中间格式 ─────────────────────────
@@ -420,6 +454,10 @@ namespace BatchPdfPublisher.BuildingModel
         public const string CutHatch = "WL-模型-剖切填充";
         public const string LevelText = "WL-模型-标高";
         public const string Title = "WL-模型-图名";
+        /// <summary>尺寸标注（落图时建成真的 CAD 标注）。</summary>
+        public const string Dimension = "WL-模型-尺寸";
+        /// <summary>门窗表等表格视图的线框与文字。</summary>
+        public const string Schedule = "WL-模型-门窗表";
 
         public sealed class Style
         {
@@ -439,7 +477,9 @@ namespace BatchPdfPublisher.BuildingModel
             new Style { Name = Ground, Color = 7, LineType = "Continuous", LineWeight = 70, Description = "室外地坪线（特粗）" },
             new Style { Name = CutHatch, Color = 8, LineType = "Continuous", LineWeight = 13, Description = "剖切填充" },
             new Style { Name = LevelText, Color = 7, LineType = "Continuous", LineWeight = 13, Description = "标高符号与数值" },
-            new Style { Name = Title, Color = 7, LineType = "Continuous", LineWeight = 25, Description = "图名与比例" }
+            new Style { Name = Title, Color = 7, LineType = "Continuous", LineWeight = 25, Description = "图名与比例" },
+            new Style { Name = Dimension, Color = 7, LineType = "Continuous", LineWeight = 13, Description = "尺寸标注（落图时建成 CAD 标注）" },
+            new Style { Name = Schedule, Color = 7, LineType = "Continuous", LineWeight = 18, Description = "门窗表线框与文字" }
         };
 
         public static Style Find(string name)

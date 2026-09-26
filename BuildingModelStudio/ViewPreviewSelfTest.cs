@@ -28,19 +28,25 @@ namespace Wanluo.BuildingModelStudio
             var library = SampleModelFactory.CreateDemoOpeningLibrary();
             var canvas = new ViewPreviewCanvas { Size = new Size(Width, Height) };
 
-            // 1) 五张默认视图：每张都要真的画出来，而且线条一条不少
-            foreach (var definition in SampleModelFactory.CreateDefaultViews(model.Name))
+            // 1) 五张默认视图 + 门窗表：每张都要真的画出来，而且线条一条不少
+            var definitions = SampleModelFactory.CreateDefaultViews(model.Name);
+            definitions.Add(SampleModelFactory.CreateScheduleView(model.Name));
+            foreach (var definition in definitions)
             {
-                var view = OrthographicProjector.Project(model, definition, library);
+                var view = definition.Kind == ViewKind.Schedule
+                    ? OrthographicProjector.ProjectSchedule(model, library, definition.Title)
+                    : OrthographicProjector.Project(model, definition, library);
                 var painted = RenderOnce(canvas, view, definition.Title, log);
                 if (canvas.LastLineCount != view.Lines.Count)
                     throw new Exception(definition.Title + " 只画了 " + canvas.LastLineCount + " / " + view.Lines.Count + " 条线");
                 if (canvas.LastTextCount != view.Texts.Count)
                     throw new Exception(definition.Title + " 只画了 " + canvas.LastTextCount + " / " + view.Texts.Count + " 个文字");
+                if (canvas.LastDimensionCount != view.Dimensions.Count)
+                    throw new Exception(definition.Title + " 只画了 " + canvas.LastDimensionCount + " / " + view.Dimensions.Count + " 条尺寸");
                 if (painted < 2000) throw new Exception(definition.Title + " 只画出了 " + painted + " 个像素");
                 log("PASS 预览 " + definition.Title + "：线 " + canvas.LastLineCount + "（门窗 "
                     + view.Lines.Count(l => l.Layer == ViewLayers.Opening) + "）、文字 " + canvas.LastTextCount
-                    + "、填充 " + canvas.LastHatchCount + "，非背景像素 " + painted);
+                    + "、尺寸 " + canvas.LastDimensionCount + "、填充 " + canvas.LastHatchCount + "，非背景像素 " + painted);
             }
 
             // 2) 点选：点洞口正中应选中它；点空白处应取消；重算后仍保持选中同一个构件
