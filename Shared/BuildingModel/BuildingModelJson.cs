@@ -149,12 +149,7 @@ namespace BatchPdfPublisher.BuildingModel
                         stream.Flush(true);
                     }
                     if (new FileInfo(temporary).Length == 0) throw new IOException("暂存文件为空：" + path);
-                    if (File.Exists(path))
-                    {
-                        try { File.Replace(temporary, path, path + ".bak", true); }
-                        catch (PlatformNotSupportedException) { File.Copy(temporary, path, true); File.Delete(temporary); }
-                        catch (IOException) { File.Copy(temporary, path, true); File.Delete(temporary); }
-                    }
+                    if (File.Exists(path)) File.Replace(temporary, path, path + ".bak", true);
                     else File.Move(temporary, path);
                 }
                 finally

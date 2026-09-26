@@ -125,6 +125,7 @@ namespace Wanluo.BuildingModelStudio
                 {
                     CanvasSelfTest.Run(Console.WriteLine);
                     PlanInteractionSelfTest.Run(Console.WriteLine);
+                    MainFormPersistenceSelfTest.Run(Console.WriteLine);
                     ViewPreviewSelfTest.Run(Console.WriteLine);
                     VolumeSelfTest.Run(Console.WriteLine);
                 }
@@ -779,7 +780,14 @@ namespace Wanluo.BuildingModelStudio
 
             _canvas.StatusChanged += text => _status.Text = text;
             _canvas.SelectionChanged += ShowProperties;
-            _canvas.StructureChanged += () => { RefreshStoreys(); if (_tabs.SelectedIndex == 2) RefreshVolume(); };
+            _canvas.StructureChanged += () =>
+            {
+                // Undo/Redo replaces the canvas model with a deserialized snapshot.
+                // Keep every preview and save path on that same instance.
+                _model = _canvas.Model;
+                RefreshStoreys();
+                if (_tabs.SelectedIndex == 2) RefreshVolume();
+            };
             _canvas.SaveRequested += SaveModel;
 
             Log("P1.5 平面草图：用「画墙 / 放窗 / 放门 / 布柱」把平面画出来，画的就是模型。");
@@ -892,20 +900,27 @@ namespace Wanluo.BuildingModelStudio
 
         private void SaveModel()
         {
-            if (_model == null) return;
+            TrySaveModel();
+        }
+
+        private bool TrySaveModel()
+        {
+            _model = _canvas.Model;
+            if (_model == null) return false;
             try
             {
                 BuildingModelJson.SaveModel(ModelPath, _model);
                 _canvas.MarkSaved();
                 Log("已保存：" + ModelPath + "（" + new FileInfo(ModelPath).Length + " 字节）");
+                return true;
             }
-            catch (Exception exception) { Log("保存失败：" + exception.Message); }
+            catch (Exception exception) { Log("保存失败：" + exception.Message); return false; }
         }
 
         private void GenerateViewsNow()
         {
             if (_model == null) { Log("还没有模型。"); return; }
-            SaveModel();
+            if (!TrySaveModel()) { Log("视图未生成：模型尚未保存成功。"); return; }
             var total = Program.GenerateViews(_projectFolder.Text, ModelName, _model, Log, _openingLibrary);
             Log("生成完成，共 " + total + " 条线。回到 CAD 执行 LTTZ 落图（选 views 目录下的 json）。");
             RefreshViewPreview(false);
@@ -1063,6 +1078,7 @@ namespace Wanluo.BuildingModelStudio
         private void PushToCad()
         {
             if (_model == null) { Log("还没有模型。"); return; }
+            if (!TrySaveModel()) { Log("未推送到 CAD：模型尚未保存成功。"); return; }
             var total = Program.GenerateViews(_projectFolder.Text, ModelName, _model, Log, _openingLibrary);
             var modelFolder = Program.ModelFolderOf(_projectFolder.Text, ModelName);
             var marked = Program.MarkPendingForCad(_projectFolder.Text, ModelName);
@@ -1758,4 +1774,3 @@ namespace Wanluo.BuildingModelStudio
         }
     }
 }
-

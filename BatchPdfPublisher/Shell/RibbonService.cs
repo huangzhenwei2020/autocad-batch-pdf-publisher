@@ -218,16 +218,21 @@ namespace BatchPdfPublisher.Services
                     var info = button.Tag as ShortcutBadgeInfo;
                     if (info == null) continue;
                     var target = elements
-                        .Where(x => (ReferenceEquals(x.DataContext, button)
-                            || ReferenceEquals((x as ContentControl)?.Content, button)
-                            || string.Equals(NormalizeCaption(AutomationProperties.GetName(x)), NormalizeCaption(info.Label), StringComparison.Ordinal))
-                            && x.ActualWidth >= 40 && x.ActualHeight >= 35)
-                        .OrderByDescending(x => x.ActualWidth * x.ActualHeight)
-                        .FirstOrDefault();
+                        .Where(x => ReferenceEquals(x.DataContext, button)
+                            || ReferenceEquals((x as ContentControl)?.Content, button))
+                        .Select(x => LargeButtonAncestor(x, ribbon))
+                        .FirstOrDefault(x => x != null);
+                    if (target == null)
+                        target = orderedButtonControls.FirstOrDefault(x =>
+                            string.Equals(NormalizeCaption(AutomationProperties.GetName(x)),
+                                NormalizeCaption(info.Label), StringComparison.Ordinal));
                     // AutoCAD/T20 does not expose the RibbonButton model through DataContext
                     // or Content. On the active custom tab these are the only 72px native
                     // large-button controls, so visual order is the stable fallback.
-                    if (target == null && buttonIndex < orderedButtonControls.Count)
+                    // Never match AutomationProperties.Name: "建筑模型" is both the
+                    // last button caption and its panel title. Adorning the panel
+                    // places JZMX over the title, as seen in the CAD screenshot.
+                    if (target == null && orderedButtonControls.Count == buttons.Count)
                         target = orderedButtonControls[buttonIndex];
                     if (target == null) continue;
                     var layer = AdornerLayer.GetAdornerLayer(target);
@@ -249,6 +254,17 @@ namespace BatchPdfPublisher.Services
             {
                 Trace("Ribbon 快捷键标签定位失败：" + exception);
             }
+        }
+
+        private static FrameworkElement LargeButtonAncestor(FrameworkElement element, DependencyObject ribbon)
+        {
+            for (DependencyObject current = element; current != null && !ReferenceEquals(current, ribbon);
+                 current = VisualTreeHelper.GetParent(current))
+            {
+                var candidate = current as FrameworkElement;
+                if (IsLargeRibbonButtonControl(candidate)) return candidate;
+            }
+            return null;
         }
 
         private static string NormalizeCaption(string value)

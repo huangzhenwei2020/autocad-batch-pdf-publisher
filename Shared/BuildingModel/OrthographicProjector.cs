@@ -1184,7 +1184,11 @@ namespace BatchPdfPublisher.BuildingModel
 
             var projA = frame.P(wall.X1, wall.Y1);
             var projB = frame.P(wall.X2, wall.Y2);
-            var crossesCut = (projA - cutProj) * (projB - cutProj) <= Epsilon * Epsilon;
+            // The wall has thickness: a cut can intersect its face even when
+            // neither centreline endpoint lies on the cutting plane.
+            var cornerDepths = corners.Select(point => frame.P(point.X, point.Y)).ToArray();
+            var crossesCut = cornerDepths.Min() <= cutProj + Epsilon
+                && cornerDepths.Max() >= cutProj - Epsilon;
 
             if (isSection)
             {

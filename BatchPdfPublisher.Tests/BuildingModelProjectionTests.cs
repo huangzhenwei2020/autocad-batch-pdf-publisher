@@ -29,6 +29,7 @@ internal static class BuildingModelProjectionTests
             ElevationDirectionsAreMirrored(model);
             HiddenLinesRemoveCoveredEdges(model);
             SectionProducesCutRectsAndHatch(model);
+            OffsetCutInsideWallThicknessProducesSection();
             JsonRoundTripsWithoutLoss(model);
             PlanEditingTests.Run();
             OpeningTypeLibraryTests.Run();
@@ -168,6 +169,28 @@ internal static class BuildingModelProjectionTests
             + sizes.Count(s => Math.Abs(s[0] - 240d) < Tolerance && Math.Abs(s[1] - 900d) < Tolerance)
             + " 处，窗台/窗顶线 " + sillLines.Count + "/" + headLines.Count + " 条，间距 "
             + view.Hatches[0].Spacing.ToString("0") + "mm）");
+    }
+
+    private static void OffsetCutInsideWallThicknessProducesSection()
+    {
+        var model = new BuildingModelDocument();
+        model.Storeys.Add(new StoreyModel { Id = "F", Elevation = 0d, Height = 3000d });
+        model.Walls.Add(new WallModel
+        {
+            Id = "W", StoreyId = "F", X1 = 0d, Y1 = 0d, X2 = 5000d, Y2 = 0d,
+            Thickness = 200d
+        });
+        foreach (var offset in new[] { 0d, -50d, 50d })
+        {
+            var view = OrthographicProjector.Project(model, new ViewDefinitionModel
+            {
+                Id = "offset-cut", Kind = ViewKind.Section,
+                CutAxis = SectionAxis.CutY, CutPosition = offset, ViewSign = 1
+            });
+            Assert(view.Hatches.Count == 1 && view.Lines.Any(line => line.Layer == ViewLayers.Cut),
+                "剖切线 Y=" + offset + " 位于 200mm 墙内，应有墙断面");
+        }
+        Console.WriteLine("PASS 墙厚内偏心剖切：Y=0/±50 均有断面");
     }
 
     /// <summary>填充边界的包围盒尺寸（宽, 高）。</summary>

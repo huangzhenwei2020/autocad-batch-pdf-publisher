@@ -23,6 +23,7 @@
     <Compile Include="ViewPreviewCanvas.cs" />
     <Compile Include="CanvasSelfTest.cs" />
     <Compile Include="PlanInteractionSelfTest.cs" />
+    <Compile Include="MainFormPersistenceSelfTest.cs" />
     <Compile Include="ViewPreviewSelfTest.cs" />
     <Compile Include="VolumeSelfTest.cs" />
     <!-- 建筑模型的纯逻辑层：与主插件、测试工程共用同一份源码（本仓库既有做法：源码链接，不新增 DLL）。 -->
@@ -44,7 +45,6 @@
     <Compile Include="..\BatchPdfPublisher\Features\DoorWindows\Models\DoorWindowElevationGeometry.cs" Link="DoorWindows\DoorWindowElevationGeometry.cs" />
   </ItemGroup>
 </Project>
-
 
 
 
