@@ -3,6 +3,7 @@ using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Runtime;
 using Autodesk.AutoCAD.DatabaseServices;
 using BatchPdfPublisher.Services;
+using BatchPdfPublisher.Features.BuildingModel.Services;
 using System;
 using System.IO;
 using System.Collections.Generic;
@@ -157,6 +158,15 @@ namespace BatchPdfPublisher
             var document = Application.DocumentManager.MdiActiveDocument;
             if (document == null) return;
             BuildingModelCadBridge.ExportOpeningLibrary(document);
+        }
+
+        /// <summary>打开建模程序（万落建筑模型）并直接载入当前项目的模型。</summary>
+        [CommandMethod("JZMX")]
+        public void OpenBuildingModelStudio()
+        {
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document == null) return;
+            BuildingModelStudioLauncher.Open(document);
         }
 
         [CommandMethod("LINEVISION", CommandFlags.Session)]

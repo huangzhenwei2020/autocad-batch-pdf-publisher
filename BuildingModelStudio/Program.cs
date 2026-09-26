@@ -22,9 +22,21 @@ namespace Wanluo.BuildingModelStudio
         /// <summary>命令行模式（生成/自检）：出错只写日志，不弹对话框。</summary>
         internal static bool Headless;
 
+        /// <summary>启动时要打开的项目文件夹 / 模型名称（CAD 里执行 JZMX 时会带上这两个参数）。</summary>
+        internal static string StartupProjectFolder;
+        internal static string StartupModelName;
+
         [STAThread]
         private static void Main(string[] args)
         {
+            // 先取 --project / --model（可以和其它参数一起给）：
+            // CAD 里「建筑模型」命令就是这样把当前项目的模型直接打开的。
+            for (var index = 0; index < (args == null ? 0 : args.Length); index++)
+            {
+                var value = index + 1 < args.Length ? args[index + 1] : null;
+                if (string.Equals(args[index], "--project", StringComparison.OrdinalIgnoreCase)) StartupProjectFolder = value;
+                else if (string.Equals(args[index], "--model", StringComparison.OrdinalIgnoreCase)) StartupModelName = value;
+            }
             // 命令行模式：不弹窗口，直接生成样例模型与视图。
             //   dotnet 万落建筑模型.dll --generate [<项目文件夹>] [<模型名称>]
             if (args != null && args.Length > 0 && string.Equals(args[0], "--generate", StringComparison.OrdinalIgnoreCase))
@@ -180,9 +192,6 @@ namespace Wanluo.BuildingModelStudio
                         var preview = FindControl<ViewPreviewCanvas>(form);
                         if (preview != null) preview.Refresh();
                         Application.DoEvents();
-                        // 第三个参数可以指定要看哪一张（视图 id，例如 schedule = 门窗表）
-                        if (args.Length > 2) form.SelectViewForTest(args[2]);
-                        Application.DoEvents();
                         // 布局还没完全稳定时（脚本里 Show 完马上截图）重新适应一次，保证整张图都在画面里
                         form.PerformLayout();
                         if (preview != null)
@@ -206,6 +215,10 @@ namespace Wanluo.BuildingModelStudio
                         var path = args.Length > 1 && !string.IsNullOrWhiteSpace(args[1])
                             ? args[1]
                             : Path.Combine(Path.GetTempPath(), "万落建筑模型-界面.png");
+                        // 允许在后面附加 --project/--model（CAD 启动时就是这样带的），位置参数照样识别
+                        var positional = PositionalArguments(args, 1);
+                        if (positional.Count > 0 && !string.IsNullOrWhiteSpace(positional[0])) path = positional[0];
+                        if (positional.Count > 1) form.SelectViewForTest(positional[1]);
                         // 按**客户区**尺寸截：用窗口尺寸截会把右边和下边截掉（截图里画布看着被切了一半）
                         var client = form.ClientSize;
                         using (var bitmap = new Bitmap(client.Width, client.Height))
@@ -217,7 +230,7 @@ namespace Wanluo.BuildingModelStudio
                             + (preview == null ? "未找到" : preview.LastLineCount + " 条线")
                             + (preview == null ? "" : "；画布 " + preview.Width + "×" + preview.Height
                                 + "，1px≈" + Math.Round(1d / Math.Max(1e-9d, preview.ViewScale), 1) + "mm")
-                            + "）");
+                            + "；模型 " + (form.ModelNameForTest ?? "?") + "）");
                         form.Close();
                     }
                 }
@@ -339,6 +352,24 @@ namespace Wanluo.BuildingModelStudio
             Console.WriteLine("PASS 预览改做法：把 " + opening.Id + " 换成 " + target.Code + "（"
                 + target.Width.ToString("0") + "×" + target.Height.ToString("0") + "）→ 模型已改、视图已重算并标出新编号"
                 + "（线条 " + linesBefore + " → " + preview.View.Lines.Count + "）");
+        }
+
+        /// <summary>把参数里的位置参数挑出来（跳过模式名与 --project/--model 这类带值的开关）。</summary>
+        private static List<string> PositionalArguments(string[] args, int start)
+        {
+            var result = new List<string>();
+            for (var index = Math.Max(0, start); index < (args == null ? 0 : args.Length); index++)
+            {
+                var value = args[index] ?? string.Empty;
+                if (string.Equals(value, "--project", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(value, "--model", StringComparison.OrdinalIgnoreCase))
+                {
+                    index++;        // 跳过它的值
+                    continue;
+                }
+                result.Add(value);
+            }
+            return result;
         }
 
         /// <summary>在控件树里找第一个指定类型的控件（自检用）。</summary>
@@ -500,12 +531,14 @@ namespace Wanluo.BuildingModelStudio
             var fileRow = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true };
             fileRow.Controls.Add(FieldLabel("项目文件夹"));
             _projectFolder.Width = 300;
-            _projectFolder.Text = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "万落建筑项目", "建筑模型样例");
+            _projectFolder.Text = string.IsNullOrWhiteSpace(Program.StartupProjectFolder)
+                ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "万落建筑项目", "建筑模型样例")
+                : Program.StartupProjectFolder;
             fileRow.Controls.Add(_projectFolder);
             fileRow.Controls.Add(Button("选择…", ChooseFolder, false));
             fileRow.Controls.Add(FieldLabel("模型名称"));
             _modelName.Width = 150;
-            _modelName.Text = "样例-两层小房子";
+            _modelName.Text = string.IsNullOrWhiteSpace(Program.StartupModelName) ? "样例-两层小房子" : Program.StartupModelName;
             fileRow.Controls.Add(_modelName);
             fileRow.Controls.Add(Button("打开/新建", OpenOrCreateModel, true));
             fileRow.Controls.Add(Button("保存", SaveModel, true));
@@ -761,6 +794,7 @@ namespace Wanluo.BuildingModelStudio
         }
 
         internal string ViewInfoForTest { get { return _viewInfo.Text; } }
+        internal string ModelNameForTest { get { return ModelName; } }
         internal OpeningTypeLibraryDocument OpeningLibraryForTest { get { return _openingLibrary; } }
 
         /// <summary>自检/截图用：按视图 id 选中预览的下拉项（例如 "schedule" 门窗表）。</summary>

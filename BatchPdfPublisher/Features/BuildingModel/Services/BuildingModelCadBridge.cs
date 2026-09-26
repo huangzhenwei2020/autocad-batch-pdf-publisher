@@ -31,17 +31,8 @@ namespace BatchPdfPublisher.Services
         {
             if (document == null) return;
             var editor = document.Editor;
-            string path;
-            using (var dialog = new OpenFileDialog
-            {
-                Title = "选择建模程序生成的视图文件（views\\*.json）",
-                Filter = "视图文件 (*.json)|*.json|所有文件 (*.*)|*.*",
-                InitialDirectory = LastViewFolder()
-            })
-            {
-                if (dialog.ShowDialog() != DialogResult.OK) return;
-                path = dialog.FileName;
-            }
+            var path = PickViewFile(document, editor);
+            if (string.IsNullOrWhiteSpace(path)) return;
 
             ViewDocument view;
             try { view = BuildingModelJson.LoadView(path); }
@@ -569,6 +560,62 @@ namespace BatchPdfPublisher.Services
                 }
                 table.Add(record);
                 transaction.AddNewlyCreatedDBObject(record, true);
+            }
+        }
+
+        /// <summary>
+        /// 落图选文件：**先列出当前项目已生成的图纸/视图让你挑序号**（不用翻文件对话框），
+        /// 输入 0 才走文件浏览（落别处的文件或没建项目时用）。
+        /// </summary>
+        private static string PickViewFile(Document document, Editor editor)
+        {
+            string projectFolder = null;
+            string modelName = null;
+            try
+            {
+                var project = new PublishPlanStore().GetActiveProject();
+                projectFolder = project == null ? null : project.ProjectFolder;
+                modelName = project == null ? null : project.Name;
+            }
+            catch
+            {
+                // 读项目失败就当没有项目，直接走文件浏览
+            }
+            var modelFolder = StudioLaunch.FindModelFolder(projectFolder, modelName);
+            var entries = StudioLaunch.ListViews(modelFolder);
+            if (entries.Count == 0)
+            {
+                if (modelFolder != null)
+                    editor.WriteMessage("\n当前项目的模型目录里还没有视图：" + modelFolder
+                        + "\n先在建模程序里「生成全部视图」（CAD 里执行 JZMX 打开建模程序）。");
+                return BrowseViewFile();
+            }
+
+            editor.WriteMessage("\n请选择要落图的图纸/视图（当前项目：" + (modelName ?? "未命名") + "）：");
+            for (var index = 0; index < entries.Count; index++)
+                editor.WriteMessage("\n  " + (index + 1).ToString("00") + "）" + entries[index].Display);
+            editor.WriteMessage("\n  00）浏览其它文件…");
+            var options = new PromptIntegerOptions("\n输入序号")
+            {
+                DefaultValue = 1, AllowNone = false, AllowZero = true, UseDefaultValue = true
+            };
+            var result = editor.GetInteger(options);
+            if (result.Status != PromptStatus.OK) return null;
+            if (result.Value <= 0) return BrowseViewFile();
+            if (result.Value > entries.Count) return entries[entries.Count - 1].FilePath;
+            return entries[result.Value - 1].FilePath;
+        }
+
+        private static string BrowseViewFile()
+        {
+            using (var dialog = new OpenFileDialog
+            {
+                Title = "选择建模程序生成的视图文件（views\\*.json）",
+                Filter = "视图文件 (*.json)|*.json|所有文件 (*.*)|*.*",
+                InitialDirectory = LastViewFolder()
+            })
+            {
+                return dialog.ShowDialog() == DialogResult.OK ? dialog.FileName : null;
             }
         }
 

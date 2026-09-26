@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using BatchPdfPublisher.BuildingModel;
 
@@ -30,7 +31,72 @@ internal static class OpeningElevationTests
         DimensionsAndSchedule();
         PlanProjection();
         SheetComposition();
-        Console.WriteLine("PASS 立面门窗：分格与开启线 / 背立面镜像 / 遮挡裁剪 / 自定义分格 / 1:100-1:50 详简 / 参数兜底 / 可点选锚点与编号 / 尺寸与门窗表 / 平面图 / 排版出图");
+        StudioLaunchChecks();
+        Console.WriteLine("PASS 立面门窗：分格与开启线 / 背立面镜像 / 遮挡裁剪 / 自定义分格 / 1:100-1:50 详简 / 参数兜底 / 可点选锚点与编号 / 尺寸与门窗表 / 平面图 / 排版出图 / 启动与取件");
+    }
+
+    // ───────────────────────── 11. 从 CAD 启动建模程序 / 落图取件 ─────────────────────────
+
+    /// <summary>
+    /// CAD 里「建筑模型」命令（JZMX）要能把项目文件夹与模型名称传给建模程序，
+    /// 落图（LTTZ）要能直接列出本项目已生成的图纸/视图让人挑序号 —— 这两件事的纯逻辑在这里钉住。
+    /// </summary>
+    private static void StudioLaunchChecks()
+    {
+        // 1) 启动参数
+        var arguments = StudioLaunch.BuildArguments(@"H:\项目\万落示例\", " 样例-两层小房子 ");
+        Assert(arguments == "--project \"H:\\项目\\万落示例\" --model \"样例-两层小房子\"",
+            "启动参数不对：" + arguments);
+        Assert(StudioLaunch.BuildArguments(null, null) == string.Empty, "空参数应得到空字符串");
+        Assert(StudioLaunch.BuildArguments(@"C:\a", null) == "--project \"C:\\a\"", "只有项目文件夹时不该带 --model");
+
+        // 2) 找程序：按候选顺序取第一个存在的
+        var root = Path.Combine(Path.GetTempPath(), "WanluoStudioLaunchTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var exe = Path.Combine(root, StudioLaunch.ExecutableName);
+            File.WriteAllText(exe, "stub");
+            Assert(StudioLaunch.FindExecutable(new[] { null, Path.Combine(root, "没有.exe"), exe }) == Path.GetFullPath(exe),
+                "应在候选里找到存在的程序");
+            Assert(StudioLaunch.FindExecutable(new[] { Path.Combine(root, "没有.exe") }) == null, "都不存在时应返回 null");
+
+            // 发布目录候选：<根>\CadApi\R24 → <根>\建筑模型\万落建筑模型.exe
+            var band = Path.Combine(root, "CadApi", "R24");
+            Directory.CreateDirectory(band);
+            var published = Path.Combine(root, StudioLaunch.RelativeFolder, StudioLaunch.ExecutableName);
+            Directory.CreateDirectory(Path.GetDirectoryName(published));
+            File.WriteAllText(published, "stub");
+            Assert(StudioLaunch.DefaultCandidates(band).Any(c => string.Equals(c, published, StringComparison.OrdinalIgnoreCase)),
+                "发布目录候选里应包含 <发布根>\\建筑模型\\万落建筑模型.exe");
+            Assert(StudioLaunch.FindExecutable(StudioLaunch.DefaultCandidates(band)) == Path.GetFullPath(published),
+                "应能在发布目录候选里找到建模程序");
+
+            // 3) 找模型目录 + 列视图清单
+            var projectFolder = Path.Combine(root, "项目A");
+            var modelFolder = Path.Combine(projectFolder, StudioLaunch.ModelFolderName, "住宅楼");
+            Directory.CreateDirectory(Path.Combine(modelFolder, StudioLaunch.ViewsFolderName));
+            Assert(StudioLaunch.FindModelFolder(projectFolder, "住宅楼") == modelFolder, "按模型名称应找到模型目录");
+            Assert(StudioLaunch.FindModelFolder(projectFolder, "不存在") == null, "模型名不存在时应返回 null");
+            Assert(StudioLaunch.FindModelFolder(projectFolder, null) == modelFolder, "只有一个模型时应自动用它");
+            Assert(StudioLaunch.FindModelFolder(Path.Combine(root, "没有项目"), null) == null, "没有项目目录时返回 null");
+
+            var south = new ViewDocument { Id = "elev-south", Title = "住宅楼 南立面图", Kind = ViewKind.Elevation, Scale = 100 };
+            south.Lines.Add(new ViewLine { Layer = ViewLayers.Elevation, X1 = 0, Y1 = 0, X2 = 1000, Y2 = 0 });
+            BuildingModelJson.SaveView(Path.Combine(modelFolder, StudioLaunch.ViewsFolderName, "elev-south.json"), south);
+            var sheet = new ViewDocument { Id = "sheet-1", Title = "建施-01", Kind = ViewKind.Sheet, Scale = 1, PaperName = "A3" };
+            sheet.Lines.Add(new ViewLine { Layer = ViewLayers.SheetFrame, X1 = 0, Y1 = 0, X2 = 420, Y2 = 0 });
+            BuildingModelJson.SaveView(Path.Combine(modelFolder, StudioLaunch.ViewsFolderName, "sheet-1.json"), sheet);
+            File.WriteAllText(Path.Combine(modelFolder, StudioLaunch.ViewsFolderName, "坏文件.json"), "{ 这不是 json");
+
+            var entries = StudioLaunch.ListViews(modelFolder);
+            Assert(entries.Count == 2, "坏文件应被跳过，只列出两张，实际 " + entries.Count);
+            Assert(entries[0].Kind == ViewKind.Sheet && entries[0].Title == "建施-01", "图纸应排在最前面");
+            Assert(entries[1].Id == "elev-south" && entries[1].Display.IndexOf("立面", StringComparison.Ordinal) >= 0,
+                "清单里应能看出类型：" + entries[1].Display);
+            Console.WriteLine("   启动与取件：参数、发布目录候选、模型目录定位、视图清单（跳过坏文件）都符合预期");
+        }
+        finally { try { Directory.Delete(root, true); } catch { } }
     }
 
     // ───────────────────────── 10. 排版出图（图纸） ─────────────────────────

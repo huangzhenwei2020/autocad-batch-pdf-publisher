@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
@@ -24,6 +24,7 @@
     <Compile Include="..\Shared\BuildingModel\OrthographicProjector.cs" Link="Features\BuildingModel\Shared\OrthographicProjector.cs" />
     <Compile Include="..\Shared\BuildingModel\OpeningElevationAdapter.cs" Link="Features\BuildingModel\Shared\OpeningElevationAdapter.cs" />
     <Compile Include="..\Shared\BuildingModel\SheetComposer.cs" Link="Features\BuildingModel\Shared\SheetComposer.cs" />
+    <Compile Include="..\Shared\BuildingModel\StudioLaunch.cs" Link="Features\BuildingModel\Shared\StudioLaunch.cs" />
     <Reference Include="PdfSharp" HintPath="..\PdfSharp.dll" Private="true" />
     <None Include="..\ThirdParty\Pdfium\pdfium.dll" Link="pdfium.dll" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\ThirdParty\Pdfium\LICENSES\**\*" Link="licenses\Pdfium\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
@@ -38,4 +39,5 @@
     <PackageReference Include="AutoCAD.NET" Version="25.0.1" PrivateAssets="all" ExcludeAssets="runtime" />
   </ItemGroup>
 </Project>
+
 

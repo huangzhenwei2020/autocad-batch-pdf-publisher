@@ -416,6 +416,29 @@ Invoke-Checked {
 $launcher = Join-Path $OutputRoot '万落建筑工具启动器.exe'
 if (-not (Test-Path -LiteralPath $launcher)) { throw '未生成万落建筑工具启动器.exe' }
 
+# 建模程序（万落建筑模型）：CAD 里执行 JZMX 会到 <发布根>\建筑模型\ 下找它，
+# 所以这里把它的 Release 产物一并放进发布目录（独立程序，不参与 CAD 插件加载）。
+$studioProject = Join-Path $repositoryRoot 'BuildingModelStudio\BuildingModelStudio.csproj'
+$studioOutput = Join-Path $OutputRoot '建筑模型'
+if (Test-Path -LiteralPath $studioProject) {
+    $studioDotnet = Find-DotNet8
+    Write-Host '编译建模程序（万落建筑模型）…' -ForegroundColor Cyan
+    Invoke-Checked {
+        & $studioDotnet build $studioProject -c Release -o $studioOutput --nologo -v:minimal
+    } '编译建模程序'
+    foreach ($name in @('万落建筑模型.exe', '万落建筑模型.dll', '万落建筑模型.deps.json', '万落建筑模型.runtimeconfig.json')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $studioOutput $name))) { throw "建模程序缺少文件：$name" }
+    }
+    Get-ChildItem $studioOutput -Recurse -Filter '*.pdb' -File -ErrorAction SilentlyContinue | Remove-Item -Force
+    # 建模程序是 .NET 8 桌面程序：若目标机没装桌面运行时，附一份官方运行时提示
+    @'
+万落建筑模型 需要 .NET 8 桌面运行时（Windows Desktop Runtime 8.x）。
+若双击没反应：到 https://dotnet.microsoft.com/download/dotnet/8.0 下载
+「.NET Desktop Runtime 8.x - Windows x64」安装后即可（或从 CAD 里执行 JZM X / 建筑模型 命令启动）。
+'@ | Set-Content -LiteralPath (Join-Path $studioOutput '运行说明.txt') -Encoding UTF8
+    Write-Host ('建模程序已发布：' + $studioOutput) -ForegroundColor Green
+}
+
 # PDB files are developer symbols, not runtime dependencies. Keeping them out of
 # dist makes the installation directory unambiguous and prevents stale symbols
 # from being mistaken for payloads.
@@ -439,6 +462,7 @@ $manifest = [ordered]@{
     GitBranch = $sourceGitBranch
     GitDirty = $sourceGitDirty
     LauncherSha256 = (Get-FileHash -LiteralPath $launcher -Algorithm SHA256).Hash
+    StudioSha256 = $(if (Test-Path -LiteralPath (Join-Path $OutputRoot '建筑模型\万落建筑模型.exe')) { (Get-FileHash -LiteralPath (Join-Path $OutputRoot '建筑模型\万落建筑模型.exe') -Algorithm SHA256).Hash } else { $null })
     PaddleOcrIncluded = [bool]$IncludePaddleOcr
     PaddleOcrSha256 = $(if ($paddleOcrWorker) { (Get-FileHash -LiteralPath $paddleOcrWorker -Algorithm SHA256).Hash } else { $null })
     Bands = $buildRecords
