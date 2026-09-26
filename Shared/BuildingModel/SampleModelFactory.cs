@@ -154,6 +154,19 @@ namespace BatchPdfPublisher.BuildingModel
             };
         }
 
+        /// <summary>某一层的平面图定义（平面用 StoreyIds 指定画哪一层）。</summary>
+        public static ViewDefinitionModel CreatePlanView(StoreyModel storey)
+        {
+            var id = storey == null || string.IsNullOrWhiteSpace(storey.Id) ? "plan" : storey.Id;
+            var name = storey == null || string.IsNullOrWhiteSpace(storey.Name) ? id : storey.Name;
+            var definition = new ViewDefinitionModel
+            {
+                Id = "plan-" + id, Title = name + " 平面图", Kind = ViewKind.Plan, Scale = 100
+            };
+            if (storey != null && !string.IsNullOrWhiteSpace(storey.Id)) definition.StoreyIds.Add(storey.Id);
+            return definition;
+        }
+
         private static ViewDefinitionModel Elevation(string id, string title, ElevationDirection direction)
         {
             return new ViewDefinitionModel

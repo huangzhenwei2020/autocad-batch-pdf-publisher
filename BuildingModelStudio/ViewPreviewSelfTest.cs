@@ -28,8 +28,10 @@ namespace Wanluo.BuildingModelStudio
             var library = SampleModelFactory.CreateDemoOpeningLibrary();
             var canvas = new ViewPreviewCanvas { Size = new Size(Width, Height) };
 
-            // 1) 五张默认视图 + 门窗表：每张都要真的画出来，而且线条一条不少
+            // 1) 五张默认视图 + 每层平面 + 门窗表：每张都要真的画出来，而且线条一条不少
             var definitions = SampleModelFactory.CreateDefaultViews(model.Name);
+            foreach (var storey in (model.Storeys ?? new List<StoreyModel>()).Where(s => s != null))
+                definitions.Add(SampleModelFactory.CreatePlanView(storey));
             definitions.Add(SampleModelFactory.CreateScheduleView(model.Name));
             foreach (var definition in definitions)
             {

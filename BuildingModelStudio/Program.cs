@@ -253,6 +253,8 @@ namespace Wanluo.BuildingModelStudio
             using (var canvas = new ViewPreviewCanvas { Size = new Size(1500, 1000) })
             {
                 var definitions = SampleModelFactory.CreateDefaultViews(modelName);
+                foreach (var storey in (model.Storeys ?? new List<StoreyModel>()).Where(s => s != null))
+                    definitions.Add(SampleModelFactory.CreatePlanView(storey));
                 definitions.Add(SampleModelFactory.CreateScheduleView(modelName));
                 foreach (var definition in definitions)
                 {
@@ -393,6 +395,20 @@ namespace Wanluo.BuildingModelStudio
                     + view.Texts.Count + "、填充 " + view.Hatches.Count + "、尺寸 " + view.Dimensions.Count
                     + " → " + Path.GetFileName(path));
                 foreach (var warning in view.Warnings) log("  提示：" + warning);
+            }
+
+            // 平面图：每层一张（平面也由模型投影生成，不开 CAD 就能看）
+            foreach (var storey in (model.Storeys ?? new List<StoreyModel>()).Where(s => s != null))
+            {
+                var definition = SampleModelFactory.CreatePlanView(storey);
+                var plan = OrthographicProjector.Project(model, definition, library);
+                var path = BuildingModelJson.ViewFilePath(projectFolder, modelName, plan.Id);
+                BuildingModelJson.SaveView(path, plan);
+                total += plan.Lines.Count;
+                log("视图：" + plan.Title + " → 线 " + plan.Lines.Count + "、文字 " + plan.Texts.Count
+                    + "、尺寸 " + plan.Dimensions.Count + "、可点选门窗 " + plan.Anchors.Count
+                    + " → " + Path.GetFileName(path));
+                foreach (var warning in plan.Warnings) log("  提示：" + warning);
             }
 
             // 门窗表：按编号汇总模型里的洞口（做法取自类型库），与立面/剖面一样落图
@@ -802,6 +818,9 @@ namespace Wanluo.BuildingModelStudio
             _viewChooser.Items.Clear();
             foreach (var definition in SampleModelFactory.CreateDefaultViews(ModelName))
                 _viewChooser.Items.Add(new ViewChoice(definition));
+            if (_model != null)
+                foreach (var storey in (_model.Storeys ?? new List<StoreyModel>()).Where(s => s != null))
+                    _viewChooser.Items.Add(new ViewChoice(SampleModelFactory.CreatePlanView(storey)));
             _viewChooser.Items.Add(new ViewChoice(SampleModelFactory.CreateScheduleView(ModelName)));   // 门窗表也能预览
             if (_viewChooser.Items.Count == 0) return;
             for (var index = 0; index < _viewChooser.Items.Count; index++)

@@ -28,7 +28,88 @@ internal static class OpeningElevationTests
         FallsBackWhenParametersInvalid();
         AnchorsAndLabels();
         DimensionsAndSchedule();
-        Console.WriteLine("PASS 立面门窗：分格与开启线 / 背立面镜像 / 遮挡裁剪 / 自定义分格 / 1:100-1:50 详简 / 参数兜底 / 可点选锚点与编号 / 尺寸与门窗表");
+        PlanProjection();
+        Console.WriteLine("PASS 立面门窗：分格与开启线 / 背立面镜像 / 遮挡裁剪 / 自定义分格 / 1:100-1:50 详简 / 参数兜底 / 可点选锚点与编号 / 尺寸与门窗表 / 平面图");
+    }
+
+    // ───────────────────────── 9. 平面图投影 ─────────────────────────
+
+    /// <summary>
+    /// 平面图 v1：墙两条面线（洞口断开 + 封口）、窗两条玻璃线、门一条扇线 + 90° 弧、柱断面矩形，
+    /// 外围横向/竖向定位链与总尺寸。
+    /// </summary>
+    private static void PlanProjection()
+    {
+        var model = SampleModelFactory.CreateTwoStoreyHouse();
+        var storey = model.Storeys[0];                       // 一层
+        var definition = SampleModelFactory.CreatePlanView(storey);
+        var plan = OrthographicProjector.Project(model, definition, null);
+
+        Assert(plan.Kind == ViewKind.Plan, "应生成平面类视图");
+        Assert(plan.Texts.Any(t => t.Layer == ViewLayers.Title && t.Text.IndexOf("平面图", StringComparison.Ordinal) >= 0), "平面图缺图名");
+
+        var cut = plan.Lines.Where(l => l.Layer == ViewLayers.Cut).ToList();
+        var opening = plan.Lines.Where(l => l.Layer == ViewLayers.Opening).ToList();
+        // 视图坐标 = 模型坐标 - 视图原点（Normalize 会把整张图平移到 0 起）
+        var originX = plan.OriginX;
+        var originY = plan.OriginY;
+        Func<double, double> X = value => value - originX;
+        Func<double, double> Y = value => value - originY;
+
+        // 南墙（y=0，厚 240）：外面线 y=-120，在 1450-2950（窗）与 4950-5850（门）处断开
+        Assert(HasPlanLine(cut, X(0d), Y(-120d), X(1450d), Y(-120d)), "南墙外面线应从 x=0 画到窗左 1450");
+        Assert(HasPlanLine(cut, X(2950d), Y(-120d), X(4950d), Y(-120d)), "窗与门之间的墙面线（2950→4950）没画出来");
+        Assert(HasPlanLine(cut, X(5850d), Y(-120d), X(7200d), Y(-120d)), "门右到墙端（5850→7200）没画出来");
+        Assert(!HasPlanLine(cut, X(1450d), Y(-120d), X(2950d), Y(-120d)), "窗洞范围内的墙面线不该画出来");
+        Assert(HasPlanLine(cut, X(1450d), Y(-120d), X(1450d), Y(120d)), "窗左门垛封口没画出来");
+        // 窗：两条玻璃线（墙厚内侧 ±42）
+        Assert(HasPlanLine(opening, X(1450d), Y(42d), X(2950d), Y(42d)) && HasPlanLine(opening, X(1450d), Y(-42d), X(2950d), Y(-42d)),
+            "窗的两条玻璃线没画出来");
+        // 门：扇线（从门垛沿墙法线出 900）+ 8 段开启弧（弧终点落在另一侧门垛上）
+        Assert(HasPlanLine(opening, X(4950d), Y(0d), X(4950d), Y(900d)), "门的扇线（4950,0 → 4950,900）没画出来");
+        var arcReachesJamb = opening.Any(l => (Math.Abs(l.X1 - X(5850d)) < Tolerance && Math.Abs(l.Y1 - Y(0d)) < Tolerance)
+            || (Math.Abs(l.X2 - X(5850d)) < Tolerance && Math.Abs(l.Y2 - Y(0d)) < Tolerance));
+        Assert(arcReachesJamb, "门的 90° 开启弧应扫到另一侧门垛（5850,0）");
+        Assert(opening.Count == 15, "一层平面的门窗图例应有 15 条线（3 窗×2 + 1 门×9），实际 " + opening.Count);
+        // 柱断面
+        var column = model.Columns.First(c => string.Equals(c.StoreyId, storey.Id, StringComparison.OrdinalIgnoreCase));
+        Assert(HasPlanLine(cut, X(column.X - column.Width / 2d), Y(column.Y - column.Depth / 2d),
+            X(column.X + column.Width / 2d), Y(column.Y - column.Depth / 2d)), "柱断面矩形没画出来");
+
+        // 外围尺寸：总长 7600（-200→7400）、总宽 5800（-200→5600）
+        var totalWidth = plan.Dimensions.FirstOrDefault(d => d.Note == "总长");
+        Assert(totalWidth != null && Math.Abs(totalWidth.From + originX - (-200d)) < Tolerance && Math.Abs(totalWidth.To + originX - 7400d) < Tolerance,
+            "平面图总长应为 -200→7400，实际 " + (totalWidth == null ? "缺失" : (totalWidth.From + originX) + "→" + (totalWidth.To + originX)));
+        var totalDepth = plan.Dimensions.FirstOrDefault(d => d.Note == "总宽");
+        Assert(totalDepth != null && Math.Abs(totalDepth.From + originY - (-200d)) < Tolerance && Math.Abs(totalDepth.To + originY - 5600d) < Tolerance,
+            "平面图总宽应为 -200→5600，实际 " + (totalDepth == null ? "缺失" : (totalDepth.From + originY) + "→" + (totalDepth.To + originY)));
+        var horizontal = plan.Dimensions.Where(d => !d.Vertical && d.Note == "定位（横向）").ToList();
+        Assert(horizontal.Any(d => Math.Abs(d.From + originX - 0d) < Tolerance && Math.Abs(d.To + originX - 1450d) < Tolerance),
+            "平面横向定位链应含 0→1450（墙端到窗左）");
+        // 洞口边线都要成为链上的一个分界点（南墙的窗 1450/2950、门 4950/5850）
+        foreach (var edge in new[] { 1450d, 2950d, 4950d, 5850d })
+            Assert(horizontal.Any(d => Math.Abs(d.From + originX - edge) < Tolerance || Math.Abs(d.To + originX - edge) < Tolerance),
+                "平面横向定位链应含洞口边线 " + edge);
+        Assert(Math.Abs(horizontal.Sum(d => d.To - d.From) - 7600d) < 0.01d, "横向定位链各段之和应等于总长 7600");
+
+        // 可点选：一层 4 个洞口都有锚点，且锚点框盖住洞口
+        Assert(plan.Anchors.Count == 4, "一层平面应有 4 个门窗锚点，实际 " + plan.Anchors.Count);
+        var anchor = plan.Anchors.First(a => string.Equals(a.ElementId, "1F-S-C1518", StringComparison.OrdinalIgnoreCase));
+        Assert(anchor.X1 + originX <= 1450d && anchor.X2 + originX >= 2950d && anchor.Y2 - anchor.Y1 >= 240d, "窗锚点框应盖住洞口与墙厚");
+        Console.WriteLine("   平面图：墙面线在洞口断开、窗 2 条玻璃线、门扇线 + 弧、柱断面，总长 7600 / 总宽 5800，锚点 4 个");
+    }
+
+    /// <summary>平面上有没有一条给定端点（顺序无关，容差内）的线。</summary>
+    private static bool HasPlanLine(List<ViewLine> lines, double x1, double y1, double x2, double y2)
+    {
+        foreach (var line in lines)
+        {
+            if (Math.Abs(line.X1 - x1) < Tolerance && Math.Abs(line.Y1 - y1) < Tolerance
+                && Math.Abs(line.X2 - x2) < Tolerance && Math.Abs(line.Y2 - y2) < Tolerance) return true;
+            if (Math.Abs(line.X1 - x2) < Tolerance && Math.Abs(line.Y1 - y2) < Tolerance
+                && Math.Abs(line.X2 - x1) < Tolerance && Math.Abs(line.Y2 - y1) < Tolerance) return true;
+        }
+        return false;
     }
 
     // ───────────────────────── 8. 竖向尺寸与门窗表 ─────────────────────────
@@ -43,21 +124,28 @@ internal static class OpeningElevationTests
         var definition = SampleModelFactory.CreateDefaultViews(model.Name)[0];      // 南立面，1:100
         var view = OrthographicProjector.Project(model, definition, library);
 
-        var minU = view.Lines.Min(l => Math.Min(l.X1, l.X2)) + view.OriginX;
-        var maxU = view.Lines.Max(l => Math.Max(l.X1, l.X2)) + view.OriginX;
+        // 只取"建筑几何"那批线（标高符号线在图名/轮廓之外，算进去总长会变成 8840）
+        var geometry = view.Lines.Where(l => l.Layer != ViewLayers.LevelText && l.Layer != ViewLayers.Title).ToList();
+        var originX = view.OriginX;
+        var originY = view.OriginY;
+        // 视图里的坐标 = 模型坐标 - 原点；下面统一换算回模型坐标来核对
+        var minU = geometry.Min(l => Math.Min(l.X1, l.X2)) + originX;
+        var maxU = geometry.Max(l => Math.Max(l.X1, l.X2)) + originX;
+        Func<double, double> modelU = value => value + originX;
+        Func<double, double> modelZ = value => value + originY;
         var storeyDimensions = view.Dimensions.Where(d => d.Note != null && d.Note.StartsWith("层高", StringComparison.Ordinal)).ToList();
         Assert(storeyDimensions.Count == 2, "两层应各有 1 条层高尺寸，实际 " + storeyDimensions.Count);
-        Assert(storeyDimensions.Any(d => Math.Abs(d.From - 0d) < Tolerance && Math.Abs(d.To - 3600d) < Tolerance),
+        Assert(storeyDimensions.Any(d => Math.Abs(modelZ(d.From) - 0d) < Tolerance && Math.Abs(modelZ(d.To) - 3600d) < Tolerance),
             "一层层高尺寸应为 0→3600");
-        Assert(storeyDimensions.Any(d => Math.Abs(d.From - 3600d) < Tolerance && Math.Abs(d.To - 6900d) < Tolerance),
+        Assert(storeyDimensions.Any(d => Math.Abs(modelZ(d.From) - 3600d) < Tolerance && Math.Abs(modelZ(d.To) - 6900d) < Tolerance),
             "二层层高尺寸应为 3600→6900");
-        Assert(storeyDimensions.All(d => Math.Abs(d.LinePosition - (maxU + 2000d)) < Tolerance),
+        Assert(storeyDimensions.All(d => Math.Abs(modelU(d.LinePosition) - (maxU + 2000d)) < Tolerance),
             "层高尺寸应画在立面右侧 maxU+2000 处");
 
         var total = view.Dimensions.FirstOrDefault(d => d.Note == "总高");
         Assert(total != null, "缺少总高尺寸");
-        Assert(Math.Abs(total.From - 0d) < Tolerance && Math.Abs(total.To - 6900d) < Tolerance
-            && Math.Abs(total.LinePosition - (maxU + 3000d)) < Tolerance, "总高应为 0→6900，画在 maxU+3000 处");
+        Assert(Math.Abs(modelZ(total.From) - 0d) < Tolerance && Math.Abs(modelZ(total.To) - 6900d) < Tolerance
+            && Math.Abs(modelU(total.LinePosition) - (maxU + 3000d)) < Tolerance, "总高应为 0→6900，画在 maxU+3000 处");
 
         // 一层南墙有 1500×1800@900 的窗与 900×2100 的门 → 定位链 0→900→2100→2700
         //（注意只算这张图上画出来的洞口：北面/东面的窗不该出现在南立面的尺寸链里）
@@ -65,11 +153,31 @@ internal static class OpeningElevationTests
             && d.Note.StartsWith("洞口定位", StringComparison.Ordinal)
             && d.Note.IndexOf("一层", StringComparison.Ordinal) >= 0).ToList();
         Assert(firstFloor.Count == 3, "一层洞口定位链应有 3 段（0-900-2100-2700），实际 " + firstFloor.Count);
-        Assert(firstFloor.Any(d => Math.Abs(d.From - 0d) < Tolerance && Math.Abs(d.To - 900d) < Tolerance), "缺少窗台 900 那一段");
-        Assert(firstFloor.Any(d => Math.Abs(d.From - 900d) < Tolerance && Math.Abs(d.To - 2100d) < Tolerance), "缺少 900→2100 那一段");
-        Assert(firstFloor.Any(d => Math.Abs(d.From - 2100d) < Tolerance && Math.Abs(d.To - 2700d) < Tolerance), "缺少 2100→2700 那一段");
-        Assert(firstFloor.All(d => Math.Abs(d.LinePosition - (minU - 1200d)) < Tolerance), "一层定位链应画在立面左侧 minU-1200 处");
+        Assert(firstFloor.Any(d => Math.Abs(modelZ(d.From) - 0d) < Tolerance && Math.Abs(modelZ(d.To) - 900d) < Tolerance), "缺少窗台 900 那一段");
+        Assert(firstFloor.Any(d => Math.Abs(modelZ(d.From) - 900d) < Tolerance && Math.Abs(modelZ(d.To) - 2100d) < Tolerance), "缺少 900→2100 那一段");
+        Assert(firstFloor.Any(d => Math.Abs(modelZ(d.From) - 2100d) < Tolerance && Math.Abs(modelZ(d.To) - 2700d) < Tolerance), "缺少 2100→2700 那一段");
+        Assert(firstFloor.All(d => Math.Abs(modelU(d.LinePosition) - (minU - 1200d)) < Tolerance), "一层定位链应画在立面左侧 minU-1200 处");
         Assert(firstFloor.All(d => string.IsNullOrEmpty(d.Text)), "尺寸文字应留给 CAD 自己量（Text 留空）");
+
+        // 横向：内层洞口定位链 + 外层总长。
+        // 立面参考：一层南窗 1450..2950、一层南门 4950..5850、二层南窗 2850..4350、两端墙外皮 -120 / 7320
+        var minZ = geometry.Min(l => Math.Min(l.Y1, l.Y2)) + originY;
+        var horizontal = view.Dimensions.Where(d => !d.Vertical).ToList();
+        var innerRun = horizontal.Where(d => d.Note == "洞口定位（横向）").ToList();
+        Assert(innerRun.Count == 7, "横向洞口定位链应有 7 段（-120｜1450｜2850｜2950｜4350｜4950｜5850｜7320），实际 " + innerRun.Count);
+        Assert(innerRun.All(d => Math.Abs(modelZ(d.AnchorPosition) - minZ) < Tolerance && Math.Abs(modelZ(d.LinePosition) - (minZ - 1200d)) < Tolerance),
+            "横向定位链应画在建筑底边下方 1200 处");
+        var expectedEdges = new[] { -120d, 1450d, 2850d, 2950d, 4350d, 4950d, 5850d, 7320d };
+        for (var i = 0; i + 1 < expectedEdges.Length; i++)
+            Assert(innerRun.Any(d => Math.Abs(modelU(d.From) - expectedEdges[i]) < Tolerance && Math.Abs(modelU(d.To) - expectedEdges[i + 1]) < Tolerance),
+                "横向定位链缺少 " + expectedEdges[i] + "→" + expectedEdges[i + 1] + " 那一段；实际是："
+                + string.Join("、", innerRun.OrderBy(d => d.From).Select(d => Math.Round(modelU(d.From)) + "→" + Math.Round(modelU(d.To))).ToArray()));
+        var totalWidth = horizontal.FirstOrDefault(d => d.Note == "总长");
+        Assert(totalWidth != null, "缺少总长尺寸");
+        Assert(Math.Abs(modelU(totalWidth.From) - (-120d)) < Tolerance && Math.Abs(modelU(totalWidth.To) - 7320d) < Tolerance
+            && Math.Abs(modelZ(totalWidth.LinePosition) - (minZ - 2000d)) < Tolerance,
+            "总长应为 -120→7320（7440），画在建筑底边下方 2000 处");
+        Assert(Math.Abs(innerRun.Sum(d => d.To - d.From) - 7440d) < 0.01d, "横向定位链各段之和应等于总长 7440");
 
         // 门窗表：按编号汇总（样例里 C1215×2、C1518×2、M0921×1）
         var schedule = OrthographicProjector.ProjectSchedule(model, library, "门窗表");
