@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -126,6 +126,7 @@ namespace Wanluo.BuildingModelStudio
                     CanvasSelfTest.Run(Console.WriteLine);
                     PlanInteractionSelfTest.Run(Console.WriteLine);
                     ViewPreviewSelfTest.Run(Console.WriteLine);
+                    VolumeSelfTest.Run(Console.WriteLine);
                 }
                 catch (Exception exception)
                 {
@@ -328,6 +329,9 @@ namespace Wanluo.BuildingModelStudio
                             + "、尺寸 " + view.Dimensions.Count + "、填充 " + view.Hatches.Count + "）");
                     }
                 }
+
+                // 三维轴测图（体量预览）
+                WriteVolumeSnapshot(model, outputFolder, log);
             }
         }
 
@@ -376,6 +380,26 @@ namespace Wanluo.BuildingModelStudio
             Console.WriteLine("PASS 预览改做法：把 " + opening.Id + " 换成 " + target.Code + "（"
                 + target.Width.ToString("0") + "×" + target.Height.ToString("0") + "）→ 模型已改、视图已重算并标出新编号"
                 + "（线条 " + linesBefore + " → " + preview.View.Lines.Count + "）");
+        }
+
+        /// <summary>把三维轴测图渲染成 PNG（与三维预览页同一个控件、同一条绘制路径）。</summary>
+        internal static void WriteVolumeSnapshot(BuildingModelDocument model, string outputFolder, Action<string> log)
+        {
+            if (model == null || string.IsNullOrWhiteSpace(outputFolder)) return;
+            using (var canvas = new VolumeCanvas { Size = new Size(1400, 900) })
+            {
+                canvas.SetModel(model);
+                using (var bitmap = new Bitmap(canvas.Width, canvas.Height))
+                {
+                    using (var graphics = Graphics.FromImage(bitmap)) canvas.Render(graphics);
+                    var path = Path.Combine(outputFolder, "三维轴测.png");
+                    bitmap.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+                    var volume = BuildingVolumeBuilder.Build(model, null);
+                    log("快照：" + path + "（体量面 " + volume.Faces.Count + "、范围 "
+                        + Math.Round(volume.Width) + "×" + Math.Round(volume.Depth) + "×" + Math.Round(volume.Height)
+                        + " mm、画出 " + canvas.LastFaceCount + " 个面）");
+                }
+            }
         }
 
         /// <summary>把参数里的位置参数挑出来（跳过模式名与 --project/--model 这类带值的开关）。</summary>
@@ -562,6 +586,8 @@ namespace Wanluo.BuildingModelStudio
         private readonly Dictionary<string, Button> _toolButtons = new Dictionary<string, Button>();
         private readonly TabControl _tabs = new TabControl();
         private readonly ViewPreviewCanvas _viewPreview = new ViewPreviewCanvas();
+        private readonly VolumeCanvas _volumeCanvas = new VolumeCanvas();
+        private readonly CheckBox _volumeOnlyStorey = new CheckBox();
         private readonly ComboBox _viewChooser = new ComboBox();
         private readonly Label _viewInfo = new Label();
         private BuildingModelDocument _model;
@@ -641,7 +667,12 @@ namespace Wanluo.BuildingModelStudio
             _tabs.Dock = DockStyle.Fill;
             _tabs.TabPages.Add(planPage);
             _tabs.TabPages.Add(BuildPreviewPage());
-            _tabs.SelectedIndexChanged += (s, e) => { if (_tabs.SelectedIndex == 1) RefreshViewPreview(true); };
+            _tabs.TabPages.Add(BuildVolumePage());
+            _tabs.SelectedIndexChanged += (s, e) =>
+            {
+                if (_tabs.SelectedIndex == 1) RefreshViewPreview(true);
+                if (_tabs.SelectedIndex == 2) RefreshVolume();
+            };
             split.Panel1.Controls.Add(_tabs);
 
             var side = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 9, Padding = new Padding(6) };
@@ -715,7 +746,7 @@ namespace Wanluo.BuildingModelStudio
 
             _canvas.StatusChanged += text => _status.Text = text;
             _canvas.SelectionChanged += ShowProperties;
-            _canvas.StructureChanged += RefreshStoreys;
+            _canvas.StructureChanged += () => { RefreshStoreys(); if (_tabs.SelectedIndex == 2) RefreshVolume(); };
             _canvas.SaveRequested += SaveModel;
 
             Log("P1.5 平面草图：用「画墙 / 放窗 / 放门 / 布柱」把平面画出来，画的就是模型。");
@@ -882,6 +913,73 @@ namespace Wanluo.BuildingModelStudio
         internal void ApplyTypeToSelectionForTest()
         {
             ApplyTypeToSelection();
+        }
+
+        // ───────────────────────── 三维预览 ─────────────────────────
+
+        /// <summary>三维预览页：一行工具 + 整块体量画布。</summary>
+        private TabPage BuildVolumePage()
+        {
+            var page = new TabPage("三维预览") { BackColor = Color.FromArgb(24, 26, 30), Padding = new Padding(0) };
+            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3 };
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+            var row = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, Padding = new Padding(6, 6, 6, 0) };
+            row.Controls.Add(Button("重算体量", () => RefreshVolume(true), true));
+            row.Controls.Add(Button("复位视角(Ctrl+A)", () => { _volumeCanvas.ZoomExtents(); _volumeCanvas.Focus(); }, false));
+            row.Controls.Add(Button("轴测视角", () =>
+            {
+                _volumeCanvas.Camera.AzimuthDegrees = 35d;
+                _volumeCanvas.Camera.ElevationDegrees = 28d;
+                _volumeCanvas.Rebuild();
+            }, false));
+            row.Controls.Add(Button("俯视", () =>
+            {
+                _volumeCanvas.Camera.AzimuthDegrees = 0d;
+                _volumeCanvas.Camera.ElevationDegrees = 88d;
+                _volumeCanvas.Rebuild();
+            }, false));
+            _volumeOnlyStorey.AutoSize = true;
+            _volumeOnlyStorey.ForeColor = Color.FromArgb(180, 186, 196);
+            _volumeOnlyStorey.Text = "只看当前楼层";
+            _volumeOnlyStorey.CheckedChanged += (s, e) =>
+            {
+                _volumeCanvas.OnlyCurrentStorey = _volumeOnlyStorey.Checked;
+                RefreshVolume(true);
+            };
+            row.Controls.Add(_volumeOnlyStorey);
+            layout.Controls.Add(row, 0, 0);
+            layout.Controls.Add(new Label
+            {
+                AutoSize = true,
+                MaximumSize = new Size(620, 0),
+                ForeColor = Color.FromArgb(105, 112, 122),
+                Padding = new Padding(8, 2, 8, 4),
+                Text = "自研轴测投影：背面剔除 + 按深度从远到近填充（画家算法）。门窗洞口还没在体量上开洞，楼梯与坡屋面还没做。"
+            }, 0, 1);
+
+            _volumeCanvas.Dock = DockStyle.Fill;
+            _volumeCanvas.StatusChanged += text => _status.Text = text;
+            layout.Controls.Add(_volumeCanvas, 0, 2);
+            page.Controls.Add(layout);
+            return page;
+        }
+
+        /// <summary>重算三维体量（模型改动、切楼层、切页签时调用）。</summary>
+        private void RefreshVolume(bool log = false)
+        {
+            if (_model == null) { _volumeCanvas.SetModel(null); return; }
+            _volumeCanvas.StoreyId = _canvas.StoreyId;
+            _volumeCanvas.SetModel(_model);
+            if (log)
+            {
+                var volume = BuildingVolumeBuilder.Build(_model, _volumeOnlyStorey.Checked ? _canvas.StoreyId : null);
+                Log("三维体量：" + volume.Faces.Count + " 个面，范围 " + Math.Round(volume.Width) + "×"
+                    + Math.Round(volume.Depth) + "×" + Math.Round(volume.Height) + " mm（"
+                    + (_volumeOnlyStorey.Checked ? "只看当前楼层" : "整栋") + "）");
+            }
         }
 
         // ───────────────────────── 推到 CAD ─────────────────────────
@@ -1528,3 +1626,4 @@ namespace Wanluo.BuildingModelStudio
         }
     }
 }
+

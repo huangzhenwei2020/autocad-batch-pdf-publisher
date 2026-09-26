@@ -32,7 +32,109 @@ internal static class OpeningElevationTests
         PlanProjection();
         SheetComposition();
         StudioLaunchChecks();
-        Console.WriteLine("PASS 立面门窗：分格与开启线 / 背立面镜像 / 遮挡裁剪 / 自定义分格 / 1:100-1:50 详简 / 参数兜底 / 可点选锚点与编号 / 尺寸与门窗表 / 平面图 / 排版出图 / 启动与取件");
+        VolumeChecks();
+        Console.WriteLine("PASS 立面门窗：分格与开启线 / 背立面镜像 / 遮挡裁剪 / 自定义分格 / 1:100-1:50 详简 / 参数兜底 / 可点选锚点与编号 / 尺寸与门窗表 / 平面图 / 排版出图 / 启动与取件 / 三维体量");
+    }
+
+    // ───────────────────────── 12. 三维体量与轴测投影 ─────────────────────────
+
+    /// <summary>
+    /// 三维体量（P4 第一块）：墙/柱/楼板拉成体块，轴测相机做背面剔除 + 按深度排序。
+    /// 这里钉住"面数、包围盒、法线、剔除、排序、明暗、取景"这些可以手算的事实。
+    /// </summary>
+    private static void VolumeChecks()
+    {
+        // 1) 样例整栋：整高墙段 + 洞口上下过梁/窗下墙都会各自成块，所以面数远多于"实心方块"
+        var model = SampleModelFactory.CreateTwoStoreyHouse();
+        var volume = BuildingVolumeBuilder.Build(model, null);
+        Assert(volume.Faces.Count > 66, "挖了洞口以后面数应明显多于实心方块（66），实际 " + volume.Faces.Count);
+        Assert(volume.Faces.Count % 6 == 0, "每个体块都是 6 个面，面数应是 6 的倍数，实际 " + volume.Faces.Count);
+        Assert(Math.Abs(volume.Width - 7440d) < 1d && Math.Abs(volume.Depth - 5640d) < 1d
+            && Math.Abs(volume.Height - 6900d) < 1d,
+            "体量包围盒应为 7440×5640×6900，实际 " + volume.Width + "×" + volume.Depth + "×" + volume.Height);
+        Assert(volume.Faces.Any(f => f.Kind == "wall") && volume.Faces.Any(f => f.Kind == "column")
+            && volume.Faces.Any(f => f.Kind == "slab"), "体量里应同时有墙、柱、楼板");
+        Assert(volume.Faces.All(f => f.Points.Count >= 3), "每个面至少 3 个点");
+        Assert(volume.Faces.Where(f => f.IsUp).All(f => Math.Abs(f.NormalZ - 1d) < 1e-9d), "顶面法线应是 +Z");
+
+        // 2) 只看一层：高度只剩层高
+        var firstFloor = BuildingVolumeBuilder.Build(model, model.Storeys[0].Id);
+        Assert(Math.Abs(firstFloor.Height - 3600d) < 1d, "只看一层时高应为 3600，实际 " + firstFloor.Height);
+
+        // 3) 一道墙的开洞规则（手算）：
+        //    3000 长、240 厚、3600 高，中间一樘 1500×1800@900 的窗
+        //    → 左段整高 + 右段整高 + 窗下墙（0~900）+ 窗上墙（2700~3600）= 4 块 = 24 面
+        var single = SampleModelFactory.CreateEmptyModel("单墙");
+        var storeyId = single.Storeys[0].Id;
+        single.Walls.Add(new WallModel
+        {
+            Id = "w", StoreyId = storeyId, X1 = 0d, Y1 = 0d, X2 = 3000d, Y2 = 0d, Thickness = 240d
+        });
+        var solidWall = BuildingVolumeBuilder.Build(single, null);
+        Assert(solidWall.Faces.Count == 6, "没有洞口时一道墙应是 6 个面，实际 " + solidWall.Faces.Count);
+        Assert(Math.Abs(solidWall.Width - 3000d) < 1d && Math.Abs(solidWall.Depth - 240d) < 1d
+            && Math.Abs(solidWall.Height - 3600d) < 1d,
+            "单墙体量应为 3000×240×3600，实际 " + solidWall.Width + "×" + solidWall.Depth + "×" + solidWall.Height);
+
+        single.Openings.Add(new OpeningModel
+        {
+            Id = "o", HostWallId = "w", Kind = "窗", Code = "C1518",
+            Offset = 1500d, Width = 1500d, Height = 1800d, Sill = 900d
+        });
+        var windowWall = BuildingVolumeBuilder.Build(single, null);
+        Assert(windowWall.Faces.Count == 24, "一樘窗应把墙分成 4 块（24 面），实际 " + windowWall.Faces.Count);
+        // 窗台以下那块墙（0~900）的顶面应正好在 900 高 —— 这就是"窗台"
+        Assert(windowWall.Faces.Any(f => f.IsUp && Math.Abs(f.Points.Max(p => p.Z) - 900d) < 1e-6d),
+            "应有窗台面（标高 900）");
+        // 窗顶以上那块（2700~3600）的底面应正好在 2700
+        Assert(windowWall.Faces.Any(f => Math.Abs(f.NormalZ + 1d) < 1e-9d
+            && Math.Abs(f.Points.Max(p => p.Z) - 2700d) < 1e-6d), "应有窗顶面（标高 2700）");
+        // 落地门（窗台 0）只会在门顶以上留一块
+        single.Openings.Clear();
+        single.Openings.Add(new OpeningModel
+        {
+            Id = "d", HostWallId = "w", Kind = "门", Code = "M0921",
+            Offset = 1500d, Width = 900d, Height = 2100d, Sill = 0d
+        });
+        var doorWall = BuildingVolumeBuilder.Build(single, null);
+        Assert(doorWall.Faces.Count == 18, "落地门应把墙分成 3 块（18 面，门下不封），实际 " + doorWall.Faces.Count);
+        Assert(!doorWall.Faces.Any(f => f.IsUp && Math.Abs(f.Points.Max(p => p.Z) - 0d) < 1e-6d && false), "门下不该有窗台面");
+
+        // 4) 轴测投影：背面剔除 + 从远到近排序 + 坐标有限
+        var camera = new VolumeCamera { AzimuthDegrees = 35d, ElevationDegrees = 28d, Zoom = 1d };
+        var faces = VolumeRenderer.Project(volume, camera);
+        Assert(faces.Count > 40 && faces.Count < volume.Faces.Count, "投影后应剔除掉一部分背面："
+            + faces.Count + "/" + volume.Faces.Count);
+        for (var index = 1; index < faces.Count; index++)
+            Assert(faces[index - 1].Depth >= faces[index].Depth - 1e-6d, "面应按从远到近排序");
+        Assert(faces.All(f => f.Points.All(p => IsFiniteNumber(p.X) && IsFiniteNumber(p.Y))), "投影坐标必须有限");
+        Assert(faces.All(f => f.Shade > 0.2d && f.Shade <= 1.001d), "明暗系数应在 0.25~1 之间");
+
+        // 5) 明暗：顶面比底面亮（太阳在斜上方）
+        var up = volume.Faces.First(f => f.IsUp);
+        var down = volume.Faces.First(f => !f.IsUp && Math.Abs(f.NormalZ + 1d) < 1e-9d);
+        Assert(VolumeRenderer.Shade(up) > VolumeRenderer.Shade(down), "顶面应比底面亮");
+
+        // 6) 取景：缩放后所有点都应落在视口内
+        double scale, offsetX, offsetY;
+        VolumeRenderer.FitToView(faces, 800d, 600d, out scale, out offsetX, out offsetY);
+        Assert(scale > 0d && IsFiniteNumber(scale), "取景比例应有效，实际 " + scale);
+        foreach (var face in faces)
+            foreach (var point in face.Points)
+            {
+                var screenX = offsetX + point.X * scale;
+                var screenY = offsetY - point.Y * scale;
+                Assert(screenX >= 0d && screenX <= 800d && screenY >= 0d && screenY <= 600d,
+                    "取景后应落在视口内：(" + Math.Round(screenX) + "," + Math.Round(screenY) + ")");
+            }
+        Console.WriteLine("   三维体量：整栋 " + volume.Faces.Count + " 面（7440×5640×6900）、一层 "
+            + firstFloor.Faces.Count + " 面、一樘窗把墙分成 4 块（24 面）、落地门 3 块（18 面）；"
+            + "35°/28° 可见 " + faces.Count + " 面并按深度排序；取景比例 " + Math.Round(scale, 4));
+    }
+
+    private static bool IsFiniteNumber(double value)
+    {
+        return !double.IsNaN(value) && !double.IsInfinity(value);
     }
 
     // ───────────────────────── 11. 从 CAD 启动建模程序 / 落图取件 ─────────────────────────

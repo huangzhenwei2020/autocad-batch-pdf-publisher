@@ -17,12 +17,14 @@
     <Compile Include="CrashLog.cs" />
     <Compile Include="DrawGuard.cs" />
     <Compile Include="CadWindow.cs" />
+    <Compile Include="VolumeCanvas.cs" />
     <Compile Include="PlanCanvas.cs" />
     <Compile Include="PlanGrid.cs" />
     <Compile Include="ViewPreviewCanvas.cs" />
     <Compile Include="CanvasSelfTest.cs" />
     <Compile Include="PlanInteractionSelfTest.cs" />
     <Compile Include="ViewPreviewSelfTest.cs" />
+    <Compile Include="VolumeSelfTest.cs" />
     <!-- 建筑模型的纯逻辑层：与主插件、测试工程共用同一份源码（本仓库既有做法：源码链接，不新增 DLL）。 -->
     <Compile Include="..\Shared\BuildingModel\ModelTypes.cs" Link="Shared\ModelTypes.cs" />
     <Compile Include="..\Shared\BuildingModel\BuildingModelJson.cs" Link="Shared\BuildingModelJson.cs" />
@@ -31,6 +33,8 @@
     <Compile Include="..\Shared\BuildingModel\OrthographicProjector.cs" Link="Shared\OrthographicProjector.cs" />
     <Compile Include="..\Shared\BuildingModel\SheetComposer.cs" Link="Shared\SheetComposer.cs" />
     <Compile Include="..\Shared\BuildingModel\StudioLaunch.cs" Link="Shared\StudioLaunch.cs" />
+    <Compile Include="..\Shared\BuildingModel\BuildingVolume.cs" Link="Features\BuildingModel\Shared\BuildingVolume.cs" />
+    <Compile Include="..\Shared\BuildingModel\VolumeRenderer.cs" Link="Features\BuildingModel\Shared\VolumeRenderer.cs" />
     <Compile Include="..\Shared\BuildingModel\OpeningElevationAdapter.cs" Link="Shared\OpeningElevationAdapter.cs" />
     <Compile Include="..\Shared\BuildingModel\SampleModelFactory.cs" Link="Shared\SampleModelFactory.cs" />
     <!-- 门窗立面生成器：与插件**同一份源码**（它不依赖 AutoCAD），程序里的门窗分格/开启线就是插件那套画法 -->
@@ -38,6 +42,9 @@
     <Compile Include="..\BatchPdfPublisher\Features\DoorWindows\Models\DoorWindowElevationGeometry.cs" Link="DoorWindows\DoorWindowElevationGeometry.cs" />
   </ItemGroup>
 </Project>
+
+
+
 
 
 

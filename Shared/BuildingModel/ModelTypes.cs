@@ -28,6 +28,17 @@ namespace BatchPdfPublisher.BuildingModel
         public PointModel(double x, double y) { X = x; Y = y; }
     }
 
+    /// <summary>三维点（mm，Z 向上）。只用于三维体量与预览，不写进模型文件。</summary>
+    public sealed class Point3DModel
+    {
+        public double X { get; set; }
+        public double Y { get; set; }
+        public double Z { get; set; }
+
+        public Point3DModel() { }
+        public Point3DModel(double x, double y, double z) { X = x; Y = y; Z = z; }
+    }
+
     /// <summary>楼层：立面/剖面的竖向基准，也是"层高"的唯一来源。</summary>
     public sealed class StoreyModel
     {
