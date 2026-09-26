@@ -542,6 +542,7 @@ namespace BatchPdfPublisher.BuildingModel
             var bounds = PlanBounds(walls);
             AddPlanAxes(document, model, bounds[0], bounds[1], bounds[2], bounds[3], view.Scale);
             AddPlanRooms(document, model, storey.Id, view.Scale, walls);
+            AddPlanStairs(document, model, storey, view.Scale);
 
             AddPlanDimensions(document, view, walls, openings, model);
             AddTitle(document, view);
@@ -666,6 +667,156 @@ namespace BatchPdfPublisher.BuildingModel
                 index++;
                 _ = walls;
             }
+        }
+
+        /// <summary>
+        /// 平面图里的楼梯（双跑）：两跑梯段 + 踏步线 + 休息平台 + 梯井两侧扶手线 + 剖断线 + 上下行箭头。
+        ///
+        /// 画法与制图习惯一致：踏步线只画在两条梯段条带内；剖断线画在第一跑"越过 1.2m 剖切高度"的那一级；
+        /// 箭头沿"第一跑起步 → 平台 → 第二跑到达"走（上），最底层只画"上"，其余楼层多画一条反向的"下"。
+        /// </summary>
+        private static void AddPlanStairs(ViewDocument document, BuildingModelDocument model,
+            StoreyModel storey, int scale)
+        {
+            var stairs = (model.Stairs ?? new List<StairModel>())
+                .Where(s => s != null && string.Equals(s.StoreyId ?? string.Empty, storey.Id ?? string.Empty,
+                    StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (stairs.Count == 0) return;
+
+            var textHeight = Math.Max(250d, Math.Max(1, scale) * 2.5d);
+            var lowest = (model.Storeys ?? new List<StoreyModel>()).Where(s => s != null)
+                .OrderBy(s => s.Elevation).FirstOrDefault();
+            var hasDown = lowest != null
+                && !string.Equals(lowest.Id ?? string.Empty, storey.Id ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+
+            foreach (var stair in stairs)
+            {
+                var geometry = StairGeometry.Build(model, stair);
+                if (geometry == null) continue;
+                if (geometry.Flights.Count == 0)
+                {
+                    document.Warnings.Add("楼梯「" + (stair.Id ?? "?") + "」的尺寸放不下踏步与平台（净长 "
+                        + Math.Round(stair.Length) + "、净宽 " + Math.Round(stair.Width) + "），只画了楼梯间范围。");
+                    AddRect(document, ViewLayers.Stair, geometry.X0, geometry.Y0, geometry.X1, geometry.Y1);
+                    continue;
+                }
+
+                foreach (var flight in geometry.Flights)
+                {
+                    // 梯段外框（两条长边 + 两端封口）
+                    AddRect(document, ViewLayers.Stair, flight.X0, flight.Y0, flight.X1, flight.Y1);
+                    foreach (var tread in flight.Treads)
+                        AddLine(document, ViewLayers.Stair, tread[0].X, tread[0].Y, tread[1].X, tread[1].Y);
+                }
+                // 休息平台外沿（靠房间一侧的两条边；靠梯段那侧已经由梯段封口线画过）
+                AddRect(document, ViewLayers.Stair, geometry.LandingX0, geometry.LandingY0,
+                    geometry.LandingX1, geometry.LandingY1);
+
+                foreach (var rail in geometry.Handrails)
+                    AddLine(document, ViewLayers.Stair, rail[0].X, rail[0].Y, rail[1].X, rail[1].Y);
+
+                AddStairBreakLine(document, geometry, textHeight);
+                AddStairArrows(document, geometry, textHeight, hasDown);
+
+                document.Anchors.Add(new ViewAnchor
+                {
+                    Kind = "stair", ElementId = stair.Id,
+                    X1 = geometry.X0, Y1 = geometry.Y0, X2 = geometry.X1, Y2 = geometry.Y1
+                });
+            }
+        }
+
+        /// <summary>剖断线：画在第一跑"踏面刚超过 1.2m 剖切高度"的那一级上（两条 45° 细线）。</summary>
+        private static void AddStairBreakLine(ViewDocument document, StairGeometry geometry, double textHeight)
+        {
+            const double cutHeight = 1200d;
+            var steps = Math.Max(1, geometry.StepsPerFlight);
+            var index = (int)Math.Floor(cutHeight / Math.Max(1d, geometry.Riser));
+            if (index >= steps) return;                    // 一跑还没走到剖切高度（层高很低时）
+            if (index < 1) index = 1;
+            var flight = geometry.Flights[0];
+            var offset = Math.Max(150d, textHeight);
+            // 45°斜线：沿梯段方向的偏移量 = 梯段宽的一半，看起来就是"斜着划一刀"
+            var span = geometry.AlongX ? flight.Y1 - flight.Y0 : flight.X1 - flight.X0;
+            var slant = span / 2d;
+            var run = index * geometry.Going;
+            var startS = run - slant / 2d;
+            var endS = run + slant / 2d;
+            for (var line = 0; line < 2; line++)
+            {
+                var shift = line * offset;
+                PointModel a, b;
+                if (geometry.AlongX)
+                {
+                    a = new PointModel(geometry.X0 + startS + shift, flight.Y0);
+                    b = new PointModel(geometry.X0 + endS + shift, flight.Y1);
+                }
+                else
+                {
+                    a = new PointModel(flight.X0, geometry.Y0 + startS + shift);
+                    b = new PointModel(flight.X1, geometry.Y0 + endS + shift);
+                }
+                AddLine(document, ViewLayers.Stair, a.X, a.Y, b.X, b.Y);
+            }
+        }
+
+        /// <summary>上下行箭头：沿上行路径走一条折线 + 箭头（"上"），非底层再画反向的一条（"下"）。</summary>
+        private static void AddStairArrows(ViewDocument document, StairGeometry geometry, double textHeight, bool hasDown)
+        {
+            var path = (geometry.UpPath ?? new List<PointModel>()).Where(p => p != null).ToList();
+            if (path.Count < 2) return;
+            var arrows = Math.Max(120d, textHeight * 0.8d);
+
+            // 上：起步点 → 平台 → 到达点，箭头画在末端
+            for (var index = 0; index + 1 < path.Count; index++)
+                AddLine(document, ViewLayers.Stair, path[index].X, path[index].Y, path[index + 1].X, path[index + 1].Y);
+            AddArrowHead(document, path[path.Count - 2], path[path.Count - 1], arrows);
+            document.Texts.Add(new ViewText
+            {
+                Layer = ViewLayers.Stair, Text = "上", Height = textHeight,
+                X = path[0].X - textHeight / 2d, Y = path[0].Y - textHeight * 0.35d
+            });
+
+            if (!hasDown) return;
+            // 下：从到达点反向回来（画在旁边的偏移线上，免得与"上"叠在一起）
+            var offset = Math.Max(200d, textHeight * 1.2d);
+            var reverse = new List<PointModel>();
+            foreach (var point in path)
+                reverse.Add(geometry.AlongX
+                    ? new PointModel(point.X, point.Y + offset)
+                    : new PointModel(point.X + offset, point.Y));
+            for (var index = 0; index + 1 < reverse.Count; index++)
+                AddLine(document, ViewLayers.Stair, reverse[index].X, reverse[index].Y,
+                    reverse[index + 1].X, reverse[index + 1].Y);
+            AddArrowHead(document, reverse[1], reverse[0], arrows);
+            document.Texts.Add(new ViewText
+            {
+                Layer = ViewLayers.Stair, Text = "下", Height = textHeight,
+                X = reverse[reverse.Count - 1].X - textHeight / 2d,
+                Y = reverse[reverse.Count - 1].Y - textHeight * 0.35d
+            });
+        }
+
+        /// <summary>在 <paramref name="tip"/> 处画一个 V 形箭头，方向由 <paramref name="from"/> → tip 决定。</summary>
+        private static void AddArrowHead(ViewDocument document, PointModel from, PointModel tip, double size)
+        {
+            if (from == null || tip == null) return;
+            var dx = tip.X - from.X;
+            var dy = tip.Y - from.Y;
+            var length = Math.Sqrt(dx * dx + dy * dy);
+            if (length < 1e-6d) return;
+            var ux = dx / length;
+            var uy = dy / length;
+            // 两条 30° 的翼
+            var cos = Math.Cos(30d * Math.PI / 180d);
+            var sin = Math.Sin(30d * Math.PI / 180d);
+            var leftX = tip.X - size * (ux * cos - uy * sin);
+            var leftY = tip.Y - size * (uy * cos + ux * sin);
+            var rightX = tip.X - size * (ux * cos + uy * sin);
+            var rightY = tip.Y - size * (uy * cos - ux * sin);
+            AddLine(document, ViewLayers.Stair, tip.X, tip.Y, leftX, leftY);
+            AddLine(document, ViewLayers.Stair, tip.X, tip.Y, rightX, rightY);
         }
 
         /// <summary>一道墙上挂着的洞口（按沿墙定位排序）。</summary>

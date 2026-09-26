@@ -764,6 +764,7 @@ namespace Wanluo.BuildingModelStudio
                 case ViewLayers.Title: return Color.FromArgb(160, 220, 255);
                 case ViewLayers.Axis: return Color.FromArgb(200, 160, 230);
                 case ViewLayers.Room: return Color.FromArgb(150, 210, 225);
+                case ViewLayers.Stair: return Color.FromArgb(230, 195, 130);
                 default: return Color.FromArgb(180, 186, 196);
             }
         }

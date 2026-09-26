@@ -33,7 +33,126 @@ internal static class OpeningElevationTests
         SheetComposition();
         StudioLaunchChecks();
         VolumeChecks();
-        Console.WriteLine("PASS 立面门窗：分格与开启线 / 背立面镜像 / 遮挡裁剪 / 自定义分格 / 1:100-1:50 详简 / 参数兜底 / 可点选锚点与编号 / 尺寸与门窗表 / 平面图 / 排版出图 / 启动与取件 / 三维体量（门窗构件 / 剖切 / 透视 / 共面合并 / 藏在墙里的面）");
+        StairChecks();
+        Console.WriteLine("PASS 立面门窗：分格与开启线 / 背立面镜像 / 遮挡裁剪 / 自定义分格 / 1:100-1:50 详简 / 参数兜底 / 可点选锚点与编号 / 尺寸与门窗表 / 平面图 / 排版出图 / 启动与取件 / 三维体量（门窗构件 / 剖切 / 透视 / 共面合并 / 藏在墙里的面）/ 楼梯（双跑几何 / 平面 / 体量 / 校验）");
+    }
+
+    // ───────────────────────── 13. 楼梯（双跑） ─────────────────────────
+
+    /// <summary>
+    /// 楼梯这一层的承诺：**参数手算得出来**。3000 净长 × 2700 净宽、踏步宽 260、每跑 9 级、梯段宽 1200：
+    /// 层高 3600 → 踏步高 = 3600/(2×9) = 200；踏步总长 = 9×260 = 2340；平台 = 3000-2340 = 660；
+    /// 平台标高 = 1800；第二跑到达 = 3600。平面里踏步线 8×2 条、剖断线 2 条、"上/下"文字与箭头齐全。
+    /// </summary>
+    private static void StairChecks()
+    {
+        var model = SampleModelFactory.CreateEmptyModel("楼梯");
+        model.Storeys[0].Height = 3600d;
+        // 再加一层，平面里才会有"下"（本层不是最低层才画下行箭头）
+        model.Storeys.Add(new StoreyModel { Id = "2F", Name = "二层", Elevation = 3600d, Height = 3300d });
+        var storeyId = model.Storeys[0].Id;
+        var stair = new StairModel
+        {
+            Id = "st-1", StoreyId = storeyId, X = 0d, Y = 0d,
+            Length = 3000d, Width = 2700d, AlongX = true,
+            FlightWidth = 1200d, Going = 260d, StepsPerFlight = 9, WellWidth = 100d
+        };
+        model.Stairs.Add(stair);
+
+        // 1) 几何：手算核对
+        var geometry = StairGeometry.Build(model, stair);
+        Assert(geometry != null && geometry.Flights.Count == 2, "双跑楼梯应展开成两跑");
+        Assert(Math.Abs(geometry.Riser - 200d) < 1e-6d, "踏步高应为 3600/(2×9)=200，实际 " + geometry.Riser);
+        Assert(Math.Abs(geometry.TreadRun - 2340d) < 1e-6d, "踏步总长应为 2340，实际 " + geometry.TreadRun);
+        Assert(Math.Abs(geometry.LandingDepth - 660d) < 1e-6d, "休息平台应为 660，实际 " + geometry.LandingDepth);
+        Assert(Math.Abs(geometry.LandingElevation - 1800d) < 1e-6d, "平台标高应为 1800，实际 " + geometry.LandingElevation);
+        Assert(Math.Abs(geometry.TopElevation - 3600d) < 1e-6d, "第二跑到达上一层楼面 3600，实际 " + geometry.TopElevation);
+        Assert(geometry.Flights[0].Steps.Count == 9 && geometry.Flights[1].Steps.Count == 9, "每跑 9 级");
+        Assert(geometry.Flights.All(f => f.Treads.Count == 8), "每跑 8 条踏步线（9 级之间）");
+        Assert(Math.Abs(geometry.Flights[0].Steps[0].TopElevation - 200d) < 1e-6d, "第 1 级踏面 200");
+        Assert(Math.Abs(geometry.Flights[0].Steps[8].TopElevation - 1800d) < 1e-6d, "第 9 级踏面 = 平台标高 1800");
+        Assert(Math.Abs(geometry.Flights[1].Steps[8].TopElevation - 3600d) < 1e-6d, "第二跑第 9 级 = 3600");
+        // 第一跑在南侧条带（Y 0..1200），第二跑在北侧（Y 1500..2700），中间是梯井
+        Assert(Math.Abs(geometry.Flights[0].Y0) < 1e-6d && Math.Abs(geometry.Flights[0].Y1 - 1200d) < 1e-6d,
+            "第一跑应在 Y 0..1200");
+        Assert(Math.Abs(geometry.Flights[1].Y0 - 1500d) < 1e-6d && Math.Abs(geometry.Flights[1].Y1 - 2700d) < 1e-6d,
+            "第二跑应在 Y 1500..2700");
+        Assert(geometry.WellY1 - geometry.WellY0 > 100d - 1e-6d, "梯井应至少 100 宽，实际 "
+            + Math.Round(geometry.WellY1 - geometry.WellY0));
+        Assert(Math.Abs(geometry.LandingX0 - 2340d) < 1e-6d && Math.Abs(geometry.LandingX1 - 3000d) < 1e-6d,
+            "平台应在 X 2340..3000");
+        Assert(geometry.Handrails.Count == 3, "梯井两侧 + 平台内沿三条扶手线");
+        Assert(geometry.UpPath.Count == 4, "上行路径应是 起步 → 平台 → 转向 → 到达 四点");
+
+        // 沿 Y 跑时 Length 改成沿 Y、Width 沿 X（第一跑占 X 0..1200）
+        stair.AlongX = false;
+        var alongY = StairGeometry.Build(model, stair);
+        Assert(alongY.Flights.Count == 2, "沿 Y 跑也应展开成两跑");
+        Assert(Math.Abs(alongY.Flights[0].X0) < 1e-6d && Math.Abs(alongY.Flights[0].X1 - 1200d) < 1e-6d,
+            "沿 Y 跑时第一跑占 X 0..1200，实际 " + Math.Round(alongY.Flights[0].X0) + ".."
+            + Math.Round(alongY.Flights[0].X1));
+        Assert(Math.Abs(alongY.Y1 - 3000d) < 1e-6d, "沿 Y 跑时楼梯间沿 Y 应是净长 3000，实际 " + alongY.Y1);
+        stair.AlongX = true;
+
+        // 2) 校验：放不下 / 踏步高离谱都要给出人话
+        var tooNarrow = new StairModel { Id = "st-2", StoreyId = storeyId, Length = 3000d, Width = 2000d, FlightWidth = 1200d };
+        Assert(PlanEditing.ValidateStair(model, tooNarrow) != null, "净宽放不下两跑应报错");
+        var tooShort = new StairModel { Id = "st-3", StoreyId = storeyId, Length = 2000d, Width = 2700d, Going = 260d, StepsPerFlight = 9 };
+        Assert(PlanEditing.ValidateStair(model, tooShort) != null, "净长放不下踏步+平台应报错");
+        var badRiser = new StairModel
+        {
+            Id = "st-4", StoreyId = storeyId, Length = 5400d, Width = 2700d,
+            Going = 260d, StepsPerFlight = 9, Riser = 260d
+        };
+        Assert(PlanEditing.ValidateStair(model, badRiser) != null, "踏步高 260 超出常用范围应报错");
+        Assert(PlanEditing.ValidateStair(model, stair) == null, "默认参数应通过校验：" + PlanEditing.ValidateStair(model, stair));
+
+        // 3) 平面图：踏步线 + 平台 + 剖断线 + 上下行箭头 + 可点选锚点
+        var view = SampleModelFactory.CreatePlanView(model.Storeys[0]);
+        var plan = OrthographicProjector.Project(model, view, null);
+        var stairLines = plan.Lines.Where(l => l.Layer == ViewLayers.Stair).ToList();
+        Assert(stairLines.Count > 30, "平面里的楼梯线应包含梯段框、踏步线与剖断线，实际 " + stairLines.Count);
+        Assert(plan.Texts.Any(t => t.Layer == ViewLayers.Stair && t.Text == "上"), "缺少上行文字「上」");
+        Assert(!plan.Texts.Any(t => t.Layer == ViewLayers.Stair && t.Text == "下"),
+            "最低层平面只画「上」（没有往下的楼梯）");
+        Assert(plan.Anchors.Any(a => a.Kind == "stair" && a.ElementId == "st-1"), "楼梯要有可点选锚点");
+        // 二层是"非最低层"：同一张平面里「上」「下」都要有
+        model.Stairs.Add(new StairModel
+        {
+            Id = "st-2", StoreyId = "2F", X = 0d, Y = 0d, Length = 3000d, Width = 2700d,
+            FlightWidth = 1200d, Going = 260d, StepsPerFlight = 9, WellWidth = 100d
+        });
+        var secondPlan = OrthographicProjector.Project(model, SampleModelFactory.CreatePlanView(model.Storeys[1]), null);
+        Assert(secondPlan.Texts.Any(t => t.Layer == ViewLayers.Stair && t.Text == "上")
+            && secondPlan.Texts.Any(t => t.Layer == ViewLayers.Stair && t.Text == "下"),
+            "非最低层平面应同时标「上」与「下」");
+
+        // 4) 体量：一级踏步一个方块 + 平台 + 栏板
+        var volume = BuildingVolumeBuilder.Build(model, null);
+        Assert(volume.Faces.Any(f => f.Kind == "stair"), "体量里应有楼梯构件");
+        Assert(volume.Faces.Count(f => f.Kind == "stair") % 6 == 0, "楼梯体块也应是 6 个面");
+        Assert(Math.Abs(volume.Height - 7900d) < 1d, "整栋 6900 + 二层楼梯栏板 1000 = 7900，实际 " + volume.Height);
+        var oneStorey = BuildingVolumeBuilder.Build(model, storeyId);
+        Assert(oneStorey.Faces.Any(f => f.Kind == "stair"), "只看这一层时楼梯也要在");
+        Assert(Math.Abs(oneStorey.Height - 4600d) < 1d,
+            "只看一层时高应是 层高 3600 + 平台口栏板 1000 = 4600，实际 " + oneStorey.Height);
+        // 楼梯自己占的范围：起步落在楼面上，最上一级踏板底 1800-200-120=1480（说明下面不是实心块）
+        var stairFaces = oneStorey.Faces.Where(f => f.Kind == "stair").ToList();
+        Assert(Math.Abs(stairFaces.Min(f => f.Points.Min(p => p.Z)) - 0d) < 1d, "楼梯最低点应是本层楼面 0");
+        Assert(stairFaces.Any(f => Math.Abs(f.Points.Min(p => p.Z) - 1480d) < 1d),
+            "第九级踏板底应在 1480（踏面 1800 - 踏步高 200 - 板厚 120），实际 "
+            + Math.Round(stairFaces.Min(f => f.Points.Min(p => p.Z))));
+        Assert(stairFaces.Any(f => Math.Abs(f.Points.Max(p => p.Z) - 2800d) < 1d),
+            "第二跑最后一段栏板顶应在 1800+1000=2800（第二跑收在 1800 那一档）");
+        Assert(Math.Abs(stairFaces.Max(f => f.Points.Max(p => p.X)) - 3000d) < 1d
+            && Math.Abs(stairFaces.Max(f => f.Points.Max(p => p.Y)) - 2700d) < 1d,
+            "楼梯平面范围应是 3000×2700");
+
+        Console.WriteLine("   楼梯几何：踏步高 " + Math.Round(geometry.Riser) + "、踏步总长 " + Math.Round(geometry.TreadRun)
+            + "、平台 " + Math.Round(geometry.LandingDepth) + "@" + Math.Round(geometry.LandingElevation)
+            + "、到达 " + Math.Round(geometry.TopElevation) + "；平面线 " + stairLines.Count
+            + "、文字 " + string.Join("/", plan.Texts.Where(t => t.Layer == ViewLayers.Stair).Select(t => t.Text).ToArray())
+            + "；体量楼梯面 " + oneStorey.Faces.Count(f => f.Kind == "stair"));
     }
 
     // ───────────────────────── 12. 三维体量与轴测投影 ─────────────────────────

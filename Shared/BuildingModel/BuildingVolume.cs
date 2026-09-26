@@ -87,7 +87,88 @@ namespace BatchPdfPublisher.BuildingModel
                 if (onlyOne && !Same(slab.StoreyId, storeyId)) continue;
                 AddSlabPrism(volume, slab, ref first);
             }
+            foreach (var stair in model.Stairs ?? new List<StairModel>())
+            {
+                if (stair == null) continue;
+                if (onlyOne && !Same(stair.StoreyId, storeyId)) continue;
+                AddStair(volume, model, stair, ref first);
+            }
             return volume;
+        }
+
+        /// <summary>
+        /// 楼梯 → 一级踏步一个小方块（底面按 踏面 - 踏步高 - 板厚 取，下面就是斜板的样子）+
+        /// 休息平台板 + 两侧**栏板**（靠梯井那侧，每 3 级一段）。
+        /// </summary>
+        private static void AddStair(BuildingVolume volume, BuildingModelDocument model, StairModel stair, ref bool first)
+        {
+            var geometry = StairGeometry.Build(model, stair);
+            if (geometry == null || geometry.Flights.Count == 0) return;
+            const double treadThickness = 120d;      // 梯段板厚（近似）
+            const double railHeight = 1000d;         // 栏板高（从踏面算）
+            const double railThickness = 40d;        // 栏板厚
+            const int railGroup = 3;                 // 每 3 级一段栏板（跟着踏步台阶式上升）
+
+            var spanT = geometry.AlongX ? geometry.Y1 - geometry.Y0 : geometry.X1 - geometry.X0;
+            foreach (var flight in geometry.Flights)
+            {
+                foreach (var step in flight.Steps)
+                {
+                    var z1 = step.TopElevation;
+                    var z0 = Math.Max(geometry.BaseElevation, z1 - geometry.Riser - treadThickness);
+                    AddBox(volume, step.X0, step.Y0, step.X1, step.Y1, z0, z1, "stair", stair.StoreyId, ref first);
+                }
+
+                if (flight.Steps.Count == 0) continue;
+                // 靠梯井那一侧的栏板：第一跑在南/西侧条带（梯井在 t 大的一侧），第二跑相反
+                var wellT = flight.Index == 0
+                    ? (geometry.AlongX ? geometry.Y0 + stair.FlightWidth : geometry.X0 + stair.FlightWidth)
+                    : (geometry.AlongX ? geometry.Y1 - stair.FlightWidth : geometry.X1 - stair.FlightWidth);
+                for (var index = 0; index < flight.Steps.Count; index += railGroup)
+                {
+                    var last = Math.Min(index + railGroup - 1, flight.Steps.Count - 1);
+                    var from = flight.Steps[index];
+                    var to = flight.Steps[last];
+                    var z0 = from.TopElevation;
+                    var z1 = to.TopElevation + railHeight;
+                    if (geometry.AlongX)
+                    {
+                        var x0 = Math.Min(from.X0, to.X0);
+                        var x1 = Math.Max(from.X1, to.X1);
+                        var inner = wellT - railThickness;
+                        AddBox(volume, x0, Math.Min(inner, wellT), x1, Math.Max(inner, wellT), z0, z1,
+                            "stair", stair.StoreyId, ref first);
+                    }
+                    else
+                    {
+                        var y0 = Math.Min(from.Y0, to.Y0);
+                        var y1 = Math.Max(from.Y1, to.Y1);
+                        var inner = wellT - railThickness;
+                        AddBox(volume, Math.Min(inner, wellT), y0, Math.Max(inner, wellT), y1, z0, z1,
+                            "stair", stair.StoreyId, ref first);
+                    }
+                }
+                _ = spanT;
+            }
+
+            // 休息平台板
+            if (geometry.LandingX1 - geometry.LandingX0 > 1d && geometry.LandingY1 - geometry.LandingY0 > 1d)
+                AddBox(volume, geometry.LandingX0, geometry.LandingY0, geometry.LandingX1, geometry.LandingY1,
+                    geometry.LandingElevation - geometry.LandingThickness, geometry.LandingElevation,
+                    "stair", stair.StoreyId, ref first);
+        }
+
+        /// <summary>轴对齐的长方体（平面矩形 + 底顶标高）。</summary>
+        private static void AddBox(BuildingVolume volume, double x0, double y0, double x1, double y1,
+            double z0, double z1, string kind, string storeyId, ref bool first)
+        {
+            if (x1 - x0 < 0.5d || y1 - y0 < 0.5d || z1 - z0 < 0.5d) return;
+            var corners = new List<Point3DModel>
+            {
+                new Point3DModel(x0, y0, z0), new Point3DModel(x1, y0, z0),
+                new Point3DModel(x1, y1, z0), new Point3DModel(x0, y1, z0)
+            };
+            AddPrism(volume, corners, z0, z1, kind, storeyId, ref first);
         }
 
         /// <summary>

@@ -670,6 +670,7 @@ namespace Wanluo.BuildingModelStudio
             tools.Controls.Add(ToolButton("放窗", "window", false));
             tools.Controls.Add(ToolButton("放门", "door", false));
             tools.Controls.Add(ToolButton("布柱", "column", false));
+            tools.Controls.Add(ToolButton("放楼梯", "stair", false));
             tools.Controls.Add(ToolButton("拉轴线", "axis", false));
             tools.Controls.Add(ToolButton("画房间", "room", false));
             tools.Controls.Add(Button("删除选中(Delete)", () => _canvas.DeleteSelection(), false));
@@ -842,6 +843,9 @@ namespace Wanluo.BuildingModelStudio
             if (tool == "window") return "放窗（点在墙上）";
             if (tool == "door") return "放门（点在墙上）";
             if (tool == "column") return "布柱（点位置）";
+            if (tool == "axis") return "拉轴线（点两下，长边方向即轴线方向）";
+            if (tool == "room") return "画房间（连续点轮廓，点回起点或按 Esc 闭合）";
+            if (tool == "stair") return "放楼梯（点两个角拉出楼梯间矩形，长边就是梯段方向）";
             return "选择（点选/拖夹点）";
         }
 
@@ -1527,7 +1531,7 @@ namespace Wanluo.BuildingModelStudio
             var hit = _canvas.Selection;
             if (hit == null || _model == null)
             {
-                var label = new Label { Text = "未选中构件。用「选择」工具点墙 / 门窗 / 柱。", AutoSize = true, MaximumSize = new Size(330, 60) };
+                var label = new Label { Text = "未选中构件。用「选择」工具点墙 / 门窗 / 柱 / 楼梯。", AutoSize = true, MaximumSize = new Size(330, 60) };
                 host.Controls.Add(label, 0, 0);
                 host.SetColumnSpan(label, 2);
                 return;
@@ -1588,6 +1592,38 @@ namespace Wanluo.BuildingModelStudio
                 AddField(host, ref row, "房间名", room.Name ?? string.Empty, v => room.Name = v);
                 AddInfo(host, ref row, "面积 " + room.AreaSquareMetres.ToString("0.00") + " m²（按轮廓现算）");
                 AddInfo(host, ref row, "轮廓 " + (room.Outline ?? new List<PointModel>()).Count + " 个点（拖房间名可整体移动）");
+            }
+            else if (hit.Kind == "stair")
+            {
+                var stair = (_model.Stairs ?? new List<StairModel>()).FirstOrDefault(s => s != null && Same(s.Id, hit.Id));
+                if (stair == null) return;
+                var geometry = StairGeometry.Build(_model, stair);
+                AddField(host, ref row, "楼梯编号", stair.Id, v => stair.Id = v);
+                AddField(host, ref row, "左下角 X", stair.X.ToString("0"), v => stair.X = Num(v, stair.X));
+                AddField(host, ref row, "左下角 Y", stair.Y.ToString("0"), v => stair.Y = Num(v, stair.Y));
+                AddField(host, ref row, "梯段方向", stair.AlongX ? "沿X" : "沿Y", v =>
+                {
+                    var text = (v ?? string.Empty).Trim();
+                    if (text.IndexOf("Y", StringComparison.OrdinalIgnoreCase) >= 0
+                        || text.IndexOf("y", StringComparison.Ordinal) >= 0) stair.AlongX = false;
+                    else if (text.IndexOf("X", StringComparison.OrdinalIgnoreCase) >= 0) stair.AlongX = true;
+                });
+                AddField(host, ref row, "净长(沿梯段)", stair.Length.ToString("0"), v => stair.Length = Num(v, stair.Length));
+                AddField(host, ref row, "净宽(两跑)", stair.Width.ToString("0"), v => stair.Width = Num(v, stair.Width));
+                AddField(host, ref row, "梯段宽", stair.FlightWidth.ToString("0"), v => stair.FlightWidth = Num(v, stair.FlightWidth));
+                AddField(host, ref row, "踏步宽", stair.Going.ToString("0"), v => stair.Going = Num(v, stair.Going));
+                AddField(host, ref row, "每跑踏步数", stair.StepsPerFlight.ToString("0"), v => stair.StepsPerFlight = (int)Num(v, stair.StepsPerFlight));
+                AddField(host, ref row, "踏步高(0=现算)", stair.Riser.ToString("0"), v => stair.Riser = Num(v, stair.Riser));
+                AddField(host, ref row, "平台深(0=现算)", stair.LandingDepth.ToString("0"), v => stair.LandingDepth = Num(v, stair.LandingDepth));
+                AddField(host, ref row, "梯井宽", stair.WellWidth.ToString("0"), v => stair.WellWidth = Num(v, stair.WellWidth));
+                if (geometry != null)
+                    AddInfo(host, ref row, geometry.Flights.Count == 0
+                        ? "尺寸放不下踏步与平台，平面里只画了楼梯间范围。"
+                        : "踏步高 " + Math.Round(geometry.Riser) + " mm（总 " + geometry.TotalSteps + " 级）、踏步总长 "
+                          + Math.Round(geometry.TreadRun) + "、平台 " + Math.Round(geometry.LandingDepth) + " @ 标高 "
+                          + Math.Round(geometry.LandingElevation) + "，上一层楼面 " + Math.Round(geometry.TopElevation));
+                var error = PlanEditing.ValidateStair(_model, stair);
+                if (error != null) AddInfo(host, ref row, "提示：" + error);
             }
         }
 

@@ -150,6 +150,16 @@ namespace BatchPdfPublisher.BuildingModel
                     return new PlanHit { Kind = "column", Id = column.Id, Grip = 0 };
             }
 
+            // 4) 楼梯：点在楼梯间矩形里就选中它（楼梯内部没有别的可点构件）
+            foreach (var stair in (model.Stairs ?? new List<StairModel>()).Where(s => s != null && Same(s.StoreyId, storeyId)))
+            {
+                var length = Math.Abs(stair.Length) > 1d ? Math.Abs(stair.Length) : 5400d;
+                var width = Math.Abs(stair.Width) > 1d ? Math.Abs(stair.Width) : 2700d;
+                if (x >= stair.X - tolerance && x <= stair.X + length + tolerance
+                    && y >= stair.Y - tolerance && y <= stair.Y + width + tolerance)
+                    return new PlanHit { Kind = "stair", Id = stair.Id, Grip = -1 };
+            }
+
             // 4) 墙身（按厚度的一半 + 容差判定）
             foreach (var wall in walls)
             {
@@ -213,6 +223,35 @@ namespace BatchPdfPublisher.BuildingModel
             var points = (room.Outline ?? new List<PointModel>()).Where(p => p != null).ToList();
             if (points.Count < 3) return "房间轮廓至少要 3 个点。";
             if (room.AreaSquareMetres < 0.01d) return "房间面积太小（轮廓可能重合了）。";
+            return null;
+        }
+
+        /// <summary>
+        /// 楼梯校验：楼梯间要放得下两跑梯段（梯段宽 ×2 + 梯井 ≤ 净宽；踏步总长 + 平台 ≤ 净长），
+        /// 踏步高要在 100~200mm 的常用区间里。
+        /// </summary>
+        public static string ValidateStair(BuildingModelDocument model, StairModel stair)
+        {
+            if (stair == null) return "楼梯为空。";
+            var length = Math.Abs(stair.Length);
+            var width = Math.Abs(stair.Width);
+            if (length < 1000d) return "楼梯间净长太小（至少要放得下踏步区与休息平台）。";
+            if (width < 1000d) return "楼梯间净宽太小（至少要放得下两跑梯段）。";
+            var flightWidth = stair.FlightWidth > 200d ? stair.FlightWidth : 1200d;
+            var well = Math.Max(0d, stair.WellWidth);
+            if (flightWidth * 2d + well > width + 1d)
+                return "楼梯间净宽 " + Math.Round(width) + " 放不下两跑 " + Math.Round(flightWidth)
+                    + "（两跑 + 梯井 = " + Math.Round(flightWidth * 2d + well) + "）。";
+            var steps = Math.Max(1, stair.StepsPerFlight);
+            var going = stair.Going > 50d ? stair.Going : 260d;
+            var treadRun = steps * going;
+            var landing = stair.LandingDepth > 1d ? stair.LandingDepth : length - treadRun;
+            if (landing < 600d)
+                return "楼梯间净长不够：踏步总长 " + Math.Round(treadRun) + " + 平台 600 已超过净长 "
+                    + Math.Round(length) + "（可减小踏步宽或减少踏步数）。";
+            var riser = stair.Riser > 20d ? stair.Riser : (model == null ? 3000d : model.HeightOf(stair)) / (2d * steps);
+            if (riser < 100d || riser > 200d)
+                return "踏步高 " + Math.Round(riser) + " mm 超出常用范围（100~200）：请调踏步数或直接给踏步高。";
             return null;
         }
 

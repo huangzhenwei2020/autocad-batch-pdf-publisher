@@ -17,7 +17,7 @@ namespace Wanluo.BuildingModelStudio
     /// </summary>
     internal sealed class PlanCanvas : Control
     {
-        private enum DragMode { None, Pan, Grip, MoveWall, MoveOpening, MoveColumn, DrawWall, DrawRoom, MoveAxis, MoveRoom }
+        private enum DragMode { None, Pan, Grip, MoveWall, MoveOpening, MoveColumn, DrawWall, DrawRoom, MoveAxis, MoveRoom, MoveStair }
 
         private readonly ModelEditHistory _history = new ModelEditHistory();
         private BuildingModelDocument _model;
@@ -154,6 +154,7 @@ namespace Wanluo.BuildingModelStudio
         private ColumnModel _dragColumn;
         private AxisModel _dragAxis;
         private RoomModel _dragRoom;
+        private StairModel _dragStair;
         private double _dragOriginAxisPosition;
         private List<PointModel> _dragOriginOutline;
         /// <summary>正在画的房间轮廓（"房间"工具连续点出来的点）。</summary>
@@ -217,6 +218,7 @@ namespace Wanluo.BuildingModelStudio
             _dragColumn = null;
             _dragAxis = null;
             _dragRoom = null;
+            _dragStair = null;
             _dragOriginOutline = null;
             _dragGrip = -1;
         }
@@ -237,6 +239,8 @@ namespace Wanluo.BuildingModelStudio
                     return _dragAxis != null && (_model.Axes ?? new List<AxisModel>()).Contains(_dragAxis);
                 case DragMode.MoveRoom:
                     return _dragRoom != null && (_model.Rooms ?? new List<RoomModel>()).Contains(_dragRoom);
+                case DragMode.MoveStair:
+                    return _dragStair != null && (_model.Stairs ?? new List<StairModel>()).Contains(_dragStair);
                 default:
                     return true;
             }
@@ -296,6 +300,8 @@ namespace Wanluo.BuildingModelStudio
         public string OpeningKind = "窗";
         public double OpeningWidth = 1500d, OpeningHeight = 1800d, OpeningSill = 900d;
         public double DefaultWallThickness = 200d, DefaultWallHeight = 0d, DefaultColumnSize = 400d;
+        /// <summary>放楼梯的默认参数（踏步宽、梯段宽）——放完可在属性面板逐项改。</summary>
+        public double DefaultStairGoing = 260d, DefaultStairFlightWidth = 1200d;
 
         /// <summary>当前选中的门窗类型（来自类型库）；不为空时放门窗直接套用它的编号与尺寸。</summary>
         public OpeningTypeModel CurrentType;
@@ -412,6 +418,7 @@ namespace Wanluo.BuildingModelStudio
             DrawSlabs(g);
             DrawWalls(g);
             DrawColumns(g);
+            DrawStairs(g);
             DrawOpenings(g);
             DrawRooms(g);
             DrawPreview(g);
@@ -540,6 +547,80 @@ namespace Wanluo.BuildingModelStudio
                 };
                 using (var brush = new SolidBrush(selected ? Color.FromArgb(220, 170, 90) : Color.FromArgb(110, 116, 126)))
                     g.FillPolygon(brush, points);
+            }
+        }
+
+        /// <summary>
+        /// 平面草图里的楼梯：与出图用的是**同一套几何**（<see cref="StairGeometry"/>），
+        /// 所以草图上看到的踏步、平台、箭头就是落图后的样子。
+        /// </summary>
+        private void DrawStairs(Graphics g)
+        {
+            if (_model == null) return;
+            var stairs = (_model.Stairs ?? new List<StairModel>()).Where(s => s != null && Same(s.StoreyId, _storeyId)).ToList();
+            if (stairs.Count == 0) return;
+            using (var pen = new Pen(Color.FromArgb(215, 180, 120), 1.1f))
+            using (var thick = new Pen(Color.FromArgb(235, 205, 150), 1.6f))
+            using (var font = new Font("Microsoft YaHei UI", 8f))
+            using (var brush = new SolidBrush(Color.FromArgb(240, 215, 165)))
+            {
+                foreach (var stair in stairs)
+                {
+                    var geometry = StairGeometry.Build(_model, stair);
+                    if (geometry == null) continue;
+                    var selected = _selection != null && _selection.Kind == "stair" && Same(_selection.Id, stair.Id);
+                    pen.Color = selected ? Color.FromArgb(255, 210, 120) : Color.FromArgb(215, 180, 120);
+                    if (geometry.Flights.Count == 0)
+                    {
+                        DrawClippedLine(g, pen, ToScreen(geometry.X0, geometry.Y0), ToScreen(geometry.X1, geometry.Y0));
+                        DrawClippedLine(g, pen, ToScreen(geometry.X1, geometry.Y0), ToScreen(geometry.X1, geometry.Y1));
+                        DrawClippedLine(g, pen, ToScreen(geometry.X1, geometry.Y1), ToScreen(geometry.X0, geometry.Y1));
+                        DrawClippedLine(g, pen, ToScreen(geometry.X0, geometry.Y1), ToScreen(geometry.X0, geometry.Y0));
+                        continue;
+                    }
+                    foreach (var flight in geometry.Flights)
+                    {
+                        DrawClippedLine(g, pen, ToScreen(flight.X0, flight.Y0), ToScreen(flight.X1, flight.Y0));
+                        DrawClippedLine(g, pen, ToScreen(flight.X1, flight.Y0), ToScreen(flight.X1, flight.Y1));
+                        DrawClippedLine(g, pen, ToScreen(flight.X1, flight.Y1), ToScreen(flight.X0, flight.Y1));
+                        DrawClippedLine(g, pen, ToScreen(flight.X0, flight.Y1), ToScreen(flight.X0, flight.Y0));
+                        foreach (var tread in flight.Treads)
+                            DrawClippedLine(g, pen, ToScreen(tread[0].X, tread[0].Y), ToScreen(tread[1].X, tread[1].Y));
+                    }
+                    DrawClippedLine(g, thick, ToScreen(geometry.LandingX0, geometry.LandingY0),
+                        ToScreen(geometry.LandingX1, geometry.LandingY0));
+                    DrawClippedLine(g, thick, ToScreen(geometry.LandingX1, geometry.LandingY0),
+                        ToScreen(geometry.LandingX1, geometry.LandingY1));
+                    DrawClippedLine(g, thick, ToScreen(geometry.LandingX1, geometry.LandingY1),
+                        ToScreen(geometry.LandingX0, geometry.LandingY1));
+                    DrawClippedLine(g, thick, ToScreen(geometry.LandingX0, geometry.LandingY1),
+                        ToScreen(geometry.LandingX0, geometry.LandingY0));
+                    foreach (var rail in geometry.Handrails)
+                        DrawClippedLine(g, pen, ToScreen(rail[0].X, rail[0].Y), ToScreen(rail[1].X, rail[1].Y));
+
+                    // 上行箭头（起点处标"上"）
+                    var path = geometry.UpPath ?? new List<PointModel>();
+                    if (path.Count >= 2)
+                    {
+                        for (var index = 0; index + 1 < path.Count; index++)
+                            DrawClippedLine(g, pen, ToScreen(path[index].X, path[index].Y),
+                                ToScreen(path[index + 1].X, path[index + 1].Y));
+                        var tip = ToScreen(path[path.Count - 1].X, path[path.Count - 1].Y);
+                        var before = ToScreen(path[path.Count - 2].X, path[path.Count - 2].Y);
+                        var dx = tip.X - before.X;
+                        var dy = tip.Y - before.Y;
+                        var length = Math.Sqrt(dx * dx + dy * dy);
+                        if (length > 1e-6d)
+                        {
+                            var ux = dx / length;
+                            var uy = dy / length;
+                            g.DrawLine(pen, tip, new PointF(tip.X - (float)(ux * 10 - uy * 5), tip.Y - (float)(uy * 10 + ux * 5)));
+                            g.DrawLine(pen, tip, new PointF(tip.X - (float)(ux * 10 + uy * 5), tip.Y - (float)(uy * 10 - ux * 5)));
+                        }
+                        var start = ToScreen(path[0].X, path[0].Y);
+                        g.DrawString("上", font, brush, start.X - 6f, start.Y - 6f);
+                    }
+                }
             }
         }
 
@@ -745,6 +826,43 @@ namespace Wanluo.BuildingModelStudio
                     Commit("布柱");
                     break;
                 }
+                case "stair":
+                {
+                    // 两次点击拉出一个矩形楼梯间：长边就是梯段方向
+                    if (!_drawFromX.HasValue) { _drawFromX = snap.X; _drawFromY = snap.Y; StatusChanged?.Invoke("再点一下确定楼梯间的另一个角。"); break; }
+                    var fromX = _drawFromX.Value;
+                    var fromY = _drawFromY ?? 0d;
+                    var dx = Math.Abs(snap.X - fromX);
+                    var dy = Math.Abs(snap.Y - fromY);
+                    if (Math.Min(dx, dy) < 500d) { StatusChanged?.Invoke("提示：楼梯间太小了，请拉出一个矩形（长边 = 梯段方向）。"); break; }
+                    var alongX = dx >= dy;
+                    var length = alongX ? dx : dy;
+                    var width = alongX ? dy : dx;
+                    // 踏步数：先按"目标踏步高 ≈165"估，再受楼梯间净长限制（要留 600 给休息平台）；
+                    // 两头都满足不了时交给 ValidateStair 给出人话提示，别硬塞一个 300 高的踏步。
+                    var storeyHeight = _model.HeightOf(new StairModel { StoreyId = _storeyId });
+                    var byHeight = (int)Math.Round(storeyHeight / (2d * 165d));
+                    var byLength = (int)Math.Floor((length - 600d) / DefaultStairGoing);
+                    var stair = new StairModel
+                    {
+                        Id = NewId("ST"), StoreyId = _storeyId,
+                        X = Math.Min(fromX, snap.X), Y = Math.Min(fromY, snap.Y),
+                        Length = length, Width = width, AlongX = alongX,
+                        FlightWidth = Math.Max(600d, Math.Min(DefaultStairFlightWidth, (width - 100d) / 2d)),
+                        Going = DefaultStairGoing,
+                        StepsPerFlight = Math.Max(3, Math.Min(Math.Max(3, byHeight), Math.Max(3, byLength))),
+                        WellWidth = 100d
+                    };
+                    var error = PlanEditing.ValidateStair(_model, stair);
+                    _drawFromX = _drawFromY = null;
+                    if (error != null) { StatusChanged?.Invoke("提示：" + error); break; }
+                    _model.Stairs.Add(stair);
+                    _selection = new PlanHit { Kind = "stair", Id = stair.Id, Grip = -1 };
+                    Commit("放楼梯 " + stair.Id);
+                    StatusChanged?.Invoke("已放楼梯（" + Math.Round(stair.Length) + "×" + Math.Round(stair.Width)
+                        + "，每跑 " + stair.StepsPerFlight + " 级 × " + Math.Round(stair.Going) + "）——踏步数/踏步宽可在属性面板改。");
+                    break;
+                }
                 default:
                 {
                     var hit = PlanEditing.HitTest(_model, _storeyId, snap.X, snap.Y, 10d / _scale);
@@ -788,6 +906,16 @@ namespace Wanluo.BuildingModelStudio
                             _dragOriginOutline = (room.Outline ?? new List<PointModel>())
                                 .Select(p => p == null ? null : new PointModel(p.X, p.Y)).ToList();
                             _drag = DragMode.MoveRoom;
+                        }
+                    }
+                    else if (hit.Kind == "stair")
+                    {
+                        var stair = (_model.Stairs ?? new List<StairModel>()).FirstOrDefault(s => s != null && Same(s.Id, hit.Id));
+                        if (stair != null)
+                        {
+                            _dragStair = stair;
+                            _dragOriginX1 = stair.X; _dragOriginY1 = stair.Y;
+                            _drag = DragMode.MoveStair;
                         }
                     }
                     Invalidate();
@@ -882,6 +1010,11 @@ namespace Wanluo.BuildingModelStudio
                         points[index].Y = offsets[index].Y + deltaY;
                     }
                 }
+                else if (_drag == DragMode.MoveStair)
+                {
+                    _dragStair.X = _dragOriginX1 + deltaX;
+                    _dragStair.Y = _dragOriginY1 + deltaY;
+                }
                 Invalidate();
                 RaiseStatus();
                 return;
@@ -897,7 +1030,8 @@ namespace Wanluo.BuildingModelStudio
             {
                 var label = _drag == DragMode.Grip ? "改墙端点" : _drag == DragMode.MoveWall ? "移动墙"
                     : _drag == DragMode.MoveOpening ? "移动洞口" : _drag == DragMode.MoveColumn ? "移动柱"
-                    : _drag == DragMode.MoveAxis ? "移动轴线" : _drag == DragMode.MoveRoom ? "移动房间" : "编辑";
+                    : _drag == DragMode.MoveAxis ? "移动轴线" : _drag == DragMode.MoveRoom ? "移动房间"
+                    : _drag == DragMode.MoveStair ? "移动楼梯" : "编辑";
                 Commit(label);
             }
             CancelDrag();
@@ -970,6 +1104,7 @@ namespace Wanluo.BuildingModelStudio
                 if (removed) PlanEditing.RenumberAxes(_model);
             }
             else if (_selection.Kind == "room") removed = _model.Rooms.RemoveAll(r => r != null && Same(r.Id, _selection.Id)) > 0;
+            else if (_selection.Kind == "stair") removed = _model.Stairs.RemoveAll(s => s != null && Same(s.Id, _selection.Id)) > 0;
             if (!removed) { StatusChanged?.Invoke("没找到要删除的构件。"); return; }
             CancelDrag();       // 被拖的那一个可能刚被删掉，拖动立即结束
             _selection = null;

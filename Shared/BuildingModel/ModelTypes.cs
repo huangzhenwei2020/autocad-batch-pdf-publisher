@@ -150,6 +150,40 @@ namespace BatchPdfPublisher.BuildingModel
         public double Height { get; set; }
     }
 
+    /// <summary>
+    /// 双跑楼梯（最常见的楼梯间做法）：轴对齐的楼梯间矩形 + 两跑梯段 + 一个休息平台。
+    ///
+    /// 参数按建筑制图习惯给：踏步宽（<see cref="Going"/>）、每跑踏步数（<see cref="StepsPerFlight"/>）、
+    /// 梯段宽（<see cref="FlightWidth"/>）。**踏步高**默认由层高现算：踏步高 = 层高 ÷（2×每跑踏步数），
+    /// 这样"上一层"正好落在上一层楼面标高上（也能显式给 <see cref="Riser"/> 覆盖）。
+    /// </summary>
+    public sealed class StairModel
+    {
+        public string Id { get; set; }
+        public string StoreyId { get; set; }
+        /// <summary>楼梯间左下角（平面，mm）。</summary>
+        public double X { get; set; }
+        public double Y { get; set; }
+        /// <summary>楼梯间沿**梯段方向**的净长（踏步区 + 休息平台，mm）。</summary>
+        public double Length { get; set; } = 5400d;
+        /// <summary>楼梯间沿**梯段宽度方向**的净宽（两跑 + 梯井，mm）。</summary>
+        public double Width { get; set; } = 2700d;
+        /// <summary>梯段方向：true = 沿 X 跑（第一跑朝 +X），false = 沿 Y 跑（第一跑朝 +Y）。</summary>
+        public bool AlongX { get; set; } = true;
+        /// <summary>单跑梯段宽（mm）。</summary>
+        public double FlightWidth { get; set; } = 1200d;
+        /// <summary>踏步宽（mm）。</summary>
+        public double Going { get; set; } = 260d;
+        /// <summary>每一跑的踏步数。</summary>
+        public int StepsPerFlight { get; set; } = 9;
+        /// <summary>踏步高（mm）；0 = 按层高 ÷（2×每跑踏步数）现算。</summary>
+        public double Riser { get; set; }
+        /// <summary>休息平台深（mm）；0 = 按 净长 - 每跑踏步总长 现算。</summary>
+        public double LandingDepth { get; set; }
+        /// <summary>梯井宽（两跑之间，mm）。</summary>
+        public double WellWidth { get; set; } = 100d;
+    }
+
     /// <summary>整个建筑模型（P0 只含体量所必需的构件）。</summary>
     public sealed class BuildingModelDocument
     {
@@ -160,6 +194,8 @@ namespace BatchPdfPublisher.BuildingModel
         public List<OpeningModel> Openings { get; set; } = new List<OpeningModel>();
         public List<SlabModel> Slabs { get; set; } = new List<SlabModel>();
         public List<ColumnModel> Columns { get; set; } = new List<ColumnModel>();
+        /// <summary>楼梯：挂楼层（双跑：两跑梯段 + 休息平台）。</summary>
+        public List<StairModel> Stairs { get; set; } = new List<StairModel>();
         /// <summary>轴网：整栋通用（不挂楼层），平面图靠它标轴线尺寸与轴号。</summary>
         public List<AxisModel> Axes { get; set; } = new List<AxisModel>();
         /// <summary>房间：挂楼层，平面图里标房间名与面积。</summary>
@@ -197,6 +233,21 @@ namespace BatchPdfPublisher.BuildingModel
             var storey = FindStorey(column.StoreyId);
             if (storey != null && storey.Height > 0.5d) return storey.Height;
             return 3000d;
+        }
+
+        /// <summary>楼梯所在楼层的层高（踏步高按它现算）；找不到楼层时按 3000。</summary>
+        public double HeightOf(StairModel stair)
+        {
+            var storey = stair == null ? null : FindStorey(stair.StoreyId);
+            return storey != null && storey.Height > 0.5d ? storey.Height : 3000d;
+        }
+
+        public StairModel FindStair(string id)
+        {
+            if (string.IsNullOrWhiteSpace(id)) return null;
+            foreach (var stair in Stairs ?? new List<StairModel>())
+                if (stair != null && string.Equals(stair.Id, id, StringComparison.OrdinalIgnoreCase)) return stair;
+            return null;
         }
     }
 
@@ -543,9 +594,10 @@ namespace BatchPdfPublisher.BuildingModel
         public const string Schedule = "WL-模型-门窗表";
         /// <summary>轴网（轴线用点划线、轴号圆圈与文字）。</summary>
         public const string Axis = "WL-模型-轴线";
+        /// <summary>楼梯（踏步线、休息平台、上下行箭头与文字、扶手）。</summary>
+        public const string Stair = "WL-模型-楼梯";
         /// <summary>房间轮廓、房间名与面积。</summary>
-        public const string Room = "WL-模型-房间";
-        /// <summary>图纸自带的图框与标题栏（落图时若套用了项目图框模板，这一层会被跳过）。</summary>
+        public const string Room = "WL-模型-房间";        /// <summary>图纸自带的图框与标题栏（落图时若套用了项目图框模板，这一层会被跳过）。</summary>
         public const string SheetFrame = "WL-模型-图纸框";
 
         public sealed class Style
@@ -571,6 +623,7 @@ namespace BatchPdfPublisher.BuildingModel
             new Style { Name = Schedule, Color = 7, LineType = "Continuous", LineWeight = 18, Description = "门窗表线框与文字" },
             new Style { Name = Axis, Color = 7, LineType = "CENTER", LineWeight = 13, Description = "轴线（点划线）与轴号" },
             new Style { Name = Room, Color = 7, LineType = "Continuous", LineWeight = 13, Description = "房间轮廓、名称与面积" },
+            new Style { Name = Stair, Color = 7, LineType = "Continuous", LineWeight = 18, Description = "楼梯：踏步线、休息平台、上下行箭头与扶手" },
             new Style { Name = SheetFrame, Color = 7, LineType = "Continuous", LineWeight = 35, Description = "图纸自带图框与标题栏（套用项目图框时跳过）" }
         };
 

@@ -33,7 +33,53 @@ namespace Wanluo.BuildingModelStudio
             CancelsWhenHostWallGone(log);
             DrawsAxisAndRenumbers(log);
             DrawsRoomAndMovesIt(log);
-            log("PASS 平面交互自检：拖柱 / 拖墙夹点 / 拖洞口 / 拉轴线 / 画房间 —— 目标被删、被撤销、换楼层、宿主墙消失都只取消拖动，不抛异常");
+            PlacesStairAndMovesIt(log);
+            log("PASS 平面交互自检：拖柱 / 拖墙夹点 / 拖洞口 / 拉轴线 / 画房间 / 放楼梯 —— 目标被删、被撤销、换楼层、宿主墙消失都只取消拖动，不抛异常");
+        }
+
+        // ───────────────────────── 8. 放楼梯（两点拉矩形 + 参数现算 + 整体移动） ─────────────────────────
+
+        private static void PlacesStairAndMovesIt(Action<string> log)
+        {
+            var canvas = NewCanvas(out var model);
+            canvas.Tool = "stair";
+            // 拉一个 3000（X）× 2700（Y）的楼梯间 → 长边是 X，所以梯段沿 X
+            canvas.SimulateMouseDown(ToScreen(0d, 0d), MouseButtons.Left);
+            canvas.SimulateMouseDown(ToScreen(3000d, 2700d), MouseButtons.Left);
+            Assert(model.Stairs.Count == 1, "放完应有 1 部楼梯，实际 " + model.Stairs.Count);
+            var stair = model.Stairs[0];
+            Assert(stair.AlongX, "长边是 X 时梯段应沿 X");
+            Assert(Math.Abs(stair.Length - 3000d) < 50d && Math.Abs(stair.Width - 2700d) < 50d,
+                "楼梯间应是 3000×2700，实际 " + Math.Round(stair.Length) + "×" + Math.Round(stair.Width));
+            Assert(stair.FlightWidth * 2d + stair.WellWidth <= stair.Width + 1d,
+                "默认梯段宽应放得进净宽：" + stair.FlightWidth + "×2+" + stair.WellWidth);
+
+            // 几何：踏步高按层高现算（默认层高 3600 / 18 级 = 200）
+            var storey = model.FindStorey(stair.StoreyId);
+            var geometry = StairGeometry.Build(model, stair);
+            Assert(geometry != null && geometry.Flights.Count == 2, "应能展开成两跑");
+            Assert(Math.Abs(geometry.TopElevation - (storey == null ? 3600d : storey.Elevation + storey.Height)) < 1d,
+                "第二跑到达标高应正好是上一层楼面，实际 " + geometry.TopElevation + " / 层高 "
+                + (storey == null ? 0d : storey.Height));
+
+            // 选中并整体移动
+            canvas.Tool = "select";
+            canvas.SimulateMouseDown(ToScreen(1500d, 1350d), MouseButtons.Left);
+            Assert(canvas.IsDragging, "点楼梯内部应选中并进入拖动状态");
+            Assert(canvas.Selection != null && canvas.Selection.Kind == "stair", "选中的应是楼梯");
+            canvas.SimulateMouseMove(ToScreen(2000d, 1850d));
+            canvas.SimulateMouseUp(ToScreen(2000d, 1850d), MouseButtons.Left);
+            Assert(Math.Abs(stair.X - 500d) < 200d && Math.Abs(stair.Y - 500d) < 200d,
+                "楼梯应整体移动到 (500,500) 附近，实际 (" + Math.Round(stair.X) + "," + Math.Round(stair.Y) + ")");
+
+            // 拖动中删除：只取消拖动，不抛异常
+            canvas.SimulateMouseDown(ToScreen(stair.X + 1500d, stair.Y + 1350d), MouseButtons.Left);
+            canvas.DeleteSelection();
+            canvas.SimulateMouseMove(ToScreen(4000d, 3000d));
+            Assert(model.Stairs.Count == 0, "删除后模型里不应还有楼梯");
+            Assert(canvas.LastPaintError == null, "删除楼梯后继续移动鼠标不应产生绘制错误：" + canvas.LastPaintError);
+            log("PASS 放楼梯：两点拉出 3000×2700 → 沿长边定向、踏步高 200 到达上一层 " + Math.Round(geometry.TopElevation)
+                + "；拖动整体移动；拖动中删除不抛异常");
         }
 
         // ───────────────────────── 6. 拉轴线（自动编号） ─────────────────────────

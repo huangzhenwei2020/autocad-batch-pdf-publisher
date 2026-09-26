@@ -1,4 +1,4 @@
-﻿<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
@@ -55,6 +55,7 @@
     <Compile Include="..\Shared\BuildingModel\SheetComposer.cs"><Link>Features\BuildingModel\Shared\SheetComposer.cs</Link></Compile>
     <Compile Include="..\Shared\BuildingModel\StudioLaunch.cs"><Link>Features\BuildingModel\Shared\StudioLaunch.cs</Link></Compile>
     <Compile Include="..\Shared\BuildingModel\BuildingVolume.cs"><Link>Features\BuildingModel\Shared\BuildingVolume.cs</Link></Compile>
+    <Compile Include="..\Shared\BuildingModel\StairGeometry.cs"><Link>Features\BuildingModel\Shared\StairGeometry.cs</Link></Compile>
     <Compile Include="..\Shared\BuildingModel\VolumeRenderer.cs"><Link>Features\BuildingModel\Shared\VolumeRenderer.cs</Link></Compile>
     <Compile Include="Compatibility\Net40Polyfills.cs" />
     <Compile Include="Commands.cs" />

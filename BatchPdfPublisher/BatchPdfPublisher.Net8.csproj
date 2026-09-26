@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
@@ -26,6 +26,7 @@
     <Compile Include="..\Shared\BuildingModel\SheetComposer.cs" Link="Features\BuildingModel\Shared\SheetComposer.cs" />
     <Compile Include="..\Shared\BuildingModel\StudioLaunch.cs" Link="Features\BuildingModel\Shared\StudioLaunch.cs" />
     <Compile Include="..\Shared\BuildingModel\BuildingVolume.cs" Link="Features\BuildingModel\Shared\BuildingVolume.cs" />
+    <Compile Include="..\Shared\BuildingModel\StairGeometry.cs" Link="Features\BuildingModel\Shared\StairGeometry.cs" />
     <Compile Include="..\Shared\BuildingModel\VolumeRenderer.cs" Link="Features\BuildingModel\Shared\VolumeRenderer.cs" />
     <Reference Include="PdfSharp" HintPath="..\PdfSharp.dll" Private="true" />
     <None Include="..\ThirdParty\Pdfium\pdfium.dll" Link="pdfium.dll" CopyToOutputDirectory="PreserveNewest" />
