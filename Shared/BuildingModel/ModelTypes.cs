@@ -198,7 +198,9 @@ namespace BatchPdfPublisher.BuildingModel
         /// <summary>表格类视图（门窗表）：同样是"视图产物 = 线 + 文字"，落图命令不用特殊处理。</summary>
         Schedule = 2,
         /// <summary>平面图：水平剖切俯视（墙、门窗、柱），用 <see cref="ViewDefinitionModel.StoreyIds"/> 指定画哪一层。</summary>
-        Plan = 3
+        Plan = 3,
+        /// <summary>图纸（排版结果）：单位是**图纸毫米**，落图后按 1:1 出图（见 <see cref="SheetComposer"/>）。</summary>
+        Sheet = 4
     }
 
     /// <summary>立面方向：南 = 从南往北看（默认取"从 -Y 看向 +Y"）。</summary>

@@ -19,6 +19,7 @@
     <Compile Include="..\Shared\BuildingModel\ModelEditHistory.cs" Link="Shared\ModelEditHistory.cs" />
     <Compile Include="..\Shared\BuildingModel\PlanEditing.cs" Link="Shared\PlanEditing.cs" />
     <Compile Include="..\Shared\BuildingModel\OrthographicProjector.cs" Link="Shared\OrthographicProjector.cs" />
+    <Compile Include="..\Shared\BuildingModel\SheetComposer.cs" Link="Shared\SheetComposer.cs" />
     <Compile Include="..\Shared\BuildingModel\OpeningElevationAdapter.cs" Link="Shared\OpeningElevationAdapter.cs" />
     <Compile Include="..\Shared\BuildingModel\SampleModelFactory.cs" Link="Shared\SampleModelFactory.cs" />
     <!-- 门窗立面生成器：与插件同一份源码（不依赖 AutoCAD），所以立面分格/开启线两边完全一致 -->

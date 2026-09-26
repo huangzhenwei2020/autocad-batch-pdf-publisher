@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 
 namespace BatchPdfPublisher.BuildingModel
 {
@@ -185,6 +186,48 @@ namespace BatchPdfPublisher.BuildingModel
             {
                 Id = "schedule", Title = "门窗表", Kind = ViewKind.Schedule, Scale = 100
             };
+        }
+
+        /// <summary>
+        /// 默认出图套图（A3 横 4 张）：每层平面各一张、四个立面一张、剖面 + 门窗表一张。
+        /// 视图 id 与 <see cref="CreateDefaultViews"/> / <see cref="CreatePlanView"/> / <see cref="CreateScheduleView"/> 对应。
+        /// </summary>
+        public static List<SheetDefinitionModel> CreateDefaultSheets(BuildingModelDocument model)
+        {
+            var storeys = (model == null ? new List<StoreyModel>() : model.Storeys ?? new List<StoreyModel>())
+                .Where(s => s != null).OrderBy(s => s.Elevation).ToList();
+            var sheets = new List<SheetDefinitionModel>();
+
+            for (var index = 0; index < storeys.Count; index++)
+            {
+                var storey = storeys[index];
+                var view = CreatePlanView(storey);
+                sheets.Add(new SheetDefinitionModel
+                {
+                    Id = "sheet-" + view.Id, Number = "建施-" + (index + 1).ToString("00"),
+                    Title = (storey.Name ?? storey.Id) + " 平面图", Paper = "A3", Landscape = true,
+                    ViewIds = { view.Id }
+                });
+            }
+
+            var elevationSheet = new SheetDefinitionModel
+            {
+                Id = "sheet-elevations", Number = "建施-" + (storeys.Count + 1).ToString("00"),
+                Title = "立面图", Paper = "A3", Landscape = true
+            };
+            foreach (var direction in new[] { "elev-south", "elev-north", "elev-east", "elev-west" })
+                elevationSheet.ViewIds.Add(direction);
+            sheets.Add(elevationSheet);
+
+            var sectionSheet = new SheetDefinitionModel
+            {
+                Id = "sheet-section", Number = "建施-" + (storeys.Count + 2).ToString("00"),
+                Title = "剖面图 + 门窗表", Paper = "A3", Landscape = true
+            };
+            sectionSheet.ViewIds.Add("section-1");
+            sectionSheet.ViewIds.Add("schedule");
+            sheets.Add(sectionSheet);
+            return sheets;
         }
 
         /// <summary>某一层的平面图定义（平面用 StoreyIds 指定画哪一层）。</summary>

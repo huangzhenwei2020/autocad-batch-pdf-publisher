@@ -193,10 +193,13 @@ namespace Wanluo.BuildingModelStudio
             var boxWidth = Math.Max(50d, Width - left - 16d);
             var boxHeight = Math.Max(50d, Height - top - 16d);
 
-            var minX = bounds.Value.Left - 500d;
-            var maxX = bounds.Value.Right + 500d;
-            var minY = bounds.Value.Top - 500d;
-            var maxY = bounds.Value.Bottom + 500d;
+            // 取景留边按视图大小取（4%）：模型视图（几千毫米）与图纸（几百毫米纸面）都好用
+            var extent = Math.Max(bounds.Value.Width, bounds.Value.Height);
+            var margin = Math.Max(5d, Math.Min(500d, extent * 0.04d));
+            var minX = bounds.Value.Left - margin;
+            var maxX = bounds.Value.Right + margin;
+            var minY = bounds.Value.Top - margin;
+            var maxY = bounds.Value.Bottom + margin;
             var width = Math.Max(1d, maxX - minX);
             var height = Math.Max(1d, maxY - minY);
             _scale = Math.Max(0.002d, Math.Min(boxWidth / width, boxHeight / height));

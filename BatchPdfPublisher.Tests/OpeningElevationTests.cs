@@ -29,7 +29,99 @@ internal static class OpeningElevationTests
         AnchorsAndLabels();
         DimensionsAndSchedule();
         PlanProjection();
-        Console.WriteLine("PASS 立面门窗：分格与开启线 / 背立面镜像 / 遮挡裁剪 / 自定义分格 / 1:100-1:50 详简 / 参数兜底 / 可点选锚点与编号 / 尺寸与门窗表 / 平面图");
+        SheetComposition();
+        Console.WriteLine("PASS 立面门窗：分格与开启线 / 背立面镜像 / 遮挡裁剪 / 自定义分格 / 1:100-1:50 详简 / 参数兜底 / 可点选锚点与编号 / 尺寸与门窗表 / 平面图 / 排版出图");
+    }
+
+    // ───────────────────────── 10. 排版出图（图纸） ─────────────────────────
+
+    /// <summary>
+    /// 图纸 = 一份 Kind=Sheet 的视图产物（单位是图纸毫米，落图后按 1:1 出图）：
+    /// 图框留边（装订边 25、其余 5）、右下角标题栏、视图按各自比例缩到纸面并排进格子、
+    /// 尺寸转成带显式文字的尺寸（纸面距离不再是真实尺寸）、超格的视图出提示。
+    /// </summary>
+    private static void SheetComposition()
+    {
+        var model = SampleModelFactory.CreateTwoStoreyHouse();
+        var library = SampleModelFactory.CreateDemoOpeningLibrary();
+        var views = new List<ViewDocument>();
+        foreach (var definition in SampleModelFactory.CreateDefaultViews(model.Name))
+            views.Add(OrthographicProjector.Project(model, definition, library));
+        foreach (var storey in model.Storeys)
+            views.Add(OrthographicProjector.Project(model, SampleModelFactory.CreatePlanView(storey), library));
+        views.Add(OrthographicProjector.ProjectSchedule(model, library, "门窗表"));
+
+        var sheets = SampleModelFactory.CreateDefaultSheets(model);
+        Assert(sheets.Count == 4, "默认套图应有 4 张（两层平面 + 立面 + 剖面/门窗表），实际 " + sheets.Count);
+        Assert(sheets[0].Paper == "A3" && sheets[0].Landscape, "默认图纸应为 A3 横");
+
+        // 只排一张平面：便于按算得出来的数字核对
+        var one = new SheetDefinitionModel
+        {
+            Id = "sheet-test", Number = "建施-99", Title = "一层平面图", Paper = "A3", Landscape = true
+        };
+        one.ViewIds.Add("plan-1F");
+        var sheet = SheetComposer.Compose(views, one);
+
+        Assert(sheet.Kind == ViewKind.Sheet && sheet.Scale == 1, "图纸应是 Kind=Sheet、比例 1（图纸毫米）");
+        Assert(sheet.Title.IndexOf("建施-99", StringComparison.Ordinal) >= 0
+            && sheet.Title.IndexOf("A3", StringComparison.Ordinal) >= 0, "图纸标题应含图号与纸张：实际 " + sheet.Title);
+        Assert(sheet.Texts.Any(t => t.Text == "一层平面图" && Math.Abs(t.Height - 7d) < 0.01d), "标题栏缺少图名");
+        Assert(sheet.Texts.Any(t => t.Text != null && t.Text.StartsWith("图号 建施-99", StringComparison.Ordinal)), "标题栏缺少图号");
+        Assert(sheet.Texts.Any(t => t.Text != null && t.Text.IndexOf("万落建筑工具", StringComparison.Ordinal) >= 0), "标题栏缺少单位/日期");
+
+        // 图框：A3 横 = 420×297；外框 0..420/0..297，图框 25..415 / 5..292
+        Assert(HasViewLine(sheet, 0d, 0d, 420d, 0d) && HasViewLine(sheet, 0d, 297d, 420d, 297d), "缺少纸边外框");
+        Assert(HasViewLine(sheet, 25d, 5d, 415d, 5d) && HasViewLine(sheet, 25d, 292d, 415d, 292d), "缺少图框（留边 25/5）");
+        Assert(HasViewLine(sheet, 235d, 5d, 415d, 5d) || sheet.Lines.Any(l => Math.Abs(l.X1 - 235d) < Tolerance && Math.Abs(l.X2 - 235d) < Tolerance),
+            "缺少标题栏左边线（右下角 180 宽）");
+
+        // 视图按 1:100 缩到纸面：墙断面（Cut 层）轮廓 7440×5640 → 74.4×56.4 mm，且都在图框内
+        var walls = sheet.Lines.Where(l => l.Layer == ViewLayers.Cut).ToList();
+        Assert(walls.Count > 0, "图纸上应有墙断面（Cut 层）");
+        var width = walls.Max(l => Math.Max(l.X1, l.X2)) - walls.Min(l => Math.Min(l.X1, l.X2));
+        var height = walls.Max(l => Math.Max(l.Y1, l.Y2)) - walls.Min(l => Math.Min(l.Y1, l.Y2));
+        Assert(Math.Abs(width - 74.4d) < 1d, "平面图在图纸上宽应约 74.4mm（7440 的 1:100），实际 " + Math.Round(width, 2));
+        Assert(Math.Abs(height - 56.4d) < 1d, "平面图在图纸上高应约 56.4mm（5640 的 1:100），实际 " + Math.Round(height, 2));
+        // 轴线也要一起排进图纸（比建筑范围更长），并且所有内容都在图框内
+        var axisLines = sheet.Lines.Where(l => l.Layer == ViewLayers.Axis).ToList();
+        Assert(axisLines.Count == 5, "图纸上应有 5 条轴线，实际 " + axisLines.Count);
+        Assert(axisLines.Max(l => Math.Max(l.X1, l.X2)) - axisLines.Min(l => Math.Min(l.X1, l.X2)) > width,
+            "轴线应比建筑范围更长");
+        var inside = sheet.Lines.Where(l => l.Layer != ViewLayers.Title);
+        Assert(inside.All(l => Math.Min(l.X1, l.X2) >= 24.5d && Math.Max(l.X1, l.X2) <= 415.5d
+            && Math.Min(l.Y1, l.Y2) >= 4.5d && Math.Max(l.Y1, l.Y2) <= 292.5d), "视图内容应排在图框内");
+
+        // 尺寸转成显式文字（纸面距离不再是真实尺寸）：轴线 3600 的尺寸文字要是 "3600"
+        Assert(sheet.Dimensions.Count > 0, "图纸上应保留尺寸");
+        Assert(sheet.Dimensions.All(d => !string.IsNullOrWhiteSpace(d.Text)), "图纸上的尺寸必须有显式文字（否则 CAD 量出来的是纸面距离）");
+        Assert(sheet.Dimensions.Any(d => d.Text == "3600"), "图纸上应能读到 3600 这一档轴线尺寸");
+
+        // 超格提示：四个立面挤进 A4 竖排（2×2 格，每格约 84mm 宽），1:100 的立面应报超格
+        var tight = new SheetDefinitionModel { Id = "sheet-tight", Number = "建施-98", Title = "挤一挤", Paper = "A4", Landscape = false };
+        foreach (var direction in new[] { "elev-south", "elev-north", "elev-east", "elev-west" })
+            tight.ViewIds.Add(direction);
+        var tightSheet = SheetComposer.Compose(views, tight);
+        Assert(tightSheet.Warnings.Any(w => w.IndexOf("超出图纸格", StringComparison.Ordinal) >= 0), "塞不下时应给出超格提示：" + string.Join(" / ", tightSheet.Warnings.ToArray()));
+
+        // 找不到的视图要提示，而不是崩
+        var missing = new SheetDefinitionModel { Id = "sheet-missing", Number = "建施-97", Title = "缺视图" };
+        missing.ViewIds.Add("不存在的视图");
+        var missingSheet = SheetComposer.Compose(views, missing);
+        Assert(missingSheet.Warnings.Any(w => w.IndexOf("找不到视图", StringComparison.Ordinal) >= 0), "找不到视图时应给出提示");
+        Console.WriteLine("   排版出图：A3 横图框 25/5、标题栏 180×40、平面 74.4×56.4mm 落在图框内、尺寸带显式文字，超格/缺视图都有提示");
+    }
+
+    private static bool HasViewLine(ViewDocument view, double x1, double y1, double x2, double y2)
+    {
+        foreach (var line in view.Lines)
+        {
+            if (Math.Abs(line.X1 - x1) < Tolerance && Math.Abs(line.Y1 - y1) < Tolerance
+                && Math.Abs(line.X2 - x2) < Tolerance && Math.Abs(line.Y2 - y2) < Tolerance) return true;
+            if (Math.Abs(line.X1 - x2) < Tolerance && Math.Abs(line.Y1 - y2) < Tolerance
+                && Math.Abs(line.X2 - x1) < Tolerance && Math.Abs(line.Y2 - y1) < Tolerance) return true;
+        }
+        return false;
     }
 
     // ───────────────────────── 9. 平面图投影 ─────────────────────────

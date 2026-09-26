@@ -258,6 +258,24 @@ namespace Wanluo.BuildingModelStudio
                 foreach (var storey in (model.Storeys ?? new List<StoreyModel>()).Where(s => s != null))
                     definitions.Add(SampleModelFactory.CreatePlanView(storey));
                 definitions.Add(SampleModelFactory.CreateScheduleView(modelName));
+                var allViews = definitions
+                    .Select(definition => definition.Kind == ViewKind.Schedule
+                        ? OrthographicProjector.ProjectSchedule(model, library, definition.Title)
+                        : OrthographicProjector.Project(model, definition, library))
+                    .ToList();
+                foreach (var sheet in SampleModelFactory.CreateDefaultSheets(model))
+                {
+                    var sheetView = SheetComposer.Compose(allViews, sheet);
+                    canvas.View = sheetView;
+                    using (var bitmap = new Bitmap(canvas.Width, canvas.Height))
+                    {
+                        using (var graphics = Graphics.FromImage(bitmap)) canvas.Render(graphics);
+                        var path = Path.Combine(outputFolder, "图纸-" + sheet.Number + " " + sheet.Title + ".png");
+                        bitmap.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+                        log("快照：" + path + "（线 " + sheetView.Lines.Count + "、文字 " + sheetView.Texts.Count
+                            + "、尺寸 " + sheetView.Dimensions.Count + "）");
+                    }
+                }
                 foreach (var definition in definitions)
                 {
                     var view = definition.Kind == ViewKind.Schedule
@@ -386,9 +404,11 @@ namespace Wanluo.BuildingModelStudio
             var total = 0;
             if (library == null) log("提示：没有门窗类型库，立面只画洞口轮廓（用 CAD 的 TQLX 导出后可补上分格与开启线）。");
             else log("门窗类型库：" + library.Types.Count + " 个类型，立面的分格与开启线按编号取用。");
+            var generated = new List<ViewDocument>();
             foreach (var definition in SampleModelFactory.CreateDefaultViews(modelName))
             {
                 var view = OrthographicProjector.Project(model, definition, library);
+                generated.Add(view);
                 var path = BuildingModelJson.ViewFilePath(projectFolder, modelName, view.Id);
                 BuildingModelJson.SaveView(path, view);
                 total += view.Lines.Count;
@@ -404,6 +424,7 @@ namespace Wanluo.BuildingModelStudio
             {
                 var definition = SampleModelFactory.CreatePlanView(storey);
                 var plan = OrthographicProjector.Project(model, definition, library);
+                generated.Add(plan);
                 var path = BuildingModelJson.ViewFilePath(projectFolder, modelName, plan.Id);
                 BuildingModelJson.SaveView(path, plan);
                 total += plan.Lines.Count;
@@ -415,11 +436,24 @@ namespace Wanluo.BuildingModelStudio
 
             // 门窗表：按编号汇总模型里的洞口（做法取自类型库），与立面/剖面一样落图
             var schedule = OrthographicProjector.ProjectSchedule(model, library, "门窗表");
+            generated.Add(schedule);
             var schedulePath = BuildingModelJson.ViewFilePath(projectFolder, modelName, schedule.Id);
             BuildingModelJson.SaveView(schedulePath, schedule);
             total += schedule.Lines.Count;
             log("视图：" + schedule.Title + " → 线 " + schedule.Lines.Count + "、文字 " + schedule.Texts.Count
                 + "（按编号汇总，做法来自类型库）→ " + Path.GetFileName(schedulePath));
+
+            // 排版出图：把视图按纸张排成图纸（图纸本身就是一份视图产物，落图后按 1:1 出图）
+            foreach (var sheet in SampleModelFactory.CreateDefaultSheets(model))
+            {
+                var composed = SheetComposer.Compose(generated, sheet);
+                var path = BuildingModelJson.ViewFilePath(projectFolder, modelName, composed.Id);
+                BuildingModelJson.SaveView(path, composed);
+                total += composed.Lines.Count;
+                log("图纸：" + composed.Title + " → 线 " + composed.Lines.Count + "、文字 " + composed.Texts.Count
+                    + "、尺寸 " + composed.Dimensions.Count + " → " + Path.GetFileName(path));
+                foreach (var warning in composed.Warnings) log("  提示：" + warning);
+            }
             return total;
         }
     }
@@ -826,6 +860,12 @@ namespace Wanluo.BuildingModelStudio
                 foreach (var storey in (_model.Storeys ?? new List<StoreyModel>()).Where(s => s != null))
                     _viewChooser.Items.Add(new ViewChoice(SampleModelFactory.CreatePlanView(storey)));
             _viewChooser.Items.Add(new ViewChoice(SampleModelFactory.CreateScheduleView(ModelName)));   // 门窗表也能预览
+            if (_model != null)
+                foreach (var sheet in SampleModelFactory.CreateDefaultSheets(_model))
+                    _viewChooser.Items.Add(new ViewChoice(new ViewDefinitionModel
+                    {
+                        Id = sheet.Id, Title = sheet.Title + "（图纸）", Kind = ViewKind.Sheet, Scale = 1
+                    }));
             if (_viewChooser.Items.Count == 0) return;
             for (var index = 0; index < _viewChooser.Items.Count; index++)
                 if (!string.IsNullOrEmpty(wanted)
@@ -855,9 +895,20 @@ namespace Wanluo.BuildingModelStudio
             if (choice == null) return;
             try
             {
-                var view = choice.Definition.Kind == ViewKind.Schedule
-                    ? OrthographicProjector.ProjectSchedule(_model, _openingLibrary, choice.Definition.Title)
-                    : OrthographicProjector.Project(_model, choice.Definition, _openingLibrary);
+                ViewDocument view;
+                if (choice.Definition.Kind == ViewKind.Schedule)
+                {
+                    view = OrthographicProjector.ProjectSchedule(_model, _openingLibrary, choice.Definition.Title);
+                }
+                else if (choice.Definition.Kind == ViewKind.Sheet)
+                {
+                    // 图纸：把当前模型的所有视图现算一遍再排版（保证图纸永远与模型一致）
+                    view = SheetComposer.Compose(ComposeAllViews(), FindSheet(choice.Definition.Id));
+                }
+                else
+                {
+                    view = OrthographicProjector.Project(_model, choice.Definition, _openingLibrary);
+                }
                 _viewPreview.View = view;
                 var openingLines = view.Lines.Count(line => line.Layer == ViewLayers.Opening);
                 // 之前选中的那一樘如果还在这张视图里，继续显示它的信息（改完做法看得见效果）
@@ -931,6 +982,25 @@ namespace Wanluo.BuildingModelStudio
             _viewInfo.Text = view.Title + "：线 " + view.Lines.Count + "（门窗 " + openingLines + "）、文字 "
                 + view.Texts.Count + "、填充 " + view.Hatches.Count
                 + (_openingLibrary == null ? "　（没有类型库：门窗只画洞口轮廓）" : "　（做法来自类型库）");
+        }
+
+        /// <summary>把当前模型的全部视图现算一遍（图纸排版要用它们）。</summary>
+        private List<ViewDocument> ComposeAllViews()
+        {
+            var views = new List<ViewDocument>();
+            if (_model == null) return views;
+            foreach (var definition in SampleModelFactory.CreateDefaultViews(ModelName))
+                views.Add(OrthographicProjector.Project(_model, definition, _openingLibrary));
+            foreach (var storey in (_model.Storeys ?? new List<StoreyModel>()).Where(s => s != null))
+                views.Add(OrthographicProjector.Project(_model, SampleModelFactory.CreatePlanView(storey), _openingLibrary));
+            views.Add(OrthographicProjector.ProjectSchedule(_model, _openingLibrary, "门窗表"));
+            return views;
+        }
+
+        private SheetDefinitionModel FindSheet(string sheetId)
+        {
+            var sheets = SampleModelFactory.CreateDefaultSheets(_model);
+            return sheets.FirstOrDefault(s => string.Equals(s.Id, sheetId, StringComparison.OrdinalIgnoreCase)) ?? sheets.FirstOrDefault();
         }
 
         private void OpenModelFolder()

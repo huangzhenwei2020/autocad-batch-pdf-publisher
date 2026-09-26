@@ -1,4 +1,4 @@
-<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+﻿<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
@@ -52,6 +52,7 @@
     <Compile Include="..\Shared\BuildingModel\BuildingModelJson.cs"><Link>Features\BuildingModel\Shared\BuildingModelJson.cs</Link></Compile>
     <Compile Include="..\Shared\BuildingModel\OrthographicProjector.cs"><Link>Features\BuildingModel\Shared\OrthographicProjector.cs</Link></Compile>
     <Compile Include="..\Shared\BuildingModel\OpeningElevationAdapter.cs"><Link>Features\BuildingModel\Shared\OpeningElevationAdapter.cs</Link></Compile>
+    <Compile Include="..\Shared\BuildingModel\SheetComposer.cs"><Link>Features\BuildingModel\Shared\SheetComposer.cs</Link></Compile>
     <Compile Include="Compatibility\Net40Polyfills.cs" />
     <Compile Include="Commands.cs" />
     <Compile Include="Infrastructure\**\*.cs" />
@@ -75,3 +76,4 @@
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>
+
