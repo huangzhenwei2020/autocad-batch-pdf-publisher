@@ -682,7 +682,7 @@ namespace BatchPdfPublisher.Services
                         + " 的登记图框：本次用图纸自带的图框。）");
                     return null;
                 }
-                FrameTemplateStore.EnsureAvailable(document.Database, frame);
+                FrameTemplateStore.EnsureAvailable(document, frame);
                 var blockTable = (BlockTable)transaction.GetObject(document.Database.BlockTableId, OpenMode.ForRead);
                 if (!blockTable.Has(frame.BlockName))
                 {
