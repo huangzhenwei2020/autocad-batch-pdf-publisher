@@ -30,6 +30,7 @@ internal static class BuildingModelProjectionTests
             HiddenLinesRemoveCoveredEdges(model);
             SectionProducesCutRectsAndHatch(model);
             OffsetCutInsideWallThicknessProducesSection();
+            WallAndOpeningEditUpdatesElevationAndSection();
             JsonRoundTripsWithoutLoss(model);
             PlanEditingTests.Run();
             OpeningTypeLibraryTests.Run();
@@ -191,6 +192,43 @@ internal static class BuildingModelProjectionTests
                 "剖切线 Y=" + offset + " 位于 200mm 墙内，应有墙断面");
         }
         Console.WriteLine("PASS 墙厚内偏心剖切：Y=0/±50 均有断面");
+    }
+
+    private static void WallAndOpeningEditUpdatesElevationAndSection()
+    {
+        // G0 金样：同一构件 ID 的墙加长、加厚，附着的窗沿墙移动。
+        // 立面要跟随端点/窗位置，偏心剖面要从未剖到变成剖到。
+        var model = new BuildingModelDocument { Name = "墙窗联动金样" };
+        model.Storeys.Add(new StoreyModel { Id = "1F", Elevation = 0d, Height = 3000d });
+        var wall = new WallModel { Id = "W-1", StoreyId = "1F", X1 = 0d, Y1 = 0d,
+            X2 = 5000d, Y2 = 0d, Thickness = 240d };
+        var opening = new OpeningModel { Id = "O-1", HostWallId = "W-1", Kind = "窗",
+            Offset = 2000d, Width = 1200d, Height = 1500d, Sill = 900d };
+        model.Walls.Add(wall);
+        model.Openings.Add(opening);
+        var elevationDefinition = new ViewDefinitionModel { Id = "golden-south", Title = "南立面",
+            Kind = ViewKind.Elevation, Direction = ElevationDirection.South };
+        var sectionDefinition = new ViewDefinitionModel { Id = "golden-section", Title = "偏心剖面",
+            Kind = ViewKind.Section, CutAxis = SectionAxis.CutY, CutPosition = 140d, ViewSign = 1 };
+        var before = OrthographicProjector.Project(model, elevationDefinition);
+        var beforeWindow = before.Anchors.Single(a => a.ElementId == "O-1");
+        var beforeSection = OrthographicProjector.Project(model, sectionDefinition);
+        Assert(beforeSection.Hatches.Count == 0, "金样前置条件：Y=140 应在 240 厚墙以外");
+
+        wall.X2 = 6000d;
+        wall.Thickness = 300d;
+        opening.Offset = 2400d;
+        Assert(PlanEditing.ValidateOpening(model, wall, opening) == null, "编辑后窗仍须在所属墙内");
+        var after = OrthographicProjector.Project(model, elevationDefinition);
+        var afterWindow = after.Anchors.Single(a => a.ElementId == "O-1");
+        var afterSection = OrthographicProjector.Project(model, sectionDefinition);
+        Assert(Math.Abs(afterWindow.X1 - beforeWindow.X1 - 400d) < Tolerance,
+            "窗沿墙移动 400 后，立面锚点必须同步移动");
+        Assert(after.Lines.Max(l => Math.Max(l.X1, l.X2)) > before.Lines.Max(l => Math.Max(l.X1, l.X2)) + 900d,
+            "墙加长 1000 后，立面右端必须延伸");
+        Assert(afterSection.Hatches.Count == 1 && afterSection.Lines.Any(l => l.Layer == ViewLayers.Cut),
+            "墙厚改为 300 后，Y=140 剖面必须出现墙断面");
+        Console.WriteLine("PASS 墙窗联动金样：墙加长/加厚、窗平移、立面与偏心剖面同步更新");
     }
 
     /// <summary>填充边界的包围盒尺寸（宽, 高）。</summary>

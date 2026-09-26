@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Windows.Forms;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.Colors;
@@ -27,6 +29,8 @@ namespace BatchPdfPublisher.Services
     /// </summary>
     internal static class BuildingModelCadBridge
     {
+        private const string PlacementRegApp = "WL_BUILDING_VIEW";
+
         public static void PlaceView(Document document)
         {
             if (document == null) return;
@@ -45,15 +49,52 @@ namespace BatchPdfPublisher.Services
             }
             SaveLastViewFolder(Path.GetDirectoryName(path));
 
-            var pointResult = editor.GetPoint("\n指定视图插入点（视图左下角）：");
-            if (pointResult.Status != PromptStatus.OK) return;
-            var anchor = pointResult.Value;
+            if (string.IsNullOrWhiteSpace(view.Id))
+            {
+                editor.WriteMessage("\n视图缺少稳定 ID，无法安全更新，请重新生成视图。");
+                return;
+            }
+            var sourceKey = ViewSourceKey(path, view.Id);
+            var placements = FindPlacements(document.Database, sourceKey);
+            PlacedView replacing = null;
+            if (placements.Count > 0)
+            {
+                editor.WriteMessage("\n此视图在当前 DWG 中已有 " + placements.Count + " 处登记放置：");
+                for (var index = 0; index < placements.Count; index++)
+                    editor.WriteMessage("\n  " + (index + 1) + "）更新位置 (" + placements[index].Anchor.X.ToString("0.##")
+                        + ", " + placements[index].Anchor.Y.ToString("0.##") + ")，" + placements[index].EntityCount + " 个生成实体");
+                editor.WriteMessage("\n  0）另插一份");
+                var choice = editor.GetInteger(new PromptIntegerOptions("\n输入序号")
+                {
+                    DefaultValue = 1, AllowNone = false, AllowZero = true, UseDefaultValue = true
+                });
+                if (choice.Status != PromptStatus.OK) return;
+                if (choice.Value < 0 || choice.Value > placements.Count)
+                {
+                    editor.WriteMessage("\n序号无效，未修改图纸。");
+                    return;
+                }
+                if (choice.Value > 0) replacing = placements[choice.Value - 1];
+            }
+            Point3d anchor;
+            if (replacing != null) anchor = replacing.Anchor;
+            else
+            {
+                var pointResult = editor.GetPoint("\n指定视图插入点（视图左下角）：");
+                if (pointResult.Status != PromptStatus.OK) return;
+                anchor = pointResult.Value;
+            }
+            var placementId = replacing == null ? Guid.NewGuid().ToString("N") : replacing.Id;
 
             var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             var hatchIds = new List<ObjectId>();
-            using (document.LockDocument())
-            using (var transaction = document.Database.TransactionManager.StartTransaction())
+            var generatedIds = new List<ObjectId>();
+            var skippedGeneratedElements = 0;
+            try
             {
+              using (document.LockDocument())
+              using (var transaction = document.Database.TransactionManager.StartTransaction())
+              {
                 EnsureViewLayers(document.Database, transaction);
                 var space = (BlockTableRecord)transaction.GetObject(
                     SymbolUtilityServices.GetBlockModelSpaceId(document.Database), OpenMode.ForWrite);
@@ -61,7 +102,10 @@ namespace BatchPdfPublisher.Services
                 // 图纸（Kind=Sheet）：先看看项目里有没有同纸张的登记图框，有就套用它，
                 // 并跳过图纸自带的图框与标题栏（那一层叫 WL-模型-图纸框），避免双层图框。
                 var skipLayers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                var frame = view.Kind == ViewKind.Sheet ? InsertProjectFrame(document, transaction, space, view, anchor) : null;
+                ObjectId frameId = ObjectId.Null;
+                var frame = view.Kind == ViewKind.Sheet
+                    ? InsertProjectFrame(document, transaction, space, view, anchor, out frameId) : null;
+                if (!frameId.IsNull) generatedIds.Add(frameId);
                 if (frame != null) skipLayers.Add(ViewLayers.SheetFrame);
 
                 foreach (var line in view.Lines ?? new List<ViewLine>())
@@ -74,6 +118,7 @@ namespace BatchPdfPublisher.Services
                     ApplyLineType(transaction, document.Database, entity, line.LineType);
                     space.AppendEntity(entity);
                     transaction.AddNewlyCreatedDBObject(entity, true);
+                    generatedIds.Add(entity.ObjectId);
                     Bump(counts, line.Layer);
                 }
 
@@ -88,6 +133,7 @@ namespace BatchPdfPublisher.Services
                     ApplyLayer(entity, text.Layer);
                     space.AppendEntity(entity);
                     transaction.AddNewlyCreatedDBObject(entity, true);
+                    generatedIds.Add(entity.ObjectId);
                     Bump(counts, text.Layer);
                 }
 
@@ -100,6 +146,7 @@ namespace BatchPdfPublisher.Services
                     ApplyLayer(entity, circle.Layer);
                     space.AppendEntity(entity);
                     transaction.AddNewlyCreatedDBObject(entity, true);
+                    generatedIds.Add(entity.ObjectId);
                     Bump(counts, circle.Layer);
                 }
 
@@ -129,10 +176,12 @@ namespace BatchPdfPublisher.Services
                             ApplyLayer(entity, string.IsNullOrWhiteSpace(dimension.Layer) ? ViewLayers.Dimension : dimension.Layer);
                             space.AppendEntity(entity);
                             transaction.AddNewlyCreatedDBObject(entity, true);
+                            generatedIds.Add(entity.ObjectId);
                             Bump(counts, string.IsNullOrWhiteSpace(dimension.Layer) ? ViewLayers.Dimension : dimension.Layer);
                         }
                         catch (Exception exception)
                         {
+                            skippedGeneratedElements++;
                             editor.WriteMessage("\n一条尺寸标注失败已跳过（" + dimension.Note + "）：" + exception.Message);
                         }
                     }
@@ -153,11 +202,13 @@ namespace BatchPdfPublisher.Services
                         entity.AppendLoop(HatchLoopTypes.External, loop, new DoubleCollection());
                         entity.EvaluateHatch(true);
                         hatchIds.Add(entity.ObjectId);
+                        generatedIds.Add(entity.ObjectId);
                         Bump(counts, hatch.Layer);
                     }
                     catch (Exception exception)
                     {
                         entity.Erase();
+                        skippedGeneratedElements++;
                         editor.WriteMessage("\n一处剖切填充失败已跳过：" + exception.Message);
                     }
                 }
@@ -175,10 +226,47 @@ namespace BatchPdfPublisher.Services
                         editor.WriteMessage("\n提示：填充置底未成功（不影响出图）：" + exception.Message);
                     }
                 }
+                if (generatedIds.Count == 0)
+                    throw new InvalidOperationException("新视图没有可放置的实体，原图保持不变。");
+                if (replacing != null && skippedGeneratedElements > 0)
+                    throw new InvalidOperationException("新视图有 " + skippedGeneratedElements
+                        + " 个生成元素失败；旧视图已保留，请修正后重试。");
+                EnsurePlacementRegApp(document.Database, transaction);
+                foreach (var id in generatedIds)
+                {
+                    var entity = (Entity)transaction.GetObject(id, OpenMode.ForWrite);
+                    TagPlacement(entity, sourceKey, placementId, anchor);
+                }
+                if (replacing != null)
+                {
+                    // Erase only entities carrying this exact placement identity. Untagged
+                    // user annotations and other instances of the same view stay untouched.
+                    var newIds = new HashSet<ObjectId>(generatedIds);
+                    var removeIds = new List<ObjectId>();
+                    foreach (ObjectId id in space)
+                    {
+                        Entity entity;
+                        try { entity = transaction.GetObject(id, OpenMode.ForRead, false) as Entity; }
+                        catch (Autodesk.AutoCAD.Runtime.Exception) { continue; }
+                        var tag = ReadPlacement(entity);
+                        if (tag == null || tag.SourceKey != sourceKey || tag.Id != placementId
+                            || newIds.Contains(id)) continue;
+                        removeIds.Add(id);
+                    }
+                    foreach (var id in removeIds)
+                        ((Entity)transaction.GetObject(id, OpenMode.ForWrite)).Erase();
+                }
                 transaction.Commit();
+              }
+            }
+            catch (Exception exception)
+            {
+                editor.WriteMessage("\n落图事务失败，未替换原视图：" + exception.Message);
+                return;
             }
 
-            editor.WriteMessage("\n落图完成：" + (view.Title ?? view.Id) + "（1:" + view.Scale + "）");
+            editor.WriteMessage("\n" + (replacing == null ? "落图完成：" : "视图更新完成：")
+                + (view.Title ?? view.Id) + "（1:" + view.Scale + "）");
             foreach (var pair in counts.OrderByDescending(x => x.Value))
                 editor.WriteMessage("\n  " + pair.Key + "：" + pair.Value + " 个实体");
             if (view.Warnings != null && view.Warnings.Count > 0)
@@ -209,6 +297,98 @@ namespace BatchPdfPublisher.Services
                     // 清标记失败不影响已经落好的图
                 }
             }
+        }
+
+        private sealed class PlacedView
+        {
+            public string SourceKey;
+            public string Id;
+            public Point3d Anchor;
+            public int EntityCount;
+        }
+
+        private static string ViewSourceKey(string path, string viewId)
+        {
+            // A path scopes identical view IDs from different models. The digest fits
+            // XData's per-string limit and does not expose project paths in the DWG.
+            var source = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar).ToUpperInvariant()
+                + "\n" + viewId.Trim().ToUpperInvariant();
+            using (var sha = SHA256.Create())
+                return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(source))).Replace("-", "");
+        }
+
+        private static List<PlacedView> FindPlacements(Database database, string sourceKey)
+        {
+            var found = new Dictionary<string, PlacedView>(StringComparer.Ordinal);
+            using (var transaction = database.TransactionManager.StartTransaction())
+            {
+                var space = (BlockTableRecord)transaction.GetObject(
+                    SymbolUtilityServices.GetBlockModelSpaceId(database), OpenMode.ForRead);
+                foreach (ObjectId id in space)
+                {
+                    Entity entity;
+                    try { entity = transaction.GetObject(id, OpenMode.ForRead, false) as Entity; }
+                    catch (Autodesk.AutoCAD.Runtime.Exception) { continue; }
+                    var tag = ReadPlacement(entity);
+                    if (tag == null || tag.SourceKey != sourceKey) continue;
+                    PlacedView placed;
+                    if (!found.TryGetValue(tag.Id, out placed))
+                    {
+                        placed = tag;
+                        found.Add(tag.Id, placed);
+                    }
+                    placed.EntityCount++;
+                }
+            }
+            return found.Values.OrderBy(p => p.Anchor.X).ThenBy(p => p.Anchor.Y).ToList();
+        }
+
+        private static PlacedView ReadPlacement(Entity entity)
+        {
+            if (entity == null || entity.IsErased) return null;
+            try
+            {
+                using (var data = entity.GetXDataForApplication(PlacementRegApp))
+                {
+                    if (data == null) return null;
+                    var values = data.AsArray();
+                    if (values.Length != 6 || values[0].Value as string != PlacementRegApp) return null;
+                    var sourceKey = values[1].Value as string;
+                    var id = values[2].Value as string;
+                    if (string.IsNullOrWhiteSpace(sourceKey) || string.IsNullOrWhiteSpace(id)) return null;
+                    return new PlacedView
+                    {
+                        SourceKey = sourceKey, Id = id,
+                        Anchor = new Point3d(Convert.ToDouble(values[3].Value), Convert.ToDouble(values[4].Value),
+                            Convert.ToDouble(values[5].Value))
+                    };
+                }
+            }
+            catch (Autodesk.AutoCAD.Runtime.Exception) { return null; }
+            catch (FormatException) { return null; }
+            catch (InvalidCastException) { return null; }
+        }
+
+        private static void EnsurePlacementRegApp(Database database, Transaction transaction)
+        {
+            var table = (RegAppTable)transaction.GetObject(database.RegAppTableId, OpenMode.ForRead);
+            if (table.Has(PlacementRegApp)) return;
+            table.UpgradeOpen();
+            var record = new RegAppTableRecord { Name = PlacementRegApp };
+            table.Add(record);
+            transaction.AddNewlyCreatedDBObject(record, true);
+        }
+
+        private static void TagPlacement(Entity entity, string sourceKey, string placementId, Point3d anchor)
+        {
+            using (var data = new ResultBuffer(
+                new TypedValue((int)DxfCode.ExtendedDataRegAppName, PlacementRegApp),
+                new TypedValue((int)DxfCode.ExtendedDataAsciiString, sourceKey),
+                new TypedValue((int)DxfCode.ExtendedDataAsciiString, placementId),
+                new TypedValue((int)DxfCode.ExtendedDataReal, anchor.X),
+                new TypedValue((int)DxfCode.ExtendedDataReal, anchor.Y),
+                new TypedValue((int)DxfCode.ExtendedDataReal, anchor.Z)))
+                entity.XData = data;
         }
 
         public static void ExportDrawing(Document document)
@@ -663,8 +843,9 @@ namespace BatchPdfPublisher.Services
         /// 找不到就返回 null —— 调用方照常使用图纸自带的图框。
         /// </summary>
         private static FrameDefinition InsertProjectFrame(Document document, Transaction transaction,
-            BlockTableRecord space, ViewDocument view, Point3d anchor)
+            BlockTableRecord space, ViewDocument view, Point3d anchor, out ObjectId insertedId)
         {
+            insertedId = ObjectId.Null;
             try
             {
                 var frames = new PublishPlanStore().LoadFrames()
@@ -705,6 +886,7 @@ namespace BatchPdfPublisher.Services
                 try { reference.LayerId = DraftingStandardService.EnsureFrameLayer(document.Database, transaction); } catch { }
                 space.AppendEntity(reference);
                 transaction.AddNewlyCreatedDBObject(reference, true);
+                insertedId = reference.ObjectId;
                 FillFrameAttributes(definition, transaction, reference, frame, view);
                 document.Editor.WriteMessage("\n已套用项目图框：“" + frame.DisplayName + "”（按纸张缩放到 "
                     + paperWidth.ToString("0") + "×" + paperHeight.ToString("0") + "，图纸自带图框已跳过）。");
@@ -712,6 +894,12 @@ namespace BatchPdfPublisher.Services
             }
             catch (Exception exception)
             {
+                if (!insertedId.IsNull)
+                {
+                    try { ((Entity)transaction.GetObject(insertedId, OpenMode.ForWrite)).Erase(); }
+                    catch { }
+                    insertedId = ObjectId.Null;
+                }
                 document.Editor.WriteMessage("\n套用项目图框失败（将使用图纸自带图框）：" + exception.Message);
                 return null;
             }
