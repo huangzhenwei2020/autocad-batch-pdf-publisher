@@ -2,6 +2,7 @@ using System.Globalization;
 using System.ComponentModel;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
@@ -109,9 +110,40 @@ internal sealed class ProbeWindow : Window
         Grid.SetRow(tree, 1);
         root.Children.Add(tree);
 
-        Grid.SetRow(_viewport, 1);
-        Grid.SetColumn(_viewport, 1);
-        root.Children.Add(_viewport);
+        var viewportHost = new Grid();
+        viewportHost.Children.Add(_viewport);
+        var viewportInput = new Border { Background = Brushes.Transparent };
+        viewportInput.PointerPressed += (_, e) =>
+        {
+            var buttons = e.GetCurrentPoint(viewportInput).Properties;
+            var selecting = buttons.IsLeftButtonPressed;
+            var panning = buttons.IsMiddleButtonPressed || buttons.IsRightButtonPressed;
+            if (!selecting && !panning) return;
+            _viewport.BeginInteraction(e.GetPosition(_viewport), selecting, panning);
+            e.Pointer.Capture(viewportInput);
+            e.Handled = true;
+        };
+        viewportInput.PointerMoved += (_, e) =>
+        {
+            var buttons = e.GetCurrentPoint(viewportInput).Properties;
+            _viewport.MoveInteraction(e.GetPosition(_viewport), buttons.IsLeftButtonPressed,
+                buttons.IsMiddleButtonPressed || buttons.IsRightButtonPressed);
+        };
+        viewportInput.PointerReleased += (_, e) =>
+        {
+            _viewport.EndInteraction(e.GetPosition(_viewport));
+            if (e.Pointer.Captured == viewportInput) e.Pointer.Capture(null);
+            e.Handled = true;
+        };
+        viewportInput.PointerWheelChanged += (_, e) =>
+        {
+            _viewport.Zoom(e.Delta.Y);
+            e.Handled = true;
+        };
+        viewportHost.Children.Add(viewportInput);
+        Grid.SetRow(viewportHost, 1);
+        Grid.SetColumn(viewportHost, 1);
+        root.Children.Add(viewportHost);
 
         var propertyScroll = new ScrollViewer { Content = _properties };
         Grid.SetRow(propertyScroll, 1);

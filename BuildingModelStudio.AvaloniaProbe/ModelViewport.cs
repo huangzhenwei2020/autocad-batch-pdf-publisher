@@ -297,27 +297,20 @@ internal sealed class ModelViewport : OpenGlControlBase
         return true;
     }
 
-    protected override void OnPointerPressed(PointerPressedEventArgs e)
+    public void BeginInteraction(Point point, bool selecting, bool panning)
     {
-        base.OnPointerPressed(e);
-        var properties = e.GetCurrentPoint(this).Properties;
-        _panning = properties.IsMiddleButtonPressed || properties.IsRightButtonPressed;
-        _selecting = properties.IsLeftButtonPressed && !_panning;
+        _panning = panning;
+        _selecting = selecting && !panning;
         if (!_panning && !_selecting) return;
-        _dragStart = e.GetPosition(this);
+        _dragStart = point;
         _pressStart = _dragStart;
         _dragged = false;
-        e.Pointer.Capture(this);
     }
 
-    protected override void OnPointerMoved(PointerEventArgs e)
+    public void MoveInteraction(Point now, bool leftPressed, bool middleOrRightPressed)
     {
-        base.OnPointerMoved(e);
         if (_dragStart is not { } previous) return;
-        var properties = e.GetCurrentPoint(this).Properties;
-        if (_panning ? !properties.IsMiddleButtonPressed && !properties.IsRightButtonPressed
-            : !properties.IsLeftButtonPressed) return;
-        var now = e.GetPosition(this);
+        if (_panning ? !middleOrRightPressed : !leftPressed) return;
         if (_pressStart is { } start && (Math.Abs(now.X - start.X) > 4 || Math.Abs(now.Y - start.Y) > 4))
             _dragged = true;
         if (_panning)
@@ -338,23 +331,19 @@ internal sealed class ModelViewport : OpenGlControlBase
         RequestNextFrameRendering();
     }
 
-    protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
+    public void Zoom(double delta)
     {
-        base.OnPointerWheelChanged(e);
-        _distance = Math.Clamp(_distance * MathF.Pow(0.85f, (float)e.Delta.Y), 2f, 200f);
+        _distance = Math.Clamp(_distance * MathF.Pow(0.85f, (float)delta), 2f, 200f);
         RequestNextFrameRendering();
-        e.Handled = true;
     }
 
-    protected override void OnPointerReleased(PointerReleasedEventArgs e)
+    public void EndInteraction(Point point)
     {
         if (_selecting && !_dragged && _pressStart != null)
-            ElementPicked?.Invoke(Pick(e.GetPosition(this)));
+            ElementPicked?.Invoke(Pick(point));
         _dragStart = null;
         _pressStart = null;
         _panning = false;
         _selecting = false;
-        if (e.Pointer.Captured == this) e.Pointer.Capture(null);
-        base.OnPointerReleased(e);
     }
 }
