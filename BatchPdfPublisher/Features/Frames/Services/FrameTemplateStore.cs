@@ -72,21 +72,29 @@ namespace BatchPdfPublisher.Services
             catch (Exception exception) { error = exception.Message; return false; }
         }
 
-        public static void EnsureAvailable(Database database, FrameDefinition frame)
+        public static void EnsureAvailable(Document document, FrameDefinition frame)
         {
+            if (document == null) throw new ArgumentNullException("document");
+            var database = document.Database;
             if (database == null || frame == null || string.IsNullOrWhiteSpace(frame.BlockName)) throw new InvalidOperationException("请选择有效的登记图框。");
-            using (var transaction = database.TransactionManager.StartOpenCloseTransaction())
+            var mode = document.LockMode();
+            var alreadyLocked = mode == DocumentLockMode.Write || mode == DocumentLockMode.ExclusiveWrite
+                || mode == DocumentLockMode.ProtectedAutoWrite || mode == DocumentLockMode.AutoWrite;
+            using (var writeLock = alreadyLocked ? null : document.LockDocument())
             {
-                var blocks = (BlockTable)transaction.GetObject(database.BlockTableId, OpenMode.ForRead);
-                if (blocks.Has(frame.BlockName)) return;
-            }
-            var path = UserDataPaths.ResolveFromRoot(frame.TemplateRelativePath);
-            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
-                throw new InvalidOperationException("当前图纸缺少图框块“" + frame.BlockName + "”，而该旧登记尚无便携图框模板。请在含该图框的图纸中重新登记一次；以后复制整个插件文件夹即可在其他电脑自动使用。");
-            using (var source = new Database(false, true))
-            {
-                source.ReadDwgFile(path, FileOpenMode.OpenForReadAndAllShare, true, string.Empty);
-                database.Insert(frame.BlockName, source, false);
+                using (var transaction = database.TransactionManager.StartOpenCloseTransaction())
+                {
+                    var blocks = (BlockTable)transaction.GetObject(database.BlockTableId, OpenMode.ForRead);
+                    if (blocks.Has(frame.BlockName)) return;
+                }
+                var path = UserDataPaths.ResolveFromRoot(frame.TemplateRelativePath);
+                if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                    throw new InvalidOperationException("当前图纸缺少图框块“" + frame.BlockName + "”，而该旧登记尚无便携图框模板。请在含该图框的图纸中重新登记一次；以后复制整个插件文件夹即可在其他电脑自动使用。");
+                using (var source = new Database(false, true))
+                {
+                    source.ReadDwgFile(path, FileOpenMode.OpenForReadAndAllShare, true, string.Empty);
+                    database.Insert(frame.BlockName, source, false);
+                }
             }
         }
     }

@@ -339,7 +339,7 @@ namespace BatchPdfPublisher.Services
             }
 
             // 有图框：指定第一张图框左下角插入点，门窗按图框纸张分页排版并插入图框块。
-            FrameTemplateStore.EnsureAvailable(document.Database, frame);
+            FrameTemplateStore.EnsureAvailable(document, frame);
             var framePoint = document.Editor.GetPoint("\n指定第一张门窗立面图框左下角插入点: ");
             if (framePoint.Status != PromptStatus.OK) return 0;
             var pagedTiming = System.Diagnostics.Stopwatch.StartNew();
