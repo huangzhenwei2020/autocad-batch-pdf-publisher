@@ -65,8 +65,15 @@ namespace BatchPdfPublisher.Services
                 var space = (BlockTableRecord)transaction.GetObject(
                     SymbolUtilityServices.GetBlockModelSpaceId(document.Database), OpenMode.ForWrite);
 
+                // 图纸（Kind=Sheet）：先看看项目里有没有同纸张的登记图框，有就套用它，
+                // 并跳过图纸自带的图框与标题栏（那一层叫 WL-模型-图纸框），避免双层图框。
+                var skipLayers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var frame = view.Kind == ViewKind.Sheet ? InsertProjectFrame(document, transaction, space, view, anchor) : null;
+                if (frame != null) skipLayers.Add(ViewLayers.SheetFrame);
+
                 foreach (var line in view.Lines ?? new List<ViewLine>())
                 {
+                    if (!string.IsNullOrWhiteSpace(line.Layer) && skipLayers.Contains(line.Layer)) continue;
                     var entity = new Line(
                         new Point3d(anchor.X + line.X1, anchor.Y + line.Y1, 0d),
                         new Point3d(anchor.X + line.X2, anchor.Y + line.Y2, 0d));
@@ -563,6 +570,161 @@ namespace BatchPdfPublisher.Services
                 table.Add(record);
                 transaction.AddNewlyCreatedDBObject(record, true);
             }
+        }
+
+        /// <summary>
+        /// 图纸落图时套用项目已登记的图框模板：
+        /// 按图纸的纸张规格（<see cref="ViewDocument.PaperName"/>，或用 <see cref="ViewDocument.FrameTemplate"/> 指定块名）
+        /// 在项目图框里找一条匹配的，把它插到插入点（按纸张缩放到 1:1 纸面），并回填图名/图号/比例属性。
+        /// 找不到就返回 null —— 调用方照常使用图纸自带的图框。
+        /// </summary>
+        private static FrameDefinition InsertProjectFrame(Document document, Transaction transaction,
+            BlockTableRecord space, ViewDocument view, Point3d anchor)
+        {
+            try
+            {
+                var frames = new PublishPlanStore().LoadFrames()
+                    .Where(f => f != null && !string.IsNullOrWhiteSpace(f.BlockName)).ToList();
+                if (frames.Count == 0)
+                {
+                    document.Editor.WriteMessage("\n（项目里还没有登记图框：本次用图纸自带的图框；"
+                        + "在「图框登记」里登记 " + (view.PaperName ?? "同规格") + " 图框后会自动套用。）");
+                    return null;
+                }
+                var frame = PickFrame(frames, view);
+                if (frame == null)
+                {
+                    document.Editor.WriteMessage("\n（项目里没有 " + (view.PaperName ?? "同规格")
+                        + " 的登记图框：本次用图纸自带的图框。）");
+                    return null;
+                }
+                FrameTemplateStore.EnsureAvailable(document.Database, frame);
+                var blockTable = (BlockTable)transaction.GetObject(document.Database.BlockTableId, OpenMode.ForRead);
+                if (!blockTable.Has(frame.BlockName))
+                {
+                    document.Editor.WriteMessage("\n（图框块“" + frame.BlockName + "”不在当前图纸里：本次用图纸自带的图框。）");
+                    return null;
+                }
+                var definitionId = blockTable[frame.BlockName];
+                var definition = (BlockTableRecord)transaction.GetObject(definitionId, OpenMode.ForRead);
+                var bounds = DefinitionBounds(definition, transaction);
+                if (bounds == null) return null;
+
+                var paperWidth = view.PaperWidth > 1d ? view.PaperWidth : 420d;
+                var paperHeight = view.PaperHeight > 1d ? view.PaperHeight : 297d;
+                var factor = Math.Min(paperWidth / bounds.Width, paperHeight / bounds.Height);
+                if (!(factor > 0d) || double.IsInfinity(factor)) return null;
+
+                var position = new Point3d(anchor.X - bounds.MinX * factor, anchor.Y - bounds.MinY * factor, anchor.Z);
+                var reference = new BlockReference(position, definitionId) { ScaleFactors = new Scale3d(factor) };
+                // 图框放到制图标准的图框图层上（与门窗立面、大样插入保持一致）
+                try { reference.LayerId = DraftingStandardService.EnsureFrameLayer(document.Database, transaction); } catch { }
+                space.AppendEntity(reference);
+                transaction.AddNewlyCreatedDBObject(reference, true);
+                FillFrameAttributes(definition, transaction, reference, frame, view);
+                document.Editor.WriteMessage("\n已套用项目图框：“" + frame.DisplayName + "”（按纸张缩放到 "
+                    + paperWidth.ToString("0") + "×" + paperHeight.ToString("0") + "，图纸自带图框已跳过）。");
+                return frame;
+            }
+            catch (Exception exception)
+            {
+                document.Editor.WriteMessage("\n套用项目图框失败（将使用图纸自带图框）：" + exception.Message);
+                return null;
+            }
+        }
+
+        /// <summary>按纸张规格与横竖方向挑一条项目图框（<see cref="ViewDocument.FrameTemplate"/> 指定了块名就优先用它）。</summary>
+        private static FrameDefinition PickFrame(List<FrameDefinition> frames, ViewDocument view)
+        {
+            if (!string.IsNullOrWhiteSpace(view.FrameTemplate))
+            {
+                var named = frames.FirstOrDefault(f => string.Equals(f.BlockName, view.FrameTemplate, StringComparison.OrdinalIgnoreCase));
+                if (named != null) return named;
+            }
+            var wanted = (view.PaperName ?? string.Empty).Trim();
+            if (wanted.Length == 0) return frames.FirstOrDefault();
+            var landscape = view.PaperWidth >= view.PaperHeight;
+            var byPaper = frames.Where(f => string.Equals((f.PaperSize ?? string.Empty).Trim(), wanted, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (byPaper.Count == 0) return null;
+            var byOrientation = byPaper.Where(f => SameOrientation(f.PaperOrientation, landscape)).ToList();
+            return (byOrientation.Count > 0 ? byOrientation : byPaper).First();
+        }
+
+        private static bool SameOrientation(string orientation, bool landscape)
+        {
+            var text = (orientation ?? string.Empty).Trim();
+            if (text.Length == 0) return true;                       // 没登记方向的先用着
+            var isLandscape = text.IndexOf("横", StringComparison.Ordinal) >= 0;
+            return isLandscape == landscape;
+        }
+
+        private static void FillFrameAttributes(BlockTableRecord definition, Transaction transaction,
+            BlockReference reference, FrameDefinition frame, ViewDocument view)
+        {
+            foreach (ObjectId id in definition)
+            {
+                var attributeDefinition = transaction.GetObject(id, OpenMode.ForRead, false) as AttributeDefinition;
+                if (attributeDefinition == null || attributeDefinition.Constant) continue;
+                var attribute = new AttributeReference();
+                attribute.SetAttributeFromBlock(attributeDefinition, reference.BlockTransform);
+                var tag = (attributeDefinition.Tag ?? string.Empty).Trim();
+                var value = attributeDefinition.TextString;
+                if (TagMatches(tag, frame.PrintScaleAttributeTag, "比例")) value = "1:1";
+                else if (TagMatches(tag, frame.SheetNameAttributeTag, "图纸名称", "图名")) value = view.Title ?? string.Empty;
+                else if (TagMatches(tag, frame.SheetNumberAttributeTag, "图号")) value = SheetNumberOf(view);
+                else if (TagMatches(tag, frame.BuildingAttributeTag, "子项目名称") && !string.IsNullOrWhiteSpace(frame.DefaultBuilding))
+                    value = frame.DefaultBuilding;
+                attribute.TextString = string.IsNullOrWhiteSpace(value) || value.StartsWith("<", StringComparison.Ordinal) ? tag : value;
+                reference.AttributeCollection.AppendAttribute(attribute);
+                transaction.AddNewlyCreatedDBObject(attribute, true);
+            }
+        }
+
+        /// <summary>从图纸标题里取图号（标题形如"建施-01　一层 平面图　A3 横…"）。</summary>
+        private static string SheetNumberOf(ViewDocument view)
+        {
+            var title = view.Title ?? string.Empty;
+            var parts = title.Split(new[] { '　', ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            return parts.Length > 0 && parts[0].IndexOf("建施", StringComparison.Ordinal) >= 0 ? parts[0] : (view.Id ?? "SHEET");
+        }
+
+        private static bool TagMatches(string tag, string configured, params string[] fallbacks)
+        {
+            var value = (tag ?? string.Empty).Trim();
+            if (!string.IsNullOrWhiteSpace(configured) && string.Equals(value, configured.Trim(), StringComparison.OrdinalIgnoreCase)) return true;
+            foreach (var fallback in fallbacks)
+                if (!string.IsNullOrWhiteSpace(fallback) && value.IndexOf(fallback, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            return false;
+        }
+
+        private sealed class DefinitionBoundsInfo
+        {
+            public double MinX, MinY, Width, Height;
+        }
+
+        private static DefinitionBoundsInfo DefinitionBounds(BlockTableRecord definition, Transaction transaction)
+        {
+            var first = true;
+            var extents = new Extents3d();
+            foreach (ObjectId id in definition)
+            {
+                var entity = transaction.GetObject(id, OpenMode.ForRead, false) as Entity;
+                if (entity == null) continue;
+                try
+                {
+                    if (first) { extents = entity.GeometricExtents; first = false; }
+                    else extents.AddExtents(entity.GeometricExtents);
+                }
+                catch { }
+            }
+            if (first) return null;
+            var width = Math.Abs(extents.MaxPoint.X - extents.MinPoint.X);
+            var height = Math.Abs(extents.MaxPoint.Y - extents.MinPoint.Y);
+            if (width < 1e-6d || height < 1e-6d) return null;
+            return new DefinitionBoundsInfo
+            {
+                MinX = extents.MinPoint.X, MinY = extents.MinPoint.Y, Width = width, Height = height
+            };
         }
 
         /// <summary>

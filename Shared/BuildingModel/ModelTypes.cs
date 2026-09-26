@@ -295,6 +295,15 @@ namespace BatchPdfPublisher.BuildingModel
         public string Title { get; set; }
         public int Scale { get; set; } = 100;
         public ViewKind Kind { get; set; }
+        /// <summary>
+        /// 图纸（Kind = Sheet）才有：纸张规格名与纸面尺寸（mm）。
+        /// 落图时插件按它去项目已登记图框里找匹配的图框模板；找不到就用图纸自带的图框。
+        /// </summary>
+        public string PaperName { get; set; }
+        public double PaperWidth { get; set; }
+        public double PaperHeight { get; set; }
+        /// <summary>指定要用哪张图框模板（登记时的块名）；空 = 按纸张自动匹配。</summary>
+        public string FrameTemplate { get; set; }
         /// <summary>视图平面原点对应的模型坐标（插件用它在 DWG 里定位）。</summary>
         public double OriginX { get; set; }
         public double OriginY { get; set; }
@@ -525,6 +534,8 @@ namespace BatchPdfPublisher.BuildingModel
         public const string Axis = "WL-模型-轴线";
         /// <summary>房间轮廓、房间名与面积。</summary>
         public const string Room = "WL-模型-房间";
+        /// <summary>图纸自带的图框与标题栏（落图时若套用了项目图框模板，这一层会被跳过）。</summary>
+        public const string SheetFrame = "WL-模型-图纸框";
 
         public sealed class Style
         {
@@ -548,7 +559,8 @@ namespace BatchPdfPublisher.BuildingModel
             new Style { Name = Dimension, Color = 7, LineType = "Continuous", LineWeight = 13, Description = "尺寸标注（落图时建成 CAD 标注）" },
             new Style { Name = Schedule, Color = 7, LineType = "Continuous", LineWeight = 18, Description = "门窗表线框与文字" },
             new Style { Name = Axis, Color = 7, LineType = "CENTER", LineWeight = 13, Description = "轴线（点划线）与轴号" },
-            new Style { Name = Room, Color = 7, LineType = "Continuous", LineWeight = 13, Description = "房间轮廓、名称与面积" }
+            new Style { Name = Room, Color = 7, LineType = "Continuous", LineWeight = 13, Description = "房间轮廓、名称与面积" },
+            new Style { Name = SheetFrame, Color = 7, LineType = "Continuous", LineWeight = 35, Description = "图纸自带图框与标题栏（套用项目图框时跳过）" }
         };
 
         public static Style Find(string name)

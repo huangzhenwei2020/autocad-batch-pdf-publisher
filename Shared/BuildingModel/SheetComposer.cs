@@ -16,6 +16,8 @@ namespace BatchPdfPublisher.BuildingModel
         public string Paper { get; set; } = "A3";
         /// <summary>横放（true，默认）或竖放。</summary>
         public bool Landscape { get; set; } = true;
+        /// <summary>指定要用哪张图框模板（登记时的块名）；空 = 落图时按纸张自动匹配。</summary>
+        public string FrameTemplate { get; set; }
         /// <summary>排在这张图上的视图 id（views/*.json 的 id，按顺序排入）。</summary>
         public List<string> ViewIds { get; set; } = new List<string>();
     }
@@ -91,7 +93,11 @@ namespace BatchPdfPublisher.BuildingModel
                 Id = string.IsNullOrWhiteSpace(sheet.Id) ? "sheet" : sheet.Id,
                 Title = BuildTitle(sheet, paperWidth, paperHeight),
                 Kind = ViewKind.Sheet,
-                Scale = 1                                   // 纸面毫米，1:1 出图
+                Scale = 1,                                  // 纸面毫米，1:1 出图
+                PaperName = FindPaper(sheet.Paper).Name,
+                PaperWidth = paperWidth,
+                PaperHeight = paperHeight,
+                FrameTemplate = sheet.FrameTemplate
             };
 
             AddBorder(document, paperWidth, paperHeight);
@@ -138,9 +144,10 @@ namespace BatchPdfPublisher.BuildingModel
 
         private static void AddBorder(ViewDocument document, double width, double height)
         {
-            // 外框（纸边）与图框（留边：左 25 装订、其余 5）
-            AddRect(document, ViewLayers.Title, 0d, 0d, width, height);
-            AddRect(document, ViewLayers.Title, BindingMargin, OtherMargin, width - OtherMargin, height - OtherMargin);
+            // 外框（纸边）与图框（留边：左 25 装订、其余 5）——放在"图纸框"图层上：
+            // 落图时如果套用了项目自己的图框模板，插件会跳过这一层，不会出现双层图框。
+            AddRect(document, ViewLayers.SheetFrame, 0d, 0d, width, height);
+            AddRect(document, ViewLayers.SheetFrame, BindingMargin, OtherMargin, width - OtherMargin, height - OtherMargin);
         }
 
         private static void AddTitleBlock(ViewDocument document, SheetDefinitionModel sheet, double width, double height)
@@ -149,29 +156,29 @@ namespace BatchPdfPublisher.BuildingModel
             var bottom = OtherMargin;
             var left = right - TitleBlockWidth;
             var top = bottom + TitleBlockHeight;
-            AddRect(document, ViewLayers.Title, left, bottom, right, top);
+            AddRect(document, ViewLayers.SheetFrame, left, bottom, right, top);
 
             // 标题栏内两道横线，把"图名 / 图号·比例·日期"分开
-            AddLine(document, ViewLayers.Title, left, bottom + 22d, right, bottom + 22d);
-            AddLine(document, ViewLayers.Title, left + 110d, bottom, left + 110d, bottom + 22d);
+            AddLine(document, ViewLayers.SheetFrame, left, bottom + 22d, right, bottom + 22d);
+            AddLine(document, ViewLayers.SheetFrame, left + 110d, bottom, left + 110d, bottom + 22d);
 
             var number = string.IsNullOrWhiteSpace(sheet.Number) ? "建施-XX" : sheet.Number;
             var title = string.IsNullOrWhiteSpace(sheet.Title) ? "图纸" : sheet.Title;
             document.Texts.Add(new ViewText
             {
-                Layer = ViewLayers.Title, Text = title, X = left + 4d, Y = bottom + 26d, Height = 7d
+                Layer = ViewLayers.SheetFrame, Text = title, X = left + 4d, Y = bottom + 26d, Height = 7d
             });
             document.Texts.Add(new ViewText
             {
-                Layer = ViewLayers.Title, Text = "图号 " + number, X = left + 4d, Y = bottom + 6d, Height = 4.5d
+                Layer = ViewLayers.SheetFrame, Text = "图号 " + number, X = left + 4d, Y = bottom + 6d, Height = 4.5d
             });
             document.Texts.Add(new ViewText
             {
-                Layer = ViewLayers.Title, Text = "比例 见图", X = left + 114d, Y = bottom + 6d, Height = 4.5d
+                Layer = ViewLayers.SheetFrame, Text = "比例 见图", X = left + 114d, Y = bottom + 6d, Height = 4.5d
             });
             document.Texts.Add(new ViewText
             {
-                Layer = ViewLayers.Title, Text = "万落建筑工具　" + DateTime.Now.ToString("yyyy-MM-dd"),
+                Layer = ViewLayers.SheetFrame, Text = "万落建筑工具　" + DateTime.Now.ToString("yyyy-MM-dd"),
                 X = left + 114d, Y = bottom + 26d, Height = 4d
             });
         }

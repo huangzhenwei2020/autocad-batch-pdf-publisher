@@ -64,6 +64,11 @@ internal static class OpeningElevationTests
         var sheet = SheetComposer.Compose(views, one);
 
         Assert(sheet.Kind == ViewKind.Sheet && sheet.Scale == 1, "图纸应是 Kind=Sheet、比例 1（图纸毫米）");
+        Assert(sheet.PaperName == "A3" && Math.Abs(sheet.PaperWidth - 420d) < 0.01d && Math.Abs(sheet.PaperHeight - 297d) < 0.01d,
+            "图纸应记录纸张规格（落图时按它匹配项目图框）：实际 " + sheet.PaperName + " " + sheet.PaperWidth + "×" + sheet.PaperHeight);
+        Assert(sheet.Lines.Any(l => l.Layer == ViewLayers.SheetFrame), "自带图框应画在 WL-模型-图纸框 图层上（套用项目图框时好跳过）");
+        Assert(sheet.Texts.Where(t => t.Text == "一层平面图" || (t.Text ?? "").StartsWith("图号 ", StringComparison.Ordinal))
+            .All(t => t.Layer == ViewLayers.SheetFrame), "标题栏文字也应在 WL-模型-图纸框 图层上");
         Assert(sheet.Title.IndexOf("建施-99", StringComparison.Ordinal) >= 0
             && sheet.Title.IndexOf("A3", StringComparison.Ordinal) >= 0, "图纸标题应含图号与纸张：实际 " + sheet.Title);
         Assert(sheet.Texts.Any(t => t.Text == "一层平面图" && Math.Abs(t.Height - 7d) < 0.01d), "标题栏缺少图名");
@@ -88,7 +93,8 @@ internal static class OpeningElevationTests
         Assert(axisLines.Count == 5, "图纸上应有 5 条轴线，实际 " + axisLines.Count);
         Assert(axisLines.Max(l => Math.Max(l.X1, l.X2)) - axisLines.Min(l => Math.Min(l.X1, l.X2)) > width,
             "轴线应比建筑范围更长");
-        var inside = sheet.Lines.Where(l => l.Layer != ViewLayers.Title);
+        // 视图内容（不含图框/标题栏那两层）都应落在图框内
+        var inside = sheet.Lines.Where(l => l.Layer != ViewLayers.Title && l.Layer != ViewLayers.SheetFrame);
         Assert(inside.All(l => Math.Min(l.X1, l.X2) >= 24.5d && Math.Max(l.X1, l.X2) <= 415.5d
             && Math.Min(l.Y1, l.Y2) >= 4.5d && Math.Max(l.Y1, l.Y2) <= 292.5d), "视图内容应排在图框内");
 
