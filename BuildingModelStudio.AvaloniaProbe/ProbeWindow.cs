@@ -31,6 +31,7 @@ internal sealed class ProbeWindow : Window
     private readonly Button _undo = new() { Content = "撤销" };
     private readonly Button _redo = new() { Content = "重做" };
     private readonly Button _publish = new() { Content = "生成 CAD 视图" };
+    private readonly Button _sendToCad = new() { Content = "推到 CAD" };
     private string? _selectedId;
     private string? _filePath;
     private string _savedJson;
@@ -45,9 +46,7 @@ internal sealed class ProbeWindow : Window
         Height = 800;
         MinWidth = 800;
         MinHeight = 520;
-        _filePath = Program.ModelPath;
-        _session = new BuildingModelEditSession(_filePath == null
-            ? SampleModelFactory.CreateTwoStoreyHouse() : BuildingModelJson.LoadModel(_filePath));
+        _session = new BuildingModelEditSession(SampleModelFactory.CreateTwoStoreyHouse());
         _savedJson = BuildingModelJson.ToJson(_session.Model);
         _viewport = new ModelViewport(BuildingVolumeBuilder.Build(_session.Model));
         _viewport.ElementPicked += SelectById;
@@ -87,8 +86,10 @@ internal sealed class ProbeWindow : Window
         toolbar.Children.Add(open);
         toolbar.Children.Add(save);
         toolbar.Children.Add(saveAs);
-        _publish.Click += async (_, _) => await PublishViewsAsync();
+        _publish.Click += async (_, _) => await PublishViewsAsync(false);
+        _sendToCad.Click += async (_, _) => await PublishViewsAsync(true);
         toolbar.Children.Add(_publish);
+        toolbar.Children.Add(_sendToCad);
         toolbar.Children.Add(resetView);
         Grid.SetColumnSpan(toolbar, 3);
         root.Children.Add(toolbar);
@@ -164,7 +165,12 @@ internal sealed class ProbeWindow : Window
         RefreshHistoryButtons();
         UpdateTitle();
         Closing += OnClosing;
-        ConfigureSmokeAndSnapshot();
+        if (Program.ModelPath == null) ConfigureSmokeAndSnapshot();
+        else Opened += async (_, _) =>
+        {
+            if (await LoadModelAsync(Program.ModelPath)) ConfigureSmokeAndSnapshot();
+            else if (Program.Smoke) { Program.SmokeFailed = true; Close(); }
+        };
     }
 
     private void UpdateTitle()
@@ -184,26 +190,39 @@ internal sealed class ProbeWindow : Window
         if (files.Count == 0) return;
         var path = files[0].TryGetLocalPath();
         if (path == null) { _status.Text = "当前只支持本机文件路径。"; return; }
+        await LoadModelAsync(path);
+    }
+
+    private async Task<bool> LoadModelAsync(string path)
+    {
+        var generation = ++_sceneGeneration;
+        _status.Text = "正在后台打开模型…";
         try
         {
             var loaded = await Task.Run(() =>
             {
                 var session = new BuildingModelEditSession(BuildingModelJson.LoadModel(path));
-                return (session, volume: BuildingVolumeBuilder.Build(session.Model));
+                return (session, scene: ModelViewport.PrepareScene(BuildingVolumeBuilder.Build(session.Model)));
             });
-            ++_sceneGeneration;
+            if (generation != _sceneGeneration) return false;
             _session = loaded.session;
             _filePath = path;
             _savedJson = BuildingModelJson.ToJson(_session.Model);
-            _viewport.SetVolume(loaded.volume);
+            _viewport.SetScene(loaded.scene);
             _viewport.ResetView();
             BuildElementList();
             SelectById(_items.FirstOrDefault()?.Id);
             RefreshHistoryButtons();
             UpdateTitle();
             _status.Text = "已打开 " + path;
+            return true;
         }
-        catch (Exception ex) { _status.Text = "打开失败：" + ex.Message; }
+        catch (Exception ex)
+        {
+            _status.Text = "打开失败：" + ex.Message;
+            if (Program.Smoke) Console.Error.WriteLine(_status.Text);
+            return false;
+        }
     }
 
     private async Task<bool> SaveModelAsync(bool saveAs)
@@ -235,7 +254,7 @@ internal sealed class ProbeWindow : Window
         catch (Exception ex) { _status.Text = "保存失败：" + ex.Message; return false; }
     }
 
-    private async Task PublishViewsAsync()
+    private async Task PublishViewsAsync(bool markForCad)
     {
         if (_filePath == null || !string.Equals(Path.GetFileName(_filePath), "model.json", StringComparison.OrdinalIgnoreCase))
         {
@@ -246,16 +265,27 @@ internal sealed class ProbeWindow : Window
         var path = _filePath;
         var model = _session.Model;
         _publish.IsEnabled = false;
+        _sendToCad.IsEnabled = false;
         _status.Text = "正在生成立面、剖面、平面与图纸视图…";
         try
         {
-            var count = await Task.Run(() => BuildingModelViewPublisher.Publish(path, model));
-            _status.Text = HasChanges
-                ? $"已生成 {count} 张视图，但生成期间模型又有修改，请再次生成。"
-                : $"已生成 {count} 张 CAD 视图 → {Path.Combine(Path.GetDirectoryName(path)!, "views")}";
+            if (markForCad)
+            {
+                var result = await Task.Run(() => BuildingModelViewPublisher.PublishToCad(path, model));
+                _status.Text = HasChanges
+                    ? "生成期间模型又有修改，请重新推到 CAD。"
+                    : $"已生成 {result.ViewCount} 张视图，待落图 {result.PendingCount} 张；回到 CAD 执行 LTTZ。";
+            }
+            else
+            {
+                var count = await Task.Run(() => BuildingModelViewPublisher.Publish(path, model));
+                _status.Text = HasChanges
+                    ? $"已生成 {count} 张视图，但生成期间模型又有修改，请再次生成。"
+                    : $"已生成 {count} 张 CAD 视图 → {Path.Combine(Path.GetDirectoryName(path)!, "views")}";
+            }
         }
         catch (Exception ex) { _status.Text = "生成视图失败：" + ex.Message; }
-        finally { _publish.IsEnabled = true; }
+        finally { _publish.IsEnabled = true; _sendToCad.IsEnabled = true; }
     }
 
     private async Task<bool> ConfirmSavedAsync()
@@ -299,20 +329,33 @@ internal sealed class ProbeWindow : Window
         var model = _session.Model;
         _elements.ItemsSource = null;
         _items.Clear();
+        var wallsByStorey = model.Walls.GroupBy(x => x.StoreyId).ToDictionary(x => x.Key, x => x.ToList());
+        var wallStoreys = model.Walls.ToDictionary(x => x.Id, x => x.StoreyId);
+        var openingsByStorey = model.Openings.Where(x => wallStoreys.ContainsKey(x.HostWallId))
+            .GroupBy(x => wallStoreys[x.HostWallId]).ToDictionary(x => x.Key, x => x.ToList());
+        var slabsByStorey = model.Slabs.GroupBy(x => x.StoreyId).ToDictionary(x => x.Key, x => x.ToList());
+        var columnsByStorey = model.Columns.GroupBy(x => x.StoreyId).ToDictionary(x => x.Key, x => x.ToList());
+        var stairsByStorey = model.Stairs.GroupBy(x => x.StoreyId).ToDictionary(x => x.Key, x => x.ToList());
+        var roofsByStorey = model.Roofs.GroupBy(x => x.StoreyId).ToDictionary(x => x.Key, x => x.ToList());
         foreach (var floor in model.Storeys)
         {
-            foreach (var wall in model.Walls.Where(x => x.StoreyId == floor.Id))
+            if (!wallsByStorey.TryGetValue(floor.Id, out var walls)) walls = new();
+            foreach (var wall in walls)
                 _items.Add(new ElementItem { Id = wall.Id, Label = $"{floor.Name} · 墙  {wall.Id}" });
-            foreach (var opening in model.Openings.Where(x =>
-                model.Walls.Any(w => w.Id == x.HostWallId && w.StoreyId == floor.Id)))
+            if (!openingsByStorey.TryGetValue(floor.Id, out var openings)) openings = new();
+            foreach (var opening in openings)
                 _items.Add(new ElementItem { Id = opening.Id, Label = $"{floor.Name} · {opening.Kind}  {opening.Id}" });
-            foreach (var slab in model.Slabs.Where(x => x.StoreyId == floor.Id))
+            if (!slabsByStorey.TryGetValue(floor.Id, out var slabs)) slabs = new();
+            foreach (var slab in slabs)
                 _items.Add(new ElementItem { Id = slab.Id, Label = $"{floor.Name} · 楼板  {slab.Id}" });
-            foreach (var column in model.Columns.Where(x => x.StoreyId == floor.Id))
+            if (!columnsByStorey.TryGetValue(floor.Id, out var columns)) columns = new();
+            foreach (var column in columns)
                 _items.Add(new ElementItem { Id = column.Id, Label = $"{floor.Name} · 柱  {column.Id}" });
-            foreach (var stair in model.Stairs.Where(x => x.StoreyId == floor.Id))
+            if (!stairsByStorey.TryGetValue(floor.Id, out var stairs)) stairs = new();
+            foreach (var stair in stairs)
                 _items.Add(new ElementItem { Id = stair.Id, Label = $"{floor.Name} · 楼梯  {stair.Id}" });
-            foreach (var roof in model.Roofs.Where(x => x.StoreyId == floor.Id))
+            if (!roofsByStorey.TryGetValue(floor.Id, out var roofs)) roofs = new();
+            foreach (var roof in roofs)
                 _items.Add(new ElementItem { Id = roof.Id, Label = $"{floor.Name} · 屋面  {roof.Id}" });
         }
         _elements.ItemsSource = _items;
@@ -416,9 +459,9 @@ internal sealed class ProbeWindow : Window
         _status.Text = message + " · 正在重建三维视图…";
         try
         {
-            var volume = await Task.Run(() => BuildingVolumeBuilder.Build(model));
+            var scene = await Task.Run(() => ModelViewport.PrepareScene(BuildingVolumeBuilder.Build(model)));
             if (generation != _sceneGeneration) return;
-            _viewport.SetVolume(volume);
+            _viewport.SetScene(scene);
             _status.Text = $"{message} · 修订 {_session.Revision}{(HasChanges ? " · 未保存" : "")}";
         }
         catch (Exception ex)
@@ -454,10 +497,11 @@ internal sealed class ProbeWindow : Window
             var hit = _viewport.FrameRendered
                 ? _viewport.PickAt(new Point(_viewport.Bounds.Width / 2, _viewport.Bounds.Height / 2)) : null;
             var success = _viewport.FrameRendered && hit != null;
-            Environment.ExitCode = success ? 0 : 1;
+            Program.SmokeFailed = !success;
             Console.WriteLine(success ? "AVALONIA_GPU_PICK_OK " + hit : "AVALONIA_GPU_OR_PICK_FAILED");
             Close();
         };
-        Opened += (_, _) => timer.Start();
+        if (IsVisible) timer.Start();
+        else Opened += (_, _) => timer.Start();
     }
 }

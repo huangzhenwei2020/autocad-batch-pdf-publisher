@@ -13,28 +13,52 @@ namespace BuildingModelStudio.AvaloniaProbe;
 internal sealed class ModelViewport : OpenGlControlBase
 {
     [StructLayout(LayoutKind.Sequential)]
-    private struct Vertex
+    internal struct Vertex
     {
         public Vector3 Position;
         public Vector3 Color;
         public float ElementIndex;
     }
 
-    private readonly struct PickTriangle
+    internal readonly struct PickTriangle
     {
         public readonly Vector3 A, B, C;
         public readonly string ElementId;
-        public PickTriangle(Vector3 a, Vector3 b, Vector3 c, string elementId)
-        { A = a; B = b; C = c; ElementId = elementId; }
+        public readonly int DrawIndex;
+        public PickTriangle(Vector3 a, Vector3 b, Vector3 c, string elementId, int drawIndex)
+        { A = a; B = b; C = c; ElementId = elementId; DrawIndex = drawIndex; }
     }
 
-    private sealed class MeshSnapshot
+    internal struct PickNode
+    {
+        public Vector3 Min, Max;
+        public int Start, Count, Left, Right;
+    }
+
+    internal sealed class MeshSnapshot
     {
         public readonly Vertex[] Vertices;
         public readonly PickTriangle[] Triangles;
+        public readonly PickNode[] PickNodes;
         public readonly Dictionary<string, float> ElementIndexes;
         public MeshSnapshot(Vertex[] vertices, PickTriangle[] triangles, Dictionary<string, float> elementIndexes)
-        { Vertices = vertices; Triangles = triangles; ElementIndexes = elementIndexes; }
+        {
+            Vertices = vertices;
+            Triangles = triangles;
+            ElementIndexes = elementIndexes;
+            PickNodes = BuildPickTree(triangles);
+        }
+    }
+
+    internal sealed class PreparedScene
+    {
+        internal readonly BuildingVolume Volume;
+        private readonly MeshSnapshot _mesh;
+        internal PreparedScene(BuildingVolume volume, MeshSnapshot mesh)
+        { Volume = volume; _mesh = mesh; }
+        internal int TriangleCount => _mesh.Triangles.Length;
+        internal int VertexCount => _mesh.Vertices.Length;
+        internal MeshSnapshot Snapshot => _mesh;
     }
 
     private volatile MeshSnapshot _snapshot;
@@ -60,16 +84,21 @@ internal sealed class ModelViewport : OpenGlControlBase
     public bool FrameRendered => _frameRendered;
     public event Action<string?>? ElementPicked;
 
-    public ModelViewport(BuildingVolume volume)
+    public ModelViewport(BuildingVolume volume) : this(PrepareScene(volume)) { }
+
+    public ModelViewport(PreparedScene scene)
     {
-        _volume = volume;
-        _snapshot = BuildSnapshot(volume);
+        _volume = scene.Volume;
+        _snapshot = scene.Snapshot;
     }
 
-    public void SetVolume(BuildingVolume volume)
+    public static PreparedScene PrepareScene(BuildingVolume volume)
+        => new PreparedScene(volume, BuildSnapshot(volume));
+
+    public void SetScene(PreparedScene scene)
     {
-        _volume = volume;
-        _snapshot = BuildSnapshot(volume);
+        _volume = scene.Volume;
+        _snapshot = scene.Snapshot;
         _selectedIndex = _selectedId != null && _snapshot.ElementIndexes.TryGetValue(_selectedId, out var index)
             ? index : 0f;
         RequestNextFrameRendering();
@@ -130,10 +159,66 @@ internal sealed class ModelViewport : OpenGlControlBase
                 var b = ToVertex(face.Points[i], center, scale, color, elementIndex);
                 var c = ToVertex(face.Points[i + 1], center, scale, color, elementIndex);
                 vertices.Add(a); vertices.Add(b); vertices.Add(c);
-                triangles.Add(new PickTriangle(a.Position, b.Position, c.Position, face.ElementId));
+                triangles.Add(new PickTriangle(a.Position, b.Position, c.Position, face.ElementId, triangles.Count));
             }
         }
         return new MeshSnapshot(vertices.ToArray(), triangles.ToArray(), elementIndexes);
+    }
+
+    private static PickNode[] BuildPickTree(PickTriangle[] triangles)
+    {
+        if (triangles.Length == 0) return Array.Empty<PickNode>();
+        var nodes = new List<PickNode>();
+        BuildNode(0, triangles.Length);
+        return nodes.ToArray();
+
+        int BuildNode(int start, int count)
+        {
+            var nodeIndex = nodes.Count;
+            nodes.Add(default);
+            var min = new Vector3(float.PositiveInfinity);
+            var max = new Vector3(float.NegativeInfinity);
+            for (var i = start; i < start + count; i++)
+            {
+                var t = triangles[i];
+                min = Vector3.Min(min, Vector3.Min(t.A, Vector3.Min(t.B, t.C)));
+                max = Vector3.Max(max, Vector3.Max(t.A, Vector3.Max(t.B, t.C)));
+            }
+            if (count <= 12)
+            {
+                nodes[nodeIndex] = new PickNode { Min = min, Max = max, Start = start, Count = count };
+                return nodeIndex;
+            }
+            var extent = max - min;
+            var axis = extent.X >= extent.Y && extent.X >= extent.Z ? 0
+                : extent.Y >= extent.Z ? 1 : 2;
+            var middle = axis == 0 ? (min.X + max.X) * 1.5f
+                : axis == 1 ? (min.Y + max.Y) * 1.5f : (min.Z + max.Z) * 1.5f;
+            var low = start;
+            var high = start + count - 1;
+            while (low <= high)
+            {
+                if (Centroid(triangles[low], axis) < middle) low++;
+                else
+                {
+                    (triangles[low], triangles[high]) = (triangles[high], triangles[low]);
+                    high--;
+                }
+            }
+            var leftCount = low - start;
+            if (leftCount == 0 || leftCount == count) leftCount = count / 2;
+            var left = BuildNode(start, leftCount);
+            var right = BuildNode(start + leftCount, count - leftCount);
+            nodes[nodeIndex] = new PickNode { Min = min, Max = max, Start = start, Left = left, Right = right };
+            return nodeIndex;
+        }
+    }
+
+    private static float Centroid(PickTriangle triangle, int axis)
+    {
+        return axis == 0 ? triangle.A.X + triangle.B.X + triangle.C.X
+            : axis == 1 ? triangle.A.Y + triangle.B.Y + triangle.C.Y
+            : triangle.A.Z + triangle.B.Z + triangle.C.Z;
     }
 
     private static Vertex ToVertex(Point3DModel point, Point3DModel center, float scale, Vector3 color,
@@ -260,27 +345,41 @@ internal sealed class ModelViewport : OpenGlControlBase
         var view = CameraView();
         var projection = Matrix4x4.CreatePerspectiveFieldOfView(0.8f,
             (float)(Bounds.Width / Bounds.Height), 0.1f, 100f);
-        var transform = model * view * projection;
+        var x = (float)(point.X / Bounds.Width * 2 - 1);
+        var y = (float)(1 - point.Y / Bounds.Height * 2);
+        return PickNormalized(_snapshot, model * view * projection, x, y);
+    }
+
+    private static string? PickNormalized(MeshSnapshot snapshot, Matrix4x4 transform, float x, float y)
+    {
+        if (snapshot.PickNodes.Length == 0 || !Matrix4x4.Invert(transform, out var inverse)
+            || !Unproject(x, y, 0f, inverse, out var origin)
+            || !Unproject(x, y, 1f, inverse, out var far)) return null;
+        var direction = Vector3.Normalize(far - origin);
+        var bestDistance = float.PositiveInfinity;
+        var bestDrawIndex = int.MaxValue;
         string? bestId = null;
-        var bestDepth = float.PositiveInfinity;
-        foreach (var triangle in _snapshot.Triangles)
+        var stack = new Stack<int>();
+        stack.Push(0);
+        while (stack.Count > 0)
         {
-            if (string.IsNullOrWhiteSpace(triangle.ElementId)) continue;
-            if (!Project(triangle.A, transform, out var a)
-                || !Project(triangle.B, transform, out var b)
-                || !Project(triangle.C, transform, out var c)) continue;
-            var px = (float)(point.X / Bounds.Width * 2 - 1);
-            var py = (float)(1 - point.Y / Bounds.Height * 2);
-            var denominator = (b.Y - c.Y) * (a.X - c.X) + (c.X - b.X) * (a.Y - c.Y);
-            if (Math.Abs(denominator) < 1e-9f) continue;
-            var wa = ((b.Y - c.Y) * (px - c.X) + (c.X - b.X) * (py - c.Y)) / denominator;
-            var wb = ((c.Y - a.Y) * (px - c.X) + (a.X - c.X) * (py - c.Y)) / denominator;
-            var wc = 1f - wa - wb;
-            if (wa < -1e-5f || wb < -1e-5f || wc < -1e-5f) continue;
-            var depth = wa * a.Z + wb * b.Z + wc * c.Z;
-            if (depth < bestDepth)
+            var node = snapshot.PickNodes[stack.Pop()];
+            if (!IntersectsBox(origin, direction, node.Min, node.Max, bestDistance + 1e-5f)) continue;
+            if (node.Count == 0)
             {
-                bestDepth = depth;
+                stack.Push(node.Left);
+                stack.Push(node.Right);
+                continue;
+            }
+            for (var i = node.Start; i < node.Start + node.Count; i++)
+            {
+                var triangle = snapshot.Triangles[i];
+                if (string.IsNullOrWhiteSpace(triangle.ElementId)) continue;
+                if (!IntersectsTriangle(origin, direction, triangle, out var distance)
+                    || distance > bestDistance + 1e-5f
+                    || (Math.Abs(distance - bestDistance) <= 1e-5f && triangle.DrawIndex >= bestDrawIndex)) continue;
+                bestDistance = distance;
+                bestDrawIndex = triangle.DrawIndex;
                 bestId = triangle.ElementId;
             }
         }
@@ -289,12 +388,92 @@ internal sealed class ModelViewport : OpenGlControlBase
 
     internal string? PickAt(Point point) => Pick(point);
 
+    internal static string? PickForBenchmark(PreparedScene scene, Matrix4x4 transform, float x, float y)
+        => PickNormalized(scene.Snapshot, transform, x, y);
+
+    internal static string? PickBruteRayForCheck(PreparedScene scene, Matrix4x4 transform, float x, float y)
+    {
+        if (!Matrix4x4.Invert(transform, out var inverse)
+            || !Unproject(x, y, 0f, inverse, out var origin)
+            || !Unproject(x, y, 1f, inverse, out var far)) return null;
+        var direction = Vector3.Normalize(far - origin);
+        var bestDistance = float.PositiveInfinity;
+        var bestDrawIndex = int.MaxValue;
+        string? bestId = null;
+        foreach (var triangle in scene.Snapshot.Triangles)
+        {
+            if (string.IsNullOrWhiteSpace(triangle.ElementId)
+                || !IntersectsTriangle(origin, direction, triangle, out var distance)
+                || distance > bestDistance + 1e-5f
+                || (Math.Abs(distance - bestDistance) <= 1e-5f && triangle.DrawIndex >= bestDrawIndex)) continue;
+            bestDistance = distance;
+            bestDrawIndex = triangle.DrawIndex;
+            bestId = triangle.ElementId;
+        }
+        return bestId;
+    }
+
     private static bool Project(Vector3 position, Matrix4x4 transform, out Vector3 normalized)
     {
         var clip = Vector4.Transform(new Vector4(position, 1f), transform);
         if (clip.W <= 1e-6f) { normalized = default; return false; }
         normalized = new Vector3(clip.X / clip.W, clip.Y / clip.W, clip.Z / clip.W);
         return true;
+    }
+
+    private static bool Unproject(float x, float y, float z, Matrix4x4 inverse, out Vector3 position)
+    {
+        var clip = Vector4.Transform(new Vector4(x, y, z, 1f), inverse);
+        if (Math.Abs(clip.W) < 1e-7f) { position = default; return false; }
+        position = new Vector3(clip.X / clip.W, clip.Y / clip.W, clip.Z / clip.W);
+        return true;
+    }
+
+    private static bool IntersectsBox(Vector3 origin, Vector3 direction, Vector3 min, Vector3 max, float limit)
+    {
+        var near = 0f;
+        var far = limit;
+        for (var axis = 0; axis < 3; axis++)
+        {
+            var o = axis == 0 ? origin.X : axis == 1 ? origin.Y : origin.Z;
+            var d = axis == 0 ? direction.X : axis == 1 ? direction.Y : direction.Z;
+            var lo = axis == 0 ? min.X : axis == 1 ? min.Y : min.Z;
+            var hi = axis == 0 ? max.X : axis == 1 ? max.Y : max.Z;
+            lo -= 1e-4f;
+            hi += 1e-4f;
+            if (Math.Abs(d) < 1e-9f)
+            {
+                if (o < lo || o > hi) return false;
+                continue;
+            }
+            var a = (lo - o) / d;
+            var b = (hi - o) / d;
+            if (a > b) (a, b) = (b, a);
+            near = Math.Max(near, a);
+            far = Math.Min(far, b);
+            if (near > far) return false;
+        }
+        return true;
+    }
+
+    private static bool IntersectsTriangle(Vector3 origin, Vector3 direction, PickTriangle triangle,
+        out float distance)
+    {
+        distance = 0f;
+        var edge1 = triangle.B - triangle.A;
+        var edge2 = triangle.C - triangle.A;
+        var cross = Vector3.Cross(direction, edge2);
+        var determinant = Vector3.Dot(edge1, cross);
+        if (Math.Abs(determinant) < 1e-8f) return false;
+        var inverse = 1f / determinant;
+        var offset = origin - triangle.A;
+        var u = Vector3.Dot(offset, cross) * inverse;
+        if (u < -1e-5f || u > 1f + 1e-5f) return false;
+        var q = Vector3.Cross(offset, edge1);
+        var v = Vector3.Dot(direction, q) * inverse;
+        if (v < -1e-5f || u + v > 1f + 1e-5f) return false;
+        distance = Vector3.Dot(edge2, q) * inverse;
+        return distance > 1e-6f;
     }
 
     public void BeginInteraction(Point point, bool selecting, bool panning)

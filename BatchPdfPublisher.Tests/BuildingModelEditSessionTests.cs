@@ -96,36 +96,55 @@ internal static class BuildingModelEditSessionTests
             if (File.Exists(path + ".bak")) File.Delete(path + ".bak");
         }
         var outputFolder = Path.Combine(Path.GetTempPath(), "wanluo-views-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(outputFolder);
+        var modelFolder = Path.Combine(outputFolder, StudioLaunch.ModelFolderName, "样例");
+        Directory.CreateDirectory(modelFolder);
         try
         {
-            var modelFile = Path.Combine(outputFolder, "model.json");
+            var modelFile = Path.Combine(modelFolder, "model.json");
             BuildingModelJson.SaveModel(modelFile, session.Model);
+            var wrongLocationRejected = false;
+            try { BuildingModelViewPublisher.PublishToCad(Path.Combine(outputFolder, "model.json"), session.Model); }
+            catch (InvalidOperationException) { wrongLocationRejected = true; }
+            Assert(wrongLocationRejected, "不在项目建筑模型目录的文件仍被加入 CAD 待落图");
             var count = BuildingModelViewPublisher.Publish(modelFile, session.Model);
-            var viewsFolder = Path.Combine(outputFolder, StudioLaunch.ViewsFolderName);
+            var viewsFolder = Path.Combine(modelFolder, StudioLaunch.ViewsFolderName);
             Assert(count > 5 && Directory.GetFiles(viewsFolder, "*.json").Length == count,
                 "视图文件数量不正确");
-            Assert(StudioLaunch.ListViews(outputFolder).Count == count,
+            Assert(StudioLaunch.ListViews(modelFolder).Count == count,
                 "现有 CAD 取件流程无法识别新生成的视图");
             var south = BuildingModelJson.LoadView(Path.Combine(viewsFolder, "elev-south.json"));
             Assert(south.Lines.Max(x => Math.Max(x.X1, x.X2))
                 > originalSouth.Lines.Max(x => Math.Max(x.X1, x.X2)), "落盘视图未包含编辑后的墙长");
+            var pushed = BuildingModelViewPublisher.PublishToCad(modelFile, session.Model);
+            Assert(pushed.ViewCount == count && pushed.PendingCount > 0
+                && File.Exists(pushed.PendingFilePath), "推到 CAD 未生成待落图清单");
+            var listed = StudioLaunch.ListViews(modelFolder);
+            Assert(listed.Count(x => x.Pending) == pushed.PendingCount
+                && listed.Where(x => x.Pending).All(x => x.Kind == ViewKind.Sheet),
+                "CAD 清单没有优先标记图纸");
+            var first = listed.First(x => x.Pending);
+            StudioLaunch.RemovePending(modelFolder, first.Id);
+            Assert(StudioLaunch.ListViews(modelFolder).Count(x => x.Pending) == pushed.PendingCount - 1,
+                "CAD 落图后待办没有减少");
         }
         finally
         {
-            var viewsFolder = Path.Combine(outputFolder, StudioLaunch.ViewsFolderName);
+            var viewsFolder = Path.Combine(modelFolder, StudioLaunch.ViewsFolderName);
             if (Directory.Exists(viewsFolder))
             {
                 foreach (var file in Directory.GetFiles(viewsFolder)) File.Delete(file);
                 Directory.Delete(viewsFolder);
             }
-            foreach (var file in Directory.GetFiles(outputFolder)) File.Delete(file);
+            foreach (var file in Directory.GetFiles(modelFolder)) File.Delete(file);
+            Directory.Delete(modelFolder);
+            Directory.Delete(Path.Combine(outputFolder, StudioLaunch.ModelFolderName));
             Directory.Delete(outputFolder);
         }
         Console.WriteLine("PASS 跨平台墙窗编辑事务：校验失败不提交，撤销/重做恢复参数与构件 ID");
         Console.WriteLine("PASS 墙窗完整参数：墙长/厚/高与洞口定位/宽/高/窗台高原子修改，越界回滚、撤销生效");
         Console.WriteLine("PASS 模型文件：编辑后保存/重新打开保留参数与 ID，覆盖保存保留备份");
         Console.WriteLine("PASS CAD 视图再生：墙长修改传递到立面，剖面和图纸落盘可重新读取");
+        Console.WriteLine("PASS CAD 待落图：优先标记图纸，CAD 清单识别，落图后待办递减");
     }
 
     private static double Length(BuildingModelDocument model, string id)
