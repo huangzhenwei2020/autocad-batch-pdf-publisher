@@ -27,8 +27,12 @@ namespace Wanluo.BuildingModelStudio
         private bool _panning;
         private double _cursorX, _cursorY;
         private string _lastPaintError;
+        /// <summary>当前选中的模型构件 id（视图里的锚点按它找）——重算视图后仍然选中同一个构件。</summary>
+        private string _selectedElementId;
 
         public event Action<string> StatusChanged;
+        /// <summary>点选变化（参数是被点中的锚点，点空白处为 null）。</summary>
+        public event Action<ViewAnchor> AnchorSelected;
 
         public ViewPreviewCanvas()
         {
@@ -56,6 +60,68 @@ namespace Wanluo.BuildingModelStudio
                 Invalidate();
                 RaiseStatus();
             }
+        }
+
+        /// <summary>当前选中的锚点（按构件 id 在当前视图里找）；没有选中返回 null。</summary>
+        internal ViewAnchor SelectedAnchor
+        {
+            get
+            {
+                if (_view == null || string.IsNullOrEmpty(_selectedElementId)) return null;
+                foreach (var anchor in _view.Anchors ?? new List<ViewAnchor>())
+                    if (anchor != null && string.Equals(anchor.ElementId, _selectedElementId, StringComparison.OrdinalIgnoreCase))
+                        return anchor;
+                return null;
+            }
+        }
+
+        internal string SelectedElementId { get { return _selectedElementId; } }
+
+        /// <summary>自检用：直接选中某个构件（相当于点中了它）。</summary>
+        internal void SelectElement(string elementId)
+        {
+            _selectedElementId = elementId;
+            Invalidate();
+            RaiseStatus();
+        }
+
+        /// <summary>自检用：把一次点击送进画布。</summary>
+        internal void SimulateClick(Point screen)
+        {
+            SelectAt(screen);
+        }
+
+        /// <summary>自检用：视图坐标 → 屏幕坐标（用于"点某个洞口"）。</summary>
+        internal Point ModelToScreenForTest(double x, double y)
+        {
+            var point = ToScreen(x, y);
+            return new Point((int)Math.Round(point.X), (int)Math.Round(point.Y));
+        }
+
+        /// <summary>点选：命中锚点（门窗洞口）就选中，点空白处取消选中。</summary>
+        private void SelectAt(Point screen)
+        {
+            ViewAnchor found = null;
+            if (_view != null && ViewportUsable())
+            {
+                var tolerance = 10d / Math.Max(1e-9d, _scale);      // 10 像素的容差，不用点得很准
+                var x = (screen.X - _offsetX) / _scale;
+                var y = (_offsetY - screen.Y) / _scale;
+                foreach (var anchor in _view.Anchors ?? new List<ViewAnchor>())
+                {
+                    if (anchor == null) continue;
+                    if (x < Math.Min(anchor.X1, anchor.X2) - tolerance) continue;
+                    if (x > Math.Max(anchor.X1, anchor.X2) + tolerance) continue;
+                    if (y < Math.Min(anchor.Y1, anchor.Y2) - tolerance) continue;
+                    if (y > Math.Max(anchor.Y1, anchor.Y2) + tolerance) continue;
+                    found = anchor;
+                    break;
+                }
+            }
+            _selectedElementId = found == null ? null : found.ElementId;
+            Invalidate();
+            RaiseStatus();
+            AnchorSelected?.Invoke(found);
         }
 
         /// <summary>
@@ -113,9 +179,10 @@ namespace Wanluo.BuildingModelStudio
                 _offsetY = Height - 60d;
                 return;
             }
-            // 左上角要留给图例：把图缩在"减去图例"的那块框里，图例就不会压在立面上
+            // 左上角要留给图例（图例大约 300×180 像素）：把图缩在"减去图例"的那块框里，
+            // 图例就不会压在立面上，底部图名也不会被裁掉。
             var left = Math.Min(300d, Width * 0.35d);
-            var top = 16d;
+            var top = Math.Min(180d, Height * 0.28d);
             var boxWidth = Math.Max(50d, Width - left - 16d);
             var boxHeight = Math.Max(50d, Height - top - 16d);
 
@@ -130,7 +197,10 @@ namespace Wanluo.BuildingModelStudio
             _offsetY = top + (boxHeight - height * _scale) / 2d + maxY * _scale;
         }
 
-        /// <summary>视图几何的包围盒（忽略文字与图名，否则图名会把画面顶偏）。</summary>
+        /// <summary>
+        /// 视图的范围（线条 + 填充 + 文字）：缩放到这个范围。
+        /// 文字也要算进去 —— 标高在右边、图名在下面，不算进来就会被裁掉。
+        /// </summary>
         private static RectangleF? BoundsOf(ViewDocument view)
         {
             double minX = double.MaxValue, maxX = double.MinValue, minY = double.MaxValue, maxY = double.MinValue;
@@ -148,6 +218,15 @@ namespace Wanluo.BuildingModelStudio
                     if (point == null || !DrawGuard.Sane(point.X, point.Y)) continue;
                     Include(point.X, point.Y);
                 }
+            foreach (var text in view.Texts ?? new List<ViewText>())
+            {
+                if (text == null || string.IsNullOrEmpty(text.Text)) continue;
+                if (!DrawGuard.Sane(text.X, text.Y)) continue;
+                var height = text.Height > 1d ? text.Height : 250d;
+                var width = height * 0.62d * text.Text.Length;        // 与预览绘制同一套估算
+                Include(text.X, text.Y - height);                     // 文字左下角在 (X, Y)
+                Include(text.X + width, text.Y);
+            }
             if (!found) return null;
             return RectangleF.FromLTRB((float)minX, (float)minY, (float)maxX, (float)maxY);
 
@@ -172,7 +251,9 @@ namespace Wanluo.BuildingModelStudio
             {
                 _panning = true;
                 Cursor = Cursors.SizeAll;
+                return;
             }
+            if (e.Button == MouseButtons.Left) SelectAt(e.Location);
         }
 
         protected override void OnMouseMove(MouseEventArgs e)
@@ -232,6 +313,7 @@ namespace Wanluo.BuildingModelStudio
 
         private void RaiseStatus()
         {
+            var selected = SelectedAnchor;
             var text = _view == null
                 ? "立面预览：还没有视图"
                 : "光标 " + Math.Round(_cursorX) + ", " + Math.Round(_cursorY) + " mm"
@@ -239,7 +321,8 @@ namespace Wanluo.BuildingModelStudio
                     + "　线 " + (_view.Lines == null ? 0 : _view.Lines.Count)
                     + " / 文字 " + (_view.Texts == null ? 0 : _view.Texts.Count)
                     + " / 填充 " + (_view.Hatches == null ? 0 : _view.Hatches.Count)
-                    + "　1px≈" + Math.Round(1d / Math.Max(1e-9d, _scale), 1) + "mm";
+                    + "　1px≈" + Math.Round(1d / Math.Max(1e-9d, _scale), 1) + "mm"
+                    + (selected == null ? "　（点门窗可选中）" : "　已选中：" + selected.ElementId);
             StatusChanged?.Invoke(text);
         }
 
@@ -303,7 +386,24 @@ namespace Wanluo.BuildingModelStudio
             DrawHatches(g);
             DrawLines(g);
             DrawTexts(g);
+            DrawSelection(g);
             DrawLegend(g);
+        }
+
+        /// <summary>选中高亮：虚线框套住点中的那个洞口，配合右侧类型库就知道在改哪一樘。</summary>
+        private void DrawSelection(Graphics g)
+        {
+            var anchor = SelectedAnchor;
+            if (anchor == null) return;
+            var first = ToScreen(anchor.X1, anchor.Y1);
+            var second = ToScreen(anchor.X2, anchor.Y2);
+            var left = Math.Min(first.X, second.X);
+            var top = Math.Min(first.Y, second.Y);
+            var width = Math.Abs(second.X - first.X);
+            var height = Math.Abs(second.Y - first.Y);
+            if (width < 1f || height < 1f) return;
+            using (var pen = new Pen(Color.FromArgb(255, 210, 120), 1.8f) { DashStyle = DashStyle.Dash })
+                g.DrawRectangle(pen, left, top, width, height);
         }
 
         private void DrawHatches(Graphics g)
@@ -413,7 +513,9 @@ namespace Wanluo.BuildingModelStudio
                 using (var brush = new SolidBrush(ColorFor(text.Layer, style)))
                 {
                     var point = ToScreen(text.X, text.Y);
-                    g.DrawString(text.Text, font, brush, point.X, point.Y);
+                    // 视图格式里文字 (X, Y) 是"左下角"（插件落图用的 DBText 位置就是基线左端），
+                    // 所以这里把字符串画在 Y 的上方，预览与 CAD 才对得上。
+                    g.DrawString(text.Text, font, brush, point.X, point.Y - font.Height);
                 }
                 LastTextCount++;
             }

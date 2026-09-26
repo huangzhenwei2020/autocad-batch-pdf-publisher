@@ -247,10 +247,32 @@ namespace BatchPdfPublisher.BuildingModel
         public List<ViewLine> Lines { get; set; } = new List<ViewLine>();
         public List<ViewText> Texts { get; set; } = new List<ViewText>();
         public List<ViewHatch> Hatches { get; set; } = new List<ViewHatch>();
+        /// <summary>
+        /// 图上元素与模型构件的对应关系（视图平面里的矩形范围 + 模型里的构件 id）。
+        /// 用途：预览里点选门窗 → 知道是哪一樘；落图后要联动门窗表/改做法也有依据。
+        /// 只是"索引"，不影响画出来的几何，插件落图时忽略它。
+        /// </summary>
+        public List<ViewAnchor> Anchors { get; set; } = new List<ViewAnchor>();
         /// <summary>生成时用到的模型版本，便于判断是否需要重算。</summary>
         public string ModelRevision { get; set; }
         /// <summary>投影过程中的提示（例如斜墙按包围盒近似）。</summary>
         public List<string> Warnings { get; set; } = new List<string>();
+    }
+
+    /// <summary>
+    /// 视图里一个可点选元素的定位框：<see cref="ElementId"/> 指向模型里的构件（洞口/墙…），
+    /// 坐标是视图平面坐标（与线条同一套，落在 (U, Z) 上）。
+    /// </summary>
+    public sealed class ViewAnchor
+    {
+        /// <summary>元素种类：opening（门窗洞口）/ wall（墙）。</summary>
+        public string Kind { get; set; } = "opening";
+        /// <summary>模型里的构件 id。</summary>
+        public string ElementId { get; set; }
+        public double X1 { get; set; }
+        public double Y1 { get; set; }
+        public double X2 { get; set; }
+        public double Y2 { get; set; }
     }
 
     // ───────────────────────── "提取图纸"的中间格式 ─────────────────────────

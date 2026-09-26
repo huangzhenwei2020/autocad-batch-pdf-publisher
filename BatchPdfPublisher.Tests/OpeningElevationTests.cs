@@ -26,7 +26,50 @@ internal static class OpeningElevationTests
         HonoursCustomCellLayout();
         SimplifiesAtHundredthScale();
         FallsBackWhenParametersInvalid();
-        Console.WriteLine("PASS 立面门窗：分格与开启线 / 背立面镜像 / 遮挡裁剪 / 自定义分格 / 1:100-1:50 详简 / 参数兜底");
+        AnchorsAndLabels();
+        Console.WriteLine("PASS 立面门窗：分格与开启线 / 背立面镜像 / 遮挡裁剪 / 自定义分格 / 1:100-1:50 详简 / 参数兜底 / 可点选锚点与编号");
+    }
+
+    // ───────────────────────── 7. 可点选锚点与洞口编号 ─────────────────────────
+
+    /// <summary>
+    /// 视图里要有"这个矩形对应模型里哪一樘门窗"的锚点（预览点选、门窗表联动都靠它），
+    /// 还要把洞口编号写在图上（有窗台写下方、落地门写上方，字高按比例）。
+    /// </summary>
+    private static void AnchorsAndLabels()
+    {
+        var library = Library(Type("C1518", "双扇等分", "双向推拉"));
+        var view = Project(SingleWindowModel("C1518"), ElevationDirection.South, library);
+        var u = view.OriginX;
+        var z = view.OriginY;
+
+        Assert(view.Anchors.Count == 1, "南立面应有一个门窗锚点，实际 " + view.Anchors.Count);
+        var anchor = view.Anchors[0];
+        Assert(anchor.Kind == "opening" && anchor.ElementId == "o-1", "锚点应指向洞口 o-1，实际 " + anchor.Kind + "/" + anchor.ElementId);
+        Assert(Math.Abs(anchor.X1 - (750d - u)) < Tolerance && Math.Abs(anchor.X2 - (2250d - u)) < Tolerance
+            && Math.Abs(anchor.Y1 - (900d - z)) < Tolerance && Math.Abs(anchor.Y2 - (2700d - z)) < Tolerance,
+            "锚点矩形应与洞口一致：(750,900)-(2250,2700) + 视图原点，实际 ("
+            + (anchor.X1 + u) + "," + (anchor.Y1 + z) + ")-(" + (anchor.X2 + u) + "," + (anchor.Y2 + z) + ")");
+
+        var label = view.Texts.FirstOrDefault(t => t.Layer == ViewLayers.Opening && t.Text == "C1518");
+        Assert(label != null, "立面上应标出洞口编号 C1518");
+        Assert(Math.Abs(label.Height - 200d) < Tolerance, "1:100 的编号字高应为 200mm，实际 " + label.Height);
+        Assert(Math.Abs(label.Y - (580d - z)) < Tolerance, "有窗台的窗，编号应写在洞口下方（模型 y=580），实际 " + (label.Y + z));
+        var estimated = label.Height * 0.62d * "C1518".Length;
+        Assert(Math.Abs(label.X + estimated / 2d - (1500d - u)) < 1d, "编号应大致居中在洞口上（模型 x=1500）");
+
+        // 落地门（窗台 0）：洞口下方是墙脚/地面，编号改写在洞口上方（这樘门高 1800 → 上方即 1800 以上）
+        var door = SingleWindowModel("M0921");
+        door.Openings[0].Kind = "门";
+        door.Openings[0].Sill = 0d;
+        door.Openings[0].Height = 2100d;
+        var doorView = Project(door, ElevationDirection.South, null);
+        var doorLabel = doorView.Texts.FirstOrDefault(t => t.Layer == ViewLayers.Opening && t.Text == "M0921");
+        Assert(doorLabel != null, "落地门也要标编号");
+        var doorLabelY = doorLabel.Y + doorView.OriginY;
+        Assert(doorLabelY > 2100d && doorLabelY < 3000d, "落地门的编号应写在洞口上方（2100 以上、层高以内），实际 " + doorLabelY);
+        Console.WriteLine("   锚点与编号：洞口锚点 1 个（750,900)-(2250,2700)、编号 C1518 字高 200 写在窗下、门编号写在门上方（"
+            + Math.Round(doorLabelY) + "）");
     }
 
     // ───────────────────────── 1. 分格与开启线 ─────────────────────────

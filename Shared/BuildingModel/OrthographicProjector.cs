@@ -88,7 +88,7 @@ namespace BatchPdfPublisher.BuildingModel
             {
                 if (wall == null || !Include(includeAll, view.StoreyIds, wall.StoreyId)) continue;
                 AddWall(model, wall, frame, isSection, cutProj, view.ViewDepth, rects, cutRects, extraLines,
-                    openingDetails, openingLibrary, Math.Max(1, view.Scale) >= 100, document.Warnings);
+                    openingDetails, openingLibrary, Math.Max(1, view.Scale), document);
             }
             foreach (var column in model.Columns ?? new List<ColumnModel>())
             {
@@ -199,9 +199,11 @@ namespace BatchPdfPublisher.BuildingModel
 
         private static void AddWall(BuildingModelDocument model, WallModel wall, Frame frame, bool isSection,
             double cutProj, double viewDepth, List<Rect> rects, List<Rect> cutRects, List<ViewLine> extraLines,
-            List<OpeningDetail> openingDetails, OpeningTypeLibraryDocument openingLibrary, bool simplifiedDetail,
-            List<string> warnings)
+            List<OpeningDetail> openingDetails, OpeningTypeLibraryDocument openingLibrary, int scale,
+            ViewDocument document)
         {
+            var warnings = document.Warnings;
+            var simplifiedDetail = scale >= 100;      // 1:100 及更小按简化画法（见 §5.5 比例分级）
             var dx = wall.X2 - wall.X1;
             var dy = wall.Y2 - wall.Y1;
             var length = Math.Sqrt(dx * dx + dy * dy);
@@ -307,6 +309,13 @@ namespace BatchPdfPublisher.BuildingModel
                     Depth = body.HasValue ? body.Value.Depth + 100d : 0d,                // 画在墙前面
                     Layer = ViewLayers.Opening
                 });
+                // 可点选锚点 + 洞口编号：预览里点一下就认得出是哪一樘，落图后也是门窗表联动的依据
+                document.Anchors.Add(new ViewAnchor
+                {
+                    Kind = "opening", ElementId = opening.Id,
+                    X1 = ou0, Y1 = oz0, X2 = ou1, Y2 = oz1
+                });
+                AddOpeningLabel(document, opening, ou0, ou1, oz0, oz1, scale);
 
                 // 立面门窗的分格与开启线：按编号查类型库，查不到就只留洞口轮廓
                 var type = OpeningElevationAdapter.Resolve(openingLibrary, opening);
@@ -328,6 +337,29 @@ namespace BatchPdfPublisher.BuildingModel
         }
 
         // ───────────────────── 门窗分格与开启线（复用插件生成器） ─────────────────────
+
+        /// <summary>
+        /// 洞口编号（C1518 / M0921…）写在洞口旁边：有窗台的写在洞口下方，落地门写在洞口上方
+        ///（下方是墙脚/地面，写了压线）。字高按出图比例取（1:100 → 200mm ≈ 图上 2mm）。
+        /// </summary>
+        private static void AddOpeningLabel(ViewDocument document, OpeningModel opening,
+            double u0, double u1, double z0, double z1, int scale)
+        {
+            var code = (opening.Code ?? string.Empty).Trim();
+            if (code.Length == 0) return;
+            var height = Math.Max(150d, Math.Max(1, scale) * 2d);
+            var estimatedWidth = height * 0.62d * code.Length;          // 仅用于居中估算
+            var x = (u0 + u1) / 2d - estimatedWidth / 2d;
+            var y = opening.Sill >= 500d ? z0 - height * 1.6d : z1 + height * 0.6d;
+            document.Texts.Add(new ViewText
+            {
+                Layer = ViewLayers.Opening,
+                Text = code,
+                X = x,
+                Y = y,
+                Height = height
+            });
+        }
 
         /// <summary>洞口局部的做法线：x 从洞口左边起、y 从洞口底起（mm）。</summary>
         private struct DetailSegment

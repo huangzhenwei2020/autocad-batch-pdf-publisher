@@ -43,7 +43,26 @@ namespace Wanluo.BuildingModelStudio
                     + "、填充 " + canvas.LastHatchCount + "，非背景像素 " + painted);
             }
 
-            // 2) 极端视图变换：不许挂、不许抛（平面画布崩过一次，预览不能重蹈覆辙）
+            // 2) 点选：点洞口正中应选中它；点空白处应取消；重算后仍保持选中同一个构件
+            var southView = OrthographicProjector.Project(model, SampleModelFactory.CreateDefaultViews(model.Name)[0], library);
+            canvas.View = southView;
+            using (var surface = new Offscreen(Width, Height)) canvas.Render(surface.Graphics);   // 先画一次，视图变换才定下来
+            var anchor = southView.Anchors.FirstOrDefault(a => a != null);
+            if (anchor == null) throw new Exception("南立面没有门窗锚点，预览无法点选。");
+            var center = canvas.ModelToScreenForTest((anchor.X1 + anchor.X2) / 2d, (anchor.Y1 + anchor.Y2) / 2d);
+            canvas.SimulateClick(center);
+            if (canvas.SelectedAnchor == null || canvas.SelectedAnchor.ElementId != anchor.ElementId)
+                throw new Exception("点洞口正中应选中 " + anchor.ElementId + "，实际 "
+                    + (canvas.SelectedAnchor == null ? "没选中" : canvas.SelectedAnchor.ElementId));
+            canvas.SimulateClick(new Point(Width - 5, 5));      // 右上角空白处
+            if (canvas.SelectedAnchor != null) throw new Exception("点空白处应取消选中。");
+            canvas.SelectElement(anchor.ElementId);
+            canvas.View = OrthographicProjector.Project(model, SampleModelFactory.CreateDefaultViews(model.Name)[0], library);
+            if (canvas.SelectedAnchor == null) throw new Exception("重算视图后应仍保持选中同一个构件。");
+            using (var surface = new Offscreen(Width, Height)) canvas.Render(surface.Graphics);
+            log("PASS 预览点选：点中洞口 → 选中 " + anchor.ElementId + "；点空白取消；重算后仍选中同一樘");
+
+            // 3) 极端视图变换：不许挂、不许抛（平面画布崩过一次，预览不能重蹈覆辙）
             var south = OrthographicProjector.Project(model, SampleModelFactory.CreateDefaultViews(model.Name)[0], library);
             var extremes = new List<double[]>
             {

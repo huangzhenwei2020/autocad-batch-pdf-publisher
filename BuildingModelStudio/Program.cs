@@ -108,33 +108,49 @@ namespace Wanluo.BuildingModelStudio
                     {
                         form.Show();
                         Application.DoEvents();
-                        var canvas = FindCanvas(form);
-                        if (canvas == null) throw new InvalidOperationException("主窗口里没有找到画布控件。");
-                        if (canvas.Model == null) throw new InvalidOperationException("画布没有加载模型。");
-                        if (canvas.Model.Storeys.Count == 0) throw new InvalidOperationException("模型没有楼层。");
-                        // 真正走一次窗口绘制（WM_PAINT）：以前 DrawGrid 会在这里死循环并抛 OverflowException
-                        canvas.Refresh();
-                        Application.DoEvents();
-                        if (canvas.LastPaintError != null)
-                            throw new InvalidOperationException("画布真实绘制失败：" + canvas.LastPaintError);
-                        Console.WriteLine("PASS 主窗口构造与画布装载：楼层 " + canvas.Model.Storeys.Count
-                            + "、墙 " + canvas.Model.Walls.Count + "、洞口 " + canvas.Model.Openings.Count
-                            + "（已真实绘制一次，无异常）");
+                        // 自检用一份临时工程，绝不碰用户的模型（下面会套用类型、会保存）
+                        var temp = Path.Combine(Path.GetTempPath(), "WanluoStudioSelfTest", Guid.NewGuid().ToString("N"));
+                        try
+                        {
+                            GenerateSample(temp, "自检模型", text => { });
+                            form.UseProjectForTest(temp, "自检模型");
+                            Application.DoEvents();
 
-                        // 预览页：切过去、真的画一次（走窗口 WM_PAINT，与用户点开预览是同一条路）
-                        var preview = FindControl<ViewPreviewCanvas>(form);
-                        if (preview == null) throw new InvalidOperationException("主窗口里没有找到立面预览控件。");
-                        var tabs = FindControl<TabControl>(form);
-                        if (tabs != null && tabs.TabPages.Count > 1) tabs.SelectedIndex = 1;
-                        Application.DoEvents();
-                        preview.Refresh();
-                        Application.DoEvents();
-                        if (preview.LastPaintError != null)
-                            throw new InvalidOperationException("立面预览真实绘制失败：" + preview.LastPaintError);
-                        if (preview.LastLineCount <= 0)
-                            throw new InvalidOperationException("立面预览没有画出任何线条（视图选择或重算没生效）。");
-                        Console.WriteLine("PASS 立面预览：已真实绘制一次，" + preview.View.Title
-                            + " 画了 " + preview.LastLineCount + " 条线 / " + preview.LastTextCount + " 个文字（无异常）");
+                            var canvas = FindCanvas(form);
+                            if (canvas == null) throw new InvalidOperationException("主窗口里没有找到画布控件。");
+                            if (canvas.Model == null) throw new InvalidOperationException("画布没有加载模型。");
+                            if (canvas.Model.Storeys.Count == 0) throw new InvalidOperationException("模型没有楼层。");
+                            // 真正走一次窗口绘制（WM_PAINT）：以前 DrawGrid 会在这里死循环并抛 OverflowException
+                            canvas.Refresh();
+                            Application.DoEvents();
+                            if (canvas.LastPaintError != null)
+                                throw new InvalidOperationException("画布真实绘制失败：" + canvas.LastPaintError);
+                            Console.WriteLine("PASS 主窗口构造与画布装载：楼层 " + canvas.Model.Storeys.Count
+                                + "、墙 " + canvas.Model.Walls.Count + "、洞口 " + canvas.Model.Openings.Count
+                                + "（已真实绘制一次，无异常）");
+
+                            // 预览页：切过去、真的画一次（走窗口 WM_PAINT，与用户点开预览是同一条路）
+                            var preview = FindControl<ViewPreviewCanvas>(form);
+                            if (preview == null) throw new InvalidOperationException("主窗口里没有找到立面预览控件。");
+                            var tabs = FindControl<TabControl>(form);
+                            if (tabs != null && tabs.TabPages.Count > 1) tabs.SelectedIndex = 1;
+                            Application.DoEvents();
+                            preview.Refresh();
+                            Application.DoEvents();
+                            if (preview.LastPaintError != null)
+                                throw new InvalidOperationException("立面预览真实绘制失败：" + preview.LastPaintError);
+                            if (preview.LastLineCount <= 0)
+                                throw new InvalidOperationException("立面预览没有画出任何线条（视图选择或重算没生效）。");
+                            Console.WriteLine("PASS 立面预览：已真实绘制一次，" + preview.View.Title
+                                + " 画了 " + preview.LastLineCount + " 条线 / " + preview.LastTextCount + " 个文字（无异常）");
+
+                            // 预览里点一樘门窗 → 换类型库里的另一条 → 模型与预览都要跟着变
+                            CheckPreviewPickAndApply(form, preview, canvas);
+                        }
+                        finally
+                        {
+                            try { Directory.Delete(temp, true); } catch { }
+                        }
                         form.Close();
                     }
                 }
@@ -162,6 +178,17 @@ namespace Wanluo.BuildingModelStudio
                         var preview = FindControl<ViewPreviewCanvas>(form);
                         if (preview != null) preview.Refresh();
                         Application.DoEvents();
+                        // 截图里顺手点中第一樘门窗，好把"点选高亮 + 信息行"一起拍进去
+                        if (preview != null && preview.View != null)
+                        {
+                            var anchor = (preview.View.Anchors ?? new List<ViewAnchor>()).FirstOrDefault(a => a != null);
+                            if (anchor != null)
+                            {
+                                preview.SimulateClick(preview.ModelToScreenForTest(
+                                    (anchor.X1 + anchor.X2) / 2d, (anchor.Y1 + anchor.Y2) / 2d));
+                                Application.DoEvents();
+                            }
+                        }
                         var path = args.Length > 1 && !string.IsNullOrWhiteSpace(args[1])
                             ? args[1]
                             : Path.Combine(Path.GetTempPath(), "万落建筑模型-界面.png");
@@ -222,6 +249,53 @@ namespace Wanluo.BuildingModelStudio
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// 自检：在预览里点中一樘门窗 → 换成类型库里的另一条 → 断言模型改对了、视图按新做法重算了。
+        /// 走的就是用户点按钮的那两条方法（点选事件回调 + 套用类型），不是另写一套。
+        /// </summary>
+        private static void CheckPreviewPickAndApply(MainForm form, ViewPreviewCanvas preview, PlanCanvas canvas)
+        {
+            var model = canvas.Model;
+            var opening = model.Openings.FirstOrDefault(o => o != null && !string.IsNullOrWhiteSpace(o.Code));
+            if (opening == null) throw new InvalidOperationException("自检模型里没有带编号的洞口。");
+            var anchor = (preview.View.Anchors ?? new List<ViewAnchor>())
+                .FirstOrDefault(a => a != null && string.Equals(a.ElementId, opening.Id, StringComparison.OrdinalIgnoreCase));
+            if (anchor == null) throw new InvalidOperationException("视图里没有 " + opening.Id + " 的锚点，预览无法点选。");
+
+            preview.SimulateClick(preview.ModelToScreenForTest(
+                (anchor.X1 + anchor.X2) / 2d, (anchor.Y1 + anchor.Y2) / 2d));
+            Application.DoEvents();
+            if (!string.Equals(preview.SelectedElementId, opening.Id, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("点中洞口后应选中 " + opening.Id + "，实际 " + preview.SelectedElementId);
+            if (form.ViewInfoForTest.IndexOf(opening.Code, StringComparison.Ordinal) < 0)
+                throw new InvalidOperationException("信息行里应显示被选中门窗的编号：" + form.ViewInfoForTest);
+            Console.WriteLine("PASS 预览点选：点中 " + opening.Code + "（" + opening.Id + "），信息行已显示它的尺寸与做法");
+
+            // 换一条编号不同的类型，然后走"套用到选中洞口"
+            var library = form.OpeningLibraryForTest;
+            if (library == null) throw new InvalidOperationException("自检工程没有载入门窗类型库。");
+            var index = library.Types.FindIndex(t => t != null && !string.Equals(t.Code, opening.Code, StringComparison.OrdinalIgnoreCase));
+            if (index < 0) throw new InvalidOperationException("类型库里没有第二个可换的类型。");
+            var target = library.Types[index];
+            var linesBefore = preview.View.Lines.Count;
+
+            form.SelectOpeningTypeForTest(index);
+            form.ApplyTypeToSelectionForTest();
+            Application.DoEvents();
+
+            if (!string.Equals(opening.Code, target.Code, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("套用后洞口编号应为 " + target.Code + "，实际 " + opening.Code);
+            if (Math.Abs(opening.Width - target.Width) > 0.5d || Math.Abs(opening.Height - target.Height) > 0.5d)
+                throw new InvalidOperationException("套用后洞口尺寸应跟类型库一致：" + opening.Width + "×" + opening.Height);
+            if (preview.View == null || !preview.View.Texts.Any(t => t != null && t.Text == target.Code))
+                throw new InvalidOperationException("重算后的立面里应标出新编号 " + target.Code);
+            if (preview.SelectedElementId == null)
+                throw new InvalidOperationException("重算后应仍选中刚才那一樘门窗。");
+            Console.WriteLine("PASS 预览改做法：把 " + opening.Id + " 换成 " + target.Code + "（"
+                + target.Width.ToString("0") + "×" + target.Height.ToString("0") + "）→ 模型已改、视图已重算并标出新编号"
+                + "（线条 " + linesBefore + " → " + preview.View.Lines.Count + "）");
         }
 
         /// <summary>在控件树里找第一个指定类型的控件（自检用）。</summary>
@@ -589,6 +663,31 @@ namespace Wanluo.BuildingModelStudio
             RefreshViewPreview(false);
         }
 
+        // ───────────────────────── 自检用的接口（只给 --selftest 用） ─────────────────────────
+
+        /// <summary>自检用：切到指定工程（自检会在临时目录里造一份，绝不碰用户的模型）。</summary>
+        internal void UseProjectForTest(string folder, string modelName)
+        {
+            _projectFolder.Text = folder;
+            _modelName.Text = modelName;
+            OpenOrCreateModel();
+        }
+
+        internal string ViewInfoForTest { get { return _viewInfo.Text; } }
+        internal OpeningTypeLibraryDocument OpeningLibraryForTest { get { return _openingLibrary; } }
+
+        /// <summary>自检用：在右侧类型库里选中第 index 条（等于用户点列表）。</summary>
+        internal void SelectOpeningTypeForTest(int index)
+        {
+            _openingTypes.SelectedIndex = index;
+        }
+
+        /// <summary>自检用：点「套用到选中洞口」。</summary>
+        internal void ApplyTypeToSelectionForTest()
+        {
+            ApplyTypeToSelection();
+        }
+
         // ───────────────────────── 立面/剖面预览 ─────────────────────────
 
         /// <summary>切到预览页并立刻按当前模型重算一张（顶部「预览立面」按钮）。</summary>
@@ -626,6 +725,7 @@ namespace Wanluo.BuildingModelStudio
                 ForeColor = Color.FromArgb(105, 112, 122),
                 Padding = new Padding(8, 2, 8, 4),
                 Text = "预览用的是 CAD 落图读的那份视图数据：这里看到什么，LTTZ 落到 DWG 里就是什么。"
+                    + "　左键点门窗：选中它（右侧类型库选一条后点「套用到选中洞口」即可改做法并立刻重算）"
                     + "　中键/右键拖动：平移　滚轮：缩放"
             };
             _viewInfo.AutoSize = true;
@@ -638,6 +738,7 @@ namespace Wanluo.BuildingModelStudio
 
             _viewPreview.Dock = DockStyle.Fill;
             _viewPreview.StatusChanged += text => _status.Text = text;
+            _viewPreview.AnchorSelected += OnPreviewAnchorSelected;
             layout.Controls.Add(_viewPreview, 0, 3);
             page.Controls.Add(layout);
             return page;
@@ -681,9 +782,9 @@ namespace Wanluo.BuildingModelStudio
                 var view = OrthographicProjector.Project(_model, choice.Definition, _openingLibrary);
                 _viewPreview.View = view;
                 var openingLines = view.Lines.Count(line => line.Layer == ViewLayers.Opening);
-                _viewInfo.Text = view.Title + "：线 " + view.Lines.Count + "（门窗 " + openingLines + "）、文字 "
-                    + view.Texts.Count + "、填充 " + view.Hatches.Count
-                    + (_openingLibrary == null ? "　（没有类型库：门窗只画洞口轮廓）" : "　（做法来自类型库）");
+                // 之前选中的那一樘如果还在这张视图里，继续显示它的信息（改完做法看得见效果）
+                var keepSelected = _viewPreview.SelectedAnchor;
+                if (keepSelected == null) UpdateViewInfo(); else OnPreviewAnchorSelected(keepSelected);
                 if (log)
                 {
                     Log("预览 " + view.Title + "：线 " + view.Lines.Count + "（门窗 " + openingLines + "）、文字 "
@@ -704,6 +805,54 @@ namespace Wanluo.BuildingModelStudio
             public ViewChoice(ViewDefinitionModel definition) { Definition = definition; }
             public ViewDefinitionModel Definition { get; private set; }
             public override string ToString() { return Definition.Title; }
+        }
+
+        // ───────────────────────── 预览里点选门窗 ─────────────────────────
+
+        /// <summary>预览里点中了某个洞口：把它的信息显示出来，并说明可以怎么改。</summary>
+        private void OnPreviewAnchorSelected(ViewAnchor anchor)
+        {
+            if (anchor == null)
+            {
+                UpdateViewInfo();
+                return;
+            }
+            var opening = FindOpening(anchor.ElementId);
+            if (opening == null)
+            {
+                _viewInfo.Text = "选中的构件已经不在模型里了（可能被删除或撤销），已取消选择。";
+                return;
+            }
+            var type = _openingLibrary == null ? null : _openingLibrary.FindType(opening.Code);
+            var kind = string.IsNullOrWhiteSpace(opening.Kind) ? "洞口" : opening.Kind;
+            var size = Math.Round(opening.Width) + "×" + Math.Round(opening.Height)
+                + (opening.Sill > 0.5d ? "@窗台 " + Math.Round(opening.Sill) : "，落地");
+            var typeText = type == null
+                ? "类型库里没有「" + (opening.Code ?? "未编号") + "」"
+                : (type.DivisionPreset ?? "—") + " / " + (type.OpeningMode ?? "—")
+                    + (string.IsNullOrWhiteSpace(type.ElevationType) ? "" : "（" + type.ElevationType + "）");
+            _viewInfo.Text = "已选中 " + (opening.Code ?? "未编号") + "：" + kind + " " + size + "　做法：" + typeText
+                + "　→ 在右侧类型库选一条后点「套用到选中洞口」即可改做法";
+            Log("预览选中：" + (opening.Code ?? "未编号") + "（" + kind + " " + size + "）　做法：" + typeText);
+        }
+
+        /// <summary>按模型里的洞口 id 找洞口（预览与平面共用）。</summary>
+        private OpeningModel FindOpening(string id)
+        {
+            if (_model == null || string.IsNullOrWhiteSpace(id)) return null;
+            return (_model.Openings ?? new List<OpeningModel>()).FirstOrDefault(o => o != null
+                && string.Equals(o.Id, id, StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>刷新预览页那句"线 N / 门窗 N"的信息行。</summary>
+        private void UpdateViewInfo()
+        {
+            var view = _viewPreview.View;
+            if (view == null) { _viewInfo.Text = "还没有视图：点「重算当前视图」。"; return; }
+            var openingLines = view.Lines.Count(line => line.Layer == ViewLayers.Opening);
+            _viewInfo.Text = view.Title + "：线 " + view.Lines.Count + "（门窗 " + openingLines + "）、文字 "
+                + view.Texts.Count + "、填充 " + view.Hatches.Count
+                + (_openingLibrary == null ? "　（没有类型库：门窗只画洞口轮廓）" : "　（做法来自类型库）");
         }
 
         private void OpenModelFolder()
@@ -809,12 +958,22 @@ namespace Wanluo.BuildingModelStudio
         private void ApplyTypeToSelection()
         {
             if (_canvas.CurrentType == null) { Log("先在列表里选一个门窗类型。"); return; }
+            // 选中的洞口可以来自平面画布（选择工具），也可以来自**立面预览里点中的那一樘**
             var hit = _canvas.Selection;
-            if (hit == null || hit.Kind != "opening") { Log("先用「选择」工具选中一樘门窗。"); return; }
-            var opening = (_model.Openings ?? new List<OpeningModel>()).FirstOrDefault(o => o != null
-                && string.Equals(o.Id, hit.Id, StringComparison.OrdinalIgnoreCase));
-            var wall = opening == null ? null : _canvas.FindWall(opening.HostWallId);
-            if (opening == null || wall == null) { Log("没找到这樘门窗或它的宿主墙。"); return; }
+            var opening = hit != null && hit.Kind == "opening" ? FindOpening(hit.Id) : null;
+            var fromPreview = false;
+            if (opening == null)
+            {
+                var anchor = _viewPreview.SelectedAnchor;
+                if (anchor != null)
+                {
+                    opening = FindOpening(anchor.ElementId);
+                    fromPreview = opening != null;
+                }
+            }
+            if (opening == null) { Log("先选中一樘门窗：平面里用「选择」工具点它，或切到「立面 / 剖面预览」点它。"); return; }
+            var wall = _canvas.FindWall(opening.HostWallId);
+            if (wall == null) { Log("没找到这樘门窗的宿主墙。"); return; }
             var backup = new OpeningModel
             {
                 Id = opening.Id, HostWallId = opening.HostWallId, Code = opening.Code, Kind = opening.Kind,
@@ -833,8 +992,9 @@ namespace Wanluo.BuildingModelStudio
             _canvas.Invalidate();
             SaveModel();
             ShowProperties();
+            if (fromPreview) RefreshViewPreview(false);      // 预览里改的：立刻按新做法重算，还是选中这一樘
             Log("已套用类型：" + _canvas.CurrentType.Code + "（洞口 " + opening.Width.ToString("0") + "×"
-                + opening.Height.ToString("0") + "）");
+                + opening.Height.ToString("0") + "，" + (fromPreview ? "来自立面预览选中" : "来自平面选中") + "）");
         }
 
         private void ClearOpeningType()
