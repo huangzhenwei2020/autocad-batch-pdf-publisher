@@ -51,10 +51,31 @@ namespace Wanluo.BuildingModelStudio
             set
             {
                 _view = value;
+                _needsFit = true;
                 ZoomExtents();
                 Invalidate();
                 RaiseStatus();
             }
+        }
+
+        /// <summary>
+        /// 视图在窗口还没有尺寸时就装进来了（构造期常见）：先记一笔，
+        /// 等控件真正有尺寸再"缩放适应"一次 —— 否则用户切到预览页看到的会是一片空白。
+        /// </summary>
+        private bool _needsFit;
+
+        protected override void OnSizeChanged(EventArgs e)
+        {
+            base.OnSizeChanged(e);
+            FitIfNeeded();
+        }
+
+        private void FitIfNeeded()
+        {
+            if (!_needsFit || Width <= 0 || Height <= 0) return;
+            _needsFit = false;
+            ZoomExtents();
+            Invalidate();
         }
 
         /// <summary>自检用：直接摆好视图变换，不走鼠标。</summary>
@@ -78,7 +99,12 @@ namespace Wanluo.BuildingModelStudio
 
         public void ZoomExtents()
         {
-            if (_view == null || Width <= 0 || Height <= 0) return;
+            if (_view == null || Width <= 0 || Height <= 0)
+            {
+                _needsFit = _view != null;      // 还没尺寸：等 OnSizeChanged 再适应
+                return;
+            }
+            _needsFit = false;
             var bounds = BoundsOf(_view);
             if (bounds == null)
             {
@@ -260,6 +286,7 @@ namespace Wanluo.BuildingModelStudio
             LastLineCount = 0;
             LastTextCount = 0;
             LastHatchCount = 0;
+            FitIfNeeded();      // 控件刚拿到尺寸时，先把视图摆正再画（否则切过来可能是一片空白）
 
             if (_view == null)
             {

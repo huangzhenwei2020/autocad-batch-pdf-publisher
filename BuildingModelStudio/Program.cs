@@ -145,6 +145,43 @@ namespace Wanluo.BuildingModelStudio
                 return;
             }
 
+            // 主窗口自检模式：把主窗口构造并显示一次，确认布局、画布与预览都不会抛异常。
+            //   dotnet 万落建筑模型.dll --snapshot-ui [<输出 png>]
+            if (args != null && args.Length > 0 && string.Equals(args[0], "--snapshot-ui", StringComparison.OrdinalIgnoreCase))
+            {
+                Headless = true;
+                try
+                {
+                    using (var form = new MainForm())
+                    {
+                        form.Show();
+                        Application.DoEvents();
+                        var tabs = FindControl<TabControl>(form);
+                        if (tabs != null && tabs.TabPages.Count > 1) tabs.SelectedIndex = 1;   // 切到预览页
+                        var preview = FindControl<ViewPreviewCanvas>(form);
+                        if (preview != null) preview.Refresh();
+                        Application.DoEvents();
+                        var path = args.Length > 1 && !string.IsNullOrWhiteSpace(args[1])
+                            ? args[1]
+                            : Path.Combine(Path.GetTempPath(), "万落建筑模型-界面.png");
+                        using (var bitmap = new Bitmap(form.Width, form.Height))
+                        {
+                            form.DrawToBitmap(bitmap, new Rectangle(0, 0, form.Width, form.Height));
+                            bitmap.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+                        }
+                        Console.WriteLine("界面快照：" + path + "（预览 "
+                            + (preview == null ? "未找到" : preview.LastLineCount + " 条线") + "）");
+                        form.Close();
+                    }
+                }
+                catch (Exception exception)
+                {
+                    Console.Error.WriteLine("FAIL " + exception);
+                    Environment.ExitCode = 1;
+                }
+                return;
+            }
+
             Application.Run(new MainForm());
         }
 
@@ -313,6 +350,7 @@ namespace Wanluo.BuildingModelStudio
             fileRow.Controls.Add(Button("打开/新建", OpenOrCreateModel, true));
             fileRow.Controls.Add(Button("保存", SaveModel, true));
             fileRow.Controls.Add(Button("生成全部视图", GenerateViewsNow, true));
+            fileRow.Controls.Add(Button("预览立面", ShowViewPreview, true));
             fileRow.Controls.Add(Button("打开模型目录", OpenModelFolder, false));
             top.Controls.Add(fileRow, 0, 0);
 
@@ -551,6 +589,14 @@ namespace Wanluo.BuildingModelStudio
         }
 
         // ───────────────────────── 立面/剖面预览 ─────────────────────────
+
+        /// <summary>切到预览页并立刻按当前模型重算一张（顶部「预览立面」按钮）。</summary>
+        private void ShowViewPreview()
+        {
+            if (_tabs.TabPages.Count > 1) _tabs.SelectedIndex = 1;
+            RefreshViewPreview(true);
+            _viewPreview.Focus();
+        }
 
         /// <summary>预览页：上面一行选视图 + 重算，下面整块是预览画布。</summary>
         private TabPage BuildPreviewPage()
