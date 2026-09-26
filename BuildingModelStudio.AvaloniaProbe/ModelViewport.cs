@@ -1,5 +1,6 @@
 using System.Numerics;
 using System.Runtime.InteropServices;
+using System.Diagnostics;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -81,7 +82,15 @@ internal sealed class ModelViewport : OpenGlControlBase
     private bool _selecting;
     private bool _dragged;
     private volatile bool _frameRendered;
+    private long _renderedFrameCount;
+    private long _lastSynchronizedFrameTicks;
+    private int _lastRenderedVertexCount;
     public bool FrameRendered => _frameRendered;
+    internal long RenderedFrameCount => Interlocked.Read(ref _renderedFrameCount);
+    internal int LastRenderedVertexCount => Volatile.Read(ref _lastRenderedVertexCount);
+    internal double LastSynchronizedFrameMs
+        => Stopwatch.GetElapsedTime(0, Interlocked.Read(ref _lastSynchronizedFrameTicks)).TotalMilliseconds;
+    internal string GpuRenderer { get; private set; } = "unknown";
     public event Action<string?>? ElementPicked;
 
     public ModelViewport(BuildingVolume volume) : this(PrepareScene(volume)) { }
@@ -118,6 +127,12 @@ internal sealed class ModelViewport : OpenGlControlBase
         _pitch = -0.2f;
         _distance = 19.72f;
         _target = Vector3.Zero;
+        RequestNextFrameRendering();
+    }
+
+    internal void RotateForBenchmark(float radians)
+    {
+        _yaw += radians;
         RequestNextFrameRendering();
     }
 
@@ -249,6 +264,7 @@ internal sealed class ModelViewport : OpenGlControlBase
 
     protected override unsafe void OnOpenGlInit(GlInterface gl)
     {
+        GpuRenderer = gl.GetString(GL_VENDOR) + " / " + gl.GetString(GL_RENDERER);
         var vertexSource = ShaderSource(GlVersion, false, @"
             attribute vec3 aPos;
             attribute vec3 aColor;
@@ -314,6 +330,7 @@ internal sealed class ModelViewport : OpenGlControlBase
 
     protected override unsafe void OnOpenGlRender(GlInterface gl, int fb)
     {
+        var benchmarkStart = Program.GpuBenchCount > 0 ? Stopwatch.GetTimestamp() : 0L;
         var scale = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1d;
         var width = Math.Max(1, (int)Math.Round(Bounds.Width * scale));
         var height = Math.Max(1, (int)Math.Round(Bounds.Height * scale));
@@ -335,7 +352,14 @@ internal sealed class ModelViewport : OpenGlControlBase
         gl.UniformMatrix4fv(gl.GetUniformLocationString(_program, "uProjection"), 1, false, &projection);
         gl.Uniform1f(gl.GetUniformLocationString(_program, "uSelectedElement"), _selectedIndex);
         gl.DrawArrays(GL_TRIANGLES, 0, snapshot.Vertices.Length);
+        if (benchmarkStart != 0)
+        {
+            gl.Finish();
+            Interlocked.Exchange(ref _lastSynchronizedFrameTicks, Stopwatch.GetTimestamp() - benchmarkStart);
+        }
         _frameRendered = gl.GetError() == GL_NO_ERROR && snapshot.Vertices.Length > 0;
+        Volatile.Write(ref _lastRenderedVertexCount, snapshot.Vertices.Length);
+        Interlocked.Increment(ref _renderedFrameCount);
     }
 
     private string? Pick(Point point)

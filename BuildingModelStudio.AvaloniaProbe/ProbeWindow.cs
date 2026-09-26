@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.ComponentModel;
+using System.Diagnostics;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -165,7 +166,8 @@ internal sealed class ProbeWindow : Window
         RefreshHistoryButtons();
         UpdateTitle();
         Closing += OnClosing;
-        if (Program.ModelPath == null) ConfigureSmokeAndSnapshot();
+        if (Program.GpuBenchCount > 0) Opened += async (_, _) => await RunGpuBenchmarkAsync(Program.GpuBenchCount);
+        else if (Program.ModelPath == null) ConfigureSmokeAndSnapshot();
         else Opened += async (_, _) =>
         {
             if (await LoadModelAsync(Program.ModelPath)) ConfigureSmokeAndSnapshot();
@@ -474,6 +476,72 @@ internal sealed class ProbeWindow : Window
     {
         _undo.IsEnabled = _session.CanUndo;
         _redo.IsEnabled = _session.CanRedo;
+    }
+
+    private async Task RunGpuBenchmarkAsync(int count)
+    {
+        try
+        {
+            _status.Text = $"正在准备 {count} 道墙的 GPU 测试场景…";
+            var prepared = await Task.Run(() =>
+            {
+                var watch = Stopwatch.StartNew();
+                var model = Program.CreateBenchmarkModel(count);
+                var scene = ModelViewport.PrepareScene(BuildingVolumeBuilder.Build(model));
+                return (model, scene, preparationMs: watch.ElapsedMilliseconds);
+            });
+            _session = new BuildingModelEditSession(prepared.model);
+            _savedJson = BuildingModelJson.ToJson(prepared.model);
+            var listWatch = Stopwatch.StartNew();
+            BuildElementList();
+            var listMs = listWatch.ElapsedMilliseconds;
+            var previousFrame = _viewport.RenderedFrameCount;
+            var uploadStart = Stopwatch.GetTimestamp();
+            _viewport.SetScene(prepared.scene);
+            await WaitForFrameAsync(prepared.scene.VertexCount, previousFrame);
+            var firstFrameMs = Stopwatch.GetElapsedTime(uploadStart).TotalMilliseconds;
+            var uploadGpuMs = _viewport.LastSynchronizedFrameMs;
+            var responseTimes = new double[60];
+            var gpuTimes = new double[60];
+            for (var i = 0; i < responseTimes.Length; i++)
+            {
+                previousFrame = _viewport.RenderedFrameCount;
+                var requestStart = Stopwatch.GetTimestamp();
+                _viewport.RotateForBenchmark(0.035f);
+                await WaitForFrameAsync(prepared.scene.VertexCount, previousFrame);
+                responseTimes[i] = Stopwatch.GetElapsedTime(requestStart).TotalMilliseconds;
+                gpuTimes[i] = _viewport.LastSynchronizedFrameMs;
+            }
+            Array.Sort(responseTimes);
+            Array.Sort(gpuTimes);
+            var managedMb = GC.GetTotalMemory(true) / 1048576d;
+            Console.WriteLine($"GPU_BENCH renderer={_viewport.GpuRenderer} elements={count} vertices={prepared.scene.VertexCount} "
+                + $"prepareMs={prepared.preparationMs} listMs={listMs} firstFrameMs={firstFrameMs:0.###} "
+                + $"uploadAndDrawMs={uploadGpuMs:0.###} rotationResponseP95Ms={responseTimes[56]:0.###} "
+                + $"rotationGpuP95Ms={gpuTimes[56]:0.###} managedMB={managedMb:0.0}");
+        }
+        catch (Exception ex)
+        {
+            Program.SmokeFailed = true;
+            Console.Error.WriteLine("GPU_BENCH_FAILED " + ex);
+        }
+        finally { Close(); }
+    }
+
+    private async Task WaitForFrameAsync(int expectedVertices, long afterFrame)
+    {
+        var timeout = Stopwatch.StartNew();
+        while (timeout.Elapsed < TimeSpan.FromSeconds(30))
+        {
+            if (_viewport.RenderedFrameCount > afterFrame
+                && _viewport.LastRenderedVertexCount == expectedVertices)
+            {
+                if (!_viewport.FrameRendered) throw new InvalidOperationException("OpenGL 返回错误或没有绘制模型。");
+                return;
+            }
+            await Task.Delay(5);
+        }
+        throw new TimeoutException("等待 GPU 视口绘制超时。");
     }
 
     private void ConfigureSmokeAndSnapshot()

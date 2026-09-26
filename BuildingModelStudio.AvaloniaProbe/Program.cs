@@ -13,6 +13,7 @@ internal static class Program
 {
     public static bool Smoke { get; private set; }
     public static bool SmokeFailed { get; set; }
+    public static int GpuBenchCount { get; private set; }
     public static string? SnapshotPath { get; private set; }
     public static string? ModelPath { get; private set; }
 
@@ -24,13 +25,17 @@ internal static class Program
             RunPickCheck();
             return 0;
         }
+        var gpuBenchIndex = Array.IndexOf(args, "--gpu-bench");
+        if (gpuBenchIndex >= 0)
+        {
+            GpuBenchCount = ParseBenchmarkCount(args, gpuBenchIndex, "--gpu-bench");
+            AppBuilder.Configure<ProbeApp>().UsePlatformDetect().LogToTrace().StartWithClassicDesktopLifetime(args);
+            return SmokeFailed ? 1 : 0;
+        }
         var benchIndex = Array.IndexOf(args, "--bench");
         if (benchIndex >= 0)
         {
-            if (benchIndex + 1 >= args.Length || !int.TryParse(args[benchIndex + 1], out var count)
-                || count < 1 || count > 50000)
-                throw new ArgumentException("--bench 后需跟 1 到 50000 的构件数。");
-            RunBenchmark(count);
+            RunBenchmark(ParseBenchmarkCount(args, benchIndex, "--bench"));
             return 0;
         }
         Smoke = args.Contains("--smoke", StringComparer.OrdinalIgnoreCase);
@@ -40,6 +45,14 @@ internal static class Program
         if (index >= 0 && index + 1 < args.Length) ModelPath = Path.GetFullPath(args[index + 1]);
         AppBuilder.Configure<ProbeApp>().UsePlatformDetect().LogToTrace().StartWithClassicDesktopLifetime(args);
         return SmokeFailed ? 1 : 0;
+    }
+
+    private static int ParseBenchmarkCount(string[] args, int index, string option)
+    {
+        if (index + 1 >= args.Length || !int.TryParse(args[index + 1], out var count)
+            || count < 1 || count > 50000)
+            throw new ArgumentException($"{option} 后需跟 1 到 50000 的构件数。");
+        return count;
     }
 
     private static void RunPickCheck()
@@ -68,19 +81,7 @@ internal static class Program
 
     private static void RunBenchmark(int count)
     {
-        var model = new BuildingModelDocument { Name = "视口性能样例" };
-        model.Storeys.Add(new StoreyModel { Id = "1F", Name = "一层", Height = 3000 });
-        var columns = (int)Math.Ceiling(Math.Sqrt(count));
-        for (var i = 0; i < count; i++)
-        {
-            var x = (i % columns) * 1300d;
-            var y = (i / columns) * 1300d;
-            model.Walls.Add(new WallModel
-            {
-                Id = "W-" + i, StoreyId = "1F", X1 = x, Y1 = y,
-                X2 = x + 1000d, Y2 = y, Thickness = 200d
-            });
-        }
+        var model = CreateBenchmarkModel(count);
         var watch = Stopwatch.StartNew();
         var volume = BuildingVolumeBuilder.Build(model);
         var volumeMs = watch.ElapsedMilliseconds;
@@ -106,6 +107,24 @@ internal static class Program
         Console.WriteLine($"BENCH elements={count} faces={volume.Faces.Count} triangles={scene.TriangleCount} "
             + $"volumeMs={volumeMs} sceneMs={totalMs - volumeMs} totalMs={totalMs} "
             + $"pickP95Ms={durations[189]:0.###} hits={hits} managedMB={managedMb:0.0}");
+    }
+
+    internal static BuildingModelDocument CreateBenchmarkModel(int count)
+    {
+        var model = new BuildingModelDocument { Name = "视口性能样例" };
+        model.Storeys.Add(new StoreyModel { Id = "1F", Name = "一层", Height = 3000 });
+        var columns = (int)Math.Ceiling(Math.Sqrt(count));
+        for (var i = 0; i < count; i++)
+        {
+            var x = (i % columns) * 1300d;
+            var y = (i / columns) * 1300d;
+            model.Walls.Add(new WallModel
+            {
+                Id = "W-" + i, StoreyId = "1F", X1 = x, Y1 = y,
+                X2 = x + 1000d, Y2 = y, Thickness = 200d
+            });
+        }
+        return model;
     }
 }
 
