@@ -56,6 +56,7 @@
     <Compile Include="..\Shared\BuildingModel\StudioLaunch.cs"><Link>Features\BuildingModel\Shared\StudioLaunch.cs</Link></Compile>
     <Compile Include="..\Shared\BuildingModel\BuildingVolume.cs"><Link>Features\BuildingModel\Shared\BuildingVolume.cs</Link></Compile>
     <Compile Include="..\Shared\BuildingModel\StairGeometry.cs"><Link>Features\BuildingModel\Shared\StairGeometry.cs</Link></Compile>
+    <Compile Include="..\Shared\BuildingModel\RoofGeometry.cs"><Link>Features\BuildingModel\Shared\RoofGeometry.cs</Link></Compile>
     <Compile Include="..\Shared\BuildingModel\VolumeRenderer.cs"><Link>Features\BuildingModel\Shared\VolumeRenderer.cs</Link></Compile>
     <Compile Include="Compatibility\Net40Polyfills.cs" />
     <Compile Include="Commands.cs" />

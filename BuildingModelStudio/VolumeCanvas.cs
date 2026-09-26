@@ -284,6 +284,8 @@ namespace Wanluo.BuildingModelStudio
                 : kind == "column" ? Color.FromArgb(126, 134, 146)
                 : kind == "frame" ? Color.FromArgb(96, 104, 116)
                 : kind == "door" ? Color.FromArgb(176, 138, 96)
+                : kind == "stair" ? Color.FromArgb(158, 160, 166)
+                : kind == "roof" ? Color.FromArgb(186, 118, 92)
                 : Color.FromArgb(168, 176, 188);
             return Color.FromArgb(
                 (int)Math.Round(baseColor.R * shade),

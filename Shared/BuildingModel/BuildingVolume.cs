@@ -93,7 +93,41 @@ namespace BatchPdfPublisher.BuildingModel
                 if (onlyOne && !Same(stair.StoreyId, storeyId)) continue;
                 AddStair(volume, model, stair, ref first);
             }
+            foreach (var roof in model.Roofs ?? new List<RoofModel>())
+            {
+                if (roof == null) continue;
+                if (onlyOne && !Same(roof.StoreyId, storeyId)) continue;
+                AddRoof(volume, model, roof, ref first);
+            }
             return volume;
+        }
+
+        /// <summary>
+        /// 坡屋面 → 5 个面（底面 + 两坡 + 两端山墙三角），几何全部由 <see cref="RoofGeometry"/> 算。
+        /// </summary>
+        private static void AddRoof(BuildingVolume volume, BuildingModelDocument model, RoofModel roof, ref bool first)
+        {
+            var geometry = RoofGeometry.Build(model, roof);
+            if (geometry == null || !geometry.IsValid) return;
+            var faces = geometry.ToFaces("roof", roof.StoreyId);
+            foreach (var face in faces)
+            {
+                volume.Faces.Add(face);
+                foreach (var point in face.Points)
+                {
+                    if (first)
+                    {
+                        volume.MinX = volume.MaxX = point.X; volume.MinY = volume.MaxY = point.Y;
+                        volume.MinZ = volume.MaxZ = point.Z; first = false;
+                    }
+                    else
+                    {
+                        volume.MinX = Math.Min(volume.MinX, point.X); volume.MaxX = Math.Max(volume.MaxX, point.X);
+                        volume.MinY = Math.Min(volume.MinY, point.Y); volume.MaxY = Math.Max(volume.MaxY, point.Y);
+                        volume.MinZ = Math.Min(volume.MinZ, point.Z); volume.MaxZ = Math.Max(volume.MaxZ, point.Z);
+                    }
+                }
+            }
         }
 
         /// <summary>

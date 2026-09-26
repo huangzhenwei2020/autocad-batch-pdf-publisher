@@ -34,7 +34,47 @@ namespace Wanluo.BuildingModelStudio
             DrawsAxisAndRenumbers(log);
             DrawsRoomAndMovesIt(log);
             PlacesStairAndMovesIt(log);
-            log("PASS 平面交互自检：拖柱 / 拖墙夹点 / 拖洞口 / 拉轴线 / 画房间 / 放楼梯 —— 目标被删、被撤销、换楼层、宿主墙消失都只取消拖动，不抛异常");
+            PlacesRoofAndMovesIt(log);
+            log("PASS 平面交互自检：拖柱 / 拖墙夹点 / 拖洞口 / 拉轴线 / 画房间 / 放楼梯 / 放屋面 —— 目标被删、被撤销、换楼层、宿主墙消失都只取消拖动，不抛异常");
+        }
+
+        // ───────────────────────── 9. 放屋面（两点拉檐口矩形 + 坡度现算 + 整体移动） ─────────────────────────
+
+        private static void PlacesRoofAndMovesIt(Action<string> log)
+        {
+            var canvas = NewCanvas(out var model);
+            canvas.Tool = "roof";
+            canvas.SimulateMouseDown(ToScreen(0d, 0d), MouseButtons.Left);
+            canvas.SimulateMouseDown(ToScreen(7440d, 5640d), MouseButtons.Left);
+            Assert(model.Roofs.Count == 1, "放完应有 1 个屋面，实际 " + model.Roofs.Count);
+            var roof = model.Roofs[0];
+            Assert(roof.AlongX, "长边是 X 时屋脊应沿 X");
+            Assert(Math.Abs(roof.Width - 7440d) < 50d && Math.Abs(roof.Depth - 5640d) < 50d,
+                "檐口矩形应是 7440×5640，实际 " + Math.Round(roof.Width) + "×" + Math.Round(roof.Depth));
+            var geometry = RoofGeometry.Build(model, roof);
+            var storey = model.FindStorey(roof.StoreyId);
+            Assert(Math.Abs(geometry.EaveElevation - (storey == null ? 0d : storey.Elevation + storey.Height)) < 1d,
+                "檐口标高应现算成「本层楼面 + 层高」，实际 " + geometry.EaveElevation);
+            Assert(Math.Abs(geometry.RidgeElevation - (geometry.EaveElevation + geometry.HalfSpan * 0.5d)) < 5d,
+                "1:2 坡时屋脊应在 檐口 + 半跨/2，实际 " + geometry.RidgeElevation);
+
+            // 选中并整体移动
+            canvas.Tool = "select";
+            canvas.SimulateMouseDown(ToScreen(3720d, 2820d), MouseButtons.Left);
+            Assert(canvas.IsDragging && canvas.Selection != null && canvas.Selection.Kind == "roof", "点屋面内部应选中屋面");
+            canvas.SimulateMouseMove(ToScreen(4220d, 3320d));
+            canvas.SimulateMouseUp(ToScreen(4220d, 3320d), MouseButtons.Left);
+            Assert(Math.Abs(roof.X - 500d) < 200d && Math.Abs(roof.Y - 500d) < 200d,
+                "屋面应整体移动到 (500,500) 附近，实际 (" + Math.Round(roof.X) + "," + Math.Round(roof.Y) + ")");
+
+            // 拖动中删除
+            canvas.SimulateMouseDown(ToScreen(roof.X + 3720d, roof.Y + 2820d), MouseButtons.Left);
+            canvas.DeleteSelection();
+            canvas.SimulateMouseMove(ToScreen(1000d, 1000d));
+            Assert(model.Roofs.Count == 0, "删除后模型里不应还有屋面");
+            Assert(canvas.LastPaintError == null, "删除屋面后继续移动鼠标不应产生绘制错误：" + canvas.LastPaintError);
+            log("PASS 放屋面：两点拉出 7440×5640 → 屋脊沿长边、檐口 " + Math.Round(geometry.EaveElevation)
+                + " 屋脊 " + Math.Round(geometry.RidgeElevation) + "；拖动整体移动；拖动中删除不抛异常");
         }
 
         // ───────────────────────── 8. 放楼梯（两点拉矩形 + 参数现算 + 整体移动） ─────────────────────────

@@ -671,6 +671,7 @@ namespace Wanluo.BuildingModelStudio
             tools.Controls.Add(ToolButton("放门", "door", false));
             tools.Controls.Add(ToolButton("布柱", "column", false));
             tools.Controls.Add(ToolButton("放楼梯", "stair", false));
+            tools.Controls.Add(ToolButton("放屋面", "roof", false));
             tools.Controls.Add(ToolButton("拉轴线", "axis", false));
             tools.Controls.Add(ToolButton("画房间", "room", false));
             tools.Controls.Add(Button("删除选中(Delete)", () => _canvas.DeleteSelection(), false));
@@ -846,6 +847,7 @@ namespace Wanluo.BuildingModelStudio
             if (tool == "axis") return "拉轴线（点两下，长边方向即轴线方向）";
             if (tool == "room") return "画房间（连续点轮廓，点回起点或按 Esc 闭合）";
             if (tool == "stair") return "放楼梯（点两个角拉出楼梯间矩形，长边就是梯段方向）";
+            if (tool == "roof") return "放屋面（点两个角拉出檐口矩形，长边就是屋脊方向；记得把挑檐拉进去）";
             return "选择（点选/拖夹点）";
         }
 
@@ -1531,7 +1533,7 @@ namespace Wanluo.BuildingModelStudio
             var hit = _canvas.Selection;
             if (hit == null || _model == null)
             {
-                var label = new Label { Text = "未选中构件。用「选择」工具点墙 / 门窗 / 柱 / 楼梯。", AutoSize = true, MaximumSize = new Size(330, 60) };
+                var label = new Label { Text = "未选中构件。用「选择」工具点墙 / 门窗 / 柱 / 楼梯 / 屋面。", AutoSize = true, MaximumSize = new Size(330, 60) };
                 host.Controls.Add(label, 0, 0);
                 host.SetColumnSpan(label, 2);
                 return;
@@ -1592,6 +1594,35 @@ namespace Wanluo.BuildingModelStudio
                 AddField(host, ref row, "房间名", room.Name ?? string.Empty, v => room.Name = v);
                 AddInfo(host, ref row, "面积 " + room.AreaSquareMetres.ToString("0.00") + " m²（按轮廓现算）");
                 AddInfo(host, ref row, "轮廓 " + (room.Outline ?? new List<PointModel>()).Count + " 个点（拖房间名可整体移动）");
+            }
+            else if (hit.Kind == "roof")
+            {
+                var roof = (_model.Roofs ?? new List<RoofModel>()).FirstOrDefault(r => r != null && Same(r.Id, hit.Id));
+                if (roof == null) return;
+                AddField(host, ref row, "屋面编号", roof.Id, v => roof.Id = v);
+                AddField(host, ref row, "左下角 X", roof.X.ToString("0"), v => roof.X = Num(v, roof.X));
+                AddField(host, ref row, "左下角 Y", roof.Y.ToString("0"), v => roof.Y = Num(v, roof.Y));
+                AddField(host, ref row, "檐口宽(X)", roof.Width.ToString("0"), v => roof.Width = Num(v, roof.Width));
+                AddField(host, ref row, "檐口深(Y)", roof.Depth.ToString("0"), v => roof.Depth = Num(v, roof.Depth));
+                AddField(host, ref row, "屋脊方向", roof.AlongX ? "沿X" : "沿Y", v =>
+                {
+                    var text = (v ?? string.Empty).Trim();
+                    if (text.IndexOf("Y", StringComparison.OrdinalIgnoreCase) >= 0) roof.AlongX = false;
+                    else if (text.IndexOf("X", StringComparison.OrdinalIgnoreCase) >= 0) roof.AlongX = true;
+                });
+                AddField(host, ref row, "坡度角(度)", roof.PitchDegrees.ToString("0.###"), v =>
+                    roof.PitchDegrees = Num(v, roof.PitchDegrees));
+                AddField(host, ref row, "檐口标高(0=现算)", roof.EaveElevation.ToString("0"), v =>
+                    roof.EaveElevation = Num(v, roof.EaveElevation));
+                AddField(host, ref row, "屋面板厚", roof.Thickness.ToString("0"), v => roof.Thickness = Num(v, roof.Thickness));
+                var roofGeometry = RoofGeometry.Build(_model, roof);
+                if (roofGeometry != null)
+                    AddInfo(host, ref row, "檐口 " + Math.Round(roofGeometry.EaveElevation) + "、屋脊 "
+                        + Math.Round(roofGeometry.RidgeElevation) + "（半跨 " + Math.Round(roofGeometry.HalfSpan)
+                        + "、坡面斜长 " + Math.Round(roofGeometry.SlopeLength) + "，坡度 1:"
+                        + Math.Round(1d / Math.Tan(roofGeometry.PitchDegrees * Math.PI / 180d), 2) + "）");
+                var roofError = PlanEditing.ValidateRoof(roof);
+                if (roofError != null) AddInfo(host, ref row, "提示：" + roofError);
             }
             else if (hit.Kind == "stair")
             {

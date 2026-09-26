@@ -160,6 +160,16 @@ namespace BatchPdfPublisher.BuildingModel
                     return new PlanHit { Kind = "stair", Id = stair.Id, Grip = -1 };
             }
 
+            // 5) 屋面：点在檐口矩形里就选中它（屋面在平面图里是"上层投影"，只用来选中与编辑）
+            foreach (var roof in (model.Roofs ?? new List<RoofModel>()).Where(r => r != null && Same(r.StoreyId, storeyId)))
+            {
+                var width = Math.Abs(roof.Width) > 1d ? Math.Abs(roof.Width) : 7440d;
+                var depth = Math.Abs(roof.Depth) > 1d ? Math.Abs(roof.Depth) : 5640d;
+                if (x >= roof.X - tolerance && x <= roof.X + width + tolerance
+                    && y >= roof.Y - tolerance && y <= roof.Y + depth + tolerance)
+                    return new PlanHit { Kind = "roof", Id = roof.Id, Grip = -1 };
+            }
+
             // 4) 墙身（按厚度的一半 + 容差判定）
             foreach (var wall in walls)
             {
@@ -223,6 +233,19 @@ namespace BatchPdfPublisher.BuildingModel
             var points = (room.Outline ?? new List<PointModel>()).Where(p => p != null).ToList();
             if (points.Count < 3) return "房间轮廓至少要 3 个点。";
             if (room.AreaSquareMetres < 0.01d) return "房间面积太小（轮廓可能重合了）。";
+            return null;
+        }
+
+        /// <summary>屋面校验：尺寸够大、坡度在 1°~60° 之间。</summary>
+        public static string ValidateRoof(RoofModel roof)
+        {
+            if (roof == null) return "屋面为空。";
+            var width = Math.Abs(roof.Width);
+            var depth = Math.Abs(roof.Depth);
+            if (width < 1000d || depth < 1000d)
+                return "屋面尺寸太小（" + Math.Round(width) + "×" + Math.Round(depth) + "）：檐口矩形至少要 1m 见方。";
+            if (roof.PitchDegrees <= 1d || roof.PitchDegrees >= 60d)
+                return "坡度角 " + Math.Round(roof.PitchDegrees, 1) + "° 不合理（应在 1°~60° 之间）。";
             return null;
         }
 

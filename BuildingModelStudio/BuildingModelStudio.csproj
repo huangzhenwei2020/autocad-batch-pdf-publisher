@@ -35,6 +35,7 @@
     <Compile Include="..\Shared\BuildingModel\StudioLaunch.cs" Link="Shared\StudioLaunch.cs" />
     <Compile Include="..\Shared\BuildingModel\BuildingVolume.cs" Link="Features\BuildingModel\Shared\BuildingVolume.cs" />
     <Compile Include="..\Shared\BuildingModel\StairGeometry.cs" Link="Features\BuildingModel\Shared\StairGeometry.cs" />
+    <Compile Include="..\Shared\BuildingModel\RoofGeometry.cs" Link="Features\BuildingModel\Shared\RoofGeometry.cs" />
     <Compile Include="..\Shared\BuildingModel\VolumeRenderer.cs" Link="Features\BuildingModel\Shared\VolumeRenderer.cs" />
     <Compile Include="..\Shared\BuildingModel\OpeningElevationAdapter.cs" Link="Shared\OpeningElevationAdapter.cs" />
     <Compile Include="..\Shared\BuildingModel\SampleModelFactory.cs" Link="Shared\SampleModelFactory.cs" />

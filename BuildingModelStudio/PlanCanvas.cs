@@ -17,7 +17,7 @@ namespace Wanluo.BuildingModelStudio
     /// </summary>
     internal sealed class PlanCanvas : Control
     {
-        private enum DragMode { None, Pan, Grip, MoveWall, MoveOpening, MoveColumn, DrawWall, DrawRoom, MoveAxis, MoveRoom, MoveStair }
+        private enum DragMode { None, Pan, Grip, MoveWall, MoveOpening, MoveColumn, DrawWall, DrawRoom, MoveAxis, MoveRoom, MoveStair, MoveRoof }
 
         private readonly ModelEditHistory _history = new ModelEditHistory();
         private BuildingModelDocument _model;
@@ -155,6 +155,7 @@ namespace Wanluo.BuildingModelStudio
         private AxisModel _dragAxis;
         private RoomModel _dragRoom;
         private StairModel _dragStair;
+        private RoofModel _dragRoof;
         private double _dragOriginAxisPosition;
         private List<PointModel> _dragOriginOutline;
         /// <summary>正在画的房间轮廓（"房间"工具连续点出来的点）。</summary>
@@ -219,6 +220,7 @@ namespace Wanluo.BuildingModelStudio
             _dragAxis = null;
             _dragRoom = null;
             _dragStair = null;
+            _dragRoof = null;
             _dragOriginOutline = null;
             _dragGrip = -1;
         }
@@ -241,6 +243,8 @@ namespace Wanluo.BuildingModelStudio
                     return _dragRoom != null && (_model.Rooms ?? new List<RoomModel>()).Contains(_dragRoom);
                 case DragMode.MoveStair:
                     return _dragStair != null && (_model.Stairs ?? new List<StairModel>()).Contains(_dragStair);
+                case DragMode.MoveRoof:
+                    return _dragRoof != null && (_model.Roofs ?? new List<RoofModel>()).Contains(_dragRoof);
                 default:
                     return true;
             }
@@ -302,6 +306,8 @@ namespace Wanluo.BuildingModelStudio
         public double DefaultWallThickness = 200d, DefaultWallHeight = 0d, DefaultColumnSize = 400d;
         /// <summary>放楼梯的默认参数（踏步宽、梯段宽）——放完可在属性面板逐项改。</summary>
         public double DefaultStairGoing = 260d, DefaultStairFlightWidth = 1200d;
+        /// <summary>放屋面的默认坡度角（26.565° = 1:2 坡）。</summary>
+        public double DefaultRoofPitch = 26.565d;
 
         /// <summary>当前选中的门窗类型（来自类型库）；不为空时放门窗直接套用它的编号与尺寸。</summary>
         public OpeningTypeModel CurrentType;
@@ -418,6 +424,7 @@ namespace Wanluo.BuildingModelStudio
             DrawSlabs(g);
             DrawWalls(g);
             DrawColumns(g);
+            DrawRoofs(g);
             DrawStairs(g);
             DrawOpenings(g);
             DrawRooms(g);
@@ -547,6 +554,39 @@ namespace Wanluo.BuildingModelStudio
                 };
                 using (var brush = new SolidBrush(selected ? Color.FromArgb(220, 170, 90) : Color.FromArgb(110, 116, 126)))
                     g.FillPolygon(brush, points);
+            }
+        }
+
+        /// <summary>
+        /// 平面草图里的屋面：檐口矩形（虚线，表示"上层投影"）+ 屋脊点划线 + 坡度文字。
+        /// 平面图（剖在 1.2m）里不画屋面，这里画是为了**能选中、能改参数**。
+        /// </summary>
+        private void DrawRoofs(Graphics g)
+        {
+            if (_model == null) return;
+            var roofs = (_model.Roofs ?? new List<RoofModel>()).Where(r => r != null && Same(r.StoreyId, _storeyId)).ToList();
+            if (roofs.Count == 0) return;
+            using (var eavePen = new Pen(Color.FromArgb(215, 150, 110), 1.2f) { DashStyle = DashStyle.Dash })
+            using (var ridgePen = new Pen(Color.FromArgb(235, 175, 130), 1.4f) { DashStyle = DashStyle.DashDot })
+            using (var font = new Font("Microsoft YaHei UI", 8f))
+            using (var brush = new SolidBrush(Color.FromArgb(240, 190, 150)))
+            {
+                foreach (var roof in roofs)
+                {
+                    var geometry = RoofGeometry.Build(_model, roof);
+                    if (geometry == null) continue;
+                    var selected = _selection != null && _selection.Kind == "roof" && Same(_selection.Id, roof.Id);
+                    eavePen.Color = selected ? Color.FromArgb(255, 210, 120) : Color.FromArgb(215, 150, 110);
+                    DrawClippedLine(g, eavePen, ToScreen(geometry.X0, geometry.Y0), ToScreen(geometry.X1, geometry.Y0));
+                    DrawClippedLine(g, eavePen, ToScreen(geometry.X1, geometry.Y0), ToScreen(geometry.X1, geometry.Y1));
+                    DrawClippedLine(g, eavePen, ToScreen(geometry.X1, geometry.Y1), ToScreen(geometry.X0, geometry.Y1));
+                    DrawClippedLine(g, eavePen, ToScreen(geometry.X0, geometry.Y1), ToScreen(geometry.X0, geometry.Y0));
+                    DrawClippedLine(g, ridgePen, ToScreen(geometry.RidgeStart.X, geometry.RidgeStart.Y),
+                        ToScreen(geometry.RidgeEnd.X, geometry.RidgeEnd.Y));
+                    var label = ToScreen((geometry.X0 + geometry.X1) / 2d, geometry.Y1);
+                    g.DrawString("屋脊 " + Math.Round(geometry.RidgeElevation) + " / 坡度 "
+                        + Math.Round(geometry.PitchDegrees, 1) + "°", font, brush, label.X + 4f, label.Y + 4f);
+                }
             }
         }
 
@@ -826,6 +866,43 @@ namespace Wanluo.BuildingModelStudio
                     Commit("布柱");
                     break;
                 }
+                case "roof":
+                {
+                    // 两次点击拉出檐口矩形（把挑檐一起拉进去）；长边自动当屋脊方向
+                    if (!_drawFromX.HasValue)
+                    {
+                        _drawFromX = snap.X; _drawFromY = snap.Y;
+                        StatusChanged?.Invoke("再点一下确定檐口矩形的另一个角（记得把挑檐拉进去）。");
+                        break;
+                    }
+                    var fromX = _drawFromX.Value;
+                    var fromY = _drawFromY ?? 0d;
+                    var dx = Math.Abs(snap.X - fromX);
+                    var dy = Math.Abs(snap.Y - fromY);
+                    if (Math.Min(dx, dy) < 1000d)
+                    {
+                        StatusChanged?.Invoke("提示：屋面太小了，请拉出至少 1m 见方的檐口矩形。");
+                        break;
+                    }
+                    var roof = new RoofModel
+                    {
+                        Id = NewId("RF"), StoreyId = _storeyId,
+                        X = Math.Min(fromX, snap.X), Y = Math.Min(fromY, snap.Y),
+                        Width = dx, Depth = dy, AlongX = dx >= dy,
+                        PitchDegrees = DefaultRoofPitch, EaveElevation = 0d
+                    };
+                    var error = PlanEditing.ValidateRoof(roof);
+                    _drawFromX = _drawFromY = null;
+                    if (error != null) { StatusChanged?.Invoke("提示：" + error); break; }
+                    _model.Roofs.Add(roof);
+                    _selection = new PlanHit { Kind = "roof", Id = roof.Id, Grip = -1 };
+                    Commit("放屋面 " + roof.Id);
+                    var geometry = RoofGeometry.Build(_model, roof);
+                    StatusChanged?.Invoke("已放坡屋面（" + Math.Round(roof.Width) + "×" + Math.Round(roof.Depth)
+                        + "，" + (roof.AlongX ? "屋脊沿X" : "屋脊沿Y") + "）——檐口标高 " + Math.Round(geometry.EaveElevation)
+                        + "、屋脊 " + Math.Round(geometry.RidgeElevation) + "，坡度与方向可在属性面板改。");
+                    break;
+                }
                 case "stair":
                 {
                     // 两次点击拉出一个矩形楼梯间：长边就是梯段方向
@@ -916,6 +993,16 @@ namespace Wanluo.BuildingModelStudio
                             _dragStair = stair;
                             _dragOriginX1 = stair.X; _dragOriginY1 = stair.Y;
                             _drag = DragMode.MoveStair;
+                        }
+                    }
+                    else if (hit.Kind == "roof")
+                    {
+                        var roof = (_model.Roofs ?? new List<RoofModel>()).FirstOrDefault(r => r != null && Same(r.Id, hit.Id));
+                        if (roof != null)
+                        {
+                            _dragRoof = roof;
+                            _dragOriginX1 = roof.X; _dragOriginY1 = roof.Y;
+                            _drag = DragMode.MoveRoof;
                         }
                     }
                     Invalidate();
@@ -1015,6 +1102,11 @@ namespace Wanluo.BuildingModelStudio
                     _dragStair.X = _dragOriginX1 + deltaX;
                     _dragStair.Y = _dragOriginY1 + deltaY;
                 }
+                else if (_drag == DragMode.MoveRoof)
+                {
+                    _dragRoof.X = _dragOriginX1 + deltaX;
+                    _dragRoof.Y = _dragOriginY1 + deltaY;
+                }
                 Invalidate();
                 RaiseStatus();
                 return;
@@ -1031,7 +1123,7 @@ namespace Wanluo.BuildingModelStudio
                 var label = _drag == DragMode.Grip ? "改墙端点" : _drag == DragMode.MoveWall ? "移动墙"
                     : _drag == DragMode.MoveOpening ? "移动洞口" : _drag == DragMode.MoveColumn ? "移动柱"
                     : _drag == DragMode.MoveAxis ? "移动轴线" : _drag == DragMode.MoveRoom ? "移动房间"
-                    : _drag == DragMode.MoveStair ? "移动楼梯" : "编辑";
+                    : _drag == DragMode.MoveStair ? "移动楼梯" : _drag == DragMode.MoveRoof ? "移动屋面" : "编辑";
                 Commit(label);
             }
             CancelDrag();
@@ -1105,6 +1197,7 @@ namespace Wanluo.BuildingModelStudio
             }
             else if (_selection.Kind == "room") removed = _model.Rooms.RemoveAll(r => r != null && Same(r.Id, _selection.Id)) > 0;
             else if (_selection.Kind == "stair") removed = _model.Stairs.RemoveAll(s => s != null && Same(s.Id, _selection.Id)) > 0;
+            else if (_selection.Kind == "roof") removed = _model.Roofs.RemoveAll(r => r != null && Same(r.Id, _selection.Id)) > 0;
             if (!removed) { StatusChanged?.Invoke("没找到要删除的构件。"); return; }
             CancelDrag();       // 被拖的那一个可能刚被删掉，拖动立即结束
             _selection = null;

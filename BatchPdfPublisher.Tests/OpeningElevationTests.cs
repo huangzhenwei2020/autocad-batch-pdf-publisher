@@ -34,7 +34,8 @@ internal static class OpeningElevationTests
         StudioLaunchChecks();
         VolumeChecks();
         StairChecks();
-        Console.WriteLine("PASS 立面门窗：分格与开启线 / 背立面镜像 / 遮挡裁剪 / 自定义分格 / 1:100-1:50 详简 / 参数兜底 / 可点选锚点与编号 / 尺寸与门窗表 / 平面图 / 排版出图 / 启动与取件 / 三维体量（门窗构件 / 剖切 / 透视 / 共面合并 / 藏在墙里的面）/ 楼梯（双跑几何 / 平面 / 体量 / 剖面 / 校验）");
+        RoofChecks();
+        Console.WriteLine("PASS 立面门窗：分格与开启线 / 背立面镜像 / 遮挡裁剪 / 自定义分格 / 1:100-1:50 详简 / 参数兜底 / 可点选锚点与编号 / 尺寸与门窗表 / 平面图 / 排版出图 / 启动与取件 / 三维体量（门窗构件 / 剖切 / 透视 / 共面合并 / 藏在墙里的面）/ 楼梯（双跑几何 / 平面 / 体量 / 剖面 / 校验）/ 坡屋面（几何 / 立面山墙 / 剖面 / 体量）");
     }
 
     // ───────────────────────── 13. 楼梯（双跑） ─────────────────────────
@@ -195,6 +196,94 @@ internal static class OpeningElevationTests
 
         Console.WriteLine("   楼梯剖面：顺着剖 45 条（竖 " + parallelVertical + " / 横 " + parallelHorizontal
             + "）、横着剖 25 条、剖切面之前的 0 条");
+    }
+
+    /// <summary>
+    /// 坡屋面（双坡）：手算得出来的几何 ——
+    /// 檐口 7440×5640、坡度 26.565°（tan = 0.5）、檐口标高 6900（二层楼面 3600 + 层高 3300）：
+    /// 屋脊 = 6900 + 5640/2 × 0.5 = 6900 + 1410 = 8310。屋脊沿 X → 南北立面看到坡面（矩形），
+    /// 东西立面看到山墙三角（两条坡线交于 8310）；剖在 X=const（顺着屋脊）看到三角，剖在 Y=const 看到坡面。
+    /// </summary>
+    private static void RoofChecks()
+    {
+        var model = SampleModelFactory.CreateEmptyModel("坡屋面");
+        model.Storeys[0].Height = 3600d;
+        model.Storeys.Add(new StoreyModel { Id = "2F", Name = "二层", Elevation = 3600d, Height = 3300d });
+        var roof = new RoofModel
+        {
+            Id = "rf-1", StoreyId = "2F", X = 0d, Y = 0d, Width = 7440d, Depth = 5640d,
+            AlongX = true, PitchDegrees = 26.565d, EaveElevation = 0d
+        };
+        model.Roofs.Add(roof);
+
+        // 1) 几何：檐口标高按"二层楼面 + 层高"现算
+        var geometry = RoofGeometry.Build(model, roof);
+        Assert(geometry != null && geometry.IsValid, "屋面几何应有效");
+        Assert(Math.Abs(geometry.EaveElevation - 6900d) < 1e-6d, "檐口标高应是 6900，实际 " + geometry.EaveElevation);
+        Assert(Math.Abs(geometry.RidgeElevation - 8310d) < 1d, "屋脊标高应是 8310，实际 " + geometry.RidgeElevation);
+        Assert(Math.Abs(geometry.HalfSpan - 2820d) < 1e-6d, "半跨应是 5640/2 = 2820，实际 " + geometry.HalfSpan);
+        Assert(Math.Abs(geometry.RidgeStart.X - 0d) < 1e-6d && Math.Abs(geometry.RidgeStart.Y - 2820d) < 1e-6d,
+            "屋脊应沿 X 在 Y=2820 处");
+        // 显式给坡度角（45°）时屋脊更高
+        roof.PitchDegrees = 45d;
+        var steep = RoofGeometry.Build(model, roof);
+        Assert(Math.Abs(steep.RidgeElevation - 9720d) < 1d, "45° 时屋脊应是 6900+2820=9720，实际 " + steep.RidgeElevation);
+        roof.PitchDegrees = 26.565d;
+
+        // 2) 立面：南北看到坡面（矩形轮廓：檐口 + 屋脊），东西看到山墙三角
+        var south = OrthographicProjector.Project(model, SampleModelFactory.CreateDefaultViews("x")[0], null);
+        var southRoof = south.Lines.Where(l => l.Layer == ViewLayers.Roof).ToList();
+        Assert(southRoof.Any(l => Math.Abs(l.Y1 - 6900d) < 1d && Math.Abs(l.Y2 - 6900d) < 1d),
+            "南立面应有檐口线（标高 6900）");
+        Assert(southRoof.Any(l => Math.Abs(l.Y1 - 8310d) < 1d && Math.Abs(l.Y2 - 8310d) < 1d),
+            "南立面应有屋脊线（标高 8310）");
+        Assert(southRoof.All(l => Math.Abs(l.Y1 - l.Y2) < 1d || Math.Abs(l.X1 - l.X2) < 1d),
+            "正对坡面看时屋面线应都是横平竖直的");
+
+        var east = OrthographicProjector.Project(model, SampleModelFactory.CreateDefaultViews("x")[2], null);
+        var eastRoof = east.Lines.Where(l => l.Layer == ViewLayers.Roof).ToList();
+        var sloped = eastRoof.Where(l => Math.Abs(l.Y1 - l.Y2) > 1d && Math.Abs(l.X1 - l.X2) > 1d).ToList();
+        Assert(sloped.Count == 2, "山墙这头看应有两条坡线，实际 " + sloped.Count);
+        Assert(sloped.All(l => Math.Abs(Math.Max(l.Y1, l.Y2) - 8310d) < 1d),
+            "两条坡线都应交在屋脊 8310 上");
+
+        // 3) 剖面：顺着屋脊剖（CutX）看到三角；横着剖（CutY）看到坡面
+        var along = OrthographicProjector.Project(model, new ViewDefinitionModel
+        {
+            Id = "s1", Title = "顺脊", Kind = ViewKind.Section, Scale = 50,
+            CutAxis = SectionAxis.CutX, CutPosition = 3720d, ViewSign = 1, ViewDepth = 20000d
+        }, null);
+        var alongRoof = along.Lines.Where(l => l.Layer == ViewLayers.Roof).ToList();
+        Assert(alongRoof.Count(l => Math.Abs(l.Y1 - l.Y2) > 1d && Math.Abs(l.X1 - l.X2) > 1d) == 2,
+            "顺着屋脊剖应看到两条坡线，实际 " + alongRoof.Count);
+        var across = OrthographicProjector.Project(model, new ViewDefinitionModel
+        {
+            Id = "s2", Title = "横剖", Kind = ViewKind.Section, Scale = 50,
+            CutAxis = SectionAxis.CutY, CutPosition = 2820d, ViewSign = 1, ViewDepth = 20000d
+        }, null);
+        var acrossRoof = across.Lines.Where(l => l.Layer == ViewLayers.Roof).ToList();
+        Assert(acrossRoof.Any(l => Math.Abs(l.Y1 - 8310d) < 1d), "横着剖到屋脊处，剖到的屋面线应在 8310");
+
+        // 4) 体量：5 个面（底 + 两坡 + 两端山墙），最高点 = 屋脊
+        var volume = BuildingVolumeBuilder.Build(model, null);
+        Assert(volume.Faces.Count(f => f.Kind == "roof") == 5, "屋面应是 5 个面，实际 "
+            + volume.Faces.Count(f => f.Kind == "roof"));
+        Assert(Math.Abs(volume.MaxZ - 8310d) < 1d, "体量最高点应是屋脊 8310，实际 " + volume.MaxZ);
+        Assert(Math.Abs(volume.MinZ - 6780d) < 1d, "屋面底面应是 檐口 6900 − 板厚 120 = 6780，实际 " + volume.MinZ);
+        var slopes = volume.Faces.Where(f => f.Kind == "roof" && f.NormalZ > 0.1d && f.NormalZ < 0.99d).ToList();
+        Assert(slopes.Count == 2, "应有两个斜的坡面，实际 " + slopes.Count);
+        Assert(slopes.All(f => f.Points.Count == 4), "坡面应是四边形");
+        // 屋面法线：坡度 1:2（tan=0.5）→ 法线 (0, ∓0.4472, 0.8944)，一个朝南一个朝北、都朝上
+        Assert(slopes.All(f => f.NormalZ > 0.5d && Math.Abs(f.NormalY) > 0.3d), "坡面法线应朝上并偏向南北");
+        Assert(slopes.Any(f => f.NormalY < -0.3d) && slopes.Any(f => f.NormalY > 0.3d),
+            "两个坡面应一个朝南一个朝北");
+        Assert(slopes.All(f => Math.Abs(f.NormalZ - 0.8944d) < 0.01d), "1:2 坡的法线 Z 分量应是 0.8944，实际 "
+            + string.Join("/", slopes.Select(f => Math.Round(f.NormalZ, 4).ToString()).ToArray()));
+
+        Console.WriteLine("   坡屋面：檐口 " + Math.Round(geometry.EaveElevation) + "、屋脊 "
+            + Math.Round(geometry.RidgeElevation) + "（半跨 " + Math.Round(geometry.HalfSpan)
+            + "、坡度 " + Math.Round(geometry.PitchDegrees, 3) + "°）；山墙坡线 " + sloped.Count
+            + " 条、体量屋面 " + volume.Faces.Count(f => f.Kind == "roof") + " 面");
     }
 
     /// <summary>造一个两层模型 + 一部楼梯（楼梯 X 位置可调，用来验"剖切面前面就切掉"）。</summary>

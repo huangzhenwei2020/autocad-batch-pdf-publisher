@@ -106,6 +106,11 @@ namespace BatchPdfPublisher.BuildingModel
                 if (stair == null || !Include(includeAll, view.StoreyIds, stair.StoreyId)) continue;
                 AddStairProfile(model, stair, frame, isSection, cutProj, view.ViewDepth, extraLines);
             }
+            foreach (var roof in model.Roofs ?? new List<RoofModel>())
+            {
+                if (roof == null || !Include(includeAll, view.StoreyIds, roof.StoreyId)) continue;
+                AddRoofProfile(model, roof, frame, isSection, cutProj, view.ViewDepth, rects, extraLines);
+            }
 
             // 近的在前：近的矩形负责把远的边裁掉（剖切矩形最靠前）。
             var nearer = new List<Rect>();
@@ -153,6 +158,13 @@ namespace BatchPdfPublisher.BuildingModel
             var minZ = geometry.Min(l => Math.Min(l.Y1, l.Y2));
             var baseZ = usable[0].Elevation;
             var topZ = usable.Max(s => s.Elevation + (s.Height > 0.5d ? s.Height : 3000d));
+            // 有坡屋面时，总高要算到**屋脊**（立面图上的实际最高点）
+            var roofs = (model.Roofs ?? new List<RoofModel>())
+                .Where(r => r != null && Include(view.StoreyIds == null || view.StoreyIds.Count == 0, view.StoreyIds, r.StoreyId))
+                .Select(r => RoofGeometry.Build(model, r))
+                .Where(g => g != null && g.IsValid)
+                .ToList();
+            foreach (var roofGeometry in roofs) topZ = Math.Max(topZ, roofGeometry.RidgeElevation);
 
             // 先算出"这个立面自己的洞口"：图上有锚点 + 落在**朝观察者的最近一道外墙**上。
             // 立面图的尺寸只标这个立面的门窗，背面的窗不能混进来。
@@ -251,7 +263,19 @@ namespace BatchPdfPublisher.BuildingModel
                     Layer = ViewLayers.Dimension, Vertical = true,
                     From = baseZ, To = topZ,
                     AnchorPosition = maxU, LinePosition = totalLinePosition,
-                    Note = "总高"
+                    Note = roofs.Count > 0 ? "总高（到屋脊）" : "总高"
+                });
+            }
+            // 屋面的"檐口 → 屋脊"单独标一道（制图习惯：坡度与脊高要能看出来）
+            foreach (var roofGeometry in roofs)
+            {
+                if (roofGeometry.RidgeElevation - roofGeometry.EaveElevation < 1d) continue;
+                document.Dimensions.Add(new ViewDimension
+                {
+                    Layer = ViewLayers.Dimension, Vertical = true,
+                    From = roofGeometry.EaveElevation, To = roofGeometry.RidgeElevation,
+                    AnchorPosition = maxU, LinePosition = totalLinePosition + 1000d,
+                    Note = "屋面（檐口→屋脊，坡度 " + Math.Round(roofGeometry.PitchDegrees, 1) + "°）"
                 });
             }
 
@@ -1675,6 +1699,77 @@ namespace BatchPdfPublisher.BuildingModel
             AddLine(extraLines, layer, lu1, landBottom, lu1, landTop);
             AddLine(extraLines, layer, lu0, landTop + handrailHeight, lu1, landTop + handrailHeight);
         }
+        /// <summary>
+        /// 立面/剖面里的坡屋面（双坡）：
+        ///
+        /// - **视线与屋脊平行**（站在山墙这一头看，或剖面顺着屋脊切）→ 看到**三角**轮廓：
+        ///   檐口一条横线 + 两条坡线交于屋脊；
+        /// - **视线与屋脊垂直**（正对坡面看）→ 看到**坡面**：檐口线 + 屋脊线两条横线（外面套一个矩形轮廓）；
+        /// - 剖面时若剖切面在屋面范围内，再补一条"剖到的屋面"横线（该处屋面标高）。
+        /// </summary>
+        private static void AddRoofProfile(BuildingModelDocument model, RoofModel roof, Frame frame,
+            bool isSection, double cutProj, double viewDepth, List<Rect> rects, List<ViewLine> extraLines)
+        {
+            var geometry = RoofGeometry.Build(model, roof);
+            if (geometry == null || !geometry.IsValid) return;
+
+            var eave = geometry.EaveElevation;
+            var ridge = geometry.RidgeElevation;
+            var bottom = eave - geometry.Thickness;
+
+            // 视线是不是顺着屋脊（Vx/Vy 与屋脊方向同向）
+            var alongRidgeView = geometry.AlongX ? Math.Abs(frame.Vx) > 0.5d : Math.Abs(frame.Vy) > 0.5d;
+            var u0 = Math.Min(frame.U(geometry.X0, geometry.Y0), frame.U(geometry.X1, geometry.Y1));
+            var u1 = Math.Max(frame.U(geometry.X0, geometry.Y0), frame.U(geometry.X1, geometry.Y1));
+            // 屋脊在视图水平轴上的位置（坡面跨度方向的中点）
+            var ridgeU = frame.U(geometry.RidgeStart.X, geometry.RidgeStart.Y);
+
+            if (alongRidgeView)
+            {
+                // 山墙这头看：三角形（檐口横线 + 两条坡线）
+                AddLine(extraLines, ViewLayers.Roof, u0, eave, u1, eave);
+                AddLine(extraLines, ViewLayers.Roof, u0, eave, ridgeU, ridge);
+                AddLine(extraLines, ViewLayers.Roof, u1, eave, ridgeU, ridge);
+                // 檐口厚度（挑檐板边）
+                if (Math.Abs(bottom - eave) > 1d)
+                {
+                    AddLine(extraLines, ViewLayers.Roof, u0, bottom, u1, bottom);
+                    AddLine(extraLines, ViewLayers.Roof, u0, bottom, u0, eave);
+                    AddLine(extraLines, ViewLayers.Roof, u1, bottom, u1, eave);
+                }
+            }
+            else
+            {
+                // 正对坡面看：檐口线 + 屋脊线 + 两侧竖边（用矩形那套做遮挡，才能被前面的墙挡住）
+                var body = new Rect
+                {
+                    U0 = u0, U1 = u1, Z0 = bottom, Z1 = ridge,
+                    Depth = frame.Depth((geometry.X0 + geometry.X1) / 2d, (geometry.Y0 + geometry.Y1) / 2d),
+                    Layer = ViewLayers.Roof
+                };
+                rects.Add(body);
+                AddLine(extraLines, ViewLayers.Roof, u0, eave, u1, eave);
+                AddLine(extraLines, ViewLayers.Roof, u0, ridge, u1, ridge);
+            }
+
+            if (!isSection) return;
+            // 剖面：剖切面切到屋面时，补一条"这里屋面有多高"的横线
+            var p0 = frame.P(geometry.X0, geometry.Y0);
+            var p1 = frame.P(geometry.X1, geometry.Y1);
+            var projMin = Math.Min(p0, p1);
+            var projMax = Math.Max(p0, p1);
+            if (projMax < cutProj - Epsilon) return;
+            if (viewDepth > 0.5d && projMin > cutProj + viewDepth) return;
+            if (cutProj < projMin - Epsilon || cutProj > projMax + Epsilon) return;
+            // 切点离哪条檐口近，就算那边的坡高（双坡在剖切面上是单坡的一段）
+            var distanceToEave = 0d;
+            if (geometry.AlongX) distanceToEave = frame.Vy >= 0d ? cutProj - geometry.Y0 : geometry.Y1 - cutProj;
+            else distanceToEave = frame.Vx >= 0d ? cutProj - geometry.X0 : geometry.X1 - cutProj;
+            distanceToEave = Math.Max(0d, Math.Min(geometry.HalfSpan, distanceToEave));
+            var cutZ = eave + distanceToEave * Math.Tan(geometry.PitchDegrees * Math.PI / 180d);
+            AddLine(extraLines, ViewLayers.Roof, u0, cutZ, u1, cutZ);
+        }
+
         /// <summary>往现成的线表里加一条线（楼梯轮廓直接进视图时用）。</summary>
         private static void AddLine(List<ViewLine> lines, string layer, double x1, double y1, double x2, double y2)
         {

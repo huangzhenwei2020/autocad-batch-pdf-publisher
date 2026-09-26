@@ -184,6 +184,33 @@ namespace BatchPdfPublisher.BuildingModel
         public double WellWidth { get; set; } = 100d;
     }
 
+    /// <summary>
+    /// 坡屋面（**双坡**）：轴对齐的檐口矩形 + 屋脊方向 + 坡度角。
+    ///
+    /// 画的时候就把**挑檐**算进去（矩形拉到外墙以外），这样三维里自然就有挑檐。
+    /// 屋脊标高按"檐口标高 + 半跨 × tan(坡度)"现算；屋面板厚只用来做体量。
+    /// </summary>
+    public sealed class RoofModel
+    {
+        public string Id { get; set; }
+        public string StoreyId { get; set; }
+        /// <summary>檐口矩形左下角（平面，mm）。</summary>
+        public double X { get; set; }
+        public double Y { get; set; }
+        /// <summary>檐口矩形沿 X 的尺寸。</summary>
+        public double Width { get; set; } = 7440d;
+        /// <summary>檐口矩形沿 Y 的尺寸。</summary>
+        public double Depth { get; set; } = 5640d;
+        /// <summary>屋脊方向：true = 屋脊沿 X（朝 ±Y 两坡），false = 屋脊沿 Y。</summary>
+        public bool AlongX { get; set; } = true;
+        /// <summary>坡度角（度）。默认 26.565°（即 1:2 坡）。</summary>
+        public double PitchDegrees { get; set; } = 26.565d;
+        /// <summary>檐口标高（mm）；0 = 按所属楼层标高 + 层高现算。</summary>
+        public double EaveElevation { get; set; }
+        /// <summary>屋面板厚（mm，做体量与剖面用）。</summary>
+        public double Thickness { get; set; } = 120d;
+    }
+
     /// <summary>整个建筑模型（P0 只含体量所必需的构件）。</summary>
     public sealed class BuildingModelDocument
     {
@@ -196,6 +223,8 @@ namespace BatchPdfPublisher.BuildingModel
         public List<ColumnModel> Columns { get; set; } = new List<ColumnModel>();
         /// <summary>楼梯：挂楼层（双跑：两跑梯段 + 休息平台）。</summary>
         public List<StairModel> Stairs { get; set; } = new List<StairModel>();
+        /// <summary>坡屋面：挂楼层（檐口矩形 + 屋脊方向 + 坡度）。</summary>
+        public List<RoofModel> Roofs { get; set; } = new List<RoofModel>();
         /// <summary>轴网：整栋通用（不挂楼层），平面图靠它标轴线尺寸与轴号。</summary>
         public List<AxisModel> Axes { get; set; } = new List<AxisModel>();
         /// <summary>房间：挂楼层，平面图里标房间名与面积。</summary>
@@ -596,6 +625,8 @@ namespace BatchPdfPublisher.BuildingModel
         public const string Axis = "WL-模型-轴线";
         /// <summary>楼梯（踏步线、休息平台、上下行箭头与文字、扶手）。</summary>
         public const string Stair = "WL-模型-楼梯";
+        /// <summary>坡屋面（檐口、屋脊、坡线与山墙三角）。</summary>
+        public const string Roof = "WL-模型-屋面";
         /// <summary>房间轮廓、房间名与面积。</summary>
         public const string Room = "WL-模型-房间";        /// <summary>图纸自带的图框与标题栏（落图时若套用了项目图框模板，这一层会被跳过）。</summary>
         public const string SheetFrame = "WL-模型-图纸框";
@@ -624,6 +655,7 @@ namespace BatchPdfPublisher.BuildingModel
             new Style { Name = Axis, Color = 7, LineType = "CENTER", LineWeight = 13, Description = "轴线（点划线）与轴号" },
             new Style { Name = Room, Color = 7, LineType = "Continuous", LineWeight = 13, Description = "房间轮廓、名称与面积" },
             new Style { Name = Stair, Color = 7, LineType = "Continuous", LineWeight = 18, Description = "楼梯：踏步线、休息平台、上下行箭头与扶手" },
+            new Style { Name = Roof, Color = 7, LineType = "Continuous", LineWeight = 25, Description = "坡屋面：檐口、屋脊、坡线与山墙轮廓" },
             new Style { Name = SheetFrame, Color = 7, LineType = "Continuous", LineWeight = 35, Description = "图纸自带图框与标题栏（套用项目图框时跳过）" }
         };
 
