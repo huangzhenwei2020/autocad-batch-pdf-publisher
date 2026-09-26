@@ -25,6 +25,11 @@ namespace Wanluo.BuildingModelStudio
         private string _tool = "select";
         private PlanHit _selection;
         private DragMode _drag = DragMode.None;
+        /// <summary>拖动开始时抓住的构件引用（拖动期间只认它们，不再解引用 _selection）。</summary>
+        private WallModel _dragWall;
+        private OpeningModel _dragOpening;
+        private ColumnModel _dragColumn;
+        private int _dragGrip = -1;
         private Point _lastMouse;
         private double _dragStartX, _dragStartY;
         private double _dragOriginX1, _dragOriginY1, _dragOriginX2, _dragOriginY2, _dragOriginOffset;
@@ -56,6 +61,7 @@ namespace Wanluo.BuildingModelStudio
             get { return _model; }
             set
             {
+                CancelDrag();
                 _model = value;
                 _selection = null;
                 if (_model != null) _history.Reset(_model);
@@ -69,10 +75,70 @@ namespace Wanluo.BuildingModelStudio
         public PlanHit Selection { get { return _selection; } }
         public bool IsDirty { get { return _dirty; } }
 
+        /// <summary>
+        /// 取消正在进行的拖动：清掉拖动状态与抓着的构件引用。
+        /// 删除、撤销/重做、换楼层、换模型、换工具、失去鼠标捕获都要走它 ——
+        /// 2026-09-26 的 NullReferenceException 就是"拖柱时选中项被清空，鼠标一动还去解引用"。
+        /// </summary>
+        private void CancelDrag()
+        {
+            _drag = DragMode.None;
+            _dragWall = null;
+            _dragOpening = null;
+            _dragColumn = null;
+            _dragGrip = -1;
+        }
+
+        /// <summary>拖动抓着的构件还在模型里吗（被删除或撤销替换掉的模型会让它不在）。</summary>
+        private bool DragTargetAlive()
+        {
+            switch (_drag)
+            {
+                case DragMode.MoveWall:
+                case DragMode.Grip:
+                    return _dragWall != null && (_model.Walls ?? new List<WallModel>()).Contains(_dragWall);
+                case DragMode.MoveOpening:
+                    return _dragOpening != null && (_model.Openings ?? new List<OpeningModel>()).Contains(_dragOpening);
+                case DragMode.MoveColumn:
+                    return _dragColumn != null && (_model.Columns ?? new List<ColumnModel>()).Contains(_dragColumn);
+                default:
+                    return true;
+            }
+        }
+
+        /// <summary>自检用：把鼠标消息直接送进画布（拖动路径不依赖窗口消息循环）。</summary>
+        internal void SimulateMouseDown(Point point, MouseButtons button)
+        {
+            OnMouseDown(new MouseEventArgs(button, 1, point.X, point.Y, 0));
+        }
+
+        /// <summary>自检用：送一条鼠标移动。</summary>
+        internal void SimulateMouseMove(Point point)
+        {
+            OnMouseMove(new MouseEventArgs(MouseButtons.Left, 0, point.X, point.Y, 0));
+        }
+
+        /// <summary>自检用：送一条鼠标抬起。</summary>
+        internal void SimulateMouseUp(Point point, MouseButtons button)
+        {
+            OnMouseUp(new MouseEventArgs(button, 1, point.X, point.Y, 0));
+        }
+
+        /// <summary>自检用：当前是否在拖动。</summary>
+        internal bool IsDragging { get { return _drag != DragMode.None; } }
+
         public string StoreyId
         {
             get { return _storeyId; }
-            set { _storeyId = value; _selection = null; Invalidate(); RaiseStatus(); SelectionChanged?.Invoke(); }
+            set
+            {
+                CancelDrag();       // 换楼层时原来选中的构件不属于这一层了，拖动必须停
+                _storeyId = value;
+                _selection = null;
+                Invalidate();
+                RaiseStatus();
+                SelectionChanged?.Invoke();
+            }
         }
 
         public string Tool
@@ -80,6 +146,7 @@ namespace Wanluo.BuildingModelStudio
             get { return _tool; }
             set
             {
+                CancelDrag();
                 _tool = value ?? "select";
                 _drawFromX = _drawFromY = null;
                 Cursor = _tool == "select" ? Cursors.Default : Cursors.Cross;
@@ -495,23 +562,28 @@ namespace Wanluo.BuildingModelStudio
                     var hit = PlanEditing.HitTest(_model, _storeyId, snap.X, snap.Y, 10d / _scale);
                     _selection = hit;
                     SelectionChanged?.Invoke();
-                    if (hit == null) { Invalidate(); break; }
+                    if (hit == null) { CancelDrag(); Invalidate(); break; }
                     _dragStartX = x; _dragStartY = y;
+                    // 拖动期间**只认这里抓到的对象引用**，不再回头看 _selection：
+                    // _selection 可能被删除/撤销/切楼层清掉，再解引用就会 NullReferenceException。
+                    _dragWall = null; _dragOpening = null; _dragColumn = null; _dragGrip = -1;
                     var wall = hit.Kind == "wall" ? FindWall(hit.Id) : null;
                     if (wall != null)
                     {
+                        _dragWall = wall;
+                        _dragGrip = hit.Grip;
                         _dragOriginX1 = wall.X1; _dragOriginY1 = wall.Y1; _dragOriginX2 = wall.X2; _dragOriginY2 = wall.Y2;
                         _drag = hit.Grip >= 0 ? DragMode.Grip : DragMode.MoveWall;
                     }
                     else if (hit.Kind == "opening")
                     {
                         var opening = (_model.Openings ?? new List<OpeningModel>()).FirstOrDefault(o => o != null && Same(o.Id, hit.Id));
-                        if (opening != null) { _dragOriginOffset = opening.Offset; _drag = DragMode.MoveOpening; }
+                        if (opening != null) { _dragOpening = opening; _dragOriginOffset = opening.Offset; _drag = DragMode.MoveOpening; }
                     }
                     else if (hit.Kind == "column")
                     {
                         var column = (_model.Columns ?? new List<ColumnModel>()).FirstOrDefault(c => c != null && Same(c.Id, hit.Id));
-                        if (column != null) { _dragOriginX1 = column.X; _dragOriginY1 = column.Y; _drag = DragMode.MoveColumn; }
+                        if (column != null) { _dragColumn = column; _dragOriginX1 = column.X; _dragOriginY1 = column.Y; _drag = DragMode.MoveColumn; }
                     }
                     Invalidate();
                     RaiseStatus();
@@ -541,48 +613,52 @@ namespace Wanluo.BuildingModelStudio
 
             if (_drag != DragMode.None && _drag != DragMode.DrawWall && _model != null)
             {
+                if (!DragTargetAlive())
+                {
+                    // 拖到一半时构件被删掉/撤销/换楼层了：取消拖动，别去解引用旧对象
+                    CancelDrag();
+                    StatusChanged?.Invoke("拖动的构件已经不在模型里了（被删除或撤销），已取消本次拖动。");
+                    Invalidate();
+                    RaiseStatus();
+                    return;
+                }
                 var deltaX = _cursorX - _dragStartX;
                 var deltaY = _cursorY - _dragStartY;
                 if (_drag == DragMode.MoveWall)
                 {
-                    var wall = FindWall(_selection.Id);
-                    if (wall != null)
-                    {
-                        wall.X1 = _dragOriginX1 + deltaX; wall.Y1 = _dragOriginY1 + deltaY;
-                        wall.X2 = _dragOriginX2 + deltaX; wall.Y2 = _dragOriginY2 + deltaY;
-                    }
+                    _dragWall.X1 = _dragOriginX1 + deltaX; _dragWall.Y1 = _dragOriginY1 + deltaY;
+                    _dragWall.X2 = _dragOriginX2 + deltaX; _dragWall.Y2 = _dragOriginY2 + deltaY;
                 }
                 else if (_drag == DragMode.Grip)
                 {
-                    var wall = FindWall(_selection.Id);
-                    if (wall != null)
+                    if (_dragGrip == 0) { _dragWall.X1 = _cursorX; _dragWall.Y1 = _cursorY; }
+                    else if (_dragGrip == 1) { _dragWall.X2 = _cursorX; _dragWall.Y2 = _cursorY; }
+                    else
                     {
-                        if (_selection.Grip == 0) { wall.X1 = _cursorX; wall.Y1 = _cursorY; }
-                        else if (_selection.Grip == 1) { wall.X2 = _cursorX; wall.Y2 = _cursorY; }
-                        else
-                        {
-                            // 中点夹点 = 整道墙平移
-                            wall.X1 = _dragOriginX1 + deltaX; wall.Y1 = _dragOriginY1 + deltaY;
-                            wall.X2 = _dragOriginX2 + deltaX; wall.Y2 = _dragOriginY2 + deltaY;
-                        }
+                        // 中点夹点 = 整道墙平移
+                        _dragWall.X1 = _dragOriginX1 + deltaX; _dragWall.Y1 = _dragOriginY1 + deltaY;
+                        _dragWall.X2 = _dragOriginX2 + deltaX; _dragWall.Y2 = _dragOriginY2 + deltaY;
                     }
                 }
                 else if (_drag == DragMode.MoveOpening)
                 {
-                    var opening = (_model.Openings ?? new List<OpeningModel>()).FirstOrDefault(o => o != null && Same(o.Id, _selection.Id));
-                    var wall = opening == null ? null : FindWall(opening.HostWallId);
-                    if (opening != null && wall != null)
+                    var wall = FindWall(_dragOpening.HostWallId);
+                    if (wall == null)
                     {
-                        // 洞口只能沿墙滑动，并且不能滑出墙端
-                        var length = PlanEditing.WallLength(wall);
-                        opening.Offset = Math.Max(opening.Width / 2d, Math.Min(length - opening.Width / 2d,
-                            PlanEditing.ProjectOnWall(wall, _cursorX, _cursorY)));
+                        CancelDrag();
+                        StatusChanged?.Invoke("洞口所在的墙已经不在模型里了，已取消本次拖动。");
+                        Invalidate();
+                        RaiseStatus();
+                        return;
                     }
+                    // 洞口只能沿墙滑动，并且不能滑出墙端
+                    var length = PlanEditing.WallLength(wall);
+                    _dragOpening.Offset = Math.Max(_dragOpening.Width / 2d, Math.Min(length - _dragOpening.Width / 2d,
+                        PlanEditing.ProjectOnWall(wall, _cursorX, _cursorY)));
                 }
                 else if (_drag == DragMode.MoveColumn)
                 {
-                    var column = (_model.Columns ?? new List<ColumnModel>()).FirstOrDefault(c => c != null && Same(c.Id, _selection.Id));
-                    if (column != null) { column.X = _dragOriginX1 + deltaX; column.Y = _dragOriginY1 + deltaY; }
+                    _dragColumn.X = _dragOriginX1 + deltaX; _dragColumn.Y = _dragOriginY1 + deltaY;
                 }
                 Invalidate();
                 RaiseStatus();
@@ -601,7 +677,14 @@ namespace Wanluo.BuildingModelStudio
                     : _drag == DragMode.MoveOpening ? "移动洞口" : "移动柱";
                 Commit(label);
             }
-            if (_drag == DragMode.Pan || _drag != DragMode.None) _drag = DragMode.None;
+            CancelDrag();
+        }
+
+        /// <summary>鼠标捕获丢了（拖到窗口外面、切走了窗口）就别再继续拖，免得后面去解引用旧对象。</summary>
+        protected override void OnMouseCaptureChanged(EventArgs e)
+        {
+            base.OnMouseCaptureChanged(e);
+            if (!Capture && _drag != DragMode.None) CancelDrag();
         }
 
         protected override void OnMouseWheel(MouseEventArgs e)
@@ -621,6 +704,7 @@ namespace Wanluo.BuildingModelStudio
             base.OnKeyDown(e);
             if (e.KeyCode == Keys.Escape)
             {
+                CancelDrag();
                 _drawFromX = _drawFromY = null;
                 _selection = null;
                 SelectionChanged?.Invoke();
@@ -657,6 +741,7 @@ namespace Wanluo.BuildingModelStudio
             else if (_selection.Kind == "opening") removed = _model.Openings.RemoveAll(o => o != null && Same(o.Id, _selection.Id)) > 0;
             else if (_selection.Kind == "column") removed = _model.Columns.RemoveAll(c => c != null && Same(c.Id, _selection.Id)) > 0;
             if (!removed) { StatusChanged?.Invoke("没找到要删除的构件。"); return; }
+            CancelDrag();       // 被拖的那一个可能刚被删掉，拖动立即结束
             _selection = null;
             SelectionChanged?.Invoke();
             Commit("删除");
@@ -666,6 +751,7 @@ namespace Wanluo.BuildingModelStudio
         {
             var restored = _history.Undo(_model);
             if (ReferenceEquals(restored, _model)) { StatusChanged?.Invoke("没有可撤销的操作。"); return; }
+            CancelDrag();       // 撤销会把模型换成快照，拖动抓着的旧对象已经不是模型里的了
             _model = restored;
             _selection = null;
             StructureChanged?.Invoke();
@@ -679,6 +765,7 @@ namespace Wanluo.BuildingModelStudio
         {
             var restored = _history.Redo(_model);
             if (ReferenceEquals(restored, _model)) { StatusChanged?.Invoke("没有可重做的操作。"); return; }
+            CancelDrag();
             _model = restored;
             _selection = null;
             StructureChanged?.Invoke();

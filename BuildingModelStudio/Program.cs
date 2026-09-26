@@ -86,6 +86,7 @@ namespace Wanluo.BuildingModelStudio
                 try
                 {
                     CanvasSelfTest.Run(Console.WriteLine);
+                    PlanInteractionSelfTest.Run(Console.WriteLine);
                     ViewPreviewSelfTest.Run(Console.WriteLine);
                 }
                 catch (Exception exception)

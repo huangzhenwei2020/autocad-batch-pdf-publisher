@@ -20,6 +20,7 @@
     <Compile Include="PlanGrid.cs" />
     <Compile Include="ViewPreviewCanvas.cs" />
     <Compile Include="CanvasSelfTest.cs" />
+    <Compile Include="PlanInteractionSelfTest.cs" />
     <Compile Include="ViewPreviewSelfTest.cs" />
     <!-- 建筑模型的纯逻辑层：与主插件、测试工程共用同一份源码（本仓库既有做法：源码链接，不新增 DLL）。 -->
     <Compile Include="..\Shared\BuildingModel\ModelTypes.cs" Link="Shared\ModelTypes.cs" />
