@@ -131,17 +131,88 @@ namespace BatchPdfPublisher.BuildingModel
                 cursor = Math.Max(cursor, opening.End);
             }
             if (length - cursor > 1d) AddWallSegment(volume, wall, cursor, length, z0, z1, ref first);
+
+            // 门窗构件：窗 = 四条边框 + 玻璃；门 = 一扇打开的门扇（这样三维里一眼能看出是窗还是门）
+            foreach (var opening in openings)
+            {
+                var source = (model.Openings ?? new List<OpeningModel>()).FirstOrDefault(candidate => candidate != null
+                    && Same(candidate.HostWallId, wall.Id)
+                    && Math.Abs(Math.Max(0d, candidate.Offset - Math.Max(0d, candidate.Width) / 2d) - opening.Start) < 0.5d);
+                var kind = source == null ? "窗" : (source.Kind ?? "窗");
+                if (kind.IndexOf("门", StringComparison.Ordinal) >= 0)
+                    AddDoorLeaf(volume, wall, opening.Start, opening.End, z0 + opening.Sill, z0 + opening.Head, wall.StoreyId, ref first);
+                else
+                    AddWindowParts(volume, wall, opening.Start, opening.End, z0 + opening.Sill, z0 + opening.Head, wall.StoreyId, ref first);
+            }
+        }
+
+        /// <summary>窗：外框（四条边各一块）+ 玻璃（薄板，居中在墙厚里）。</summary>
+        private static void AddWindowParts(BuildingVolume volume, WallModel wall, double start, double end,
+            double sill, double head, string storeyId, ref bool first)
+        {
+            var width = end - start;
+            var height = head - sill;
+            if (width < 40d || height < 40d) return;
+            var frame = Math.Min(60d, Math.Min(width, height) / 4d);
+            AddWallSegment(volume, wall, start, end, sill, sill + frame, storeyId, "frame", ref first);                 // 下框
+            AddWallSegment(volume, wall, start, end, head - frame, head, storeyId, "frame", ref first);                 // 上框
+            AddWallSegment(volume, wall, start, start + frame, sill, head, storeyId, "frame", ref first);               // 左框
+            AddWallSegment(volume, wall, end - frame, end, sill, head, storeyId, "frame", ref first);                   // 右框
+            AddWallSegment(volume, wall, start + frame, end - frame, sill + frame, head - frame, storeyId, "glass",
+                ref first, 20d);                                                                                        // 玻璃
+        }
+
+        /// <summary>
+        /// 门：一扇**打开 35°** 的门扇（合页在洞口起点一侧、朝墙法线方向开）。
+        /// 模型里还没存开启方向，这里按制图习惯统一取"起点侧合页、向法线正方向开"。
+        /// </summary>
+        private static void AddDoorLeaf(BuildingVolume volume, WallModel wall, double start, double end,
+            double sill, double head, string storeyId, ref bool first)
+        {
+            var width = end - start;
+            var height = head - sill;
+            var length = Math.Sqrt((wall.X2 - wall.X1) * (wall.X2 - wall.X1) + (wall.Y2 - wall.Y1) * (wall.Y2 - wall.Y1));
+            if (length < 1d || width < 40d || height < 40d) return;
+            var ux = (wall.X2 - wall.X1) / length;
+            var uy = (wall.Y2 - wall.Y1) / length;
+            var nx = -uy;
+            var ny = ux;
+            const double angle = 35d * Math.PI / 180d;
+            var dx = ux * Math.Cos(angle) + nx * Math.Sin(angle);
+            var dy = uy * Math.Cos(angle) + ny * Math.Sin(angle);
+            var thickness = 40d;
+            var hingeX = wall.X1 + ux * start;
+            var hingeY = wall.Y1 + uy * start;
+
+            var corners = new List<Point3DModel>
+            {
+                new Point3DModel(hingeX - nx * thickness / 2d, hingeY - ny * thickness / 2d, sill),
+                new Point3DModel(hingeX + dx * width - nx * thickness / 2d, hingeY + dy * width - ny * thickness / 2d, sill),
+                new Point3DModel(hingeX + dx * width + nx * thickness / 2d, hingeY + dy * width + ny * thickness / 2d, sill),
+                new Point3DModel(hingeX + nx * thickness / 2d, hingeY + ny * thickness / 2d, sill)
+            };
+            AddPrism(volume, corners, sill, head, "door", storeyId, ref first);
         }
 
         /// <summary>墙轴线上 [from, to] 这一段、标高 za~zb 的体块。</summary>
         private static void AddWallSegment(BuildingVolume volume, WallModel wall, double from, double to,
             double za, double zb, ref bool first)
         {
+            AddWallSegment(volume, wall, from, to, za, zb, wall.StoreyId, "wall", ref first, 0d);
+        }
+
+        /// <summary>
+        /// 同上，但可以指定构件种类与厚度（门窗构件用）：
+        /// <paramref name="thickness"/> = 0 表示用墙厚；&gt; 0 表示以墙轴线为中心的这个厚度（玻璃就是这样一块薄板）。
+        /// </summary>
+        private static void AddWallSegment(BuildingVolume volume, WallModel wall, double from, double to,
+            double za, double zb, string storeyId, string kind, ref bool first, double thickness = 0d)
+        {
             var length = Math.Sqrt((wall.X2 - wall.X1) * (wall.X2 - wall.X1) + (wall.Y2 - wall.Y1) * (wall.Y2 - wall.Y1));
             if (length < 1d || to - from < 1d || zb - za < 1d) return;
             var ux = (wall.X2 - wall.X1) / length;
             var uy = (wall.Y2 - wall.Y1) / length;
-            var half = (wall.Thickness > 0.5d ? wall.Thickness : 200d) / 2d;
+            var half = (thickness > 0.5d ? thickness : (wall.Thickness > 0.5d ? wall.Thickness : 200d)) / 2d;
             var nx = -uy * half;
             var ny = ux * half;
             var ax = wall.X1 + ux * from;
@@ -155,7 +226,7 @@ namespace BatchPdfPublisher.BuildingModel
                 new Point3DModel(bx - nx, by - ny, za),
                 new Point3DModel(ax - nx, ay - ny, za)
             };
-            AddPrism(volume, corners, za, zb, "wall", wall.StoreyId, ref first);
+            AddPrism(volume, corners, za, zb, kind, storeyId, ref first);
         }
 
         private static void AddColumnBox(BuildingVolume volume, ColumnModel column, double z0, double z1, ref bool first)

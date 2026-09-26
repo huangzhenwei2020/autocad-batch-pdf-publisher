@@ -33,7 +33,7 @@ internal static class OpeningElevationTests
         SheetComposition();
         StudioLaunchChecks();
         VolumeChecks();
-        Console.WriteLine("PASS 立面门窗：分格与开启线 / 背立面镜像 / 遮挡裁剪 / 自定义分格 / 1:100-1:50 详简 / 参数兜底 / 可点选锚点与编号 / 尺寸与门窗表 / 平面图 / 排版出图 / 启动与取件 / 三维体量");
+        Console.WriteLine("PASS 立面门窗：分格与开启线 / 背立面镜像 / 遮挡裁剪 / 自定义分格 / 1:100-1:50 详简 / 参数兜底 / 可点选锚点与编号 / 尺寸与门窗表 / 平面图 / 排版出图 / 启动与取件 / 三维体量（门窗构件 / 剖切 / 透视 / 共面合并 / 藏在墙里的面）");
     }
 
     // ───────────────────────── 12. 三维体量与轴测投影 ─────────────────────────
@@ -82,14 +82,18 @@ internal static class OpeningElevationTests
             Offset = 1500d, Width = 1500d, Height = 1800d, Sill = 900d
         });
         var windowWall = BuildingVolumeBuilder.Build(single, null);
-        Assert(windowWall.Faces.Count == 24, "一樘窗应把墙分成 4 块（24 面），实际 " + windowWall.Faces.Count);
+        // 4 块墙（24 面）+ 窗框 4 块（24 面）+ 玻璃 1 块（6 面）= 54 面
+        Assert(windowWall.Faces.Count == 54, "一樘窗应是 4 块墙 + 4 块窗框 + 1 块玻璃（54 面），实际 "
+            + windowWall.Faces.Count);
+        Assert(windowWall.Faces.Count(f => f.Kind == "frame") == 24 && windowWall.Faces.Count(f => f.Kind == "glass") == 6,
+            "窗框 24 面、玻璃 6 面");
         // 窗台以下那块墙（0~900）的顶面应正好在 900 高 —— 这就是"窗台"
         Assert(windowWall.Faces.Any(f => f.IsUp && Math.Abs(f.Points.Max(p => p.Z) - 900d) < 1e-6d),
             "应有窗台面（标高 900）");
         // 窗顶以上那块（2700~3600）的底面应正好在 2700
         Assert(windowWall.Faces.Any(f => Math.Abs(f.NormalZ + 1d) < 1e-9d
             && Math.Abs(f.Points.Max(p => p.Z) - 2700d) < 1e-6d), "应有窗顶面（标高 2700）");
-        // 落地门（窗台 0）只会在门顶以上留一块
+        // 落地门（窗台 0）只会在门顶以上留一块，另加一扇打开的门扇
         single.Openings.Clear();
         single.Openings.Add(new OpeningModel
         {
@@ -97,7 +101,9 @@ internal static class OpeningElevationTests
             Offset = 1500d, Width = 900d, Height = 2100d, Sill = 0d
         });
         var doorWall = BuildingVolumeBuilder.Build(single, null);
-        Assert(doorWall.Faces.Count == 18, "落地门应把墙分成 3 块（18 面，门下不封），实际 " + doorWall.Faces.Count);
+        Assert(doorWall.Faces.Count == 24, "落地门应是 3 块墙（18 面）+ 门扇（6 面）= 24 面，实际 "
+            + doorWall.Faces.Count);
+        Assert(doorWall.Faces.Count(f => f.Kind == "door") == 6, "门扇应为 6 面");
         Assert(!doorWall.Faces.Any(f => f.IsUp && Math.Abs(f.Points.Max(p => p.Z) - 0d) < 1e-6d && false), "门下不该有窗台面");
 
         // 4) 轴测投影：背面剔除 + 从远到近排序 + 坐标有限
@@ -128,8 +134,241 @@ internal static class OpeningElevationTests
                     "取景后应落在视口内：(" + Math.Round(screenX) + "," + Math.Round(screenY) + ")");
             }
         Console.WriteLine("   三维体量：整栋 " + volume.Faces.Count + " 面（7440×5640×6900）、一层 "
-            + firstFloor.Faces.Count + " 面、一樘窗把墙分成 4 块（24 面）、落地门 3 块（18 面）；"
+            + firstFloor.Faces.Count + " 面、一樘窗 = 4 块墙 + 4 块窗框 + 玻璃（54 面）、落地门 24 面；"
             + "35°/28° 可见 " + faces.Count + " 面并按深度排序；取景比例 " + Math.Round(scale, 4));
+        // 体量是"一堆小方块"拼出来的，所以真正看得见的面只是少数（其余是背面与贴在一起的内部面）；
+        // 一遍过滤以后再跑一遍"藏在墙里"的规则不该再丢掉任何面（幂等 = 判据稳定）。
+        Assert(faces.Count < volume.Faces.Count * 0.4d, "可见面应远少于体量面数："
+            + faces.Count + "/" + volume.Faces.Count);
+        Assert(VolumeRenderer.DropFacesBehindParallelPlanes(faces).Count == faces.Count,
+            "过滤过一遍以后不该还能丢掉面（判据应稳定）");
+
+        VolumeRenderExtraChecks(model, volume);
+    }
+
+    /// <summary>
+    /// 三维渲染的第二组：剖切、透视、共面合并（门窗在三维里"一眼看出来"的那一层）。
+    /// 这些都要能手算核对，所以全部走纯几何的 <see cref="VolumeRenderer"/>。
+    /// </summary>
+    private static void VolumeRenderExtraChecks(BuildingModelDocument model, BuildingVolume volume)
+    {
+        // 1) 水平剖切：只留标高以下 —— 点是真的被裁掉（最大 Z 正好等于剖切标高）
+        var clipZ = 1500d;
+        var cut = VolumeRenderer.ClipFaces(volume.Faces, clipZ, false);
+        Assert(cut.Count > 0 && cut.Count < volume.Faces.Count, "剖切后应只剩一部分面：" + cut.Count + "/" + volume.Faces.Count);
+        Assert(cut.All(f => f.Points.All(p => p.Z <= clipZ + 1e-6d)), "剖切后不应有点高于剖切标高");
+        Assert(Math.Abs(cut.Max(f => f.Points.Max(p => p.Z)) - clipZ) < 1e-6d, "应有面正好停在剖切标高上");
+        var above = VolumeRenderer.ClipFaces(volume.Faces, clipZ, true);
+        Assert(above.All(f => f.Points.All(p => p.Z >= clipZ - 1e-6d)), "反过来应只留剖切标高以上");
+
+        // 2) 剖切后投影：画出来的东西比不剖切矮（V 方向的范围变小）
+        var camera = new VolumeCamera { AzimuthDegrees = 35d, ElevationDegrees = 28d, Zoom = 1d, ClipZ = clipZ };
+        var cutFaces = VolumeRenderer.Project(volume, camera);
+        var plainFaces = VolumeRenderer.Project(volume, new VolumeCamera { AzimuthDegrees = 35d, ElevationDegrees = 28d });
+        Assert(cutFaces.Count > 0 && cutFaces.Count < plainFaces.Count, "剖切后可见面应更少");
+        var cutTop = cutFaces.Max(f => f.Points.Max(p => p.Y));
+        var plainTop = plainFaces.Max(f => f.Points.Max(p => p.Y));
+        Assert(cutTop < plainTop - 100d, "剖切后最高点应明显变低：" + Math.Round(cutTop) + " vs " + Math.Round(plainTop));
+
+        // 3) 透视：一近一远两个一样的面 —— 平行投影下一样大，透视下近的更大
+        //    （方位角 0 = 相机在南边，所以 y 越小越靠近相机）
+        var nearSquare = SquareAtY(-4000d);
+        var farSquare = SquareAtY(-1000d);
+        var flatCamera = new VolumeCamera { AzimuthDegrees = 0d, ElevationDegrees = 0d, Zoom = 1d };
+        var orthoNear = ProjectArea(nearSquare, flatCamera);
+        var orthoFar = ProjectArea(farSquare, flatCamera);
+        Assert(Math.Abs(orthoNear - orthoFar) < orthoNear * 1e-6d,
+            "平行投影下远近一样大：" + Math.Round(orthoNear, 1) + " vs " + Math.Round(orthoFar, 1));
+        var deepCamera = new VolumeCamera
+        {
+            AzimuthDegrees = 0d, ElevationDegrees = 0d, Zoom = 1d, Perspective = true, FieldOfViewDegrees = 40d
+        };
+        var perspectiveNear = ProjectArea(nearSquare, deepCamera);
+        var perspectiveFar = ProjectArea(farSquare, deepCamera);
+        Assert(IsFiniteNumber(perspectiveNear) && perspectiveNear > 0d, "透视面积应有效，实际 " + perspectiveNear);
+        Assert(perspectiveNear > perspectiveFar * 1.2d, "透视下近处应明显更大："
+            + Math.Round(perspectiveNear, 1) + " vs " + Math.Round(perspectiveFar, 1));
+        // 视场角越小（长焦）画面越大
+        var tele = ProjectArea(nearSquare, new VolumeCamera
+        {
+            AzimuthDegrees = 0d, ElevationDegrees = 0d, Perspective = true, FieldOfViewDegrees = 12d
+        });
+        Assert(tele > perspectiveNear * 2d, "视场角变小画面应明显变大：" + Math.Round(tele, 1)
+            + " vs " + Math.Round(perspectiveNear, 1));
+
+        // 4) 共面合并：分格墙（洞口上下的墙块与左右墙块共面）中间的"分格线"不画；
+        //    实心方块没有共面邻面，边全部照画。
+        var solid = SampleModelFactory.CreateEmptyModel("共面");
+        solid.Walls.Add(new WallModel
+        {
+            Id = "w", StoreyId = solid.Storeys[0].Id, X1 = 0d, Y1 = 0d, X2 = 3000d, Y2 = 0d, Thickness = 240d
+        });
+        var solidFaces = VolumeRenderer.Project(BuildingVolumeBuilder.Build(solid, null),
+            new VolumeCamera { AzimuthDegrees = 35d, ElevationDegrees = 28d, Zoom = 1d });
+        Assert(solidFaces.All(f => f.Edges.Count == f.Points.Count), "实心墙没有共面邻面，每个面应是 4 条整边");
+        solid.Openings.Add(new OpeningModel
+        {
+            Id = "o", HostWallId = "w", Kind = "窗", Code = "C1518",
+            Offset = 1500d, Width = 1500d, Height = 1800d, Sill = 900d
+        });
+        var splitFaces = VolumeRenderer.Project(BuildingVolumeBuilder.Build(solid, null),
+            new VolumeCamera { AzimuthDegrees = 35d, ElevationDegrees = 28d, Zoom = 1d });
+        Assert(splitFaces.All(f => f.Edges.All(segment => segment.Count == 2)), "每条边都应是两个点");
+        Assert(splitFaces.All(f => f.Points.All(p => IsFiniteNumber(p.X) && IsFiniteNumber(p.Y))
+            && f.Edges.SelectMany(segment => segment).All(p => IsFiniteNumber(p.X) && IsFiniteNumber(p.Y))),
+            "合并后的边坐标必须有限");
+        var mergedFaces = splitFaces.Count(f => f.Edges.Count < f.Points.Count);
+        Assert(mergedFaces > 0, "洞口上下的墙块与左右墙块共面，中间的线应被合并掉");
+        // 自洽核对：没共面邻面时"画出来的线"= 各面周长；有共面邻面时必须更少
+        var solidDrawn = TotalEdgeLength(solidFaces);
+        var solidPerimeter = PolygonPerimeter(solidFaces);
+        Assert(Math.Abs(solidDrawn - solidPerimeter) < 1e-6d, "实心墙应把周长整圈画出来："
+            + Math.Round(solidDrawn) + " vs " + Math.Round(solidPerimeter));
+        var splitDrawn = TotalEdgeLength(splitFaces);
+        var splitPerimeter = PolygonPerimeter(splitFaces);
+        Assert(splitDrawn < splitPerimeter * 0.999d, "合并后画出来的线应少于各面周长："
+            + Math.Round(splitDrawn) + " vs " + Math.Round(splitPerimeter));
+
+        // 5) 门窗在三维里能分辨：窗有 frame/glass、门有 door，玻璃比墙厚薄（真的放在墙里）
+        Assert(volume.Faces.Any(f => f.Kind == "glass") && volume.Faces.Any(f => f.Kind == "frame")
+            && volume.Faces.Any(f => f.Kind == "door"), "整栋体量里应同时有窗框、玻璃、门扇");
+        foreach (var storeyId in model.Storeys.Select(storey => storey.Id))
+        {
+            var one = BuildingVolumeBuilder.Build(model, storeyId);
+            Assert(one.Faces.Any(f => f.Kind == "frame"), "每层的体量里都应有窗框");
+        }
+        Console.WriteLine("   三维剖切/透视/共面：剖切 " + Math.Round(clipZ) + " mm 后 " + cut.Count + "/"
+            + volume.Faces.Count + " 面（最高点 " + Math.Round(cutTop) + " vs " + Math.Round(plainTop) + "）；"
+            + "共面合并 " + mergedFaces + " 个面上的线被吃掉，描边总长 " + Math.Round(splitPerimeter)
+            + " → " + Math.Round(splitDrawn) + " mm；透视近/远面积 " + Math.Round(perspectiveNear, 3)
+            + " / " + Math.Round(perspectiveFar, 3));
+
+        // 6) "藏在墙里"的面要丢掉：单墙 + 一樘窗里，窗框/玻璃的各面都是实体内部的贴合面，
+        //    把它们画出来就会在墙面上看到一层层边框线（三维里最容易看出来的假相）。
+        var hidden = SampleModelFactory.CreateEmptyModel("藏面");
+        hidden.Walls.Add(new WallModel
+        {
+            Id = "w", StoreyId = hidden.Storeys[0].Id, X1 = 0d, Y1 = 0d, X2 = 3000d, Y2 = 0d, Thickness = 240d
+        });
+        hidden.Openings.Add(new OpeningModel
+        {
+            Id = "o", HostWallId = "w", Kind = "窗", Code = "C1518",
+            Offset = 1500d, Width = 1500d, Height = 1800d, Sill = 900d
+        });
+        var glassWall = BuildingVolumeBuilder.Build(hidden, null);
+        var glassFaces = VolumeRenderer.Project(glassWall, new VolumeCamera { AzimuthDegrees = 35d, ElevationDegrees = 28d });
+        Assert(glassFaces.All(f => f.Visible), "投影结果里不该再留背面的面");
+        Assert(glassFaces.Count < glassWall.Faces.Count / 2, "开洞后大部分面都是内部贴合面，应被丢掉："
+            + glassFaces.Count + "/" + glassWall.Faces.Count);
+        // 玻璃的四条侧边都贴在窗框里 → 四张侧边都不该画，只剩朝向相机的两个大面
+        Assert(glassFaces.Count(f => f.Kind == "glass") <= 2, "玻璃只该留下朝向相机的两个大面");
+        Console.WriteLine("   三维藏面：单墙开窗 " + glassWall.Faces.Count + " 面 → 可见 "
+            + glassFaces.Count + " 面（玻璃 " + glassFaces.Count(f => f.Kind == "glass")
+            + "、窗框 " + glassFaces.Count(f => f.Kind == "frame") + "）");
+
+        ParallelPlaneChecks();
+    }
+
+    /// <summary>
+    /// "藏在墙里"的判据：平行、在它前面 600mm 以内的面把它盖满时，这个面看不见（例：楼板侧边落在墙厚正中）。
+    /// 用两块手算得出来的板来钉：正对相机的一层是墙，后面 120mm 处是一小条楼板边。
+    /// </summary>
+    private static void ParallelPlaneChecks()
+    {
+        var volume = new BuildingVolume { MinX = 0d, MaxX = 2000d, MinY = -120d, MaxY = 0d, MinZ = 0d, MaxZ = 3000d };
+        volume.Faces.Add(Quad("wall", 0d, -120d, 0d, 2000d, 3000d, -1d));      // 前面的大墙
+        volume.Faces.Add(Quad("slab", 0d, 0d, 1000d, 2000d, 120d, -1d));       // 后面 120mm 的一小条
+        var camera = new VolumeCamera { AzimuthDegrees = 0d, ElevationDegrees = 0d, Zoom = 1d };
+        var visible = VolumeRenderer.Project(volume, camera);
+        Assert(visible.Any(f => f.Kind == "wall"), "前面的大墙当然要画");
+        Assert(!visible.Any(f => f.Kind == "slab"), "被大墙盖满的小条应被丢掉（它藏在墙里）");
+
+        // 换成"在后面 1000mm"：超过 600mm 的判定范围，就不该乱丢（那可能是窗洞里退进去的一块）
+        var far = new BuildingVolume { MinX = 0d, MaxX = 2000d, MinY = -1120d, MaxY = 0d, MinZ = 0d, MaxZ = 3000d };
+        far.Faces.Add(Quad("wall", 0d, -1120d, 0d, 2000d, 3000d, -1d));
+        far.Faces.Add(Quad("slab", 0d, 0d, 1000d, 2000d, 120d, -1d));
+        var farVisible = VolumeRenderer.Project(far, camera);
+        Assert(farVisible.Any(f => f.Kind == "slab"), "离得太远（>600mm）的面不该被当成「藏在墙里」");
+        Console.WriteLine("   三维藏面：平行面前 120mm 的小面被丢掉、1000mm 的保留（阈值 600mm 生效）");
+    }
+
+    /// <summary>造一片竖直方板：X 从 0 到 width，Z 从 z0 到 z0+height，固定在一个 Y 上。</summary>
+    private static VolumeFace Quad(string kind, double x0, double y, double z0, double width, double height, double normalY)
+    {
+        return new VolumeFace
+        {
+            Kind = kind, NormalY = normalY,
+            Points = new List<Point3DModel>
+            {
+                new Point3DModel(x0, y, z0), new Point3DModel(x0 + width, y, z0),
+                new Point3DModel(x0 + width, y, z0 + height), new Point3DModel(x0, y, z0 + height)
+            }
+        };
+    }
+
+    /// <summary>各面多边形周长的总和（= 完全不做共面合并时会画的线长）。</summary>
+    private static double PolygonPerimeter(List<VolumeFace2D> faces)
+    {
+        double total = 0d;
+        foreach (var face in faces)
+            for (var index = 0; index < face.Points.Count; index++)
+            {
+                var p = face.Points[index];
+                var q = face.Points[(index + 1) % face.Points.Count];
+                var dx = q.X - p.X;
+                var dy = q.Y - p.Y;
+                total += Math.Sqrt(dx * dx + dy * dy);
+            }
+        return total;
+    }
+
+    /// <summary>投影结果里所有要画的线的总长（用来核对"共面合并确实少画了线"）。</summary>
+    private static double TotalEdgeLength(List<VolumeFace2D> faces)
+    {
+        double total = 0d;
+        foreach (var face in faces)
+            foreach (var segment in face.Edges)
+            {
+                if (segment == null || segment.Count < 2) continue;
+                var dx = segment[1].X - segment[0].X;
+                var dy = segment[1].Y - segment[0].Y;
+                total += Math.Sqrt(dx * dx + dy * dy);
+            }
+        return total;
+    }
+
+    /// <summary>造一片朝南（法线 -Y）的竖直方板，只用来量"透视下近大远小"。</summary>
+    private static BuildingVolume SquareAtY(double y)
+    {
+        var volume = new BuildingVolume
+        {
+            MinX = 0d, MaxX = 2000d, MinY = -4000d, MaxY = 0d, MinZ = 0d, MaxZ = 3000d
+        };
+        volume.Faces.Add(new VolumeFace
+        {
+            Kind = "wall", NormalY = -1d,
+            Points = new List<Point3DModel>
+            {
+                new Point3DModel(0d, y, 0d), new Point3DModel(2000d, y, 0d),
+                new Point3DModel(2000d, y, 3000d), new Point3DModel(0d, y, 3000d)
+            }
+        });
+        return volume;
+    }
+
+    /// <summary>把体量投出来，算第一片面的（屏幕）面积 —— 比较平行投影与透视图的就是它。</summary>
+    private static double ProjectArea(BuildingVolume volume, VolumeCamera camera)
+    {
+        var projected = VolumeRenderer.Project(volume, camera);
+        if (projected.Count == 0) return 0d;
+        var points = projected[0].Points;
+        double area = 0d;
+        for (var index = 0; index < points.Count; index++)
+        {
+            var next = points[(index + 1) % points.Count];
+            area += points[index].X * next.Y - next.X * points[index].Y;
+        }
+        return Math.Abs(area) / 2d;
     }
 
     private static bool IsFiniteNumber(double value)

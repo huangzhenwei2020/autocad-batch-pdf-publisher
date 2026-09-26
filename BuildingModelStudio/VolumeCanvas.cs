@@ -47,6 +47,8 @@ namespace Wanluo.BuildingModelStudio
         internal int LastCulledCount { get; private set; }
         internal string LastPaintError { get { return _lastPaintError; } }
         internal VolumeCamera Camera { get { return _camera; } }
+        /// <summary>调试用：只画这些种类的面（空 = 全画）。</summary>
+        internal HashSet<string> KindFilter { get; set; }
 
         /// <summary>设置模型（会重算体量并适应视图）。</summary>
         public void SetModel(BuildingModelDocument model)
@@ -79,6 +81,27 @@ namespace Wanluo.BuildingModelStudio
             RaiseStatus();
         }
 
+        /// <summary>透视开关（默认轴测：平行投影，与建筑制图观感一致）。</summary>
+        internal void SetPerspective(bool perspective)
+        {
+            _camera.Perspective = perspective;
+            _autoFit = true;
+            _camera.Zoom = 1d;
+            Invalidate();
+            RaiseStatus();
+        }
+
+        /// <summary>水平剖切：clipZ &lt;= 0 或 keepAbove 都不勾时关掉；否则只留剖切面一侧。</summary>
+        internal void SetClip(double clipZ, bool enabled)
+        {
+            _camera.ClipZ = enabled ? Math.Max(0d, clipZ) : 0d;
+            Invalidate();
+            RaiseStatus();
+        }
+
+        internal bool PerspectiveOn { get { return _camera.Perspective; } }
+        internal double ClipZValue { get { return _camera.ClipZ; } }
+
         protected override void OnSizeChanged(EventArgs e)
         {
             base.OnSizeChanged(e);
@@ -95,7 +118,10 @@ namespace Wanluo.BuildingModelStudio
             StatusChanged?.Invoke("三维轴测　方位 " + Math.Round(_camera.AzimuthDegrees) + "°　仰角 "
                 + Math.Round(_camera.ElevationDegrees) + "°　体量 " + Math.Round(_volume.Width) + "×"
                 + Math.Round(_volume.Depth) + "×" + Math.Round(_volume.Height) + " mm　面 "
-                + _faces.Count + "（剔除背面 " + LastCulledCount + "）　左键拖动旋转 / 滚轮缩放 / Ctrl+A 复位");
+                + _faces.Count + "（剔除背面 " + LastCulledCount + "）"
+                + (_camera.Perspective ? "　透视" : "　轴测")
+                + (_camera.ClipZ > 0.5d ? "　剖切 " + Math.Round(_camera.ClipZ) + " mm" : string.Empty)
+                + "　左键拖动旋转 / 滚轮缩放 / Ctrl+A 复位");
         }
 
         // ───────────────────────── 鼠标 ─────────────────────────
@@ -200,9 +226,11 @@ namespace Wanluo.BuildingModelStudio
             if (!DrawGuard.IsFinite(scale) || scale <= 0d) return;
 
             using (var edge = new Pen(Color.FromArgb(70, 78, 88), 1f))
+            using (var glassEdge = new Pen(Color.FromArgb(150, 190, 214), 1f))
             {
                 foreach (var face in faces)                     // 已经"从远到近"排好：画家算法消隐
                 {
+                    if (KindFilter != null && KindFilter.Count > 0 && !KindFilter.Contains(face.Kind ?? string.Empty)) continue;
                     var points = new PointF[face.Points.Count];
                     var valid = true;
                     for (var index = 0; index < face.Points.Count; index++)
@@ -215,7 +243,20 @@ namespace Wanluo.BuildingModelStudio
                     if (!valid || points.Length < 3) continue;
                     using (var brush = new SolidBrush(FaceColor(face)))
                         g.FillPolygon(brush, points);
-                    g.DrawPolygon(edge, points);
+                    // 共面合并：与邻面贴在一起的那段边不画（一排墙段看上去就是一整片墙）
+                    var pen = face.Kind == "glass" ? glassEdge : edge;
+                    foreach (var segment in face.Edges)
+                    {
+                        if (segment == null || segment.Count < 2) continue;
+                        var x1 = offsetX + segment[0].X * scale;
+                        var y1 = offsetY - segment[0].Y * scale;
+                        var x2 = offsetX + segment[1].X * scale;
+                        var y2 = offsetY - segment[1].Y * scale;
+                        if (!DrawGuard.IsFinite(x1) || !DrawGuard.IsFinite(y1)
+                            || !DrawGuard.IsFinite(x2) || !DrawGuard.IsFinite(y2)) continue;
+                        g.DrawLine(pen, (float)DrawGuard.Clamp(x1), (float)DrawGuard.Clamp(y1),
+                            (float)DrawGuard.Clamp(x2), (float)DrawGuard.Clamp(y2));
+                    }
                     LastFaceCount++;
                 }
             }
@@ -223,13 +264,27 @@ namespace Wanluo.BuildingModelStudio
             if (_autoFit) _camera.Zoom = 1d;                    // 适应后把相机缩放归位，滚轮再改
         }
 
-        /// <summary>面颜色：按构件种类给基色，再乘明暗；顶面最亮。</summary>
+        /// <summary>
+        /// 面颜色：按构件种类给基色，再乘明暗；顶面最亮。
+        /// 门窗是"补一层"的重点：玻璃半透明（能看见后面的墙/家具），门扇偏暖色，窗框最深，
+        /// 这样一眼就能分清哪儿是窗、哪儿是门。
+        /// </summary>
         internal static Color FaceColor(VolumeFace2D face)
         {
-            var baseColor = face.Kind == "slab" ? Color.FromArgb(150, 158, 170)
-                : face.Kind == "column" ? Color.FromArgb(126, 134, 146)
-                : Color.FromArgb(168, 176, 188);
+            var kind = face.Kind ?? string.Empty;
             var shade = Math.Max(0.25d, Math.Min(1d, face.Shade + (face.IsUp ? 0.12d : 0d)));
+            if (kind == "glass")
+            {
+                // 半透明淡蓝：画家算法从远到近画，先画的墙会透出来
+                var alpha = (int)Math.Round(70d + 70d * shade);
+                return Color.FromArgb(Math.Max(40, Math.Min(170, alpha)),
+                    (int)Math.Round(176d * shade + 30d), (int)Math.Round(212d * shade + 30d), 236);
+            }
+            var baseColor = kind == "slab" ? Color.FromArgb(150, 158, 170)
+                : kind == "column" ? Color.FromArgb(126, 134, 146)
+                : kind == "frame" ? Color.FromArgb(96, 104, 116)
+                : kind == "door" ? Color.FromArgb(176, 138, 96)
+                : Color.FromArgb(168, 176, 188);
             return Color.FromArgb(
                 (int)Math.Round(baseColor.R * shade),
                 (int)Math.Round(baseColor.G * shade),

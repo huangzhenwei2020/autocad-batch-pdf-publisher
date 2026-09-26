@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -386,19 +386,47 @@ namespace Wanluo.BuildingModelStudio
         internal static void WriteVolumeSnapshot(BuildingModelDocument model, string outputFolder, Action<string> log)
         {
             if (model == null || string.IsNullOrWhiteSpace(outputFolder)) return;
+            var volume = BuildingVolumeBuilder.Build(model, null);
             using (var canvas = new VolumeCanvas { Size = new Size(1400, 900) })
             {
                 canvas.SetModel(model);
-                using (var bitmap = new Bitmap(canvas.Width, canvas.Height))
+                SaveVolume(canvas, outputFolder, "三维轴测.png", log,
+                    "体量面 " + volume.Faces.Count + "、范围 " + Math.Round(volume.Width) + "×"
+                    + Math.Round(volume.Depth) + "×" + Math.Round(volume.Height) + " mm");
+
+                // 剖切轴测：切到 1500 高，能看见室内（门窗、隔墙都在）
+                canvas.SetClip(1500d, true);
+                SaveVolume(canvas, outputFolder, "三维剖切.png", log, "剖切标高 1500 mm");
+
+                // 透视：近大远小，更像"看模型"
+                canvas.SetClip(0d, false);
+                canvas.SetPerspective(true);
+                SaveVolume(canvas, outputFolder, "三维透视.png", log, "透视 32° 视场角");
+
+                // 调试用：按种类分别出一张图（WL_VOLUME_KINDS=wall,slab,column,frame,glass,door）
+                var kinds = Environment.GetEnvironmentVariable("WL_VOLUME_KINDS");
+                if (!string.IsNullOrWhiteSpace(kinds))
                 {
-                    using (var graphics = Graphics.FromImage(bitmap)) canvas.Render(graphics);
-                    var path = Path.Combine(outputFolder, "三维轴测.png");
-                    bitmap.Save(path, System.Drawing.Imaging.ImageFormat.Png);
-                    var volume = BuildingVolumeBuilder.Build(model, null);
-                    log("快照：" + path + "（体量面 " + volume.Faces.Count + "、范围 "
-                        + Math.Round(volume.Width) + "×" + Math.Round(volume.Depth) + "×" + Math.Round(volume.Height)
-                        + " mm、画出 " + canvas.LastFaceCount + " 个面）");
+                    canvas.SetPerspective(false);
+                    foreach (var kind in kinds.Split(','))
+                    {
+                        canvas.KindFilter = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { kind.Trim() };
+                        SaveVolume(canvas, outputFolder, "调试-三维-" + kind.Trim() + ".png", log, "只看 " + kind.Trim());
+                    }
+                    canvas.KindFilter = null;
                 }
+            }
+        }
+
+        private static void SaveVolume(VolumeCanvas canvas, string outputFolder, string fileName, Action<string> log,
+            string note)
+        {
+            using (var bitmap = new Bitmap(canvas.Width, canvas.Height))
+            {
+                using (var graphics = Graphics.FromImage(bitmap)) canvas.Render(graphics);
+                var path = Path.Combine(outputFolder, fileName);
+                bitmap.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+                log("快照：" + path + "（" + note + "、画出 " + canvas.LastFaceCount + " 个面）");
             }
         }
 
@@ -588,6 +616,9 @@ namespace Wanluo.BuildingModelStudio
         private readonly ViewPreviewCanvas _viewPreview = new ViewPreviewCanvas();
         private readonly VolumeCanvas _volumeCanvas = new VolumeCanvas();
         private readonly CheckBox _volumeOnlyStorey = new CheckBox();
+        private readonly CheckBox _volumePerspective = new CheckBox();
+        private readonly CheckBox _volumeClip = new CheckBox();
+        private readonly NumericUpDown _volumeClipHeight = new NumericUpDown();
         private readonly ComboBox _viewChooser = new ComboBox();
         private readonly Label _viewInfo = new Label();
         private BuildingModelDocument _model;
@@ -950,14 +981,48 @@ namespace Wanluo.BuildingModelStudio
                 RefreshVolume(true);
             };
             row.Controls.Add(_volumeOnlyStorey);
+
+            _volumePerspective.AutoSize = true;
+            _volumePerspective.ForeColor = Color.FromArgb(180, 186, 196);
+            _volumePerspective.Text = "透视";
+            _volumePerspective.CheckedChanged += (s, e) => _volumeCanvas.SetPerspective(_volumePerspective.Checked);
+            row.Controls.Add(_volumePerspective);
+
+            _volumeClip.AutoSize = true;
+            _volumeClip.ForeColor = Color.FromArgb(180, 186, 196);
+            _volumeClip.Text = "剖切标高";
+            _volumeClip.CheckedChanged += (s, e) =>
+            {
+                _volumeClipHeight.Enabled = _volumeClip.Checked;
+                _volumeCanvas.SetClip((double)_volumeClipHeight.Value, _volumeClip.Checked);
+            };
+            row.Controls.Add(_volumeClip);
+
+            _volumeClipHeight.Width = 74;
+            _volumeClipHeight.DecimalPlaces = 0;
+            _volumeClipHeight.Minimum = 0m;
+            _volumeClipHeight.Maximum = 200000m;
+            _volumeClipHeight.Increment = 100m;
+            _volumeClipHeight.Value = 1200m;
+            _volumeClipHeight.Enabled = false;
+            _volumeClipHeight.BackColor = Color.FromArgb(38, 41, 46);
+            _volumeClipHeight.ForeColor = Color.FromArgb(214, 220, 228);
+            _volumeClipHeight.ValueChanged += (s, e) =>
+            {
+                if (_volumeClip.Checked) _volumeCanvas.SetClip((double)_volumeClipHeight.Value, true);
+            };
+            row.Controls.Add(_volumeClipHeight);
+
             layout.Controls.Add(row, 0, 0);
             layout.Controls.Add(new Label
             {
                 AutoSize = true,
-                MaximumSize = new Size(620, 0),
+                MaximumSize = new Size(760, 0),
                 ForeColor = Color.FromArgb(105, 112, 122),
                 Padding = new Padding(8, 2, 8, 4),
-                Text = "自研轴测投影：背面剔除 + 按深度从远到近填充（画家算法）。门窗洞口还没在体量上开洞，楼梯与坡屋面还没做。"
+                Text = "自研轴测投影：背面剔除 + 藏在墙里的内部贴合面丢掉 + 按深度从远到近填充（画家算法）；"
+                     + "门窗已按洞口切开并补上窗框/玻璃/门扇，共面的相邻墙段不再画分格线，"
+                     + "楼板侧边落在墙厚里的也不再画。剖切标高以上的部分会被真的切掉，便于看内部；楼梯与坡屋面还没做。"
             }, 0, 1);
 
             _volumeCanvas.Dock = DockStyle.Fill;
