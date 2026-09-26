@@ -10,6 +10,15 @@ namespace BatchPdfPublisher.BuildingModel
     /// </summary>
     public static class SampleModelFactory
     {
+        /// <summary>一个空模型：只有一层/二层两个楼层，用来从零开始画平面。</summary>
+        public static BuildingModelDocument CreateEmptyModel(string name)
+        {
+            var model = new BuildingModelDocument { Name = string.IsNullOrWhiteSpace(name) ? "新建模型" : name };
+            model.Storeys.Add(new StoreyModel { Id = "1F", Name = "一层", Elevation = 0d, Height = 3600d });
+            model.Storeys.Add(new StoreyModel { Id = "2F", Name = "二层", Elevation = 3600d, Height = 3300d });
+            return model;
+        }
+
         public static BuildingModelDocument CreateTwoStoreyHouse()
         {
             var model = new BuildingModelDocument { Name = "样例-两层小房子" };

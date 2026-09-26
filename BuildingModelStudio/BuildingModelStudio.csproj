@@ -14,9 +14,12 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="Program.cs" />
+    <Compile Include="PlanCanvas.cs" />
     <!-- 建筑模型的纯逻辑层：与主插件、测试工程共用同一份源码（本仓库既有做法：源码链接，不新增 DLL）。 -->
     <Compile Include="..\Shared\BuildingModel\ModelTypes.cs" Link="Shared\ModelTypes.cs" />
     <Compile Include="..\Shared\BuildingModel\BuildingModelJson.cs" Link="Shared\BuildingModelJson.cs" />
+    <Compile Include="..\Shared\BuildingModel\ModelEditHistory.cs" Link="Shared\ModelEditHistory.cs" />
+    <Compile Include="..\Shared\BuildingModel\PlanEditing.cs" Link="Shared\PlanEditing.cs" />
     <Compile Include="..\Shared\BuildingModel\OrthographicProjector.cs" Link="Shared\OrthographicProjector.cs" />
     <Compile Include="..\Shared\BuildingModel\SampleModelFactory.cs" Link="Shared\SampleModelFactory.cs" />
   </ItemGroup>

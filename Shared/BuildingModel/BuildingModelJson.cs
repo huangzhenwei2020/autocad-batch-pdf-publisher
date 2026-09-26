@@ -22,6 +22,23 @@ namespace BatchPdfPublisher.BuildingModel
             Write(path, typeof(BuildingModelDocument), model);
         }
 
+        /// <summary>序列化成字符串（撤销栈与单元测试用）。</summary>
+        public static string ToJson(BuildingModelDocument model)
+        {
+            using (var stream = new MemoryStream())
+            {
+                new DataContractJsonSerializer(typeof(BuildingModelDocument)).WriteObject(stream, model);
+                return Encoding.UTF8.GetString(stream.ToArray());
+            }
+        }
+
+        public static BuildingModelDocument FromJson(string json)
+        {
+            if (string.IsNullOrWhiteSpace(json)) throw new InvalidDataException("模型内容为空。");
+            using (var stream = new MemoryStream(Encoding.UTF8.GetBytes(json)))
+                return (BuildingModelDocument)new DataContractJsonSerializer(typeof(BuildingModelDocument)).ReadObject(stream);
+        }
+
         public static BuildingModelDocument LoadModel(string path)
         {
             var model = (BuildingModelDocument)Read(path, typeof(BuildingModelDocument));

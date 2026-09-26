@@ -30,6 +30,7 @@ internal static class BuildingModelProjectionTests
             HiddenLinesRemoveCoveredEdges(model);
             SectionProducesCutRectsAndHatch(model);
             JsonRoundTripsWithoutLoss(model);
+            PlanEditingTests.Run();
         }
         catch (Exception exception)
         {
