@@ -25,12 +25,23 @@ namespace BatchPdfPublisher.BuildingModel
 
         public bool TrySetWallLength(string id, double length, out string error)
         {
+            var source = Model.Walls.FirstOrDefault(x => x != null && Same(x.Id, id));
+            if (source == null) { error = "未找到墙：" + id; return false; }
+            return TrySetWallGeometry(id, length, source.Thickness, source.Height, out error);
+        }
+
+        public bool TrySetWallGeometry(string id, double length, double thickness, double height, out string error)
+        {
             error = null;
             if (!Finite(length) || length < 10d)
             {
                 error = "墙长必须是至少 10 mm 的有限数值。";
                 return false;
             }
+            if (!Finite(thickness) || thickness <= 0d)
+            { error = "墙厚必须是大于 0 mm 的有限数值。"; return false; }
+            if (!Finite(height) || (height != 0d && height < 10d))
+            { error = "墙高必须是 0（随楼层）或至少 10 mm 的有限数值。"; return false; }
             var candidate = Clone(Model);
             var wall = candidate.Walls.FirstOrDefault(x => x != null && Same(x.Id, id));
             if (wall == null) { error = "未找到墙：" + id; return false; }
@@ -40,6 +51,8 @@ namespace BatchPdfPublisher.BuildingModel
             if (previousLength < 1e-9d) { error = "墙轴线长度为零。"; return false; }
             wall.X2 = wall.X1 + dx / previousLength * length;
             wall.Y2 = wall.Y1 + dy / previousLength * length;
+            wall.Thickness = thickness;
+            wall.Height = height;
             error = ValidateWallAndOpenings(candidate, wall);
             if (error != null) return false;
             Commit(candidate);
@@ -48,15 +61,29 @@ namespace BatchPdfPublisher.BuildingModel
 
         public bool TrySetOpeningOffset(string id, double offset, out string error)
         {
+            var source = Model.Openings.FirstOrDefault(x => x != null && Same(x.Id, id));
+            if (source == null) { error = "未找到洞口：" + id; return false; }
+            return TrySetOpeningGeometry(id, offset, source.Width, source.Height, source.Sill, out error);
+        }
+
+        public bool TrySetOpeningGeometry(string id, double offset, double width, double height,
+            double sill, out string error)
+        {
             error = null;
-            if (!Finite(offset)) { error = "洞口定位必须是有限数值。"; return false; }
+            if (!Finite(offset) || !Finite(width) || !Finite(height) || !Finite(sill))
+            { error = "洞口参数必须是有限数值。"; return false; }
+            if (width <= 0d || height <= 0d || sill < 0d)
+            { error = "洞口宽高必须大于 0，窗台高不能为负。"; return false; }
             var candidate = Clone(Model);
             var opening = candidate.Openings.FirstOrDefault(x => x != null && Same(x.Id, id));
             if (opening == null) { error = "未找到洞口：" + id; return false; }
             var wall = candidate.Walls.FirstOrDefault(x => x != null && Same(x.Id, opening.HostWallId));
             if (wall == null) { error = "洞口宿主墙不存在：" + opening.HostWallId; return false; }
             opening.Offset = offset;
-            error = PlanEditing.ValidateOpening(candidate, wall, opening);
+            opening.Width = width;
+            opening.Height = height;
+            opening.Sill = sill;
+            error = ValidateOpeningGeometry(candidate, wall, opening);
             if (error != null) return false;
             Commit(candidate);
             return true;
@@ -80,6 +107,8 @@ namespace BatchPdfPublisher.BuildingModel
 
         private void Commit(BuildingModelDocument candidate)
         {
+            if (string.Equals(BuildingModelJson.ToJson(candidate), BuildingModelJson.ToJson(Model), StringComparison.Ordinal))
+                return;
             Model = candidate;
             _history.Push(Model);
             Revision++;
@@ -91,9 +120,22 @@ namespace BatchPdfPublisher.BuildingModel
             if (error != null) return error;
             foreach (var opening in candidate.Openings.Where(x => x != null && Same(x.HostWallId, wall.Id)))
             {
-                error = PlanEditing.ValidateOpening(candidate, wall, opening);
+                error = ValidateOpeningGeometry(candidate, wall, opening);
                 if (error != null) return error;
             }
+            return null;
+        }
+
+        private static string ValidateOpeningGeometry(BuildingModelDocument model, WallModel wall, OpeningModel opening)
+        {
+            var error = PlanEditing.ValidateOpening(model, wall, opening);
+            if (error != null) return error;
+            var storey = model.FindStorey(wall.StoreyId);
+            var wallHeight = wall.Height > 0d ? wall.Height : (storey == null ? 0d : storey.Height);
+            if (!Finite(wallHeight) || wallHeight <= 0d)
+                return "宿主墙没有有效高度或楼层。";
+            if (opening.Sill + opening.Height > wallHeight + 0.5d)
+                return "洞口顶部超出宿主墙高度（" + Math.Round(wallHeight) + " mm）。";
             return null;
         }
 

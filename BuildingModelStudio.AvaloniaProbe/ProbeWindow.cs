@@ -345,14 +345,15 @@ internal sealed class ProbeWindow : Window
         if (wall != null)
         {
             var length = Math.Sqrt(Math.Pow(wall.X2 - wall.X1, 2) + Math.Pow(wall.Y2 - wall.Y1, 2));
-            _properties.Children.Add(new TextBlock { Text = "墙长（mm）" });
-            var field = new TextBox { Text = length.ToString("0.##", CultureInfo.InvariantCulture) };
-            _properties.Children.Add(field);
-            _properties.Children.Add(new TextBlock { Text = $"厚度 {wall.Thickness:0.##} mm · 楼层 {wall.StoreyId}" });
-            var apply = new Button { Content = "应用墙长" };
-            apply.Click += async (_, _) => await ApplyNumberAsync(field.Text, value =>
+            _properties.Children.Add(new TextBlock { Text = $"楼层 {wall.StoreyId} · 墙高 0 表示随楼层" });
+            var lengthField = AddNumberField("墙长（mm）", length);
+            var thicknessField = AddNumberField("墙厚（mm）", wall.Thickness);
+            var heightField = AddNumberField("墙高（mm）", wall.Height);
+            var apply = new Button { Content = "应用墙体参数" };
+            apply.Click += async (_, _) => await ApplyGeometryAsync(
+                new[] { lengthField, thicknessField, heightField }, values =>
             {
-                var success = _session.TrySetWallLength(wall.Id, value, out var error);
+                var success = _session.TrySetWallGeometry(wall.Id, values[0], values[1], values[2], out var error);
                 return (success, error);
             });
             _properties.Children.Add(apply);
@@ -362,14 +363,15 @@ internal sealed class ProbeWindow : Window
         if (opening != null)
         {
             _properties.Children.Add(new TextBlock { Text = $"{opening.Kind} · 宿主墙 {opening.HostWallId}", TextWrapping = TextWrapping.Wrap });
-            _properties.Children.Add(new TextBlock { Text = "沿墙定位（mm）" });
-            var field = new TextBox { Text = opening.Offset.ToString("0.##", CultureInfo.InvariantCulture) };
-            _properties.Children.Add(field);
-            _properties.Children.Add(new TextBlock { Text = $"宽 {opening.Width:0.##} · 高 {opening.Height:0.##} mm" });
-            var apply = new Button { Content = "应用窗位" };
-            apply.Click += async (_, _) => await ApplyNumberAsync(field.Text, value =>
+            var offsetField = AddNumberField("沿墙中心定位（mm）", opening.Offset);
+            var widthField = AddNumberField("洞口宽（mm）", opening.Width);
+            var heightField = AddNumberField("洞口高（mm）", opening.Height);
+            var sillField = AddNumberField("窗台高（mm）", opening.Sill);
+            var apply = new Button { Content = "应用门窗参数" };
+            apply.Click += async (_, _) => await ApplyGeometryAsync(
+                new[] { offsetField, widthField, heightField, sillField }, values =>
             {
-                var success = _session.TrySetOpeningOffset(opening.Id, value, out var error);
+                var success = _session.TrySetOpeningGeometry(opening.Id, values[0], values[1], values[2], values[3], out var error);
                 return (success, error);
             });
             _properties.Children.Add(apply);
@@ -377,15 +379,29 @@ internal sealed class ProbeWindow : Window
         else _properties.Children.Add(new TextBlock { Text = "此构件当前只支持选择。" });
     }
 
-    private async Task ApplyNumberAsync(string? text, Func<double, (bool success, string? error)> edit)
+    private TextBox AddNumberField(string label, double value)
     {
-        if (!double.TryParse(text, NumberStyles.Float, CultureInfo.CurrentCulture, out var value)
-            && !double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value))
+        _properties.Children.Add(new TextBlock { Text = label });
+        var field = new TextBox { Text = value.ToString("0.##", CultureInfo.InvariantCulture) };
+        _properties.Children.Add(field);
+        return field;
+    }
+
+    private async Task ApplyGeometryAsync(IReadOnlyList<TextBox> fields,
+        Func<double[], (bool success, string? error)> edit)
+    {
+        var values = new double[fields.Count];
+        for (var i = 0; i < fields.Count; i++)
         {
-            _status.Text = "请输入有效的毫米数值。";
-            return;
+            var text = fields[i].Text;
+            if (!double.TryParse(text, NumberStyles.Float, CultureInfo.CurrentCulture, out values[i])
+                && !double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out values[i]))
+            {
+                _status.Text = $"第 {i + 1} 个参数不是有效的毫米数值。";
+                return;
+            }
         }
-        var result = edit(value);
+        var result = edit(values);
         if (!result.success) { _status.Text = result.error; return; }
         await RefreshModelAsync("已更新构件 " + _selectedId);
     }

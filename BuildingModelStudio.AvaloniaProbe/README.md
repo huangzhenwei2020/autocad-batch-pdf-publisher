@@ -9,7 +9,7 @@ dotnet run --project BuildingModelStudio.AvaloniaProbe -c Release -- --snapshot 
 dotnet run --project BuildingModelStudio.AvaloniaProbe -c Release -- --model <项目/建筑模型/名称/model.json>
 ```
 
-`--smoke` 等待 GPU 帧绘制、检查 OpenGL 错误，并从视口中心拾取一个真实构件 ID；`--snapshot` 从 Avalonia 合成器捕获包括 GPU 视口的完整窗口。点击模型或左侧列表会同步选中构件；左键拖动旋转，中键/右键拖动平移，滚轮缩放。选择墙可改墙长，选择门窗可改沿墙定位；修改通过共享模型校验后重建视口，可撤销/重做。
+`--smoke` 等待 GPU 帧绘制、检查 OpenGL 错误，并从视口中心拾取一个真实构件 ID；`--snapshot` 从 Avalonia 合成器捕获包括 GPU 视口的完整窗口。点击模型或左侧列表会同步选中构件；左键拖动旋转，中键/右键拖动平移，滚轮缩放。选择墙可一次修改墙长、墙厚、墙高（0 表示随楼层）；选择门窗可一次修改沿墙定位、宽、高、窗台高。修改在克隆模型上校验，洞口越出宿主墙、顶部超出墙高、与其他洞口重叠时整笔拒绝；合法修改重建视口，可撤销/重做。同值提交不增加修订。
 
 工具栏可打开、保存、另存为模型；未保存修改在标题显示 `*`，关闭或打开另一模型时询问保存。保存沿用共享层的原子替换和 `.bak` 备份。模型保存为项目 `建筑模型/<名称>/model.json` 后，点击“生成 CAD 视图”会在同级 `views/` 写入四立面、剖面、轴测、各层平面、门窗表及图纸 JSON，已有同名文件留 `.bak`。若同级存在 `openings.json`，会使用项目门窗类型库；否则门窗立面只保留洞口轮廓。现有 `StudioLaunch.ListViews` 能识别这些视图，AutoCAD 中的更新/落图仍需用户在 Windows 插件中操作。
 
