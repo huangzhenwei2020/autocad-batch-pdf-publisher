@@ -5,17 +5,24 @@
     <ImplicitUsings>disable</ImplicitUsings>
     <Nullable>disable</Nullable>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <!-- CS0649：门窗条目里的 IsFireRescueVariant 只有插件侧会赋值，链接进来编译时必然"未赋值" -->
+    <NoWarn>$(NoWarn);CS0649</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="BuildingModelProjectionTests.cs" />
     <Compile Include="PlanEditingTests.cs" />
     <Compile Include="OpeningTypeLibraryTests.cs" />
+    <Compile Include="OpeningElevationTests.cs" />
     <!-- 建筑模型的纯逻辑层：程序与插件共用同一份源码（见 BuildingModelStudio 与主插件 csproj）。 -->
     <Compile Include="..\Shared\BuildingModel\ModelTypes.cs" Link="Shared\ModelTypes.cs" />
     <Compile Include="..\Shared\BuildingModel\BuildingModelJson.cs" Link="Shared\BuildingModelJson.cs" />
     <Compile Include="..\Shared\BuildingModel\ModelEditHistory.cs" Link="Shared\ModelEditHistory.cs" />
     <Compile Include="..\Shared\BuildingModel\PlanEditing.cs" Link="Shared\PlanEditing.cs" />
     <Compile Include="..\Shared\BuildingModel\OrthographicProjector.cs" Link="Shared\OrthographicProjector.cs" />
+    <Compile Include="..\Shared\BuildingModel\OpeningElevationAdapter.cs" Link="Shared\OpeningElevationAdapter.cs" />
     <Compile Include="..\Shared\BuildingModel\SampleModelFactory.cs" Link="Shared\SampleModelFactory.cs" />
+    <!-- 门窗立面生成器：与插件同一份源码（不依赖 AutoCAD），所以立面分格/开启线两边完全一致 -->
+    <Compile Include="..\BatchPdfPublisher\Features\DoorWindows\Models\DoorWindowScheduleItem.cs" Link="DoorWindows\DoorWindowScheduleItem.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\DoorWindows\Models\DoorWindowElevationGeometry.cs" Link="DoorWindows\DoorWindowElevationGeometry.cs" />
   </ItemGroup>
 </Project>

@@ -325,10 +325,22 @@ namespace BatchPdfPublisher.BuildingModel
         public double InstallationGap { get; set; } = 20d;
         public string DoorFrameType { get; set; }
         public double DoorFrameWidth { get; set; }
+        public string CustomColumnRatios { get; set; }
+        public string CustomRowRatios { get; set; }
         public string CustomColumnWidths { get; set; }
         public string CustomRowHeights { get; set; }
         public string CustomCellLayout { get; set; }
         public string CellOpeningModes { get; set; }
+        /// <summary>门联窗里门扇的靠位：靠左 / 靠右 / 居中。</summary>
+        public string DoorPlacement { get; set; }
+        public double DoorEdgeDistance { get; set; }
+        /// <summary>凸窗左右转折面：墙 / 窗，以及进深（mm）。</summary>
+        public string BayLeftSide { get; set; }
+        public string BayRightSide { get; set; }
+        public double BayLeftDepth { get; set; } = 600d;
+        public double BayRightDepth { get; set; } = 600d;
+        public string BayLeftCellLayout { get; set; }
+        public string BayRightCellLayout { get; set; }
         public string Material { get; set; }
         public string AtlasName { get; set; }
         public string Remarks { get; set; }
@@ -356,6 +368,19 @@ namespace BatchPdfPublisher.BuildingModel
         public string ExportedAt { get; set; }
         public List<OpeningTypeModel> Types { get; set; } = new List<OpeningTypeModel>();
         public List<OpeningTemplateModel> Templates { get; set; } = new List<OpeningTemplateModel>();
+
+        /// <summary>按编号查类型（忽略大小写与首尾空格）；找不到返回 null。</summary>
+        public OpeningTypeModel FindType(string code)
+        {
+            if (string.IsNullOrWhiteSpace(code) || Types == null) return null;
+            var wanted = code.Trim();
+            foreach (var type in Types)
+            {
+                if (type == null || string.IsNullOrWhiteSpace(type.Code)) continue;
+                if (string.Equals(type.Code.Trim(), wanted, StringComparison.OrdinalIgnoreCase)) return type;
+            }
+            return null;
+        }
     }
 
     /// <summary>

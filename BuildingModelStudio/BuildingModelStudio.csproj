@@ -8,7 +8,7 @@
     <AssemblyName>万落建筑模型</AssemblyName>
     <RootNamespace>Wanluo.BuildingModelStudio</RootNamespace>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
-    <NoWarn>$(NoWarn);CA1416</NoWarn>
+    <NoWarn>$(NoWarn);CA1416;CS0649</NoWarn>
     <!-- 这是"建筑模型"程序（P0 骨架）。P1.5 起会作为启动器的一个模块载荷打包，
          当前先独立编译，不参与 Build-Release.ps1 的发布流程。 -->
   </PropertyGroup>
@@ -24,6 +24,10 @@
     <Compile Include="..\Shared\BuildingModel\ModelEditHistory.cs" Link="Shared\ModelEditHistory.cs" />
     <Compile Include="..\Shared\BuildingModel\PlanEditing.cs" Link="Shared\PlanEditing.cs" />
     <Compile Include="..\Shared\BuildingModel\OrthographicProjector.cs" Link="Shared\OrthographicProjector.cs" />
+    <Compile Include="..\Shared\BuildingModel\OpeningElevationAdapter.cs" Link="Shared\OpeningElevationAdapter.cs" />
     <Compile Include="..\Shared\BuildingModel\SampleModelFactory.cs" Link="Shared\SampleModelFactory.cs" />
+    <!-- 门窗立面生成器：与插件**同一份源码**（它不依赖 AutoCAD），程序里的门窗分格/开启线就是插件那套画法 -->
+    <Compile Include="..\BatchPdfPublisher\Features\DoorWindows\Models\DoorWindowScheduleItem.cs" Link="DoorWindows\DoorWindowScheduleItem.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\DoorWindows\Models\DoorWindowElevationGeometry.cs" Link="DoorWindows\DoorWindowElevationGeometry.cs" />
   </ItemGroup>
 </Project>

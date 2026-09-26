@@ -32,6 +32,7 @@ internal static class BuildingModelProjectionTests
             JsonRoundTripsWithoutLoss(model);
             PlanEditingTests.Run();
             OpeningTypeLibraryTests.Run();
+            OpeningElevationTests.Run();
         }
         catch (Exception exception)
         {

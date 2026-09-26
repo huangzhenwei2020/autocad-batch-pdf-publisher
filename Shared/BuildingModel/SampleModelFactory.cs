@@ -35,9 +35,9 @@ namespace BatchPdfPublisher.BuildingModel
             library.Types.Add(Type("C1824", "窗", 1800d, 2400d, 900d, "三扇等分", "双扇平开", "铝合金", "图集 12J4-1"));
             library.Types.Add(Type("M0921", "门", 900d, 2100d, 0d, "单扇", "左平开", "木质", "图集 12J6"));
             library.Types.Add(Type("M1524", "门", 1500d, 2400d, 0d, "双扇等分", "双扇平开", "玻璃", "图集 12J6"));
-            library.Templates.Add(new OpeningTemplateModel { Name = "普通双扇推拉窗", ElevationType = "窗", DivisionPreset = "双扇等分", OpeningMode = "双向推拉" });
-            library.Templates.Add(new OpeningTemplateModel { Name = "普通单扇平开窗", ElevationType = "窗", DivisionPreset = "单扇", OpeningMode = "左平开" });
-            library.Templates.Add(new OpeningTemplateModel { Name = "普通单扇门", ElevationType = "门", DivisionPreset = "单扇", OpeningMode = "左平开" });
+            library.Templates.Add(new OpeningTemplateModel { Name = "普通双扇推拉窗", ElevationType = "普通窗", DivisionPreset = "双扇等分", OpeningMode = "双向推拉" });
+            library.Templates.Add(new OpeningTemplateModel { Name = "普通单扇平开窗", ElevationType = "普通窗", DivisionPreset = "单扇", OpeningMode = "左平开" });
+            library.Templates.Add(new OpeningTemplateModel { Name = "普通单扇门", ElevationType = "普通门", DivisionPreset = "单扇", OpeningMode = "左平开" });
             return library;
         }
 
@@ -47,7 +47,14 @@ namespace BatchPdfPublisher.BuildingModel
             return new OpeningTypeModel
             {
                 Code = code, Kind = kind, Width = width, Height = height, Sill = sill,
-                ElevationType = kind, DivisionPreset = division, OpeningMode = opening,
+                // ElevationType 与插件里的取值一致（普通门/普通窗）：生成器靠它判断"整樘都是门扇"
+                ElevationType = "普通" + kind,
+                DivisionPreset = division, OpeningMode = opening,
+                // 做法参数按插件里的默认值（外框 50、中挺 50、安装缝 20、门扇内框 N 型 50）
+                HasOuterFrame = true, OuterFrameWidth = 50d,
+                HasMullion = true, MullionWidth = 50d,
+                HasInstallationGap = true, InstallationGap = 20d,
+                DoorFrameType = "N型", DoorFrameWidth = 50d,
                 Material = material, AtlasName = atlas, Source = "演示类型库"
             };
         }

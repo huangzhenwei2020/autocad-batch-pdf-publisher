@@ -51,6 +51,7 @@
     <Compile Include="..\Shared\BuildingModel\ModelTypes.cs"><Link>Features\BuildingModel\Shared\ModelTypes.cs</Link></Compile>
     <Compile Include="..\Shared\BuildingModel\BuildingModelJson.cs"><Link>Features\BuildingModel\Shared\BuildingModelJson.cs</Link></Compile>
     <Compile Include="..\Shared\BuildingModel\OrthographicProjector.cs"><Link>Features\BuildingModel\Shared\OrthographicProjector.cs</Link></Compile>
+    <Compile Include="..\Shared\BuildingModel\OpeningElevationAdapter.cs"><Link>Features\BuildingModel\Shared\OpeningElevationAdapter.cs</Link></Compile>
     <Compile Include="Compatibility\Net40Polyfills.cs" />
     <Compile Include="Commands.cs" />
     <Compile Include="Infrastructure\**\*.cs" />

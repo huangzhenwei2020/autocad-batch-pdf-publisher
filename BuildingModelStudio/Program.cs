@@ -131,29 +131,57 @@ namespace Wanluo.BuildingModelStudio
             log("模型：" + modelPath + "（楼层 " + model.Storeys.Count + "、墙 " + model.Walls.Count
                 + "、洞口 " + model.Openings.Count + "、楼板 " + model.Slabs.Count + "、柱 " + model.Columns.Count + "）");
 
-            // 顺便放一份演示门窗类型库（只在没有时写，不覆盖 CAD 导出的真库）
+            // 顺便放一份演示门窗类型库（CAD 导出的真库绝不覆盖：只有"还是演示库"时才重写）
             var libraryPath = BuildingModelJson.OpeningLibraryPath(projectFolder, modelName);
-            if (!File.Exists(libraryPath))
+            if (!File.Exists(libraryPath) || IsStillDemoLibrary(libraryPath))
             {
                 var library = SampleModelFactory.CreateDemoOpeningLibrary();
                 BuildingModelJson.SaveOpeningLibrary(libraryPath, library);
                 log("演示门窗类型库：" + libraryPath + "（类型 " + library.Types.Count + " 个；真实项目请用 CAD 的 TQLX 导出）");
             }
-            return GenerateViews(projectFolder, modelName, model, log);
+            return GenerateViews(projectFolder, modelName, model, log,
+                File.Exists(libraryPath) ? BuildingModelJson.LoadOpeningLibrary(libraryPath) : null);
         }
 
-        /// <summary>按默认视图集合生成 views/*.json，返回线条总数。</summary>
-        internal static int GenerateViews(string projectFolder, string modelName, BuildingModelDocument model, Action<string> log)
+        /// <summary>
+        /// 这份类型库是不是"还没被替换过的演示库"。
+        /// 演示库要能随程序升级更新做法参数（外框/中挺/安装缝），
+        /// 但 CAD 用 TQLX 导出的真库、或用户手工导入的类型库，一个字段都不能动。
+        /// </summary>
+        private static bool IsStillDemoLibrary(string path)
+        {
+            try
+            {
+                var library = BuildingModelJson.LoadOpeningLibrary(path);
+                if (library == null || library.Types == null || library.Types.Count == 0) return true;
+                return library.Types.All(type => type != null && type.Source == "演示类型库");
+            }
+            catch
+            {
+                return false;      // 读不出来就当作用户的东西，别覆盖
+            }
+        }
+
+        /// <summary>
+        /// 按默认视图集合生成 views/*.json，返回线条总数。
+        /// <paramref name="library"/> 是门窗类型库：立面的门窗分格与开启线按编号查它取做法（可为空）。
+        /// </summary>
+        internal static int GenerateViews(string projectFolder, string modelName, BuildingModelDocument model,
+            Action<string> log, OpeningTypeLibraryDocument library)
         {
             var total = 0;
+            if (library == null) log("提示：没有门窗类型库，立面只画洞口轮廓（用 CAD 的 TQLX 导出后可补上分格与开启线）。");
+            else log("门窗类型库：" + library.Types.Count + " 个类型，立面的分格与开启线按编号取用。");
             foreach (var definition in SampleModelFactory.CreateDefaultViews(modelName))
             {
-                var view = OrthographicProjector.Project(model, definition);
+                var view = OrthographicProjector.Project(model, definition, library);
                 var path = BuildingModelJson.ViewFilePath(projectFolder, modelName, view.Id);
                 BuildingModelJson.SaveView(path, view);
                 total += view.Lines.Count;
-                log("视图：" + view.Title + " → 线 " + view.Lines.Count + "、文字 " + view.Texts.Count
-                    + "、填充 " + view.Hatches.Count + " → " + Path.GetFileName(path));
+                var openingLines = view.Lines.Count(line => line.Layer == ViewLayers.Opening);
+                log("视图：" + view.Title + " → 线 " + view.Lines.Count + "（门窗 " + openingLines + "）、文字 "
+                    + view.Texts.Count + "、填充 " + view.Hatches.Count + " → " + Path.GetFileName(path));
+                foreach (var warning in view.Warnings) log("  提示：" + warning);
             }
             return total;
         }
@@ -426,7 +454,7 @@ namespace Wanluo.BuildingModelStudio
         {
             if (_model == null) { Log("还没有模型。"); return; }
             SaveModel();
-            var total = Program.GenerateViews(_projectFolder.Text, ModelName, _model, Log);
+            var total = Program.GenerateViews(_projectFolder.Text, ModelName, _model, Log, _openingLibrary);
             Log("生成完成，共 " + total + " 条线。回到 CAD 执行 LTTZ 落图（选 views 目录下的 json）。");
         }
 
