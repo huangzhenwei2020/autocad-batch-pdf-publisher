@@ -98,25 +98,10 @@ namespace Wanluo.BuildingModelStudio
 
         // ───────────────────────── 视图变换 ─────────────────────────
 
-        /// <summary>交给 GDI+ 的屏幕坐标上限（GDI+ 超过 int32 就抛 OverflowException，实测 1e9 可以、2e9 就抛）。</summary>
-        private const double MaxScreenCoordinate = 1e8d;
-
+        /// <summary>交给 GDI+ 的屏幕坐标上限与夹取：统一走 DrawGuard（立面预览也用同一套）。</summary>
         private PointF ToScreen(double x, double y)
         {
-            return new PointF((float)ClampScreen(_offsetX + x * _scale), (float)ClampScreen(_offsetY - y * _scale));
-        }
-
-        /// <summary>
-        /// 任何屏幕坐标都先夹进 GDI+ 能接受的范围：
-        /// GDI+ 的 DrawLine 拿到 ±∞ / NaN / 超过 1e9 的坐标就抛 System.OverflowException（"Overflow error."）。
-        /// 屏幕外的构件被夹到边界上，反正也看不见。
-        /// </summary>
-        private static double ClampScreen(double screen)
-        {
-            if (double.IsNaN(screen)) return 0d;
-            if (screen > MaxScreenCoordinate) return MaxScreenCoordinate;
-            if (screen < -MaxScreenCoordinate) return -MaxScreenCoordinate;
-            return screen;
+            return new PointF((float)DrawGuard.Clamp(_offsetX + x * _scale), (float)DrawGuard.Clamp(_offsetY - y * _scale));
         }
 
         private void ToModel(Point screen, out double x, out double y)
@@ -125,21 +110,16 @@ namespace Wanluo.BuildingModelStudio
             y = (_offsetY - screen.Y) / _scale;
         }
 
+        /// <summary>能安全交给 GDI+ 的模型坐标（坏数据只跳过自己，不拖垮整块画布）。</summary>
+        private static bool Sane(double x, double y)
+        {
+            return DrawGuard.Sane(x, y);
+        }
+
         /// <summary>视图变换还能不能用（比例非有限、偏移非有限都会让整块画布画不出来）。</summary>
         private bool ViewportUsable()
         {
-            return PlanGrid.IsFinite(_scale) && _scale > 0d
-                && PlanGrid.IsFinite(_offsetX) && PlanGrid.IsFinite(_offsetY);
-        }
-
-        /// <summary>
-        /// 能安全交给 GDI+ 的模型坐标：有限、而且不超出合理范围。
-        /// 模型是从 json 读进来的，文件坏掉或坐标被改成天文数字时，这里挡住就不会再抛 OverflowException。
-        /// </summary>
-        private static bool Sane(double x, double y)
-        {
-            return PlanGrid.IsFinite(x) && PlanGrid.IsFinite(y)
-                && Math.Abs(x) <= 1e9d && Math.Abs(y) <= 1e9d;
+            return DrawGuard.ViewportUsable(_scale, _offsetX, _offsetY);
         }
 
         public void ZoomExtents()

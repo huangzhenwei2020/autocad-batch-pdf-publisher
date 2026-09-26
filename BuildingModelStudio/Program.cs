@@ -47,6 +47,28 @@ namespace Wanluo.BuildingModelStudio
                 return;
             }
 
+            // 预览快照：把默认视图渲染成 PNG（不开窗口、不用 CAD，方便核对/留档）
+            //   dotnet 万落建筑模型.dll --snapshot [<项目文件夹>] [<模型名称>] [<输出目录>]
+            if (args != null && args.Length > 0 && string.Equals(args[0], "--snapshot", StringComparison.OrdinalIgnoreCase))
+            {
+                Headless = true;
+                try
+                {
+                    var folder = args.Length > 1 && !string.IsNullOrWhiteSpace(args[1])
+                        ? args[1]
+                        : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "万落建筑项目", "建筑模型样例");
+                    var name = args.Length > 2 && !string.IsNullOrWhiteSpace(args[2]) ? args[2] : "样例-两层小房子";
+                    var output = args.Length > 3 && !string.IsNullOrWhiteSpace(args[3]) ? args[3] : null;
+                    WriteSnapshots(folder, name, output, Console.WriteLine);
+                }
+                catch (Exception exception)
+                {
+                    Console.Error.WriteLine("快照失败：" + exception);
+                    Environment.ExitCode = 1;
+                }
+                return;
+            }
+
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
@@ -56,7 +78,7 @@ namespace Wanluo.BuildingModelStudio
             Application.ThreadException += (sender, args) => CrashLog.Report(args.Exception);
             AppDomain.CurrentDomain.UnhandledException += (sender, args) => CrashLog.Report(args.ExceptionObject as Exception);
 
-            // 画布自检：不弹窗口，把平面画布真正画到离屏位图上（含极端比例、坏模型、坏 Graphics）。
+            // 画布自检：不弹窗口，把平面画布与立面预览真正画到离屏位图上
             //   dotnet 万落建筑模型.dll --selftest-canvas
             if (args != null && args.Length > 0 && string.Equals(args[0], "--selftest-canvas", StringComparison.OrdinalIgnoreCase))
             {
@@ -64,6 +86,7 @@ namespace Wanluo.BuildingModelStudio
                 try
                 {
                     CanvasSelfTest.Run(Console.WriteLine);
+                    ViewPreviewSelfTest.Run(Console.WriteLine);
                 }
                 catch (Exception exception)
                 {
@@ -96,6 +119,21 @@ namespace Wanluo.BuildingModelStudio
                         Console.WriteLine("PASS 主窗口构造与画布装载：楼层 " + canvas.Model.Storeys.Count
                             + "、墙 " + canvas.Model.Walls.Count + "、洞口 " + canvas.Model.Openings.Count
                             + "（已真实绘制一次，无异常）");
+
+                        // 预览页：切过去、真的画一次（走窗口 WM_PAINT，与用户点开预览是同一条路）
+                        var preview = FindControl<ViewPreviewCanvas>(form);
+                        if (preview == null) throw new InvalidOperationException("主窗口里没有找到立面预览控件。");
+                        var tabs = FindControl<TabControl>(form);
+                        if (tabs != null && tabs.TabPages.Count > 1) tabs.SelectedIndex = 1;
+                        Application.DoEvents();
+                        preview.Refresh();
+                        Application.DoEvents();
+                        if (preview.LastPaintError != null)
+                            throw new InvalidOperationException("立面预览真实绘制失败：" + preview.LastPaintError);
+                        if (preview.LastLineCount <= 0)
+                            throw new InvalidOperationException("立面预览没有画出任何线条（视图选择或重算没生效）。");
+                        Console.WriteLine("PASS 立面预览：已真实绘制一次，" + preview.View.Title
+                            + " 画了 " + preview.LastLineCount + " 条线 / " + preview.LastTextCount + " 个文字（无异常）");
                         form.Close();
                     }
                 }
@@ -112,11 +150,50 @@ namespace Wanluo.BuildingModelStudio
 
         private static PlanCanvas FindCanvas(Control parent)
         {
+            return FindControl<PlanCanvas>(parent);
+        }
+
+        /// <summary>
+        /// 把默认视图渲染成 PNG（与程序里预览用的是同一个控件、同一条绘制路径）。
+        /// 用途：不开 CAD 也能核对立面长什么样，也方便把结果发给别人看。
+        /// </summary>
+        internal static void WriteSnapshots(string projectFolder, string modelName, string outputFolder, Action<string> log)
+        {
+            var modelPath = BuildingModelJson.ModelFilePath(projectFolder, modelName);
+            if (!File.Exists(modelPath)) throw new FileNotFoundException("找不到模型：" + modelPath);
+            var model = BuildingModelJson.LoadModel(modelPath);
+            var libraryPath = BuildingModelJson.OpeningLibraryPath(projectFolder, modelName);
+            var library = File.Exists(libraryPath) ? BuildingModelJson.LoadOpeningLibrary(libraryPath) : null;
+            if (outputFolder == null)
+                outputFolder = Path.Combine(Path.GetDirectoryName(modelPath) ?? projectFolder, "预览");
+            Directory.CreateDirectory(outputFolder);
+
+            using (var canvas = new ViewPreviewCanvas { Size = new Size(1500, 1000) })
+            {
+                foreach (var definition in SampleModelFactory.CreateDefaultViews(modelName))
+                {
+                    var view = OrthographicProjector.Project(model, definition, library);
+                    canvas.View = view;
+                    using (var bitmap = new Bitmap(canvas.Width, canvas.Height))
+                    {
+                        using (var graphics = Graphics.FromImage(bitmap)) canvas.Render(graphics);
+                        var path = Path.Combine(outputFolder, definition.Title + ".png");
+                        bitmap.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+                        log("快照：" + path + "（线 " + view.Lines.Count + "、文字 " + view.Texts.Count
+                            + "、填充 " + view.Hatches.Count + "）");
+                    }
+                }
+            }
+        }
+
+        /// <summary>在控件树里找第一个指定类型的控件（自检用）。</summary>
+        private static T FindControl<T>(Control parent) where T : Control
+        {
             foreach (Control child in parent.Controls)
             {
-                var canvas = child as PlanCanvas;
-                if (canvas != null) return canvas;
-                var nested = FindCanvas(child);
+                var match = child as T;
+                if (match != null) return match;
+                var nested = FindControl<T>(child);
                 if (nested != null) return nested;
             }
             return null;
@@ -199,12 +276,16 @@ namespace Wanluo.BuildingModelStudio
         private readonly ListBox _openingTypes = new ListBox();
         private readonly Label _openingLibraryInfo = new Label();
         private readonly Dictionary<string, Button> _toolButtons = new Dictionary<string, Button>();
+        private readonly TabControl _tabs = new TabControl();
+        private readonly ViewPreviewCanvas _viewPreview = new ViewPreviewCanvas();
+        private readonly ComboBox _viewChooser = new ComboBox();
+        private readonly Label _viewInfo = new Label();
         private BuildingModelDocument _model;
         private OpeningTypeLibraryDocument _openingLibrary;
 
         public MainForm()
         {
-            Text = "万落建筑模型 · 平面草图（P1.5）";
+            Text = "万落建筑模型 · 平面草图 + 立面预览（P1.5）";
             Width = 1280;
             Height = 800;
             MinimumSize = new Size(1000, 640);
@@ -256,12 +337,19 @@ namespace Wanluo.BuildingModelStudio
             }, 0, 2);
             root.Controls.Add(top, 0, 0);
 
-            // ── 中部：画布 + 右侧面板 ────────────────────────────────────────
+            // ── 中部：左侧「平面草图 / 立面预览」两个页签 + 右侧面板 ──────────
             var split = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, SplitterWidth = 6 };
             split.HandleCreated += (s, e) => { try { split.SplitterDistance = Math.Max(560, split.Width - 400); } catch { } };
             root.Controls.Add(split, 0, 1);
+
             _canvas.Dock = DockStyle.Fill;
-            split.Panel1.Controls.Add(_canvas);
+            var planPage = new TabPage("平面草图") { BackColor = Color.FromArgb(24, 26, 30), Padding = new Padding(0) };
+            planPage.Controls.Add(_canvas);
+            _tabs.Dock = DockStyle.Fill;
+            _tabs.TabPages.Add(planPage);
+            _tabs.TabPages.Add(BuildPreviewPage());
+            _tabs.SelectedIndexChanged += (s, e) => { if (_tabs.SelectedIndex == 1) RefreshViewPreview(true); };
+            split.Panel1.Controls.Add(_tabs);
 
             var side = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 9, Padding = new Padding(6) };
             side.RowStyles.Add(new RowStyle(SizeType.AutoSize));          // 0 楼层标题
@@ -339,7 +427,8 @@ namespace Wanluo.BuildingModelStudio
 
             Log("P1.5 平面草图：用「画墙 / 放窗 / 放门 / 布柱」把平面画出来，画的就是模型。");
             Log("门窗类型库：CAD 里执行 TQLX 导出 → 本程序「刷新（模型目录）」即可用它放门窗。");
-            Log("画完点「生成全部视图」，回到 CAD 执行 LTTZ 落图。");
+            Log("立面/剖面预览：切到「立面 / 剖面预览」页签，选一张视图点「重算当前视图」——不用开 CAD 就能看分格与开启线。");
+            Log("画完点「生成全部视图」，回到 CAD 执行 LTTZ 落图（预览里看到什么，落下去就是什么）。");
             OpenOrCreateModel();
         }
 
@@ -434,6 +523,8 @@ namespace Wanluo.BuildingModelStudio
                     + "、柱 " + _model.Columns.Count + "、楼板 " + _model.Slabs.Count
                     + "、楼层 " + _model.Storeys.Count);
                 LoadOpeningLibraryFromModelFolder(true);
+                RefreshViewChoices();
+                RefreshViewPreview(false);
             }
             catch (Exception exception) { Log("打开模型失败：" + exception.Message); }
         }
@@ -456,6 +547,116 @@ namespace Wanluo.BuildingModelStudio
             SaveModel();
             var total = Program.GenerateViews(_projectFolder.Text, ModelName, _model, Log, _openingLibrary);
             Log("生成完成，共 " + total + " 条线。回到 CAD 执行 LTTZ 落图（选 views 目录下的 json）。");
+            RefreshViewPreview(false);
+        }
+
+        // ───────────────────────── 立面/剖面预览 ─────────────────────────
+
+        /// <summary>预览页：上面一行选视图 + 重算，下面整块是预览画布。</summary>
+        private TabPage BuildPreviewPage()
+        {
+            var page = new TabPage("立面 / 剖面预览") { BackColor = Color.FromArgb(24, 26, 30), Padding = new Padding(0) };
+            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4 };
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+            var row = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, Padding = new Padding(6, 6, 6, 0) };
+            row.Controls.Add(new Label { Text = "视图", AutoSize = true, Padding = new Padding(0, 6, 4, 0) });
+            _viewChooser.DropDownStyle = ComboBoxStyle.DropDownList;
+            _viewChooser.Width = 220;
+            _viewChooser.SelectedIndexChanged += (s, e) => RefreshViewPreview(true);
+            row.Controls.Add(_viewChooser);
+            row.Controls.Add(Button("重算当前视图", () => RefreshViewPreview(true), true));
+            row.Controls.Add(Button("生成全部视图", GenerateViewsNow, false));
+            row.Controls.Add(Button("缩放适应(Ctrl+A)", () => { _viewPreview.ZoomExtents(); _viewPreview.Invalidate(); _viewPreview.Focus(); }, false));
+            layout.Controls.Add(row, 0, 0);
+
+            var hint = new Label
+            {
+                AutoSize = true,
+                ForeColor = Color.FromArgb(105, 112, 122),
+                Padding = new Padding(8, 2, 8, 4),
+                Text = "预览用的是 CAD 落图读的那份视图数据：这里看到什么，LTTZ 落到 DWG 里就是什么。"
+                    + "　中键/右键拖动：平移　滚轮：缩放"
+            };
+            _viewInfo.AutoSize = true;
+            _viewInfo.ForeColor = Color.FromArgb(150, 200, 170);
+            _viewInfo.Padding = new Padding(8, 2, 8, 0);
+            _viewInfo.Text = "还没有视图：点「重算当前视图」。";
+            layout.Controls.Add(row, 0, 0);
+            layout.Controls.Add(_viewInfo, 0, 1);
+            layout.Controls.Add(hint, 0, 2);
+
+            _viewPreview.Dock = DockStyle.Fill;
+            _viewPreview.StatusChanged += text => _status.Text = text;
+            layout.Controls.Add(_viewPreview, 0, 3);
+            page.Controls.Add(layout);
+            return page;
+        }
+
+        private void RefreshViewChoices()
+        {
+            var wanted = SelectedViewId();
+            _viewChooser.Items.Clear();
+            foreach (var definition in SampleModelFactory.CreateDefaultViews(ModelName))
+                _viewChooser.Items.Add(new ViewChoice(definition));
+            if (_viewChooser.Items.Count == 0) return;
+            for (var index = 0; index < _viewChooser.Items.Count; index++)
+                if (!string.IsNullOrEmpty(wanted)
+                    && string.Equals(((ViewChoice)_viewChooser.Items[index]).Definition.Id, wanted, StringComparison.OrdinalIgnoreCase))
+                {
+                    _viewChooser.SelectedIndex = index;
+                    return;
+                }
+            _viewChooser.SelectedIndex = 0;
+        }
+
+        private string SelectedViewId()
+        {
+            var choice = _viewChooser.SelectedItem as ViewChoice;
+            return choice == null ? null : choice.Definition.Id;
+        }
+
+        /// <summary>
+        /// 按**当前模型**（不是磁盘上的旧视图）重算选中的那一张，直接画到预览里。
+        /// 所以"改完平面就能立刻看立面"，不必先生成、再落图。
+        /// </summary>
+        private void RefreshViewPreview(bool log)
+        {
+            if (_model == null) { _viewInfo.Text = "还没有模型。"; return; }
+            var choice = _viewChooser.SelectedItem as ViewChoice;
+            if (choice == null) { RefreshViewChoices(); choice = _viewChooser.SelectedItem as ViewChoice; }
+            if (choice == null) return;
+            try
+            {
+                var view = OrthographicProjector.Project(_model, choice.Definition, _openingLibrary);
+                _viewPreview.View = view;
+                var openingLines = view.Lines.Count(line => line.Layer == ViewLayers.Opening);
+                _viewInfo.Text = view.Title + "：线 " + view.Lines.Count + "（门窗 " + openingLines + "）、文字 "
+                    + view.Texts.Count + "、填充 " + view.Hatches.Count
+                    + (_openingLibrary == null ? "　（没有类型库：门窗只画洞口轮廓）" : "　（做法来自类型库）");
+                if (log)
+                {
+                    Log("预览 " + view.Title + "：线 " + view.Lines.Count + "（门窗 " + openingLines + "）、文字 "
+                        + view.Texts.Count + "、填充 " + view.Hatches.Count + "。");
+                    foreach (var warning in view.Warnings) Log("  提示：" + warning);
+                }
+            }
+            catch (Exception exception)
+            {
+                _viewInfo.Text = "预览失败：" + exception.Message;
+                Log("预览失败：" + exception.GetType().Name + "：" + exception.Message);
+            }
+        }
+
+        /// <summary>下拉框里的一项：把视图定义显示成图名。</summary>
+        private sealed class ViewChoice
+        {
+            public ViewChoice(ViewDefinitionModel definition) { Definition = definition; }
+            public ViewDefinitionModel Definition { get; private set; }
+            public override string ToString() { return Definition.Title; }
         }
 
         private void OpenModelFolder()
@@ -477,6 +678,7 @@ namespace Wanluo.BuildingModelStudio
                 RefreshOpeningTypeList();
                 _openingLibraryInfo.Text = "模型目录里还没有 openings.json：可在 CAD 里执行 TQLX 导出，或点「导入类型库…」。";
                 if (log) Log("没有找到类型库：" + path);
+                RefreshViewPreview(false);
                 return;
             }
             try
@@ -495,6 +697,7 @@ namespace Wanluo.BuildingModelStudio
                 _openingLibraryInfo.Text = "类型库读取失败：" + exception.Message;
                 if (log) Log("类型库读取失败：" + exception.Message);
             }
+            RefreshViewPreview(false);      // 换了类型库，立面的分格/开启线要跟着重算
         }
 
         private void ImportOpeningLibrary()
@@ -517,6 +720,7 @@ namespace Wanluo.BuildingModelStudio
                     RefreshOpeningTypeList();
                     _openingLibraryInfo.Text = "已导入并保存到模型目录：类型 " + library.Types.Count + " 个。";
                     Log("已导入类型库：" + dialog.FileName + " → " + target);
+                    RefreshViewPreview(false);
                 }
                 catch (Exception exception) { Log("导入失败：" + exception.Message); }
             }

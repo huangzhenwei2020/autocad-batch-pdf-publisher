@@ -40,8 +40,8 @@ namespace Wanluo.BuildingModelStudio
         public const int MaxLinesPerAxis = 400;
         /// <summary>步长放大次数上限（5^64 早就超出 double 有效范围，纯粹防死循环）。</summary>
         private const int MaxStepGrowth = 64;
-        /// <summary>交给 GDI+ 的屏幕坐标绝对值上限。</summary>
-        public const float MaxScreenCoordinate = 1e8f;
+        /// <summary>交给 GDI+ 的屏幕坐标绝对值上限（与 DrawGuard 保持一致）。</summary>
+        public const float MaxScreenCoordinate = (float)DrawGuard.MaxScreenCoordinate;
 
         /// <summary>
         /// 算出当前视图下要画的网格线。任何输入异常（非有限、比例为 0）都返回空表。
@@ -111,7 +111,7 @@ namespace Wanluo.BuildingModelStudio
 
         public static bool IsFinite(double value)
         {
-            return !double.IsNaN(value) && !double.IsInfinity(value);
+            return DrawGuard.IsFinite(value);
         }
     }
 }
