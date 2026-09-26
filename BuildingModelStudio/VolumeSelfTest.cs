@@ -24,6 +24,16 @@ namespace Wanluo.BuildingModelStudio
             var model = SampleModelFactory.CreateTwoStoreyHouse();
             var canvas = new VolumeCanvas { Size = new Size(Width, Height) };
             canvas.SetModel(model);
+            var projectedOnce = canvas.ProjectionCount;
+            RenderOnce(canvas, log);
+            RenderOnce(canvas, log);
+            if (canvas.ProjectionCount != projectedOnce)
+                throw new Exception("同一视角重绘不应重复计算三维遮挡。");
+            canvas.Camera.AzimuthDegrees += 1d;
+            RenderOnce(canvas, log);
+            if (canvas.ProjectionCount != projectedOnce + 1)
+                throw new Exception("相机转动后应重新计算一次投影。");
+            log("PASS 三维投影缓存：同视角重绘复用结果，转动后只重算一次");
 
             var volume = BuildingVolumeBuilder.Build(model, null);
             if (volume.Faces.Count == 0) throw new Exception("样例模型应该能算出体量面。");

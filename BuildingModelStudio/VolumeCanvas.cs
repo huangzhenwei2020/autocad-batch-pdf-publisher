@@ -22,6 +22,8 @@ namespace Wanluo.BuildingModelStudio
         private readonly VolumeCamera _camera = new VolumeCamera();
         private BuildingVolume _volume;
         private List<VolumeFace2D> _faces = new List<VolumeFace2D>();
+        private BuildingVolume _projectedVolume;
+        private VolumeCamera _projectedCamera;
         private bool _autoFit = true;
         private bool _dragging;
         private Point _lastMouse;
@@ -45,6 +47,7 @@ namespace Wanluo.BuildingModelStudio
 
         internal int LastFaceCount { get; private set; }
         internal int LastCulledCount { get; private set; }
+        internal int ProjectionCount { get; private set; }
         internal string LastPaintError { get { return _lastPaintError; } }
         internal VolumeCamera Camera { get { return _camera; } }
         /// <summary>调试用：只画这些种类的面（空 = 全画）。</summary>
@@ -62,7 +65,7 @@ namespace Wanluo.BuildingModelStudio
         public void Rebuild()
         {
             _volume = BuildingModelBuilder(_model);
-            _faces = VolumeRenderer.Project(_volume, _camera);
+            ProjectIfNeeded();
             if (_autoFit) { /* 画的时候按视口适应 */ }
             Invalidate();
             RaiseStatus();
@@ -147,7 +150,6 @@ namespace Wanluo.BuildingModelStudio
             _lastMouse = e.Location;
             _camera.AzimuthDegrees = (_camera.AzimuthDegrees - dx * 0.6d) % 360d;
             _camera.ElevationDegrees = Math.Max(-5d, Math.Min(88d, _camera.ElevationDegrees + dy * 0.5d));
-            _faces = VolumeRenderer.Project(_volume, _camera);
             Invalidate();
             RaiseStatus();
         }
@@ -212,8 +214,7 @@ namespace Wanluo.BuildingModelStudio
                 return;
             }
 
-            var faces = VolumeRenderer.Project(_volume, _camera);
-            _faces = faces;
+            var faces = ProjectIfNeeded();
             LastCulledCount = _volume.Faces.Count - faces.Count;
             if (faces.Count == 0) return;
 
@@ -262,6 +263,24 @@ namespace Wanluo.BuildingModelStudio
             }
 
             if (_autoFit) _camera.Zoom = 1d;                    // 适应后把相机缩放归位，滚轮再改
+        }
+
+        private List<VolumeFace2D> ProjectIfNeeded()
+        {
+            if (!ReferenceEquals(_volume, _projectedVolume) || _projectedCamera == null
+                || _projectedCamera.AzimuthDegrees != _camera.AzimuthDegrees
+                || _projectedCamera.ElevationDegrees != _camera.ElevationDegrees
+                || _projectedCamera.Perspective != _camera.Perspective
+                || _projectedCamera.FieldOfViewDegrees != _camera.FieldOfViewDegrees
+                || _projectedCamera.ClipZ != _camera.ClipZ
+                || _projectedCamera.ClipKeepAbove != _camera.ClipKeepAbove)
+            {
+                _faces = VolumeRenderer.Project(_volume, _camera);
+                _projectedVolume = _volume;
+                _projectedCamera = _camera.Clone();
+                ProjectionCount++;
+            }
+            return _faces;
         }
 
         /// <summary>

@@ -10,7 +10,7 @@ namespace BatchPdfPublisher.Services
     /// <summary>The approved iOS artwork is embedded in both CAD runtime builds.</summary>
     internal static class RibbonIconAssets
     {
-        internal const string StyleVersion = "WL_IOS_NATIVE_BADGE_7_";
+        internal const string StyleVersion = "WL_IOS_NATIVE_BADGE_8_";
         private static readonly string[] FeatureIds =
         {
             "publisher", "frame", "catalog", "architecture_spec", "stair_detail", "door_window",
@@ -39,14 +39,14 @@ namespace BatchPdfPublisher.Services
 
         private static BitmapSource Rasterize(BitmapSource source, int size)
         {
-            // AutoCAD's Ribbon image presenter can use Stretch=None. Passing the
-            // 258px crop clips it to a corner instead of scaling the whole icon.
-            // Materialize independent 96-DPI bitmaps at the actual native sizes.
+            // Keep the native 32/16 DIP size, but retain twice as many pixels.
+            // A 32px/96-DPI bitmap is enlarged by Windows at 150%-200% scaling
+            // and its edges go soft. 64px/192-DPI remains 32 DIP in the Ribbon.
             var visual = new DrawingVisual();
             RenderOptions.SetBitmapScalingMode(visual, BitmapScalingMode.HighQuality);
             using (var drawing = visual.RenderOpen())
                 drawing.DrawImage(source, new Rect(0, 0, size, size));
-            var bitmap = new RenderTargetBitmap(size, size, 96, 96, PixelFormats.Pbgra32);
+            var bitmap = new RenderTargetBitmap(size * 2, size * 2, 192, 192, PixelFormats.Pbgra32);
             bitmap.Render(visual);
             bitmap.Freeze();
             return bitmap;
