@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <AssemblyName>WanLuo.BuildingModel.Core</AssemblyName>
+    <!-- This field is assigned by the Windows plugin, not by the core build. -->
+    <NoWarn>$(NoWarn);CS0649</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\Shared\BuildingModel\*.cs" Link="Shared\%(Filename)%(Extension)" />
+    <Compile Include="..\BatchPdfPublisher\Features\DoorWindows\Models\DoorWindowScheduleItem.cs" Link="DoorWindows\DoorWindowScheduleItem.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\DoorWindows\Models\DoorWindowElevationGeometry.cs" Link="DoorWindows\DoorWindowElevationGeometry.cs" />
+  </ItemGroup>
+</Project>
