@@ -101,6 +101,11 @@ namespace BatchPdfPublisher.BuildingModel
                 if (slab == null || !Include(includeAll, view.StoreyIds, slab.StoreyId)) continue;
                 AddSlab(slab, frame, isSection, cutProj, view.ViewDepth, rects, cutRects, document.Warnings);
             }
+            foreach (var stair in model.Stairs ?? new List<StairModel>())
+            {
+                if (stair == null || !Include(includeAll, view.StoreyIds, stair.StoreyId)) continue;
+                AddStairProfile(model, stair, frame, isSection, cutProj, view.ViewDepth, extraLines);
+            }
 
             // 近的在前：近的矩形负责把远的边裁掉（剖切矩形最靠前）。
             var nearer = new List<Rect>();
@@ -1570,8 +1575,114 @@ namespace BatchPdfPublisher.BuildingModel
             if (body.HasValue) rects.Add(body.Value);
         }
 
-        // ───────────────────────────── 遮挡与输出 ─────────────────────────────
+        /// <summary>
+        /// 立面/剖面里的楼梯：**剖面方向与梯段方向一致**时画锯齿（踏面 + 踢面）+ 梯段斜板 + 平台 + 栏杆；
+        /// 方向垂直时（横着剖到楼梯）画成"一级一级摞起来的水平线"。
+        ///
+        /// 这几条线直接进视图（不走矩形遮挡那套）：楼梯在建筑内部，前面是剖切面之后的墙，
+        /// 挡住的只是薄薄一层，画在最上层反而更像制图习惯里的"看线"。
+        /// 剖切面在楼梯前面的（整部楼梯被切掉）与超出看线深度的，都不画。
+        /// </summary>
+        private static void AddStairProfile(BuildingModelDocument model, StairModel stair, Frame frame,
+            bool isSection, double cutProj, double viewDepth, List<ViewLine> extraLines)
+        {
+            var geometry = StairGeometry.Build(model, stair);
+            if (geometry == null || geometry.Flights.Count == 0) return;
 
+            // 楼梯在"看的方向"上的范围（拿楼梯间矩形的两个角投一下）
+            var cornerA = frame.P(geometry.X0, geometry.Y0);
+            var cornerB = frame.P(geometry.X1, geometry.Y1);
+            var projMin = Math.Min(cornerA, cornerB);
+            var projMax = Math.Max(cornerA, cornerB);
+            if (isSection)
+            {
+                if (projMax < cutProj - Epsilon) return;                              // 整部楼梯在剖切面前面：切掉了
+                if (viewDepth > 0.5d && projMin > cutProj + viewDepth) return;         // 比看线深度还远：看不见
+            }
+
+            // 剖面方向与梯段方向一致吗？（沿梯段走一趟，看水平坐标 U 变化大不大）
+            Func<double, double, double> u = frame.U;
+            var first = geometry.Flights[0];
+            var uStart = u(first.Start.X, first.Start.Y);
+            var uEnd = u(first.End.X, first.End.Y);
+            var alongFlight = Math.Abs(uEnd - uStart) > geometry.TreadRun * 0.5d;
+            var layer = ViewLayers.Stair;
+            const double handrailHeight = 1000d;
+            const double treadThickness = 120d;
+
+            foreach (var flight in geometry.Flights)
+            {
+                var rising = u(flight.End.X, flight.End.Y) > u(flight.Start.X, flight.Start.Y);
+                var steps = flight.Steps.OrderBy(step => step.Number).ToList();
+                if (steps.Count == 0) continue;
+
+                if (alongFlight)
+                {
+                    var bottomStart = 0d;
+                    var bottomEnd = 0d;
+                    for (var index = 0; index < steps.Count; index++)
+                    {
+                        var step = steps[index];
+                        var u0 = u(step.X0, step.Y0);
+                        var u1 = u(step.X1, step.Y1);
+                        if (u0 > u1) { var swap = u0; u0 = u1; u1 = swap; }
+                        AddLine(extraLines, layer, u0, step.TopElevation, u1, step.TopElevation);            // 踏面
+                        var riserU = rising ? u1 : u0;
+                        AddLine(extraLines, layer, riserU, step.TopElevation - geometry.Riser,
+                            riserU, step.TopElevation);                                                      // 踢面
+                        var soffit = step.TopElevation - geometry.Riser - treadThickness;
+                        if (index == 0) bottomStart = soffit;
+                        bottomEnd = soffit;
+                    }
+                    // 梯段斜板（下面那条斜线）与栏杆
+                    var firstLow = u(steps[0].X0, steps[0].Y0);
+                    var firstHigh = u(steps[0].X1, steps[0].Y1);
+                    var lastLow = u(steps[steps.Count - 1].X0, steps[steps.Count - 1].Y0);
+                    var lastHigh = u(steps[steps.Count - 1].X1, steps[steps.Count - 1].Y1);
+                    var uFirst = rising ? Math.Min(firstLow, firstHigh) : Math.Max(firstLow, firstHigh);
+                    var uLast = rising ? Math.Max(lastLow, lastHigh) : Math.Min(lastLow, lastHigh);
+                    AddLine(extraLines, layer, uFirst, bottomStart, uLast, bottomEnd);
+                    AddLine(extraLines, layer, uFirst, steps[0].TopElevation + handrailHeight,
+                        uLast, steps[steps.Count - 1].TopElevation + handrailHeight);
+                }
+                else
+                {
+                    // 横着剖到：一级一条水平线，看上去就是"摞起来的踏步"
+                    foreach (var step in steps)
+                    {
+                        var u0 = u(step.X0, step.Y0);
+                        var u1 = u(step.X1, step.Y1);
+                        AddLine(extraLines, layer, Math.Min(u0, u1), step.TopElevation,
+                            Math.Max(u0, u1), step.TopElevation);
+                    }
+                    var top = steps[steps.Count - 1].TopElevation + handrailHeight;
+                    var a2 = u(steps[0].X0, steps[0].Y0);
+                    var b2 = u(steps[0].X1, steps[0].Y1);
+                    AddLine(extraLines, layer, Math.Min(a2, b2), top, Math.Max(a2, b2), top);
+                }
+            }
+
+            // 休息平台（板顶 + 板底 + 两端竖线）与平台栏杆
+            var landingA = u(geometry.LandingX0, geometry.LandingY0);
+            var landingB = u(geometry.LandingX1, geometry.LandingY1);
+            var lu0 = Math.Min(landingA, landingB);
+            var lu1 = Math.Max(landingA, landingB);
+            var landTop = geometry.LandingElevation;
+            var landBottom = landTop - geometry.LandingThickness;
+            AddLine(extraLines, layer, lu0, landTop, lu1, landTop);
+            AddLine(extraLines, layer, lu0, landBottom, lu1, landBottom);
+            AddLine(extraLines, layer, lu0, landBottom, lu0, landTop);
+            AddLine(extraLines, layer, lu1, landBottom, lu1, landTop);
+            AddLine(extraLines, layer, lu0, landTop + handrailHeight, lu1, landTop + handrailHeight);
+        }
+        /// <summary>往现成的线表里加一条线（楼梯轮廓直接进视图时用）。</summary>
+        private static void AddLine(List<ViewLine> lines, string layer, double x1, double y1, double x2, double y2)
+        {
+            if (lines == null) return;
+            lines.Add(new ViewLine { Layer = layer, X1 = x1, Y1 = y1, X2 = x2, Y2 = y2 });
+        }
+
+        // ───────────────────────────── 遮挡与输出 ─────────────────────────────
         private static void EmitRectEdges(Rect rect, List<Rect> nearer, List<ViewLine> output)
         {
             if (rect.U1 - rect.U0 < 0.5d || rect.Z1 - rect.Z0 < 0.5d) return;

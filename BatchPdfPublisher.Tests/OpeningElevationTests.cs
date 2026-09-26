@@ -34,7 +34,7 @@ internal static class OpeningElevationTests
         StudioLaunchChecks();
         VolumeChecks();
         StairChecks();
-        Console.WriteLine("PASS 立面门窗：分格与开启线 / 背立面镜像 / 遮挡裁剪 / 自定义分格 / 1:100-1:50 详简 / 参数兜底 / 可点选锚点与编号 / 尺寸与门窗表 / 平面图 / 排版出图 / 启动与取件 / 三维体量（门窗构件 / 剖切 / 透视 / 共面合并 / 藏在墙里的面）/ 楼梯（双跑几何 / 平面 / 体量 / 校验）");
+        Console.WriteLine("PASS 立面门窗：分格与开启线 / 背立面镜像 / 遮挡裁剪 / 自定义分格 / 1:100-1:50 详简 / 参数兜底 / 可点选锚点与编号 / 尺寸与门窗表 / 平面图 / 排版出图 / 启动与取件 / 三维体量（门窗构件 / 剖切 / 透视 / 共面合并 / 藏在墙里的面）/ 楼梯（双跑几何 / 平面 / 体量 / 剖面 / 校验）");
     }
 
     // ───────────────────────── 13. 楼梯（双跑） ─────────────────────────
@@ -153,6 +153,63 @@ internal static class OpeningElevationTests
             + "、到达 " + Math.Round(geometry.TopElevation) + "；平面线 " + stairLines.Count
             + "、文字 " + string.Join("/", plan.Texts.Where(t => t.Layer == ViewLayers.Stair).Select(t => t.Text).ToArray())
             + "；体量楼梯面 " + oneStorey.Faces.Count(f => f.Kind == "stair"));
+
+        StairSectionChecks();
+    }
+
+    /// <summary>
+    /// 剖面里的楼梯：**剖面方向与梯段方向一致**时是锯齿（踏面 + 踢面 + 斜板 + 平台 + 栏杆）；
+    /// 垂直时是"一级一条水平线"；整部楼梯落在剖切面前面（被切掉）时一条都不画。
+    /// 这里用"线的条数与方向"钉死，都是数得出来的。
+    /// </summary>
+    private static void StairSectionChecks()
+    {
+        // 剖在 X=2200、朝 +X 看（样例 1-1 剖面就是这么定的）
+        var section = new ViewDefinitionModel
+        {
+            Id = "sec", Title = "1-1 剖面图", Kind = ViewKind.Section, Scale = 50,
+            CutAxis = SectionAxis.CutX, CutPosition = 2200d, ViewSign = 1, ViewDepth = 12000d
+        };
+
+        // 1) 梯段沿 Y（与看的方向一致）→ 锯齿
+        var alongModel = TwoStoreyStairModel(alongX: false, x: 2400d);
+        var parallel = OrthographicProjector.Project(alongModel, section, null);
+        var parallelLines = parallel.Lines.Where(l => l.Layer == ViewLayers.Stair).ToList();
+        var parallelVertical = parallelLines.Count(l => Math.Abs(l.X1 - l.X2) < 0.01d);
+        var parallelHorizontal = parallelLines.Count(l => Math.Abs(l.Y1 - l.Y2) < 0.01d);
+        Assert(parallelVertical == 20, "两跑共 18 条踢面 + 平台两端 2 条竖线 = 20，实际 " + parallelVertical);
+        Assert(parallelHorizontal == 21, "18 条踏面 + 平台顶/底/栏杆 3 条 = 21，实际 " + parallelHorizontal);
+        Assert(parallelLines.Count == 45, "剖到梯段方向应有 45 条楼梯线，实际 " + parallelLines.Count);
+
+        // 2) 梯段沿 X（与看的方向垂直）→ 一级一条水平线
+        var crossModel = TwoStoreyStairModel(alongX: true, x: 2400d);
+        var cross = OrthographicProjector.Project(crossModel, section, null);
+        var crossLines = cross.Lines.Where(l => l.Layer == ViewLayers.Stair).ToList();
+        Assert(crossLines.Count == 25, "横着剖到楼梯应是 18 条踏步线 + 2 条栏杆 + 平台 5 条 = 25，实际 " + crossLines.Count);
+        Assert(crossLines.Count(l => Math.Abs(l.X1 - l.X2) < 0.01d) == 2, "横剖时只有平台两端是竖线");
+
+        // 3) 楼梯整个在剖切面**前面**（X 最大只到 −300，剖切面在 X=2200、朝 +X 看）→ 被切掉，一条不画
+        var cutAwayModel = TwoStoreyStairModel(alongX: false, x: -3000d);
+        var cutAway = OrthographicProjector.Project(cutAwayModel, section, null);
+        Assert(!cutAway.Lines.Any(l => l.Layer == ViewLayers.Stair), "剖切面之前的楼梯不该画出来");
+
+        Console.WriteLine("   楼梯剖面：顺着剖 45 条（竖 " + parallelVertical + " / 横 " + parallelHorizontal
+            + "）、横着剖 25 条、剖切面之前的 0 条");
+    }
+
+    /// <summary>造一个两层模型 + 一部楼梯（楼梯 X 位置可调，用来验"剖切面前面就切掉"）。</summary>
+    private static BuildingModelDocument TwoStoreyStairModel(bool alongX, double x)
+    {
+        var model = SampleModelFactory.CreateEmptyModel("楼梯剖面");
+        model.Storeys[0].Height = 3600d;
+        model.Storeys.Add(new StoreyModel { Id = "2F", Name = "二层", Elevation = 3600d, Height = 3300d });
+        model.Stairs.Add(new StairModel
+        {
+            Id = "st-1", StoreyId = model.Storeys[0].Id, X = x, Y = 0d,
+            Length = 3000d, Width = 2700d, AlongX = alongX,
+            FlightWidth = 1200d, Going = 260d, StepsPerFlight = 9, WellWidth = 100d
+        });
+        return model;
     }
 
     // ───────────────────────── 12. 三维体量与轴测投影 ─────────────────────────
