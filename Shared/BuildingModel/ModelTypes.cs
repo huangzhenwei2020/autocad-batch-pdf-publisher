@@ -82,6 +82,50 @@ namespace BatchPdfPublisher.BuildingModel
         public double TopElevation { get; set; }
     }
 
+    /// <summary>
+    /// 一条轴线（整栋通用）。<see cref="Vertical"/> = 沿 Y 方向的竖轴（标 X 位置，轴号 1、2、3…），
+    /// 否则是沿 X 方向的横轴（标 Y 位置，轴号 A、B、C…）。<see cref="ExtentStart/End"/> 为 0 表示按建筑范围自动延伸。
+    /// </summary>
+    public sealed class AxisModel
+    {
+        public string Id { get; set; }
+        /// <summary>轴号（1/2/3… 或 A/B/C…）。</summary>
+        public string Name { get; set; }
+        public bool Vertical { get; set; }
+        /// <summary>轴线位置：竖轴给 X、横轴给 Y。</summary>
+        public double Position { get; set; }
+        public double ExtentStart { get; set; }
+        public double ExtentEnd { get; set; }
+    }
+
+    /// <summary>房间：闭合轮廓 + 名称（面积由轮廓现算，平面图里标名字与面积）。</summary>
+    public sealed class RoomModel
+    {
+        public string Id { get; set; }
+        public string StoreyId { get; set; }
+        public string Name { get; set; }
+        public List<PointModel> Outline { get; set; } = new List<PointModel>();
+
+        /// <summary>房间面积（m²，按轮廓用鞋带公式现算；轮廓少于 3 点时返回 0）。</summary>
+        public double AreaSquareMetres
+        {
+            get
+            {
+                var points = Outline ?? new List<PointModel>();
+                if (points.Count < 3) return 0d;
+                double sum = 0d;
+                for (var index = 0; index < points.Count; index++)
+                {
+                    var current = points[index];
+                    var next = points[(index + 1) % points.Count];
+                    if (current == null || next == null) return 0d;
+                    sum += current.X * next.Y - next.X * current.Y;
+                }
+                return Math.Abs(sum) / 2d / 1_000_000d;      // mm² → m²
+            }
+        }
+    }
+
     /// <summary>柱：平面矩形 + 高度（从所属楼层标高起算）。</summary>
     public sealed class ColumnModel
     {
@@ -105,6 +149,10 @@ namespace BatchPdfPublisher.BuildingModel
         public List<OpeningModel> Openings { get; set; } = new List<OpeningModel>();
         public List<SlabModel> Slabs { get; set; } = new List<SlabModel>();
         public List<ColumnModel> Columns { get; set; } = new List<ColumnModel>();
+        /// <summary>轴网：整栋通用（不挂楼层），平面图靠它标轴线尺寸与轴号。</summary>
+        public List<AxisModel> Axes { get; set; } = new List<AxisModel>();
+        /// <summary>房间：挂楼层，平面图里标房间名与面积。</summary>
+        public List<RoomModel> Rooms { get; set; } = new List<RoomModel>();
 
         public StoreyModel FindStorey(string id)
         {
@@ -251,6 +299,8 @@ namespace BatchPdfPublisher.BuildingModel
         public List<ViewLine> Lines { get; set; } = new List<ViewLine>();
         public List<ViewText> Texts { get; set; } = new List<ViewText>();
         public List<ViewHatch> Hatches { get; set; } = new List<ViewHatch>();
+        /// <summary>圆（轴号圆圈、索引符号等）：落图时建成 CAD 的 Circle。</summary>
+        public List<ViewCircle> Circles { get; set; } = new List<ViewCircle>();
         /// <summary>
         /// 图上元素与模型构件的对应关系（视图平面里的矩形范围 + 模型里的构件 id）。
         /// 用途：预览里点选门窗 → 知道是哪一樘；落图后要联动门窗表/改做法也有依据。
@@ -282,6 +332,15 @@ namespace BatchPdfPublisher.BuildingModel
         public double Y1 { get; set; }
         public double X2 { get; set; }
         public double Y2 { get; set; }
+    }
+
+    /// <summary>视图里的一个圆（轴号圆圈、详图索引符号等）。</summary>
+    public sealed class ViewCircle
+    {
+        public string Layer { get; set; }
+        public double X { get; set; }
+        public double Y { get; set; }
+        public double Radius { get; set; }
     }
 
     /// <summary>
@@ -460,6 +519,10 @@ namespace BatchPdfPublisher.BuildingModel
         public const string Dimension = "WL-模型-尺寸";
         /// <summary>门窗表等表格视图的线框与文字。</summary>
         public const string Schedule = "WL-模型-门窗表";
+        /// <summary>轴网（轴线用点划线、轴号圆圈与文字）。</summary>
+        public const string Axis = "WL-模型-轴线";
+        /// <summary>房间轮廓、房间名与面积。</summary>
+        public const string Room = "WL-模型-房间";
 
         public sealed class Style
         {
@@ -481,7 +544,9 @@ namespace BatchPdfPublisher.BuildingModel
             new Style { Name = LevelText, Color = 7, LineType = "Continuous", LineWeight = 13, Description = "标高符号与数值" },
             new Style { Name = Title, Color = 7, LineType = "Continuous", LineWeight = 25, Description = "图名与比例" },
             new Style { Name = Dimension, Color = 7, LineType = "Continuous", LineWeight = 13, Description = "尺寸标注（落图时建成 CAD 标注）" },
-            new Style { Name = Schedule, Color = 7, LineType = "Continuous", LineWeight = 18, Description = "门窗表线框与文字" }
+            new Style { Name = Schedule, Color = 7, LineType = "Continuous", LineWeight = 18, Description = "门窗表线框与文字" },
+            new Style { Name = Axis, Color = 7, LineType = "CENTER", LineWeight = 13, Description = "轴线（点划线）与轴号" },
+            new Style { Name = Room, Color = 7, LineType = "Continuous", LineWeight = 13, Description = "房间轮廓、名称与面积" }
         };
 
         public static Style Find(string name)

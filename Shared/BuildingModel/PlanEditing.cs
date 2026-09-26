@@ -157,6 +157,62 @@ namespace BatchPdfPublisher.BuildingModel
                 if (DistanceToSegment(x, y, wall.X1, wall.Y1, wall.X2, wall.Y2) <= half + tolerance)
                     return new PlanHit { Kind = "wall", Id = wall.Id, Grip = -1 };
             }
+
+            // 5) 轴线（整栋通用；排在墙后面，墙上的轴线仍然优先选中墙）
+            foreach (var axis in (model.Axes ?? new List<AxisModel>()).Where(a => a != null))
+            {
+                var distance = axis.Vertical ? Math.Abs(x - axis.Position) : Math.Abs(y - axis.Position);
+                if (distance <= tolerance) return new PlanHit { Kind = "axis", Id = axis.Id, Grip = -1 };
+            }
+
+            // 6) 房间：点房间名（轮廓形心附近）就选中它 —— 不按整个房间面积判定，
+            //    否则房间会把墙、门窗的点击全吃掉。
+            foreach (var room in (model.Rooms ?? new List<RoomModel>()).Where(r => r != null && Same(r.StoreyId, storeyId)))
+            {
+                var points = (room.Outline ?? new List<PointModel>()).Where(p => p != null).ToList();
+                if (points.Count < 3) continue;
+                var centerX = points.Average(p => p.X);
+                var centerY = points.Average(p => p.Y);
+                var radius = Math.Max(tolerance, 600d);
+                if (Math.Abs(x - centerX) <= radius && Math.Abs(y - centerY) <= radius)
+                    return new PlanHit { Kind = "room", Id = room.Id, Grip = -1 };
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// 轴号重排：竖轴按 X 从小到大编 1、2、3…，横轴按 Y 从小到大编 A、B、C…（超过 Z 后 AA、AB…）。
+        /// 移动/新增/删除轴线后都该调一次，保证轴号永远与位置一致。
+        /// </summary>
+        public static void RenumberAxes(BuildingModelDocument model)
+        {
+            if (model == null || model.Axes == null) return;
+            var vertical = model.Axes.Where(a => a != null && a.Vertical).OrderBy(a => a.Position).ToList();
+            for (var index = 0; index < vertical.Count; index++) vertical[index].Name = (index + 1).ToString();
+            var horizontal = model.Axes.Where(a => a != null && !a.Vertical).OrderBy(a => a.Position).ToList();
+            for (var index = 0; index < horizontal.Count; index++) horizontal[index].Name = LetterName(index);
+        }
+
+        /// <summary>0 → A、1 → B…25 → Z、26 → AA。</summary>
+        public static string LetterName(int index)
+        {
+            var name = string.Empty;
+            var value = Math.Max(0, index);
+            do
+            {
+                name = (char)('A' + value % 26) + name;
+                value = value / 26 - 1;
+            } while (value >= 0);
+            return name;
+        }
+
+        /// <summary>房间/轴线之类的简单校验：房间至少 3 个点、轴号不能为空。</summary>
+        public static string ValidateRoom(RoomModel room)
+        {
+            if (room == null) return "房间为空。";
+            var points = (room.Outline ?? new List<PointModel>()).Where(p => p != null).ToList();
+            if (points.Count < 3) return "房间轮廓至少要 3 个点。";
+            if (room.AreaSquareMetres < 0.01d) return "房间面积太小（轮廓可能重合了）。";
             return null;
         }
 

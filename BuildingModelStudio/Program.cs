@@ -83,6 +83,8 @@ namespace Wanluo.BuildingModelStudio
             if (args != null && args.Length > 0 && string.Equals(args[0], "--selftest-canvas", StringComparison.OrdinalIgnoreCase))
             {
                 Headless = true;
+                // 自检日志逐行刷出去：万一某一步卡住，从输出最后一行就能看出卡在哪
+                Console.SetOut(new StreamWriter(Console.OpenStandardOutput()) { AutoFlush = true });
                 try
                 {
                     CanvasSelfTest.Run(Console.WriteLine);
@@ -484,6 +486,8 @@ namespace Wanluo.BuildingModelStudio
             tools.Controls.Add(ToolButton("放窗", "window", false));
             tools.Controls.Add(ToolButton("放门", "door", false));
             tools.Controls.Add(ToolButton("布柱", "column", false));
+            tools.Controls.Add(ToolButton("拉轴线", "axis", false));
+            tools.Controls.Add(ToolButton("画房间", "room", false));
             tools.Controls.Add(Button("删除选中(Delete)", () => _canvas.DeleteSelection(), false));
             tools.Controls.Add(Button("撤销(Ctrl+Z)", () => _canvas.Undo(), false));
             tools.Controls.Add(Button("重做(Ctrl+Y)", () => _canvas.Redo(), false));
@@ -494,8 +498,8 @@ namespace Wanluo.BuildingModelStudio
             {
                 AutoSize = true,
                 ForeColor = Color.FromArgb(105, 112, 122),
-                Text = "左键：执行当前工具　中键/右键拖动：平移　滚轮：缩放　Esc：取消　Delete：删除"
-                    + "　（捕捉自动生效：端点 / 中点 / 正交 / 100mm 轴网）"
+                Text = "左键：执行当前工具　中键/右键拖动：平移　滚轮：缩放　Esc：取消／闭合房间　Delete：删除"
+                    + "　（捕捉自动生效：端点 / 中点 / 正交 / 100mm 轴网）　「拉轴线」：拉一条定方向与位置；「画房间」：连续点轮廓，点回起点或 Esc 闭合"
             }, 0, 2);
             root.Controls.Add(top, 0, 0);
 
@@ -1148,6 +1152,7 @@ namespace Wanluo.BuildingModelStudio
             _model.Walls.RemoveAll(w => w != null && string.Equals(w.StoreyId, storey.Id, StringComparison.OrdinalIgnoreCase));
             _model.Columns.RemoveAll(c => c != null && string.Equals(c.StoreyId, storey.Id, StringComparison.OrdinalIgnoreCase));
             _model.Slabs.RemoveAll(s => s != null && string.Equals(s.StoreyId, storey.Id, StringComparison.OrdinalIgnoreCase));
+            _model.Rooms.RemoveAll(r => r != null && string.Equals(r.StoreyId, storey.Id, StringComparison.OrdinalIgnoreCase));
             _model.Storeys.Remove(storey);
             RefreshStoreys();
             _canvas.Invalidate();
@@ -1208,6 +1213,25 @@ namespace Wanluo.BuildingModelStudio
                 AddField(host, ref row, "中心 Y", column.Y.ToString("0"), v => column.Y = Num(v, column.Y));
                 AddField(host, ref row, "宽", column.Width.ToString("0"), v => column.Width = Num(v, column.Width));
                 AddField(host, ref row, "深", column.Depth.ToString("0"), v => column.Depth = Num(v, column.Depth));
+            }
+            else if (hit.Kind == "axis")
+            {
+                var axis = (_model.Axes ?? new List<AxisModel>()).FirstOrDefault(a => a != null && Same(a.Id, hit.Id));
+                if (axis == null) return;
+                AddField(host, ref row, "轴号", axis.Name ?? string.Empty, v => { axis.Name = v; });
+                AddInfo(host, ref row, axis.Vertical ? "方向：竖轴（沿 Y，标 X）" : "方向：横轴（沿 X，标 Y）");
+                AddField(host, ref row, axis.Vertical ? "位置 X" : "位置 Y", axis.Position.ToString("0"), v => axis.Position = Num(v, axis.Position));
+                AddField(host, ref row, "延伸起", axis.ExtentStart.ToString("0"), v => axis.ExtentStart = Num(v, axis.ExtentStart));
+                AddField(host, ref row, "延伸止", axis.ExtentEnd.ToString("0"), v => axis.ExtentEnd = Num(v, axis.ExtentEnd));
+                AddInfo(host, ref row, "（延伸填 0 = 按建筑范围自动；轴号会按位置自动重排）");
+            }
+            else if (hit.Kind == "room")
+            {
+                var room = (_model.Rooms ?? new List<RoomModel>()).FirstOrDefault(r => r != null && Same(r.Id, hit.Id));
+                if (room == null) return;
+                AddField(host, ref row, "房间名", room.Name ?? string.Empty, v => room.Name = v);
+                AddInfo(host, ref row, "面积 " + room.AreaSquareMetres.ToString("0.00") + " m²（按轮廓现算）");
+                AddInfo(host, ref row, "轮廓 " + (room.Outline ?? new List<PointModel>()).Count + " 个点（拖房间名可整体移动）");
             }
         }
 

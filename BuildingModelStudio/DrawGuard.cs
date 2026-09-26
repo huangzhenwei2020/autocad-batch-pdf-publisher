@@ -45,5 +45,64 @@ namespace Wanluo.BuildingModelStudio
         {
             return IsFinite(scale) && scale > 0d && IsFinite(offsetX) && IsFinite(offsetY);
         }
+
+        /// <summary>
+        /// 把一条屏幕线段裁到视口内（Liang-Barsky）。返回 false = 整段都在视口外，不用画。
+        ///
+        /// 为什么必须裁：GDI+ 画**虚线/点划线**时要按线长生成虚线段。
+        /// 缩放到很大时（例如 1px=1e-9mm）轴线可能长到 2e8 像素，GDI+ 会生成上亿段虚线直接卡死
+        /// —— 2026-09-26 的"轴网自检卡住"就是这个。裁到视口后线长最多一个屏幕对角线，画起来就是瞬时的。
+        /// </summary>
+        public static bool ClipLine(ref float x1, ref float y1, ref float x2, ref float y2,
+            float left, float top, float right, float bottom)
+        {
+            if (!IsFinite(x1) || !IsFinite(y1) || !IsFinite(x2) || !IsFinite(y2)) return false;
+            if (!IsFinite(left) || !IsFinite(top) || !IsFinite(right) || !IsFinite(bottom)) return false;
+            var dx = x2 - x1;
+            var dy = y2 - y1;
+            var enter = 0d;
+            var exit = 1d;
+            if (!ClipEdge(-dx, x1 - left, ref enter, ref exit)) return false;
+            if (!ClipEdge(dx, right - x1, ref enter, ref exit)) return false;
+            if (!ClipEdge(-dy, y1 - top, ref enter, ref exit)) return false;
+            if (!ClipEdge(dy, bottom - y1, ref enter, ref exit)) return false;
+            if (exit <= enter) return false;
+            var startX = x1 + enter * dx;
+            var startY = y1 + enter * dy;
+            var endX = x1 + exit * dx;
+            var endY = y1 + exit * dy;
+            x1 = (float)startX; y1 = (float)startY;
+            x2 = (float)endX; y2 = (float)endY;
+            return true;
+        }
+
+        private static bool ClipEdge(double p, double q, ref double enter, ref double exit)
+        {
+            if (Math.Abs(p) < 1e-12d) return q >= 0d;
+            var r = q / p;
+            if (p < 0d)
+            {
+                if (r > exit) return false;
+                if (r > enter) enter = r;
+            }
+            else
+            {
+                if (r < enter) return false;
+                if (r < exit) exit = r;
+            }
+            return true;
+        }
+
+        /// <summary>这个矩形（屏幕坐标）跟视口有交集吗（没交集的多边形/圆可以直接跳过）。</summary>
+        public static bool IntersectsViewport(float left, float top, float right, float bottom,
+            float viewWidth, float viewHeight, float margin = 8f)
+        {
+            if (!IsFinite(left) || !IsFinite(top) || !IsFinite(right) || !IsFinite(bottom)) return false;
+            if (Math.Min(left, right) > viewWidth + margin) return false;
+            if (Math.Max(left, right) < -margin) return false;
+            if (Math.Min(top, bottom) > viewHeight + margin) return false;
+            if (Math.Max(top, bottom) < -margin) return false;
+            return true;
+        }
     }
 }

@@ -91,6 +91,18 @@ namespace BatchPdfPublisher.Services
                     Bump(counts, text.Layer);
                 }
 
+                // 圆（轴号圆圈等）
+                foreach (var circle in view.Circles ?? new List<ViewCircle>())
+                {
+                    if (circle == null || Math.Abs(circle.Radius) < 0.5d) continue;
+                    var entity = new Circle(new Point3d(anchor.X + circle.X, anchor.Y + circle.Y, 0d), Vector3d.ZAxis,
+                        Math.Abs(circle.Radius));
+                    ApplyLayer(entity, circle.Layer);
+                    space.AppendEntity(entity);
+                    transaction.AddNewlyCreatedDBObject(entity, true);
+                    Bump(counts, circle.Layer);
+                }
+
                 // 尺寸标注：建成**真的 CAD 标注**（可拉伸、可改），不是拆成线 +
                 // 文字。样式用插件统一的"万落建筑工具 1:N 标注样式"，与门窗立面一致。
                 if (view.Dimensions != null && view.Dimensions.Count > 0)

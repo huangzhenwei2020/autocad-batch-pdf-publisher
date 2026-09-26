@@ -538,10 +538,134 @@ namespace BatchPdfPublisher.BuildingModel
                     column.X - halfWidth, column.Y - halfDepth, column.X + halfWidth, column.Y + halfDepth);
             }
 
-            AddPlanDimensions(document, view, walls, openings);
+            // 轴网与房间：平面图的两个"信息层"
+            var bounds = PlanBounds(walls);
+            AddPlanAxes(document, model, bounds[0], bounds[1], bounds[2], bounds[3], view.Scale);
+            AddPlanRooms(document, model, storey.Id, view.Scale, walls);
+
+            AddPlanDimensions(document, view, walls, openings, model);
             AddTitle(document, view);
             Normalize(document);
             return document;
+        }
+
+        /// <summary>
+        /// 轴网：竖轴（沿 Y，标 X）与横轴（沿 X，标 Y）画成点划线 + 两端轴号圆圈，
+        /// 每条都带"图上元素 ↔ 模型构件"的锚点，平面里也能点选轴线。
+        /// </summary>
+        private static void AddPlanAxes(ViewDocument document, BuildingModelDocument model,
+            double minX, double maxX, double minY, double maxY, int scale)
+        {
+            var axes = (model.Axes ?? new List<AxisModel>()).Where(a => a != null && IsFinite(a.Position)).ToList();
+            if (axes.Count == 0) return;
+            var margin = Math.Max(3200d, Math.Max(1, scale) * 32d);      // 轴线伸出建筑 3200：轴号圆圈要落最外一道尺寸线之外
+            var radius = Math.Max(400d, Math.Max(1, scale) * 4d);        // 轴号圆圈半径 400（图上 4mm）
+            var textHeight = Math.Max(250d, Math.Max(1, scale) * 2.5d);
+
+            foreach (var axis in axes)
+            {
+                var start = axis.ExtentStart > 0.5d || axis.ExtentEnd > 0.5d
+                    ? Math.Min(axis.ExtentStart, axis.ExtentEnd)
+                    : (axis.Vertical ? minY : minX) - margin;
+                var end = axis.ExtentStart > 0.5d || axis.ExtentEnd > 0.5d
+                    ? Math.Max(axis.ExtentStart, axis.ExtentEnd)
+                    : (axis.Vertical ? maxY : maxX) + margin;
+                if (end - start < 1d) continue;
+
+                if (axis.Vertical)
+                {
+                    document.Lines.Add(new ViewLine
+                    {
+                        Layer = ViewLayers.Axis, LineType = "CENTER",
+                        X1 = axis.Position, Y1 = start, X2 = axis.Position, Y2 = end
+                    });
+                    AddAxisBubble(document, axis.Name, axis.Position, start - radius * 0.4d, radius, textHeight);
+                    AddAxisBubble(document, axis.Name, axis.Position, end + radius * 0.4d, radius, textHeight);
+                    document.Anchors.Add(new ViewAnchor
+                    {
+                        Kind = "axis", ElementId = axis.Id,
+                        X1 = axis.Position - radius, Y1 = start, X2 = axis.Position + radius, Y2 = end
+                    });
+                }
+                else
+                {
+                    document.Lines.Add(new ViewLine
+                    {
+                        Layer = ViewLayers.Axis, LineType = "CENTER",
+                        X1 = start, Y1 = axis.Position, X2 = end, Y2 = axis.Position
+                    });
+                    AddAxisBubble(document, axis.Name, start - radius * 0.4d, axis.Position, radius, textHeight);
+                    AddAxisBubble(document, axis.Name, end + radius * 0.4d, axis.Position, radius, textHeight);
+                    document.Anchors.Add(new ViewAnchor
+                    {
+                        Kind = "axis", ElementId = axis.Id,
+                        X1 = start, Y1 = axis.Position - radius, X2 = end, Y2 = axis.Position + radius
+                    });
+                }
+            }
+        }
+
+        /// <summary>轴号：一个圆圈 + 圈里的轴号（文字按圆心与字宽估算居中）。</summary>
+        private static void AddAxisBubble(ViewDocument document, string name, double x, double y, double radius, double textHeight)
+        {
+            var label = string.IsNullOrWhiteSpace(name) ? "?" : name.Trim();
+            document.Circles.Add(new ViewCircle { Layer = ViewLayers.Axis, X = x, Y = y, Radius = radius });
+            var estimated = textHeight * 0.62d * label.Length;
+            document.Texts.Add(new ViewText
+            {
+                Layer = ViewLayers.Axis, Text = label,
+                X = x - estimated / 2d, Y = y - textHeight * 0.35d, Height = textHeight
+            });
+            _ = radius;
+        }
+
+        /// <summary>房间：轮廓（细线）+ 名称 + 面积（m²，按轮廓现算）。</summary>
+        private static void AddPlanRooms(ViewDocument document, BuildingModelDocument model, string storeyId, int scale,
+            List<WallModel> walls)
+        {
+            var rooms = (model.Rooms ?? new List<RoomModel>()).Where(r => r != null
+                && string.Equals(r.StoreyId ?? string.Empty, storeyId ?? string.Empty, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (rooms.Count == 0) return;
+            var textHeight = Math.Max(250d, Math.Max(1, scale) * 2.5d);
+            var index = 0;
+            foreach (var room in rooms)
+            {
+                var points = (room.Outline ?? new List<PointModel>()).Where(p => p != null && IsFinite(p.X) && IsFinite(p.Y)).ToList();
+                if (points.Count < 3) continue;
+                for (var i = 0; i < points.Count; i++)
+                {
+                    var next = points[(i + 1) % points.Count];
+                    document.Lines.Add(new ViewLine
+                    {
+                        Layer = ViewLayers.Room,
+                        X1 = points[i].X, Y1 = points[i].Y, X2 = next.X, Y2 = next.Y
+                    });
+                }
+                var centerX = points.Average(p => p.X);
+                var centerY = points.Average(p => p.Y);
+                var name = string.IsNullOrWhiteSpace(room.Name) ? "房间" + (index + 1) : room.Name.Trim();
+                var area = room.AreaSquareMetres.ToString("0.00") + " m²";
+                var nameWidth = textHeight * 0.62d * name.Length;
+                var areaWidth = textHeight * 0.62d * area.Length;
+                document.Texts.Add(new ViewText
+                {
+                    Layer = ViewLayers.Room, Text = name,
+                    X = centerX - nameWidth / 2d, Y = centerY + textHeight * 0.7d, Height = textHeight
+                });
+                document.Texts.Add(new ViewText
+                {
+                    Layer = ViewLayers.Room, Text = area,
+                    X = centerX - areaWidth / 2d, Y = centerY - textHeight * 0.9d, Height = textHeight * 0.85d
+                });
+                document.Anchors.Add(new ViewAnchor
+                {
+                    Kind = "room", ElementId = room.Id,
+                    X1 = points.Min(p => p.X), Y1 = points.Min(p => p.Y),
+                    X2 = points.Max(p => p.X), Y2 = points.Max(p => p.Y)
+                });
+                index++;
+                _ = walls;
+            }
         }
 
         /// <summary>一道墙上挂着的洞口（按沿墙定位排序）。</summary>
@@ -667,22 +791,39 @@ namespace BatchPdfPublisher.BuildingModel
             });
         }
 
-        /// <summary>平面外围尺寸：下方横向定位链 + 总长，左侧竖向定位链 + 总宽（都由墙端点与洞口边线取值）。</summary>
-        private static void AddPlanDimensions(ViewDocument document, ViewDefinitionModel view,
-            List<WallModel> walls, List<OpeningModel> openings)
+        /// <summary>平面图的建筑范围（含墙厚外皮），返回 [minX, maxX, minY, maxY]。</summary>
+        private static double[] PlanBounds(List<WallModel> walls)
         {
-            if (walls.Count == 0) return;
-            var minX = walls.Min(w => Math.Min(w.X1, w.X2)) - 200d;
-            var maxX = walls.Max(w => Math.Max(w.X1, w.X2)) + 200d;
-            var minY = walls.Min(w => Math.Min(w.Y1, w.Y2)) - 200d;
-            var maxY = walls.Max(w => Math.Max(w.Y1, w.Y2)) + 200d;
-            var xs = new List<double> { minX, maxX };
-            var ys = new List<double> { minY, maxY };
+            if (walls == null || walls.Count == 0) return new[] { 0d, 0d, 0d, 0d };
+            double minX = double.MaxValue, maxX = double.MinValue, minY = double.MaxValue, maxY = double.MinValue;
             foreach (var wall in walls)
             {
-                xs.Add(wall.X1); xs.Add(wall.X2);
-                ys.Add(wall.Y1); ys.Add(wall.Y2);
+                var half = (wall.Thickness > 0.5d ? wall.Thickness : 200d) / 2d;
+                minX = Math.Min(minX, Math.Min(wall.X1, wall.X2) - half);
+                maxX = Math.Max(maxX, Math.Max(wall.X1, wall.X2) + half);
+                minY = Math.Min(minY, Math.Min(wall.Y1, wall.Y2) - half);
+                maxY = Math.Max(maxY, Math.Max(wall.Y1, wall.Y2) + half);
             }
+            return new[] { minX, maxX, minY, maxY };
+        }
+
+        /// <summary>
+        /// 平面外围尺寸（建筑制图的三道）：内层洞口定位、中层轴线尺寸（有轴网时）、外层总尺寸。
+        /// 左侧同理（竖向）。
+        /// </summary>
+        private static void AddPlanDimensions(ViewDocument document, ViewDefinitionModel view,
+            List<WallModel> walls, List<OpeningModel> openings, BuildingModelDocument model)
+        {
+            if (walls.Count == 0) return;
+            // 尺寸链从建筑外皮起算（与立面图的总长/总宽一致：外墙外皮到外皮）
+            var bounds = PlanBounds(walls);
+            var minX = bounds[0];
+            var maxX = bounds[1];
+            var minY = bounds[2];
+            var maxY = bounds[3];
+
+            var openingXs = new List<double> { minX, maxX };
+            var openingYs = new List<double> { minY, maxY };
             foreach (var opening in openings)
             {
                 var wall = walls.FirstOrDefault(w => w != null
@@ -691,43 +832,52 @@ namespace BatchPdfPublisher.BuildingModel
                 var edges = OpeningEdges(wall, opening);
                 var a = PlanPoint(wall, edges[0]);
                 var b = PlanPoint(wall, edges[1]);
-                xs.Add(a.X); xs.Add(b.X);
-                ys.Add(a.Y); ys.Add(b.Y);
+                openingXs.Add(a.X); openingXs.Add(b.X);
+                openingYs.Add(a.Y); openingYs.Add(b.Y);
             }
-            xs = xs.Where(IsFinite).Distinct().OrderBy(v => v).ToList();
-            ys = ys.Where(IsFinite).Distinct().OrderBy(v => v).ToList();
-            _ = view;
 
-            for (var i = 0; i + 1 < xs.Count; i++)
-            {
-                if (xs[i + 1] - xs[i] < 1d) continue;
-                document.Dimensions.Add(new ViewDimension
-                {
-                    Layer = ViewLayers.Dimension, Vertical = false,
-                    From = xs[i], To = xs[i + 1], AnchorPosition = minY, LinePosition = minY - 1200d,
-                    Note = "定位（横向）"
-                });
-            }
+            var axes = (model.Axes ?? new List<AxisModel>()).Where(a => a != null && IsFinite(a.Position)).ToList();
+            var axisXs = axes.Where(a => a.Vertical).Select(a => a.Position).ToList();
+            var axisYs = axes.Where(a => !a.Vertical).Select(a => a.Position).ToList();
+
+            AddPlanChain(document, openingXs, minY, minY - 1200d, false, "洞口定位（横向）", true);
+            if (axisXs.Count > 0)
+                AddPlanChain(document, new List<double> { minX, maxX }.Concat(axisXs).ToList(), minY, minY - 2000d, false, "轴线（横向）", false);
             document.Dimensions.Add(new ViewDimension
             {
                 Layer = ViewLayers.Dimension, Vertical = false,
-                From = minX, To = maxX, AnchorPosition = minY, LinePosition = minY - 2000d, Note = "总长"
+                From = minX, To = maxX, AnchorPosition = minY,
+                LinePosition = minY - (axisXs.Count > 0 ? 2800d : 2000d), Note = "总长"
             });
-            for (var i = 0; i + 1 < ys.Count; i++)
-            {
-                if (ys[i + 1] - ys[i] < 1d) continue;
-                document.Dimensions.Add(new ViewDimension
-                {
-                    Layer = ViewLayers.Dimension, Vertical = true,
-                    From = ys[i], To = ys[i + 1], AnchorPosition = minX, LinePosition = minX - 1200d,
-                    Note = "定位（竖向）"
-                });
-            }
+
+            AddPlanChain(document, openingYs, minX, minX - 1200d, true, "洞口定位（竖向）", true);
+            if (axisYs.Count > 0)
+                AddPlanChain(document, new List<double> { minY, maxY }.Concat(axisYs).ToList(), minX, minX - 2000d, true, "轴线（竖向）", false);
             document.Dimensions.Add(new ViewDimension
             {
                 Layer = ViewLayers.Dimension, Vertical = true,
-                From = minY, To = maxY, AnchorPosition = minX, LinePosition = minX - 2000d, Note = "总宽"
+                From = minY, To = maxY, AnchorPosition = minX,
+                LinePosition = minX - (axisYs.Count > 0 ? 2800d : 2000d), Note = "总宽"
             });
+            _ = view;
+        }
+
+        /// <summary>把一串定位值连成连续尺寸链（排序去重后逐段出一条尺寸）。</summary>
+        private static void AddPlanChain(ViewDocument document, List<double> values, double anchor, double linePosition,
+            bool vertical, string note, bool keepDuplicatesAsIs)
+        {
+            var points = values.Where(IsFinite).Distinct().OrderBy(v => v).ToList();
+            _ = keepDuplicatesAsIs;
+            for (var i = 0; i + 1 < points.Count; i++)
+            {
+                if (points[i + 1] - points[i] < 1d) continue;
+                document.Dimensions.Add(new ViewDimension
+                {
+                    Layer = ViewLayers.Dimension, Vertical = vertical,
+                    From = points[i], To = points[i + 1],
+                    AnchorPosition = anchor, LinePosition = linePosition, Note = note
+                });
+            }
         }
 
         private static void AddLine(ViewDocument document, string layer, double x1, double y1, double x2, double y2)
@@ -1434,6 +1584,14 @@ namespace BatchPdfPublisher.BuildingModel
             document.OriginX = uMin;
             document.OriginY = zMin;
             foreach (var line in document.Lines) { line.X1 -= uMin; line.X2 -= uMin; line.Y1 -= zMin; line.Y2 -= zMin; }
+            // 锚点（图上元素 ↔ 模型构件）也在视图坐标里，必须一起平移 ——
+            // 否则预览点选会按"没平移的位置"去命中，点到的地方和看到的窗对不上。
+            foreach (var anchor in document.Anchors)
+            {
+                if (anchor == null) continue;
+                anchor.X1 -= uMin; anchor.X2 -= uMin;
+                anchor.Y1 -= zMin; anchor.Y2 -= zMin;
+            }
             // 尺寸也要跟着平移：竖直尺寸量的是 Z（From/To）、界线与尺寸线在 X 上；
             // 水平尺寸反过来。漏了这一步，落图后尺寸会整体偏掉一个视图原点。
             foreach (var dimension in document.Dimensions)
@@ -1456,6 +1614,12 @@ namespace BatchPdfPublisher.BuildingModel
             }
             foreach (var hatch in document.Hatches)
                 foreach (var point in hatch.Boundary) { point.X -= uMin; point.Y -= zMin; }
+            foreach (var circle in document.Circles)
+            {
+                if (circle == null) continue;
+                circle.X -= uMin;
+                circle.Y -= zMin;
+            }
             foreach (var text in document.Texts) { text.X -= uMin; text.Y -= zMin; }
         }
     }

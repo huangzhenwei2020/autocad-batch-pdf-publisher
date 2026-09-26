@@ -98,7 +98,40 @@ namespace BatchPdfPublisher.BuildingModel
 
             model.Columns.Add(new ColumnModel { Id = "KZ-1", StoreyId = "1F", X = 600d, Y = 600d, Width = 400d, Depth = 400d });
 
+            // 轴网（整栋通用）：竖轴 1/2/3（x=0/3600/7200）、横轴 A/B（y=0/5400）
+            model.Axes.Add(new AxisModel { Id = "ax-1", Name = "1", Vertical = true, Position = 0d });
+            model.Axes.Add(new AxisModel { Id = "ax-2", Name = "2", Vertical = true, Position = width / 2d });
+            model.Axes.Add(new AxisModel { Id = "ax-3", Name = "3", Vertical = true, Position = width });
+            model.Axes.Add(new AxisModel { Id = "ax-A", Name = "A", Vertical = false, Position = 0d });
+            model.Axes.Add(new AxisModel { Id = "ax-B", Name = "B", Vertical = false, Position = depth });
+
+            // 房间：每层两间（面积由轮廓现算）
+            foreach (var storey in new[] { "1F", "2F" })
+            {
+                model.Rooms.Add(new RoomModel
+                {
+                    Id = storey + "-R1", StoreyId = storey, Name = "起居室",
+                    Outline = Rectangle(120d, 120d, width / 2d - 120d, depth - 120d)
+                });
+                model.Rooms.Add(new RoomModel
+                {
+                    Id = storey + "-R2", StoreyId = storey, Name = "卧室",
+                    Outline = Rectangle(width / 2d + 120d, 120d, width - 120d, depth - 120d)
+                });
+            }
+
             return model;
+        }
+
+        private static List<PointModel> Rectangle(double x1, double y1, double x2, double y2)
+        {
+            return new List<PointModel>
+            {
+                new PointModel(x1, y1),
+                new PointModel(x2, y1),
+                new PointModel(x2, y2),
+                new PointModel(x1, y2)
+            };
         }
 
         private static OpeningModel Window(string id, string hostWallId, string code, double offset, double width, double height, double sill)

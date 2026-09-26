@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.Linq;
 using System.Windows.Forms;
 using BatchPdfPublisher.BuildingModel;
 
@@ -30,7 +31,78 @@ namespace Wanluo.BuildingModelStudio
             CancelsWhenUndoneMidDrag(log);
             CancelsWhenStoreyChanged(log);
             CancelsWhenHostWallGone(log);
-            log("PASS 平面交互自检：拖柱 / 拖墙夹点 / 拖洞口 —— 目标被删、被撤销、换楼层、宿主墙消失都只取消拖动，不抛异常");
+            DrawsAxisAndRenumbers(log);
+            DrawsRoomAndMovesIt(log);
+            log("PASS 平面交互自检：拖柱 / 拖墙夹点 / 拖洞口 / 拉轴线 / 画房间 —— 目标被删、被撤销、换楼层、宿主墙消失都只取消拖动，不抛异常");
+        }
+
+        // ───────────────────────── 6. 拉轴线（自动编号） ─────────────────────────
+
+        private static void DrawsAxisAndRenumbers(Action<string> log)
+        {
+            var canvas = NewCanvas(out var model);
+            canvas.Tool = "axis";
+            // 拉一条竖轴：从 (2000,0) 到 (2000,4000) → 位置 X=2000，方向取主轴（竖向）
+            canvas.SimulateMouseDown(ToScreen(2000d, 0d), MouseButtons.Left);
+            canvas.SimulateMouseDown(ToScreen(2000d, 4000d), MouseButtons.Left);
+            Assert(model.Axes.Count == 1, "拉一条轴线后模型里应有 1 条轴线，实际 " + model.Axes.Count);
+            var axis = model.Axes[0];
+            Assert(axis.Vertical && Math.Abs(axis.Position - 2000d) < 5d, "轴线应是竖轴且在 x≈2000，实际 Vertical=" + axis.Vertical + " Position=" + axis.Position);
+            Assert(axis.Name == "1", "第一条竖轴轴号应为 1，实际 " + axis.Name);
+
+            // 再拉两条：x=500 与 x=4000 → 轴号应按位置重排为 1/2/3
+            canvas.SimulateMouseDown(ToScreen(500d, 0d), MouseButtons.Left);
+            canvas.SimulateMouseDown(ToScreen(500d, 4000d), MouseButtons.Left);
+            canvas.SimulateMouseDown(ToScreen(4000d, 0d), MouseButtons.Left);
+            canvas.SimulateMouseDown(ToScreen(4000d, 4000d), MouseButtons.Left);
+            var ordered = model.Axes.OrderBy(a => a.Position).Select(a => a.Name).ToArray();
+            Assert(string.Join(",", ordered) == "1,2,3", "竖轴轴号应按位置重排为 1,2,3，实际 " + string.Join(",", ordered));
+
+            // 拖第 2 条轴线：只能沿垂直方向移动
+            var middle = model.Axes.First(a => a.Name == "2");
+            var beforeY = middle.Position;
+            canvas.Tool = "select";
+            canvas.SimulateMouseDown(ToScreen(middle.Position, 2000d), MouseButtons.Left);
+            Assert(canvas.IsDragging, "点轴线应进入拖动状态");
+            canvas.SimulateMouseMove(ToScreen(3000d, 2600d));
+            Assert(Math.Abs(middle.Position - 3000d) < 50d, "轴线应跟着鼠标移到 x≈3000，实际 " + middle.Position);
+            canvas.SimulateMouseUp(ToScreen(3000d, 2600d), MouseButtons.Left);
+            Assert(Math.Abs(beforeY - 2000d) < 0.01d, "原来的位置不该被改坏");
+            log("PASS 拉轴线：拉 3 条 → 轴号按位置重排 1,2,3；拖轴线只沿垂直方向移动");
+        }
+
+        // ───────────────────────── 7. 画房间（面积现算 + 整体移动） ─────────────────────────
+
+        private static void DrawsRoomAndMovesIt(Action<string> log)
+        {
+            var canvas = NewCanvas(out var model);
+            canvas.Tool = "room";
+            canvas.SimulateMouseDown(ToScreen(0d, 0d), MouseButtons.Left);
+            canvas.SimulateMouseDown(ToScreen(3000d, 0d), MouseButtons.Left);
+            canvas.SimulateMouseDown(ToScreen(3000d, 2000d), MouseButtons.Left);
+            canvas.SimulateMouseDown(ToScreen(0d, 2000d), MouseButtons.Left);
+            canvas.SimulateMouseDown(ToScreen(0d, 0d), MouseButtons.Left);        // 点回起点 = 闭合
+            Assert(model.Rooms.Count == 1, "画完应有 1 个房间，实际 " + model.Rooms.Count);
+            var room = model.Rooms[0];
+            Assert(Math.Abs(room.AreaSquareMetres - 6d) < 0.01d, "3×2m 的房间面积应为 6.00 m²，实际 " + room.AreaSquareMetres);
+
+            // 拖房间名（形心附近）整体移动
+            canvas.Tool = "select";
+            canvas.SimulateMouseDown(ToScreen(1500d, 1000d), MouseButtons.Left);
+            Assert(canvas.IsDragging, "点房间名附近应选中并进入拖动状态");
+            canvas.SimulateMouseMove(ToScreen(2500d, 1500d));
+            canvas.SimulateMouseUp(ToScreen(2500d, 1500d), MouseButtons.Left);
+            var centerX = room.Outline.Average(p => p.X);
+            Assert(Math.Abs(centerX - 2500d) < 200d, "房间应整体移到 x≈2500，实际 " + centerX);
+            Assert(Math.Abs(room.AreaSquareMetres - 6d) < 0.01d, "整体移动不该改变面积");
+
+            // 删除房间后不应残留空引用（拖动中删除也走 CancelDrag）
+            canvas.SimulateMouseDown(ToScreen(2500d, 1500d), MouseButtons.Left);
+            canvas.DeleteSelection();
+            canvas.SimulateMouseMove(ToScreen(4000d, 3000d));
+            Assert(model.Rooms.Count == 0, "删除后模型里不应还有房间");
+            Assert(canvas.LastPaintError == null, "删除房间后继续移动鼠标不应产生绘制错误：" + canvas.LastPaintError);
+            log("PASS 画房间：4 点闭合 → 面积 6.00 m²；拖整体移动；拖动中删除不抛异常");
         }
 
         // ───────────────────────── 1. 正常拖动与提交 ─────────────────────────

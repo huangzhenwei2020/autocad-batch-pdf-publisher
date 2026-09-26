@@ -17,7 +17,7 @@ namespace Wanluo.BuildingModelStudio
     /// </summary>
     internal sealed class PlanCanvas : Control
     {
-        private enum DragMode { None, Pan, Grip, MoveWall, MoveOpening, MoveColumn, DrawWall }
+        private enum DragMode { None, Pan, Grip, MoveWall, MoveOpening, MoveColumn, DrawWall, DrawRoom, MoveAxis, MoveRoom }
 
         private readonly ModelEditHistory _history = new ModelEditHistory();
         private BuildingModelDocument _model;
@@ -25,10 +25,139 @@ namespace Wanluo.BuildingModelStudio
         private string _tool = "select";
         private PlanHit _selection;
         private DragMode _drag = DragMode.None;
-        /// <summary>拖动开始时抓住的构件引用（拖动期间只认它们，不再解引用 _selection）。</summary>
+        /// <summary>闭合当前房间草稿：至少 3 个点才建房间（名字先给个默认的，可在属性面板改）。</summary>
+        public void FinishRoomDraft()
+        {
+            var points = _roomDraft;
+            _roomDraft = null;
+            if (points == null || points.Count < 3)
+            {
+                StatusChanged?.Invoke("房间轮廓至少 3 个点，已取消。");
+                Invalidate();
+                return;
+            }
+            var room = new RoomModel
+            {
+                Id = NewId("R"), StoreyId = _storeyId,
+                Name = "房间" + ((_model.Rooms ?? new List<RoomModel>()).Count + 1),
+                Outline = points
+            };
+            var error = PlanEditing.ValidateRoom(room);
+            if (error != null) { StatusChanged?.Invoke("提示：" + error); Invalidate(); return; }
+            _model.Rooms.Add(room);
+            _selection = new PlanHit { Kind = "room", Id = room.Id };
+            Commit("画房间 " + room.Name);
+            StatusChanged?.Invoke("已建房间 " + room.Name + "（面积 " + room.AreaSquareMetres.ToString("0.00") + " m²，名称可在属性面板改）。");
+        }
+
+        private void DrawAxes(Graphics g)
+        {
+            if (_model == null) return;
+            var axes = _model.Axes ?? new List<AxisModel>();
+            if (axes.Count == 0) return;
+            using (var pen = new Pen(Color.FromArgb(200, 160, 230), 1.1f) { DashStyle = DashStyle.DashDot })
+            using (var bubble = new Pen(Color.FromArgb(200, 160, 230), 1.1f))
+            using (var font = new Font("Microsoft YaHei UI", 8f))
+            using (var brush = new SolidBrush(Color.FromArgb(220, 200, 240)))
+            {
+                foreach (var axis in axes.Where(a => a != null && Sane(a.Position, a.Position)))
+                {
+                    var margin = 1200d;
+                    PointF from, to;
+                    if (axis.Vertical)
+                    {
+                        var start = axis.ExtentStart > 0.5d || axis.ExtentEnd > 0.5d ? Math.Min(axis.ExtentStart, axis.ExtentEnd) : double.NaN;
+                        var end = axis.ExtentStart > 0.5d || axis.ExtentEnd > 0.5d ? Math.Max(axis.ExtentStart, axis.ExtentEnd) : double.NaN;
+                        if (double.IsNaN(start))
+                        {
+                            var ys = (_model.Walls ?? new List<WallModel>()).Where(w => w != null).SelectMany(w => new[] { w.Y1, w.Y2 }).ToList();
+                            start = (ys.Count == 0 ? 0d : ys.Min()) - margin;
+                            end = (ys.Count == 0 ? 0d : ys.Max()) + margin;
+                        }
+                        from = ToScreen(axis.Position, start);
+                        to = ToScreen(axis.Position, end);
+                    }
+                    else
+                    {
+                        var start = axis.ExtentStart > 0.5d || axis.ExtentEnd > 0.5d ? Math.Min(axis.ExtentStart, axis.ExtentEnd) : double.NaN;
+                        var end = axis.ExtentStart > 0.5d || axis.ExtentEnd > 0.5d ? Math.Max(axis.ExtentStart, axis.ExtentEnd) : double.NaN;
+                        if (double.IsNaN(start))
+                        {
+                            var xs = (_model.Walls ?? new List<WallModel>()).Where(w => w != null).SelectMany(w => new[] { w.X1, w.X2 }).ToList();
+                            start = (xs.Count == 0 ? 0d : xs.Min()) - margin;
+                            end = (xs.Count == 0 ? 0d : xs.Max()) + margin;
+                        }
+                        from = ToScreen(start, axis.Position);
+                        to = ToScreen(end, axis.Position);
+                    }
+                    var selected = _selection != null && _selection.Kind == "axis" && Same(_selection.Id, axis.Id);
+                    pen.Color = selected ? Color.FromArgb(255, 210, 120) : Color.FromArgb(200, 160, 230);
+                    DrawClippedLine(g, pen, from, to);
+                    // 轴号圆圈（画个圆 + 轴号）
+                    var label = axis.Name ?? "?";
+                    foreach (var point in new[] { from, to })
+                    {
+                        var extent = axis.Vertical
+                            ? (point.Y <= from.Y ? -1 : 1)
+                            : (point.X <= from.X ? -1 : 1);
+                        var centerX = axis.Vertical ? point.X : point.X + extent * 700f;
+                        var centerY = axis.Vertical ? point.Y + extent * 700f : point.Y;
+                        g.DrawEllipse(bubble, centerX - 9f, centerY - 9f, 18f, 18f);
+                        var size = g.MeasureString(label, font);
+                        g.DrawString(label, font, brush, centerX - size.Width / 2f, centerY - size.Height / 2f);
+                    }
+                }
+            }
+        }
+
+        private void DrawRooms(Graphics g)        {
+            if (_model == null) return;
+            var rooms = (_model.Rooms ?? new List<RoomModel>()).Where(r => r != null && Same(r.StoreyId, _storeyId)).ToList();
+            if (rooms.Count == 0 && _roomDraft == null) return;
+            using (var pen = new Pen(Color.FromArgb(150, 210, 225), 1.1f))
+            using (var draft = new Pen(Color.FromArgb(120, 200, 255), 1.4f) { DashStyle = DashStyle.Dash })
+            using (var font = new Font("Microsoft YaHei UI", 8f))
+            using (var brush = new SolidBrush(Color.FromArgb(180, 225, 235)))
+            {
+                foreach (var room in rooms)
+                {
+                    var points = (room.Outline ?? new List<PointModel>()).Where(p => p != null && Sane(p.X, p.Y)).ToList();
+                    if (points.Count < 3) continue;
+                    var screens = points.Select(p => ToScreen(p.X, p.Y)).ToArray();
+                    var selected = _selection != null && _selection.Kind == "room" && Same(_selection.Id, room.Id);
+                    pen.Color = selected ? Color.FromArgb(255, 210, 120) : Color.FromArgb(150, 210, 225);
+                    g.DrawPolygon(pen, screens);
+                    var name = string.IsNullOrWhiteSpace(room.Name) ? "房间" : room.Name;
+                    var area = room.AreaSquareMetres.ToString("0.00") + " m²";
+                    // 名字与面积写在形心（与投影出来的平面图一致）
+                    var centerX = screens.Average(p => p.X);
+                    var centerY = screens.Average(p => p.Y);
+                    var nameSize = g.MeasureString(name, font);
+                    var areaSize = g.MeasureString(area, font);
+                    g.DrawString(name, font, brush, centerX - nameSize.Width / 2f, centerY - nameSize.Height);
+                    g.DrawString(area, font, brush, centerX - areaSize.Width / 2f, centerY + 2f);
+                }
+                if (_roomDraft != null && _roomDraft.Count > 0)
+                {
+                    var screens = _roomDraft.Select(p => ToScreen(p.X, p.Y)).ToList();
+                    for (var index = 0; index + 1 < screens.Count; index++) g.DrawLine(draft, screens[index], screens[index + 1]);
+                    if (screens.Count > 0) g.DrawLine(draft, screens[screens.Count - 1], ToScreen(_cursorX, _cursorY));
+                    for (var index = 0; index < screens.Count; index++) g.FillRectangle(Brushes.Gold, screens[index].X - 3f, screens[index].Y - 3f, 6f, 6f);
+                }
+            }
+        }
+
+        // ───────────────────────── 拖动状态（拖谁只认谁） ─────────────────────────
+
         private WallModel _dragWall;
         private OpeningModel _dragOpening;
         private ColumnModel _dragColumn;
+        private AxisModel _dragAxis;
+        private RoomModel _dragRoom;
+        private double _dragOriginAxisPosition;
+        private List<PointModel> _dragOriginOutline;
+        /// <summary>正在画的房间轮廓（"房间"工具连续点出来的点）。</summary>
+        private List<PointModel> _roomDraft;
         private int _dragGrip = -1;
         private Point _lastMouse;
         private double _dragStartX, _dragStartY;
@@ -86,6 +215,9 @@ namespace Wanluo.BuildingModelStudio
             _dragWall = null;
             _dragOpening = null;
             _dragColumn = null;
+            _dragAxis = null;
+            _dragRoom = null;
+            _dragOriginOutline = null;
             _dragGrip = -1;
         }
 
@@ -101,6 +233,10 @@ namespace Wanluo.BuildingModelStudio
                     return _dragOpening != null && (_model.Openings ?? new List<OpeningModel>()).Contains(_dragOpening);
                 case DragMode.MoveColumn:
                     return _dragColumn != null && (_model.Columns ?? new List<ColumnModel>()).Contains(_dragColumn);
+                case DragMode.MoveAxis:
+                    return _dragAxis != null && (_model.Axes ?? new List<AxisModel>()).Contains(_dragAxis);
+                case DragMode.MoveRoom:
+                    return _dragRoom != null && (_model.Rooms ?? new List<RoomModel>()).Contains(_dragRoom);
                 default:
                     return true;
             }
@@ -147,6 +283,7 @@ namespace Wanluo.BuildingModelStudio
             set
             {
                 CancelDrag();
+                if (_roomDraft != null) FinishRoomDraft();      // 换工具时把没画完的房间收尾
                 _tool = value ?? "select";
                 _drawFromX = _drawFromY = null;
                 Cursor = _tool == "select" ? Cursors.Default : Cursors.Cross;
@@ -271,12 +408,25 @@ namespace Wanluo.BuildingModelStudio
             }
 
             DrawGrid(g);
+            DrawAxes(g);
             DrawSlabs(g);
             DrawWalls(g);
             DrawColumns(g);
             DrawOpenings(g);
+            DrawRooms(g);
             DrawPreview(g);
             DrawGrips(g);
+        }
+
+        /// <summary>
+        /// 画一条线（先裁到视口）。所有线都该走这里 ——
+        /// 点划线/虚线在极端缩放下会长到上亿像素，GDI+ 生成虚线段会直接卡死。
+        /// </summary>
+        private void DrawClippedLine(Graphics g, Pen pen, PointF from, PointF to)
+        {
+            var x1 = from.X; var y1 = from.Y; var x2 = to.X; var y2 = to.Y;
+            if (!DrawGuard.ClipLine(ref x1, ref y1, ref x2, ref y2, 0f, 0f, Width, Height)) return;
+            g.DrawLine(pen, x1, y1, x2, y2);
         }
 
         /// <summary>自检用：直接摆好视图变换，不走鼠标。</summary>
@@ -327,8 +477,8 @@ namespace Wanluo.BuildingModelStudio
                 foreach (var line in lines)
                 {
                     var pen = line.Major ? thick : thin;
-                    if (line.Vertical) g.DrawLine(pen, line.Screen, 0f, line.Screen, Height);
-                    else g.DrawLine(pen, 0f, line.Screen, Width, line.Screen);
+                    if (line.Vertical) DrawClippedLine(g, pen, new PointF(line.Screen, 0f), new PointF(line.Screen, Height));
+                    else DrawClippedLine(g, pen, new PointF(0f, line.Screen), new PointF(Width, line.Screen));
                 }
             }
         }
@@ -522,6 +672,44 @@ namespace Wanluo.BuildingModelStudio
                         }
                     }
                     break;
+                case "axis":
+                    // 拉一条轴线：两次点击，方向取主轴方向，位置取垂直坐标（自动编号）
+                    if (!_drawFromX.HasValue) { _drawFromX = snap.X; _drawFromY = snap.Y; }
+                    else
+                    {
+                        var dx = Math.Abs(snap.X - _drawFromX.Value);
+                        var dy = Math.Abs(snap.Y - _drawFromY.Value);
+                        if (Math.Max(dx, dy) < 1d) { StatusChanged?.Invoke("提示：轴线太短，请拉出一段距离。"); break; }
+                        var axis = new AxisModel
+                        {
+                            Id = NewId("AX"),
+                            Vertical = dx <= dy,                                     // 竖向拉出来的就是竖轴
+                            Position = dx <= dy ? _drawFromX.Value : _drawFromY.Value,
+                            ExtentStart = dx <= dy ? Math.Min(_drawFromY.Value, snap.Y) : Math.Min(_drawFromX.Value, snap.X),
+                            ExtentEnd = dx <= dy ? Math.Max(_drawFromY.Value, snap.Y) : Math.Max(_drawFromX.Value, snap.X)
+                        };
+                        _model.Axes.Add(axis);
+                        PlanEditing.RenumberAxes(_model);
+                        _selection = new PlanHit { Kind = "axis", Id = axis.Id };
+                        Commit("加轴线 " + axis.Name);
+                        _drawFromX = _drawFromY = null;
+                    }
+                    break;
+                case "room":
+                    // 连续点出房间轮廓；点回起点或按 Esc/右键结束并闭合
+                    if (_roomDraft == null) _roomDraft = new List<PointModel>();
+                    if (_roomDraft.Count >= 3)
+                    {
+                        var first = _roomDraft[0];
+                        if (Math.Abs(snap.X - first.X) < 200d && Math.Abs(snap.Y - first.Y) < 200d)
+                        {
+                            FinishRoomDraft();
+                            break;
+                        }
+                    }
+                    _roomDraft.Add(new PointModel(snap.X, snap.Y));
+                    StatusChanged?.Invoke("房间轮廓已点 " + _roomDraft.Count + " 个点（点回起点或按 Esc 闭合）。");
+                    break;
                 case "window":
                 case "door":
                 {
@@ -566,7 +754,7 @@ namespace Wanluo.BuildingModelStudio
                     _dragStartX = x; _dragStartY = y;
                     // 拖动期间**只认这里抓到的对象引用**，不再回头看 _selection：
                     // _selection 可能被删除/撤销/切楼层清掉，再解引用就会 NullReferenceException。
-                    _dragWall = null; _dragOpening = null; _dragColumn = null; _dragGrip = -1;
+                    _dragWall = null; _dragOpening = null; _dragColumn = null; _dragAxis = null; _dragRoom = null; _dragGrip = -1;
                     var wall = hit.Kind == "wall" ? FindWall(hit.Id) : null;
                     if (wall != null)
                     {
@@ -584,6 +772,23 @@ namespace Wanluo.BuildingModelStudio
                     {
                         var column = (_model.Columns ?? new List<ColumnModel>()).FirstOrDefault(c => c != null && Same(c.Id, hit.Id));
                         if (column != null) { _dragColumn = column; _dragOriginX1 = column.X; _dragOriginY1 = column.Y; _drag = DragMode.MoveColumn; }
+                    }
+                    else if (hit.Kind == "axis")
+                    {
+                        var axis = (_model.Axes ?? new List<AxisModel>()).FirstOrDefault(a => a != null && Same(a.Id, hit.Id));
+                        if (axis != null) { _dragAxis = axis; _dragOriginAxisPosition = axis.Position; _drag = DragMode.MoveAxis; }
+                    }
+                    else if (hit.Kind == "room")
+                    {
+                        var room = (_model.Rooms ?? new List<RoomModel>()).FirstOrDefault(r => r != null && Same(r.Id, hit.Id));
+                        if (room != null)
+                        {
+                            _dragRoom = room;
+                            _dragOriginX1 = x; _dragOriginY1 = y;
+                            _dragOriginOutline = (room.Outline ?? new List<PointModel>())
+                                .Select(p => p == null ? null : new PointModel(p.X, p.Y)).ToList();
+                            _drag = DragMode.MoveRoom;
+                        }
                     }
                     Invalidate();
                     RaiseStatus();
@@ -660,6 +865,23 @@ namespace Wanluo.BuildingModelStudio
                 {
                     _dragColumn.X = _dragOriginX1 + deltaX; _dragColumn.Y = _dragOriginY1 + deltaY;
                 }
+                else if (_drag == DragMode.MoveAxis)
+                {
+                    // 轴线只能沿垂直方向移动（竖轴改 X、横轴改 Y）
+                    _dragAxis.Position = _dragAxis.Vertical ? _cursorX : _cursorY;
+                    PlanEditing.RenumberAxes(_model);       // 轴号跟着位置重排
+                }
+                else if (_drag == DragMode.MoveRoom)
+                {
+                    var points = _dragRoom.Outline ?? new List<PointModel>();
+                    var offsets = _dragOriginOutline ?? new List<PointModel>();
+                    for (var index = 0; index < points.Count && index < offsets.Count; index++)
+                    {
+                        if (points[index] == null || offsets[index] == null) continue;
+                        points[index].X = offsets[index].X + deltaX;
+                        points[index].Y = offsets[index].Y + deltaY;
+                    }
+                }
                 Invalidate();
                 RaiseStatus();
                 return;
@@ -674,7 +896,8 @@ namespace Wanluo.BuildingModelStudio
             if (_drag != DragMode.None && _drag != DragMode.Pan && _drag != DragMode.DrawWall)
             {
                 var label = _drag == DragMode.Grip ? "改墙端点" : _drag == DragMode.MoveWall ? "移动墙"
-                    : _drag == DragMode.MoveOpening ? "移动洞口" : "移动柱";
+                    : _drag == DragMode.MoveOpening ? "移动洞口" : _drag == DragMode.MoveColumn ? "移动柱"
+                    : _drag == DragMode.MoveAxis ? "移动轴线" : _drag == DragMode.MoveRoom ? "移动房间" : "编辑";
                 Commit(label);
             }
             CancelDrag();
@@ -704,6 +927,7 @@ namespace Wanluo.BuildingModelStudio
             base.OnKeyDown(e);
             if (e.KeyCode == Keys.Escape)
             {
+                if (_roomDraft != null) { FinishRoomDraft(); return; }      // 画房间时 Esc = 闭合
                 CancelDrag();
                 _drawFromX = _drawFromY = null;
                 _selection = null;
@@ -740,6 +964,12 @@ namespace Wanluo.BuildingModelStudio
             }
             else if (_selection.Kind == "opening") removed = _model.Openings.RemoveAll(o => o != null && Same(o.Id, _selection.Id)) > 0;
             else if (_selection.Kind == "column") removed = _model.Columns.RemoveAll(c => c != null && Same(c.Id, _selection.Id)) > 0;
+            else if (_selection.Kind == "axis")
+            {
+                removed = _model.Axes.RemoveAll(a => a != null && Same(a.Id, _selection.Id)) > 0;
+                if (removed) PlanEditing.RenumberAxes(_model);
+            }
+            else if (_selection.Kind == "room") removed = _model.Rooms.RemoveAll(r => r != null && Same(r.Id, _selection.Id)) > 0;
             if (!removed) { StatusChanged?.Invoke("没找到要删除的构件。"); return; }
             CancelDrag();       // 被拖的那一个可能刚被删掉，拖动立即结束
             _selection = null;

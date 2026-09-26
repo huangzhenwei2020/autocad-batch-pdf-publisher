@@ -47,6 +47,7 @@ namespace Wanluo.BuildingModelStudio
         internal int LastTextCount { get; private set; }
         internal int LastHatchCount { get; private set; }
         internal int LastDimensionCount { get; private set; }
+        internal int LastCircleCount { get; private set; }
         internal string LastPaintError { get { return _lastPaintError; } }
         internal double ViewScale { get { return _scale; } }
 
@@ -224,6 +225,13 @@ namespace Wanluo.BuildingModelStudio
                     if (point == null || !DrawGuard.Sane(point.X, point.Y)) continue;
                     Include(point.X, point.Y);
                 }
+            foreach (var circle in view.Circles ?? new List<ViewCircle>())
+            {
+                if (circle == null || !DrawGuard.Sane(circle.X, circle.Y) || !DrawGuard.IsFinite(circle.Radius)) continue;
+                var radius = Math.Abs(circle.Radius);
+                Include(circle.X - radius, circle.Y - radius);
+                Include(circle.X + radius, circle.Y + radius);
+            }
             foreach (var text in view.Texts ?? new List<ViewText>())
             {
                 if (text == null || string.IsNullOrEmpty(text.Text)) continue;
@@ -396,6 +404,7 @@ namespace Wanluo.BuildingModelStudio
             LastTextCount = 0;
             LastHatchCount = 0;
             LastDimensionCount = 0;
+            LastCircleCount = 0;
             FitIfNeeded();      // 控件刚拿到尺寸时，先把视图摆正再画（否则切过来可能是一片空白）
 
             if (_view == null)
@@ -412,6 +421,7 @@ namespace Wanluo.BuildingModelStudio
 
             DrawHatches(g);
             DrawLines(g);
+            DrawCircles(g);
             DrawDimensions(g);
             DrawTexts(g);
             DrawSelection(g);
@@ -598,11 +608,34 @@ namespace Wanluo.BuildingModelStudio
                 using (var pen = new Pen(ColorFor(line.Layer, style), WidthFor(line.Layer, style)))
                 {
                     if (IsHidden(line.LineType)) pen.DashStyle = DashStyle.Dash;
+                    else if (IsCenter(line.LineType)) pen.DashStyle = DashStyle.DashDot;
                     var from = ToScreen(line.X1, line.Y1);
                     var to = ToScreen(line.X2, line.Y2);
-                    g.DrawLine(pen, from, to);
+                    // 裁到视口再画：虚线/点划线太长时 GDI+ 会生成海量虚线段直接卡死
+                    var x1 = from.X; var y1 = from.Y; var x2 = to.X; var y2 = to.Y;
+                    if (!DrawGuard.ClipLine(ref x1, ref y1, ref x2, ref y2, 0f, 0f, Width, Height)) continue;
+                    g.DrawLine(pen, x1, y1, x2, y2);
                 }
                 LastLineCount++;
+            }
+        }
+
+        /// <summary>圆（轴号圆圈等）。</summary>
+        private void DrawCircles(Graphics g)
+        {
+            foreach (var circle in _view.Circles ?? new List<ViewCircle>())
+            {
+                if (circle == null) continue;
+                if (!DrawGuard.Sane(circle.X, circle.Y) || !DrawGuard.IsFinite(circle.Radius)) continue;
+                var radius = Math.Abs(circle.Radius) * _scale;
+                if (!DrawGuard.IsFinite(radius) || radius < 1d || radius > 1e6d) continue;
+                var style = ViewLayers.Find(circle.Layer);
+                using (var pen = new Pen(ColorFor(circle.Layer, style), Math.Max(0.9f, WidthFor(circle.Layer, style))))
+                {
+                    var center = ToScreen(circle.X, circle.Y);
+                    g.DrawEllipse(pen, center.X - (float)radius, center.Y - (float)radius, (float)radius * 2f, (float)radius * 2f);
+                }
+                LastCircleCount++;
             }
         }
 
@@ -726,6 +759,8 @@ namespace Wanluo.BuildingModelStudio
                 case ViewLayers.CutHatch: return Color.FromArgb(120, 132, 148);
                 case ViewLayers.LevelText: return Color.FromArgb(255, 210, 120);
                 case ViewLayers.Title: return Color.FromArgb(160, 220, 255);
+                case ViewLayers.Axis: return Color.FromArgb(200, 160, 230);
+                case ViewLayers.Room: return Color.FromArgb(150, 210, 225);
                 default: return Color.FromArgb(180, 186, 196);
             }
         }
@@ -743,6 +778,13 @@ namespace Wanluo.BuildingModelStudio
         {
             return !string.IsNullOrWhiteSpace(lineType)
                 && lineType.IndexOf("HIDDEN", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static bool IsCenter(string lineType)
+        {
+            return !string.IsNullOrWhiteSpace(lineType)
+                && (lineType.IndexOf("CENTER", StringComparison.OrdinalIgnoreCase) >= 0
+                    || lineType.IndexOf("DASHDOT", StringComparison.OrdinalIgnoreCase) >= 0);
         }
     }
 }
