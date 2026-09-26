@@ -31,6 +31,8 @@ internal static class BuildingModelProjectionTests
             SectionProducesCutRectsAndHatch(model);
             OffsetCutInsideWallThicknessProducesSection();
             WallAndOpeningEditUpdatesElevationAndSection();
+            VolumeIdentityTests.Run();
+            BuildingModelEditSessionTests.Run();
             JsonRoundTripsWithoutLoss(model);
             PlanEditingTests.Run();
             OpeningTypeLibraryTests.Run();

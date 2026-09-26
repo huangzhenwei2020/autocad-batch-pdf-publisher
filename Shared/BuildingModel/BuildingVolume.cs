@@ -10,6 +10,8 @@ namespace BatchPdfPublisher.BuildingModel
         public List<Point3DModel> Points { get; set; } = new List<Point3DModel>();
         /// <summary>构件种类：wall / column / slab。</summary>
         public string Kind { get; set; }
+        /// <summary>生成此面的语义构件 ID；拾取和选中均使用它，不使用临时面序号。</summary>
+        public string ElementId { get; set; }
         /// <summary>所属楼层（用于"只显示某层"与着色）。</summary>
         public string StoreyId { get; set; }
         /// <summary>面法线（单位向量，朝外）。</summary>
@@ -112,6 +114,7 @@ namespace BatchPdfPublisher.BuildingModel
             var faces = geometry.ToFaces("roof", roof.StoreyId);
             foreach (var face in faces)
             {
+                face.ElementId = roof.Id;
                 volume.Faces.Add(face);
                 foreach (var point in face.Points)
                 {
@@ -150,7 +153,7 @@ namespace BatchPdfPublisher.BuildingModel
                 {
                     var z1 = step.TopElevation;
                     var z0 = Math.Max(geometry.BaseElevation, z1 - geometry.Riser - treadThickness);
-                    AddBox(volume, step.X0, step.Y0, step.X1, step.Y1, z0, z1, "stair", stair.StoreyId, ref first);
+                    AddBox(volume, step.X0, step.Y0, step.X1, step.Y1, z0, z1, "stair", stair.StoreyId, stair.Id, ref first);
                 }
 
                 if (flight.Steps.Count == 0) continue;
@@ -171,7 +174,7 @@ namespace BatchPdfPublisher.BuildingModel
                         var x1 = Math.Max(from.X1, to.X1);
                         var inner = wellT - railThickness;
                         AddBox(volume, x0, Math.Min(inner, wellT), x1, Math.Max(inner, wellT), z0, z1,
-                            "stair", stair.StoreyId, ref first);
+                            "stair", stair.StoreyId, stair.Id, ref first);
                     }
                     else
                     {
@@ -179,7 +182,7 @@ namespace BatchPdfPublisher.BuildingModel
                         var y1 = Math.Max(from.Y1, to.Y1);
                         var inner = wellT - railThickness;
                         AddBox(volume, Math.Min(inner, wellT), y0, Math.Max(inner, wellT), y1, z0, z1,
-                            "stair", stair.StoreyId, ref first);
+                            "stair", stair.StoreyId, stair.Id, ref first);
                     }
                 }
                 _ = spanT;
@@ -189,12 +192,12 @@ namespace BatchPdfPublisher.BuildingModel
             if (geometry.LandingX1 - geometry.LandingX0 > 1d && geometry.LandingY1 - geometry.LandingY0 > 1d)
                 AddBox(volume, geometry.LandingX0, geometry.LandingY0, geometry.LandingX1, geometry.LandingY1,
                     geometry.LandingElevation - geometry.LandingThickness, geometry.LandingElevation,
-                    "stair", stair.StoreyId, ref first);
+                    "stair", stair.StoreyId, stair.Id, ref first);
         }
 
         /// <summary>轴对齐的长方体（平面矩形 + 底顶标高）。</summary>
         private static void AddBox(BuildingVolume volume, double x0, double y0, double x1, double y1,
-            double z0, double z1, string kind, string storeyId, ref bool first)
+            double z0, double z1, string kind, string storeyId, string elementId, ref bool first)
         {
             if (x1 - x0 < 0.5d || y1 - y0 < 0.5d || z1 - z0 < 0.5d) return;
             var corners = new List<Point3DModel>
@@ -202,7 +205,7 @@ namespace BatchPdfPublisher.BuildingModel
                 new Point3DModel(x0, y0, z0), new Point3DModel(x1, y0, z0),
                 new Point3DModel(x1, y1, z0), new Point3DModel(x0, y1, z0)
             };
-            AddPrism(volume, corners, z0, z1, kind, storeyId, ref first);
+            AddPrism(volume, corners, z0, z1, kind, storeyId, elementId, ref first);
         }
 
         /// <summary>
@@ -226,6 +229,7 @@ namespace BatchPdfPublisher.BuildingModel
                     var head = Math.Min(sill + Math.Max(0d, opening.Height), height);
                     return new
                     {
+                        Source = opening,
                         Start = Math.Max(0d, opening.Offset - half),
                         End = Math.Min(length, opening.Offset + half),
                         Sill = sill,
@@ -250,31 +254,30 @@ namespace BatchPdfPublisher.BuildingModel
             // 门窗构件：窗 = 四条边框 + 玻璃；门 = 一扇打开的门扇（这样三维里一眼能看出是窗还是门）
             foreach (var opening in openings)
             {
-                var source = (model.Openings ?? new List<OpeningModel>()).FirstOrDefault(candidate => candidate != null
-                    && Same(candidate.HostWallId, wall.Id)
-                    && Math.Abs(Math.Max(0d, candidate.Offset - Math.Max(0d, candidate.Width) / 2d) - opening.Start) < 0.5d);
-                var kind = source == null ? "窗" : (source.Kind ?? "窗");
+                var kind = opening.Source.Kind ?? "窗";
                 if (kind.IndexOf("门", StringComparison.Ordinal) >= 0)
-                    AddDoorLeaf(volume, wall, opening.Start, opening.End, z0 + opening.Sill, z0 + opening.Head, wall.StoreyId, ref first);
+                    AddDoorLeaf(volume, wall, opening.Start, opening.End, z0 + opening.Sill, z0 + opening.Head,
+                        wall.StoreyId, opening.Source.Id, ref first);
                 else
-                    AddWindowParts(volume, wall, opening.Start, opening.End, z0 + opening.Sill, z0 + opening.Head, wall.StoreyId, ref first);
+                    AddWindowParts(volume, wall, opening.Start, opening.End, z0 + opening.Sill, z0 + opening.Head,
+                        wall.StoreyId, opening.Source.Id, ref first);
             }
         }
 
         /// <summary>窗：外框（四条边各一块）+ 玻璃（薄板，居中在墙厚里）。</summary>
         private static void AddWindowParts(BuildingVolume volume, WallModel wall, double start, double end,
-            double sill, double head, string storeyId, ref bool first)
+            double sill, double head, string storeyId, string elementId, ref bool first)
         {
             var width = end - start;
             var height = head - sill;
             if (width < 40d || height < 40d) return;
             var frame = Math.Min(60d, Math.Min(width, height) / 4d);
-            AddWallSegment(volume, wall, start, end, sill, sill + frame, storeyId, "frame", ref first);                 // 下框
-            AddWallSegment(volume, wall, start, end, head - frame, head, storeyId, "frame", ref first);                 // 上框
-            AddWallSegment(volume, wall, start, start + frame, sill, head, storeyId, "frame", ref first);               // 左框
-            AddWallSegment(volume, wall, end - frame, end, sill, head, storeyId, "frame", ref first);                   // 右框
+            AddWallSegment(volume, wall, start, end, sill, sill + frame, storeyId, "frame", ref first, 0d, elementId); // 下框
+            AddWallSegment(volume, wall, start, end, head - frame, head, storeyId, "frame", ref first, 0d, elementId); // 上框
+            AddWallSegment(volume, wall, start, start + frame, sill, head, storeyId, "frame", ref first, 0d, elementId); // 左框
+            AddWallSegment(volume, wall, end - frame, end, sill, head, storeyId, "frame", ref first, 0d, elementId);   // 右框
             AddWallSegment(volume, wall, start + frame, end - frame, sill + frame, head - frame, storeyId, "glass",
-                ref first, 20d);                                                                                        // 玻璃
+                ref first, 20d, elementId);                                                                             // 玻璃
         }
 
         /// <summary>
@@ -282,7 +285,7 @@ namespace BatchPdfPublisher.BuildingModel
         /// 模型里还没存开启方向，这里按制图习惯统一取"起点侧合页、向法线正方向开"。
         /// </summary>
         private static void AddDoorLeaf(BuildingVolume volume, WallModel wall, double start, double end,
-            double sill, double head, string storeyId, ref bool first)
+            double sill, double head, string storeyId, string elementId, ref bool first)
         {
             var width = end - start;
             var height = head - sill;
@@ -306,14 +309,14 @@ namespace BatchPdfPublisher.BuildingModel
                 new Point3DModel(hingeX + dx * width + nx * thickness / 2d, hingeY + dy * width + ny * thickness / 2d, sill),
                 new Point3DModel(hingeX + nx * thickness / 2d, hingeY + ny * thickness / 2d, sill)
             };
-            AddPrism(volume, corners, sill, head, "door", storeyId, ref first);
+            AddPrism(volume, corners, sill, head, "door", storeyId, elementId, ref first);
         }
 
         /// <summary>墙轴线上 [from, to] 这一段、标高 za~zb 的体块。</summary>
         private static void AddWallSegment(BuildingVolume volume, WallModel wall, double from, double to,
             double za, double zb, ref bool first)
         {
-            AddWallSegment(volume, wall, from, to, za, zb, wall.StoreyId, "wall", ref first, 0d);
+            AddWallSegment(volume, wall, from, to, za, zb, wall.StoreyId, "wall", ref first, 0d, wall.Id);
         }
 
         /// <summary>
@@ -321,7 +324,8 @@ namespace BatchPdfPublisher.BuildingModel
         /// <paramref name="thickness"/> = 0 表示用墙厚；&gt; 0 表示以墙轴线为中心的这个厚度（玻璃就是这样一块薄板）。
         /// </summary>
         private static void AddWallSegment(BuildingVolume volume, WallModel wall, double from, double to,
-            double za, double zb, string storeyId, string kind, ref bool first, double thickness = 0d)
+            double za, double zb, string storeyId, string kind, ref bool first, double thickness = 0d,
+            string elementId = null)
         {
             var length = Math.Sqrt((wall.X2 - wall.X1) * (wall.X2 - wall.X1) + (wall.Y2 - wall.Y1) * (wall.Y2 - wall.Y1));
             if (length < 1d || to - from < 1d || zb - za < 1d) return;
@@ -341,7 +345,7 @@ namespace BatchPdfPublisher.BuildingModel
                 new Point3DModel(bx - nx, by - ny, za),
                 new Point3DModel(ax - nx, ay - ny, za)
             };
-            AddPrism(volume, corners, za, zb, kind, storeyId, ref first);
+            AddPrism(volume, corners, za, zb, kind, storeyId, elementId ?? wall.Id, ref first);
         }
 
         private static void AddColumnBox(BuildingVolume volume, ColumnModel column, double z0, double z1, ref bool first)
@@ -356,7 +360,7 @@ namespace BatchPdfPublisher.BuildingModel
                 new Point3DModel(column.X + halfWidth, column.Y + halfDepth, z0),
                 new Point3DModel(column.X - halfWidth, column.Y + halfDepth, z0)
             };
-            AddPrism(volume, corners, z0, z1, "column", column.StoreyId, ref first);
+            AddPrism(volume, corners, z0, z1, "column", column.StoreyId, column.Id, ref first);
         }
 
         private static void AddSlabPrism(BuildingVolume volume, SlabModel slab, ref bool first)
@@ -368,12 +372,12 @@ namespace BatchPdfPublisher.BuildingModel
             var z1 = slab.TopElevation;
             var z0 = z1 - thickness;
             var corners = outline.Select(p => new Point3DModel(p.X, p.Y, z0)).ToList();
-            AddPrism(volume, corners, z0, z1, "slab", slab.StoreyId, ref first);
+            AddPrism(volume, corners, z0, z1, "slab", slab.StoreyId, slab.Id, ref first);
         }
 
         /// <summary>把一个平面轮廓沿 Z 拉成棱柱：顶面 + 底面 + 每个侧面。</summary>
         private static void AddPrism(BuildingVolume volume, List<Point3DModel> baseCorners, double z0, double z1,
-            string kind, string storeyId, ref bool first)
+            string kind, string storeyId, string elementId, ref bool first)
         {
             if (baseCorners == null || baseCorners.Count < 3) return;
             // 轮廓按"逆时针"归一（面积正 = 逆时针，保证法线朝外）
@@ -381,12 +385,12 @@ namespace BatchPdfPublisher.BuildingModel
 
             volume.Faces.Add(new VolumeFace
             {
-                Kind = kind, StoreyId = storeyId, NormalZ = 1d,
+                Kind = kind, StoreyId = storeyId, ElementId = elementId, NormalZ = 1d,
                 Points = corners.Select(p => new Point3DModel(p.X, p.Y, z1)).ToList()
             });
             volume.Faces.Add(new VolumeFace
             {
-                Kind = kind, StoreyId = storeyId, NormalZ = -1d,
+                Kind = kind, StoreyId = storeyId, ElementId = elementId, NormalZ = -1d,
                 Points = corners.Select(p => new Point3DModel(p.X, p.Y, z0)).Reverse().ToList()
             });
             for (var index = 0; index < corners.Count; index++)
@@ -401,7 +405,7 @@ namespace BatchPdfPublisher.BuildingModel
                 var ny = -dx / length;
                 volume.Faces.Add(new VolumeFace
                 {
-                    Kind = kind, StoreyId = storeyId, NormalX = nx, NormalY = ny,
+                    Kind = kind, StoreyId = storeyId, ElementId = elementId, NormalX = nx, NormalY = ny,
                     Points = new List<Point3DModel>
                     {
                         new Point3DModel(a.X, a.Y, z0), new Point3DModel(b.X, b.Y, z0),

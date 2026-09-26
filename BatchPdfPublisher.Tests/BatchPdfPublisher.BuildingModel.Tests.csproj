@@ -10,6 +10,9 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="BuildingModelProjectionTests.cs" />
+    <Compile Include="VolumeIdentityTests.cs" />
+    <Compile Include="BuildingModelEditSessionTests.cs" />
+    <Compile Include="..\Shared\BuildingModel\BuildingModelEditSession.cs" Link="Shared\BuildingModelEditSession.cs" />
     <Compile Include="PlanEditingTests.cs" />
     <Compile Include="OpeningTypeLibraryTests.cs" />
     <Compile Include="OpeningElevationTests.cs" />
@@ -32,5 +35,3 @@
     <Compile Include="..\BatchPdfPublisher\Features\DoorWindows\Models\DoorWindowElevationGeometry.cs" Link="DoorWindows\DoorWindowElevationGeometry.cs" />
   </ItemGroup>
 </Project>
-
-
