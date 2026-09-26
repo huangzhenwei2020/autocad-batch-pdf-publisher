@@ -103,6 +103,26 @@ namespace BatchPdfPublisher.BuildingModel
             return Path.Combine(ModelFolder(projectFolder, name), "import.json");
         }
 
+        /// <summary>门窗类型库：放在模型目录下的 <c>openings.json</c>（随项目走）。</summary>
+        public static string OpeningLibraryPath(string projectFolder, string name)
+        {
+            return Path.Combine(ModelFolder(projectFolder, name), "openings.json");
+        }
+
+        public static void SaveOpeningLibrary(string path, OpeningTypeLibraryDocument library)
+        {
+            Write(path, typeof(OpeningTypeLibraryDocument), library);
+        }
+
+        public static OpeningTypeLibraryDocument LoadOpeningLibrary(string path)
+        {
+            var library = (OpeningTypeLibraryDocument)Read(path, typeof(OpeningTypeLibraryDocument));
+            if (library == null) throw new InvalidDataException("门窗类型库内容为空：" + path);
+            if (library.Types == null) library.Types = new List<OpeningTypeModel>();
+            if (library.Templates == null) library.Templates = new List<OpeningTemplateModel>();
+            return library;
+        }
+
         private static string SafeName(string value)
         {
             var invalid = Path.GetInvalidFileNameChars();

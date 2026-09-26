@@ -96,6 +96,15 @@ namespace Wanluo.BuildingModelStudio
             BuildingModelJson.SaveModel(modelPath, model);
             log("模型：" + modelPath + "（楼层 " + model.Storeys.Count + "、墙 " + model.Walls.Count
                 + "、洞口 " + model.Openings.Count + "、楼板 " + model.Slabs.Count + "、柱 " + model.Columns.Count + "）");
+
+            // 顺便放一份演示门窗类型库（只在没有时写，不覆盖 CAD 导出的真库）
+            var libraryPath = BuildingModelJson.OpeningLibraryPath(projectFolder, modelName);
+            if (!File.Exists(libraryPath))
+            {
+                var library = SampleModelFactory.CreateDemoOpeningLibrary();
+                BuildingModelJson.SaveOpeningLibrary(libraryPath, library);
+                log("演示门窗类型库：" + libraryPath + "（类型 " + library.Types.Count + " 个；真实项目请用 CAD 的 TQLX 导出）");
+            }
             return GenerateViews(projectFolder, modelName, model, log);
         }
 
@@ -125,8 +134,11 @@ namespace Wanluo.BuildingModelStudio
         private readonly TextBox _modelName = new TextBox();
         private readonly Label _status = new Label();
         private readonly Panel _properties = new Panel();
+        private readonly ListBox _openingTypes = new ListBox();
+        private readonly Label _openingLibraryInfo = new Label();
         private readonly Dictionary<string, Button> _toolButtons = new Dictionary<string, Button>();
         private BuildingModelDocument _model;
+        private OpeningTypeLibraryDocument _openingLibrary;
 
         public MainForm()
         {
@@ -189,13 +201,17 @@ namespace Wanluo.BuildingModelStudio
             _canvas.Dock = DockStyle.Fill;
             split.Panel1.Controls.Add(_canvas);
 
-            var side = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, Padding = new Padding(6) };
-            side.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            side.RowStyles.Add(new RowStyle(SizeType.Absolute, 150));
-            side.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            side.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            side.RowStyles.Add(new RowStyle(SizeType.Absolute, 150));
-            side.Controls.Add(Title("楼层（下方列表为当前顺序）"), 0, 0);
+            var side = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 9, Padding = new Padding(6) };
+            side.RowStyles.Add(new RowStyle(SizeType.AutoSize));          // 0 楼层标题
+            side.RowStyles.Add(new RowStyle(SizeType.Absolute, 110));     // 1 楼层列表
+            side.RowStyles.Add(new RowStyle(SizeType.AutoSize));          // 2 楼层按钮
+            side.RowStyles.Add(new RowStyle(SizeType.AutoSize));          // 3 类型库标题
+            side.RowStyles.Add(new RowStyle(SizeType.Absolute, 120));     // 4 类型库列表
+            side.RowStyles.Add(new RowStyle(SizeType.AutoSize));          // 5 类型库按钮
+            side.RowStyles.Add(new RowStyle(SizeType.AutoSize));          // 6 类型库说明
+            side.RowStyles.Add(new RowStyle(SizeType.Percent, 100));      // 7 构件属性
+            side.RowStyles.Add(new RowStyle(SizeType.Absolute, 170));     // 8 日志
+            side.Controls.Add(Title("楼层（列表按标高排序）"), 0, 0);
             _storeys.Dock = DockStyle.Fill;
             _storeys.IntegralHeight = false;
             _storeys.SelectedIndexChanged += (s, e) => SwitchStorey();
@@ -206,6 +222,23 @@ namespace Wanluo.BuildingModelStudio
             storeyButtons.Controls.Add(Button("删除楼层", RemoveStorey, false));
             side.Controls.Add(storeyButtons, 0, 2);
 
+            side.Controls.Add(Title("门窗类型库（来自 CAD 的 TQLX 导出）"), 0, 3);
+            _openingTypes.Dock = DockStyle.Fill;
+            _openingTypes.IntegralHeight = false;
+            _openingTypes.SelectedIndexChanged += (s, e) => UseSelectedOpeningType();
+            side.Controls.Add(_openingTypes, 0, 4);
+            var openingButtons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true };
+            openingButtons.Controls.Add(Button("导入类型库…", ImportOpeningLibrary, true));
+            openingButtons.Controls.Add(Button("刷新（模型目录）", () => LoadOpeningLibraryFromModelFolder(true), false));
+            openingButtons.Controls.Add(Button("套用到选中洞口", ApplyTypeToSelection, false));
+            openingButtons.Controls.Add(Button("取消选择类型", ClearOpeningType, false));
+            side.Controls.Add(openingButtons, 0, 5);
+            _openingLibraryInfo.AutoSize = true;
+            _openingLibraryInfo.MaximumSize = new Size(360, 44);
+            _openingLibraryInfo.ForeColor = Color.FromArgb(105, 112, 122);
+            _openingLibraryInfo.Text = "未导入类型库：放门窗用默认尺寸（窗 1500×1800@900，门 900×2100）。";
+            side.Controls.Add(_openingLibraryInfo, 0, 6);
+
             var propsPanel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
             propsPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             propsPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -213,7 +246,7 @@ namespace Wanluo.BuildingModelStudio
             _properties.Dock = DockStyle.Fill;
             _properties.AutoScroll = true;
             propsPanel.Controls.Add(_properties, 0, 1);
-            side.Controls.Add(propsPanel, 0, 3);
+            side.Controls.Add(propsPanel, 0, 7);
 
             var logPanel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
             logPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -243,6 +276,7 @@ namespace Wanluo.BuildingModelStudio
             _canvas.SaveRequested += SaveModel;
 
             Log("P1.5 平面草图：用「画墙 / 放窗 / 放门 / 布柱」把平面画出来，画的就是模型。");
+            Log("门窗类型库：CAD 里执行 TQLX 导出 → 本程序「刷新（模型目录）」即可用它放门窗。");
             Log("画完点「生成全部视图」，回到 CAD 执行 LTTZ 落图。");
             OpenOrCreateModel();
         }
@@ -337,6 +371,7 @@ namespace Wanluo.BuildingModelStudio
                 Log("构件：墙 " + _model.Walls.Count + "、洞口 " + _model.Openings.Count
                     + "、柱 " + _model.Columns.Count + "、楼板 " + _model.Slabs.Count
                     + "、楼层 " + _model.Storeys.Count);
+                LoadOpeningLibraryFromModelFolder(true);
             }
             catch (Exception exception) { Log("打开模型失败：" + exception.Message); }
         }
@@ -366,6 +401,134 @@ namespace Wanluo.BuildingModelStudio
             var folder = Path.GetDirectoryName(ModelPath);
             if (!Directory.Exists(folder)) { Log("目录还不存在：" + folder); return; }
             Process.Start(new ProcessStartInfo { FileName = folder, UseShellExecute = true });
+        }
+
+        // ───────────────────────── 门窗类型库 ─────────────────────────
+
+        /// <summary>从模型目录读取 openings.json（CAD 里用 TQLX 导出的那份）。</summary>
+        private void LoadOpeningLibraryFromModelFolder(bool log)
+        {
+            var path = BuildingModelJson.OpeningLibraryPath(_projectFolder.Text, ModelName);
+            if (!File.Exists(path))
+            {
+                _openingLibrary = null;
+                RefreshOpeningTypeList();
+                _openingLibraryInfo.Text = "模型目录里还没有 openings.json：可在 CAD 里执行 TQLX 导出，或点「导入类型库…」。";
+                if (log) Log("没有找到类型库：" + path);
+                return;
+            }
+            try
+            {
+                _openingLibrary = BuildingModelJson.LoadOpeningLibrary(path);
+                RefreshOpeningTypeList();
+                _openingLibraryInfo.Text = "已载入：" + (_openingLibrary.ProjectName ?? "未命名项目")
+                    + "，类型 " + _openingLibrary.Types.Count + " 个、做法模板 " + _openingLibrary.Templates.Count
+                    + " 个（" + File.GetLastWriteTime(path).ToString("MM-dd HH:mm") + "）";
+                if (log) Log("已载入门窗类型库：" + path + "（类型 " + _openingLibrary.Types.Count + " 个）");
+            }
+            catch (Exception exception)
+            {
+                _openingLibrary = null;
+                RefreshOpeningTypeList();
+                _openingLibraryInfo.Text = "类型库读取失败：" + exception.Message;
+                if (log) Log("类型库读取失败：" + exception.Message);
+            }
+        }
+
+        private void ImportOpeningLibrary()
+        {
+            using (var dialog = new OpenFileDialog
+            {
+                Title = "选择 CAD 导出的门窗类型库（openings.json）",
+                Filter = "门窗类型库 (*.json)|*.json|所有文件 (*.*)|*.*",
+                InitialDirectory = Path.GetDirectoryName(BuildingModelJson.OpeningLibraryPath(_projectFolder.Text, ModelName))
+            })
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                try
+                {
+                    var library = BuildingModelJson.LoadOpeningLibrary(dialog.FileName);
+                    var target = BuildingModelJson.OpeningLibraryPath(_projectFolder.Text, ModelName);
+                    Directory.CreateDirectory(Path.GetDirectoryName(target));
+                    BuildingModelJson.SaveOpeningLibrary(target, library);      // 复制到模型目录，下次自动载入
+                    _openingLibrary = library;
+                    RefreshOpeningTypeList();
+                    _openingLibraryInfo.Text = "已导入并保存到模型目录：类型 " + library.Types.Count + " 个。";
+                    Log("已导入类型库：" + dialog.FileName + " → " + target);
+                }
+                catch (Exception exception) { Log("导入失败：" + exception.Message); }
+            }
+        }
+
+        private void RefreshOpeningTypeList()
+        {
+            var previous = _canvas.CurrentType == null ? null : _canvas.CurrentType.Code;
+            _openingTypes.Items.Clear();
+            if (_openingLibrary == null || _openingLibrary.Types == null) return;
+            foreach (var type in _openingLibrary.Types)
+            {
+                if (type == null) continue;
+                _openingTypes.Items.Add(type.Code + "　" + (type.Kind ?? "窗") + "　"
+                    + type.Width.ToString("0") + "×" + type.Height.ToString("0")
+                    + (type.Sill > 0.5d ? "＠" + type.Sill.ToString("0") : "　落地"));
+            }
+            if (previous != null)
+            {
+                var index = _openingLibrary.Types.FindIndex(t => t != null
+                    && string.Equals(t.Code, previous, StringComparison.OrdinalIgnoreCase));
+                if (index >= 0 && index < _openingTypes.Items.Count) _openingTypes.SelectedIndex = index;
+            }
+        }
+
+        private void UseSelectedOpeningType()
+        {
+            if (_openingLibrary == null || _openingTypes.SelectedIndex < 0) return;
+            var type = _openingLibrary.Types.ElementAtOrDefault(_openingTypes.SelectedIndex);
+            if (type == null) return;
+            _canvas.CurrentType = type;
+            _canvas.OpeningWidth = type.Width;
+            _canvas.OpeningHeight = type.Height;
+            _canvas.OpeningSill = type.Sill;
+            Log("当前门窗类型：" + type.Code + "（" + type.Kind + " " + type.Width.ToString("0") + "×"
+                + type.Height.ToString("0") + (type.Sill > 0.5d ? "，窗台 " + type.Sill.ToString("0") : "，落地") + "）");
+        }
+
+        private void ApplyTypeToSelection()
+        {
+            if (_canvas.CurrentType == null) { Log("先在列表里选一个门窗类型。"); return; }
+            var hit = _canvas.Selection;
+            if (hit == null || hit.Kind != "opening") { Log("先用「选择」工具选中一樘门窗。"); return; }
+            var opening = (_model.Openings ?? new List<OpeningModel>()).FirstOrDefault(o => o != null
+                && string.Equals(o.Id, hit.Id, StringComparison.OrdinalIgnoreCase));
+            var wall = opening == null ? null : _canvas.FindWall(opening.HostWallId);
+            if (opening == null || wall == null) { Log("没找到这樘门窗或它的宿主墙。"); return; }
+            var backup = new OpeningModel
+            {
+                Id = opening.Id, HostWallId = opening.HostWallId, Code = opening.Code, Kind = opening.Kind,
+                Offset = opening.Offset, Width = opening.Width, Height = opening.Height, Sill = opening.Sill
+            };
+            PlanEditing.ApplyType(opening, _canvas.CurrentType);
+            var error = PlanEditing.ValidateOpening(_model, wall, opening);
+            if (error != null)
+            {
+                // 放不下就退回原样，别把模型改坏
+                opening.Code = backup.Code; opening.Kind = backup.Kind; opening.Width = backup.Width;
+                opening.Height = backup.Height; opening.Sill = backup.Sill;
+                Log("套用失败：" + error);
+                return;
+            }
+            _canvas.Invalidate();
+            SaveModel();
+            ShowProperties();
+            Log("已套用类型：" + _canvas.CurrentType.Code + "（洞口 " + opening.Width.ToString("0") + "×"
+                + opening.Height.ToString("0") + "）");
+        }
+
+        private void ClearOpeningType()
+        {
+            _canvas.CurrentType = null;
+            _openingTypes.ClearSelected();
+            Log("已取消当前门窗类型，放门窗改回默认尺寸。");
         }
 
         // ───────────────────────── 楼层 ─────────────────────────

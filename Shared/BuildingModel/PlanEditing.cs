@@ -289,6 +289,32 @@ namespace BatchPdfPublisher.BuildingModel
             };
         }
 
+        /// <summary>
+        /// 按门窗类型库里的一个类型设置洞口（编号/类型/宽/高/窗台）。
+        /// 门一律落地（窗台 0）；其余按类型给的窗台高。
+        /// </summary>
+        public static void ApplyType(OpeningModel opening, OpeningTypeModel type)
+        {
+            if (opening == null || type == null) return;
+            if (!string.IsNullOrWhiteSpace(type.Code)) opening.Code = type.Code.Trim();
+            if (!string.IsNullOrWhiteSpace(type.Kind)) opening.Kind = type.Kind.Trim();
+            if (type.Width > 0.5d) opening.Width = type.Width;
+            if (type.Height > 0.5d) opening.Height = type.Height;
+            var isDoor = (opening.Kind ?? string.Empty).IndexOf("门", StringComparison.Ordinal) >= 0;
+            opening.Sill = isDoor ? 0d : Math.Max(0d, type.Sill);
+        }
+
+        /// <summary>在类型库里按编号找类型（忽略大小写与首尾空格）。</summary>
+        public static OpeningTypeModel FindType(OpeningTypeLibraryDocument library, string code)
+        {
+            if (library == null || library.Types == null || string.IsNullOrWhiteSpace(code)) return null;
+            var clean = code.Trim();
+            foreach (var type in library.Types)
+                if (type != null && string.Equals((type.Code ?? string.Empty).Trim(), clean, StringComparison.OrdinalIgnoreCase))
+                    return type;
+            return null;
+        }
+
         /// <summary>墙长（mm）。</summary>
         public static double WallLength(WallModel wall)
         {

@@ -19,6 +19,39 @@ namespace BatchPdfPublisher.BuildingModel
             return model;
         }
 
+        /// <summary>
+        /// 演示用门窗类型库：让程序在没有 CAD、也没有 TQLX 导出时也能试放门窗。
+        /// 真实项目应当用 CAD 里 <c>TQLX</c> 导出的那份（它带做法/材料/图集）。
+        /// </summary>
+        public static OpeningTypeLibraryDocument CreateDemoOpeningLibrary()
+        {
+            var library = new OpeningTypeLibraryDocument
+            {
+                ProjectName = "演示类型库",
+                ExportedAt = System.DateTime.Now.ToString("O")
+            };
+            library.Types.Add(Type("C1215", "窗", 1200d, 1500d, 900d, "单扇", "右平开", "铝合金", "图集 12J4-1"));
+            library.Types.Add(Type("C1518", "窗", 1500d, 1800d, 900d, "双扇等分", "双向推拉", "铝合金", "图集 12J4-1"));
+            library.Types.Add(Type("C1824", "窗", 1800d, 2400d, 900d, "三扇等分", "双扇平开", "铝合金", "图集 12J4-1"));
+            library.Types.Add(Type("M0921", "门", 900d, 2100d, 0d, "单扇", "左平开", "木质", "图集 12J6"));
+            library.Types.Add(Type("M1524", "门", 1500d, 2400d, 0d, "双扇等分", "双扇平开", "玻璃", "图集 12J6"));
+            library.Templates.Add(new OpeningTemplateModel { Name = "普通双扇推拉窗", ElevationType = "窗", DivisionPreset = "双扇等分", OpeningMode = "双向推拉" });
+            library.Templates.Add(new OpeningTemplateModel { Name = "普通单扇平开窗", ElevationType = "窗", DivisionPreset = "单扇", OpeningMode = "左平开" });
+            library.Templates.Add(new OpeningTemplateModel { Name = "普通单扇门", ElevationType = "门", DivisionPreset = "单扇", OpeningMode = "左平开" });
+            return library;
+        }
+
+        private static OpeningTypeModel Type(string code, string kind, double width, double height, double sill,
+            string division, string opening, string material, string atlas)
+        {
+            return new OpeningTypeModel
+            {
+                Code = code, Kind = kind, Width = width, Height = height, Sill = sill,
+                ElevationType = kind, DivisionPreset = division, OpeningMode = opening,
+                Material = material, AtlasName = atlas, Source = "演示类型库"
+            };
+        }
+
         public static BuildingModelDocument CreateTwoStoreyHouse()
         {
             var model = new BuildingModelDocument { Name = "样例-两层小房子" };

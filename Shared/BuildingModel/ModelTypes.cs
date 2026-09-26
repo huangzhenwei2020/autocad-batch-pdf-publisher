@@ -297,6 +297,67 @@ namespace BatchPdfPublisher.BuildingModel
         public List<DrawingEntityModel> Entities { get; set; } = new List<DrawingEntityModel>();
     }
 
+    // ───────────────────────── 门窗类型库（从插件导出，程序里放门窗用） ─────────────────────────
+
+    /// <summary>
+    /// 一个门窗类型：编号 + 洞口尺寸 + 立面做法。
+    /// 来源是插件里已有的项目门窗参数（`DoorWindowElevationPreference`）与立面模板
+    /// （`DoorWindowElevationTemplate`），因此**不需要用户重新录一遍**。
+    /// </summary>
+    public sealed class OpeningTypeModel
+    {
+        public string Code { get; set; }
+        /// <summary>窗 / 门 / 门联窗 / 百叶。</summary>
+        public string Kind { get; set; } = "窗";
+        public double Width { get; set; } = 1500d;
+        public double Height { get; set; } = 1800d;
+        public double Sill { get; set; } = 900d;
+
+        // 立面做法（P1.5 先存下来，落图阶段用于画分格与开启线）
+        public string ElevationType { get; set; }
+        public string DivisionPreset { get; set; }
+        public string OpeningMode { get; set; }
+        public bool HasOuterFrame { get; set; } = true;
+        public double OuterFrameWidth { get; set; } = 50d;
+        public bool HasMullion { get; set; } = true;
+        public double MullionWidth { get; set; } = 50d;
+        public bool HasInstallationGap { get; set; } = true;
+        public double InstallationGap { get; set; } = 20d;
+        public string DoorFrameType { get; set; }
+        public double DoorFrameWidth { get; set; }
+        public string CustomColumnWidths { get; set; }
+        public string CustomRowHeights { get; set; }
+        public string CustomCellLayout { get; set; }
+        public string CellOpeningModes { get; set; }
+        public string Material { get; set; }
+        public string AtlasName { get; set; }
+        public string Remarks { get; set; }
+        /// <summary>来源说明（项目参数 / 手工）。</summary>
+        public string Source { get; set; }
+    }
+
+    /// <summary>立面做法模板（可复用的分格/开启预设）。</summary>
+    public sealed class OpeningTemplateModel
+    {
+        public string Name { get; set; }
+        public string ElevationType { get; set; }
+        public string DivisionPreset { get; set; }
+        public string OpeningMode { get; set; }
+    }
+
+    /// <summary>
+    /// 门窗类型库：插件导出 → 程序读取。放在模型目录下的 <c>openings.json</c>，随项目一起走；
+    /// 没有它程序也能画图（用默认尺寸）。
+    /// </summary>
+    public sealed class OpeningTypeLibraryDocument
+    {
+        public int SchemaVersion { get; set; } = BuildingModelSchema.Version;
+        public string ProjectName { get; set; }
+        public string ExportedAt { get; set; }
+        public List<OpeningTypeModel> Types { get; set; } = new List<OpeningTypeModel>();
+        public List<OpeningTemplateModel> Templates { get; set; } = new List<OpeningTemplateModel>();
+    }
+
     /// <summary>
     /// 视图图层键与默认样式。
     ///

@@ -150,6 +150,15 @@ namespace BatchPdfPublisher
             BuildingModelCadBridge.PlaceView(document);
         }
 
+        /// <summary>把当前项目的门窗参数与立面做法模板导出成建模程序可读的类型库。</summary>
+        [CommandMethod("TQLX")]
+        public void ExportOpeningTypeLibrary()
+        {
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document == null) return;
+            BuildingModelCadBridge.ExportOpeningLibrary(document);
+        }
+
         [CommandMethod("LINEVISION", CommandFlags.Session)]
         [CommandMethod("TXZCAD", CommandFlags.Session)]
         [CommandMethod("TXC", CommandFlags.Session)]

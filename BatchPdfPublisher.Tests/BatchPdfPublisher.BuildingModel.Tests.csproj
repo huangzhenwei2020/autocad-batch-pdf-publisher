@@ -9,6 +9,7 @@
   <ItemGroup>
     <Compile Include="BuildingModelProjectionTests.cs" />
     <Compile Include="PlanEditingTests.cs" />
+    <Compile Include="OpeningTypeLibraryTests.cs" />
     <!-- 建筑模型的纯逻辑层：程序与插件共用同一份源码（见 BuildingModelStudio 与主插件 csproj）。 -->
     <Compile Include="..\Shared\BuildingModel\ModelTypes.cs" Link="Shared\ModelTypes.cs" />
     <Compile Include="..\Shared\BuildingModel\BuildingModelJson.cs" Link="Shared\BuildingModelJson.cs" />

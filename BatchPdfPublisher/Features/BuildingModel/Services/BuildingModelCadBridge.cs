@@ -9,6 +9,7 @@ using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Geometry;
 using BatchPdfPublisher.BuildingModel;
+using BatchPdfPublisher.Models;      // DoorWindowElevationPreference / DoorWindowElevationTemplate
 using AcApplication = Autodesk.AutoCAD.ApplicationServices.Application;
 
 namespace BatchPdfPublisher.Services
@@ -302,6 +303,143 @@ namespace BatchPdfPublisher.Services
                 return record.Name;
             }
             catch { return string.Empty; }
+        }
+
+        /// <summary>
+        /// 导出门窗类型库（命令 <c>TQLX</c>）：把**插件里已有的**门窗参数与立面模板写成
+        /// <c>openings.json</c>，让建模程序放门窗时直接选类型，而不是重新录一遍。
+        ///
+        /// 参数来源：
+        /// - 洞口尺寸与做法：当前项目的 `DoorWindowElevationPreference`（门窗立面的"按工程记忆"）；
+        /// - 做法模板：`DoorWindowElevationTemplate`（普通双扇推拉窗之类）。
+        /// </summary>
+        public static void ExportOpeningLibrary(Document document)
+        {
+            if (document == null) return;
+            var editor = document.Editor;
+
+            string projectName;
+            List<DoorWindowElevationPreference> preferences;
+            List<DoorWindowElevationTemplate> templates;
+            try
+            {
+                var project = new PublishPlanStore().GetActiveProject();
+                projectName = project == null ? "默认项目" : project.Name;
+                preferences = new DoorWindowElevationStore().LoadForActiveProject();
+                templates = new DoorWindowElevationTemplateStore().Load();
+            }
+            catch (Exception exception)
+            {
+                editor.WriteMessage("\n读取门窗参数失败：" + exception.Message);
+                return;
+            }
+
+            var library = new OpeningTypeLibraryDocument
+            {
+                ProjectName = projectName,
+                ExportedAt = DateTime.Now.ToString("O")
+            };
+            foreach (var template in templates ?? new List<DoorWindowElevationTemplate>())
+            {
+                if (template == null || string.IsNullOrWhiteSpace(template.Name)) continue;
+                library.Templates.Add(new OpeningTemplateModel
+                {
+                    Name = template.Name,
+                    ElevationType = template.ElevationType,
+                    DivisionPreset = template.DivisionPreset,
+                    OpeningMode = template.OpeningMode
+                });
+            }
+
+            // 同一编号可能有多个尺寸（改过洞口尺寸的历史记录）：保留最后处理到的那条
+            var byCode = new Dictionary<string, OpeningTypeModel>(StringComparer.OrdinalIgnoreCase);
+            foreach (var preference in preferences ?? new List<DoorWindowElevationPreference>())
+            {
+                if (preference == null || string.IsNullOrWhiteSpace(preference.Code)) continue;
+                var code = preference.Code.Trim();
+                var kind = KindOf(preference, code);
+                byCode[code] = new OpeningTypeModel
+                {
+                    Code = code,
+                    Kind = kind,
+                    Width = preference.Width > 0.5d ? preference.Width : DefaultWidth(kind),
+                    Height = preference.Height > 0.5d ? preference.Height : DefaultHeight(kind),
+                    Sill = preference.HasSillHeight && !preference.SillHeightSuppressed ? preference.SillHeight : DefaultSill(kind),
+                    ElevationType = preference.ElevationType,
+                    DivisionPreset = preference.DivisionPreset,
+                    OpeningMode = preference.OpeningMode,
+                    HasOuterFrame = preference.HasOuterFrame,
+                    OuterFrameWidth = preference.OuterFrameWidth,
+                    HasMullion = preference.HasMullion,
+                    MullionWidth = preference.MullionWidth,
+                    HasInstallationGap = preference.HasInstallationGap,
+                    InstallationGap = preference.InstallationGap,
+                    DoorFrameType = preference.DoorFrameType,
+                    DoorFrameWidth = preference.DoorFrameWidth,
+                    CustomColumnWidths = preference.CustomColumnWidths,
+                    CustomRowHeights = preference.CustomRowHeights,
+                    CustomCellLayout = preference.CustomCellLayout,
+                    CellOpeningModes = preference.CellOpeningModes,
+                    Material = preference.Material,
+                    AtlasName = preference.AtlasName,
+                    Remarks = preference.Remarks,
+                    Source = "项目参数：" + projectName
+                };
+            }
+            library.Types.AddRange(byCode.Values.OrderBy(t => t.Code, StringComparer.OrdinalIgnoreCase));
+
+            string path;
+            using (var dialog = new SaveFileDialog
+            {
+                Title = "导出门窗类型库（建模程序读取它来放门窗）",
+                Filter = "门窗类型库 (*.json)|*.json",
+                FileName = "openings.json",
+                InitialDirectory = LastViewFolder()
+            })
+            {
+                if (dialog.ShowDialog() != DialogResult.OK) return;
+                path = dialog.FileName;
+            }
+
+            try
+            {
+                BuildingModelJson.SaveOpeningLibrary(path, library);
+                editor.WriteMessage("\n门窗类型库已导出：" + library.Types.Count + " 个类型、"
+                    + library.Templates.Count + " 个做法模板 → " + path);
+                if (library.Types.Count == 0)
+                    editor.WriteMessage("\n提示：当前项目还没有门窗参数。可先在“门窗立面（MCLM）”里录一次，"
+                        + "再导出；也可以先导出空库供程序使用。");
+            }
+            catch (Exception exception)
+            {
+                editor.WriteMessage("\n门窗类型库写入失败：" + exception.Message);
+            }
+            SaveLastViewFolder(Path.GetDirectoryName(path));
+        }
+
+        private static string KindOf(DoorWindowElevationPreference preference, string code)
+        {
+            var type = (preference.ElevationType ?? string.Empty).Trim();
+            if (type.Length > 0) return type;
+            if (!string.IsNullOrWhiteSpace(preference.DoorFrameType)) return "门";
+            if (code.StartsWith("M", StringComparison.OrdinalIgnoreCase)) return "门";
+            if (code.StartsWith("C", StringComparison.OrdinalIgnoreCase)) return "窗";
+            return "窗";
+        }
+
+        private static double DefaultWidth(string kind)
+        {
+            return string.Equals(kind, "门", StringComparison.OrdinalIgnoreCase) ? 900d : 1500d;
+        }
+
+        private static double DefaultHeight(string kind)
+        {
+            return string.Equals(kind, "门", StringComparison.OrdinalIgnoreCase) ? 2100d : 1800d;
+        }
+
+        private static double DefaultSill(string kind)
+        {
+            return string.Equals(kind, "门", StringComparison.OrdinalIgnoreCase) ? 0d : 900d;
         }
 
         /// <summary>

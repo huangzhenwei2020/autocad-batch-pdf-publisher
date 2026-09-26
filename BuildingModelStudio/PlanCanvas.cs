@@ -93,6 +93,9 @@ namespace Wanluo.BuildingModelStudio
         public double OpeningWidth = 1500d, OpeningHeight = 1800d, OpeningSill = 900d;
         public double DefaultWallThickness = 200d, DefaultWallHeight = 0d, DefaultColumnSize = 400d;
 
+        /// <summary>当前选中的门窗类型（来自类型库）；不为空时放门窗直接套用它的编号与尺寸。</summary>
+        public OpeningTypeModel CurrentType;
+
         // ───────────────────────── 视图变换 ─────────────────────────
 
         private PointF ToScreen(double x, double y)
@@ -385,11 +388,12 @@ namespace Wanluo.BuildingModelStudio
                     opening.Height = OpeningHeight;
                     opening.Sill = _tool == "door" ? 0d : OpeningSill;
                     opening.Code = _tool == "door" ? "M" + Math.Round(opening.Width) : "C" + Math.Round(opening.Width);
+                    if (CurrentType != null) PlanEditing.ApplyType(opening, CurrentType);   // 类型库优先
                     var error = PlanEditing.ValidateOpening(_model, wall, opening);
                     if (error != null) { StatusChanged?.Invoke("提示：" + error); break; }
                     _model.Openings.Add(opening);
                     _selection = new PlanHit { Kind = "opening", Id = opening.Id, Offset = opening.Offset };
-                    Commit("放" + OpeningKind);
+                    Commit("放" + (opening.Code ?? OpeningKind));
                     break;
                 }
                 case "column":
