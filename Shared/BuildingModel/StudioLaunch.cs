@@ -14,6 +14,8 @@ namespace BatchPdfPublisher.BuildingModel
         public string FilePath { get; set; }
         public DateTime Modified { get; set; }
         public long SizeBytes { get; set; }
+        /// <summary>是不是"建模程序刚推过来、还没落图"的那几张（清单里带 ★）。</summary>
+        public bool Pending { get; set; }
 
         /// <summary>清单里显示的一行（序号由调用方加）。</summary>
         public string Display
@@ -22,10 +24,24 @@ namespace BatchPdfPublisher.BuildingModel
             {
                 var kind = Kind == ViewKind.Sheet ? "图纸" : Kind == ViewKind.Plan ? "平面"
                     : Kind == ViewKind.Section ? "剖面" : Kind == ViewKind.Schedule ? "门窗表" : "立面";
-                return "[" + kind + "] " + (string.IsNullOrWhiteSpace(Title) ? Id : Title)
+                return (Pending ? "★" : "　") + "[" + kind + "] " + (string.IsNullOrWhiteSpace(Title) ? Id : Title)
                     + "　" + Modified.ToString("MM-dd HH:mm");
             }
         }
+    }
+
+    /// <summary>待落图清单里的一条。</summary>
+    public sealed class StudioPendingEntry
+    {
+        public string Id { get; set; }
+        public string FilePath { get; set; }
+    }
+
+    /// <summary>待落图清单：建模程序"推到 CAD"时写下的、还没落图的图纸/视图。</summary>
+    public sealed class StudioPendingList
+    {
+        public DateTime WrittenAt { get; set; }
+        public List<StudioPendingEntry> Entries { get; set; } = new List<StudioPendingEntry>();
     }
 
     /// <summary>
@@ -45,6 +61,89 @@ namespace BatchPdfPublisher.BuildingModel
         public const string ModelFolderName = "建筑模型";
         /// <summary>视图文件所在子目录。</summary>
         public const string ViewsFolderName = "views";
+        /// <summary>"待落图"标记文件名（放在 views 目录里；用 .txt 免得被当成视图读）。</summary>
+        public const string PendingFileName = "待落图.txt";
+
+        /// <summary>待落图标记文件路径：<c>&lt;模型目录&gt;\views\待落图.txt</c>。</summary>
+        public static string PendingFilePath(string modelFolder)
+        {
+            return string.IsNullOrWhiteSpace(modelFolder) ? null : Path.Combine(modelFolder, ViewsFolderName, PendingFileName);
+        }
+
+        /// <summary>
+        /// 写下"待落图"清单（建模程序点「推到 CAD」时调用）。
+        /// 格式是纯文本：第一行带时间戳，后面每行 <c>id|文件路径</c> —— 出问题用记事本就能看。
+        /// </summary>
+        public static bool WritePending(string modelFolder, IEnumerable<StudioPendingEntry> entries)
+        {
+            var file = PendingFilePath(modelFolder);
+            if (string.IsNullOrWhiteSpace(file)) return false;
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(file));
+                var builder = new System.Text.StringBuilder();
+                builder.AppendLine("# 万落建筑模型 待落图 " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+                foreach (var entry in entries ?? Enumerable.Empty<StudioPendingEntry>())
+                {
+                    if (entry == null || string.IsNullOrWhiteSpace(entry.FilePath)) continue;
+                    builder.AppendLine((entry.Id ?? string.Empty) + "|" + entry.FilePath);
+                }
+                File.WriteAllText(file, builder.ToString(), System.Text.Encoding.UTF8);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>读"待落图"清单；没有或读不出来返回 null（调用方按"没有待落图"处理）。</summary>
+        public static StudioPendingList ReadPending(string modelFolder)
+        {
+            var file = PendingFilePath(modelFolder);
+            if (string.IsNullOrWhiteSpace(file) || !File.Exists(file)) return null;
+            try
+            {
+                var list = new StudioPendingList { WrittenAt = File.GetLastWriteTime(file) };
+                foreach (var raw in File.ReadAllLines(file))
+                {
+                    var line = (raw ?? string.Empty).Trim();
+                    if (line.Length == 0 || line.StartsWith("#", StringComparison.Ordinal)) continue;
+                    var split = line.IndexOf('|');
+                    if (split <= 0 || split >= line.Length - 1) continue;
+                    list.Entries.Add(new StudioPendingEntry
+                    {
+                        Id = line.Substring(0, split).Trim(),
+                        FilePath = line.Substring(split + 1).Trim()
+                    });
+                }
+                return list;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>落图完把这一条从"待落图"里去掉；清单空了就把文件删掉。</summary>
+        public static void RemovePending(string modelFolder, string viewId)
+        {
+            var list = ReadPending(modelFolder);
+            if (list == null) return;
+            var remaining = list.Entries
+                .Where(entry => entry != null && !string.Equals(entry.Id, viewId, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            var file = PendingFilePath(modelFolder);
+            try
+            {
+                if (remaining.Count == 0) { if (File.Exists(file)) File.Delete(file); return; }
+                WritePending(modelFolder, remaining);
+            }
+            catch
+            {
+                // 删不掉就算了，下次落图再清
+            }
+        }
 
         /// <summary>
         /// 组装启动参数：<c>--project "&lt;项目文件夹&gt;" --model "&lt;模型名称&gt;"</c>。
@@ -129,6 +228,12 @@ namespace BatchPdfPublisher.BuildingModel
             if (string.IsNullOrWhiteSpace(modelFolder)) return result;
             var viewsFolder = Path.Combine(modelFolder, ViewsFolderName);
             if (!Directory.Exists(viewsFolder)) return result;
+            var pending = ReadPending(modelFolder);
+            var pendingIds = new HashSet<string>(
+                (pending == null ? new List<StudioPendingEntry>() : pending.Entries)
+                    .Where(entry => entry != null && !string.IsNullOrWhiteSpace(entry.Id))
+                    .Select(entry => entry.Id.Trim()),
+                StringComparer.OrdinalIgnoreCase);
 
             foreach (var file in Directory.GetFiles(viewsFolder, "*.json"))
             {
@@ -137,14 +242,16 @@ namespace BatchPdfPublisher.BuildingModel
                     var view = BuildingModelJson.LoadView(file);
                     if (view == null) continue;
                     var info = new FileInfo(file);
+                    var id = string.IsNullOrWhiteSpace(view.Id) ? Path.GetFileNameWithoutExtension(file) : view.Id;
                     result.Add(new StudioViewEntry
                     {
-                        Id = string.IsNullOrWhiteSpace(view.Id) ? Path.GetFileNameWithoutExtension(file) : view.Id,
+                        Id = id,
                         Title = view.Title,
                         Kind = view.Kind,
                         FilePath = file,
                         Modified = info.LastWriteTime,
-                        SizeBytes = info.Length
+                        SizeBytes = info.Length,
+                        Pending = pendingIds.Contains(id)
                     });
                 }
                 catch
@@ -152,8 +259,10 @@ namespace BatchPdfPublisher.BuildingModel
                     // 读不出来的跳过，别因为一个坏文件列不出清单
                 }
             }
+            // 带 ★（待落图）的排最前，其余按"图纸 → 平面 → 立面 → 剖面 → 门窗表"
             return result
-                .OrderBy(entry => Rank(entry.Kind))
+                .OrderByDescending(entry => entry.Pending)
+                .ThenBy(entry => Rank(entry.Kind))
                 .ThenBy(entry => entry.Title ?? entry.Id, StringComparer.CurrentCulture)
                 .ToList();
         }

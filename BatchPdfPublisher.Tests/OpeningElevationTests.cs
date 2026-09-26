@@ -94,7 +94,30 @@ internal static class OpeningElevationTests
             Assert(entries[0].Kind == ViewKind.Sheet && entries[0].Title == "建施-01", "图纸应排在最前面");
             Assert(entries[1].Id == "elev-south" && entries[1].Display.IndexOf("立面", StringComparison.Ordinal) >= 0,
                 "清单里应能看出类型：" + entries[1].Display);
-            Console.WriteLine("   启动与取件：参数、发布目录候选、模型目录定位、视图清单（跳过坏文件）都符合预期");
+
+            // 4) "待落图"标记：写 → 读 → 清单里带 ★ 且排最前 → 落完一张少一张
+            var sheetPath = Path.Combine(modelFolder, StudioLaunch.ViewsFolderName, "sheet-1.json");
+            Assert(StudioLaunch.PendingFilePath(modelFolder) == Path.Combine(modelFolder, StudioLaunch.ViewsFolderName, "待落图.txt"),
+                "待落图文件应放在 views 目录下");
+            Assert(StudioLaunch.ReadPending(modelFolder) == null, "还没推过时应返回 null");
+            Assert(StudioLaunch.WritePending(modelFolder, new[]
+            {
+                new StudioPendingEntry { Id = "sheet-1", FilePath = sheetPath },
+                new StudioPendingEntry { Id = "不存在的", FilePath = "" }        // 空路径应被跳过
+            }), "写待落图清单应成功");
+
+            var pendingList = StudioLaunch.ReadPending(modelFolder);
+            Assert(pendingList != null && pendingList.Entries.Count == 1 && pendingList.Entries[0].Id == "sheet-1",
+                "读回来的待落图清单应只有 1 条（空路径被跳过）");
+            entries = StudioLaunch.ListViews(modelFolder);
+            Assert(entries[0].Pending && entries[0].Id == "sheet-1", "待落图的那张应排在清单最前并带 ★");
+            Assert(entries[0].Display.StartsWith("★", StringComparison.Ordinal), "清单显示应带 ★：" + entries[0].Display);
+            Assert(entries.Count(entry => entry.Pending) == 1, "只有一张是待落图");
+
+            StudioLaunch.RemovePending(modelFolder, "sheet-1");
+            Assert(StudioLaunch.ReadPending(modelFolder) == null, "落完图后待落图文件应被删掉");
+            Assert(StudioLaunch.ListViews(modelFolder).All(entry => !entry.Pending), "落完图后不该再有 ★");
+            Console.WriteLine("   启动与取件：参数、发布目录候选、模型目录定位、视图清单（跳过坏文件）、待落图写读清 都符合预期");
         }
         finally { try { Directory.Delete(root, true); } catch { } }
     }

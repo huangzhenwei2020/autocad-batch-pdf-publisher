@@ -81,6 +81,30 @@ namespace Wanluo.BuildingModelStudio
                 return;
             }
 
+            // 推到 CAD（不弹窗口、不切窗口，只生成 + 写"待落图"清单，便于脚本/自检核对）
+            //   dotnet 万落建筑模型.dll --push [<项目文件夹>] [<模型名称>]
+            if (args != null && args.Length > 0 && string.Equals(args[0], "--push", StringComparison.OrdinalIgnoreCase))
+            {
+                Headless = true;
+                try
+                {
+                    var folder = args.Length > 1 && !string.IsNullOrWhiteSpace(args[1])
+                        ? args[1]
+                        : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "万落建筑项目", "建筑模型样例");
+                    var name = args.Length > 2 && !string.IsNullOrWhiteSpace(args[2]) ? args[2] : "样例-两层小房子";
+                    var lines = GenerateViewsForExistingModel(folder, name, Console.WriteLine);
+                    var marked = MarkPendingForCad(folder, name);
+                    Console.WriteLine("完成：" + lines + " 条线；待落图 " + marked + " 张 → "
+                        + StudioLaunch.PendingFilePath(ModelFolderOf(folder, name)));
+                }
+                catch (Exception exception)
+                {
+                    Console.Error.WriteLine("推送失败：" + exception);
+                    Environment.ExitCode = 1;
+                }
+                return;
+            }
+
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
@@ -425,8 +449,43 @@ namespace Wanluo.BuildingModelStudio
             }
         }
 
+        /// <summary>项目的模型目录：<c>&lt;项目文件夹&gt;\建筑模型\&lt;模型名称&gt;</c>。</summary>
+        internal static string ModelFolderOf(string projectFolder, string modelName)
+        {
+            try { return BuildingModelJson.ModelFolder(projectFolder, modelName); }
+            catch { return null; }
+        }
+
+        /// <summary>对**已存在的模型**重新生成全部视图与图纸（不动模型本身，保住用户的编辑）。</summary>
+        internal static int GenerateViewsForExistingModel(string projectFolder, string modelName, Action<string> log)
+        {
+            var modelPath = BuildingModelJson.ModelFilePath(projectFolder, modelName);
+            if (!File.Exists(modelPath)) throw new FileNotFoundException("找不到模型：" + modelPath);
+            var model = BuildingModelJson.LoadModel(modelPath);
+            var libraryPath = BuildingModelJson.OpeningLibraryPath(projectFolder, modelName);
+            var library = File.Exists(libraryPath) ? BuildingModelJson.LoadOpeningLibrary(libraryPath) : null;
+            return GenerateViews(projectFolder, modelName, model, log, library);
+        }
+
         /// <summary>
-        /// 按默认视图集合生成 views/*.json，返回线条总数。
+        /// 写下"待落图"清单（优先图纸，没有图纸就推所有视图），返回标记的张数。
+        /// 「推到 CAD」按钮与 <c>--push</c> 共用这一段。
+        /// </summary>
+        internal static int MarkPendingForCad(string projectFolder, string modelName)
+        {
+            var modelFolder = ModelFolderOf(projectFolder, modelName);
+            var entries = StudioLaunch.ListViews(modelFolder);
+            var sheets = entries.Where(entry => entry.Kind == ViewKind.Sheet).ToList();
+            var marked = sheets.Count > 0 ? sheets : entries;
+            StudioLaunch.WritePending(modelFolder, marked.Select(entry => new StudioPendingEntry
+            {
+                Id = entry.Id, FilePath = entry.FilePath
+            }));
+            return marked.Count;
+        }
+
+        /// <summary>
+        /// 把默认视图集合生成 views/*.json，返回线条总数。
         /// <paramref name="library"/> 是门窗类型库：立面的门窗分格与开启线按编号查它取做法（可为空）。
         /// </summary>
         internal static int GenerateViews(string projectFolder, string modelName, BuildingModelDocument model,
@@ -543,6 +602,7 @@ namespace Wanluo.BuildingModelStudio
             fileRow.Controls.Add(Button("打开/新建", OpenOrCreateModel, true));
             fileRow.Controls.Add(Button("保存", SaveModel, true));
             fileRow.Controls.Add(Button("生成全部视图", GenerateViewsNow, true));
+            fileRow.Controls.Add(Button("推到 CAD", PushToCad, true));
             fileRow.Controls.Add(Button("预览立面", ShowViewPreview, true));
             fileRow.Controls.Add(Button("打开模型目录", OpenModelFolder, false));
             top.Controls.Add(fileRow, 0, 0);
@@ -822,6 +882,35 @@ namespace Wanluo.BuildingModelStudio
         internal void ApplyTypeToSelectionForTest()
         {
             ApplyTypeToSelection();
+        }
+
+        // ───────────────────────── 推到 CAD ─────────────────────────
+
+        /// <summary>
+        /// 「推到 CAD」：生成全部视图与图纸 → 写下"待落图"清单（CAD 里 LTTZ 会带 ★ 列出来、
+        /// 并默认落第一张）→ 把 AutoCAD 窗口切到前台，并**自动输入 LTTZ**；
+        /// 切不过去或没找到 CAD 就只留清单，让用户自己回 CAD 敲 LTTZ。
+        /// </summary>
+        private void PushToCad()
+        {
+            if (_model == null) { Log("还没有模型。"); return; }
+            var total = Program.GenerateViews(_projectFolder.Text, ModelName, _model, Log, _openingLibrary);
+            var modelFolder = Program.ModelFolderOf(_projectFolder.Text, ModelName);
+            var marked = Program.MarkPendingForCad(_projectFolder.Text, ModelName);
+            var sheets = StudioLaunch.ListViews(modelFolder).Where(entry => entry.Kind == ViewKind.Sheet).ToList();
+
+            Log(marked > 0
+                ? "已标记待落图 " + marked + " 张" + (sheets.Count > 0 ? "（图纸）" : "（视图）") + "：" + modelFolder
+                : "没有可推的视图/图纸（先生成一次）");
+            Log("生成完成，共 " + total + " 条线。");
+
+            var activated = CadWindow.TryActivate();
+            if (!activated)
+            {
+                Log("没找到正在运行的 AutoCAD：请在 CAD 里执行 LTTZ（会列出带 ★ 的待落图，默认就是刚推过去的）。");
+                return;
+            }
+            Log("已切到 AutoCAD 并自动输入 LTTZ；在提示里选序号、点插入点即可。若没反应，手动敲 LTTZ 即可。");
         }
 
         // ───────────────────────── 立面/剖面预览 ─────────────────────────

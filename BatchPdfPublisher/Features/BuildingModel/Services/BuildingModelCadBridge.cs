@@ -31,8 +31,10 @@ namespace BatchPdfPublisher.Services
         {
             if (document == null) return;
             var editor = document.Editor;
+            SelectedViewId = null;                       // 每次落图重新记
             var path = PickViewFile(document, editor);
             if (string.IsNullOrWhiteSpace(path)) return;
+            var placedViewId = SelectedViewId;
 
             ViewDocument view;
             try { view = BuildingModelJson.LoadView(path); }
@@ -181,6 +183,32 @@ namespace BatchPdfPublisher.Services
                 editor.WriteMessage("\n  " + pair.Key + "：" + pair.Value + " 个实体");
             if (view.Warnings != null && view.Warnings.Count > 0)
                 editor.WriteMessage("\n提示：" + string.Join("；", view.Warnings.ToArray()));
+
+            // 落完图把这一条的"待落图"标记去掉（建模程序推过来的那几张，落一张少一张）
+            if (!string.IsNullOrWhiteSpace(placedViewId))
+            {
+                try
+                {
+                    var project = new PublishPlanStore().GetActiveProject();
+                    var modelFolder = StudioLaunch.FindModelFolder(project == null ? null : project.ProjectFolder,
+                        project == null ? null : project.Name);
+                    var pending = StudioLaunch.ReadPending(modelFolder);
+                    if (pending != null && pending.Entries.Any(entry => entry != null
+                        && string.Equals(entry.Id, placedViewId, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        StudioLaunch.RemovePending(modelFolder, placedViewId);
+                        var left = StudioLaunch.ReadPending(modelFolder);
+                        var remaining = left == null ? 0 : left.Entries.Count;
+                        editor.WriteMessage(remaining > 0
+                            ? "\n（还有 " + remaining + " 张待落图：再执行 LTTZ 即可，带 ★ 的就是）\n"
+                            : "\n（建模程序推过来的图纸已全部落图）\n");
+                    }
+                }
+                catch
+                {
+                    // 清标记失败不影响已经落好的图
+                }
+            }
         }
 
         public static void ExportDrawing(Document document)
@@ -595,6 +623,9 @@ namespace BatchPdfPublisher.Services
             for (var index = 0; index < entries.Count; index++)
                 editor.WriteMessage("\n  " + (index + 1).ToString("00") + "）" + entries[index].Display);
             editor.WriteMessage("\n  00）浏览其它文件…");
+            var pendingCount = entries.Count(entry => entry.Pending);
+            if (pendingCount > 0)
+                editor.WriteMessage("\n（★ = 建模程序刚推过来、还没落图的 " + pendingCount + " 张，默认落第一张）");
             var options = new PromptIntegerOptions("\n输入序号")
             {
                 DefaultValue = 1, AllowNone = false, AllowZero = true, UseDefaultValue = true
@@ -603,8 +634,14 @@ namespace BatchPdfPublisher.Services
             if (result.Status != PromptStatus.OK) return null;
             if (result.Value <= 0) return BrowseViewFile();
             if (result.Value > entries.Count) return entries[entries.Count - 1].FilePath;
+            // 记下选的是哪一条：落图成功后要把它的"待落图"标记去掉
+            SelectedViewId = entries[result.Value - 1].Id;
             return entries[result.Value - 1].FilePath;
         }
+
+        /// <summary>刚刚选中的视图 id（落图成功后用来清"待落图"标记）。</summary>
+        [ThreadStatic]
+        private static string SelectedViewId;
 
         private static string BrowseViewFile()
         {

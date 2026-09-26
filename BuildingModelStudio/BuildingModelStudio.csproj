@@ -16,6 +16,7 @@
     <Compile Include="Program.cs" />
     <Compile Include="CrashLog.cs" />
     <Compile Include="DrawGuard.cs" />
+    <Compile Include="CadWindow.cs" />
     <Compile Include="PlanCanvas.cs" />
     <Compile Include="PlanGrid.cs" />
     <Compile Include="ViewPreviewCanvas.cs" />
@@ -37,5 +38,6 @@
     <Compile Include="..\BatchPdfPublisher\Features\DoorWindows\Models\DoorWindowElevationGeometry.cs" Link="DoorWindows\DoorWindowElevationGeometry.cs" />
   </ItemGroup>
 </Project>
+
 
 
