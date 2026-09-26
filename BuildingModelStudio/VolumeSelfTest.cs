@@ -42,7 +42,9 @@ namespace Wanluo.BuildingModelStudio
                 canvas.Camera.AzimuthDegrees = view.AzimuthDegrees;
                 canvas.Camera.ElevationDegrees = view.ElevationDegrees;
                 canvas.Camera.Zoom = 1d;
+                var watch = System.Diagnostics.Stopwatch.StartNew();
                 var painted = RenderOnce(canvas, log);
+                watch.Stop();
                 if (canvas.LastFaceCount < 10)
                     throw new Exception("方位 " + view.AzimuthDegrees + "° 只画了 " + canvas.LastFaceCount + " 个面");
                 if (painted.Painted < 3000)
@@ -53,7 +55,7 @@ namespace Wanluo.BuildingModelStudio
                     throw new Exception("方位 " + view.AzimuthDegrees + "° 轮廓里漏了 " + painted.Holes + " 个背景像素");
                 log("PASS 三维体量：方位 " + view.AzimuthDegrees + "° / 仰角 " + view.ElevationDegrees
                     + "°　画出面 " + canvas.LastFaceCount + "（隐藏面 " + canvas.LastCulledCount + "）非背景像素 "
-                    + painted.Painted + "、漏底 " + painted.Holes);
+                    + painted.Painted + "、漏底 " + painted.Holes + "、耗时 " + watch.ElapsedMilliseconds + " ms");
             }
 
             // 只看一层：体量应该明显变小（高度只剩一层）

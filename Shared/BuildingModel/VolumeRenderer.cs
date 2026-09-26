@@ -179,7 +179,129 @@ namespace BatchPdfPublisher.BuildingModel
                 .Where(item => item.Visible).ToList();
             var ordered = kept.OrderByDescending(item => item.Depth).ToList();      // 远的先画
             SuppressCoplanarEdges(ordered);
+            HideEdgesBehindNearerFaces(ordered);
             return ordered;
+        }
+
+        /// <summary>
+        /// **逐段消隐**：一条边只要被"更近的面"投影盖住，那一段就不画。
+        ///
+        /// 为什么还要这一步：画家算法是"按面的平均深度排序后整片填充"，遇到"高处小面压住低处大面"
+        /// （楼板边、门窗口的侧壁）会排错序，于是描边里会剩下一两条本该看不见的接缝线。
+        /// 有了解析的线段裁剪，这些线就干净了 —— 这是纯几何、可单元测试的，不依赖任何图形库。
+        /// </summary>
+        public static void HideEdgesBehindNearerFaces(List<VolumeFace2D> ordered)
+        {
+            if (ordered == null || ordered.Count < 2) return;
+            // 预先算好每个面投影的外包框：绝大部分"更近的面"跟这条边根本不相干，靠它快速跳过
+            var boxes = ordered.Select(face => Bounds(face.Points)).ToArray();
+            for (var index = 0; index < ordered.Count; index++)
+            {
+                var face = ordered[index];
+                if (face.Edges == null || face.Edges.Count == 0) continue;
+                var visible = new List<List<PointModel>>();
+                foreach (var segment in face.Edges)
+                {
+                    if (segment == null || segment.Count < 2) continue;
+                    var remaining = new List<List<PointModel>> { segment };
+                    for (var nearer = index + 1; nearer < ordered.Count && remaining.Count > 0; nearer++)
+                    {
+                        var cover = ordered[nearer];
+                        var box = boxes[nearer];
+                        var next = new List<List<PointModel>>();
+                        foreach (var part in remaining)
+                            next.AddRange(SubtractPolygon(part, cover.Points, box));
+                        remaining = next;
+                    }
+                    visible.AddRange(remaining);
+                }
+                face.Edges = visible;
+            }
+        }
+
+        /// <summary>线段减去一块凸/凹多边形（返回剩下没被盖住的段）。</summary>
+        private static List<List<PointModel>> SubtractPolygon(List<PointModel> segment, List<PointModel> polygon,
+            double[] box)
+        {
+            var result = new List<List<PointModel>>();
+            if (segment == null || segment.Count < 2 || polygon == null || polygon.Count < 3) { result.Add(segment); return result; }
+            var a = segment[0];
+            var b = segment[1];
+            // 外包框不相交：整段都留着
+            if (b == null || a == null) return result;
+            if (Math.Max(a.X, b.X) < box[0] || Math.Min(a.X, b.X) > box[2]
+                || Math.Max(a.Y, b.Y) < box[1] || Math.Min(a.Y, b.Y) > box[3]) { result.Add(segment); return result; }
+
+            var dx = b.X - a.X;
+            var dy = b.Y - a.Y;
+            var lengthSquared = dx * dx + dy * dy;
+            if (lengthSquared < 1e-12d) return result;
+
+            // 1) 求出线段与多边形各边的交点参数 t（0..1），加上两端点
+            var cuts = new List<double> { 0d, 1d };
+            for (var index = 0; index < polygon.Count; index++)
+            {
+                var p = polygon[index];
+                var q = polygon[(index + 1) % polygon.Count];
+                if (p == null || q == null) continue;
+                var ex = q.X - p.X;
+                var ey = q.Y - p.Y;
+                var denominator = dx * ey - dy * ex;
+                if (Math.Abs(denominator) < 1e-12d) continue;                  // 平行
+                var t = ((p.X - a.X) * ey - (p.Y - a.Y) * ex) / denominator;
+                var s = ((p.X - a.X) * dy - (p.Y - a.Y) * dx) / denominator;
+                if (t <= 0d || t >= 1d || s < 0d || s > 1d) continue;
+                cuts.Add(t);
+            }
+            cuts.Sort();
+
+            // 2) 逐段判断中点是否在多边形内：在里面 = 被盖住
+            for (var index = 0; index + 1 < cuts.Count; index++)
+            {
+                var t0 = cuts[index];
+                var t1 = cuts[index + 1];
+                if (t1 - t0 < 1e-9d) continue;
+                var mid = (t0 + t1) / 2d;
+                var x = a.X + dx * mid;
+                var y = a.Y + dy * mid;
+                if (CoveredStrict(polygon, x, y)) continue;
+                result.Add(new List<PointModel>
+                {
+                    new PointModel(a.X + dx * t0, a.Y + dy * t0),
+                    new PointModel(a.X + dx * t1, a.Y + dy * t1)
+                });
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// "确实被盖住"：贴着多边形的边不算 —— 相邻两面共用一条边时，
+        /// 一个面的内部会紧贴另一个面的边界，若按"点在边上也算在里"就会把共用边整条吃掉。
+        /// </summary>
+        private static bool CoveredStrict(List<PointModel> polygon, double x, double y)
+        {
+            const double margin = 0.1d;
+            for (var index = 0; index < polygon.Count; index++)
+            {
+                var p = polygon[index];
+                var q = polygon[(index + 1) % polygon.Count];
+                if (p == null || q == null) continue;
+                if (DistanceToSegment(p.X, p.Y, q.X, q.Y, x, y) <= margin) return false;
+            }
+            return Inside(polygon, x, y);
+        }
+
+        /// <summary>投影外包框：minX, minY, maxX, maxY。</summary>
+        private static double[] Bounds(List<PointModel> points)
+        {
+            var box = new[] { double.MaxValue, double.MaxValue, double.MinValue, double.MinValue };
+            foreach (var point in points)
+            {
+                if (point == null) continue;
+                box[0] = Math.Min(box[0], point.X); box[1] = Math.Min(box[1], point.Y);
+                box[2] = Math.Max(box[2], point.X); box[3] = Math.Max(box[3], point.Y);
+            }
+            return box;
         }
 
         /// <summary>

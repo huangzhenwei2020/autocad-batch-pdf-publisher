@@ -35,7 +35,7 @@ internal static class OpeningElevationTests
         VolumeChecks();
         StairChecks();
         RoofChecks();
-        Console.WriteLine("PASS 立面门窗：分格与开启线 / 背立面镜像 / 遮挡裁剪 / 自定义分格 / 1:100-1:50 详简 / 参数兜底 / 可点选锚点与编号 / 尺寸与门窗表 / 平面图 / 排版出图 / 启动与取件 / 三维体量（门窗构件 / 剖切 / 透视 / 共面合并 / 藏在墙里的面）/ 楼梯（双跑几何 / 平面 / 体量 / 剖面 / 校验）/ 坡屋面（几何 / 立面山墙 / 剖面 / 体量）");
+        Console.WriteLine("PASS 立面门窗：分格与开启线 / 背立面镜像 / 遮挡裁剪 / 自定义分格 / 1:100-1:50 详简 / 参数兜底 / 可点选锚点与编号 / 尺寸与门窗表 / 平面图 / 排版出图 / 启动与取件 / 三维体量（门窗构件 / 剖切 / 透视 / 共面合并 / 藏在墙里的面 / 逐段消隐）/ 楼梯（双跑几何 / 平面 / 体量 / 剖面 / 校验）/ 坡屋面（几何 / 立面山墙 / 剖面 / 体量）");
     }
 
     // ───────────────────────── 13. 楼梯（双跑） ─────────────────────────
@@ -555,6 +555,70 @@ internal static class OpeningElevationTests
         var farVisible = VolumeRenderer.Project(far, camera);
         Assert(farVisible.Any(f => f.Kind == "slab"), "离得太远（>600mm）的面不该被当成「藏在墙里」");
         Console.WriteLine("   三维藏面：平行面前 120mm 的小面被丢掉、1000mm 的保留（阈值 600mm 生效）");
+
+        HiddenLineChecks();
+    }
+
+    /// <summary>
+    /// 逐段消隐：一条边被"更近的面"盖住的那一段不画（画板算法排错序时留下的接缝线就靠它清掉）。
+    /// 用手算得出来的两块板钉：近的 2000×2000，远的一条边整个落在它里面 → 全被吃掉；
+    /// 落一半 → 只剩一半；贴在边界上（相邻两面共用边）→ 一点都不能吃。
+    /// </summary>
+    private static void HiddenLineChecks()
+    {
+        var covered = Quad2D(200d, new[] { new[] { 500d, 500d, 1500d, 1500d } });
+        VolumeRenderer.HideEdgesBehindNearerFaces(new List<VolumeFace2D>
+        {
+            covered, Quad2D(100d, new List<double[]>())
+        });
+        Assert(covered.Edges.Count == 0, "整条被近面盖住的边应该不画，实际还剩 " + covered.Edges.Count + " 段");
+
+        var partial = Quad2D(200d, new[] { new[] { 1500d, 500d, 2500d, 500d } });
+        VolumeRenderer.HideEdgesBehindNearerFaces(new List<VolumeFace2D>
+        {
+            partial, Quad2D(100d, new List<double[]>())
+        });
+        var remaining = partial.Edges.Sum(Length);
+        Assert(Math.Abs(remaining - 500d) < 1d, "一半在近面里的边应只剩 500mm，实际 " + Math.Round(remaining));
+
+        var shared = Quad2D(200d, new[] { new[] { 0d, 0d, 0d, 2000d } });
+        VolumeRenderer.HideEdgesBehindNearerFaces(new List<VolumeFace2D>
+        {
+            shared, Quad2D(100d, new List<double[]>())
+        });
+        Assert(Math.Abs(shared.Edges.Sum(Length) - 2000d) < 1d, "贴在近面边上的共用边不该被吃掉，实际 "
+            + Math.Round(shared.Edges.Sum(Length)));
+
+        Console.WriteLine("   三维消隐：整条被盖住剩 0 mm、一半被盖剩 " + Math.Round(remaining)
+            + " mm、贴边共用边 " + Math.Round(shared.Edges.Sum(Length)) + " mm（不吃）");
+    }
+
+    private static double Length(List<PointModel> segment)
+    {
+        if (segment == null || segment.Count < 2) return 0d;
+        var dx = segment[1].X - segment[0].X;
+        var dy = segment[1].Y - segment[0].Y;
+        return Math.Sqrt(dx * dx + dy * dy);
+    }
+
+    /// <summary>造一块 0..2000 × 0..2000 的投影面（深度、边给全）。</summary>
+    private static VolumeFace2D Quad2D(double depth, IEnumerable<double[]> edges)
+    {
+        var face = new VolumeFace2D
+        {
+            Depth = depth,
+            Points = new List<PointModel>
+            {
+                new PointModel(0d, 0d), new PointModel(2000d, 0d),
+                new PointModel(2000d, 2000d), new PointModel(0d, 2000d)
+            }
+        };
+        foreach (var edge in edges)
+            face.Edges.Add(new List<PointModel>
+            {
+                new PointModel(edge[0], edge[1]), new PointModel(edge[2], edge[3])
+            });
+        return face;
     }
 
     /// <summary>造一片竖直方板：X 从 0 到 width，Z 从 z0 到 z0+height，固定在一个 Y 上。</summary>
