@@ -284,6 +284,57 @@ internal static class OpeningElevationTests
             + Math.Round(geometry.RidgeElevation) + "（半跨 " + Math.Round(geometry.HalfSpan)
             + "、坡度 " + Math.Round(geometry.PitchDegrees, 3) + "°）；山墙坡线 " + sloped.Count
             + " 条、体量屋面 " + volume.Faces.Count(f => f.Kind == "roof") + " 面");
+
+        AxonometricChecks();
+    }
+
+    /// <summary>
+    /// 轴测出图：把三维体量投成"可见轮廓线"的视图（CAD 里就是普通线，不需要特殊处理），
+    /// 并单独排一张图纸（建施-05）。这里钉：线条数与可见面数一致、坐标有限、换角度会变、透视也能出。
+    /// </summary>
+    private static void AxonometricChecks()
+    {
+        var model = SampleModelFactory.CreateTwoStoreyHouse();
+        var definition = SampleModelFactory.CreateAxonometricView(model.Name);
+        var view = OrthographicProjector.Project(model, definition, null);
+        var lines = view.Lines.Where(l => l.Layer == ViewLayers.Axonometric).ToList();
+        Assert(view.Kind == ViewKind.Axonometric, "轴测图的 Kind 应是 Axonometric");
+        Assert(lines.Count > 50, "轴测图应该有足够多的可见轮廓线，实际 " + lines.Count);
+        Assert(view.Lines.All(l => IsFiniteNumber(l.X1) && IsFiniteNumber(l.Y1)
+            && IsFiniteNumber(l.X2) && IsFiniteNumber(l.Y2)), "轴测图坐标必须有限");
+        Assert(view.Texts.Any(t => t.Layer == ViewLayers.Title), "轴测图要有图名");
+        // 默认 35°/28°：可见 79 面 → 每条边一段到几段
+        var volume = BuildingVolumeBuilder.Build(model, null);
+        var visible = VolumeRenderer.Project(volume, new VolumeCamera { AzimuthDegrees = 35d, ElevationDegrees = 28d });
+        Assert(lines.Count >= visible.Count, "轮廓线段数应不少于可见面数：" + lines.Count + " vs " + visible.Count);
+
+        // 换一个方位角：看到的轮廓不一样
+        definition.AzimuthDegrees = 215d;
+        var other = OrthographicProjector.Project(model, definition, null);
+        Assert(other.Lines.Count != lines.Count, "换方位角后轮廓线数应该变（35° " + lines.Count
+            + " vs 215° " + other.Lines.Count + "）");
+        // 透视也能出图，且坐标有限
+        definition.Perspective = true;
+        var perspective = OrthographicProjector.Project(model, definition, null);
+        Assert(perspective.Lines.Any(l => l.Layer == ViewLayers.Axonometric)
+            && perspective.Lines.All(l => IsFiniteNumber(l.X1) && IsFiniteNumber(l.Y2)), "透视轴测图也要能出来");
+
+        // 排进 A3 图纸：内容落在图框内
+        var sheet = SheetComposer.Compose(
+            new List<ViewDocument> { view },
+            new SheetDefinitionModel
+            {
+                Id = "sheet-axon-test", Number = "建施-05", Title = "轴测图", Paper = "A3", Landscape = true,
+                ViewIds = { view.Id }
+            });
+        var inside = sheet.Lines.Where(l => l.Layer != ViewLayers.Title && l.Layer != ViewLayers.SheetFrame).ToList();
+        Assert(inside.Count > 0, "轴测图应排到图纸上");
+        Assert(inside.All(l => Math.Min(l.X1, l.X2) >= 24.5d && Math.Max(l.X1, l.X2) <= 415.5d
+            && Math.Min(l.Y1, l.Y2) >= 4.5d && Math.Max(l.Y1, l.Y2) <= 292.5d), "轴测图应排在图框内");
+
+        Console.WriteLine("   轴测出图：默认 35°/28° " + lines.Count + " 条轮廓（可见 " + visible.Count
+            + " 面）、215° 时 " + other.Lines.Count + " 条、透视 " + perspective.Lines.Count
+            + " 条；A3 图纸内 " + inside.Count + " 条");
     }
 
     /// <summary>造一个两层模型 + 一部楼梯（楼梯 X 位置可调，用来验"剖切面前面就切掉"）。</summary>
@@ -811,7 +862,9 @@ internal static class OpeningElevationTests
         views.Add(OrthographicProjector.ProjectSchedule(model, library, "门窗表"));
 
         var sheets = SampleModelFactory.CreateDefaultSheets(model);
-        Assert(sheets.Count == 4, "默认套图应有 4 张（两层平面 + 立面 + 剖面/门窗表），实际 " + sheets.Count);
+        Assert(sheets.Count == 5, "默认套图应有 5 张（两层平面 + 立面 + 剖面/门窗表 + 轴测图），实际 " + sheets.Count);
+        Assert(sheets[4].Id == "sheet-axon" && sheets[4].Number == "建施-05" && sheets[4].ViewIds.Contains("axon-1"),
+            "第 5 张应是轴测图（建施-05，排 axon-1）：实际 " + sheets[4].Id + " " + sheets[4].Number);
         Assert(sheets[0].Paper == "A3" && sheets[0].Landscape, "默认图纸应为 A3 横");
 
         // 只排一张平面：便于按算得出来的数字核对

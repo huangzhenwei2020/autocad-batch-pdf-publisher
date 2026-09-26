@@ -291,7 +291,12 @@ namespace BatchPdfPublisher.BuildingModel
         /// <summary>平面图：水平剖切俯视（墙、门窗、柱），用 <see cref="ViewDefinitionModel.StoreyIds"/> 指定画哪一层。</summary>
         Plan = 3,
         /// <summary>图纸（排版结果）：单位是**图纸毫米**，落图后按 1:1 出图（见 <see cref="SheetComposer"/>）。</summary>
-        Sheet = 4
+        Sheet = 4,
+        /// <summary>
+        /// 轴测图：把三维体量按轴测/透视投出来，只画可见的**轮廓线**（走 <see cref="VolumeRenderer"/> 的消隐）。
+        /// 相机角度用 <see cref="ViewDefinitionModel.AzimuthDegrees"/> / <see cref="ViewDefinitionModel.ElevationDegrees"/>。
+        /// </summary>
+        Axonometric = 5
     }
 
     /// <summary>立面方向：南 = 从南往北看（默认取"从 -Y 看向 +Y"）。</summary>
@@ -334,6 +339,14 @@ namespace BatchPdfPublisher.BuildingModel
         public List<string> StoreyIds { get; set; } = new List<string>();
         /// <summary>model = 跟随模型重算；drawing = 已手工深化，不再自动重算。</summary>
         public string State { get; set; } = "model";
+
+        // 轴测图：相机绕建筑的方位角与仰角（度），与三维预览页签用的是同一套相机
+        /// <summary>方位角（度）：0 = 从南往北看，逆时针为正。</summary>
+        public double AzimuthDegrees { get; set; } = 35d;
+        /// <summary>仰角（度）：0 = 平视，90 = 俯视。</summary>
+        public double ElevationDegrees { get; set; } = 28d;
+        /// <summary>轴测图是否用透视（默认 false = 轴测）。</summary>
+        public bool Perspective { get; set; }
     }
 
     /// <summary>视图里的一条线（已投影到视图平面：U 水平、Z 竖向、单位 mm）。</summary>
@@ -627,6 +640,8 @@ namespace BatchPdfPublisher.BuildingModel
         public const string Stair = "WL-模型-楼梯";
         /// <summary>坡屋面（檐口、屋脊、坡线与山墙三角）。</summary>
         public const string Roof = "WL-模型-屋面";
+        /// <summary>轴测图（三维体量投出来的可见轮廓）。</summary>
+        public const string Axonometric = "WL-模型-轴测";
         /// <summary>房间轮廓、房间名与面积。</summary>
         public const string Room = "WL-模型-房间";        /// <summary>图纸自带的图框与标题栏（落图时若套用了项目图框模板，这一层会被跳过）。</summary>
         public const string SheetFrame = "WL-模型-图纸框";
@@ -656,6 +671,7 @@ namespace BatchPdfPublisher.BuildingModel
             new Style { Name = Room, Color = 7, LineType = "Continuous", LineWeight = 13, Description = "房间轮廓、名称与面积" },
             new Style { Name = Stair, Color = 7, LineType = "Continuous", LineWeight = 18, Description = "楼梯：踏步线、休息平台、上下行箭头与扶手" },
             new Style { Name = Roof, Color = 7, LineType = "Continuous", LineWeight = 25, Description = "坡屋面：檐口、屋脊、坡线与山墙轮廓" },
+            new Style { Name = Axonometric, Color = 7, LineType = "Continuous", LineWeight = 18, Description = "轴测图：三维体量投出来的可见轮廓" },
             new Style { Name = SheetFrame, Color = 7, LineType = "Continuous", LineWeight = 35, Description = "图纸自带图框与标题栏（套用项目图框时跳过）" }
         };
 

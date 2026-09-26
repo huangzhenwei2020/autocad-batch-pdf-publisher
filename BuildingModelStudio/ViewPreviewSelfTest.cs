@@ -28,7 +28,7 @@ namespace Wanluo.BuildingModelStudio
             var library = SampleModelFactory.CreateDemoOpeningLibrary();
             var canvas = new ViewPreviewCanvas { Size = new Size(Width, Height) };
 
-            // 1) 五张默认视图 + 每层平面 + 门窗表：每张都要真的画出来，而且线条一条不少
+            // 1) 六张默认视图（四立面 + 剖面 + 轴测）+ 每层平面 + 门窗表：每张都要真的画出来，线条一条不少
             var definitions = SampleModelFactory.CreateDefaultViews(model.Name);
             foreach (var storey in (model.Storeys ?? new List<StoreyModel>()).Where(s => s != null))
                 definitions.Add(SampleModelFactory.CreatePlanView(storey));
@@ -114,7 +114,7 @@ namespace Wanluo.BuildingModelStudio
                 canvas.SafeRender(empty.Graphics);      // 没有视图时只画提示，同样不许抛
             }
 
-            log("PASS 立面预览自检全部通过（5 张视图 / 极端变换 / 坏数据 / 坏 Graphics）。");
+            log("PASS 立面预览自检全部通过（6 张视图 / 极端变换 / 坏数据 / 坏 Graphics）。");
         }
 
         private static int RenderOnce(ViewPreviewCanvas canvas, ViewDocument view, string label, Action<string> log)

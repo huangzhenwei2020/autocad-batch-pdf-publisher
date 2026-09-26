@@ -66,6 +66,7 @@ namespace BatchPdfPublisher.BuildingModel
             if (model == null) throw new ArgumentNullException(nameof(model));
             if (view == null) throw new ArgumentNullException(nameof(view));
             if (view.Kind == ViewKind.Plan) return ProjectPlan(model, view, openingLibrary);
+            if (view.Kind == ViewKind.Axonometric) return ProjectAxonometric(model, view);
 
             var document = new ViewDocument
             {
@@ -1699,6 +1700,55 @@ namespace BatchPdfPublisher.BuildingModel
             AddLine(extraLines, layer, lu1, landBottom, lu1, landTop);
             AddLine(extraLines, layer, lu0, landTop + handrailHeight, lu1, landTop + handrailHeight);
         }
+        /// <summary>
+        /// 轴测图：把三维体量按轴测（或透视）投出来，只画**可见的轮廓线**。
+        ///
+        /// 走的是三维预览那一整条链路（<see cref="BuildingVolumeBuilder"/> → <see cref="VolumeRenderer"/>）：
+        /// 背面剔除、藏在墙里的面丢掉、逐段消隐都在里面，所以落图出来的线和程序里看到的是同一份几何。
+        /// 落图后是普通视图（线 + 图名），CAD 侧不用特殊处理。
+        /// </summary>
+        public static ViewDocument ProjectAxonometric(BuildingModelDocument model, ViewDefinitionModel view)
+        {
+            if (model == null) throw new ArgumentNullException(nameof(model));
+            if (view == null) throw new ArgumentNullException(nameof(view));
+            var document = new ViewDocument
+            {
+                Id = view.Id,
+                Title = view.Title,
+                Kind = ViewKind.Axonometric,
+                Scale = Math.Max(1, view.Scale)
+            };
+            var volume = BuildingVolumeBuilder.Build(model, null);
+            if (volume.Faces.Count == 0)
+            {
+                document.Warnings.Add("模型里还没有可以出轴测图的构件（墙/柱/楼板/楼梯/屋面都为空）。");
+                AddTitle(document, view);
+                Normalize(document);
+                return document;
+            }
+            var camera = new VolumeCamera
+            {
+                AzimuthDegrees = view.AzimuthDegrees, ElevationDegrees = view.ElevationDegrees,
+                Zoom = 1d, Perspective = view.Perspective
+            };
+            var faces = VolumeRenderer.Project(volume, camera);
+            foreach (var face in faces)
+            {
+                foreach (var segment in face.Edges ?? new List<List<PointModel>>())
+                {
+                    if (segment == null || segment.Count < 2) continue;
+                    AddLine(document, ViewLayers.Axonometric,
+                        segment[0].X, segment[0].Y, segment[1].X, segment[1].Y);
+                }
+            }
+            document.Warnings.Add("轴测图：体量 " + volume.Faces.Count + " 面，可见 " + faces.Count
+                + " 面，方位 " + Math.Round(camera.AzimuthDegrees) + "°、仰角 " + Math.Round(camera.ElevationDegrees)
+                + "°（改角度重算即可换一个方向）。");
+            AddTitle(document, view);
+            Normalize(document);
+            return document;
+        }
+
         /// <summary>
         /// 立面/剖面里的坡屋面（双坡）：
         ///

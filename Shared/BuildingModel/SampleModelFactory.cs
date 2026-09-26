@@ -160,7 +160,7 @@ namespace BatchPdfPublisher.BuildingModel
             return result;
         }
 
-        /// <summary>P0 的默认出图集合：四个立面 + 一个剖面（切在 X = 3600）。</summary>
+        /// <summary>P0 的默认出图集合：四个立面 + 一个剖面（切在 X = 3600）+ 一张轴测图。</summary>
         public static List<ViewDefinitionModel> CreateDefaultViews(string name)
         {
             return new List<ViewDefinitionModel>
@@ -175,7 +175,18 @@ namespace BatchPdfPublisher.BuildingModel
                     // 剖在 X = 2200：正好穿过一层南墙的窗（中心 2200、宽 1500），
                     // 这样样例剖面能看到"洞口处断面断开 + 窗台线/窗顶线"。
                     CutAxis = SectionAxis.CutX, CutPosition = 2200d, ViewSign = 1, ViewDepth = 12000d
-                }
+                },
+                CreateAxonometricView(name)
+            };
+        }
+
+        /// <summary>轴测图定义：默认 35°/28° 的轴测（可改方位角/仰角，也可开透视）。</summary>
+        public static ViewDefinitionModel CreateAxonometricView(string name)
+        {
+            return new ViewDefinitionModel
+            {
+                Id = "axon-1", Title = (name ?? "建筑") + " 轴测图", Kind = ViewKind.Axonometric, Scale = 100,
+                AzimuthDegrees = 35d, ElevationDegrees = 28d
             };
         }
 
@@ -189,7 +200,7 @@ namespace BatchPdfPublisher.BuildingModel
         }
 
         /// <summary>
-        /// 默认出图套图（A3 横 4 张）：每层平面各一张、四个立面一张、剖面 + 门窗表一张。
+        /// 默认出图套图（A3 横 5 张）：每层平面各一张、四个立面一张、剖面 + 门窗表一张、**轴测图一张**。
         /// 视图 id 与 <see cref="CreateDefaultViews"/> / <see cref="CreatePlanView"/> / <see cref="CreateScheduleView"/> 对应。
         /// </summary>
         public static List<SheetDefinitionModel> CreateDefaultSheets(BuildingModelDocument model)
@@ -227,6 +238,14 @@ namespace BatchPdfPublisher.BuildingModel
             sectionSheet.ViewIds.Add("section-1");
             sectionSheet.ViewIds.Add("schedule");
             sheets.Add(sectionSheet);
+
+            // 轴测图单独一张（"建施-05"）：三维体量投出来的可见轮廓，用来对体块关系
+            sheets.Add(new SheetDefinitionModel
+            {
+                Id = "sheet-axon", Number = "建施-" + (storeys.Count + 3).ToString("00"),
+                Title = "轴测图", Paper = "A3", Landscape = true,
+                ViewIds = { "axon-1" }
+            });
             return sheets;
         }
 
