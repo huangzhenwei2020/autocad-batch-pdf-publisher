@@ -10,6 +10,7 @@ internal static class Program
 {
     public static bool Smoke { get; private set; }
     public static string? SnapshotPath { get; private set; }
+    public static string? ModelPath { get; private set; }
 
     [STAThread]
     private static void Main(string[] args)
@@ -17,6 +18,8 @@ internal static class Program
         Smoke = args.Contains("--smoke", StringComparer.OrdinalIgnoreCase);
         var index = Array.IndexOf(args, "--snapshot");
         if (index >= 0 && index + 1 < args.Length) SnapshotPath = Path.GetFullPath(args[index + 1]);
+        index = Array.IndexOf(args, "--model");
+        if (index >= 0 && index + 1 < args.Length) ModelPath = Path.GetFullPath(args[index + 1]);
         AppBuilder.Configure<ProbeApp>().UsePlatformDetect().LogToTrace().StartWithClassicDesktopLifetime(args);
     }
 }

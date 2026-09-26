@@ -17,6 +17,7 @@ internal sealed class ModelViewport : OpenGlControlBase
     {
         public Vector3 Position;
         public Vector3 Color;
+        public float ElementIndex;
     }
 
     private readonly struct PickTriangle
@@ -31,14 +32,16 @@ internal sealed class ModelViewport : OpenGlControlBase
     {
         public readonly Vertex[] Vertices;
         public readonly PickTriangle[] Triangles;
-        public MeshSnapshot(Vertex[] vertices, PickTriangle[] triangles)
-        { Vertices = vertices; Triangles = triangles; }
+        public readonly Dictionary<string, float> ElementIndexes;
+        public MeshSnapshot(Vertex[] vertices, PickTriangle[] triangles, Dictionary<string, float> elementIndexes)
+        { Vertices = vertices; Triangles = triangles; ElementIndexes = elementIndexes; }
     }
 
     private volatile MeshSnapshot _snapshot;
     private MeshSnapshot? _uploaded;
     private BuildingVolume _volume;
     private string? _selectedId;
+    private float _selectedIndex;
     private int _program;
     private int _vertexShader;
     private int _fragmentShader;
@@ -46,8 +49,12 @@ internal sealed class ModelViewport : OpenGlControlBase
     private int _array;
     private float _yaw = 0.4f;
     private float _pitch = -0.2f;
+    private float _distance = 19.72f;
+    private Vector3 _target;
     private Point? _dragStart;
     private Point? _pressStart;
+    private bool _panning;
+    private bool _selecting;
     private bool _dragged;
     private volatile bool _frameRendered;
     public bool FrameRendered => _frameRendered;
@@ -56,27 +63,46 @@ internal sealed class ModelViewport : OpenGlControlBase
     public ModelViewport(BuildingVolume volume)
     {
         _volume = volume;
-        _snapshot = BuildSnapshot(volume, null);
+        _snapshot = BuildSnapshot(volume);
     }
 
     public void SetVolume(BuildingVolume volume)
     {
         _volume = volume;
-        _snapshot = BuildSnapshot(volume, _selectedId);
+        _snapshot = BuildSnapshot(volume);
+        _selectedIndex = _selectedId != null && _snapshot.ElementIndexes.TryGetValue(_selectedId, out var index)
+            ? index : 0f;
         RequestNextFrameRendering();
     }
 
     public void SelectElement(string? id)
     {
         _selectedId = id;
-        _snapshot = BuildSnapshot(_volume, id);
+        _selectedIndex = id != null && _snapshot.ElementIndexes.TryGetValue(id, out var index)
+            ? index : 0f;
         RequestNextFrameRendering();
     }
 
-    private static MeshSnapshot BuildSnapshot(BuildingVolume volume, string? selectedId)
+    public void ResetView()
+    {
+        _yaw = 0.4f;
+        _pitch = -0.2f;
+        _distance = 19.72f;
+        _target = Vector3.Zero;
+        RequestNextFrameRendering();
+    }
+
+    private Matrix4x4 CameraView()
+    {
+        var direction = Vector3.Normalize(new Vector3(11, 10, 13));
+        return Matrix4x4.CreateLookAt(_target + direction * _distance, _target, Vector3.UnitY);
+    }
+
+    private static MeshSnapshot BuildSnapshot(BuildingVolume volume)
     {
         var vertices = new List<Vertex>();
         var triangles = new List<PickTriangle>();
+        var elementIndexes = new Dictionary<string, float>(StringComparer.Ordinal);
         var center = volume.Center;
         var scale = (float)(10d / Math.Max(1d, volume.Diagonal));
         foreach (var face in volume.Faces)
@@ -92,26 +118,33 @@ internal sealed class ModelViewport : OpenGlControlBase
             var brightness = Math.Clamp(0.6f + (float)face.NormalZ * 0.2f
                 + (float)face.NormalX * 0.12f + (float)face.NormalY * 0.08f, 0.4f, 1f);
             color *= brightness;
-            if (face.ElementId == selectedId) color = new Vector3(1f, 0.72f, 0.18f);
+            var elementIndex = 0f;
+            if (!string.IsNullOrWhiteSpace(face.ElementId))
+            {
+                if (!elementIndexes.TryGetValue(face.ElementId, out elementIndex))
+                    elementIndexes.Add(face.ElementId, elementIndex = elementIndexes.Count + 1);
+            }
             for (var i = 1; i + 1 < face.Points.Count; i++)
             {
-                var a = ToVertex(face.Points[0], center, scale, color);
-                var b = ToVertex(face.Points[i], center, scale, color);
-                var c = ToVertex(face.Points[i + 1], center, scale, color);
+                var a = ToVertex(face.Points[0], center, scale, color, elementIndex);
+                var b = ToVertex(face.Points[i], center, scale, color, elementIndex);
+                var c = ToVertex(face.Points[i + 1], center, scale, color, elementIndex);
                 vertices.Add(a); vertices.Add(b); vertices.Add(c);
                 triangles.Add(new PickTriangle(a.Position, b.Position, c.Position, face.ElementId));
             }
         }
-        return new MeshSnapshot(vertices.ToArray(), triangles.ToArray());
+        return new MeshSnapshot(vertices.ToArray(), triangles.ToArray(), elementIndexes);
     }
 
-    private static Vertex ToVertex(Point3DModel point, Point3DModel center, float scale, Vector3 color)
+    private static Vertex ToVertex(Point3DModel point, Point3DModel center, float scale, Vector3 color,
+        float elementIndex)
         => new()
         {
             Position = new Vector3((float)(point.X - center.X) * scale,
                 (float)(point.Z - center.Z) * scale,
                 (float)(center.Y - point.Y) * scale),
-            Color = color
+            Color = color,
+            ElementIndex = elementIndex
         };
 
     private static string ShaderSource(GlVersion version, bool fragment, string body)
@@ -134,12 +167,15 @@ internal sealed class ModelViewport : OpenGlControlBase
         var vertexSource = ShaderSource(GlVersion, false, @"
             attribute vec3 aPos;
             attribute vec3 aColor;
+            attribute float aElement;
             varying vec3 vColor;
+            uniform float uSelectedElement;
             uniform mat4 uProjection;
             uniform mat4 uView;
             uniform mat4 uModel;
             void main() {
-                vColor = aColor;
+                vColor = uSelectedElement > 0.5 && abs(aElement - uSelectedElement) < 0.5
+                    ? vec3(1.0, 0.72, 0.18) : aColor;
                 gl_Position = uProjection * uView * uModel * vec4(aPos, 1.0);
             }");
         var fragmentSource = ShaderSource(GlVersion, true, @"
@@ -154,6 +190,7 @@ internal sealed class ModelViewport : OpenGlControlBase
         gl.AttachShader(_program, _fragmentShader);
         gl.BindAttribLocationString(_program, 0, "aPos");
         gl.BindAttribLocationString(_program, 1, "aColor");
+        gl.BindAttribLocationString(_program, 2, "aElement");
         var linkError = gl.LinkProgramAndGetError(_program);
         if (!string.IsNullOrWhiteSpace(vertexError) || !string.IsNullOrWhiteSpace(fragmentError)
             || !string.IsNullOrWhiteSpace(linkError))
@@ -166,8 +203,10 @@ internal sealed class ModelViewport : OpenGlControlBase
         gl.BindVertexArray(_array);
         gl.VertexAttribPointer(0, 3, GL_FLOAT, 0, sizeof(Vertex), IntPtr.Zero);
         gl.VertexAttribPointer(1, 3, GL_FLOAT, 0, sizeof(Vertex), new IntPtr(12));
+        gl.VertexAttribPointer(2, 1, GL_FLOAT, 0, sizeof(Vertex), new IntPtr(24));
         gl.EnableVertexAttribArray(0);
         gl.EnableVertexAttribArray(1);
+        gl.EnableVertexAttribArray(2);
     }
 
     private unsafe void Upload(GlInterface gl, MeshSnapshot snapshot)
@@ -204,11 +243,12 @@ internal sealed class ModelViewport : OpenGlControlBase
         var snapshot = _snapshot;
         if (!ReferenceEquals(snapshot, _uploaded)) Upload(gl, snapshot);
         var model = Matrix4x4.CreateFromYawPitchRoll(_yaw, _pitch, 0);
-        var view = Matrix4x4.CreateLookAt(new Vector3(11, 10, 13), Vector3.Zero, Vector3.UnitY);
+        var view = CameraView();
         var projection = Matrix4x4.CreatePerspectiveFieldOfView(0.8f, (float)width / height, 0.1f, 100f);
         gl.UniformMatrix4fv(gl.GetUniformLocationString(_program, "uModel"), 1, false, &model);
         gl.UniformMatrix4fv(gl.GetUniformLocationString(_program, "uView"), 1, false, &view);
         gl.UniformMatrix4fv(gl.GetUniformLocationString(_program, "uProjection"), 1, false, &projection);
+        gl.Uniform1f(gl.GetUniformLocationString(_program, "uSelectedElement"), _selectedIndex);
         gl.DrawArrays(GL_TRIANGLES, 0, snapshot.Vertices.Length);
         _frameRendered = gl.GetError() == GL_NO_ERROR && snapshot.Vertices.Length > 0;
     }
@@ -217,7 +257,7 @@ internal sealed class ModelViewport : OpenGlControlBase
     {
         if (Bounds.Width <= 0 || Bounds.Height <= 0) return null;
         var model = Matrix4x4.CreateFromYawPitchRoll(_yaw, _pitch, 0);
-        var view = Matrix4x4.CreateLookAt(new Vector3(11, 10, 13), Vector3.Zero, Vector3.UnitY);
+        var view = CameraView();
         var projection = Matrix4x4.CreatePerspectiveFieldOfView(0.8f,
             (float)(Bounds.Width / Bounds.Height), 0.1f, 100f);
         var transform = model * view * projection;
@@ -260,30 +300,61 @@ internal sealed class ModelViewport : OpenGlControlBase
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
         base.OnPointerPressed(e);
+        var properties = e.GetCurrentPoint(this).Properties;
+        _panning = properties.IsMiddleButtonPressed || properties.IsRightButtonPressed;
+        _selecting = properties.IsLeftButtonPressed && !_panning;
+        if (!_panning && !_selecting) return;
         _dragStart = e.GetPosition(this);
         _pressStart = _dragStart;
         _dragged = false;
+        e.Pointer.Capture(this);
     }
 
     protected override void OnPointerMoved(PointerEventArgs e)
     {
         base.OnPointerMoved(e);
-        if (_dragStart is not { } previous || !e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+        if (_dragStart is not { } previous) return;
+        var properties = e.GetCurrentPoint(this).Properties;
+        if (_panning ? !properties.IsMiddleButtonPressed && !properties.IsRightButtonPressed
+            : !properties.IsLeftButtonPressed) return;
         var now = e.GetPosition(this);
         if (_pressStart is { } start && (Math.Abs(now.X - start.X) > 4 || Math.Abs(now.Y - start.Y) > 4))
             _dragged = true;
-        _yaw += (float)(now.X - previous.X) * 0.008f;
-        _pitch += (float)(now.Y - previous.Y) * 0.008f;
+        if (_panning)
+        {
+            var forward = Vector3.Normalize(new Vector3(-11, -10, -13));
+            var right = Vector3.Normalize(Vector3.Cross(forward, Vector3.UnitY));
+            var up = Vector3.Normalize(Vector3.Cross(right, forward));
+            var unitsPerPixel = 2f * _distance * MathF.Tan(0.4f) / Math.Max(1f, (float)Bounds.Height);
+            _target += right * (float)(previous.X - now.X) * unitsPerPixel
+                + up * (float)(now.Y - previous.Y) * unitsPerPixel;
+        }
+        else
+        {
+            _yaw += (float)(now.X - previous.X) * 0.008f;
+            _pitch += (float)(now.Y - previous.Y) * 0.008f;
+        }
         _dragStart = now;
         RequestNextFrameRendering();
     }
 
+    protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
+    {
+        base.OnPointerWheelChanged(e);
+        _distance = Math.Clamp(_distance * MathF.Pow(0.85f, (float)e.Delta.Y), 2f, 200f);
+        RequestNextFrameRendering();
+        e.Handled = true;
+    }
+
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
-        if (!_dragged && _pressStart != null)
+        if (_selecting && !_dragged && _pressStart != null)
             ElementPicked?.Invoke(Pick(e.GetPosition(this)));
         _dragStart = null;
         _pressStart = null;
+        _panning = false;
+        _selecting = false;
+        if (e.Pointer.Captured == this) e.Pointer.Capture(null);
         base.OnPointerReleased(e);
     }
 }

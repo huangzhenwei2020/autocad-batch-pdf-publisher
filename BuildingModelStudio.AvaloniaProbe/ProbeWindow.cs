@@ -1,9 +1,11 @@
 using System.Globalization;
+using System.ComponentModel;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
+using Avalonia.Platform.Storage;
 using Avalonia.Rendering.Composition;
 using Avalonia.Threading;
 using BatchPdfPublisher.BuildingModel;
@@ -19,7 +21,7 @@ internal sealed class ProbeWindow : Window
         public override string ToString() => Label;
     }
 
-    private readonly BuildingModelEditSession _session;
+    private BuildingModelEditSession _session;
     private readonly ModelViewport _viewport;
     private readonly ListBox _elements = new();
     private readonly List<ElementItem> _items = new();
@@ -27,7 +29,13 @@ internal sealed class ProbeWindow : Window
     private readonly TextBlock _status = new();
     private readonly Button _undo = new() { Content = "撤销" };
     private readonly Button _redo = new() { Content = "重做" };
+    private readonly Button _publish = new() { Content = "生成 CAD 视图" };
     private string? _selectedId;
+    private string? _filePath;
+    private string _savedJson;
+    private bool _closeConfirmed;
+    private int _sceneGeneration;
+    private bool HasChanges => BuildingModelJson.ToJson(_session.Model) != _savedJson;
 
     public ProbeWindow()
     {
@@ -36,7 +44,10 @@ internal sealed class ProbeWindow : Window
         Height = 800;
         MinWidth = 800;
         MinHeight = 520;
-        _session = new BuildingModelEditSession(SampleModelFactory.CreateTwoStoreyHouse());
+        _filePath = Program.ModelPath;
+        _session = new BuildingModelEditSession(_filePath == null
+            ? SampleModelFactory.CreateTwoStoreyHouse() : BuildingModelJson.LoadModel(_filePath));
+        _savedJson = BuildingModelJson.ToJson(_session.Model);
         _viewport = new ModelViewport(BuildingVolumeBuilder.Build(_session.Model));
         _viewport.ElementPicked += SelectById;
 
@@ -60,10 +71,24 @@ internal sealed class ProbeWindow : Window
             FontWeight = FontWeight.SemiBold,
             VerticalAlignment = VerticalAlignment.Center
         });
-        _undo.Click += (_, _) => { if (_session.Undo()) RefreshModel("已撤销"); };
-        _redo.Click += (_, _) => { if (_session.Redo()) RefreshModel("已重做"); };
+        _undo.Click += async (_, _) => { if (_session.Undo()) await RefreshModelAsync("已撤销"); };
+        _redo.Click += async (_, _) => { if (_session.Redo()) await RefreshModelAsync("已重做"); };
         toolbar.Children.Add(_undo);
         toolbar.Children.Add(_redo);
+        var open = new Button { Content = "打开模型" };
+        open.Click += async (_, _) => await OpenModelAsync();
+        var save = new Button { Content = "保存" };
+        save.Click += async (_, _) => await SaveModelAsync(false);
+        var saveAs = new Button { Content = "另存为" };
+        saveAs.Click += async (_, _) => await SaveModelAsync(true);
+        var resetView = new Button { Content = "视图复位" };
+        resetView.Click += (_, _) => _viewport.ResetView();
+        toolbar.Children.Add(open);
+        toolbar.Children.Add(save);
+        toolbar.Children.Add(saveAs);
+        _publish.Click += async (_, _) => await PublishViewsAsync();
+        toolbar.Children.Add(_publish);
+        toolbar.Children.Add(resetView);
         Grid.SetColumnSpan(toolbar, 3);
         root.Children.Add(toolbar);
 
@@ -96,7 +121,7 @@ internal sealed class ProbeWindow : Window
         _status.Foreground = new SolidColorBrush(Color.Parse("#A4B8CF"));
         _status.VerticalAlignment = VerticalAlignment.Center;
         _status.Margin = new Thickness(14, 0);
-        _status.Text = "G1 技术探针 · 样例模型只在内存中编辑，不保存、不修改 CAD";
+        _status.Text = "左键选择/旋转 · 中键或右键平移 · 滚轮缩放 · 毫米单位";
         Grid.SetRow(_status, 2);
         Grid.SetColumnSpan(_status, 3);
         root.Children.Add(_status);
@@ -105,12 +130,142 @@ internal sealed class ProbeWindow : Window
         BuildElementList();
         SelectById("1F-S");
         RefreshHistoryButtons();
+        UpdateTitle();
+        Closing += OnClosing;
         ConfigureSmokeAndSnapshot();
+    }
+
+    private void UpdateTitle()
+    {
+        Title = $"万落建筑模型 · {(_filePath == null ? "未命名样例" : Path.GetFileName(_filePath))}{(HasChanges ? " *" : "")}";
+    }
+
+    private async Task OpenModelAsync()
+    {
+        if (!await ConfirmSavedAsync()) return;
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "打开建筑模型",
+            AllowMultiple = false,
+            FileTypeFilter = new[] { new FilePickerFileType("建筑模型 JSON") { Patterns = new[] { "*.json" } } }
+        });
+        if (files.Count == 0) return;
+        var path = files[0].TryGetLocalPath();
+        if (path == null) { _status.Text = "当前只支持本机文件路径。"; return; }
+        try
+        {
+            var loaded = await Task.Run(() =>
+            {
+                var session = new BuildingModelEditSession(BuildingModelJson.LoadModel(path));
+                return (session, volume: BuildingVolumeBuilder.Build(session.Model));
+            });
+            ++_sceneGeneration;
+            _session = loaded.session;
+            _filePath = path;
+            _savedJson = BuildingModelJson.ToJson(_session.Model);
+            _viewport.SetVolume(loaded.volume);
+            _viewport.ResetView();
+            BuildElementList();
+            SelectById(_items.FirstOrDefault()?.Id);
+            RefreshHistoryButtons();
+            UpdateTitle();
+            _status.Text = "已打开 " + path;
+        }
+        catch (Exception ex) { _status.Text = "打开失败：" + ex.Message; }
+    }
+
+    private async Task<bool> SaveModelAsync(bool saveAs)
+    {
+        var path = saveAs ? null : _filePath;
+        if (path == null)
+        {
+            var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+            {
+                Title = "保存建筑模型",
+                SuggestedFileName = _filePath == null ? "model.json" : Path.GetFileName(_filePath),
+                DefaultExtension = "json",
+                FileTypeChoices = new[] { new FilePickerFileType("建筑模型 JSON") { Patterns = new[] { "*.json" } } }
+            });
+            if (file == null) return false;
+            path = file.TryGetLocalPath();
+            if (path == null) { _status.Text = "当前只支持保存到本机文件路径。"; return false; }
+        }
+        try
+        {
+            var model = _session.Model;
+            await Task.Run(() => BuildingModelJson.SaveModel(path, model));
+            _filePath = path;
+            _savedJson = BuildingModelJson.ToJson(model);
+            UpdateTitle();
+            _status.Text = "已保存 " + path;
+            return true;
+        }
+        catch (Exception ex) { _status.Text = "保存失败：" + ex.Message; return false; }
+    }
+
+    private async Task PublishViewsAsync()
+    {
+        if (_filePath == null || !string.Equals(Path.GetFileName(_filePath), "model.json", StringComparison.OrdinalIgnoreCase))
+        {
+            _status.Text = "先用「另存为」将模型保存为项目的 建筑模型/<名称>/model.json。";
+            return;
+        }
+        if (HasChanges && !await SaveModelAsync(false)) return;
+        var path = _filePath;
+        var model = _session.Model;
+        _publish.IsEnabled = false;
+        _status.Text = "正在生成立面、剖面、平面与图纸视图…";
+        try
+        {
+            var count = await Task.Run(() => BuildingModelViewPublisher.Publish(path, model));
+            _status.Text = HasChanges
+                ? $"已生成 {count} 张视图，但生成期间模型又有修改，请再次生成。"
+                : $"已生成 {count} 张 CAD 视图 → {Path.Combine(Path.GetDirectoryName(path)!, "views")}";
+        }
+        catch (Exception ex) { _status.Text = "生成视图失败：" + ex.Message; }
+        finally { _publish.IsEnabled = true; }
+    }
+
+    private async Task<bool> ConfirmSavedAsync()
+    {
+        if (!HasChanges) return true;
+        var dialog = new Window
+        {
+            Title = "未保存的修改", Width = 390, Height = 155,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            CanResize = false
+        };
+        var content = new StackPanel { Margin = new Thickness(18), Spacing = 18 };
+        content.Children.Add(new TextBlock { Text = "模型有未保存的修改，是否先保存？" });
+        var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
+        foreach (var choice in new[] { ("保存", "save"), ("放弃修改", "discard"), ("取消", "cancel") })
+        {
+            var button = new Button { Content = choice.Item1 };
+            button.Click += (_, _) => dialog.Close(choice.Item2);
+            actions.Children.Add(button);
+        }
+        content.Children.Add(actions);
+        dialog.Content = content;
+        var result = await dialog.ShowDialog<string?>(this);
+        if (result == "discard") return true;
+        return result == "save" && await SaveModelAsync(false);
+    }
+
+    private async void OnClosing(object? sender, CancelEventArgs e)
+    {
+        if (_closeConfirmed || !HasChanges) return;
+        e.Cancel = true;
+        if (await ConfirmSavedAsync())
+        {
+            _closeConfirmed = true;
+            Close();
+        }
     }
 
     private void BuildElementList()
     {
         var model = _session.Model;
+        _elements.ItemsSource = null;
         _items.Clear();
         foreach (var floor in model.Storeys)
         {
@@ -163,7 +318,7 @@ internal sealed class ProbeWindow : Window
             _properties.Children.Add(field);
             _properties.Children.Add(new TextBlock { Text = $"厚度 {wall.Thickness:0.##} mm · 楼层 {wall.StoreyId}" });
             var apply = new Button { Content = "应用墙长" };
-            apply.Click += (_, _) => ApplyNumber(field.Text, value =>
+            apply.Click += async (_, _) => await ApplyNumberAsync(field.Text, value =>
             {
                 var success = _session.TrySetWallLength(wall.Id, value, out var error);
                 return (success, error);
@@ -180,7 +335,7 @@ internal sealed class ProbeWindow : Window
             _properties.Children.Add(field);
             _properties.Children.Add(new TextBlock { Text = $"宽 {opening.Width:0.##} · 高 {opening.Height:0.##} mm" });
             var apply = new Button { Content = "应用窗位" };
-            apply.Click += (_, _) => ApplyNumber(field.Text, value =>
+            apply.Click += async (_, _) => await ApplyNumberAsync(field.Text, value =>
             {
                 var success = _session.TrySetOpeningOffset(opening.Id, value, out var error);
                 return (success, error);
@@ -190,7 +345,7 @@ internal sealed class ProbeWindow : Window
         else _properties.Children.Add(new TextBlock { Text = "此构件当前只支持选择。" });
     }
 
-    private void ApplyNumber(string? text, Func<double, (bool success, string? error)> edit)
+    private async Task ApplyNumberAsync(string? text, Func<double, (bool success, string? error)> edit)
     {
         if (!double.TryParse(text, NumberStyles.Float, CultureInfo.CurrentCulture, out var value)
             && !double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value))
@@ -200,15 +355,28 @@ internal sealed class ProbeWindow : Window
         }
         var result = edit(value);
         if (!result.success) { _status.Text = result.error; return; }
-        RefreshModel("已更新构件 " + _selectedId);
+        await RefreshModelAsync("已更新构件 " + _selectedId);
     }
 
-    private void RefreshModel(string message)
+    private async Task RefreshModelAsync(string message)
     {
-        _viewport.SetVolume(BuildingVolumeBuilder.Build(_session.Model));
+        var generation = ++_sceneGeneration;
+        var model = _session.Model;
         RefreshProperties();
         RefreshHistoryButtons();
-        _status.Text = $"{message} · 修订 {_session.Revision} · 仅内存试验";
+        UpdateTitle();
+        _status.Text = message + " · 正在重建三维视图…";
+        try
+        {
+            var volume = await Task.Run(() => BuildingVolumeBuilder.Build(model));
+            if (generation != _sceneGeneration) return;
+            _viewport.SetVolume(volume);
+            _status.Text = $"{message} · 修订 {_session.Revision}{(HasChanges ? " · 未保存" : "")}";
+        }
+        catch (Exception ex)
+        {
+            if (generation == _sceneGeneration) _status.Text = "三维重建失败：" + ex.Message;
+        }
     }
 
     private void RefreshHistoryButtons()
