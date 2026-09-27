@@ -23,8 +23,18 @@ internal sealed class ProbeWindow : Window
         public override string ToString() => Label;
     }
 
+    private sealed class StoreyItem
+    {
+        public string Id = "";
+        public string Name = "";
+        public override string ToString() => Name;
+    }
+
     private BuildingModelEditSession _session;
     private readonly ModelViewport _viewport;
+    private readonly PlanEditorCanvas _planCanvas = new();
+    private readonly TabControl _workspaces = new();
+    private readonly ComboBox _storeyChooser = new() { Width = 130 };
     private readonly ListBox _elements = new();
     private readonly List<ElementItem> _items = new();
     private readonly StackPanel _properties = new() { Margin = new Thickness(16), Spacing = 12 };
@@ -33,10 +43,12 @@ internal sealed class ProbeWindow : Window
     private readonly Button _redo = new() { Content = "重做" };
     private readonly Button _publish = new() { Content = "生成 CAD 视图" };
     private readonly Button _sendToCad = new() { Content = "推到 CAD" };
+    private CancellationTokenSource? _publishCancellation;
     private string? _selectedId;
     private string? _filePath;
     private string _savedJson;
     private bool _closeConfirmed;
+    private bool _refreshingStoreys;
     private int _sceneGeneration;
     private bool HasChanges => BuildingModelJson.ToJson(_session.Model) != _savedJson;
 
@@ -51,6 +63,25 @@ internal sealed class ProbeWindow : Window
         _savedJson = BuildingModelJson.ToJson(_session.Model);
         _viewport = new ModelViewport(BuildingVolumeBuilder.Build(_session.Model));
         _viewport.ElementPicked += SelectById;
+        _planCanvas.ElementPicked += SelectById;
+        _planCanvas.WallRequested += async (start, end) =>
+        {
+            if (!_session.TryAddWall(new WallModel
+            {
+                StoreyId = (_storeyChooser.SelectedItem as StoreyItem)?.Id ?? "1F",
+                X1 = start.X, Y1 = start.Y, X2 = end.X, Y2 = end.Y, Thickness = 240
+            }, out var id, out var error)) { _status.Text = error; return; }
+            _selectedId = id;
+            await RefreshModelAsync("已新增墙");
+        };
+        _planCanvas.OpeningRequested += async (kind, wallId, offset) =>
+        {
+            var opening = PlanEditing.CreateOpening(kind, wallId, offset);
+            if (!_session.TryAddOpening(opening, out var id, out var error))
+            { _status.Text = error; return; }
+            _selectedId = id;
+            await RefreshModelAsync("已新增" + kind);
+        };
 
         var root = new Grid
         {
@@ -91,6 +122,9 @@ internal sealed class ProbeWindow : Window
         _sendToCad.Click += async (_, _) => await PublishViewsAsync(true);
         toolbar.Children.Add(_publish);
         toolbar.Children.Add(_sendToCad);
+        var cancelPublish = new Button { Content = "取消生成" };
+        cancelPublish.Click += (_, _) => _publishCancellation?.Cancel();
+        toolbar.Children.Add(cancelPublish);
         toolbar.Children.Add(resetView);
         Grid.SetColumnSpan(toolbar, 3);
         root.Children.Add(toolbar);
@@ -143,9 +177,61 @@ internal sealed class ProbeWindow : Window
             e.Handled = true;
         };
         viewportHost.Children.Add(viewportInput);
-        Grid.SetRow(viewportHost, 1);
-        Grid.SetColumn(viewportHost, 1);
-        root.Children.Add(viewportHost);
+
+        var planLayout = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
+        var planTools = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(8)
+        };
+        planTools.Children.Add(new TextBlock { Text = "楼层", VerticalAlignment = VerticalAlignment.Center });
+        _storeyChooser.SelectionChanged += (_, _) =>
+        {
+            if (!_refreshingStoreys && _storeyChooser.SelectedItem is StoreyItem floor)
+                _planCanvas.SetStorey(floor.Id);
+        };
+        planTools.Children.Add(_storeyChooser);
+        foreach (var (label, tool) in new[]
+        {
+            ("选择", PlanTool.Select), ("画墙", PlanTool.Wall),
+            ("放门", PlanTool.Door), ("放窗", PlanTool.Window)
+        })
+        {
+            var button = new Button { Content = label };
+            button.Click += (_, _) =>
+            {
+                _planCanvas.Tool = tool;
+                _planCanvas.CancelDraft();
+                _status.Text = tool == PlanTool.Wall ? "画墙：连续点墙轴线端点，Esc 结束。"
+                    : tool == PlanTool.Select ? "点击墙或门窗选择构件。"
+                    : "请点选宿主墙上的位置放" + label.Substring(1) + "。";
+                _planCanvas.Focus();
+            };
+            planTools.Children.Add(button);
+        }
+        var delete = new Button { Content = "删除选中" };
+        delete.Click += async (_, _) =>
+        {
+            if (!_session.TryDeleteElement(_selectedId ?? "", out var error))
+            { _status.Text = error; return; }
+            _selectedId = null;
+            await RefreshModelAsync("已删除构件");
+        };
+        planTools.Children.Add(delete);
+        var fitPlan = new Button { Content = "缩放适应" };
+        fitPlan.Click += (_, _) => _planCanvas.Fit();
+        planTools.Children.Add(fitPlan);
+        planLayout.Children.Add(planTools);
+        Grid.SetRow(_planCanvas, 1);
+        planLayout.Children.Add(_planCanvas);
+
+        _workspaces.Items.Add(new TabItem { Header = "建筑建模", Content = viewportHost });
+        _workspaces.Items.Add(new TabItem { Header = "平面编辑", Content = planLayout });
+        _workspaces.Items.Add(new TabItem { Header = "立面编辑", IsEnabled = false });
+        _workspaces.Items.Add(new TabItem { Header = "剖面编辑", IsEnabled = false });
+        _workspaces.Items.Add(new TabItem { Header = "图纸发布", IsEnabled = false });
+        Grid.SetRow(_workspaces, 1);
+        Grid.SetColumn(_workspaces, 1);
+        root.Children.Add(_workspaces);
 
         var propertyScroll = new ScrollViewer { Content = _properties };
         Grid.SetRow(propertyScroll, 1);
@@ -162,10 +248,12 @@ internal sealed class ProbeWindow : Window
         Content = root;
 
         BuildElementList();
+        RefreshStoreys();
         SelectById("1F-S");
         RefreshHistoryButtons();
         UpdateTitle();
         Closing += OnClosing;
+        Closed += (_, _) => _publishCancellation?.Cancel();
         if (Program.GpuBenchCount > 0) Opened += async (_, _) => await RunGpuBenchmarkAsync(Program.GpuBenchCount);
         else if (Program.ModelPath == null) ConfigureSmokeAndSnapshot();
         else Opened += async (_, _) =>
@@ -236,6 +324,8 @@ internal sealed class ProbeWindow : Window
             _viewport.SetScene(loaded.scene);
             _viewport.ResetView();
             BuildElementList();
+            RefreshStoreys();
+            _planCanvas.Fit();
             SelectById(_items.FirstOrDefault()?.Id);
             RefreshHistoryButtons();
             UpdateTitle();
@@ -268,19 +358,21 @@ internal sealed class ProbeWindow : Window
         }
         try
         {
-            var model = _session.Model;
-            await Task.Run(() => BuildingModelJson.SaveModel(path, model));
+            var snapshotJson = BuildingModelJson.ToJson(_session.Model);
+            await Task.Run(() => BuildingModelJson.SaveModel(path, BuildingModelJson.FromJson(snapshotJson)));
             _filePath = path;
-            _savedJson = BuildingModelJson.ToJson(model);
+            _savedJson = snapshotJson;
             UpdateTitle();
-            _status.Text = "已保存 " + path;
-            return true;
+            var current = BuildingModelJson.ToJson(_session.Model) == snapshotJson;
+            _status.Text = current ? "已保存 " + path : "保存期间模型又有修改；当前版本仍需保存。";
+            return current;
         }
         catch (Exception ex) { _status.Text = "保存失败：" + ex.Message; return false; }
     }
 
     private async Task PublishViewsAsync(bool markForCad)
     {
+        if (_publishCancellation != null) return;
         if (_filePath == null || !string.Equals(Path.GetFileName(_filePath), "model.json", StringComparison.OrdinalIgnoreCase))
         {
             _status.Text = "先用「另存为」将模型保存为项目的 建筑模型/<名称>/model.json。";
@@ -288,29 +380,99 @@ internal sealed class ProbeWindow : Window
         }
         if (HasChanges && !await SaveModelAsync(false)) return;
         var path = _filePath;
-        var model = _session.Model;
+        var session = _session;
+        var revision = session.Revision;
+        var snapshotJson = BuildingModelJson.ToJson(session.Model);
+        var modelFolder = Path.GetDirectoryName(path)!;
+        var cancellation = new CancellationTokenSource();
+        _publishCancellation = cancellation;
+        string? staging = null;
+        string? backup = null;
+        var published = false;
         _publish.IsEnabled = false;
         _sendToCad.IsEnabled = false;
         _status.Text = "正在生成立面、剖面、平面与图纸视图…";
         try
         {
+            var result = await Task.Run(() =>
+            {
+                var token = cancellation.Token;
+                var model = BuildingModelJson.FromJson(snapshotJson);
+                var libraryPath = Path.Combine(modelFolder, "openings.json");
+                var library = File.Exists(libraryPath)
+                    ? BuildingModelJson.LoadOpeningLibrary(libraryPath) : null;
+                var views = BuildingModelViewPublisher.Generate(model, library, token.ThrowIfCancellationRequested);
+                var stage = Path.Combine(modelFolder, ".views-staging-" + Guid.NewGuid().ToString("N"));
+                try
+                {
+                    Directory.CreateDirectory(stage);
+                    foreach (var view in views)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        BuildingModelJson.SaveView(Path.Combine(stage, view.Id + ".json"), view);
+                    }
+                    token.ThrowIfCancellationRequested();
+                    return (folder: stage, views);
+                }
+                catch
+                {
+                    if (Directory.Exists(stage)) Directory.Delete(stage, true);
+                    throw;
+                }
+            }, cancellation.Token);
+            staging = result.folder;
+            if (cancellation.IsCancellationRequested || !ReferenceEquals(_session, session)
+                || session.Revision != revision || _filePath != path
+                || BuildingModelJson.ToJson(session.Model) != snapshotJson)
+            {
+                _status.Text = "生成期间模型或项目已变化，旧结果已丢弃。";
+                return;
+            }
+            var viewsFolder = Path.Combine(modelFolder, StudioLaunch.ViewsFolderName);
+            var chosen = markForCad
+                ? result.views.Where(view => view.Kind == ViewKind.Sheet).ToArray() : Array.Empty<ViewDocument>();
+            if (markForCad && chosen.Length == 0) chosen = result.views.ToArray();
             if (markForCad)
             {
-                var result = await Task.Run(() => BuildingModelViewPublisher.PublishToCad(path, model));
-                _status.Text = HasChanges
-                    ? "生成期间模型又有修改，请重新推到 CAD。"
-                    : $"已生成 {result.ViewCount} 张视图，待落图 {result.PendingCount} 张；回到 CAD 执行 LTTZ。";
+                if (!StudioLaunch.WritePendingFile(Path.Combine(staging, StudioLaunch.PendingFileName),
+                    chosen.Select(view => new StudioPendingEntry
+                    { Id = view.Id, FilePath = Path.Combine(viewsFolder, view.Id + ".json") })))
+                    throw new IOException("写入 CAD 待落图清单失败。");
             }
-            else
+            cancellation.Token.ThrowIfCancellationRequested();
+            backup = Path.Combine(modelFolder, ".views-backup-" + Guid.NewGuid().ToString("N"));
+            if (Directory.Exists(viewsFolder)) Directory.Move(viewsFolder, backup);
+            try { Directory.Move(staging, viewsFolder); }
+            catch
             {
-                var count = await Task.Run(() => BuildingModelViewPublisher.Publish(path, model));
-                _status.Text = HasChanges
-                    ? $"已生成 {count} 张视图，但生成期间模型又有修改，请再次生成。"
-                    : $"已生成 {count} 张 CAD 视图 → {Path.Combine(Path.GetDirectoryName(path)!, "views")}";
+                if (Directory.Exists(backup)) Directory.Move(backup, viewsFolder);
+                throw;
             }
+            staging = null;
+            published = true;
+            if (markForCad)
+                _status.Text = $"已生成 {result.views.Count} 张视图，待落图 {chosen.Length} 张；回到 CAD 执行 LTTZ。";
+            else _status.Text = $"已生成 {result.views.Count} 张 CAD 视图 → {viewsFolder}";
         }
+        catch (OperationCanceledException) { _status.Text = "视图生成已取消。"; }
         catch (Exception ex) { _status.Text = "生成视图失败：" + ex.Message; }
-        finally { _publish.IsEnabled = true; _sendToCad.IsEnabled = true; }
+        finally
+        {
+            if (staging != null && Directory.Exists(staging))
+            {
+                try { Directory.Delete(staging, true); }
+                catch (Exception ex) { _status.Text += " 临时文件清理失败：" + ex.Message; }
+            }
+            if (published && backup != null && Directory.Exists(backup))
+            {
+                try { Directory.Delete(backup, true); }
+                catch (Exception ex) { _status.Text += " 旧视图备份保留在：" + backup + "（" + ex.Message + "）"; }
+            }
+            if (ReferenceEquals(_publishCancellation, cancellation)) _publishCancellation = null;
+            cancellation.Dispose();
+            _publish.IsEnabled = true;
+            _sendToCad.IsEnabled = true;
+        }
     }
 
     private async Task<bool> ConfirmSavedAsync()
@@ -386,6 +548,21 @@ internal sealed class ProbeWindow : Window
         _elements.ItemsSource = _items;
     }
 
+    private void RefreshStoreys()
+    {
+        var previous = (_storeyChooser.SelectedItem as StoreyItem)?.Id;
+        _refreshingStoreys = true;
+        try
+        {
+        _storeyChooser.ItemsSource = _session.Model.Storeys.Select(s => new StoreyItem
+        { Id = s.Id, Name = s.Name + "  (" + s.Elevation.ToString("0") + " mm)" }).ToList();
+        _storeyChooser.SelectedItem = (_storeyChooser.ItemsSource as IEnumerable<StoreyItem>)?
+            .FirstOrDefault(s => s.Id == previous) ?? (_storeyChooser.ItemsSource as IEnumerable<StoreyItem>)?.FirstOrDefault();
+        }
+        finally { _refreshingStoreys = false; }
+        _planCanvas.SetModel(_session.Model, (_storeyChooser.SelectedItem as StoreyItem)?.Id ?? "1F");
+    }
+
     private void SelectById(string? id)
     {
         var item = _items.FirstOrDefault(x => x.Id == id);
@@ -396,6 +573,7 @@ internal sealed class ProbeWindow : Window
         }
         _selectedId = item?.Id;
         _viewport.SelectElement(_selectedId);
+        _planCanvas.SetSelection(_selectedId);
         RefreshProperties();
     }
 
@@ -478,6 +656,10 @@ internal sealed class ProbeWindow : Window
     {
         var generation = ++_sceneGeneration;
         var model = _session.Model;
+        var selected = _selectedId;
+        BuildElementList();
+        RefreshStoreys();
+        SelectById(selected);
         RefreshProperties();
         RefreshHistoryButtons();
         UpdateTitle();
@@ -578,8 +760,9 @@ internal sealed class ProbeWindow : Window
                 && _session.Model.Columns.Count == 0 && _session.Model.Slabs.Count == 0;
             if (!_viewport.FrameRendered && !emptyProject && DateTime.UtcNow - started < TimeSpan.FromSeconds(12)) return;
             timer.Stop();
-            if (Program.SnapshotPath != null && _viewport.FrameRendered)
+            if (Program.SnapshotPath != null && (_viewport.FrameRendered || emptyProject))
             {
+                if (Program.SnapshotPlan) _workspaces.SelectedIndex = 1;
                 await Task.Delay(200);
                 var visual = ElementComposition.GetElementVisual(this);
                 if (visual == null) throw new InvalidOperationException("Composition visual unavailable");

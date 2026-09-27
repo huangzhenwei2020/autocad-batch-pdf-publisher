@@ -16,6 +16,74 @@ namespace BatchPdfPublisher.BuildingModel
         public bool CanUndo { get { return _history.CanUndo; } }
         public bool CanRedo { get { return _history.CanRedo; } }
 
+        public bool TryAddWall(WallModel source, out string id, out string error)
+        {
+            id = null;
+            error = null;
+            if (source == null) { error = "墙为空。"; return false; }
+            if (Model.FindStorey(source.StoreyId) == null) { error = "墙所属楼层不存在。"; return false; }
+            if (!Finite(source.X1) || !Finite(source.Y1) || !Finite(source.X2) || !Finite(source.Y2)
+                || !Finite(source.Thickness) || !Finite(source.Height) || source.Height < 0d)
+            { error = "墙的坐标、厚度和高度必须是有限且有效的数值。"; return false; }
+            error = PlanEditing.ValidateWall(source);
+            if (error != null) return false;
+            var candidate = Clone(Model);
+            var wall = new WallModel
+            {
+                Id = "W-" + Guid.NewGuid().ToString("N"), StoreyId = source.StoreyId,
+                X1 = source.X1, Y1 = source.Y1, X2 = source.X2, Y2 = source.Y2,
+                Thickness = source.Thickness, Height = source.Height, Material = source.Material
+            };
+            candidate.Walls.Add(wall);
+            Commit(candidate);
+            id = wall.Id;
+            return true;
+        }
+
+        public bool TryAddOpening(OpeningModel source, out string id, out string error)
+        {
+            id = null;
+            error = null;
+            if (source == null) { error = "洞口为空。"; return false; }
+            var wall = Model.Walls.FirstOrDefault(x => x != null && Same(x.Id, source.HostWallId));
+            if (wall == null) { error = "门窗的宿主墙不存在。"; return false; }
+            var candidate = Clone(Model);
+            var opening = new OpeningModel
+            {
+                Id = "O-" + Guid.NewGuid().ToString("N"), HostWallId = wall.Id,
+                Kind = source.Kind, Code = source.Code, Offset = source.Offset,
+                Width = source.Width, Height = source.Height, Sill = source.Sill
+            };
+            candidate.Openings.Add(opening);
+            error = ValidateOpeningGeometry(candidate,
+                candidate.Walls.First(x => Same(x.Id, wall.Id)), opening);
+            if (error != null) return false;
+            Commit(candidate);
+            id = opening.Id;
+            return true;
+        }
+
+        public bool TryDeleteElement(string id, out string error)
+        {
+            error = null;
+            if (string.IsNullOrWhiteSpace(id)) { error = "尚未选择构件。"; return false; }
+            var candidate = Clone(Model);
+            var wall = candidate.Walls.FirstOrDefault(x => x != null && Same(x.Id, id));
+            if (wall != null)
+            {
+                candidate.Openings.RemoveAll(x => x != null && Same(x.HostWallId, wall.Id));
+                candidate.Walls.Remove(wall);
+            }
+            else
+            {
+                var opening = candidate.Openings.FirstOrDefault(x => x != null && Same(x.Id, id));
+                if (opening == null) { error = "当前只能删除墙或门窗；未找到构件：" + id; return false; }
+                candidate.Openings.Remove(opening);
+            }
+            Commit(candidate);
+            return true;
+        }
+
         public BuildingModelEditSession(BuildingModelDocument source)
         {
             if (source == null) throw new ArgumentNullException(nameof(source));

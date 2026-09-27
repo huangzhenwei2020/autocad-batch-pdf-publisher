@@ -83,6 +83,12 @@ namespace BatchPdfPublisher.BuildingModel
         {
             var file = PendingFilePath(modelFolder);
             if (string.IsNullOrWhiteSpace(file)) return false;
+            return WritePendingFile(file, entries);
+        }
+
+        public static bool WritePendingFile(string file, IEnumerable<StudioPendingEntry> entries)
+        {
+            if (string.IsNullOrWhiteSpace(file)) return false;
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(file));

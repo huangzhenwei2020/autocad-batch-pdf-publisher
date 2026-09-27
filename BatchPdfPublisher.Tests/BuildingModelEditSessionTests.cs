@@ -7,6 +7,7 @@ internal static class BuildingModelEditSessionTests
 {
     public static void Run()
     {
+        AddDeleteAndRestoreModel();
         var session = new BuildingModelEditSession(SampleModelFactory.CreateTwoStoreyHouse());
         var wallId = "1F-S";
         var openingId = "1F-S-C1518";
@@ -145,6 +146,31 @@ internal static class BuildingModelEditSessionTests
         Console.WriteLine("PASS 模型文件：编辑后保存/重新打开保留参数与 ID，覆盖保存保留备份");
         Console.WriteLine("PASS CAD 视图再生：墙长修改传递到立面，剖面和图纸落盘可重新读取");
         Console.WriteLine("PASS CAD 待落图：优先标记图纸，CAD 清单识别，落图后待办递减");
+    }
+
+    private static void AddDeleteAndRestoreModel()
+    {
+        var session = new BuildingModelEditSession(SampleModelFactory.CreateEmptyModel("空项目"));
+        string wallId, openingId, error;
+        Assert(session.TryAddWall(new WallModel
+        {
+            StoreyId = "1F", X1 = 0, Y1 = 0, X2 = 5000, Y2 = 0, Thickness = 240
+        }, out wallId, out error), "新建墙失败：" + error);
+        var window = PlanEditing.CreateOpening("窗", wallId, 2500);
+        Assert(session.TryAddOpening(window, out openingId, out error), "新建窗失败：" + error);
+        Assert(!session.TryAddOpening(PlanEditing.CreateOpening("门", wallId, 2500), out _, out error)
+            && error.Contains("重叠"), "重叠门未被拒绝");
+        var revision = session.Revision;
+        Assert(!session.TryAddWall(new WallModel { StoreyId = "2F", X1 = double.NaN, X2 = 5000 },
+            out _, out error) && session.Revision == revision, "非法墙修改了模型");
+        Assert(session.TryDeleteElement(wallId, out error) && session.Model.Walls.Count == 0
+            && session.Model.Openings.Count == 0, "删墙没有一并删除宿主洞口");
+        Assert(session.Undo() && session.Model.Walls.Single().Id == wallId
+            && session.Model.Openings.Single().Id == openingId, "撤销删墙未恢复 ID 和洞口");
+        Assert(session.Redo() && session.Model.Walls.Count == 0, "重做删墙失败");
+        Assert(session.Undo() && session.Model.Openings.Single().HostWallId == wallId,
+            "重新撤销后门窗宿主错误");
+        Console.WriteLine("PASS 新版公共编辑：增墙开窗、非法输入回滚、删墙级联与撤销重做");
     }
 
     private static double Length(BuildingModelDocument model, string id)

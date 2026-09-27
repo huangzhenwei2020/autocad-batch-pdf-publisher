@@ -15,6 +15,7 @@ internal static class Program
     public static bool SmokeFailed { get; set; }
     public static int GpuBenchCount { get; private set; }
     public static string? SnapshotPath { get; private set; }
+    public static bool SnapshotPlan { get; private set; }
     public static string? ModelPath { get; private set; }
     public static bool CreateMissingProjectModel { get; private set; }
     public static string? ProjectModelName { get; private set; }
@@ -43,6 +44,12 @@ internal static class Program
         Smoke = args.Contains("--smoke", StringComparer.OrdinalIgnoreCase);
         var index = Array.IndexOf(args, "--snapshot");
         if (index >= 0 && index + 1 < args.Length) SnapshotPath = Path.GetFullPath(args[index + 1]);
+        index = Array.IndexOf(args, "--snapshot-plan");
+        if (index >= 0 && index + 1 < args.Length)
+        {
+            SnapshotPath = Path.GetFullPath(args[index + 1]);
+            SnapshotPlan = true;
+        }
         var projectIndex = Array.IndexOf(args, "--project");
         var modelIndex = Array.IndexOf(args, "--model");
         if (projectIndex >= 0)
