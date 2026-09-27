@@ -64,8 +64,10 @@ internal sealed class ProbeWindow : Window
         MinHeight = 520;
         _session = new BuildingModelEditSession(SampleModelFactory.CreateTwoStoreyHouse());
         _savedJson = BuildingModelJson.ToJson(_session.Model);
-        _viewport = new ModelViewport(BuildingVolumeBuilder.Build(_session.Model));
+        var initialVolume = BuildingVolumeBuilder.Build(_session.Model);
+        _viewport = new ModelViewport(initialVolume);
         _gizmo = new ViewportTransformOverlay(_viewport);
+        _gizmo.SetAxes(initialVolume);
         _gizmo.PreviewChanged += value => _status.Text = value + " · 松开鼠标提交，Esc 取消";
         _gizmo.TransformFinished += async (id, dx, dy, angle, copy) =>
         {
@@ -138,7 +140,7 @@ internal sealed class ProbeWindow : Window
         var saveAs = new Button { Content = "另存为" };
         saveAs.Click += async (_, _) => await SaveModelAsync(true);
         var resetView = new Button { Content = "视图复位" };
-        resetView.Click += (_, _) => _viewport.ResetView();
+        resetView.Click += (_, _) => { _viewport.ResetView(); _gizmo.InvalidateVisual(); };
         toolbar.Children.Add(open);
         toolbar.Children.Add(save);
         toolbar.Children.Add(saveAs);
@@ -405,6 +407,7 @@ internal sealed class ProbeWindow : Window
             _filePath = path;
             _savedJson = BuildingModelJson.ToJson(_session.Model);
             _viewport.SetScene(loaded.scene);
+            _gizmo.SetAxes(loaded.scene.Volume);
             _viewport.ResetView();
             BuildElementList();
             RefreshStoreys();
@@ -830,6 +833,7 @@ internal sealed class ProbeWindow : Window
             var scene = await Task.Run(() => ModelViewport.PrepareScene(BuildingVolumeBuilder.Build(model)));
             if (generation != _sceneGeneration) return;
             _viewport.SetScene(scene);
+            _gizmo.SetAxes(scene.Volume);
             _gizmo.InvalidateVisual();
             _status.Text = $"{message} · 修订 {_session.Revision}{(HasChanges ? " · 未保存" : "")}";
         }

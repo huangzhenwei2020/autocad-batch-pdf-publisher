@@ -25,6 +25,7 @@ internal sealed class PlanEditorCanvas : Control
     private bool _gripMoved;
     private Dictionary<string, WallEndpointMove>? _gripPreview;
     private readonly List<(WallModel horizontal, WallModel vertical)> _orthogonalJunctions = new();
+    private List<AxisModel> _resolvedAxes = new();
     private double _scale = 0.07;
     private double _centerX;
     private double _centerY;
@@ -48,6 +49,7 @@ internal sealed class PlanEditorCanvas : Control
         _model = model;
         _storeyId = storeyId;
         _gripPreview = null;
+        _resolvedAxes = BuildingAxisLayout.Resolve(model);
         IndexOrthogonalJunctions();
         if (!_fitted) Fit();
         InvalidateVisual();
@@ -435,7 +437,7 @@ internal sealed class PlanEditorCanvas : Control
         var brush = new SolidColorBrush(Color.Parse("#6A9AA8"));
         var pen = new Pen(brush, 1, new DashStyle(new[] { 10d, 4d, 2d, 4d }, 0));
         var labelBrush = new SolidColorBrush(Color.Parse("#B3D8E1"));
-        foreach (var axis in _model.Axes ?? new List<AxisModel>())
+        foreach (var axis in _resolvedAxes)
         {
             if (axis == null || double.IsNaN(axis.Position) || double.IsInfinity(axis.Position)) continue;
             var named = !string.IsNullOrWhiteSpace(axis.Name);

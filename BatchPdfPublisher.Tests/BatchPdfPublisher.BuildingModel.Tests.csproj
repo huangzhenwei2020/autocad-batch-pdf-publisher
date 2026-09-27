@@ -23,6 +23,7 @@
     <Compile Include="..\Shared\BuildingModel\BuildingModelJson.cs" Link="Shared\BuildingModelJson.cs" />
     <Compile Include="..\Shared\BuildingModel\ModelEditHistory.cs" Link="Shared\ModelEditHistory.cs" />
     <Compile Include="..\Shared\BuildingModel\PlanEditing.cs" Link="Shared\PlanEditing.cs" />
+    <Compile Include="..\Shared\BuildingModel\BuildingAxisLayout.cs" Link="Shared\BuildingAxisLayout.cs" />
     <Compile Include="..\Shared\BuildingModel\OrthographicProjector.cs" Link="Shared\OrthographicProjector.cs" />
     <Compile Include="..\Shared\BuildingModel\SheetComposer.cs" Link="Shared\SheetComposer.cs" />
     <Compile Include="..\Shared\BuildingModel\StudioLaunch.cs" Link="Shared\StudioLaunch.cs" />

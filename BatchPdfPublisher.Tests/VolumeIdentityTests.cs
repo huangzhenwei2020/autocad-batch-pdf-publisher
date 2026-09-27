@@ -37,6 +37,7 @@ internal static class VolumeIdentityTests
         CheckOrthogonalTJoint();
         CheckWallReferencePlacement();
         MeasureJunctionGrid();
+        CheckSharedAxesAndCadJunction();
         Console.WriteLine("PASS 三维体量构件身份：样例墙/门窗/板/柱可追溯，参数修改后 ID 稳定");
     }
 
@@ -77,7 +78,7 @@ internal static class VolumeIdentityTests
         var left = BuildingVolumeBuilder.Build(model);
         Assert(Math.Abs(left.MinY + 200) < 1e-6 && Math.Abs(left.MaxY) < 1e-6,
             "左面定位轴线应落在墙实体的左侧边界");
-        Assert(left.GuideLines.Count == 2 && left.GuideLines.Any(g => g.ElementId == "axis-wall"
+        Assert(left.GuideLines.Count == 3 && left.GuideLines.Any(g => g.ElementId == "axis-wall"
             && Math.Abs(g.Start.Y) < 1e-6), "墙轴线与建筑轴网未送到三维地面参考线");
         var session = new BuildingModelEditSession(model);
         Assert(session.TrySetWallAxisPlacement("axis-wall", WallAxisPlacement.RightFace, out var error),
@@ -130,6 +131,45 @@ internal static class VolumeIdentityTests
             "正交墙网生成了异常数量的面：" + volume.Faces.Count);
         Console.WriteLine("PASS 正交墙网：40 道墙，" + volume.Faces.Count + " 面，建模 "
             + watch.ElapsedMilliseconds + " ms（当前机器）");
+    }
+
+    private static void CheckSharedAxesAndCadJunction()
+    {
+        var model = SampleModelFactory.CreateEmptyModel("轴网与 CAD 墙角");
+        model.Storeys.Add(new StoreyModel { Id = "2F", Name = "二层", Elevation = 3600, Height = 3300 });
+        model.Walls.Add(new WallModel { Id = "one-horizontal", StoreyId = "1F",
+            X1 = -1000, Y1 = 0, X2 = 0, Y2 = 0, Thickness = 200 });
+        model.Walls.Add(new WallModel { Id = "one-vertical", StoreyId = "1F",
+            X1 = 0, Y1 = 0, X2 = 0, Y2 = 1000, Thickness = 200 });
+        model.Walls.Add(new WallModel { Id = "two-horizontal", StoreyId = "2F",
+            X1 = -1000, Y1 = 0, X2 = 0, Y2 = 0, Thickness = 200 });
+        var axes = BuildingAxisLayout.Resolve(model);
+        var shared = axes.Where(a => !a.Vertical && Math.Abs(a.Position) < 1e-6).ToArray();
+        Assert(shared.Length == 1 && !string.IsNullOrWhiteSpace(shared[0].Name),
+            "跨楼层重合墙轴线应共用一条带编号的轴线");
+        ViewDocument Plan(string storey) => OrthographicProjector.ProjectPlan(model,
+            new ViewDefinitionModel { Id = "plan-" + storey, Title = storey + "平面",
+                Kind = ViewKind.Plan, Scale = 100,
+                StoreyIds = new System.Collections.Generic.List<string> { storey } }, null);
+        var first = Plan("1F");
+        var second = Plan("2F");
+        Assert(first.Anchors.Any(a => a.Kind == "axis" && a.ElementId == shared[0].Id)
+            && second.Anchors.Any(a => a.Kind == "axis" && a.ElementId == shared[0].Id),
+            "CAD 两层平面未引用同一轴线 ID");
+        Assert(first.Texts.Any(t => t.Layer == ViewLayers.Axis && t.Text == shared[0].Name)
+            && second.Texts.Any(t => t.Layer == ViewLayers.Axis && t.Text == shared[0].Name),
+            "CAD 两层平面轴号不一致");
+        var cut = first.Lines.Where(l => l.Layer == ViewLayers.Cut).ToArray();
+        Assert(cut.Any(l => Math.Abs(l.Y1 + first.OriginY + 100) < 1e-6
+            && Math.Abs(l.Y2 + first.OriginY + 100) < 1e-6
+            && Math.Max(l.X1, l.X2) + first.OriginX >= 99),
+            "CAD 平面墙角缺少补齐后的外边界");
+        Assert(!cut.Any(l => Math.Abs(l.X1 + first.OriginX) < 1e-6
+            && Math.Abs(l.X2 + first.OriginX) < 1e-6
+            && Math.Min(l.Y1, l.Y2) + first.OriginY < -49
+            && Math.Max(l.Y1, l.Y2) + first.OriginY > -51),
+            "CAD 平面仍画出墙角内部接缝");
+        Console.WriteLine("PASS 共享轴网与 CAD 收口：跨楼层同 ID 同轴号、L 形外边界无缺角及内部线");
     }
 
     private static void Assert(bool condition, string message)

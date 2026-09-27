@@ -522,9 +522,17 @@ namespace BatchPdfPublisher.BuildingModel
                 openings.Add(opening);
             }
 
-            // 墙：洞口把墙断开，两段面线 + 洞口两端的封口
+            // 同层、同高、无洞口的正交相接墙使用与三维体量相同的融合边界。
+            // 逐墙画封口会把内部交接线也推到 CAD，并在端点角部留下缺口。
+            var unionVolume = new BuildingVolume();
+            var unionFirst = true;
+            var joinedIds = OrthogonalWallUnion.AddJoinedWalls(unionVolume, model, walls, ref unionFirst);
+            AddJoinedWallPlanBoundary(document, unionVolume);
+
+            // 其他墙：洞口把墙断开，两段面线 + 洞口两端的封口
             foreach (var wall in walls)
             {
+                if (joinedIds.Contains(wall.Id)) continue;
                 var spans = OpeningsOnWall(wall, openings)
                     .Select(o => OpeningEdges(wall, o))
                     .OrderBy(e => e[0])
@@ -580,6 +588,38 @@ namespace BatchPdfPublisher.BuildingModel
             return document;
         }
 
+        private static void AddJoinedWallPlanBoundary(ViewDocument document, BuildingVolume volume)
+        {
+            var groups = volume.Faces.Where(f => f.Kind == "wall" && Math.Abs(f.NormalZ) < 0.5d
+                && f.Points.Count >= 2)
+                .Select(f => new { A = f.Points[0], B = f.Points[1] })
+                .Where(edge => Math.Abs(edge.A.X - edge.B.X) > 0.001d
+                    || Math.Abs(edge.A.Y - edge.B.Y) > 0.001d)
+                .GroupBy(edge => Math.Abs(edge.A.X - edge.B.X) < 0.001d
+                    ? "V|" + Math.Round(edge.A.X, 3).ToString("F3", System.Globalization.CultureInfo.InvariantCulture)
+                    : "H|" + Math.Round(edge.A.Y, 3).ToString("F3", System.Globalization.CultureInfo.InvariantCulture));
+            foreach (var group in groups)
+            {
+                var vertical = group.Key[0] == 'V';
+                var coordinate = vertical ? group.First().A.X : group.First().A.Y;
+                var spans = group.Select(edge => new[]
+                {
+                    vertical ? Math.Min(edge.A.Y, edge.B.Y) : Math.Min(edge.A.X, edge.B.X),
+                    vertical ? Math.Max(edge.A.Y, edge.B.Y) : Math.Max(edge.A.X, edge.B.X)
+                }).OrderBy(span => span[0]).ToList();
+                if (spans.Count == 0) continue;
+                var start = spans[0][0]; var end = spans[0][1];
+                for (var index = 1; index <= spans.Count; index++)
+                {
+                    if (index < spans.Count && spans[index][0] <= end + 0.001d)
+                    { end = Math.Max(end, spans[index][1]); continue; }
+                    if (vertical) AddLine(document, ViewLayers.Cut, coordinate, start, coordinate, end);
+                    else AddLine(document, ViewLayers.Cut, start, coordinate, end, coordinate);
+                    if (index < spans.Count) { start = spans[index][0]; end = spans[index][1]; }
+                }
+            }
+        }
+
         /// <summary>
         /// 轴网：竖轴（沿 Y，标 X）与横轴（沿 X，标 Y）画成点划线 + 两端轴号圆圈，
         /// 每条都带"图上元素 ↔ 模型构件"的锚点，平面里也能点选轴线。
@@ -587,7 +627,7 @@ namespace BatchPdfPublisher.BuildingModel
         private static void AddPlanAxes(ViewDocument document, BuildingModelDocument model,
             double minX, double maxX, double minY, double maxY, int scale)
         {
-            var axes = (model.Axes ?? new List<AxisModel>()).Where(a => a != null && IsFinite(a.Position)).ToList();
+            var axes = BuildingAxisLayout.Resolve(model);
             if (axes.Count == 0) return;
             var margin = Math.Max(3200d, Math.Max(1, scale) * 32d);      // 轴线伸出建筑 3200：轴号圆圈要落最外一道尺寸线之外
             var radius = Math.Max(400d, Math.Max(1, scale) * 4d);        // 轴号圆圈半径 400（图上 4mm）
@@ -1023,7 +1063,7 @@ namespace BatchPdfPublisher.BuildingModel
                 openingYs.Add(a.Y); openingYs.Add(b.Y);
             }
 
-            var axes = (model.Axes ?? new List<AxisModel>()).Where(a => a != null && IsFinite(a.Position)).ToList();
+            var axes = BuildingAxisLayout.Resolve(model);
             var axisXs = axes.Where(a => a.Vertical).Select(a => a.Position).ToList();
             var axisYs = axes.Where(a => !a.Vertical).Select(a => a.Position).ToList();
 

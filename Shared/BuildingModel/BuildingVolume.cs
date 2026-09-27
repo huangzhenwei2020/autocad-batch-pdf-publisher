@@ -54,6 +54,7 @@ namespace BatchPdfPublisher.BuildingModel
         public Point3DModel Start { get; set; }
         public Point3DModel End { get; set; }
         public string ElementId { get; set; }
+        public string Label { get; set; }
         public bool IsBuildingAxis { get; set; }
     }
 
@@ -133,13 +134,13 @@ namespace BatchPdfPublisher.BuildingModel
                         End = new Point3DModel(wall.X2 + ux * 1200d, wall.Y2 + uy * 1200d, z), ElementId = wall.Id
                     });
                 }
-                foreach (var axis in model.Axes ?? new List<AxisModel>())
+                foreach (var axis in BuildingAxisLayout.Resolve(model))
                 {
                     if (axis == null || !IsFinite(axis.Position)) continue;
                     var from = axis.ExtentStart == 0 && axis.ExtentEnd == 0
-                        ? (axis.Vertical ? volume.MinY - 1600d : volume.MinX - 1600d) : axis.ExtentStart;
+                        ? (axis.Vertical ? volume.MinY - 3000d : volume.MinX - 3000d) : axis.ExtentStart;
                     var to = axis.ExtentStart == 0 && axis.ExtentEnd == 0
-                        ? (axis.Vertical ? volume.MaxY + 1600d : volume.MaxX + 1600d) : axis.ExtentEnd;
+                        ? (axis.Vertical ? volume.MaxY + 3000d : volume.MaxX + 3000d) : axis.ExtentEnd;
                     var z = volume.MinZ + 2d;
                     volume.GuideLines.Add(new VolumeGuideLine
                     {
@@ -147,7 +148,7 @@ namespace BatchPdfPublisher.BuildingModel
                             : new Point3DModel(from, axis.Position, z),
                         End = axis.Vertical ? new Point3DModel(axis.Position, to, z)
                             : new Point3DModel(to, axis.Position, z),
-                        ElementId = axis.Id, IsBuildingAxis = true
+                        ElementId = axis.Id, Label = axis.Name, IsBuildingAxis = true
                     });
                 }
             }
