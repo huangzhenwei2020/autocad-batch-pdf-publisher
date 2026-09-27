@@ -55,6 +55,8 @@ namespace BatchPdfPublisher.BuildingModel
         public Point3DModel End { get; set; }
         public string ElementId { get; set; }
         public string Label { get; set; }
+        public string StartLabel { get; set; }
+        public string EndLabel { get; set; }
         public bool IsBuildingAxis { get; set; }
     }
 
@@ -138,9 +140,11 @@ namespace BatchPdfPublisher.BuildingModel
                 {
                     if (axis == null || !IsFinite(axis.Position)) continue;
                     var from = axis.ExtentStart == 0 && axis.ExtentEnd == 0
-                        ? (axis.Vertical ? volume.MinY - 3000d : volume.MinX - 3000d) : axis.ExtentStart;
+                        ? (axis.Vertical ? volume.MinY - 3000d : volume.MinX - 3000d)
+                        : Math.Min(axis.ExtentStart, axis.ExtentEnd);
                     var to = axis.ExtentStart == 0 && axis.ExtentEnd == 0
-                        ? (axis.Vertical ? volume.MaxY + 3000d : volume.MaxX + 3000d) : axis.ExtentEnd;
+                        ? (axis.Vertical ? volume.MaxY + 3000d : volume.MaxX + 3000d)
+                        : Math.Max(axis.ExtentStart, axis.ExtentEnd);
                     var z = volume.MinZ + 2d;
                     volume.GuideLines.Add(new VolumeGuideLine
                     {
@@ -148,7 +152,10 @@ namespace BatchPdfPublisher.BuildingModel
                             : new Point3DModel(from, axis.Position, z),
                         End = axis.Vertical ? new Point3DModel(axis.Position, to, z)
                             : new Point3DModel(to, axis.Position, z),
-                        ElementId = axis.Id, Label = axis.Name, IsBuildingAxis = true
+                        ElementId = axis.Id, Label = axis.Name,
+                        StartLabel = string.IsNullOrWhiteSpace(axis.StartName) ? axis.Name : axis.StartName,
+                        EndLabel = string.IsNullOrWhiteSpace(axis.EndName) ? axis.Name : axis.EndName,
+                        IsBuildingAxis = true
                     });
                 }
             }

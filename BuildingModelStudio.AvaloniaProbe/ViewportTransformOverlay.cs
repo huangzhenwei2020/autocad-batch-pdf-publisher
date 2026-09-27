@@ -1,7 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
-using System.Globalization;
 using BatchPdfPublisher.BuildingModel;
 
 namespace BuildingModelStudio.AvaloniaProbe;
@@ -18,8 +17,6 @@ internal sealed class ViewportTransformOverlay : Control
     private string? _handle;
     private bool _copy;
     private double _dx, _dy, _angle;
-    private IReadOnlyList<VolumeGuideLine> _axisGuides = Array.Empty<VolumeGuideLine>();
-    private BuildingVolume? _axisVolume;
     public ViewTransformTool Tool { get; private set; }
     public bool IsDragging => _handle != null;
     public event Action<string, double, double, double, bool>? TransformFinished;
@@ -30,14 +27,6 @@ internal sealed class ViewportTransformOverlay : Control
         _viewport = viewport;
         IsHitTestVisible = false;
         ClipToBounds = true;
-    }
-
-    public void SetAxes(BuildingVolume volume)
-    {
-        _axisVolume = volume;
-        _axisGuides = volume.GuideLines.Where(line => line.IsBuildingAxis
-            && !string.IsNullOrWhiteSpace(line.Label)).ToArray();
-        InvalidateVisual();
     }
 
     public void SetSelection(WallModel? wall, double elevation)
@@ -152,28 +141,6 @@ internal sealed class ViewportTransformOverlay : Control
     public override void Render(DrawingContext context)
     {
         base.Render(context);
-        var silhouette = ProjectedVolumeBounds();
-        foreach (var axis in _axisGuides)
-        {
-            var start = _viewport.ProjectModelPoint(axis.Start.X, axis.Start.Y, axis.Start.Z);
-            var end = _viewport.ProjectModelPoint(axis.End.X, axis.End.Y, axis.End.Z);
-            if (start == null || end == null || silhouette == null) continue;
-            var startClearance = DistanceOutside(silhouette.Value, start.Value);
-            var endClearance = DistanceOutside(silhouette.Value, end.Value);
-            var point = startClearance >= endClearance ? start : end;
-            // The 3D guide is depth tested. Its 2D number must stay outside the
-            // building silhouette, otherwise it can float over an occluding wall.
-            if (Math.Max(startClearance, endClearance) < 16) continue;
-            if (point == null || point.Value.X < 15 || point.Value.X > Bounds.Width - 15
-                || point.Value.Y < 15 || point.Value.Y > Bounds.Height - 15) continue;
-            var brush = new SolidColorBrush(Color.Parse("#85DCCF"));
-            context.DrawEllipse(new SolidColorBrush(Color.Parse("#142431")),
-                new Pen(brush, 1), point.Value, 13, 13);
-            var label = new FormattedText(axis.Label, CultureInfo.CurrentCulture,
-                FlowDirection.LeftToRight, Typeface.Default, 12, brush);
-            context.DrawText(label, new Point(point.Value.X - label.Width / 2,
-                point.Value.Y - label.Height / 2));
-        }
         if (_wall == null || Tool == ViewTransformTool.Select) return;
         var center = Center();
         if (center == null) return;
@@ -210,28 +177,4 @@ internal sealed class ViewportTransformOverlay : Control
         }
     }
 
-    private Rect? ProjectedVolumeBounds()
-    {
-        var volume = _axisVolume;
-        if (volume == null) return null;
-        var points = new List<Point>();
-        foreach (var x in new[] { volume.MinX, volume.MaxX })
-        foreach (var y in new[] { volume.MinY, volume.MaxY })
-        foreach (var z in new[] { volume.MinZ, volume.MaxZ })
-        {
-            var projected = _viewport.ProjectModelPoint(x, y, z);
-            if (projected != null) points.Add(projected.Value);
-        }
-        if (points.Count == 0) return null;
-        return new Rect(points.Min(p => p.X), points.Min(p => p.Y),
-            points.Max(p => p.X) - points.Min(p => p.X),
-            points.Max(p => p.Y) - points.Min(p => p.Y));
-    }
-
-    private static double DistanceOutside(Rect bounds, Point point)
-    {
-        var dx = Math.Max(bounds.Left - point.X, Math.Max(0, point.X - bounds.Right));
-        var dy = Math.Max(bounds.Top - point.Y, Math.Max(0, point.Y - bounds.Bottom));
-        return Math.Sqrt(dx * dx + dy * dy);
-    }
 }

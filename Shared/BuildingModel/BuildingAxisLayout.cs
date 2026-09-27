@@ -25,12 +25,15 @@ namespace BatchPdfPublisher.BuildingModel
                 if (existing != null)
                 {
                     if (string.IsNullOrWhiteSpace(existing.Name)) existing.Name = axis.Name;
+                    if (string.IsNullOrWhiteSpace(existing.StartName)) existing.StartName = axis.StartName;
+                    if (string.IsNullOrWhiteSpace(existing.EndName)) existing.EndName = axis.EndName;
                     continue;
                 }
                 result.Add(new AxisModel
                 {
                     Id = string.IsNullOrWhiteSpace(axis.Id) ? AutoId(axis.Vertical, axis.Position) : axis.Id,
-                    Name = axis.Name, Vertical = axis.Vertical, Position = axis.Position,
+                    Name = axis.Name, StartName = axis.StartName, EndName = axis.EndName,
+                    Vertical = axis.Vertical, Position = axis.Position,
                     ExtentStart = axis.ExtentStart, ExtentEnd = axis.ExtentEnd
                 });
             }

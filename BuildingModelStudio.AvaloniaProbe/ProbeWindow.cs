@@ -67,7 +67,6 @@ internal sealed class ProbeWindow : Window
         var initialVolume = BuildingVolumeBuilder.Build(_session.Model);
         _viewport = new ModelViewport(initialVolume);
         _gizmo = new ViewportTransformOverlay(_viewport);
-        _gizmo.SetAxes(initialVolume);
         _gizmo.PreviewChanged += value => _status.Text = value + " · 松开鼠标提交，Esc 取消";
         _gizmo.TransformFinished += async (id, dx, dy, angle, copy) =>
         {
@@ -139,11 +138,21 @@ internal sealed class ProbeWindow : Window
         save.Click += async (_, _) => await SaveModelAsync(false);
         var saveAs = new Button { Content = "另存为" };
         saveAs.Click += async (_, _) => await SaveModelAsync(true);
+        var axisSettings = new Button { Content = "轴号设置" };
+        axisSettings.Click += async (_, _) =>
+        {
+            var dialog = new AxisSettingsWindow(_session.Model);
+            if (!await dialog.ShowDialog<bool>(this)) return;
+            if (_session.TryReplaceAxes(dialog.ResultAxes, out var error))
+                await RefreshModelAsync("轴号已更新");
+            else _status.Text = error;
+        };
         var resetView = new Button { Content = "视图复位" };
         resetView.Click += (_, _) => { _viewport.ResetView(); _gizmo.InvalidateVisual(); };
         toolbar.Children.Add(open);
         toolbar.Children.Add(save);
         toolbar.Children.Add(saveAs);
+        toolbar.Children.Add(axisSettings);
         _publish.Click += async (_, _) => await PublishViewsAsync(false);
         _sendToCad.Click += async (_, _) => await PublishViewsAsync(true);
         toolbar.Children.Add(_publish);
@@ -407,7 +416,6 @@ internal sealed class ProbeWindow : Window
             _filePath = path;
             _savedJson = BuildingModelJson.ToJson(_session.Model);
             _viewport.SetScene(loaded.scene);
-            _gizmo.SetAxes(loaded.scene.Volume);
             _viewport.ResetView();
             BuildElementList();
             RefreshStoreys();
@@ -833,7 +841,6 @@ internal sealed class ProbeWindow : Window
             var scene = await Task.Run(() => ModelViewport.PrepareScene(BuildingVolumeBuilder.Build(model)));
             if (generation != _sceneGeneration) return;
             _viewport.SetScene(scene);
-            _gizmo.SetAxes(scene.Volume);
             _gizmo.InvalidateVisual();
             _status.Text = $"{message} · 修订 {_session.Revision}{(HasChanges ? " · 未保存" : "")}";
         }
@@ -930,10 +937,18 @@ internal sealed class ProbeWindow : Window
             {
                 if (Program.SnapshotPlan) _workspaces.SelectedIndex = 1;
                 await Task.Delay(200);
-                var visual = ElementComposition.GetElementVisual(this);
+                AxisSettingsWindow? axisDialog = null;
+                if (Program.SnapshotAxes)
+                {
+                    axisDialog = new AxisSettingsWindow(_session.Model);
+                    axisDialog.Show(this);
+                    await Task.Delay(350);
+                }
+                var visual = ElementComposition.GetElementVisual((Control?)axisDialog ?? this);
                 if (visual == null) throw new InvalidOperationException("Composition visual unavailable");
                 var snapshot = await visual.Compositor.CreateCompositionVisualSnapshot(visual, 1);
                 snapshot.Save(Program.SnapshotPath, PngBitmapEncoderOptions.Default);
+                axisDialog?.Close();
                 Console.WriteLine("AVALONIA_SNAPSHOT " + Program.SnapshotPath);
             }
             var hit = _viewport.FrameRendered

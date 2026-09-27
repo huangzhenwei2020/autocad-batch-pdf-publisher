@@ -127,6 +127,10 @@ namespace BatchPdfPublisher.BuildingModel
         public string Id { get; set; }
         /// <summary>轴号（1/2/3… 或 A/B/C…）。</summary>
         public string Name { get; set; }
+        /// <summary>轴线坐标递增方向的起点轴号；空值沿用 Name。</summary>
+        public string StartName { get; set; }
+        /// <summary>轴线坐标递增方向的终点轴号；空值沿用 Name。</summary>
+        public string EndName { get; set; }
         public bool Vertical { get; set; }
         /// <summary>轴线位置：竖轴给 X、横轴给 Y。</summary>
         public double Position { get; set; }

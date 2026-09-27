@@ -450,7 +450,13 @@ internal sealed class PlanEditorCanvas : Control
                 var b = Screen(axis.Position, Math.Min(end, max.Y));
                 if (a.Y < b.Y) continue;
                 context.DrawLine(pen, a, b);
-                if (named) DrawAxisBubble(context, axis.Name, new Point(a.X, Math.Max(18, b.Y + 17)), labelBrush);
+                if (named)
+                {
+                    DrawAxisBubble(context, axis.StartName ?? axis.Name,
+                        new Point(a.X, Math.Min(Bounds.Height - 18, a.Y - 17)), labelBrush);
+                    DrawAxisBubble(context, axis.EndName ?? axis.Name,
+                        new Point(b.X, Math.Max(18, b.Y + 17)), labelBrush);
+                }
             }
             else
             {
@@ -461,7 +467,13 @@ internal sealed class PlanEditorCanvas : Control
                 var b = Screen(Math.Min(end, max.X), axis.Position);
                 if (a.X > b.X) continue;
                 context.DrawLine(pen, a, b);
-                if (named) DrawAxisBubble(context, axis.Name, new Point(Math.Max(18, a.X + 17), a.Y), labelBrush);
+                if (named)
+                {
+                    DrawAxisBubble(context, axis.StartName ?? axis.Name,
+                        new Point(Math.Max(18, a.X + 17), a.Y), labelBrush);
+                    DrawAxisBubble(context, axis.EndName ?? axis.Name,
+                        new Point(Math.Min(Bounds.Width - 18, b.X - 17), b.Y), labelBrush);
+                }
             }
         }
     }

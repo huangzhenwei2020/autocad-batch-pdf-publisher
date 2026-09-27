@@ -147,6 +147,17 @@ internal static class VolumeIdentityTests
         var shared = axes.Where(a => !a.Vertical && Math.Abs(a.Position) < 1e-6).ToArray();
         Assert(shared.Length == 1 && !string.IsNullOrWhiteSpace(shared[0].Name),
             "跨楼层重合墙轴线应共用一条带编号的轴线");
+        model.Axes.Add(new AxisModel { Id = "manual-horizontal", Vertical = false,
+            Position = 0, Name = "A", StartName = "A-L", EndName = "A-R" });
+        axes = BuildingAxisLayout.Resolve(model);
+        shared = axes.Where(a => !a.Vertical && Math.Abs(a.Position) < 1e-6).ToArray();
+        Assert(shared.Length == 1 && shared[0].Id == "manual-horizontal"
+            && shared[0].StartName == "A-L" && shared[0].EndName == "A-R",
+            "显式轴网两端轴号应覆盖自动轴号，并跨层共用");
+        var guide = BuildingVolumeBuilder.Build(model).GuideLines.Single(g => g.IsBuildingAxis
+            && g.ElementId == "manual-horizontal");
+        Assert(guide.StartLabel == "A-L" && guide.EndLabel == "A-R",
+            "三维地面轴线两端应保留不同轴号");
         ViewDocument Plan(string storey) => OrthographicProjector.ProjectPlan(model,
             new ViewDefinitionModel { Id = "plan-" + storey, Title = storey + "平面",
                 Kind = ViewKind.Plan, Scale = 100,
@@ -156,9 +167,21 @@ internal static class VolumeIdentityTests
         Assert(first.Anchors.Any(a => a.Kind == "axis" && a.ElementId == shared[0].Id)
             && second.Anchors.Any(a => a.Kind == "axis" && a.ElementId == shared[0].Id),
             "CAD 两层平面未引用同一轴线 ID");
-        Assert(first.Texts.Any(t => t.Layer == ViewLayers.Axis && t.Text == shared[0].Name)
-            && second.Texts.Any(t => t.Layer == ViewLayers.Axis && t.Text == shared[0].Name),
+        Assert(first.Texts.Any(t => t.Layer == ViewLayers.Axis && t.Text == "A-L")
+            && second.Texts.Any(t => t.Layer == ViewLayers.Axis && t.Text == "A-L"),
             "CAD 两层平面轴号不一致");
+        Assert(first.Texts.Any(t => t.Layer == ViewLayers.Axis && t.Text == "A-L")
+            && first.Texts.Any(t => t.Layer == ViewLayers.Axis && t.Text == "A-R"),
+            "CAD 平面应保留轴线两端不同轴号");
+        var editing = new BuildingModelEditSession(model);
+        var changedAxes = model.Axes.Select(a => new AxisModel { Id = a.Id, Vertical = a.Vertical,
+            Position = a.Position, Name = a.Name, StartName = a.StartName,
+            EndName = a.EndName }).ToList();
+        changedAxes[0].EndName = "A-E";
+        Assert(editing.TryReplaceAxes(changedAxes, out var axisError) && axisError == null
+            && editing.Model.Axes[0].EndName == "A-E", "轴号窗口修改未提交");
+        Assert(editing.Undo() && editing.Model.Axes[0].EndName == "A-R",
+            "轴号修改未作为一笔操作撤销");
         var cut = first.Lines.Where(l => l.Layer == ViewLayers.Cut).ToArray();
         Assert(cut.Any(l => Math.Abs(l.Y1 + first.OriginY + 100) < 1e-6
             && Math.Abs(l.Y2 + first.OriginY + 100) < 1e-6

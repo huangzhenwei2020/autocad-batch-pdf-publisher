@@ -16,6 +16,34 @@ namespace BatchPdfPublisher.BuildingModel
         public bool CanUndo { get { return _history.CanUndo; } }
         public bool CanRedo { get { return _history.CanRedo; } }
 
+        /// <summary>Replace building-wide explicit axes as one undoable edit. Derived wall axes stay automatic.</summary>
+        public bool TryReplaceAxes(System.Collections.Generic.IEnumerable<AxisModel> axes, out string error)
+        {
+            error = null;
+            if (axes == null) { error = "轴网为空。"; return false; }
+            var replacement = axes.ToList();
+            if (replacement.Any(a => a == null || string.IsNullOrWhiteSpace(a.Id)
+                || !Finite(a.Position) || !Finite(a.ExtentStart) || !Finite(a.ExtentEnd)))
+            { error = "轴线 ID、位置和范围必须有效。"; return false; }
+            if (replacement.GroupBy(a => a.Id, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1))
+            { error = "轴线 ID 重复。"; return false; }
+            if (replacement.SelectMany(a => new[] { a.Name, a.StartName, a.EndName })
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .Any(s => s.Length > 24 || s.Any(c => !((c >= 'A' && c <= 'Z')
+                    || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+                    || c == '-' || c == '/' || c == '\''))))
+            { error = "轴号最多 24 个字符，仅支持英文字母、数字、-、/ 和撇号。"; return false; }
+            var candidate = Clone(Model);
+            candidate.Axes = replacement.Select(a => new AxisModel
+            {
+                Id = a.Id, Name = a.Name?.Trim(), StartName = a.StartName?.Trim(),
+                EndName = a.EndName?.Trim(), Vertical = a.Vertical, Position = a.Position,
+                ExtentStart = a.ExtentStart, ExtentEnd = a.ExtentEnd
+            }).ToList();
+            Commit(candidate);
+            return true;
+        }
+
         public bool TryAddWall(WallModel source, out string id, out string error)
         {
             id = null;

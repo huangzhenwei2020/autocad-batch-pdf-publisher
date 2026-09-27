@@ -650,8 +650,8 @@ namespace BatchPdfPublisher.BuildingModel
                         Layer = ViewLayers.Axis, LineType = "CENTER",
                         X1 = axis.Position, Y1 = start, X2 = axis.Position, Y2 = end
                     });
-                    AddAxisBubble(document, axis.Name, axis.Position, start - radius * 0.4d, radius, textHeight);
-                    AddAxisBubble(document, axis.Name, axis.Position, end + radius * 0.4d, radius, textHeight);
+                    AddAxisBubble(document, axis.StartName ?? axis.Name, axis.Position, start - radius * 0.4d, radius, textHeight);
+                    AddAxisBubble(document, axis.EndName ?? axis.Name, axis.Position, end + radius * 0.4d, radius, textHeight);
                     document.Anchors.Add(new ViewAnchor
                     {
                         Kind = "axis", ElementId = axis.Id,
@@ -665,8 +665,8 @@ namespace BatchPdfPublisher.BuildingModel
                         Layer = ViewLayers.Axis, LineType = "CENTER",
                         X1 = start, Y1 = axis.Position, X2 = end, Y2 = axis.Position
                     });
-                    AddAxisBubble(document, axis.Name, start - radius * 0.4d, axis.Position, radius, textHeight);
-                    AddAxisBubble(document, axis.Name, end + radius * 0.4d, axis.Position, radius, textHeight);
+                    AddAxisBubble(document, axis.StartName ?? axis.Name, start - radius * 0.4d, axis.Position, radius, textHeight);
+                    AddAxisBubble(document, axis.EndName ?? axis.Name, end + radius * 0.4d, axis.Position, radius, textHeight);
                     document.Anchors.Add(new ViewAnchor
                     {
                         Kind = "axis", ElementId = axis.Id,

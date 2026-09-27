@@ -231,9 +231,75 @@ internal sealed class ModelViewport : OpenGlControlBase
                 : new Vector3(1f, 0.7f, 0.25f);
             vertices.Add(ToVertex(line.Start, center, scale, color, 0));
             vertices.Add(ToVertex(line.End, center, scale, color, 0));
+            if (line.IsBuildingAxis)
+            {
+                AddGroundAxisLabel(line.Start, line.StartLabel ?? line.Label, vertices, center, scale, color);
+                AddGroundAxisLabel(line.End, line.EndLabel ?? line.Label, vertices, center, scale, color);
+            }
         }
         return new MeshSnapshot(vertices.ToArray(), triangleVertexCount,
             triangles.ToArray(), elementIndexes);
+    }
+
+    private static readonly Dictionary<char, string> AxisFont = new()
+    {
+        ['0']="01110/10001/10011/10101/11001/10001/01110", ['1']="00100/01100/00100/00100/00100/00100/01110",
+        ['2']="01110/10001/00001/00010/00100/01000/11111", ['3']="11110/00001/00001/01110/00001/00001/11110",
+        ['4']="00010/00110/01010/10010/11111/00010/00010", ['5']="11111/10000/10000/11110/00001/00001/11110",
+        ['6']="01110/10000/10000/11110/10001/10001/01110", ['7']="11111/00001/00010/00100/01000/01000/01000",
+        ['8']="01110/10001/10001/01110/10001/10001/01110", ['9']="01110/10001/10001/01111/00001/00001/01110",
+        ['A']="01110/10001/10001/11111/10001/10001/10001", ['B']="11110/10001/10001/11110/10001/10001/11110",
+        ['C']="01111/10000/10000/10000/10000/10000/01111", ['D']="11110/10001/10001/10001/10001/10001/11110",
+        ['E']="11111/10000/10000/11110/10000/10000/11111", ['F']="11111/10000/10000/11110/10000/10000/10000",
+        ['G']="01111/10000/10000/10111/10001/10001/01111", ['H']="10001/10001/10001/11111/10001/10001/10001",
+        ['I']="01110/00100/00100/00100/00100/00100/01110", ['J']="00111/00010/00010/00010/10010/10010/01100",
+        ['K']="10001/10010/10100/11000/10100/10010/10001", ['L']="10000/10000/10000/10000/10000/10000/11111",
+        ['M']="10001/11011/10101/10101/10001/10001/10001", ['N']="10001/11001/10101/10011/10001/10001/10001",
+        ['O']="01110/10001/10001/10001/10001/10001/01110", ['P']="11110/10001/10001/11110/10000/10000/10000",
+        ['Q']="01110/10001/10001/10001/10101/10010/01101", ['R']="11110/10001/10001/11110/10100/10010/10001",
+        ['S']="01111/10000/10000/01110/00001/00001/11110", ['T']="11111/00100/00100/00100/00100/00100/00100",
+        ['U']="10001/10001/10001/10001/10001/10001/01110", ['V']="10001/10001/10001/10001/10001/01010/00100",
+        ['W']="10001/10001/10001/10101/10101/10101/01010", ['X']="10001/10001/01010/00100/01010/10001/10001",
+        ['Y']="10001/10001/01010/00100/00100/00100/00100", ['Z']="11111/00001/00010/00100/01000/10000/11111",
+        ['-']="00000/00000/00000/11111/00000/00000/00000", ['/']="00001/00001/00010/00100/01000/10000/10000",
+        ['\'']="00100/00100/00100/00000/00000/00000/00000", ['?']="01110/10001/00001/00010/00100/00000/00100"
+    };
+
+    private static void AddGroundAxisLabel(Point3DModel at, string? label, List<Vertex> vertices,
+        Point3DModel center, float scale, Vector3 color)
+    {
+        if (string.IsNullOrWhiteSpace(label)) return;
+        var name = label.Trim().ToUpperInvariant();
+        const double radius = 450d;
+        var z = at.Z + 2d;
+        void Line(double x1, double y1, double x2, double y2)
+        {
+            vertices.Add(ToVertex(new Point3DModel(x1, y1, z), center, scale, color, 0));
+            vertices.Add(ToVertex(new Point3DModel(x2, y2, z), center, scale, color, 0));
+        }
+        for (var i = 0; i < 32; i++)
+        {
+            var a = i * Math.PI / 16d;
+            var b = (i + 1) * Math.PI / 16d;
+            Line(at.X + radius * Math.Cos(a), at.Y + radius * Math.Sin(a),
+                at.X + radius * Math.Cos(b), at.Y + radius * Math.Sin(b));
+        }
+        var cell = Math.Min(92d, 720d / Math.Max(1, name.Length * 6));
+        var left = at.X - (name.Length * 6d - 1d) * cell / 2d;
+        var top = at.Y + 3d * cell;
+        for (var character = 0; character < name.Length; character++)
+        {
+            var rows = (AxisFont.TryGetValue(name[character], out var bitmap)
+                ? bitmap : AxisFont['?']).Split('/');
+            for (var row = 0; row < 7; row++)
+            for (var column = 0; column < 5; column++)
+            {
+                if (rows[row][column] != '1') continue;
+                var x = left + (character * 6 + column) * cell;
+                var y = top - row * cell;
+                Line(x, y, x + cell * 0.8d, y);
+            }
+        }
     }
 
     private static PickNode[] BuildPickTree(PickTriangle[] triangles)
