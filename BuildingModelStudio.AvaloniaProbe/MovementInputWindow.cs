@@ -11,17 +11,18 @@ internal sealed record MovementResult(double X, double Y, double Angle);
 /// <summary>Shows the drag result before committing an object transform.</summary>
 internal sealed class MovementInputWindow : Window
 {
-    public MovementInputWindow(double dx, double dy, double angle)
+    public MovementInputWindow(double dx, double dy, double angle, bool copying = false)
     {
         var rotating = Math.Abs(angle) > 0.001;
-        Title = rotating ? "确认旋转" : "确认移动";
+        Title = rotating ? "确认旋转" : copying ? "确认复制" : "确认移动";
         Width = 430; Height = rotating ? 235 : 300;
         MinWidth = 380; CanResize = false;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         Background = new SolidColorBrush(Color.Parse("#151B23"));
         Foreground = Brushes.White;
         var root = new StackPanel { Spacing = 12, Margin = new Thickness(22) };
-        root.Children.Add(new TextBlock { Text = rotating ? "旋转角度" : "移动距离（mm）",
+        root.Children.Add(new TextBlock { Text = rotating ? "旋转角度"
+                : copying ? "复制位移（mm）" : "移动距离（mm）",
             FontSize = 20, FontWeight = FontWeight.Bold });
         var x = new TextBox { Text = dx.ToString("0.##", CultureInfo.CurrentCulture) };
         var y = new TextBox { Text = dy.ToString("0.##", CultureInfo.CurrentCulture) };
@@ -43,7 +44,7 @@ internal sealed class MovementInputWindow : Window
             HorizontalAlignment = HorizontalAlignment.Right, Spacing = 9 };
         var cancel = new Button { Content = "取消", MinWidth = 80 };
         cancel.Click += (_, _) => Close(null);
-        var confirm = new Button { Content = "确定移动", MinWidth = 90 };
+        var confirm = new Button { Content = copying ? "确定复制" : "确定移动", MinWidth = 90 };
         if (rotating) confirm.Content = "确定旋转";
         confirm.Click += (_, _) =>
         {

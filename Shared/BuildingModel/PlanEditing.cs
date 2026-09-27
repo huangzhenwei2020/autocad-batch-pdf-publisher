@@ -40,6 +40,8 @@ namespace BatchPdfPublisher.BuildingModel
         public const string SnapIntersection = "交点";
         public const string SnapPerpendicular = "垂足";
         public const string SnapNearest = "墙身";
+        public const string SnapAxis = "轴线";
+        public const string SnapAxisIntersection = "轴线交点";
         public const string SnapNone = "无";
 
         /// <summary>点到线段的距离。</summary>
@@ -306,7 +308,8 @@ namespace BatchPdfPublisher.BuildingModel
         /// 空白处返回原始坐标，不自动吸附到正交方向或虚拟网格。
         /// </summary>
         public static SnapResult Snap(BuildingModelDocument model, string storeyId, double x, double y, double tolerance,
-            bool hasFrom, double fromX, double fromY, string excludedWallId = null)
+            bool hasFrom, double fromX, double fromY, string excludedWallId = null,
+            IReadOnlyList<AxisModel> resolvedAxes = null)
         {
             var result = new SnapResult { X = x, Y = y, Kind = SnapNone };
             var walls = (model?.Walls ?? new List<WallModel>())
@@ -363,8 +366,35 @@ namespace BatchPdfPublisher.BuildingModel
                     Consider(x, y, wall.X1 + t * (wall.X2 - wall.X1),
                         wall.Y1 + t * (wall.Y2 - wall.Y1), SnapNearest, tolerance, ref best, result);
                 }
+                if (result.Snapped) return result;
+                var axes = resolvedAxes ?? BuildingAxisLayout.Resolve(model);
+                var nearbyVertical = axes.Where(a => a.Vertical && Math.Abs(a.Position - x) <= tolerance).ToArray();
+                var nearbyHorizontal = axes.Where(a => !a.Vertical && Math.Abs(a.Position - y) <= tolerance).ToArray();
+                best = tolerance;
+                foreach (var vertical in nearbyVertical)
+                foreach (var horizontal in nearbyHorizontal)
+                {
+                    if (!OnAxis(vertical, horizontal.Position) || !OnAxis(horizontal, vertical.Position)) continue;
+                    Consider(x, y, vertical.Position, horizontal.Position,
+                        SnapAxisIntersection, tolerance, ref best, result);
+                }
+                if (result.Snapped) return result;
+                best = tolerance;
+                foreach (var axis in nearbyVertical)
+                    if (OnAxis(axis, y)) Consider(x, y, axis.Position, y,
+                        SnapAxis, tolerance, ref best, result);
+                foreach (var axis in nearbyHorizontal)
+                    if (OnAxis(axis, x)) Consider(x, y, x, axis.Position,
+                        SnapAxis, tolerance, ref best, result);
             }
             return result;
+        }
+
+        private static bool OnAxis(AxisModel axis, double along)
+        {
+            if (axis.ExtentStart == 0d && axis.ExtentEnd == 0d) return true;
+            return along >= Math.Min(axis.ExtentStart, axis.ExtentEnd) - 0.5d
+                && along <= Math.Max(axis.ExtentStart, axis.ExtentEnd) + 0.5d;
         }
 
         private static bool TrySegmentIntersection(WallModel a, WallModel b, out double x, out double y)
@@ -403,6 +433,10 @@ namespace BatchPdfPublisher.BuildingModel
             if (wall.Thickness <= 0d) return "墙厚必须大于 0。";
             if (!Enum.IsDefined(typeof(WallAxisPlacement), wall.AxisPlacement))
                 return "墙定位轴线只能位于墙中、左面或右面。";
+            if (wall.AxisOffset.HasValue && ((double.IsNaN(wall.AxisOffset.Value)
+                || double.IsInfinity(wall.AxisOffset.Value))
+                || Math.Abs(wall.AxisOffset.Value) > wall.Thickness / 2d + 0.001d))
+                return "轴线左右侧墙厚不能为负。";
             return null;
         }
 

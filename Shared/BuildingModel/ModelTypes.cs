@@ -65,6 +65,8 @@ namespace BatchPdfPublisher.BuildingModel
         public double Thickness { get; set; } = 200d;
         /// <summary>定位轴线在墙中、左面或右面；旧模型默认为墙中。</summary>
         public WallAxisPlacement AxisPlacement { get; set; } = WallAxisPlacement.Center;
+        /// <summary>自定义墙体中心相对定位轴线的有向偏移；空值沿用旧版墙中/左/右模式。</summary>
+        public double? AxisOffset { get; set; }
         /// <summary>墙高；0 表示取所属楼层的层高。</summary>
         public double Height { get; set; }
         public string Material { get; set; }
@@ -76,6 +78,7 @@ namespace BatchPdfPublisher.BuildingModel
         public static double BodyOffset(WallModel wall)
         {
             var half = (wall.Thickness > 0.5d ? wall.Thickness : 200d) / 2d;
+            if (wall.AxisOffset.HasValue) return wall.AxisOffset.Value;
             return wall.AxisPlacement == WallAxisPlacement.LeftFace ? -half
                 : wall.AxisPlacement == WallAxisPlacement.RightFace ? half : 0d;
         }

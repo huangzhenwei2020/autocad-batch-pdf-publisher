@@ -104,12 +104,11 @@ internal static class Program
     private static void RunPickCheck()
     {
         var scene = ModelViewport.PrepareScene(BuildingVolumeBuilder.Build(SampleModelFactory.CreateTwoStoreyHouse()));
-        var view = Matrix4x4.CreateLookAt(new Vector3(11, 10, 13), Vector3.Zero, Vector3.UnitY);
         var projection = Matrix4x4.CreatePerspectiveFieldOfView(0.8f, 760f / 715f, 0.1f, 100f);
         var checkedPoints = 0;
         foreach (var yaw in new[] { -0.8f, 0.4f, 1.5f })
         {
-            var transform = Matrix4x4.CreateFromYawPitchRoll(yaw, -0.2f, 0) * view * projection;
+            var transform = ModelViewport.OrbitView(yaw, 0.45f, 19.72f, Vector3.Zero) * projection;
             for (var row = 0; row < 25; row++)
             for (var col = 0; col < 25; col++)
             {
@@ -133,8 +132,7 @@ internal static class Program
         var volumeMs = watch.ElapsedMilliseconds;
         var scene = ModelViewport.PrepareScene(volume);
         var totalMs = watch.ElapsedMilliseconds;
-        var transform = Matrix4x4.CreateFromYawPitchRoll(0.4f, -0.2f, 0)
-            * Matrix4x4.CreateLookAt(new Vector3(11, 10, 13), Vector3.Zero, Vector3.UnitY)
+        var transform = ModelViewport.OrbitView(0.4f, 0.45f, 19.72f, Vector3.Zero)
             * Matrix4x4.CreatePerspectiveFieldOfView(0.8f, 760f / 715f, 0.1f, 100f);
         ModelViewport.PickForBenchmark(scene, transform, 0f, 0f);
         var durations = new double[200];

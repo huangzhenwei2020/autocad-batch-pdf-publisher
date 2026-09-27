@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
@@ -43,6 +44,10 @@ internal sealed class ProbeWindow : Window
     private readonly Dictionary<ViewTransformTool, Button> _viewToolButtons = new();
     private readonly StackPanel _properties = new() { Margin = new Thickness(16), Spacing = 12 };
     private readonly TextBlock _status = new();
+    private readonly TextBox _commandInput = new()
+    { PlaceholderText = "输入命令：WA 画墙 / M 移动 / CO 复制", MinWidth = 180 };
+    private readonly Button _polarButton = new() { Content = "极轴 45°：关" };
+    private readonly Button _orthoButton = new() { Content = "正交 F8：关" };
     private readonly Button _undo = new() { Content = "撤销 Ctrl+Z" };
     private readonly Button _redo = new() { Content = "重做 Ctrl+Y" };
     private readonly Button _publish = new() { Content = "生成 CAD 视图" };
@@ -53,6 +58,9 @@ internal sealed class ProbeWindow : Window
     private string _savedJson;
     private bool _closeConfirmed;
     private bool _refreshingStoreys;
+    private bool _movingInViewport;
+    private bool _copyingInViewport;
+    private PointModel? _viewportMoveBase;
     private int _sceneGeneration;
     private bool HasChanges => BuildingModelJson.ToJson(_session.Model) != _savedJson;
     private static readonly string ReleaseRevision = ReadReleaseRevision();
@@ -101,15 +109,20 @@ internal sealed class ProbeWindow : Window
         };
         _viewport.ElementPicked += SelectById;
         _planCanvas.ElementPicked += SelectById;
+        _planCanvas.MoveStageChanged += text => _status.Text = text;
+        _planCanvas.MoveRequested += async (id, from, to, copy) =>
+            await FinishMoveAsync(id, from, to, copy);
         _planCanvas.SnapChanged += kind =>
         {
             if (kind != PlanEditing.SnapNone) _status.Text = "捕捉：" + kind;
         };
         _planCanvas.AxisConstraintChanged += mode => _status.Text = mode switch
         {
-            PlanAxisConstraint.X => "已锁定 X 方向；按 X 解除。",
-            PlanAxisConstraint.Y => "已锁定 Y 方向；按 Y 解除。",
-            _ => "已解除方向锁定。"
+            PlanAxisConstraint.X => _planCanvas.OrthogonalEnabled
+                ? "F8 正交：当前锁定水平方向。" : "按住 Shift：当前锁定水平方向；松开恢复自由。",
+            PlanAxisConstraint.Y => _planCanvas.OrthogonalEnabled
+                ? "F8 正交：当前锁定垂直方向。" : "按住 Shift：当前锁定垂直方向；松开恢复自由。",
+            _ => "自由画墙。"
         };
         _planCanvas.WallRequested += (start, end) =>
         {
@@ -150,7 +163,7 @@ internal sealed class ProbeWindow : Window
 
         var root = new Grid
         {
-            RowDefinitions = new RowDefinitions("50,*,34"),
+            RowDefinitions = new RowDefinitions("50,*,72"),
             ColumnDefinitions = new ColumnDefinitions("230,*,290"),
             Background = new SolidColorBrush(Color.Parse("#151B23"))
         };
@@ -172,6 +185,9 @@ internal sealed class ProbeWindow : Window
         _redo.Click += async (_, _) => await RedoModelAsync();
         toolbar.Children.Add(_undo);
         toolbar.Children.Add(_redo);
+        var deleteSelected = new Button { Content = "删除选中" };
+        deleteSelected.Click += async (_, _) => await DeleteSelectedAsync();
+        toolbar.Children.Add(deleteSelected);
         var open = new Button { Content = "打开模型" };
         open.Click += async (_, _) => await OpenModelAsync();
         var save = new Button { Content = "保存" };
@@ -233,8 +249,36 @@ internal sealed class ProbeWindow : Window
         {
             var buttons = e.GetCurrentPoint(viewportInput).Properties;
             var selecting = buttons.IsLeftButtonPressed;
-            var panning = buttons.IsMiddleButtonPressed || buttons.IsRightButtonPressed;
-            if (!selecting && !panning) return;
+            if (_movingInViewport && selecting)
+            {
+                var wall = _session.Model.Walls.FirstOrDefault(w => w.Id == _selectedId);
+                if (wall == null) { CancelMove(); return; }
+                var elevation = _session.Model.BaseElevationOf(wall)
+                    + _session.Model.HeightOf(wall) / 2d;
+                if (!_viewport.TryScreenToPlan(e.GetPosition(_viewport), elevation, out var point))
+                { _status.Text = "当前视角无法确定移动点，请调整视角后重试。"; return; }
+                if (_viewportMoveBase == null)
+                {
+                    _viewportMoveBase = point;
+                    _status.Text = (_copyingInViewport ? "复制 CO" : "移动 M")
+                        + "：指定目标点；也可在弹窗中输入精确位移。Esc 取消。";
+                }
+                else
+                {
+                    var from = _viewportMoveBase;
+                    var id = _selectedId!;
+                    var copy = _copyingInViewport;
+                    CancelMove();
+                    _ = FinishMoveAsync(id, from, point, copy);
+                }
+                e.Handled = true;
+                return;
+            }
+            var orbiting = buttons.IsMiddleButtonPressed
+                && !e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+            var panning = buttons.IsRightButtonPressed
+                || (buttons.IsMiddleButtonPressed && e.KeyModifiers.HasFlag(KeyModifiers.Shift));
+            if (!selecting && !panning && !orbiting) return;
             if (selecting && _gizmo.TryBegin(e.GetPosition(_viewport),
                 e.KeyModifiers.HasFlag(KeyModifiers.Shift)))
             {
@@ -243,7 +287,7 @@ internal sealed class ProbeWindow : Window
                 return;
             }
             _viewport.BeginInteraction(e.GetPosition(_viewport), selecting, panning,
-                _gizmo.Tool == ViewTransformTool.Select || e.KeyModifiers.HasFlag(KeyModifiers.Alt));
+                orbiting, orbiting);
             e.Pointer.Capture(viewportInput);
             e.Handled = true;
         };
@@ -292,6 +336,9 @@ internal sealed class ProbeWindow : Window
             _viewToolButtons.Add(tool, button);
             viewTools.Children.Add(button);
         }
+        var preciseMove3D = new Button { Content = "基点移动 M" };
+        preciseMove3D.Click += (_, _) => BeginMove();
+        viewTools.Children.Add(preciseMove3D);
         viewportHost.Children.Add(viewTools);
 
         var planLayout = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,*") };
@@ -328,15 +375,15 @@ internal sealed class ProbeWindow : Window
             var button = new Button { Content = label };
             button.Click += (_, _) =>
             {
-                _planCanvas.Tool = tool;
-                _planCanvas.CancelDraft();
-                _status.Text = tool == PlanTool.Wall ? "画墙：连续点墙轴线端点，Esc 结束。"
-                    : tool == PlanTool.Select ? "点击墙或门窗选择构件。"
-                    : "请点选宿主墙上的位置放" + label.Substring(1) + "。";
-                _planCanvas.Focus();
+                SetPlanTool(tool);
             };
             planTools.Children.Add(button);
         }
+        _polarButton.Click += (_, _) => SetPolar(!_planCanvas.PolarEnabled,
+            _planCanvas.PolarStepDegrees);
+        _orthoButton.Click += (_, _) => SetOrthogonal(!_planCanvas.OrthogonalEnabled);
+        planTools.Children.Add(_orthoButton);
+        planTools.Children.Add(_polarButton);
         var parameterTools = new StackPanel { Orientation = Orientation.Horizontal,
             Spacing = 8, Margin = new Thickness(8, 0, 8, 8) };
         parameterTools.Children.Add(new TextBlock { Text = "精确墙长", VerticalAlignment = VerticalAlignment.Center });
@@ -344,29 +391,30 @@ internal sealed class ProbeWindow : Window
         parameterTools.Children.Add(new TextBlock { Text = "新墙高（0=随楼层）",
             VerticalAlignment = VerticalAlignment.Center });
         parameterTools.Children.Add(_newWallHeight);
-        parameterTools.Children.Add(new TextBlock { Text = "方向约束", VerticalAlignment = VerticalAlignment.Center });
-        foreach (var (label, mode) in new[] { ("自由", PlanAxisConstraint.Free),
-            ("沿 X", PlanAxisConstraint.X), ("沿 Y", PlanAxisConstraint.Y) })
-        {
-            var button = new Button { Content = label };
-            button.Click += (_, _) => { _planCanvas.SetAxisConstraint(mode); _planCanvas.Focus(); };
-            parameterTools.Children.Add(button);
-        }
+        parameterTools.Children.Add(new TextBlock { Text = "F8 正交 · Shift 临时正交 · F10 极轴 · 画墙时直接输入长度",
+            VerticalAlignment = VerticalAlignment.Center });
         var delete = new Button { Content = "删除选中" };
-        delete.Click += async (_, _) =>
-        {
-            if (!_session.TryDeleteElement(_selectedId ?? "", out var error))
-            { _status.Text = error; return; }
-            _selectedId = null;
-            await RefreshModelAsync("已删除构件");
-        };
+        var preciseMovePlan = new Button { Content = "基点移动 M" };
+        preciseMovePlan.Click += (_, _) => BeginMove();
+        planTools.Children.Add(preciseMovePlan);
+        delete.Click += async (_, _) => await DeleteSelectedAsync();
         planTools.Children.Add(delete);
         var fitPlan = new Button { Content = "缩放适应" };
         fitPlan.Click += (_, _) => _planCanvas.Fit();
         planTools.Children.Add(fitPlan);
-        planLayout.Children.Add(planTools);
+        planLayout.Children.Add(new ScrollViewer
+        {
+            Content = planTools,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled
+        });
         Grid.SetRow(parameterTools, 1);
-        planLayout.Children.Add(parameterTools);
+        planLayout.Children.Add(new ScrollViewer
+        {
+            Content = parameterTools,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled
+        });
         Grid.SetRow(_planCanvas, 2);
         planLayout.Children.Add(_planCanvas);
 
@@ -387,21 +435,43 @@ internal sealed class ProbeWindow : Window
         _status.Foreground = new SolidColorBrush(Color.Parse("#A4B8CF"));
         _status.VerticalAlignment = VerticalAlignment.Center;
         _status.Margin = new Thickness(14, 0);
-        _status.Text = "左键选择/旋转 · 中键或右键平移 · 滚轮缩放 · 毫米单位";
-        Grid.SetRow(_status, 2);
-        Grid.SetColumnSpan(_status, 3);
-        root.Children.Add(_status);
+        _status.Text = "左键选择 · 中键旋转 · Shift+中键或右键平移 · 滚轮缩放 · 毫米单位";
+        var console = new Grid
+        {
+            RowDefinitions = new RowDefinitions("30,34"),
+            ColumnDefinitions = new ColumnDefinitions("65,*"),
+            Margin = new Thickness(12, 2)
+        };
+        Grid.SetColumnSpan(_status, 2);
+        console.Children.Add(_status);
+        var prompt = new TextBlock { Text = "命令:", VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(14, 0) };
+        Grid.SetRow(prompt, 1);
+        console.Children.Add(prompt);
+        _commandInput.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter || e.Key == Key.Space)
+            {
+                var command = _commandInput.Text;
+                _commandInput.Clear();
+                ExecuteCommand(command);
+                e.Handled = true;
+            }
+            else if (e.Key == Key.Escape)
+            {
+                _commandInput.Clear();
+                CancelActiveCommand();
+                e.Handled = true;
+            }
+        };
+        Grid.SetRow(_commandInput, 1);
+        Grid.SetColumn(_commandInput, 1);
+        console.Children.Add(_commandInput);
+        Grid.SetRow(console, 2);
+        Grid.SetColumnSpan(console, 3);
+        root.Children.Add(console);
         Content = root;
         AddHandler(KeyDownEvent, OnShortcutKeyDown, RoutingStrategies.Tunnel);
-        KeyDown += (_, e) =>
-        {
-            if (_workspaces.SelectedIndex != 0 || e.Source is TextBox || e.Source is ComboBox) return;
-            if (e.Key == Key.Escape && _gizmo.IsDragging) { _gizmo.Cancel(); e.Handled = true; }
-            else if (e.KeyModifiers != KeyModifiers.None) return;
-            else if (e.Key == Key.Q) { SetViewTool(ViewTransformTool.Select); e.Handled = true; }
-            else if (e.Key == Key.W) { SetViewTool(ViewTransformTool.Move); e.Handled = true; }
-            else if (e.Key == Key.E) { SetViewTool(ViewTransformTool.Rotate); e.Handled = true; }
-        };
 
         BuildElementList();
         RefreshStoreys();
@@ -731,15 +801,225 @@ internal sealed class ProbeWindow : Window
             : "旋转 E：拖动选中墙的橙色圆环；Shift 拖动复制。";
     }
 
+    private void SetPlanTool(PlanTool tool)
+    {
+        _planCanvas.Tool = tool;
+        _planCanvas.CancelDraft();
+        _status.Text = tool == PlanTool.Wall
+            ? "画墙 WA：点起点，指向方向后可直接输入长度，空格/回车确认，Esc 退出。"
+            : tool == PlanTool.Select ? "选择 Q：点击墙或门窗选择构件。"
+            : "请点选宿主墙上的位置。";
+        _planCanvas.Focus();
+    }
+
+    private void SetPolar(bool enabled, double stepDegrees)
+    {
+        if (enabled && _planCanvas.OrthogonalEnabled) SetOrthogonal(false);
+        _planCanvas.SetPolar(enabled, stepDegrees);
+        _polarButton.Content = $"极轴 {stepDegrees:0.#}°：{(enabled ? "开" : "关")}";
+        _status.Text = enabled ? $"极轴已开启：按 {stepDegrees:0.#}° 增量追踪；Shift 临时正交。"
+            : "极轴已关闭；Shift 可临时正交。";
+    }
+
+    private void SetOrthogonal(bool enabled)
+    {
+        if (enabled && _planCanvas.PolarEnabled) SetPolar(false, _planCanvas.PolarStepDegrees);
+        _planCanvas.SetOrthogonal(enabled);
+        _orthoButton.Content = $"正交 F8：{(enabled ? "开" : "关")}";
+        _status.Text = enabled ? "正交已开启：画墙和指定目标点时锁定水平或垂直。F8 关闭。"
+            : "正交已关闭；按住 Shift 可临时锁定水平或垂直。";
+    }
+
+    private void CancelActiveCommand()
+    {
+        _commandInput.Clear();
+        _gizmo.Cancel();
+        CancelMove();
+        if (_workspaces.SelectedIndex == 1) SetPlanTool(PlanTool.Select);
+        else _planCanvas.CancelDraft();
+        _status.Text = "命令已取消，返回选择。";
+    }
+
+    private void ExecuteCommand(string? input)
+    {
+        var command = input?.Trim() ?? "";
+        if (_workspaces.SelectedIndex == 1 && _planCanvas.HasWallStart
+            && ModelCommandCatalog.TryPolarLength(command, out var polarLength, out var angleDegrees))
+        {
+            if (!_planCanvas.TryDrawWallPolar(polarLength, angleDegrees, out var error)) _status.Text = error;
+            else { _status.Text = $"已按 {angleDegrees:0.##}° 画 {polarLength:0.##} mm 墙；Esc 退出。"; _planCanvas.Focus(); }
+            return;
+        }
+        if (_workspaces.SelectedIndex == 1 && _planCanvas.HasWallStart
+            && ModelCommandCatalog.TryLength(command, out var length))
+        {
+            if (!_planCanvas.TryDrawWallLength(length, out var error)) _status.Text = error;
+            else { _status.Text = $"已画 {length:0.##} mm 墙；继续指定下一段，Esc 退出。"; _planCanvas.Focus(); }
+            return;
+        }
+        if (ModelCommandCatalog.TryDisplacement(input, out var dx, out var dy))
+        {
+            var active = _movingInViewport || _planCanvas.IsMoving;
+            if (!active || _selectedId == null)
+            { _status.Text = "请先选择墙并输入 M 或 CO。"; return; }
+            var copy = _movingInViewport ? _copyingInViewport : _planCanvas.IsCopyingMove;
+            var id = _selectedId;
+            CancelMove();
+            _planCanvas.CancelDraft();
+            _ = ApplyExactDisplacementAsync(id, dx, dy, copy);
+            return;
+        }
+        if (command.StartsWith("POLAR", StringComparison.OrdinalIgnoreCase)
+            && command.Length > 5 && double.TryParse(command[5..].Trim(), NumberStyles.Float,
+                CultureInfo.InvariantCulture, out var polarStep)
+            && double.IsFinite(polarStep) && polarStep >= 1 && polarStep <= 90)
+        { SetPolar(true, polarStep); return; }
+        switch (ModelCommandCatalog.Resolve(input))
+        {
+            case ModelCommandKind.Wall:
+                _workspaces.SelectedIndex = 1;
+                SetPlanTool(PlanTool.Wall); break;
+            case ModelCommandKind.Move: BeginMove(false); break;
+            case ModelCommandKind.Copy: BeginMove(true); break;
+            case ModelCommandKind.Polar:
+                SetPolar(!_planCanvas.PolarEnabled, _planCanvas.PolarStepDegrees); break;
+            case ModelCommandKind.Ortho:
+                SetOrthogonal(!_planCanvas.OrthogonalEnabled); break;
+            case ModelCommandKind.Select:
+                if (_workspaces.SelectedIndex == 1) SetPlanTool(PlanTool.Select);
+                else SetViewTool(ViewTransformTool.Select);
+                break;
+            case ModelCommandKind.GizmoMove:
+                if (_workspaces.SelectedIndex == 0) SetViewTool(ViewTransformTool.Move);
+                break;
+            case ModelCommandKind.Rotate:
+                if (_workspaces.SelectedIndex == 0) SetViewTool(ViewTransformTool.Rotate);
+                break;
+            case ModelCommandKind.Mirror:
+                _status.Text = "MI 镜像尚未实现；当前模型不会被修改。"; break;
+            case ModelCommandKind.Fillet:
+                _status.Text = "F 圆角尚未实现；当前模型不会被修改。"; break;
+            default:
+                _status.Text = string.IsNullOrWhiteSpace(input) ? "请输入命令。"
+                    : "未知命令：" + input.Trim(); break;
+        }
+    }
+
+    private void BeginMove(bool copy = false)
+    {
+        if (_session.Model.Walls.All(w => w.Id != _selectedId))
+        { _status.Text = "请先选择要操作的墙。"; return; }
+        _gizmo.Cancel();
+        _commandInput.PlaceholderText = "可输入 @ΔX,ΔY 精确提交，例如 @300,0";
+        if (_workspaces.SelectedIndex == 1)
+        {
+            if (!_planCanvas.BeginMove(copy)) _status.Text = "请在当前楼层选择一面墙。";
+            else _planCanvas.Focus();
+            return;
+        }
+        if (_workspaces.SelectedIndex != 0) return;
+        _movingInViewport = true;
+        _copyingInViewport = copy;
+        _viewportMoveBase = null;
+        _commandInput.PlaceholderText = "可输入 @ΔX,ΔY 精确提交，例如 @300,0";
+        _status.Text = (copy ? "复制 CO" : "移动 M")
+            + "：在三维视图指定基点，再指定目标点；Esc 取消。";
+    }
+
+    private void CancelMove()
+    {
+        _movingInViewport = false;
+        _copyingInViewport = false;
+        _viewportMoveBase = null;
+        _commandInput.PlaceholderText = "输入命令：M 移动 / CO 复制";
+    }
+
+    private async Task FinishMoveAsync(string id, PointModel from, PointModel to, bool copy)
+    {
+        var entered = await new MovementInputWindow(to.X - from.X, to.Y - from.Y, 0, copy)
+            .ShowDialog<MovementResult?>(this);
+        if (entered == null)
+        {
+            _commandInput.PlaceholderText = "输入命令：M 移动 / CO 复制";
+            _status.Text = copy ? "已取消复制。" : "已取消移动。";
+            return;
+        }
+        await ApplyExactDisplacementAsync(id, entered.X, entered.Y, copy);
+    }
+
+    private async Task ApplyExactDisplacementAsync(string id, double dx, double dy, bool copy)
+    {
+        if (!_session.TryTransformWall(id, dx, dy, 0,
+            copy, out var affectedId, out var error))
+        { _status.Text = error; return; }
+        _selectedId = affectedId;
+        _commandInput.PlaceholderText = "输入命令：M 移动 / CO 复制";
+        await RefreshModelAsync(copy ? "已复制墙及门窗" : "已移动墙（长度保持不变）");
+    }
+
     private void OnShortcutKeyDown(object? sender, KeyEventArgs e)
     {
-        if (!e.KeyModifiers.HasFlag(KeyModifiers.Control) || ShortcutEditingText(e.Source)) return;
-        if (e.Key == Key.Z && e.KeyModifiers.HasFlag(KeyModifiers.Shift))
-        { e.Handled = true; _ = RedoModelAsync(); }
-        else if (e.Key == Key.Z)
-        { e.Handled = true; _ = UndoModelAsync(); }
-        else if (e.Key == Key.Y)
-        { e.Handled = true; _ = RedoModelAsync(); }
+        var editingOtherField = ShortcutEditingText(e.Source) && !IsCommandInput(e.Source);
+        if (editingOtherField) return;
+        if (e.Key == Key.Escape)
+        { e.Handled = true; CancelActiveCommand(); return; }
+        if (e.Key == Key.F8)
+        { e.Handled = true; SetOrthogonal(!_planCanvas.OrthogonalEnabled); return; }
+        if (e.Key == Key.F10)
+        { e.Handled = true; SetPolar(!_planCanvas.PolarEnabled, _planCanvas.PolarStepDegrees); return; }
+        if (e.Key == Key.Delete && e.KeyModifiers == KeyModifiers.None && !ShortcutEditingText(e.Source))
+        { e.Handled = true; _ = DeleteSelectedAsync(); return; }
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        {
+            if (e.Key == Key.Z && e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+            { e.Handled = true; _ = RedoModelAsync(); }
+            else if (e.Key == Key.Z)
+            { e.Handled = true; _ = UndoModelAsync(); }
+            else if (e.Key == Key.Y)
+            { e.Handled = true; _ = RedoModelAsync(); }
+            return;
+        }
+        if (IsCommandInput(e.Source) || e.KeyModifiers.HasFlag(KeyModifiers.Alt)) return;
+        if (e.Key == Key.Enter || e.Key == Key.Space)
+        {
+            if (!string.IsNullOrWhiteSpace(_commandInput.Text))
+            { var command = _commandInput.Text; _commandInput.Clear(); ExecuteCommand(command); }
+            e.Handled = true;
+            return;
+        }
+        var character = CommandCharacter(e.Key, e.KeyModifiers.HasFlag(KeyModifiers.Shift));
+        if (character == null) return;
+        _commandInput.Text += character;
+        _commandInput.CaretIndex = _commandInput.Text?.Length ?? 0;
+        _commandInput.Focus();
+        e.Handled = true;
+    }
+
+    private bool IsCommandInput(object? source)
+    {
+        var control = source as Control;
+        while (control != null)
+        {
+            if (ReferenceEquals(control, _commandInput)) return true;
+            control = control.Parent as Control;
+        }
+        return false;
+    }
+
+    private static string? CommandCharacter(Key key, bool shift)
+    {
+        var name = key.ToString();
+        if (name.Length == 1 && name[0] >= 'A' && name[0] <= 'Z') return name;
+        if (name.Length == 2 && name[0] == 'D' && char.IsDigit(name[1]))
+            return shift && name[1] == '2' ? "@" : name[1].ToString();
+        if (name.StartsWith("NumPad", StringComparison.Ordinal)
+            && name.Length == 7 && char.IsDigit(name[^1])) return name[^1].ToString();
+        return name switch
+        {
+            "OemComma" => shift ? "<" : ",", "OemPeriod" or "Decimal" => ".",
+            "OemMinus" or "Subtract" => "-", "OemPlus" or "Add" => "+",
+            _ => null
+        };
     }
 
     private static bool ShortcutEditingText(object? source)
@@ -773,6 +1053,16 @@ internal sealed class ProbeWindow : Window
         if (_session.Redo()) await RefreshModelAsync("已重做（Ctrl+Y / Ctrl+Shift+Z）");
     }
 
+    private async Task DeleteSelectedAsync()
+    {
+        if (!_session.TryDeleteElement(_selectedId ?? "", out var error))
+        { _status.Text = error; return; }
+        _gizmo.Cancel();
+        _planCanvas.CancelDraft();
+        _selectedId = null;
+        await RefreshModelAsync("已删除构件（Ctrl+Z 可撤销）");
+    }
+
     private void UpdateGizmoSelection()
     {
         var wall = _session.Model.Walls.FirstOrDefault(x => x.Id == _selectedId);
@@ -797,21 +1087,18 @@ internal sealed class ProbeWindow : Window
             var length = Math.Sqrt(Math.Pow(wall.X2 - wall.X1, 2) + Math.Pow(wall.Y2 - wall.Y1, 2));
             _properties.Children.Add(new TextBlock { Text = $"楼层 {wall.StoreyId} · 墙高 0 表示随楼层" });
             var lengthField = AddNumberField("墙长（mm）", length);
-            var thicknessField = AddNumberField("墙厚（mm）", wall.Thickness);
+            var bodyOffset = WallReferenceGeometry.BodyOffset(wall);
+            var leftField = AddNumberField("轴线左侧墙厚（mm）", wall.Thickness / 2d + bodyOffset);
+            var rightField = AddNumberField("轴线右侧墙厚（mm）", wall.Thickness / 2d - bodyOffset);
             var heightField = AddNumberField("墙高（mm）", wall.Height);
-            _properties.Children.Add(new TextBlock { Text = "定位轴线位置（沿墙起点 → 终点判断左右）" });
-            var axisPlacement = new ComboBox
-            {
-                ItemsSource = new[] { "墙中", "墙左面", "墙右面" },
-                SelectedIndex = (int)wall.AxisPlacement
-            };
-            _properties.Children.Add(axisPlacement);
+            _properties.Children.Add(new TextBlock { Text = "左右按墙起点 → 终点判断；两侧之和为总墙厚。",
+                TextWrapping = TextWrapping.Wrap });
             var apply = new Button { Content = "应用墙体参数" };
             apply.Click += async (_, _) => await ApplyGeometryAsync(
-                new[] { lengthField, thicknessField, heightField }, values =>
+                new[] { lengthField, leftField, rightField, heightField }, values =>
             {
-                var success = _session.TrySetWallGeometry(wall.Id, values[0], values[1], values[2],
-                    (WallAxisPlacement)Math.Max(0, axisPlacement.SelectedIndex), out var error);
+                var success = _session.TrySetWallGeometryBySides(wall.Id,
+                    values[0], values[1], values[2], values[3], out var error);
                 return (success, error);
             });
             _properties.Children.Add(apply);
@@ -1100,6 +1387,22 @@ internal sealed class ProbeWindow : Window
         _viewport.EndInteraction(new Point(100, 130));
         var orbit = _viewport.CameraAngles;
         var passed = original == stationary && orbit.Pitch < stationary.Pitch;
+        var fixedPoint = _session.Model.Walls.FirstOrDefault(w => w.Id == "1F-S");
+        if (fixedPoint != null)
+        {
+            var before = _viewport.ProjectModelPoint(fixedPoint.X1, fixedPoint.Y1,
+                _session.Model.BaseElevationOf(fixedPoint));
+            var reduced = BuildingModelJson.FromJson(BuildingModelJson.ToJson(_session.Model));
+            reduced.Walls.RemoveAll(w => w.Id != "1F-S");
+            reduced.Openings.Clear();
+            _viewport.SetScene(ModelViewport.PrepareScene(BuildingVolumeBuilder.Build(reduced)));
+            var after = _viewport.ProjectModelPoint(fixedPoint.X1, fixedPoint.Y1,
+                _session.Model.BaseElevationOf(fixedPoint));
+            passed &= before != null && after != null
+                && Math.Abs(before.Value.X - after.Value.X) < 0.1
+                && Math.Abs(before.Value.Y - after.Value.Y) < 0.1;
+            _viewport.SetScene(ModelViewport.PrepareScene(BuildingVolumeBuilder.Build(_session.Model)));
+        }
         Console.WriteLine(passed ? "AVALONIA_CAMERA_DRAG_OK" : "AVALONIA_CAMERA_DRAG_FAILED");
         _viewport.ResetView();
         return passed;
@@ -1136,7 +1439,49 @@ internal sealed class ProbeWindow : Window
             RoutedEvent = KeyDownEvent, Key = Key.Z, KeyModifiers = KeyModifiers.Control
         });
         var textKeptModel = textBox != null && _session.Revision == revision;
-        var success = undone && redone && shiftRedo && textKeptModel;
+        var shiftHorizontal = PlanEditorCanvas.ShiftDirection(new PointModel(0, 0),
+            new PointModel(100, 20)) == PlanAxisConstraint.X;
+        var shiftVertical = PlanEditorCanvas.ShiftDirection(new PointModel(0, 0),
+            new PointModel(20, 100)) == PlanAxisConstraint.Y;
+        var commands = ModelCommandCatalog.Resolve("m") == ModelCommandKind.Move
+            && ModelCommandCatalog.Resolve("WA") == ModelCommandKind.Wall
+            && ModelCommandCatalog.Resolve("ORTHO") == ModelCommandKind.Ortho
+            && ModelCommandCatalog.Resolve(" CO ") == ModelCommandKind.Copy
+            && ModelCommandCatalog.Resolve("mi") == ModelCommandKind.Mirror
+            && ModelCommandCatalog.Resolve("f") == ModelCommandKind.Fillet
+            && ModelCommandCatalog.TryPolarLength("@3000<45", out var polarDistance,
+                out var polarAngle) && polarDistance == 3000 && polarAngle == 45
+            && ModelCommandCatalog.TryDisplacement("@300,-25", out var commandX,
+                out var commandY) && commandX == 300 && commandY == -25;
+        _viewport.RaiseEvent(new KeyEventArgs { RoutedEvent = KeyDownEvent, Key = Key.M });
+        var typedM = _commandInput.Text == "M";
+        _commandInput.RaiseEvent(new KeyEventArgs { RoutedEvent = KeyDownEvent, Key = Key.Space });
+        var moving = typedM && _movingInViewport;
+        _viewport.RaiseEvent(new KeyEventArgs { RoutedEvent = KeyDownEvent, Key = Key.Escape });
+        var moveCancelled = !_movingInViewport;
+        ExecuteCommand("CO");
+        var copying = _movingInViewport && _copyingInViewport;
+        CancelMove();
+        _viewport.RaiseEvent(new KeyEventArgs { RoutedEvent = KeyDownEvent, Key = Key.F8 });
+        var orthoOn = _planCanvas.OrthogonalEnabled && !_planCanvas.PolarEnabled;
+        _viewport.RaiseEvent(new KeyEventArgs { RoutedEvent = KeyDownEvent, Key = Key.F10 });
+        var polarOn = !_planCanvas.OrthogonalEnabled && _planCanvas.PolarEnabled;
+        _viewport.RaiseEvent(new KeyEventArgs { RoutedEvent = KeyDownEvent, Key = Key.F10 });
+        _viewport.RaiseEvent(new KeyEventArgs { RoutedEvent = KeyDownEvent, Key = Key.W });
+        _commandInput.Text += "A";
+        _commandInput.RaiseEvent(new KeyEventArgs { RoutedEvent = KeyDownEvent, Key = Key.Space });
+        var wallStarted = _workspaces.SelectedIndex == 1 && _planCanvas.Tool == PlanTool.Wall;
+        _planCanvas.RaiseEvent(new KeyEventArgs { RoutedEvent = KeyDownEvent, Key = Key.Escape });
+        var wallCancelled = _planCanvas.Tool == PlanTool.Select;
+        var polarMath = PlanEditorCanvas.PolarPoint(new PointModel(0, 0),
+            new PointModel(100, 20), 45);
+        var polarSnaps = Math.Abs(polarMath.Y) < 0.001;
+        var planMove = _planCanvas.BeginMove();
+        _planCanvas.CancelDraft();
+        var success = undone && redone && shiftRedo && textKeptModel
+            && shiftHorizontal && shiftVertical && commands
+            && moving && moveCancelled && copying && planMove && orthoOn
+            && polarOn && wallStarted && wallCancelled && polarSnaps;
         Console.WriteLine(success ? "AVALONIA_CTRL_Z_Y_SHIFT_Z_OK" : "AVALONIA_SHORTCUT_CHECK_FAILED");
         return success;
     }

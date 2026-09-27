@@ -13,6 +13,7 @@ internal static class PlanEditingTests
 
     public static void Run()
     {
+        SnapToBuildingAxes();
         HitTestPrefersOpeningThenGrips();
         SnapFindsEndpointsAndMidpoints();
         SnapOnlyToObjects();
@@ -21,6 +22,23 @@ internal static class PlanEditingTests
         HistoryUndoRedoAndBranchReset();
         DrawRoomThenProjectElevation();
         Console.WriteLine("PASS 平面编辑逻辑：命中 / 捕捉 / 洞口校验 / 撤销栈 / 手画一间房出立面");
+    }
+
+    private static void SnapToBuildingAxes()
+    {
+        var model = SampleModelFactory.CreateEmptyModel("轴网捕捉");
+        model.Axes.Add(new AxisModel { Id = "AX-X", Vertical = true, Position = 1000,
+            ExtentStart = 0, ExtentEnd = 4000 });
+        model.Axes.Add(new AxisModel { Id = "AX-Y", Vertical = false, Position = 2000,
+            ExtentStart = 0, ExtentEnd = 3000 });
+        var intersection = PlanEditing.Snap(model, "1F", 1020, 2010, 50, false, 0, 0);
+        Assert(intersection.Kind == PlanEditing.SnapAxisIntersection
+            && intersection.X == 1000 && intersection.Y == 2000,
+            "画墙未捕捉到轴线交点");
+        var axis = PlanEditing.Snap(model, "1F", 1020, 2800, 50, false, 0, 0);
+        Assert(axis.Kind == PlanEditing.SnapAxis && axis.X == 1000 && axis.Y == 2800,
+            "画墙未捕捉到轴线");
+        Console.WriteLine("PASS 轴线及轴线交点捕捉");
     }
 
     private static BuildingModelDocument Model()

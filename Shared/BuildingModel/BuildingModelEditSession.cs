@@ -92,9 +92,10 @@ namespace BatchPdfPublisher.BuildingModel
                 Id = "W-" + Guid.NewGuid().ToString("N"), StoreyId = source.StoreyId,
                 X1 = source.X1, Y1 = source.Y1, X2 = source.X2, Y2 = source.Y2,
                 Thickness = source.Thickness, Height = source.Height, Material = source.Material,
-                AxisPlacement = source.AxisPlacement
+                AxisPlacement = source.AxisPlacement, AxisOffset = source.AxisOffset
             };
             candidate.Walls.Add(wall);
+            if (!SplitOrthogonalTConnections(candidate, true, out error)) return false;
             Commit(candidate);
             id = wall.Id;
             return true;
@@ -137,8 +138,13 @@ namespace BatchPdfPublisher.BuildingModel
             else
             {
                 var opening = candidate.Openings.FirstOrDefault(x => x != null && Same(x.Id, id));
-                if (opening == null) { error = "当前只能删除墙或门窗；未找到构件：" + id; return false; }
-                candidate.Openings.Remove(opening);
+                if (opening != null) candidate.Openings.Remove(opening);
+                else if (candidate.Columns.RemoveAll(x => x != null && Same(x.Id, id)) == 0
+                    && candidate.Slabs.RemoveAll(x => x != null && Same(x.Id, id)) == 0
+                    && candidate.Stairs.RemoveAll(x => x != null && Same(x.Id, id)) == 0
+                    && candidate.Roofs.RemoveAll(x => x != null && Same(x.Id, id)) == 0
+                    && candidate.Rooms.RemoveAll(x => x != null && Same(x.Id, id)) == 0)
+                { error = "未找到可删除的构件：" + id; return false; }
             }
             Commit(candidate);
             return true;
@@ -148,7 +154,74 @@ namespace BatchPdfPublisher.BuildingModel
         {
             if (source == null) throw new ArgumentNullException(nameof(source));
             Model = Clone(source);
+            // Older files may contain an unsplit through-wall at a T junction.
+            // Give each arm its own persistent wall ID before editing starts.
+            SplitOrthogonalTConnections(Model, false, out _);
             _history.Reset(Model);
+        }
+
+        private static bool SplitOrthogonalTConnections(BuildingModelDocument model,
+            bool rejectBlockedSplit, out string error)
+        {
+            error = null;
+            // Keep iterating because a single through-wall may meet several branch walls.
+            for (var pass = 0; pass < 256; pass++)
+            {
+                var split = false;
+                foreach (var host in model.Walls.ToArray())
+                {
+                    var hostHorizontal = Math.Abs(host.Y2 - host.Y1) <= 0.001d;
+                    var hostVertical = Math.Abs(host.X2 - host.X1) <= 0.001d;
+                    if (hostHorizontal == hostVertical) continue;
+                    var length = hostHorizontal ? Math.Abs(host.X2 - host.X1) : Math.Abs(host.Y2 - host.Y1);
+                    foreach (var branch in model.Walls.ToArray())
+                    {
+                        if (ReferenceEquals(host, branch) || !Same(host.StoreyId, branch.StoreyId)
+                            || Math.Min(model.BaseElevationOf(host) + model.HeightOf(host),
+                                model.BaseElevationOf(branch) + model.HeightOf(branch))
+                                - Math.Max(model.BaseElevationOf(host), model.BaseElevationOf(branch)) <= 0.5d) continue;
+                        var branchHorizontal = Math.Abs(branch.Y2 - branch.Y1) <= 0.001d;
+                        var branchVertical = Math.Abs(branch.X2 - branch.X1) <= 0.001d;
+                        if (!(hostHorizontal && branchVertical || hostVertical && branchHorizontal)) continue;
+                        foreach (var endpoint in new[] { new PointModel(branch.X1, branch.Y1),
+                            new PointModel(branch.X2, branch.Y2) })
+                        {
+                            var onAxis = hostHorizontal ? Math.Abs(endpoint.Y - host.Y1) <= 0.5d
+                                : Math.Abs(endpoint.X - host.X1) <= 0.5d;
+                            var signed = hostHorizontal ? (endpoint.X - host.X1) * Math.Sign(host.X2 - host.X1)
+                                : (endpoint.Y - host.Y1) * Math.Sign(host.Y2 - host.Y1);
+                            if (!onAxis || signed <= 0.5d || signed >= length - 0.5d) continue;
+                            var openings = model.Openings.Where(o => Same(o.HostWallId, host.Id)).ToArray();
+                            if (openings.Any(o => o.Offset - o.Width / 2d < signed + 0.5d
+                                && o.Offset + o.Width / 2d > signed - 0.5d))
+                            {
+                                if (rejectBlockedSplit)
+                                { error = "T 形连接位于门窗洞口内；请先移动洞口或接点。"; return false; }
+                                continue;
+                            }
+                            var right = new WallModel
+                            {
+                                Id = "W-" + Guid.NewGuid().ToString("N"), StoreyId = host.StoreyId,
+                                X1 = endpoint.X, Y1 = endpoint.Y, X2 = host.X2, Y2 = host.Y2,
+                                Thickness = host.Thickness, Height = host.Height,
+                                Material = host.Material, AxisPlacement = host.AxisPlacement,
+                                AxisOffset = host.AxisOffset
+                            };
+                            host.X2 = endpoint.X; host.Y2 = endpoint.Y;
+                            model.Walls.Add(right);
+                            foreach (var opening in openings.Where(o => o.Offset > signed))
+                            { opening.HostWallId = right.Id; opening.Offset -= signed; }
+                            split = true;
+                            break;
+                        }
+                        if (split) break;
+                    }
+                    if (split) break;
+                }
+                if (!split) return true;
+            }
+            error = "T 形墙体连接过多，无法自动拆分。";
+            return false;
         }
 
         public bool TrySetWallLength(string id, double length, out string error)
@@ -268,7 +341,7 @@ namespace BatchPdfPublisher.BuildingModel
                 {
                     Id = "W-" + Guid.NewGuid().ToString("N"), StoreyId = source.StoreyId,
                     Thickness = source.Thickness, Height = source.Height, Material = source.Material,
-                    AxisPlacement = source.AxisPlacement
+                    AxisPlacement = source.AxisPlacement, AxisOffset = source.AxisOffset
                 };
                 candidate.Walls.Add(target);
                 foreach (var opening in candidate.Openings.Where(x => x != null && Same(x.HostWallId, id)).ToArray())
@@ -294,11 +367,25 @@ namespace BatchPdfPublisher.BuildingModel
         {
             var wall = Model.Walls.FirstOrDefault(x => x != null && Same(x.Id, id));
             if (wall == null) { error = "未找到墙：" + id; return false; }
-            return TrySetWallGeometry(id, length, thickness, height, wall.AxisPlacement, out error);
+            return TrySetWallGeometryCore(id, length, thickness, height,
+                wall.AxisPlacement, wall.AxisOffset, out error);
         }
 
         public bool TrySetWallGeometry(string id, double length, double thickness, double height,
             WallAxisPlacement placement, out string error)
+            => TrySetWallGeometryCore(id, length, thickness, height, placement, null, out error);
+
+        public bool TrySetWallGeometryBySides(string id, double length, double left, double right,
+            double height, out string error)
+        {
+            if (!Finite(left) || !Finite(right) || left < 0d || right < 0d || left + right <= 0d)
+            { error = "轴线左右两侧墙厚必须是非负有限数值，且总墙厚大于 0。"; return false; }
+            return TrySetWallGeometryCore(id, length, left + right, height,
+                WallAxisPlacement.Center, (left - right) / 2d, out error);
+        }
+
+        private bool TrySetWallGeometryCore(string id, double length, double thickness, double height,
+            WallAxisPlacement placement, double? axisOffset, out string error)
         {
             error = null;
             if (!Enum.IsDefined(typeof(WallAxisPlacement), placement))
@@ -324,6 +411,7 @@ namespace BatchPdfPublisher.BuildingModel
             wall.Thickness = thickness;
             wall.Height = height;
             wall.AxisPlacement = placement;
+            wall.AxisOffset = axisOffset;
             error = ValidateWallAndOpenings(candidate, wall);
             if (error != null) return false;
             Commit(candidate);
@@ -338,8 +426,9 @@ namespace BatchPdfPublisher.BuildingModel
             var candidate = Clone(Model);
             var wall = candidate.Walls.FirstOrDefault(x => x != null && Same(x.Id, id));
             if (wall == null) { error = "未找到墙：" + id; return false; }
-            if (wall.AxisPlacement == placement) return true;
+            if (wall.AxisPlacement == placement && wall.AxisOffset == null) return true;
             wall.AxisPlacement = placement;
+            wall.AxisOffset = null;
             Commit(candidate);
             return true;
         }

@@ -17,6 +17,7 @@ internal sealed class PlanEditorCanvas : Control
     private string? _selectedId;
     private PointModel? _wallStart;
     private PointModel? _cursor;
+    private Point? _lastPointer;
     private string _snapKind = PlanEditing.SnapNone;
     private Point? _panStart;
     private string? _gripWallId;
@@ -31,27 +32,111 @@ internal sealed class PlanEditorCanvas : Control
     private double _centerX;
     private double _centerY;
     private bool _fitted;
+    private bool _shiftHeld;
+    private bool _moving;
+    private bool _copying;
+    private PointModel? _moveBase;
     public PlanTool Tool { get; set; }
     public PlanAxisConstraint AxisConstraint { get; private set; }
+    public bool IsMoving => _moving;
+    public bool IsCopyingMove => _copying;
+    public bool HasWallStart => Tool == PlanTool.Wall && _wallStart != null;
+    public bool PolarEnabled { get; private set; }
+    public bool OrthogonalEnabled { get; private set; }
+    public double PolarStepDegrees { get; private set; } = 45d;
     public event Func<PointModel, PointModel, bool>? WallRequested;
     public event Action<string, string, double>? OpeningRequested;
     public event Action<string?>? ElementPicked;
     public event Action<string, int, PointModel>? WallGripReleased;
     public event Action<string>? SnapChanged;
     public event Action<PlanAxisConstraint>? AxisConstraintChanged;
+    public event Action<string, PointModel, PointModel, bool>? MoveRequested;
+    public event Action<string>? MoveStageChanged;
+
+    public void SetPolar(bool enabled, double stepDegrees)
+    {
+        if (!double.IsFinite(stepDegrees) || stepDegrees < 1d || stepDegrees > 90d)
+            throw new ArgumentOutOfRangeException(nameof(stepDegrees));
+        PolarEnabled = enabled;
+        PolarStepDegrees = stepDegrees;
+        if (_lastPointer is Point point && (Tool == PlanTool.Wall || _moving))
+            _cursor = Snap(point);
+        InvalidateVisual();
+    }
+
+    public void SetOrthogonal(bool enabled)
+    {
+        OrthogonalEnabled = enabled;
+        if (_lastPointer is Point point) UpdateShiftConstraint(point, _shiftHeld);
+        else if (!enabled) SetAxisConstraint(PlanAxisConstraint.Free);
+        InvalidateVisual();
+    }
+
+    internal static PointModel PolarPoint(PointModel anchor, PointModel target, double stepDegrees)
+    {
+        var dx = target.X - anchor.X; var dy = target.Y - anchor.Y;
+        var radius = Math.Sqrt(dx * dx + dy * dy);
+        if (radius < 1e-9) return target;
+        var step = stepDegrees * Math.PI / 180d;
+        var angle = Math.Round(Math.Atan2(dy, dx) / step) * step;
+        return new PointModel(anchor.X + radius * Math.Cos(angle),
+            anchor.Y + radius * Math.Sin(angle));
+    }
+
+    public bool BeginMove(bool copy = false)
+    {
+        if (_selectedId == null || !_model.Walls.Any(w => w.Id == _selectedId && w.StoreyId == _storeyId))
+            return false;
+        CancelDraft();
+        Tool = PlanTool.Select;
+        _moving = true;
+        _copying = copy;
+        MoveStageChanged?.Invoke((copy ? "复制 CO" : "移动 M")
+            + "：指定基点（可捕捉墙端点或轴线）。Esc 取消。");
+        return true;
+    }
 
     public void SetAxisConstraint(PlanAxisConstraint constraint)
     {
         AxisConstraint = constraint;
+        if ((Tool == PlanTool.Wall || _moving) && _lastPointer is Point point)
+            _cursor = Snap(point);
         AxisConstraintChanged?.Invoke(constraint);
         InvalidateVisual();
     }
+
+    private void UpdateShiftConstraint(Point point, bool held)
+    {
+        _shiftHeld = held;
+        if (!held && !OrthogonalEnabled) { if (AxisConstraint != PlanAxisConstraint.Free)
+            SetAxisConstraint(PlanAxisConstraint.Free); return; }
+        PointModel? anchor = _wallStart ?? _moveBase;
+        if (_gripWallId != null)
+        {
+            var wall = _model.Walls.FirstOrDefault(w => w.Id == _gripWallId);
+            if (wall != null) anchor = _gripIndex == 0
+                ? new PointModel(wall.X1, wall.Y1) : new PointModel(wall.X2, wall.Y2);
+        }
+        if (anchor == null) return;
+        var world = World(point);
+        var direction = ShiftDirection(anchor, world);
+        if (direction != AxisConstraint) SetAxisConstraint(direction);
+    }
+
+    internal static PlanAxisConstraint ShiftDirection(PointModel anchor, PointModel world)
+        => Math.Abs(world.X - anchor.X) >= Math.Abs(world.Y - anchor.Y)
+            ? PlanAxisConstraint.X : PlanAxisConstraint.Y;
 
     public PlanEditorCanvas()
     {
         Focusable = true;
         ClipToBounds = true;
         Cursor = new Cursor(StandardCursorType.Cross);
+        LostFocus += (_, _) =>
+        {
+            _shiftHeld = false;
+            if (!OrthogonalEnabled) SetAxisConstraint(PlanAxisConstraint.Free);
+        };
     }
 
     public void SetModel(BuildingModelDocument model, string storeyId)
@@ -59,6 +144,9 @@ internal sealed class PlanEditorCanvas : Control
         _model = model;
         _storeyId = storeyId;
         _gripPreview = null;
+        _moving = false;
+        _copying = false;
+        _moveBase = null;
         _resolvedAxes = BuildingAxisLayout.Resolve(model);
         IndexOrthogonalJunctions();
         if (!_fitted) Fit();
@@ -81,8 +169,14 @@ internal sealed class PlanEditorCanvas : Control
 
     public void CancelDraft()
     {
+        _moving = false;
+        _copying = false;
+        _moveBase = null;
         _wallStart = null;
         _cursor = null;
+        _lastPointer = null;
+        _shiftHeld = false;
+        SetAxisConstraint(PlanAxisConstraint.Free);
         _snapKind = PlanEditing.SnapNone;
         _gripWallId = null;
         _gripPosition = null;
@@ -104,6 +198,23 @@ internal sealed class PlanEditorCanvas : Control
         if (direction < 1e-6) { dx = 1; dy = 0; direction = 1; }
         var end = new PointModel(_wallStart.X + dx / direction * length,
             _wallStart.Y + dy / direction * length);
+        if (WallRequested?.Invoke(_wallStart, end) != true)
+        { error = "未能创建该墙。"; return false; }
+        _wallStart = end;
+        InvalidateVisual();
+        error = "";
+        return true;
+    }
+
+    public bool TryDrawWallPolar(double length, double angleDegrees, out string error)
+    {
+        error = "请先在画布上指定墙的起点。";
+        if (Tool != PlanTool.Wall || _wallStart == null) return false;
+        if (!double.IsFinite(length) || length < 10 || !double.IsFinite(angleDegrees))
+        { error = "请输入有效的墙长和角度，例如 @3000<45。"; return false; }
+        var angle = angleDegrees * Math.PI / 180d;
+        var end = new PointModel(_wallStart.X + length * Math.Cos(angle),
+            _wallStart.Y + length * Math.Sin(angle));
         if (WallRequested?.Invoke(_wallStart, end) != true)
         { error = "未能创建该墙。"; return false; }
         _wallStart = end;
@@ -196,11 +307,11 @@ internal sealed class PlanEditorCanvas : Control
         var world = World(p);
         var from = Tool == PlanTool.Wall ? _wallStart : null;
         var snapped = PlanEditing.Snap(_model, _storeyId, world.X, world.Y, 10d / _scale,
-            from != null, from?.X ?? 0, from?.Y ?? 0, excludedWallId);
-        if (snapped.Kind != _snapKind && (Tool == PlanTool.Wall || _gripWallId != null))
+            from != null, from?.X ?? 0, from?.Y ?? 0, excludedWallId, _resolvedAxes);
+        if (snapped.Kind != _snapKind && (Tool == PlanTool.Wall || _gripWallId != null || _moving))
             SnapChanged?.Invoke(snapped.Kind);
         _snapKind = snapped.Kind;
-        PointModel? anchor = _wallStart;
+        PointModel? anchor = _wallStart ?? _moveBase;
         if (excludedWallId != null)
         {
             var wall = _model.Walls.FirstOrDefault(w => w.Id == excludedWallId);
@@ -211,6 +322,8 @@ internal sealed class PlanEditorCanvas : Control
             return new PointModel(snapped.X, anchor.Y);
         if (anchor != null && AxisConstraint == PlanAxisConstraint.Y)
             return new PointModel(anchor.X, snapped.Y);
+        if (anchor != null && PolarEnabled && snapped.Kind == PlanEditing.SnapNone)
+            return PolarPoint(anchor, new PointModel(snapped.X, snapped.Y), PolarStepDegrees);
         return new PointModel(snapped.X, snapped.Y);
     }
 
@@ -219,6 +332,8 @@ internal sealed class PlanEditorCanvas : Control
         base.OnPointerPressed(e);
         Focus();
         var point = e.GetPosition(this);
+        _lastPointer = point;
+        UpdateShiftConstraint(point, _shiftHeld || e.KeyModifiers.HasFlag(KeyModifiers.Shift));
         var buttons = e.GetCurrentPoint(this).Properties;
         if (buttons.IsMiddleButtonPressed || buttons.IsRightButtonPressed)
         {
@@ -227,6 +342,29 @@ internal sealed class PlanEditorCanvas : Control
             return;
         }
         if (!buttons.IsLeftButtonPressed) return;
+        if (_moving)
+        {
+            var snapped = Snap(point);
+            if (_moveBase == null)
+            {
+                _moveBase = snapped;
+                MoveStageChanged?.Invoke((_copying ? "复制 CO" : "移动 M")
+                    + "：指定目标点；按住 Shift 自动锁定水平/垂直。Esc 取消。");
+            }
+            else
+            {
+                var from = _moveBase;
+                var id = _selectedId!;
+                var copy = _copying;
+                _moving = false;
+                _copying = false;
+                _moveBase = null;
+                MoveRequested?.Invoke(id, from, snapped, copy);
+            }
+            e.Handled = true;
+            InvalidateVisual();
+            return;
+        }
         if (Tool == PlanTool.Select && _selectedId != null)
         {
             var wall = _model.Walls.FirstOrDefault(w => w.Id == _selectedId && w.StoreyId == _storeyId);
@@ -275,6 +413,8 @@ internal sealed class PlanEditorCanvas : Control
     {
         base.OnPointerMoved(e);
         var point = e.GetPosition(this);
+        _lastPointer = point;
+        UpdateShiftConstraint(point, _shiftHeld || e.KeyModifiers.HasFlag(KeyModifiers.Shift));
         if (_panStart is Point previous)
         {
             _centerX -= (point.X - previous.X) / _scale;
@@ -292,7 +432,7 @@ internal sealed class PlanEditorCanvas : Control
             InvalidateVisual();
             return;
         }
-        if (Tool == PlanTool.Wall) _cursor = Snap(point);
+        if (Tool == PlanTool.Wall || _moving) _cursor = Snap(point);
         else { _cursor = World(point); _snapKind = PlanEditing.SnapNone; }
         InvalidateVisual();
     }
@@ -334,13 +474,22 @@ internal sealed class PlanEditorCanvas : Control
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
-        if (e.Key == Key.X) { SetAxisConstraint(AxisConstraint == PlanAxisConstraint.X
-            ? PlanAxisConstraint.Free : PlanAxisConstraint.X); e.Handled = true; return; }
-        if (e.Key == Key.Y) { SetAxisConstraint(AxisConstraint == PlanAxisConstraint.Y
-            ? PlanAxisConstraint.Free : PlanAxisConstraint.Y); e.Handled = true; return; }
+        if (e.Key == Key.LeftShift || e.Key == Key.RightShift)
+        {
+            if (_lastPointer is Point point) UpdateShiftConstraint(point, true);
+            return;
+        }
         if (e.Key != Key.Escape) return;
         CancelDraft();
         e.Handled = true;
+    }
+
+    protected override void OnKeyUp(KeyEventArgs e)
+    {
+        base.OnKeyUp(e);
+        if (e.Key != Key.LeftShift && e.Key != Key.RightShift) return;
+        if (_lastPointer is Point point) UpdateShiftConstraint(point, false);
+        else { _shiftHeld = false; if (!OrthogonalEnabled) SetAxisConstraint(PlanAxisConstraint.Free); }
     }
 
     private (WallModel? wall, double offset) HitWall(Point p)
@@ -412,6 +561,11 @@ internal sealed class PlanEditorCanvas : Control
             context.DrawLine(pen, first, second);
         }
         DrawOrthogonalJunctions(context);
+        foreach (var seam in WallJunctionLines.Resolve(_model,
+            _model.Walls.Where(w => w.StoreyId == _storeyId),
+            (_model.FindStorey(_storeyId)?.Elevation ?? 0d) + 1200d))
+            context.DrawLine(new Pen(new SolidColorBrush(Color.Parse("#59768F")), 1),
+                Screen(seam.Item1.X, seam.Item1.Y), Screen(seam.Item2.X, seam.Item2.Y));
         foreach (var wall in _model.Walls.Where(w => w.StoreyId == _storeyId))
             context.DrawLine(new Pen(new SolidColorBrush(Color.Parse("#192D3C")), 1),
                 PreviewWallEndpoint(wall, 0), PreviewWallEndpoint(wall, 1));
@@ -445,11 +599,23 @@ internal sealed class PlanEditorCanvas : Control
         if (_wallStart != null && _cursor != null)
             context.DrawLine(new Pen(new SolidColorBrush(Color.Parse("#65E8B2")), 2),
                 Screen(_wallStart.X, _wallStart.Y), Screen(_cursor.X, _cursor.Y));
+        if (_moving && _moveBase != null && _cursor != null && selectedWall != null)
+        {
+            var dx = _cursor.X - _moveBase.X;
+            var dy = _cursor.Y - _moveBase.Y;
+            var preview = new Pen(new SolidColorBrush(Color.Parse("#65E8B2")),
+                Math.Clamp(selectedWall.Thickness * _scale, 3, 30));
+            context.DrawLine(preview, Screen(selectedWall.X1 + dx, selectedWall.Y1 + dy),
+                Screen(selectedWall.X2 + dx, selectedWall.Y2 + dy));
+            context.DrawLine(new Pen(new SolidColorBrush(Color.Parse("#65E8B2")), 1),
+                Screen(_moveBase.X, _moveBase.Y), Screen(_cursor.X, _cursor.Y));
+        }
         var marker = _gripWallId != null ? _gripPosition : _cursor;
         if (marker != null && _snapKind != PlanEditing.SnapNone)
         {
             var p = Screen(marker.X, marker.Y);
-            var color = _snapKind == PlanEditing.SnapIntersection ? "#FFCC66"
+            var color = _snapKind == PlanEditing.SnapIntersection
+                || _snapKind == PlanEditing.SnapAxisIntersection ? "#FFCC66"
                 : _snapKind == PlanEditing.SnapPerpendicular ? "#67E9BE" : "#6AC9FF";
             var pen = new Pen(new SolidColorBrush(Color.Parse(color)), 2);
             context.DrawEllipse(null, pen, p, 6, 6);

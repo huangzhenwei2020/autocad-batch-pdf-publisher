@@ -76,13 +76,14 @@ internal sealed class ModelViewport : OpenGlControlBase
     private int _fragmentShader;
     private int _buffer;
     private int _array;
-    private float _yaw = 0.4f;
-    private float _pitch = -0.2f;
+    private float _yaw = MathF.Atan2(11f, 13f);
+    private float _pitch = MathF.Asin(10f / MathF.Sqrt(11f * 11f + 10f * 10f + 13f * 13f));
     private float _distance = 19.72f;
     private Vector3 _target;
     private Point? _dragStart;
     private Point? _pressStart;
     private bool _panning;
+    private bool _orbiting;
     private bool _selecting;
     private bool _orbitAllowed;
     private bool _dragged;
@@ -112,7 +113,18 @@ internal sealed class ModelViewport : OpenGlControlBase
 
     public void SetScene(PreparedScene scene)
     {
+        var oldCenter = _volume.Center;
+        var oldScale = (float)(10d / Math.Max(1d, _volume.Diagonal));
+        var worldX = oldCenter.X + _target.X / oldScale;
+        var worldY = oldCenter.Y - _target.Z / oldScale;
+        var worldZ = oldCenter.Z + _target.Y / oldScale;
         _volume = scene.Volume;
+        var newCenter = _volume.Center;
+        var newScale = (float)(10d / Math.Max(1d, _volume.Diagonal));
+        _target = new Vector3((float)(worldX - newCenter.X) * newScale,
+            (float)(worldZ - newCenter.Z) * newScale,
+            (float)(newCenter.Y - worldY) * newScale);
+        _distance *= newScale / oldScale;
         _snapshot = scene.Snapshot;
         _selectedIndex = _selectedId != null && _snapshot.ElementIndexes.TryGetValue(_selectedId, out var index)
             ? index : 0f;
@@ -129,8 +141,8 @@ internal sealed class ModelViewport : OpenGlControlBase
 
     public void ResetView()
     {
-        _yaw = 0.4f;
-        _pitch = -0.2f;
+        _yaw = MathF.Atan2(11f, 13f);
+        _pitch = MathF.Asin(10f / MathF.Sqrt(11f * 11f + 10f * 10f + 13f * 13f));
         _distance = 19.72f;
         _target = Vector3.Zero;
         RequestNextFrameRendering();
@@ -142,18 +154,22 @@ internal sealed class ModelViewport : OpenGlControlBase
         RequestNextFrameRendering();
     }
 
-    private Matrix4x4 CameraView()
+    internal static Matrix4x4 OrbitView(float yaw, float pitch, float distance, Vector3 target)
     {
-        var direction = Vector3.Normalize(new Vector3(11, 10, 13));
-        return Matrix4x4.CreateLookAt(_target + direction * _distance, _target, Vector3.UnitY);
+        // Turntable orbit: azimuth stays around world up; elevation is around the
+        // camera's current right axis. Never rotate the model to move the view.
+        var direction = new Vector3(MathF.Cos(pitch) * MathF.Sin(yaw),
+            MathF.Sin(pitch), MathF.Cos(pitch) * MathF.Cos(yaw));
+        return Matrix4x4.CreateLookAt(target + direction * distance, target, Vector3.UnitY);
     }
+
+    private Matrix4x4 CameraView() => OrbitView(_yaw, _pitch, _distance, _target);
 
     private Matrix4x4 ViewProjection()
     {
-        var model = Matrix4x4.CreateFromYawPitchRoll(_yaw, _pitch, 0);
         var projection = Matrix4x4.CreatePerspectiveFieldOfView(0.8f,
             (float)(Bounds.Width / Bounds.Height), 0.1f, 100f);
-        return model * CameraView() * projection;
+        return CameraView() * projection;
     }
 
     internal Point? ProjectModelPoint(double x, double y, double z)
@@ -230,6 +246,7 @@ internal sealed class ModelViewport : OpenGlControlBase
         {
             if (line?.Start == null || line.End == null) continue;
             var color = line.IsBuildingAxis ? new Vector3(0.3f, 0.85f, 0.75f)
+                : line.IsWallJoint ? new Vector3(0.23f, 0.36f, 0.5f)
                 : new Vector3(1f, 0.7f, 0.25f);
             vertices.Add(ToVertex(line.Start, center, scale, color, 0));
             vertices.Add(ToVertex(line.End, center, scale, color, 0));
@@ -468,7 +485,7 @@ internal sealed class ModelViewport : OpenGlControlBase
         gl.BindVertexArray(_array);
         var snapshot = _snapshot;
         if (!ReferenceEquals(snapshot, _uploaded)) Upload(gl, snapshot);
-        var model = Matrix4x4.CreateFromYawPitchRoll(_yaw, _pitch, 0);
+        var model = Matrix4x4.Identity;
         var view = CameraView();
         var projection = Matrix4x4.CreatePerspectiveFieldOfView(0.8f, (float)width / height, 0.1f, 100f);
         gl.UniformMatrix4fv(gl.GetUniformLocationString(_program, "uModel"), 1, false, &model);
@@ -495,7 +512,7 @@ internal sealed class ModelViewport : OpenGlControlBase
     private string? Pick(Point point)
     {
         if (Bounds.Width <= 0 || Bounds.Height <= 0) return null;
-        var model = Matrix4x4.CreateFromYawPitchRoll(_yaw, _pitch, 0);
+        var model = Matrix4x4.Identity;
         var view = CameraView();
         var projection = Matrix4x4.CreatePerspectiveFieldOfView(0.8f,
             (float)(Bounds.Width / Bounds.Height), 0.1f, 100f);
@@ -630,12 +647,14 @@ internal sealed class ModelViewport : OpenGlControlBase
         return distance > 1e-6f;
     }
 
-    public void BeginInteraction(Point point, bool selecting, bool panning, bool orbitAllowed = true)
+    public void BeginInteraction(Point point, bool selecting, bool panning,
+        bool orbitAllowed = true, bool orbiting = false)
     {
         _panning = panning;
+        _orbiting = orbiting && !panning;
         _selecting = selecting && !panning;
         _orbitAllowed = orbitAllowed;
-        if (!_panning && !_selecting) return;
+        if (!_panning && !_selecting && !_orbiting) return;
         _dragStart = point;
         _pressStart = _dragStart;
         _dragged = false;
@@ -644,12 +663,14 @@ internal sealed class ModelViewport : OpenGlControlBase
     public void MoveInteraction(Point now, bool leftPressed, bool middleOrRightPressed)
     {
         if (_dragStart is not { } previous) return;
-        if (_panning ? !middleOrRightPressed : !leftPressed) return;
+        if ((_panning || _orbiting) ? !middleOrRightPressed : !leftPressed) return;
         if (_pressStart is { } start && (Math.Abs(now.X - start.X) > 4 || Math.Abs(now.Y - start.Y) > 4))
             _dragged = true;
         if (_panning)
         {
-            var forward = Vector3.Normalize(new Vector3(-11, -10, -13));
+            var forward = Vector3.Normalize(_target - (_target + new Vector3(
+                MathF.Cos(_pitch) * MathF.Sin(_yaw), MathF.Sin(_pitch),
+                MathF.Cos(_pitch) * MathF.Cos(_yaw)) * _distance));
             var right = Vector3.Normalize(Vector3.Cross(forward, Vector3.UnitY));
             var up = Vector3.Normalize(Vector3.Cross(right, forward));
             var unitsPerPixel = 2f * _distance * MathF.Tan(0.4f) / Math.Max(1f, (float)Bounds.Height);
@@ -679,6 +700,7 @@ internal sealed class ModelViewport : OpenGlControlBase
         _dragStart = null;
         _pressStart = null;
         _panning = false;
+        _orbiting = false;
         _selecting = false;
     }
 }

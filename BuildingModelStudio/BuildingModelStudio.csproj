@@ -32,6 +32,8 @@
     <Compile Include="..\Shared\BuildingModel\ModelEditHistory.cs" Link="Shared\ModelEditHistory.cs" />
     <Compile Include="..\Shared\BuildingModel\PlanEditing.cs" Link="Shared\PlanEditing.cs" />
     <Compile Include="..\Shared\BuildingModel\OrthographicProjector.cs" Link="Shared\OrthographicProjector.cs" />
+    <Compile Include="..\Shared\BuildingModel\WallJunctionLines.cs" Link="Shared\WallJunctionLines.cs" />
+    <Compile Include="..\Shared\BuildingModel\StoreyElevationLayout.cs" Link="Shared\StoreyElevationLayout.cs" />
     <Compile Include="..\Shared\BuildingModel\SheetComposer.cs" Link="Shared\SheetComposer.cs" />
     <Compile Include="..\Shared\BuildingModel\BuildingModelViewPublisher.cs" Link="Shared\BuildingModelViewPublisher.cs" />
     <Compile Include="..\Shared\BuildingModel\StudioLaunch.cs" Link="Shared\StudioLaunch.cs" />

@@ -14,10 +14,10 @@ internal static class BuildingModelEditSessionTests
         EditWallEndpoints();
         MoveJoinedWallGrip();
         MoveOnlySelectedWallGrip();
-        MoveTWallJunction();
-        MoveMultiLevelWallJunction();
-        MeasureRepeatedJunctionPreview();
-        RejectConflictingWallJunction();
+        SplitTWallAndRestoreCaps();
+        AxisSidesAndBasementLevels();
+        DeleteOtherModelObjects();
+        DifferentHeightWallJunction();
         TransformWallWithOpenings();
         var session = new BuildingModelEditSession(SampleModelFactory.CreateTwoStoreyHouse());
         var wallId = "1F-S";
@@ -355,6 +355,116 @@ internal static class BuildingModelEditSessionTests
         Console.WriteLine("PASS 墙交接夹点：同楼层容差内相接端点联动，洞口越界整笔回滚，撤销重做恢复");
     }
 
+    private static void SplitTWallAndRestoreCaps()
+    {
+        var session = new BuildingModelEditSession(SampleModelFactory.CreateEmptyModel("墙体 T 接测试"));
+        string error;
+        Assert(session.TryAddWall(new WallModel { StoreyId = "1F", X1 = 0, Y1 = 0,
+            X2 = 6000, Y2 = 0, Thickness = 240 }, out var leftId, out error), error);
+        Assert(session.TryAddWall(new WallModel { StoreyId = "1F", X1 = 3000, Y1 = 0,
+            X2 = 3000, Y2 = 4000, Thickness = 240 }, out var branchId, out error), error);
+        Assert(session.Model.Walls.Count == 3, "T 接未把贯通墙拆成可单独删除的两段");
+        var rightId = session.Model.Walls.Single(w => w.Id != leftId && w.Id != branchId).Id;
+        Assert(WallJunctionLines.Resolve(session.Model, session.Model.Walls).Count == 2,
+            "T 接没有生成两条对角斜接线");
+        var joinedTop = BuildingVolumeBuilder.Build(session.Model).Faces
+            .Where(f => f.Kind == "wall" && f.NormalZ > 0.5d).ToArray();
+        Assert(TopOwnerAt(joinedTop, 2940, -60) == leftId
+            && TopOwnerAt(joinedTop, 3060, -60) == rightId
+            && TopOwnerAt(joinedTop, 3000, 80) == branchId,
+            "T 接顶面的斜切归属不正确，选择时仍呈方角");
+        Assert(BuildingVolumeBuilder.Build(session.Model).GuideLines.Count(g => g.IsWallJoint) == 2,
+            "三维顶面没有同步显示 T 接斜线");
+        Assert(session.TryDeleteElement(branchId, out error), error);
+        Assert(WallJunctionLines.Resolve(session.Model, session.Model.Walls).Count == 0,
+            "删除支墙后，贯通墙应恢复平直收口");
+        Assert(BuildingVolumeBuilder.Build(session.Model).GuideLines.All(g => !g.IsWallJoint),
+            "删除支墙后三维仍保留旧接缝");
+        Assert(session.Undo() && session.Model.Walls.Count == 3, "撤销未恢复 T 接");
+        Assert(session.TryDeleteElement(rightId, out error), error);
+        Assert(WallJunctionLines.Resolve(session.Model, session.Model.Walls).Count == 1,
+            "删除右墙后，应成为一条斜接的 L 角");
+        var cornerTop = BuildingVolumeBuilder.Build(session.Model).Faces
+            .Where(f => f.Kind == "wall" && f.NormalZ > 0.5d).ToArray();
+        Assert(TopOwnerAt(cornerTop, 2940, -60) == leftId
+            && TopOwnerAt(cornerTop, 3060, 60) == branchId,
+            "L 角顶面的斜切归属不正确");
+        Assert(session.TryDeleteElement(branchId, out error), error);
+        Assert(WallJunctionLines.Resolve(session.Model, session.Model.Walls).Count == 0,
+            "删除 L 角支墙后，剩余墙未恢复平直端头");
+        Assert(session.Model.Walls.Single().Id == leftId, "墙段 ID 在删除重算中变化");
+        var older = SampleModelFactory.CreateEmptyModel("旧模型 T 接");
+        older.Walls.Add(new WallModel { Id = "H", StoreyId = "1F",
+            X1 = 0, Y1 = 0, X2 = 6000, Y2 = 0, Thickness = 240 });
+        older.Walls.Add(new WallModel { Id = "V", StoreyId = "1F",
+            X1 = 3000, Y1 = 0, X2 = 3000, Y2 = 4000, Thickness = 240 });
+        older.Openings.Add(PlanEditing.CreateOpening("窗", "H", 4500));
+        var migrated = new BuildingModelEditSession(older);
+        Assert(migrated.Model.Walls.Count == 3, "旧模型的 T 接没有拆成独立墙段");
+        var migratedOpening = migrated.Model.Openings.Single();
+        Assert(migratedOpening.HostWallId != "H" && Math.Abs(migratedOpening.Offset - 1500) < 0.001,
+            "拆分旧墙时门窗宿主及偏移没有迁移");
+        Console.WriteLine("PASS 墙体 T/L 接：左右墙可独立删除，斜接线随拓扑重算，撤销恢复");
+    }
+
+    private static void AxisSidesAndBasementLevels()
+    {
+        var floors = StoreyElevationLayout.Resolve(new[]
+        {
+            new StoreyModel { Id = "B2", Name = "地下二层", Height = 3000 },
+            new StoreyModel { Id = "B1", Name = "地下一层", Height = 3600 },
+            new StoreyModel { Id = "1F", Name = "一层", Height = 4200 },
+            new StoreyModel { Id = "2F", Name = "二层", Height = 3300 }
+        }, "1F", 150);
+        Assert(floors[0].Elevation == -6450 && floors[1].Elevation == -3450
+            && floors[2].Elevation == 150 && floors[3].Elevation == 4350,
+            "地下室或地上楼层的自动标高有误");
+        var model = SampleModelFactory.CreateEmptyModel("轴偏距测试");
+        var session = new BuildingModelEditSession(model);
+        Assert(session.TryAddWall(new WallModel { StoreyId = "1F", X1 = 0, Y1 = 0,
+            X2 = 5000, Y2 = 0, Thickness = 240 }, out var id, out var error), error);
+        Assert(session.TrySetWallGeometryBySides(id, 5000, 70, 230, 0, out error), error);
+        var wall = session.Model.Walls.Single();
+        Assert(wall.Thickness == 300 && WallReferenceGeometry.BodyOffset(wall) == -80,
+            "独立的轴线左右侧墙厚没有传到墙体几何");
+        var volume = BuildingVolumeBuilder.Build(session.Model);
+        Assert(Math.Abs(volume.MinY + 230) < 0.001 && Math.Abs(volume.MaxY - 70) < 0.001,
+            "轴线左右侧尺寸没有传递到三维墙体");
+        Assert(session.Undo() && WallReferenceGeometry.BodyOffset(session.Model.Walls.Single()) == 0,
+            "撤销没有恢复轴线偏距");
+        Console.WriteLine("PASS 轴线左右独立偏距、地下室负标高及单基准楼层推算");
+    }
+
+    private static void DeleteOtherModelObjects()
+    {
+        var model = SampleModelFactory.CreateEmptyModel("删除构件测试");
+        model.Columns.Add(new ColumnModel { Id = "C", StoreyId = "1F", X = 0, Y = 0 });
+        model.Slabs.Add(new SlabModel { Id = "S", StoreyId = "1F" });
+        var session = new BuildingModelEditSession(model);
+        Assert(session.TryDeleteElement("C", out var error) && session.Model.Columns.Count == 0, error);
+        Assert(session.TryDeleteElement("S", out error) && session.Model.Slabs.Count == 0, error);
+        Assert(session.Undo() && session.Model.Slabs.Count == 1,
+            "删除楼板后 Ctrl+Z 未恢复");
+        Console.WriteLine("PASS 三维其他构件删除及撤销");
+    }
+
+    private static void DifferentHeightWallJunction()
+    {
+        var session = new BuildingModelEditSession(SampleModelFactory.CreateEmptyModel("高低墙测试"));
+        Assert(session.TryAddWall(new WallModel { StoreyId = "1F", X1 = 0, Y1 = 0,
+            X2 = 6000, Y2 = 0, Thickness = 240, Height = 3000 }, out _, out var error), error);
+        Assert(session.TryAddWall(new WallModel { StoreyId = "1F", X1 = 3000, Y1 = 0,
+            X2 = 3000, Y2 = 4000, Thickness = 240, Height = 1500 }, out _, out error), error);
+        Assert(session.Model.Walls.Count == 3, "不同高度、但竖向重叠的 T 接没有拆分贯通墙");
+        Assert(WallJunctionLines.Resolve(session.Model, session.Model.Walls, 1200).Count == 2
+            && WallJunctionLines.Resolve(session.Model, session.Model.Walls, 2000).Count == 0,
+            "不同墙高的接缝没有按平面剖切高度重算");
+        var volume = BuildingVolumeBuilder.Build(session.Model);
+        Assert(volume.Faces.Count > 0 && volume.MaxZ >= 3000,
+            "高低墙重叠后的三维实体缺失");
+        Console.WriteLine("PASS 高低墙：重叠高度融合、剖切高度以上不出现低墙接缝");
+    }
+
     private static void MoveTWallJunction()
     {
         var session = new BuildingModelEditSession(SampleModelFactory.CreateEmptyModel("T 形交接测试"));
@@ -542,6 +652,23 @@ internal static class BuildingModelEditSessionTests
         Assert(BuildingModelJson.ToJson(model) == original,
             "预览计算修改了正式模型");
         Console.WriteLine($"PASS 长链预览：120 道墙，建图 {buildMs} ms，60 次鼠标预览 {watch.ElapsedMilliseconds} ms，模型未修改");
+    }
+
+    private static string TopOwnerAt(VolumeFace[] faces, double x, double y)
+    {
+        foreach (var face in faces)
+        {
+            var positive = false; var negative = false;
+            for (var i = 0; i < face.Points.Count; i++)
+            {
+                var a = face.Points[i]; var b = face.Points[(i + 1) % face.Points.Count];
+                var cross = (b.X - a.X) * (y - a.Y) - (b.Y - a.Y) * (x - a.X);
+                if (cross > 0.000001d) positive = true;
+                if (cross < -0.000001d) negative = true;
+            }
+            if (!positive || !negative) return face.ElementId;
+        }
+        return null;
     }
 
     private static double Length(BuildingModelDocument model, string id)

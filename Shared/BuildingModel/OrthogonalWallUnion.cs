@@ -17,6 +17,12 @@ namespace BatchPdfPublisher.BuildingModel
             public double X0, X1, Y0, Y1, Z0, Z1;
         }
 
+        private sealed class TopMiter
+        {
+            public double X0, X1, Y0, Y1, Z0, Z;
+            public readonly List<Tuple<Box, PointModel[]>> Regions = new List<Tuple<Box, PointModel[]>>();
+        }
+
         internal static HashSet<string> AddJoinedWalls(BuildingVolume volume, BuildingModelDocument model,
             List<WallModel> walls, ref bool first)
         {
@@ -80,19 +86,15 @@ namespace BatchPdfPublisher.BuildingModel
                     var one = whole[a]; var two = whole[b];
                     if (Math.Min(one.Z1, two.Z1) - Math.Max(one.Z0, two.Z0) < 0.001d
                         || Horizontal(one.Wall) == Horizontal(two.Wall)) continue;
-                    foreach (var p in Endpoints(one.Wall))
-                    foreach (var q in Endpoints(two.Wall))
-                    {
-                        if (Math.Abs(p.Item1 - q.Item1) > 0.5d || Math.Abs(p.Item2 - q.Item2) > 0.5d) continue;
-                        var horizontal = Horizontal(one.Wall) ? one : two;
-                        var vertical = Horizontal(one.Wall) ? two : one;
-                        shapes.Add(new Box { Wall = one.Wall,
-                            Z0 = Math.Max(one.Z0, two.Z0), Z1 = Math.Min(one.Z1, two.Z1),
-                            X0 = vertical.X0, X1 = vertical.X1,
-                            Y0 = horizontal.Y0, Y1 = horizontal.Y1 });
-                    }
+                    var horizontal = Horizontal(one.Wall) ? one : two;
+                    var vertical = Horizontal(one.Wall) ? two : one;
+                    if (!NearJunction(horizontal, vertical)) continue;
+                    shapes.Add(new Box { Wall = one.Wall,
+                        Z0 = Math.Max(one.Z0, two.Z0), Z1 = Math.Min(one.Z1, two.Z1),
+                        X0 = vertical.X0, X1 = vertical.X1,
+                        Y0 = horizontal.Y0, Y1 = horizontal.Y1 });
                 }
-                AddCells(volume, shapes, ref first);
+                AddCells(volume, shapes, CreateTopMiters(whole), ref first);
                 foreach (var box in component) result.Add(box.Wall.Id);
             }
             return result;
@@ -132,7 +134,204 @@ namespace BatchPdfPublisher.BuildingModel
             }
         }
 
-        private static void AddCells(BuildingVolume volume, List<Box> boxes, ref bool first)
+        private static List<TopMiter> CreateTopMiters(List<Box> walls)
+        {
+            var result = new List<TopMiter>();
+            var ends = walls.SelectMany(b => new[]
+            {
+                Tuple.Create(b, b.Wall.X1, b.Wall.Y1, b.Wall.X2, b.Wall.Y2),
+                Tuple.Create(b, b.Wall.X2, b.Wall.Y2, b.Wall.X1, b.Wall.Y1)
+            });
+            foreach (var group in ends.GroupBy(e => Tuple.Create(e.Item1.Wall.StoreyId,
+                Math.Round(e.Item2, 1), Math.Round(e.Item3, 1))))
+            {
+                var at = group.ToArray();
+                if (at.Length < 2 || at.Length > 3 || at.Any(e =>
+                    Math.Abs(e.Item1.Z0 - at[0].Item1.Z0) > 0.001d
+                    || Math.Abs(e.Item1.Z1 - at[0].Item1.Z1) > 0.001d)) continue;
+                var horizontal = at.Where(e => Horizontal(e.Item1.Wall)).ToArray();
+                var vertical = at.Where(e => !Horizontal(e.Item1.Wall)).ToArray();
+                var x = at[0].Item2; var y = at[0].Item3;
+                Box h, v;
+                if (horizontal.Length == 1 && vertical.Length == 1)
+                {
+                    h = horizontal[0].Item1; v = vertical[0].Item1;
+                    var hx = Math.Sign(horizontal[0].Item4 - x);
+                    var vy = Math.Sign(vertical[0].Item5 - y);
+                    var m = new TopMiter { X0 = v.X0, X1 = v.X1,
+                        Y0 = h.Y0, Y1 = h.Y1, Z0 = h.Z0, Z = h.Z1 };
+                    var bl = new PointModel(m.X0, m.Y0); var br = new PointModel(m.X1, m.Y0);
+                    var tr = new PointModel(m.X1, m.Y1); var tl = new PointModel(m.X0, m.Y1);
+                    PointModel[] hRegion, vRegion;
+                    if (hx * vy > 0)
+                    {
+                        var lowerRight = new[] { bl, br, tr };
+                        var upperLeft = new[] { bl, tr, tl };
+                        hRegion = hx > 0 ? lowerRight : upperLeft;
+                        vRegion = hx > 0 ? upperLeft : lowerRight;
+                    }
+                    else
+                    {
+                        var lowerLeft = new[] { bl, br, tl };
+                        var upperRight = new[] { br, tr, tl };
+                        hRegion = hx > 0 ? upperRight : lowerLeft;
+                        vRegion = hx > 0 ? lowerLeft : upperRight;
+                    }
+                    m.Regions.Add(Tuple.Create(h, hRegion));
+                    m.Regions.Add(Tuple.Create(v, vRegion));
+                    result.Add(m);
+                }
+                else if (horizontal.Length == 2 && vertical.Length == 1)
+                {
+                    var left = horizontal.FirstOrDefault(e => e.Item4 < x);
+                    var right = horizontal.FirstOrDefault(e => e.Item4 > x);
+                    if (left == null || right == null
+                        || Math.Abs(left.Item1.Y0 - right.Item1.Y0) > 0.001d
+                        || Math.Abs(left.Item1.Y1 - right.Item1.Y1) > 0.001d) continue;
+                    h = left.Item1; v = vertical[0].Item1;
+                    var m = new TopMiter { X0 = v.X0, X1 = v.X1,
+                        Y0 = h.Y0, Y1 = h.Y1, Z0 = h.Z0, Z = h.Z1 };
+                    var near = vertical[0].Item5 > y ? m.Y0 : m.Y1;
+                    var far = vertical[0].Item5 > y ? m.Y1 : m.Y0;
+                    var tip = new PointModel(x, near);
+                    m.Regions.Add(Tuple.Create(left.Item1, new[] {
+                        new PointModel(m.X0, near), tip, new PointModel(m.X0, far) }));
+                    m.Regions.Add(Tuple.Create(right.Item1, new[] {
+                        tip, new PointModel(m.X1, near), new PointModel(m.X1, far) }));
+                    m.Regions.Add(Tuple.Create(v, new[] {
+                        tip, new PointModel(m.X0, far), new PointModel(m.X1, far) }));
+                    result.Add(m);
+                }
+                else if (vertical.Length == 2 && horizontal.Length == 1)
+                {
+                    var bottom = vertical.FirstOrDefault(e => e.Item5 < y);
+                    var top = vertical.FirstOrDefault(e => e.Item5 > y);
+                    if (bottom == null || top == null
+                        || Math.Abs(bottom.Item1.X0 - top.Item1.X0) > 0.001d
+                        || Math.Abs(bottom.Item1.X1 - top.Item1.X1) > 0.001d) continue;
+                    h = horizontal[0].Item1; v = bottom.Item1;
+                    var m = new TopMiter { X0 = v.X0, X1 = v.X1,
+                        Y0 = h.Y0, Y1 = h.Y1, Z0 = h.Z0, Z = h.Z1 };
+                    var near = horizontal[0].Item4 > x ? m.X0 : m.X1;
+                    var far = horizontal[0].Item4 > x ? m.X1 : m.X0;
+                    var tip = new PointModel(near, y);
+                    m.Regions.Add(Tuple.Create(bottom.Item1, new[] {
+                        new PointModel(near, m.Y0), new PointModel(far, m.Y0), tip }));
+                    m.Regions.Add(Tuple.Create(top.Item1, new[] {
+                        tip, new PointModel(far, m.Y1), new PointModel(near, m.Y1) }));
+                    m.Regions.Add(Tuple.Create(h, new[] {
+                        tip, new PointModel(far, m.Y0), new PointModel(far, m.Y1) }));
+                    result.Add(m);
+                }
+            }
+            foreach (var h in walls.Where(b => Horizontal(b.Wall)))
+            foreach (var v in walls.Where(b => !Horizontal(b.Wall)))
+            {
+                if (!Same(h.Wall.StoreyId, v.Wall.StoreyId)
+                    || Math.Abs(h.Z0 - v.Z0) > 0.001d
+                    || Math.Abs(h.Z1 - v.Z1) > 0.001d
+                    || !NearJunction(h, v)
+                    || result.Any(m => Math.Abs(m.X0 - v.X0) < 0.001d
+                        && Math.Abs(m.Y0 - h.Y0) < 0.001d
+                        && Math.Abs(m.Z - h.Z1) < 0.001d)) continue;
+                var x = v.Wall.X1; var y = h.Wall.Y1;
+                var hAtStart = Math.Abs(h.Wall.X1 - x) <= Math.Abs(h.Wall.X2 - x);
+                var vAtStart = Math.Abs(v.Wall.Y1 - y) <= Math.Abs(v.Wall.Y2 - y);
+                var hx = Math.Sign(hAtStart ? h.Wall.X2 - h.Wall.X1 : h.Wall.X1 - h.Wall.X2);
+                var vy = Math.Sign(vAtStart ? v.Wall.Y2 - v.Wall.Y1 : v.Wall.Y1 - v.Wall.Y2);
+                var miter = new TopMiter { X0 = v.X0, X1 = v.X1,
+                    Y0 = h.Y0, Y1 = h.Y1, Z0 = h.Z0, Z = h.Z1 };
+                var bl = new PointModel(miter.X0, miter.Y0);
+                var br = new PointModel(miter.X1, miter.Y0);
+                var tr = new PointModel(miter.X1, miter.Y1);
+                var tl = new PointModel(miter.X0, miter.Y1);
+                PointModel[] hRegion, vRegion;
+                if (hx * vy > 0)
+                {
+                    hRegion = hx > 0 ? new[] { bl, br, tr } : new[] { bl, tr, tl };
+                    vRegion = hx > 0 ? new[] { bl, tr, tl } : new[] { bl, br, tr };
+                }
+                else
+                {
+                    hRegion = hx > 0 ? new[] { br, tr, tl } : new[] { bl, br, tl };
+                    vRegion = hx > 0 ? new[] { bl, br, tl } : new[] { br, tr, tl };
+                }
+                miter.Regions.Add(Tuple.Create(h, hRegion));
+                miter.Regions.Add(Tuple.Create(v, vRegion));
+                result.Add(miter);
+            }
+            return result;
+        }
+
+        private static List<PointModel> ClipConvex(PointModel[] subject, PointModel[] clip)
+        {
+            var output = subject.ToList();
+            if (SignedArea(clip) < 0d) clip = clip.Reverse().ToArray();
+            for (var i = 0; i < clip.Length; i++)
+            {
+                var a = clip[i]; var b = clip[(i + 1) % clip.Length];
+                var input = output; output = new List<PointModel>();
+                if (input.Count == 0) break;
+                var previous = input[input.Count - 1];
+                var previousSide = Side(a, b, previous);
+                foreach (var current in input)
+                {
+                    var currentSide = Side(a, b, current);
+                    if ((previousSide < -0.000001d) != (currentSide < -0.000001d))
+                    {
+                        var t = previousSide / (previousSide - currentSide);
+                        output.Add(new PointModel(previous.X + (current.X - previous.X) * t,
+                            previous.Y + (current.Y - previous.Y) * t));
+                    }
+                    if (currentSide >= -0.000001d) output.Add(current);
+                    previous = current; previousSide = currentSide;
+                }
+            }
+            return output;
+        }
+
+        private static double Side(PointModel a, PointModel b, PointModel p)
+            => (b.X - a.X) * (p.Y - a.Y) - (b.Y - a.Y) * (p.X - a.X);
+
+        private static double SignedArea(IReadOnlyList<PointModel> points)
+        {
+            var twice = 0d;
+            for (var i = 0; i < points.Count; i++)
+            {
+                var next = points[(i + 1) % points.Count];
+                twice += points[i].X * next.Y - next.X * points[i].Y;
+            }
+            return twice / 2d;
+        }
+
+        private static Box SideOwner(Box fallback, List<TopMiter> miters,
+            double x, double y, double z)
+        {
+            foreach (var m in miters)
+            {
+                if (z < m.Z0 - 0.001d || z > m.Z + 0.001d
+                    || x < m.X0 - 0.001d || x > m.X1 + 0.001d
+                    || y < m.Y0 - 0.001d || y > m.Y1 + 0.001d) continue;
+                foreach (var region in m.Regions)
+                {
+                    var polygon = region.Item2;
+                    var clockwise = SignedArea(polygon) < 0d;
+                    var inside = true;
+                    for (var i = 0; i < polygon.Length; i++)
+                    {
+                        var side = Side(polygon[i], polygon[(i + 1) % polygon.Length],
+                            new PointModel(x, y));
+                        if (clockwise ? side > 0.000001d : side < -0.000001d)
+                        { inside = false; break; }
+                    }
+                    if (inside) return region.Item1;
+                }
+            }
+            return fallback;
+        }
+
+        private static void AddCells(BuildingVolume volume, List<Box> boxes,
+            List<TopMiter> miters, ref bool first)
         {
             var xs = boxes.SelectMany(b => new[] { b.X0, b.X1 }).Distinct().OrderBy(x => x).ToArray();
             var ys = boxes.SelectMany(b => new[] { b.Y0, b.Y1 }).Distinct().OrderBy(y => y).ToArray();
@@ -161,22 +360,40 @@ namespace BatchPdfPublisher.BuildingModel
                 var z0 = zs[z]; var z1 = zs[z + 1];
                 if (x1 - x0 < 0.000001d || y1 - y0 < 0.000001d || z1 - z0 < 0.000001d) continue;
                 if (z == zs.Length - 2 || owner[x, y, z + 1] == null)
-                    AddFace(volume, box, 0, 0, 1, new[] { P(x0,y0,z1), P(x1,y0,z1),
-                        P(x1,y1,z1), P(x0,y1,z1) }, ref first);
+                {
+                    var miter = miters.FirstOrDefault(m => Math.Abs(m.Z - z1) < 0.001d
+                        && x0 >= m.X0 - 0.001d && x1 <= m.X1 + 0.001d
+                        && y0 >= m.Y0 - 0.001d && y1 <= m.Y1 + 0.001d);
+                    if (miter == null)
+                        AddFace(volume, box, 0, 0, 1, new[] { P(x0,y0,z1), P(x1,y0,z1),
+                            P(x1,y1,z1), P(x0,y1,z1) }, ref first);
+                    else
+                    {
+                        var cell = new[] { new PointModel(x0, y0), new PointModel(x1, y0),
+                            new PointModel(x1, y1), new PointModel(x0, y1) };
+                        foreach (var region in miter.Regions)
+                        {
+                            var clipped = ClipConvex(cell, region.Item2);
+                            if (clipped.Count < 3 || Math.Abs(SignedArea(clipped)) < 0.000001d) continue;
+                            AddFace(volume, region.Item1, 0, 0, 1,
+                                clipped.Select(p => P(p.X, p.Y, z1)).ToArray(), ref first);
+                        }
+                    }
+                }
                 if (z == 0 || owner[x, y, z - 1] == null)
                     AddFace(volume, box, 0, 0, -1, new[] { P(x0,y1,z0), P(x1,y1,z0),
                         P(x1,y0,z0), P(x0,y0,z0) }, ref first);
                 if (y == 0 || owner[x, y - 1, z] == null)
-                    AddFace(volume, box, 0, -1, 0, new[] { P(x0,y0,z0), P(x1,y0,z0),
+                    AddFace(volume, SideOwner(box, miters, (x0+x1)/2, y0, (z0+z1)/2), 0, -1, 0, new[] { P(x0,y0,z0), P(x1,y0,z0),
                         P(x1,y0,z1), P(x0,y0,z1) }, ref first);
                 if (x == xs.Length - 2 || owner[x + 1, y, z] == null)
-                    AddFace(volume, box, 1, 0, 0, new[] { P(x1,y0,z0), P(x1,y1,z0),
+                    AddFace(volume, SideOwner(box, miters, x1, (y0+y1)/2, (z0+z1)/2), 1, 0, 0, new[] { P(x1,y0,z0), P(x1,y1,z0),
                         P(x1,y1,z1), P(x1,y0,z1) }, ref first);
                 if (y == ys.Length - 2 || owner[x, y + 1, z] == null)
-                    AddFace(volume, box, 0, 1, 0, new[] { P(x1,y1,z0), P(x0,y1,z0),
+                    AddFace(volume, SideOwner(box, miters, (x0+x1)/2, y1, (z0+z1)/2), 0, 1, 0, new[] { P(x1,y1,z0), P(x0,y1,z0),
                         P(x0,y1,z1), P(x1,y1,z1) }, ref first);
                 if (x == 0 || owner[x - 1, y, z] == null)
-                    AddFace(volume, box, -1, 0, 0, new[] { P(x0,y1,z0), P(x0,y0,z0),
+                    AddFace(volume, SideOwner(box, miters, x0, (y0+y1)/2, (z0+z1)/2), -1, 0, 0, new[] { P(x0,y1,z0), P(x0,y0,z0),
                         P(x0,y0,z1), P(x0,y1,z1) }, ref first);
             }
         }
@@ -210,8 +427,24 @@ namespace BatchPdfPublisher.BuildingModel
             if (a.X0 <= b.X1 + 0.001d && b.X0 <= a.X1 + 0.001d
                 && a.Y0 <= b.Y1 + 0.001d && b.Y0 <= a.Y1 + 0.001d) return true;
             return Horizontal(a.Wall) != Horizontal(b.Wall)
-                && Endpoints(a.Wall).Any(p => Endpoints(b.Wall).Any(q =>
-                    Math.Abs(p.Item1 - q.Item1) <= 0.5d && Math.Abs(p.Item2 - q.Item2) <= 0.5d));
+                && NearJunction(Horizontal(a.Wall) ? a : b,
+                    Horizontal(a.Wall) ? b : a);
+        }
+
+        private static bool NearJunction(Box horizontal, Box vertical)
+        {
+            var x = vertical.Wall.X1;
+            var y = horizontal.Wall.Y1;
+            // A moved wall may leave its axis endpoints a few millimetres apart while
+            // the wall bodies still overlap. Join only within the opposite wall width.
+            var horizontalReach = Math.Max(x - vertical.X0, vertical.X1 - x) + 0.5d;
+            var verticalReach = Math.Max(y - horizontal.Y0, horizontal.Y1 - y) + 0.5d;
+            return Endpoints(horizontal.Wall).Any(p => Math.Abs(p.Item1 - x) <= horizontalReach)
+                && Endpoints(vertical.Wall).Any(p => Math.Abs(p.Item2 - y) <= verticalReach)
+                && horizontal.X0 <= vertical.X1 + 0.001d
+                && vertical.X0 <= horizontal.X1 + 0.001d
+                && horizontal.Y0 <= vertical.Y1 + 0.001d
+                && vertical.Y0 <= horizontal.Y1 + 0.001d;
         }
         private static bool Horizontal(WallModel wall) { return Math.Abs(wall.Y2 - wall.Y1) < 0.001d; }
         private static IEnumerable<Tuple<double,double>> Endpoints(WallModel wall)

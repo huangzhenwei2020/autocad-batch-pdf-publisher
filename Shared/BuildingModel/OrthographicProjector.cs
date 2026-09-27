@@ -529,6 +529,10 @@ namespace BatchPdfPublisher.BuildingModel
             var joinedIds = OrthogonalWallUnion.AddJoinedWalls(unionVolume, model, walls, ref unionFirst);
             AddJoinedWallPlanBoundary(document, unionVolume,
                 storey.Elevation + Math.Min(1200d, storey.Height / 2d));
+            foreach (var seam in WallJunctionLines.Resolve(model, walls,
+                storey.Elevation + Math.Min(1200d, storey.Height / 2d)))
+                AddLine(document, ViewLayers.Cut,
+                    seam.Item1.X, seam.Item1.Y, seam.Item2.X, seam.Item2.Y);
 
             // 其他墙：洞口把墙断开，两段面线 + 洞口两端的封口
             foreach (var wall in walls)

@@ -34,6 +34,8 @@ internal static class VolumeIdentityTests
         Assert(updated.Faces.Any(x => x.ElementId == originalWallId), "编辑后墙 ID 丢失");
         Assert(updated.Faces.Any(x => x.ElementId == originalOpeningId), "编辑后洞口 ID 丢失");
         CheckOrthogonalCorner();
+        CheckOffsetMiterOwnership();
+        CheckMovedCornerCloses();
         CheckOrthogonalTJoint();
         CheckUnequalHeightJunction();
         CheckOpeningWallJunction();
@@ -53,13 +55,10 @@ internal static class VolumeIdentityTests
             X1 = 0, Y1 = 0, X2 = 0, Y2 = 1000, Thickness = 200 });
         var volume = BuildingVolumeBuilder.Build(model);
         var top = volume.Faces.Where(f => f.Kind == "wall" && f.NormalZ > 0.5).ToArray();
-        foreach (var point in new[] { (x: 50d, y: -50d), (x: 10d, y: 10d),
+        foreach (var point in new[] { (x: 40d, y: -50d), (x: 10d, y: 10d),
             (x: -510d, y: 10d), (x: 10d, y: 510d) })
         {
-            var count = top.Count(f => point.x >= f.Points.Min(p => p.X) - 1e-6
-                && point.x <= f.Points.Max(p => p.X) + 1e-6
-                && point.y >= f.Points.Min(p => p.Y) - 1e-6
-                && point.y <= f.Points.Max(p => p.Y) + 1e-6);
+            var count = top.Count(f => InsideTopFace(f, point.x, point.y));
             Assert(count == 1, "正交墙角顶面缺失或重叠：" + point + "，面数 " + count);
         }
         Assert(!volume.Faces.Any(f => f.Kind == "wall" && Math.Abs(f.NormalZ) < 0.5
@@ -69,6 +68,61 @@ internal static class VolumeIdentityTests
         Assert(volume.Faces.Where(f => f.Kind == "wall")
             .Select(f => f.ElementId).Distinct().Count() == 2, "墙角融合后墙 ID 丢失");
         Console.WriteLine("PASS 正交墙角：缺角填合、顶面无重叠、内部面消除、两道墙可追溯");
+    }
+
+    private static void CheckOffsetMiterOwnership()
+    {
+        var model = SampleModelFactory.CreateEmptyModel("偏心斜接墙角");
+        model.Walls.Add(new WallModel { Id = "H", StoreyId = "1F", X1 = 0, Y1 = 0,
+            X2 = 1000, Y2 = 0, Thickness = 200, AxisOffset = -30 });
+        model.Walls.Add(new WallModel { Id = "V", StoreyId = "1F", X1 = 0, Y1 = 0,
+            X2 = 0, Y2 = 1000, Thickness = 200, AxisOffset = 20 });
+        var faces = BuildingVolumeBuilder.Build(model).Faces;
+        var top = faces
+            .Where(f => f.Kind == "wall" && f.NormalZ > 0.5).ToArray();
+        Assert(top.Single(f => InsideTopFace(f, 50, -100)).ElementId == "H"
+            && top.Single(f => InsideTopFace(f, -80, 50)).ElementId == "V",
+            "偏心墙角顶面的斜切归属错误");
+        Assert(faces.Any(f => f.Kind == "wall" && f.ElementId == "H"
+            && f.NormalY < -0.5 && f.Points.All(p => Math.Abs(p.Y + 130) < 0.001)
+            && f.Points.Min(p => p.X) < 50 && f.Points.Max(p => p.X) > 50),
+            "偏心斜接的外侧面应与横墙选中高亮一致");
+        Assert(faces.Any(f => f.Kind == "wall" && f.ElementId == "V"
+            && f.NormalX < -0.5 && f.Points.All(p => Math.Abs(p.X + 120) < 0.001)
+            && f.Points.Min(p => p.Y) < 50 && f.Points.Max(p => p.Y) > 50),
+            "偏心斜接的外侧面应与竖墙选中高亮一致");
+        Console.WriteLine("PASS 偏心墙角：顶面和外侧面沿斜线分属两墙");
+    }
+
+    private static void CheckMovedCornerCloses()
+    {
+        var model = SampleModelFactory.CreateEmptyModel("移动后的墙角");
+        model.Walls.Add(new WallModel { Id = "H", StoreyId = "1F", X1 = -1000,
+            Y1 = 0, X2 = 0, Y2 = 0, Thickness = 200 });
+        model.Walls.Add(new WallModel { Id = "V", StoreyId = "1F", X1 = 0,
+            Y1 = 0, X2 = 0, Y2 = 1000, Thickness = 200 });
+        var session = new BuildingModelEditSession(model);
+        Assert(session.TryTransformWall("V", 20, 25, 0, false, out _, out var error),
+            "移动墙失败：" + error);
+        var faces = BuildingVolumeBuilder.Build(session.Model).Faces;
+        var top = faces.Where(f => f.Kind == "wall" && f.NormalZ > 0.5).ToArray();
+        foreach (var point in new[] { (x: -50d, y: -60d), (x: 10d, y: -40d),
+            (x: 50d, y: 50d) })
+            Assert(top.Count(f => InsideTopFace(f, point.x, point.y)) == 1,
+                "移动后墙角出现顶面缺口或重面：" + point + "，面数 "
+                    + top.Count(f => InsideTopFace(f, point.x, point.y)));
+        Assert(top.Any(f => f.ElementId == "H" && InsideTopFace(f, -50, -50))
+            && top.Any(f => f.ElementId == "V" && InsideTopFace(f, 50, 50)),
+            "移动后斜接顶面未归属到对应墙体");
+        Assert(faces.Any(f => f.Kind == "wall" && f.ElementId == "H"
+            && f.NormalY < -0.5 && f.Points.All(p => Math.Abs(p.Y + 100) < 0.001)
+            && f.Points.Min(p => p.X) < 50 && f.Points.Max(p => p.X) > 50),
+            "移动后墙角外侧漏出横墙端面");
+        Assert(faces.Any(f => f.Kind == "wall" && f.ElementId == "V"
+            && f.NormalX > 0.5 && f.Points.All(p => Math.Abs(p.X - 120) < 0.001)
+            && f.Points.Min(p => p.Y) < 50 && f.Points.Max(p => p.Y) > 50),
+            "移动后墙角外侧漏出竖墙端面");
+        Console.WriteLine("PASS 墙体移动后端点错开：自动补角、顶面无缺口或重面");
     }
 
     private static void CheckWallReferencePlacement()
@@ -108,10 +162,7 @@ internal static class VolumeIdentityTests
         foreach (var point in new[] { (x: 70d, y: -100d), (x: 70d, y: 100d),
             (x: 70d, y: 170d), (x: -100d, y: 70d) })
         {
-            var count = top.Count(f => point.x > f.Points.Min(p => p.X) + 1e-6
-                && point.x < f.Points.Max(p => p.X) - 1e-6
-                && point.y > f.Points.Min(p => p.Y) + 1e-6
-                && point.y < f.Points.Max(p => p.Y) - 1e-6);
+            var count = top.Count(f => InsideTopFace(f, point.x, point.y));
             Assert(count == 1, "T 形交接顶面缺失或重叠：" + point + "，面数 " + count);
         }
         Console.WriteLine("PASS 不同墙厚 T 形交接：墙体顶面无缺角或重面");
@@ -255,6 +306,20 @@ internal static class VolumeIdentityTests
             && Math.Max(l.Y1, l.Y2) + first.OriginY > -51),
             "CAD 平面仍画出墙角内部接缝");
         Console.WriteLine("PASS 共享轴网与 CAD 收口：跨楼层同 ID 同轴号、L 形外边界无缺角及内部线");
+    }
+
+    private static bool InsideTopFace(VolumeFace face, double x, double y)
+    {
+        var positive = false; var negative = false;
+        for (var i = 0; i < face.Points.Count; i++)
+        {
+            var a = face.Points[i]; var b = face.Points[(i + 1) % face.Points.Count];
+            var cross = (b.X - a.X) * (y - a.Y) - (b.Y - a.Y) * (x - a.X);
+            if (cross > 0.000001d) positive = true;
+            if (cross < -0.000001d) negative = true;
+            if (positive && negative) return false;
+        }
+        return true;
     }
 
     private static void Assert(bool condition, string message)

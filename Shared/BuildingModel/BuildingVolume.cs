@@ -58,6 +58,7 @@ namespace BatchPdfPublisher.BuildingModel
         public string StartLabel { get; set; }
         public string EndLabel { get; set; }
         public bool IsBuildingAxis { get; set; }
+        public bool IsWallJoint { get; set; }
     }
 
     /// <summary>
@@ -82,6 +83,17 @@ namespace BatchPdfPublisher.BuildingModel
             var walls = (model.Walls ?? new List<WallModel>())
                 .Where(wall => wall != null && (!onlyOne || Same(wall.StoreyId, storeyId))).ToList();
             var merged = OrthogonalWallUnion.AddJoinedWalls(volume, model, walls, ref first);
+            foreach (var floorWalls in walls.GroupBy(w => w.StoreyId))
+            {
+                var top = model.BaseElevationOf(floorWalls.First()) + model.HeightOf(floorWalls.First()) + 2d;
+                foreach (var seam in WallJunctionLines.Resolve(model, floorWalls))
+                    volume.GuideLines.Add(new VolumeGuideLine
+                    {
+                        Start = new Point3DModel(seam.Item1.X, seam.Item1.Y, top),
+                        End = new Point3DModel(seam.Item2.X, seam.Item2.Y, top),
+                        IsWallJoint = true
+                    });
+            }
             foreach (var wall in walls)
             {
                 var z0 = model.BaseElevationOf(wall);
