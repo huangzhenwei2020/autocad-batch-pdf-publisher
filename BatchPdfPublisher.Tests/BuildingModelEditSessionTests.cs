@@ -11,6 +11,7 @@ internal static class BuildingModelEditSessionTests
         AddDeleteAndRestoreModel();
         RecoverInterruptedViewBatch();
         EditWallEndpoints();
+        TransformWallWithOpenings();
         var session = new BuildingModelEditSession(SampleModelFactory.CreateTwoStoreyHouse());
         var wallId = "1F-S";
         var openingId = "1F-S-C1518";
@@ -255,6 +256,47 @@ internal static class BuildingModelEditSessionTests
         Assert(session.Undo() && session.Model.Walls.Single().X2 == 5000,
             "撤销夹点移动未恢复墙端");
         Console.WriteLine("PASS 墙端夹点：合法移动保留 ID，洞口越界和非法坐标回滚，撤销恢复");
+    }
+
+    private static void TransformWallWithOpenings()
+    {
+        var session = new BuildingModelEditSession(SampleModelFactory.CreateEmptyModel("整墙定位测试"));
+        Assert(session.TryAddWall(new WallModel
+        {
+            StoreyId = "1F", X1 = 0, Y1 = 0, X2 = 5000, Y2 = 0, Thickness = 240
+        }, out var wallId, out var error), "测试建墙失败：" + error);
+        Assert(session.TryAddOpening(PlanEditing.CreateOpening("窗", wallId, 2500),
+            out var openingId, out error), "测试开窗失败：" + error);
+        var before = session.Revision;
+        Assert(!session.TryTransformWall(wallId, double.NaN, 0, 0, false, out _, out error)
+            && session.Revision == before, "非法位移改变了模型");
+        Assert(session.TryTransformWall(wallId, 1000, 2000, 90, false, out var movedId, out error),
+            "整墙定位失败：" + error);
+        var moved = session.Model.Walls.Single();
+        Assert(movedId == wallId && Math.Abs(moved.X1 - 3500) < 0.001
+            && Math.Abs(moved.Y1 - (-500)) < 0.001
+            && Math.Abs(moved.X2 - 3500) < 0.001
+            && Math.Abs(moved.Y2 - 4500) < 0.001,
+            "墙没有绕中心旋转并平移到预期位置");
+        Assert(session.Model.Openings.Single().Id == openingId
+            && session.Model.Openings.Single().HostWallId == wallId,
+            "整墙移动改变了门窗身份或宿主");
+        Assert(session.TryTransformWall(wallId, 3000, 0, 0, true, out var copiedId, out error),
+            "复制墙和门窗失败：" + error);
+        Assert(copiedId != wallId && session.Model.Walls.Count == 2 && session.Model.Openings.Count == 2,
+            "复制后墙和门窗数量或身份错误");
+        var copiedOpening = session.Model.Openings.Single(x => x.HostWallId == copiedId);
+        Assert(copiedOpening.Id != openingId && copiedOpening.Offset == 2500,
+            "复制门窗未分配新 ID 或沿墙位置丢失");
+        Assert(session.Undo() && session.Model.Walls.Count == 1 && session.Model.Openings.Count == 1,
+            "撤销复制没有一并移除墙和门窗");
+        Assert(session.Undo() && session.Model.Walls.Single().X1 == 0
+            && session.Model.Openings.Single().Id == openingId,
+            "撤销移动没有恢复墙或门窗");
+        Assert(session.Redo() && session.Redo() && session.Model.Walls.Count == 2
+            && session.Model.Openings.Any(x => x.Id == copiedOpening.Id && x.HostWallId == copiedId),
+            "重做没有恢复复制的墙和门窗 ID");
+        Console.WriteLine("PASS 整墙定位：移动/旋转保留宿主关系，复制门窗一并新建，非法输入回滚，撤销重做原子恢复");
     }
 
     private static double Length(BuildingModelDocument model, string id)

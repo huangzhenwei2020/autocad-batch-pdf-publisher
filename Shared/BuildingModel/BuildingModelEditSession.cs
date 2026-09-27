@@ -114,6 +114,65 @@ namespace BatchPdfPublisher.BuildingModel
             return true;
         }
 
+        /// <summary>Moves or rotates a whole wall about its midpoint. Copies keep their hosted openings.</summary>
+        public bool TryTransformWall(string id, double deltaX, double deltaY, double angleDegrees,
+            bool copy, out string affectedId, out string error)
+        {
+            affectedId = null;
+            error = null;
+            if (!Finite(deltaX) || !Finite(deltaY) || !Finite(angleDegrees))
+            { error = "墙体位移和旋转角度必须是有限数值。"; return false; }
+            if (deltaX == 0d && deltaY == 0d && angleDegrees == 0d)
+            { error = "请输入位移或旋转角度。"; return false; }
+            var candidate = Clone(Model);
+            var source = candidate.Walls.FirstOrDefault(x => x != null && Same(x.Id, id));
+            if (source == null) { error = "未找到墙：" + id; return false; }
+            var angle = angleDegrees * Math.PI / 180d;
+            if (!Finite(angle)) { error = "旋转角度超出有效范围。"; return false; }
+            var cosine = Math.Cos(angle);
+            var sine = Math.Sin(angle);
+            var midX = source.X1 / 2d + source.X2 / 2d;
+            var midY = source.Y1 / 2d + source.Y2 / 2d;
+            var halfX = (source.X2 - source.X1) / 2d;
+            var halfY = (source.Y2 - source.Y1) / 2d;
+            var rotatedX = halfX * cosine - halfY * sine;
+            var rotatedY = halfX * sine + halfY * cosine;
+            var centerX = midX + deltaX;
+            var centerY = midY + deltaY;
+            var x1 = centerX - rotatedX;
+            var y1 = centerY - rotatedY;
+            var x2 = centerX + rotatedX;
+            var y2 = centerY + rotatedY;
+            if (!Finite(x1) || !Finite(y1) || !Finite(x2) || !Finite(y2))
+            { error = "变换后的墙端点超出有效范围。"; return false; }
+            WallModel target;
+            if (copy)
+            {
+                target = new WallModel
+                {
+                    Id = "W-" + Guid.NewGuid().ToString("N"), StoreyId = source.StoreyId,
+                    Thickness = source.Thickness, Height = source.Height, Material = source.Material
+                };
+                candidate.Walls.Add(target);
+                foreach (var opening in candidate.Openings.Where(x => x != null && Same(x.HostWallId, id)).ToArray())
+                {
+                    candidate.Openings.Add(new OpeningModel
+                    {
+                        Id = "O-" + Guid.NewGuid().ToString("N"), HostWallId = target.Id,
+                        Kind = opening.Kind, Code = opening.Code, Offset = opening.Offset,
+                        Width = opening.Width, Height = opening.Height, Sill = opening.Sill
+                    });
+                }
+            }
+            else target = source;
+            target.X1 = x1; target.Y1 = y1; target.X2 = x2; target.Y2 = y2;
+            error = ValidateWallAndOpenings(candidate, target);
+            if (error != null) return false;
+            Commit(candidate);
+            affectedId = target.Id;
+            return true;
+        }
+
         public bool TrySetWallGeometry(string id, double length, double thickness, double height, out string error)
         {
             error = null;

@@ -619,6 +619,29 @@ internal sealed class ProbeWindow : Window
                 return (success, error);
             });
             _properties.Children.Add(apply);
+            _properties.Children.Add(new TextBlock { Text = "整墙定位（门窗随墙移动）", FontWeight = FontWeight.Bold, Margin = new Thickness(0, 12, 0, 0) });
+            var deltaXField = AddNumberField("水平位移 X（mm）", 0);
+            var deltaYField = AddNumberField("竖直位移 Y（mm）", 0);
+            var angleField = AddNumberField("逆时针旋转（度，绕墙中点）", 0);
+            var move = new Button { Content = "移动 / 旋转墙" };
+            move.Click += async (_, _) => await ApplyGeometryAsync(
+                new[] { deltaXField, deltaYField, angleField }, values =>
+            {
+                var success = _session.TryTransformWall(wall.Id, values[0], values[1], values[2],
+                    false, out _, out var error);
+                return (success, error);
+            });
+            _properties.Children.Add(move);
+            var copy = new Button { Content = "复制墙和门窗" };
+            copy.Click += async (_, _) => await ApplyGeometryAsync(
+                new[] { deltaXField, deltaYField, angleField }, values =>
+            {
+                var success = _session.TryTransformWall(wall.Id, values[0], values[1], values[2],
+                    true, out var newId, out var error);
+                if (success) _selectedId = newId;
+                return (success, error);
+            });
+            _properties.Children.Add(copy);
             return;
         }
         var opening = _session.Model.Openings.FirstOrDefault(x => x.Id == _selectedId);
