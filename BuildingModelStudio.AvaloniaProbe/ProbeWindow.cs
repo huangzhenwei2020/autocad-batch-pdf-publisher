@@ -80,6 +80,7 @@ internal sealed class ProbeWindow : Window
         {
             if (kind != PlanEditing.SnapNone) _status.Text = "捕捉：" + kind;
         };
+        _planCanvas.GripPreviewError += error => _status.Text = error;
         _planCanvas.WallRequested += (start, end) =>
         {
             if (!_session.TryAddWall(new WallModel

@@ -126,78 +126,20 @@ namespace BatchPdfPublisher.BuildingModel
             if (source == null) { error = "未找到墙：" + id; return false; }
             if (x == (endpointIndex == 0 ? source.X1 : source.X2)
                 && y == (endpointIndex == 0 ? source.Y1 : source.Y2)) return true;
+            if (!WallGripPropagation.TryCreate(Model, source.StoreyId, out var graph, out error)
+                || !graph.TryMove(id, endpointIndex, x, y, out var changes, out error)) return false;
             var candidate = Clone(Model);
-            var wall = candidate.Walls.First(w => w != null && Same(w.Id, id));
-            const double joinTolerance = 0.5d;
-            var originals = Model.Walls.Where(w => w != null && Same(w.StoreyId, wall.StoreyId)).ToArray();
-            var ids = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            if (originals.Any(w => string.IsNullOrWhiteSpace(w.Id) || !ids.Add(w.Id)))
-            { error = "当前楼层存在空白或重复的墙 ID，不能联动编辑。"; return false; }
-            var originalById = originals.ToDictionary(w => w.Id, StringComparer.OrdinalIgnoreCase);
-            var candidateById = candidate.Walls.Where(w => w != null && Same(w.StoreyId, wall.StoreyId))
+            var byId = candidate.Walls.Where(w => w != null && Same(w.StoreyId, source.StoreyId))
                 .ToDictionary(w => w.Id, StringComparer.OrdinalIgnoreCase);
-            var pending = new System.Collections.Generic.Queue<(WallModel wall, int index, PointModel position)>();
-            var assigned = new System.Collections.Generic.Dictionary<string, PointModel>(StringComparer.OrdinalIgnoreCase);
             var changed = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var dirtyHosts = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            pending.Enqueue((originalById[id], endpointIndex,
-                new PointModel(x, y)));
-            while (pending.Count > 0 || dirtyHosts.Count > 0)
+            foreach (var move in changes)
             {
-                while (pending.Count > 0)
-                {
-                    var move = pending.Dequeue();
-                    var key = move.wall.Id + "|" + move.index;
-                    if (assigned.TryGetValue(key, out var previousTarget))
-                    {
-                        if (!EndpointNear(previousTarget.X, previousTarget.Y,
-                            move.position.X, move.position.Y, joinTolerance))
-                        { error = "墙交接约束冲突，无法确定端点新位置。"; return false; }
-                        continue;
-                    }
-                    if (!Finite(move.position.X) || !Finite(move.position.Y))
-                    { error = "联动后的墙端点超出有效坐标范围。"; return false; }
-                    assigned.Add(key, move.position);
-                    var target = candidateById[move.wall.Id];
-                    if (move.index == 0) { target.X1 = move.position.X; target.Y1 = move.position.Y; }
-                    else { target.X2 = move.position.X; target.Y2 = move.position.Y; }
-                    changed.Add(target.Id);
-                    dirtyHosts.Add(target.Id);
-                    var oldX = move.index == 0 ? move.wall.X1 : move.wall.X2;
-                    var oldY = move.index == 0 ? move.wall.Y1 : move.wall.Y2;
-                    foreach (var other in originals)
-                    {
-                        if (!Same(other.Id, move.wall.Id)
-                            && EndpointNear(other.X1, other.Y1, oldX, oldY, joinTolerance))
-                            pending.Enqueue((other, 0, move.position));
-                        if (!Same(other.Id, move.wall.Id)
-                            && EndpointNear(other.X2, other.Y2, oldX, oldY, joinTolerance))
-                            pending.Enqueue((other, 1, move.position));
-                    }
-                }
-                var hosts = dirtyHosts.ToArray();
-                dirtyHosts.Clear();
-                foreach (var hostId in hosts)
-                {
-                    var previous = originalById[hostId];
-                    var host = candidateById[hostId];
-                    foreach (var other in originals)
-                    {
-                        if (Same(other.Id, hostId)) continue;
-                        for (var index = 0; index < 2; index++)
-                        {
-                            var ox = index == 0 ? other.X1 : other.X2;
-                            var oy = index == 0 ? other.Y1 : other.Y2;
-                            if (!PlanEditing.TryProjectWallInterior(previous, ox, oy,
-                                joinTolerance, out var fraction)) continue;
-                            pending.Enqueue((other, index, new PointModel(
-                                host.X1 + (host.X2 - host.X1) * fraction,
-                                host.Y1 + (host.Y2 - host.Y1) * fraction)));
-                        }
-                    }
-                }
+                var target = byId[move.WallId];
+                if (move.Index == 0) { target.X1 = move.X; target.Y1 = move.Y; }
+                else { target.X2 = move.X; target.Y2 = move.Y; }
+                changed.Add(move.WallId);
             }
-            foreach (var current in changed.Select(wallId => candidateById[wallId]))
+            foreach (var current in changed.Select(wallId => byId[wallId]))
             {
                 error = ValidateWallAndOpenings(candidate, current);
                 if (error != null) return false;
@@ -380,11 +322,6 @@ namespace BatchPdfPublisher.BuildingModel
         }
 
         private static bool Finite(double value) { return !double.IsNaN(value) && !double.IsInfinity(value); }
-        private static bool EndpointNear(double x, double y, double otherX, double otherY, double tolerance)
-        {
-            return Math.Abs(x - otherX) <= tolerance && Math.Abs(y - otherY) <= tolerance
-                && Math.Sqrt(Math.Pow(x - otherX, 2) + Math.Pow(y - otherY, 2)) <= tolerance;
-        }
         private static bool Same(string left, string right)
         {
             return string.Equals(left, right, StringComparison.OrdinalIgnoreCase);

@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -14,6 +15,7 @@ internal static class BuildingModelEditSessionTests
         MoveJoinedWallGrip();
         MoveTWallJunction();
         MoveMultiLevelWallJunction();
+        MeasureRepeatedJunctionPreview();
         RejectConflictingWallJunction();
         TransformWallWithOpenings();
         var session = new BuildingModelEditSession(SampleModelFactory.CreateTwoStoreyHouse());
@@ -414,6 +416,12 @@ internal static class BuildingModelEditSessionTests
         {
             StoreyId = "1F", X1 = 4000, Y1 = 2000, X2 = 4000, Y2 = 3500, Thickness = 240
         }, out var leafId, out error), "三级支墙创建失败：" + error);
+        Assert(WallGripPropagation.TryCreate(session.Model, "1F", out var graph, out error),
+            "多级交接图建立失败：" + error);
+        Assert(graph.TryMove(rootId, 1, 6000, 1000, out var preview, out error),
+            "多级交接预览计算失败：" + error);
+        Assert(Math.Abs(preview.First(p => p.WallId == leafId && p.Index == 0).Y - 2125) < 0.001,
+            "拖动预览未显示三级支墙的目标位置");
         var revision = session.Revision;
         Assert(session.TryMoveWallGrip(rootId, 1, 6000, 1000, out error),
             "多级交接移动失败：" + error);
@@ -425,6 +433,12 @@ internal static class BuildingModelEditSessionTests
             && Math.Abs(child.Y1 - 2250) < 0.001
             && Math.Abs(leaf.Y1 - 2125) < 0.001,
             "多级 T 形交接没有逐级传递到三级支墙");
+        Assert(preview.All(p =>
+        {
+            var wall = session.Model.Walls.First(w => w.Id == p.WallId);
+            return Math.Abs((p.Index == 0 ? wall.X1 : wall.X2) - p.X) < 0.001
+                && Math.Abs((p.Index == 0 ? wall.Y1 : wall.Y2) - p.Y) < 0.001;
+        }), "拖动预览与最终提交的墙端点不一致");
         Assert(session.Undo() && session.Model.Walls.First(w => w.Id == leafId).Y1 == 2000
             && session.Model.Walls.First(w => w.Id == rootId).Y2 == 0,
             "撤销未原子恢复多级交接");
@@ -473,6 +487,42 @@ internal static class BuildingModelEditSessionTests
             && error.Contains("重复") && malformedSession.Revision == 0,
             "重复墙 ID 的导入模型未被安全拒绝");
         Console.WriteLine("PASS 多宿主冲突：交接目标不一致时拒绝并保留原模型");
+    }
+
+    private static void MeasureRepeatedJunctionPreview()
+    {
+        var model = SampleModelFactory.CreateEmptyModel("重复预览测试");
+        var previous = new WallModel
+        {
+            Id = "chain-0", StoreyId = "1F", X1 = 0, Y1 = 0,
+            X2 = 1000, Y2 = 0, Thickness = 240
+        };
+        model.Walls.Add(previous);
+        for (var i = 1; i < 120; i++)
+        {
+            var x = (previous.X1 + previous.X2) / 2;
+            var y = (previous.Y1 + previous.Y2) / 2;
+            previous = new WallModel
+            {
+                Id = "chain-" + i, StoreyId = "1F", X1 = x, Y1 = y,
+                X2 = x + (i % 2 == 0 ? 1000 : 0),
+                Y2 = y + (i % 2 == 0 ? 0 : 1000), Thickness = 240
+            };
+            model.Walls.Add(previous);
+        }
+        var original = BuildingModelJson.ToJson(model);
+        var watch = Stopwatch.StartNew();
+        Assert(WallGripPropagation.TryCreate(model, "1F", out var graph, out var error),
+            "长链交接图建立失败：" + error);
+        var buildMs = watch.ElapsedMilliseconds;
+        watch.Restart();
+        for (var i = 0; i < 60; i++)
+            Assert(graph.TryMove("chain-0", 1, 1000, 100 + i,
+                out var changes, out error) && changes.Count >= 120,
+                "重复拖动预览失败：" + error);
+        Assert(BuildingModelJson.ToJson(model) == original,
+            "预览计算修改了正式模型");
+        Console.WriteLine($"PASS 长链预览：120 道墙，建图 {buildMs} ms，60 次鼠标预览 {watch.ElapsedMilliseconds} ms，模型未修改");
     }
 
     private static double Length(BuildingModelDocument model, string id)
