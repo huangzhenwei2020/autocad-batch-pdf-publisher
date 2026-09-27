@@ -12,6 +12,7 @@ using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Geometry;
 using BatchPdfPublisher.BuildingModel;
 using BatchPdfPublisher.Models;      // DoorWindowElevationPreference / DoorWindowElevationTemplate
+using BatchPdfPublisher.Views;
 using AcApplication = Autodesk.AutoCAD.ApplicationServices.Application;
 
 namespace BatchPdfPublisher.Services
@@ -30,6 +31,9 @@ namespace BatchPdfPublisher.Services
     internal static class BuildingModelCadBridge
     {
         private const string PlacementRegApp = "WL_BUILDING_VIEW";
+        private static bool IsHeadlessHost => string.Equals(
+            System.Diagnostics.Process.GetCurrentProcess().ProcessName, "accoreconsole",
+            StringComparison.OrdinalIgnoreCase);
 
         public static void PlaceView(Document document)
         {
@@ -59,21 +63,8 @@ namespace BatchPdfPublisher.Services
             PlacedView replacing = null;
             if (placements.Count > 0)
             {
-                editor.WriteMessage("\n此视图在当前 DWG 中已有 " + placements.Count + " 处登记放置：");
-                for (var index = 0; index < placements.Count; index++)
-                    editor.WriteMessage("\n  " + (index + 1) + "）更新位置 (" + placements[index].Anchor.X.ToString("0.##")
-                        + ", " + placements[index].Anchor.Y.ToString("0.##") + ")，" + placements[index].EntityCount + " 个生成实体");
-                editor.WriteMessage("\n  0）另插一份");
-                var choice = editor.GetInteger(new PromptIntegerOptions("\n输入序号")
-                {
-                    DefaultValue = 1, AllowNone = false, AllowZero = true, UseDefaultValue = true
-                });
-                if (choice.Status != PromptStatus.OK) return;
-                if (choice.Value < 0 || choice.Value > placements.Count)
-                {
-                    editor.WriteMessage("\n序号无效，未修改图纸。");
-                    return;
-                }
+                var choice = PickPlacement(placements, editor);
+                if (!choice.HasValue) return;
                 if (choice.Value > 0) replacing = placements[choice.Value - 1];
             }
             Point3d anchor;
@@ -305,6 +296,43 @@ namespace BatchPdfPublisher.Services
             public string Id;
             public Point3d Anchor;
             public int EntityCount;
+        }
+
+        private static int? PickPlacement(IReadOnlyList<PlacedView> placements, Editor editor)
+        {
+            if (!IsHeadlessHost)
+            {
+                var choices = placements.Select((placement, index) => new BuildingModelChoice
+                {
+                    Value = index + 1,
+                    Title = "更新已有位置 " + (index + 1),
+                    Subtitle = "插入点 (" + placement.Anchor.X.ToString("0.##") + ", "
+                        + placement.Anchor.Y.ToString("0.##") + ") · " + placement.EntityCount + " 个生成实体",
+                    Badge = "更新"
+                }).ToList();
+                choices.Add(new BuildingModelChoice
+                {
+                    Value = 0, Title = "另插一份", Subtitle = "保留已有位置，在图上指定新的插入点", Badge = "新增"
+                });
+                var dialog = new BuildingModelChoiceWindow("选择落图方式",
+                    "此视图已放入当前图纸。更新会替换所选位置的生成图元，保留手工补绘。",
+                    choices, false, "继续");
+                return AcApplication.ShowModalWindow(dialog) == true ? dialog.SelectedValue : null;
+            }
+
+            editor.WriteMessage("\n此视图在当前 DWG 中已有 " + placements.Count + " 处登记放置：");
+            for (var index = 0; index < placements.Count; index++)
+                editor.WriteMessage("\n  " + (index + 1) + "）更新位置 (" + placements[index].Anchor.X.ToString("0.##")
+                    + ", " + placements[index].Anchor.Y.ToString("0.##") + ")，" + placements[index].EntityCount + " 个生成实体");
+            editor.WriteMessage("\n  0）另插一份");
+            var result = editor.GetInteger(new PromptIntegerOptions("\n输入序号")
+            {
+                DefaultValue = 1, AllowNone = false, AllowZero = true, UseDefaultValue = true
+            });
+            if (result.Status != PromptStatus.OK) return null;
+            if (result.Value >= 0 && result.Value <= placements.Count) return result.Value;
+            editor.WriteMessage("\n序号无效，未修改图纸。");
+            return null;
         }
 
         private static string ViewSourceKey(string path, string viewId)
@@ -772,8 +800,7 @@ namespace BatchPdfPublisher.Services
         }
 
         /// <summary>
-        /// 落图选文件：**先列出当前项目已生成的图纸/视图让你挑序号**（不用翻文件对话框），
-        /// 输入 0 才走文件浏览（落别处的文件或没建项目时用）。
+        /// 图形宿主用 WPF 窗口选择视图；无界面的 core console 保留序号输入，供自动验收。
         /// </summary>
         private static string PickViewFile(Document document, Editor editor)
         {
@@ -791,12 +818,34 @@ namespace BatchPdfPublisher.Services
             }
             var modelFolder = StudioLaunch.FindModelFolder(projectFolder, modelName);
             var entries = StudioLaunch.ListViews(modelFolder);
+            if (!IsHeadlessHost)
+            {
+                var choices = entries.Select((entry, index) => new BuildingModelChoice
+                {
+                    Value = index,
+                    Title = string.IsNullOrWhiteSpace(entry.Title) ? entry.Id : entry.Title,
+                    Subtitle = (entry.Kind == ViewKind.Sheet ? "图纸" : entry.Kind == ViewKind.Plan ? "平面"
+                        : entry.Kind == ViewKind.Section ? "剖面" : entry.Kind == ViewKind.Schedule ? "门窗表" : "立面")
+                        + " · 更新于 " + entry.Modified.ToString("yyyy-MM-dd HH:mm"),
+                    Badge = entry.Pending ? "待落图" : string.Empty
+                });
+                var dialog = new BuildingModelChoiceWindow("选择要落图的视图",
+                    "当前项目：" + (modelName ?? "未选择项目")
+                        + (entries.Count == 0 ? "。还没有生成视图，可浏览其它视图文件。" : "。可双击选择，待落图内容排在前面。"),
+                    choices, true, "选择视图");
+                if (AcApplication.ShowModalWindow(dialog) != true) return null;
+                if (dialog.BrowseRequested) return BrowseViewFile();
+                if (!dialog.SelectedValue.HasValue) return null;
+                var selected = entries[dialog.SelectedValue.Value];
+                SelectedViewId = selected.Id;
+                return selected.FilePath;
+            }
             if (entries.Count == 0)
             {
                 if (modelFolder != null)
                     editor.WriteMessage("\n当前项目的模型目录里还没有视图：" + modelFolder
                         + "\n先在建模程序里「生成全部视图」（CAD 里执行 JZMX 打开建模程序）。");
-                return BrowseViewFile();
+                return null;
             }
 
             editor.WriteMessage("\n请选择要落图的图纸/视图（当前项目：" + (modelName ?? "未命名") + "）：");
@@ -825,15 +874,13 @@ namespace BatchPdfPublisher.Services
 
         private static string BrowseViewFile()
         {
-            using (var dialog = new OpenFileDialog
+            var dialog = new Microsoft.Win32.OpenFileDialog
             {
                 Title = "选择建模程序生成的视图文件（views\\*.json）",
                 Filter = "视图文件 (*.json)|*.json|所有文件 (*.*)|*.*",
                 InitialDirectory = LastViewFolder()
-            })
-            {
-                return dialog.ShowDialog() == DialogResult.OK ? dialog.FileName : null;
-            }
+            };
+            return dialog.ShowDialog() == true ? dialog.FileName : null;
         }
 
         /// <summary>

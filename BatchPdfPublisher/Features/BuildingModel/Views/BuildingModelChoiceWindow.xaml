@@ -1,0 +1,126 @@
+<Window x:Class="BatchPdfPublisher.Views.BuildingModelChoiceWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="模型视图落图" Width="720" Height="560" MinWidth="420" MinHeight="300"
+        WindowStartupLocation="CenterOwner" ResizeMode="CanResizeWithGrip"
+        Background="#17212D" Foreground="#F2F6FA" FontFamily="Microsoft YaHei UI"
+        FontSize="14" UseLayoutRounding="True" SnapsToDevicePixels="True">
+  <Window.Resources>
+    <Style x:Key="ScrollPageButton" TargetType="RepeatButton">
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="RepeatButton"><Border Background="Transparent"/></ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style TargetType="Thumb">
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Thumb">
+            <Border Background="#526C84" CornerRadius="5" Margin="2"/>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style TargetType="ScrollBar">
+      <Setter Property="Width" Value="12"/>
+      <Setter Property="Background" Value="#17212D"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ScrollBar">
+            <Grid Background="{TemplateBinding Background}">
+              <Track x:Name="PART_Track" IsDirectionReversed="True" Focusable="False">
+                <Track.DecreaseRepeatButton>
+                  <RepeatButton Command="ScrollBar.PageUpCommand" Style="{StaticResource ScrollPageButton}"/>
+                </Track.DecreaseRepeatButton>
+                <Track.Thumb><Thumb/></Track.Thumb>
+                <Track.IncreaseRepeatButton>
+                  <RepeatButton Command="ScrollBar.PageDownCommand" Style="{StaticResource ScrollPageButton}"/>
+                </Track.IncreaseRepeatButton>
+              </Track>
+            </Grid>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style TargetType="Button">
+      <Setter Property="MinHeight" Value="38"/>
+      <Setter Property="Padding" Value="16,7"/>
+      <Setter Property="Margin" Value="0,0,8,0"/>
+      <Setter Property="Background" Value="#253647"/>
+      <Setter Property="Foreground" Value="#F2F6FA"/>
+      <Setter Property="BorderBrush" Value="#3B5268"/>
+      <Setter Property="Cursor" Value="Hand"/>
+    </Style>
+    <Style TargetType="ListBoxItem">
+      <Setter Property="Padding" Value="0"/>
+      <Setter Property="Margin" Value="0,0,0,6"/>
+      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+      <Setter Property="Background" Value="#213140"/>
+      <Setter Property="Foreground" Value="#F2F6FA"/>
+      <Setter Property="BorderBrush" Value="#35506A"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ListBoxItem">
+            <Border x:Name="ItemBorder" Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="8">
+              <ContentPresenter Margin="12,10"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="ItemBorder" Property="Background" Value="#2C4155"/>
+              </Trigger>
+              <Trigger Property="IsSelected" Value="True">
+                <Setter TargetName="ItemBorder" Property="Background" Value="#174779"/>
+                <Setter TargetName="ItemBorder" Property="BorderBrush" Value="#1686F7"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+  </Window.Resources>
+  <Grid Margin="22">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+    <TextBlock x:Name="HeadingText" FontSize="24" FontWeight="SemiBold"/>
+    <TextBlock x:Name="DescriptionText" Grid.Row="1" Margin="0,7,0,18"
+               Foreground="#A8BED0" TextWrapping="Wrap"/>
+    <ListBox x:Name="ChoicesList" Grid.Row="2" BorderThickness="0" Background="Transparent"
+             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+             SelectionChanged="ChoicesList_SelectionChanged"
+             MouseDoubleClick="ChoicesList_MouseDoubleClick">
+      <ListBox.ItemTemplate>
+        <DataTemplate>
+          <Grid>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <StackPanel>
+              <TextBlock Text="{Binding Title}" FontSize="15" FontWeight="SemiBold"
+                         TextTrimming="CharacterEllipsis"/>
+              <TextBlock Text="{Binding Subtitle}" Margin="0,4,0,0" FontSize="12"
+                         Foreground="#B4C7D8" TextTrimming="CharacterEllipsis"/>
+            </StackPanel>
+            <TextBlock Grid.Column="1" Text="{Binding Badge}" Margin="14,0,0,0"
+                       Foreground="#67B6FF" VerticalAlignment="Center"/>
+          </Grid>
+        </DataTemplate>
+      </ListBox.ItemTemplate>
+    </ListBox>
+    <Grid Grid.Row="3" Margin="0,18,0,0">
+      <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+      <Button x:Name="BrowseButton" Content="浏览视图文件…" Click="BrowseButton_Click"
+              HorizontalAlignment="Left"/>
+      <StackPanel Grid.Column="1" Orientation="Horizontal">
+        <Button Content="取消" Click="CancelButton_Click" IsCancel="True"/>
+        <Button x:Name="AcceptButton" Content="确定" Click="AcceptButton_Click"
+                IsDefault="True" Margin="0" Background="#0877E7" BorderBrush="#0877E7"/>
+      </StackPanel>
+    </Grid>
+  </Grid>
+</Window>
