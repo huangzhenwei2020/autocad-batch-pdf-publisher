@@ -42,7 +42,7 @@ internal sealed class ProbeWindow : Window
 
     public ProbeWindow()
     {
-        Title = "万落建筑模型 · 跨平台编辑探针";
+        Title = "万落建筑模型";
         Width = 1280;
         Height = 800;
         MinWidth = 800;
@@ -170,9 +170,32 @@ internal sealed class ProbeWindow : Window
         else if (Program.ModelPath == null) ConfigureSmokeAndSnapshot();
         else Opened += async (_, _) =>
         {
-            if (await LoadModelAsync(Program.ModelPath)) ConfigureSmokeAndSnapshot();
+            if (await OpenStartupModelAsync(Program.ModelPath)) ConfigureSmokeAndSnapshot();
             else if (Program.Smoke) { Program.SmokeFailed = true; Close(); }
         };
+    }
+
+    private async Task<bool> OpenStartupModelAsync(string path)
+    {
+        if (Program.CreateMissingProjectModel && !File.Exists(path))
+        {
+            try
+            {
+                var name = Program.ProjectModelName ?? "建筑模型";
+                await Task.Run(() =>
+                {
+                    // Do not replace a model another process created after the existence check.
+                    if (!File.Exists(path))
+                        BuildingModelJson.SaveModel(path, SampleModelFactory.CreateEmptyModel(name));
+                });
+            }
+            catch (Exception ex)
+            {
+                _status.Text = "新建项目模型失败：" + ex.Message;
+                return false;
+            }
+        }
+        return await LoadModelAsync(path);
     }
 
     private void UpdateTitle()
@@ -551,7 +574,9 @@ internal sealed class ProbeWindow : Window
         var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
         timer.Tick += async (_, _) =>
         {
-            if (!_viewport.FrameRendered && DateTime.UtcNow - started < TimeSpan.FromSeconds(12)) return;
+            var emptyProject = Program.CreateMissingProjectModel && _session.Model.Walls.Count == 0
+                && _session.Model.Columns.Count == 0 && _session.Model.Slabs.Count == 0;
+            if (!_viewport.FrameRendered && !emptyProject && DateTime.UtcNow - started < TimeSpan.FromSeconds(12)) return;
             timer.Stop();
             if (Program.SnapshotPath != null && _viewport.FrameRendered)
             {
@@ -564,9 +589,11 @@ internal sealed class ProbeWindow : Window
             }
             var hit = _viewport.FrameRendered
                 ? _viewport.PickAt(new Point(_viewport.Bounds.Width / 2, _viewport.Bounds.Height / 2)) : null;
-            var success = _viewport.FrameRendered && hit != null;
+            var success = emptyProject ? _filePath == Program.ModelPath && File.Exists(_filePath)
+                : _viewport.FrameRendered && hit != null;
             Program.SmokeFailed = !success;
-            Console.WriteLine(success ? "AVALONIA_GPU_PICK_OK " + hit : "AVALONIA_GPU_OR_PICK_FAILED");
+            Console.WriteLine(success ? (emptyProject ? "AVALONIA_EMPTY_PROJECT_OK " + _filePath
+                : "AVALONIA_GPU_PICK_OK " + hit) : "AVALONIA_GPU_OR_PICK_FAILED");
             Close();
         };
         if (IsVisible) timer.Start();

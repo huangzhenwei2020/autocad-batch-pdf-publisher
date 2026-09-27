@@ -1,0 +1,64 @@
+<Window x:Class="Wanluo.BuildingModelStudio.WpfPilot.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:h="http://helix-toolkit.org/wpf/SharpDX"
+        Title="万落建筑模型 · WPF 技术试验" Width="1200" Height="760"
+        MinWidth="900" MinHeight="580" Background="#141D29" Foreground="#EDF4FC"
+        FontFamily="Microsoft YaHei UI" FontSize="14" WindowStartupLocation="CenterScreen">
+  <Window.Resources>
+    <Style TargetType="Button">
+      <Setter Property="Background" Value="#1D73E8" />
+      <Setter Property="Foreground" Value="White" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="Padding" Value="16,9" />
+      <Setter Property="Margin" Value="0,0,8,0" />
+      <Setter Property="Cursor" Value="Hand" />
+    </Style>
+  </Window.Resources>
+  <Grid>
+    <Grid.ColumnDefinitions>
+      <ColumnDefinition Width="250" />
+      <ColumnDefinition Width="*" />
+    </Grid.ColumnDefinitions>
+    <Border Grid.Column="0" Background="#253445" Padding="20">
+      <DockPanel>
+        <StackPanel DockPanel.Dock="Top">
+          <TextBlock FontSize="22" FontWeight="SemiBold" Text="万落建筑模型" Margin="0,0,0,6" />
+          <TextBlock Foreground="#9DC0E7" Text="WPF 三维视口技术试验" Margin="0,0,0,28" />
+          <TextBlock FontWeight="SemiBold" Text="模型概览" Margin="0,0,0,12" />
+          <TextBlock x:Name="ModelName" TextWrapping="Wrap" Foreground="#DBE9FA" Margin="0,0,0,12" />
+          <TextBlock x:Name="ModelStats" TextWrapping="Wrap" Foreground="#AFC4DB" Margin="0,0,0,22" />
+          <TextBlock Foreground="#9DC0E7" TextWrapping="Wrap"
+                     Text="当前仅验证 WPF 布局与 GPU 三维预览。正式编辑、保存、CAD 回写仍使用现有程序。" />
+        </StackPanel>
+        <TextBlock DockPanel.Dock="Bottom" Foreground="#809BB8" Text="试验版 · 不修改工程文件" />
+      </DockPanel>
+    </Border>
+    <Grid Grid.Column="1" Margin="24,20,24,20">
+      <Grid.RowDefinitions>
+        <RowDefinition Height="Auto" />
+        <RowDefinition Height="Auto" />
+        <RowDefinition Height="*" />
+        <RowDefinition Height="Auto" />
+      </Grid.RowDefinitions>
+      <TextBlock Grid.Row="0" Text="建筑模型预览" FontSize="30" FontWeight="SemiBold" Margin="0,0,0,4" />
+      <DockPanel Grid.Row="1" Margin="0,0,0,16">
+        <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
+          <Button Click="OpenModel_Click" Content="打开模型…" />
+          <Button Click="Sample_Click" Content="查看样例" Background="#2D4156" />
+          <Button Click="Fit_Click" Content="适应视图" Background="#2D4156" />
+        </StackPanel>
+        <TextBlock VerticalAlignment="Center" HorizontalAlignment="Right" Foreground="#9DC0E7"
+                   Text="鼠标拖动旋转 · 滚轮缩放" />
+      </DockPanel>
+      <Border Grid.Row="2" BorderBrush="#405872" BorderThickness="1" CornerRadius="12" Background="#1B2937" ClipToBounds="True">
+        <h:Viewport3DX x:Name="Scene" BackgroundColor="#1B2937" ShowCoordinateSystem="True" ShowViewCube="True">
+          <h:AmbientLight3D Color="#5B6572" />
+          <h:DirectionalLight3D Direction="-1,-2,-3" Color="#FFFFFF" />
+        </h:Viewport3DX>
+      </Border>
+      <TextBlock Grid.Row="3" x:Name="Status" Foreground="#AFC4DB" Margin="0,12,0,0"
+                 Text="正在准备样例模型…" />
+    </Grid>
+  </Grid>
+</Window>

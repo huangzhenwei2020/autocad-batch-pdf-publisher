@@ -16,8 +16,8 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
     /// 画完在 CAD 里用 <c>LTTZ</c> 落图（那条命令会先列出本项目的图纸/视图让你挑序号）。
     ///
     /// 找程序的位置（按顺序）：
-    /// 1. 上次用户手动指定的路径（存在本机配置里，换电脑/换目录后用一次就记住）；
-    /// 2. 发布目录：插件 DLL 在 <c>&lt;发布根&gt;\CadApi\R24\</c>，建模程序在 <c>&lt;发布根&gt;\建筑模型\万落建筑模型.exe</c>；
+    /// 1. 发布目录：插件 DLL 在 <c>&lt;发布根&gt;\CadApi\R24\</c>，新版建模程序在 <c>&lt;发布根&gt;\建筑模型\万落建筑模型.exe</c>；
+    /// 2. 上次用户手动指定的路径（只有发布目录不存在时才使用，避免旧版路径盖过新版）；
     /// 3. 都没有就弹一次文件对话框让你选，选完记住。
     /// </summary>
     internal static class BuildingModelStudioLauncher
@@ -74,7 +74,7 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
                 editor.WriteMessage("\n已启动建模程序：" + executable);
                 editor.WriteMessage("\n项目：" + projectFolder + "　模型：" + (modelName ?? "（默认）")
                     + (modelFolder == null ? "（还不存在，程序里会按这个名字新建）" : ""));
-                editor.WriteMessage("\n画完点「生成全部视图」，回到 CAD 执行 LTTZ —— 会先列出本项目的图纸/视图，挑序号就行。\n");
+                editor.WriteMessage("\n在建模程序里修改并保存模型后，点「生成 CAD 视图」或「推到 CAD」；回到 CAD 执行 LTTZ 落图。\n");
             }
             catch (Exception exception)
             {
@@ -83,13 +83,13 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
             }
         }
 
-        /// <summary>按"记住的路径 → 发布目录候选 → 让用户选"的顺序找建模程序。</summary>
+        /// <summary>按"发布目录候选 → 记住的路径 → 让用户选"的顺序找建模程序。</summary>
         private static string ResolveExecutable(Autodesk.AutoCAD.EditorInput.Editor editor)
         {
             var candidates = new List<string>();
+            candidates.AddRange(StudioLaunch.DefaultCandidates(PluginFolder()));
             var remembered = ReadRememberedPath();
             if (!string.IsNullOrWhiteSpace(remembered)) candidates.Add(remembered);
-            candidates.AddRange(StudioLaunch.DefaultCandidates(PluginFolder()));
             var found = StudioLaunch.FindExecutable(candidates);
             if (found != null) return found;
 

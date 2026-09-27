@@ -16,17 +16,27 @@ namespace BatchPdfPublisher.BuildingModel
         }
 
         public static IReadOnlyList<ViewDocument> Generate(BuildingModelDocument model,
-            OpeningTypeLibraryDocument library = null)
+            OpeningTypeLibraryDocument library = null, Action checkCancellation = null)
         {
             if (model == null) throw new ArgumentNullException(nameof(model));
             var views = new List<ViewDocument>();
             foreach (var definition in SampleModelFactory.CreateDefaultViews(model.Name))
+            {
+                checkCancellation?.Invoke();
                 views.Add(OrthographicProjector.Project(model, definition, library));
+            }
             foreach (var storey in (model.Storeys ?? new List<StoreyModel>()).Where(s => s != null))
+            {
+                checkCancellation?.Invoke();
                 views.Add(OrthographicProjector.Project(model, SampleModelFactory.CreatePlanView(storey), library));
+            }
+            checkCancellation?.Invoke();
             views.Add(OrthographicProjector.ProjectSchedule(model, library, "门窗表"));
             foreach (var sheet in SampleModelFactory.CreateDefaultSheets(model))
+            {
+                checkCancellation?.Invoke();
                 views.Add(SheetComposer.Compose(views, sheet));
+            }
             return views;
         }
 

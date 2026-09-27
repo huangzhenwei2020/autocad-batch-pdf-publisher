@@ -4,7 +4,7 @@ param(
     [switch]$SkipBuild
 )
 
-# 建筑模型程序（BuildingModelStudio → 万落建筑模型.exe）的编译 + 自检。
+# 旧 WinForms 编辑器回归测试 + 当前 Avalonia 建模入口的项目启动测试。
 #
 # 为什么单独有个脚本：这个程序不在 Build-Release.ps1 的发布流程里（它是独立程序，
 # 不打包进 CAD 插件），但它自己的画布曾经出过一次致命绘制 bug，所以自检必须能一条命令跑完。
@@ -39,4 +39,26 @@ foreach ($mode in @('--selftest-canvas', '--selftest')) {
     if ($LASTEXITCODE -ne 0) { throw "自检失败：$mode" }
 }
 
-Write-Host "建筑模型程序：编译 + 自检全部通过。" -ForegroundColor Green
+$newProject = Join-Path $root 'BuildingModelStudio.AvaloniaProbe\BuildingModelStudio.AvaloniaProbe.csproj'
+if (-not $SkipBuild) {
+    & $dotnet build $newProject -c $Configuration --nologo
+    if ($LASTEXITCODE -ne 0) { throw "新版建模程序编译失败：$newProject" }
+}
+$newDll = Join-Path $root "BuildingModelStudio.AvaloniaProbe\bin\$Configuration\net8.0\万落建筑模型.dll"
+if (-not (Test-Path -LiteralPath $newDll)) { throw "找不到新版建模程序：$newDll" }
+$testRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('WanluoStudioLaunchTest-' + [guid]::NewGuid().ToString('N'))
+try {
+    & $dotnet $dll --generate $testRoot 'CAD入口自检' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw '测试模型生成失败。' }
+    & $dotnet $newDll --smoke --project $testRoot --model 'CAD入口自检'
+    if ($LASTEXITCODE -ne 0) { throw '新版建模程序无法通过项目参数打开模型。' }
+}
+finally {
+    $full = [System.IO.Path]::GetFullPath($testRoot)
+    $tempRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\') + '\'
+    if ($full.StartsWith($tempRoot, [System.StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $full)) {
+        Remove-Item -LiteralPath $full -Recurse -Force
+    }
+}
+
+Write-Host "建筑模型：旧编辑器回归与新版 CAD 入口自检全部通过。" -ForegroundColor Green

@@ -4,6 +4,8 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using BatchPdfPublisher.BuildingModel;
 
@@ -186,6 +188,33 @@ namespace Wanluo.BuildingModelStudio
 
                             // 预览里点一樘门窗 → 换类型库里的另一条 → 模型与预览都要跟着变
                             CheckPreviewPickAndApply(form, preview, canvas);
+                            var testView = BuildingModelJson.ViewFilePath(temp, "自检模型", "elev-south");
+                            // Use a real window and pump messages so the async UI continuation runs.
+                            var generateTask = form.GenerateViewsForTest(false);
+                            var deadline = DateTime.UtcNow.AddSeconds(15);
+                            while (!generateTask.IsCompleted && DateTime.UtcNow < deadline)
+                            {
+                                Application.DoEvents();
+                                System.Threading.Thread.Sleep(5);
+                            }
+                            if (!generateTask.IsCompleted) throw new TimeoutException("后台生成视图未完成。");
+                            generateTask.GetAwaiter().GetResult();
+                            if (!File.Exists(testView)) throw new InvalidOperationException("后台生成没有发布视图。");
+                            Console.WriteLine("PASS 后台生成：真实窗口可处理消息，视图已发布");
+
+                            File.Delete(testView);
+                            generateTask = form.GenerateViewsForTest(false);
+                            canvas.Model.Name += "-编辑中";
+                            deadline = DateTime.UtcNow.AddSeconds(15);
+                            while (!generateTask.IsCompleted && DateTime.UtcNow < deadline)
+                            {
+                                Application.DoEvents();
+                                System.Threading.Thread.Sleep(5);
+                            }
+                            if (!generateTask.IsCompleted) throw new TimeoutException("过期视图生成未完成。");
+                            generateTask.GetAwaiter().GetResult();
+                            if (File.Exists(testView)) throw new InvalidOperationException("模型编辑后的旧视图仍被发布。");
+                            Console.WriteLine("PASS 后台生成：编辑期间的旧结果被丢弃");
                         }
                         finally
                         {
@@ -624,6 +653,7 @@ namespace Wanluo.BuildingModelStudio
         private readonly Label _viewInfo = new Label();
         private BuildingModelDocument _model;
         private OpeningTypeLibraryDocument _openingLibrary;
+        private CancellationTokenSource _viewGeneration;
 
         public MainForm()
         {
@@ -659,8 +689,9 @@ namespace Wanluo.BuildingModelStudio
             fileRow.Controls.Add(_modelName);
             fileRow.Controls.Add(Button("打开/新建", OpenOrCreateModel, true));
             fileRow.Controls.Add(Button("保存", SaveModel, true));
-            fileRow.Controls.Add(Button("生成全部视图", GenerateViewsNow, true));
-            fileRow.Controls.Add(Button("推到 CAD", PushToCad, true));
+            fileRow.Controls.Add(Button("生成全部视图", () => _ = GenerateViewsAsync(false), true));
+            fileRow.Controls.Add(Button("取消生成", CancelViewGeneration, false));
+            fileRow.Controls.Add(Button("推到 CAD", () => _ = GenerateViewsAsync(true), true));
             fileRow.Controls.Add(Button("预览立面", ShowViewPreview, true));
             fileRow.Controls.Add(Button("打开模型目录", OpenModelFolder, false));
             top.Controls.Add(fileRow, 0, 0);
@@ -789,6 +820,7 @@ namespace Wanluo.BuildingModelStudio
                 if (_tabs.SelectedIndex == 2) RefreshVolume();
             };
             _canvas.SaveRequested += SaveModel;
+            FormClosing += (s, e) => _viewGeneration?.Cancel();
 
             Log("P1.5 平面草图：用「画墙 / 放窗 / 放门 / 布柱」把平面画出来，画的就是模型。");
             Log("门窗类型库：CAD 里执行 TQLX 导出 → 本程序「刷新（模型目录）」即可用它放门窗。");
@@ -917,14 +949,98 @@ namespace Wanluo.BuildingModelStudio
             catch (Exception exception) { Log("保存失败：" + exception.Message); return false; }
         }
 
-        private void GenerateViewsNow()
+        private async Task GenerateViewsAsync(bool pushToCad)
         {
-            if (_model == null) { Log("还没有模型。"); return; }
+            if (_canvas.Model == null) { Log("还没有模型。"); return; }
             if (!TrySaveModel()) { Log("视图未生成：模型尚未保存成功。"); return; }
-            var total = Program.GenerateViews(_projectFolder.Text, ModelName, _model, Log, _openingLibrary);
-            Log("生成完成，共 " + total + " 条线。回到 CAD 执行 LTTZ 落图（选 views 目录下的 json）。");
-            RefreshViewPreview(false);
+
+            // Never let the worker touch a model being edited by the UI. A later edit or
+            // project/library switch invalidates this result before it reaches views/.
+            string modelJson;
+            try { modelJson = BuildingModelJson.ToJson(_canvas.Model); }
+            catch (Exception exception) { Log("生成视图失败：模型快照无法读取：" + exception.Message); return; }
+            var projectFolder = _projectFolder.Text;
+            var modelName = ModelName;
+            var library = _openingLibrary;
+            var previous = _viewGeneration;
+            previous?.Cancel();
+            var source = new CancellationTokenSource();
+            _viewGeneration = source;
+            string stagingFolder = null;
+            Log("正在后台生成视图；可继续编辑，模型改变后本次结果会自动丢弃。");
+            try
+            {
+                var result = await Task.Run(() =>
+                {
+                    var token = source.Token;
+                    var snapshot = BuildingModelJson.FromJson(modelJson);
+                    var views = BuildingModelViewPublisher.Generate(snapshot, library, token.ThrowIfCancellationRequested);
+                    var modelFolder = BuildingModelJson.ModelFolder(projectFolder, modelName);
+                    var staging = Path.Combine(modelFolder, ".views-staging-" + Guid.NewGuid().ToString("N"));
+                    try
+                    {
+                        Directory.CreateDirectory(staging);
+                        foreach (var view in views)
+                        {
+                            token.ThrowIfCancellationRequested();
+                            BuildingModelJson.SaveView(Path.Combine(staging, view.Id + ".json"), view);
+                        }
+                        token.ThrowIfCancellationRequested();
+                        return (Folder: staging, Views: views, Lines: views.Sum(view => view.Lines.Count));
+                    }
+                    catch
+                    {
+                        if (Directory.Exists(staging)) Directory.Delete(staging, true);
+                        throw;
+                    }
+                }, source.Token);
+                stagingFolder = result.Folder;
+                if (source.IsCancellationRequested || !ReferenceEquals(_viewGeneration, source)
+                    || IsDisposed || !string.Equals(_projectFolder.Text, projectFolder, StringComparison.Ordinal)
+                    || !string.Equals(ModelName, modelName, StringComparison.Ordinal)
+                    || !ReferenceEquals(_openingLibrary, library)
+                    || !string.Equals(BuildingModelJson.ToJson(_canvas.Model), modelJson, StringComparison.Ordinal))
+                {
+                    Log("模型、类型库或项目已改变，旧视图结果已丢弃；需要时重新生成。");
+                    return;
+                }
+
+                var viewsFolder = BuildingModelJson.ViewsFolder(projectFolder, modelName);
+                Directory.CreateDirectory(viewsFolder);
+                foreach (var view in result.Views)
+                {
+                    var name = view.Id + ".json";
+                    File.Move(Path.Combine(stagingFolder, name), Path.Combine(viewsFolder, name), true);
+                }
+                Log("生成完成，共 " + result.Views.Count + " 张视图、" + result.Lines + " 条线。");
+                foreach (var view in result.Views)
+                    foreach (var warning in view.Warnings) Log(view.Title + "：" + warning);
+                RefreshViewPreview(false);
+                if (pushToCad) FinishPushToCad(projectFolder, modelName);
+                else Log("回到 CAD 执行 LTTZ 落图（选 views 目录下的 json）。");
+            }
+            catch (OperationCanceledException) { Log("上一次视图生成已取消。"); }
+            catch (Exception exception) { Log("生成视图失败：" + exception.Message); }
+            finally
+            {
+                if (stagingFolder != null)
+                {
+                    try { if (Directory.Exists(stagingFolder)) Directory.Delete(stagingFolder, true); }
+                    catch (Exception exception) { Log("清理临时视图失败：" + exception.Message); }
+                }
+                if (ReferenceEquals(_viewGeneration, source)) _viewGeneration = null;
+                source.Dispose();
+            }
         }
+
+        private void CancelViewGeneration()
+        {
+            if (_viewGeneration == null) { Log("当前没有正在生成的视图。"); return; }
+            _viewGeneration.Cancel();
+            Log("正在取消视图生成…");
+        }
+
+        internal Task GenerateViewsForTest(bool pushToCad) { return GenerateViewsAsync(pushToCad); }
 
         // ───────────────────────── 自检用的接口（只给 --selftest 用） ─────────────────────────
 
@@ -1075,20 +1191,15 @@ namespace Wanluo.BuildingModelStudio
         /// 并默认落第一张）→ 把 AutoCAD 窗口切到前台，并**自动输入 LTTZ**；
         /// 切不过去或没找到 CAD 就只留清单，让用户自己回 CAD 敲 LTTZ。
         /// </summary>
-        private void PushToCad()
+        private void FinishPushToCad(string projectFolder, string modelName)
         {
-            if (_model == null) { Log("还没有模型。"); return; }
-            if (!TrySaveModel()) { Log("未推送到 CAD：模型尚未保存成功。"); return; }
-            var total = Program.GenerateViews(_projectFolder.Text, ModelName, _model, Log, _openingLibrary);
-            var modelFolder = Program.ModelFolderOf(_projectFolder.Text, ModelName);
-            var marked = Program.MarkPendingForCad(_projectFolder.Text, ModelName);
+            var modelFolder = Program.ModelFolderOf(projectFolder, modelName);
+            var marked = Program.MarkPendingForCad(projectFolder, modelName);
             var sheets = StudioLaunch.ListViews(modelFolder).Where(entry => entry.Kind == ViewKind.Sheet).ToList();
 
             Log(marked > 0
                 ? "已标记待落图 " + marked + " 张" + (sheets.Count > 0 ? "（图纸）" : "（视图）") + "：" + modelFolder
                 : "没有可推的视图/图纸（先生成一次）");
-            Log("生成完成，共 " + total + " 条线。");
-
             var activated = CadWindow.TryActivate();
             if (!activated)
             {
@@ -1125,7 +1236,8 @@ namespace Wanluo.BuildingModelStudio
             _viewChooser.SelectedIndexChanged += (s, e) => RefreshViewPreview(true);
             row.Controls.Add(_viewChooser);
             row.Controls.Add(Button("重算当前视图", () => RefreshViewPreview(true), true));
-            row.Controls.Add(Button("生成全部视图", GenerateViewsNow, false));
+            row.Controls.Add(Button("生成全部视图", () => _ = GenerateViewsAsync(false), false));
+            row.Controls.Add(Button("取消生成", CancelViewGeneration, false));
             row.Controls.Add(Button("缩放适应(Ctrl+A)", () => { _viewPreview.ZoomExtents(); _viewPreview.Invalidate(); _viewPreview.Focus(); }, false));
             layout.Controls.Add(row, 0, 0);
 
@@ -1724,6 +1836,7 @@ namespace Wanluo.BuildingModelStudio
 
         private void Log(string message)
         {
+            if (IsDisposed || _log.IsDisposed) return;
             _log.AppendText(DateTime.Now.ToString("HH:mm:ss") + "  " + message + Environment.NewLine);
         }
     }

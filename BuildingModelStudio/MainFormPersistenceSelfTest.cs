@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Reflection;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using BatchPdfPublisher.BuildingModel;
 
@@ -39,8 +40,8 @@ namespace Wanluo.BuildingModelStudio
                     // must not be generated from a model that failed to persist.
                     File.Delete(path);
                     Directory.CreateDirectory(path);
-                    typeof(MainForm).GetMethod("GenerateViewsNow", BindingFlags.Instance | BindingFlags.NonPublic)
-                        .Invoke(form, null);
+                    var generate = typeof(MainForm).GetMethod("GenerateViewsAsync", BindingFlags.Instance | BindingFlags.NonPublic);
+                    ((Task)generate.Invoke(form, new object[] { false })).GetAwaiter().GetResult();
                     var modelFolder = BuildingModelJson.ModelFolder(root, "state-test");
                     var views = Path.Combine(modelFolder, "views");
                     if (Directory.Exists(views) && Directory.GetFiles(views, "*.json").Length != 0)

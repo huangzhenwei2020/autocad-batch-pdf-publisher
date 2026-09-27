@@ -38,33 +38,68 @@ namespace BatchPdfPublisher.Services
         public static void PlaceView(Document document)
         {
             if (document == null) return;
+            if (!IsHeadlessHost)
+            {
+                var batch = PickViewBatch(document);
+                if (batch == null) return;
+                foreach (var entry in batch.SelectedEntries)
+                    if (!PlaceOneView(document, entry.FilePath, entry.Id, batch.FrameMode, batch.SelectedFrame)) break;
+                return;
+            }
             var editor = document.Editor;
             SelectedViewId = null;                       // 每次落图重新记
             var path = PickViewFile(document, editor);
             if (string.IsNullOrWhiteSpace(path)) return;
-            var placedViewId = SelectedViewId;
+            PlaceOneView(document, path, SelectedViewId, null, null);
+        }
+
+        private static bool PlaceOneView(Document document, string path, string placedViewId,
+            BuildingFrameMode? frameMode, FrameDefinition selectedFrame)
+        {
+            var editor = document.Editor;
 
             ViewDocument view;
             try { view = BuildingModelJson.LoadView(path); }
             catch (Exception exception)
             {
                 editor.WriteMessage("\n视图文件读取失败：" + exception.Message);
-                return;
+                return false;
             }
             SaveLastViewFolder(Path.GetDirectoryName(path));
 
             if (string.IsNullOrWhiteSpace(view.Id))
             {
                 editor.WriteMessage("\n视图缺少稳定 ID，无法安全更新，请重新生成视图。");
-                return;
+                return false;
             }
-            var sourceKey = ViewSourceKey(path, view.Id);
+            var sourceViewId = view.Id;
+            if (frameMode == BuildingFrameMode.Project && selectedFrame == null)
+            {
+                editor.WriteMessage("\n尚未选择项目图框，落图已取消。");
+                return false;
+            }
+            if (frameMode == BuildingFrameMode.Project && view.Kind == ViewKind.Sheet
+                && !FrameMatches(view, selectedFrame))
+            {
+                editor.WriteMessage("\n“" + (view.Title ?? view.Id) + "”与所选项目图框的规格不匹配，落图已取消。");
+                return false;
+            }
+            if (frameMode.HasValue && frameMode != BuildingFrameMode.None && view.Kind != ViewKind.Sheet)
+            {
+                try { view = ComposeSingleViewSheet(view, selectedFrame); }
+                catch (Exception exception)
+                {
+                    editor.WriteMessage("\n视图排版失败：" + exception.Message);
+                    return false;
+                }
+            }
+            var sourceKey = ViewSourceKey(path, sourceViewId);
             var placements = FindPlacements(document.Database, sourceKey);
             PlacedView replacing = null;
             if (placements.Count > 0)
             {
                 var choice = PickPlacement(placements, editor);
-                if (!choice.HasValue) return;
+                if (!choice.HasValue) return false;
                 if (choice.Value > 0) replacing = placements[choice.Value - 1];
             }
             Point3d anchor;
@@ -72,7 +107,7 @@ namespace BatchPdfPublisher.Services
             else
             {
                 var pointResult = editor.GetPoint("\n指定视图插入点（视图左下角）：");
-                if (pointResult.Status != PromptStatus.OK) return;
+                if (pointResult.Status != PromptStatus.OK) return false;
                 anchor = pointResult.Value;
             }
             var placementId = replacing == null ? Guid.NewGuid().ToString("N") : replacing.Id;
@@ -94,10 +129,13 @@ namespace BatchPdfPublisher.Services
                 // 并跳过图纸自带的图框与标题栏（那一层叫 WL-模型-图纸框），避免双层图框。
                 var skipLayers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 ObjectId frameId = ObjectId.Null;
-                var frame = view.Kind == ViewKind.Sheet
-                    ? InsertProjectFrame(document, transaction, space, view, anchor, out frameId) : null;
+                var insertProject = view.Kind == ViewKind.Sheet &&
+                    (!frameMode.HasValue || frameMode == BuildingFrameMode.Project);
+                var frame = insertProject
+                    ? InsertProjectFrame(document, transaction, space, view, anchor, out frameId,
+                        selectedFrame, frameMode == BuildingFrameMode.Project) : null;
                 if (!frameId.IsNull) generatedIds.Add(frameId);
-                if (frame != null) skipLayers.Add(ViewLayers.SheetFrame);
+                if (frame != null || frameMode == BuildingFrameMode.None) skipLayers.Add(ViewLayers.SheetFrame);
 
                 foreach (var line in view.Lines ?? new List<ViewLine>())
                 {
@@ -115,6 +153,7 @@ namespace BatchPdfPublisher.Services
 
                 foreach (var text in view.Texts ?? new List<ViewText>())
                 {
+                    if (!string.IsNullOrWhiteSpace(text.Layer) && skipLayers.Contains(text.Layer)) continue;
                     var entity = new DBText
                     {
                         TextString = text.Text ?? string.Empty,
@@ -132,6 +171,7 @@ namespace BatchPdfPublisher.Services
                 foreach (var circle in view.Circles ?? new List<ViewCircle>())
                 {
                     if (circle == null || Math.Abs(circle.Radius) < 0.5d) continue;
+                    if (!string.IsNullOrWhiteSpace(circle.Layer) && skipLayers.Contains(circle.Layer)) continue;
                     var entity = new Circle(new Point3d(anchor.X + circle.X, anchor.Y + circle.Y, 0d), Vector3d.ZAxis,
                         Math.Abs(circle.Radius));
                     ApplyLayer(entity, circle.Layer);
@@ -159,6 +199,7 @@ namespace BatchPdfPublisher.Services
                     foreach (var dimension in view.Dimensions)
                     {
                         if (dimension == null) continue;
+                        if (!string.IsNullOrWhiteSpace(dimension.Layer) && skipLayers.Contains(dimension.Layer)) continue;
                         var span = Math.Abs(dimension.To - dimension.From);
                         if (span < 0.5d) continue;
                         try
@@ -179,7 +220,9 @@ namespace BatchPdfPublisher.Services
                 }
 
                 foreach (var hatch in view.Hatches ?? new List<ViewHatch>())
-                {                    if (hatch.Boundary == null || hatch.Boundary.Count < 3) continue;
+                {
+                    if (hatch == null || hatch.Boundary == null || hatch.Boundary.Count < 3) continue;
+                    if (!string.IsNullOrWhiteSpace(hatch.Layer) && skipLayers.Contains(hatch.Layer)) continue;
                     var entity = new Hatch { Associative = false };
                     space.AppendEntity(entity);
                     transaction.AddNewlyCreatedDBObject(entity, true);
@@ -253,7 +296,7 @@ namespace BatchPdfPublisher.Services
             catch (Exception exception)
             {
                 editor.WriteMessage("\n落图事务失败，未替换原视图：" + exception.Message);
-                return;
+                return false;
             }
 
             editor.WriteMessage("\n" + (replacing == null ? "落图完成：" : "视图更新完成：")
@@ -288,6 +331,7 @@ namespace BatchPdfPublisher.Services
                     // 清标记失败不影响已经落好的图
                 }
             }
+            return true;
         }
 
         private sealed class PlacedView
@@ -343,6 +387,60 @@ namespace BatchPdfPublisher.Services
                 + "\n" + viewId.Trim().ToUpperInvariant();
             using (var sha = SHA256.Create())
                 return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(source))).Replace("-", "");
+        }
+
+        private static HashSet<string> FindPlacedSourceKeys(Database database)
+        {
+            var keys = new HashSet<string>(StringComparer.Ordinal);
+            using (var transaction = database.TransactionManager.StartTransaction())
+            {
+                var space = (BlockTableRecord)transaction.GetObject(
+                    SymbolUtilityServices.GetBlockModelSpaceId(database), OpenMode.ForRead);
+                foreach (ObjectId id in space)
+                {
+                    Entity entity;
+                    try { entity = transaction.GetObject(id, OpenMode.ForRead, false) as Entity; }
+                    catch (Autodesk.AutoCAD.Runtime.Exception) { continue; }
+                    var tag = ReadPlacement(entity);
+                    if (tag != null) keys.Add(tag.SourceKey);
+                }
+            }
+            return keys;
+        }
+
+        private static ViewDocument ComposeSingleViewSheet(ViewDocument source, FrameDefinition frame)
+        {
+            var paper = frame == null || string.IsNullOrWhiteSpace(frame.PaperSize) ? "A3" : frame.PaperSize;
+            var orientation = frame == null || string.IsNullOrWhiteSpace(frame.PaperOrientation)
+                ? "横向" : frame.PaperOrientation;
+            var size = frame == null ? new[] { 420d, 297d }
+                : PaperSizeCatalog.GetSize(paper, frame.Extension, orientation);
+            var sheet = new SheetDefinitionModel
+            {
+                Id = "placed-" + source.Id,
+                Number = source.Id,
+                Title = source.Title,
+                Paper = paper,
+                PaperWidth = size[0],
+                PaperHeight = size[1],
+                Landscape = size[0] >= size[1],
+                FrameTemplate = frame == null ? null : frame.BlockName,
+                ViewIds = new List<string> { source.Id }
+            };
+            return SheetComposer.Compose(new[] { source }, sheet);
+        }
+
+        private static bool FrameMatches(ViewDocument view, FrameDefinition frame)
+        {
+            if (frame == null) return false;
+            if (!string.IsNullOrWhiteSpace(view.PaperName)
+                && !string.Equals(view.PaperName.Trim(), (frame.PaperSize ?? string.Empty).Trim(),
+                    StringComparison.OrdinalIgnoreCase)) return false;
+            if (view.PaperWidth <= 0d || view.PaperHeight <= 0d) return true;
+            var orientation = string.IsNullOrWhiteSpace(frame.PaperOrientation)
+                ? PaperSizeCatalog.DefaultOrientation(frame.PaperSize) : frame.PaperOrientation;
+            var size = PaperSizeCatalog.GetSize(frame.PaperSize, frame.Extension, orientation);
+            return Math.Abs(view.PaperWidth - size[0]) < 2d && Math.Abs(view.PaperHeight - size[1]) < 2d;
         }
 
         private static List<PlacedView> FindPlacements(Database database, string sourceKey)
@@ -799,9 +897,44 @@ namespace BatchPdfPublisher.Services
             }
         }
 
-        /// <summary>
-        /// 图形宿主用 WPF 窗口选择视图；无界面的 core console 保留序号输入，供自动验收。
-        /// </summary>
+        private static BuildingModelBatchWindow PickViewBatch(Document document)
+        {
+            string projectFolder = null;
+            string projectName = null;
+            try
+            {
+                var project = new PublishPlanStore().GetActiveProject();
+                projectFolder = project == null ? null : project.ProjectFolder;
+                projectName = project == null ? null : project.Name;
+            }
+            catch (Exception exception)
+            {
+                document.Editor.WriteMessage("\n读取当前项目失败：" + exception.Message);
+            }
+            var modelFolder = StudioLaunch.FindModelFolder(projectFolder, projectName);
+            var entries = StudioLaunch.ListViews(modelFolder);
+            try
+            {
+                var placed = FindPlacedSourceKeys(document.Database);
+                foreach (var entry in entries)
+                    entry.Placed = placed.Contains(ViewSourceKey(entry.FilePath, entry.Id));
+            }
+            catch (Exception exception)
+            {
+                document.Editor.WriteMessage("\n读取已落图状态失败：" + exception.Message);
+            }
+            List<FrameDefinition> frames;
+            try { frames = new PublishPlanStore().LoadFrames(); }
+            catch (Exception exception)
+            {
+                document.Editor.WriteMessage("\n读取项目图框失败：" + exception.Message);
+                frames = new List<FrameDefinition>();
+            }
+            var dialog = new BuildingModelBatchWindow(projectName, entries, frames);
+            return AcApplication.ShowModalWindow(dialog) == true ? dialog : null;
+        }
+
+        /// <summary>无界面的 core console 保留序号输入，供自动验收。</summary>
         private static string PickViewFile(Document document, Editor editor)
         {
             string projectFolder = null;
@@ -818,28 +951,6 @@ namespace BatchPdfPublisher.Services
             }
             var modelFolder = StudioLaunch.FindModelFolder(projectFolder, modelName);
             var entries = StudioLaunch.ListViews(modelFolder);
-            if (!IsHeadlessHost)
-            {
-                var choices = entries.Select((entry, index) => new BuildingModelChoice
-                {
-                    Value = index,
-                    Title = string.IsNullOrWhiteSpace(entry.Title) ? entry.Id : entry.Title,
-                    Subtitle = (entry.Kind == ViewKind.Sheet ? "图纸" : entry.Kind == ViewKind.Plan ? "平面"
-                        : entry.Kind == ViewKind.Section ? "剖面" : entry.Kind == ViewKind.Schedule ? "门窗表" : "立面")
-                        + " · 更新于 " + entry.Modified.ToString("yyyy-MM-dd HH:mm"),
-                    Badge = entry.Pending ? "待落图" : string.Empty
-                });
-                var dialog = new BuildingModelChoiceWindow("选择要落图的视图",
-                    "当前项目：" + (modelName ?? "未选择项目")
-                        + (entries.Count == 0 ? "。还没有生成视图，可浏览其它视图文件。" : "。可双击选择，待落图内容排在前面。"),
-                    choices, true, "选择视图");
-                if (AcApplication.ShowModalWindow(dialog) != true) return null;
-                if (dialog.BrowseRequested) return BrowseViewFile();
-                if (!dialog.SelectedValue.HasValue) return null;
-                var selected = entries[dialog.SelectedValue.Value];
-                SelectedViewId = selected.Id;
-                return selected.FilePath;
-            }
             if (entries.Count == 0)
             {
                 if (modelFolder != null)
@@ -890,20 +1001,23 @@ namespace BatchPdfPublisher.Services
         /// 找不到就返回 null —— 调用方照常使用图纸自带的图框。
         /// </summary>
         private static FrameDefinition InsertProjectFrame(Document document, Transaction transaction,
-            BlockTableRecord space, ViewDocument view, Point3d anchor, out ObjectId insertedId)
+            BlockTableRecord space, ViewDocument view, Point3d anchor, out ObjectId insertedId,
+            FrameDefinition selectedFrame, bool strict)
         {
             insertedId = ObjectId.Null;
             try
             {
-                var frames = new PublishPlanStore().LoadFrames()
-                    .Where(f => f != null && !string.IsNullOrWhiteSpace(f.BlockName)).ToList();
+                var frames = selectedFrame == null
+                    ? new PublishPlanStore().LoadFrames()
+                        .Where(f => f != null && !string.IsNullOrWhiteSpace(f.BlockName)).ToList()
+                    : new List<FrameDefinition> { selectedFrame };
                 if (frames.Count == 0)
                 {
                     document.Editor.WriteMessage("\n（项目里还没有登记图框：本次用图纸自带的图框；"
                         + "在「图框登记」里登记 " + (view.PaperName ?? "同规格") + " 图框后会自动套用。）");
                     return null;
                 }
-                var frame = PickFrame(frames, view);
+                var frame = selectedFrame ?? PickFrame(frames, view);
                 if (frame == null)
                 {
                     document.Editor.WriteMessage("\n（项目里没有 " + (view.PaperName ?? "同规格")
@@ -914,18 +1028,27 @@ namespace BatchPdfPublisher.Services
                 var blockTable = (BlockTable)transaction.GetObject(document.Database.BlockTableId, OpenMode.ForRead);
                 if (!blockTable.Has(frame.BlockName))
                 {
+                    if (strict) throw new InvalidOperationException("所选图框块“" + frame.BlockName + "”不在当前图纸里。");
                     document.Editor.WriteMessage("\n（图框块“" + frame.BlockName + "”不在当前图纸里：本次用图纸自带的图框。）");
                     return null;
                 }
                 var definitionId = blockTable[frame.BlockName];
                 var definition = (BlockTableRecord)transaction.GetObject(definitionId, OpenMode.ForRead);
                 var bounds = DefinitionBounds(definition, transaction);
-                if (bounds == null) return null;
+                if (bounds == null)
+                {
+                    if (strict) throw new InvalidOperationException("所选图框没有有效边界。");
+                    return null;
+                }
 
                 var paperWidth = view.PaperWidth > 1d ? view.PaperWidth : 420d;
                 var paperHeight = view.PaperHeight > 1d ? view.PaperHeight : 297d;
                 var factor = Math.Min(paperWidth / bounds.Width, paperHeight / bounds.Height);
-                if (!(factor > 0d) || double.IsInfinity(factor)) return null;
+                if (!(factor > 0d) || double.IsInfinity(factor))
+                {
+                    if (strict) throw new InvalidOperationException("所选图框尺寸无效。");
+                    return null;
+                }
 
                 var position = new Point3d(anchor.X - bounds.MinX * factor, anchor.Y - bounds.MinY * factor, anchor.Z);
                 var reference = new BlockReference(position, definitionId) { ScaleFactors = new Scale3d(factor) };
@@ -941,6 +1064,7 @@ namespace BatchPdfPublisher.Services
             }
             catch (Exception exception)
             {
+                if (strict) throw new InvalidOperationException("套用所选图框失败：" + exception.Message, exception);
                 if (!insertedId.IsNull)
                 {
                     try { ((Entity)transaction.GetObject(insertedId, OpenMode.ForWrite)).Erase(); }

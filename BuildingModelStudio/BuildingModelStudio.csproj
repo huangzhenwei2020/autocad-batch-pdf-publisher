@@ -33,6 +33,7 @@
     <Compile Include="..\Shared\BuildingModel\PlanEditing.cs" Link="Shared\PlanEditing.cs" />
     <Compile Include="..\Shared\BuildingModel\OrthographicProjector.cs" Link="Shared\OrthographicProjector.cs" />
     <Compile Include="..\Shared\BuildingModel\SheetComposer.cs" Link="Shared\SheetComposer.cs" />
+    <Compile Include="..\Shared\BuildingModel\BuildingModelViewPublisher.cs" Link="Shared\BuildingModelViewPublisher.cs" />
     <Compile Include="..\Shared\BuildingModel\StudioLaunch.cs" Link="Shared\StudioLaunch.cs" />
     <Compile Include="..\Shared\BuildingModel\BuildingVolume.cs" Link="Features\BuildingModel\Shared\BuildingVolume.cs" />
     <Compile Include="..\Shared\BuildingModel\StairGeometry.cs" Link="Features\BuildingModel\Shared\StairGeometry.cs" />
@@ -45,7 +46,6 @@
     <Compile Include="..\BatchPdfPublisher\Features\DoorWindows\Models\DoorWindowElevationGeometry.cs" Link="DoorWindows\DoorWindowElevationGeometry.cs" />
   </ItemGroup>
 </Project>
-
 
 
 

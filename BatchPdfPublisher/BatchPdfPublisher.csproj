@@ -66,6 +66,7 @@
     <Compile Include="Features\Frames\Views\FrameRegistrationWindow.xaml.cs"><DependentUpon>FrameRegistrationWindow.xaml</DependentUpon></Compile>
     <Page Include="Features\Frames\Views\FrameRegistrationWindow.xaml" />
     <Page Include="Features\BuildingModel\Views\BuildingModelChoiceWindow.xaml" />
+    <Page Include="Features\BuildingModel\Views\BuildingModelBatchWindow.xaml" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="..\Resources\Ribbon\ios-icons.png">

@@ -34,6 +34,8 @@ internal static class BuildingModelProjectionTests
             VolumeIdentityTests.Run();
             BuildingModelEditSessionTests.Run();
             JsonRoundTripsWithoutLoss(model);
+            RegisteredFramePaperSizeIsPreserved();
+            ViewGenerationCanBeCancelled(model);
             PlanEditingTests.Run();
             OpeningTypeLibraryTests.Run();
             OpeningElevationTests.Run();
@@ -43,6 +45,40 @@ internal static class BuildingModelProjectionTests
             Console.Error.WriteLine("FAIL " + exception);
             Environment.ExitCode = 1;
         }
+    }
+
+    private static void RegisteredFramePaperSizeIsPreserved()
+    {
+        var source = new ViewDocument { Id = "plan-a", Title = "测试平面", Kind = ViewKind.Plan, Scale = 100 };
+        source.Lines.Add(new ViewLine { X1 = 0, Y1 = 0, X2 = 5000, Y2 = 0, Layer = ViewLayers.Elevation });
+        var sheet = SheetComposer.Compose(new[] { source }, new SheetDefinitionModel
+        {
+            Id = "sheet-a", Title = "加长图框测试", Paper = "A3",
+            PaperWidth = 630, PaperHeight = 297, ViewIds = new List<string> { source.Id }
+        });
+        Assert(sheet.Kind == ViewKind.Sheet && Math.Abs(sheet.PaperWidth - 630) < Tolerance
+            && Math.Abs(sheet.PaperHeight - 297) < Tolerance,
+            "登记的加长图框应使用精确纸面尺寸，而不是回退为标准 A3");
+        Assert(sheet.Lines.Any(line => line.Layer == ViewLayers.SheetFrame
+            && Math.Abs(Math.Max(line.X1, line.X2) - 630) < Tolerance),
+            "图框线应延伸到加长纸张边界");
+        Console.WriteLine("PASS 加长图框纸面尺寸和图框线一致");
+    }
+
+    private static void ViewGenerationCanBeCancelled(BuildingModelDocument model)
+    {
+        var checks = 0;
+        try
+        {
+            BuildingModelViewPublisher.Generate(model, null, () =>
+            {
+                if (++checks == 2) throw new OperationCanceledException();
+            });
+            throw new InvalidOperationException("取消后仍完成了整批视图生成。");
+        }
+        catch (OperationCanceledException) { }
+        Assert(checks == 2, "视图批次没有在各张视图之间检查取消。");
+        Console.WriteLine("PASS 视图批次可在逐张生成时取消");
     }
 
     private static void SouthElevationShowsOutlineAndOpenings(BuildingModelDocument model)

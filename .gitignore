@@ -22,6 +22,7 @@ plot.log
 
 # Reproducible build output. Never launch binaries from the repository root.
 /.artifacts/
+**/.artifacts/
 /.tools/
 /dist/
 /CadApi/

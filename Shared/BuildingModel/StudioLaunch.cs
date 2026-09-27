@@ -14,8 +14,13 @@ namespace BatchPdfPublisher.BuildingModel
         public string FilePath { get; set; }
         public DateTime Modified { get; set; }
         public long SizeBytes { get; set; }
+        public string PaperName { get; set; }
+        public double PaperWidth { get; set; }
+        public double PaperHeight { get; set; }
         /// <summary>是不是"建模程序刚推过来、还没落图"的那几张（清单里带 ★）。</summary>
         public bool Pending { get; set; }
+        /// <summary>当前 DWG 已登记的放置状态，由 CAD 宿主读取后填充，不写入模型文件。</summary>
+        public bool Placed { get; set; }
 
         /// <summary>清单里显示的一行（序号由调用方加）。</summary>
         public string Display
@@ -251,6 +256,9 @@ namespace BatchPdfPublisher.BuildingModel
                         FilePath = file,
                         Modified = info.LastWriteTime,
                         SizeBytes = info.Length,
+                        PaperName = view.PaperName,
+                        PaperWidth = view.PaperWidth,
+                        PaperHeight = view.PaperHeight,
                         Pending = pendingIds.Contains(id)
                     });
                 }

@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>万落建筑模型-WPF试验</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="HelixToolkit.Wpf.SharpDX" Version="3.1.2" />
+    <Compile Include="..\Shared\BuildingModel\ModelTypes.cs" Link="Shared\ModelTypes.cs" />
+    <Compile Include="..\Shared\BuildingModel\BuildingModelJson.cs" Link="Shared\BuildingModelJson.cs" />
+    <Compile Include="..\Shared\BuildingModel\BuildingVolume.cs" Link="Shared\BuildingVolume.cs" />
+    <Compile Include="..\Shared\BuildingModel\StairGeometry.cs" Link="Shared\StairGeometry.cs" />
+    <Compile Include="..\Shared\BuildingModel\RoofGeometry.cs" Link="Shared\RoofGeometry.cs" />
+    <Compile Include="..\Shared\BuildingModel\SampleModelFactory.cs" Link="Shared\SampleModelFactory.cs" />
+    <Compile Include="..\Shared\BuildingModel\SheetComposer.cs" Link="Shared\SheetComposer.cs" />
+  </ItemGroup>
+</Project>

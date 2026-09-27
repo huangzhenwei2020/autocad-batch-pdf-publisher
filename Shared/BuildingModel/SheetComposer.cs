@@ -14,6 +14,9 @@ namespace BatchPdfPublisher.BuildingModel
         public string Title { get; set; }
         /// <summary>纸张规格名（A4/A3/A2/A1/A0，见 <see cref="SheetComposer.Papers"/>）。</summary>
         public string Paper { get; set; } = "A3";
+        /// <summary>可选的精确纸面尺寸（mm），供已登记的加长图框使用。</summary>
+        public double PaperWidth { get; set; }
+        public double PaperHeight { get; set; }
         /// <summary>横放（true，默认）或竖放。</summary>
         public bool Landscape { get; set; } = true;
         /// <summary>指定要用哪张图框模板（登记时的块名）；空 = 落图时按纸张自动匹配。</summary>
@@ -71,6 +74,12 @@ namespace BatchPdfPublisher.BuildingModel
         /// <summary>纸张的实际宽高（按横放/竖放换算）。</summary>
         public static void PaperSize(SheetDefinitionModel sheet, out double width, out double height)
         {
+            if (sheet != null && sheet.PaperWidth > 0d && sheet.PaperHeight > 0d)
+            {
+                width = sheet.PaperWidth;
+                height = sheet.PaperHeight;
+                return;
+            }
             var paper = FindPaper(sheet == null ? null : sheet.Paper);
             var landscape = sheet == null || sheet.Landscape;
             width = landscape ? paper.LongSide : paper.ShortSide;
