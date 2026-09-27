@@ -17,6 +17,7 @@ internal static class Program
     public static string? SnapshotPath { get; private set; }
     public static bool SnapshotPlan { get; private set; }
     public static bool SnapshotAxes { get; private set; }
+    public static bool SnapshotStoreys { get; private set; }
     public static bool SnapshotGizmo { get; private set; }
     public static bool GizmoCheck { get; private set; }
     public static bool ShortcutCheck { get; private set; }
@@ -62,6 +63,12 @@ internal static class Program
         {
             SnapshotPath = Path.GetFullPath(args[index + 1]);
             SnapshotAxes = true;
+        }
+        index = Array.IndexOf(args, "--snapshot-storeys");
+        if (index >= 0 && index + 1 < args.Length)
+        {
+            SnapshotPath = Path.GetFullPath(args[index + 1]);
+            SnapshotStoreys = true;
         }
         var projectIndex = Array.IndexOf(args, "--project");
         var modelIndex = Array.IndexOf(args, "--model");

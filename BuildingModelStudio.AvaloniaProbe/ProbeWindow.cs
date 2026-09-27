@@ -37,6 +37,7 @@ internal sealed class ProbeWindow : Window
     private readonly PlanEditorCanvas _planCanvas = new();
     private readonly TabControl _workspaces = new();
     private readonly ComboBox _storeyChooser = new() { Width = 130 };
+    private readonly TextBox _newWallHeight = new() { Width = 110, Text = "0", PlaceholderText = "墙高 mm" };
     private readonly ListBox _elements = new();
     private readonly List<ElementItem> _items = new();
     private readonly Dictionary<ViewTransformTool, Button> _viewToolButtons = new();
@@ -54,6 +55,25 @@ internal sealed class ProbeWindow : Window
     private bool _refreshingStoreys;
     private int _sceneGeneration;
     private bool HasChanges => BuildingModelJson.ToJson(_session.Model) != _savedJson;
+    private static readonly string ReleaseRevision = ReadReleaseRevision();
+
+    private static string ReadReleaseRevision()
+    {
+        try
+        {
+            var file = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "build-info.json"));
+            if (!File.Exists(file)) return "dev";
+            using var json = System.Text.Json.JsonDocument.Parse(File.ReadAllText(file));
+            var sha = json.RootElement.GetProperty("GitCommit").GetString();
+            return string.IsNullOrWhiteSpace(sha) ? "dev" : sha.Substring(0, Math.Min(7, sha.Length));
+        }
+        catch { return "dev"; }
+    }
+
+    private static bool TryNumber(string? text, out double value)
+        => (double.TryParse(text, NumberStyles.Float, CultureInfo.CurrentCulture, out value)
+            || double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value))
+            && double.IsFinite(value);
 
     public ProbeWindow()
     {
@@ -70,7 +90,11 @@ internal sealed class ProbeWindow : Window
         _gizmo.PreviewChanged += value => _status.Text = value + " · 松开鼠标提交，Esc 取消";
         _gizmo.TransformFinished += async (id, dx, dy, angle, copy) =>
         {
-            if (!_session.TryTransformWall(id, dx, dy, angle, copy, out var affectedId, out var error))
+            var entered = Program.GizmoCheck ? new MovementResult(dx, dy, angle)
+                : await new MovementInputWindow(dx, dy, angle).ShowDialog<MovementResult?>(this);
+            if (entered == null) return;
+            if (!_session.TryTransformWall(id, entered.X, entered.Y, entered.Angle,
+                copy, out var affectedId, out var error))
             { _status.Text = error; return; }
             _selectedId = affectedId;
             await RefreshModelAsync(copy ? "已复制墙及门窗" : "已变换墙");
@@ -81,12 +105,21 @@ internal sealed class ProbeWindow : Window
         {
             if (kind != PlanEditing.SnapNone) _status.Text = "捕捉：" + kind;
         };
+        _planCanvas.AxisConstraintChanged += mode => _status.Text = mode switch
+        {
+            PlanAxisConstraint.X => "已锁定 X 方向；按 X 解除。",
+            PlanAxisConstraint.Y => "已锁定 Y 方向；按 Y 解除。",
+            _ => "已解除方向锁定。"
+        };
         _planCanvas.WallRequested += (start, end) =>
         {
+            if (!TryNumber(_newWallHeight.Text, out var wallHeight) || wallHeight < 0)
+            { _status.Text = "新墙高度请输入非负毫米数；0 表示随楼层。"; return false; }
             if (!_session.TryAddWall(new WallModel
             {
                 StoreyId = (_storeyChooser.SelectedItem as StoreyItem)?.Id ?? "1F",
-                X1 = start.X, Y1 = start.Y, X2 = end.X, Y2 = end.Y, Thickness = 240
+                X1 = start.X, Y1 = start.Y, X2 = end.X, Y2 = end.Y,
+                Thickness = 240, Height = wallHeight
             }, out var id, out var error)) { _status.Text = error; return false; }
             _selectedId = id;
             _ = RefreshModelAsync("已新增墙");
@@ -94,7 +127,14 @@ internal sealed class ProbeWindow : Window
         };
         _planCanvas.WallGripReleased += async (id, index, position) =>
         {
-            if (!_session.TryMoveWallGripOnly(id, index, position.X, position.Y, out var error))
+            var wall = _session.Model.Walls.FirstOrDefault(w => w.Id == id);
+            if (wall == null) return;
+            var ox = index == 0 ? wall.X1 : wall.X2;
+            var oy = index == 0 ? wall.Y1 : wall.Y2;
+            var entered = await new MovementInputWindow(position.X - ox, position.Y - oy, 0)
+                .ShowDialog<MovementResult?>(this);
+            if (entered == null) return;
+            if (!_session.TryMoveWallGripOnly(id, index, ox + entered.X, oy + entered.Y, out var error))
             { _status.Text = error; return; }
             _selectedId = id;
             await RefreshModelAsync("已调整墙交接端点");
@@ -117,7 +157,7 @@ internal sealed class ProbeWindow : Window
         var toolbar = new StackPanel
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 18,
+            Spacing = 6,
             Margin = new Thickness(18, 0),
             VerticalAlignment = VerticalAlignment.Center
         };
@@ -152,6 +192,9 @@ internal sealed class ProbeWindow : Window
         toolbar.Children.Add(open);
         toolbar.Children.Add(save);
         toolbar.Children.Add(saveAs);
+        var globalStoreys = new Button { Content = "楼层设置" };
+        globalStoreys.Click += async (_, _) => await OpenStoreySettingsAsync();
+        toolbar.Children.Add(globalStoreys);
         toolbar.Children.Add(axisSettings);
         _publish.Click += async (_, _) => await PublishViewsAsync(false);
         _sendToCad.Click += async (_, _) => await PublishViewsAsync(true);
@@ -199,7 +242,8 @@ internal sealed class ProbeWindow : Window
                 e.Handled = true;
                 return;
             }
-            _viewport.BeginInteraction(e.GetPosition(_viewport), selecting, panning);
+            _viewport.BeginInteraction(e.GetPosition(_viewport), selecting, panning,
+                _gizmo.Tool == ViewTransformTool.Select || e.KeyModifiers.HasFlag(KeyModifiers.Alt));
             e.Pointer.Capture(viewportInput);
             e.Handled = true;
         };
@@ -250,7 +294,7 @@ internal sealed class ProbeWindow : Window
         }
         viewportHost.Children.Add(viewTools);
 
-        var planLayout = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
+        var planLayout = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,*") };
         var planTools = new StackPanel
         {
             Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(8)
@@ -262,6 +306,9 @@ internal sealed class ProbeWindow : Window
                 _planCanvas.SetStorey(floor.Id);
         };
         planTools.Children.Add(_storeyChooser);
+        var storeys = new Button { Content = "楼层设置" };
+        storeys.Click += async (_, _) => await OpenStoreySettingsAsync();
+        planTools.Children.Add(storeys);
         var wallLength = new TextBox { Width = 100, PlaceholderText = "墙长 mm" };
         wallLength.KeyDown += (sender, e) =>
         {
@@ -290,7 +337,21 @@ internal sealed class ProbeWindow : Window
             };
             planTools.Children.Add(button);
         }
-        planTools.Children.Add(wallLength);
+        var parameterTools = new StackPanel { Orientation = Orientation.Horizontal,
+            Spacing = 8, Margin = new Thickness(8, 0, 8, 8) };
+        parameterTools.Children.Add(new TextBlock { Text = "精确墙长", VerticalAlignment = VerticalAlignment.Center });
+        parameterTools.Children.Add(wallLength);
+        parameterTools.Children.Add(new TextBlock { Text = "新墙高（0=随楼层）",
+            VerticalAlignment = VerticalAlignment.Center });
+        parameterTools.Children.Add(_newWallHeight);
+        parameterTools.Children.Add(new TextBlock { Text = "方向约束", VerticalAlignment = VerticalAlignment.Center });
+        foreach (var (label, mode) in new[] { ("自由", PlanAxisConstraint.Free),
+            ("沿 X", PlanAxisConstraint.X), ("沿 Y", PlanAxisConstraint.Y) })
+        {
+            var button = new Button { Content = label };
+            button.Click += (_, _) => { _planCanvas.SetAxisConstraint(mode); _planCanvas.Focus(); };
+            parameterTools.Children.Add(button);
+        }
         var delete = new Button { Content = "删除选中" };
         delete.Click += async (_, _) =>
         {
@@ -304,7 +365,9 @@ internal sealed class ProbeWindow : Window
         fitPlan.Click += (_, _) => _planCanvas.Fit();
         planTools.Children.Add(fitPlan);
         planLayout.Children.Add(planTools);
-        Grid.SetRow(_planCanvas, 1);
+        Grid.SetRow(parameterTools, 1);
+        planLayout.Children.Add(parameterTools);
+        Grid.SetRow(_planCanvas, 2);
         planLayout.Children.Add(_planCanvas);
 
         _workspaces.Items.Add(new TabItem { Header = "建筑建模", Content = viewportHost });
@@ -382,7 +445,7 @@ internal sealed class ProbeWindow : Window
 
     private void UpdateTitle()
     {
-        Title = $"万落建筑模型 · {(_filePath == null ? "未命名样例" : Path.GetFileName(_filePath))}{(HasChanges ? " *" : "")}";
+        Title = $"万落建筑模型 [{ReleaseRevision}] · {(_filePath == null ? "未命名样例" : Path.GetFileName(_filePath))}{(HasChanges ? " *" : "")}";
     }
 
     private async Task OpenModelAsync()
@@ -850,6 +913,15 @@ internal sealed class ProbeWindow : Window
         }
     }
 
+    private async Task OpenStoreySettingsAsync()
+    {
+        var dialog = new StoreySettingsWindow(_session.Model);
+        if (!await dialog.ShowDialog<bool>(this)) return;
+        if (_session.TryReplaceStoreys(dialog.ResultStoreys, out var error))
+            await RefreshModelAsync("楼层已更新");
+        else _status.Text = error;
+    }
+
     private void RefreshHistoryButtons()
     {
         _undo.IsEnabled = _session.CanUndo;
@@ -937,25 +1009,24 @@ internal sealed class ProbeWindow : Window
             {
                 if (Program.SnapshotPlan) _workspaces.SelectedIndex = 1;
                 await Task.Delay(200);
-                AxisSettingsWindow? axisDialog = null;
+                Window? settingsDialog = null;
                 if (Program.SnapshotAxes)
-                {
-                    axisDialog = new AxisSettingsWindow(_session.Model);
-                    axisDialog.Show(this);
-                    await Task.Delay(350);
-                }
-                var visual = ElementComposition.GetElementVisual((Control?)axisDialog ?? this);
+                    settingsDialog = new AxisSettingsWindow(_session.Model);
+                else if (Program.SnapshotStoreys)
+                    settingsDialog = new StoreySettingsWindow(_session.Model);
+                if (settingsDialog != null) { settingsDialog.Show(this); await Task.Delay(350); }
+                var visual = ElementComposition.GetElementVisual((Control?)settingsDialog ?? this);
                 if (visual == null) throw new InvalidOperationException("Composition visual unavailable");
                 var snapshot = await visual.Compositor.CreateCompositionVisualSnapshot(visual, 1);
                 snapshot.Save(Program.SnapshotPath, PngBitmapEncoderOptions.Default);
-                axisDialog?.Close();
+                settingsDialog?.Close();
                 Console.WriteLine("AVALONIA_SNAPSHOT " + Program.SnapshotPath);
             }
             var hit = _viewport.FrameRendered
                 ? _viewport.PickAt(new Point(_viewport.Bounds.Width / 2, _viewport.Bounds.Height / 2)) : null;
             var success = emptyProject ? _filePath == Program.ModelPath && File.Exists(_filePath)
                 : _viewport.FrameRendered && hit != null;
-            if (Program.GizmoCheck) success &= RunGizmoSmokeCheck();
+            if (Program.GizmoCheck) success &= RunGizmoSmokeCheck() && RunCameraSmokeCheck();
             if (Program.ShortcutCheck) success &= RunShortcutSmokeCheck();
             Program.SmokeFailed = !success;
             Console.WriteLine(success ? (emptyProject ? "AVALONIA_EMPTY_PROJECT_OK " + _filePath
@@ -1015,6 +1086,23 @@ internal sealed class ProbeWindow : Window
         }
         Console.WriteLine(success ? "AVALONIA_GIZMO_MOVE_ROTATE_COPY_OK" : "AVALONIA_GIZMO_CHECK_FAILED");
         return success;
+    }
+
+    private bool RunCameraSmokeCheck()
+    {
+        var original = _viewport.CameraAngles;
+        _viewport.BeginInteraction(new Point(100, 100), true, false, false);
+        _viewport.MoveInteraction(new Point(100, 130), true, false);
+        _viewport.EndInteraction(new Point(100, 130));
+        var stationary = _viewport.CameraAngles;
+        _viewport.BeginInteraction(new Point(100, 100), true, false, true);
+        _viewport.MoveInteraction(new Point(100, 130), true, false);
+        _viewport.EndInteraction(new Point(100, 130));
+        var orbit = _viewport.CameraAngles;
+        var passed = original == stationary && orbit.Pitch < stationary.Pitch;
+        Console.WriteLine(passed ? "AVALONIA_CAMERA_DRAG_OK" : "AVALONIA_CAMERA_DRAG_FAILED");
+        _viewport.ResetView();
+        return passed;
     }
 
     private bool RunShortcutSmokeCheck()

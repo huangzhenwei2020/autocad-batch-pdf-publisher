@@ -527,7 +527,8 @@ namespace BatchPdfPublisher.BuildingModel
             var unionVolume = new BuildingVolume();
             var unionFirst = true;
             var joinedIds = OrthogonalWallUnion.AddJoinedWalls(unionVolume, model, walls, ref unionFirst);
-            AddJoinedWallPlanBoundary(document, unionVolume);
+            AddJoinedWallPlanBoundary(document, unionVolume,
+                storey.Elevation + Math.Min(1200d, storey.Height / 2d));
 
             // 其他墙：洞口把墙断开，两段面线 + 洞口两端的封口
             foreach (var wall in walls)
@@ -588,10 +589,12 @@ namespace BatchPdfPublisher.BuildingModel
             return document;
         }
 
-        private static void AddJoinedWallPlanBoundary(ViewDocument document, BuildingVolume volume)
+        private static void AddJoinedWallPlanBoundary(ViewDocument document, BuildingVolume volume,
+            double cutElevation)
         {
             var groups = volume.Faces.Where(f => f.Kind == "wall" && Math.Abs(f.NormalZ) < 0.5d
-                && f.Points.Count >= 2)
+                && f.Points.Count >= 2 && f.Points.Min(p => p.Z) <= cutElevation + 0.001d
+                && f.Points.Max(p => p.Z) >= cutElevation - 0.001d)
                 .Select(f => new { A = f.Points[0], B = f.Points[1] })
                 .Where(edge => Math.Abs(edge.A.X - edge.B.X) > 0.001d
                     || Math.Abs(edge.A.Y - edge.B.Y) > 0.001d)

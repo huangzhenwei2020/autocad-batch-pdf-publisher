@@ -35,6 +35,9 @@ internal static class VolumeIdentityTests
         Assert(updated.Faces.Any(x => x.ElementId == originalOpeningId), "编辑后洞口 ID 丢失");
         CheckOrthogonalCorner();
         CheckOrthogonalTJoint();
+        CheckUnequalHeightJunction();
+        CheckOpeningWallJunction();
+        CheckStoreySettings();
         CheckWallReferencePlacement();
         MeasureJunctionGrid();
         CheckSharedAxesAndCadJunction();
@@ -112,6 +115,65 @@ internal static class VolumeIdentityTests
             Assert(count == 1, "T 形交接顶面缺失或重叠：" + point + "，面数 " + count);
         }
         Console.WriteLine("PASS 不同墙厚 T 形交接：墙体顶面无缺角或重面");
+    }
+
+    private static void CheckUnequalHeightJunction()
+    {
+        var model = SampleModelFactory.CreateEmptyModel("高低墙交接");
+        model.Walls.Add(new WallModel { Id = "tall", StoreyId = "1F",
+            X1 = -1000, Y1 = 0, X2 = 1000, Y2 = 0, Thickness = 200, Height = 3000 });
+        model.Walls.Add(new WallModel { Id = "low", StoreyId = "1F",
+            X1 = 0, Y1 = -1000, X2 = 0, Y2 = 1000, Thickness = 200, Height = 1500 });
+        var volume = BuildingVolumeBuilder.Build(model);
+        var lowTop = volume.Faces.Where(f => f.Kind == "wall" && f.NormalZ > 0.5
+            && Math.Abs(f.Points[0].Z - 1500) < 0.001).ToArray();
+        Assert(lowTop.Length > 0 && !lowTop.Any(f => f.Points.Min(p => p.X) < 0
+            && f.Points.Max(p => p.X) > 0 && f.Points.Min(p => p.Y) < 0
+            && f.Points.Max(p => p.Y) > 0),
+            "高低墙重叠区不应出现低墙顶面（内部重面）");
+        Console.WriteLine("PASS 高低墙交接：交叠空间无内部低墙顶面");
+    }
+
+    private static void CheckOpeningWallJunction()
+    {
+        var model = SampleModelFactory.CreateEmptyModel("带窗墙角");
+        model.Walls.Add(new WallModel { Id = "h-window", StoreyId = "1F",
+            X1 = -2000, Y1 = 0, X2 = 0, Y2 = 0, Thickness = 200 });
+        model.Walls.Add(new WallModel { Id = "v-wall", StoreyId = "1F",
+            X1 = 0, Y1 = 0, X2 = 0, Y2 = 2000, Thickness = 200 });
+        model.Openings.Add(new OpeningModel { Id = "window", HostWallId = "h-window",
+            Kind = "窗", Offset = 1000, Width = 600, Sill = 900, Height = 1200 });
+        var volume = BuildingVolumeBuilder.Build(model);
+        Assert(volume.Faces.Any(f => f.ElementId == "window" && f.Kind == "glass"),
+            "墙角融合后窗框玻璃不应消失");
+        var top = volume.Faces.Where(f => f.Kind == "wall" && f.NormalZ > 0.5).ToArray();
+        Assert(top.Count(f => f.Points.Min(p => p.X) < 50 && f.Points.Max(p => p.X) > 50
+            && f.Points.Min(p => p.Y) < 50 && f.Points.Max(p => p.Y) > 50) == 1,
+            "带窗墙角顶面应融合为一份实体");
+        var plan = OrthographicProjector.ProjectPlan(model,
+            new ViewDefinitionModel { Id = "corner-plan", Title = "带窗墙角平面",
+                Kind = ViewKind.Plan, StoreyIds = new System.Collections.Generic.List<string> { "1F" }, Scale = 100 }, null);
+        Assert(!plan.Lines.Any(l => l.Layer == ViewLayers.Cut
+            && Math.Abs(l.Y1 + plan.OriginY + 100) < 0.001
+            && Math.Abs(l.Y2 + plan.OriginY + 100) < 0.001
+            && l.X1 + plan.OriginX < -1300 && l.X2 + plan.OriginX > -700),
+            "CAD 平面窗洞处不应被融合墙体封住");
+        Console.WriteLine("PASS 带窗正交墙角：融合实体、洞口玻璃及 CAD 平面洞口并存");
+    }
+
+    private static void CheckStoreySettings()
+    {
+        var model = SampleModelFactory.CreateEmptyModel("楼层设置");
+        var session = new BuildingModelEditSession(model);
+        var floors = model.Storeys.Select(s => new StoreyModel { Id = s.Id,
+            Name = s.Name, Elevation = s.Elevation, Height = 3600 }).ToList();
+        floors.Add(new StoreyModel { Id = "3F", Name = "三层", Elevation = 7200, Height = 3300 });
+        Assert(session.TryReplaceStoreys(floors, out var error) && error == null
+            && session.Model.Storeys.Count == 3 && session.Model.Storeys[0].Height == 3600,
+            "楼层窗口设置未应用");
+        Assert(session.Undo() && session.Model.Storeys.Count == 2,
+            "楼层设置未作为一笔操作撤销");
+        Console.WriteLine("PASS 楼层设置：层高、新增楼层与撤销");
     }
 
     private static void MeasureJunctionGrid()

@@ -8,6 +8,7 @@ using BatchPdfPublisher.BuildingModel;
 namespace BuildingModelStudio.AvaloniaProbe;
 
 internal enum PlanTool { Select, Wall, Door, Window }
+internal enum PlanAxisConstraint { Free, X, Y }
 
 internal sealed class PlanEditorCanvas : Control
 {
@@ -31,11 +32,20 @@ internal sealed class PlanEditorCanvas : Control
     private double _centerY;
     private bool _fitted;
     public PlanTool Tool { get; set; }
+    public PlanAxisConstraint AxisConstraint { get; private set; }
     public event Func<PointModel, PointModel, bool>? WallRequested;
     public event Action<string, string, double>? OpeningRequested;
     public event Action<string?>? ElementPicked;
     public event Action<string, int, PointModel>? WallGripReleased;
     public event Action<string>? SnapChanged;
+    public event Action<PlanAxisConstraint>? AxisConstraintChanged;
+
+    public void SetAxisConstraint(PlanAxisConstraint constraint)
+    {
+        AxisConstraint = constraint;
+        AxisConstraintChanged?.Invoke(constraint);
+        InvalidateVisual();
+    }
 
     public PlanEditorCanvas()
     {
@@ -121,8 +131,9 @@ internal sealed class PlanEditorCanvas : Control
             var maxY = walls.Max(w => Math.Max(w.Y1, w.Y2));
             _centerX = (minX + maxX) / 2;
             _centerY = (minY + maxY) / 2;
-            _scale = Math.Clamp(Math.Min((size.Width - 80) / Math.Max(1000, maxX - minX),
-                (size.Height - 80) / Math.Max(1000, maxY - minY)), 0.01, 0.5);
+            var axisBand = Math.Clamp(Math.Min(size.Width, size.Height) * 0.28d, 100d, 180d);
+            _scale = Math.Clamp(Math.Min((size.Width - axisBand) / Math.Max(1000, maxX - minX),
+                (size.Height - axisBand) / Math.Max(1000, maxY - minY)), 0.01, 0.5);
         }
         _fitted = true;
         InvalidateVisual();
@@ -189,6 +200,17 @@ internal sealed class PlanEditorCanvas : Control
         if (snapped.Kind != _snapKind && (Tool == PlanTool.Wall || _gripWallId != null))
             SnapChanged?.Invoke(snapped.Kind);
         _snapKind = snapped.Kind;
+        PointModel? anchor = _wallStart;
+        if (excludedWallId != null)
+        {
+            var wall = _model.Walls.FirstOrDefault(w => w.Id == excludedWallId);
+            if (wall != null) anchor = _gripIndex == 0
+                ? new PointModel(wall.X1, wall.Y1) : new PointModel(wall.X2, wall.Y2);
+        }
+        if (anchor != null && AxisConstraint == PlanAxisConstraint.X)
+            return new PointModel(snapped.X, anchor.Y);
+        if (anchor != null && AxisConstraint == PlanAxisConstraint.Y)
+            return new PointModel(anchor.X, snapped.Y);
         return new PointModel(snapped.X, snapped.Y);
     }
 
@@ -312,6 +334,10 @@ internal sealed class PlanEditorCanvas : Control
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
+        if (e.Key == Key.X) { SetAxisConstraint(AxisConstraint == PlanAxisConstraint.X
+            ? PlanAxisConstraint.Free : PlanAxisConstraint.X); e.Handled = true; return; }
+        if (e.Key == Key.Y) { SetAxisConstraint(AxisConstraint == PlanAxisConstraint.Y
+            ? PlanAxisConstraint.Free : PlanAxisConstraint.Y); e.Handled = true; return; }
         if (e.Key != Key.Escape) return;
         CancelDraft();
         e.Handled = true;

@@ -282,7 +282,6 @@ namespace BatchPdfPublisher.BuildingModel
             if (root != null)
             {
                 yield return Path.Combine(root.FullName, RelativeFolder, ExecutableName);
-                yield return Path.Combine(root.FullName, RelativeFolder, "万落建筑模型.dll");
             }
             yield return Path.Combine(folder, RelativeFolder, ExecutableName);
             yield return Path.Combine(folder, ExecutableName);

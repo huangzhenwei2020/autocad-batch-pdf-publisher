@@ -44,6 +44,37 @@ namespace BatchPdfPublisher.BuildingModel
             return true;
         }
 
+        public bool TryReplaceStoreys(System.Collections.Generic.IEnumerable<StoreyModel> storeys, out string error)
+        {
+            error = null;
+            if (storeys == null) { error = "楼层列表为空。"; return false; }
+            var replacement = storeys.ToList();
+            if (replacement.Count == 0 || replacement.Any(s => s == null
+                || string.IsNullOrWhiteSpace(s.Id) || string.IsNullOrWhiteSpace(s.Name)
+                || !Finite(s.Elevation) || !Finite(s.Height) || s.Height <= 0d))
+            { error = "楼层名称、标高和层高必须有效，层高应大于 0。"; return false; }
+            if (replacement.GroupBy(s => s.Id, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1))
+            { error = "楼层 ID 重复。"; return false; }
+            var ids = new System.Collections.Generic.HashSet<string>(replacement.Select(s => s.Id),
+                StringComparer.OrdinalIgnoreCase);
+            if (Model.Walls.Any(w => !ids.Contains(w.StoreyId))
+                || Model.Columns.Any(c => !ids.Contains(c.StoreyId))
+                || Model.Slabs.Any(s => !ids.Contains(s.StoreyId)))
+            { error = "已有构件所在的楼层不能删除。"; return false; }
+            var candidate = Clone(Model);
+            candidate.Storeys = replacement.Select(s => new StoreyModel
+            { Id = s.Id.Trim(), Name = s.Name.Trim(), Elevation = s.Elevation, Height = s.Height }).ToList();
+            foreach (var wall in candidate.Walls)
+            {
+                var height = wall.Height > 0d ? wall.Height : candidate.FindStorey(wall.StoreyId)?.Height ?? 0d;
+                if (candidate.Openings.Where(o => Same(o.HostWallId, wall.Id))
+                    .Any(o => o.Sill + o.Height > height + 0.5d))
+                { error = "楼层层高修改后有门窗超出墙高：" + wall.Id; return false; }
+            }
+            Commit(candidate);
+            return true;
+        }
+
         public bool TryAddWall(WallModel source, out string id, out string error)
         {
             id = null;

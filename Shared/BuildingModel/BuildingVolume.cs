@@ -84,10 +84,10 @@ namespace BatchPdfPublisher.BuildingModel
             var merged = OrthogonalWallUnion.AddJoinedWalls(volume, model, walls, ref first);
             foreach (var wall in walls)
             {
-                if (merged.Contains(wall.Id)) continue;
                 var z0 = model.BaseElevationOf(wall);
                 var z1 = z0 + model.HeightOf(wall);
-                AddWallWithOpenings(volume, wall, model, z0, z1, ref first);
+                if (merged.Contains(wall.Id)) AddMergedWallOpeningParts(volume, wall, model, z0, z1, ref first);
+                else AddWallWithOpenings(volume, wall, model, z0, z1, ref first);
             }
             foreach (var column in model.Columns ?? new List<ColumnModel>())
             {
@@ -140,10 +140,10 @@ namespace BatchPdfPublisher.BuildingModel
                 {
                     if (axis == null || !IsFinite(axis.Position)) continue;
                     var from = axis.ExtentStart == 0 && axis.ExtentEnd == 0
-                        ? (axis.Vertical ? volume.MinY - 3000d : volume.MinX - 3000d)
+                        ? (axis.Vertical ? volume.MinY - 4500d : volume.MinX - 4500d)
                         : Math.Min(axis.ExtentStart, axis.ExtentEnd);
                     var to = axis.ExtentStart == 0 && axis.ExtentEnd == 0
-                        ? (axis.Vertical ? volume.MaxY + 3000d : volume.MaxX + 3000d)
+                        ? (axis.Vertical ? volume.MaxY + 4500d : volume.MaxX + 4500d)
                         : Math.Max(axis.ExtentStart, axis.ExtentEnd);
                     var z = volume.MinZ + 2d;
                     volume.GuideLines.Add(new VolumeGuideLine
@@ -319,6 +319,26 @@ namespace BatchPdfPublisher.BuildingModel
                 else
                     AddWindowParts(volume, wall, opening.Start, opening.End, z0 + opening.Sill, z0 + opening.Head,
                         wall.StoreyId, opening.Source.Id, ref first);
+            }
+        }
+
+        private static void AddMergedWallOpeningParts(BuildingVolume volume, WallModel wall,
+            BuildingModelDocument model, double z0, double z1, ref bool first)
+        {
+            var length = Math.Sqrt(Math.Pow(wall.X2 - wall.X1, 2) + Math.Pow(wall.Y2 - wall.Y1, 2));
+            foreach (var opening in model.Openings ?? new List<OpeningModel>())
+            {
+                if (opening == null || !Same(opening.HostWallId, wall.Id)) continue;
+                var start = Math.Max(0d, opening.Offset - opening.Width / 2d);
+                var end = Math.Min(length, opening.Offset + opening.Width / 2d);
+                var sill = z0 + Math.Max(0d, opening.Sill);
+                var head = Math.Min(z1, sill + Math.Max(0d, opening.Height));
+                if (end - start < 1d || head - sill < 1d) continue;
+                if ((opening.Kind ?? "窗").IndexOf("门", StringComparison.Ordinal) >= 0)
+                    AddDoorLeaf(volume, wall, start, end, sill, head,
+                        wall.StoreyId, opening.Id, ref first);
+                else AddWindowParts(volume, wall, start, end, sill, head,
+                    wall.StoreyId, opening.Id, ref first);
             }
         }
 

@@ -17,21 +17,10 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
     ///
     /// 找程序的位置（按顺序）：
     /// 1. 发布目录：插件 DLL 在 <c>&lt;发布根&gt;\CadApi\R24\</c>，新版建模程序在 <c>&lt;发布根&gt;\建筑模型\万落建筑模型.exe</c>；
-    /// 2. 上次用户手动指定的路径（只有发布目录不存在时才使用，避免旧版路径盖过新版）；
-    /// 3. 都没有就弹一次文件对话框让你选，选完记住。
+    /// 2. 发布目录不存在时才让用户手动选择。旧版记忆路径不能悄悄覆盖当前 CAD 插件。
     /// </summary>
     internal static class BuildingModelStudioLauncher
     {
-        private static string RememberedPathFile
-        {
-            get
-            {
-                var folder = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "万落建筑工具");
-                return Path.Combine(folder, "建筑模型程序路径.txt");
-            }
-        }
-
         public static void Open(Document document)
         {
             if (document == null) return;
@@ -83,17 +72,15 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
             }
         }
 
-        /// <summary>按"发布目录候选 → 记住的路径 → 让用户选"的顺序找建模程序。</summary>
+        /// <summary>只自动启动与当前 CAD 插件同包的建模程序；其他版本需用户明确选择。</summary>
         private static string ResolveExecutable(Autodesk.AutoCAD.EditorInput.Editor editor)
         {
             var candidates = new List<string>();
             candidates.AddRange(StudioLaunch.DefaultCandidates(PluginFolder()));
-            var remembered = ReadRememberedPath();
-            if (!string.IsNullOrWhiteSpace(remembered)) candidates.Add(remembered);
             var found = StudioLaunch.FindExecutable(candidates);
             if (found != null) return found;
 
-            editor.WriteMessage("\n没有在发布目录里找到「" + StudioLaunch.ExecutableName + "」，请选择它的位置（只需选一次）。");
+            editor.WriteMessage("\n当前插件发布目录缺少「" + StudioLaunch.ExecutableName + "」。请选择要启动的程序，本次选择不覆盖当前版本。");
             using (var dialog = new OpenFileDialog
             {
                 Title = "选择万落建筑模型.exe",
@@ -102,7 +89,6 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
             })
             {
                 if (dialog.ShowDialog() != DialogResult.OK) return null;
-                WriteRememberedPath(dialog.FileName);
                 return dialog.FileName;
             }
         }
@@ -120,33 +106,5 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
             }
         }
 
-        private static string ReadRememberedPath()
-        {
-            try
-            {
-                var file = RememberedPathFile;
-                if (!File.Exists(file)) return null;
-                var path = File.ReadAllText(file).Trim();
-                return string.IsNullOrWhiteSpace(path) ? null : path;
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        private static void WriteRememberedPath(string path)
-        {
-            try
-            {
-                var file = RememberedPathFile;
-                Directory.CreateDirectory(Path.GetDirectoryName(file));
-                File.WriteAllText(file, path);
-            }
-            catch
-            {
-                // 记不住也无所谓，下次再选一次
-            }
-        }
     }
 }

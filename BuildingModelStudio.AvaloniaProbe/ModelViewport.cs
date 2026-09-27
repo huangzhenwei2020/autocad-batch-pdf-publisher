@@ -84,6 +84,7 @@ internal sealed class ModelViewport : OpenGlControlBase
     private Point? _pressStart;
     private bool _panning;
     private bool _selecting;
+    private bool _orbitAllowed;
     private bool _dragged;
     private volatile bool _frameRendered;
     private long _renderedFrameCount;
@@ -92,6 +93,7 @@ internal sealed class ModelViewport : OpenGlControlBase
     public bool FrameRendered => _frameRendered;
     internal long RenderedFrameCount => Interlocked.Read(ref _renderedFrameCount);
     internal int LastRenderedVertexCount => Volatile.Read(ref _lastRenderedVertexCount);
+    internal (float Yaw, float Pitch) CameraAngles => (_yaw, _pitch);
     internal double LastSynchronizedFrameMs
         => Stopwatch.GetElapsedTime(0, Interlocked.Read(ref _lastSynchronizedFrameTicks)).TotalMilliseconds;
     internal string GpuRenderer { get; private set; } = "unknown";
@@ -628,10 +630,11 @@ internal sealed class ModelViewport : OpenGlControlBase
         return distance > 1e-6f;
     }
 
-    public void BeginInteraction(Point point, bool selecting, bool panning)
+    public void BeginInteraction(Point point, bool selecting, bool panning, bool orbitAllowed = true)
     {
         _panning = panning;
         _selecting = selecting && !panning;
+        _orbitAllowed = orbitAllowed;
         if (!_panning && !_selecting) return;
         _dragStart = point;
         _pressStart = _dragStart;
@@ -653,10 +656,11 @@ internal sealed class ModelViewport : OpenGlControlBase
             _target += right * (float)(previous.X - now.X) * unitsPerPixel
                 + up * (float)(now.Y - previous.Y) * unitsPerPixel;
         }
-        else
+        else if (_orbitAllowed)
         {
             _yaw += (float)(now.X - previous.X) * 0.008f;
-            _pitch += (float)(now.Y - previous.Y) * 0.008f;
+            _pitch = Math.Clamp(_pitch - (float)(now.Y - previous.Y) * 0.008f,
+                -1.45f, 1.45f);
         }
         _dragStart = now;
         RequestNextFrameRendering();
