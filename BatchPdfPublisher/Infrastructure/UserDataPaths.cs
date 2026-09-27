@@ -9,6 +9,7 @@ namespace BatchPdfPublisher.Services
     public static class UserDataPaths
     {
         public const string PortableRootEnvironmentVariable = "WANLUO_ARCHITECTURE_TOOLS_ROOT";
+        public const string UserDataRootEnvironmentVariable = "WANLUO_USER_DATA_ROOT";
         private static readonly object MigrationLock = new object();
         private static bool _migrationChecked;
         public static string PluginDirectory { get { return FindPluginDirectory(); } }
@@ -16,6 +17,9 @@ namespace BatchPdfPublisher.Services
         {
             get
             {
+                // An explicit per-process root keeps CAD integration tests separate from real projects.
+                var isolatedRoot = Environment.GetEnvironmentVariable(UserDataRootEnvironmentVariable);
+                if (!string.IsNullOrWhiteSpace(isolatedRoot)) return Ensure(Path.GetFullPath(isolatedRoot));
                 var root = Ensure(Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                     "WanluoArchitectureTools",

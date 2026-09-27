@@ -23,9 +23,14 @@ namespace BatchPdfPublisher
         private static CatalogSettings _catalogSettings;
         private static Action _catalogDone;
         private static readonly string DiagnosticLog = Path.Combine(UserDataPaths.LogsDirectory, "BatchPdfPublisher.trace.log");
+        private static bool IsCoreConsole => string.Equals(
+            System.Diagnostics.Process.GetCurrentProcess().ProcessName, "accoreconsole",
+            StringComparison.OrdinalIgnoreCase);
         public void Initialize()
         {
             WriteStartupReceipt("Initialize");
+            // accoreconsole has no Ribbon or menu host; initialize only CAD commands there.
+            if (IsCoreConsole) return;
             try { Application.SetSystemVariable("RIBBONSTATE", 1); } catch { }
             RibbonService.InstallWhenReady();
             MenuService.InstallWhenReady();
@@ -34,7 +39,12 @@ namespace BatchPdfPublisher
             CloudSyncCoordinator.Install();
             CadSaveCloudSyncService.Install();
         }
-        public void Terminate() { CadSaveCloudSyncService.Remove(); CloudSyncCoordinator.Remove(); ProjectAutoSaveService.Remove(); ShortcutAliasService.Remove(); RibbonService.Remove(); MenuService.Remove(); }
+        public void Terminate()
+        {
+            if (IsCoreConsole) return;
+            CadSaveCloudSyncService.Remove(); CloudSyncCoordinator.Remove(); ProjectAutoSaveService.Remove();
+            ShortcutAliasService.Remove(); RibbonService.Remove(); MenuService.Remove();
+        }
 
         [CommandMethod("BPP")]
         public void BppCommand() => OpenPublisher();
