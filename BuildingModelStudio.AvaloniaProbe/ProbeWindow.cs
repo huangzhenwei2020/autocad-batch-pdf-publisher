@@ -80,7 +80,6 @@ internal sealed class ProbeWindow : Window
         {
             if (kind != PlanEditing.SnapNone) _status.Text = "捕捉：" + kind;
         };
-        _planCanvas.GripPreviewError += error => _status.Text = error;
         _planCanvas.WallRequested += (start, end) =>
         {
             if (!_session.TryAddWall(new WallModel
@@ -94,7 +93,7 @@ internal sealed class ProbeWindow : Window
         };
         _planCanvas.WallGripReleased += async (id, index, position) =>
         {
-            if (!_session.TryMoveWallGrip(id, index, position.X, position.Y, out var error))
+            if (!_session.TryMoveWallGripOnly(id, index, position.X, position.Y, out var error))
             { _status.Text = error; return; }
             _selectedId = id;
             await RefreshModelAsync("已调整墙交接端点");

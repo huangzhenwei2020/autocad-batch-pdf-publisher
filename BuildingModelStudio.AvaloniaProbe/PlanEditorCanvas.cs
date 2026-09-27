@@ -23,10 +23,7 @@ internal sealed class PlanEditorCanvas : Control
     private PointModel? _gripPosition;
     private Point? _gripPress;
     private bool _gripMoved;
-    private WallGripPropagation? _gripGraph;
-    private bool _gripGraphUnavailable;
     private Dictionary<string, WallEndpointMove>? _gripPreview;
-    private string? _gripPreviewError;
     private readonly List<(WallModel horizontal, WallModel vertical)> _orthogonalJunctions = new();
     private double _scale = 0.07;
     private double _centerX;
@@ -38,7 +35,6 @@ internal sealed class PlanEditorCanvas : Control
     public event Action<string?>? ElementPicked;
     public event Action<string, int, PointModel>? WallGripReleased;
     public event Action<string>? SnapChanged;
-    public event Action<string>? GripPreviewError;
 
     public PlanEditorCanvas()
     {
@@ -51,10 +47,7 @@ internal sealed class PlanEditorCanvas : Control
     {
         _model = model;
         _storeyId = storeyId;
-        _gripGraph = null;
-        _gripGraphUnavailable = false;
         _gripPreview = null;
-        _gripPreviewError = null;
         IndexOrthogonalJunctions();
         if (!_fitted) Fit();
         InvalidateVisual();
@@ -83,10 +76,7 @@ internal sealed class PlanEditorCanvas : Control
         _gripPosition = null;
         _gripPress = null;
         _gripMoved = false;
-        _gripGraph = null;
-        _gripGraphUnavailable = false;
         _gripPreview = null;
-        _gripPreviewError = null;
         InvalidateVisual();
     }
 
@@ -175,31 +165,14 @@ internal sealed class PlanEditorCanvas : Control
     private void UpdateGripPreview()
     {
         if (_gripWallId == null || _gripPosition == null) return;
-        if (_gripGraphUnavailable) return;
-        if (_gripGraph == null && !WallGripPropagation.TryCreate(_model, _storeyId,
-            out _gripGraph, out var creationError))
+        _gripPreview = new Dictionary<string, WallEndpointMove>(StringComparer.OrdinalIgnoreCase)
         {
-            _gripGraphUnavailable = true;
-            ReportGripPreviewError(creationError);
-            return;
-        }
-        if (!_gripGraph.TryMove(_gripWallId, _gripIndex, _gripPosition.X, _gripPosition.Y,
-            out var changes, out var error))
-        {
-            _gripPreview = null;
-            ReportGripPreviewError(error);
-            return;
-        }
-        _gripPreviewError = null;
-        _gripPreview = changes.ToDictionary(change => change.WallId + "|" + change.Index,
-            change => change, StringComparer.OrdinalIgnoreCase);
-    }
-
-    private void ReportGripPreviewError(string error)
-    {
-        if (_gripPreviewError == error) return;
-        _gripPreviewError = error;
-        GripPreviewError?.Invoke(error);
+            [_gripWallId + "|" + _gripIndex] = new WallEndpointMove
+            {
+                WallId = _gripWallId, Index = _gripIndex,
+                X = _gripPosition.X, Y = _gripPosition.Y
+            }
+        };
     }
 
     private static double Distance(Point a, Point b)
@@ -314,10 +287,7 @@ internal sealed class PlanEditorCanvas : Control
             _gripPosition = null;
             _gripPress = null;
             _gripMoved = false;
-            _gripGraph = null;
-            _gripGraphUnavailable = false;
             _gripPreview = null;
-            _gripPreviewError = null;
             if (moved) WallGripReleased?.Invoke(id, index, position);
             InvalidateVisual();
         }
@@ -498,6 +468,8 @@ internal sealed class PlanEditorCanvas : Control
     {
         foreach (var (horizontal, vertical) in _orthogonalJunctions)
         {
+            if (_gripPreview != null && _gripWallId != null
+                && (horizontal.Id == _gripWallId || vertical.Id == _gripWallId)) continue;
             var horizontalBody = PreviewWallBody(horizontal);
             var verticalBody = PreviewWallBody(vertical);
             var x = (verticalBody.first.X + verticalBody.second.X) / 2;

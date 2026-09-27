@@ -13,6 +13,7 @@ internal static class BuildingModelEditSessionTests
         RecoverInterruptedViewBatch();
         EditWallEndpoints();
         MoveJoinedWallGrip();
+        MoveOnlySelectedWallGrip();
         MoveTWallJunction();
         MoveMultiLevelWallJunction();
         MeasureRepeatedJunctionPreview();
@@ -487,6 +488,24 @@ internal static class BuildingModelEditSessionTests
             && error.Contains("重复") && malformedSession.Revision == 0,
             "重复墙 ID 的导入模型未被安全拒绝");
         Console.WriteLine("PASS 多宿主冲突：交接目标不一致时拒绝并保留原模型");
+    }
+
+    private static void MoveOnlySelectedWallGrip()
+    {
+        var model = SampleModelFactory.CreateEmptyModel("独立墙端编辑");
+        model.Walls.Add(new WallModel { Id = "a", StoreyId = "1F",
+            X1 = -1000, Y1 = 0, X2 = 0, Y2 = 0, Thickness = 200 });
+        model.Walls.Add(new WallModel { Id = "b", StoreyId = "1F",
+            X1 = 0, Y1 = 0, X2 = 0, Y2 = 1000, Thickness = 200 });
+        var session = new BuildingModelEditSession(model);
+        Assert(session.TryMoveWallGripOnly("a", 1, -200, 0, out var error),
+            "独立墙端移动失败：" + error);
+        Assert(session.Model.Walls.First(w => w.Id == "b").X1 == 0
+            && session.Model.Walls.First(w => w.Id == "a").X2 == -200,
+            "默认墙端编辑不应移动另一道墙");
+        Assert(session.Undo() && session.Model.Walls.First(w => w.Id == "a").X2 == 0,
+            "独立墙端移动撤销失败");
+        Console.WriteLine("PASS 独立墙端编辑：只改选中墙，其他墙保持不动，撤销恢复");
     }
 
     private static void MeasureRepeatedJunctionPreview()

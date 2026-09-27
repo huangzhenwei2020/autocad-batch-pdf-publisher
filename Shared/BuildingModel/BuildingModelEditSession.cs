@@ -115,7 +115,29 @@ namespace BatchPdfPublisher.BuildingModel
             return true;
         }
 
-        /// <summary>Moves one wall grip through coincident endpoints and T-junction dependencies.</summary>
+        /// <summary>Moves only the selected wall endpoint; the ordinary editor does not infer a persistent junction constraint.</summary>
+        public bool TryMoveWallGripOnly(string id, int endpointIndex, double x, double y, out string error)
+        {
+            error = null;
+            if (endpointIndex != 0 && endpointIndex != 1)
+            { error = "墙端点序号只能是 0 或 1。"; return false; }
+            if (!Finite(x) || !Finite(y))
+            { error = "墙端点必须是有限坐标。"; return false; }
+            var source = Model.Walls.FirstOrDefault(w => w != null && Same(w.Id, id));
+            if (source == null) { error = "未找到墙：" + id; return false; }
+            if (x == (endpointIndex == 0 ? source.X1 : source.X2)
+                && y == (endpointIndex == 0 ? source.Y1 : source.Y2)) return true;
+            var candidate = Clone(Model);
+            var target = candidate.Walls.First(w => w != null && Same(w.Id, id));
+            if (endpointIndex == 0) { target.X1 = x; target.Y1 = y; }
+            else { target.X2 = x; target.Y2 = y; }
+            error = ValidateWallAndOpenings(candidate, target);
+            if (error != null) return false;
+            Commit(candidate);
+            return true;
+        }
+
+        /// <summary>Explicit optional constraint operation: moves coincident endpoints and T-junction dependencies.</summary>
         public bool TryMoveWallGrip(string id, int endpointIndex, double x, double y, out string error)
         {
             error = null;
