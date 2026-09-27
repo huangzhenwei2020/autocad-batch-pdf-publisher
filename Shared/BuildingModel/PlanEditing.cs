@@ -21,7 +21,7 @@ namespace BatchPdfPublisher.BuildingModel
     {
         public double X { get; set; }
         public double Y { get; set; }
-        /// <summary>捕捉类型（端点/中点/正交/轴网/无）。</summary>
+        /// <summary>捕捉类型（端点/中点/交点/垂足/正交/轴网/无）。</summary>
         public string Kind { get; set; } = "无";
         public bool Snapped { get { return Kind != "无"; } }
     }
@@ -37,6 +37,8 @@ namespace BatchPdfPublisher.BuildingModel
     {
         public const string SnapEndpoint = "端点";
         public const string SnapMidpoint = "中点";
+        public const string SnapIntersection = "交点";
+        public const string SnapPerpendicular = "垂足";
         public const string SnapOrthogonal = "正交";
         public const string SnapAxis = "轴网";
         public const string SnapNone = "无";
@@ -282,20 +284,56 @@ namespace BatchPdfPublisher.BuildingModel
         /// 捕捉：先端点/中点，再"从上一点正交"，最后轴网；都没命中就返回原始点。
         /// </summary>
         public static SnapResult Snap(BuildingModelDocument model, string storeyId, double x, double y, double tolerance,
-            bool hasFrom, double fromX, double fromY, double axisStep)
+            bool hasFrom, double fromX, double fromY, double axisStep, string excludedWallId = null)
         {
             var result = new SnapResult { X = x, Y = y, Kind = SnapNone };
+            var walls = (model?.Walls ?? new List<WallModel>())
+                .Where(w => w != null && Same(w.StoreyId, storeyId)
+                    && (excludedWallId == null || !Same(w.Id, excludedWallId)))
+                .ToList();
             if (model != null)
             {
                 var best = tolerance;
-                foreach (var wall in (model.Walls ?? new List<WallModel>())
-                    .Where(w => w != null && Same(w.StoreyId, storeyId)))
+                foreach (var wall in walls)
                 {
                     Consider(x, y, wall.X1, wall.Y1, SnapEndpoint, tolerance, ref best, result);
                     Consider(x, y, wall.X2, wall.Y2, SnapEndpoint, tolerance, ref best, result);
-                    Consider(x, y, (wall.X1 + wall.X2) / 2d, (wall.Y1 + wall.Y2) / 2d, SnapMidpoint, tolerance, ref best, result);
                 }
                 if (result.Snapped) return result;
+
+                var near = walls.Where(w => DistanceToSegment(x, y, w.X1, w.Y1, w.X2, w.Y2) <= tolerance)
+                    .ToList();
+                best = tolerance;
+                for (var i = 0; i < near.Count; i++)
+                for (var j = i + 1; j < near.Count; j++)
+                {
+                    if (!TrySegmentIntersection(near[i], near[j], out var ix, out var iy)) continue;
+                    Consider(x, y, ix, iy, SnapIntersection, tolerance, ref best, result);
+                }
+                if (result.Snapped) return result;
+
+                best = tolerance;
+                foreach (var wall in near)
+                    Consider(x, y, (wall.X1 + wall.X2) / 2d, (wall.Y1 + wall.Y2) / 2d,
+                        SnapMidpoint, tolerance, ref best, result);
+                if (result.Snapped) return result;
+
+                if (hasFrom)
+                {
+                    best = tolerance;
+                    foreach (var wall in near)
+                    {
+                        var dx = wall.X2 - wall.X1;
+                        var dy = wall.Y2 - wall.Y1;
+                        var lengthSquared = dx * dx + dy * dy;
+                        if (lengthSquared < 1e-9d) continue;
+                        var t = ((fromX - wall.X1) * dx + (fromY - wall.Y1) * dy) / lengthSquared;
+                        if (t <= 0d || t >= 1d) continue;
+                        Consider(x, y, wall.X1 + t * dx, wall.Y1 + t * dy,
+                            SnapPerpendicular, tolerance, ref best, result);
+                    }
+                    if (result.Snapped) return result;
+                }
             }
 
             if (hasFrom)
@@ -336,6 +374,22 @@ namespace BatchPdfPublisher.BuildingModel
                 }
             }
             return result;
+        }
+
+        private static bool TrySegmentIntersection(WallModel a, WallModel b, out double x, out double y)
+        {
+            x = y = 0d;
+            var ax = a.X2 - a.X1; var ay = a.Y2 - a.Y1;
+            var bx = b.X2 - b.X1; var by = b.Y2 - b.Y1;
+            var cross = ax * by - ay * bx;
+            if (Math.Abs(cross) < 1e-9d) return false;
+            var cx = b.X1 - a.X1; var cy = b.Y1 - a.Y1;
+            var t = (cx * by - cy * bx) / cross;
+            var u = (cx * ay - cy * ax) / cross;
+            if (t < 0d || t > 1d || u < 0d || u > 1d) return false;
+            x = a.X1 + t * ax;
+            y = a.Y1 + t * ay;
+            return true;
         }
 
         private static void Consider(double x, double y, double tx, double ty, string kind, double tolerance,

@@ -64,15 +64,33 @@ internal sealed class ProbeWindow : Window
         _viewport = new ModelViewport(BuildingVolumeBuilder.Build(_session.Model));
         _viewport.ElementPicked += SelectById;
         _planCanvas.ElementPicked += SelectById;
-        _planCanvas.WallRequested += async (start, end) =>
+        _planCanvas.SnapChanged += kind =>
+        {
+            if (kind != PlanEditing.SnapNone) _status.Text = "捕捉：" + kind;
+        };
+        _planCanvas.WallRequested += (start, end) =>
         {
             if (!_session.TryAddWall(new WallModel
             {
                 StoreyId = (_storeyChooser.SelectedItem as StoreyItem)?.Id ?? "1F",
                 X1 = start.X, Y1 = start.Y, X2 = end.X, Y2 = end.Y, Thickness = 240
-            }, out var id, out var error)) { _status.Text = error; return; }
+            }, out var id, out var error)) { _status.Text = error; return false; }
             _selectedId = id;
-            await RefreshModelAsync("已新增墙");
+            _ = RefreshModelAsync("已新增墙");
+            return true;
+        };
+        _planCanvas.WallGripReleased += async (id, index, position) =>
+        {
+            var wall = _session.Model.Walls.FirstOrDefault(w => w.Id == id);
+            if (wall == null) return;
+            var x1 = index == 0 ? position.X : wall.X1;
+            var y1 = index == 0 ? position.Y : wall.Y1;
+            var x2 = index == 1 ? position.X : wall.X2;
+            var y2 = index == 1 ? position.Y : wall.Y2;
+            if (!_session.TrySetWallEndpoints(id, x1, y1, x2, y2, out var error))
+            { _status.Text = error; return; }
+            _selectedId = id;
+            await RefreshModelAsync("已调整墙端点");
         };
         _planCanvas.OpeningRequested += async (kind, wallId, offset) =>
         {
@@ -139,6 +157,7 @@ internal sealed class ProbeWindow : Window
         {
             _selectedId = (_elements.SelectedItem as ElementItem)?.Id;
             _viewport.SelectElement(_selectedId);
+            _planCanvas.SetSelection(_selectedId);
             RefreshProperties();
         };
         Grid.SetRow(_elements, 1);
@@ -190,6 +209,16 @@ internal sealed class ProbeWindow : Window
                 _planCanvas.SetStorey(floor.Id);
         };
         planTools.Children.Add(_storeyChooser);
+        var wallLength = new TextBox { Width = 100, PlaceholderText = "墙长 mm" };
+        wallLength.KeyDown += (sender, e) =>
+        {
+            if (e.Key != Key.Enter) return;
+            if (!double.TryParse(wallLength.Text, NumberStyles.Float, CultureInfo.CurrentCulture, out var length))
+                _status.Text = "请输入有效的墙长（mm）。";
+            else if (!_planCanvas.TryDrawWallLength(length, out var error)) _status.Text = error;
+            else { wallLength.Text = ""; _planCanvas.Focus(); }
+            e.Handled = true;
+        };
         foreach (var (label, tool) in new[]
         {
             ("选择", PlanTool.Select), ("画墙", PlanTool.Wall),
@@ -208,6 +237,7 @@ internal sealed class ProbeWindow : Window
             };
             planTools.Children.Add(button);
         }
+        planTools.Children.Add(wallLength);
         var delete = new Button { Content = "删除选中" };
         delete.Click += async (_, _) =>
         {

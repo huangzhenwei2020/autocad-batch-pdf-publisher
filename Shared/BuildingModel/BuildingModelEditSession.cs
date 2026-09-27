@@ -98,6 +98,22 @@ namespace BatchPdfPublisher.BuildingModel
             return TrySetWallGeometry(id, length, source.Thickness, source.Height, out error);
         }
 
+        public bool TrySetWallEndpoints(string id, double x1, double y1, double x2, double y2,
+            out string error)
+        {
+            error = null;
+            if (!Finite(x1) || !Finite(y1) || !Finite(x2) || !Finite(y2))
+            { error = "墙端点必须是有限坐标。"; return false; }
+            var candidate = Clone(Model);
+            var wall = candidate.Walls.FirstOrDefault(x => x != null && Same(x.Id, id));
+            if (wall == null) { error = "未找到墙：" + id; return false; }
+            wall.X1 = x1; wall.Y1 = y1; wall.X2 = x2; wall.Y2 = y2;
+            error = ValidateWallAndOpenings(candidate, wall);
+            if (error != null) return false;
+            Commit(candidate);
+            return true;
+        }
+
         public bool TrySetWallGeometry(string id, double length, double thickness, double height, out string error)
         {
             error = null;

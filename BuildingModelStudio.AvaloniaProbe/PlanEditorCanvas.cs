@@ -15,15 +15,23 @@ internal sealed class PlanEditorCanvas : Control
     private string? _selectedId;
     private PointModel? _wallStart;
     private PointModel? _cursor;
+    private string _snapKind = PlanEditing.SnapNone;
     private Point? _panStart;
+    private string? _gripWallId;
+    private int _gripIndex;
+    private PointModel? _gripPosition;
+    private Point? _gripPress;
+    private bool _gripMoved;
     private double _scale = 0.07;
     private double _centerX;
     private double _centerY;
     private bool _fitted;
     public PlanTool Tool { get; set; }
-    public event Action<PointModel, PointModel>? WallRequested;
+    public event Func<PointModel, PointModel, bool>? WallRequested;
     public event Action<string, string, double>? OpeningRequested;
     public event Action<string?>? ElementPicked;
+    public event Action<string, int, PointModel>? WallGripReleased;
+    public event Action<string>? SnapChanged;
 
     public PlanEditorCanvas()
     {
@@ -57,7 +65,32 @@ internal sealed class PlanEditorCanvas : Control
     {
         _wallStart = null;
         _cursor = null;
+        _snapKind = PlanEditing.SnapNone;
+        _gripWallId = null;
+        _gripPosition = null;
+        _gripPress = null;
+        _gripMoved = false;
         InvalidateVisual();
+    }
+
+    public bool TryDrawWallLength(double length, out string error)
+    {
+        error = "请先在画布上指定墙的起点。";
+        if (Tool != PlanTool.Wall || _wallStart == null) return false;
+        if (double.IsNaN(length) || double.IsInfinity(length) || length < 10)
+        { error = "墙长必须是至少 10 mm 的有限数值。"; return false; }
+        var dx = (_cursor?.X ?? _wallStart.X + 1) - _wallStart.X;
+        var dy = (_cursor?.Y ?? _wallStart.Y) - _wallStart.Y;
+        var direction = Math.Sqrt(dx * dx + dy * dy);
+        if (direction < 1e-6) { dx = 1; dy = 0; direction = 1; }
+        var end = new PointModel(_wallStart.X + dx / direction * length,
+            _wallStart.Y + dy / direction * length);
+        if (WallRequested?.Invoke(_wallStart, end) != true)
+        { error = "未能创建该墙。"; return false; }
+        _wallStart = end;
+        InvalidateVisual();
+        error = "";
+        return true;
     }
 
     public void Fit() => FitToSize(Bounds.Size);
@@ -104,28 +137,16 @@ internal sealed class PlanEditorCanvas : Control
     private static double Distance(Point a, Point b)
         => Math.Sqrt(Math.Pow(a.X - b.X, 2) + Math.Pow(a.Y - b.Y, 2));
 
-    private PointModel Snap(Point p)
+    private PointModel Snap(Point p, string? excludedWallId = null)
     {
         var world = World(p);
-        var best = 12d;
-        PointModel? result = null;
-        foreach (var wall in _model.Walls.Where(w => w.StoreyId == _storeyId))
-        {
-            foreach (var candidate in new[]
-            {
-                new PointModel(wall.X1, wall.Y1), new PointModel(wall.X2, wall.Y2),
-                new PointModel((wall.X1 + wall.X2) / 2, (wall.Y1 + wall.Y2) / 2)
-            })
-            {
-                var screen = Screen(candidate.X, candidate.Y);
-                var distance = Distance(screen, p);
-                if (distance < best) { best = distance; result = candidate; }
-            }
-        }
-        if (result != null) return result;
-        var grid = new PointModel(Math.Round(world.X / 100d) * 100d,
-            Math.Round(world.Y / 100d) * 100d);
-        return Distance(Screen(grid.X, grid.Y), p) < 8 ? grid : world;
+        var from = Tool == PlanTool.Wall ? _wallStart : null;
+        var snapped = PlanEditing.Snap(_model, _storeyId, world.X, world.Y, 10d / _scale,
+            from != null, from?.X ?? 0, from?.Y ?? 0, 100d, excludedWallId);
+        if (snapped.Kind != _snapKind && (Tool == PlanTool.Wall || _gripWallId != null))
+            SnapChanged?.Invoke(snapped.Kind);
+        _snapKind = snapped.Kind;
+        return new PointModel(snapped.X, snapped.Y);
     }
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)
@@ -141,6 +162,27 @@ internal sealed class PlanEditorCanvas : Control
             return;
         }
         if (!buttons.IsLeftButtonPressed) return;
+        if (Tool == PlanTool.Select && _selectedId != null)
+        {
+            var wall = _model.Walls.FirstOrDefault(w => w.Id == _selectedId && w.StoreyId == _storeyId);
+            if (wall != null)
+            {
+                var first = Screen(wall.X1, wall.Y1);
+                var second = Screen(wall.X2, wall.Y2);
+                if (Distance(point, first) <= 12 || Distance(point, second) <= 12)
+                {
+                    _gripWallId = wall.Id;
+                    _gripIndex = Distance(point, first) <= Distance(point, second) ? 0 : 1;
+                    _gripPosition = _gripIndex == 0
+                        ? new PointModel(wall.X1, wall.Y1) : new PointModel(wall.X2, wall.Y2);
+                    _gripPress = point;
+                    _gripMoved = false;
+                    e.Pointer.Capture(this);
+                    e.Handled = true;
+                    return;
+                }
+            }
+        }
         if (Tool == PlanTool.Wall)
         {
             var end = Snap(point);
@@ -152,8 +194,7 @@ internal sealed class PlanEditorCanvas : Control
                 else if (Math.Abs(end.Y - start.Y) < 12 / _scale) end.Y = start.Y;
                 if (Math.Sqrt(Math.Pow(end.X - start.X, 2) + Math.Pow(end.Y - start.Y, 2)) >= 10)
                 {
-                    WallRequested?.Invoke(start, end);
-                    _wallStart = end;
+                    if (WallRequested?.Invoke(start, end) == true) _wallStart = end;
                 }
             }
         }
@@ -177,6 +218,13 @@ internal sealed class PlanEditorCanvas : Control
             _centerY += (point.Y - previous.Y) / _scale;
             _panStart = point;
         }
+        if (_gripWallId != null)
+        {
+            if (_gripPress is Point press && Distance(point, press) >= 3) _gripMoved = true;
+            if (_gripMoved) _gripPosition = Snap(point, _gripWallId);
+            InvalidateVisual();
+            return;
+        }
         _cursor = Snap(point);
         InvalidateVisual();
     }
@@ -185,6 +233,19 @@ internal sealed class PlanEditorCanvas : Control
     {
         base.OnPointerReleased(e);
         _panStart = null;
+        if (_gripWallId != null && _gripPosition != null)
+        {
+            var id = _gripWallId;
+            var index = _gripIndex;
+            var position = _gripPosition;
+            var moved = _gripMoved;
+            _gripWallId = null;
+            _gripPosition = null;
+            _gripPress = null;
+            _gripMoved = false;
+            if (moved) WallGripReleased?.Invoke(id, index, position);
+            InvalidateVisual();
+        }
         if (e.Pointer.Captured == this) e.Pointer.Capture(null);
     }
 
@@ -271,11 +332,15 @@ internal sealed class PlanEditorCanvas : Control
         foreach (var wall in _model.Walls.Where(w => w.StoreyId == _storeyId))
         {
             var selected = wall.Id == _selectedId;
+            var first = selected && _gripWallId == wall.Id && _gripIndex == 0 && _gripPosition != null
+                ? Screen(_gripPosition.X, _gripPosition.Y) : Screen(wall.X1, wall.Y1);
+            var second = selected && _gripWallId == wall.Id && _gripIndex == 1 && _gripPosition != null
+                ? Screen(_gripPosition.X, _gripPosition.Y) : Screen(wall.X2, wall.Y2);
             var pen = new Pen(new SolidColorBrush(Color.Parse(selected ? "#FFC46B" : "#9BC4E9")),
                 Math.Clamp(wall.Thickness * _scale, 3, 30));
-            context.DrawLine(pen, Screen(wall.X1, wall.Y1), Screen(wall.X2, wall.Y2));
+            context.DrawLine(pen, first, second);
             context.DrawLine(new Pen(new SolidColorBrush(Color.Parse("#142033")), 1),
-                Screen(wall.X1, wall.Y1), Screen(wall.X2, wall.Y2));
+                first, second);
         }
         foreach (var opening in _model.Openings)
         {
@@ -292,8 +357,30 @@ internal sealed class PlanEditorCanvas : Control
             context.DrawLine(new Pen(new SolidColorBrush(Color.Parse(opening.Id == _selectedId
                 ? "#FFC46B" : opening.Kind == "门" ? "#F4B779" : "#5AD4EC")), 3), a, b);
         }
+        var selectedWall = _model.Walls.FirstOrDefault(w => w.Id == _selectedId && w.StoreyId == _storeyId);
+        if (selectedWall != null)
+        {
+            var first = _gripWallId == selectedWall.Id && _gripIndex == 0 && _gripPosition != null
+                ? Screen(_gripPosition.X, _gripPosition.Y) : Screen(selectedWall.X1, selectedWall.Y1);
+            var second = _gripWallId == selectedWall.Id && _gripIndex == 1 && _gripPosition != null
+                ? Screen(_gripPosition.X, _gripPosition.Y) : Screen(selectedWall.X2, selectedWall.Y2);
+            var gripBrush = new SolidColorBrush(Color.Parse("#FFC46B"));
+            context.FillRectangle(gripBrush, new Rect(first.X - 5, first.Y - 5, 10, 10));
+            context.FillRectangle(gripBrush, new Rect(second.X - 5, second.Y - 5, 10, 10));
+        }
         if (_wallStart != null && _cursor != null)
             context.DrawLine(new Pen(new SolidColorBrush(Color.Parse("#65E8B2")), 2),
                 Screen(_wallStart.X, _wallStart.Y), Screen(_cursor.X, _cursor.Y));
+        var marker = _gripWallId != null ? _gripPosition : _cursor;
+        if (marker != null && _snapKind != PlanEditing.SnapNone)
+        {
+            var p = Screen(marker.X, marker.Y);
+            var color = _snapKind == PlanEditing.SnapIntersection ? "#FFCC66"
+                : _snapKind == PlanEditing.SnapPerpendicular ? "#67E9BE" : "#6AC9FF";
+            var pen = new Pen(new SolidColorBrush(Color.Parse(color)), 2);
+            context.DrawEllipse(null, pen, p, 6, 6);
+            context.DrawLine(pen, new Point(p.X - 9, p.Y), new Point(p.X + 9, p.Y));
+            context.DrawLine(pen, new Point(p.X, p.Y - 9), new Point(p.X, p.Y + 9));
+        }
     }
 }

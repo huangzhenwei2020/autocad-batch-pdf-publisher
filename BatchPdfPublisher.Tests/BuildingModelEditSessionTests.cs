@@ -8,6 +8,7 @@ internal static class BuildingModelEditSessionTests
     public static void Run()
     {
         AddDeleteAndRestoreModel();
+        EditWallEndpoints();
         var session = new BuildingModelEditSession(SampleModelFactory.CreateTwoStoreyHouse());
         var wallId = "1F-S";
         var openingId = "1F-S-C1518";
@@ -171,6 +172,31 @@ internal static class BuildingModelEditSessionTests
         Assert(session.Undo() && session.Model.Openings.Single().HostWallId == wallId,
             "重新撤销后门窗宿主错误");
         Console.WriteLine("PASS 新版公共编辑：增墙开窗、非法输入回滚、删墙级联与撤销重做");
+    }
+
+    private static void EditWallEndpoints()
+    {
+        var session = new BuildingModelEditSession(SampleModelFactory.CreateEmptyModel("夹点测试"));
+        Assert(session.TryAddWall(new WallModel
+        {
+            StoreyId = "1F", X1 = 0, Y1 = 0, X2 = 5000, Y2 = 0, Thickness = 240
+        }, out var wallId, out var error), "夹点测试建墙失败：" + error);
+        Assert(session.TryAddOpening(PlanEditing.CreateOpening("窗", wallId, 2500),
+            out var openingId, out error), "夹点测试开窗失败：" + error);
+        var revision = session.Revision;
+        Assert(!session.TrySetWallEndpoints(wallId, 0, 0, 3000, 0, out error)
+            && error.Contains("范围") && session.Revision == revision,
+            "缩短墙使窗越界时未完整回滚");
+        Assert(!session.TrySetWallEndpoints(wallId, double.NaN, 0, 5000, 0, out error)
+            && session.Revision == revision, "非法夹点坐标修改了模型");
+        Assert(session.TrySetWallEndpoints(wallId, 0, 0, 6000, 0, out error),
+            "合法夹点移动失败：" + error);
+        Assert(session.Model.Walls.Single().Id == wallId && session.Model.Walls.Single().X2 == 6000
+            && session.Model.Openings.Single().HostWallId == wallId
+            && session.Model.Openings.Single().Id == openingId, "夹点移动改变了构件身份");
+        Assert(session.Undo() && session.Model.Walls.Single().X2 == 5000,
+            "撤销夹点移动未恢复墙端");
+        Console.WriteLine("PASS 墙端夹点：合法移动保留 ID，洞口越界和非法坐标回滚，撤销恢复");
     }
 
     private static double Length(BuildingModelDocument model, string id)
