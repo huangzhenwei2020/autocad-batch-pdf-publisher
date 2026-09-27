@@ -21,7 +21,7 @@ namespace BatchPdfPublisher.BuildingModel
     {
         public double X { get; set; }
         public double Y { get; set; }
-        /// <summary>捕捉类型（端点/中点/交点/垂足/正交/轴网/无）。</summary>
+        /// <summary>捕捉类型（墙端点/交点/中点/垂足/墙身/无）。</summary>
         public string Kind { get; set; } = "无";
         public bool Snapped { get { return Kind != "无"; } }
     }
@@ -39,8 +39,7 @@ namespace BatchPdfPublisher.BuildingModel
         public const string SnapMidpoint = "中点";
         public const string SnapIntersection = "交点";
         public const string SnapPerpendicular = "垂足";
-        public const string SnapOrthogonal = "正交";
-        public const string SnapAxis = "轴网";
+        public const string SnapNearest = "墙身";
         public const string SnapNone = "无";
 
         /// <summary>点到线段的距离。</summary>
@@ -281,10 +280,11 @@ namespace BatchPdfPublisher.BuildingModel
         }
 
         /// <summary>
-        /// 捕捉：先端点/中点，再"从上一点正交"，最后轴网；都没命中就返回原始点。
+        /// 只捕捉真实墙对象：端点、交点、中点、垂足、最近墙身。
+        /// 空白处返回原始坐标，不自动吸附到正交方向或虚拟网格。
         /// </summary>
         public static SnapResult Snap(BuildingModelDocument model, string storeyId, double x, double y, double tolerance,
-            bool hasFrom, double fromX, double fromY, double axisStep, string excludedWallId = null)
+            bool hasFrom, double fromX, double fromY, string excludedWallId = null)
         {
             var result = new SnapResult { X = x, Y = y, Kind = SnapNone };
             var walls = (model?.Walls ?? new List<WallModel>())
@@ -334,43 +334,12 @@ namespace BatchPdfPublisher.BuildingModel
                     }
                     if (result.Snapped) return result;
                 }
-            }
-
-            if (hasFrom)
-            {
-                var dx = x - fromX;
-                var dy = y - fromY;
-                if (Math.Abs(dx) <= tolerance || Math.Abs(dy) <= tolerance)
+                best = tolerance;
+                foreach (var wall in near)
                 {
-                    // 已经接近水平/竖向：贴齐
-                    result.X = Math.Abs(dx) <= Math.Abs(dy) ? fromX : x;
-                    result.Y = Math.Abs(dx) <= Math.Abs(dy) ? y : fromY;
-                    result.Kind = SnapOrthogonal;
-                    return result;
-                }
-                // 与上一点构成近似正交时，吸附到正交方向
-                var angle = Math.Atan2(dy, dx) * 180d / Math.PI;
-                var snappedAngle = Math.Round(angle / 90d) * 90d;
-                if (Math.Abs(angle - snappedAngle) <= 8d)
-                {
-                    var radians = snappedAngle * Math.PI / 180d;
-                    var length = Math.Sqrt(dx * dx + dy * dy);
-                    result.X = fromX + Math.Cos(radians) * length;
-                    result.Y = fromY + Math.Sin(radians) * length;
-                    result.Kind = SnapOrthogonal;
-                    return result;
-                }
-            }
-
-            if (axisStep > 0.5d)
-            {
-                var gx = Math.Round(x / axisStep) * axisStep;
-                var gy = Math.Round(y / axisStep) * axisStep;
-                if (Near(x, y, gx, gy, tolerance))
-                {
-                    result.X = gx;
-                    result.Y = gy;
-                    result.Kind = SnapAxis;
+                    var t = ParameterOnSegment(x, y, wall.X1, wall.Y1, wall.X2, wall.Y2);
+                    Consider(x, y, wall.X1 + t * (wall.X2 - wall.X1),
+                        wall.Y1 + t * (wall.Y2 - wall.Y1), SnapNearest, tolerance, ref best, result);
                 }
             }
             return result;

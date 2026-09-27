@@ -765,7 +765,7 @@ namespace Wanluo.BuildingModelStudio
             if (e.Button != MouseButtons.Left || _model == null) return;
 
             var snap = PlanEditing.Snap(_model, _storeyId, x, y, 12d / _scale, _drawFromX.HasValue,
-                _drawFromX ?? 0d, _drawFromY ?? 0d, 100d);
+                _drawFromX ?? 0d, _drawFromY ?? 0d);
             _cursorX = snap.X;
             _cursorY = snap.Y;
             _snapKind = snap.Kind;
@@ -1026,7 +1026,7 @@ namespace Wanluo.BuildingModelStudio
                 return;
             }
             var snap = PlanEditing.Snap(_model, _storeyId, rawX, rawY, 12d / _scale, _drawFromX.HasValue,
-                _drawFromX ?? 0d, _drawFromY ?? 0d, 100d);
+                _drawFromX ?? 0d, _drawFromY ?? 0d);
             _cursorX = snap.X;
             _cursorY = snap.Y;
             _snapKind = snap.Kind;

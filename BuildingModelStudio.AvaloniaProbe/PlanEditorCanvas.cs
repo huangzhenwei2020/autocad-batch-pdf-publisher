@@ -142,7 +142,7 @@ internal sealed class PlanEditorCanvas : Control
         var world = World(p);
         var from = Tool == PlanTool.Wall ? _wallStart : null;
         var snapped = PlanEditing.Snap(_model, _storeyId, world.X, world.Y, 10d / _scale,
-            from != null, from?.X ?? 0, from?.Y ?? 0, 100d, excludedWallId);
+            from != null, from?.X ?? 0, from?.Y ?? 0, excludedWallId);
         if (snapped.Kind != _snapKind && (Tool == PlanTool.Wall || _gripWallId != null))
             SnapChanged?.Invoke(snapped.Kind);
         _snapKind = snapped.Kind;
@@ -190,8 +190,6 @@ internal sealed class PlanEditorCanvas : Control
             else
             {
                 var start = _wallStart;
-                if (Math.Abs(end.X - start.X) < 12 / _scale) end.X = start.X;
-                else if (Math.Abs(end.Y - start.Y) < 12 / _scale) end.Y = start.Y;
                 if (Math.Sqrt(Math.Pow(end.X - start.X, 2) + Math.Pow(end.Y - start.Y, 2)) >= 10)
                 {
                     if (WallRequested?.Invoke(start, end) == true) _wallStart = end;
@@ -225,7 +223,8 @@ internal sealed class PlanEditorCanvas : Control
             InvalidateVisual();
             return;
         }
-        _cursor = Snap(point);
+        if (Tool == PlanTool.Wall) _cursor = Snap(point);
+        else { _cursor = World(point); _snapKind = PlanEditing.SnapNone; }
         InvalidateVisual();
     }
 

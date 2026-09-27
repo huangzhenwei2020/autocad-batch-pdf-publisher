@@ -15,7 +15,7 @@ internal static class PlanEditingTests
     {
         HitTestPrefersOpeningThenGrips();
         SnapFindsEndpointsAndMidpoints();
-        SnapOrthogonalAndGrid();
+        SnapOnlyToObjects();
         SnapIntersectionsAndPerpendiculars();
         ValidateOpeningRejectsOverflowAndOverlap();
         HistoryUndoRedoAndBranchReset();
@@ -61,29 +61,37 @@ internal static class PlanEditingTests
     private static void SnapFindsEndpointsAndMidpoints()
     {
         var model = Model();
-        var endpoint = PlanEditing.Snap(model, "1F", 6030d, 30d, 60d, false, 0d, 0d, 0d);
+        var endpoint = PlanEditing.Snap(model, "1F", 6030d, 30d, 60d, false, 0d, 0d);
         Assert(endpoint.Snapped && endpoint.Kind == PlanEditing.SnapEndpoint
             && Math.Abs(endpoint.X - 6000d) < Tolerance && Math.Abs(endpoint.Y) < Tolerance,
             "端点捕捉失败：" + endpoint.Kind + " (" + endpoint.X + "," + endpoint.Y + ")");
-        var midpoint = PlanEditing.Snap(model, "1F", 3000d, 40d, 60d, false, 0d, 0d, 0d);
+        var midpoint = PlanEditing.Snap(model, "1F", 3000d, 40d, 60d, false, 0d, 0d);
         Assert(midpoint.Snapped && midpoint.Kind == PlanEditing.SnapMidpoint && Math.Abs(midpoint.Y) < Tolerance,
             "中点捕捉失败：" + midpoint.Kind);
         Console.WriteLine("   捕捉：端点 (6000,0)、中点 (3000,0) 命中");
     }
 
-    private static void SnapOrthogonalAndGrid()
+    private static void SnapOnlyToObjects()
     {
         var model = Model();
-        // 从上一点 (1000,1000) 拉出几乎水平的线 → 贴到 Y=1000
-        var orthogonal = PlanEditing.Snap(model, "1F", 5000d, 1060d, 40d, true, 1000d, 1000d, 0d);
-        Assert(orthogonal.Snapped && orthogonal.Kind == PlanEditing.SnapOrthogonal
-            && Math.Abs(orthogonal.Y - 1000d) < Tolerance, "正交捕捉失败：" + orthogonal.Kind + " y=" + orthogonal.Y);
-        // 轴网（100mm 网格）在远离墙的地方生效
-        var grid = PlanEditing.Snap(model, "1F", 20030d, 20040d, 60d, false, 0d, 0d, 100d);
-        Assert(grid.Snapped && grid.Kind == PlanEditing.SnapAxis
-            && Math.Abs(grid.X - 20000d) < Tolerance && Math.Abs(grid.Y - 20000d) < Tolerance,
-            "轴网捕捉失败：" + grid.Kind + " (" + grid.X + "," + grid.Y + ")");
-        Console.WriteLine("   捕捉：正交贴齐与 100mm 轴网均生效");
+        var blank = PlanEditing.Snap(model, "1F", 20030d, 20040d, 60d,
+            true, 1000d, 20040d);
+        Assert(blank.Kind == PlanEditing.SnapNone && blank.X == 20030d && blank.Y == 20040d,
+            "空白处仍被吸到网格或正交方向");
+        var nearHorizontal = PlanEditing.Snap(model, "1F", 5000d, 1060d, 40d,
+            true, 1000d, 1000d);
+        Assert(nearHorizontal.Kind == PlanEditing.SnapNone && nearHorizontal.Y == 1060d,
+            "空白处仍被强制拉成水平线");
+        var wall = PlanEditing.Snap(model, "1F", 4500d, 40d, 60d,
+            false, 0d, 0d);
+        Assert(wall.Kind == PlanEditing.SnapNearest
+            && Math.Abs(wall.X - 4500d) < Tolerance && Math.Abs(wall.Y) < Tolerance,
+            "未吸附到鼠标附近的真实墙身");
+        var endpoint = PlanEditing.Snap(model, "1F", 6030d, 30d, 60d,
+            false, 0d, 0d);
+        Assert(endpoint.Kind == PlanEditing.SnapEndpoint && endpoint.X == 6000d && endpoint.Y == 0d,
+            "对象端点捕捉被墙身捕捉覆盖");
+        Console.WriteLine("   对象捕捉：空白处保留原坐标，近墙身/端点才吸附");
     }
 
     private static void SnapIntersectionsAndPerpendiculars()
@@ -93,24 +101,24 @@ internal static class PlanEditingTests
             X1 = 0, Y1 = 0, X2 = 6000, Y2 = 0 });
         model.Walls.Add(new WallModel { Id = "vertical", StoreyId = "1F",
             X1 = 3000, Y1 = -2000, X2 = 3000, Y2 = 2000 });
-        var crossing = PlanEditing.Snap(model, "1F", 3020, 20, 80, false, 0, 0, 0);
+        var crossing = PlanEditing.Snap(model, "1F", 3020, 20, 80, false, 0, 0);
         Assert(crossing.Kind == PlanEditing.SnapIntersection
             && Math.Abs(crossing.X - 3000) < Tolerance && Math.Abs(crossing.Y) < Tolerance,
             "墙轴线内部交点捕捉失败：" + crossing.Kind);
-        var foot = PlanEditing.Snap(model, "1F", 1020, 30, 80, true, 1000, 1800, 0);
+        var foot = PlanEditing.Snap(model, "1F", 1020, 30, 80, true, 1000, 1800);
         Assert(foot.Kind == PlanEditing.SnapPerpendicular
             && Math.Abs(foot.X - 1000) < Tolerance && Math.Abs(foot.Y) < Tolerance,
             "垂足捕捉失败：" + foot.Kind);
-        var outside = PlanEditing.Snap(model, "1F", 7000, 20, 80, true, 7000, 1800, 0);
+        var outside = PlanEditing.Snap(model, "1F", 7000, 20, 80, true, 7000, 1800);
         Assert(outside.Kind != PlanEditing.SnapPerpendicular && outside.Kind != PlanEditing.SnapIntersection,
             "墙段外的延长线被当成垂足或交点");
         model.Walls[1].X1 = 7000;
         model.Walls[1].X2 = 7000;
-        var extension = PlanEditing.Snap(model, "1F", 7000, 10, 80, false, 0, 0, 0);
+        var extension = PlanEditing.Snap(model, "1F", 7000, 10, 80, false, 0, 0);
         Assert(extension.Kind != PlanEditing.SnapIntersection, "延长线交点被错误捕捉");
         model.Walls[1].X1 = 1000; model.Walls[1].Y1 = 1000;
         model.Walls[1].X2 = 5000; model.Walls[1].Y2 = 1000;
-        var parallel = PlanEditing.Snap(model, "1F", 3000, 500, 80, false, 0, 0, 0);
+        var parallel = PlanEditing.Snap(model, "1F", 3000, 500, 80, false, 0, 0);
         Assert(parallel.Kind != PlanEditing.SnapIntersection, "平行墙出现假交点");
         Console.WriteLine("   捕捉：内部交点/垂足命中，延长线和平行墙不误吸附");
     }

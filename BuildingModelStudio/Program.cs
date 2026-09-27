@@ -717,7 +717,7 @@ namespace Wanluo.BuildingModelStudio
                 AutoSize = true,
                 ForeColor = Color.FromArgb(105, 112, 122),
                 Text = "左键：执行当前工具　中键/右键拖动：平移　滚轮：缩放　Esc：取消／闭合房间　Delete：删除"
-                    + "　（捕捉自动生效：端点 / 中点 / 正交 / 100mm 轴网）　「拉轴线」：拉一条定方向与位置；「画房间」：连续点轮廓，点回起点或 Esc 闭合"
+                    + "　（仅捕捉墙对象：端点 / 交点 / 中点 / 垂足 / 墙身）　「拉轴线」：拉一条定方向与位置；「画房间」：连续点轮廓，点回起点或 Esc 闭合"
             }, 0, 2);
             root.Controls.Add(top, 0, 0);
 
