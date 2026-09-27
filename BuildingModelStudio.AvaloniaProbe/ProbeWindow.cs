@@ -92,16 +92,10 @@ internal sealed class ProbeWindow : Window
         };
         _planCanvas.WallGripReleased += async (id, index, position) =>
         {
-            var wall = _session.Model.Walls.FirstOrDefault(w => w.Id == id);
-            if (wall == null) return;
-            var x1 = index == 0 ? position.X : wall.X1;
-            var y1 = index == 0 ? position.Y : wall.Y1;
-            var x2 = index == 1 ? position.X : wall.X2;
-            var y2 = index == 1 ? position.Y : wall.Y2;
-            if (!_session.TrySetWallEndpoints(id, x1, y1, x2, y2, out var error))
+            if (!_session.TryMoveWallGrip(id, index, position.X, position.Y, out var error))
             { _status.Text = error; return; }
             _selectedId = id;
-            await RefreshModelAsync("已调整墙端点");
+            await RefreshModelAsync("已调整墙交接端点");
         };
         _planCanvas.OpeningRequested += async (kind, wallId, offset) =>
         {

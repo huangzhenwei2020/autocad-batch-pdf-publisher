@@ -114,6 +114,46 @@ namespace BatchPdfPublisher.BuildingModel
             return true;
         }
 
+        /// <summary>Moves one wall grip and all wall endpoints joined to its previous position.</summary>
+        public bool TryMoveWallGrip(string id, int endpointIndex, double x, double y, out string error)
+        {
+            error = null;
+            if (endpointIndex != 0 && endpointIndex != 1)
+            { error = "墙端点序号只能是 0 或 1。"; return false; }
+            if (!Finite(x) || !Finite(y))
+            { error = "墙端点必须是有限坐标。"; return false; }
+            var candidate = Clone(Model);
+            var wall = candidate.Walls.FirstOrDefault(w => w != null && Same(w.Id, id));
+            if (wall == null) { error = "未找到墙：" + id; return false; }
+            var oldX = endpointIndex == 0 ? wall.X1 : wall.X2;
+            var oldY = endpointIndex == 0 ? wall.Y1 : wall.Y2;
+            const double joinTolerance = 0.5d;
+            var changed = candidate.Walls.Where(w => w != null && Same(w.StoreyId, wall.StoreyId)
+                && (Same(w.Id, id)
+                    || EndpointNear(w.X1, w.Y1, oldX, oldY, joinTolerance)
+                    || EndpointNear(w.X2, w.Y2, oldX, oldY, joinTolerance))).ToArray();
+            foreach (var current in changed)
+            {
+                if (Same(current.Id, id))
+                {
+                    if (endpointIndex == 0) { current.X1 = x; current.Y1 = y; }
+                    else { current.X2 = x; current.Y2 = y; }
+                    continue;
+                }
+                if (EndpointNear(current.X1, current.Y1, oldX, oldY, joinTolerance))
+                { current.X1 = x; current.Y1 = y; }
+                if (EndpointNear(current.X2, current.Y2, oldX, oldY, joinTolerance))
+                { current.X2 = x; current.Y2 = y; }
+            }
+            foreach (var current in changed)
+            {
+                error = ValidateWallAndOpenings(candidate, current);
+                if (error != null) return false;
+            }
+            Commit(candidate);
+            return true;
+        }
+
         /// <summary>Moves or rotates a whole wall about its midpoint. Copies keep their hosted openings.</summary>
         public bool TryTransformWall(string id, double deltaX, double deltaY, double angleDegrees,
             bool copy, out string affectedId, out string error)
@@ -288,6 +328,11 @@ namespace BatchPdfPublisher.BuildingModel
         }
 
         private static bool Finite(double value) { return !double.IsNaN(value) && !double.IsInfinity(value); }
+        private static bool EndpointNear(double x, double y, double otherX, double otherY, double tolerance)
+        {
+            return Math.Abs(x - otherX) <= tolerance && Math.Abs(y - otherY) <= tolerance
+                && Math.Sqrt(Math.Pow(x - otherX, 2) + Math.Pow(y - otherY, 2)) <= tolerance;
+        }
         private static bool Same(string left, string right)
         {
             return string.Equals(left, right, StringComparison.OrdinalIgnoreCase);

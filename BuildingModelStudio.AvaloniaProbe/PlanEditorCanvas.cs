@@ -134,6 +134,26 @@ internal sealed class PlanEditorCanvas : Control
         => new(_centerX + (p.X - Bounds.Width / 2) / _scale,
             _centerY - (p.Y - Bounds.Height / 2) / _scale);
 
+    private Point PreviewWallEndpoint(WallModel wall, int index)
+    {
+        var x = index == 0 ? wall.X1 : wall.X2;
+        var y = index == 0 ? wall.Y1 : wall.Y2;
+        if (_gripWallId != null && _gripPosition != null)
+        {
+            var selected = _model.Walls.FirstOrDefault(w => w.Id == _gripWallId);
+            if (selected != null && wall.StoreyId == selected.StoreyId)
+            {
+                var anchorX = _gripIndex == 0 ? selected.X1 : selected.X2;
+                var anchorY = _gripIndex == 0 ? selected.Y1 : selected.Y2;
+                if ((wall.Id == selected.Id && index == _gripIndex)
+                    || (wall.Id != selected.Id && Math.Sqrt(Math.Pow(x - anchorX, 2)
+                        + Math.Pow(y - anchorY, 2)) <= 0.5d))
+                    return Screen(_gripPosition.X, _gripPosition.Y);
+            }
+        }
+        return Screen(x, y);
+    }
+
     private static double Distance(Point a, Point b)
         => Math.Sqrt(Math.Pow(a.X - b.X, 2) + Math.Pow(a.Y - b.Y, 2));
 
@@ -331,10 +351,8 @@ internal sealed class PlanEditorCanvas : Control
         foreach (var wall in _model.Walls.Where(w => w.StoreyId == _storeyId))
         {
             var selected = wall.Id == _selectedId;
-            var first = selected && _gripWallId == wall.Id && _gripIndex == 0 && _gripPosition != null
-                ? Screen(_gripPosition.X, _gripPosition.Y) : Screen(wall.X1, wall.Y1);
-            var second = selected && _gripWallId == wall.Id && _gripIndex == 1 && _gripPosition != null
-                ? Screen(_gripPosition.X, _gripPosition.Y) : Screen(wall.X2, wall.Y2);
+            var first = PreviewWallEndpoint(wall, 0);
+            var second = PreviewWallEndpoint(wall, 1);
             var pen = new Pen(new SolidColorBrush(Color.Parse(selected ? "#FFC46B" : "#9BC4E9")),
                 Math.Clamp(wall.Thickness * _scale, 3, 30));
             context.DrawLine(pen, first, second);
@@ -345,12 +363,16 @@ internal sealed class PlanEditorCanvas : Control
         {
             var wall = _model.Walls.FirstOrDefault(w => w.Id == opening.HostWallId && w.StoreyId == _storeyId);
             if (wall == null) continue;
-            var length = Math.Sqrt(Math.Pow(wall.X2 - wall.X1, 2) + Math.Pow(wall.Y2 - wall.Y1, 2));
+            var first = PreviewWallEndpoint(wall, 0);
+            var second = PreviewWallEndpoint(wall, 1);
+            var length = Distance(first, second) / _scale;
             if (length < 1) continue;
             var t1 = (opening.Offset - opening.Width / 2) / length;
             var t2 = (opening.Offset + opening.Width / 2) / length;
-            var a = Screen(wall.X1 + (wall.X2 - wall.X1) * t1, wall.Y1 + (wall.Y2 - wall.Y1) * t1);
-            var b = Screen(wall.X1 + (wall.X2 - wall.X1) * t2, wall.Y1 + (wall.Y2 - wall.Y1) * t2);
+            var a = new Point(first.X + (second.X - first.X) * t1,
+                first.Y + (second.Y - first.Y) * t1);
+            var b = new Point(first.X + (second.X - first.X) * t2,
+                first.Y + (second.Y - first.Y) * t2);
             context.DrawLine(new Pen(new SolidColorBrush(Color.Parse("#111A25")),
                 Math.Clamp(wall.Thickness * _scale + 2, 5, 32)), a, b);
             context.DrawLine(new Pen(new SolidColorBrush(Color.Parse(opening.Id == _selectedId
@@ -359,10 +381,8 @@ internal sealed class PlanEditorCanvas : Control
         var selectedWall = _model.Walls.FirstOrDefault(w => w.Id == _selectedId && w.StoreyId == _storeyId);
         if (selectedWall != null)
         {
-            var first = _gripWallId == selectedWall.Id && _gripIndex == 0 && _gripPosition != null
-                ? Screen(_gripPosition.X, _gripPosition.Y) : Screen(selectedWall.X1, selectedWall.Y1);
-            var second = _gripWallId == selectedWall.Id && _gripIndex == 1 && _gripPosition != null
-                ? Screen(_gripPosition.X, _gripPosition.Y) : Screen(selectedWall.X2, selectedWall.Y2);
+            var first = PreviewWallEndpoint(selectedWall, 0);
+            var second = PreviewWallEndpoint(selectedWall, 1);
             var gripBrush = new SolidColorBrush(Color.Parse("#FFC46B"));
             context.FillRectangle(gripBrush, new Rect(first.X - 5, first.Y - 5, 10, 10));
             context.FillRectangle(gripBrush, new Rect(second.X - 5, second.Y - 5, 10, 10));

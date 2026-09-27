@@ -11,6 +11,7 @@ internal static class BuildingModelEditSessionTests
         AddDeleteAndRestoreModel();
         RecoverInterruptedViewBatch();
         EditWallEndpoints();
+        MoveJoinedWallGrip();
         TransformWallWithOpenings();
         var session = new BuildingModelEditSession(SampleModelFactory.CreateTwoStoreyHouse());
         var wallId = "1F-S";
@@ -297,6 +298,55 @@ internal static class BuildingModelEditSessionTests
             && session.Model.Openings.Any(x => x.Id == copiedOpening.Id && x.HostWallId == copiedId),
             "重做没有恢复复制的墙和门窗 ID");
         Console.WriteLine("PASS 整墙定位：移动/旋转保留宿主关系，复制门窗一并新建，非法输入回滚，撤销重做原子恢复");
+    }
+
+    private static void MoveJoinedWallGrip()
+    {
+        var session = new BuildingModelEditSession(SampleModelFactory.CreateEmptyModel("墙交接测试"));
+        string error;
+        Assert(session.TryAddWall(new WallModel
+        {
+            StoreyId = "1F", X1 = 0, Y1 = 0, X2 = 5000, Y2 = 0, Thickness = 240
+        }, out var firstId, out error), "交接主墙创建失败：" + error);
+        Assert(session.TryAddWall(new WallModel
+        {
+            StoreyId = "1F", X1 = 5000, Y1 = 0, X2 = 5000, Y2 = 4000, Thickness = 240
+        }, out var secondId, out error), "交接支墙创建失败：" + error);
+        Assert(session.TryAddWall(new WallModel
+        {
+            StoreyId = "1F", X1 = 5000.3, Y1 = 0.2, X2 = 8000, Y2 = 0, Thickness = 240
+        }, out var thirdId, out error), "容差内支墙创建失败：" + error);
+        Assert(session.TryAddWall(new WallModel
+        {
+            StoreyId = "2F", X1 = 5000, Y1 = 0, X2 = 7000, Y2 = 0, Thickness = 240
+        }, out var otherFloorId, out error), "其他楼层墙创建失败：" + error);
+        Assert(session.TryAddOpening(PlanEditing.CreateOpening("窗", secondId, 1500),
+            out var openingId, out error), "交接墙开窗失败：" + error);
+        var revision = session.Revision;
+        Assert(!session.TryMoveWallGrip(firstId, 1, 5000, 3000, out error)
+            && error.Contains("范围") && session.Revision == revision,
+            "相接墙洞口越界时没有整笔回滚");
+        Assert(session.Model.Walls.First(w => w.Id == secondId).Y1 == 0,
+            "回滚后相接墙端点被改动");
+        Assert(!session.TryMoveWallGrip(firstId, 2, 5200, 1000, out error)
+            && session.Revision == revision, "非法端点序号改变模型");
+        Assert(session.TryMoveWallGrip(firstId, 1, 5200, 1000, out error),
+            "移动墙交接点失败：" + error);
+        Assert(session.Revision == revision + 1, "联动移动应作为一笔编辑");
+        Assert(session.Model.Walls.First(w => w.Id == firstId).X2 == 5200
+            && session.Model.Walls.First(w => w.Id == secondId).Y1 == 1000
+            && session.Model.Walls.First(w => w.Id == thirdId).X1 == 5200
+            && session.Model.Walls.First(w => w.Id == thirdId).Y1 == 1000,
+            "相接端点没有一起移到同一位置");
+        Assert(session.Model.Walls.First(w => w.Id == otherFloorId).X1 == 5000
+            && session.Model.Openings.First(o => o.Id == openingId).HostWallId == secondId,
+            "其他楼层或宿主洞口被错误修改");
+        Assert(session.Undo() && session.Model.Walls.First(w => w.Id == thirdId).X1 == 5000.3
+            && session.Model.Walls.First(w => w.Id == secondId).Y1 == 0,
+            "撤销没有恢复全部相接墙");
+        Assert(session.Redo() && session.Model.Walls.First(w => w.Id == thirdId).X1 == 5200,
+            "重做没有恢复墙交接");
+        Console.WriteLine("PASS 墙交接夹点：同楼层容差内相接端点联动，洞口越界整笔回滚，撤销重做恢复");
     }
 
     private static double Length(BuildingModelDocument model, string id)
