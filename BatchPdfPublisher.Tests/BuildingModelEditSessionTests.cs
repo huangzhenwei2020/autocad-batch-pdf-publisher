@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using BatchPdfPublisher.BuildingModel;
 
 internal static class BuildingModelEditSessionTests
@@ -8,6 +9,7 @@ internal static class BuildingModelEditSessionTests
     public static void Run()
     {
         AddDeleteAndRestoreModel();
+        RecoverInterruptedViewBatch();
         EditWallEndpoints();
         var session = new BuildingModelEditSession(SampleModelFactory.CreateTwoStoreyHouse());
         var wallId = "1F-S";
@@ -172,6 +174,62 @@ internal static class BuildingModelEditSessionTests
         Assert(session.Undo() && session.Model.Openings.Single().HostWallId == wallId,
             "重新撤销后门窗宿主错误");
         Console.WriteLine("PASS 新版公共编辑：增墙开窗、非法输入回滚、删墙级联与撤销重做");
+    }
+
+    private static void RecoverInterruptedViewBatch()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "wanluo-batch-" + Guid.NewGuid().ToString("N"));
+        var views = Path.Combine(root, StudioLaunch.ViewsFolderName);
+        var stage = Path.Combine(root, ".views-staging-test");
+        Directory.CreateDirectory(views);
+        Directory.CreateDirectory(stage);
+        try
+        {
+            File.WriteAllText(Path.Combine(views, "old.json"), "old");
+            File.WriteAllText(Path.Combine(stage, "new.json"), "new");
+            Assert(StudioLaunch.CommitStagedViews(root, stage) == null
+                && File.Exists(Path.Combine(views, "new.json"))
+                && !File.Exists(Path.Combine(views, "old.json")), "发布后出现新旧混合视图");
+            Assert(!StudioLaunch.RecoverInterruptedPublish(root), "完整新批次被误恢复成旧版");
+            AssertThrows(() => StudioLaunch.CommitStagedViews(root, stage), "缺少暂存目录仍被切换");
+            Assert(File.Exists(Path.Combine(views, "new.json")), "无效暂存目录改变了现有批次");
+            var backup = Path.Combine(root, ".views-backup-interrupted");
+            Directory.Move(views, backup);
+            StudioLaunch.ListViews(root);
+            Assert(File.Exists(Path.Combine(views, "new.json"))
+                && !StudioLaunch.RecoverInterruptedPublish(root), "CAD 取图时未恢复中断的批次");
+            BuildingModelJson.SaveView(Path.Combine(views, "batch0.json"),
+                new ViewDocument { Id = "batch0", Title = "批次 0" });
+            var writer = Task.Run(() =>
+            {
+                for (var i = 1; i <= 20; i++)
+                {
+                    var nextStage = Path.Combine(root, ".views-staging-" + i);
+                    Directory.CreateDirectory(nextStage);
+                    BuildingModelJson.SaveView(Path.Combine(nextStage, "batch" + i + ".json"),
+                        new ViewDocument { Id = "batch" + i, Title = "批次 " + i });
+                    StudioLaunch.CommitStagedViews(root, nextStage);
+                }
+            });
+            var reader = Task.Run(() =>
+            {
+                for (var i = 0; i < 200; i++)
+                {
+                    var listed = StudioLaunch.ListViews(root);
+                    Assert(listed.Count == 1, "CAD 并发取图时看到了缺失或混合的视图批次");
+                }
+            });
+            Task.WaitAll(writer, reader);
+            Console.WriteLine("PASS 视图整批切换：不混批、无效暂存回滚、中断恢复、并发取图");
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    private static void AssertThrows(Action action, string message)
+    {
+        try { action(); }
+        catch (InvalidOperationException) { return; }
+        throw new InvalidOperationException(message);
     }
 
     private static void EditWallEndpoints()

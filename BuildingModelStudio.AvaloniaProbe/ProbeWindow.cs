@@ -417,8 +417,6 @@ internal sealed class ProbeWindow : Window
         var cancellation = new CancellationTokenSource();
         _publishCancellation = cancellation;
         string? staging = null;
-        string? backup = null;
-        var published = false;
         _publish.IsEnabled = false;
         _sendToCad.IsEnabled = false;
         _status.Text = "正在生成立面、剖面、平面与图纸视图…";
@@ -470,19 +468,12 @@ internal sealed class ProbeWindow : Window
                     throw new IOException("写入 CAD 待落图清单失败。");
             }
             cancellation.Token.ThrowIfCancellationRequested();
-            backup = Path.Combine(modelFolder, ".views-backup-" + Guid.NewGuid().ToString("N"));
-            if (Directory.Exists(viewsFolder)) Directory.Move(viewsFolder, backup);
-            try { Directory.Move(staging, viewsFolder); }
-            catch
-            {
-                if (Directory.Exists(backup)) Directory.Move(backup, viewsFolder);
-                throw;
-            }
+            var oldBackup = StudioLaunch.CommitStagedViews(modelFolder, staging);
             staging = null;
-            published = true;
             if (markForCad)
                 _status.Text = $"已生成 {result.views.Count} 张视图，待落图 {chosen.Length} 张；回到 CAD 执行 LTTZ。";
             else _status.Text = $"已生成 {result.views.Count} 张 CAD 视图 → {viewsFolder}";
+            if (oldBackup != null) _status.Text += " 旧视图备份保留在：" + oldBackup;
         }
         catch (OperationCanceledException) { _status.Text = "视图生成已取消。"; }
         catch (Exception ex) { _status.Text = "生成视图失败：" + ex.Message; }
@@ -492,11 +483,6 @@ internal sealed class ProbeWindow : Window
             {
                 try { Directory.Delete(staging, true); }
                 catch (Exception ex) { _status.Text += " 临时文件清理失败：" + ex.Message; }
-            }
-            if (published && backup != null && Directory.Exists(backup))
-            {
-                try { Directory.Delete(backup, true); }
-                catch (Exception ex) { _status.Text += " 旧视图备份保留在：" + backup + "（" + ex.Message + "）"; }
             }
             if (ReferenceEquals(_publishCancellation, cancellation)) _publishCancellation = null;
             cancellation.Dispose();

@@ -2,6 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
+using System.Threading;
 
 namespace BatchPdfPublisher.BuildingModel
 {
@@ -105,6 +108,80 @@ namespace BatchPdfPublisher.BuildingModel
             catch
             {
                 return false;
+            }
+        }
+
+        /// <summary>切换完整视图批次；失败时尽量恢复旧批次，旧目录无法清理时返回其路径。</summary>
+        public static string CommitStagedViews(string modelFolder, string stagingFolder)
+        {
+            if (string.IsNullOrWhiteSpace(modelFolder) || string.IsNullOrWhiteSpace(stagingFolder))
+                throw new ArgumentException("模型目录和暂存目录不能为空。");
+            var root = Path.GetFullPath(modelFolder).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var stage = Path.GetFullPath(stagingFolder).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var pathComparison = Path.DirectorySeparatorChar == '\\'
+                ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            if (!string.Equals(Path.GetDirectoryName(stage), root, pathComparison)
+                || !Path.GetFileName(stage).StartsWith(".views-staging-", StringComparison.Ordinal)
+                || !Directory.Exists(stage) || Directory.GetFiles(stage, "*.json").Length == 0)
+                throw new InvalidOperationException("视图暂存目录无效或没有视图，未切换发布批次。");
+            return WithViewLock(root, () => CommitStagedViewsCore(root, stage));
+        }
+
+        private static string CommitStagedViewsCore(string root, string stage)
+        {
+            RecoverInterruptedPublishCore(root);
+            var views = Path.Combine(root, ViewsFolderName);
+            var backup = Path.Combine(root, ".views-backup-" + Guid.NewGuid().ToString("N"));
+            var hadOldViews = Directory.Exists(views);
+            if (hadOldViews) Directory.Move(views, backup);
+            try { Directory.Move(stage, views); }
+            catch
+            {
+                if (hadOldViews && !Directory.Exists(views)) Directory.Move(backup, views);
+                throw;
+            }
+            if (!hadOldViews) return null;
+            try { Directory.Delete(backup, true); return null; }
+            catch { return backup; }
+        }
+
+        /// <summary>上次进程若在旧目录移走后中断，则恢复最近一份完整旧批次。</summary>
+        public static bool RecoverInterruptedPublish(string modelFolder)
+        {
+            if (string.IsNullOrWhiteSpace(modelFolder) || !Directory.Exists(modelFolder)) return false;
+            return WithViewLock(modelFolder, () => RecoverInterruptedPublishCore(modelFolder));
+        }
+
+        private static bool RecoverInterruptedPublishCore(string modelFolder)
+        {
+            var views = Path.Combine(modelFolder, ViewsFolderName);
+            if (Directory.Exists(views)) return false;
+            var backup = Directory.GetDirectories(modelFolder, ".views-backup-*")
+                .OrderByDescending(Directory.GetLastWriteTimeUtc).FirstOrDefault();
+            if (backup == null) return false;
+            Directory.Move(backup, views);
+            return true;
+        }
+
+        private static T WithViewLock<T>(string modelFolder, Func<T> action)
+        {
+            var path = Path.GetFullPath(modelFolder)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (Path.DirectorySeparatorChar == '\\') path = path.ToUpperInvariant();
+            string name;
+            using (var sha = SHA256.Create())
+                name = "WanLuoViews-" + BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(path)))
+                    .Replace("-", "").Substring(0, 32);
+            using (var gate = new Mutex(false, name))
+            {
+                try
+                {
+                    if (!gate.WaitOne(TimeSpan.FromSeconds(15)))
+                        throw new IOException("等待该模型的视图发布完成超时。");
+                }
+                catch (AbandonedMutexException) { /* 上个进程退出，继续检查备份目录。 */ }
+                try { return action(); }
+                finally { gate.ReleaseMutex(); }
             }
         }
 
@@ -237,6 +314,14 @@ namespace BatchPdfPublisher.BuildingModel
         {
             var result = new List<StudioViewEntry>();
             if (string.IsNullOrWhiteSpace(modelFolder)) return result;
+            return WithViewLock(modelFolder, () => ListViewsCore(modelFolder));
+        }
+
+        private static List<StudioViewEntry> ListViewsCore(string modelFolder)
+        {
+            var result = new List<StudioViewEntry>();
+            if (!Directory.Exists(modelFolder)) return result;
+            RecoverInterruptedPublishCore(modelFolder);
             var viewsFolder = Path.Combine(modelFolder, ViewsFolderName);
             if (!Directory.Exists(viewsFolder)) return result;
             var pending = ReadPending(modelFolder);
