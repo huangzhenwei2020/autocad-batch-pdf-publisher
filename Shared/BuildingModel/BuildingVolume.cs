@@ -115,22 +115,31 @@ namespace BatchPdfPublisher.BuildingModel
             }
             if (!first)
             {
+                var guideElevation = walls.Count == 0 ? volume.MinZ
+                    : walls.Min(wall => model.BaseElevationOf(wall));
                 foreach (var wall in walls)
                 {
+                    if (!onlyOne && Math.Abs(model.BaseElevationOf(wall) - guideElevation) > 0.001d)
+                        continue;
                     var z = model.BaseElevationOf(wall) + 2d;
+                    var dx = wall.X2 - wall.X1;
+                    var dy = wall.Y2 - wall.Y1;
+                    var length = Math.Sqrt(dx * dx + dy * dy);
+                    if (length < 1d) continue;
+                    var ux = dx / length; var uy = dy / length;
                     volume.GuideLines.Add(new VolumeGuideLine
                     {
-                        Start = new Point3DModel(wall.X1, wall.Y1, z),
-                        End = new Point3DModel(wall.X2, wall.Y2, z), ElementId = wall.Id
+                        Start = new Point3DModel(wall.X1 - ux * 1200d, wall.Y1 - uy * 1200d, z),
+                        End = new Point3DModel(wall.X2 + ux * 1200d, wall.Y2 + uy * 1200d, z), ElementId = wall.Id
                     });
                 }
                 foreach (var axis in model.Axes ?? new List<AxisModel>())
                 {
                     if (axis == null || !IsFinite(axis.Position)) continue;
                     var from = axis.ExtentStart == 0 && axis.ExtentEnd == 0
-                        ? (axis.Vertical ? volume.MinY - 500d : volume.MinX - 500d) : axis.ExtentStart;
+                        ? (axis.Vertical ? volume.MinY - 1600d : volume.MinX - 1600d) : axis.ExtentStart;
                     var to = axis.ExtentStart == 0 && axis.ExtentEnd == 0
-                        ? (axis.Vertical ? volume.MaxY + 500d : volume.MaxX + 500d) : axis.ExtentEnd;
+                        ? (axis.Vertical ? volume.MaxY + 1600d : volume.MaxX + 1600d) : axis.ExtentEnd;
                     var z = volume.MinZ + 2d;
                     volume.GuideLines.Add(new VolumeGuideLine
                     {

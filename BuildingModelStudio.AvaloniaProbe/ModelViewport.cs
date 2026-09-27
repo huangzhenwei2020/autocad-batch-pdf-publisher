@@ -410,7 +410,6 @@ internal sealed class ModelViewport : OpenGlControlBase
         gl.DrawArrays(GL_TRIANGLES, 0, snapshot.TriangleVertexCount);
         if (snapshot.Vertices.Length > snapshot.TriangleVertexCount)
         {
-            gl.Disable(GL_DEPTH_TEST);
             gl.Uniform1f(gl.GetUniformLocationString(_program, "uSelectedElement"), 0f);
             gl.DrawArrays(GuideLinesPrimitive, snapshot.TriangleVertexCount,
                 snapshot.Vertices.Length - snapshot.TriangleVertexCount);
