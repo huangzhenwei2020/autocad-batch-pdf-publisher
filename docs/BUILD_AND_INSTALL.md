@@ -36,6 +36,14 @@ powershell -ExecutionPolicy Bypass -File .\build\Build-Release.ps1
 .\build\Build-Release.ps1 -Bands R24,R25
 ```
 
+本机装有 AutoCAD 2022 时，R24 默认使用它的 API；没有 2022 时使用已安装的最新 R24 API。要明确指定 AutoCAD 2022，可执行：
+
+```powershell
+.\build\Build-Release.ps1 -Bands R24,R25 -R24AutoCadYear 2022
+```
+
+指定的 AutoCAD 版本必须已安装；该参数只选择编译引用，运行仍需在目标 CAD 版本中验证。
+
 正式用户包需要同时携带免安装 Python 的 PaddleOCR 增强组件时执行：
 
 ```powershell

@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
     [string[]]$Bands,
+    [ValidateRange(2021, 2024)]
+    [int]$R24AutoCadYear = 0,
     [string]$OutputRoot,
     [switch]$KeepIntermediate,
     [switch]$IncludePaddleOcr
@@ -207,6 +209,15 @@ foreach ($installation in $installations) {
     if (-not $available.ContainsKey($band) -or $installation.Year -gt $available[$band].Year) {
         $available[$band] = $installation
     }
+}
+
+if ($R24AutoCadYear -eq 0 -and ($installations | Where-Object { $_.Year -eq 2022 } | Select-Object -First 1)) {
+    $R24AutoCadYear = 2022
+}
+if ($R24AutoCadYear -ne 0) {
+    $selectedR24 = $installations | Where-Object { $_.Year -eq $R24AutoCadYear } | Select-Object -First 1
+    if (-not $selectedR24) { throw "本机未找到 AutoCAD $R24AutoCadYear 的完整 API 安装。" }
+    $available['R24'] = $selectedR24
 }
 
 # R25 targets .NET 8. Autodesk's official compile-time package allows a full
