@@ -32,11 +32,13 @@ internal sealed class ProbeWindow : Window
 
     private BuildingModelEditSession _session;
     private readonly ModelViewport _viewport;
+    private readonly ViewportTransformOverlay _gizmo;
     private readonly PlanEditorCanvas _planCanvas = new();
     private readonly TabControl _workspaces = new();
     private readonly ComboBox _storeyChooser = new() { Width = 130 };
     private readonly ListBox _elements = new();
     private readonly List<ElementItem> _items = new();
+    private readonly Dictionary<ViewTransformTool, Button> _viewToolButtons = new();
     private readonly StackPanel _properties = new() { Margin = new Thickness(16), Spacing = 12 };
     private readonly TextBlock _status = new();
     private readonly Button _undo = new() { Content = "撤销" };
@@ -62,6 +64,15 @@ internal sealed class ProbeWindow : Window
         _session = new BuildingModelEditSession(SampleModelFactory.CreateTwoStoreyHouse());
         _savedJson = BuildingModelJson.ToJson(_session.Model);
         _viewport = new ModelViewport(BuildingVolumeBuilder.Build(_session.Model));
+        _gizmo = new ViewportTransformOverlay(_viewport);
+        _gizmo.PreviewChanged += value => _status.Text = value + " · 松开鼠标提交，Esc 取消";
+        _gizmo.TransformFinished += async (id, dx, dy, angle, copy) =>
+        {
+            if (!_session.TryTransformWall(id, dx, dy, angle, copy, out var affectedId, out var error))
+            { _status.Text = error; return; }
+            _selectedId = affectedId;
+            await RefreshModelAsync(copy ? "已复制墙及门窗" : "已变换墙");
+        };
         _viewport.ElementPicked += SelectById;
         _planCanvas.ElementPicked += SelectById;
         _planCanvas.SnapChanged += kind =>
@@ -158,6 +169,7 @@ internal sealed class ProbeWindow : Window
             _selectedId = (_elements.SelectedItem as ElementItem)?.Id;
             _viewport.SelectElement(_selectedId);
             _planCanvas.SetSelection(_selectedId);
+            UpdateGizmoSelection();
             RefreshProperties();
         };
         Grid.SetRow(_elements, 1);
@@ -174,18 +186,32 @@ internal sealed class ProbeWindow : Window
             var selecting = buttons.IsLeftButtonPressed;
             var panning = buttons.IsMiddleButtonPressed || buttons.IsRightButtonPressed;
             if (!selecting && !panning) return;
+            if (selecting && _gizmo.TryBegin(e.GetPosition(_viewport),
+                e.KeyModifiers.HasFlag(KeyModifiers.Shift)))
+            {
+                e.Pointer.Capture(viewportInput);
+                e.Handled = true;
+                return;
+            }
             _viewport.BeginInteraction(e.GetPosition(_viewport), selecting, panning);
             e.Pointer.Capture(viewportInput);
             e.Handled = true;
         };
         viewportInput.PointerMoved += (_, e) =>
         {
+            if (_gizmo.IsDragging)
+            {
+                _gizmo.Move(e.GetPosition(_viewport));
+                return;
+            }
             var buttons = e.GetCurrentPoint(viewportInput).Properties;
             _viewport.MoveInteraction(e.GetPosition(_viewport), buttons.IsLeftButtonPressed,
                 buttons.IsMiddleButtonPressed || buttons.IsRightButtonPressed);
+            _gizmo.InvalidateVisual();
         };
         viewportInput.PointerReleased += (_, e) =>
         {
+            if (_gizmo.IsDragging) _gizmo.Finish();
             _viewport.EndInteraction(e.GetPosition(_viewport));
             if (e.Pointer.Captured == viewportInput) e.Pointer.Capture(null);
             e.Handled = true;
@@ -193,9 +219,30 @@ internal sealed class ProbeWindow : Window
         viewportInput.PointerWheelChanged += (_, e) =>
         {
             _viewport.Zoom(e.Delta.Y);
+            _gizmo.InvalidateVisual();
             e.Handled = true;
         };
         viewportHost.Children.Add(viewportInput);
+        viewportHost.Children.Add(_gizmo);
+        var viewTools = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 6,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(10)
+        };
+        foreach (var (label, tool) in new[]
+        {
+            ("选择 Q", ViewTransformTool.Select),
+            ("移动 W", ViewTransformTool.Move),
+            ("旋转 E", ViewTransformTool.Rotate)
+        })
+        {
+            var button = new Button { Content = label };
+            button.Click += (_, _) => SetViewTool(tool);
+            _viewToolButtons.Add(tool, button);
+            viewTools.Children.Add(button);
+        }
+        viewportHost.Children.Add(viewTools);
 
         var planLayout = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
         var planTools = new StackPanel
@@ -276,10 +323,19 @@ internal sealed class ProbeWindow : Window
         Grid.SetColumnSpan(_status, 3);
         root.Children.Add(_status);
         Content = root;
+        KeyDown += (_, e) =>
+        {
+            if (_workspaces.SelectedIndex != 0 || e.Source is TextBox || e.Source is ComboBox) return;
+            if (e.Key == Key.Escape && _gizmo.IsDragging) { _gizmo.Cancel(); e.Handled = true; }
+            else if (e.Key == Key.Q) { SetViewTool(ViewTransformTool.Select); e.Handled = true; }
+            else if (e.Key == Key.W) { SetViewTool(ViewTransformTool.Move); e.Handled = true; }
+            else if (e.Key == Key.E) { SetViewTool(ViewTransformTool.Rotate); e.Handled = true; }
+        };
 
         BuildElementList();
         RefreshStoreys();
         SelectById("1F-S");
+        SetViewTool(Program.SnapshotGizmo ? ViewTransformTool.Move : ViewTransformTool.Select);
         RefreshHistoryButtons();
         UpdateTitle();
         Closing += OnClosing;
@@ -590,7 +646,26 @@ internal sealed class ProbeWindow : Window
         _selectedId = item?.Id;
         _viewport.SelectElement(_selectedId);
         _planCanvas.SetSelection(_selectedId);
+        UpdateGizmoSelection();
         RefreshProperties();
+    }
+
+    private void SetViewTool(ViewTransformTool tool)
+    {
+        _gizmo.SetTool(tool);
+        foreach (var entry in _viewToolButtons)
+            entry.Value.Background = new SolidColorBrush(Color.Parse(entry.Key == tool ? "#2169BF" : "#263342"));
+        _status.Text = tool == ViewTransformTool.Select ? "选择 Q：点选构件；左键空白处旋转视角。"
+            : tool == ViewTransformTool.Move ? "移动 W：拖红色 X 轴、绿色 Y 轴或中心方块；Shift 拖动复制。"
+            : "旋转 E：拖动选中墙的橙色圆环；Shift 拖动复制。";
+    }
+
+    private void UpdateGizmoSelection()
+    {
+        var wall = _session.Model.Walls.FirstOrDefault(x => x.Id == _selectedId);
+        var storey = wall == null ? null : _session.Model.FindStorey(wall.StoreyId);
+        _gizmo.SetSelection(wall, storey == null ? 0 : storey.Elevation
+            + (wall!.Height > 0 ? wall.Height : storey.Height) / 2);
     }
 
     private void RefreshProperties()
@@ -708,6 +783,7 @@ internal sealed class ProbeWindow : Window
             var scene = await Task.Run(() => ModelViewport.PrepareScene(BuildingVolumeBuilder.Build(model)));
             if (generation != _sceneGeneration) return;
             _viewport.SetScene(scene);
+            _gizmo.InvalidateVisual();
             _status.Text = $"{message} · 修订 {_session.Revision}{(HasChanges ? " · 未保存" : "")}";
         }
         catch (Exception ex)
@@ -813,12 +889,64 @@ internal sealed class ProbeWindow : Window
                 ? _viewport.PickAt(new Point(_viewport.Bounds.Width / 2, _viewport.Bounds.Height / 2)) : null;
             var success = emptyProject ? _filePath == Program.ModelPath && File.Exists(_filePath)
                 : _viewport.FrameRendered && hit != null;
+            if (Program.GizmoCheck) success &= RunGizmoSmokeCheck();
             Program.SmokeFailed = !success;
             Console.WriteLine(success ? (emptyProject ? "AVALONIA_EMPTY_PROJECT_OK " + _filePath
                 : "AVALONIA_GPU_PICK_OK " + hit) : "AVALONIA_GPU_OR_PICK_FAILED");
+            if (Program.GizmoCheck) _closeConfirmed = true;
             Close();
         };
         if (IsVisible) timer.Start();
         else Opened += (_, _) => timer.Start();
+    }
+
+    private bool RunGizmoSmokeCheck()
+    {
+        var wall = _session.Model.Walls.FirstOrDefault(x => x.Id == "1F-S");
+        var storey = wall == null ? null : _session.Model.FindStorey(wall.StoreyId);
+        if (wall == null || storey == null) return false;
+        _gizmo.SetSelection(wall, storey.Elevation + storey.Height / 2);
+        _gizmo.SetTool(ViewTransformTool.Move);
+        var center = _viewport.ProjectModelPoint((wall.X1 + wall.X2) / 2,
+            (wall.Y1 + wall.Y2) / 2, storey.Elevation + storey.Height / 2);
+        if (center == null || !_gizmo.TryBegin(center.Value, false)) return false;
+        var originalX = wall.X1;
+        var originalY = wall.Y1;
+        _gizmo.Move(new Point(center.Value.X + 30, center.Value.Y - 15));
+        _gizmo.Finish();
+        var moved = _session.Model.Walls.First(x => x.Id == wall.Id);
+        var success = _session.Revision > 0 && (Math.Abs(moved.X1 - originalX) > 1
+            || Math.Abs(moved.Y1 - originalY) > 1);
+        if (success)
+        {
+            _gizmo.SetTool(ViewTransformTool.Rotate);
+            center = _viewport.ProjectModelPoint((moved.X1 + moved.X2) / 2,
+                (moved.Y1 + moved.Y2) / 2, storey.Elevation + storey.Height / 2);
+            var beforeRevision = _session.Revision;
+            success = center != null && _gizmo.TryBegin(new Point(center.Value.X + 49, center.Value.Y), false);
+            if (success)
+            {
+                _gizmo.Move(new Point(center!.Value.X, center.Value.Y - 49));
+                _gizmo.Finish();
+                success = _session.Revision == beforeRevision + 1;
+            }
+        }
+        if (success)
+        {
+            var rotated = _session.Model.Walls.First(x => x.Id == wall.Id);
+            _gizmo.SetTool(ViewTransformTool.Move);
+            center = _viewport.ProjectModelPoint((rotated.X1 + rotated.X2) / 2,
+                (rotated.Y1 + rotated.Y2) / 2, storey.Elevation + storey.Height / 2);
+            var beforeWalls = _session.Model.Walls.Count;
+            success = center != null && _gizmo.TryBegin(center.Value, true);
+            if (success)
+            {
+                _gizmo.Move(new Point(center!.Value.X + 30, center.Value.Y - 15));
+                _gizmo.Finish();
+                success = _session.Model.Walls.Count == beforeWalls + 1;
+            }
+        }
+        Console.WriteLine(success ? "AVALONIA_GIZMO_MOVE_ROTATE_COPY_OK" : "AVALONIA_GIZMO_CHECK_FAILED");
+        return success;
     }
 }

@@ -142,6 +142,48 @@ internal sealed class ModelViewport : OpenGlControlBase
         return Matrix4x4.CreateLookAt(_target + direction * _distance, _target, Vector3.UnitY);
     }
 
+    private Matrix4x4 ViewProjection()
+    {
+        var model = Matrix4x4.CreateFromYawPitchRoll(_yaw, _pitch, 0);
+        var projection = Matrix4x4.CreatePerspectiveFieldOfView(0.8f,
+            (float)(Bounds.Width / Bounds.Height), 0.1f, 100f);
+        return model * CameraView() * projection;
+    }
+
+    internal Point? ProjectModelPoint(double x, double y, double z)
+    {
+        if (Bounds.Width <= 0 || Bounds.Height <= 0) return null;
+        var center = _volume.Center;
+        var scale = (float)(10d / Math.Max(1d, _volume.Diagonal));
+        var position = new Vector4((float)(x - center.X) * scale,
+            (float)(z - center.Z) * scale, (float)(center.Y - y) * scale, 1f);
+        var clip = Vector4.Transform(position, ViewProjection());
+        if (clip.W <= 1e-5f) return null;
+        return new Point((clip.X / clip.W + 1d) * Bounds.Width / 2d,
+            (1d - clip.Y / clip.W) * Bounds.Height / 2d);
+    }
+
+    internal bool TryScreenToPlan(Point point, double elevation, out PointModel result)
+    {
+        result = new PointModel();
+        if (Bounds.Width <= 0 || Bounds.Height <= 0
+            || !Matrix4x4.Invert(ViewProjection(), out var inverse)) return false;
+        var nx = (float)(point.X / Bounds.Width * 2d - 1d);
+        var ny = (float)(1d - point.Y / Bounds.Height * 2d);
+        if (!Unproject(nx, ny, 0f, inverse, out var near)
+            || !Unproject(nx, ny, 1f, inverse, out var far)) return false;
+        var center = _volume.Center;
+        var scale = (float)(10d / Math.Max(1d, _volume.Diagonal));
+        var planeY = (float)(elevation - center.Z) * scale;
+        var dy = far.Y - near.Y;
+        if (Math.Abs(dy) < 1e-6f) return false;
+        var t = (planeY - near.Y) / dy;
+        if (t <= 0f) return false;
+        var hit = near + t * (far - near);
+        result = new PointModel(hit.X / scale + center.X, center.Y - hit.Z / scale);
+        return double.IsFinite(result.X) && double.IsFinite(result.Y);
+    }
+
     private static MeshSnapshot BuildSnapshot(BuildingVolume volume)
     {
         var vertices = new List<Vertex>();
