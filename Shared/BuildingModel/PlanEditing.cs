@@ -67,6 +67,28 @@ namespace BatchPdfPublisher.BuildingModel
             return Math.Max(0d, Math.Min(1d, t));
         }
 
+        /// <summary>Finds an endpoint attached to the interior of a wall axis, excluding its two ends.</summary>
+        public static bool TryProjectWallInterior(WallModel wall, double x, double y,
+            double tolerance, out double fraction)
+        {
+            fraction = 0d;
+            if (wall == null || tolerance < 0d || double.IsNaN(tolerance) || double.IsInfinity(tolerance)) return false;
+            var dx = wall.X2 - wall.X1;
+            var dy = wall.Y2 - wall.Y1;
+            var squared = dx * dx + dy * dy;
+            if (squared < 100d) return false;
+            var raw = ((x - wall.X1) * dx + (y - wall.Y1) * dy) / squared;
+            if (double.IsNaN(raw) || double.IsInfinity(raw)) return false;
+            var margin = tolerance / Math.Sqrt(squared);
+            if (raw <= margin || raw >= 1d - margin) return false;
+            var px = wall.X1 + raw * dx;
+            var py = wall.Y1 + raw * dy;
+            var distance = Math.Sqrt((x - px) * (x - px) + (y - py) * (y - py));
+            if (distance > tolerance) return false;
+            fraction = raw;
+            return true;
+        }
+
         /// <summary>点到墙轴线的垂足距离（沿墙轴线到起点的距离，mm）。</summary>
         public static double ProjectOnWall(WallModel wall, double x, double y)
         {

@@ -131,7 +131,7 @@ namespace BatchPdfPublisher.BuildingModel
             var changed = candidate.Walls.Where(w => w != null && Same(w.StoreyId, wall.StoreyId)
                 && (Same(w.Id, id)
                     || EndpointNear(w.X1, w.Y1, oldX, oldY, joinTolerance)
-                    || EndpointNear(w.X2, w.Y2, oldX, oldY, joinTolerance))).ToArray();
+                    || EndpointNear(w.X2, w.Y2, oldX, oldY, joinTolerance))).ToList();
             foreach (var current in changed)
             {
                 if (Same(current.Id, id))
@@ -144,6 +144,45 @@ namespace BatchPdfPublisher.BuildingModel
                 { current.X1 = x; current.Y1 = y; }
                 if (EndpointNear(current.X2, current.Y2, oldX, oldY, joinTolerance))
                 { current.X2 = x; current.Y2 = y; }
+            }
+            // An endpoint on a moving wall's interior keeps its fractional position on that wall.
+            // Collect first so a branch attached to two moving walls cannot be silently pulled apart.
+            var assignments = new System.Collections.Generic.Dictionary<string, PointModel>(StringComparer.OrdinalIgnoreCase);
+            foreach (var host in changed.ToArray())
+            {
+                var previous = Model.Walls.First(w => w != null && Same(w.Id, host.Id));
+                foreach (var other in Model.Walls.Where(w => w != null && Same(w.StoreyId, host.StoreyId)
+                    && !Same(w.Id, host.Id)))
+                {
+                    for (var index = 0; index < 2; index++)
+                    {
+                        var ox = index == 0 ? other.X1 : other.X2;
+                        var oy = index == 0 ? other.Y1 : other.Y2;
+                        if (!PlanEditing.TryProjectWallInterior(previous, ox, oy,
+                            joinTolerance, out var fraction)) continue;
+                        var branch = candidate.Walls.First(w => w != null && Same(w.Id, other.Id));
+                        var currentX = index == 0 ? branch.X1 : branch.X2;
+                        var currentY = index == 0 ? branch.Y1 : branch.Y2;
+                        if (!EndpointNear(currentX, currentY, ox, oy, joinTolerance)) continue;
+                        var destination = new PointModel(host.X1 + (host.X2 - host.X1) * fraction,
+                            host.Y1 + (host.Y2 - host.Y1) * fraction);
+                        var key = other.Id + "|" + index;
+                        if (assignments.TryGetValue(key, out var existing)
+                            && !EndpointNear(existing.X, existing.Y, destination.X, destination.Y, joinTolerance))
+                        { error = "T 形交接点同时依附多道移动墙，无法确定新位置。"; return false; }
+                        assignments[key] = destination;
+                    }
+                }
+            }
+            foreach (var assignment in assignments)
+            {
+                var separator = assignment.Key.LastIndexOf('|');
+                var branchId = assignment.Key.Substring(0, separator);
+                var index = assignment.Key[separator + 1] - '0';
+                var branch = candidate.Walls.First(w => w != null && Same(w.Id, branchId));
+                if (index == 0) { branch.X1 = assignment.Value.X; branch.Y1 = assignment.Value.Y; }
+                else { branch.X2 = assignment.Value.X; branch.Y2 = assignment.Value.Y; }
+                if (!changed.Any(w => Same(w.Id, branch.Id))) changed.Add(branch);
             }
             foreach (var current in changed)
             {

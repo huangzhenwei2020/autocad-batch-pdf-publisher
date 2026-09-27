@@ -12,6 +12,7 @@ internal static class BuildingModelEditSessionTests
         RecoverInterruptedViewBatch();
         EditWallEndpoints();
         MoveJoinedWallGrip();
+        MoveTWallJunction();
         TransformWallWithOpenings();
         var session = new BuildingModelEditSession(SampleModelFactory.CreateTwoStoreyHouse());
         var wallId = "1F-S";
@@ -347,6 +348,48 @@ internal static class BuildingModelEditSessionTests
         Assert(session.Redo() && session.Model.Walls.First(w => w.Id == thirdId).X1 == 5200,
             "重做没有恢复墙交接");
         Console.WriteLine("PASS 墙交接夹点：同楼层容差内相接端点联动，洞口越界整笔回滚，撤销重做恢复");
+    }
+
+    private static void MoveTWallJunction()
+    {
+        var session = new BuildingModelEditSession(SampleModelFactory.CreateEmptyModel("T 形交接测试"));
+        string error;
+        Assert(session.TryAddWall(new WallModel
+        {
+            StoreyId = "1F", X1 = 0, Y1 = 0, X2 = 6000, Y2 = 0, Thickness = 240
+        }, out var hostId, out error), "T 形宿主墙创建失败：" + error);
+        Assert(session.TryAddWall(new WallModel
+        {
+            StoreyId = "1F", X1 = 3000, Y1 = 0, X2 = 3000, Y2 = 4000, Thickness = 240
+        }, out var branchId, out error), "T 形支墙创建失败：" + error);
+        Assert(session.TryAddWall(new WallModel
+        {
+            StoreyId = "2F", X1 = 3000, Y1 = 0, X2 = 3000, Y2 = 4000, Thickness = 240
+        }, out var upperId, out error), "上层支墙创建失败：" + error);
+        Assert(session.TryAddOpening(PlanEditing.CreateOpening("窗", branchId, 1500),
+            out _, out error), "支墙窗创建失败：" + error);
+        Assert(PlanEditing.TryProjectWallInterior(session.Model.Walls.First(w => w.Id == hostId),
+            3000, 0, 0.5, out var fraction) && fraction == 0.5,
+            "T 形交接点未识别为墙身内部");
+        Assert(!PlanEditing.TryProjectWallInterior(session.Model.Walls.First(w => w.Id == hostId),
+            6000, 0, 0.5, out _), "宿主墙端点被误判为 T 形交接");
+        var revision = session.Revision;
+        Assert(!session.TryMoveWallGrip(hostId, 1, 6000, 6000, out error)
+            && error.Contains("范围") && session.Revision == revision,
+            "T 形支墙窗越界时没有整笔回滚");
+        Assert(session.Model.Walls.First(w => w.Id == branchId).Y1 == 0,
+            "T 形失败回滚后支墙移动了");
+        Assert(session.TryMoveWallGrip(hostId, 1, 6000, 1000, out error),
+            "T 形宿主墙夹点移动失败：" + error);
+        var branch = session.Model.Walls.First(w => w.Id == branchId);
+        Assert(Math.Abs(branch.X1 - 3000) < 0.001 && Math.Abs(branch.Y1 - 500) < 0.001
+            && session.Model.Walls.First(w => w.Id == upperId).Y1 == 0,
+            "T 形支墙未保持宿主墙身比例位置，或影响其他楼层");
+        Assert(session.Undo() && session.Model.Walls.First(w => w.Id == branchId).Y1 == 0,
+            "撤销未恢复 T 形交接");
+        Assert(session.Redo() && Math.Abs(session.Model.Walls.First(w => w.Id == branchId).Y1 - 500) < 0.001,
+            "重做未恢复 T 形交接");
+        Console.WriteLine("PASS T 形墙交接：支墙端点沿宿主墙身跟随，门窗越界整笔回滚，跨楼层隔离与撤销重做");
     }
 
     private static double Length(BuildingModelDocument model, string id)

@@ -149,6 +149,16 @@ internal sealed class PlanEditorCanvas : Control
                     || (wall.Id != selected.Id && Math.Sqrt(Math.Pow(x - anchorX, 2)
                         + Math.Pow(y - anchorY, 2)) <= 0.5d))
                     return Screen(_gripPosition.X, _gripPosition.Y);
+                if (wall.Id != selected.Id && PlanEditing.TryProjectWallInterior(selected,
+                    x, y, 0.5d, out var fraction))
+                {
+                    var startX = _gripIndex == 0 ? _gripPosition.X : selected.X1;
+                    var startY = _gripIndex == 0 ? _gripPosition.Y : selected.Y1;
+                    var endX = _gripIndex == 1 ? _gripPosition.X : selected.X2;
+                    var endY = _gripIndex == 1 ? _gripPosition.Y : selected.Y2;
+                    return Screen(startX + (endX - startX) * fraction,
+                        startY + (endY - startY) * fraction);
+                }
             }
         }
         return Screen(x, y);

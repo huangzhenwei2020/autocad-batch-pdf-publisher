@@ -18,6 +18,7 @@ internal static class Program
     public static bool SnapshotPlan { get; private set; }
     public static bool SnapshotGizmo { get; private set; }
     public static bool GizmoCheck { get; private set; }
+    public static bool ShortcutCheck { get; private set; }
     public static string? ModelPath { get; private set; }
     public static bool CreateMissingProjectModel { get; private set; }
     public static string? ProjectModelName { get; private set; }
@@ -46,6 +47,7 @@ internal static class Program
         Smoke = args.Contains("--smoke", StringComparer.OrdinalIgnoreCase);
         SnapshotGizmo = args.Contains("--snapshot-gizmo", StringComparer.OrdinalIgnoreCase);
         GizmoCheck = args.Contains("--gizmo-check", StringComparer.OrdinalIgnoreCase);
+        ShortcutCheck = args.Contains("--shortcut-check", StringComparer.OrdinalIgnoreCase);
         var index = Array.IndexOf(args, "--snapshot");
         if (index >= 0 && index + 1 < args.Length) SnapshotPath = Path.GetFullPath(args[index + 1]);
         index = Array.IndexOf(args, "--snapshot-plan");

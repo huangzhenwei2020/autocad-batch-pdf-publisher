@@ -10,6 +10,7 @@ using Avalonia.Media.Imaging;
 using Avalonia.Platform.Storage;
 using Avalonia.Rendering.Composition;
 using Avalonia.Threading;
+using Avalonia.Interactivity;
 using BatchPdfPublisher.BuildingModel;
 
 namespace BuildingModelStudio.AvaloniaProbe;
@@ -41,8 +42,8 @@ internal sealed class ProbeWindow : Window
     private readonly Dictionary<ViewTransformTool, Button> _viewToolButtons = new();
     private readonly StackPanel _properties = new() { Margin = new Thickness(16), Spacing = 12 };
     private readonly TextBlock _status = new();
-    private readonly Button _undo = new() { Content = "撤销" };
-    private readonly Button _redo = new() { Content = "重做" };
+    private readonly Button _undo = new() { Content = "撤销 Ctrl+Z" };
+    private readonly Button _redo = new() { Content = "重做 Ctrl+Y" };
     private readonly Button _publish = new() { Content = "生成 CAD 视图" };
     private readonly Button _sendToCad = new() { Content = "推到 CAD" };
     private CancellationTokenSource? _publishCancellation;
@@ -126,8 +127,8 @@ internal sealed class ProbeWindow : Window
             FontWeight = FontWeight.SemiBold,
             VerticalAlignment = VerticalAlignment.Center
         });
-        _undo.Click += async (_, _) => { if (_session.Undo()) await RefreshModelAsync("已撤销"); };
-        _redo.Click += async (_, _) => { if (_session.Redo()) await RefreshModelAsync("已重做"); };
+        _undo.Click += async (_, _) => await UndoModelAsync();
+        _redo.Click += async (_, _) => await RedoModelAsync();
         toolbar.Children.Add(_undo);
         toolbar.Children.Add(_redo);
         var open = new Button { Content = "打开模型" };
@@ -317,10 +318,12 @@ internal sealed class ProbeWindow : Window
         Grid.SetColumnSpan(_status, 3);
         root.Children.Add(_status);
         Content = root;
+        AddHandler(KeyDownEvent, OnShortcutKeyDown, RoutingStrategies.Tunnel);
         KeyDown += (_, e) =>
         {
             if (_workspaces.SelectedIndex != 0 || e.Source is TextBox || e.Source is ComboBox) return;
             if (e.Key == Key.Escape && _gizmo.IsDragging) { _gizmo.Cancel(); e.Handled = true; }
+            else if (e.KeyModifiers != KeyModifiers.None) return;
             else if (e.Key == Key.Q) { SetViewTool(ViewTransformTool.Select); e.Handled = true; }
             else if (e.Key == Key.W) { SetViewTool(ViewTransformTool.Move); e.Handled = true; }
             else if (e.Key == Key.E) { SetViewTool(ViewTransformTool.Rotate); e.Handled = true; }
@@ -654,6 +657,48 @@ internal sealed class ProbeWindow : Window
             : "旋转 E：拖动选中墙的橙色圆环；Shift 拖动复制。";
     }
 
+    private void OnShortcutKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (!e.KeyModifiers.HasFlag(KeyModifiers.Control) || ShortcutEditingText(e.Source)) return;
+        if (e.Key == Key.Z && e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+        { e.Handled = true; _ = RedoModelAsync(); }
+        else if (e.Key == Key.Z)
+        { e.Handled = true; _ = UndoModelAsync(); }
+        else if (e.Key == Key.Y)
+        { e.Handled = true; _ = RedoModelAsync(); }
+    }
+
+    private static bool ShortcutEditingText(object? source)
+    {
+        var control = source as Control;
+        while (control != null)
+        {
+            if (control is TextBox || control is ComboBox) return true;
+            control = control.Parent as Control;
+        }
+        return false;
+    }
+
+    private async Task UndoModelAsync()
+    {
+        if (_gizmo.IsDragging)
+        {
+            _gizmo.Cancel();
+            _status.Text = "已取消当前拖动，模型未修改。";
+            return;
+        }
+        _gizmo.Cancel();
+        _planCanvas.CancelDraft();
+        if (_session.Undo()) await RefreshModelAsync("已撤销（Ctrl+Z）");
+    }
+
+    private async Task RedoModelAsync()
+    {
+        _gizmo.Cancel();
+        _planCanvas.CancelDraft();
+        if (_session.Redo()) await RefreshModelAsync("已重做（Ctrl+Y / Ctrl+Shift+Z）");
+    }
+
     private void UpdateGizmoSelection()
     {
         var wall = _session.Model.Walls.FirstOrDefault(x => x.Id == _selectedId);
@@ -884,10 +929,11 @@ internal sealed class ProbeWindow : Window
             var success = emptyProject ? _filePath == Program.ModelPath && File.Exists(_filePath)
                 : _viewport.FrameRendered && hit != null;
             if (Program.GizmoCheck) success &= RunGizmoSmokeCheck();
+            if (Program.ShortcutCheck) success &= RunShortcutSmokeCheck();
             Program.SmokeFailed = !success;
             Console.WriteLine(success ? (emptyProject ? "AVALONIA_EMPTY_PROJECT_OK " + _filePath
                 : "AVALONIA_GPU_PICK_OK " + hit) : "AVALONIA_GPU_OR_PICK_FAILED");
-            if (Program.GizmoCheck) _closeConfirmed = true;
+            if (Program.GizmoCheck || Program.ShortcutCheck) _closeConfirmed = true;
             Close();
         };
         if (IsVisible) timer.Start();
@@ -941,6 +987,42 @@ internal sealed class ProbeWindow : Window
             }
         }
         Console.WriteLine(success ? "AVALONIA_GIZMO_MOVE_ROTATE_COPY_OK" : "AVALONIA_GIZMO_CHECK_FAILED");
+        return success;
+    }
+
+    private bool RunShortcutSmokeCheck()
+    {
+        var original = _session.Model.Walls.First(x => x.Id == "1F-S").X2;
+        if (!_session.TrySetWallLength("1F-S", original + 500, out _)) return false;
+        _viewport.RaiseEvent(new KeyEventArgs
+        {
+            RoutedEvent = KeyDownEvent, Key = Key.Z, KeyModifiers = KeyModifiers.Control
+        });
+        var undone = _session.Model.Walls.First(x => x.Id == "1F-S").X2 == original;
+        _viewport.RaiseEvent(new KeyEventArgs
+        {
+            RoutedEvent = KeyDownEvent, Key = Key.Y, KeyModifiers = KeyModifiers.Control
+        });
+        var redone = _session.Model.Walls.First(x => x.Id == "1F-S").X2 == original + 500;
+        _viewport.RaiseEvent(new KeyEventArgs
+        {
+            RoutedEvent = KeyDownEvent, Key = Key.Z, KeyModifiers = KeyModifiers.Control
+        });
+        _viewport.RaiseEvent(new KeyEventArgs
+        {
+            RoutedEvent = KeyDownEvent, Key = Key.Z,
+            KeyModifiers = KeyModifiers.Control | KeyModifiers.Shift
+        });
+        var shiftRedo = _session.Model.Walls.First(x => x.Id == "1F-S").X2 == original + 500;
+        var revision = _session.Revision;
+        var textBox = _properties.Children.OfType<TextBox>().FirstOrDefault();
+        textBox?.RaiseEvent(new KeyEventArgs
+        {
+            RoutedEvent = KeyDownEvent, Key = Key.Z, KeyModifiers = KeyModifiers.Control
+        });
+        var textKeptModel = textBox != null && _session.Revision == revision;
+        var success = undone && redone && shiftRedo && textKeptModel;
+        Console.WriteLine(success ? "AVALONIA_CTRL_Z_Y_SHIFT_Z_OK" : "AVALONIA_SHORTCUT_CHECK_FAILED");
         return success;
     }
 }
