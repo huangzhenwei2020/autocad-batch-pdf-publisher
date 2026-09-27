@@ -13,6 +13,7 @@ namespace BuildingModelStudio.AvaloniaProbe;
 
 internal sealed class ModelViewport : OpenGlControlBase
 {
+    private const int GuideLinesPrimitive = 0x0001; // GL_LINES
     [StructLayout(LayoutKind.Sequential)]
     internal struct Vertex
     {
@@ -39,12 +40,15 @@ internal sealed class ModelViewport : OpenGlControlBase
     internal sealed class MeshSnapshot
     {
         public readonly Vertex[] Vertices;
+        public readonly int TriangleVertexCount;
         public readonly PickTriangle[] Triangles;
         public readonly PickNode[] PickNodes;
         public readonly Dictionary<string, float> ElementIndexes;
-        public MeshSnapshot(Vertex[] vertices, PickTriangle[] triangles, Dictionary<string, float> elementIndexes)
+        public MeshSnapshot(Vertex[] vertices, int triangleVertexCount,
+            PickTriangle[] triangles, Dictionary<string, float> elementIndexes)
         {
             Vertices = vertices;
+            TriangleVertexCount = triangleVertexCount;
             Triangles = triangles;
             ElementIndexes = elementIndexes;
             PickNodes = BuildPickTree(triangles);
@@ -219,7 +223,17 @@ internal sealed class ModelViewport : OpenGlControlBase
                 triangles.Add(new PickTriangle(a.Position, b.Position, c.Position, face.ElementId, triangles.Count));
             }
         }
-        return new MeshSnapshot(vertices.ToArray(), triangles.ToArray(), elementIndexes);
+        var triangleVertexCount = vertices.Count;
+        foreach (var line in volume.GuideLines)
+        {
+            if (line?.Start == null || line.End == null) continue;
+            var color = line.IsBuildingAxis ? new Vector3(0.3f, 0.85f, 0.75f)
+                : new Vector3(1f, 0.7f, 0.25f);
+            vertices.Add(ToVertex(line.Start, center, scale, color, 0));
+            vertices.Add(ToVertex(line.End, center, scale, color, 0));
+        }
+        return new MeshSnapshot(vertices.ToArray(), triangleVertexCount,
+            triangles.ToArray(), elementIndexes);
     }
 
     private static PickNode[] BuildPickTree(PickTriangle[] triangles)
@@ -393,7 +407,14 @@ internal sealed class ModelViewport : OpenGlControlBase
         gl.UniformMatrix4fv(gl.GetUniformLocationString(_program, "uView"), 1, false, &view);
         gl.UniformMatrix4fv(gl.GetUniformLocationString(_program, "uProjection"), 1, false, &projection);
         gl.Uniform1f(gl.GetUniformLocationString(_program, "uSelectedElement"), _selectedIndex);
-        gl.DrawArrays(GL_TRIANGLES, 0, snapshot.Vertices.Length);
+        gl.DrawArrays(GL_TRIANGLES, 0, snapshot.TriangleVertexCount);
+        if (snapshot.Vertices.Length > snapshot.TriangleVertexCount)
+        {
+            gl.Disable(GL_DEPTH_TEST);
+            gl.Uniform1f(gl.GetUniformLocationString(_program, "uSelectedElement"), 0f);
+            gl.DrawArrays(GuideLinesPrimitive, snapshot.TriangleVertexCount,
+                snapshot.Vertices.Length - snapshot.TriangleVertexCount);
+        }
         if (benchmarkStart != 0)
         {
             gl.Finish();

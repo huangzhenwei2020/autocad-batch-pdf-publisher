@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
+using System.Globalization;
 using BatchPdfPublisher.BuildingModel;
 
 namespace BuildingModelStudio.AvaloniaProbe;
@@ -26,6 +27,7 @@ internal sealed class PlanEditorCanvas : Control
     private bool _gripGraphUnavailable;
     private Dictionary<string, WallEndpointMove>? _gripPreview;
     private string? _gripPreviewError;
+    private readonly List<(WallModel horizontal, WallModel vertical)> _orthogonalJunctions = new();
     private double _scale = 0.07;
     private double _centerX;
     private double _centerY;
@@ -53,6 +55,7 @@ internal sealed class PlanEditorCanvas : Control
         _gripGraphUnavailable = false;
         _gripPreview = null;
         _gripPreviewError = null;
+        IndexOrthogonalJunctions();
         if (!_fitted) Fit();
         InvalidateVisual();
     }
@@ -61,6 +64,7 @@ internal sealed class PlanEditorCanvas : Control
     {
         _storeyId = id;
         CancelDraft();
+        IndexOrthogonalJunctions();
         Fit();
     }
 
@@ -154,6 +158,18 @@ internal sealed class PlanEditorCanvas : Control
         if (_gripPreview != null && _gripPreview.TryGetValue(wall.Id + "|" + index, out var moved))
             return Screen(moved.X, moved.Y);
         return Screen(x, y);
+    }
+
+    private (Point first, Point second) PreviewWallBody(WallModel wall)
+    {
+        var first = PreviewWallEndpoint(wall, 0);
+        var second = PreviewWallEndpoint(wall, 1);
+        var dx = second.X - first.X; var dy = second.Y - first.Y;
+        var length = Math.Sqrt(dx * dx + dy * dy);
+        if (length < 1e-6) return (first, second);
+        var offset = WallReferenceGeometry.BodyOffset(wall) * _scale / length;
+        return (new Point(first.X + dy * offset, first.Y - dx * offset),
+            new Point(second.X + dy * offset, second.Y - dx * offset));
     }
 
     private void UpdateGripPreview()
@@ -388,23 +404,24 @@ internal sealed class PlanEditorCanvas : Control
             context.DrawLine(gridPen, Screen(x, min.Y), Screen(x, max.Y));
         for (var y = Math.Ceiling(min.Y / spacing) * spacing; y <= max.Y; y += spacing)
             context.DrawLine(gridPen, Screen(min.X, y), Screen(max.X, y));
+        DrawAxes(context, min, max);
         foreach (var wall in _model.Walls.Where(w => w.StoreyId == _storeyId))
         {
             var selected = wall.Id == _selectedId;
-            var first = PreviewWallEndpoint(wall, 0);
-            var second = PreviewWallEndpoint(wall, 1);
+            var (first, second) = PreviewWallBody(wall);
             var pen = new Pen(new SolidColorBrush(Color.Parse(selected ? "#FFC46B" : "#9BC4E9")),
                 Math.Clamp(wall.Thickness * _scale, 3, 30));
             context.DrawLine(pen, first, second);
-            context.DrawLine(new Pen(new SolidColorBrush(Color.Parse("#142033")), 1),
-                first, second);
         }
+        DrawOrthogonalJunctions(context);
+        foreach (var wall in _model.Walls.Where(w => w.StoreyId == _storeyId))
+            context.DrawLine(new Pen(new SolidColorBrush(Color.Parse("#192D3C")), 1),
+                PreviewWallEndpoint(wall, 0), PreviewWallEndpoint(wall, 1));
         foreach (var opening in _model.Openings)
         {
             var wall = _model.Walls.FirstOrDefault(w => w.Id == opening.HostWallId && w.StoreyId == _storeyId);
             if (wall == null) continue;
-            var first = PreviewWallEndpoint(wall, 0);
-            var second = PreviewWallEndpoint(wall, 1);
+            var (first, second) = PreviewWallBody(wall);
             var length = Distance(first, second) / _scale;
             if (length < 1) continue;
             var t1 = (opening.Offset - opening.Width / 2) / length;
@@ -441,5 +458,89 @@ internal sealed class PlanEditorCanvas : Control
             context.DrawLine(pen, new Point(p.X - 9, p.Y), new Point(p.X + 9, p.Y));
             context.DrawLine(pen, new Point(p.X, p.Y - 9), new Point(p.X, p.Y + 9));
         }
+    }
+
+    private void DrawAxes(DrawingContext context, PointModel min, PointModel max)
+    {
+        var brush = new SolidColorBrush(Color.Parse("#6A9AA8"));
+        var pen = new Pen(brush, 1, new DashStyle(new[] { 10d, 4d, 2d, 4d }, 0));
+        var labelBrush = new SolidColorBrush(Color.Parse("#B3D8E1"));
+        foreach (var axis in _model.Axes ?? new List<AxisModel>())
+        {
+            if (axis == null || double.IsNaN(axis.Position) || double.IsInfinity(axis.Position)) continue;
+            var named = !string.IsNullOrWhiteSpace(axis.Name);
+            if (axis.Vertical)
+            {
+                if (axis.Position < min.X || axis.Position > max.X) continue;
+                var start = axis.ExtentStart == 0 && axis.ExtentEnd == 0 ? min.Y : axis.ExtentStart;
+                var end = axis.ExtentStart == 0 && axis.ExtentEnd == 0 ? max.Y : axis.ExtentEnd;
+                var a = Screen(axis.Position, Math.Max(start, min.Y));
+                var b = Screen(axis.Position, Math.Min(end, max.Y));
+                if (a.Y < b.Y) continue;
+                context.DrawLine(pen, a, b);
+                if (named) DrawAxisBubble(context, axis.Name, new Point(a.X, Math.Max(18, b.Y + 17)), labelBrush);
+            }
+            else
+            {
+                if (axis.Position < min.Y || axis.Position > max.Y) continue;
+                var start = axis.ExtentStart == 0 && axis.ExtentEnd == 0 ? min.X : axis.ExtentStart;
+                var end = axis.ExtentStart == 0 && axis.ExtentEnd == 0 ? max.X : axis.ExtentEnd;
+                var a = Screen(Math.Max(start, min.X), axis.Position);
+                var b = Screen(Math.Min(end, max.X), axis.Position);
+                if (a.X > b.X) continue;
+                context.DrawLine(pen, a, b);
+                if (named) DrawAxisBubble(context, axis.Name, new Point(Math.Max(18, a.X + 17), a.Y), labelBrush);
+            }
+        }
+    }
+
+    private void DrawOrthogonalJunctions(DrawingContext context)
+    {
+        foreach (var (horizontal, vertical) in _orthogonalJunctions)
+        {
+            var horizontalBody = PreviewWallBody(horizontal);
+            var verticalBody = PreviewWallBody(vertical);
+            var x = (verticalBody.first.X + verticalBody.second.X) / 2;
+            var y = (horizontalBody.first.Y + horizontalBody.second.Y) / 2;
+            var width = Math.Clamp(vertical.Thickness * _scale, 3, 30);
+            var height = Math.Clamp(horizontal.Thickness * _scale, 3, 30);
+            var color = horizontal.Id == _selectedId || vertical.Id == _selectedId ? "#FFC46B" : "#9BC4E9";
+            context.FillRectangle(new SolidColorBrush(Color.Parse(color)),
+                new Rect(x - width / 2, y - height / 2, width, height));
+        }
+    }
+
+    private void IndexOrthogonalJunctions()
+    {
+        _orthogonalJunctions.Clear();
+        var hosts = new HashSet<string>(_model.Openings.Select(o => o.HostWallId),
+            StringComparer.OrdinalIgnoreCase);
+        var walls = _model.Walls.Where(w => w.StoreyId == _storeyId && !hosts.Contains(w.Id)).ToArray();
+        for (var i = 0; i < walls.Length; i++)
+        for (var j = i + 1; j < walls.Length; j++)
+        {
+            var first = walls[i]; var second = walls[j];
+            var firstHorizontal = Math.Abs(first.Y2 - first.Y1) < 0.001;
+            var secondHorizontal = Math.Abs(second.Y2 - second.Y1) < 0.001;
+            var firstVertical = Math.Abs(first.X2 - first.X1) < 0.001;
+            var secondVertical = Math.Abs(second.X2 - second.X1) < 0.001;
+            if (!(firstHorizontal && secondVertical || secondHorizontal && firstVertical)) continue;
+            var firstEndpoints = new[] { (first.X1, first.Y1), (first.X2, first.Y2) };
+            var secondEndpoints = new[] { (second.X1, second.Y1), (second.X2, second.Y2) };
+            if (!firstEndpoints.Any(a => secondEndpoints.Any(b =>
+                Math.Abs(a.Item1 - b.Item1) <= 0.5 && Math.Abs(a.Item2 - b.Item2) <= 0.5))) continue;
+            var horizontal = firstHorizontal ? first : second;
+            var vertical = firstHorizontal ? second : first;
+            _orthogonalJunctions.Add((horizontal, vertical));
+        }
+    }
+
+    private static void DrawAxisBubble(DrawingContext context, string name, Point center, IBrush brush)
+    {
+        var pen = new Pen(brush, 1);
+        context.DrawEllipse(new SolidColorBrush(Color.Parse("#111A25")), pen, center, 14, 14);
+        var text = new FormattedText(name, CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
+            Typeface.Default, 12, brush);
+        context.DrawText(text, new Point(center.X - text.Width / 2, center.Y - text.Height / 2));
     }
 }

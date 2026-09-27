@@ -50,7 +50,10 @@ namespace BatchPdfPublisher.BuildingModel
         public double Height { get; set; }
     }
 
-    /// <summary>墙：轴线两端 + 厚度 + 高度（从所属楼层的标高起算）。</summary>
+    /// <summary>沿墙轴线起点到终点看，轴线落在墙厚的哪一侧。</summary>
+    public enum WallAxisPlacement { Center, LeftFace, RightFace }
+
+    /// <summary>墙：定位轴线两端 + 厚度 + 高度（从所属楼层的标高起算）。</summary>
     public sealed class WallModel
     {
         public string Id { get; set; }
@@ -60,9 +63,31 @@ namespace BatchPdfPublisher.BuildingModel
         public double X2 { get; set; }
         public double Y2 { get; set; }
         public double Thickness { get; set; } = 200d;
+        /// <summary>定位轴线在墙中、左面或右面；旧模型默认为墙中。</summary>
+        public WallAxisPlacement AxisPlacement { get; set; } = WallAxisPlacement.Center;
         /// <summary>墙高；0 表示取所属楼层的层高。</summary>
         public double Height { get; set; }
         public string Material { get; set; }
+    }
+
+    public static class WallReferenceGeometry
+    {
+        /// <summary>墙实体中心相对定位轴线的有向距离；正数为轴线左侧。</summary>
+        public static double BodyOffset(WallModel wall)
+        {
+            var half = (wall.Thickness > 0.5d ? wall.Thickness : 200d) / 2d;
+            return wall.AxisPlacement == WallAxisPlacement.LeftFace ? -half
+                : wall.AxisPlacement == WallAxisPlacement.RightFace ? half : 0d;
+        }
+
+        public static PointModel BodyPoint(WallModel wall, double x, double y)
+        {
+            var dx = wall.X2 - wall.X1; var dy = wall.Y2 - wall.Y1;
+            var length = Math.Sqrt(dx * dx + dy * dy);
+            if (length < 1e-9d) return new PointModel(x, y);
+            var offset = BodyOffset(wall) / length;
+            return new PointModel(x - dy * offset, y + dx * offset);
+        }
     }
 
     /// <summary>洞口（门窗）：挂在某道墙上，沿墙轴线的定位 + 宽高 + 窗台高。</summary>

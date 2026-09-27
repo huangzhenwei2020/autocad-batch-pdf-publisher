@@ -26,6 +26,8 @@ namespace BatchPdfPublisher.BuildingModel
     public sealed class BuildingVolume
     {
         public List<VolumeFace> Faces { get; set; } = new List<VolumeFace>();
+        /// <summary>定位参考线，仅供编辑视口显示；不是实体面，也不参与拾取或 CAD 网格。</summary>
+        public List<VolumeGuideLine> GuideLines { get; set; } = new List<VolumeGuideLine>();
         public double MinX, MinY, MinZ, MaxX, MaxY, MaxZ;
 
         public double Width { get { return MaxX - MinX; } }
@@ -47,10 +49,18 @@ namespace BatchPdfPublisher.BuildingModel
         }
     }
 
+    public sealed class VolumeGuideLine
+    {
+        public Point3DModel Start { get; set; }
+        public Point3DModel End { get; set; }
+        public string ElementId { get; set; }
+        public bool IsBuildingAxis { get; set; }
+    }
+
     /// <summary>
     /// 从建筑模型生成**三维体量**（P4 的第一块，纯几何、不依赖任何图形库）：
     ///
-    /// - 墙 → 沿轴线拉出的长方体（厚 × 长 × 高，高取层高）；
+    /// - 正交、等高且无洞口的相接墙 → 融合后的实体；其他墙逐墙生成；
     /// - 柱 → 长方体（宽 × 深 × 高）；
     /// - 楼板 → 按轮廓拉出的棱柱（顶标高 - 板厚 ~ 顶标高）。
     ///
@@ -66,10 +76,12 @@ namespace BatchPdfPublisher.BuildingModel
             var onlyOne = !string.IsNullOrWhiteSpace(storeyId);
             var first = true;
 
-            foreach (var wall in model.Walls ?? new List<WallModel>())
+            var walls = (model.Walls ?? new List<WallModel>())
+                .Where(wall => wall != null && (!onlyOne || Same(wall.StoreyId, storeyId))).ToList();
+            var merged = OrthogonalWallUnion.AddJoinedWalls(volume, model, walls, ref first);
+            foreach (var wall in walls)
             {
-                if (wall == null) continue;
-                if (onlyOne && !Same(wall.StoreyId, storeyId)) continue;
+                if (merged.Contains(wall.Id)) continue;
                 var z0 = model.BaseElevationOf(wall);
                 var z1 = z0 + model.HeightOf(wall);
                 AddWallWithOpenings(volume, wall, model, z0, z1, ref first);
@@ -100,6 +112,35 @@ namespace BatchPdfPublisher.BuildingModel
                 if (roof == null) continue;
                 if (onlyOne && !Same(roof.StoreyId, storeyId)) continue;
                 AddRoof(volume, model, roof, ref first);
+            }
+            if (!first)
+            {
+                foreach (var wall in walls)
+                {
+                    var z = model.BaseElevationOf(wall) + 2d;
+                    volume.GuideLines.Add(new VolumeGuideLine
+                    {
+                        Start = new Point3DModel(wall.X1, wall.Y1, z),
+                        End = new Point3DModel(wall.X2, wall.Y2, z), ElementId = wall.Id
+                    });
+                }
+                foreach (var axis in model.Axes ?? new List<AxisModel>())
+                {
+                    if (axis == null || !IsFinite(axis.Position)) continue;
+                    var from = axis.ExtentStart == 0 && axis.ExtentEnd == 0
+                        ? (axis.Vertical ? volume.MinY - 500d : volume.MinX - 500d) : axis.ExtentStart;
+                    var to = axis.ExtentStart == 0 && axis.ExtentEnd == 0
+                        ? (axis.Vertical ? volume.MaxY + 500d : volume.MaxX + 500d) : axis.ExtentEnd;
+                    var z = volume.MinZ + 2d;
+                    volume.GuideLines.Add(new VolumeGuideLine
+                    {
+                        Start = axis.Vertical ? new Point3DModel(axis.Position, from, z)
+                            : new Point3DModel(from, axis.Position, z),
+                        End = axis.Vertical ? new Point3DModel(axis.Position, to, z)
+                            : new Point3DModel(to, axis.Position, z),
+                        ElementId = axis.Id, IsBuildingAxis = true
+                    });
+                }
             }
             return volume;
         }
@@ -301,6 +342,8 @@ namespace BatchPdfPublisher.BuildingModel
             var thickness = 40d;
             var hingeX = wall.X1 + ux * start;
             var hingeY = wall.Y1 + uy * start;
+            var hinge = WallReferenceGeometry.BodyPoint(wall, hingeX, hingeY);
+            hingeX = hinge.X; hingeY = hinge.Y;
 
             var corners = new List<Point3DModel>
             {
@@ -338,6 +381,10 @@ namespace BatchPdfPublisher.BuildingModel
             var ay = wall.Y1 + uy * from;
             var bx = wall.X1 + ux * to;
             var by = wall.Y1 + uy * to;
+            var bodyStart = WallReferenceGeometry.BodyPoint(wall, ax, ay);
+            var bodyEnd = WallReferenceGeometry.BodyPoint(wall, bx, by);
+            ax = bodyStart.X; ay = bodyStart.Y;
+            bx = bodyEnd.X; by = bodyEnd.Y;
             var corners = new List<Point3DModel>
             {
                 new Point3DModel(ax + nx, ay + ny, za),

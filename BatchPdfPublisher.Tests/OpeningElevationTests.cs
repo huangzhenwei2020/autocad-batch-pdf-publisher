@@ -364,7 +364,9 @@ internal static class OpeningElevationTests
         var model = SampleModelFactory.CreateTwoStoreyHouse();
         var volume = BuildingVolumeBuilder.Build(model, null);
         Assert(volume.Faces.Count > 66, "挖了洞口以后面数应明显多于实心方块（66），实际 " + volume.Faces.Count);
-        Assert(volume.Faces.Count % 6 == 0, "每个体块都是 6 个面，面数应是 6 的倍数，实际 " + volume.Faces.Count);
+        Assert(volume.Faces.All(f => f.Points.Count >= 3
+            && f.Points.All(p => !double.IsNaN(p.X) && !double.IsNaN(p.Y) && !double.IsNaN(p.Z))),
+            "融合后体量不能出现无效面或坐标");
         Assert(Math.Abs(volume.Width - 7440d) < 1d && Math.Abs(volume.Depth - 5640d) < 1d
             && Math.Abs(volume.Height - 6900d) < 1d,
             "体量包围盒应为 7440×5640×6900，实际 " + volume.Width + "×" + volume.Depth + "×" + volume.Height);

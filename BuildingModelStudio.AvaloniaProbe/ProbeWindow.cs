@@ -726,11 +726,19 @@ internal sealed class ProbeWindow : Window
             var lengthField = AddNumberField("墙长（mm）", length);
             var thicknessField = AddNumberField("墙厚（mm）", wall.Thickness);
             var heightField = AddNumberField("墙高（mm）", wall.Height);
+            _properties.Children.Add(new TextBlock { Text = "定位轴线位置（沿墙起点 → 终点判断左右）" });
+            var axisPlacement = new ComboBox
+            {
+                ItemsSource = new[] { "墙中", "墙左面", "墙右面" },
+                SelectedIndex = (int)wall.AxisPlacement
+            };
+            _properties.Children.Add(axisPlacement);
             var apply = new Button { Content = "应用墙体参数" };
             apply.Click += async (_, _) => await ApplyGeometryAsync(
                 new[] { lengthField, thicknessField, heightField }, values =>
             {
-                var success = _session.TrySetWallGeometry(wall.Id, values[0], values[1], values[2], out var error);
+                var success = _session.TrySetWallGeometry(wall.Id, values[0], values[1], values[2],
+                    (WallAxisPlacement)Math.Max(0, axisPlacement.SelectedIndex), out var error);
                 return (success, error);
             });
             _properties.Children.Add(apply);

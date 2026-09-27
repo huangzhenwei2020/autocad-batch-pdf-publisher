@@ -32,7 +32,8 @@ namespace BatchPdfPublisher.BuildingModel
             {
                 Id = "W-" + Guid.NewGuid().ToString("N"), StoreyId = source.StoreyId,
                 X1 = source.X1, Y1 = source.Y1, X2 = source.X2, Y2 = source.Y2,
-                Thickness = source.Thickness, Height = source.Height, Material = source.Material
+                Thickness = source.Thickness, Height = source.Height, Material = source.Material,
+                AxisPlacement = source.AxisPlacement
             };
             candidate.Walls.Add(wall);
             Commit(candidate);
@@ -185,7 +186,8 @@ namespace BatchPdfPublisher.BuildingModel
                 target = new WallModel
                 {
                     Id = "W-" + Guid.NewGuid().ToString("N"), StoreyId = source.StoreyId,
-                    Thickness = source.Thickness, Height = source.Height, Material = source.Material
+                    Thickness = source.Thickness, Height = source.Height, Material = source.Material,
+                    AxisPlacement = source.AxisPlacement
                 };
                 candidate.Walls.Add(target);
                 foreach (var opening in candidate.Openings.Where(x => x != null && Same(x.HostWallId, id)).ToArray())
@@ -209,7 +211,17 @@ namespace BatchPdfPublisher.BuildingModel
 
         public bool TrySetWallGeometry(string id, double length, double thickness, double height, out string error)
         {
+            var wall = Model.Walls.FirstOrDefault(x => x != null && Same(x.Id, id));
+            if (wall == null) { error = "未找到墙：" + id; return false; }
+            return TrySetWallGeometry(id, length, thickness, height, wall.AxisPlacement, out error);
+        }
+
+        public bool TrySetWallGeometry(string id, double length, double thickness, double height,
+            WallAxisPlacement placement, out string error)
+        {
             error = null;
+            if (!Enum.IsDefined(typeof(WallAxisPlacement), placement))
+            { error = "墙定位轴线只能位于墙中、左面或右面。"; return false; }
             if (!Finite(length) || length < 10d)
             {
                 error = "墙长必须是至少 10 mm 的有限数值。";
@@ -230,8 +242,23 @@ namespace BatchPdfPublisher.BuildingModel
             wall.Y2 = wall.Y1 + dy / previousLength * length;
             wall.Thickness = thickness;
             wall.Height = height;
+            wall.AxisPlacement = placement;
             error = ValidateWallAndOpenings(candidate, wall);
             if (error != null) return false;
+            Commit(candidate);
+            return true;
+        }
+
+        public bool TrySetWallAxisPlacement(string id, WallAxisPlacement placement, out string error)
+        {
+            error = null;
+            if (!Enum.IsDefined(typeof(WallAxisPlacement), placement))
+            { error = "墙定位轴线只能位于墙中、左面或右面。"; return false; }
+            var candidate = Clone(Model);
+            var wall = candidate.Walls.FirstOrDefault(x => x != null && Same(x.Id, id));
+            if (wall == null) { error = "未找到墙：" + id; return false; }
+            if (wall.AxisPlacement == placement) return true;
+            wall.AxisPlacement = placement;
             Commit(candidate);
             return true;
         }

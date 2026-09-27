@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Linq;
 using BatchPdfPublisher.BuildingModel;
 
@@ -32,7 +33,103 @@ internal static class VolumeIdentityTests
         var updated = BuildingVolumeBuilder.Build(model);
         Assert(updated.Faces.Any(x => x.ElementId == originalWallId), "编辑后墙 ID 丢失");
         Assert(updated.Faces.Any(x => x.ElementId == originalOpeningId), "编辑后洞口 ID 丢失");
+        CheckOrthogonalCorner();
+        CheckOrthogonalTJoint();
+        CheckWallReferencePlacement();
+        MeasureJunctionGrid();
         Console.WriteLine("PASS 三维体量构件身份：样例墙/门窗/板/柱可追溯，参数修改后 ID 稳定");
+    }
+
+    private static void CheckOrthogonalCorner()
+    {
+        var model = SampleModelFactory.CreateEmptyModel("墙角收口");
+        model.Walls.Add(new WallModel { Id = "horizontal", StoreyId = "1F",
+            X1 = -1000, Y1 = 0, X2 = 0, Y2 = 0, Thickness = 200 });
+        model.Walls.Add(new WallModel { Id = "vertical", StoreyId = "1F",
+            X1 = 0, Y1 = 0, X2 = 0, Y2 = 1000, Thickness = 200 });
+        var volume = BuildingVolumeBuilder.Build(model);
+        var top = volume.Faces.Where(f => f.Kind == "wall" && f.NormalZ > 0.5).ToArray();
+        foreach (var point in new[] { (x: 50d, y: -50d), (x: 10d, y: 10d),
+            (x: -510d, y: 10d), (x: 10d, y: 510d) })
+        {
+            var count = top.Count(f => point.x >= f.Points.Min(p => p.X) - 1e-6
+                && point.x <= f.Points.Max(p => p.X) + 1e-6
+                && point.y >= f.Points.Min(p => p.Y) - 1e-6
+                && point.y <= f.Points.Max(p => p.Y) + 1e-6);
+            Assert(count == 1, "正交墙角顶面缺失或重叠：" + point + "，面数 " + count);
+        }
+        Assert(!volume.Faces.Any(f => f.Kind == "wall" && Math.Abs(f.NormalZ) < 0.5
+            && f.Points.All(p => Math.Abs(p.X) < 1e-6)
+            && f.Points.Min(p => p.Y) < -49 && f.Points.Max(p => p.Y) > -51),
+            "墙角内部仍存在立面重面");
+        Assert(volume.Faces.Where(f => f.Kind == "wall")
+            .Select(f => f.ElementId).Distinct().Count() == 2, "墙角融合后墙 ID 丢失");
+        Console.WriteLine("PASS 正交墙角：缺角填合、顶面无重叠、内部面消除、两道墙可追溯");
+    }
+
+    private static void CheckWallReferencePlacement()
+    {
+        var model = SampleModelFactory.CreateEmptyModel("墙定位轴线");
+        model.Walls.Add(new WallModel { Id = "axis-wall", StoreyId = "1F",
+            X1 = 0, Y1 = 0, X2 = 1000, Y2 = 0, Thickness = 200,
+            AxisPlacement = WallAxisPlacement.LeftFace });
+        model.Axes.Add(new AxisModel { Id = "building-axis", Name = "1", Vertical = true, Position = 0 });
+        var left = BuildingVolumeBuilder.Build(model);
+        Assert(Math.Abs(left.MinY + 200) < 1e-6 && Math.Abs(left.MaxY) < 1e-6,
+            "左面定位轴线应落在墙实体的左侧边界");
+        Assert(left.GuideLines.Count == 2 && left.GuideLines.Any(g => g.ElementId == "axis-wall"
+            && Math.Abs(g.Start.Y) < 1e-6), "墙轴线与建筑轴网未送到三维地面参考线");
+        var session = new BuildingModelEditSession(model);
+        Assert(session.TrySetWallAxisPlacement("axis-wall", WallAxisPlacement.RightFace, out var error),
+            "墙定位轴线切换失败：" + error);
+        var right = BuildingVolumeBuilder.Build(session.Model);
+        Assert(Math.Abs(right.MinY) < 1e-6 && Math.Abs(right.MaxY - 200) < 1e-6,
+            "右面定位轴线应落在墙实体的右侧边界");
+        Assert(BuildingModelJson.FromJson(BuildingModelJson.ToJson(session.Model)).Walls[0].AxisPlacement
+            == WallAxisPlacement.RightFace, "墙定位轴线位置保存后丢失");
+        Assert(session.Undo() && session.Model.Walls[0].AxisPlacement == WallAxisPlacement.LeftFace,
+            "撤销未恢复墙定位轴线位置");
+        Console.WriteLine("PASS 墙定位轴线：墙中/左面/右面几何、三维参考线、保存与撤销");
+    }
+
+    private static void CheckOrthogonalTJoint()
+    {
+        var model = SampleModelFactory.CreateEmptyModel("T 形墙交接");
+        model.Walls.Add(new WallModel { Id = "host", StoreyId = "1F",
+            X1 = -1000, Y1 = 0, X2 = 1000, Y2 = 0, Thickness = 240 });
+        model.Walls.Add(new WallModel { Id = "branch", StoreyId = "1F",
+            X1 = 0, Y1 = 0, X2 = 0, Y2 = 1000, Thickness = 160 });
+        var volume = BuildingVolumeBuilder.Build(model);
+        var top = volume.Faces.Where(f => f.Kind == "wall" && f.NormalZ > 0.5).ToArray();
+        foreach (var point in new[] { (x: 70d, y: -100d), (x: 70d, y: 100d),
+            (x: 70d, y: 170d), (x: -100d, y: 70d) })
+        {
+            var count = top.Count(f => point.x > f.Points.Min(p => p.X) + 1e-6
+                && point.x < f.Points.Max(p => p.X) - 1e-6
+                && point.y > f.Points.Min(p => p.Y) + 1e-6
+                && point.y < f.Points.Max(p => p.Y) - 1e-6);
+            Assert(count == 1, "T 形交接顶面缺失或重叠：" + point + "，面数 " + count);
+        }
+        Console.WriteLine("PASS 不同墙厚 T 形交接：墙体顶面无缺角或重面");
+    }
+
+    private static void MeasureJunctionGrid()
+    {
+        var model = SampleModelFactory.CreateEmptyModel("交接性能");
+        for (var i = 0; i < 20; i++)
+        {
+            var coordinate = i * 400d;
+            model.Walls.Add(new WallModel { Id = "h" + i, StoreyId = "1F",
+                X1 = 0, Y1 = coordinate, X2 = 7600, Y2 = coordinate, Thickness = 200 });
+            model.Walls.Add(new WallModel { Id = "v" + i, StoreyId = "1F",
+                X1 = coordinate, Y1 = 0, X2 = coordinate, Y2 = 7600, Thickness = 200 });
+        }
+        var watch = Stopwatch.StartNew();
+        var volume = BuildingVolumeBuilder.Build(model);
+        Assert(volume.Faces.Count > 0 && volume.Faces.Count < 20000,
+            "正交墙网生成了异常数量的面：" + volume.Faces.Count);
+        Console.WriteLine("PASS 正交墙网：40 道墙，" + volume.Faces.Count + " 面，建模 "
+            + watch.ElapsedMilliseconds + " ms（当前机器）");
     }
 
     private static void Assert(bool condition, string message)

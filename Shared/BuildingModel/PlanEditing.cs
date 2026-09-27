@@ -401,6 +401,8 @@ namespace BatchPdfPublisher.BuildingModel
             var length = Math.Sqrt((wall.X2 - wall.X1) * (wall.X2 - wall.X1) + (wall.Y2 - wall.Y1) * (wall.Y2 - wall.Y1));
             if (length < 10d) return "墙太短（不足 10mm），已忽略。";
             if (wall.Thickness <= 0d) return "墙厚必须大于 0。";
+            if (!Enum.IsDefined(typeof(WallAxisPlacement), wall.AxisPlacement))
+                return "墙定位轴线只能位于墙中、左面或右面。";
             return null;
         }
 

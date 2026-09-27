@@ -888,8 +888,10 @@ namespace BatchPdfPublisher.BuildingModel
         private static void AddWallFaces(ViewDocument document, WallModel wall, double from, double to, bool jambsOnly = false)
         {
             var half = (wall.Thickness > 0.5d ? wall.Thickness : 200d) / 2d;
-            var start = PlanPoint(wall, from);
-            var end = PlanPoint(wall, to);
+            var axisStart = PlanPoint(wall, from);
+            var axisEnd = PlanPoint(wall, to);
+            var start = WallReferenceGeometry.BodyPoint(wall, axisStart.X, axisStart.Y);
+            var end = WallReferenceGeometry.BodyPoint(wall, axisEnd.X, axisEnd.Y);
             var length = WallLength(wall);
             if (length < 1d) return;
             var nx = -(wall.Y2 - wall.Y1) / length * half;
@@ -918,8 +920,10 @@ namespace BatchPdfPublisher.BuildingModel
             var nx = -uy;
             var ny = ux;
             var isDoor = (opening.Kind ?? string.Empty).IndexOf("门", StringComparison.Ordinal) >= 0;
-            var start = PlanPoint(wall, edges[0]);
-            var end = PlanPoint(wall, edges[1]);
+            var axisStart = PlanPoint(wall, edges[0]);
+            var axisEnd = PlanPoint(wall, edges[1]);
+            var start = WallReferenceGeometry.BodyPoint(wall, axisStart.X, axisStart.Y);
+            var end = WallReferenceGeometry.BodyPoint(wall, axisEnd.X, axisEnd.Y);
 
             if (!isDoor)
             {
@@ -980,10 +984,12 @@ namespace BatchPdfPublisher.BuildingModel
             foreach (var wall in walls)
             {
                 var half = (wall.Thickness > 0.5d ? wall.Thickness : 200d) / 2d;
-                minX = Math.Min(minX, Math.Min(wall.X1, wall.X2) - half);
-                maxX = Math.Max(maxX, Math.Max(wall.X1, wall.X2) + half);
-                minY = Math.Min(minY, Math.Min(wall.Y1, wall.Y2) - half);
-                maxY = Math.Max(maxY, Math.Max(wall.Y1, wall.Y2) + half);
+                var a = WallReferenceGeometry.BodyPoint(wall, wall.X1, wall.Y1);
+                var b = WallReferenceGeometry.BodyPoint(wall, wall.X2, wall.Y2);
+                minX = Math.Min(minX, Math.Min(a.X, b.X) - half);
+                maxX = Math.Max(maxX, Math.Max(a.X, b.X) + half);
+                minY = Math.Min(minY, Math.Min(a.Y, b.Y) - half);
+                maxY = Math.Max(maxY, Math.Max(a.Y, b.Y) + half);
             }
             return new[] { minX, maxX, minY, maxY };
         }
@@ -1167,15 +1173,17 @@ namespace BatchPdfPublisher.BuildingModel
             var half = (wall.Thickness > 0.5d ? wall.Thickness : 200d) / 2d;
             var nx = -uy * half;
             var ny = ux * half;
+            var bodyStart = WallReferenceGeometry.BodyPoint(wall, wall.X1, wall.Y1);
+            var bodyEnd = WallReferenceGeometry.BodyPoint(wall, wall.X2, wall.Y2);
             var zBase = model.BaseElevationOf(wall);
             var zTop = zBase + model.HeightOf(wall);
 
             var corners = new List<PointModel>
             {
-                new PointModel(wall.X1 + nx, wall.Y1 + ny),
-                new PointModel(wall.X2 + nx, wall.Y2 + ny),
-                new PointModel(wall.X2 - nx, wall.Y2 - ny),
-                new PointModel(wall.X1 - nx, wall.Y1 - ny)
+                new PointModel(bodyStart.X + nx, bodyStart.Y + ny),
+                new PointModel(bodyEnd.X + nx, bodyEnd.Y + ny),
+                new PointModel(bodyEnd.X - nx, bodyEnd.Y - ny),
+                new PointModel(bodyStart.X - nx, bodyStart.Y - ny)
             };
 
             // 斜墙：正交投影的轮廓不再是矩形，P0 用包围盒近似并提示
