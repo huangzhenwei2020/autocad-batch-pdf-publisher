@@ -114,7 +114,7 @@ namespace BatchPdfPublisher.BuildingModel
             return true;
         }
 
-        /// <summary>Moves one wall grip and all wall endpoints joined to its previous position.</summary>
+        /// <summary>Moves one wall grip through coincident endpoints and T-junction dependencies.</summary>
         public bool TryMoveWallGrip(string id, int endpointIndex, double x, double y, out string error)
         {
             error = null;
@@ -122,69 +122,82 @@ namespace BatchPdfPublisher.BuildingModel
             { error = "墙端点序号只能是 0 或 1。"; return false; }
             if (!Finite(x) || !Finite(y))
             { error = "墙端点必须是有限坐标。"; return false; }
+            var source = Model.Walls.FirstOrDefault(w => w != null && Same(w.Id, id));
+            if (source == null) { error = "未找到墙：" + id; return false; }
+            if (x == (endpointIndex == 0 ? source.X1 : source.X2)
+                && y == (endpointIndex == 0 ? source.Y1 : source.Y2)) return true;
             var candidate = Clone(Model);
-            var wall = candidate.Walls.FirstOrDefault(w => w != null && Same(w.Id, id));
-            if (wall == null) { error = "未找到墙：" + id; return false; }
-            var oldX = endpointIndex == 0 ? wall.X1 : wall.X2;
-            var oldY = endpointIndex == 0 ? wall.Y1 : wall.Y2;
+            var wall = candidate.Walls.First(w => w != null && Same(w.Id, id));
             const double joinTolerance = 0.5d;
-            var changed = candidate.Walls.Where(w => w != null && Same(w.StoreyId, wall.StoreyId)
-                && (Same(w.Id, id)
-                    || EndpointNear(w.X1, w.Y1, oldX, oldY, joinTolerance)
-                    || EndpointNear(w.X2, w.Y2, oldX, oldY, joinTolerance))).ToList();
-            foreach (var current in changed)
+            var originals = Model.Walls.Where(w => w != null && Same(w.StoreyId, wall.StoreyId)).ToArray();
+            var ids = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (originals.Any(w => string.IsNullOrWhiteSpace(w.Id) || !ids.Add(w.Id)))
+            { error = "当前楼层存在空白或重复的墙 ID，不能联动编辑。"; return false; }
+            var originalById = originals.ToDictionary(w => w.Id, StringComparer.OrdinalIgnoreCase);
+            var candidateById = candidate.Walls.Where(w => w != null && Same(w.StoreyId, wall.StoreyId))
+                .ToDictionary(w => w.Id, StringComparer.OrdinalIgnoreCase);
+            var pending = new System.Collections.Generic.Queue<(WallModel wall, int index, PointModel position)>();
+            var assigned = new System.Collections.Generic.Dictionary<string, PointModel>(StringComparer.OrdinalIgnoreCase);
+            var changed = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var dirtyHosts = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            pending.Enqueue((originalById[id], endpointIndex,
+                new PointModel(x, y)));
+            while (pending.Count > 0 || dirtyHosts.Count > 0)
             {
-                if (Same(current.Id, id))
+                while (pending.Count > 0)
                 {
-                    if (endpointIndex == 0) { current.X1 = x; current.Y1 = y; }
-                    else { current.X2 = x; current.Y2 = y; }
-                    continue;
-                }
-                if (EndpointNear(current.X1, current.Y1, oldX, oldY, joinTolerance))
-                { current.X1 = x; current.Y1 = y; }
-                if (EndpointNear(current.X2, current.Y2, oldX, oldY, joinTolerance))
-                { current.X2 = x; current.Y2 = y; }
-            }
-            // An endpoint on a moving wall's interior keeps its fractional position on that wall.
-            // Collect first so a branch attached to two moving walls cannot be silently pulled apart.
-            var assignments = new System.Collections.Generic.Dictionary<string, PointModel>(StringComparer.OrdinalIgnoreCase);
-            foreach (var host in changed.ToArray())
-            {
-                var previous = Model.Walls.First(w => w != null && Same(w.Id, host.Id));
-                foreach (var other in Model.Walls.Where(w => w != null && Same(w.StoreyId, host.StoreyId)
-                    && !Same(w.Id, host.Id)))
-                {
-                    for (var index = 0; index < 2; index++)
+                    var move = pending.Dequeue();
+                    var key = move.wall.Id + "|" + move.index;
+                    if (assigned.TryGetValue(key, out var previousTarget))
                     {
-                        var ox = index == 0 ? other.X1 : other.X2;
-                        var oy = index == 0 ? other.Y1 : other.Y2;
-                        if (!PlanEditing.TryProjectWallInterior(previous, ox, oy,
-                            joinTolerance, out var fraction)) continue;
-                        var branch = candidate.Walls.First(w => w != null && Same(w.Id, other.Id));
-                        var currentX = index == 0 ? branch.X1 : branch.X2;
-                        var currentY = index == 0 ? branch.Y1 : branch.Y2;
-                        if (!EndpointNear(currentX, currentY, ox, oy, joinTolerance)) continue;
-                        var destination = new PointModel(host.X1 + (host.X2 - host.X1) * fraction,
-                            host.Y1 + (host.Y2 - host.Y1) * fraction);
-                        var key = other.Id + "|" + index;
-                        if (assignments.TryGetValue(key, out var existing)
-                            && !EndpointNear(existing.X, existing.Y, destination.X, destination.Y, joinTolerance))
-                        { error = "T 形交接点同时依附多道移动墙，无法确定新位置。"; return false; }
-                        assignments[key] = destination;
+                        if (!EndpointNear(previousTarget.X, previousTarget.Y,
+                            move.position.X, move.position.Y, joinTolerance))
+                        { error = "墙交接约束冲突，无法确定端点新位置。"; return false; }
+                        continue;
+                    }
+                    if (!Finite(move.position.X) || !Finite(move.position.Y))
+                    { error = "联动后的墙端点超出有效坐标范围。"; return false; }
+                    assigned.Add(key, move.position);
+                    var target = candidateById[move.wall.Id];
+                    if (move.index == 0) { target.X1 = move.position.X; target.Y1 = move.position.Y; }
+                    else { target.X2 = move.position.X; target.Y2 = move.position.Y; }
+                    changed.Add(target.Id);
+                    dirtyHosts.Add(target.Id);
+                    var oldX = move.index == 0 ? move.wall.X1 : move.wall.X2;
+                    var oldY = move.index == 0 ? move.wall.Y1 : move.wall.Y2;
+                    foreach (var other in originals)
+                    {
+                        if (!Same(other.Id, move.wall.Id)
+                            && EndpointNear(other.X1, other.Y1, oldX, oldY, joinTolerance))
+                            pending.Enqueue((other, 0, move.position));
+                        if (!Same(other.Id, move.wall.Id)
+                            && EndpointNear(other.X2, other.Y2, oldX, oldY, joinTolerance))
+                            pending.Enqueue((other, 1, move.position));
+                    }
+                }
+                var hosts = dirtyHosts.ToArray();
+                dirtyHosts.Clear();
+                foreach (var hostId in hosts)
+                {
+                    var previous = originalById[hostId];
+                    var host = candidateById[hostId];
+                    foreach (var other in originals)
+                    {
+                        if (Same(other.Id, hostId)) continue;
+                        for (var index = 0; index < 2; index++)
+                        {
+                            var ox = index == 0 ? other.X1 : other.X2;
+                            var oy = index == 0 ? other.Y1 : other.Y2;
+                            if (!PlanEditing.TryProjectWallInterior(previous, ox, oy,
+                                joinTolerance, out var fraction)) continue;
+                            pending.Enqueue((other, index, new PointModel(
+                                host.X1 + (host.X2 - host.X1) * fraction,
+                                host.Y1 + (host.Y2 - host.Y1) * fraction)));
+                        }
                     }
                 }
             }
-            foreach (var assignment in assignments)
-            {
-                var separator = assignment.Key.LastIndexOf('|');
-                var branchId = assignment.Key.Substring(0, separator);
-                var index = assignment.Key[separator + 1] - '0';
-                var branch = candidate.Walls.First(w => w != null && Same(w.Id, branchId));
-                if (index == 0) { branch.X1 = assignment.Value.X; branch.Y1 = assignment.Value.Y; }
-                else { branch.X2 = assignment.Value.X; branch.Y2 = assignment.Value.Y; }
-                if (!changed.Any(w => Same(w.Id, branch.Id))) changed.Add(branch);
-            }
-            foreach (var current in changed)
+            foreach (var current in changed.Select(wallId => candidateById[wallId]))
             {
                 error = ValidateWallAndOpenings(candidate, current);
                 if (error != null) return false;

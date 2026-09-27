@@ -13,6 +13,8 @@ internal static class BuildingModelEditSessionTests
         EditWallEndpoints();
         MoveJoinedWallGrip();
         MoveTWallJunction();
+        MoveMultiLevelWallJunction();
+        RejectConflictingWallJunction();
         TransformWallWithOpenings();
         var session = new BuildingModelEditSession(SampleModelFactory.CreateTwoStoreyHouse());
         var wallId = "1F-S";
@@ -390,6 +392,87 @@ internal static class BuildingModelEditSessionTests
         Assert(session.Redo() && Math.Abs(session.Model.Walls.First(w => w.Id == branchId).Y1 - 500) < 0.001,
             "重做未恢复 T 形交接");
         Console.WriteLine("PASS T 形墙交接：支墙端点沿宿主墙身跟随，门窗越界整笔回滚，跨楼层隔离与撤销重做");
+    }
+
+    private static void MoveMultiLevelWallJunction()
+    {
+        var session = new BuildingModelEditSession(SampleModelFactory.CreateEmptyModel("多级交接测试"));
+        string error;
+        Assert(session.TryAddWall(new WallModel
+        {
+            StoreyId = "1F", X1 = 0, Y1 = 0, X2 = 6000, Y2 = 0, Thickness = 240
+        }, out var rootId, out error), "根墙创建失败：" + error);
+        Assert(session.TryAddWall(new WallModel
+        {
+            StoreyId = "1F", X1 = 3000, Y1 = 0, X2 = 3000, Y2 = 4000, Thickness = 240
+        }, out var branchId, out error), "一级支墙创建失败：" + error);
+        Assert(session.TryAddWall(new WallModel
+        {
+            StoreyId = "1F", X1 = 3000, Y1 = 2000, X2 = 5000, Y2 = 2000, Thickness = 240
+        }, out var childId, out error), "二级支墙创建失败：" + error);
+        Assert(session.TryAddWall(new WallModel
+        {
+            StoreyId = "1F", X1 = 4000, Y1 = 2000, X2 = 4000, Y2 = 3500, Thickness = 240
+        }, out var leafId, out error), "三级支墙创建失败：" + error);
+        var revision = session.Revision;
+        Assert(session.TryMoveWallGrip(rootId, 1, 6000, 1000, out error),
+            "多级交接移动失败：" + error);
+        var branch = session.Model.Walls.First(w => w.Id == branchId);
+        var child = session.Model.Walls.First(w => w.Id == childId);
+        var leaf = session.Model.Walls.First(w => w.Id == leafId);
+        Assert(session.Revision == revision + 1
+            && Math.Abs(branch.Y1 - 500) < 0.001
+            && Math.Abs(child.Y1 - 2250) < 0.001
+            && Math.Abs(leaf.Y1 - 2125) < 0.001,
+            "多级 T 形交接没有逐级传递到三级支墙");
+        Assert(session.Undo() && session.Model.Walls.First(w => w.Id == leafId).Y1 == 2000
+            && session.Model.Walls.First(w => w.Id == rootId).Y2 == 0,
+            "撤销未原子恢复多级交接");
+        Assert(session.Redo() && Math.Abs(session.Model.Walls.First(w => w.Id == leafId).Y1 - 2125) < 0.001,
+            "重做未恢复多级交接");
+        var settledRevision = session.Revision;
+        Assert(session.TryMoveWallGrip(rootId, 1, 6000, 1000, out error)
+            && session.Revision == settledRevision, "未移动的夹点仍产生了修订");
+        Console.WriteLine("PASS 多级墙交接：三级 T 形依附逐级更新，单次撤销/重做恢复整条链");
+    }
+
+    private static void RejectConflictingWallJunction()
+    {
+        var session = new BuildingModelEditSession(SampleModelFactory.CreateEmptyModel("交接冲突测试"));
+        string error;
+        Assert(session.TryAddWall(new WallModel
+        {
+            StoreyId = "1F", X1 = 0, Y1 = 0, X2 = 6000, Y2 = 0, Thickness = 240
+        }, out var rootId, out error), "冲突测试根墙创建失败：" + error);
+        Assert(session.TryAddWall(new WallModel
+        {
+            StoreyId = "1F", X1 = 3000, Y1 = 0, X2 = 3000, Y2 = 4000, Thickness = 240
+        }, out _, out error), "冲突测试竖墙创建失败：" + error);
+        Assert(session.TryAddWall(new WallModel
+        {
+            StoreyId = "1F", X1 = 2000, Y1 = 0, X2 = 4000, Y2 = 4000, Thickness = 240
+        }, out _, out error), "冲突测试斜墙创建失败：" + error);
+        Assert(session.TryAddWall(new WallModel
+        {
+            StoreyId = "1F", X1 = 3000, Y1 = 2000, X2 = 3500, Y2 = 3000, Thickness = 240
+        }, out var sharedId, out error), "共用交接支墙创建失败：" + error);
+        var revision = session.Revision;
+        Assert(!session.TryMoveWallGrip(rootId, 1, 6000, 1000, out error)
+            && error.Contains("冲突") && session.Revision == revision,
+            "双宿主墙给出不同交接位置时未拒绝整笔编辑");
+        Assert(session.Model.Walls.First(w => w.Id == sharedId).Y1 == 2000
+            && session.Model.Walls.First(w => w.Id == rootId).Y2 == 0,
+            "冲突失败后模型发生部分修改");
+        var malformed = SampleModelFactory.CreateEmptyModel("重复 ID 交接测试");
+        malformed.Walls.Add(new WallModel { Id = "duplicate", StoreyId = "1F",
+            X1 = 0, Y1 = 0, X2 = 1000, Y2 = 0, Thickness = 240 });
+        malformed.Walls.Add(new WallModel { Id = "duplicate", StoreyId = "1F",
+            X1 = 1000, Y1 = 0, X2 = 1000, Y2 = 1000, Thickness = 240 });
+        var malformedSession = new BuildingModelEditSession(malformed);
+        Assert(!malformedSession.TryMoveWallGrip("duplicate", 1, 1200, 200, out error)
+            && error.Contains("重复") && malformedSession.Revision == 0,
+            "重复墙 ID 的导入模型未被安全拒绝");
+        Console.WriteLine("PASS 多宿主冲突：交接目标不一致时拒绝并保留原模型");
     }
 
     private static double Length(BuildingModelDocument model, string id)
