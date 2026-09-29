@@ -142,7 +142,7 @@ internal sealed class PlanEditorCanvas : Control
     public void SetModel(BuildingModelDocument model, string storeyId)
     {
         _model = model;
-        _storeyId = storeyId;
+        _storeyId = model.FindStorey(storeyId)?.TemplateStoreyId ?? storeyId;
         _gripPreview = null;
         _moving = false;
         _copying = false;
@@ -155,7 +155,7 @@ internal sealed class PlanEditorCanvas : Control
 
     public void SetStorey(string id)
     {
-        _storeyId = id;
+        _storeyId = _model.FindStorey(id)?.TemplateStoreyId ?? id;
         CancelDraft();
         IndexOrthogonalJunctions();
         Fit();

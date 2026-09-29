@@ -44,6 +44,8 @@ namespace BatchPdfPublisher.BuildingModel
     {
         public string Id { get; set; }
         public string Name { get; set; }
+        /// <summary>Standard-floor source. Null means this floor owns its own plan elements.</summary>
+        public string TemplateStoreyId { get; set; }
         /// <summary>结构标高（mm）。</summary>
         public double Elevation { get; set; }
         /// <summary>层高（mm）。</summary>

@@ -16,6 +16,8 @@ internal static class Program
     public static int GpuBenchCount { get; private set; }
     public static string? SnapshotPath { get; private set; }
     public static bool SnapshotPlan { get; private set; }
+    public static bool SnapshotCompact { get; private set; }
+    public static bool SnapshotProperties { get; private set; }
     public static bool SnapshotAxes { get; private set; }
     public static bool SnapshotStoreys { get; private set; }
     public static bool SnapshotGizmo { get; private set; }
@@ -57,6 +59,20 @@ internal static class Program
         {
             SnapshotPath = Path.GetFullPath(args[index + 1]);
             SnapshotPlan = true;
+        }
+        index = Array.IndexOf(args, "--snapshot-compact");
+        if (index >= 0 && index + 1 < args.Length)
+        {
+            SnapshotPath = Path.GetFullPath(args[index + 1]);
+            SnapshotPlan = true;
+            SnapshotCompact = true;
+        }
+        index = Array.IndexOf(args, "--snapshot-properties");
+        if (index >= 0 && index + 1 < args.Length)
+        {
+            SnapshotPath = Path.GetFullPath(args[index + 1]);
+            SnapshotPlan = true;
+            SnapshotProperties = true;
         }
         index = Array.IndexOf(args, "--snapshot-axes");
         if (index >= 0 && index + 1 < args.Length)

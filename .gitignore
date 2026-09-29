@@ -11,7 +11,8 @@ obj-*/
 __pycache__/
 .tmp/
 **/.tmp/
-design-qa/
+design-qa/*
+!design-qa/building-model-ribbon-approved.png
 design-qa.md
 plot.log
 *.pyc

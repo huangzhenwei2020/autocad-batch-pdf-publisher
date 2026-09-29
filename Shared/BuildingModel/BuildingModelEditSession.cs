@@ -57,19 +57,68 @@ namespace BatchPdfPublisher.BuildingModel
             { error = "楼层 ID 重复。"; return false; }
             var ids = new System.Collections.Generic.HashSet<string>(replacement.Select(s => s.Id),
                 StringComparer.OrdinalIgnoreCase);
+            foreach (var storey in replacement.Where(s => !string.IsNullOrWhiteSpace(s.TemplateStoreyId)))
+            {
+                var source = replacement.FirstOrDefault(s => Same(s.Id, storey.TemplateStoreyId));
+                if (source == null || Same(source.Id, storey.Id)
+                    || !string.IsNullOrWhiteSpace(source.TemplateStoreyId))
+                { error = "标准层来源必须是另一独立楼层，不能形成引用链。"; return false; }
+                if (Model.Walls.Any(w => Same(w.StoreyId, storey.Id))
+                    || Model.Columns.Any(c => Same(c.StoreyId, storey.Id))
+                    || Model.Slabs.Any(s => Same(s.StoreyId, storey.Id))
+                    || Model.Stairs.Any(s => Same(s.StoreyId, storey.Id))
+                    || Model.Roofs.Any(r => Same(r.StoreyId, storey.Id))
+                    || Model.Rooms.Any(r => Same(r.StoreyId, storey.Id)))
+                { error = "该楼层已有独立构件，请先移走再设为标准层引用。"; return false; }
+            }
             if (Model.Walls.Any(w => !ids.Contains(w.StoreyId))
                 || Model.Columns.Any(c => !ids.Contains(c.StoreyId))
-                || Model.Slabs.Any(s => !ids.Contains(s.StoreyId)))
+                || Model.Slabs.Any(s => !ids.Contains(s.StoreyId))
+                || Model.Stairs.Any(s => !ids.Contains(s.StoreyId))
+                || Model.Roofs.Any(r => !ids.Contains(r.StoreyId))
+                || Model.Rooms.Any(r => !ids.Contains(r.StoreyId)))
             { error = "已有构件所在的楼层不能删除。"; return false; }
             var candidate = Clone(Model);
             candidate.Storeys = replacement.Select(s => new StoreyModel
-            { Id = s.Id.Trim(), Name = s.Name.Trim(), Elevation = s.Elevation, Height = s.Height }).ToList();
+            { Id = s.Id.Trim(), Name = s.Name.Trim(), TemplateStoreyId = s.TemplateStoreyId?.Trim(),
+                Elevation = s.Elevation, Height = s.Height }).ToList();
+            foreach (var slab in candidate.Slabs)
+            {
+                var before = Model.FindStorey(slab.StoreyId);
+                var after = candidate.FindStorey(slab.StoreyId);
+                if (before == null || after == null) continue;
+                var followsTop = Math.Abs(slab.TopElevation - (before.Elevation + before.Height)) < 1d;
+                slab.TopElevation += followsTop
+                    ? after.Elevation + after.Height - before.Elevation - before.Height
+                    : after.Elevation - before.Elevation;
+            }
+            foreach (var roof in candidate.Roofs)
+            {
+                if (roof.EaveElevation <= 0.5d) continue;
+                var before = Model.FindStorey(roof.StoreyId);
+                var after = candidate.FindStorey(roof.StoreyId);
+                if (before == null || after == null) continue;
+                var followsTop = Math.Abs(roof.EaveElevation - (before.Elevation + before.Height)) < 1d;
+                roof.EaveElevation += followsTop
+                    ? after.Elevation + after.Height - before.Elevation - before.Height
+                    : after.Elevation - before.Elevation;
+            }
             foreach (var wall in candidate.Walls)
             {
                 var height = wall.Height > 0d ? wall.Height : candidate.FindStorey(wall.StoreyId)?.Height ?? 0d;
                 if (candidate.Openings.Where(o => Same(o.HostWallId, wall.Id))
                     .Any(o => o.Sill + o.Height > height + 0.5d))
                 { error = "楼层层高修改后有门窗超出墙高：" + wall.Id; return false; }
+            }
+            foreach (var target in candidate.Storeys.Where(s => !string.IsNullOrWhiteSpace(s.TemplateStoreyId)))
+            {
+                foreach (var wall in candidate.Walls.Where(w => Same(w.StoreyId, target.TemplateStoreyId)))
+                {
+                    var height = wall.Height > 0d ? wall.Height : target.Height;
+                    if (candidate.Openings.Where(o => Same(o.HostWallId, wall.Id))
+                        .Any(o => o.Sill + o.Height > height + 0.5d))
+                    { error = "标准层层高不足，门窗超出墙高：" + target.Id; return false; }
+                }
             }
             Commit(candidate);
             return true;
@@ -80,7 +129,8 @@ namespace BatchPdfPublisher.BuildingModel
             id = null;
             error = null;
             if (source == null) { error = "墙为空。"; return false; }
-            if (Model.FindStorey(source.StoreyId) == null) { error = "墙所属楼层不存在。"; return false; }
+            var storey = Model.FindStorey(source.StoreyId);
+            if (storey == null) { error = "墙所属楼层不存在。"; return false; }
             if (!Finite(source.X1) || !Finite(source.Y1) || !Finite(source.X2) || !Finite(source.Y2)
                 || !Finite(source.Thickness) || !Finite(source.Height) || source.Height < 0d)
             { error = "墙的坐标、厚度和高度必须是有限且有效的数值。"; return false; }
@@ -89,7 +139,9 @@ namespace BatchPdfPublisher.BuildingModel
             var candidate = Clone(Model);
             var wall = new WallModel
             {
-                Id = "W-" + Guid.NewGuid().ToString("N"), StoreyId = source.StoreyId,
+                Id = "W-" + Guid.NewGuid().ToString("N"),
+                StoreyId = string.IsNullOrWhiteSpace(storey.TemplateStoreyId)
+                    ? source.StoreyId : storey.TemplateStoreyId,
                 X1 = source.X1, Y1 = source.Y1, X2 = source.X2, Y2 = source.Y2,
                 Thickness = source.Thickness, Height = source.Height, Material = source.Material,
                 AxisPlacement = source.AxisPlacement, AxisOffset = source.AxisOffset

@@ -77,6 +77,7 @@ namespace BatchPdfPublisher.BuildingModel
         {
             var volume = new BuildingVolume();
             if (model == null) return volume;
+            model = StandardStoreyLayout.Materialize(model);
             var onlyOne = !string.IsNullOrWhiteSpace(storeyId);
             var first = true;
 

@@ -40,6 +40,7 @@ internal static class VolumeIdentityTests
         CheckUnequalHeightJunction();
         CheckOpeningWallJunction();
         CheckStoreySettings();
+        CheckStandardStoreys();
         CheckWallReferencePlacement();
         MeasureJunctionGrid();
         CheckSharedAxesAndCadJunction();
@@ -215,16 +216,111 @@ internal static class VolumeIdentityTests
     private static void CheckStoreySettings()
     {
         var model = SampleModelFactory.CreateEmptyModel("楼层设置");
+        model.Slabs.Add(new SlabModel { Id = "floor-slab", StoreyId = "2F",
+            TopElevation = model.FindStorey("2F").Elevation });
+        model.Slabs.Add(new SlabModel { Id = "roof-slab", StoreyId = "2F",
+            TopElevation = model.FindStorey("2F").Elevation + model.FindStorey("2F").Height });
         var session = new BuildingModelEditSession(model);
+        var oldSecondBase = model.FindStorey("2F").Elevation;
+        var oldSecondTop = oldSecondBase + model.FindStorey("2F").Height;
         var floors = model.Storeys.Select(s => new StoreyModel { Id = s.Id,
             Name = s.Name, Elevation = s.Elevation, Height = 3600 }).ToList();
+        floors[1].Elevation = floors[0].Elevation + floors[0].Height;
         floors.Add(new StoreyModel { Id = "3F", Name = "三层", Elevation = 7200, Height = 3300 });
         Assert(session.TryReplaceStoreys(floors, out var error) && error == null
             && session.Model.Storeys.Count == 3 && session.Model.Storeys[0].Height == 3600,
             "楼层窗口设置未应用");
+        Assert(Math.Abs(session.Model.Slabs.Single(s => s.Id == "floor-slab").TopElevation
+                - floors[1].Elevation) < 0.001d
+            && Math.Abs(session.Model.Slabs.Single(s => s.Id == "roof-slab").TopElevation
+                - (floors[1].Elevation + floors[1].Height)) < 0.001d,
+            "楼层标高或层高修改后，所属楼板没有同步移动");
         Assert(session.Undo() && session.Model.Storeys.Count == 2,
             "楼层设置未作为一笔操作撤销");
+        Assert(session.Model.Slabs.Single(s => s.Id == "floor-slab").TopElevation == oldSecondBase
+            && session.Model.Slabs.Single(s => s.Id == "roof-slab").TopElevation == oldSecondTop,
+            "撤销楼层设置未恢复楼板标高");
+        var emptyFloor = model.Storeys.Select(s => new StoreyModel { Id = s.Id,
+            Name = s.Name, Elevation = s.Elevation, Height = s.Height }).ToList();
+        emptyFloor.Add(new StoreyModel { Id = "3F", Name = "三层", Elevation = 6900, Height = 3300 });
+        Assert(session.TryReplaceStoreys(emptyFloor, out error), error);
+        Assert(session.TryReplaceStoreys(emptyFloor.Where(s => s.Id != "3F"), out error),
+            "空楼层应可删除：" + error);
+        Assert(!session.TryReplaceStoreys(emptyFloor.Where(s => s.Id != "2F"), out error),
+            "已有楼板的楼层不应被直接删除");
         Console.WriteLine("PASS 楼层设置：层高、新增楼层与撤销");
+    }
+
+    private static void CheckStandardStoreys()
+    {
+        var model = SampleModelFactory.CreateEmptyModel("标准层三维验证");
+        model.Walls.Add(new WallModel { Id = "source-wall", StoreyId = "1F",
+            X1 = 0, Y1 = 0, X2 = 4000, Y2 = 0, Thickness = 200 });
+        model.Openings.Add(new OpeningModel { Id = "source-window", HostWallId = "source-wall",
+            Kind = "窗", Offset = 1800, Width = 1000, Height = 1200, Sill = 900 });
+        model.Slabs.Add(new SlabModel { Id = "source-slab", StoreyId = "1F",
+            Thickness = 120, TopElevation = model.FindStorey("1F").Height,
+            Outline = new System.Collections.Generic.List<PointModel>
+            { new PointModel(0, 0), new PointModel(4000, 0),
+              new PointModel(4000, 3000), new PointModel(0, 3000) } });
+        var session = new BuildingModelEditSession(model);
+        var floors = model.Storeys.Select(s => new StoreyModel { Id = s.Id, Name = s.Name,
+            Elevation = s.Elevation, Height = s.Height }).ToList();
+        floors.Add(new StoreyModel { Id = "3F", Name = "三层", Elevation = 6900,
+            Height = 3300, TemplateStoreyId = "1F" });
+        floors.Add(new StoreyModel { Id = "4F", Name = "四层", Elevation = 10200,
+            Height = 3000, TemplateStoreyId = "1F" });
+        Assert(session.TryReplaceStoreys(floors, out var error), error);
+        Assert(session.Model.Walls.Count == 1 && session.Model.Slabs.Count == 1,
+            "标准层不应在模型文件中重复存储平面构件");
+        var reloaded = BuildingModelJson.FromJson(BuildingModelJson.ToJson(session.Model));
+        Assert(reloaded.FindStorey("3F").TemplateStoreyId == "1F",
+            "标准层引用保存后丢失");
+        var physical = StandardStoreyLayout.Materialize(reloaded);
+        Assert(physical.Walls.Count == 3 && physical.Openings.Count == 3 && physical.Slabs.Count == 3,
+            "标准层没有为每个实际楼层生成墙、门窗和楼板");
+        Assert(physical.Walls.Any(w => w.StoreyId == "3F")
+            && physical.Openings.Any(o => o.HostWallId == "source-wall@STD@3F")
+            && Math.Abs(physical.Slabs.Single(s => s.StoreyId == "3F").TopElevation - 10200d) < 0.001d,
+            "标准层构件没有落在目标楼层的标高");
+        Assert(Math.Abs(physical.Slabs.Single(s => s.StoreyId == "4F").TopElevation - 13200d) < 0.001d,
+            "第二个引用层没有落在自己的标高");
+        var volume = BuildingVolumeBuilder.Build(reloaded);
+        Assert(volume.Faces.Any(f => f.StoreyId == "1F" && f.Kind == "wall")
+            && volume.Faces.Any(f => f.StoreyId == "3F" && f.Kind == "wall")
+            && volume.Faces.Any(f => f.StoreyId == "3F" && f.Kind == "slab")
+            && volume.Faces.Any(f => f.StoreyId == "4F" && f.Kind == "wall")
+            && volume.Faces.Any(f => f.StoreyId == "4F" && f.Kind == "slab")
+            && volume.Faces.Where(f => f.StoreyId == "3F" && f.Kind == "wall")
+                .SelectMany(f => f.Points).Min(p => p.Z) >= 6900d,
+            "三维场景必须显示多层实体，不能只显示一层标准层");
+        Assert(BuildingVolumeBuilder.Build(reloaded, "3F").Faces.All(f => f.StoreyId == "3F"),
+            "按层显示混入其他楼层");
+        var plan = OrthographicProjector.ProjectPlan(reloaded,
+            new ViewDefinitionModel { Id = "standard-plan", Kind = ViewKind.Plan,
+                StoreyIds = new System.Collections.Generic.List<string> { "3F" }, Scale = 100 }, null);
+        Assert(plan.Lines.Count > 0, "标准层平面图缺少共用构件");
+        Assert(session.TrySetWallLength("source-wall", 5000, out error), error);
+        Assert(StandardStoreyLayout.Materialize(session.Model).Walls
+            .Single(w => w.StoreyId == "3F").X2 == 5000,
+            "修改来源层后，引用层没有同步更新");
+        Assert(StandardStoreyLayout.Materialize(session.Model).Walls
+            .Single(w => w.StoreyId == "4F").X2 == 5000,
+            "第二个引用层没有同步来源层修改");
+        var tooShort = floors.Select(s => new StoreyModel { Id = s.Id, Name = s.Name,
+            Elevation = s.Elevation, Height = s.Id == "3F" ? 1900 : s.Height,
+            TemplateStoreyId = s.TemplateStoreyId }).ToList();
+        Assert(!session.TryReplaceStoreys(tooShort, out error),
+            "目标楼层层高不足时应拒绝超高门窗");
+        var targetWithOwnWall = BuildingModelJson.FromJson(BuildingModelJson.ToJson(session.Model));
+        targetWithOwnWall.Walls.Add(new WallModel { Id = "other", StoreyId = "3F",
+            X1 = 0, Y1 = 1000, X2 = 4000, Y2 = 1000, Thickness = 200 });
+        var guarded = new BuildingModelEditSession(targetWithOwnWall);
+        Assert(!guarded.TryReplaceStoreys(floors, out error),
+            "已有独立构件的楼层不能直接改为标准层引用");
+        Assert(!session.TryReplaceStoreys(floors.Where(s => s.Id != "1F"), out error),
+            "正在被引用的标准层来源不能删除");
+        Console.WriteLine("PASS 标准层：共用平面构件，多层三维实体与标高、保存及删除保护");
     }
 
     private static void MeasureJunctionGrid()

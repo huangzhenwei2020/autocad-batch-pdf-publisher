@@ -65,6 +65,7 @@ namespace BatchPdfPublisher.BuildingModel
         {
             if (model == null) throw new ArgumentNullException(nameof(model));
             if (view == null) throw new ArgumentNullException(nameof(view));
+            model = StandardStoreyLayout.Materialize(model);
             if (view.Kind == ViewKind.Plan) return ProjectPlan(model, view, openingLibrary);
             if (view.Kind == ViewKind.Axonometric) return ProjectAxonometric(model, view);
 
@@ -355,6 +356,7 @@ namespace BatchPdfPublisher.BuildingModel
         public static ViewDocument ProjectSchedule(BuildingModelDocument model, OpeningTypeLibraryDocument library, string title)
         {
             if (model == null) throw new ArgumentNullException(nameof(model));
+            model = StandardStoreyLayout.Materialize(model);
             var document = new ViewDocument
             {
                 Id = "schedule",
@@ -493,6 +495,7 @@ namespace BatchPdfPublisher.BuildingModel
         {
             if (model == null) throw new ArgumentNullException(nameof(model));
             if (view == null) throw new ArgumentNullException(nameof(view));
+            model = StandardStoreyLayout.Materialize(model);
             var storeyId = view.StoreyIds != null && view.StoreyIds.Count > 0 ? view.StoreyIds[0] : null;
             var storey = model.FindStorey(storeyId);
             var document = new ViewDocument

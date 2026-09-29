@@ -12,4 +12,8 @@
     <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.3" />
     <ProjectReference Include="..\BuildingModel.Core\BuildingModel.Core.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <AvaloniaResource Include="Resources\Icons\*.svg" />
+    <AvaloniaResource Include="Resources\Icons\*.png" />
+  </ItemGroup>
 </Project>

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -40,7 +41,10 @@ internal sealed class ProbeWindow : Window
     private readonly ComboBox _storeyChooser = new() { Width = 130 };
     private readonly TextBox _newWallHeight = new() { Width = 110, Text = "0", PlaceholderText = "墙高 mm" };
     private readonly ListBox _elements = new();
+    private readonly TreeView _browserTree = new();
+    private readonly Dictionary<string, TreeViewItem> _browserNodes = new();
     private readonly List<ElementItem> _items = new();
+    private readonly Dictionary<PlanTool, Button> _planToolButtons = new();
     private readonly Dictionary<ViewTransformTool, Button> _viewToolButtons = new();
     private readonly StackPanel _properties = new() { Margin = new Thickness(16), Spacing = 12 };
     private readonly TextBlock _status = new();
@@ -48,6 +52,8 @@ internal sealed class ProbeWindow : Window
     { PlaceholderText = "输入命令：WA 画墙 / M 移动 / CO 复制", MinWidth = 180 };
     private readonly Button _polarButton = new() { Content = "极轴 45°：关" };
     private readonly Button _orthoButton = new() { Content = "正交 F8：关" };
+    private readonly Button _polarStatusButton = new() { Content = "极轴 F10" };
+    private readonly Button _orthoStatusButton = new() { Content = "正交 F8" };
     private readonly Button _undo = new() { Content = "撤销 Ctrl+Z" };
     private readonly Button _redo = new() { Content = "重做 Ctrl+Y" };
     private readonly Button _publish = new() { Content = "生成 CAD 视图" };
@@ -60,10 +66,12 @@ internal sealed class ProbeWindow : Window
     private bool _refreshingStoreys;
     private bool _movingInViewport;
     private bool _copyingInViewport;
+    private string _elementFilter = "";
     private PointModel? _viewportMoveBase;
     private int _sceneGeneration;
     private bool HasChanges => BuildingModelJson.ToJson(_session.Model) != _savedJson;
     private static readonly string ReleaseRevision = ReadReleaseRevision();
+    private static readonly ConcurrentDictionary<string, Bitmap> IconCache = new();
 
     private static string ReadReleaseRevision()
     {
@@ -86,10 +94,11 @@ internal sealed class ProbeWindow : Window
     public ProbeWindow()
     {
         Title = "万落建筑模型";
-        Width = 1280;
-        Height = 800;
-        MinWidth = 800;
-        MinHeight = 520;
+        Width = 1500;
+        Height = 900;
+        MinWidth = 960;
+        MinHeight = 620;
+        if (Program.SnapshotCompact) { Width = 1000; Height = 650; }
         _session = new BuildingModelEditSession(SampleModelFactory.CreateTwoStoreyHouse());
         _savedJson = BuildingModelJson.ToJson(_session.Model);
         var initialVolume = BuildingVolumeBuilder.Build(_session.Model);
@@ -98,6 +107,7 @@ internal sealed class ProbeWindow : Window
         _gizmo.PreviewChanged += value => _status.Text = value + " · 松开鼠标提交，Esc 取消";
         _gizmo.TransformFinished += async (id, dx, dy, angle, copy) =>
         {
+            id = StandardStoreyLayout.SourceElementId(_session.Model, id);
             var entered = Program.GizmoCheck ? new MovementResult(dx, dy, angle)
                 : await new MovementInputWindow(dx, dy, angle).ShowDialog<MovementResult?>(this);
             if (entered == null) return;
@@ -163,31 +173,93 @@ internal sealed class ProbeWindow : Window
 
         var root = new Grid
         {
-            RowDefinitions = new RowDefinitions("50,*,72"),
-            ColumnDefinitions = new ColumnDefinitions("230,*,290"),
-            Background = new SolidColorBrush(Color.Parse("#151B23"))
+            RowDefinitions = new RowDefinitions("38,116,*,88"),
+            ColumnDefinitions = new ColumnDefinitions("270,*,36"),
+            Background = new SolidColorBrush(Color.Parse("#101923"))
         };
-        var toolbar = new StackPanel
+        var ribbonTabs = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 3,
+            Margin = new Thickness(0) };
+        var ribbonContent = new ContentControl();
+        var quickAccess = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 3,
+            Margin = new Thickness(10, 0) };
+        Button Quick(string icon, string tip, Action callback)
         {
-            Orientation = Orientation.Horizontal,
-            Spacing = 6,
-            Margin = new Thickness(18, 0),
-            VerticalAlignment = VerticalAlignment.Center
+            var button = new Button { Content = QuickIcon(icon), Width = 32,
+                Height = 32, Padding = new Thickness(4), Background = Brushes.Transparent,
+                BorderThickness = new Thickness(0) };
+            button.Click += (_, _) => callback();
+            ToolTip.SetTip(button, tip);
+            return button;
+        }
+        quickAccess.Children.Add(Quick("folder-open", "打开模型  Ctrl+O", () => _ = OpenModelAsync()));
+        quickAccess.Children.Add(Quick("save", "保存  Ctrl+S", () => _ = SaveModelAsync(false)));
+        quickAccess.Children.Add(Quick("undo-2", "撤销  Ctrl+Z", () => _ = UndoModelAsync()));
+        quickAccess.Children.Add(Quick("redo-2", "重做  Ctrl+Y", () => _ = RedoModelAsync()));
+        var commandSearch = new TextBox { PlaceholderText = "搜索命令...",
+            Margin = new Thickness(4, 3, 8, 3), MinHeight = 30 };
+        commandSearch.KeyDown += (_, e) =>
+        {
+            if (e.Key != Key.Enter) return;
+            ExecuteCommand(commandSearch.Text);
+            commandSearch.Clear();
+            e.Handled = true;
         };
-        toolbar.Children.Add(new TextBlock
+        var headerLayout = new Grid { ColumnDefinitions = new ColumnDefinitions("150,*,180") };
+        headerLayout.Children.Add(quickAccess);
+        Grid.SetColumn(ribbonTabs, 1);
+        headerLayout.Children.Add(ribbonTabs);
+        Grid.SetColumn(commandSearch, 2);
+        headerLayout.Children.Add(commandSearch);
+        var ribbonHeader = new Border { Background = new SolidColorBrush(Color.Parse("#19232F")),
+            Child = headerLayout };
+        Grid.SetColumnSpan(ribbonHeader, 3);
+        root.Children.Add(ribbonHeader);
+        var ribbonScroll = new ScrollViewer { Content = ribbonContent,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Hidden,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled };
+        var ribbonNavigation = new Grid { ColumnDefinitions = new ColumnDefinitions("0,*,32") };
+        var ribbonLeft = new Button { Content = "‹", Padding = new Thickness(0), IsVisible = false,
+            Background = new SolidColorBrush(Color.Parse("#20364A")) };
+        var ribbonRight = new Button { Content = "›", Padding = new Thickness(0),
+            Background = new SolidColorBrush(Color.Parse("#20364A")) };
+        void UpdateRibbonArrows()
         {
-            Text = "建筑建模   平面编辑   立面剖面   图纸发布",
-            FontSize = 16,
-            FontWeight = FontWeight.SemiBold,
-            VerticalAlignment = VerticalAlignment.Center
-        });
+            var remaining = ribbonScroll.Extent.Width - ribbonScroll.Viewport.Width;
+            var showLeft = ribbonScroll.Offset.X > 1;
+            var showRight = remaining > ribbonScroll.Offset.X + 1;
+            ribbonLeft.IsVisible = showLeft;
+            ribbonRight.IsVisible = showRight;
+            ribbonNavigation.ColumnDefinitions[0].Width = new GridLength(showLeft ? 32 : 0);
+            ribbonNavigation.ColumnDefinitions[2].Width = new GridLength(showRight ? 32 : 0);
+        }
+        ribbonLeft.Click += (_, _) =>
+        {
+            ribbonScroll.Offset = new Vector(Math.Max(0, ribbonScroll.Offset.X - 300), 0);
+            UpdateRibbonArrows();
+        };
+        ribbonRight.Click += (_, _) =>
+        {
+            ribbonScroll.Offset = new Vector(ribbonScroll.Offset.X + 300, 0);
+            UpdateRibbonArrows();
+        };
+        ribbonScroll.SizeChanged += (_, _) => Dispatcher.UIThread.Post(UpdateRibbonArrows,
+            DispatcherPriority.Loaded);
+        ribbonScroll.ScrollChanged += (_, _) => UpdateRibbonArrows();
+        ribbonNavigation.Children.Add(ribbonLeft);
+        Grid.SetColumn(ribbonScroll, 1);
+        ribbonNavigation.Children.Add(ribbonScroll);
+        Grid.SetColumn(ribbonRight, 2);
+        ribbonNavigation.Children.Add(ribbonRight);
+        var ribbonSurface = new Border { Background = new SolidColorBrush(Color.Parse("#1C2835")),
+            BorderBrush = new SolidColorBrush(Color.Parse("#304357")), BorderThickness = new Thickness(0, 0, 0, 1),
+            Child = ribbonNavigation };
+        Grid.SetRow(ribbonSurface, 1);
+        Grid.SetColumnSpan(ribbonSurface, 3);
+        root.Children.Add(ribbonSurface);
         _undo.Click += async (_, _) => await UndoModelAsync();
         _redo.Click += async (_, _) => await RedoModelAsync();
-        toolbar.Children.Add(_undo);
-        toolbar.Children.Add(_redo);
         var deleteSelected = new Button { Content = "删除选中" };
         deleteSelected.Click += async (_, _) => await DeleteSelectedAsync();
-        toolbar.Children.Add(deleteSelected);
         var open = new Button { Content = "打开模型" };
         open.Click += async (_, _) => await OpenModelAsync();
         var save = new Button { Content = "保存" };
@@ -195,52 +267,56 @@ internal sealed class ProbeWindow : Window
         var saveAs = new Button { Content = "另存为" };
         saveAs.Click += async (_, _) => await SaveModelAsync(true);
         var axisSettings = new Button { Content = "轴号设置" };
-        axisSettings.Click += async (_, _) =>
-        {
-            var dialog = new AxisSettingsWindow(_session.Model);
-            if (!await dialog.ShowDialog<bool>(this)) return;
-            if (_session.TryReplaceAxes(dialog.ResultAxes, out var error))
-                await RefreshModelAsync("轴号已更新");
-            else _status.Text = error;
-        };
+        axisSettings.Click += async (_, _) => await OpenAxisSettingsAsync();
         var resetView = new Button { Content = "视图复位" };
-        resetView.Click += (_, _) => { _viewport.ResetView(); _gizmo.InvalidateVisual(); };
-        toolbar.Children.Add(open);
-        toolbar.Children.Add(save);
-        toolbar.Children.Add(saveAs);
+        resetView.Click += (_, _) => ResetActiveView();
         var globalStoreys = new Button { Content = "楼层设置" };
         globalStoreys.Click += async (_, _) => await OpenStoreySettingsAsync();
-        toolbar.Children.Add(globalStoreys);
-        toolbar.Children.Add(axisSettings);
         _publish.Click += async (_, _) => await PublishViewsAsync(false);
         _sendToCad.Click += async (_, _) => await PublishViewsAsync(true);
-        toolbar.Children.Add(_publish);
-        toolbar.Children.Add(_sendToCad);
         var cancelPublish = new Button { Content = "取消生成" };
         cancelPublish.Click += (_, _) => _publishCancellation?.Cancel();
-        toolbar.Children.Add(cancelPublish);
-        toolbar.Children.Add(resetView);
-        Grid.SetColumnSpan(toolbar, 3);
-        root.Children.Add(toolbar);
 
-        var tree = new Grid { RowDefinitions = new RowDefinitions("46,*"), Margin = new Thickness(12) };
-        tree.Children.Add(new TextBlock
-        {
-            Text = "项目构件", FontSize = 20, FontWeight = FontWeight.Bold,
-            VerticalAlignment = VerticalAlignment.Center
-        });
+        var tree = new Grid { RowDefinitions = new RowDefinitions("42,36,*"),
+            Margin = new Thickness(8, 8, 4, 8) };
+        var leftHeader = new Grid();
+        leftHeader.Children.Add(new TextBlock { Text = "项目浏览器", FontSize = 14,
+            FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(10, 0) });
+        tree.Children.Add(leftHeader);
+        var browserSearch = new TextBox { PlaceholderText = "搜索构件...", Margin = new Thickness(8, 0, 8, 5) };
+        Grid.SetRow(browserSearch, 1);
+        tree.Children.Add(browserSearch);
+        browserSearch.TextChanged += (_, _) => FilterElementList(browserSearch.Text);
         _elements.SelectionChanged += (_, _) =>
         {
             _selectedId = (_elements.SelectedItem as ElementItem)?.Id;
+            if (_selectedId != null && _browserNodes.TryGetValue(_selectedId, out var browserNode))
+                browserNode.IsSelected = true;
             _viewport.SelectElement(_selectedId);
             _planCanvas.SetSelection(_selectedId);
             UpdateGizmoSelection();
             RefreshProperties();
         };
-        Grid.SetRow(_elements, 1);
-        tree.Children.Add(_elements);
-        Grid.SetRow(tree, 1);
-        root.Children.Add(tree);
+        Grid.SetRow(_browserTree, 2);
+        _browserTree.Margin = new Thickness(8, 5, 8, 8);
+        tree.Children.Add(_browserTree);
+        var leftToggle = new Button { Width = 30, Height = 30,
+            HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, 14, 7, 0) };
+        ToolTip.SetTip(leftToggle, "收起项目浏览器");
+        var leftHost = new Grid();
+        leftHost.Children.Add(tree);
+        leftHost.Children.Add(leftToggle);
+        leftToggle.Click += (_, _) =>
+        {
+            tree.IsVisible = !tree.IsVisible;
+            root.ColumnDefinitions[0].Width = new GridLength(tree.IsVisible ? 270 : 38);
+            leftToggle.Content = CommandIcon(tree.IsVisible ? "chevron-left" : "chevron-right", 15);
+            ToolTip.SetTip(leftToggle, tree.IsVisible ? "收起项目浏览器" : "展开项目浏览器");
+        };
+        Grid.SetRow(leftHost, 2);
+        root.Children.Add(leftHost);
 
         var viewportHost = new Grid();
         viewportHost.Children.Add(_viewport);
@@ -339,23 +415,24 @@ internal sealed class ProbeWindow : Window
         var preciseMove3D = new Button { Content = "基点移动 M" };
         preciseMove3D.Click += (_, _) => BeginMove();
         viewTools.Children.Add(preciseMove3D);
-        viewportHost.Children.Add(viewTools);
+        // View tools live in the ribbon; the viewport remains unobstructed.
 
-        var planLayout = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,*") };
+        var planLayout = new Grid { RowDefinitions = new RowDefinitions("42,*") };
         var planTools = new StackPanel
         {
-            Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(8)
+            Orientation = Orientation.Horizontal, Spacing = 3
         };
-        planTools.Children.Add(new TextBlock { Text = "楼层", VerticalAlignment = VerticalAlignment.Center });
+        var openingTools = new StackPanel { Spacing = 2,
+            VerticalAlignment = VerticalAlignment.Center };
         _storeyChooser.SelectionChanged += (_, _) =>
         {
             if (!_refreshingStoreys && _storeyChooser.SelectedItem is StoreyItem floor)
                 _planCanvas.SetStorey(floor.Id);
         };
-        planTools.Children.Add(_storeyChooser);
-        var storeys = new Button { Content = "楼层设置" };
-        storeys.Click += async (_, _) => await OpenStoreySettingsAsync();
-        planTools.Children.Add(storeys);
+        var planViewStrip = new StackPanel { Orientation = Orientation.Horizontal,
+            Spacing = 8, Margin = new Thickness(8, 4) };
+        planViewStrip.Children.Add(new TextBlock { Text = "楼层", VerticalAlignment = VerticalAlignment.Center });
+        planViewStrip.Children.Add(_storeyChooser);
         var wallLength = new TextBox { Width = 100, PlaceholderText = "墙长 mm" };
         wallLength.KeyDown += (sender, e) =>
         {
@@ -377,60 +454,252 @@ internal sealed class ProbeWindow : Window
             {
                 SetPlanTool(tool);
             };
-            planTools.Children.Add(button);
+            _planToolButtons[tool] = button;
+            if (tool == PlanTool.Wall) planTools.Children.Add(button);
+            else if (tool is PlanTool.Door or PlanTool.Window)
+            {
+                button.Classes.Add("ribbon-small");
+                openingTools.Children.Add(button);
+            }
         }
+        planTools.Children.Add(openingTools);
         _polarButton.Click += (_, _) => SetPolar(!_planCanvas.PolarEnabled,
             _planCanvas.PolarStepDegrees);
         _orthoButton.Click += (_, _) => SetOrthogonal(!_planCanvas.OrthogonalEnabled);
-        planTools.Children.Add(_orthoButton);
-        planTools.Children.Add(_polarButton);
-        var parameterTools = new StackPanel { Orientation = Orientation.Horizontal,
-            Spacing = 8, Margin = new Thickness(8, 0, 8, 8) };
+        var parameterTools = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
         parameterTools.Children.Add(new TextBlock { Text = "精确墙长", VerticalAlignment = VerticalAlignment.Center });
         parameterTools.Children.Add(wallLength);
         parameterTools.Children.Add(new TextBlock { Text = "新墙高（0=随楼层）",
             VerticalAlignment = VerticalAlignment.Center });
         parameterTools.Children.Add(_newWallHeight);
-        parameterTools.Children.Add(new TextBlock { Text = "F8 正交 · Shift 临时正交 · F10 极轴 · 画墙时直接输入长度",
-            VerticalAlignment = VerticalAlignment.Center });
         var delete = new Button { Content = "删除选中" };
         var preciseMovePlan = new Button { Content = "基点移动 M" };
         preciseMovePlan.Click += (_, _) => BeginMove();
-        planTools.Children.Add(preciseMovePlan);
         delete.Click += async (_, _) => await DeleteSelectedAsync();
-        planTools.Children.Add(delete);
         var fitPlan = new Button { Content = "缩放适应" };
         fitPlan.Click += (_, _) => _planCanvas.Fit();
-        planTools.Children.Add(fitPlan);
-        planLayout.Children.Add(new ScrollViewer
-        {
-            Content = planTools,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled
-        });
-        Grid.SetRow(parameterTools, 1);
-        planLayout.Children.Add(new ScrollViewer
-        {
-            Content = parameterTools,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled
-        });
-        Grid.SetRow(_planCanvas, 2);
+        planViewStrip.Children.Add(fitPlan);
+        planLayout.Children.Add(planViewStrip);
+        Grid.SetRow(_planCanvas, 1);
         planLayout.Children.Add(_planCanvas);
 
-        _workspaces.Items.Add(new TabItem { Header = "建筑建模", Content = viewportHost });
-        _workspaces.Items.Add(new TabItem { Header = "平面编辑", Content = planLayout });
-        _workspaces.Items.Add(new TabItem { Header = "立面编辑", IsEnabled = false });
-        _workspaces.Items.Add(new TabItem { Header = "剖面编辑", IsEnabled = false });
-        _workspaces.Items.Add(new TabItem { Header = "图纸发布", IsEnabled = false });
-        Grid.SetRow(_workspaces, 1);
+        var modelTab = new TabItem { Header = "三维视图", Content = viewportHost,
+            FontSize = 13, MinWidth = 88, Height = 32 };
+        var planTab = new TabItem { Header = "平面视图", Content = planLayout,
+            FontSize = 13, MinWidth = 88, Height = 32 };
+        var drawingTab = new TabItem { Header = "图纸视图", IsEnabled = false,
+            FontSize = 13, MinWidth = 88, Height = 32 };
+        _workspaces.Margin = new Thickness(8, 0, 8, 0);
+        _workspaces.Items.Add(modelTab);
+        _workspaces.Items.Add(planTab);
+        _workspaces.Items.Add(drawingTab);
+        void UpdateWorkspaceTabs()
+        {
+            foreach (var tab in new[] { modelTab, planTab, drawingTab })
+            {
+                var selected = ReferenceEquals(tab, _workspaces.SelectedItem);
+                tab.Background = new SolidColorBrush(Color.Parse(selected ? "#1B5D9E" : "#1B2937"));
+                tab.Foreground = new SolidColorBrush(Color.Parse(selected ? "#FFFFFF" : "#B2C4D6"));
+                tab.BorderBrush = new SolidColorBrush(Color.Parse("#30485E"));
+                tab.BorderThickness = new Thickness(1);
+            }
+        }
+        _workspaces.SelectionChanged += (_, _) => UpdateWorkspaceTabs();
+        _workspaces.SelectedIndex = Program.Smoke || Program.SnapshotPath != null ? 0 : 1;
+        UpdateWorkspaceTabs();
+        Grid.SetRow(_workspaces, 2);
         Grid.SetColumn(_workspaces, 1);
         root.Children.Add(_workspaces);
 
         var propertyScroll = new ScrollViewer { Content = _properties };
+        var rightHeader = new Grid { Height = 42 };
+        rightHeader.Children.Add(new TextBlock { Text = "属性", FontSize = 14,
+            FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(12, 0) });
+        var rightPanel = new Grid { RowDefinitions = new RowDefinitions("42,*"), IsVisible = false,
+            Margin = new Thickness(4, 8, 8, 8) };
+        rightPanel.Children.Add(rightHeader);
         Grid.SetRow(propertyScroll, 1);
-        Grid.SetColumn(propertyScroll, 2);
-        root.Children.Add(propertyScroll);
+        rightPanel.Children.Add(propertyScroll);
+        var rightToggle = new Button { Width = 30, Height = 30,
+            HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, 14, 7, 0) };
+        ToolTip.SetTip(rightToggle, "展开属性栏");
+        var propertyRailLabel = new TextBlock { Text = "属\n性", FontSize = 12,
+            TextAlignment = TextAlignment.Center, VerticalAlignment = VerticalAlignment.Top,
+            HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 52, 0, 0) };
+        var rightHost = new Grid();
+        rightHost.Children.Add(rightPanel);
+        rightHost.Children.Add(propertyRailLabel);
+        rightHost.Children.Add(rightToggle);
+        rightToggle.Click += (_, _) =>
+        {
+            rightPanel.IsVisible = !rightPanel.IsVisible;
+            propertyRailLabel.IsVisible = !rightPanel.IsVisible;
+            root.ColumnDefinitions[2].Width = new GridLength(rightPanel.IsVisible ? 310 : 36);
+            rightToggle.Content = CommandIcon(rightPanel.IsVisible ? "chevron-right" : "chevron-left", 15);
+            ToolTip.SetTip(rightToggle, rightPanel.IsVisible ? "收起属性栏" : "展开属性栏");
+        };
+        if (Program.SnapshotProperties)
+        {
+            rightPanel.IsVisible = true;
+            propertyRailLabel.IsVisible = false;
+            root.ColumnDefinitions[2].Width = new GridLength(310);
+        }
+        Grid.SetRow(rightHost, 2);
+        Grid.SetColumn(rightHost, 2);
+        root.Children.Add(rightHost);
+
+        var pages = new Dictionary<string, Control>();
+        var tabButtons = new Dictionary<string, Button>();
+        static Button Action(string caption, Action callback)
+        {
+            var button = new Button { Content = caption };
+            button.Click += (_, _) => callback();
+            return button;
+        }
+        static Button Planned(string caption)
+        {
+            var button = new Button { Content = caption, IsHitTestVisible = false, Opacity = 0.43 };
+            ToolTip.SetTip(button, caption + "：尚未实现");
+            return button;
+        }
+        var structuralTools = new StackPanel { Spacing = 2,
+            VerticalAlignment = VerticalAlignment.Center };
+        foreach (var name in new[] { "楼板", "柱", "楼梯" })
+        {
+            var button = Planned(name);
+            button.Classes.Add("ribbon-list");
+            button.Opacity = 0.62;
+            structuralTools.Children.Add(button);
+        }
+        static Border Group(string title, params Control[] controls)
+        {
+            var actions = new StackPanel { Orientation = Orientation.Horizontal,
+                Spacing = 2, VerticalAlignment = VerticalAlignment.Center };
+            foreach (var control in controls) actions.Children.Add(control);
+            var layout = new Grid { RowDefinitions = new RowDefinitions("*,18"),
+                Margin = new Thickness(6, 4, 6, 1) };
+            layout.Children.Add(actions);
+            var caption = new TextBlock { Text = title, FontSize = 11,
+                Foreground = new SolidColorBrush(Color.Parse("#9BB3CA")),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center };
+            Grid.SetRow(caption, 1);
+            layout.Children.Add(caption);
+            return new Border { Child = layout, BorderBrush = new SolidColorBrush(Color.Parse("#405267")),
+                BorderThickness = new Thickness(0, 0, 1, 0) };
+        }
+        static StackPanel Page(params Control[] groups)
+        {
+            var page = new StackPanel { Orientation = Orientation.Horizontal,
+                VerticalAlignment = VerticalAlignment.Stretch };
+            foreach (var group in groups) page.Children.Add(group);
+            return page;
+        }
+        pages["建模"] = Page(
+            Group("建筑构件", planTools),
+            Group("结构构件", structuralTools),
+            Group("基准设置", axisSettings, globalStoreys, Planned("标高")),
+            Group("修改", Action("移动", () => BeginMove()),
+                Action("复制", () => BeginMove(true)),
+                Planned("旋转"), Planned("镜像"), Planned("偏移"), Planned("阵列"),
+                Action("删除", () => _ = DeleteSelectedAsync())),
+            Group("编辑", Planned("相交"), Planned("修剪"), Planned("延伸")));
+        pages["构件"] = Page(Group("建筑构件",
+            Action("画墙", () => { _workspaces.SelectedIndex = 1; SetPlanTool(PlanTool.Wall); }),
+            Action("放门", () => { _workspaces.SelectedIndex = 1; SetPlanTool(PlanTool.Door); }),
+            Action("放窗", () => { _workspaces.SelectedIndex = 1; SetPlanTool(PlanTool.Window); })),
+            Group("绘制参数", parameterTools));
+        pages["编辑"] = Page(
+            Group("历史", _undo, _redo),
+            Group("修改", _planToolButtons[PlanTool.Select], preciseMovePlan,
+                Action("复制 CO", () => BeginMove(true)), deleteSelected),
+            Group("绘制约束", _orthoButton, _polarButton));
+        pages["标注"] = Page(Group("轴线与楼层",
+            Action("轴号设置", () => _ = OpenAxisSettingsAsync()),
+            Action("楼层设置", () => _ = OpenStoreySettingsAsync())));
+        pages["视图"] = Page(
+            Group("三维操作", viewTools),
+            Group("视图", resetView,
+                Action("平面视图", () => _workspaces.SelectedIndex = 1),
+                Action("三维视图", () => _workspaces.SelectedIndex = 0)));
+        pages["出图"] = Page(Group("CAD 输出", _publish, _sendToCad, cancelPublish));
+        pages["管理"] = Page(Group("模型文件", open, save, saveAs),
+            Group("项目设置", Action("楼层设置", () => _ = OpenStoreySettingsAsync())));
+        void StyleRibbonControl(Control control, bool inRibbon = true)
+        {
+            switch (control)
+            {
+                case Button button:
+                    var list = inRibbon && button.Classes.Contains("ribbon-list");
+                    var small = inRibbon && button.Classes.Contains("ribbon-small");
+                    button.MinHeight = inRibbon ? list ? 24 : small ? 36 : 74 : 32;
+                    if (inRibbon) button.MinWidth = list ? 168 : small ? 98 : 72;
+                    button.FontSize = 12;
+                    button.Padding = inRibbon ? list ? new Thickness(6, 0)
+                        : small ? new Thickness(6, 2) : new Thickness(5, 5)
+                        : new Thickness(10, 5);
+                    button.Background = new SolidColorBrush(Color.Parse("#1C2835"));
+                    button.Foreground = new SolidColorBrush(Color.Parse("#D9E9F5"));
+                    button.BorderBrush = new SolidColorBrush(Color.Parse("#38556E"));
+                    button.BorderThickness = inRibbon ? new Thickness(0) : new Thickness(1);
+                    button.CornerRadius = new CornerRadius(4);
+                    if (inRibbon && button.Content is "画墙")
+                    {
+                        button.MinWidth = 78;
+                        button.BorderBrush = new SolidColorBrush(Color.Parse("#4B81AE"));
+                        button.BorderThickness = new Thickness(1);
+                    }
+                    if (inRibbon && button.Content is string label)
+                        SetCommandVisual(button, label, small || list);
+                    break;
+                case ComboBox combo:
+                    combo.MinHeight = 32;
+                    combo.Background = new SolidColorBrush(Color.Parse("#20364A"));
+                    combo.BorderBrush = new SolidColorBrush(Color.Parse("#38556E"));
+                    break;
+                case TextBox input:
+                    input.MinHeight = 32;
+                    input.Background = new SolidColorBrush(Color.Parse("#20364A"));
+                    input.BorderBrush = new SolidColorBrush(Color.Parse("#38556E"));
+                    break;
+            }
+            if (control is Panel panel)
+                foreach (var child in panel.Children) StyleRibbonControl(child, inRibbon);
+            else if (control is Border border && border.Child != null)
+                StyleRibbonControl(border.Child, inRibbon);
+        }
+        foreach (var page in pages.Values) StyleRibbonControl(page);
+        foreach (var control in new Control[] { browserSearch, _storeyChooser, fitPlan,
+            leftToggle, rightToggle, _commandInput })
+            StyleRibbonControl(control, false);
+        SetCommandVisual(fitPlan, "缩放适应", true);
+        leftToggle.Content = CommandIcon("chevron-left", 15);
+        rightToggle.Content = CommandIcon(rightPanel.IsVisible ? "chevron-right" : "chevron-left", 15);
+        ribbonLeft.Content = CommandIcon("chevron-left", 15);
+        ribbonRight.Content = CommandIcon("chevron-right", 15);
+        void SelectRibbon(string name)
+        {
+            ribbonContent.Content = pages[name];
+            ribbonScroll.Offset = new Vector(0, 0);
+            Dispatcher.UIThread.Post(UpdateRibbonArrows, DispatcherPriority.Loaded);
+            foreach (var pair in tabButtons)
+            {
+                pair.Value.Background = new SolidColorBrush(Color.Parse(pair.Key == name ? "#155995" : "#19232F"));
+                pair.Value.Foreground = new SolidColorBrush(Color.Parse(pair.Key == name ? "#FFFFFF" : "#C1D1DF"));
+            }
+        }
+        foreach (var name in new[] { "建模", "构件", "编辑", "标注", "视图", "出图", "管理" })
+        {
+            var button = new Button { Content = name, MinWidth = 86, Height = 34,
+                FontSize = 16, Margin = new Thickness(0, 2, 0, 0), Padding = new Thickness(12, 4),
+                BorderThickness = new Thickness(0) };
+            button.Click += (_, _) => SelectRibbon(name);
+            tabButtons[name] = button;
+            ribbonTabs.Children.Add(button);
+        }
+        SelectRibbon("建模");
 
         _status.Foreground = new SolidColorBrush(Color.Parse("#A4B8CF"));
         _status.VerticalAlignment = VerticalAlignment.Center;
@@ -438,7 +707,7 @@ internal sealed class ProbeWindow : Window
         _status.Text = "左键选择 · 中键旋转 · Shift+中键或右键平移 · 滚轮缩放 · 毫米单位";
         var console = new Grid
         {
-            RowDefinitions = new RowDefinitions("30,34"),
+            RowDefinitions = new RowDefinitions("24,32,28"),
             ColumnDefinitions = new ColumnDefinitions("65,*"),
             Margin = new Thickness(12, 2)
         };
@@ -467,7 +736,35 @@ internal sealed class ProbeWindow : Window
         Grid.SetRow(_commandInput, 1);
         Grid.SetColumn(_commandInput, 1);
         console.Children.Add(_commandInput);
-        Grid.SetRow(console, 2);
+        var statusStrip = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"),
+            Margin = new Thickness(6, 1, 0, 0) };
+        statusStrip.Children.Add(new TextBlock { Text = "毫米单位  ·  Esc 取消当前命令",
+            FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#8FA9BD")),
+            VerticalAlignment = VerticalAlignment.Center });
+        void StyleStatusButton(Button button, int column, string tip, Action callback)
+        {
+            button.MinWidth = 78;
+            button.Height = 24;
+            button.Padding = new Thickness(0);
+            button.HorizontalContentAlignment = HorizontalAlignment.Center;
+            button.VerticalContentAlignment = VerticalAlignment.Center;
+            button.FontSize = 11;
+            button.Background = new SolidColorBrush(Color.Parse("#1C3042"));
+            button.BorderThickness = new Thickness(0);
+            button.CornerRadius = new CornerRadius(3);
+            ToolTip.SetTip(button, tip);
+            button.Click += (_, _) => callback();
+            Grid.SetColumn(button, column);
+            statusStrip.Children.Add(button);
+        }
+        StyleStatusButton(_orthoStatusButton, 1, "正交约束 (F8)",
+            () => SetOrthogonal(!_planCanvas.OrthogonalEnabled));
+        StyleStatusButton(_polarStatusButton, 2, "极轴追踪 (F10)",
+            () => SetPolar(!_planCanvas.PolarEnabled, _planCanvas.PolarStepDegrees));
+        Grid.SetRow(statusStrip, 2);
+        Grid.SetColumnSpan(statusStrip, 2);
+        console.Children.Add(statusStrip);
+        Grid.SetRow(console, 3);
         Grid.SetColumnSpan(console, 3);
         root.Children.Add(console);
         Content = root;
@@ -477,6 +774,7 @@ internal sealed class ProbeWindow : Window
         RefreshStoreys();
         SelectById("1F-S");
         SetViewTool(Program.SnapshotGizmo ? ViewTransformTool.Move : ViewTransformTool.Select);
+        SetPlanTool(PlanTool.Select);
         RefreshHistoryButtons();
         UpdateTitle();
         Closing += OnClosing;
@@ -511,6 +809,141 @@ internal sealed class ProbeWindow : Window
             }
         }
         return await LoadModelAsync(path);
+    }
+
+    private static (string? icon, string? shortcut) RibbonButtonVisual(string label) => label switch
+    {
+        "选择" or "选择 Q" => ("mouse-pointer-2", "Q"),
+        "画墙" => ("wall-plan", "WA"),
+        "放门" => ("door-open", "DR"),
+        "放窗" => ("app-window", "WN"),
+        "楼板" => ("layers", null),
+        "柱" => ("box", null),
+        "楼梯" => ("layers", null),
+        "标高" => ("layers", null),
+        "移动" or "基点移动 M" => ("move", "M"),
+        "移动 W" => ("move", "W"),
+        "旋转 E" => ("rotate-ccw", "E"),
+        "旋转" => ("rotate-ccw", null),
+        "复制" or "复制 CO" => ("copy", "CO"),
+        "镜像" => ("copy", null),
+        "偏移" => ("move", null),
+        "阵列" => ("grid-3x3", null),
+        "相交" => ("grid-3x3", null),
+        "修剪" => ("trash", null),
+        "延伸" => ("move", null),
+        "删除" => ("trash", "Del"),
+        "删除选中" => ("trash", "Del"),
+        "楼层设置" => ("layers", "LS"),
+        "轴号设置" => ("grid-3x3", "AX"),
+        "打开模型" => ("folder-open", "Ctrl+O"),
+        "保存" => ("save", "Ctrl+S"),
+        "另存为" => ("file-plus", "Ctrl+Shift+S"),
+        "生成 CAD 视图" => ("file-axis-3d", "PV"),
+        "推到 CAD" => ("send", "SC"),
+        "取消生成" => ("undo-2", null),
+        "视图复位" => ("maximize", "Home"),
+        "缩放适应" => ("maximize", "ZF"),
+        "平面视图" => ("panel-top", "PL"),
+        "三维视图" => ("box", "3D"),
+        _ when label.StartsWith("撤销", StringComparison.Ordinal) => ("undo-2", "Ctrl+Z"),
+        _ when label.StartsWith("重做", StringComparison.Ordinal) => ("redo-2", "Ctrl+Y"),
+        _ when label.StartsWith("正交", StringComparison.Ordinal) => ("grid-3x3", "F8"),
+        _ when label.StartsWith("极轴", StringComparison.Ordinal) => ("grid-3x3", "F10"),
+        _ => (null, null)
+    };
+
+    private static Control CommandIcon(string name, double size)
+    {
+        if (name is "door-open" or "app-window")
+        {
+            var path = name == "door-open"
+                ? "M4 21 L4 3 L19 3 L19 21 M8 21 L8 7 L16 5 L16 21 M11 14 L12 14"
+                : "M3 4 L21 4 L21 20 L3 20 Z M3 10 L21 10 M12 10 L12 20";
+            return VectorIcon(path, size);
+        }
+        var bitmap = IconCache.GetOrAdd(name, key =>
+        {
+            using var stream = Avalonia.Platform.AssetLoader.Open(
+                new Uri("avares://万落建筑模型/Resources/Icons/" + key + ".png"));
+            return new Bitmap(stream);
+        });
+        return new Image { Source = bitmap, Width = size, Height = size,
+            Stretch = Stretch.Uniform, IsHitTestVisible = false };
+    }
+
+    private static Control VectorIcon(string path, double size) =>
+        new Avalonia.Controls.Shapes.Path
+        {
+            Data = Geometry.Parse(path), Width = size, Height = size,
+            Stroke = new SolidColorBrush(Color.Parse("#9CCFFF")), StrokeThickness = 2,
+            Stretch = Stretch.Uniform, IsHitTestVisible = false
+        };
+
+    private static Control QuickIcon(string name)
+    {
+        var data = name switch
+        {
+            "folder-open" => "M2 20 L5 10 L22 10 L19 20 Z M2 20 L2 5 L9 5 L11 7 L19 7 L19 10",
+            "save" => "M3 3 L17 3 L21 7 L21 21 L3 21 Z M7 3 L7 9 L16 9 L16 3 M7 21 L7 13 L17 13 L17 21",
+            "undo-2" => "M9 4 L4 9 L9 14 M4 9 L15 9 C19 9 21 12 21 16 C21 19 18 21 14 21",
+            _ => "M15 4 L20 9 L15 14 M20 9 L9 9 C5 9 3 12 3 16 C3 19 6 21 10 21"
+        };
+        return VectorIcon(data, 17);
+    }
+
+    private static Control BrowserHeader(string title, string icon)
+    {
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+        row.Children.Add(CommandIcon(icon, 14));
+        row.Children.Add(new TextBlock { Text = title, VerticalAlignment = VerticalAlignment.Center });
+        return row;
+    }
+
+    private static void SetCommandVisual(Button button, string label, bool compact = false)
+    {
+        var (icon, shortcut) = RibbonButtonVisual(label);
+        if (icon == null) return;
+        var title = shortcut != null && label.EndsWith(shortcut, StringComparison.OrdinalIgnoreCase)
+            ? label[..^shortcut.Length].Trim() : label;
+        if (button.Classes.Contains("ribbon-list"))
+        {
+            var row = new Grid { ColumnDefinitions = new ColumnDefinitions("24,*,14"), Width = 154 };
+            row.Children.Add(CommandIcon(icon, 17));
+            var text = new TextBlock { Text = title, FontSize = 12,
+                VerticalAlignment = VerticalAlignment.Center };
+            Grid.SetColumn(text, 1);
+            row.Children.Add(text);
+            var arrow = CommandIcon("chevron-right", 12);
+            Grid.SetColumn(arrow, 2);
+            row.Children.Add(arrow);
+            button.Content = row;
+        }
+        else if (compact)
+        {
+            var row = new StackPanel { Orientation = Orientation.Horizontal,
+                Spacing = 7, VerticalAlignment = VerticalAlignment.Center };
+            row.Children.Add(CommandIcon(icon, 15));
+            row.Children.Add(new TextBlock { Text = title + (shortcut == null ? "" : "  " + shortcut),
+                FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
+            button.Content = row;
+        }
+        else
+        {
+            var column = new StackPanel { Spacing = 3,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center };
+            column.Children.Add(CommandIcon(icon, 27));
+            column.Children.Add(new TextBlock { Text = title, FontSize = 11,
+                HorizontalAlignment = HorizontalAlignment.Center });
+            if (shortcut != null)
+                column.Children.Add(new TextBlock { Text = shortcut, FontSize = 9,
+                    Foreground = new SolidColorBrush(Color.Parse("#7FA8CE")),
+                    HorizontalAlignment = HorizontalAlignment.Center });
+            button.Content = column;
+        }
+        ToolTip.SetTip(button, !button.IsHitTestVisible ? label + "：尚未实现"
+            : shortcut == null ? label : label + "  (" + shortcut + ")");
     }
 
     private void UpdateTitle()
@@ -758,7 +1191,87 @@ internal sealed class ProbeWindow : Window
             foreach (var roof in roofs)
                 _items.Add(new ElementItem { Id = roof.Id, Label = $"{floor.Name} · 屋面  {roof.Id}" });
         }
+        FilterElementList(_elementFilter);
+    }
+
+    private void FilterElementList(string? query)
+    {
+        _elementFilter = query?.Trim() ?? "";
         _elements.ItemsSource = _items;
+        RebuildBrowserTree();
+    }
+
+    private void RebuildBrowserTree()
+    {
+        _browserTree.Items.Clear();
+        _browserNodes.Clear();
+        var model = _session.Model;
+        var project = new TreeViewItem { Header = BrowserHeader(model.Name, "folder-open"), IsExpanded = true };
+        var floors = new TreeViewItem { Header = BrowserHeader("楼层", "layers"), IsExpanded = true };
+        project.Items.Add(floors);
+        var wallStoreys = model.Walls.ToDictionary(w => w.Id, w => w.StoreyId);
+        var matches = _elementFilter.Length == 0 ? null : _items
+            .Where(item => item.Label.Contains(_elementFilter,
+                StringComparison.CurrentCultureIgnoreCase))
+            .Select(item => item.Id).ToHashSet();
+        bool Matches(string id) => matches == null || matches.Contains(id);
+        void AddCategory(TreeViewItem floorNode, string name,
+            IEnumerable<(string id, string label)> elements)
+        {
+            var entries = elements.Where(x => Matches(x.id)).ToList();
+            if (entries.Count == 0) return;
+            var icon = name switch { "墙" => "wall-plan", "门窗" => "door-open",
+                "楼板" => "layers", "柱" => "box", _ => "layers" };
+            var category = new TreeViewItem { Header = BrowserHeader($"{name} ({entries.Count})", icon),
+                IsExpanded = _elementFilter.Length > 0 || entries.Count < 12 };
+            foreach (var (id, label) in entries)
+            {
+                var leaf = new TreeViewItem { Header = BrowserHeader(label, icon) };
+                ToolTip.SetTip(leaf, id);
+                leaf.PointerPressed += (_, _) => SelectById(id);
+                category.Items.Add(leaf);
+                _browserNodes[id] = leaf;
+            }
+            floorNode.Items.Add(category);
+        }
+        foreach (var floor in model.Storeys)
+        {
+            var floorNode = new TreeViewItem
+            {
+                Header = BrowserHeader($"{floor.Name}  (标高 {floor.Elevation:0} mm)"
+                    + (string.IsNullOrWhiteSpace(floor.TemplateStoreyId) ? "" : " · 标准层"), "layers"),
+                IsExpanded = _elementFilter.Length > 0 || floor == model.Storeys.FirstOrDefault()
+            };
+            if (!string.IsNullOrWhiteSpace(floor.TemplateStoreyId))
+                floorNode.Items.Add(new TreeViewItem
+                { Header = BrowserHeader("共用 " + floor.TemplateStoreyId + " 平面构件", "copy") });
+            AddCategory(floorNode, "墙", model.Walls.Where(x => x.StoreyId == floor.Id)
+                .Select(x => (x.Id, "墙  " + x.Id)));
+            AddCategory(floorNode, "门窗", model.Openings.Where(x =>
+                    wallStoreys.TryGetValue(x.HostWallId, out var storey) && storey == floor.Id)
+                .Select(x => (x.Id, x.Kind + "  " + x.Id)));
+            AddCategory(floorNode, "楼板", model.Slabs.Where(x => x.StoreyId == floor.Id)
+                .Select(x => (x.Id, "楼板  " + x.Id)));
+            AddCategory(floorNode, "柱", model.Columns.Where(x => x.StoreyId == floor.Id)
+                .Select(x => (x.Id, "柱  " + x.Id)));
+            AddCategory(floorNode, "楼梯", model.Stairs.Where(x => x.StoreyId == floor.Id)
+                .Select(x => (x.Id, "楼梯  " + x.Id)));
+            AddCategory(floorNode, "屋面", model.Roofs.Where(x => x.StoreyId == floor.Id)
+                .Select(x => (x.Id, "屋面  " + x.Id)));
+            if (floorNode.Items.Count > 0) floors.Items.Add(floorNode);
+        }
+        _browserTree.Items.Add(project);
+        if (_selectedId != null && _browserNodes.TryGetValue(_selectedId, out var selected))
+            selected.IsSelected = true;
+    }
+
+    private async Task OpenAxisSettingsAsync()
+    {
+        var dialog = new AxisSettingsWindow(_session.Model);
+        if (!await dialog.ShowDialog<bool>(this)) return;
+        if (_session.TryReplaceAxes(dialog.ResultAxes, out var error))
+            await RefreshModelAsync("轴号已更新");
+        else _status.Text = error;
     }
 
     private void RefreshStoreys()
@@ -768,7 +1281,8 @@ internal sealed class ProbeWindow : Window
         try
         {
         _storeyChooser.ItemsSource = _session.Model.Storeys.Select(s => new StoreyItem
-        { Id = s.Id, Name = s.Name + "  (" + s.Elevation.ToString("0") + " mm)" }).ToList();
+        { Id = s.Id, Name = s.Name + "  (" + s.Elevation.ToString("0") + " mm)"
+            + (string.IsNullOrWhiteSpace(s.TemplateStoreyId) ? "" : " · 标准层 " + s.TemplateStoreyId) }).ToList();
         _storeyChooser.SelectedItem = (_storeyChooser.ItemsSource as IEnumerable<StoreyItem>)?
             .FirstOrDefault(s => s.Id == previous) ?? (_storeyChooser.ItemsSource as IEnumerable<StoreyItem>)?.FirstOrDefault();
         }
@@ -778,14 +1292,17 @@ internal sealed class ProbeWindow : Window
 
     private void SelectById(string? id)
     {
+        var visualId = id;
+        id = StandardStoreyLayout.SourceElementId(_session.Model, id);
         var item = _items.FirstOrDefault(x => x.Id == id);
         if (!ReferenceEquals(_elements.SelectedItem, item))
         {
             _elements.SelectedItem = item;
+            if (visualId != id) _viewport.SelectElement(visualId);
             return;
         }
         _selectedId = item?.Id;
-        _viewport.SelectElement(_selectedId);
+        _viewport.SelectElement(visualId ?? _selectedId);
         _planCanvas.SetSelection(_selectedId);
         UpdateGizmoSelection();
         RefreshProperties();
@@ -801,10 +1318,19 @@ internal sealed class ProbeWindow : Window
             : "旋转 E：拖动选中墙的橙色圆环；Shift 拖动复制。";
     }
 
+    private void ResetActiveView()
+    {
+        if (_workspaces.SelectedIndex == 1) _planCanvas.Fit();
+        else { _viewport.ResetView(); _gizmo.InvalidateVisual(); }
+    }
+
     private void SetPlanTool(PlanTool tool)
     {
         _planCanvas.Tool = tool;
         _planCanvas.CancelDraft();
+        foreach (var entry in _planToolButtons)
+            entry.Value.Background = new SolidColorBrush(Color.Parse(
+                entry.Key == tool ? "#1768A7" : "#20364A"));
         _status.Text = tool == PlanTool.Wall
             ? "画墙 WA：点起点，指向方向后可直接输入长度，空格/回车确认，Esc 退出。"
             : tool == PlanTool.Select ? "选择 Q：点击墙或门窗选择构件。"
@@ -816,7 +1342,8 @@ internal sealed class ProbeWindow : Window
     {
         if (enabled && _planCanvas.OrthogonalEnabled) SetOrthogonal(false);
         _planCanvas.SetPolar(enabled, stepDegrees);
-        _polarButton.Content = $"极轴 {stepDegrees:0.#}°：{(enabled ? "开" : "关")}";
+        SetCommandVisual(_polarButton, $"极轴 {stepDegrees:0.#}°：{(enabled ? "开" : "关")}");
+        _polarStatusButton.Background = new SolidColorBrush(Color.Parse(enabled ? "#155995" : "#1C3042"));
         _status.Text = enabled ? $"极轴已开启：按 {stepDegrees:0.#}° 增量追踪；Shift 临时正交。"
             : "极轴已关闭；Shift 可临时正交。";
     }
@@ -825,7 +1352,8 @@ internal sealed class ProbeWindow : Window
     {
         if (enabled && _planCanvas.PolarEnabled) SetPolar(false, _planCanvas.PolarStepDegrees);
         _planCanvas.SetOrthogonal(enabled);
-        _orthoButton.Content = $"正交 F8：{(enabled ? "开" : "关")}";
+        SetCommandVisual(_orthoButton, $"正交 F8：{(enabled ? "开" : "关")}");
+        _orthoStatusButton.Background = new SolidColorBrush(Color.Parse(enabled ? "#155995" : "#1C3042"));
         _status.Text = enabled ? "正交已开启：画墙和指定目标点时锁定水平或垂直。F8 关闭。"
             : "正交已关闭；按住 Shift 可临时锁定水平或垂直。";
     }
@@ -874,6 +1402,18 @@ internal sealed class ProbeWindow : Window
                 CultureInfo.InvariantCulture, out var polarStep)
             && double.IsFinite(polarStep) && polarStep >= 1 && polarStep <= 90)
         { SetPolar(true, polarStep); return; }
+        switch (command.ToUpperInvariant())
+        {
+            case "DR": _workspaces.SelectedIndex = 1; SetPlanTool(PlanTool.Door); return;
+            case "WN": _workspaces.SelectedIndex = 1; SetPlanTool(PlanTool.Window); return;
+            case "LS": _ = OpenStoreySettingsAsync(); return;
+            case "AX": _ = OpenAxisSettingsAsync(); return;
+            case "PL": _workspaces.SelectedIndex = 1; return;
+            case "3D": _workspaces.SelectedIndex = 0; return;
+            case "ZF": ResetActiveView(); return;
+            case "PV": _ = PublishViewsAsync(false); return;
+            case "SC": _ = PublishViewsAsync(true); return;
+        }
         switch (ModelCommandCatalog.Resolve(input))
         {
             case ModelCommandKind.Wall:
@@ -959,8 +1499,21 @@ internal sealed class ProbeWindow : Window
 
     private void OnShortcutKeyDown(object? sender, KeyEventArgs e)
     {
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        {
+            if (e.Key == Key.O)
+            { e.Handled = true; _ = OpenModelAsync(); return; }
+            if (e.Key == Key.S)
+            {
+                e.Handled = true;
+                _ = SaveModelAsync(e.KeyModifiers.HasFlag(KeyModifiers.Shift));
+                return;
+            }
+        }
         var editingOtherField = ShortcutEditingText(e.Source) && !IsCommandInput(e.Source);
         if (editingOtherField) return;
+        if (e.Key == Key.Home)
+        { e.Handled = true; ResetActiveView(); return; }
         if (e.Key == Key.Escape)
         { e.Handled = true; CancelActiveCommand(); return; }
         if (e.Key == Key.F8)
@@ -1074,7 +1627,6 @@ internal sealed class ProbeWindow : Window
     private void RefreshProperties()
     {
         _properties.Children.Clear();
-        _properties.Children.Add(new TextBlock { Text = "属性", FontSize = 20, FontWeight = FontWeight.Bold });
         if (_selectedId == null)
         {
             _properties.Children.Add(new TextBlock { Text = "点击视口中的构件或从左侧列表选择。", TextWrapping = TextWrapping.Wrap });
@@ -1093,7 +1645,7 @@ internal sealed class ProbeWindow : Window
             var heightField = AddNumberField("墙高（mm）", wall.Height);
             _properties.Children.Add(new TextBlock { Text = "左右按墙起点 → 终点判断；两侧之和为总墙厚。",
                 TextWrapping = TextWrapping.Wrap });
-            var apply = new Button { Content = "应用墙体参数" };
+            var apply = InspectorButton("应用墙体参数");
             apply.Click += async (_, _) => await ApplyGeometryAsync(
                 new[] { lengthField, leftField, rightField, heightField }, values =>
             {
@@ -1106,7 +1658,7 @@ internal sealed class ProbeWindow : Window
             var deltaXField = AddNumberField("水平位移 X（mm）", 0);
             var deltaYField = AddNumberField("竖直位移 Y（mm）", 0);
             var angleField = AddNumberField("逆时针旋转（度，绕墙中点）", 0);
-            var move = new Button { Content = "移动 / 旋转墙" };
+            var move = InspectorButton("移动 / 旋转墙");
             move.Click += async (_, _) => await ApplyGeometryAsync(
                 new[] { deltaXField, deltaYField, angleField }, values =>
             {
@@ -1115,7 +1667,7 @@ internal sealed class ProbeWindow : Window
                 return (success, error);
             });
             _properties.Children.Add(move);
-            var copy = new Button { Content = "复制墙和门窗" };
+            var copy = InspectorButton("复制墙和门窗");
             copy.Click += async (_, _) => await ApplyGeometryAsync(
                 new[] { deltaXField, deltaYField, angleField }, values =>
             {
@@ -1135,7 +1687,7 @@ internal sealed class ProbeWindow : Window
             var widthField = AddNumberField("洞口宽（mm）", opening.Width);
             var heightField = AddNumberField("洞口高（mm）", opening.Height);
             var sillField = AddNumberField("窗台高（mm）", opening.Sill);
-            var apply = new Button { Content = "应用门窗参数" };
+            var apply = InspectorButton("应用门窗参数");
             apply.Click += async (_, _) => await ApplyGeometryAsync(
                 new[] { offsetField, widthField, heightField, sillField }, values =>
             {
@@ -1150,10 +1702,21 @@ internal sealed class ProbeWindow : Window
     private TextBox AddNumberField(string label, double value)
     {
         _properties.Children.Add(new TextBlock { Text = label });
-        var field = new TextBox { Text = value.ToString("0.##", CultureInfo.InvariantCulture) };
+        var field = new TextBox { Text = value.ToString("0.##", CultureInfo.InvariantCulture),
+            MinHeight = 34, Background = new SolidColorBrush(Color.Parse("#20364A")),
+            BorderBrush = new SolidColorBrush(Color.Parse("#38556E")) };
         _properties.Children.Add(field);
         return field;
     }
+
+    private static Button InspectorButton(string label) => new()
+    {
+        Content = label, MinHeight = 34, Padding = new Thickness(10, 5),
+        Background = new SolidColorBrush(Color.Parse("#20364A")),
+        Foreground = new SolidColorBrush(Color.Parse("#D9E9F5")),
+        BorderBrush = new SolidColorBrush(Color.Parse("#38556E")),
+        BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4)
+    };
 
     private async Task ApplyGeometryAsync(IReadOnlyList<TextBox> fields,
         Func<double[], (bool success, string? error)> edit)
@@ -1473,6 +2036,16 @@ internal sealed class ProbeWindow : Window
         var wallStarted = _workspaces.SelectedIndex == 1 && _planCanvas.Tool == PlanTool.Wall;
         _planCanvas.RaiseEvent(new KeyEventArgs { RoutedEvent = KeyDownEvent, Key = Key.Escape });
         var wallCancelled = _planCanvas.Tool == PlanTool.Select;
+        ExecuteCommand("DR");
+        var doorCommand = _workspaces.SelectedIndex == 1 && _planCanvas.Tool == PlanTool.Door;
+        ExecuteCommand("WN");
+        var windowCommand = _workspaces.SelectedIndex == 1 && _planCanvas.Tool == PlanTool.Window;
+        ExecuteCommand("3D");
+        var modelCommand = _workspaces.SelectedIndex == 0;
+        ExecuteCommand("PL");
+        var planCommand = _workspaces.SelectedIndex == 1;
+        var togglesKeepVisual = _orthoButton.Content is StackPanel
+            && _polarButton.Content is StackPanel;
         var polarMath = PlanEditorCanvas.PolarPoint(new PointModel(0, 0),
             new PointModel(100, 20), 45);
         var polarSnaps = Math.Abs(polarMath.Y) < 0.001;
@@ -1481,7 +2054,9 @@ internal sealed class ProbeWindow : Window
         var success = undone && redone && shiftRedo && textKeptModel
             && shiftHorizontal && shiftVertical && commands
             && moving && moveCancelled && copying && planMove && orthoOn
-            && polarOn && wallStarted && wallCancelled && polarSnaps;
+            && polarOn && wallStarted && wallCancelled && polarSnaps
+            && doorCommand && windowCommand && modelCommand && planCommand
+            && togglesKeepVisual;
         Console.WriteLine(success ? "AVALONIA_CTRL_Z_Y_SHIFT_Z_OK" : "AVALONIA_SHORTCUT_CHECK_FAILED");
         return success;
     }

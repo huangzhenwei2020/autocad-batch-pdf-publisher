@@ -19,6 +19,7 @@ namespace BatchPdfPublisher.BuildingModel
             OpeningTypeLibraryDocument library = null, Action checkCancellation = null)
         {
             if (model == null) throw new ArgumentNullException(nameof(model));
+            model = StandardStoreyLayout.Materialize(model);
             var views = new List<ViewDocument>();
             foreach (var definition in SampleModelFactory.CreateDefaultViews(model.Name))
             {

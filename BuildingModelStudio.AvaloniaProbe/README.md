@@ -1,11 +1,18 @@
 # 万落建筑模型跨平台 GPU 视口探针
 
-独立 `net8.0` + Avalonia 12.1.3 程序，引用 [`BuildingModel.Core`](../BuildingModel.Core/README.md)。当前 CAD 的 `JZMX` 与发布包中的 `建筑模型/万落建筑模型.exe` 已指向此程序。`--project <项目目录> --model <模型名称>` 会打开现有模型，若不存在则创建同名空模型；`--model <model.json 路径>` 仍可直接打开单个文件。无参数时使用内置两层样例。界面仍是 Blender 式工作区的粗略三栏技术探针，不是最终产品 UI。
+独立 `net8.0` + Avalonia 12.1.3 程序，引用 [`BuildingModel.Core`](../BuildingModel.Core/README.md)。当前 CAD 的 `JZMX` 与发布包中的 `建筑模型/万落建筑模型.exe` 已指向此程序。`--project <项目目录> --model <模型名称>` 会打开现有模型，若不存在则创建同名空模型；`--model <model.json 路径>` 仍可直接打开单个文件。无参数时使用内置两层样例。主界面采用固定高度 Ribbon、项目浏览器、视图和可收起属性栏；后续功能继续按这个结构扩展。
+
+Ribbon 导航行固定 38 px、命令区固定 116 px。调整窗口大小或收起左右侧栏时，只有视图区域伸缩；Ribbon 不换行、不按窗口高度缩放。命令超出横向空间时在固定高度内横向滚动，不覆盖视图或底部命令栏。侧栏各自独立收起，默认展开项目浏览器、收起属性栏。尚未实现的图纸视图保持禁用，不能把占位入口伪装成可用功能。建模页采用大图标主命令、旁边上下排列的小命令和底部分组名；尚未实现的命令以低对比样式呈现，不执行操作。底部状态区只展示实际可用的正交、极轴开关。
+确认的布局稿保存在 [`design-qa/building-model-ribbon-approved.png`](../design-qa/building-model-ribbon-approved.png)；新增命令应延续其固定 Ribbon、左右可收起栏和画布优先的层次。
+
+Ribbon 图标主要取自 Lucide SVG，墙命令使用专门绘制的图标；运行时使用从源 SVG 生成并缓存的透明 PNG，避免 SVG 首帧偶发空白。源文件与许可证在 `Resources/Icons/`。按钮内显示命令与快捷键。原有 `Q`、`WA`、`M`、`CO`、`Del`、`Ctrl+Z/Y`、`F8/F10` 不变，另有 `DR` 放门、`WN` 放窗、`LS` 楼层设置、`AX` 轴号设置、`PL` 平面视图、`3D` 三维视图、`ZF` 适配视图、`PV` 生成视图、`SC` 推到 CAD，以及 `Ctrl+O/S/Shift+S` 文件操作。
 
 ```text
 dotnet run --project BuildingModelStudio.AvaloniaProbe -c Release
 dotnet run --project BuildingModelStudio.AvaloniaProbe -c Release -- --smoke
 dotnet run --project BuildingModelStudio.AvaloniaProbe -c Release -- --snapshot <绝对路径.png>
+dotnet run --project BuildingModelStudio.AvaloniaProbe -c Release -- --snapshot-plan <绝对路径.png>
+dotnet run --project BuildingModelStudio.AvaloniaProbe -c Release -- --snapshot-compact <绝对路径.png> --snapshot-properties <绝对路径.png>
 dotnet run --project BuildingModelStudio.AvaloniaProbe -c Release -- --model <项目/建筑模型/名称/model.json>
 dotnet run --project BuildingModelStudio.AvaloniaProbe -c Release -- --pick-check
 dotnet run --project BuildingModelStudio.AvaloniaProbe -c Release -- --bench 50000
@@ -13,6 +20,8 @@ dotnet run --project BuildingModelStudio.AvaloniaProbe -c Release -- --gpu-bench
 ```
 
 `--smoke` 等待 GPU 帧绘制、检查 OpenGL 错误，并从视口中心拾取一个真实构件 ID；`--snapshot` 从 Avalonia 合成器捕获包括 GPU 视口的完整窗口。点击模型或左侧列表会同步选中构件；左键拖动旋转，中键/右键拖动平移，滚轮缩放。选择墙可一次修改墙长、墙厚、墙高（0 表示随楼层）；选择门窗可一次修改沿墙定位、宽、高、窗台高。修改在克隆模型上校验，洞口越出宿主墙、顶部超出墙高、与其他洞口重叠时整笔拒绝；合法修改重建视口，可撤销/重做。同值提交不增加修订。
+
+楼层设置可新增、删除无构件且未被引用的楼层。独立楼层可作为多个标准层的来源：模型文件只保存一份平面构件，编辑来源层会同步到所有引用层；三维视图、平面图和 CAD 视图生成时，按每个实际楼层的标高创建独立实体，因此三维仍显示完整的多层建筑。楼板绝对标高随楼层标高或层高调整；存在门窗越过目标层墙高等情况时拒绝变更。左右侧栏使用各自固定位置的折叠按钮，状态按钮文字居中，页签与画布边缘对齐。
 
 工具栏可打开、保存、另存为模型；未保存修改在标题显示 `*`，关闭或打开另一模型时询问保存。保存沿用共享层的原子替换和 `.bak` 备份。模型保存为项目 `建筑模型/<名称>/model.json` 后，点击“生成 CAD 视图”会在同级 `views/` 写入四立面、剖面、轴测、各层平面、门窗表及图纸 JSON，已有同名文件留 `.bak`。点击“推到 CAD”会生成视图，并将图纸优先写进现有待落图清单；回到 AutoCAD 执行 `LTTZ` 才会落图。若同级存在 `openings.json`，会使用项目门窗类型库；否则门窗立面只保留洞口轮廓。打开模型的读盘、体量和拾取索引构建在后台执行。
 

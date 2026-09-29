@@ -12,6 +12,7 @@
     <Compile Include="..\Shared\BuildingModel\ModelTypes.cs" Link="Shared\ModelTypes.cs" />
     <Compile Include="..\Shared\BuildingModel\BuildingModelJson.cs" Link="Shared\BuildingModelJson.cs" />
     <Compile Include="..\Shared\BuildingModel\BuildingVolume.cs" Link="Shared\BuildingVolume.cs" />
+    <Compile Include="..\Shared\BuildingModel\StandardStoreyLayout.cs" Link="Shared\StandardStoreyLayout.cs" />
     <Compile Include="..\Shared\BuildingModel\StairGeometry.cs" Link="Shared\StairGeometry.cs" />
     <Compile Include="..\Shared\BuildingModel\RoofGeometry.cs" Link="Shared\RoofGeometry.cs" />
     <Compile Include="..\Shared\BuildingModel\SampleModelFactory.cs" Link="Shared\SampleModelFactory.cs" />

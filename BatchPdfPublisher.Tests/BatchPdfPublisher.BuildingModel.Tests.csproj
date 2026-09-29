@@ -31,6 +31,7 @@
     <Compile Include="..\Shared\BuildingModel\OrthogonalWallUnion.cs" Link="Features\BuildingModel\Shared\OrthogonalWallUnion.cs" />
     <Compile Include="..\Shared\BuildingModel\WallJunctionLines.cs" Link="Features\BuildingModel\Shared\WallJunctionLines.cs" />
     <Compile Include="..\Shared\BuildingModel\StoreyElevationLayout.cs" Link="Features\BuildingModel\Shared\StoreyElevationLayout.cs" />
+    <Compile Include="..\Shared\BuildingModel\StandardStoreyLayout.cs" Link="Features\BuildingModel\Shared\StandardStoreyLayout.cs" />
     <Compile Include="..\Shared\BuildingModel\StairGeometry.cs" Link="Features\BuildingModel\Shared\StairGeometry.cs" />
     <Compile Include="..\Shared\BuildingModel\RoofGeometry.cs" Link="Features\BuildingModel\Shared\RoofGeometry.cs" />
     <Compile Include="..\Shared\BuildingModel\VolumeRenderer.cs" Link="Features\BuildingModel\Shared\VolumeRenderer.cs" />
