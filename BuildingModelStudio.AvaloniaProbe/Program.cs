@@ -17,6 +17,7 @@ internal static class Program
     public static string? SnapshotPath { get; private set; }
     public static bool SnapshotPlan { get; private set; }
     public static bool SnapshotCompact { get; private set; }
+    public static Size? SnapshotSize { get; private set; }
     public static bool SnapshotProperties { get; private set; }
     public static bool SnapshotAxes { get; private set; }
     public static bool SnapshotStoreys { get; private set; }
@@ -66,6 +67,15 @@ internal static class Program
             SnapshotPath = Path.GetFullPath(args[index + 1]);
             SnapshotPlan = true;
             SnapshotCompact = true;
+        }
+        index = Array.IndexOf(args, "--snapshot-size");
+        if (index >= 0)
+        {
+            var dimensions = index + 1 < args.Length ? args[index + 1].Split('x', 'X') : Array.Empty<string>();
+            if (dimensions.Length != 2 || !int.TryParse(dimensions[0], out var width)
+                || !int.TryParse(dimensions[1], out var height) || width < 800 || height < 560)
+                throw new ArgumentException("--snapshot-size 需要至少 800x560 的窗口尺寸，例如 820x600。");
+            SnapshotSize = new Size(width, height);
         }
         index = Array.IndexOf(args, "--snapshot-properties");
         if (index >= 0 && index + 1 < args.Length)

@@ -3,8 +3,12 @@ using System.Globalization;
 using System.ComponentModel;
 using System.Diagnostics;
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Controls.Presenters;
+using Avalonia.Styling;
+using Avalonia.VisualTree;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
@@ -48,6 +52,8 @@ internal sealed class ProbeWindow : Window
     private readonly Dictionary<ViewTransformTool, Button> _viewToolButtons = new();
     private readonly StackPanel _properties = new() { Margin = new Thickness(16), Spacing = 12 };
     private readonly TextBlock _status = new();
+    private Button? _quickUndo;
+    private Button? _quickRedo;
     private readonly TextBox _commandInput = new()
     { PlaceholderText = "输入命令：WA 画墙 / M 移动 / CO 复制", MinWidth = 180 };
     private readonly Button _polarButton = new() { Content = "极轴 45°：关" };
@@ -96,9 +102,21 @@ internal sealed class ProbeWindow : Window
         Title = "万落建筑模型";
         Width = 1500;
         Height = 900;
-        MinWidth = 960;
-        MinHeight = 620;
+        MinWidth = 800;
+        MinHeight = 560;
+        FontSize = 13;
+        Styles.Add(new Style(selector => selector.OfType<Button>().Class(":disabled")
+            .Template().OfType<ContentPresenter>())
+        {
+            Setters =
+            {
+                new Setter(ContentPresenter.BackgroundProperty, Brushes.Transparent),
+                new Setter(ContentPresenter.BorderBrushProperty, Brushes.Transparent)
+            }
+        });
         if (Program.SnapshotCompact) { Width = 1000; Height = 650; }
+        if (Program.SnapshotSize is Size snapshotSize)
+        { Width = snapshotSize.Width; Height = snapshotSize.Height; }
         _session = new BuildingModelEditSession(SampleModelFactory.CreateTwoStoreyHouse());
         _savedJson = BuildingModelJson.ToJson(_session.Model);
         var initialVolume = BuildingVolumeBuilder.Build(_session.Model);
@@ -189,14 +207,18 @@ internal sealed class ProbeWindow : Window
                 BorderThickness = new Thickness(0) };
             button.Click += (_, _) => callback();
             ToolTip.SetTip(button, tip);
+            AutomationProperties.SetName(button, tip);
             return button;
         }
         quickAccess.Children.Add(Quick("folder-open", "打开模型  Ctrl+O", () => _ = OpenModelAsync()));
         quickAccess.Children.Add(Quick("save", "保存  Ctrl+S", () => _ = SaveModelAsync(false)));
-        quickAccess.Children.Add(Quick("undo-2", "撤销  Ctrl+Z", () => _ = UndoModelAsync()));
-        quickAccess.Children.Add(Quick("redo-2", "重做  Ctrl+Y", () => _ = RedoModelAsync()));
-        var commandSearch = new TextBox { PlaceholderText = "搜索命令...",
+        _quickUndo = Quick("undo-2", "撤销  Ctrl+Z", () => _ = UndoModelAsync());
+        _quickRedo = Quick("redo-2", "重做  Ctrl+Y", () => _ = RedoModelAsync());
+        quickAccess.Children.Add(_quickUndo);
+        quickAccess.Children.Add(_quickRedo);
+        var commandSearch = new TextBox { PlaceholderText = "输入命令 / Enter",
             Margin = new Thickness(4, 3, 8, 3), MinHeight = 30 };
+        ToolTip.SetTip(commandSearch, "输入 WA、M、CO 等命令，按回车执行；也可直接在视图中输入。");
         commandSearch.KeyDown += (_, e) =>
         {
             if (e.Key != Key.Enter) return;
@@ -306,14 +328,16 @@ internal sealed class ProbeWindow : Window
             Margin = new Thickness(0, 14, 7, 0) };
         ToolTip.SetTip(leftToggle, "收起项目浏览器");
         var leftHost = new Grid();
+        var leftExpanded = true;
+        var rightExpanded = Program.SnapshotProperties;
+        Action updateSideLayout = () => { };
         leftHost.Children.Add(tree);
         leftHost.Children.Add(leftToggle);
         leftToggle.Click += (_, _) =>
         {
-            tree.IsVisible = !tree.IsVisible;
-            root.ColumnDefinitions[0].Width = new GridLength(tree.IsVisible ? 270 : 38);
-            leftToggle.Content = CommandIcon(tree.IsVisible ? "chevron-left" : "chevron-right", 15);
-            ToolTip.SetTip(leftToggle, tree.IsVisible ? "收起项目浏览器" : "展开项目浏览器");
+            leftExpanded = !tree.IsVisible;
+            if (leftExpanded && root.Bounds.Width < 1000) rightExpanded = false;
+            updateSideLayout();
         };
         Grid.SetRow(leftHost, 2);
         root.Children.Add(leftHost);
@@ -511,7 +535,9 @@ internal sealed class ProbeWindow : Window
         Grid.SetColumn(_workspaces, 1);
         root.Children.Add(_workspaces);
 
-        var propertyScroll = new ScrollViewer { Content = _properties };
+        var propertyScroll = new ScrollViewer { Content = _properties,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
         var rightHeader = new Grid { Height = 42 };
         rightHeader.Children.Add(new TextBlock { Text = "属性", FontSize = 14,
             FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center,
@@ -534,11 +560,8 @@ internal sealed class ProbeWindow : Window
         rightHost.Children.Add(rightToggle);
         rightToggle.Click += (_, _) =>
         {
-            rightPanel.IsVisible = !rightPanel.IsVisible;
-            propertyRailLabel.IsVisible = !rightPanel.IsVisible;
-            root.ColumnDefinitions[2].Width = new GridLength(rightPanel.IsVisible ? 310 : 36);
-            rightToggle.Content = CommandIcon(rightPanel.IsVisible ? "chevron-right" : "chevron-left", 15);
-            ToolTip.SetTip(rightToggle, rightPanel.IsVisible ? "收起属性栏" : "展开属性栏");
+            rightExpanded = !rightExpanded;
+            updateSideLayout();
         };
         if (Program.SnapshotProperties)
         {
@@ -550,6 +573,47 @@ internal sealed class ProbeWindow : Window
         Grid.SetColumn(rightHost, 2);
         root.Children.Add(rightHost);
 
+        bool? shownTree = null;
+        bool? shownProperties = null;
+        updateSideLayout = () =>
+        {
+            var available = root.Bounds.Width > 0 ? root.Bounds.Width : Width;
+            // Reserve the drawing area when both inspectors would crowd a small window.
+            var showTree = leftExpanded && (!rightExpanded || available >= 1000);
+            tree.IsVisible = showTree;
+            rightPanel.IsVisible = rightExpanded;
+            propertyRailLabel.IsVisible = !rightExpanded;
+            var leftWidth = showTree ? Math.Clamp(available * 0.20, 190, 270) : 38;
+            var rightWidth = rightExpanded ? Math.Clamp(available * 0.25, 250, 310) : 36;
+            if (Math.Abs(root.ColumnDefinitions[0].Width.Value - leftWidth) > 0.5)
+                root.ColumnDefinitions[0].Width = new GridLength(leftWidth);
+            if (Math.Abs(root.ColumnDefinitions[2].Width.Value - rightWidth) > 0.5)
+                root.ColumnDefinitions[2].Width = new GridLength(rightWidth);
+            if (shownTree != showTree)
+            {
+                shownTree = showTree;
+                leftToggle.Content = CommandIcon(showTree ? "chevron-left" : "chevron-right", 15);
+                ToolTip.SetTip(leftToggle, showTree ? "收起项目浏览器" : "展开项目浏览器（窄窗口将收起属性栏）");
+                AutomationProperties.SetName(leftToggle, showTree ? "收起项目浏览器" : "展开项目浏览器");
+            }
+            if (shownProperties != rightExpanded)
+            {
+                shownProperties = rightExpanded;
+                rightToggle.Content = CommandIcon(rightExpanded ? "chevron-right" : "chevron-left", 15);
+                ToolTip.SetTip(rightToggle, rightExpanded ? "收起属性栏" : "展开属性栏");
+                AutomationProperties.SetName(rightToggle, rightExpanded ? "收起属性栏" : "展开属性栏");
+            }
+            var compactHeader = available < 1080;
+            commandSearch.IsVisible = !compactHeader;
+            headerLayout.ColumnDefinitions[2].Width = new GridLength(compactHeader ? 0 : 180);
+            foreach (var button in ribbonTabs.Children.OfType<Button>())
+            {
+                button.MinWidth = compactHeader ? 70 : 86;
+                button.FontSize = compactHeader ? 14 : 16;
+            }
+        };
+        root.SizeChanged += (_, _) => updateSideLayout();
+
         var pages = new Dictionary<string, Control>();
         var tabButtons = new Dictionary<string, Button>();
         static Button Action(string caption, Action callback)
@@ -560,7 +624,7 @@ internal sealed class ProbeWindow : Window
         }
         static Button Planned(string caption)
         {
-            var button = new Button { Content = caption, IsHitTestVisible = false, Opacity = 0.43 };
+            var button = new Button { Content = caption, IsEnabled = false };
             ToolTip.SetTip(button, caption + "：尚未实现");
             return button;
         }
@@ -702,6 +766,7 @@ internal sealed class ProbeWindow : Window
         SelectRibbon("建模");
 
         _status.Foreground = new SolidColorBrush(Color.Parse("#A4B8CF"));
+        _status.TextTrimming = TextTrimming.CharacterEllipsis;
         _status.VerticalAlignment = VerticalAlignment.Center;
         _status.Margin = new Thickness(14, 0);
         _status.Text = "左键选择 · 中键旋转 · Shift+中键或右键平移 · 滚轮缩放 · 毫米单位";
@@ -768,6 +833,7 @@ internal sealed class ProbeWindow : Window
         Grid.SetColumnSpan(console, 3);
         root.Children.Add(console);
         Content = root;
+        updateSideLayout();
         AddHandler(KeyDownEvent, OnShortcutKeyDown, RoutingStrategies.Tunnel);
 
         BuildElementList();
@@ -897,6 +963,7 @@ internal sealed class ProbeWindow : Window
         var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
         row.Children.Add(CommandIcon(icon, 14));
         row.Children.Add(new TextBlock { Text = title, VerticalAlignment = VerticalAlignment.Center });
+        ToolTip.SetTip(row, title);
         return row;
     }
 
@@ -925,7 +992,7 @@ internal sealed class ProbeWindow : Window
                 Spacing = 7, VerticalAlignment = VerticalAlignment.Center };
             row.Children.Add(CommandIcon(icon, 15));
             row.Children.Add(new TextBlock { Text = title + (shortcut == null ? "" : "  " + shortcut),
-                FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
+                FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
             button.Content = row;
         }
         else
@@ -934,16 +1001,24 @@ internal sealed class ProbeWindow : Window
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center };
             column.Children.Add(CommandIcon(icon, 27));
-            column.Children.Add(new TextBlock { Text = title, FontSize = 11,
+            column.Children.Add(new TextBlock { Text = title, FontSize = 12,
                 HorizontalAlignment = HorizontalAlignment.Center });
             if (shortcut != null)
-                column.Children.Add(new TextBlock { Text = shortcut, FontSize = 9,
-                    Foreground = new SolidColorBrush(Color.Parse("#7FA8CE")),
-                    HorizontalAlignment = HorizontalAlignment.Center });
+                column.Children.Add(new Border
+                {
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    CornerRadius = new CornerRadius(3), Padding = new Thickness(5, 0),
+                    Background = new SolidColorBrush(Color.Parse("#203D56")),
+                    BorderBrush = new SolidColorBrush(Color.Parse("#416382")),
+                    BorderThickness = new Thickness(1),
+                    Child = new TextBlock { Text = shortcut, FontSize = 10,
+                        Foreground = new SolidColorBrush(Color.Parse("#B7DDFB")) }
+                });
             button.Content = column;
         }
-        ToolTip.SetTip(button, !button.IsHitTestVisible ? label + "：尚未实现"
+        ToolTip.SetTip(button, !button.IsEnabled ? label + "：尚未实现"
             : shortcut == null ? label : label + "  (" + shortcut + ")");
+        AutomationProperties.SetName(button, shortcut == null ? label : label + " " + shortcut);
     }
 
     private void UpdateTitle()
@@ -1701,11 +1776,20 @@ internal sealed class ProbeWindow : Window
 
     private TextBox AddNumberField(string label, double value)
     {
-        _properties.Children.Add(new TextBlock { Text = label });
+        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,100"),
+            MinHeight = 36 };
+        row.Children.Add(new TextBlock { Text = label, FontSize = 13,
+            TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 10, 0) });
         var field = new TextBox { Text = value.ToString("0.##", CultureInfo.InvariantCulture),
-            MinHeight = 34, Background = new SolidColorBrush(Color.Parse("#20364A")),
+            MinHeight = 36, FontSize = 13, VerticalAlignment = VerticalAlignment.Center,
+            Background = new SolidColorBrush(Color.Parse("#20364A")),
             BorderBrush = new SolidColorBrush(Color.Parse("#38556E")) };
-        _properties.Children.Add(field);
+        ToolTip.SetTip(field, label);
+        AutomationProperties.SetName(field, label);
+        Grid.SetColumn(field, 1);
+        row.Children.Add(field);
+        _properties.Children.Add(row);
         return field;
     }
 
@@ -1776,6 +1860,10 @@ internal sealed class ProbeWindow : Window
     {
         _undo.IsEnabled = _session.CanUndo;
         _redo.IsEnabled = _session.CanRedo;
+        if (_quickUndo != null)
+        { _quickUndo.IsEnabled = _session.CanUndo; _quickUndo.Opacity = _session.CanUndo ? 1 : 0.4; }
+        if (_quickRedo != null)
+        { _quickRedo.IsEnabled = _session.CanRedo; _quickRedo.Opacity = _session.CanRedo ? 1 : 0.4; }
     }
 
     private async Task RunGpuBenchmarkAsync(int count)
@@ -1996,7 +2084,7 @@ internal sealed class ProbeWindow : Window
         });
         var shiftRedo = _session.Model.Walls.First(x => x.Id == "1F-S").X2 == original + 500;
         var revision = _session.Revision;
-        var textBox = _properties.Children.OfType<TextBox>().FirstOrDefault();
+        var textBox = _properties.GetVisualDescendants().OfType<TextBox>().FirstOrDefault();
         textBox?.RaiseEvent(new KeyEventArgs
         {
             RoutedEvent = KeyDownEvent, Key = Key.Z, KeyModifiers = KeyModifiers.Control
