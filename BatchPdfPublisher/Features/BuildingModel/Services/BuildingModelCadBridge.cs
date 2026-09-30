@@ -42,8 +42,14 @@ namespace BatchPdfPublisher.Services
             {
                 var batch = PickViewBatch(document);
                 if (batch == null) return;
+                var cursor = new BatchPlacementCursor();
+                var completed = 0;
                 foreach (var entry in batch.SelectedEntries)
-                    if (!PlaceOneView(document, entry.FilePath, entry.Id, batch.FrameMode, batch.SelectedFrame)) break;
+                {
+                    if (!PlaceBatchEntry(document, entry.FilePath, entry.Id, batch.FrameMode, batch.SelectedFrame, cursor)) break;
+                    completed++;
+                }
+                document.Editor.WriteMessage("\n批量落图完成 " + completed + " / " + batch.SelectedEntries.Count + " 张。");
                 return;
             }
             var editor = document.Editor;
@@ -55,6 +61,15 @@ namespace BatchPdfPublisher.Services
 
         private static bool PlaceOneView(Document document, string path, string placedViewId,
             BuildingFrameMode? frameMode, FrameDefinition selectedFrame)
+        { return PlaceBatchEntry(document, path, placedViewId, frameMode, selectedFrame, null); }
+
+        private sealed class BatchPlacementCursor
+        {
+            public Point3d? Next;
+        }
+
+        private static bool PlaceBatchEntry(Document document, string path, string placedViewId,
+            BuildingFrameMode? frameMode, FrameDefinition selectedFrame, BatchPlacementCursor cursor)
         {
             var editor = document.Editor;
 
@@ -73,6 +88,11 @@ namespace BatchPdfPublisher.Services
                 return false;
             }
             var sourceViewId = view.Id;
+            if (view.Kind == ViewKind.Sheet && !view.ModelSpaceSheet)
+            {
+                editor.WriteMessage("\n这是旧版纸面缩放图纸，请在建筑模型中重新生成视图后落图；建筑必须保持 1:1。");
+                return false;
+            }
             if (frameMode == BuildingFrameMode.Project && selectedFrame == null)
             {
                 editor.WriteMessage("\n尚未选择项目图框，落图已取消。");
@@ -98,7 +118,7 @@ namespace BatchPdfPublisher.Services
             PlacedView replacing = null;
             if (placements.Count > 0)
             {
-                var choice = PickPlacement(placements, editor);
+                var choice = cursor != null && placements.Count == 1 ? 1 : PickPlacement(placements, editor);
                 if (!choice.HasValue) return false;
                 if (choice.Value > 0) replacing = placements[choice.Value - 1];
             }
@@ -106,9 +126,21 @@ namespace BatchPdfPublisher.Services
             if (replacing != null) anchor = replacing.Anchor;
             else
             {
-                var pointResult = editor.GetPoint("\n指定视图插入点（视图左下角）：");
-                if (pointResult.Status != PromptStatus.OK) return false;
-                anchor = pointResult.Value;
+                if (cursor != null && cursor.Next.HasValue) anchor = cursor.Next.Value;
+                else
+                {
+                    var pointResult = editor.GetPoint(cursor == null
+                        ? "\n指定视图插入点（视图左下角）："
+                        : "\n指定批量落图起点（全部勾选视图自动向右排列）：");
+                    if (pointResult.Status != PromptStatus.OK) return false;
+                    anchor = pointResult.Value;
+                    if (cursor != null) cursor.Next = anchor;
+                }
+                if (cursor != null)
+                {
+                    var bounds = BatchViewBounds(view);
+                    anchor = new Point3d(anchor.X - bounds[0], anchor.Y - bounds[1], anchor.Z);
+                }
             }
             var placementId = replacing == null ? Guid.NewGuid().ToString("N") : replacing.Id;
 
@@ -121,7 +153,7 @@ namespace BatchPdfPublisher.Services
               using (document.LockDocument())
               using (var transaction = document.Database.TransactionManager.StartTransaction())
               {
-                EnsureViewLayers(document.Database, transaction);
+                var layerIds = EnsureViewLayers(document.Database, transaction);
                 var space = (BlockTableRecord)transaction.GetObject(
                     SymbolUtilityServices.GetBlockModelSpaceId(document.Database), OpenMode.ForWrite);
 
@@ -143,8 +175,10 @@ namespace BatchPdfPublisher.Services
                     var entity = new Line(
                         new Point3d(anchor.X + line.X1, anchor.Y + line.Y1, 0d),
                         new Point3d(anchor.X + line.X2, anchor.Y + line.Y2, 0d));
-                    ApplyLayer(entity, line.Layer);
-                    ApplyLineType(transaction, document.Database, entity, line.LineType);
+                    var lineLayer = string.Equals(line.LineType, "DASHED", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(line.LineType, "HIDDEN", StringComparison.OrdinalIgnoreCase)
+                        ? "Hidden" : line.Layer;
+                    ApplyLayer(entity, lineLayer, layerIds);
                     space.AppendEntity(entity);
                     transaction.AddNewlyCreatedDBObject(entity, true);
                     generatedIds.Add(entity.ObjectId);
@@ -160,7 +194,7 @@ namespace BatchPdfPublisher.Services
                         Height = text.Height > 0.5d ? text.Height : 250d,
                         Position = new Point3d(anchor.X + text.X, anchor.Y + text.Y, 0d)
                     };
-                    ApplyLayer(entity, text.Layer);
+                    ApplyLayer(entity, text.Layer, layerIds);
                     space.AppendEntity(entity);
                     transaction.AddNewlyCreatedDBObject(entity, true);
                     generatedIds.Add(entity.ObjectId);
@@ -174,7 +208,7 @@ namespace BatchPdfPublisher.Services
                     if (!string.IsNullOrWhiteSpace(circle.Layer) && skipLayers.Contains(circle.Layer)) continue;
                     var entity = new Circle(new Point3d(anchor.X + circle.X, anchor.Y + circle.Y, 0d), Vector3d.ZAxis,
                         Math.Abs(circle.Radius));
-                    ApplyLayer(entity, circle.Layer);
+                    ApplyLayer(entity, circle.Layer, layerIds);
                     space.AppendEntity(entity);
                     transaction.AddNewlyCreatedDBObject(entity, true);
                     generatedIds.Add(entity.ObjectId);
@@ -205,7 +239,7 @@ namespace BatchPdfPublisher.Services
                         try
                         {
                             var entity = CreateDimension(dimension, anchor, dimensionStyle);
-                            ApplyLayer(entity, string.IsNullOrWhiteSpace(dimension.Layer) ? ViewLayers.Dimension : dimension.Layer);
+                            ApplyLayer(entity, string.IsNullOrWhiteSpace(dimension.Layer) ? ViewLayers.Dimension : dimension.Layer, layerIds);
                             space.AppendEntity(entity);
                             transaction.AddNewlyCreatedDBObject(entity, true);
                             generatedIds.Add(entity.ObjectId);
@@ -227,7 +261,7 @@ namespace BatchPdfPublisher.Services
                     space.AppendEntity(entity);
                     transaction.AddNewlyCreatedDBObject(entity, true);
                     entity.SetDatabaseDefaults(document.Database);
-                    ApplyLayer(entity, hatch.Layer);
+                    ApplyLayer(entity, hatch.Layer, layerIds);
                     ApplyHatchPattern(entity, hatch, editor);
                     var loop = new Point2dCollection();
                     foreach (var point in hatch.Boundary) loop.Add(new Point2d(anchor.X + point.X, anchor.Y + point.Y));
@@ -299,6 +333,14 @@ namespace BatchPdfPublisher.Services
                 return false;
             }
 
+            if (cursor != null && replacing == null)
+            {
+                var bounds = BatchViewBounds(view);
+                var width = Math.Max(1d, bounds[2] - bounds[0]);
+                cursor.Next = new Point3d(anchor.X + bounds[2] + Math.Max(1000d, width * 0.1d),
+                    anchor.Y + bounds[1], anchor.Z);
+            }
+
             editor.WriteMessage("\n" + (replacing == null ? "落图完成：" : "视图更新完成：")
                 + (view.Title ?? view.Id) + "（1:" + view.Scale + "）");
             foreach (var pair in counts.OrderByDescending(x => x.Value))
@@ -332,6 +374,40 @@ namespace BatchPdfPublisher.Services
                 }
             }
             return true;
+        }
+
+        private static double[] BatchViewBounds(ViewDocument view)
+        {
+            var points = new List<Point2d>();
+            foreach (var line in view.Lines ?? new List<ViewLine>())
+            { points.Add(new Point2d(line.X1, line.Y1)); points.Add(new Point2d(line.X2, line.Y2)); }
+            foreach (var circle in view.Circles ?? new List<ViewCircle>())
+            {
+                var r = Math.Abs(circle.Radius);
+                points.Add(new Point2d(circle.X - r, circle.Y - r));
+                points.Add(new Point2d(circle.X + r, circle.Y + r));
+            }
+            foreach (var hatch in view.Hatches ?? new List<ViewHatch>())
+                foreach (var p in hatch.Boundary ?? new List<PointModel>()) points.Add(new Point2d(p.X, p.Y));
+            foreach (var text in view.Texts ?? new List<ViewText>())
+            {
+                points.Add(new Point2d(text.X - text.Height, text.Y - text.Height));
+                points.Add(new Point2d(text.X + Math.Max(1, (text.Text ?? "").Length) * text.Height,
+                    text.Y + text.Height));
+            }
+            foreach (var d in view.Dimensions ?? new List<ViewDimension>())
+            {
+                points.Add(d.Vertical ? new Point2d(d.LinePosition, d.From) : new Point2d(d.From, d.LinePosition));
+                points.Add(d.Vertical ? new Point2d(d.AnchorPosition, d.To) : new Point2d(d.To, d.AnchorPosition));
+            }
+            if (view.Kind == ViewKind.Sheet)
+            {
+                points.Add(Point2d.Origin);
+                points.Add(new Point2d(view.PaperWidth * Math.Max(1, view.Scale),
+                    view.PaperHeight * Math.Max(1, view.Scale)));
+            }
+            return points.Count == 0 ? new[] { 0d, 0d, 1000d, 1000d }
+                : new[] { points.Min(p => p.X), points.Min(p => p.Y), points.Max(p => p.X), points.Max(p => p.Y) };
         }
 
         private sealed class PlacedView
@@ -427,7 +503,7 @@ namespace BatchPdfPublisher.Services
                 FrameTemplate = frame == null ? null : frame.BlockName,
                 ViewIds = new List<string> { source.Id }
             };
-            return SheetComposer.Compose(new[] { source }, sheet);
+            return SheetComposer.ComposeModelSpace(new[] { source }, sheet);
         }
 
         private static bool FrameMatches(ViewDocument view, FrameDefinition frame)
@@ -869,32 +945,28 @@ namespace BatchPdfPublisher.Services
             }
         }
 
-        private static void EnsureViewLayers(Database database, Transaction transaction)
+        private static Dictionary<string, ObjectId> EnsureViewLayers(Database database, Transaction transaction)
         {
-            var table = (LayerTable)transaction.GetObject(database.LayerTableId, OpenMode.ForRead);
+            var profile = DraftingStandardService.LoadProfile();
+            var layers = new Dictionary<string, ObjectId>(StringComparer.OrdinalIgnoreCase);
+            layers.Add("Hidden", DraftingStandardService.EnsureLayerFor(database, transaction,
+                DraftingStandardProfile.HiddenKey, profile));
             foreach (var style in ViewLayers.All)
             {
-                if (table.Has(style.Name)) continue;
-                table.UpgradeOpen();
-                var record = new LayerTableRecord
-                {
-                    Name = style.Name,
-                    Color = Color.FromColorIndex(ColorMethod.ByAci, style.Color),
-                    LineWeight = (LineWeight)style.LineWeight
-                };
-                if (!string.Equals(style.LineType, "Continuous", StringComparison.OrdinalIgnoreCase))
-                {
-                    var lineTypes = (LinetypeTable)transaction.GetObject(database.LinetypeTableId, OpenMode.ForRead);
-                    if (!lineTypes.Has(style.LineType))
-                    {
-                        try { database.LoadLineTypeFile(style.LineType, "acad.lin"); } catch { }
-                        lineTypes = (LinetypeTable)transaction.GetObject(database.LinetypeTableId, OpenMode.ForRead);
-                    }
-                    if (lineTypes.Has(style.LineType)) record.LinetypeObjectId = lineTypes[style.LineType];
-                }
-                table.Add(record);
-                transaction.AddNewlyCreatedDBObject(record, true);
+                var key = style.Name == ViewLayers.SheetFrame ? DraftingStandardProfile.FrameKey
+                    : style.Name == ViewLayers.Cut ? DraftingStandardProfile.StructureKey
+                    : style.Name == ViewLayers.Opening ? DraftingStandardProfile.FineKey
+                    : style.Name == ViewLayers.CutHatch ? DraftingStandardProfile.HatchKey
+                    : style.Name == ViewLayers.Dimension ? DraftingStandardProfile.AnnotationDimensionLayerKey
+                    : style.Name == ViewLayers.Axis ? DraftingStandardProfile.StairAxisLayerKey
+                    : style.Name == ViewLayers.Stair ? DraftingStandardProfile.StairOutlineLayerKey
+                    : style.Name == ViewLayers.Title || style.Name == ViewLayers.LevelText
+                        || style.Name == ViewLayers.Room ? DraftingStandardProfile.AnnotationTextLayerKey
+                    : style.Name == ViewLayers.Ground || style.Name == ViewLayers.Schedule
+                        ? DraftingStandardProfile.FineKey : DraftingStandardProfile.OutlineKey;
+                layers.Add(style.Name, DraftingStandardService.EnsureLayerFor(database, transaction, key, profile));
             }
+            return layers;
         }
 
         private static BuildingModelBatchWindow PickViewBatch(Document document)
@@ -997,7 +1069,7 @@ namespace BatchPdfPublisher.Services
         /// <summary>
         /// 图纸落图时套用项目已登记的图框模板：
         /// 按图纸的纸张规格（<see cref="ViewDocument.PaperName"/>，或用 <see cref="ViewDocument.FrameTemplate"/> 指定块名）
-        /// 在项目图框里找一条匹配的，把它插到插入点（按纸张缩放到 1:1 纸面），并回填图名/图号/比例属性。
+        /// 在项目图框里找一条匹配的，按出图比例放大图框，建筑几何保持模型空间 1:1。
         /// 找不到就返回 null —— 调用方照常使用图纸自带的图框。
         /// </summary>
         private static FrameDefinition InsertProjectFrame(Document document, Transaction transaction,
@@ -1043,7 +1115,7 @@ namespace BatchPdfPublisher.Services
 
                 var paperWidth = view.PaperWidth > 1d ? view.PaperWidth : 420d;
                 var paperHeight = view.PaperHeight > 1d ? view.PaperHeight : 297d;
-                var factor = Math.Min(paperWidth / bounds.Width, paperHeight / bounds.Height);
+                var factor = Math.Min(paperWidth / bounds.Width, paperHeight / bounds.Height) * Math.Max(1, view.Scale);
                 if (!(factor > 0d) || double.IsInfinity(factor))
                 {
                     if (strict) throw new InvalidOperationException("所选图框尺寸无效。");
@@ -1112,7 +1184,7 @@ namespace BatchPdfPublisher.Services
                 attribute.SetAttributeFromBlock(attributeDefinition, reference.BlockTransform);
                 var tag = (attributeDefinition.Tag ?? string.Empty).Trim();
                 var value = attributeDefinition.TextString;
-                if (TagMatches(tag, frame.PrintScaleAttributeTag, "比例")) value = "1:1";
+                if (TagMatches(tag, frame.PrintScaleAttributeTag, "比例")) value = "1:" + Math.Max(1, view.Scale);
                 else if (TagMatches(tag, frame.SheetNameAttributeTag, "图纸名称", "图名")) value = view.Title ?? string.Empty;
                 else if (TagMatches(tag, frame.SheetNumberAttributeTag, "图号")) value = SheetNumberOf(view);
                 else if (TagMatches(tag, frame.BuildingAttributeTag, "子项目名称") && !string.IsNullOrWhiteSpace(frame.DefaultBuilding))
@@ -1197,16 +1269,16 @@ namespace BatchPdfPublisher.Services
             return new RotatedDimension(rotation, first, second, linePoint, dimension.Text ?? string.Empty, dimensionStyle);
         }
 
-        private static void ApplyLayer(Entity entity, string layer)
+        private static void ApplyLayer(Entity entity, string layer, Dictionary<string, ObjectId> layerIds)
         {
-            if (string.IsNullOrWhiteSpace(layer)) return;
-            try
-            {
-                entity.Layer = layer;
+                ObjectId id;
+                if (entity is DBText && layer != ViewLayers.SheetFrame) layer = ViewLayers.LevelText;
+                if (!layerIds.TryGetValue(layer ?? string.Empty, out id))
+                    id = layerIds[ViewLayers.Elevation];
+                entity.LayerId = id;
                 entity.ColorIndex = 256;      // 随层
                 entity.LineWeight = LineWeight.ByLayer;
-            }
-            catch { }
+                entity.Linetype = "ByLayer";
         }
 
         private static void ApplyLineType(Transaction transaction, Database database, Entity entity, string lineType)

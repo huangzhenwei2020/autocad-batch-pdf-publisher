@@ -64,6 +64,12 @@ internal sealed class ProbeWindow : Window
     private readonly Button _redo = new() { Content = "重做 Ctrl+Y" };
     private readonly Button _publish = new() { Content = "生成 CAD 视图" };
     private readonly Button _sendToCad = new() { Content = "推到 CAD" };
+    private readonly Button _exportBuilding = new() { Content = "导出整栋" };
+    private readonly Button _exportStorey = new() { Content = "导出当前楼层" };
+    private readonly Button _cancelExport = new() { Content = "取消导出", IsEnabled = false };
+    private CancellationTokenSource? _exportCancellation;
+    private bool _choosingExport;
+    private readonly BlenderIntegration _blender = BlenderIntegration.Load();
     private CancellationTokenSource? _publishCancellation;
     private string? _selectedId;
     private string? _filePath;
@@ -292,6 +298,8 @@ internal sealed class ProbeWindow : Window
         axisSettings.Click += async (_, _) => await OpenAxisSettingsAsync();
         var resetView = new Button { Content = "视图复位" };
         resetView.Click += (_, _) => ResetActiveView();
+        var frameSelection = new Button { Content = "聚焦所选" };
+        frameSelection.Click += (_, _) => FrameActiveSelection();
         var globalStoreys = new Button { Content = "楼层设置" };
         globalStoreys.Click += async (_, _) => await OpenStoreySettingsAsync();
         _publish.Click += async (_, _) => await PublishViewsAsync(false);
@@ -418,6 +426,45 @@ internal sealed class ProbeWindow : Window
         };
         viewportHost.Children.Add(viewportInput);
         viewportHost.Children.Add(_gizmo);
+        var displayModes = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 1,
+            HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(10), Background = new SolidColorBrush(Color.Parse("#30485E")) };
+        var displayButtons = new Dictionary<ModelViewport.DisplayMode, Button>();
+        foreach (var (mode, label, icon) in new[]
+        {
+            (ModelViewport.DisplayMode.Wireframe, "线框", "grid-3x3"),
+            (ModelViewport.DisplayMode.Solid, "实体", "box"),
+            (ModelViewport.DisplayMode.Shaded, "着色", "layers"),
+            (ModelViewport.DisplayMode.Lit, "光照", "app-window")
+        })
+        {
+            var content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 5,
+                HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+            content.Children.Add(CommandIcon(icon, 14));
+            content.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center });
+            var button = new Button { Content = content, Width = 76, Height = 32,
+                Padding = new Thickness(4, 0), CornerRadius = new CornerRadius(0),
+                BorderThickness = new Thickness(0), FontSize = 12,
+                HorizontalContentAlignment = HorizontalAlignment.Center,
+                VerticalContentAlignment = VerticalAlignment.Center };
+            ToolTip.SetTip(button, mode == ModelViewport.DisplayMode.Lit
+                ? "定向光照预览（尚无真实阴影）" : label + "显示");
+            button.Click += (_, _) =>
+            {
+                _viewport.SetDisplayMode(mode);
+                foreach (var entry in displayButtons)
+                    entry.Value.Background = new SolidColorBrush(Color.Parse(
+                        entry.Key == mode ? "#1B5D9E" : "#1B2937"));
+            };
+            displayButtons.Add(mode, button);
+            displayModes.Children.Add(button);
+        }
+        var initialDisplayMode = Program.SnapshotDisplayMode ?? ModelViewport.DisplayMode.Shaded;
+        _viewport.SetDisplayMode(initialDisplayMode);
+        foreach (var entry in displayButtons)
+            entry.Value.Background = new SolidColorBrush(Color.Parse(
+                entry.Key == initialDisplayMode ? "#1B5D9E" : "#1B2937"));
+        viewportHost.Children.Add(displayModes);
         var viewTools = new StackPanel
         {
             Orientation = Orientation.Horizontal, Spacing = 6,
@@ -685,16 +732,35 @@ internal sealed class ProbeWindow : Window
             Action("楼层设置", () => _ = OpenStoreySettingsAsync())));
         pages["视图"] = Page(
             Group("三维操作", viewTools),
-            Group("视图", resetView,
+            Group("视图", resetView, frameSelection,
                 Action("平面视图", () => _workspaces.SelectedIndex = 1),
                 Action("三维视图", () => _workspaces.SelectedIndex = 0)));
-        pages["出图"] = Page(Group("CAD 输出", _publish, _sendToCad, cancelPublish));
+        _exportBuilding.Click += (_, _) => _ = ExportGlbAsync(false);
+        _exportStorey.Click += (_, _) => _ = ExportGlbAsync(true);
+        _cancelExport.Click += (_, _) => _exportCancellation?.Cancel();
+        var openInBlender = new CheckBox { Content = "导出后用 Blender 打开", IsChecked = _blender.OpenAfterExport,
+            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0) };
+        openInBlender.IsCheckedChanged += (_, _) =>
+        {
+            _blender.OpenAfterExport = openInBlender.IsChecked == true;
+            try { _blender.Save(); }
+            catch (Exception ex) { _status.Text = "Blender 选项保存失败：" + ex.Message; }
+        };
+        pages["出图"] = Page(Group("CAD 输出", _publish, _sendToCad, cancelPublish),
+            Group("三维模型 GLB", _exportBuilding, _exportStorey, _cancelExport, openInBlender));
         pages["管理"] = Page(Group("模型文件", open, save, saveAs),
             Group("项目设置", Action("楼层设置", () => _ = OpenStoreySettingsAsync())));
         void StyleRibbonControl(Control control, bool inRibbon = true)
         {
             switch (control)
             {
+                case CheckBox checkBox:
+                    checkBox.MinHeight = 32;
+                    checkBox.Padding = new Thickness(0);
+                    checkBox.FontSize = 12;
+                    checkBox.HorizontalContentAlignment = HorizontalAlignment.Left;
+                    checkBox.VerticalContentAlignment = VerticalAlignment.Center;
+                    break;
                 case Button button:
                     var list = inRibbon && button.Classes.Contains("ribbon-list");
                     var small = inRibbon && button.Classes.Contains("ribbon-small");
@@ -763,7 +829,7 @@ internal sealed class ProbeWindow : Window
             tabButtons[name] = button;
             ribbonTabs.Children.Add(button);
         }
-        SelectRibbon("建模");
+        SelectRibbon(Program.SnapshotRibbon ?? "建模");
 
         _status.Foreground = new SolidColorBrush(Color.Parse("#A4B8CF"));
         _status.TextTrimming = TextTrimming.CharacterEllipsis;
@@ -907,8 +973,12 @@ internal sealed class ProbeWindow : Window
         "另存为" => ("file-plus", "Ctrl+Shift+S"),
         "生成 CAD 视图" => ("file-axis-3d", "PV"),
         "推到 CAD" => ("send", "SC"),
+        "导出整栋" => ("box", "EG"),
+        "导出当前楼层" => ("layers", "EF"),
+        "取消导出" => ("undo-2", null),
         "取消生成" => ("undo-2", null),
         "视图复位" => ("maximize", "Home"),
+        "聚焦所选" => ("maximize", "Z"),
         "缩放适应" => ("maximize", "ZF"),
         "平面视图" => ("panel-top", "PL"),
         "三维视图" => ("box", "3D"),
@@ -1105,6 +1175,87 @@ internal sealed class ProbeWindow : Window
         catch (Exception ex) { _status.Text = "保存失败：" + ex.Message; return false; }
     }
 
+    private async Task ExportGlbAsync(bool currentStorey)
+    {
+        if (_choosingExport || _exportCancellation != null) return;
+        var storey = currentStorey ? _storeyChooser.SelectedItem as StoreyItem : null;
+        if (currentStorey && storey == null)
+        { _status.Text = "请先在平面视图中选择楼层。"; return; }
+        _choosingExport = true;
+        _exportBuilding.IsEnabled = _exportStorey.IsEnabled = false;
+        CancellationTokenSource? cancellation = null;
+        var shouldOpenBlender = _blender.OpenAfterExport;
+        try
+        {
+            var scope = storey?.Name ?? "整栋";
+            var name = _session.Model.Name ?? "建筑模型";
+            var suggestedName = name + "-" + scope;
+            foreach (var character in Path.GetInvalidFileNameChars()) suggestedName = suggestedName.Replace(character, '_');
+            var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+            {
+                Title = "导出 " + scope + " 三维模型",
+                SuggestedFileName = suggestedName + ".glb", DefaultExtension = "glb",
+                FileTypeChoices = new[] { new FilePickerFileType("glTF 二进制模型")
+                    { Patterns = new[] { "*.glb" } } }
+            });
+            if (file == null) return;
+            var path = file.TryGetLocalPath();
+            if (path == null) { _status.Text = "请选择本机导出位置。"; return; }
+            var snapshot = BuildingModelJson.ToJson(_session.Model);
+            cancellation = _exportCancellation = new CancellationTokenSource();
+            _cancelExport.IsEnabled = true;
+            _status.Text = "正在导出 " + scope + " 三维模型…";
+            var result = await Task.Run(() => BuildingModelGlbExporter.Export(
+                BuildingModelJson.FromJson(snapshot), path, storey?.Id, cancellation.Token));
+            _status.Text = $"已导出 {result.StoreyCount} 层、{result.ElementCount} 个构件 → {path}";
+            if (shouldOpenBlender) await OpenExportInBlenderAsync(path);
+        }
+        catch (OperationCanceledException) { _status.Text = "三维模型导出已取消。"; }
+        catch (Exception ex) { _status.Text = "三维模型导出失败：" + ex.Message; }
+        finally
+        {
+            _choosingExport = false;
+            _exportCancellation = null;
+            cancellation?.Dispose();
+            _cancelExport.IsEnabled = false;
+            _exportBuilding.IsEnabled = _exportStorey.IsEnabled = true;
+        }
+    }
+
+    private async Task OpenExportInBlenderAsync(string path)
+    {
+        try
+        {
+            var executable = await Task.Run(_blender.FindExecutable);
+            if (executable == null)
+            {
+                var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+                {
+                    Title = "选择本机 Blender 程序（模型已导出）", AllowMultiple = false,
+                    FileTypeFilter = new[] { new FilePickerFileType("Blender 程序")
+                        { Patterns = OperatingSystem.IsWindows() ? new[] { "blender.exe" } : new[] { "*" } } }
+                });
+                executable = files.FirstOrDefault()?.TryGetLocalPath();
+                if (executable == null) { _status.Text += "；未启动 Blender。"; return; }
+            }
+            var script = Path.Combine(AppContext.BaseDirectory, "Resources", "Blender", "OpenGlb.py");
+            if (!File.Exists(script)) throw new FileNotFoundException("缺少 Blender 导入脚本。", script);
+            var start = new ProcessStartInfo(executable) { UseShellExecute = false,
+                WorkingDirectory = Path.GetDirectoryName(executable)! };
+            start.ArgumentList.Add("--python");
+            start.ArgumentList.Add(script);
+            start.ArgumentList.Add("--");
+            start.ArgumentList.Add(Path.GetFullPath(path));
+            using var process = Process.Start(start);
+            if (process == null) throw new InvalidOperationException("Blender 未启动。");
+            _blender.ExecutablePath = executable;
+            try { _blender.Save(); }
+            catch (Exception ex) { _status.Text += "；程序路径未记住：" + ex.Message; }
+            _status.Text += "；已启动 Blender 导入模型。";
+        }
+        catch (Exception ex) { _status.Text += "；文件已导出，Blender 启动失败：" + ex.Message; }
+    }
+
     private async Task PublishViewsAsync(bool markForCad)
     {
         if (_publishCancellation != null) return;
@@ -1249,10 +1400,10 @@ internal sealed class ProbeWindow : Window
         {
             if (!wallsByStorey.TryGetValue(floor.Id, out var walls)) walls = new();
             foreach (var wall in walls)
-                _items.Add(new ElementItem { Id = wall.Id, Label = $"{floor.Name} · 墙  {wall.Id}" });
+                _items.Add(new ElementItem { Id = wall.Id, Label = $"{floor.Name} · {BuildingElementNames.Wall(wall)}" });
             if (!openingsByStorey.TryGetValue(floor.Id, out var openings)) openings = new();
             foreach (var opening in openings)
-                _items.Add(new ElementItem { Id = opening.Id, Label = $"{floor.Name} · {opening.Kind}  {opening.Id}" });
+                _items.Add(new ElementItem { Id = opening.Id, Label = $"{floor.Name} · {BuildingElementNames.Opening(opening)}" });
             if (!slabsByStorey.TryGetValue(floor.Id, out var slabs)) slabs = new();
             foreach (var slab in slabs)
                 _items.Add(new ElementItem { Id = slab.Id, Label = $"{floor.Name} · 楼板  {slab.Id}" });
@@ -1321,10 +1472,10 @@ internal sealed class ProbeWindow : Window
                 floorNode.Items.Add(new TreeViewItem
                 { Header = BrowserHeader("共用 " + floor.TemplateStoreyId + " 平面构件", "copy") });
             AddCategory(floorNode, "墙", model.Walls.Where(x => x.StoreyId == floor.Id)
-                .Select(x => (x.Id, "墙  " + x.Id)));
+                .Select(x => (x.Id, BuildingElementNames.Wall(x))));
             AddCategory(floorNode, "门窗", model.Openings.Where(x =>
                     wallStoreys.TryGetValue(x.HostWallId, out var storey) && storey == floor.Id)
-                .Select(x => (x.Id, x.Kind + "  " + x.Id)));
+                .Select(x => (x.Id, BuildingElementNames.Opening(x))));
             AddCategory(floorNode, "楼板", model.Slabs.Where(x => x.StoreyId == floor.Id)
                 .Select(x => (x.Id, "楼板  " + x.Id)));
             AddCategory(floorNode, "柱", model.Columns.Where(x => x.StoreyId == floor.Id)
@@ -1397,6 +1548,12 @@ internal sealed class ProbeWindow : Window
     {
         if (_workspaces.SelectedIndex == 1) _planCanvas.Fit();
         else { _viewport.ResetView(); _gizmo.InvalidateVisual(); }
+    }
+
+    private void FrameActiveSelection()
+    {
+        if (_workspaces.SelectedIndex == 1) _planCanvas.FrameSelection();
+        else { _viewport.FrameSelection(); _gizmo.InvalidateVisual(); }
     }
 
     private void SetPlanTool(PlanTool tool)
@@ -1486,8 +1643,11 @@ internal sealed class ProbeWindow : Window
             case "PL": _workspaces.SelectedIndex = 1; return;
             case "3D": _workspaces.SelectedIndex = 0; return;
             case "ZF": ResetActiveView(); return;
+            case "Z": FrameActiveSelection(); return;
             case "PV": _ = PublishViewsAsync(false); return;
             case "SC": _ = PublishViewsAsync(true); return;
+            case "EG": _ = ExportGlbAsync(false); return;
+            case "EF": _ = ExportGlbAsync(true); return;
         }
         switch (ModelCommandCatalog.Resolve(input))
         {
@@ -1608,6 +1768,8 @@ internal sealed class ProbeWindow : Window
             return;
         }
         if (IsCommandInput(e.Source) || e.KeyModifiers.HasFlag(KeyModifiers.Alt)) return;
+        if (e.Key == Key.Z && e.KeyModifiers == KeyModifiers.None)
+        { e.Handled = true; FrameActiveSelection(); return; }
         if (e.Key == Key.Enter || e.Key == Key.Space)
         {
             if (!string.IsNullOrWhiteSpace(_commandInput.Text))
@@ -1935,6 +2097,7 @@ internal sealed class ProbeWindow : Window
     private void ConfigureSmokeAndSnapshot()
     {
         if (!Program.Smoke && Program.SnapshotPath == null) return;
+        if (Program.SnapshotCamera is System.Numerics.Vector3 camera) _viewport.SetSnapshotCamera(camera);
         var started = DateTime.UtcNow;
         var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
         timer.Tick += async (_, _) =>
@@ -1963,12 +2126,14 @@ internal sealed class ProbeWindow : Window
             var hit = _viewport.FrameRendered
                 ? _viewport.PickAt(new Point(_viewport.Bounds.Width / 2, _viewport.Bounds.Height / 2)) : null;
             var success = emptyProject ? _filePath == Program.ModelPath && File.Exists(_filePath)
-                : _viewport.FrameRendered && hit != null;
+                : _viewport.FrameRendered && (hit != null
+                    || (Program.SnapshotCamera.HasValue && Program.SnapshotPath != null));
             if (Program.GizmoCheck) success &= RunGizmoSmokeCheck() && RunCameraSmokeCheck();
             if (Program.ShortcutCheck) success &= RunShortcutSmokeCheck();
             Program.SmokeFailed = !success;
             Console.WriteLine(success ? (emptyProject ? "AVALONIA_EMPTY_PROJECT_OK " + _filePath
-                : "AVALONIA_GPU_PICK_OK " + hit) : "AVALONIA_GPU_OR_PICK_FAILED");
+                : hit != null ? "AVALONIA_GPU_PICK_OK " + hit
+                    : "AVALONIA_SNAPSHOT_RENDER_OK center=empty") : "AVALONIA_GPU_OR_PICK_FAILED");
             if (Program.GizmoCheck || Program.ShortcutCheck) _closeConfirmed = true;
             Close();
         };
@@ -2061,6 +2226,31 @@ internal sealed class ProbeWindow : Window
 
     private bool RunShortcutSmokeCheck()
     {
+        _workspaces.SelectedIndex = 0;
+        _viewport.SelectElement("1F-S");
+        var direction = _viewport.CameraAngles;
+        _viewport.RaiseEvent(new KeyEventArgs { RoutedEvent = KeyDownEvent, Key = Key.Z });
+        var target = _viewport.CameraTarget;
+        var framed = direction == _viewport.CameraAngles && target.Length() > 0.01f;
+        var points = BuildingVolumeBuilder.Build(_session.Model).Faces
+            .Where(f => f.ElementId == "1F-S").SelectMany(f => f.Points).ToArray();
+        foreach (var p in points)
+        {
+            var projected = _viewport.ProjectModelPoint(p.X, p.Y, p.Z);
+            framed &= projected != null && projected.Value.X >= 0
+                && projected.Value.Y >= 0 && projected.Value.X <= _viewport.Bounds.Width
+                && projected.Value.Y <= _viewport.Bounds.Height;
+        }
+        _viewport.BeginInteraction(new Point(100, 100), false, false, true, true);
+        _viewport.MoveInteraction(new Point(130, 120), false, true);
+        _viewport.EndInteraction(new Point(130, 120));
+        framed &= System.Numerics.Vector3.Distance(target, _viewport.CameraTarget) < 0.0001f;
+        _viewport.SelectElement(null);
+        _viewport.FrameSelection();
+        framed &= _viewport.CameraDistance > 0;
+        _viewport.ResetView();
+        _viewport.SelectElement(_selectedId);
+        Console.WriteLine(framed ? "AVALONIA_Z_FRAME_SELECTION_ORBIT_OK" : "AVALONIA_Z_FRAME_SELECTION_FAILED");
         var original = _session.Model.Walls.First(x => x.Id == "1F-S").X2;
         if (!_session.TrySetWallLength("1F-S", original + 500, out _)) return false;
         _viewport.RaiseEvent(new KeyEventArgs
@@ -2139,7 +2329,7 @@ internal sealed class ProbeWindow : Window
         var polarSnaps = Math.Abs(polarMath.Y) < 0.001;
         var planMove = _planCanvas.BeginMove();
         _planCanvas.CancelDraft();
-        var success = undone && redone && shiftRedo && textKeptModel
+        var success = framed && undone && redone && shiftRedo && textKeptModel
             && shiftHorizontal && shiftVertical && commands
             && moving && moveCancelled && copying && planMove && orthoOn
             && polarOn && wallStarted && wallCancelled && polarSnaps

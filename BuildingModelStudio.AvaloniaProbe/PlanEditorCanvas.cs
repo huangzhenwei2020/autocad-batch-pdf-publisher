@@ -225,6 +225,23 @@ internal sealed class PlanEditorCanvas : Control
 
     public void Fit() => FitToSize(Bounds.Size);
 
+    public void FrameSelection()
+    {
+        if (_selectedId == null || Bounds.Width <= 50 || Bounds.Height <= 50)
+        { Fit(); return; }
+        var points = BuildingVolumeBuilder.Build(_model, _storeyId).Faces
+            .Where(f => f.ElementId == _selectedId).SelectMany(f => f.Points).ToArray();
+        if (points.Length == 0) { Fit(); return; }
+        var minX = points.Min(p => p.X); var maxX = points.Max(p => p.X);
+        var minY = points.Min(p => p.Y); var maxY = points.Max(p => p.Y);
+        _centerX = (minX + maxX) / 2;
+        _centerY = (minY + maxY) / 2;
+        _scale = Math.Clamp(Math.Min(Bounds.Width * 0.85 / Math.Max(100, maxX - minX),
+            Bounds.Height * 0.85 / Math.Max(100, maxY - minY)), 0.002, 2);
+        _fitted = true;
+        InvalidateVisual();
+    }
+
     private void FitToSize(Size size)
     {
         if (size.Width <= 50 || size.Height <= 50)
@@ -691,9 +708,7 @@ internal sealed class PlanEditorCanvas : Control
     private void IndexOrthogonalJunctions()
     {
         _orthogonalJunctions.Clear();
-        var hosts = new HashSet<string>(_model.Openings.Select(o => o.HostWallId),
-            StringComparer.OrdinalIgnoreCase);
-        var walls = _model.Walls.Where(w => w.StoreyId == _storeyId && !hosts.Contains(w.Id)).ToArray();
+        var walls = _model.Walls.Where(w => w.StoreyId == _storeyId).ToArray();
         for (var i = 0; i < walls.Length; i++)
         for (var j = i + 1; j < walls.Length; j++)
         {
@@ -703,12 +718,18 @@ internal sealed class PlanEditorCanvas : Control
             var firstVertical = Math.Abs(first.X2 - first.X1) < 0.001;
             var secondVertical = Math.Abs(second.X2 - second.X1) < 0.001;
             if (!(firstHorizontal && secondVertical || secondHorizontal && firstVertical)) continue;
-            var firstEndpoints = new[] { (first.X1, first.Y1), (first.X2, first.Y2) };
-            var secondEndpoints = new[] { (second.X1, second.Y1), (second.X2, second.Y2) };
-            if (!firstEndpoints.Any(a => secondEndpoints.Any(b =>
-                Math.Abs(a.Item1 - b.Item1) <= 0.5 && Math.Abs(a.Item2 - b.Item2) <= 0.5))) continue;
             var horizontal = firstHorizontal ? first : second;
             var vertical = firstHorizontal ? second : first;
+            var h0 = WallReferenceGeometry.BodyPoint(horizontal, horizontal.X1, horizontal.Y1);
+            var h1 = WallReferenceGeometry.BodyPoint(horizontal, horizontal.X2, horizontal.Y2);
+            var v0 = WallReferenceGeometry.BodyPoint(vertical, vertical.X1, vertical.Y1);
+            var v1 = WallReferenceGeometry.BodyPoint(vertical, vertical.X2, vertical.Y2);
+            var hHalf = horizontal.Thickness / 2d;
+            var vHalf = vertical.Thickness / 2d;
+            if (Math.Max(h0.X, h1.X) < v0.X - vHalf - 0.5d
+                || Math.Min(h0.X, h1.X) > v0.X + vHalf + 0.5d
+                || Math.Max(v0.Y, v1.Y) < h0.Y - hHalf - 0.5d
+                || Math.Min(v0.Y, v1.Y) > h0.Y + hHalf + 0.5d) continue;
             _orthogonalJunctions.Add((horizontal, vertical));
         }
     }

@@ -4,6 +4,9 @@
 
 Ribbon 导航行固定 38 px、命令区固定 116 px。调整窗口大小或收起左右侧栏时，只有视图区域伸缩；Ribbon 不换行、不按窗口高度缩放。命令超出横向空间时在固定高度内横向滚动，不覆盖视图或底部命令栏。侧栏各自独立收起，默认展开项目浏览器、收起属性栏。尚未实现的图纸视图保持禁用，不能把占位入口伪装成可用功能。建模页采用大图标主命令、旁边上下排列的小命令和底部分组名；尚未实现的命令以低对比样式呈现，不执行操作。底部状态区只展示实际可用的正交、极轴开关。
 确认的布局稿保存在 [`design-qa/building-model-ribbon-approved.png`](../design-qa/building-model-ribbon-approved.png)；新增命令应延续其固定 Ribbon、左右可收起栏和画布优先的层次。
+三维视图当前提供线框、实体、构件着色及定向光照预览；真实材质、外部模型导入和整栋导出按 [三维软件互通计划](../docs/BUILDING_MODEL_INTEROP_PLAN.md) 分阶段实现。
+“出图”页的“导出整栋”（`EG`）和“导出当前楼层”（`EF`）输出自包含 `.glb`。当前楼层取平面视图的楼层选择；标准层会按实际标高导出独立构件。文件使用米制、Y 向上坐标，保留楼层/构件节点和 ID，可直接在 Blender 导入。导出包含当前未保存的编辑快照，不修改模型 JSON；长任务可取消，失败或取消保留原导出文件。当前使用基础构件色和玻璃透明度，尚不提供贴图与用户材质编辑。
+默认勾选“导出后用 Blender 打开”：导出成功后查找本机 Blender，在新窗口导入 GLB 并适配视图；找不到时让用户选择 Blender 可执行程序。勾选状态与程序路径保存在本机用户设置中。取消程序选择或启动失败时，GLB 文件仍可正常使用。随包的 `Resources/Blender/OpenGlb.py` 负责导入，不依赖 GLB 文件关联。
 
 Ribbon 图标主要取自 Lucide SVG，墙命令使用专门绘制的图标；运行时使用从源 SVG 生成并缓存的透明 PNG，避免 SVG 首帧偶发空白。源文件与许可证在 `Resources/Icons/`。按钮内显示命令与快捷键。原有 `Q`、`WA`、`M`、`CO`、`Del`、`Ctrl+Z/Y`、`F8/F10` 不变，另有 `DR` 放门、`WN` 放窗、`LS` 楼层设置、`AX` 轴号设置、`PL` 平面视图、`3D` 三维视图、`ZF` 适配视图、`PV` 生成视图、`SC` 推到 CAD，以及 `Ctrl+O/S/Shift+S` 文件操作。
 
@@ -18,6 +21,8 @@ dotnet run --project BuildingModelStudio.AvaloniaProbe -c Release -- --model <�
 dotnet run --project BuildingModelStudio.AvaloniaProbe -c Release -- --pick-check
 dotnet run --project BuildingModelStudio.AvaloniaProbe -c Release -- --bench 50000
 dotnet run --project BuildingModelStudio.AvaloniaProbe -c Release -- --gpu-bench 50000
+dotnet run --project BuildingModelStudio.AvaloniaProbe -c Release -- --export-glb <绝对路径.glb> --model <model.json>
+dotnet run --project BuildingModelStudio.AvaloniaProbe -c Release -- --export-glb <绝对路径.glb> --model <model.json> --export-storey 1F
 ```
 
 `--smoke` 等待 GPU 帧绘制、检查 OpenGL 错误，并从视口中心拾取一个真实构件 ID；`--snapshot` 从 Avalonia 合成器捕获包括 GPU 视口的完整窗口。点击模型或左侧列表会同步选中构件；左键拖动旋转，中键/右键拖动平移，滚轮缩放。选择墙可一次修改墙长、墙厚、墙高（0 表示随楼层）；选择门窗可一次修改沿墙定位、宽、高、窗台高。修改在克隆模型上校验，洞口越出宿主墙、顶部超出墙高、与其他洞口重叠时整笔拒绝；合法修改重建视口，可撤销/重做。同值提交不增加修订。

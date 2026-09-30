@@ -59,6 +59,8 @@ namespace BatchPdfPublisher.BuildingModel
     public sealed class WallModel
     {
         public string Id { get; set; }
+        /// <summary>Stable user-facing number, separate from the internal identity.</summary>
+        public string Code { get; set; }
         public string StoreyId { get; set; }
         public double X1 { get; set; }
         public double Y1 { get; set; }
@@ -72,6 +74,33 @@ namespace BatchPdfPublisher.BuildingModel
         /// <summary>墙高；0 表示取所属楼层的层高。</summary>
         public double Height { get; set; }
         public string Material { get; set; }
+    }
+
+    public static class BuildingElementNames
+    {
+        public static void EnsureWallCodes(BuildingModelDocument model)
+        {
+            var used = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var number = 0;
+            foreach (var wall in model.Walls)
+            {
+                int parsed;
+                if (!string.IsNullOrWhiteSpace(wall.Code) && wall.Code.StartsWith("W-", StringComparison.OrdinalIgnoreCase)
+                    && int.TryParse(wall.Code.Substring(2), out parsed)) number = Math.Max(number, parsed);
+                if (!string.IsNullOrWhiteSpace(wall.Code) && !used.Add(wall.Code)) wall.Code = null;
+            }
+            foreach (var wall in model.Walls)
+                if (string.IsNullOrWhiteSpace(wall.Code))
+                {
+                    do { wall.Code = "W-" + (++number); } while (!used.Add(wall.Code));
+                }
+        }
+
+        public static string Wall(WallModel wall) { return "墙 " + wall.Code; }
+        public static string Opening(OpeningModel opening)
+        {
+            return string.IsNullOrWhiteSpace(opening.Code) ? opening.Kind + "（未编号）" : opening.Code;
+        }
     }
 
     public static class WallReferenceGeometry
@@ -433,6 +462,8 @@ namespace BatchPdfPublisher.BuildingModel
         public string Title { get; set; }
         public int Scale { get; set; } = 100;
         public ViewKind Kind { get; set; }
+        /// <summary>Sheet geometry is in real model millimetres; only the frame is scaled.</summary>
+        public bool ModelSpaceSheet { get; set; }
         /// <summary>
         /// 图纸（Kind = Sheet）才有：纸张规格名与纸面尺寸（mm）。
         /// 落图时插件按它去项目已登记图框里找匹配的图框模板；找不到就用图纸自带的图框。

@@ -209,6 +209,7 @@ namespace BatchPdfPublisher.BuildingModel
             // Older files may contain an unsplit through-wall at a T junction.
             // Give each arm its own persistent wall ID before editing starts.
             SplitOrthogonalTConnections(Model, false, out _);
+            BuildingElementNames.EnsureWallCodes(Model);
             _history.Reset(Model);
         }
 
@@ -533,6 +534,7 @@ namespace BatchPdfPublisher.BuildingModel
 
         private void Commit(BuildingModelDocument candidate)
         {
+            BuildingElementNames.EnsureWallCodes(candidate);
             if (string.Equals(BuildingModelJson.ToJson(candidate), BuildingModelJson.ToJson(Model), StringComparison.Ordinal))
                 return;
             Model = candidate;

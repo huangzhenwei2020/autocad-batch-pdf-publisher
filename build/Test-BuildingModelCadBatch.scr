@@ -1,0 +1,14 @@
+FILEDIA
+0
+CMDDIA
+0
+SECURELOAD
+0
+(command "_NETLOAD" (getenv "WANLUO_CAD_QA_PLUGIN"))
+(command "_NETLOAD" (getenv "WANLUO_CAD_QA_TEST"))
+WL_MODEL_BATCH_QA
+10000,0
+_QUIT
+_N
+
+

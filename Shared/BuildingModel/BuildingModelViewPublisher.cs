@@ -36,7 +36,7 @@ namespace BatchPdfPublisher.BuildingModel
             foreach (var sheet in SampleModelFactory.CreateDefaultSheets(model))
             {
                 checkCancellation?.Invoke();
-                views.Add(SheetComposer.Compose(views, sheet));
+                views.Add(SheetComposer.ComposeModelSpace(views, sheet));
             }
             return views;
         }

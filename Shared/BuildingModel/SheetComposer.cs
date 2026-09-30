@@ -36,13 +36,8 @@ namespace BatchPdfPublisher.BuildingModel
     /// <summary>
     /// 图纸排版：把若干张视图按比例摆到一张图纸上，画出图框与标题栏。
     ///
-    /// 关键设计：**排版结果本身就是一份 <see cref="ViewDocument"/>（Kind = Sheet，单位 = 图纸毫米）**，
-    /// 所以插件落图命令一个字都不用改就能把整张图纸落到 DWG 里，打图时按 1:1 出图即可
-    ///（视图内容已经按各自比例缩到纸面尺寸）。
-    ///
-    /// 尺寸的处理：视图里的尺寸在缩放到纸面后，几何距离不再是真实尺寸，
-    /// 所以排版时把它们**转成带显式文字的尺寸**（`ViewDimension.Text` = 模型真实值），
-    /// 这样图上读到的数字仍然对，箭头与界线位置也正确。
+    /// Compose 用于纸面预览；ComposeModelSpace 用于 CAD：建筑保持真实毫米，
+    /// 图框与纸面注释按出图比例放大，尺寸标注直接量取实际几何。
     /// </summary>
     public static class SheetComposer
     {
@@ -92,6 +87,18 @@ namespace BatchPdfPublisher.BuildingModel
         /// </summary>
         public static ViewDocument Compose(IEnumerable<ViewDocument> views, SheetDefinitionModel sheet)
         {
+            return ComposeCore(views, sheet, false);
+        }
+
+        /// <summary>CAD layout: real-size geometry and a frame enlarged by the print denominator.</summary>
+        public static ViewDocument ComposeModelSpace(IEnumerable<ViewDocument> views, SheetDefinitionModel sheet)
+        {
+            return ComposeCore(views, sheet, true);
+        }
+
+        private static ViewDocument ComposeCore(IEnumerable<ViewDocument> views, SheetDefinitionModel sheet,
+            bool modelSpace)
+        {
             if (sheet == null) throw new ArgumentNullException(nameof(sheet));
             var source = (views ?? Enumerable.Empty<ViewDocument>()).Where(v => v != null).ToList();
             double paperWidth, paperHeight;
@@ -102,7 +109,9 @@ namespace BatchPdfPublisher.BuildingModel
                 Id = string.IsNullOrWhiteSpace(sheet.Id) ? "sheet" : sheet.Id,
                 Title = BuildTitle(sheet, paperWidth, paperHeight),
                 Kind = ViewKind.Sheet,
-                Scale = 1,                                  // 纸面毫米，1:1 出图
+                Scale = modelSpace ? Math.Max(1, source.FirstOrDefault(v =>
+                    (sheet.ViewIds ?? new List<string>()).Contains(v.Id))?.Scale ?? 100) : 1,
+                ModelSpaceSheet = modelSpace,
                 PaperName = FindPaper(sheet.Paper).Name,
                 PaperWidth = paperWidth,
                 PaperHeight = paperHeight,
@@ -122,6 +131,7 @@ namespace BatchPdfPublisher.BuildingModel
             if (selected.Count == 0)
             {
                 document.Warnings.Add("这张图纸还没有排任何视图。");
+                if (modelSpace) ExpandSheet(document);
                 return document;
             }
 
@@ -140,7 +150,36 @@ namespace BatchPdfPublisher.BuildingModel
                 var cell = cells[index];
                 PlaceView(document, view, cell, sheet);
             }
+            if (modelSpace)
+            {
+                if (selected.Any(v => v.Scale != document.Scale))
+                    document.Warnings.Add("模型空间使用统一图框比例 1:" + document.Scale
+                        + "；所有视图保持真实尺寸，混合比例请分开排版。");
+                ExpandSheet(document);
+            }
             return document;
+        }
+
+        private static void ExpandSheet(ViewDocument document)
+        {
+            var factor = (double)document.Scale;
+            foreach (var line in document.Lines)
+            { line.X1 *= factor; line.Y1 *= factor; line.X2 *= factor; line.Y2 *= factor; }
+            foreach (var circle in document.Circles)
+            { circle.X *= factor; circle.Y *= factor; circle.Radius *= factor; }
+            foreach (var text in document.Texts)
+            { text.X *= factor; text.Y *= factor; text.Height *= factor; }
+            foreach (var hatch in document.Hatches)
+            {
+                hatch.Spacing *= factor;
+                foreach (var point in hatch.Boundary) { point.X *= factor; point.Y *= factor; }
+            }
+            foreach (var dimension in document.Dimensions)
+            {
+                dimension.From *= factor; dimension.To *= factor;
+                dimension.AnchorPosition *= factor; dimension.LinePosition *= factor;
+            }
+            document.Title = document.Title.Replace("（1:1 出图）", "（模型 1:1，图框 1:" + document.Scale + "）");
         }
 
         private static string BuildTitle(SheetDefinitionModel sheet, double width, double height)
@@ -219,7 +258,7 @@ namespace BatchPdfPublisher.BuildingModel
         /// </summary>
         private static void PlaceView(ViewDocument document, ViewDocument view, double[] cell, SheetDefinitionModel sheet)
         {
-            var scale = 1d / Math.Max(1, view.Scale);                 // 模型 mm → 纸面 mm
+            var scale = 1d / Math.Max(1, document.ModelSpaceSheet ? document.Scale : view.Scale);
             var bounds = GeometryBounds(view);
             if (bounds == null) { document.Warnings.Add(view.Title + " 没有几何，未排入图纸。"); return; }
 
@@ -292,7 +331,7 @@ namespace BatchPdfPublisher.BuildingModel
                     To = dimension.To * scale + (dimension.Vertical ? offsetY : offsetX),
                     AnchorPosition = dimension.AnchorPosition * scale + (dimension.Vertical ? offsetX : offsetY),
                     LinePosition = dimension.LinePosition * scale + (dimension.Vertical ? offsetX : offsetY),
-                    Text = value,
+                    Text = document.ModelSpaceSheet ? dimension.Text : value,
                     Note = dimension.Note
                 });
             }

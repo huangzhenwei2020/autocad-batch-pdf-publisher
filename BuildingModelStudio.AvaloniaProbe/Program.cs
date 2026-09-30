@@ -22,6 +22,9 @@ internal static class Program
     public static bool SnapshotAxes { get; private set; }
     public static bool SnapshotStoreys { get; private set; }
     public static bool SnapshotGizmo { get; private set; }
+    public static ModelViewport.DisplayMode? SnapshotDisplayMode { get; private set; }
+    public static string? SnapshotRibbon { get; private set; }
+    public static Vector3? SnapshotCamera { get; private set; }
     public static bool GizmoCheck { get; private set; }
     public static bool ShortcutCheck { get; private set; }
     public static string? ModelPath { get; private set; }
@@ -50,7 +53,28 @@ internal static class Program
             return 0;
         }
         Smoke = args.Contains("--smoke", StringComparer.OrdinalIgnoreCase);
+        var cameraIndex = Array.IndexOf(args, "--snapshot-camera");
+        if (cameraIndex >= 0)
+        {
+            var parts = cameraIndex + 1 < args.Length ? args[cameraIndex + 1].Split(',') : Array.Empty<string>();
+            if (parts.Length != 3) throw new ArgumentException("--snapshot-camera requires yaw,pitch,distance.");
+            var values = parts.Select(p => float.Parse(p, System.Globalization.CultureInfo.InvariantCulture)).ToArray();
+            if (values.Any(v => !float.IsFinite(v)) || Math.Abs(values[1]) >= 89 || values[2] < 2)
+                throw new ArgumentException("Invalid snapshot camera.");
+            SnapshotCamera = new Vector3(values[0] * MathF.PI / 180, values[1] * MathF.PI / 180, values[2]);
+        }
+        var ribbonIndex = Array.IndexOf(args, "--snapshot-ribbon");
+        if (ribbonIndex >= 0 && ribbonIndex + 1 < args.Length) SnapshotRibbon = args[ribbonIndex + 1];
         SnapshotGizmo = args.Contains("--snapshot-gizmo", StringComparer.OrdinalIgnoreCase);
+        var displayModeIndex = Array.IndexOf(args, "--snapshot-display-mode");
+        if (displayModeIndex >= 0)
+        {
+            if (displayModeIndex + 1 >= args.Length
+                || !Enum.TryParse<ModelViewport.DisplayMode>(args[displayModeIndex + 1],
+                    true, out var displayMode))
+                throw new ArgumentException("--snapshot-display-mode 应为 Wireframe、Solid、Shaded 或 Lit。");
+            SnapshotDisplayMode = displayMode;
+        }
         GizmoCheck = args.Contains("--gizmo-check", StringComparer.OrdinalIgnoreCase);
         ShortcutCheck = args.Contains("--shortcut-check", StringComparer.OrdinalIgnoreCase);
         var index = Array.IndexOf(args, "--snapshot");
@@ -114,6 +138,24 @@ internal static class Program
             if (modelIndex + 1 >= args.Length || string.IsNullOrWhiteSpace(args[modelIndex + 1]))
                 throw new ArgumentException("--model 后必须提供 model.json 路径。");
             ModelPath = Path.GetFullPath(args[modelIndex + 1]);
+        }
+        var exportIndex = Array.IndexOf(args, "--export-glb");
+        if (exportIndex >= 0)
+        {
+            try
+            {
+                if (exportIndex + 1 >= args.Length) throw new ArgumentException("--export-glb 后需提供文件路径。");
+                var floorIndex = Array.IndexOf(args, "--export-storey");
+                if (floorIndex >= 0 && floorIndex + 1 >= args.Length)
+                    throw new ArgumentException("--export-storey 后需提供楼层 ID。");
+                var model = ModelPath == null ? SampleModelFactory.CreateTwoStoreyHouse()
+                    : BuildingModelJson.LoadModel(ModelPath);
+                var result = BuildingModelGlbExporter.Export(model, args[exportIndex + 1],
+                    floorIndex < 0 ? null : args[floorIndex + 1]);
+                Console.WriteLine($"GLB_EXPORT_OK storeys={result.StoreyCount} elements={result.ElementCount} triangles={result.TriangleCount} bytes={result.FileBytes}");
+                return 0;
+            }
+            catch (Exception ex) { Console.Error.WriteLine(ex.Message); return 1; }
         }
         AppBuilder.Configure<ProbeApp>().UsePlatformDetect().LogToTrace().StartWithClassicDesktopLifetime(args);
         return SmokeFailed ? 1 : 0;

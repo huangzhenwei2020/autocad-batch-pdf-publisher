@@ -38,6 +38,21 @@ internal static class PlanEditingTests
         var axis = PlanEditing.Snap(model, "1F", 1020, 2800, 50, false, 0, 0);
         Assert(axis.Kind == PlanEditing.SnapAxis && axis.X == 1000 && axis.Y == 2800,
             "画墙未捕捉到轴线");
+        model.Walls.Add(new WallModel { Id = "near-axis-wall", StoreyId = "1F",
+            X1 = 0, Y1 = 2000.0035, X2 = 3000, Y2 = 2000.0035, Thickness = 240 });
+        foreach (var hasFrom in new[] { false, true })
+        {
+            var occupied = PlanEditing.Snap(model, "1F", 1020, 2001, 50,
+                hasFrom, 1000, 1000);
+            Assert(occupied.Kind == PlanEditing.SnapAxisIntersection
+                && occupied.X == 1000 && occupied.Y == 2000,
+                "附近墙身或垂足抢走轴线交点：" + occupied.Kind);
+        }
+        var excluded = PlanEditing.Snap(model, "1F", 1020, 2001, 50,
+            false, 0, 0, "near-axis-wall");
+        Assert(excluded.Kind == PlanEditing.SnapAxisIntersection
+            && excluded.X == 1000 && excluded.Y == 2000,
+            "端点编辑排除当前墙后丢失轴线交点");
         Console.WriteLine("PASS 轴线及轴线交点捕捉");
     }
 

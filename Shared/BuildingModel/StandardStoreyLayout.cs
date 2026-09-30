@@ -55,7 +55,7 @@ namespace BatchPdfPublisher.BuildingModel
                 foreach (var wall in sourceWalls)
                     expanded.Walls.Add(new WallModel
                     {
-                        Id = InstanceId(wall.Id), StoreyId = target.Id, X1 = wall.X1, Y1 = wall.Y1,
+                        Id = InstanceId(wall.Id), Code = wall.Code, StoreyId = target.Id, X1 = wall.X1, Y1 = wall.Y1,
                         X2 = wall.X2, Y2 = wall.Y2, Thickness = wall.Thickness,
                         AxisPlacement = wall.AxisPlacement, AxisOffset = wall.AxisOffset,
                         Height = wall.Height, Material = wall.Material

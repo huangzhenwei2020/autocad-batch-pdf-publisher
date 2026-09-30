@@ -11,6 +11,9 @@ namespace BatchPdfPublisher.BuildingModel
     /// </summary>
     internal static class OrthogonalWallUnion
     {
+        // Editing can leave sub-hundredth-millimetre drift on an orthogonal axis.
+        private const double AxisTolerance = 0.01d;
+        private const double GridTolerance = 0.000001d;
         private sealed class Box
         {
             public WallModel Wall;
@@ -32,8 +35,8 @@ namespace BatchPdfPublisher.BuildingModel
             foreach (var wall in walls)
             {
                 if (string.IsNullOrWhiteSpace(wall.Id)) continue;
-                var horizontal = Math.Abs(wall.Y2 - wall.Y1) < 0.001d;
-                var vertical = Math.Abs(wall.X2 - wall.X1) < 0.001d;
+                var horizontal = Horizontal(wall);
+                var vertical = Math.Abs(wall.X2 - wall.X1) <= AxisTolerance;
                 if (horizontal == vertical) continue;
                 var length = horizontal ? Math.Abs(wall.X2 - wall.X1) : Math.Abs(wall.Y2 - wall.Y1);
                 var z0 = model.BaseElevationOf(wall);
@@ -333,18 +336,18 @@ namespace BatchPdfPublisher.BuildingModel
         private static void AddCells(BuildingVolume volume, List<Box> boxes,
             List<TopMiter> miters, ref bool first)
         {
-            var xs = boxes.SelectMany(b => new[] { b.X0, b.X1 }).Distinct().OrderBy(x => x).ToArray();
-            var ys = boxes.SelectMany(b => new[] { b.Y0, b.Y1 }).Distinct().OrderBy(y => y).ToArray();
-            var zs = boxes.SelectMany(b => new[] { b.Z0, b.Z1 }).Distinct().OrderBy(z => z).ToArray();
+            var xs = GridCoordinates(boxes.SelectMany(b => new[] { b.X0, b.X1 }));
+            var ys = GridCoordinates(boxes.SelectMany(b => new[] { b.Y0, b.Y1 }));
+            var zs = GridCoordinates(boxes.SelectMany(b => new[] { b.Z0, b.Z1 }));
             var owner = new Box[xs.Length - 1, ys.Length - 1, zs.Length - 1];
             foreach (var box in boxes)
             {
-                var fromX = Array.BinarySearch(xs, box.X0);
-                var toX = Array.BinarySearch(xs, box.X1);
-                var fromY = Array.BinarySearch(ys, box.Y0);
-                var toY = Array.BinarySearch(ys, box.Y1);
-                var fromZ = Array.BinarySearch(zs, box.Z0);
-                var toZ = Array.BinarySearch(zs, box.Z1);
+                var fromX = GridIndex(xs, box.X0);
+                var toX = GridIndex(xs, box.X1);
+                var fromY = GridIndex(ys, box.Y0);
+                var toY = GridIndex(ys, box.Y1);
+                var fromZ = GridIndex(zs, box.Z0);
+                var toZ = GridIndex(zs, box.Z1);
                 for (var x = fromX; x < toX; x++)
                 for (var y = fromY; y < toY; y++)
                 for (var z = fromZ; z < toZ; z++)
@@ -381,8 +384,26 @@ namespace BatchPdfPublisher.BuildingModel
                     }
                 }
                 if (z == 0 || owner[x, y, z - 1] == null)
-                    AddFace(volume, box, 0, 0, -1, new[] { P(x0,y1,z0), P(x1,y1,z0),
-                        P(x1,y0,z0), P(x0,y0,z0) }, ref first);
+                {
+                    var miter = miters.FirstOrDefault(m => Math.Abs(m.Z0 - z0) < 0.001d
+                        && x0 >= m.X0 - 0.001d && x1 <= m.X1 + 0.001d
+                        && y0 >= m.Y0 - 0.001d && y1 <= m.Y1 + 0.001d);
+                    if (miter == null)
+                        AddFace(volume, box, 0, 0, -1, new[] { P(x0,y1,z0), P(x1,y1,z0),
+                            P(x1,y0,z0), P(x0,y0,z0) }, ref first);
+                    else
+                    {
+                        var cell = new[] { new PointModel(x0, y0), new PointModel(x1, y0),
+                            new PointModel(x1, y1), new PointModel(x0, y1) };
+                        foreach (var region in miter.Regions)
+                        {
+                            var clipped = ClipConvex(cell, region.Item2);
+                            if (clipped.Count < 3 || Math.Abs(SignedArea(clipped)) < 0.000001d) continue;
+                            AddFace(volume, region.Item1, 0, 0, -1,
+                                clipped.AsEnumerable().Reverse().Select(p => P(p.X, p.Y, z0)).ToArray(), ref first);
+                        }
+                    }
+                }
                 if (y == 0 || owner[x, y - 1, z] == null)
                     AddFace(volume, SideOwner(box, miters, (x0+x1)/2, y0, (z0+z1)/2), 0, -1, 0, new[] { P(x0,y0,z0), P(x1,y0,z0),
                         P(x1,y0,z1), P(x0,y0,z1) }, ref first);
@@ -396,6 +417,24 @@ namespace BatchPdfPublisher.BuildingModel
                     AddFace(volume, SideOwner(box, miters, x0, (y0+y1)/2, (z0+z1)/2), -1, 0, 0, new[] { P(x0,y1,z0), P(x0,y0,z0),
                         P(x0,y0,z1), P(x0,y1,z1) }, ref first);
             }
+        }
+
+        private static double[] GridCoordinates(IEnumerable<double> values)
+        {
+            var result = new List<double>();
+            foreach (var value in values.OrderBy(v => v))
+                if (result.Count == 0 || value - result[result.Count - 1] > GridTolerance)
+                    result.Add(value);
+            return result.ToArray();
+        }
+
+        private static int GridIndex(double[] coordinates, double value)
+        {
+            var index = Array.BinarySearch(coordinates, value);
+            if (index >= 0) return index;
+            index = ~index;
+            if (index > 0 && value - coordinates[index - 1] <= GridTolerance) return index - 1;
+            throw new InvalidOperationException("Wall grid coordinate was not canonicalized.");
         }
 
         private static Point3DModel P(double x, double y, double z) { return new Point3DModel(x, y, z); }
@@ -446,7 +485,7 @@ namespace BatchPdfPublisher.BuildingModel
                 && horizontal.Y0 <= vertical.Y1 + 0.001d
                 && vertical.Y0 <= horizontal.Y1 + 0.001d;
         }
-        private static bool Horizontal(WallModel wall) { return Math.Abs(wall.Y2 - wall.Y1) < 0.001d; }
+        private static bool Horizontal(WallModel wall) { return Math.Abs(wall.Y2 - wall.Y1) <= AxisTolerance; }
         private static IEnumerable<Tuple<double,double>> Endpoints(WallModel wall)
         { yield return Tuple.Create(wall.X1, wall.Y1); yield return Tuple.Create(wall.X2, wall.Y2); }
         private static bool Same(string a, string b)

@@ -9,6 +9,9 @@
     <NoWarn>$(NoWarn);CS0649</NoWarn>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="BuildingModelGlbExporter.cs" />
+    <PackageReference Include="SharpGLTF.Toolkit" Version="1.0.7" />
+    <PackageReference Include="LibTessDotNet" Version="1.1.15" />
     <Compile Include="..\Shared\BuildingModel\*.cs" Link="Shared\%(Filename)%(Extension)" />
     <Compile Include="..\BatchPdfPublisher\Features\DoorWindows\Models\DoorWindowScheduleItem.cs" Link="DoorWindows\DoorWindowScheduleItem.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\DoorWindows\Models\DoorWindowElevationGeometry.cs" Link="DoorWindows\DoorWindowElevationGeometry.cs" />

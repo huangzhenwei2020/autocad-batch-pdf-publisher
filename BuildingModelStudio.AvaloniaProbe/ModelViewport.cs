@@ -6,6 +6,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.OpenGL;
 using Avalonia.OpenGL.Controls;
+using Avalonia.Threading;
 using BatchPdfPublisher.BuildingModel;
 using static Avalonia.OpenGL.GlConsts;
 
@@ -14,12 +15,14 @@ namespace BuildingModelStudio.AvaloniaProbe;
 internal sealed class ModelViewport : OpenGlControlBase
 {
     private const int GuideLinesPrimitive = 0x0001; // GL_LINES
+    internal enum DisplayMode { Wireframe, Solid, Shaded, Lit }
     [StructLayout(LayoutKind.Sequential)]
     internal struct Vertex
     {
         public Vector3 Position;
         public Vector3 Color;
         public float ElementIndex;
+        public Vector3 Normal;
     }
 
     internal readonly struct PickTriangle
@@ -41,14 +44,16 @@ internal sealed class ModelViewport : OpenGlControlBase
     {
         public readonly Vertex[] Vertices;
         public readonly int TriangleVertexCount;
+        public readonly int EdgeVertexCount;
         public readonly PickTriangle[] Triangles;
         public readonly PickNode[] PickNodes;
         public readonly Dictionary<string, float> ElementIndexes;
-        public MeshSnapshot(Vertex[] vertices, int triangleVertexCount,
+        public MeshSnapshot(Vertex[] vertices, int triangleVertexCount, int edgeVertexCount,
             PickTriangle[] triangles, Dictionary<string, float> elementIndexes)
         {
             Vertices = vertices;
             TriangleVertexCount = triangleVertexCount;
+            EdgeVertexCount = edgeVertexCount;
             Triangles = triangles;
             ElementIndexes = elementIndexes;
             PickNodes = BuildPickTree(triangles);
@@ -67,10 +72,14 @@ internal sealed class ModelViewport : OpenGlControlBase
     }
 
     private volatile MeshSnapshot _snapshot;
+    private MeshSnapshot _baseSnapshot;
+    private MeshSnapshot? _wireframeSnapshot;
+    private BuildingVolume? _wireframePreparingFor;
     private MeshSnapshot? _uploaded;
     private BuildingVolume _volume;
     private string? _selectedId;
     private float _selectedIndex;
+    private DisplayMode _displayMode = DisplayMode.Shaded;
     private int _program;
     private int _vertexShader;
     private int _fragmentShader;
@@ -87,6 +96,7 @@ internal sealed class ModelViewport : OpenGlControlBase
     private bool _selecting;
     private bool _orbitAllowed;
     private bool _dragged;
+    private bool _orbitPivotSet;
     private volatile bool _frameRendered;
     private long _renderedFrameCount;
     private long _lastSynchronizedFrameTicks;
@@ -95,6 +105,8 @@ internal sealed class ModelViewport : OpenGlControlBase
     internal long RenderedFrameCount => Interlocked.Read(ref _renderedFrameCount);
     internal int LastRenderedVertexCount => Volatile.Read(ref _lastRenderedVertexCount);
     internal (float Yaw, float Pitch) CameraAngles => (_yaw, _pitch);
+    internal Vector3 CameraTarget => _target;
+    internal float CameraDistance => _distance;
     internal double LastSynchronizedFrameMs
         => Stopwatch.GetElapsedTime(0, Interlocked.Read(ref _lastSynchronizedFrameTicks)).TotalMilliseconds;
     internal string GpuRenderer { get; private set; } = "unknown";
@@ -105,7 +117,7 @@ internal sealed class ModelViewport : OpenGlControlBase
     public ModelViewport(PreparedScene scene)
     {
         _volume = scene.Volume;
-        _snapshot = scene.Snapshot;
+        _snapshot = _baseSnapshot = scene.Snapshot;
     }
 
     public static PreparedScene PrepareScene(BuildingVolume volume)
@@ -125,7 +137,10 @@ internal sealed class ModelViewport : OpenGlControlBase
             (float)(worldZ - newCenter.Z) * newScale,
             (float)(newCenter.Y - worldY) * newScale);
         _distance *= newScale / oldScale;
-        _snapshot = scene.Snapshot;
+        _snapshot = _baseSnapshot = scene.Snapshot;
+        _wireframeSnapshot = null;
+        _wireframePreparingFor = null;
+        if (_displayMode == DisplayMode.Wireframe) PrepareWireframe();
         _selectedIndex = _selectedId != null && _snapshot.ElementIndexes.TryGetValue(_selectedId, out var index)
             ? index : 0f;
         RequestNextFrameRendering();
@@ -139,6 +154,46 @@ internal sealed class ModelViewport : OpenGlControlBase
         RequestNextFrameRendering();
     }
 
+    internal void SetDisplayMode(DisplayMode mode)
+    {
+        if (_displayMode == mode) return;
+        _displayMode = mode;
+        if (mode == DisplayMode.Wireframe) PrepareWireframe();
+        else _snapshot = _baseSnapshot;
+        RequestNextFrameRendering();
+    }
+
+    private void PrepareWireframe()
+    {
+        if (_wireframeSnapshot != null)
+        {
+            _snapshot = _wireframeSnapshot;
+            return;
+        }
+        var volume = _volume;
+        if (volume.Faces.Count <= 3000)
+        {
+            _snapshot = _wireframeSnapshot = BuildSnapshot(volume, true);
+            return;
+        }
+        _snapshot = _baseSnapshot;
+        if (ReferenceEquals(_wireframePreparingFor, volume)) return;
+        _wireframePreparingFor = volume;
+        _ = Task.Run(() => BuildSnapshot(volume, true)).ContinueWith(task =>
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (!ReferenceEquals(_volume, volume)) return;
+                _wireframePreparingFor = null;
+                if (!task.IsCompletedSuccessfully) return;
+                _wireframeSnapshot = task.Result;
+                if (_displayMode != DisplayMode.Wireframe) return;
+                _snapshot = _wireframeSnapshot;
+                RequestNextFrameRendering();
+            });
+        }, TaskScheduler.Default);
+    }
+
     public void ResetView()
     {
         _yaw = MathF.Atan2(11f, 13f);
@@ -148,9 +203,59 @@ internal sealed class ModelViewport : OpenGlControlBase
         RequestNextFrameRendering();
     }
 
+    private bool TryBounds(string? elementId, out Vector3 min, out Vector3 max)
+    {
+        min = new Vector3(float.PositiveInfinity);
+        max = new Vector3(float.NegativeInfinity);
+        var found = false;
+        foreach (var triangle in _baseSnapshot.Triangles)
+        {
+            if (elementId != null && triangle.ElementId != elementId) continue;
+            min = Vector3.Min(min, Vector3.Min(triangle.A, Vector3.Min(triangle.B, triangle.C)));
+            max = Vector3.Max(max, Vector3.Max(triangle.A, Vector3.Max(triangle.B, triangle.C)));
+            found = true;
+        }
+        return found;
+    }
+
+    public void FrameSelection()
+    {
+        if (!TryBounds(_selectedId, out var min, out var max)
+            && !TryBounds(null, out min, out max)) return;
+        _target = (min + max) / 2;
+        var radius = Math.Max(0.01f, (max - min).Length() / 2);
+        var aspect = Math.Max(0.1f, (float)(Bounds.Width / Math.Max(1, Bounds.Height)));
+        var halfAngle = Math.Min(0.4f, MathF.Atan(MathF.Tan(0.4f) * aspect));
+        _distance = Math.Max(0.2f, radius / MathF.Sin(halfAngle) * 1.1f);
+        RequestNextFrameRendering();
+    }
+
+    private void SetSelectionOrbitPivot()
+    {
+        if (_selectedId == null || !TryBounds(_selectedId, out var min, out var max)) return;
+        var direction = new Vector3(MathF.Cos(_pitch) * MathF.Sin(_yaw),
+            MathF.Sin(_pitch), MathF.Cos(_pitch) * MathF.Cos(_yaw));
+        var eye = _target + direction * _distance;
+        var pivot = (min + max) / 2;
+        var offset = eye - pivot;
+        var distance = offset.Length();
+        if (distance < 0.2f) return;
+        _target = pivot;
+        _distance = distance;
+        _yaw = MathF.Atan2(offset.X, offset.Z);
+        _pitch = Math.Clamp(MathF.Asin(offset.Y / distance), -1.45f, 1.45f);
+    }
+
     internal void RotateForBenchmark(float radians)
     {
         _yaw += radians;
+        RequestNextFrameRendering();
+    }
+
+    internal void SetSnapshotCamera(Vector3 camera)
+    {
+        _yaw = camera.X; _pitch = camera.Y; _distance = camera.Z;
+        _target = Vector3.Zero;
         RequestNextFrameRendering();
     }
 
@@ -168,7 +273,8 @@ internal sealed class ModelViewport : OpenGlControlBase
     private Matrix4x4 ViewProjection()
     {
         var projection = Matrix4x4.CreatePerspectiveFieldOfView(0.8f,
-            (float)(Bounds.Width / Bounds.Height), 0.1f, 100f);
+            Math.Max(0.1f, (float)(Bounds.Width / Math.Max(1, Bounds.Height))),
+            Math.Max(0.001f, _distance * 0.005f), Math.Max(100f, _distance + 20f));
         return CameraView() * projection;
     }
 
@@ -206,9 +312,10 @@ internal sealed class ModelViewport : OpenGlControlBase
         return double.IsFinite(result.X) && double.IsFinite(result.Y);
     }
 
-    private static MeshSnapshot BuildSnapshot(BuildingVolume volume)
+    private static MeshSnapshot BuildSnapshot(BuildingVolume volume, bool includeEdges = false)
     {
         var vertices = new List<Vertex>();
+        var edges = includeEdges ? new List<Vertex>() : null;
         var triangles = new List<PickTriangle>();
         var elementIndexes = new Dictionary<string, float>(StringComparer.Ordinal);
         var center = volume.Center;
@@ -226,6 +333,8 @@ internal sealed class ModelViewport : OpenGlControlBase
             var brightness = Math.Clamp(0.6f + (float)face.NormalZ * 0.2f
                 + (float)face.NormalX * 0.12f + (float)face.NormalY * 0.08f, 0.4f, 1f);
             color *= brightness;
+            var normal = new Vector3((float)face.NormalX, (float)face.NormalZ,
+                (float)-face.NormalY);
             var elementIndex = 0f;
             if (!string.IsNullOrWhiteSpace(face.ElementId))
             {
@@ -234,14 +343,22 @@ internal sealed class ModelViewport : OpenGlControlBase
             }
             for (var i = 1; i + 1 < face.Points.Count; i++)
             {
-                var a = ToVertex(face.Points[0], center, scale, color, elementIndex);
-                var b = ToVertex(face.Points[i], center, scale, color, elementIndex);
-                var c = ToVertex(face.Points[i + 1], center, scale, color, elementIndex);
+                var a = ToVertex(face.Points[0], center, scale, color, elementIndex, normal);
+                var b = ToVertex(face.Points[i], center, scale, color, elementIndex, normal);
+                var c = ToVertex(face.Points[i + 1], center, scale, color, elementIndex, normal);
                 vertices.Add(a); vertices.Add(b); vertices.Add(c);
                 triangles.Add(new PickTriangle(a.Position, b.Position, c.Position, face.ElementId, triangles.Count));
             }
+            for (var i = 0; edges != null && i < face.Points.Count; i++)
+            {
+                edges.Add(ToVertex(face.Points[i], center, scale, color, elementIndex, normal));
+                edges.Add(ToVertex(face.Points[(i + 1) % face.Points.Count], center, scale,
+                    color, elementIndex, normal));
+            }
         }
         var triangleVertexCount = vertices.Count;
+        if (edges != null) vertices.AddRange(edges);
+        var edgeVertexCount = edges?.Count ?? 0;
         foreach (var line in volume.GuideLines)
         {
             if (line?.Start == null || line.End == null) continue;
@@ -256,7 +373,7 @@ internal sealed class ModelViewport : OpenGlControlBase
                 AddGroundAxisLabel(line.End, line.EndLabel ?? line.Label, vertices, center, scale, color);
             }
         }
-        return new MeshSnapshot(vertices.ToArray(), triangleVertexCount,
+        return new MeshSnapshot(vertices.ToArray(), triangleVertexCount, edgeVertexCount,
             triangles.ToArray(), elementIndexes);
     }
 
@@ -378,14 +495,15 @@ internal sealed class ModelViewport : OpenGlControlBase
     }
 
     private static Vertex ToVertex(Point3DModel point, Point3DModel center, float scale, Vector3 color,
-        float elementIndex)
+        float elementIndex, Vector3 normal = default)
         => new()
         {
             Position = new Vector3((float)(point.X - center.X) * scale,
                 (float)(point.Z - center.Z) * scale,
                 (float)(center.Y - point.Y) * scale),
             Color = color,
-            ElementIndex = elementIndex
+            ElementIndex = elementIndex,
+            Normal = normal
         };
 
     private static string ShaderSource(GlVersion version, bool fragment, string body)
@@ -410,19 +528,35 @@ internal sealed class ModelViewport : OpenGlControlBase
             attribute vec3 aPos;
             attribute vec3 aColor;
             attribute float aElement;
+            attribute vec3 aNormal;
             varying vec3 vColor;
+            varying vec3 vNormal;
+            varying float vSelected;
             uniform float uSelectedElement;
             uniform mat4 uProjection;
             uniform mat4 uView;
             uniform mat4 uModel;
             void main() {
-                vColor = uSelectedElement > 0.5 && abs(aElement - uSelectedElement) < 0.5
-                    ? vec3(1.0, 0.72, 0.18) : aColor;
+                vSelected = uSelectedElement > 0.5 && abs(aElement - uSelectedElement) < 0.5
+                    ? 1.0 : 0.0;
+                vColor = vSelected > 0.5 ? vec3(1.0, 0.72, 0.18) : aColor;
+                vNormal = aNormal;
                 gl_Position = uProjection * uView * uModel * vec4(aPos, 1.0);
             }");
         var fragmentSource = ShaderSource(GlVersion, true, @"
             varying vec3 vColor;
-            void main() { gl_FragColor = vec4(vColor, 1.0); }");
+            varying vec3 vNormal;
+            varying float vSelected;
+            uniform float uDisplayMode;
+            void main() {
+                vec3 color = vColor;
+                if (uDisplayMode < 0.5 && vSelected < 0.5)
+                    color = vec3(0.67, 0.75, 0.82);
+                else if (uDisplayMode > 1.5 && uDisplayMode < 2.5 && vSelected < 0.5)
+                    color *= 0.55 + 0.45 * max(dot(normalize(vNormal),
+                        normalize(vec3(0.35, 0.8, 0.45))), 0.0);
+                gl_FragColor = vec4(color, 1.0);
+            }");
         _vertexShader = gl.CreateShader(GL_VERTEX_SHADER);
         var vertexError = gl.CompileShaderAndGetError(_vertexShader, vertexSource);
         _fragmentShader = gl.CreateShader(GL_FRAGMENT_SHADER);
@@ -433,6 +567,7 @@ internal sealed class ModelViewport : OpenGlControlBase
         gl.BindAttribLocationString(_program, 0, "aPos");
         gl.BindAttribLocationString(_program, 1, "aColor");
         gl.BindAttribLocationString(_program, 2, "aElement");
+        gl.BindAttribLocationString(_program, 3, "aNormal");
         var linkError = gl.LinkProgramAndGetError(_program);
         if (!string.IsNullOrWhiteSpace(vertexError) || !string.IsNullOrWhiteSpace(fragmentError)
             || !string.IsNullOrWhiteSpace(linkError))
@@ -446,9 +581,11 @@ internal sealed class ModelViewport : OpenGlControlBase
         gl.VertexAttribPointer(0, 3, GL_FLOAT, 0, sizeof(Vertex), IntPtr.Zero);
         gl.VertexAttribPointer(1, 3, GL_FLOAT, 0, sizeof(Vertex), new IntPtr(12));
         gl.VertexAttribPointer(2, 1, GL_FLOAT, 0, sizeof(Vertex), new IntPtr(24));
+        gl.VertexAttribPointer(3, 3, GL_FLOAT, 0, sizeof(Vertex), new IntPtr(28));
         gl.EnableVertexAttribArray(0);
         gl.EnableVertexAttribArray(1);
         gl.EnableVertexAttribArray(2);
+        gl.EnableVertexAttribArray(3);
     }
 
     private unsafe void Upload(GlInterface gl, MeshSnapshot snapshot)
@@ -476,6 +613,12 @@ internal sealed class ModelViewport : OpenGlControlBase
         var width = Math.Max(1, (int)Math.Round(Bounds.Width * scale));
         var height = Math.Max(1, (int)Math.Round(Bounds.Height * scale));
         gl.Viewport(0, 0, width, height);
+        // Avalonia shares the GL context with its compositor. Never inherit its
+        // depth-write, culling or scissor state when drawing a fresh 3D frame.
+        gl.DepthMask(1);
+        gl.Disable(0x0B44); // GL_CULL_FACE: both sides of architectural surfaces are visible.
+        gl.Disable(0x0BE2); // GL_BLEND: current working-view meshes are opaque.
+        gl.Disable(0x0C11); // GL_SCISSOR_TEST
         gl.ClearColor(0.08f, 0.12f, 0.17f, 1f);
         gl.ClearDepth(1);
         gl.Enable(GL_DEPTH_TEST);
@@ -492,12 +635,20 @@ internal sealed class ModelViewport : OpenGlControlBase
         gl.UniformMatrix4fv(gl.GetUniformLocationString(_program, "uView"), 1, false, &view);
         gl.UniformMatrix4fv(gl.GetUniformLocationString(_program, "uProjection"), 1, false, &projection);
         gl.Uniform1f(gl.GetUniformLocationString(_program, "uSelectedElement"), _selectedIndex);
-        gl.DrawArrays(GL_TRIANGLES, 0, snapshot.TriangleVertexCount);
-        if (snapshot.Vertices.Length > snapshot.TriangleVertexCount)
+        gl.Uniform1f(gl.GetUniformLocationString(_program, "uDisplayMode"),
+            _displayMode == DisplayMode.Solid ? 0f
+                : _displayMode == DisplayMode.Lit ? 2f : 1f);
+        if (_displayMode == DisplayMode.Wireframe && snapshot.EdgeVertexCount > 0)
+            gl.DrawArrays(GuideLinesPrimitive, snapshot.TriangleVertexCount,
+                snapshot.EdgeVertexCount);
+        else gl.DrawArrays(GL_TRIANGLES, 0, snapshot.TriangleVertexCount);
+        var guideStart = snapshot.TriangleVertexCount + snapshot.EdgeVertexCount;
+        if (snapshot.Vertices.Length > guideStart)
         {
             gl.Uniform1f(gl.GetUniformLocationString(_program, "uSelectedElement"), 0f);
-            gl.DrawArrays(GuideLinesPrimitive, snapshot.TriangleVertexCount,
-                snapshot.Vertices.Length - snapshot.TriangleVertexCount);
+            gl.Uniform1f(gl.GetUniformLocationString(_program, "uDisplayMode"), 1f);
+            gl.DrawArrays(GuideLinesPrimitive, guideStart,
+                snapshot.Vertices.Length - guideStart);
         }
         if (benchmarkStart != 0)
         {
@@ -658,6 +809,7 @@ internal sealed class ModelViewport : OpenGlControlBase
         _dragStart = point;
         _pressStart = _dragStart;
         _dragged = false;
+        _orbitPivotSet = false;
     }
 
     public void MoveInteraction(Point now, bool leftPressed, bool middleOrRightPressed)
@@ -679,6 +831,11 @@ internal sealed class ModelViewport : OpenGlControlBase
         }
         else if (_orbitAllowed)
         {
+            if (!_orbitPivotSet)
+            {
+                SetSelectionOrbitPivot();
+                _orbitPivotSet = true;
+            }
             _yaw += (float)(now.X - previous.X) * 0.008f;
             _pitch = Math.Clamp(_pitch - (float)(now.Y - previous.Y) * 0.008f,
                 -1.45f, 1.45f);
@@ -689,7 +846,7 @@ internal sealed class ModelViewport : OpenGlControlBase
 
     public void Zoom(double delta)
     {
-        _distance = Math.Clamp(_distance * MathF.Pow(0.85f, (float)delta), 2f, 200f);
+        _distance = Math.Clamp(_distance * MathF.Pow(0.85f, (float)delta), 0.2f, 200f);
         RequestNextFrameRendering();
     }
 

@@ -365,8 +365,9 @@ namespace BatchPdfPublisher.BuildingModel
             var frame = Math.Min(60d, Math.Min(width, height) / 4d);
             AddWallSegment(volume, wall, start, end, sill, sill + frame, storeyId, "frame", ref first, 0d, elementId); // 下框
             AddWallSegment(volume, wall, start, end, head - frame, head, storeyId, "frame", ref first, 0d, elementId); // 上框
-            AddWallSegment(volume, wall, start, start + frame, sill, head, storeyId, "frame", ref first, 0d, elementId); // 左框
-            AddWallSegment(volume, wall, end - frame, end, sill, head, storeyId, "frame", ref first, 0d, elementId);   // 右框
+            // Side rails meet the horizontal rails, rather than overlapping them at all four corners.
+            AddWallSegment(volume, wall, start, start + frame, sill + frame, head - frame, storeyId, "frame", ref first, 0d, elementId); // 左框
+            AddWallSegment(volume, wall, end - frame, end, sill + frame, head - frame, storeyId, "frame", ref first, 0d, elementId);   // 右框
             AddWallSegment(volume, wall, start + frame, end - frame, sill + frame, head - frame, storeyId, "glass",
                 ref first, 20d, elementId);                                                                             // 玻璃
         }

@@ -304,7 +304,7 @@ namespace BatchPdfPublisher.BuildingModel
         }
 
         /// <summary>
-        /// 只捕捉真实墙对象：端点、交点、中点、垂足、最近墙身。
+        /// 捕捉墙对象及轴网：端点、墙交点、中点、轴线交点、垂足、最近墙身、单轴线。
         /// 空白处返回原始坐标，不自动吸附到正交方向或虚拟网格。
         /// </summary>
         public static SnapResult Snap(BuildingModelDocument model, string storeyId, double x, double y, double tolerance,
@@ -343,6 +343,20 @@ namespace BatchPdfPublisher.BuildingModel
                         SnapMidpoint, tolerance, ref best, result);
                 if (result.Snapped) return result;
 
+                // A discrete axis intersection must not lose to a nearby continuous wall projection.
+                var axes = resolvedAxes ?? BuildingAxisLayout.Resolve(model);
+                var nearbyVertical = axes.Where(a => a.Vertical && Math.Abs(a.Position - x) <= tolerance).ToArray();
+                var nearbyHorizontal = axes.Where(a => !a.Vertical && Math.Abs(a.Position - y) <= tolerance).ToArray();
+                best = tolerance;
+                foreach (var vertical in nearbyVertical)
+                foreach (var horizontal in nearbyHorizontal)
+                {
+                    if (!OnAxis(vertical, horizontal.Position) || !OnAxis(horizontal, vertical.Position)) continue;
+                    Consider(x, y, vertical.Position, horizontal.Position,
+                        SnapAxisIntersection, tolerance, ref best, result);
+                }
+                if (result.Snapped) return result;
+
                 if (hasFrom)
                 {
                     best = tolerance;
@@ -365,18 +379,6 @@ namespace BatchPdfPublisher.BuildingModel
                     var t = ParameterOnSegment(x, y, wall.X1, wall.Y1, wall.X2, wall.Y2);
                     Consider(x, y, wall.X1 + t * (wall.X2 - wall.X1),
                         wall.Y1 + t * (wall.Y2 - wall.Y1), SnapNearest, tolerance, ref best, result);
-                }
-                if (result.Snapped) return result;
-                var axes = resolvedAxes ?? BuildingAxisLayout.Resolve(model);
-                var nearbyVertical = axes.Where(a => a.Vertical && Math.Abs(a.Position - x) <= tolerance).ToArray();
-                var nearbyHorizontal = axes.Where(a => !a.Vertical && Math.Abs(a.Position - y) <= tolerance).ToArray();
-                best = tolerance;
-                foreach (var vertical in nearbyVertical)
-                foreach (var horizontal in nearbyHorizontal)
-                {
-                    if (!OnAxis(vertical, horizontal.Position) || !OnAxis(horizontal, vertical.Position)) continue;
-                    Consider(x, y, vertical.Position, horizontal.Position,
-                        SnapAxisIntersection, tolerance, ref best, result);
                 }
                 if (result.Snapped) return result;
                 best = tolerance;
