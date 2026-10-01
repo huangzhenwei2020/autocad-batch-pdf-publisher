@@ -40,10 +40,13 @@ namespace BatchPdfPublisher.BuildingModel
     }
 
     /// <summary>楼层：立面/剖面的竖向基准，也是"层高"的唯一来源。</summary>
+    public enum StoreyKind { Normal, Roof, MachineRoom }
+
     public sealed class StoreyModel
     {
         public string Id { get; set; }
         public string Name { get; set; }
+        public StoreyKind Kind { get; set; }
         /// <summary>Standard-floor source. Null means this floor owns its own plan elements.</summary>
         public string TemplateStoreyId { get; set; }
         /// <summary>结构标高（mm）。</summary>
@@ -155,11 +158,22 @@ namespace BatchPdfPublisher.BuildingModel
     public sealed class SlabModel
     {
         public string Id { get; set; }
+        public string Code { get; set; }
         public string StoreyId { get; set; }
         public List<PointModel> Outline { get; set; } = new List<PointModel>();
+        public List<SlabOpeningModel> Openings { get; set; } = new List<SlabOpeningModel>();
         public double Thickness { get; set; } = 120d;
         /// <summary>板顶标高（mm）。</summary>
         public double TopElevation { get; set; }
+        /// <summary>Relative to floor datum; null preserves legacy absolute elevation.</summary>
+        public double? TopOffset { get; set; }
+    }
+
+    public sealed class SlabOpeningModel
+    {
+        public string Id { get; set; }
+        public string Name { get; set; }
+        public List<PointModel> Outline { get; set; } = new List<PointModel>();
     }
 
     /// <summary>
@@ -221,6 +235,8 @@ namespace BatchPdfPublisher.BuildingModel
         public double Depth { get; set; } = 400d;
         /// <summary>柱高；0 表示取所属楼层的层高。</summary>
         public double Height { get; set; }
+        public double BaseOffset { get; set; }
+        public double TopOffset { get; set; }
     }
 
     /// <summary>
@@ -290,6 +306,20 @@ namespace BatchPdfPublisher.BuildingModel
         public string RequestId { get; set; }
         public List<WallModel> Walls { get; set; } = new List<WallModel>();
         public List<OpeningModel> Openings { get; set; } = new List<OpeningModel>();
+        public List<CadPendingOpening> PendingOpenings { get; set; } = new List<CadPendingOpening>();
+    }
+
+    public sealed class CadPendingOpening
+    {
+        public string StoreyId { get; set; }
+        public string SourceHandle { get; set; }
+        public string Code { get; set; }
+        public string Kind { get; set; }
+        public double Width { get; set; }
+        public double Height { get; set; }
+        public string Reason { get; set; }
+        // Reference only: source drawing bounds can include annotations, not an aperture.
+        public PointModel ReferencePosition { get; set; }
     }
 
     public sealed class BuildingModelDocument
@@ -341,8 +371,21 @@ namespace BatchPdfPublisher.BuildingModel
             if (column == null) return 0d;
             if (column.Height > 0.5d) return column.Height;
             var storey = FindStorey(column.StoreyId);
-            if (storey != null && storey.Height > 0.5d) return storey.Height;
+            if (storey != null && storey.Height > 0.5d)
+                return storey.Height + column.TopOffset - column.BaseOffset;
             return 3000d;
+        }
+
+        public double BaseElevationOf(ColumnModel column)
+        {
+            return (FindStorey(column.StoreyId)?.Elevation ?? 0d) + column.BaseOffset;
+        }
+
+        public double TopElevationOf(SlabModel slab)
+        {
+            return slab.TopOffset.HasValue
+                ? (FindStorey(slab.StoreyId)?.Elevation ?? 0d) + slab.TopOffset.Value
+                : slab.TopElevation;
         }
 
         /// <summary>楼梯所在楼层的层高（踏步高按它现算）；找不到楼层时按 3000。</summary>
@@ -723,6 +766,7 @@ namespace BatchPdfPublisher.BuildingModel
         public const string Stair = "WL-模型-楼梯";
         /// <summary>坡屋面（檐口、屋脊、坡线与山墙三角）。</summary>
         public const string Roof = "WL-模型-屋面";
+        public const string Slab = "WL-模型-楼板";
         /// <summary>轴测图（三维体量投出来的可见轮廓）。</summary>
         public const string Axonometric = "WL-模型-轴测";
         /// <summary>房间轮廓、房间名与面积。</summary>
@@ -754,6 +798,7 @@ namespace BatchPdfPublisher.BuildingModel
             new Style { Name = Room, Color = 7, LineType = "Continuous", LineWeight = 13, Description = "房间轮廓、名称与面积" },
             new Style { Name = Stair, Color = 7, LineType = "Continuous", LineWeight = 18, Description = "楼梯：踏步线、休息平台、上下行箭头与扶手" },
             new Style { Name = Roof, Color = 7, LineType = "Continuous", LineWeight = 25, Description = "坡屋面：檐口、屋脊、坡线与山墙轮廓" },
+            new Style { Name = Slab, Color = 7, LineType = "Continuous", LineWeight = 18, Description = "楼板边界与井道洞口" },
             new Style { Name = Axonometric, Color = 7, LineType = "Continuous", LineWeight = 18, Description = "轴测图：三维体量投出来的可见轮廓" },
             new Style { Name = SheetFrame, Color = 7, LineType = "Continuous", LineWeight = 35, Description = "图纸自带图框与标题栏（套用项目图框时跳过）" }
         };

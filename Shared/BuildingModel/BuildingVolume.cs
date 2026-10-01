@@ -106,8 +106,7 @@ namespace BatchPdfPublisher.BuildingModel
             {
                 if (column == null) continue;
                 if (onlyOne && !Same(column.StoreyId, storeyId)) continue;
-                var storey = model.FindStorey(column.StoreyId);
-                var z0 = storey == null ? 0d : storey.Elevation;
+                var z0 = model.BaseElevationOf(column);
                 var z1 = z0 + model.HeightOf(column);
                 AddColumnBox(volume, column, z0, z1, ref first);
             }
@@ -115,7 +114,7 @@ namespace BatchPdfPublisher.BuildingModel
             {
                 if (slab == null) continue;
                 if (onlyOne && !Same(slab.StoreyId, storeyId)) continue;
-                AddSlabPrism(volume, slab, ref first);
+                AddSlabPrism(volume, slab, model.TopElevationOf(slab), ref first);
             }
             foreach (var stair in model.Stairs ?? new List<StairModel>())
             {
@@ -460,16 +459,50 @@ namespace BatchPdfPublisher.BuildingModel
             AddPrism(volume, corners, z0, z1, "column", column.StoreyId, column.Id, ref first);
         }
 
-        private static void AddSlabPrism(BuildingVolume volume, SlabModel slab, ref bool first)
+        private static void AddSlabPrism(BuildingVolume volume, SlabModel slab, double topElevation, ref bool first)
         {
             var outline = (slab.Outline ?? new List<PointModel>())
                 .Where(p => p != null && IsFinite(p.X) && IsFinite(p.Y)).ToList();
             if (outline.Count < 3) return;
             var thickness = slab.Thickness > 0.5d ? slab.Thickness : 120d;
-            var z1 = slab.TopElevation;
+            var z1 = topElevation;
             var z0 = z1 - thickness;
-            var corners = outline.Select(p => new Point3DModel(p.X, p.Y, z0)).ToList();
-            AddPrism(volume, corners, z0, z1, "slab", slab.StoreyId, slab.Id, ref first);
+            var geometry = SlabGeometry.Build(slab);
+            if (geometry.IsConvexWithoutOpenings)
+            {
+                AddPrism(volume, geometry.Contours[0].Select(p => new Point3DModel(p.X, p.Y, z0)).ToList(),
+                    z0, z1, "slab", slab.StoreyId, slab.Id, ref first);
+                return;
+            }
+            foreach (var triangle in geometry.Triangles)
+            {
+                volume.Faces.Add(new VolumeFace { Kind = "slab", StoreyId = slab.StoreyId,
+                    ElementId = slab.Id, NormalZ = 1,
+                    Points = triangle.Select(p => new Point3DModel(p.X, p.Y, z1)).ToList() });
+                volume.Faces.Add(new VolumeFace { Kind = "slab", StoreyId = slab.StoreyId,
+                    ElementId = slab.Id, NormalZ = -1,
+                    Points = triangle.Select(p => new Point3DModel(p.X, p.Y, z0)).Reverse().ToList() });
+            }
+            foreach (var contour in geometry.Contours)
+                for (var i = 0; i < contour.Count; i++)
+                {
+                    var a = contour[i]; var b = contour[(i + 1) % contour.Count];
+                    var dx = b.X - a.X; var dy = b.Y - a.Y;
+                    var length = Math.Sqrt(dx * dx + dy * dy);
+                    volume.Faces.Add(new VolumeFace { Kind = "slab", StoreyId = slab.StoreyId,
+                        ElementId = slab.Id, NormalX = dy / length, NormalY = -dx / length,
+                        Points = new List<Point3DModel> { new Point3DModel(a.X, a.Y, z0),
+                            new Point3DModel(b.X, b.Y, z0), new Point3DModel(b.X, b.Y, z1),
+                            new Point3DModel(a.X, a.Y, z1) } });
+                }
+            foreach (var p in geometry.Contours[0])
+            {
+                if (first) { volume.MinX = volume.MaxX = p.X; volume.MinY = volume.MaxY = p.Y;
+                    volume.MinZ = z0; volume.MaxZ = z1; first = false; }
+                else { volume.MinX = Math.Min(volume.MinX, p.X); volume.MaxX = Math.Max(volume.MaxX, p.X);
+                    volume.MinY = Math.Min(volume.MinY, p.Y); volume.MaxY = Math.Max(volume.MaxY, p.Y);
+                    volume.MinZ = Math.Min(volume.MinZ, z0); volume.MaxZ = Math.Max(volume.MaxZ, z1); }
+            }
         }
 
         /// <summary>把一个平面轮廓沿 Z 拉成棱柱：顶面 + 底面 + 每个侧面。</summary>

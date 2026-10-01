@@ -9,6 +9,9 @@
     <NoWarn>$(NoWarn);CS0649</NoWarn>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="LibTessDotNet" Version="1.1.15" />
+    <Compile Include="..\Shared\BuildingModel\SlabGeometry.cs" Link="Shared\SlabGeometry.cs" />
+    <Compile Include="SlabGeometryTests.cs" />
     <Compile Include="BuildingModelProjectionTests.cs" />
     <Compile Include="VolumeIdentityTests.cs" />
     <Compile Include="BuildingModelEditSessionTests.cs" />

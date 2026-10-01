@@ -63,7 +63,7 @@ namespace BatchPdfPublisher.BuildingModel
             SetSourceDatum(Alignment.CadBase, DirectionPoint);
         }
         private static StoreyModel Copy(StoreyModel f) => new StoreyModel { Id = f.Id, Name = f.Name,
-            Height = f.Height, Elevation = f.Elevation, TemplateStoreyId = f.TemplateStoreyId };
+            Kind = f.Kind, Height = f.Height, Elevation = f.Elevation, TemplateStoreyId = f.TemplateStoreyId };
         private static bool Valid(PointModel p) => p != null && Finite(p.X) && Finite(p.Y);
         private static bool Finite(double value) => !double.IsNaN(value) && !double.IsInfinity(value);
     }

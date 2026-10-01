@@ -51,7 +51,8 @@ namespace BatchPdfPublisher.BuildingModel
             var replacement = storeys.ToList();
             if (replacement.Count == 0 || replacement.Any(s => s == null
                 || string.IsNullOrWhiteSpace(s.Id) || string.IsNullOrWhiteSpace(s.Name)
-                || !Finite(s.Elevation) || !Finite(s.Height) || s.Height <= 0d))
+                || !Finite(s.Elevation) || !Finite(s.Height) || s.Height <= 0d
+                || !Enum.IsDefined(typeof(StoreyKind), s.Kind)))
             { error = "楼层名称、标高和层高必须有效，层高应大于 0。"; return false; }
             if (replacement.GroupBy(s => s.Id, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1))
             { error = "楼层 ID 重复。"; return false; }
@@ -60,6 +61,8 @@ namespace BatchPdfPublisher.BuildingModel
             foreach (var storey in replacement.Where(s => !string.IsNullOrWhiteSpace(s.TemplateStoreyId)))
             {
                 var source = replacement.FirstOrDefault(s => Same(s.Id, storey.TemplateStoreyId));
+                if (storey.Kind != StoreyKind.Normal || (source != null && source.Kind != StoreyKind.Normal))
+                { error = "屋顶层和机房层应使用独立平面，不能作为标准层引用或来源。"; return false; }
                 if (source == null || Same(source.Id, storey.Id)
                     || !string.IsNullOrWhiteSpace(source.TemplateStoreyId))
                 { error = "标准层来源必须是另一独立楼层，不能形成引用链。"; return false; }
@@ -80,10 +83,15 @@ namespace BatchPdfPublisher.BuildingModel
             { error = "已有构件所在的楼层不能删除。"; return false; }
             var candidate = Clone(Model);
             candidate.Storeys = replacement.Select(s => new StoreyModel
-            { Id = s.Id.Trim(), Name = s.Name.Trim(), TemplateStoreyId = s.TemplateStoreyId?.Trim(),
+            { Id = s.Id.Trim(), Name = s.Name.Trim(), Kind = s.Kind, TemplateStoreyId = s.TemplateStoreyId?.Trim(),
                 Elevation = s.Elevation, Height = s.Height }).ToList();
+            if (candidate.Slabs.Any(s => s.TopOffset.HasValue && !Finite(s.TopOffset.Value))
+                || candidate.Columns.Any(c => !Finite(c.BaseOffset) || !Finite(c.TopOffset)
+                    || candidate.HeightOf(c) <= 0.5d))
+            { error = "构件标高偏移无效，或修改层高后柱顶低于柱底。"; return false; }
             foreach (var slab in candidate.Slabs)
             {
+                if (slab.TopOffset.HasValue) continue;
                 var before = Model.FindStorey(slab.StoreyId);
                 var after = candidate.FindStorey(slab.StoreyId);
                 if (before == null || after == null) continue;
@@ -122,6 +130,71 @@ namespace BatchPdfPublisher.BuildingModel
             }
             Commit(candidate);
             return true;
+        }
+
+        public bool TryUpsertSlab(SlabModel source, out string id, out string error)
+        {
+            id = null;
+            error = SlabGeometry.Validate(source);
+            if (error != null) return false;
+            var storey = Model.FindStorey(source.StoreyId);
+            if (storey == null || !string.IsNullOrWhiteSpace(storey.TemplateStoreyId))
+            { error = "请在独立楼层或标准层来源编辑楼板。"; return false; }
+            var candidate = Clone(Model);
+            var replacement = Clone(new BuildingModelDocument
+            { Slabs = new System.Collections.Generic.List<SlabModel> { source } }).Slabs[0];
+            if (replacement.Openings == null) replacement.Openings = new System.Collections.Generic.List<SlabOpeningModel>();
+            replacement.Id = string.IsNullOrWhiteSpace(source.Id) ? "S-" + Guid.NewGuid().ToString("N") : source.Id;
+            var index = candidate.Slabs.FindIndex(s => Same(s.Id, replacement.Id));
+            if (string.IsNullOrWhiteSpace(replacement.Code))
+            {
+                if (index >= 0) replacement.Code = candidate.Slabs[index].Code;
+                if (string.IsNullOrWhiteSpace(replacement.Code))
+                {
+                    var number = 1;
+                    while (candidate.Slabs.Any(s => Same(s.Code, "S-" + number))) number++;
+                    replacement.Code = "S-" + number;
+                }
+            }
+            if (candidate.Slabs.Any(s => !Same(s.Id, replacement.Id) && Same(s.Code, replacement.Code)))
+            { error = "楼板编号重复。"; return false; }
+            if (index < 0)
+            {
+                if (candidate.Walls.Any(w => Same(w.Id, replacement.Id))
+                    || candidate.Openings.Any(o => Same(o.Id, replacement.Id))
+                    || candidate.Columns.Any(c => Same(c.Id, replacement.Id))
+                    || candidate.Stairs.Any(s => Same(s.Id, replacement.Id))
+                    || candidate.Roofs.Any(r => Same(r.Id, replacement.Id))
+                    || candidate.Rooms.Any(r => Same(r.Id, replacement.Id)))
+                { error = "楼板 ID 已被其他构件使用。"; return false; }
+                // New slabs default to this floor's top datum, not an absolute zero elevation.
+                if (!replacement.TopOffset.HasValue) replacement.TopOffset = 0d;
+                candidate.Slabs.Add(replacement);
+            }
+            else candidate.Slabs[index] = replacement;
+            Commit(candidate);
+            id = replacement.Id;
+            return true;
+        }
+
+        public bool TryTransformSlab(string sourceId, double dx, double dy, bool copy,
+            out string id, out string error)
+        {
+            id = null;
+            var slab = Model.Slabs.FirstOrDefault(s => Same(s.Id, sourceId));
+            if (slab == null || !Finite(dx) || !Finite(dy))
+            { error = "楼板或位移无效。"; return false; }
+            var draft = Clone(new BuildingModelDocument
+            { Slabs = new System.Collections.Generic.List<SlabModel> { slab } }).Slabs[0];
+            if (draft.Openings == null) draft.Openings = new System.Collections.Generic.List<SlabOpeningModel>();
+            foreach (var point in draft.Outline.Concat(draft.Openings.SelectMany(o => o.Outline)))
+            { point.X += dx; point.Y += dy; }
+            if (copy)
+            {
+                draft.Id = null; draft.Code = null;
+                foreach (var opening in draft.Openings) opening.Id = Guid.NewGuid().ToString("N");
+            }
+            return TryUpsertSlab(draft, out id, out error);
         }
 
         public bool TryAddWall(WallModel source, out string id, out string error)

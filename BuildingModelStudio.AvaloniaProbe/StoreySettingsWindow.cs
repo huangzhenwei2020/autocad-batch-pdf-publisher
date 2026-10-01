@@ -12,9 +12,9 @@ internal sealed class StoreySettingsWindow : Window
     private const string Independent = "独立楼层";
     private readonly StackPanel _rows = new() { Spacing = 8 };
     private readonly List<(string id, Grid row, TextBox name, TextBox elevation,
-        TextBox height, ComboBox template)> _entries = new();
+        TextBox height, ComboBox template, ComboBox kind)> _entries = new();
     private readonly TextBlock _error = new() { Foreground = Brushes.OrangeRed };
-    private readonly TextBox _datum = new();
+    private readonly TextBox _datum = new() { Height = 34, MinHeight = 34 };
     private readonly TextBlock _datumLabel = new();
     private readonly HashSet<string> _occupiedIds;
     private string _datumId;
@@ -28,8 +28,8 @@ internal sealed class StoreySettingsWindow : Window
             .Concat(model.Stairs.Select(s => s.StoreyId))
             .Concat(model.Roofs.Select(r => r.StoreyId))
             .Concat(model.Rooms.Select(r => r.StoreyId)), StringComparer.OrdinalIgnoreCase);
-        Title = "楼层设置"; Width = 850; Height = 540;
-        MinWidth = 820; MinHeight = 360;
+        Title = "楼层设置"; Width = 960; Height = 540;
+        MinWidth = 960; MinHeight = 360;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         Background = new SolidColorBrush(Color.Parse("#151B23"));
         Foreground = Brushes.White;
@@ -53,6 +53,7 @@ internal sealed class StoreySettingsWindow : Window
         AddText(header, 0, "楼层 ID"); AddText(header, 1, "名称");
         AddText(header, 2, "自动标高 mm"); AddText(header, 3, "层高 mm");
         AddText(header, 4, "标准层来源"); AddText(header, 5, "操作");
+        AddText(header, 6, "楼层类型");
         _rows.Children.Add(header);
         foreach (var storey in model.Storeys.OrderBy(s => s.Elevation)) AddStorey(storey);
         RefreshTemplateOptions();
@@ -88,10 +89,15 @@ internal sealed class StoreySettingsWindow : Window
             RecalculatePreview();
         };
         var cancel = new Button { Content = "取消" };
+        var addRoof = new Button { Content = "新增屋顶层" };
+        addRoof.Click += (_, _) => AddSpecialStorey(StoreyKind.Roof, "RF", "屋顶层");
+        var addMachine = new Button { Content = "新增机房层" };
+        addMachine.Click += (_, _) => AddSpecialStorey(StoreyKind.MachineRoom, "MR", "机房层");
         cancel.Click += (_, _) => Close(false);
         var save = new Button { Content = "应用楼层" };
         save.Click += (_, _) => { if (Collect()) Close(true); };
         actions.Children.Add(addBasement); actions.Children.Add(add);
+        actions.Children.Add(addRoof); actions.Children.Add(addMachine);
         actions.Children.Add(cancel); actions.Children.Add(save);
         Grid.SetRow(actions, 5); root.Children.Add(actions);
         Content = root;
@@ -106,7 +112,7 @@ internal sealed class StoreySettingsWindow : Window
         elevation.IsReadOnly = true;
         var height = AddInput(row, 3, storey.Height.ToString("0.##", CultureInfo.CurrentCulture));
         height.TextChanged += (_, _) => RecalculatePreview();
-        var template = new ComboBox { MinHeight = 32, Tag = storey.TemplateStoreyId,
+        var template = new ComboBox { Height = 34, MinHeight = 34, Tag = storey.TemplateStoreyId,
             IsEnabled = !_occupiedIds.Contains(storey.Id),
             Background = new SolidColorBrush(Color.Parse("#202D3B")),
             Foreground = Brushes.White,
@@ -114,16 +120,35 @@ internal sealed class StoreySettingsWindow : Window
         if (!template.IsEnabled) ToolTip.SetTip(template, "该楼层已有独立构件，不能改为标准层引用");
         Grid.SetColumn(template, 4);
         row.Children.Add(template);
-        var remove = new Button { Content = "删除", MinHeight = 32,
+        var kind = new ComboBox { ItemsSource = new[] { "普通层", "屋顶层", "机房层" },
+            SelectedIndex = (int)storey.Kind, Height = 34, MinHeight = 34,
+            Background = new SolidColorBrush(Color.Parse("#202D3B")),
+            Foreground = Brushes.White,
+            BorderBrush = new SolidColorBrush(Color.Parse("#496273")) };
+        Grid.SetColumn(kind, 6); row.Children.Add(kind);
+        kind.SelectionChanged += (_, _) => RefreshTemplateOptions();
+        var remove = new Button { Content = "删除", Height = 34, MinHeight = 34,
             IsEnabled = !_occupiedIds.Contains(storey.Id) };
         if (!remove.IsEnabled) ToolTip.SetTip(remove, "该楼层已有构件，不能直接删除");
         remove.Click += (_, _) => DeleteStorey(storey.Id);
         Grid.SetColumn(remove, 5);
         row.Children.Add(remove);
         if (basement)
-        { _entries.Insert(0, (storey.Id, row, name, elevation, height, template)); _rows.Children.Insert(1, row); }
+        { _entries.Insert(0, (storey.Id, row, name, elevation, height, template, kind)); _rows.Children.Insert(1, row); }
         else
-        { _entries.Add((storey.Id, row, name, elevation, height, template)); _rows.Children.Add(row); }
+        { _entries.Add((storey.Id, row, name, elevation, height, template, kind)); _rows.Children.Add(row); }
+    }
+
+    private void AddSpecialStorey(StoreyKind kind, string prefix, string name)
+    {
+        var id = prefix;
+        for (var n = 2; _entries.Any(e => e.id == id); n++) id = prefix + n;
+        var top = _entries.Select(e => TryNumber(e.elevation.Text, out var z)
+            && TryNumber(e.height.Text, out var h) ? z + h : 0d).DefaultIfEmpty(0d).Max();
+        AddStorey(new StoreyModel { Id = id, Name = name, Kind = kind,
+            Elevation = top, Height = 3000d });
+        RefreshTemplateOptions();
+        RecalculatePreview();
     }
 
     private void RefreshTemplateOptions()
@@ -132,7 +157,10 @@ internal sealed class StoreySettingsWindow : Window
         {
             var preferred = entry.template.SelectedItem as string ?? entry.template.Tag as string;
             var options = new List<string> { Independent };
-            options.AddRange(_entries.Where(other => other.id != entry.id).Select(other => other.id));
+            if (entry.kind.SelectedIndex == 0)
+                options.AddRange(_entries.Where(other => other.id != entry.id
+                    && other.kind.SelectedIndex == 0).Select(other => other.id));
+            entry.template.IsEnabled = entry.kind.SelectedIndex == 0 && !_occupiedIds.Contains(entry.id);
             entry.template.ItemsSource = options;
             entry.template.SelectedItem = preferred != null && options.Contains(preferred) ? preferred : Independent;
             entry.template.Tag = null;
@@ -171,7 +199,8 @@ internal sealed class StoreySettingsWindow : Window
         {
             if (!TryNumber(entry.height.Text, out var height) || height <= 0d) return;
             input.Add(new StoreyModel { Id = entry.id, Name = entry.name.Text ?? entry.id,
-                Height = height, TemplateStoreyId = TemplateId(entry.template) });
+                Height = height, Kind = (StoreyKind)entry.kind.SelectedIndex,
+                TemplateStoreyId = TemplateId(entry.template) });
         }
         foreach (var (entry, floor) in _entries.Zip(StoreyElevationLayout.Resolve(input, _datumId, datum)))
             entry.elevation.Text = floor.Elevation.ToString("0.##", CultureInfo.CurrentCulture);
@@ -188,7 +217,8 @@ internal sealed class StoreySettingsWindow : Window
                 || !TryNumber(entry.height.Text, out var height) || height <= 0d)
             { _error.Text = "请填写名称以及大于 0 的层高。"; return false; }
             input.Add(new StoreyModel { Id = entry.id, Name = entry.name.Text.Trim(),
-                Height = height, TemplateStoreyId = TemplateId(entry.template) });
+                Height = height, Kind = (StoreyKind)entry.kind.SelectedIndex,
+                TemplateStoreyId = TemplateId(entry.template) });
         }
         if (input.Any(s => !string.IsNullOrWhiteSpace(s.TemplateStoreyId)
             && (input.FirstOrDefault(source => source.Id == s.TemplateStoreyId)?.TemplateStoreyId != null
@@ -204,7 +234,7 @@ internal sealed class StoreySettingsWindow : Window
         return selected == Independent ? null : selected;
     }
 
-    private static Grid NewRow() => new() { ColumnDefinitions = new ColumnDefinitions("72,140,135,135,150,54"),
+    private static Grid NewRow() => new() { ColumnDefinitions = new ColumnDefinitions("60,*,120,110,120,54,100"),
         ColumnSpacing = 8, MinHeight = 40 };
 
     private static void AddText(Grid row, int column, string value)
@@ -215,7 +245,7 @@ internal sealed class StoreySettingsWindow : Window
 
     private static TextBox AddInput(Grid row, int column, string? value)
     {
-        var input = new TextBox { Text = value, MinWidth = 130,
+        var input = new TextBox { Text = value, Height = 34, MinHeight = 34,
             Background = new SolidColorBrush(Color.Parse("#202D3B")),
             Foreground = Brushes.White,
             BorderBrush = new SolidColorBrush(Color.Parse("#496273")) };

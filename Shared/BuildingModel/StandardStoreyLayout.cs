@@ -30,7 +30,7 @@ namespace BatchPdfPublisher.BuildingModel
                 SchemaVersion = model.SchemaVersion,
                 Name = model.Name,
                 Storeys = model.Storeys.Select(s => new StoreyModel
-                { Id = s.Id, Name = s.Name, Elevation = s.Elevation, Height = s.Height }).ToList(),
+                { Id = s.Id, Name = s.Name, Kind = s.Kind, Elevation = s.Elevation, Height = s.Height }).ToList(),
                 Walls = new List<WallModel>(model.Walls),
                 Openings = new List<OpeningModel>(model.Openings),
                 Slabs = new List<SlabModel>(model.Slabs),
@@ -43,7 +43,8 @@ namespace BatchPdfPublisher.BuildingModel
             foreach (var target in model.Storeys.Where(s => !string.IsNullOrWhiteSpace(s.TemplateStoreyId)))
             {
                 var source = model.FindStorey(target.TemplateStoreyId);
-                if (source == null || !string.IsNullOrWhiteSpace(source.TemplateStoreyId)
+                if (source == null || target.Kind != StoreyKind.Normal || source.Kind != StoreyKind.Normal
+                    || !string.IsNullOrWhiteSpace(source.TemplateStoreyId)
                     || string.Equals(source.Id, target.Id, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException("标准层来源无效：" + target.Id);
                 var baseShift = target.Elevation - source.Elevation;
@@ -72,8 +73,10 @@ namespace BatchPdfPublisher.BuildingModel
                     var atTop = Math.Abs(slab.TopElevation - source.Elevation - source.Height) < 1d;
                     expanded.Slabs.Add(new SlabModel
                     {
-                        Id = InstanceId(slab.Id), StoreyId = target.Id, Outline = slab.Outline,
-                        Thickness = slab.Thickness,
+                        Id = InstanceId(slab.Id), Code = slab.Code, StoreyId = target.Id, Outline = slab.Outline,
+                        Openings = (slab.Openings ?? new List<SlabOpeningModel>()).Select(o => new SlabOpeningModel
+                        { Id = InstanceId(o.Id), Name = o.Name, Outline = o.Outline }).ToList(),
+                        Thickness = slab.Thickness, TopOffset = slab.TopOffset,
                         TopElevation = slab.TopElevation + (atTop ? topShift : baseShift)
                     });
                 }
@@ -82,7 +85,8 @@ namespace BatchPdfPublisher.BuildingModel
                     {
                         Id = InstanceId(column.Id), StoreyId = target.Id,
                         X = column.X, Y = column.Y, Width = column.Width,
-                        Depth = column.Depth, Height = column.Height
+                        Depth = column.Depth, Height = column.Height,
+                        BaseOffset = column.BaseOffset, TopOffset = column.TopOffset
                     });
                 foreach (var stair in model.Stairs.Where(s => Same(s.StoreyId, source.Id)))
                     expanded.Stairs.Add(new StairModel

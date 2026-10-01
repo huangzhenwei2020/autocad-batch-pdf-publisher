@@ -16,6 +16,8 @@
     <UseAutoCadNuGet Condition="'$(UseAutoCadNuGet)' == '' And !Exists('$(AutoCadApiPath)\acmgd.dll')">true</UseAutoCadNuGet>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="LibTessDotNet" Version="1.1.15" />
+    <Compile Include="..\Shared\BuildingModel\SlabGeometry.cs" Link="Features\BuildingModel\Shared\SlabGeometry.cs" />
     <EmbeddedResource Include="..\Resources\Ribbon\ios-icons.png" LogicalName="Wanluo.Ribbon.IosIcons.png" />
     <Compile Include="..\Shared\ProductVersion.cs" Link="Infrastructure\ProductVersion.cs" />
     <!-- 建筑模型的纯逻辑层：与建模程序、测试工程共用同一份源码（只链接插件用到的三个文件）。 -->

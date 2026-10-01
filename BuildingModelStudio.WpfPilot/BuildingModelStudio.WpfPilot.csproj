@@ -8,6 +8,8 @@
     <AssemblyName>万落建筑模型-WPF试验</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="LibTessDotNet" Version="1.1.15" />
+    <Compile Include="..\Shared\BuildingModel\SlabGeometry.cs" Link="Shared\SlabGeometry.cs" />
     <PackageReference Include="HelixToolkit.Wpf.SharpDX" Version="3.1.2" />
     <Compile Include="..\Shared\BuildingModel\ModelTypes.cs" Link="Shared\ModelTypes.cs" />
     <Compile Include="..\Shared\BuildingModel\BuildingModelJson.cs" Link="Shared\BuildingModelJson.cs" />

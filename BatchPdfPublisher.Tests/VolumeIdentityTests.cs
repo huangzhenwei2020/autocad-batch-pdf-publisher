@@ -44,6 +44,7 @@ internal static class VolumeIdentityTests
         CheckWindowFrameCorners();
         CheckClosedDoorWindows();
         CheckStoreySettings();
+        CheckStructuralElevationRules();
         CheckStandardStoreys();
         CheckWallReferencePlacement();
         MeasureJunctionGrid();
@@ -391,6 +392,61 @@ internal static class VolumeIdentityTests
         Assert(!session.TryReplaceStoreys(emptyFloor.Where(s => s.Id != "2F"), out error),
             "已有楼板的楼层不应被直接删除");
         Console.WriteLine("PASS 楼层设置：层高、新增楼层与撤销");
+    }
+
+    private static void CheckStructuralElevationRules()
+    {
+        var model = SampleModelFactory.CreateEmptyModel("structural-datums");
+        var slab = new SlabModel { Id = "linked-slab", StoreyId = "1F", TopOffset = 0,
+            Thickness = 150, Outline = new System.Collections.Generic.List<PointModel>
+            { new PointModel(0, 0), new PointModel(4000, 0),
+              new PointModel(4000, 3000), new PointModel(0, 3000) } };
+        model.Slabs.Add(slab);
+        model.Columns.Add(new ColumnModel { Id = "linked-column", StoreyId = "1F",
+            BaseOffset = -100, TopOffset = -150 });
+        var session = new BuildingModelEditSession(model);
+        var floors = StoreyElevationLayout.Resolve(model.Storeys, "1F", 1000);
+        floors[0].Height = 4200;
+        floors = StoreyElevationLayout.Resolve(floors, "1F", 1000);
+        floors.Add(new StoreyModel { Id = "RF", Name = "roof", Kind = StoreyKind.Roof,
+            Elevation = 8500, Height = 3000 });
+        floors.Add(new StoreyModel { Id = "MR", Name = "machine", Kind = StoreyKind.MachineRoom,
+            Elevation = 11500, Height = 3000 });
+        Assert(session.TryReplaceStoreys(floors, out var error), error);
+        Assert(session.Model.TopElevationOf(session.Model.Slabs[0]) == 1000,
+            "板顶未跟随所属楼层基准标高");
+        var volume = BuildingVolumeBuilder.Build(session.Model);
+        var slabPoints = volume.Faces.Where(f => f.ElementId == slab.Id).SelectMany(f => f.Points).ToList();
+        Assert(slabPoints.Min(p => p.Z) == 850 && slabPoints.Max(p => p.Z) == 1000,
+            "楼板应板顶齐楼层标高，板厚向下");
+        var columnPoints = volume.Faces.Where(f => f.ElementId == "linked-column")
+            .SelectMany(f => f.Points).ToList();
+        Assert(columnPoints.Min(p => p.Z) == 900 && columnPoints.Max(p => p.Z) == 5050,
+            "柱上下偏移或层高联动错误");
+        var reloaded = BuildingModelJson.FromJson(BuildingModelJson.ToJson(session.Model));
+        Assert(reloaded.FindStorey("RF").Kind == StoreyKind.Roof
+            && reloaded.FindStorey("MR").Kind == StoreyKind.MachineRoom
+            && reloaded.Slabs[0].TopOffset == 0 && reloaded.Columns[0].BaseOffset == -100,
+            "结构标高或楼层类型保存后丢失");
+        Assert(RoofGeometry.Build(reloaded, new RoofModel { StoreyId = "RF" }).EaveElevation == 8500,
+            "独立屋顶层的默认檐口应在本层基准，而非再次加一层层高");
+        Assert(session.Undo() && session.Model.TopElevationOf(session.Model.Slabs[0]) == 0,
+            "撤销未恢复相对板顶标高");
+        Assert(session.Redo() && session.Model.TopElevationOf(session.Model.Slabs[0]) == 1000,
+            "重做未恢复标高联动");
+        floors.Last().TemplateStoreyId = "1F";
+        Assert(!session.TryReplaceStoreys(floors, out error), "机房不能套用普通标准层");
+        floors.Last().TemplateStoreyId = null;
+        floors[1].TemplateStoreyId = "1F";
+        Assert(session.TryReplaceStoreys(floors, out error), error);
+        var expanded = StandardStoreyLayout.Materialize(session.Model);
+        Assert(expanded.TopElevationOf(expanded.Slabs.Single(s => s.StoreyId == "2F")) == 5200
+            && expanded.Columns.Single(c => c.StoreyId == "2F").TopOffset == -150,
+            "标准层没有保留相对标高");
+        Assert(expanded.FindStorey("RF").Kind == StoreyKind.Roof, "展开标准层后楼层类型丢失");
+        Assert(new SlabModel().TopOffset == null && new StoreyModel().Kind == StoreyKind.Normal,
+            "旧模型默认值不兼容");
+        Console.WriteLine("PASS 结构标高：板厚向下、柱上下偏移、标准层、屋顶机房、保存撤销");
     }
 
     private static void CheckStandardStoreys()

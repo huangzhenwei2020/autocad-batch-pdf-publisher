@@ -1,0 +1,53 @@
+<Styles xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Style Selector="NumericUpDown.slab-number /template/ ButtonSpinner">
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border Background="#192D3D" BorderBrush="#345267" BorderThickness="1" CornerRadius="4">
+        <Grid ColumnDefinitions="*,22" RowDefinitions="*,*">
+          <ContentPresenter Name="PART_ContentPresenter" Grid.RowSpan="2"
+                            Content="{TemplateBinding Content}"
+                            ContentTemplate="{TemplateBinding ContentTemplate}" />
+          <RepeatButton Name="PART_IncreaseButton" Grid.Column="1" Padding="0" MinHeight="0" Height="14" MinWidth="22" Width="22" Background="Transparent" BorderThickness="0">
+            <Image Source="avares://万落建筑模型/Resources/Icons/chevron-up.png" Width="12" Height="12" />
+          </RepeatButton>
+          <RepeatButton Name="PART_DecreaseButton" Grid.Column="1" Grid.Row="1" Padding="0" MinHeight="0" Height="14" MinWidth="22" Width="22" Background="Transparent" BorderThickness="0">
+            <Image Source="avares://万落建筑模型/Resources/Icons/chevron-down.png" Width="12" Height="12" />
+          </RepeatButton>
+        </Grid>
+        </Border>
+      </ControlTemplate>
+    </Setter>
+  </Style>
+  <Style Selector="ScrollViewer.slab-inspector ScrollBar:vertical">
+    <Setter Property="Width" Value="10" />
+    <Setter Property="MinWidth" Value="10" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Grid Width="10" Background="Transparent">
+          <Border Width="2" HorizontalAlignment="Center" Background="#30485B" />
+          <Track Name="PART_Track" Orientation="Vertical" IsDirectionReversed="True"
+                 Minimum="{TemplateBinding Minimum}" Maximum="{TemplateBinding Maximum}"
+                 Value="{TemplateBinding Value, Mode=TwoWay}" ViewportSize="{TemplateBinding ViewportSize}">
+            <Track.DecreaseButton>
+              <RepeatButton Name="PART_DecreaseButton" Background="Transparent">
+                <RepeatButton.Template><ControlTemplate><Border Background="Transparent" /></ControlTemplate></RepeatButton.Template>
+              </RepeatButton>
+            </Track.DecreaseButton>
+            <Track.IncreaseButton>
+              <RepeatButton Name="PART_IncreaseButton" Background="Transparent">
+                <RepeatButton.Template><ControlTemplate><Border Background="Transparent" /></ControlTemplate></RepeatButton.Template>
+              </RepeatButton>
+            </Track.IncreaseButton>
+            <Track.Thumb>
+              <Thumb Name="PART_Thumb" MinHeight="24">
+                <Thumb.Template>
+                  <ControlTemplate><Border Width="6" CornerRadius="3" Background="#7894AB" HorizontalAlignment="Center" /></ControlTemplate>
+                </Thumb.Template>
+              </Thumb>
+            </Track.Thumb>
+          </Track>
+        </Grid>
+      </ControlTemplate>
+    </Setter>
+  </Style>
+</Styles>

@@ -62,7 +62,8 @@ namespace BatchPdfPublisher.BuildingModel
             var storey = model == null ? null : model.FindStorey(roof.StoreyId);
             var eave = roof.EaveElevation > 0.5d
                 ? roof.EaveElevation
-                : (storey == null ? 0d : storey.Elevation + storey.Height);
+                : (storey == null ? 0d : storey.Elevation
+                    + (storey.Kind == StoreyKind.Roof ? 0d : storey.Height));
             var width = Math.Abs(roof.Width) > 1d ? Math.Abs(roof.Width) : 7440d;
             var depth = Math.Abs(roof.Depth) > 1d ? Math.Abs(roof.Depth) : 5640d;
             var pitch = roof.PitchDegrees > 1d && roof.PitchDegrees < 89d ? roof.PitchDegrees : 26.565d;

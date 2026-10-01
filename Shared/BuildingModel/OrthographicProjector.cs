@@ -101,7 +101,7 @@ namespace BatchPdfPublisher.BuildingModel
             foreach (var slab in model.Slabs ?? new List<SlabModel>())
             {
                 if (slab == null || !Include(includeAll, view.StoreyIds, slab.StoreyId)) continue;
-                AddSlab(slab, frame, isSection, cutProj, view.ViewDepth, rects, cutRects, document.Warnings);
+                AddSlab(model, slab, frame, isSection, cutProj, view.ViewDepth, rects, cutRects, document.Warnings);
             }
             foreach (var stair in model.Stairs ?? new List<StairModel>())
             {
@@ -584,6 +584,19 @@ namespace BatchPdfPublisher.BuildingModel
                     column.X - halfWidth, column.Y - halfDepth, column.X + halfWidth, column.Y + halfDepth);
             }
 
+            foreach (var slab in model.Slabs.Where(s => s != null
+                && string.Equals(s.StoreyId, storey.Id, StringComparison.OrdinalIgnoreCase)))
+            {
+                if (slab.Outline == null || slab.Outline.Count < 3) continue;
+                var geometry = SlabGeometry.Build(slab);
+                foreach (var contour in geometry.Contours)
+                    for (var i = 0; i < contour.Count; i++)
+                    {
+                        var a = contour[i]; var b = contour[(i + 1) % contour.Count];
+                        AddLine(document, ViewLayers.Slab, a.X, a.Y, b.X, b.Y);
+                    }
+            }
+
             // 轴网与房间：平面图的两个"信息层"
             var bounds = PlanBounds(walls);
             AddPlanAxes(document, model, bounds[0], bounds[1], bounds[2], bounds[3], view.Scale);
@@ -954,6 +967,20 @@ namespace BatchPdfPublisher.BuildingModel
             }
             AddLine(document, ViewLayers.Cut, start.X + nx, start.Y + ny, start.X - nx, start.Y - ny);   // 封口
             AddLine(document, ViewLayers.Cut, end.X + nx, end.Y + ny, end.X - nx, end.Y - ny);
+        }
+
+        public static List<ViewLine> CreatePlanDetailSymbols(BuildingModelDocument model, string storeyId)
+        {
+            var document = new ViewDocument();
+            var walls = model.Walls.Where(w => w.StoreyId == storeyId).ToDictionary(w => w.Id);
+            foreach (var opening in model.Openings)
+                if (walls.TryGetValue(opening.HostWallId, out var wall))
+                    AddOpeningPlanSymbol(document, wall, opening);
+            foreach (var column in model.Columns.Where(c => c.StoreyId == storeyId))
+                AddRect(document, ViewLayers.Cut, column.X - Math.Max(1d, column.Width) / 2d,
+                    column.Y - Math.Max(1d, column.Depth) / 2d, column.X + Math.Max(1d, column.Width) / 2d,
+                    column.Y + Math.Max(1d, column.Depth) / 2d);
+            return document.Lines;
         }
 
         /// <summary>平面门窗图例：窗 = 两条玻璃线；门 = 一条扇线 + 90° 开启弧（弧用短线拟合）。</summary>
@@ -1580,8 +1607,7 @@ namespace BatchPdfPublisher.BuildingModel
         {
             var halfW = (column.Width > 0.5d ? column.Width : 400d) / 2d;
             var halfD = (column.Depth > 0.5d ? column.Depth : 400d) / 2d;
-            var storey = model.FindStorey(column.StoreyId);
-            var zBase = storey == null ? 0d : storey.Elevation;
+            var zBase = model.BaseElevationOf(column);
             var zTop = zBase + model.HeightOf(column);
             var corners = new List<PointModel>
             {
@@ -1622,12 +1648,12 @@ namespace BatchPdfPublisher.BuildingModel
             if (body.HasValue) rects.Add(body.Value);
         }
 
-        private static void AddSlab(SlabModel slab, Frame frame, bool isSection, double cutProj, double viewDepth,
+        private static void AddSlab(BuildingModelDocument model, SlabModel slab, Frame frame, bool isSection, double cutProj, double viewDepth,
             List<Rect> rects, List<Rect> cutRects, List<string> warnings)
         {
             var outline = slab.Outline ?? new List<PointModel>();
             if (outline.Count < 3) return;
-            var zTop = slab.TopElevation;
+            var zTop = model.TopElevationOf(slab);
             var zBase = zTop - (slab.Thickness > 0.5d ? slab.Thickness : 120d);
 
             double[] ps, us;
@@ -1639,18 +1665,27 @@ namespace BatchPdfPublisher.BuildingModel
             {
                 if (projMin <= cutProj + Epsilon && projMax >= cutProj - Epsilon)
                 {
-                    double u0, u1;
-                    if (TryClipAtP(ps, us, cutProj, out u0, out u1))
+                    var spans = new List<double[]>();
+                    foreach (var triangle in SlabGeometry.Build(slab).Triangles)
                     {
-                        var cut = new Rect
-                        {
-                            U0 = u0, U1 = u1, Z0 = zBase, Z1 = zTop,
-                            Depth = double.MaxValue - 1d,
-                            Layer = ViewLayers.Cut,
-                            IsCut = true
-                        };
-                        rects.Add(cut);
-                        cutRects.Add(cut);
+                        double[] trianglePs, triangleUs;
+                        ToPlane(triangle, frame, out trianglePs, out triangleUs);
+                        double u0, u1;
+                        if (TryClipAtP(trianglePs, triangleUs, cutProj, out u0, out u1)
+                            && u1 - u0 > Epsilon) spans.Add(new[] { u0, u1 });
+                    }
+                    var merged = new List<double[]>();
+                    foreach (var span in spans.OrderBy(s => s[0]))
+                    {
+                        if (merged.Count == 0 || span[0] > merged[merged.Count - 1][1] + Epsilon)
+                            merged.Add(span);
+                        else merged[merged.Count - 1][1] = Math.Max(merged[merged.Count - 1][1], span[1]);
+                    }
+                    foreach (var span in merged)
+                    {
+                        var cut = new Rect { U0 = span[0], U1 = span[1], Z0 = zBase, Z1 = zTop,
+                            Depth = double.MaxValue - 1d, Layer = ViewLayers.Cut, IsCut = true };
+                        rects.Add(cut); cutRects.Add(cut);
                     }
                     return;
                 }

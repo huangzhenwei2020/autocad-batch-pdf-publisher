@@ -43,6 +43,8 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
+    <PackageReference Include="LibTessDotNet" Version="1.1.15" />
+    <Compile Include="..\Shared\BuildingModel\SlabGeometry.cs"><Link>Features\BuildingModel\Shared\SlabGeometry.cs</Link></Compile>
     <Compile Include="AssemblyInfo.cs" />
     <Compile Include="..\Shared\CadInterop\TianzhengReadOnlyAccess.cs"><Link>Infrastructure\TianzhengReadOnlyAccess.cs</Link></Compile>
     <Compile Include="..\Shared\BuildingModel\CadBuildingObjectProbe.cs"><Link>Features\BuildingModel\Shared\CadBuildingObjectProbe.cs</Link></Compile>

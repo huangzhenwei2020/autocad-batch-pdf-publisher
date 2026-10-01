@@ -4,8 +4,8 @@
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="../BuildingModel.Core/BuildingModel.Core.csproj" />
     <Compile Include="CadBuildingProbeUiTests.cs" />
-    <Compile Include="../Shared/BuildingModel/CadBuildingObjectProbe.cs" Link="CadBuildingObjectProbe.cs" />
     <Compile Include="../BatchPdfPublisher/Features/BuildingModel/Views/TianzhengBuildingProbeWindow.cs" Link="TianzhengBuildingProbeWindow.cs" />
   </ItemGroup>
 </Project>

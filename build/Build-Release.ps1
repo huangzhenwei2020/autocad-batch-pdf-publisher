@@ -296,7 +296,7 @@ foreach ($band in $Bands) {
         $project = Join-Path $repositoryRoot 'BatchPdfPublisher\BatchPdfPublisher.csproj'
         $defineConstants = ''
         Invoke-Checked {
-            & $msbuild $project /t:Rebuild /p:Configuration=Release `
+            & $msbuild $project /restore /t:Rebuild /p:Configuration=Release `
                 "/p:TargetFrameworkVersion=$framework" `
                 "/p:AutoCadApiPath=$($installation.Path)" `
                 "/p:OutputPath=$bandOutput\" `

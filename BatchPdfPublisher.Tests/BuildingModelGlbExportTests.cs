@@ -89,6 +89,7 @@ internal static class BuildingModelGlbExportTests
                 .Sum(t => Vector3.Cross(t.Item2 - t.Item1, t.Item3 - t.Item1).Length() / 2);
             Assert(Math.Abs(topArea - 3f) < 0.0001, "凹楼板三角形跨越缺口。");
             Console.WriteLine("PASS GLB 凹楼板三角剖分保持 3 平方米面积");
+            CheckSlabOpenings(path);
             CheckIndependentWallMesh(path);
             CheckModelSpaceSheets();
             CheckDisplayCodes();
@@ -96,6 +97,33 @@ internal static class BuildingModelGlbExportTests
         }
         catch (Exception ex) { Console.Error.WriteLine("FAIL " + ex); return 1; }
         finally { Directory.Delete(folder, true); }
+    }
+
+    private static void CheckSlabOpenings(string path)
+    {
+        var model = new BuildingModelDocument { Name = "井道楼板" };
+        model.Storeys.Add(new StoreyModel { Id = "2F", Name = "二层", Elevation = 3600, Height = 3300 });
+        List<PointModel> Rect(double x0, double y0, double x1, double y1) => new()
+            { new(x0, y0), new(x1, y0), new(x1, y1), new(x0, y1) };
+        model.Slabs.Add(new SlabModel { Id = "slab", StoreyId = "2F", TopOffset = 0, Thickness = 180,
+            Outline = Rect(0, 0, 6000, 5000), Openings = new List<SlabOpeningModel> {
+                new() { Id = "stair", Outline = Rect(1000, 1000, 2500, 3000) },
+                new() { Id = "lift", Outline = Rect(3500, 1000, 4500, 3000) } } });
+        BuildingModelGlbExporter.Export(model, path);
+        var glb = ModelRoot.Load(path);
+        CheckGeometry(glb, BuildingVolumeBuilder.Build(model));
+        var top = Triangles(glb).Where(t => t.Item4.Y > 0.9f).ToArray();
+        Assert(Math.Abs(top.Sum(t => Vector3.Cross(t.Item2 - t.Item1, t.Item3 - t.Item1).Length() / 2d)
+            - 25d) < 0.0001, "导出把井道孔洞填满或丢失板面。");
+        float Cross(Vector3 a, Vector3 b, Vector3 p) => (b.X - a.X) * (p.Z - a.Z) - (b.Z - a.Z) * (p.X - a.X);
+        foreach (var p in new[] { new Vector3(1.7f, 3.6f, -1.8f), new Vector3(3.9f, 3.6f, -1.8f) })
+            Assert(!top.Any(t => {
+                var signs = new[] { Cross(t.Item1, t.Item2, p), Cross(t.Item2, t.Item3, p), Cross(t.Item3, t.Item1, p) };
+                return signs.All(v => v >= -1e-6) || signs.All(v => v <= 1e-6);
+            }), "GLB 三角面跨越井道中心。");
+        Directory.CreateDirectory(".artifacts/slab-openings");
+        File.Copy(path, ".artifacts/slab-openings/model.glb", true);
+        Console.WriteLine("PASS GLB 双井道：25 平方米板面、洞口贯通、外法线与毫米米转换");
     }
 
     private static void CheckIndependentWallMesh(string path)

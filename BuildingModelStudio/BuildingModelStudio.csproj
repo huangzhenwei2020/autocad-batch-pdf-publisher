@@ -13,6 +13,8 @@
          当前先独立编译，不参与 Build-Release.ps1 的发布流程。 -->
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="LibTessDotNet" Version="1.1.15" />
+    <Compile Include="..\Shared\BuildingModel\SlabGeometry.cs" Link="Shared\SlabGeometry.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="CrashLog.cs" />
     <Compile Include="DrawGuard.cs" />

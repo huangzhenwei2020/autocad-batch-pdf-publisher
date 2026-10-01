@@ -28,6 +28,7 @@ internal static class Program
     public static Vector3? SnapshotCamera { get; private set; }
     public static bool GizmoCheck { get; private set; }
     public static bool ShortcutCheck { get; private set; }
+    public static bool SlabCheck { get; private set; }
     public static string? ModelPath { get; private set; }
     public static bool CreateMissingProjectModel { get; private set; }
     public static string? ProjectModelName { get; private set; }
@@ -80,6 +81,7 @@ internal static class Program
         }
         GizmoCheck = args.Contains("--gizmo-check", StringComparer.OrdinalIgnoreCase);
         ShortcutCheck = args.Contains("--shortcut-check", StringComparer.OrdinalIgnoreCase);
+        SlabCheck = args.Contains("--slab-check", StringComparer.OrdinalIgnoreCase);
         var index = Array.IndexOf(args, "--snapshot");
         if (index >= 0 && index + 1 < args.Length) SnapshotPath = Path.GetFullPath(args[index + 1]);
         index = Array.IndexOf(args, "--snapshot-plan");
@@ -251,6 +253,8 @@ internal sealed class ProbeApp : Application
     public override void Initialize()
     {
         Styles.Add(new FluentTheme());
+        Styles.Add(new StyleInclude(new Uri("avares://万落建筑模型/"))
+        { Source = new Uri("avares://万落建筑模型/SlabScrollbars.axaml") });
         RequestedThemeVariant = Avalonia.Styling.ThemeVariant.Dark;
     }
 

@@ -15,6 +15,7 @@
   <ItemGroup>
     <AvaloniaResource Include="Resources\Icons\*.svg" />
     <AvaloniaResource Include="Resources\Icons\*.png" />
+    <AvaloniaResource Include="SlabScrollbars.axaml" />
     <None Include="..\ThirdParty\BuildingModelInterop\LICENSES.txt" Link="licenses\BuildingModelInterop-LICENSES.txt" CopyToOutputDirectory="PreserveNewest" />
     <None Update="Resources\Blender\OpenGlb.py" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

@@ -32,6 +32,7 @@ namespace BatchPdfPublisher.BuildingModel
                 if (!SameOpening(opening, model.Openings.FirstOrDefault(o=>o.Id==opening.Id)))
                     throw new InvalidDataException("模型中已编辑或删除登记洞口 " + opening.Code + "，请先核对后再更新登记模型。");
             var walls = new List<WallModel>(); var openings = new List<OpeningModel>();
+            var pending = new List<CadPendingOpening>();
             foreach (var capture in registry.Floors)
             {
                 capture.ValidateSchedule();
@@ -66,16 +67,33 @@ namespace BatchPdfPublisher.BuildingModel
                 }
                 foreach (var source in capture.Openings.Where(o=>o.Include))
                 {
+                    var probe = capture.Probe.Entities.FirstOrDefault(e=>string.Equals(e.Handle,source.SourceHandle,StringComparison.OrdinalIgnoreCase));
                     var placement=source.Placement ?? CadOpeningJambPlacement.Find(capture.Floor,
-                        capture.Probe.Entities.FirstOrDefault(e=>string.Equals(e.Handle,source.SourceHandle,StringComparison.OrdinalIgnoreCase)),source.Width.Value);
-                    if (placement == null) throw new InvalidDataException(floor.Name + " · " + codes[source] + " 尚未读到洞口位置，请点击“补充门窗位置”处理；门窗表可独立查看和保存。");
-                    var location = placement.Revalidate(capture.Floor,source.Width.Value);
+                        probe,source.Width.Value);
+                    if (placement == null)
+                    {
+                        pending.Add(Pending(capture, source, codes[source], probe, "未确认洞口位置，未开洞"));
+                        continue;
+                    }
+                    CadOpeningPlacement location;
+                    try { location = placement.Revalidate(capture.Floor,source.Width.Value); }
+                    catch (InvalidDataException exception)
+                    {
+                        pending.Add(Pending(capture, source, codes[source], probe, exception.Message));
+                        continue;
+                    }
                     WallModel host;
                     if (!hostMap.TryGetValue(location.HostSourceHandle,out host))
-                        throw new InvalidDataException(source.Code + " 的宿主墙未纳入模型。");
+                    {
+                        pending.Add(Pending(capture, source, codes[source], probe, "宿主墙未纳入模型，未开洞"));
+                        continue;
+                    }
                     if (Distance(location.ModelWallStart,new PointModel(host.X1,host.Y1))>0.01
                         || Distance(location.ModelWallEnd,new PointModel(host.X2,host.Y2))>0.01)
-                        throw new InvalidDataException(source.Code + " 的宿主定位线已变化，请重新核对。");
+                    {
+                        pending.Add(Pending(capture, source, codes[source], probe, "宿主定位线已变化，未开洞"));
+                        continue;
+                    }
                     var targetFloors = model.Storeys.Where(f=>f.Id==floor.Id || string.Equals(f.TemplateStoreyId,floor.Id,StringComparison.OrdinalIgnoreCase));
                     var availableHeight=targetFloors.Min(f=>host.Height>0.5 ? host.Height : f.Height);
                     var sill=CadOpeningDefaults.Sill(source,availableHeight);
@@ -107,8 +125,22 @@ namespace BatchPdfPublisher.BuildingModel
             }
             BuildingElementNames.EnsureWallCodes(model);
             model.CadImport = new CadModelImportState { RequestId=requestId,
-                Walls=walls.Select(CopyWall).ToList(),Openings=openings.Select(CopyOpening).ToList() };
+                Walls=walls.Select(CopyWall).ToList(),Openings=openings.Select(CopyOpening).ToList(),PendingOpenings=pending };
             return model;
+        }
+        private static CadPendingOpening Pending(CadFloorPlanCapture capture, CadFloorOpeningItem source,
+            string code, CadBuildingProbeEntity probe, string reason)
+        {
+            PointModel position = null;
+            if (probe != null && probe.BoundsMin != null && probe.BoundsMax != null
+                && Finite(probe.BoundsMin.X) && Finite(probe.BoundsMin.Y)
+                && Finite(probe.BoundsMax.X) && Finite(probe.BoundsMax.Y))
+                position = capture.Floor.Alignment.ToModel(new PointModel(
+                    probe.BoundsMin.X / 2 + probe.BoundsMax.X / 2,
+                    probe.BoundsMin.Y / 2 + probe.BoundsMax.Y / 2));
+            return new CadPendingOpening { StoreyId=capture.Floor.Storey.Id,SourceHandle=source.SourceHandle,
+                Code=code,Kind=source.ModelKind,Width=source.Width.Value,Height=source.Height.Value,
+                Reason=reason,ReferencePosition=position };
         }
         public static double? Number(CadBuildingProbeEntity source,string name) => source.Fields.FirstOrDefault(f=>f.Name==name)?.Number;
         private static double Distance(PointModel a,PointModel b) => Math.Sqrt((a.X-b.X)*(a.X-b.X)+(a.Y-b.Y)*(a.Y-b.Y));

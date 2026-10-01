@@ -32,6 +32,7 @@ internal static class BuildingModelProjectionTests
             OffsetCutInsideWallThicknessProducesSection();
             WallAndOpeningEditUpdatesElevationAndSection();
             VolumeIdentityTests.Run();
+            SlabGeometryTests.Run();
             BuildingModelEditSessionTests.Run();
             JsonRoundTripsWithoutLoss(model);
             RegisteredFramePaperSizeIsPreserved();

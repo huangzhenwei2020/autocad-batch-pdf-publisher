@@ -161,7 +161,38 @@ internal static class CadFloorModelGenerationTests
         item.Code="M01"; item.Height=2200; item.Sill=0;
         before=BuildingModelJson.ToJson(session.Model); revision=session.Revision; item.Width=double.NaN;
         Check(!session.TryImportCadFloors(registry,"invalid",out error) && before==BuildingModelJson.ToJson(session.Model) && session.Revision==revision,"Invalid dimensions must still reject the whole edit without changing history."); item.Width=800;
-        item.Placement=null; Reject(()=>CadFloorModelGeneration.Build(model,registry)); item.Placement=location;
+        item.Placement=null;
+        var withoutLocation=CadFloorModelGeneration.Build(model,registry);
+        Check(withoutLocation.Walls.Count==1 && withoutLocation.Openings.Count==0
+            && withoutLocation.CadImport.PendingOpenings.Single().Code=="M01"
+            && withoutLocation.CadImport.PendingOpenings[0].ReferencePosition==null,
+            "Unlocated openings must warn without blocking walls or inventing a location.");
+        capture.Probe.Entities.Add(new CadBuildingProbeEntity { Handle="M1",
+            BoundsMin=new CadProbePoint { X=1000,Y=600 },BoundsMax=new CadProbePoint { X=2000,Y=900 } });
+        var withReference=CadFloorModelGeneration.Build(model,registry);
+        var pending=withReference.CadImport.PendingOpenings.Single();
+        Check(pending.ReferencePosition.X==1400 && pending.ReferencePosition.Y==550
+            && withReference.Openings.Count==0,"Drawing envelope must only supply a reference marker, not a guessed aperture.");
+        var roundtrip=BuildingModelJson.FromJson(BuildingModelJson.ToJson(withReference));
+        BuildingModelJson.SaveModel(Path.Combine(folder,"pending-marker.json"),withReference);
+        Check(roundtrip.CadImport.PendingOpenings.Single().ReferencePosition.X==1400,
+            "Pending opening markers must survive save/reopen.");
+        item.Placement=location;
+        var completed=CadFloorModelGeneration.Build(withReference,registry);
+        Check(completed.Openings.Count==1 && completed.CadImport.PendingOpenings.Count==0,
+            "Correcting placement must replace the pending marker with a real opening.");
+        capture.Openings.Add(new CadFloorOpeningItem { SourceHandle="M2",Code="M02",Kind="门",
+            Width=900,Height=2100,Sill=0 });
+        var mixed=CadFloorModelGeneration.Build(model,registry);
+        Check(mixed.Walls.Count==1 && mixed.Openings.Count==1
+            && mixed.CadImport.PendingOpenings.Single().Code=="M02",
+            "One unlocated opening must not suppress confirmed openings or model walls.");
+        var pendingRequest=CadModelGenerationRequest.Queue(registry);
+        Check(CadModelGenerationRequest.Load(path).Id==pendingRequest.Id,
+            "Queue validation must also allow unlocated openings.");
+        CadModelGenerationRequest.Acknowledge(path,pendingRequest.Id,null);
+        capture.Openings.RemoveAt(capture.Openings.Count-1);
+        capture.Probe.Entities.Clear();
         wall.StraightHorizontalLineVerified=false; Reject(()=>CadFloorModelGeneration.Build(model,registry)); wall.StraightHorizontalLineVerified=true;
         wall.Fields.First(f=>f.Name=="Elevation").Number=double.NaN; Reject(()=>CadFloorModelGeneration.Build(model,registry)); wall.Fields.First(f=>f.Name=="Elevation").Number=0;
         wall.Fields.First(f=>f.Name=="Height").Number=null;
