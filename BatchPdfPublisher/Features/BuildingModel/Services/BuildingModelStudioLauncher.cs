@@ -26,6 +26,24 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
             if (document == null) return;
             var editor = document.Editor;
 
+            var choice = new BatchPdfPublisher.Views.BuildingModelChoiceWindow("建筑模型",
+                "打开模型进行编辑，或先核验 CAD 中天正墙门窗的可读参数。",
+                new[] {
+                    new BatchPdfPublisher.Views.BuildingModelChoice { Value = 0, Title = "打开建筑模型", Subtitle = "打开当前项目的新版建筑模型", Badge = "建模" },
+                    new BatchPdfPublisher.Views.BuildingModelChoice { Value = 1, Title = "天正墙门窗字段核验", Subtitle = "只读选择对象、检查原始参数并导出核验记录；暂不创建模型", Badge = "只读" },
+                    new BatchPdfPublisher.Views.BuildingModelChoice { Value = 2, Title = "CAD 楼层登记核对", Subtitle = "使用当前建筑模型；逐层登记平面后生成墙与门窗洞口", Badge = "登记" }
+                }, false, "继续") { Title = "建筑模型" };
+            if (Autodesk.AutoCAD.ApplicationServices.Application.ShowModalWindow(choice) != true) return;
+            if (choice.SelectedValue == 1) { TianzhengBuildingProbeService.Execute(document); return; }
+            if (choice.SelectedValue == 2) { TianzhengBuildingProbeService.Execute(document, true); return; }
+
+            OpenCurrentModel(document);
+        }
+
+        public static bool OpenCurrentModel(Document document, string modelPath = null)
+        {
+            var editor = document.Editor;
+
             string projectFolder;
             string modelName;
             try
@@ -37,22 +55,25 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
             catch (Exception exception)
             {
                 editor.WriteMessage("\n读取当前项目失败：" + exception.Message);
-                return;
+                return false;
             }
             if (string.IsNullOrWhiteSpace(projectFolder))
             {
                 editor.WriteMessage("\n还没有打开/激活项目：先在启动器里建一个项目（或指定项目文件夹），再执行本命令。");
-                return;
+                return false;
             }
 
+            var activePath = modelPath ?? StudioLaunch.ActiveModelPath(projectFolder, modelName);
+            if (activePath != null && StudioLaunch.HasLiveSession(activePath)) return true;
             var executable = ResolveExecutable(editor);
-            if (string.IsNullOrWhiteSpace(executable)) return;
+            if (string.IsNullOrWhiteSpace(executable)) return false;
 
             // 模型目录已经存在就直接打开它；不存在就把"项目文件夹 + 模型名称"给建模程序，由它新建
             var modelFolder = StudioLaunch.FindModelFolder(projectFolder, modelName);
             var arguments = StudioLaunch.BuildArguments(projectFolder, modelName);
             try
             {
+                if (activePath != null) arguments = "--cad-project \"" + projectFolder.TrimEnd('\\', '/') + "\" --model \"" + activePath + "\"";
                 Process.Start(new ProcessStartInfo
                 {
                     FileName = executable,
@@ -64,11 +85,13 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
                 editor.WriteMessage("\n项目：" + projectFolder + "　模型：" + (modelName ?? "（默认）")
                     + (modelFolder == null ? "（还不存在，程序里会按这个名字新建）" : ""));
                 editor.WriteMessage("\n在建模程序里修改并保存模型后，点「生成 CAD 视图」或「推到 CAD」；回到 CAD 执行 LTTZ 落图。\n");
+                return true;
             }
             catch (Exception exception)
             {
                 editor.WriteMessage("\n启动建模程序失败：" + exception.Message
                     + "\n可以直接双击：" + executable);
+                return false;
             }
         }
 

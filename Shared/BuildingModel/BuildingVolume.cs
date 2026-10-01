@@ -322,11 +322,10 @@ namespace BatchPdfPublisher.BuildingModel
             }
             if (length - cursor > 1d) AddWallSegment(volume, wall, cursor, length, z0, z1, ref first);
 
-            // 门窗构件：窗 = 四条边框 + 玻璃；门 = 一扇打开的门扇（这样三维里一眼能看出是窗还是门）
+            // 门联窗与窗显示闭合框和玻璃；普通门保留开启门扇。
             foreach (var opening in openings)
             {
-                var kind = opening.Source.Kind ?? "窗";
-                if (kind.IndexOf("门", StringComparison.Ordinal) >= 0)
+                if (opening.Source.HasSwingLeaf())
                     AddDoorLeaf(volume, wall, opening.Start, opening.End, z0 + opening.Sill, z0 + opening.Head,
                         wall.StoreyId, opening.Source.Id, ref first);
                 else
@@ -347,7 +346,7 @@ namespace BatchPdfPublisher.BuildingModel
                 var sill = z0 + Math.Max(0d, opening.Sill);
                 var head = Math.Min(z1, sill + Math.Max(0d, opening.Height));
                 if (end - start < 1d || head - sill < 1d) continue;
-                if ((opening.Kind ?? "窗").IndexOf("门", StringComparison.Ordinal) >= 0)
+                if (opening.HasSwingLeaf())
                     AddDoorLeaf(volume, wall, start, end, sill, head,
                         wall.StoreyId, opening.Id, ref first);
                 else AddWindowParts(volume, wall, start, end, sill, head,

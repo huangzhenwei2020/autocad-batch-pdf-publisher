@@ -13,6 +13,7 @@ internal static class Program
 {
     public static bool Smoke { get; private set; }
     public static bool SmokeFailed { get; set; }
+    public static bool CadGenerationCheck { get; private set; }
     public static int GpuBenchCount { get; private set; }
     public static string? SnapshotPath { get; private set; }
     public static bool SnapshotPlan { get; private set; }
@@ -30,6 +31,7 @@ internal static class Program
     public static string? ModelPath { get; private set; }
     public static bool CreateMissingProjectModel { get; private set; }
     public static string? ProjectModelName { get; private set; }
+    public static string? ProjectFolder { get; private set; }
 
     [STAThread]
     private static int Main(string[] args)
@@ -53,6 +55,7 @@ internal static class Program
             return 0;
         }
         Smoke = args.Contains("--smoke", StringComparer.OrdinalIgnoreCase);
+        CadGenerationCheck = args.Contains("--cad-generation-check", StringComparer.OrdinalIgnoreCase);
         var cameraIndex = Array.IndexOf(args, "--snapshot-camera");
         if (cameraIndex >= 0)
         {
@@ -121,12 +124,15 @@ internal static class Program
             SnapshotStoreys = true;
         }
         var projectIndex = Array.IndexOf(args, "--project");
+        var cadProjectIndex = Array.IndexOf(args, "--cad-project");
+        if (cadProjectIndex >= 0 && cadProjectIndex + 1 < args.Length) ProjectFolder = Path.GetFullPath(args[cadProjectIndex + 1]);
         var modelIndex = Array.IndexOf(args, "--model");
         if (projectIndex >= 0)
         {
             if (projectIndex + 1 >= args.Length || string.IsNullOrWhiteSpace(args[projectIndex + 1]))
                 throw new ArgumentException("--project 后必须提供项目文件夹。");
             var folder = Path.GetFullPath(args[projectIndex + 1]);
+            ProjectFolder = folder;
             ProjectModelName = modelIndex >= 0 && modelIndex + 1 < args.Length
                 ? args[modelIndex + 1] : "建筑模型";
             if (string.IsNullOrWhiteSpace(ProjectModelName)) ProjectModelName = "建筑模型";

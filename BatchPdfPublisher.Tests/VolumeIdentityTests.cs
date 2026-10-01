@@ -42,6 +42,7 @@ internal static class VolumeIdentityTests
         CheckFractionalWallCoordinates();
         CheckNearOrthogonalCorner();
         CheckWindowFrameCorners();
+        CheckClosedDoorWindows();
         CheckStoreySettings();
         CheckStandardStoreys();
         CheckWallReferencePlacement();
@@ -63,6 +64,37 @@ internal static class VolumeIdentityTests
         var expected = 1500d*1800 - (1500-120d)*(1800-120d);
         Assert(Math.Abs(area-expected) < 0.001, "窗框角部重复面：" + area + " / " + expected);
         Console.WriteLine("PASS 窗框接角：四条框边无重叠外表面");
+    }
+
+    private static void CheckClosedDoorWindows()
+    {
+        foreach(var rise in new[] { 0d, 1200d })
+        foreach(var kind in new[] { "门联窗", "门连窗", "门" })
+        {
+            var model=SampleModelFactory.CreateEmptyModel("门联窗闭合显示");
+            var wall=new WallModel { Id="wall",StoreyId="1F",X2=6000,Y2=rise,Thickness=240,AxisOffset=35 };
+            model.Walls.Add(wall);
+            var opening=new OpeningModel { Id="mlc",HostWallId="wall",Code="MLC3627",Kind=kind,
+                Offset=3000,Width=3600,Height=2700,Sill=0 };
+            model.Openings.Add(opening);
+            var length=Math.Sqrt(wall.X2*wall.X2+wall.Y2*wall.Y2);
+            double Normal(double x,double y) => (-wall.Y2*x+wall.X2*y)/length-35;
+            var parts=BuildingVolumeBuilder.Build(model).Faces.Where(f=>f.ElementId==opening.Id).ToList();
+            Assert(parts.Any(f=>f.Kind=="frame") && parts.Any(f=>f.Kind=="glass") && parts.All(f=>f.Kind!="door"),
+                "门联窗必须显示闭合框和玻璃，不能生成打开的门扇");
+            Assert(parts.SelectMany(f=>f.Points).All(p=>Math.Abs(Normal(p.X,p.Y))<=120.01),
+                "门联窗构件不能突出到墙体外形成开启效果");
+            var plan=OrthographicProjector.ProjectPlan(model,new ViewDefinitionModel { Kind=ViewKind.Plan,
+                StoreyIds=new System.Collections.Generic.List<string> { "1F" } },null);
+            var symbols=plan.Lines.Where(l=>l.Layer==ViewLayers.Opening).ToList();
+            Assert(symbols.Count==2 && symbols.All(l=>Math.Abs((-wall.Y2*(l.X2-l.X1)+wall.X2*(l.Y2-l.Y1))/length)<.01
+                && Math.Abs(Math.Sqrt(Math.Pow(l.X2-l.X1,2)+Math.Pow(l.Y2-l.Y1,2))-opening.Width)<.01),
+                "门联窗平面图也不能画外伸门扇和开启弧");
+            opening.Code="M3627"; opening.Kind="门";
+            Assert(BuildingVolumeBuilder.Build(model).Faces.Any(f=>f.ElementId==opening.Id && f.Kind=="door"),
+                "普通门应继续保留原有开启显示");
+        }
+        Console.WriteLine("PASS 门联窗闭合显示：正交融合墙、斜墙、名称别字和旧 MLC 门类别均不画开启扇");
     }
 
     private static void CheckNearOrthogonalCorner()

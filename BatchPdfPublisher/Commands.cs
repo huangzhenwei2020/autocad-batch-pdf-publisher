@@ -179,6 +179,18 @@ namespace BatchPdfPublisher
             BuildingModelStudioLauncher.Open(document);
         }
 
+        [CommandMethod("WLTZPROBE")]
+        public void InspectNativeBuildingObjects()
+        {
+            TianzhengBuildingProbeService.Execute(Application.DocumentManager.MdiActiveDocument);
+        }
+
+        [CommandMethod("WLMCREGISTER")]
+        public void RegisterNativeOpeningParameters()
+        {
+            TianzhengBuildingProbeService.Execute(Application.DocumentManager.MdiActiveDocument, true);
+        }
+
         [CommandMethod("LINEVISION", CommandFlags.Session)]
         [CommandMethod("TXZCAD", CommandFlags.Session)]
         [CommandMethod("TXC", CommandFlags.Session)]

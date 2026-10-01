@@ -16,8 +16,8 @@ namespace BatchPdfPublisher.Services
             item.ElevationType = type;
             ApplyConstructionDefaults(item);
             item.Material = IsWindowType(type) ? "玻璃" : "无";
-            if (IsWindowType(type) && item.SillHeight <= 0d && !item.SillHeightSuppressed) item.SillHeight = 900d;
-            if (!IsWindowType(type)) { item.SillHeight = 0d; item.SillHeightSuppressed = false; }
+            if (IsWindowType(type) && item.SillHeight <= 0d && !item.SillHeightSuppressed && !item.SillHeightFromCadRegistration) item.SillHeight = 900d;
+            if (!IsWindowType(type) && item.SourceNote?.Contains("CAD 楼层登记") != true) { item.SillHeight = 0d; item.SillHeightSuppressed = false; }
             item.AtlasName = item.AtlasNameExplicitlySelected && !string.IsNullOrWhiteSpace(item.AtlasName)
                 ? NormalizeAtlasName(item.AtlasName)
                 : InferAtlas(code, type, item.SourceNote);
@@ -129,7 +129,7 @@ namespace BatchPdfPublisher.Services
             if (item.BayLeftDepth <= 0d) item.BayLeftDepth = 600d;
             if (item.BayRightDepth <= 0d) item.BayRightDepth = 600d;
             // 凸窗默认窗台高为 700；旧版在未识别窗台高时统一套的 900 也一并迁正。
-            if (!item.SillHeightSuppressed && (item.SillHeight <= 0d || Math.Abs(item.SillHeight - 900d) < .01d))
+            if (!item.SillHeightFromCadRegistration && !item.SillHeightSuppressed && (item.SillHeight <= 0d || Math.Abs(item.SillHeight - 900d) < .01d))
             {
                 item.SillHeight = 700d;
                 item.SillHeightSuppressed = false;

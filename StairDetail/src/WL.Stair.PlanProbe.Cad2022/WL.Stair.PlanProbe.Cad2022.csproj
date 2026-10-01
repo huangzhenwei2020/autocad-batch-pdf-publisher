@@ -48,6 +48,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="ProbeCommands.cs" />
+    <Compile Include="..\..\..\Shared\CadInterop\TianzhengReadOnlyAccess.cs"><Link>PlanCapture\TianzhengReadOnlyAccess.cs</Link></Compile>
     <Compile Include="..\WL.Stair.CadShared\PlanCapture\StairPlanObjectProbe.cs">
       <Link>PlanCapture\StairPlanObjectProbe.cs</Link>
     </Compile>

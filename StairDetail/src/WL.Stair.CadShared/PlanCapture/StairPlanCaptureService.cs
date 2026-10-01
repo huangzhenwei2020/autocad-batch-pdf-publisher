@@ -2315,15 +2315,10 @@ namespace WL.Stair.CadShared.PlanCapture
             try
             {
                 var acadObject = entity.AcadObject;
-                return acadObject == null
-                    ? null
-                    : acadObject.GetType().InvokeMember(
-                        propertyName,
-                        BindingFlags.GetProperty,
-                        null,
-                        acadObject,
-                        null,
-                        CultureInfo.InvariantCulture);
+                object value;
+                string error;
+                return WanLuo.CadInterop.TianzhengReadOnlyAccess.TryReadProperty(
+                    acadObject, propertyName, out value, out error) ? value : null;
             }
             catch
             {

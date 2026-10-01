@@ -188,13 +188,10 @@ namespace WL.Stair.CadShared.PlanCapture
                     return "<不可读>";
                 }
 
-                var value = acadObject.GetType().InvokeMember(
-                    propertyName,
-                    BindingFlags.GetProperty,
-                    null,
-                    acadObject,
-                    null,
-                    CultureInfo.InvariantCulture);
+                object value;
+                string error;
+                if (!WanLuo.CadInterop.TianzhengReadOnlyAccess.TryReadProperty(
+                    acadObject, propertyName, out value, out error)) return "<不可读>";
                 return value == null
                     ? string.Empty
                     : Convert.ToString(value, CultureInfo.InvariantCulture);

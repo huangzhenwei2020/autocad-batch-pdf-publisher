@@ -131,7 +131,7 @@ namespace BatchPdfPublisher.BuildingModel
         public string HostWallId { get; set; }
         /// <summary>门窗编号（对应现有门窗参数库的类型）。</summary>
         public string Code { get; set; }
-        /// <summary>窗 / 门 / 洞口。</summary>
+        /// <summary>窗 / 门 / 门联窗 / 洞口。</summary>
         public string Kind { get; set; } = "窗";
         /// <summary>洞口中心沿墙轴线到墙起点的距离（mm）。</summary>
         public double Offset { get; set; }
@@ -139,6 +139,16 @@ namespace BatchPdfPublisher.BuildingModel
         public double Height { get; set; }
         /// <summary>窗台高（相对所属楼层标高，mm）。</summary>
         public double Sill { get; set; }
+
+        /// <summary>组合门窗只显示闭合构件；旧模型误标为门时仍按 MLC 编号识别。</summary>
+        public bool HasSwingLeaf()
+        {
+            var kind = Kind ?? string.Empty;
+            var combined = kind.IndexOf("门联窗", StringComparison.Ordinal) >= 0
+                || kind.IndexOf("门连窗", StringComparison.Ordinal) >= 0
+                || (Code ?? string.Empty).Trim().StartsWith("MLC", StringComparison.OrdinalIgnoreCase);
+            return !combined && kind.IndexOf("门", StringComparison.Ordinal) >= 0;
+        }
     }
 
     /// <summary>楼板：闭合轮廓 + 板厚 + 板顶标高。</summary>
@@ -275,10 +285,18 @@ namespace BatchPdfPublisher.BuildingModel
     }
 
     /// <summary>整个建筑模型（P0 只含体量所必需的构件）。</summary>
+    public sealed class CadModelImportState
+    {
+        public string RequestId { get; set; }
+        public List<WallModel> Walls { get; set; } = new List<WallModel>();
+        public List<OpeningModel> Openings { get; set; } = new List<OpeningModel>();
+    }
+
     public sealed class BuildingModelDocument
     {
         public int SchemaVersion { get; set; } = BuildingModelSchema.Version;
         public string Name { get; set; }
+        public CadModelImportState CadImport { get; set; }
         public List<StoreyModel> Storeys { get; set; } = new List<StoreyModel>();
         public List<WallModel> Walls { get; set; } = new List<WallModel>();
         public List<OpeningModel> Openings { get; set; } = new List<OpeningModel>();

@@ -7,7 +7,7 @@ namespace BatchPdfPublisher.BuildingModel
     /// UI-independent editing boundary for the first cross-platform wall/opening probe.
     /// Changes are validated on a clone and committed only when the whole model is valid.
     /// </summary>
-    public sealed class BuildingModelEditSession
+    public sealed partial class BuildingModelEditSession
     {
         private readonly ModelEditHistory _history = new ModelEditHistory();
 

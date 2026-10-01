@@ -362,27 +362,22 @@ namespace BatchPdfPublisher.Services
 
         internal static List<DoorWindowScheduleItem> AssignSizeSuffixes(List<DoorWindowScheduleItem> items)
         {
-            foreach (var group in items.GroupBy(x => (x.Code ?? string.Empty).Trim(), StringComparer.OrdinalIgnoreCase).Where(x => x.Count() > 1))
+            var codes = BuildingModel.CadFloorPlanRegistry.ResolveCodes(items,
+                x => BuildingModel.CadOpeningDefaults.Code(new BuildingModel.CadFloorOpeningItem {
+                    Code=x.Code, Kind=InferType(x.Code,x.SourceCategory).Contains("门联窗") ? "门联窗" : InferType(x.Code,x.SourceCategory).Contains("门") ? "门" : "窗",Width=x.Width,Height=x.Height }),
+                x=>x.Width,x=>x.Height);
+            foreach (var item in items)
             {
-                var ordered = group.OrderBy(x => x.SourceRow).ToList();
-                for (var index = 0; index < ordered.Count; index++)
+                if (!string.Equals(item.Code,codes[item],StringComparison.OrdinalIgnoreCase))
                 {
-                    var suffix = ToAlphabeticSuffix(index);
-                    ordered[index].Code = (group.Key ?? string.Empty) + suffix;
-                    ordered[index].SourceNote = string.IsNullOrWhiteSpace(ordered[index].SourceNote)
-                        ? "原编号 " + group.Key + " 存在不同洞口尺寸，已自动增加后缀"
-                        : ordered[index].SourceNote + "；原编号 " + group.Key + " 存在不同洞口尺寸，已自动增加后缀";
+                    var note = BuildingModel.CadOpeningDefaults.HasCode(item.Code)
+                        ? "原编号 "+item.Code+" 存在不同洞口尺寸，已自动增加后缀" : "按洞口尺寸自动编号";
+                    item.SourceNote=string.IsNullOrWhiteSpace(item.SourceNote) ? note : item.SourceNote+"；"+note;
+                    item.Code=codes[item];
                 }
             }
             for (var index = 0; index < items.Count; index++) items[index].Sequence = index + 1;
             return items;
-        }
-
-        private static string ToAlphabeticSuffix(int index)
-        {
-            var value = index + 1; var result = string.Empty;
-            while (value > 0) { value--; result = (char)('A' + value % 26) + result; value /= 26; }
-            return result;
         }
 
         internal static List<DoorWindowScheduleItem> Consolidate(List<DoorWindowScheduleItem> items)

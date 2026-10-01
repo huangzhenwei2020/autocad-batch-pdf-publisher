@@ -64,7 +64,7 @@ namespace BatchPdfPublisher.Views
             Font = new DrawingFont("Microsoft YaHei UI", 9F);
             _documentBinding = new ModelessDocumentBinding(this, document);
             Build(); LoadSource(source);
-            Shown += (s, e) => RestoreSavedSession();
+            Shown += (s, e) => { if (!LoadRegisteredFloors()) RestoreSavedSession(); };
             FormClosed += (s, e) => SavePreferences(false);
         }
 
@@ -84,6 +84,7 @@ namespace BatchPdfPublisher.Views
             var title = new Label { Text = "门窗表数据", Font = new DrawingFont(Font, FontStyle.Bold), AutoSize = true, Margin = new Padding(0, 0, 0, 2) };
             _sourceLabel.AutoSize = true; _sourceLabel.ForeColor = Color.FromArgb(70, 82, 96);
             var sourceButtons = new FlowLayoutPanel { Width = 282, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, FlowDirection = FormsFlowDirection.LeftToRight };
+            var registered = ButtonFor("加载楼层登记门窗表"); registered.Click += (s, e) => LoadRegisteredFloors(); sourceButtons.Controls.Add(registered);
             var repick = ButtonFor("重新拾取门窗表"); repick.Click += (s, e) => Repick(); sourceButtons.Controls.Add(repick);
             var importCsv = ButtonFor("导入CSV/Excel"); importCsv.Click += (s, e) => ImportFromFile(); sourceButtons.Controls.Add(importCsv);
             var locate = ButtonFor("定位来源表"); locate.Click += (s, e) => LocateSource(); sourceButtons.Controls.Add(locate);
@@ -269,7 +270,7 @@ namespace BatchPdfPublisher.Views
                     item.BayRightCellLayout = preference.BayRightCellLayout;
                     item.Material = string.IsNullOrWhiteSpace(preference.Material) ? item.Material : preference.Material;
                     ApplySavedAtlas(item, preference); item.Remarks = preference.Remarks;
-                    if (preference.HasSillHeight) { item.SillHeight = preference.SillHeight; item.SillHeightSuppressed = preference.SillHeightSuppressed; }
+                    if (preference.HasSillHeight && !item.SillHeightFromCadRegistration) { item.SillHeight = preference.SillHeight; item.SillHeightSuppressed = preference.SillHeightSuppressed; }
                 }
                 UpdateStatus(item); prepared.Add(item);
             }
@@ -322,7 +323,7 @@ namespace BatchPdfPublisher.Views
             item.BayLeftDepth = preference.BayLeftDepth > 0d ? preference.BayLeftDepth : 600d; item.BayRightDepth = preference.BayRightDepth > 0d ? preference.BayRightDepth : 600d;
             item.BayLeftCellLayout = preference.BayLeftCellLayout; item.BayRightCellLayout = preference.BayRightCellLayout;
             item.Material = string.IsNullOrWhiteSpace(preference.Material) ? item.Material : preference.Material; ApplySavedAtlas(item, preference); item.Remarks = preference.Remarks;
-            if (preference.HasSillHeight) { item.SillHeight = preference.SillHeight; item.SillHeightSuppressed = preference.SillHeightSuppressed; }
+            if (preference.HasSillHeight && !item.SillHeightFromCadRegistration) { item.SillHeight = preference.SillHeight; item.SillHeightSuppressed = preference.SillHeightSuppressed; }
             item.GenerateFireRescueElevation = preference.GenerateFireRescueElevation;
         }
 
@@ -464,7 +465,8 @@ namespace BatchPdfPublisher.Views
             foreach (var codeGroup in _floorSources.SelectMany(floor => floor.Items.Select(item => new { floor, item }))
                 .GroupBy(x => (x.item.Code ?? string.Empty).Trim(), StringComparer.OrdinalIgnoreCase))
             {
-                var variants = codeGroup.GroupBy(x => x.item.Width.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + "×" + x.item.Height.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + "|" + (x.item.ElevationType ?? string.Empty)).ToList();
+                var variants = codeGroup.GroupBy(x => x.item.Width.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + "×" + x.item.Height.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + "|" + (x.item.ElevationType ?? string.Empty)
+                    + (_baseSource?.SourceDxfName == "CAD 楼层登记门窗表" ? "|" + x.item.SillHeightSuppressed + "|" + x.item.SillHeight.ToString("R", System.Globalization.CultureInfo.InvariantCulture) : "")).ToList();
                 foreach (var variant in variants)
                 {
                     var first = variant.First().item;
@@ -472,7 +474,8 @@ namespace BatchPdfPublisher.Views
                     combined.FloorQuantities.Clear();
                     foreach (var floor in _floorSources)
                     {
-                        var quantity = floor.Items.Where(x => string.Equals(x.Code, first.Code, StringComparison.OrdinalIgnoreCase) && Math.Abs(x.Width - first.Width) < .01d && Math.Abs(x.Height - first.Height) < .01d && string.Equals(x.ElevationType, first.ElevationType, StringComparison.Ordinal)).Sum(x => Math.Max(0, x.Quantity));
+                        var quantity = floor.Items.Where(x => string.Equals(x.Code, first.Code, StringComparison.OrdinalIgnoreCase) && Math.Abs(x.Width - first.Width) < .01d && Math.Abs(x.Height - first.Height) < .01d && string.Equals(x.ElevationType, first.ElevationType, StringComparison.Ordinal)
+                            && (_baseSource?.SourceDxfName != "CAD 楼层登记门窗表" || (x.SillHeightSuppressed == first.SillHeightSuppressed && x.SillHeight == first.SillHeight))).Sum(x => Math.Max(0, x.Quantity));
                         combined.FloorQuantities.Add(new DoorWindowFloorQuantity { FloorName = floor.FloorName, PerFloorQuantity = quantity, FloorCount = floor.FloorCount });
                     }
                     combined.Quantity = combined.FloorQuantities.Sum(x => x.TotalQuantity);
@@ -481,7 +484,8 @@ namespace BatchPdfPublisher.Views
             }
             // 保持原门窗表规则：同一原编号出现不同尺寸/类型时分行，并自动追加 A、B…后缀。
             // 分层统计只负责汇总各层数量，不能把这一可生成场景重新判定为冲突。
-            TianzhengDoorWindowService.AssignSizeSuffixes(merged.Items);
+            if (_baseSource?.SourceDxfName != "CAD 楼层登记门窗表") TianzhengDoorWindowService.AssignSizeSuffixes(merged.Items);
+            else { merged.SourceDxfName = "CAD 楼层登记门窗表"; merged.Adapter = _floorSources.Count + " 个已登记楼层"; }
             // 分层汇总行直接作为当前网格数据载入，不能再次按普通门窗表流程重建并覆盖楼层明细。
             _source = merged; _rows.RaiseListChangedEvents = false; _rows.Clear();
             foreach (var item in DoorWindowTypeOrdering.Sort(merged.Items)) _rows.Add(item);
@@ -496,8 +500,8 @@ namespace BatchPdfPublisher.Views
         {
             var clone = new DoorWindowScheduleItem
             {
-                Selected = x.Selected, GenerateFireRescueElevation = x.GenerateFireRescueElevation, Sequence = x.Sequence, Code = x.Code, SourceCategory = x.SourceCategory, Width = x.Width, Height = x.Height, Quantity = x.Quantity,
-                SourceNote = x.SourceNote, Material = x.Material, AtlasName = x.AtlasName, AtlasNameExplicitlySelected = x.AtlasNameExplicitlySelected, Remarks = x.Remarks, SillHeight = x.SillHeight, SillHeightSuppressed = x.SillHeightSuppressed,
+                Selected = x.Selected, GenerateFireRescueElevation = x.GenerateFireRescueElevation, Sequence = x.Sequence, Code = x.Code, CadRegistrationCode = x.CadRegistrationCode, CadRegistrationSill = x.CadRegistrationSill, SourceCategory = x.SourceCategory, Width = x.Width, Height = x.Height, Quantity = x.Quantity,
+                SourceNote = x.SourceNote, Material = x.Material, AtlasName = x.AtlasName, AtlasNameExplicitlySelected = x.AtlasNameExplicitlySelected, Remarks = x.Remarks, SillHeight = x.SillHeight, SillHeightSuppressed = x.SillHeightSuppressed, SillHeightFromCadRegistration = x.SillHeightFromCadRegistration,
                 ElevationType = x.ElevationType, DivisionPreset = x.DivisionPreset, OpeningMode = x.OpeningMode, HasInstallationGap = x.HasInstallationGap, InstallationGap = x.InstallationGap,
                 HasOuterFrame = x.HasOuterFrame, OuterFrameWidth = x.OuterFrameWidth, HasMullion = x.HasMullion, MullionWidth = x.MullionWidth, DoorFrameType = x.DoorFrameType, DoorFrameWidth = x.DoorFrameWidth,
                 DrawingScale = x.DrawingScale, CustomColumnRatios = x.CustomColumnRatios, CustomRowRatios = x.CustomRowRatios, CustomColumnWidths = x.CustomColumnWidths,
@@ -523,7 +527,7 @@ namespace BatchPdfPublisher.Views
                 }
                 if (Convert.ToString(_batchDivision.SelectedItem) != "不修改") item.DivisionPreset = Convert.ToString(_batchDivision.SelectedItem);
                 if (Convert.ToString(_batchOpening.SelectedItem) != "不修改") item.OpeningMode = Convert.ToString(_batchOpening.SelectedItem);
-                if ((item.ElevationType ?? string.Empty).Contains("窗") && item.SillHeight <= 0d && !item.SillHeightSuppressed) item.SillHeight = 900d; NormalizeSillHeight(item);
+                if ((item.ElevationType ?? string.Empty).Contains("窗") && item.SillHeight <= 0d && !item.SillHeightSuppressed && !item.SillHeightFromCadRegistration) item.SillHeight = 900d; NormalizeSillHeight(item);
                 UpdateStatus(item);
             }
             _grid.Refresh(); UpdateSummary(); UpdatePreview(); _status.Text = "已批量修改 " + targets.Count + " 项（蓝色多选行优先，否则使用勾选项）。";
@@ -683,7 +687,7 @@ namespace BatchPdfPublisher.Views
 
         private void SavePreferences(bool notify)
         {
-            try { _grid.EndEdit(); _store.SaveForActiveProject(_rows, ParseDrawingScale()); SaveSession(); if (notify) MessageBox.Show(this, "门窗类型、分格、开启、安装缝和出图比例已保存到当前项目。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information); }
+            try { _grid.EndEdit(); if (_baseSource?.SourceDxfName == "CAD 楼层登记门窗表") _baseSource.CadRegistrationVersion = BatchPdfPublisher.Features.BuildingModel.Services.CadRegisteredDoorWindowSchedule.SaveSills(_baseSource.Diagnostic, _baseSource.CadRegistrationVersion, _rows); _store.SaveForActiveProject(_rows, ParseDrawingScale()); SaveSession(); if (notify) MessageBox.Show(this, "门窗类型、分格、开启、安装缝和出图比例已保存到当前项目。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information); }
             catch (Exception exception) { if (notify) MessageBox.Show(this, "保存失败：" + exception.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); }
         }
 
@@ -750,6 +754,24 @@ namespace BatchPdfPublisher.Views
                 }
             }
             catch (Exception exception) { try { File.AppendAllText(Path.Combine(UserDataPaths.LogsDirectory, "door-window-elevation.log"), DateTime.Now.ToString("O") + " restore session: " + exception + Environment.NewLine); } catch { } }
+        }
+
+        private bool LoadRegisteredFloors()
+        {
+            try
+            {
+                var source = BatchPdfPublisher.Features.BuildingModel.Services.CadRegisteredDoorWindowSchedule.Load();
+                if (source == null) return false;
+                _baseSource = source;
+                LoadSource(source);
+                _status.Text = "已加载 CAD 楼层登记生成的门窗表，按实际楼层统计。设置分格、开启与离地高度后即可生成立面。";
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _status.Text = "加载楼层登记门窗表失败：" + ex.Message;
+                return true;
+            }
         }
 
         private bool TryReadSourceByHandle(string text, out DoorWindowScheduleReadResult result)
@@ -1033,7 +1055,7 @@ namespace BatchPdfPublisher.Views
                         else if (property == "SillHeightDisplay") { target.SillHeight = source.SillHeight; target.SillHeightSuppressed = source.SillHeightSuppressed; }
                         else if (property == "AtlasName") { target.AtlasName = source.AtlasName; target.AtlasNameExplicitlySelected = true; }
                         else if (property == "Remarks") target.Remarks = source.Remarks;
-                        if (property == "ElevationType" && (target.ElevationType ?? string.Empty).Contains("窗") && target.SillHeight <= 0d && !target.SillHeightSuppressed) target.SillHeight = 900d;
+                        if (property == "ElevationType" && (target.ElevationType ?? string.Empty).Contains("窗") && target.SillHeight <= 0d && !target.SillHeightSuppressed && !target.SillHeightFromCadRegistration) target.SillHeight = 900d;
                         if (property == "ElevationType" && !target.AtlasNameExplicitlySelected) target.AtlasName = DoorWindowElevationSuggestionService.InferAtlas(target.Code, target.ElevationType, target.SourceNote);
                         NormalizeSillHeight(target);
                         if (property == "InstallationGap" || property == "HasInstallationGap") NormalizeActualSizes(target);
@@ -1047,7 +1069,7 @@ namespace BatchPdfPublisher.Views
             if (property == "AtlasName") _rows[e.RowIndex].AtlasNameExplicitlySelected = true;
             if (property == "ElevationType" && !_rows[e.RowIndex].AtlasNameExplicitlySelected)
                 _rows[e.RowIndex].AtlasName = DoorWindowElevationSuggestionService.InferAtlas(_rows[e.RowIndex].Code, _rows[e.RowIndex].ElevationType, _rows[e.RowIndex].SourceNote);
-            if (property == "ElevationType" && (_rows[e.RowIndex].ElevationType ?? string.Empty).Contains("窗") && _rows[e.RowIndex].SillHeight <= 0d && !_rows[e.RowIndex].SillHeightSuppressed) _rows[e.RowIndex].SillHeight = 900d;
+            if (property == "ElevationType" && (_rows[e.RowIndex].ElevationType ?? string.Empty).Contains("窗") && _rows[e.RowIndex].SillHeight <= 0d && !_rows[e.RowIndex].SillHeightSuppressed && !_rows[e.RowIndex].SillHeightFromCadRegistration) _rows[e.RowIndex].SillHeight = 900d;
             NormalizeSillHeight(_rows[e.RowIndex]);
             var typeChanged = property == "ElevationType";
             UpdateStatus(_rows[e.RowIndex]);
@@ -1075,6 +1097,7 @@ namespace BatchPdfPublisher.Views
         private static void NormalizeSillHeight(DoorWindowScheduleItem item)
         {
             if (item == null) return;
+            if (item.SourceNote?.Contains("CAD 楼层登记") == true) return;
             if ((item.ElevationType ?? string.Empty).Contains("窗"))
             {
                 if (item.SillHeight < 0d) item.SillHeight = 0d;

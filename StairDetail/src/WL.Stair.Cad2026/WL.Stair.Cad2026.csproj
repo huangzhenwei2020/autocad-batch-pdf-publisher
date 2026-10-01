@@ -44,6 +44,7 @@
     <Compile Include="..\WL.Stair.CadShared\WanluoDataPaths.cs" Link="WanluoDataPaths.cs" />
     <Compile Include="..\WL.Stair.CadShared\DraftingStandardBridge.cs" Link="DraftingStandardBridge.cs" />
     <Compile Include="..\WL.Stair.CadShared\JsonDataSerializer.cs" Link="JsonDataSerializer.cs" />
+    <Compile Include="..\..\..\Shared\CadInterop\TianzhengReadOnlyAccess.cs" Link="PlanCapture\TianzhengReadOnlyAccess.cs" />
     <Compile Include="..\WL.Stair.CadShared\PlanCapture\StairPlanCaptureService.cs" Link="PlanCapture\StairPlanCaptureService.cs" />
     <Compile Include="..\WL.Stair.CadShared\PlanCapture\StairPlanCacheService.cs" Link="PlanCapture\StairPlanCacheService.cs" />
   </ItemGroup>

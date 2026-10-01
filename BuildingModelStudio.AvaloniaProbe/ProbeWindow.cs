@@ -73,6 +73,10 @@ internal sealed class ProbeWindow : Window
     private CancellationTokenSource? _publishCancellation;
     private string? _selectedId;
     private string? _filePath;
+    private readonly DispatcherTimer _cadImportTimer = new() { Interval = TimeSpan.FromSeconds(1) };
+    private bool _cadImportBusy;
+    private string? _cadRequestSeen;
+    private long _cadRequestStamp;
     private string _savedJson;
     private bool _closeConfirmed;
     private bool _refreshingStoreys;
@@ -910,12 +914,18 @@ internal sealed class ProbeWindow : Window
         RefreshHistoryButtons();
         UpdateTitle();
         Closing += OnClosing;
-        Closed += (_, _) => _publishCancellation?.Cancel();
+        Closed += (_, _) => { _publishCancellation?.Cancel(); _cadImportTimer.Stop(); if (_filePath != null) StudioLaunch.RemoveSession(_filePath); };
+        _cadImportTimer.Tick += async (_, _) => await ReceiveCadGenerationAsync();
+        if (!Program.Smoke) _cadImportTimer.Start();
         if (Program.GpuBenchCount > 0) Opened += async (_, _) => await RunGpuBenchmarkAsync(Program.GpuBenchCount);
         else if (Program.ModelPath == null) ConfigureSmokeAndSnapshot();
         else Opened += async (_, _) =>
         {
-            if (await OpenStartupModelAsync(Program.ModelPath)) ConfigureSmokeAndSnapshot();
+            if (await OpenStartupModelAsync(Program.ModelPath))
+            {
+                if (Program.CadGenerationCheck) await ReceiveCadGenerationAsync();
+                ConfigureSmokeAndSnapshot();
+            }
             else if (Program.Smoke) { Program.SmokeFailed = true; Close(); }
         };
     }
@@ -1113,6 +1123,7 @@ internal sealed class ProbeWindow : Window
 
     private async Task<bool> LoadModelAsync(string path)
     {
+        if (_cadImportBusy) { _status.Text = "正在生成 CAD 登记模型，请稍后打开其他模型。"; return false; }
         var generation = ++_sceneGeneration;
         _status.Text = "正在后台打开模型…";
         try
@@ -1124,8 +1135,13 @@ internal sealed class ProbeWindow : Window
             });
             if (generation != _sceneGeneration) return false;
             _session = loaded.session;
+            if (_filePath != null) StudioLaunch.RemoveSession(_filePath);
             _filePath = path;
+            _cadRequestSeen = null;
+            _cadRequestStamp = 0;
+            StudioLaunch.RegisterSession(path);
             _savedJson = BuildingModelJson.ToJson(_session.Model);
+            StudioLaunch.RememberActiveModel(Program.ProjectFolder, path);
             _viewport.SetScene(loaded.scene);
             _viewport.ResetView();
             BuildElementList();
@@ -1145,8 +1161,47 @@ internal sealed class ProbeWindow : Window
         }
     }
 
+    private async Task ReceiveCadGenerationAsync()
+    {
+        if (_cadImportBusy || _filePath == null || !StudioLaunch.IsCurrentSession(_filePath)) return;
+        var path = _filePath;
+        var requestPath = CadModelGenerationRequest.FilePath(path);
+        if (!File.Exists(requestPath)) return;
+        var stamp = File.GetLastWriteTimeUtc(requestPath).Ticks;
+        if (_cadRequestStamp == stamp) return;
+        _cadImportBusy = true;
+        string? requestId = null;
+        try
+        {
+            var request = await Task.Run(() => CadModelGenerationRequest.Load(path));
+            _cadRequestStamp = stamp;
+            requestId = request.Id;
+            if (string.IsNullOrWhiteSpace(requestId)) throw new InvalidDataException("生成请求缺少编号。");
+            if (_cadRequestSeen == requestId) return;
+            _cadRequestSeen = requestId;
+            if (!string.Equals(Path.GetFullPath(request.Registry.ModelPath), Path.GetFullPath(path), StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("登记来源与当前模型不一致。");
+            if (_session.Model.CadImport?.RequestId == requestId) { CadModelGenerationRequest.Acknowledge(path,requestId,null); return; }
+            if (!_session.TryImportCadFloors(request.Registry, requestId, out var error)) throw new InvalidDataException(error);
+            await RefreshModelAsync("已从 CAD 楼层登记生成建筑模型（可撤销）");
+            _viewport.ResetView(); _planCanvas.Fit();
+            if (!await SaveModelAsync(false)) throw new IOException(_status.Text);
+            CadModelGenerationRequest.Acknowledge(path, requestId, null);
+            _status.Text = $"已生成并保存建筑模型 · 登记墙 {_session.Model.CadImport!.Walls.Count} · 门窗洞口 {_session.Model.CadImport.Openings.Count} · Ctrl+Z 可撤销";
+            Activate();
+        }
+        catch (Exception ex)
+        {
+            _status.Text = "CAD 登记模型生成失败：" + ex.Message;
+            if (requestId != null)
+                try { CadModelGenerationRequest.Acknowledge(path, requestId, ex.Message); } catch { }
+        }
+        finally { _cadImportBusy = false; }
+    }
+
     private async Task<bool> SaveModelAsync(bool saveAs)
     {
+        if (_cadImportBusy && saveAs) { _status.Text = "正在生成 CAD 登记模型，请稍后另存。"; return false; }
         var path = saveAs ? null : _filePath;
         if (path == null)
         {
@@ -1165,8 +1220,11 @@ internal sealed class ProbeWindow : Window
         {
             var snapshotJson = BuildingModelJson.ToJson(_session.Model);
             await Task.Run(() => BuildingModelJson.SaveModel(path, BuildingModelJson.FromJson(snapshotJson)));
+            if (_filePath != null && _filePath != path) StudioLaunch.RemoveSession(_filePath);
             _filePath = path;
+            StudioLaunch.RegisterSession(path);
             _savedJson = snapshotJson;
+            StudioLaunch.RememberActiveModel(Program.ProjectFolder, path);
             UpdateTitle();
             var current = BuildingModelJson.ToJson(_session.Model) == snapshotJson;
             _status.Text = current ? "已保存 " + path : "保存期间模型又有修改；当前版本仍需保存。";
@@ -1374,6 +1432,7 @@ internal sealed class ProbeWindow : Window
 
     private async void OnClosing(object? sender, CancelEventArgs e)
     {
+        if (_cadImportBusy) { e.Cancel = true; _status.Text = "正在生成登记模型，请稍后关闭。"; return; }
         if (_closeConfirmed || !HasChanges) return;
         e.Cancel = true;
         if (await ConfirmSavedAsync())
@@ -2130,6 +2189,14 @@ internal sealed class ProbeWindow : Window
                     || (Program.SnapshotCamera.HasValue && Program.SnapshotPath != null));
             if (Program.GizmoCheck) success &= RunGizmoSmokeCheck() && RunCameraSmokeCheck();
             if (Program.ShortcutCheck) success &= RunShortcutSmokeCheck();
+            if (Program.CadGenerationCheck)
+            {
+                var result=CadModelGenerationRequest.LoadResult(_filePath!);
+                success &= result.Succeeded && _session.Model.CadImport?.RequestId==result.RequestId && _session.Model.Walls.Count>0
+                    && BuildingModelJson.LoadModel(_filePath!).CadImport?.RequestId==result.RequestId && !HasChanges && _session.CanUndo
+                    && !File.Exists(CadModelGenerationRequest.FilePath(_filePath!));
+                Console.WriteLine(success ? "CAD_GENERATION_EDITOR_OK "+result.RequestId : "CAD_GENERATION_EDITOR_FAILED "+_status.Text);
+            }
             Program.SmokeFailed = !success;
             Console.WriteLine(success ? (emptyProject ? "AVALONIA_EMPTY_PROJECT_OK " + _filePath
                 : hit != null ? "AVALONIA_GPU_PICK_OK " + hit

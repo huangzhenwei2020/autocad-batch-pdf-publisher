@@ -44,6 +44,11 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="AssemblyInfo.cs" />
+    <Compile Include="..\Shared\CadInterop\TianzhengReadOnlyAccess.cs"><Link>Infrastructure\TianzhengReadOnlyAccess.cs</Link></Compile>
+    <Compile Include="..\Shared\BuildingModel\CadBuildingObjectProbe.cs"><Link>Features\BuildingModel\Shared\CadBuildingObjectProbe.cs</Link></Compile>
+    <Compile Include="..\Shared\BuildingModel\CadOpeningRegistration.cs"><Link>Features\BuildingModel\Shared\CadOpeningRegistration.cs</Link></Compile>
+    <Compile Include="..\Shared\BuildingModel\CadFloorRegistrationAlignment.cs"><Link>Features\BuildingModel\Shared\CadFloorRegistrationAlignment.cs</Link></Compile>
+    <Compile Include="..\Shared\BuildingModel\CadOpeningPlacement.cs"><Link>Features\BuildingModel\Shared\CadOpeningPlacement.cs</Link></Compile>
     <Compile Include="..\Shared\ProductVersion.cs"><Link>Infrastructure\ProductVersion.cs</Link></Compile>
     <!-- 建筑模型的纯逻辑层：与建模程序、测试工程共用同一份源码（改这里会同时影响两边）。
          只链接插件真正用到的三个文件：模型/视图约定、JSON 读写、投影器。
@@ -55,6 +60,9 @@
     <Compile Include="..\Shared\BuildingModel\OpeningElevationAdapter.cs"><Link>Features\BuildingModel\Shared\OpeningElevationAdapter.cs</Link></Compile>
     <Compile Include="..\Shared\BuildingModel\SheetComposer.cs"><Link>Features\BuildingModel\Shared\SheetComposer.cs</Link></Compile>
     <Compile Include="..\Shared\BuildingModel\StudioLaunch.cs"><Link>Features\BuildingModel\Shared\StudioLaunch.cs</Link></Compile>
+    <Compile Include="..\Shared\BuildingModel\CadFloorPlanRegistry.cs"><Link>Features\BuildingModel\Shared\CadFloorPlanRegistry.cs</Link></Compile>
+    <Compile Include="..\Shared\BuildingModel\CadFloorModelGeneration.cs"><Link>Features\BuildingModel\Shared\CadFloorModelGeneration.cs</Link></Compile>
+    <Compile Include="..\Shared\BuildingModel\CadOpeningJambPlacement.cs"><Link>Features\BuildingModel\Shared\CadOpeningJambPlacement.cs</Link></Compile>
     <Compile Include="..\Shared\BuildingModel\BuildingVolume.cs"><Link>Features\BuildingModel\Shared\BuildingVolume.cs</Link></Compile>
     <Compile Include="..\Shared\BuildingModel\OrthogonalWallUnion.cs"><Link>Features\BuildingModel\Shared\OrthogonalWallUnion.cs</Link></Compile>
     <Compile Include="..\Shared\BuildingModel\WallJunctionLines.cs"><Link>Features\BuildingModel\Shared\WallJunctionLines.cs</Link></Compile>

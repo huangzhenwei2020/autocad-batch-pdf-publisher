@@ -969,7 +969,7 @@ namespace BatchPdfPublisher.BuildingModel
             var uy = (wall.Y2 - wall.Y1) / length;
             var nx = -uy;
             var ny = ux;
-            var isDoor = (opening.Kind ?? string.Empty).IndexOf("门", StringComparison.Ordinal) >= 0;
+            var isDoor = opening.HasSwingLeaf();
             var axisStart = PlanPoint(wall, edges[0]);
             var axisEnd = PlanPoint(wall, edges[1]);
             var start = WallReferenceGeometry.BodyPoint(wall, axisStart.X, axisStart.Y);

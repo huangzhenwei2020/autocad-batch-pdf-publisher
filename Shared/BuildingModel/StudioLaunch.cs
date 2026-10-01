@@ -61,6 +61,35 @@ namespace BatchPdfPublisher.BuildingModel
     /// </summary>
     public static class StudioLaunch
     {
+        private static string SessionToken()
+        {
+            using (var process = System.Diagnostics.Process.GetCurrentProcess())
+                return process.Id + "|" + process.StartTime.ToUniversalTime().Ticks;
+        }
+        public static void RegisterSession(string modelPath)
+        {
+            var file=modelPath+".studio-session.txt"; var temp=file+"."+Guid.NewGuid().ToString("N")+".tmp";
+            try { File.WriteAllText(temp, SessionToken()); if(File.Exists(file))File.Replace(temp,file,null); else File.Move(temp,file); }
+            finally { if(File.Exists(temp))File.Delete(temp); }
+        }
+        public static bool IsCurrentSession(string modelPath)
+        {
+            try { return File.ReadAllText(modelPath+".studio-session.txt")==SessionToken(); } catch { return false; }
+        }
+        public static void RemoveSession(string modelPath)
+        {
+            try { var file = modelPath + ".studio-session.txt";
+                if (File.Exists(file) && File.ReadAllText(file) == SessionToken()) File.Delete(file); }
+            catch { }
+        }
+        public static bool HasLiveSession(string modelPath)
+        {
+            try {
+                var parts = File.ReadAllText(modelPath + ".studio-session.txt").Split('|');
+                using (var process = System.Diagnostics.Process.GetProcessById(int.Parse(parts[0])))
+                    return !process.HasExited && process.StartTime.ToUniversalTime().Ticks == long.Parse(parts[1]);
+            } catch { return false; }
+        }
         /// <summary>可执行文件名（发布时放在 <c>建筑模型</c> 子目录里）。</summary>
         public const string ExecutableName = "万落建筑模型.exe";
         /// <summary>建模程序在发布目录里的子目录名。</summary>
@@ -71,6 +100,35 @@ namespace BatchPdfPublisher.BuildingModel
         public const string ViewsFolderName = "views";
         /// <summary>"待落图"标记文件名（放在 views 目录里；用 .txt 免得被当成视图读）。</summary>
         public const string PendingFileName = "待落图.txt";
+
+        public static void RememberActiveModel(string projectFolder, string modelPath)
+        {
+            if (string.IsNullOrWhiteSpace(projectFolder) || string.IsNullOrWhiteSpace(modelPath)) return;
+            var folder = Path.Combine(projectFolder, ModelFolderName);
+            Directory.CreateDirectory(folder);
+            var file = Path.Combine(folder, "当前模型.txt");
+            var temporary = file + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                File.WriteAllText(temporary, Path.GetFullPath(modelPath), Encoding.UTF8);
+                if (File.Exists(file)) File.Replace(temporary, file, null); else File.Move(temporary, file);
+            }
+            finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        }
+
+        public static string ActiveModelPath(string projectFolder, string modelName)
+        {
+            if (string.IsNullOrWhiteSpace(projectFolder)) return null;
+            var file = Path.Combine(projectFolder, ModelFolderName, "当前模型.txt");
+            if (File.Exists(file))
+            {
+                var path = File.ReadAllText(file, Encoding.UTF8).Trim();
+                if (!File.Exists(path)) throw new FileNotFoundException("当前打开的建筑模型尚未保存或已移动，请回建筑模型保存。", path);
+                return Path.GetFullPath(path);
+            }
+            var folder = FindModelFolder(projectFolder, modelName);
+            return folder == null ? null : Path.Combine(folder, "model.json");
+        }
 
         /// <summary>待落图标记文件路径：<c>&lt;模型目录&gt;\views\待落图.txt</c>。</summary>
         public static string PendingFilePath(string modelFolder)

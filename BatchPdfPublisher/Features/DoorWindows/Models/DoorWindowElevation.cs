@@ -57,6 +57,7 @@ namespace BatchPdfPublisher.Models
         public string SourceClassName { get; set; }
         public string Adapter { get; set; }
         public string Diagnostic { get; set; }
+        public long CadRegistrationVersion { get; set; }
         public bool HasExtents { get; set; }
         public Point3d MinPoint { get; set; }
         public Point3d MaxPoint { get; set; }

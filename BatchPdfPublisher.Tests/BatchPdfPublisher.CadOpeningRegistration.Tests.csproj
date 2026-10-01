@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework><OutputType>Exe</OutputType>
+    <UseWPF>true</UseWPF><EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../BuildingModel.Core/BuildingModel.Core.csproj" />
+    <Compile Include="CadOpeningRegistrationTests.cs" />
+    <Compile Include="CadFloorModelGenerationTests.cs" />
+    <Compile Include="CadOpeningScheduleRulesTests.cs" />
+    <Compile Include="../BatchPdfPublisher/Features/DoorWindows/Services/DoorWindowElevationSuggestionService.cs" Link="DoorWindowElevationSuggestionService.cs" />
+    <Compile Include="../BatchPdfPublisher/Features/BuildingModel/Views/CadFloorRegistrationWindow.cs" Link="CadFloorRegistrationWindow.cs" />
+    <Compile Include="../BatchPdfPublisher/Features/BuildingModel/Views/CadFloorOpeningReviewWindow.cs" Link="CadFloorOpeningReviewWindow.cs" />
+    <Compile Include="../BatchPdfPublisher/Features/BuildingModel/Views/CadRegisteredOpeningTableWindow.cs" Link="CadRegisteredOpeningTableWindow.cs" />
+    <Compile Include="../BatchPdfPublisher/Features/BuildingModel/Views/TianzhengOpeningRegistrationWindow.cs" Link="TianzhengOpeningRegistrationWindow.cs" />
+  </ItemGroup>
+</Project>

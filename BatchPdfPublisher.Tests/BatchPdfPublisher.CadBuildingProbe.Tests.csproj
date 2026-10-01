@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework><OutputType>Exe</OutputType>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="CadBuildingProbeTests.cs" />
+    <Compile Include="../Shared/CadInterop/TianzhengReadOnlyAccess.cs" Link="TianzhengReadOnlyAccess.cs" />
+    <Compile Include="../Shared/BuildingModel/CadBuildingObjectProbe.cs" Link="CadBuildingObjectProbe.cs" />
+  </ItemGroup>
+</Project>

@@ -13,6 +13,8 @@ namespace BatchPdfPublisher.Models
         internal bool IsFireRescueVariant;
         public int Sequence { get; set; }
         public string Code { get; set; }
+        public string CadRegistrationCode { get; set; }
+        public double? CadRegistrationSill { get; set; }
         public string SourceCategory { get; set; }
         public double Width { get; set; }
         public double Height { get; set; }
@@ -30,6 +32,7 @@ namespace BatchPdfPublisher.Models
         public bool AtlasNameExplicitlySelected { get; set; }
         public string Remarks { get; set; }
         public double SillHeight { get; set; }
+        public bool SillHeightFromCadRegistration { get; set; }
         /// <summary>用户把离地高度设为"—"时置 true，表示不标注离地高度。</summary>
         public bool SillHeightSuppressed { get; set; }
         public string ElevationType { get; set; }

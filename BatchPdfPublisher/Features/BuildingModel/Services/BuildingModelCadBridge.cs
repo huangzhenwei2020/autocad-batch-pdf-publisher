@@ -811,8 +811,88 @@ namespace BatchPdfPublisher.Services
             {
                 if (preference == null || string.IsNullOrWhiteSpace(preference.Code)) continue;
                 var code = preference.Code.Trim();
-                var kind = KindOf(preference, code);
-                byCode[code] = new OpeningTypeModel
+                byCode[code] = OpeningType(preference, projectName);
+            }
+            library.Types.AddRange(byCode.Values.OrderBy(t => t.Code, StringComparer.OrdinalIgnoreCase));
+
+            string path;
+            using (var dialog = new SaveFileDialog
+            {
+                Title = "导出门窗类型库（建模程序读取它来放门窗）",
+                Filter = "门窗类型库 (*.json)|*.json",
+                FileName = "openings.json",
+                InitialDirectory = LastViewFolder()
+            })
+            {
+                if (dialog.ShowDialog() != DialogResult.OK) return;
+                path = dialog.FileName;
+            }
+
+            try
+            {
+                BuildingModelJson.SaveOpeningLibrary(path, library);
+                editor.WriteMessage("\n门窗类型库已导出：" + library.Types.Count + " 个类型、"
+                    + library.Templates.Count + " 个做法模板 → " + path);
+                if (library.Types.Count == 0)
+                    editor.WriteMessage("\n提示：当前项目还没有门窗参数。可先在“门窗立面（MCLM）”里录一次，"
+                        + "再导出；也可以先导出空库供程序使用。");
+            }
+            catch (Exception exception)
+            {
+                editor.WriteMessage("\n门窗类型库写入失败：" + exception.Message);
+            }
+            SaveLastViewFolder(Path.GetDirectoryName(path));
+        }
+
+        // Preserve every history record for registration. Duplicate codes require
+        // an explicit choice; the older export command retains its existing policy.
+        internal static OpeningTypeLibraryDocument RegistrationOpeningLibrary()
+        {
+            var project = new PublishPlanStore().GetActiveProject();
+            var library = new OpeningTypeLibraryDocument { ProjectName = project == null ? "默认项目" : project.Name,
+                ExportedAt = DateTimeOffset.Now.ToString("O") };
+            foreach (var preference in new DoorWindowElevationStore().LoadForActiveProject())
+                if (preference != null && !string.IsNullOrWhiteSpace(preference.Code))
+                    library.Types.Add(OpeningType(preference, library.ProjectName));
+            return library;
+        }
+
+        internal static List<CadOpeningSillEntry> RegistrationSills()
+        {
+            var store = new DoorWindowElevationStore();
+            var entries = new List<CadOpeningSillEntry>();
+            var session = store.LoadSession();
+            if (session != null)
+            {
+                AddScheduleSills(entries, session.BaseItems, null, "已保存门窗表");
+                foreach (var floor in session.FloorSources ?? new List<DoorWindowFloorSourcePreference>())
+                    if (floor != null) AddScheduleSills(entries, floor.Items, floor.FloorName, "门窗表 · " + floor.FloorName);
+            }
+            var preferences = store.LoadForActiveProject().Where(p => p != null && !string.IsNullOrWhiteSpace(p.Code)).ToList();
+            for (var i = 0; i < preferences.Count; i++)
+            {
+                var p = preferences[i];
+                entries.Add(new CadOpeningSillEntry { Code = p.Code, TypeIndex = i,
+                    Height = p.HasSillHeight && !p.SillHeightSuppressed ? (double?)p.SillHeight : null,
+                    Source = "所选门窗立面已保存参数" });
+            }
+            return entries;
+        }
+
+        private static void AddScheduleSills(List<CadOpeningSillEntry> entries,
+            IEnumerable<DoorWindowScheduleItem> items, string floor, string source)
+        {
+            foreach (var item in items ?? Enumerable.Empty<DoorWindowScheduleItem>())
+                if (item != null && !string.IsNullOrWhiteSpace(item.Code))
+                    entries.Add(new CadOpeningSillEntry { Code = item.Code, FloorName = floor, FromSchedule = true,
+                        Height = item.SillHeightSuppressed ? null : (double?)item.SillHeight, Source = source });
+        }
+
+        private static OpeningTypeModel OpeningType(DoorWindowElevationPreference preference, string projectName)
+        {
+            var code = preference.Code.Trim();
+            var kind = KindOf(preference, code);
+            return new OpeningTypeModel
                 {
                     Code = code,
                     Kind = kind,
@@ -849,36 +929,6 @@ namespace BatchPdfPublisher.Services
                     Remarks = preference.Remarks,
                     Source = "项目参数：" + projectName
                 };
-            }
-            library.Types.AddRange(byCode.Values.OrderBy(t => t.Code, StringComparer.OrdinalIgnoreCase));
-
-            string path;
-            using (var dialog = new SaveFileDialog
-            {
-                Title = "导出门窗类型库（建模程序读取它来放门窗）",
-                Filter = "门窗类型库 (*.json)|*.json",
-                FileName = "openings.json",
-                InitialDirectory = LastViewFolder()
-            })
-            {
-                if (dialog.ShowDialog() != DialogResult.OK) return;
-                path = dialog.FileName;
-            }
-
-            try
-            {
-                BuildingModelJson.SaveOpeningLibrary(path, library);
-                editor.WriteMessage("\n门窗类型库已导出：" + library.Types.Count + " 个类型、"
-                    + library.Templates.Count + " 个做法模板 → " + path);
-                if (library.Types.Count == 0)
-                    editor.WriteMessage("\n提示：当前项目还没有门窗参数。可先在“门窗立面（MCLM）”里录一次，"
-                        + "再导出；也可以先导出空库供程序使用。");
-            }
-            catch (Exception exception)
-            {
-                editor.WriteMessage("\n门窗类型库写入失败：" + exception.Message);
-            }
-            SaveLastViewFolder(Path.GetDirectoryName(path));
         }
 
         private static string KindOf(DoorWindowElevationPreference preference, string code)
