@@ -13,7 +13,9 @@ namespace BatchPdfPublisher.BuildingModel
     {
         // Editing can leave sub-hundredth-millimetre drift on an orthogonal axis.
         private const double AxisTolerance = 0.01d;
-        private const double GridTolerance = 0.000001d;
+        // Use the same tolerance as native orthogonal-wall recognition. Microscopic
+        // coordinate drift must not split every wall surface into extra grid strips.
+        private const double GridTolerance = AxisTolerance;
         private sealed class Box
         {
             public WallModel Wall;

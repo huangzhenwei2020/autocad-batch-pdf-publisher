@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -64,14 +64,8 @@ namespace BatchPdfPublisher.BuildingModel
             var prefix=item.ModelKind=="门" ? "M" : item.ModelKind=="门联窗" ? "MLC" : item.ModelKind=="洞口" ? "DK" : "C";
             return SizeCode(prefix,item.Width??0,item.Height??0);
         }
-        public static string SizeCode(string prefix,double width,double height) => prefix
-            + Math.Round(width/100d,0,MidpointRounding.AwayFromZero).ToString("00",CultureInfo.InvariantCulture)
-            + Math.Round(height/100d,0,MidpointRounding.AwayFromZero).ToString("00",CultureInfo.InvariantCulture);
-        public static string AlphabeticSuffix(int index)
-        {
-            var value=index+1; var result="";
-            while(value>0) { value--; result=(char)('A'+value%26)+result; value/=26; } return result;
-        }
+        public static string SizeCode(string prefix,double width,double height) => OpeningConstruction.SizeCode(prefix,width,height);
+        public static string AlphabeticSuffix(int index) => OpeningConstruction.AlphabeticSuffix(index);
         public static double Sill(CadFloorOpeningItem item,double availableHeight)
         {
             if(item.Sill.HasValue)return item.Sill.Value;
@@ -155,8 +149,24 @@ namespace BatchPdfPublisher.BuildingModel
     {
         public int SchemaVersion { get; set; } = 1;
         public string ModelPath { get; set; }
+        // Nullable preserves the 100 mm default when reading older registration files.
+        public double? SlabThickness { get; set; }
+        public double ResolvedSlabThickness => SlabThickness ?? 100d;
         public List<CadFloorPlanCapture> Floors { get; set; } = new List<CadFloorPlanCapture>();
         public List<CadFloorRegistrationContext> Datums { get; set; } = new List<CadFloorRegistrationContext>();
+        public void ReconcileStoreys(BuildingModelDocument model)
+        {
+            var floors = model.Storeys.Where(s => string.IsNullOrWhiteSpace(s.TemplateStoreyId))
+                .ToDictionary(s => s.Id, StringComparer.OrdinalIgnoreCase);
+            Floors.RemoveAll(c => !floors.ContainsKey(c.Floor.Storey.Id));
+            Datums?.RemoveAll(c => !floors.ContainsKey(c.Storey.Id));
+            foreach (var context in Floors.Select(c => c.Floor).Concat(Datums ?? new List<CadFloorRegistrationContext>()))
+            {
+                var floor = floors[context.Storey.Id];
+                context.Storey = new StoreyModel { Id = floor.Id, Name = floor.Name, Kind = floor.Kind,
+                    Height = floor.Height, Elevation = floor.Elevation };
+            }
+        }
         public Dictionary<CadFloorOpeningItem,string> ResolveCodes()
         {
             var items=Floors.SelectMany(f=>f.Openings).Where(o=>o.Include).ToList();
@@ -211,7 +221,7 @@ namespace BatchPdfPublisher.BuildingModel
                 || (File.Exists(file) ? File.GetLastWriteTimeUtc(file).Ticks : 0)!=expectedFileStamp)
                 throw new InvalidDataException("楼层登记已更新，请重新打开后保存。");
             foreach(var capture in snapshot.Floors)capture.ValidateSchedule();
-            Write(snapshot);Floors=snapshot.Floors;Datums=snapshot.Datums;
+            Write(snapshot);Floors=snapshot.Floors;Datums=snapshot.Datums;SlabThickness=snapshot.SlabThickness;
         }
         public void SaveOpeningRows(IList<CadRegisteredOpeningRow> rows,long expectedFileStamp,bool persist=true)
         {
@@ -260,7 +270,7 @@ namespace BatchPdfPublisher.BuildingModel
             ValidateModelDatum(context);
             var next = (Datums ?? new List<CadFloorRegistrationContext>()).Where(f => !string.Equals(f.Storey.Id, context.Storey.Id, StringComparison.OrdinalIgnoreCase)).ToList();
             next.Add(context);
-            Write(new CadFloorPlanRegistry { ModelPath = ModelPath, Floors = Floors, Datums = next });
+            Write(new CadFloorPlanRegistry { ModelPath = ModelPath, Floors = Floors, Datums = next, SlabThickness=SlabThickness });
             Datums = next;
         }
         private void ValidateModelDatum(CadFloorRegistrationContext context)
@@ -333,7 +343,7 @@ namespace BatchPdfPublisher.BuildingModel
             next.Add(capture);
             var datums = (Datums ?? new List<CadFloorRegistrationContext>()).Where(f => !string.Equals(f.Storey.Id,capture.Floor.Storey.Id,StringComparison.OrdinalIgnoreCase)).ToList();
             datums.Add(capture.Floor);
-            Write(new CadFloorPlanRegistry { ModelPath = ModelPath, Floors = next, Datums = datums });
+            Write(new CadFloorPlanRegistry { ModelPath = ModelPath, Floors = next, Datums = datums, SlabThickness=SlabThickness });
             Floors = next; Datums = datums;
         }
         private void Write(CadFloorPlanRegistry snapshot)

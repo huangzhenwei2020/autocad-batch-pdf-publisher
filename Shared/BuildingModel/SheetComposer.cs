@@ -66,6 +66,40 @@ namespace BatchPdfPublisher.BuildingModel
             return Papers.FirstOrDefault(p => string.Equals(p.Name, wanted, StringComparison.OrdinalIgnoreCase)) ?? Papers[1];
         }
 
+        /// <summary>在模型坐标中错开短尺寸文字；CAD 和预览共用结果。</summary>
+        public static void LayoutDimensionText(ViewDocument view, double fontHeight = 0)
+        {
+            var font = fontHeight > 0 ? fontHeight : Math.Max(1,view.Scale)*2.5;
+            var occupied = new List<double[]>();
+            foreach (var text in view.Texts)
+            {
+                var w = (text.Text ?? "").Length*text.Height;
+                var angle = text.Rotation*Math.PI/180;
+                var x2 = text.X+w*Math.Cos(angle)-text.Height*Math.Sin(angle);
+                var y2 = text.Y+w*Math.Sin(angle)+text.Height*Math.Cos(angle);
+                occupied.Add(new[] { Math.Min(text.X,x2),Math.Min(text.Y,y2),Math.Max(text.X,x2),Math.Max(text.Y,y2) });
+            }
+            foreach (var d in view.Dimensions)
+            {
+                var text = string.IsNullOrWhiteSpace(d.Text) ? Math.Abs(d.To-d.From).ToString("0.###",System.Globalization.CultureInfo.InvariantCulture) : d.Text;
+                var length = Math.Max(font,text.Length*font*.8);
+                var mid = (d.From+d.To)/2;
+                double[] box = null;
+                for (var lane = 0; lane < 1000; lane++)
+                {
+                    var offset = font*(1.1+lane*1.8);
+                    var outward = d.LinePosition < d.AnchorPosition ? -1d : 1d;
+                    d.TextX = d.Vertical ? d.LinePosition+outward*offset : mid;
+                    d.TextY = d.Vertical ? mid : d.LinePosition+outward*offset;
+                    var w = d.Vertical ? font*1.4 : length; var h = d.Vertical ? length : font*1.4;
+                    box = new[] { d.TextX.Value-w/2-font*.2,d.TextY.Value-h/2-font*.2,
+                        d.TextX.Value+w/2+font*.2,d.TextY.Value+h/2+font*.2 };
+                    if (!occupied.Any(b => b[0]<box[2] && b[2]>box[0] && b[1]<box[3] && b[3]>box[1])) break;
+                }
+                occupied.Add(box);
+            }
+        }
+
         /// <summary>纸张的实际宽高（按横放/竖放换算）。</summary>
         public static void PaperSize(SheetDefinitionModel sheet, out double width, out double height)
         {
@@ -118,9 +152,6 @@ namespace BatchPdfPublisher.BuildingModel
                 FrameTemplate = sheet.FrameTemplate
             };
 
-            AddBorder(document, paperWidth, paperHeight);
-            AddTitleBlock(document, sheet, paperWidth, paperHeight);
-
             var selected = new List<ViewDocument>();
             foreach (var id in sheet.ViewIds ?? new List<string>())
             {
@@ -130,10 +161,33 @@ namespace BatchPdfPublisher.BuildingModel
             }
             if (selected.Count == 0)
             {
+                AddBorder(document, paperWidth, paperHeight);
+                AddTitleBlock(document, sheet, paperWidth, paperHeight);
                 document.Warnings.Add("这张图纸还没有排任何视图。");
                 if (modelSpace) ExpandSheet(document);
                 return document;
             }
+
+            // 格子必须容纳真实比例的完整图面（包括尺寸和图名）。保持几何比例，扩展图框，绝不允许溢出压住邻图。
+            var columns = selected.Count <= 1 ? 1 : selected.Count <= 4 ? 2 : 3;
+            var rows = (int)Math.Ceiling(selected.Count / (double)columns);
+            var boxes = selected.Select(v => new { Bounds = GeometryBounds(v),
+                Scale = 1d / Math.Max(1, modelSpace ? document.Scale : v.Scale) }).Where(v => v.Bounds != null).ToList();
+            var requiredWidth = BindingMargin + OtherMargin + ViewGap*(columns-1)
+                + columns*boxes.Select(v => (v.Bounds[2]-v.Bounds[0])*v.Scale).DefaultIfEmpty(1).Max();
+            var requiredHeight = OtherMargin*2 + TitleBlockHeight + ViewGap + ViewGap*(rows-1)
+                + rows*(ViewTitleSpace + boxes.Select(v => (v.Bounds[3]-v.Bounds[1])*v.Scale).DefaultIfEmpty(1).Max());
+            if (requiredWidth > paperWidth || requiredHeight > paperHeight)
+            {
+                paperWidth = Math.Max(paperWidth, Math.Ceiling(requiredWidth));
+                paperHeight = Math.Max(paperHeight, Math.Ceiling(requiredHeight));
+                document.PaperWidth = paperWidth; document.PaperHeight = paperHeight;
+                document.FrameTemplate = null;
+                document.PaperName = "自定义";
+                document.Warnings.Add("按原比例扩展图框至 " + paperWidth + "×" + paperHeight + " mm，避免视图重叠。");
+            }
+            AddBorder(document, paperWidth, paperHeight);
+            AddTitleBlock(document, sheet, paperWidth, paperHeight);
 
             // 内容区：图框内**让出标题栏那一条**（标题栏在右下角，整条让开最稳）。
             // 注意 LayoutCells 用的是"top = 小的 y、bottom = 大的 y"的写法。
@@ -157,6 +211,7 @@ namespace BatchPdfPublisher.BuildingModel
                         + "；所有视图保持真实尺寸，混合比例请分开排版。");
                 ExpandSheet(document);
             }
+            LayoutDimensionText(document);
             return document;
         }
 
@@ -302,6 +357,7 @@ namespace BatchPdfPublisher.BuildingModel
                 document.Texts.Add(new ViewText
                 {
                     Layer = text.Layer, Text = text.Text,
+                    Rotation = text.Rotation,
                     X = text.X * scale + offsetX, Y = text.Y * scale + offsetY,
                     Height = Math.Max(1.8d, text.Height * scale)      // 纸面上不小于 1.8mm，不然印出来看不清
                 });
@@ -312,7 +368,7 @@ namespace BatchPdfPublisher.BuildingModel
                 document.Hatches.Add(new ViewHatch
                 {
                     Layer = hatch.Layer, Pattern = hatch.Pattern, Scale = hatch.Scale, Angle = hatch.Angle,
-                    Spacing = Math.Max(0.3d, hatch.Spacing * scale),
+                    Spacing = string.Equals(hatch.Pattern,"SOLID",StringComparison.OrdinalIgnoreCase) ? 0 : Math.Max(0.3d, hatch.Spacing * scale),
                     Boundary = hatch.Boundary.Where(p => p != null)
                         .Select(p => new PointModel(p.X * scale + offsetX, p.Y * scale + offsetY)).ToList()
                 });
@@ -341,7 +397,7 @@ namespace BatchPdfPublisher.BuildingModel
         }
 
         /// <summary>视图几何（线 + 圆 + 填充）在视图坐标里的包围盒：minX、minY、maxX、maxY。</summary>
-        private static double[] GeometryBounds(ViewDocument view)
+        public static double[] GeometryBounds(ViewDocument view)
         {
             double minX = double.MaxValue, minY = double.MaxValue, maxX = double.MinValue, maxY = double.MinValue;
             var found = false;
@@ -364,6 +420,28 @@ namespace BatchPdfPublisher.BuildingModel
                     if (point == null) continue;
                     Include(point.X, point.Y);
                 }
+            foreach (var text in view.Texts ?? new List<ViewText>())
+            {
+                if (text == null) continue;
+                var angle = text.Rotation*Math.PI/180;
+                var w = (text.Text ?? "").Length*text.Height;
+                var h = text.Height*1.3;
+                foreach (var corner in new[] { new PointModel(0,0),new PointModel(w,0),new PointModel(0,h),new PointModel(w,h) })
+                    Include(text.X+corner.X*Math.Cos(angle)-corner.Y*Math.Sin(angle),
+                        text.Y+corner.X*Math.Sin(angle)+corner.Y*Math.Cos(angle));
+            }
+            foreach (var d in view.Dimensions ?? new List<ViewDimension>())
+            {
+                var pad = Math.Max(1, view.Scale)*4d;
+                if (d.TextX.HasValue && d.TextY.HasValue)
+                { Include(d.TextX.Value-pad,d.TextY.Value-pad);Include(d.TextX.Value+pad,d.TextY.Value+pad); }
+                if (d.Vertical)
+                { Include(Math.Min(d.AnchorPosition,d.LinePosition)-pad,Math.Min(d.From,d.To)-pad);
+                  Include(Math.Max(d.AnchorPosition,d.LinePosition)+pad,Math.Max(d.From,d.To)+pad); }
+                else
+                { Include(Math.Min(d.From,d.To)-pad,Math.Min(d.AnchorPosition,d.LinePosition)-pad);
+                  Include(Math.Max(d.From,d.To)+pad,Math.Max(d.AnchorPosition,d.LinePosition)+pad); }
+            }
             if (!found) return null;
             return new[] { minX, minY, maxX, maxY };
 

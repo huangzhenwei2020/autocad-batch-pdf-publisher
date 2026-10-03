@@ -206,7 +206,8 @@ namespace BatchPdfPublisher.BuildingModel
         public static List<SheetDefinitionModel> CreateDefaultSheets(BuildingModelDocument model)
         {
             var storeys = (model == null ? new List<StoreyModel>() : model.Storeys ?? new List<StoreyModel>())
-                .Where(s => s != null).OrderBy(s => s.Elevation).ToList();
+                .Where(s => s != null && (string.IsNullOrWhiteSpace(s.StandardGroupId) || s.StandardGroupId==s.Id))
+                .OrderBy(s => s.Elevation).ToList();
             var sheets = new List<SheetDefinitionModel>();
 
             for (var index = 0; index < storeys.Count; index++)
@@ -216,7 +217,7 @@ namespace BatchPdfPublisher.BuildingModel
                 sheets.Add(new SheetDefinitionModel
                 {
                     Id = "sheet-" + view.Id, Number = "建施-" + (index + 1).ToString("00"),
-                    Title = (storey.Name ?? storey.Id) + " 平面图", Paper = "A3", Landscape = true,
+                    Title = view.Title, Paper = "A3", Landscape = true,
                     ViewIds = { view.Id }
                 });
             }
@@ -254,6 +255,7 @@ namespace BatchPdfPublisher.BuildingModel
         {
             var id = storey == null || string.IsNullOrWhiteSpace(storey.Id) ? "plan" : storey.Id;
             var name = storey == null || string.IsNullOrWhiteSpace(storey.Name) ? id : storey.Name;
+            if(!string.IsNullOrWhiteSpace(storey?.StandardFloorRange))name=storey.StandardFloorRange;
             var definition = new ViewDefinitionModel
             {
                 Id = "plan-" + id, Title = name + " 平面图", Kind = ViewKind.Plan, Scale = 100

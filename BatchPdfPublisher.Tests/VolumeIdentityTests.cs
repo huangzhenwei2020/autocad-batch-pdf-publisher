@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.Linq;
 using BatchPdfPublisher.BuildingModel;
@@ -44,12 +44,48 @@ internal static class VolumeIdentityTests
         CheckWindowFrameCorners();
         CheckClosedDoorWindows();
         CheckStoreySettings();
+        CheckEditableStoreys();
         CheckStructuralElevationRules();
         CheckStandardStoreys();
+        CheckStandardFloorRanges();
         CheckWallReferencePlacement();
         MeasureJunctionGrid();
         CheckSharedAxesAndCadJunction();
         Console.WriteLine("PASS 三维体量构件身份：样例墙/门窗/板/柱可追溯，参数修改后 ID 稳定");
+    }
+
+    private static void CheckStandardFloorRanges()
+    {
+        var rows=Enumerable.Range(1,3).Select(i=>new StoreyModel { Id=i+"F",Name=i+"层",Height=3000 }).ToList();
+        rows.Add(new StoreyModel { Id="4F",Name="4～15层",Height=3000 });
+        rows.Add(new StoreyModel { Id="RF",Name="屋顶层",Kind=StoreyKind.Roof,Height=3000 });
+        var floors=StoreyElevationLayout.Resolve(StandardStoreyLayout.ExpandRanges(rows),"1F",0);
+        Assert(floors.Count==16 && floors.Single(s=>s.Id=="4F").Elevation==9000 && floors.Single(s=>s.Id=="15F").Elevation==42000
+            && floors.Single(s=>s.Id=="RF").Elevation==45000,"4～15层应展开12层，后续屋顶从45000开始");
+        var model=new BuildingModelDocument { Storeys=floors };
+        model.Walls.Add(new WallModel { Id="wall",StoreyId="4F",X2=6000,Thickness=200 });
+        model.Openings.Add(new OpeningModel { Id="window",HostWallId="wall",Code="C1518",Kind="窗",Offset=3000,Width=1500,Height=1800,Sill=900 });
+        var session=new BuildingModelEditSession(model);
+        Assert(session.TryReplaceStoreys(floors,out var error,true),"范围楼层应可保存："+error);
+        var saved=BuildingModelJson.FromJson(BuildingModelJson.ToJson(session.Model));
+        Assert(saved.FindStorey("4F").StandardFloorRange=="4～15层" && saved.FindStorey("15F").StandardGroupId=="4F","范围元数据应往返保存");
+        var materialized=StandardStoreyLayout.Materialize(saved);
+        Assert(materialized.Walls.Count==12 && materialized.Openings.Count==12,"标准层平面应展开12份墙和门窗");
+        Assert(materialized.Walls.Where(w=>w.StoreyId=="15F").All(w=>materialized.BaseElevationOf(w)==42000),"最高标准层墙应使用自己的标高");
+        rows[3].Height=3200;
+        var changed=StoreyElevationLayout.Resolve(StandardStoreyLayout.ExpandRanges(rows),"1F",0);
+        Assert(changed.Single(s=>s.Id=="15F").Elevation==44200 && changed.Single(s=>s.Id=="RF").Elevation==47400,"改每层层高应联动标准层全部标高及后续楼层");
+        foreach(var label in new[] {"4~15层","4至15层","4～15层","4-15层"})
+            Assert(StandardStoreyLayout.TryParseRange(label,out var first,out var last) && first==4 && last==15,"标准层范围输入与楼梯大样兼容");
+        foreach(var label in new[] {"4~2层","4-2层","4-501层"})
+        {
+            try { StandardStoreyLayout.ExpandRanges(new[] {new StoreyModel {Id="4F",Name=label,Height=3000}});throw new Exception("非法范围被当作单层名称接受"); }
+            catch(ArgumentException) { }
+        }
+        rows.Insert(4,new StoreyModel { Id="10F",Name="10层",Height=3000 });
+        try { StandardStoreyLayout.ExpandRanges(rows);throw new Exception("重复楼层范围未拦截"); }
+        catch(ArgumentException) { }
+        Console.WriteLine("PASS 标准层范围：4～15层展开12层、逐层标高、屋顶联动、共用平面、保存往返、重复范围校验");
     }
 
     private static void CheckWindowFrameCorners()
@@ -62,7 +98,7 @@ internal static class VolumeIdentityTests
         var front = volume.Faces.Where(f => f.Kind == "frame" && f.NormalY > 0.9).ToArray();
         var area = front.Sum(f => (f.Points.Max(p => p.X)-f.Points.Min(p => p.X))
             * (f.Points.Max(p => p.Z)-f.Points.Min(p => p.Z)));
-        var expected = 1500d*1800 - (1500-120d)*(1800-120d);
+        var expected = 1500d*1800 - (1500-100d)*(1800-100d);
         Assert(Math.Abs(area-expected) < 0.001, "窗框角部重复面：" + area + " / " + expected);
         Console.WriteLine("PASS 窗框接角：四条框边无重叠外表面");
     }
@@ -92,8 +128,8 @@ internal static class VolumeIdentityTests
                 && Math.Abs(Math.Sqrt(Math.Pow(l.X2-l.X1,2)+Math.Pow(l.Y2-l.Y1,2))-opening.Width)<.01),
                 "门联窗平面图也不能画外伸门扇和开启弧");
             opening.Code="M3627"; opening.Kind="门";
-            Assert(BuildingVolumeBuilder.Build(model).Faces.Any(f=>f.ElementId==opening.Id && f.Kind=="door"),
-                "普通门应继续保留原有开启显示");
+            Assert(BuildingVolumeBuilder.Build(model).Faces.Any(f=>f.ElementId==opening.Id && (f.Kind=="door" || f.Kind=="glass")),
+                "普通门应按门窗立面默认做法保留实体面板（带亮子的高门为玻璃门）");
         }
         Console.WriteLine("PASS 门联窗闭合显示：正交融合墙、斜墙、名称别字和旧 MLC 门类别均不画开启扇");
     }
@@ -392,6 +428,60 @@ internal static class VolumeIdentityTests
         Assert(!session.TryReplaceStoreys(emptyFloor.Where(s => s.Id != "2F"), out error),
             "已有楼板的楼层不应被直接删除");
         Console.WriteLine("PASS 楼层设置：层高、新增楼层与撤销");
+    }
+
+    private static void CheckEditableStoreys()
+    {
+        var model=SampleModelFactory.CreateEmptyModel("可编辑楼层");
+        model.Walls.Add(new WallModel { Id="wall-1",Code="W-1",StoreyId="1F",X2=4000,Thickness=200 });
+        model.Walls.Add(new WallModel { Id="wall-2",Code="W-2",StoreyId="2F",X2=6000,Thickness=200 });
+        model.Openings.Add(new OpeningModel { Id="door-2",Code="M0921",HostWallId="wall-2",Width=900,Height=2100,Offset=1500 });
+        model.Slabs.Add(new SlabModel { Id="slab-2",StoreyId="2F",TopElevation=model.FindStorey("2F").Elevation+model.FindStorey("2F").Height });
+        model.Columns.Add(new ColumnModel { Id="column-2",StoreyId="2F" });
+        model.Stairs.Add(new StairModel { Id="stairs-2",StoreyId="2F" });
+        model.Roofs.Add(new RoofModel { Id="roof-2",StoreyId="2F" });
+        model.Rooms.Add(new RoomModel { Id="room-2",StoreyId="2F" });
+        model.DrawingViews=DrawingViewCatalogue.Resolve(model);
+        var baseline=BuildingModelJson.FromJson(BuildingModelJson.ToJson(model));
+        model.CadImport=new CadModelImportState { Walls=baseline.Walls,Openings=baseline.Openings,Slabs=baseline.Slabs };
+        var session=new BuildingModelEditSession(model);
+        var original=BuildingModelJson.ToJson(session.Model);
+        var floors=BuildingModelJson.FromJson(original).Storeys;
+        floors[1].TemplateStoreyId="1F";
+        Assert(session.TryReplaceStoreys(floors,out var error,allowContentChanges:true),error);
+        Assert(session.Model.Walls.Count==1 && session.Model.Openings.Count==0 && session.Model.Slabs.Count==0
+            && session.Model.Columns.Count==0 && session.Model.Stairs.Count==0 && session.Model.Roofs.Count==0 && session.Model.Rooms.Count==0,
+            "切换为标准层不能保留本层独立构件造成重叠");
+        Assert(session.Model.CadImport.Walls.Count==1 && session.Model.CadImport.Openings.Count==0 && session.Model.CadImport.Slabs.Count==0,
+            "切换楼层来源应同步清理原登记基线");
+        floors[1].TemplateStoreyId=null;
+        Assert(session.TryReplaceStoreys(floors,out error,allowContentChanges:true),error);
+        Assert(session.Model.Walls.Count==2 && session.Model.Walls.Single(w=>w.StoreyId=="2F").X2==4000,
+            "改回独立层应保留原标准层实例，不能丢失构件");
+        Assert(session.Undo() && session.Undo() && BuildingModelJson.ToJson(session.Model)==original,
+            "楼层来源切换应完整撤销恢复原构件和登记基线");
+        floors=BuildingModelJson.FromJson(original).Storeys.Where(s=>s.Id!="2F").ToList();
+        Assert(session.TryReplaceStoreys(floors,out error,allowContentChanges:true),error);
+        Assert(session.Model.Walls.Count==1 && session.Model.Openings.Count==0 && session.Model.Slabs.Count==0
+            && session.Model.Columns.Count==0 && session.Model.Stairs.Count==0 && session.Model.Roofs.Count==0 && session.Model.Rooms.Count==0,
+            "删除非空楼层应在同一事务删除本层全部构件");
+        Assert(session.Model.DrawingViews.All(v=>!v.StoreyIds.Contains("2F")),"已删除楼层不能遗留平面图引用");
+        Assert(session.Undo() && BuildingModelJson.ToJson(session.Model)==original && session.Redo(),"楼层删除应支持撤销重做");
+        Assert(session.Undo(),"恢复删除测试");
+        var withReference=BuildingModelJson.FromJson(original);
+        withReference.Storeys.Add(new StoreyModel { Id="3F",Name="三层",Elevation=7000,Height=3300,TemplateStoreyId="2F" });
+        var sourceDelete=new BuildingModelEditSession(withReference);
+        var keep=BuildingModelJson.FromJson(BuildingModelJson.ToJson(withReference)).Storeys.Where(s=>s.Id!="2F").ToList();
+        keep.Last().TemplateStoreyId=null;
+        Assert(sourceDelete.TryReplaceStoreys(keep,out error,allowContentChanges:true),error);
+        Assert(sourceDelete.Model.Walls.Single(w=>w.StoreyId=="3F").X2==6000
+            && sourceDelete.Model.Openings.Count==1 && sourceDelete.Model.Slabs.Single().StoreyId=="3F",
+            "删除来源层时，取消引用的其他楼层应保留当前实例和门窗楼板");
+        var invalid=BuildingModelJson.FromJson(original).Storeys;invalid[1].Height=1000;
+        var revision=session.Revision;
+        Assert(!session.TryReplaceStoreys(invalid,out error,allowContentChanges:true) && revision==session.Revision,
+            "无效层高不能产生部分修改");
+        Console.WriteLine("PASS 楼层解锁：来源替换、独立层保留、非空层删除、图纸及登记基线、撤销重做");
     }
 
     private static void CheckStructuralElevationRules()

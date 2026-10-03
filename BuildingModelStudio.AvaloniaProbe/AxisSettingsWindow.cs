@@ -6,120 +6,82 @@ using BatchPdfPublisher.BuildingModel;
 
 namespace BuildingModelStudio.AvaloniaProbe;
 
-/// <summary>Building-wide axis numbering; empty endpoint fields inherit the main number.</summary>
 internal sealed class AxisSettingsWindow : Window
 {
-    private readonly List<Entry> _entries = new();
-    private readonly HashSet<string> _originalIds;
-    public List<AxisModel> ResultAxes { get; private set; } = new();
-
-    private sealed record Entry(AxisModel Axis, CheckBox Auto, TextBox Main,
-        TextBox Start, TextBox End);
-
-    public AxisSettingsWindow(BuildingModelDocument model)
+    private sealed record Entry(AxisModel Axis, CheckBox Auto, TextBox Main, TextBox Start, TextBox End,
+        ComboBox StartState, ComboBox EndState, ComboBox LineState);
+    private readonly List<Entry> _entries=new();
+    public List<AxisModel> ResultAxes {get;private set;}=new();
+    internal static readonly string[] EndStates={"显示轴号","隐藏轴号","删除轴号·短线"};
+    internal static readonly string[] LineStates={"显示轴线","隐藏轴线","删除轴线"};
+    public AxisSettingsWindow(BuildingModelDocument model, string? storeyId = null)
     {
-        Title = "轴号设置";
-        Width = 900; Height = 480; MinWidth = 700; MinHeight = 400;
-        WindowStartupLocation = WindowStartupLocation.CenterOwner;
-        Background = new SolidColorBrush(Color.Parse("#151B23"));
-        Foreground = new SolidColorBrush(Color.Parse("#E8F1F4"));
-        _originalIds = model.Axes.Select(a => a.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        var root = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,*,Auto"),
-            Margin = new Thickness(20), RowSpacing = 12 };
-        root.Children.Add(new TextBlock { Text = "整栋共用轴网 · 轴号设置", FontSize = 22,
-            FontWeight = Avalonia.Media.FontWeight.Bold });
-        var help = new TextBlock { Text = "默认自动编号。关闭“自动”可分别填写两端轴号；竖轴为下 / 上，横轴为左 / 右。两端留空时沿用主轴号。支持字母、数字、-、/、撇号。",
-            TextWrapping = Avalonia.Media.TextWrapping.Wrap };
-        Grid.SetRow(help, 1); root.Children.Add(help);
-
-        var list = new StackPanel { Spacing = 5 };
-        var header = NewRow();
-        AddCell(header, 0, "方向 / 坐标"); AddCell(header, 1, "自动");
-        AddCell(header, 2, "主轴号"); AddCell(header, 3, "下 / 左端");
-        AddCell(header, 4, "上 / 右端");
-        list.Children.Add(header);
-        var verticalIndex = 0;
-        var horizontalIndex = 0;
-        foreach (var axis in BuildingAxisLayout.Resolve(model)
-            .OrderBy(a => a.Vertical ? 0 : 1).ThenBy(a => a.Position))
-        {
-            var automaticName = axis.Vertical ? (++verticalIndex).ToString()
-                : PlanEditing.LetterName(horizontalIndex++);
-            var original = model.Axes.FirstOrDefault(a => string.Equals(a.Id, axis.Id,
-                StringComparison.OrdinalIgnoreCase));
-            var manual = original != null && ((!string.IsNullOrWhiteSpace(original.Name)
-                    && !string.Equals(original.Name, automaticName, StringComparison.OrdinalIgnoreCase))
-                || !string.IsNullOrWhiteSpace(original.StartName)
-                || !string.IsNullOrWhiteSpace(original.EndName));
-            var row = NewRow();
-            AddCell(row, 0, (axis.Vertical ? "竖轴 X=" : "横轴 Y=") + axis.Position.ToString("0.##") + " mm");
-            var automatic = new CheckBox { IsChecked = !manual, VerticalAlignment = VerticalAlignment.Center };
-            Grid.SetColumn(automatic, 1); row.Children.Add(automatic);
-            var main = NewInput(original?.Name ?? axis.Name, row, 2);
-            var start = NewInput(original?.StartName ?? "", row, 3);
-            var end = NewInput(original?.EndName ?? "", row, 4);
-            void Sync()
-            {
-                main.IsReadOnly = start.IsReadOnly = end.IsReadOnly = automatic.IsChecked == true;
+        Title="轴线 / 轴号编辑";Width=1280;Height=700;MinWidth=950;MinHeight=480;
+        WindowStartupLocation=WindowStartupLocation.CenterOwner;
+        Background=new SolidColorBrush(Color.Parse("#151B23"));Foreground=new SolidColorBrush(Color.Parse("#E8F1F4"));
+        var root=new Grid {Margin=new Thickness(20),RowDefinitions=new("Auto,Auto,Auto,*,Auto"),RowSpacing=12};
+        root.Children.Add(new TextBlock {Text="轴线 / 轴号编辑",FontSize=22,FontWeight=FontWeight.Bold});
+        var help=new TextBlock {Text=(model.StoreyAxes?.ContainsKey(storeyId??"")==true?"本层独立轴网。":"整栋共用轴网。")+"隐藏保留编号；删除端部轴号后，该端缩至墙外 500 mm；删除整条轴线才重排自动编号。修改可撤销。",TextWrapping=TextWrapping.Wrap};
+        Grid.SetRow(help,1);root.Children.Add(help);
+        var toolbar=new WrapPanel {Orientation=Orientation.Horizontal};
+        foreach(var side in new[] {"左","右","上","下"}) {
+            toolbar.Children.Add(new TextBlock {Text=side+"侧",Margin=new Thickness(8),VerticalAlignment=VerticalAlignment.Center});
+            foreach(var show in new[] {true,false}) {
+                var button=new Button {Content=show?"显示":"隐藏",Margin=new Thickness(2)};
+                button.Click+=(_,_)=>SetSide(side,show);toolbar.Children.Add(button);
             }
-            automatic.IsCheckedChanged += (_, _) => Sync();
-            Sync();
-            _entries.Add(new Entry(axis, automatic, main, start, end));
-            list.Children.Add(row);
         }
-        var scroller = new ScrollViewer { Content = list,
-            HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto };
-        Grid.SetRow(scroller, 2); root.Children.Add(scroller);
-
-        var actions = new StackPanel { Orientation = Orientation.Horizontal,
-            HorizontalAlignment = HorizontalAlignment.Right, Spacing = 10 };
-        var cancel = new Button { Content = "取消", MinWidth = 86 };
-        cancel.Click += (_, _) => Close(false);
-        var apply = new Button { Content = "应用轴号", MinWidth = 100 };
-        apply.Click += (_, _) => { Collect(); Close(true); };
-        actions.Children.Add(cancel); actions.Children.Add(apply);
-        Grid.SetRow(actions, 3); root.Children.Add(actions);
-        Content = root;
-    }
-
-    private void Collect()
-    {
-        var axes = new List<AxisModel>();
-        foreach (var entry in _entries)
-        {
-            var axis = entry.Axis;
-            var automatic = entry.Auto.IsChecked == true;
-            // Imported axes keep their geometry even if numbering is reset to automatic.
-            if (automatic && !_originalIds.Contains(axis.Id)) continue;
-            axes.Add(new AxisModel
-            {
-                Id = axis.Id, Vertical = axis.Vertical, Position = axis.Position,
-                ExtentStart = axis.ExtentStart, ExtentEnd = axis.ExtentEnd,
-                Name = automatic ? null : entry.Main.Text?.Trim(),
-                StartName = automatic ? null : entry.Start.Text?.Trim(),
-                EndName = automatic ? null : entry.End.Text?.Trim()
-            });
+        var restore=new Button {Content="显示全部轴线",Margin=new Thickness(8,0)};
+        restore.Click+=(_,_)=>{foreach(var e in _entries) if(e.LineState.SelectedIndex!=2)e.LineState.SelectedIndex=0;};toolbar.Children.Add(restore);
+        Grid.SetRow(toolbar,2);root.Children.Add(toolbar);
+        var list=new StackPanel {Spacing=6};var header=Row();
+        var captions=new[] {"方向 / 坐标 mm","自动","主轴号","下 / 左轴号","上 / 右轴号","下 / 左端","上 / 右端","整条轴线"};
+        for(var i=0;i<captions.Length;i++)Cell(header,i,new TextBlock {Text=captions[i]});list.Children.Add(header);
+        var vi=0;var hi=0;
+        foreach(var axis in BuildingAxisLayout.Resolve(model,storeyId).OrderBy(a=>a.Vertical?0:1).ThenBy(a=>a.Position)) {
+            var expected=axis.Deleted?"":axis.Vertical?(++vi).ToString():PlanEditing.LetterName(hi++);
+            var original=(storeyId!=null&&model.StoreyAxes?.ContainsKey(storeyId)==true?model.StoreyAxes[storeyId]:model.Axes).FirstOrDefault(a=>a.Id==axis.Id);
+            var automatic=axis.AutomaticNumber ?? (original==null || (string.IsNullOrWhiteSpace(original.Name) || original.Name==expected)
+                && string.IsNullOrWhiteSpace(original.StartName)&&string.IsNullOrWhiteSpace(original.EndName));
+            var row=Row();Cell(row,0,new TextBlock {Text=(axis.Vertical?"竖轴 X=":"横轴 Y=")+axis.Position.ToString("0.##")});
+            var auto=new CheckBox {IsChecked=automatic};Cell(row,1,auto);
+            var main=Input(axis.Name);var start=Input(axis.StartName);var end=Input(axis.EndName);
+            Cell(row,2,main);Cell(row,3,start);Cell(row,4,end);
+            var ss=Choice(EndStates,axis.StartRemoved?2:axis.StartHidden?1:0);
+            var es=Choice(EndStates,axis.EndRemoved?2:axis.EndHidden?1:0);
+            var ls=Choice(LineStates,axis.Deleted?2:axis.Hidden?1:0);
+            Cell(row,5,ss);Cell(row,6,es);Cell(row,7,ls);
+            void Sync(){main.IsReadOnly=start.IsReadOnly=end.IsReadOnly=auto.IsChecked==true;row.Opacity=ls.SelectedIndex==2?.55:1;}
+            auto.IsCheckedChanged+=(_,_)=>Sync();ls.SelectionChanged+=(_,_)=>Sync();Sync();
+            _entries.Add(new(axis,auto,main,start,end,ss,es,ls));list.Children.Add(row);
         }
-        ResultAxes = axes;
+        var scroll=new ScrollViewer {Content=list,HorizontalScrollBarVisibility=Avalonia.Controls.Primitives.ScrollBarVisibility.Auto};
+        Grid.SetRow(scroll,3);root.Children.Add(scroll);
+        var actions=new StackPanel {Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right,Spacing=10};
+        var cancel=new Button {Content="取消"};cancel.Click+=(_,_)=>Close(false);
+        var apply=new Button {Content="应用轴网"};apply.Click+=(_,_)=>{Collect();Close(true);};actions.Children.Add(cancel);actions.Children.Add(apply);
+        Grid.SetRow(actions,4);root.Children.Add(actions);Content=root;
     }
-
-    private static Grid NewRow() => new() { ColumnDefinitions = new ColumnDefinitions("180,65,150,150,150"),
-        ColumnSpacing = 8, MinHeight = 40 };
-
-    private static void AddCell(Grid row, int column, string value)
+    internal void SetSide(string side,bool visible)
     {
-        var text = new TextBlock { Text = value, VerticalAlignment = VerticalAlignment.Center };
-        Grid.SetColumn(text, column); row.Children.Add(text);
+        foreach(var e in _entries) {
+            if(e.Axis.Vertical!=(side=="上"||side=="下"))continue;
+            var state=side=="下"||side=="左"?e.StartState:e.EndState;
+            if(state.SelectedIndex!=2)state.SelectedIndex=visible?0:1;
+        }
     }
-
-    private static TextBox NewInput(string value, Grid row, int column)
+    internal void Collect()
     {
-        var input = new TextBox { Text = value, MaxLength = 24, MinWidth = 115,
-            Background = new SolidColorBrush(Color.Parse("#202D3B")),
-            Foreground = new SolidColorBrush(Color.Parse("#E8F1F4")),
-            BorderBrush = new SolidColorBrush(Color.Parse("#496273")) };
-        Grid.SetColumn(input, column); row.Children.Add(input);
-        return input;
+        ResultAxes=_entries.Select(e=>new AxisModel {
+            Id=e.Axis.Id,Vertical=e.Axis.Vertical,Position=e.Axis.Position,ExtentStart=e.Axis.ExtentStart,ExtentEnd=e.Axis.ExtentEnd,
+            AutomaticNumber=e.Auto.IsChecked==true,Name=e.Auto.IsChecked==true?null:e.Main.Text?.Trim(),
+            StartName=e.Auto.IsChecked==true?null:e.Start.Text?.Trim(),EndName=e.Auto.IsChecked==true?null:e.End.Text?.Trim(),
+            StartHidden=e.StartState.SelectedIndex==1,EndHidden=e.EndState.SelectedIndex==1,
+            StartRemoved=e.StartState.SelectedIndex==2,EndRemoved=e.EndState.SelectedIndex==2,
+            Hidden=e.LineState.SelectedIndex==1,Deleted=e.LineState.SelectedIndex==2 }).ToList();
     }
+    private static Grid Row()=>new() {ColumnDefinitions=new("165,50,85,100,100,165,165,135"),ColumnSpacing=8,MinHeight=38};
+    private static void Cell(Grid row,int column,Control control){control.VerticalAlignment=VerticalAlignment.Center;Grid.SetColumn(control,column);row.Children.Add(control);}
+    private static TextBox Input(string? value)=>new() {Text=value,MaxLength=24,Background=new SolidColorBrush(Color.Parse("#202D3B"))};
+    private static ComboBox Choice(string[] values,int selected)=>new() {ItemsSource=values,SelectedIndex=selected,HorizontalAlignment=HorizontalAlignment.Stretch};
 }

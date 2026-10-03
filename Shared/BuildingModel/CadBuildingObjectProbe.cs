@@ -21,6 +21,15 @@ namespace BatchPdfPublisher.BuildingModel
         public int? DbmodBefore { get; set; }
         public int? DbmodAfter { get; set; }
         public List<CadBuildingProbeEntity> Entities { get; set; } = new List<CadBuildingProbeEntity>();
+        public List<CadRoomLabel> RoomLabels { get; set; } = new List<CadRoomLabel>();
+    }
+
+    public sealed class CadRoomLabel
+    {
+        public string SourceHandle { get; set; }
+        public string Name { get; set; }
+        public PointModel Position { get; set; }
+        public double? AreaSquareMetres { get; set; }
     }
 
     public sealed class CadProbePoint
@@ -49,6 +58,8 @@ namespace BatchPdfPublisher.BuildingModel
         public double? CurveLength { get; set; }
         public List<CadProbeSegment> DisplaySegments { get; set; } = new List<CadProbeSegment>();
         public List<CadProbeArc> DisplayArcs { get; set; } = new List<CadProbeArc>();
+        // Verified closed, straight native rectangle; never inferred from extents.
+        public List<PointModel> StructuralOutline { get; set; } = new List<PointModel>();
         public List<CadProbeField> Fields { get; set; } = new List<CadProbeField>();
         public double? CandidateThickness { get; set; }
         public double? CandidateAxisOffset { get; set; }

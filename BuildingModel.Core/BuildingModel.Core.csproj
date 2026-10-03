@@ -14,6 +14,7 @@
     <PackageReference Include="LibTessDotNet" Version="1.1.15" />
     <Compile Include="..\Shared\BuildingModel\*.cs" Link="Shared\%(Filename)%(Extension)" />
     <Compile Include="..\BatchPdfPublisher\Features\DoorWindows\Models\DoorWindowScheduleItem.cs" Link="DoorWindows\DoorWindowScheduleItem.cs" />
+    <Compile Include="..\BatchPdfPublisher\Features\DoorWindows\Services\DoorWindowElevationSuggestionService.cs" Link="DoorWindows\DoorWindowElevationSuggestionService.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\DoorWindows\Models\DoorWindowElevationGeometry.cs" Link="DoorWindows\DoorWindowElevationGeometry.cs" />
   </ItemGroup>
 </Project>

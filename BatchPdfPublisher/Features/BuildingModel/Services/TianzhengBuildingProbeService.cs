@@ -41,11 +41,13 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
                         (owner, floor) => CaptureFloor(document, owner, floor),
                         registry => {
                             // Validate before starting anything; the live editor merges and validates again.
-                            CadFloorModelGeneration.Build(BuildingModelJson.LoadModel(path), registry);
+                            var preview=CadFloorModelGeneration.Build(BuildingModelJson.LoadModel(path), registry);
                             if (!BuildingModelStudioLauncher.OpenCurrentModel(document, path))
                                 throw new InvalidOperationException("建筑模型程序未启动，尚未提交生成请求。");
                             CadModelGenerationRequest.Queue(registry);
-                            document.Editor.WriteMessage("\n已提交生成建筑模型；建筑模型窗口将刷新墙和门窗洞口，可撤销本次生成。");
+                            document.Editor.WriteMessage("\n已提交生成建筑模型：墙、门窗洞口和楼板将一并更新，可撤销本次生成。");
+                            foreach(var message in preview.CadImport.SlabMessages)document.Editor.WriteMessage("\n"+message);
+                            foreach(var message in preview.CadImport.StructureMessages)document.Editor.WriteMessage("\n"+message);
                         },
                         (owner,registry,model,locations) => Application.ShowModalWindow(new CadRegisteredOpeningTableWindow(registry,model,
                             (table,capture,item)=>PickOpeningPlacement(document,table,new CadOpeningRegistrationRow { SourceHandle=item.SourceHandle,Code=item.ModelCode,Width=item.Width },capture.Floor),
@@ -102,12 +104,13 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
                 floor.RegionMin = new PointModel(polygon.Cast<Point3d>().Min(p=>p.X),polygon.Cast<Point3d>().Min(p=>p.Y));
                 floor.RegionMax = new PointModel(polygon.Cast<Point3d>().Max(p=>p.X),polygon.Cast<Point3d>().Max(p=>p.Y));
                 floor.RegionPolygon = polygon.Cast<Point3d>().Select(p=>new PointModel(p.X,p.Y)).ToList();
-                var selection = editor.SelectCrossingPolygon(polygon, new SelectionFilter(new[] { new TypedValue(0,"TCH_WALL,TCH_CURTAIN_WALL,TCH_OPENING") }));
+                var selection = editor.SelectCrossingPolygon(polygon, new SelectionFilter(new[] { new TypedValue(0,"TCH_WALL,TCH_CURTAIN_WALL,TCH_OPENING,TCH_COLUMN,TCH_BEAM") }));
                 if (selection.Status != PromptStatus.OK) throw new InvalidOperationException("框选范围内未找到天正墙或门窗洞口，请重新框选。");
                 report = ReadSelection(document, selection, true);
             }
-            var selectedWalls=report.Entities.Where(IsWall).Select(e=>e.Handle).ToList();
-            ExpandOpeningHosts(document,floor,report);
+            ReadRegionWalls(document,floor,report);
+            var selectedWalls=RegionWallHandles(floor,report);
+            ReadRoomLabels(document,floor,report);
             var capture = CadFloorPlanCapture.FromProbe(floor, report);
             RetainUsedWalls(capture,selectedWalls);
             var review = new CadFloorOpeningReviewWindow(capture, (window, item) =>
@@ -151,7 +154,8 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
             var draft=registry.Clone();
             foreach(var capture in draft.Floors) {
                 var previousWalls=capture.Floor.WallCandidates.Select(w=>w.Handle).ToList();
-                var handles=previousWalls.Concat(capture.Openings.Select(o=>o.SourceHandle)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                var handles=previousWalls.Concat(capture.Openings.Select(o=>o.SourceHandle))
+                    .Concat(capture.Probe.Entities.Where(e=>CadStructuralRegistration.IsStructure(e.DxfName)).Select(e=>e.Handle)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
                 var report=new CadBuildingProbeDocument { DrawingPath=capture.Probe.DrawingPath,DrawingFingerprint=capture.Probe.DrawingFingerprint,CapturedAt=DateTimeOffset.Now.ToString("O"),
                     CadVersion=SystemVariable("ACADVER"),TianzhengEnvironment=EnvironmentDescription(),DbmodBefore=Dbmod() };
                 using(var tx=document.Database.TransactionManager.StartOpenCloseTransaction()) {
@@ -162,11 +166,13 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
                         if(entity==null)throw new InvalidDataException("源平面对象无法读取，请重新登记。");
                         var record=new CadBuildingProbeEntity { Handle=handle };ReadEntity(entity,record,true);
                         if(string.Equals(record.DxfName,"TCH_OPENING",StringComparison.OrdinalIgnoreCase))ReadOpeningLabel(entity,record);
-                        else if(!IsWall(record))throw new InvalidDataException("源平面墙或门窗对象已改变，请重新登记。");
+                        else if(!IsWall(record)&&!CadStructuralRegistration.IsStructure(record.DxfName))throw new InvalidDataException("源平面对象类型已改变，请重新登记。");
                         report.Entities.Add(record);
                     }
                 }
-                ExpandOpeningHosts(document,capture.Floor,report);
+                ReadRegionWalls(document,capture.Floor,report);
+                previousWalls=RegionWallHandles(capture.Floor,report);
+                ReadRoomLabels(document,capture.Floor,report);
                 foreach(var item in capture.Openings) {
                     var source=report.Entities.Single(e=>string.Equals(e.Handle,item.SourceHandle,StringComparison.OrdinalIgnoreCase));
                     if(!string.Equals(source.DxfName,"TCH_OPENING",StringComparison.OrdinalIgnoreCase))
@@ -192,6 +198,98 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
             else { registry.Floors=draft.Floors;registry.Datums=draft.Datums; }
         }
         private static bool IsWall(CadBuildingProbeEntity e)=>CadBuildingProbeRules.IsWall(e.DxfName);
+        private static void ReadRegionWalls(Document document,CadFloorRegistrationContext floor,CadBuildingProbeDocument report)
+        {
+            if(floor.RegionPolygon==null || floor.RegionPolygon.Count<3)return;
+            var known=new HashSet<string>(report.Entities.Select(e=>e.Handle),StringComparer.OrdinalIgnoreCase);
+            var openings=report.Entities.Where(e=>e.DxfName=="TCH_OPENING" && e.BoundsMin!=null && e.BoundsMax!=null).ToList();
+            var padding=500/floor.Alignment.MillimetresPerCadUnit;
+            using(var tx=document.Database.TransactionManager.StartOpenCloseTransaction()) {
+                var space=(BlockTableRecord)tx.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(document.Database),OpenMode.ForRead);
+                foreach(ObjectId id in space) {
+                    if(known.Contains(id.Handle.ToString()) || !CadBuildingProbeRules.IsWall(id.ObjectClass.DxfName))continue;
+                    var entity=tx.GetObject(id,OpenMode.ForRead,false) as Entity;if(entity==null)continue;
+                    Extents3d bounds;try { bounds=entity.GeometricExtents; } catch { continue; }
+                    if(!RegionIntersects(floor,bounds) && !openings.Any(o=>bounds.MaxPoint.X>=o.BoundsMin.X-padding && bounds.MinPoint.X<=o.BoundsMax.X+padding
+                        && bounds.MaxPoint.Y>=o.BoundsMin.Y-padding && bounds.MinPoint.Y<=o.BoundsMax.Y+padding))continue;
+                    if(report.Entities.Count>=25000)throw new InvalidDataException("登记平面墙体数量过多，请缩小登记范围。");
+                    var record=new CadBuildingProbeEntity { Handle=id.Handle.ToString() };ReadEntity(entity,record,true,bounds);report.Entities.Add(record);
+                }
+            }
+            floor.WallCandidates=report.Entities.Where(IsWall).ToList();
+            foreach(var wall in floor.WallCandidates.Where(w=>w.DxfName=="TCH_CURTAIN_WALL"))
+                CadBuildingProbeRules.DeriveCurtainWall(wall,floor.Alignment.MillimetresPerCadUnit);
+        }
+        private static List<string> RegionWallHandles(CadFloorRegistrationContext floor,CadBuildingProbeDocument report)
+        {
+            // Nearby walls are read for opening placement, but retained only if they
+            // intersect the registered region or actually host a captured opening.
+            return report.Entities.Where(e=>IsWall(e) && (e.BoundsMin==null || e.BoundsMax==null ||
+                RegionIntersects(floor,new Extents3d(new Point3d(e.BoundsMin.X,e.BoundsMin.Y,e.BoundsMin.Z),
+                    new Point3d(e.BoundsMax.X,e.BoundsMax.Y,e.BoundsMax.Z)))))
+                .Select(e=>e.Handle).ToList();
+        }
+        private static bool RegionIntersects(CadFloorRegistrationContext floor,Extents3d bounds)
+        {
+            if(bounds.MaxPoint.X<floor.RegionMin.X || bounds.MinPoint.X>floor.RegionMax.X
+                || bounds.MaxPoint.Y<floor.RegionMin.Y || bounds.MinPoint.Y>floor.RegionMax.Y)return false;
+            var box=new[] { new PointModel(bounds.MinPoint.X,bounds.MinPoint.Y),new PointModel(bounds.MaxPoint.X,bounds.MinPoint.Y),
+                new PointModel(bounds.MaxPoint.X,bounds.MaxPoint.Y),new PointModel(bounds.MinPoint.X,bounds.MaxPoint.Y) };
+            if(box.Any(p=>CadFloorSlabGeneration.Inside(p,floor.RegionPolygon))
+                || floor.RegionPolygon.Any(p=>p.X>=bounds.MinPoint.X && p.X<=bounds.MaxPoint.X && p.Y>=bounds.MinPoint.Y && p.Y<=bounds.MaxPoint.Y))return true;
+            for(var i=0;i<4;i++)for(var j=0;j<floor.RegionPolygon.Count;j++) {
+                var a=box[i];var b=box[(i+1)%4];var c=floor.RegionPolygon[j];var d=floor.RegionPolygon[(j+1)%floor.RegionPolygon.Count];
+                if(Side(a,b,c)*Side(a,b,d)<=0 && Side(c,d,a)*Side(c,d,b)<=0)return true;
+            }
+            return false;
+        }
+        private static double Side(PointModel a,PointModel b,PointModel p)=>(b.X-a.X)*(p.Y-a.Y)-(b.Y-a.Y)*(p.X-a.X);
+        private static void ReadRoomLabels(Document document,CadFloorRegistrationContext floor,CadBuildingProbeDocument report)
+        {
+            report.RoomLabels=new List<CadRoomLabel>();
+            var region=floor.RegionPolygon;
+            if(region==null || region.Count<3)return;
+            using(var tx=document.Database.TransactionManager.StartOpenCloseTransaction()) {
+                var space=(BlockTableRecord)tx.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(document.Database),OpenMode.ForRead);
+                foreach(ObjectId id in space) {
+                    var dxf=id.ObjectClass.DxfName;
+                    if(!new[] { "TEXT","MTEXT","TCH_TEXT","TCH_MTEXT","TCH_ROOM","TCH_SPACE","TCH_ROOM_NAME" }.Contains(dxf))continue;
+                    var entity=tx.GetObject(id,OpenMode.ForRead,false) as Entity;if(entity==null)continue;
+                    Extents3d bounds;try { bounds=entity.GeometricExtents; } catch { continue; }
+                    if(bounds.MaxPoint.X<floor.RegionMin.X || bounds.MinPoint.X>floor.RegionMax.X
+                        || bounds.MaxPoint.Y<floor.RegionMin.Y || bounds.MinPoint.Y>floor.RegionMax.Y)continue;
+                    var count=0;
+                    var texts=new List<string>();var first=report.RoomLabels.Count;
+                    ReadRoomText(entity,id.Handle.ToString(),region,report.RoomLabels,texts,0,ref count);
+                    if(dxf=="TCH_SPACE") {
+                        var areas=texts.Select(t=>System.Text.RegularExpressions.Regex.Match(t.Trim(),@"^(\d+(?:\.\d+)?)\s*(?:m(?:2|²)?|㎡|平方米)$",System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                            .Where(m=>m.Success).Select(m=>double.Parse(m.Groups[1].Value,CultureInfo.InvariantCulture)).Distinct().ToList();
+                        if(areas.Count==1)for(var i=first;i<report.RoomLabels.Count;i++)report.RoomLabels[i].AreaSquareMetres=areas[0];
+                    }
+                }
+            }
+        }
+        private static void ReadRoomText(Entity entity,string handle,IList<PointModel> region,IList<CadRoomLabel> labels,IList<string> texts,int depth,ref int count)
+        {
+            if(depth>=6 || ++count>2048)return;
+            var text=entity is DBText ? ((DBText)entity).TextString : entity is MText ? ((MText)entity).Text : null;
+            if(text!=null) {
+                texts.Add(text);
+                if(!CadFloorSlabGeneration.IsVoidName(text))return;
+                var point=entity is DBText ? ((DBText)entity).Position : ((MText)entity).Location;
+                try { var bounds=entity.GeometricExtents;point=new Point3d(bounds.MinPoint.X/2+bounds.MaxPoint.X/2,bounds.MinPoint.Y/2+bounds.MaxPoint.Y/2,point.Z); } catch { }
+                var position=new PointModel(point.X,point.Y);
+                if(CadFloorSlabGeneration.Inside(position,region))labels.Add(new CadRoomLabel { SourceHandle=handle,Name=text.Trim(),Position=position });
+                return;
+            }
+            var parts=new DBObjectCollection();
+            try {
+                entity.Explode(parts);
+                foreach(DBObject part in parts)if(part is Entity)
+                    ReadRoomText((Entity)part,handle,region,labels,texts,depth+1,ref count);
+            } catch(Autodesk.AutoCAD.Runtime.Exception) { }
+            finally { foreach(DBObject part in parts)part.Dispose();parts.Dispose(); }
+        }
         private static bool SameDrawing(string left,string right)
         {
             Guid a,b;return Guid.TryParse(left,out a) && Guid.TryParse(right,out b) && a==b;
@@ -270,11 +368,20 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
             } catch(Autodesk.AutoCAD.Runtime.Exception) { /* Some display primitives cannot be exploded. */ }
             finally { foreach(DBObject part in parts)part.Dispose();parts.Dispose(); }
         }
-        private static void ReadEntity(Entity entity, CadBuildingProbeEntity record, bool registration)
+        private static void ReadEntity(Entity entity, CadBuildingProbeEntity record, bool registration, Extents3d? knownBounds = null)
         {
             record.DxfName = entity.GetRXClass() == null ? "" : entity.GetRXClass().DxfName;
             record.ManagedType = entity.GetType().FullName;
             record.Layer = entity.Layer;
+            if(CadStructuralRegistration.IsStructure(record.DxfName))
+            {
+                // Use read-only display geometry; do not probe unverified Tianzheng COM getters.
+                record.Category=CadStructuralRegistration.IsColumn(record.DxfName)?"天正柱":"天正梁";
+                var count=0;ReadDisplayParts(entity,record,new HashSet<string>(),0,ref count);
+                record.StructuralOutline=CadStructuralRegistration.FindRectangle(record.DisplaySegments);
+                record.CurveStatus=record.StructuralOutline.Count==4?"原生矩形轮廓已确认":"未找到可确认的矩形轮廓";
+                return;
+            }
             var curtain=string.Equals(record.DxfName,"TCH_CURTAIN_WALL",StringComparison.OrdinalIgnoreCase);
             object com = null;
             string comError = null;
@@ -297,7 +404,7 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
             record.Category = CadBuildingProbeRules.Classify(record.DxfName, record.ComType);
             try
             {
-                var bounds = entity.GeometricExtents;
+                var bounds = knownBounds ?? entity.GeometricExtents;
                 record.BoundsMin = Point(bounds.MinPoint); record.BoundsMax = Point(bounds.MaxPoint);
             }
             catch { record.Note = "无法读取包围范围；不使用包围框推断定位线。"; }

@@ -123,7 +123,7 @@ namespace BatchPdfPublisher.Services
                 if (choice.Value > 0) replacing = placements[choice.Value - 1];
             }
             Point3d anchor;
-            if (replacing != null) anchor = replacing.Anchor;
+            if (replacing != null && (cursor == null || !cursor.Next.HasValue)) anchor = replacing.Anchor;
             else
             {
                 if (cursor != null && cursor.Next.HasValue) anchor = cursor.Next.Value;
@@ -147,6 +147,7 @@ namespace BatchPdfPublisher.Services
             var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             var hatchIds = new List<ObjectId>();
             var generatedIds = new List<ObjectId>();
+            double[] placedBounds = null;
             var skippedGeneratedElements = 0;
             try
             {
@@ -192,6 +193,7 @@ namespace BatchPdfPublisher.Services
                     {
                         TextString = text.Text ?? string.Empty,
                         Height = text.Height > 0.5d ? text.Height : 250d,
+                        Rotation = text.Rotation * Math.PI / 180d,
                         Position = new Point3d(anchor.X + text.X, anchor.Y + text.Y, 0d)
                     };
                     ApplyLayer(entity, text.Layer, layerIds);
@@ -230,6 +232,8 @@ namespace BatchPdfPublisher.Services
                         dimensionStyle = document.Database.Dimstyle;
                         editor.WriteMessage("\n标注样式创建失败，改用当前标注样式：" + exception.Message);
                     }
+                    var dimensionSettings = (DimStyleTableRecord)transaction.GetObject(dimensionStyle,OpenMode.ForRead);
+                    SheetComposer.LayoutDimensionText(view,dimensionSettings.Dimtxt*Math.Max(1,dimensionSettings.Dimscale));
                     foreach (var dimension in view.Dimensions)
                     {
                         if (dimension == null) continue;
@@ -255,6 +259,7 @@ namespace BatchPdfPublisher.Services
 
                 foreach (var hatch in view.Hatches ?? new List<ViewHatch>())
                 {
+                    if(view.Kind==ViewKind.Plan || (hatch?.Layer==ViewLayers.CutHatch && string.Equals(hatch.Pattern,"SOLID",StringComparison.OrdinalIgnoreCase)))continue;
                     if (hatch == null || hatch.Boundary == null || hatch.Boundary.Count < 3) continue;
                     if (!string.IsNullOrWhiteSpace(hatch.Layer) && skipLayers.Contains(hatch.Layer)) continue;
                     var entity = new Hatch { Associative = false };
@@ -305,6 +310,25 @@ namespace BatchPdfPublisher.Services
                     var entity = (Entity)transaction.GetObject(id, OpenMode.ForWrite);
                     TagPlacement(entity, sourceKey, placementId, anchor);
                 }
+                // 批量间距以实际生成实体为准，覆盖项目图框和 CAD 标注样式产生的文字/引线。
+                var expectedBounds = BatchViewBounds(view);
+                placedBounds = new[] { anchor.X+expectedBounds[0],anchor.Y+expectedBounds[1],
+                    anchor.X+expectedBounds[2],anchor.Y+expectedBounds[3] };
+                foreach (var id in generatedIds)
+                {
+                    var entity = (Entity)transaction.GetObject(id,OpenMode.ForRead);
+                    try
+                    {
+                        var dimension = entity as Dimension;
+                        if (dimension != null) dimension.RecomputeDimensionBlock(true);
+                        var extents = entity.GeometricExtents;
+                        placedBounds[0] = Math.Min(placedBounds[0],extents.MinPoint.X);
+                        placedBounds[1] = Math.Min(placedBounds[1],extents.MinPoint.Y);
+                        placedBounds[2] = Math.Max(placedBounds[2],extents.MaxPoint.X);
+                        placedBounds[3] = Math.Max(placedBounds[3],extents.MaxPoint.Y);
+                    }
+                    catch (Autodesk.AutoCAD.Runtime.Exception) { }
+                }
                 if (replacing != null)
                 {
                     // Erase only entities carrying this exact placement identity. Untagged
@@ -333,12 +357,11 @@ namespace BatchPdfPublisher.Services
                 return false;
             }
 
-            if (cursor != null && replacing == null)
+            if (cursor != null)
             {
-                var bounds = BatchViewBounds(view);
+                var bounds = placedBounds;
                 var width = Math.Max(1d, bounds[2] - bounds[0]);
-                cursor.Next = new Point3d(anchor.X + bounds[2] + Math.Max(1000d, width * 0.1d),
-                    anchor.Y + bounds[1], anchor.Z);
+                cursor.Next = new Point3d(bounds[2] + Math.Max(1000d, width * 0.1d),bounds[1],anchor.Z);
             }
 
             editor.WriteMessage("\n" + (replacing == null ? "落图完成：" : "视图更新完成：")
@@ -391,12 +414,19 @@ namespace BatchPdfPublisher.Services
                 foreach (var p in hatch.Boundary ?? new List<PointModel>()) points.Add(new Point2d(p.X, p.Y));
             foreach (var text in view.Texts ?? new List<ViewText>())
             {
-                points.Add(new Point2d(text.X - text.Height, text.Y - text.Height));
-                points.Add(new Point2d(text.X + Math.Max(1, (text.Text ?? "").Length) * text.Height,
-                    text.Y + text.Height));
+                var angle = text.Rotation*Math.PI/180;
+                var width = Math.Max(1,(text.Text ?? "").Length)*text.Height;
+                foreach(var p in new[] {new Point2d(0,0),new Point2d(width,0),new Point2d(0,text.Height),new Point2d(width,text.Height)})
+                    points.Add(new Point2d(text.X+p.X*Math.Cos(angle)-p.Y*Math.Sin(angle),text.Y+p.X*Math.Sin(angle)+p.Y*Math.Cos(angle)));
             }
             foreach (var d in view.Dimensions ?? new List<ViewDimension>())
             {
+                if (d.TextX.HasValue && d.TextY.HasValue)
+                {
+                    var pad = Math.Max(1,view.Scale)*4;
+                    points.Add(new Point2d(d.TextX.Value-pad,d.TextY.Value-pad));
+                    points.Add(new Point2d(d.TextX.Value+pad,d.TextY.Value+pad));
+                }
                 points.Add(d.Vertical ? new Point2d(d.LinePosition, d.From) : new Point2d(d.From, d.LinePosition));
                 points.Add(d.Vertical ? new Point2d(d.AnchorPosition, d.To) : new Point2d(d.To, d.AnchorPosition));
             }
@@ -1052,7 +1082,12 @@ namespace BatchPdfPublisher.Services
                 document.Editor.WriteMessage("\n读取项目图框失败：" + exception.Message);
                 frames = new List<FrameDefinition>();
             }
-            var dialog = new BuildingModelBatchWindow(projectName, entries, frames);
+            var dialog = new BuildingModelBatchWindow(projectName, entries, frames, () => {
+                var refreshed=StudioLaunch.ListViews(modelFolder);
+                var placed=FindPlacedSourceKeys(document.Database);
+                foreach(var entry in refreshed)entry.Placed=placed.Contains(ViewSourceKey(entry.FilePath,entry.Id));
+                return refreshed;
+            });
             return AcApplication.ShowModalWindow(dialog) == true ? dialog : null;
         }
 
@@ -1316,7 +1351,13 @@ namespace BatchPdfPublisher.Services
                 second = new Point3d(anchor.X + dimension.To, anchor.Y + dimension.AnchorPosition, 0d);
                 linePoint = new Point3d(anchor.X + (dimension.From + dimension.To) / 2d, anchor.Y + dimension.LinePosition, 0d);
             }
-            return new RotatedDimension(rotation, first, second, linePoint, dimension.Text ?? string.Empty, dimensionStyle);
+            var entity = new RotatedDimension(rotation, first, second, linePoint, dimension.Text ?? string.Empty, dimensionStyle);
+            if (dimension.TextX.HasValue && dimension.TextY.HasValue)
+            {
+                entity.Dimtmove = 1;
+                entity.TextPosition = new Point3d(anchor.X+dimension.TextX.Value,anchor.Y+dimension.TextY.Value,0);
+            }
+            return entity;
         }
 
         private static void ApplyLayer(Entity entity, string layer, Dictionary<string, ObjectId> layerIds)

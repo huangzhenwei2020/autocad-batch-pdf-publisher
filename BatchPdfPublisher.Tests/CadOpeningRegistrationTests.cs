@@ -21,6 +21,19 @@ internal static class CadOpeningRegistrationTests
             Console.WriteLine("QUEUED_NATIVE_REGISTRATION "+request.Id);
             return;
         }
+        if(args.Length==2 && args[0]=="--inspect-slabs") {
+            var slabRegistry=CadFloorPlanRegistry.Load(args[1]);var actual=BuildingModelJson.LoadModel(args[1]);
+            BuildingModelDocument slabGenerated;
+            try { slabGenerated=CadFloorModelGeneration.Build(actual,slabRegistry); }
+            catch(ArgumentException ex) {
+                if(ex.Data["SlabSnapshot"] is string snapshot)File.WriteAllText(Path.Combine(Path.GetDirectoryName(args[1]),"invalid-slab.json"),snapshot);
+                Console.WriteLine("SLAB_BUILD_FAILED "+ex.Message);return;
+            }
+            foreach(var slab in slabGenerated.Slabs)Console.WriteLine("SLAB floor="+slab.StoreyId+" area="+Math.Abs(CadFloorSlabGeneration.Area(slab.Outline))+" holes="+slab.Openings.Count);
+            foreach(var message in slabGenerated.CadImport.SlabMessages)Console.WriteLine("MESSAGE "+message);
+            BuildingModelJson.SaveModel(Path.Combine(Path.GetDirectoryName(args[1]),"generated-model.json"),slabGenerated);
+            return;
+        }
         if(args.Length==2 && args[0]=="--inspect-registration") {
             var actualModel=BuildingModelJson.LoadModel(args[1]); var actualRegistry=CadFloorPlanRegistry.Load(args[1]);
             foreach(var floor in actualRegistry.Floors) {
@@ -298,6 +311,7 @@ internal static class CadOpeningRegistrationTests
             "Cancelling a pick must preserve prior location, confirmation and row selection.");
         placementWindow.Close();
         CadFloorModelGenerationTests.Run();
+        CadFloorSlabGenerationTests.Run();
         CadOpeningScheduleRulesTests.Run();
         Console.WriteLine("PASS: active model path, multi-floor registration, model generation/undo/reimport, safe jamb recognition, standard references, schedule/sill rollback and WPF actions.");
     }

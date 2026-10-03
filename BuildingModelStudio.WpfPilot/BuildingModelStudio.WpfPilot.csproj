@@ -12,6 +12,7 @@
     <Compile Include="..\Shared\BuildingModel\SlabGeometry.cs" Link="Shared\SlabGeometry.cs" />
     <PackageReference Include="HelixToolkit.Wpf.SharpDX" Version="3.1.2" />
     <Compile Include="..\Shared\BuildingModel\ModelTypes.cs" Link="Shared\ModelTypes.cs" />
+    <Compile Include="..\Shared\BuildingModel\StructuralGeometry.cs" Link="Shared\StructuralGeometry.cs" />
     <Compile Include="..\Shared\BuildingModel\BuildingModelJson.cs" Link="Shared\BuildingModelJson.cs" />
     <Compile Include="..\Shared\BuildingModel\BuildingVolume.cs" Link="Shared\BuildingVolume.cs" />
     <Compile Include="..\Shared\BuildingModel\StandardStoreyLayout.cs" Link="Shared\StandardStoreyLayout.cs" />

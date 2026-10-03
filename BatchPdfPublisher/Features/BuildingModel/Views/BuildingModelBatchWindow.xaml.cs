@@ -23,7 +23,8 @@ namespace BatchPdfPublisher.Views
         public StudioViewEntry Entry { get; set; }
         public string Name => string.IsNullOrWhiteSpace(Entry.Title) ? Entry.Id : Entry.Title;
         public string KindText => Entry.Kind == ViewKind.Sheet ? "图纸" : Entry.Kind == ViewKind.Plan ? "平面"
-            : Entry.Kind == ViewKind.Section ? "剖面" : Entry.Kind == ViewKind.Schedule ? "门窗表" : "立面";
+            : Entry.Kind == ViewKind.Section ? "剖面" : Entry.Kind == ViewKind.Schedule ? "门窗表"
+            : Entry.Kind == ViewKind.OpeningElevation ? "门窗立面" : Entry.Kind == ViewKind.Axonometric ? "轴测" : "立面";
         public string StatusText => Entry.Pending ? "待落图" : Entry.Placed ? "已落图" : "可落图";
         public Brush StatusBrush => Entry.Pending ? Brushes.DeepSkyBlue : Entry.Placed
             ? Brushes.LightGreen : Brushes.LightSlateGray;
@@ -48,6 +49,7 @@ namespace BatchPdfPublisher.Views
         private string _filter = "全部";
         private bool _ready;
         private FrameDefinition _selectedFrame;
+        private readonly Func<List<StudioViewEntry>> _reloadEntries;
 
         public IReadOnlyList<StudioViewEntry> SelectedEntries { get; private set; }
         public BuildingFrameMode FrameMode => ProjectFrameRadio.IsChecked == true ? BuildingFrameMode.Project
@@ -55,8 +57,9 @@ namespace BatchPdfPublisher.Views
         public FrameDefinition SelectedFrame => FrameMode == BuildingFrameMode.Project ? _selectedFrame : null;
 
         public BuildingModelBatchWindow(string projectName, IEnumerable<StudioViewEntry> entries,
-            IEnumerable<FrameDefinition> frames)
+            IEnumerable<FrameDefinition> frames, Func<List<StudioViewEntry>> reloadEntries = null)
         {
+            _reloadEntries=reloadEntries;
             InitializeComponent();
             ProjectText.Text = "当前项目：" + (string.IsNullOrWhiteSpace(projectName) ? "未选择" : projectName);
             _frames = (frames ?? Enumerable.Empty<FrameDefinition>())
@@ -138,6 +141,22 @@ namespace BatchPdfPublisher.Views
         private void ClearButton_Click(object sender, RoutedEventArgs args)
         {
             foreach (var row in _rows) row.IsChecked = false;
+        }
+
+        private void RefreshButton_Click(object sender, RoutedEventArgs args)
+        {
+            if(_reloadEntries==null)return;
+            try {
+                var entries=_reloadEntries();
+                var selected=new HashSet<string>(_rows.Where(r=>r.IsChecked).Select(r=>r.Entry.Id));
+                foreach(var row in _rows)row.PropertyChanged-=Row_PropertyChanged;
+                _rows.Clear();
+                foreach(var entry in entries) {
+                    var row=new BuildingModelBatchRow { Entry=entry,IsChecked=selected.Contains(entry.Id) };
+                    row.PropertyChanged+=Row_PropertyChanged;_rows.Add(row);
+                }
+                _filteredRows.Refresh();UpdateFramePanel();UpdateCount();
+            } catch(Exception ex) { SelectedCountText.Text="刷新失败："+ex.Message; }
         }
 
         private void Row_PropertyChanged(object sender, PropertyChangedEventArgs args)

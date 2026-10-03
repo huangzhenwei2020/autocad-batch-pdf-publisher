@@ -66,7 +66,7 @@ internal sealed partial class ProbeWindow
             var floor = (_storeyChooser.SelectedItem as StoreyItem)?.Id;
             var source = _session.Model.FindStorey(floor ?? "");
             floor = string.IsNullOrWhiteSpace(source?.TemplateStoreyId) ? floor : source.TemplateStoreyId;
-            draft = new SlabModel { StoreyId = floor ?? "1F", Thickness = 180, TopOffset = 0 };
+            draft = new SlabModel { StoreyId = floor ?? "1F", Thickness = 100, TopOffset = 0,FollowsStoreyTop=true };
         }
         else
         {
@@ -202,7 +202,7 @@ internal sealed partial class ProbeWindow
         _slabOffset = SlabNumber(slab.TopOffset ?? slab.TopElevation - (storey?.Elevation ?? 0), "板顶偏移 mm");
         basic.Children.Add(SlabRow("楼板编号", _slabCode));
         basic.Children.Add(SlabRow("板厚 mm", _slabThickness));
-        basic.Children.Add(SlabRow("板顶偏移 mm", _slabOffset));
+        basic.Children.Add(SlabRow(slab.FollowsStoreyTop ? "层顶偏移 mm" : "板顶偏移 mm", _slabOffset));
         _slabTop = SlabText("", "板顶标高", true);
         _slabBottom = SlabText("", "板底标高", true);
         basic.Children.Add(SlabRow("板顶标高", _slabTop));
@@ -259,6 +259,7 @@ internal sealed partial class ProbeWindow
             ShowSlabFloor(draft!.StoreyId);
         };
         _slabFooter.Children.Add(cancel); Grid.SetColumn(apply, 1); _slabFooter.Children.Add(apply);
+        _slabPreviewReady=true;
     }
 
     private void UpdateSlabLevels()
@@ -267,8 +268,9 @@ internal sealed partial class ProbeWindow
         if (!TryNumber(_slabOffset?.Text, out var offset) || !TryNumber(_slabThickness?.Text, out var thickness))
         { _slabTop.Text = _slabBottom.Text = "—"; return; }
         var floor = _session.Model.FindStorey((_slabFloor?.SelectedItem as StoreyItem)?.Id ?? "");
-        var top = (floor?.Elevation ?? 0) + offset;
+        var top = (floor?.Elevation ?? 0) + (_slabDraft?.FollowsStoreyTop==true ? floor?.Height ?? 0 : 0) + offset;
         _slabTop.Text = Mm(top) + " mm"; _slabBottom.Text = Mm(top - thickness) + " mm";
+        PreviewSlabParameters();
     }
 
     private void BuildHoleRows()
@@ -330,6 +332,10 @@ internal sealed partial class ProbeWindow
         _holeFields.Children.Add(SlabRow("长 mm", _holeLength));
         ToolTip.SetTip(_holeWidth, "以洞口左下角为基点调整 X 方向尺寸，多边形按比例缩放");
         ToolTip.SetTip(_holeLength, "以洞口左下角为基点调整 Y 方向尺寸，多边形按比例缩放");
+        _holeName.TextChanged += (_,_)=>PreviewSlabParameters();
+        foreach(var number in new[] { _holeWidth,_holeLength })number.PropertyChanged += (_,e)=> {
+            if(e.Property==NumericUpDown.TextProperty || e.Property==NumericUpDown.ValueProperty)PreviewSlabParameters();
+        };
     }
 
     private bool ReadSlabDraft(out SlabModel? draft)
@@ -369,6 +375,7 @@ internal sealed partial class ProbeWindow
         draft!.Openings.RemoveAll(o => o.Id == _slabOpeningId);
         _slabDraft = draft; _slabOpeningId = draft.Openings.FirstOrDefault()?.Id;
         BuildHoleRows(); BuildHoleFields();
+        PreviewSlabParameters();
         _status.Text = "洞口已从编辑草稿移除，点击应用写入，取消恢复。";
     }
 
@@ -430,7 +437,7 @@ internal sealed partial class ProbeWindow
             CancelActiveCommand();
             SelectById(id);
             _slabThickness!.Value = 240; _slabOffset!.Value = 50;
-            if (_slabTop!.Text != Mm(_session.Model.FindStorey(_session.Model.Slabs.Single().StoreyId).Elevation + 50) + " mm")
+            if (_slabTop!.Text != Mm(_session.Model.FindStorey(_session.Model.Slabs.Single().StoreyId).Elevation + (_slabDraft!.FollowsStoreyTop ? _session.Model.FindStorey(_slabDraft.StoreyId).Height : 0) + 50) + " mm")
                 throw new InvalidOperationException("板顶标高没有实时更新");
             _holeName!.Text = "楼梯井"; _holeWidth!.Value = 900;
             var apply = _slabFooter.Children.OfType<Button>().Last();

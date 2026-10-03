@@ -204,7 +204,7 @@ namespace BatchPdfPublisher.BuildingModel
             }
 
             // 5) 轴线（整栋通用；排在墙后面，墙上的轴线仍然优先选中墙）
-            foreach (var axis in (model.Axes ?? new List<AxisModel>()).Where(a => a != null))
+            foreach (var axis in BuildingAxisLayout.Resolve(model,storeyId).Where(a => a != null && !a.Hidden && !a.Deleted))
             {
                 var distance = axis.Vertical ? Math.Abs(x - axis.Position) : Math.Abs(y - axis.Position);
                 if (distance <= tolerance) return new PlanHit { Kind = "axis", Id = axis.Id, Grip = -1 };
@@ -324,6 +324,17 @@ namespace BatchPdfPublisher.BuildingModel
                     Consider(x, y, wall.X1, wall.Y1, SnapEndpoint, tolerance, ref best, result);
                     Consider(x, y, wall.X2, wall.Y2, SnapEndpoint, tolerance, ref best, result);
                 }
+                foreach(var column in model.Columns.Where(c=>Same(c.StoreyId,storeyId)&&c.Id!=excludedWallId))
+                {
+                    Consider(x,y,column.X,column.Y,"柱中心",tolerance,ref best,result);
+                    foreach(var corner in StructuralGeometry.ColumnOutline(column))Consider(x,y,corner.X,corner.Y,SnapEndpoint,tolerance,ref best,result);
+                }
+                foreach(var beam in model.Beams.Where(b=>Same(b.StoreyId,storeyId)&&b.Id!=excludedWallId))
+                {
+                    Consider(x,y,beam.X1,beam.Y1,SnapEndpoint,tolerance,ref best,result);
+                    Consider(x,y,beam.X2,beam.Y2,SnapEndpoint,tolerance,ref best,result);
+                    Consider(x,y,(beam.X1+beam.X2)/2,(beam.Y1+beam.Y2)/2,SnapMidpoint,tolerance,ref best,result);
+                }
                 if (result.Snapped) return result;
 
                 var near = walls.Where(w => DistanceToSegment(x, y, w.X1, w.Y1, w.X2, w.Y2) <= tolerance)
@@ -344,7 +355,7 @@ namespace BatchPdfPublisher.BuildingModel
                 if (result.Snapped) return result;
 
                 // A discrete axis intersection must not lose to a nearby continuous wall projection.
-                var axes = resolvedAxes ?? BuildingAxisLayout.Resolve(model);
+                var axes = (resolvedAxes ?? BuildingAxisLayout.Resolve(model,storeyId)).Where(a=>!a.Hidden&&!a.Deleted).ToList();
                 var nearbyVertical = axes.Where(a => a.Vertical && Math.Abs(a.Position - x) <= tolerance).ToArray();
                 var nearbyHorizontal = axes.Where(a => !a.Vertical && Math.Abs(a.Position - y) <= tolerance).ToArray();
                 best = tolerance;

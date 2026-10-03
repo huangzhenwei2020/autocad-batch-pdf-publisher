@@ -9,6 +9,46 @@ namespace BatchPdfPublisher.BuildingModel
     {
         private const string Suffix = "@STD@";
 
+        public static bool TryParseRange(string label, out int first, out int last)
+        {
+            first = last = 0;
+            var match = System.Text.RegularExpressions.Regex.Match((label ?? "").Replace(" ",""),
+                @"^(\d+)(?:层|F)?[~～至到—-](\d+)(?:层|F)?$",System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            return match.Success && int.TryParse(match.Groups[1].Value,out first)
+                && int.TryParse(match.Groups[2].Value,out last) && first>=1 && last>=first && last<=500;
+        }
+
+        /// <summary>范围行展开成实际楼层，平面自动归组到范围首层；随后由标高布局逐层推算。</summary>
+        public static List<StoreyModel> ExpandRanges(IEnumerable<StoreyModel> rows)
+        {
+            var result = new List<StoreyModel>();
+            foreach (var row in rows)
+            {
+                var label = string.IsNullOrWhiteSpace(row.StandardFloorRange) ? row.Name : row.StandardFloorRange;
+                int first,last;
+                if (!TryParseRange(label,out first,out last))
+                {
+                    if ((label ?? "").IndexOfAny(new[] {'~','～','至','到','—'})>=0
+                        || System.Text.RegularExpressions.Regex.IsMatch(label ?? "",@"^\d+.*-.*\d+"))
+                        throw new ArgumentException("楼层范围无效，请填写如 4～15层，起止层应递增。");
+                    result.Add(new StoreyModel { Id=row.Id,Name=row.Name,Kind=row.Kind,Height=row.Height,Elevation=row.Elevation,
+                        TemplateStoreyId=row.TemplateStoreyId });
+                    continue;
+                }
+                if (row.Kind!=StoreyKind.Normal) throw new ArgumentException("屋顶层和机房层不能设置标准层范围。");
+                if (!string.Equals(row.Id,first+"F",StringComparison.OrdinalIgnoreCase))
+                    throw new ArgumentException("此行从 "+row.Id+" 开始，范围首层应与本行楼层一致。");
+                for (var floor=first;floor<=last;floor++)
+                    result.Add(new StoreyModel { Id=floor+"F",Name=floor+"层",Kind=row.Kind,Height=row.Height,
+                        Elevation=row.Elevation+(floor-first)*row.Height,
+                        TemplateStoreyId=floor==first ? null : row.Id,StandardGroupId=row.Id,
+                        StandardFloorRange=floor==first ? first+"～"+last+"层" : null });
+            }
+            if (result.GroupBy(s=>s.Id,StringComparer.OrdinalIgnoreCase).Any(g=>g.Count()>1))
+                throw new ArgumentException("楼层范围与已有楼层重叠，请调整范围或删除重复楼层行。");
+            return result;
+        }
+
         public static string SourceElementId(BuildingModelDocument model, string id)
         {
             if (model == null || string.IsNullOrEmpty(id)) return id;
@@ -24,7 +64,7 @@ namespace BatchPdfPublisher.BuildingModel
         public static BuildingModelDocument Materialize(BuildingModelDocument model)
         {
             if (model == null || !model.Storeys.Any(s => !string.IsNullOrWhiteSpace(s.TemplateStoreyId)))
-                return model;
+                return OpeningConstruction.ApplyOverrides(model);
             var expanded = new BuildingModelDocument
             {
                 SchemaVersion = model.SchemaVersion,
@@ -35,10 +75,12 @@ namespace BatchPdfPublisher.BuildingModel
                 Openings = new List<OpeningModel>(model.Openings),
                 Slabs = new List<SlabModel>(model.Slabs),
                 Columns = new List<ColumnModel>(model.Columns),
+                Beams = new List<BeamModel>(model.Beams),
                 Stairs = new List<StairModel>(model.Stairs),
                 Roofs = new List<RoofModel>(model.Roofs),
                 Rooms = new List<RoomModel>(model.Rooms),
-                Axes = model.Axes
+                Axes = model.Axes, StoreyAxes=model.StoreyAxes,
+                DrawingScales=model.DrawingScales,DrawingViews = model.DrawingViews, OpeningTypes=model.OpeningTypes, OpeningTemplates=model.OpeningTemplates, OpeningOverrides=model.OpeningOverrides,OpeningEditorSnapStep=model.OpeningEditorSnapStep
             };
             foreach (var target in model.Storeys.Where(s => !string.IsNullOrWhiteSpace(s.TemplateStoreyId)))
             {
@@ -76,7 +118,7 @@ namespace BatchPdfPublisher.BuildingModel
                         Id = InstanceId(slab.Id), Code = slab.Code, StoreyId = target.Id, Outline = slab.Outline,
                         Openings = (slab.Openings ?? new List<SlabOpeningModel>()).Select(o => new SlabOpeningModel
                         { Id = InstanceId(o.Id), Name = o.Name, Outline = o.Outline }).ToList(),
-                        Thickness = slab.Thickness, TopOffset = slab.TopOffset,
+                        Thickness = slab.Thickness, TopOffset = slab.TopOffset,FollowsStoreyTop=slab.FollowsStoreyTop,
                         TopElevation = slab.TopElevation + (atTop ? topShift : baseShift)
                     });
                 }
@@ -86,8 +128,12 @@ namespace BatchPdfPublisher.BuildingModel
                         Id = InstanceId(column.Id), StoreyId = target.Id,
                         X = column.X, Y = column.Y, Width = column.Width,
                         Depth = column.Depth, Height = column.Height,
-                        BaseOffset = column.BaseOffset, TopOffset = column.TopOffset
+                        BaseOffset = column.BaseOffset, TopOffset = column.TopOffset,
+                        Code=column.Code,RotationDegrees=column.RotationDegrees
                     });
+                foreach(var beam in model.Beams.Where(b=>Same(b.StoreyId,source.Id)))
+                    expanded.Beams.Add(new BeamModel {Id=InstanceId(beam.Id),StoreyId=target.Id,Code=beam.Code,
+                        X1=beam.X1,Y1=beam.Y1,X2=beam.X2,Y2=beam.Y2,Width=beam.Width,Depth=beam.Depth,TopOffset=beam.TopOffset});
                 foreach (var stair in model.Stairs.Where(s => Same(s.StoreyId, source.Id)))
                     expanded.Stairs.Add(new StairModel
                     {
@@ -117,7 +163,7 @@ namespace BatchPdfPublisher.BuildingModel
                         Name = room.Name, Outline = room.Outline
                     });
             }
-            return expanded;
+            return OpeningConstruction.ApplyOverrides(expanded);
         }
 
         private static bool Same(string left, string right)

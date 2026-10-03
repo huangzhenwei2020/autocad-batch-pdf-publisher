@@ -192,7 +192,7 @@ namespace BatchPdfPublisher.BuildingModel
 
         private static MaterialBuilder Material(string kind)
         {
-            var color = kind == "slab" || kind == "roof" ? new Vector4(0.6f, 0.65f, 0.7f, 1)
+            var color = kind == "slab" || kind == "bay-cap" || kind == "roof" ? new Vector4(0.6f, 0.65f, 0.7f, 1)
                 : kind == "glass" ? new Vector4(0.35f, 0.65f, 0.78f, 0.35f)
                 : kind == "wall" ? new Vector4(0.48f, 0.66f, 0.8f, 1)
                 : new Vector4(0.65f, 0.7f, 0.75f, 1);

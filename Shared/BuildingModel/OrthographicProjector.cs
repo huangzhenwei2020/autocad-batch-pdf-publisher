@@ -42,6 +42,7 @@ namespace BatchPdfPublisher.BuildingModel
             public double Depth;
             public string Layer;
             public bool IsCut;
+            public OpeningModel Opening;
         }
 
         private sealed class Interval
@@ -65,9 +66,23 @@ namespace BatchPdfPublisher.BuildingModel
         {
             if (model == null) throw new ArgumentNullException(nameof(model));
             if (view == null) throw new ArgumentNullException(nameof(view));
+            openingLibrary = OpeningConstruction.Library(model, openingLibrary);
             model = StandardStoreyLayout.Materialize(model);
             if (view.Kind == ViewKind.Plan) return ProjectPlan(model, view, openingLibrary);
-            if (view.Kind == ViewKind.Axonometric) return ProjectAxonometric(model, view);
+            if (view.Kind == ViewKind.Axonometric) {model=BuildingModelJson.FromJson(BuildingModelJson.ToJson(model));model.OpeningTypes=openingLibrary.Types;return ProjectAxonometric(model, view);}
+            if (view.Kind == ViewKind.Schedule || view.Kind == ViewKind.OpeningElevation)
+            {
+                if (view.StoreyIds != null && view.StoreyIds.Count > 0)
+                {
+                    var hosts = new HashSet<string>(model.Walls.Where(w => view.StoreyIds.Contains(w.StoreyId)).Select(w => w.Id));
+                    model = BuildingModelJson.FromJson(BuildingModelJson.ToJson(model));
+                    model.Openings = model.Openings.Where(o => hosts.Contains(o.HostWallId)).ToList();
+                }
+                var result = view.Kind == ViewKind.Schedule ? ProjectSchedule(model, openingLibrary, view.Title)
+                    : ProjectOpeningElevations(model, view, openingLibrary);
+                result.Id = view.Id; result.Title = view.Title; result.Scale = Math.Max(1, view.Scale);
+                return result;
+            }
 
             var document = new ViewDocument
             {
@@ -98,6 +113,15 @@ namespace BatchPdfPublisher.BuildingModel
                 if (column == null || !Include(includeAll, view.StoreyIds, column.StoreyId)) continue;
                 AddColumn(model, column, frame, isSection, cutProj, view.ViewDepth, rects, cutRects);
             }
+            foreach(var beam in model.Beams)
+            {
+                if(!Include(includeAll,view.StoreyIds,beam.StoreyId))continue;
+                var dx=beam.X2-beam.X1;var dy=beam.Y2-beam.Y1;
+                AddColumn(model,new ColumnModel {StoreyId=beam.StoreyId,X=(beam.X1+beam.X2)/2,Y=(beam.Y1+beam.Y2)/2,
+                    Width=Math.Sqrt(dx*dx+dy*dy),Depth=beam.Width,Height=beam.Depth,
+                    RotationDegrees=Math.Atan2(dy,dx)*180/Math.PI,BaseOffset=model.TopElevationOf(beam)-beam.Depth-(model.FindStorey(beam.StoreyId)?.Elevation??0)},
+                    frame,isSection,cutProj,view.ViewDepth,rects,cutRects);
+            }
             foreach (var slab in model.Slabs ?? new List<SlabModel>())
             {
                 if (slab == null || !Include(includeAll, view.StoreyIds, slab.StoreyId)) continue;
@@ -118,7 +142,14 @@ namespace BatchPdfPublisher.BuildingModel
             var nearer = new List<Rect>();
             foreach (var rect in rects.OrderByDescending(r => r.Depth))
             {
+                var count = document.Lines.Count;
                 EmitRectEdges(rect, nearer, document.Lines);
+                if (rect.Opening != null && document.Lines.Count > count)
+                {
+                    AddOpeningLabel(document, rect.Opening, rect.U0, rect.U1, rect.Z0, rect.Z1, view.Scale);
+                    document.Anchors.Add(new ViewAnchor { Kind = "opening", ElementId = rect.Opening.Id,
+                        X1 = rect.U0, Y1 = rect.Z0, X2 = rect.U1, Y2 = rect.Z1 });
+                }
                 nearer.Add(rect);
             }
             foreach (var cut in cutRects) document.Hatches.Add(CreateHatch(cut, view));
@@ -356,6 +387,7 @@ namespace BatchPdfPublisher.BuildingModel
         public static ViewDocument ProjectSchedule(BuildingModelDocument model, OpeningTypeLibraryDocument library, string title)
         {
             if (model == null) throw new ArgumentNullException(nameof(model));
+            library=OpeningConstruction.Library(model,library);
             model = StandardStoreyLayout.Materialize(model);
             var document = new ViewDocument
             {
@@ -370,7 +402,8 @@ namespace BatchPdfPublisher.BuildingModel
             {
                 if (opening == null) continue;
                 var code = string.IsNullOrWhiteSpace(opening.Code) ? "未编号" : opening.Code.Trim();
-                var row = rows.FirstOrDefault(r => string.Equals(r.Code, code, StringComparison.OrdinalIgnoreCase));
+                var row = rows.FirstOrDefault(r => string.Equals(r.Code, code, StringComparison.OrdinalIgnoreCase)
+                    && Math.Abs(r.Width-opening.Width)<.5 && Math.Abs(r.Height-opening.Height)<.5);
                 if (row == null)
                 {
                     row = new ScheduleRow { Code = code, Kind = opening.Kind, Width = opening.Width, Height = opening.Height, Sill = opening.Sill };
@@ -453,6 +486,41 @@ namespace BatchPdfPublisher.BuildingModel
             return document;
         }
 
+        public static ViewDocument ProjectOpeningElevations(BuildingModelDocument model, ViewDefinitionModel view,
+            OpeningTypeLibraryDocument library)
+        {
+            var document = new ViewDocument { Id = view.Id, Title = view.Title, Kind = ViewKind.OpeningElevation, Scale = view.Scale };
+            var groups = model.Openings.Where(o => o.Width > 0 && o.Height > 0)
+                .GroupBy(o => (o.Code ?? "未编号").Trim().ToUpperInvariant() + "|" + Math.Round(o.Width,3) + "|" + Math.Round(o.Height,3))
+                .OrderBy(g => g.First().Code, StringComparer.OrdinalIgnoreCase).ToList();
+            if (groups.Count == 0)
+                document.Texts.Add(new ViewText { Layer = ViewLayers.Opening, Text = "模型里还没有门窗。", Height = 250 });
+            var stepX = groups.Count == 0 ? 5000 : groups.Max(g => g.First().Width) + 2000;
+            var stepY = groups.Count == 0 ? 5000 : groups.Max(g => g.First().Height) + 2000;
+            for (var index = 0; index < groups.Count; index++)
+            {
+                var opening = groups[index].First();
+                var x = index % 3 * stepX; var y = -(index / 3) * stepY;
+                DoorWindowElevationGeometry geometry;
+                try { geometry = DoorWindowElevationGeometryBuilder.Build(OpeningElevationAdapter.ToScheduleItem(opening,
+                    OpeningElevationAdapter.Resolve(library, opening), opening.Width, opening.Height)); }
+                catch (Exception ex) {
+                    document.Warnings.Add(opening.Code + "：门窗做法无效，已采用默认做法。" + ex.Message);
+                    geometry = DoorWindowElevationGeometryBuilder.Build(OpeningElevationAdapter.ToScheduleItem(opening,null,opening.Width,opening.Height));
+                }
+                foreach (var line in geometry.Lines)
+                    document.Lines.Add(new ViewLine { Layer = ViewLayers.Opening, X1 = x+line.X1, Y1 = y+line.Y1, X2 = x+line.X2, Y2 = y+line.Y2 });
+                document.Texts.Add(new ViewText { Layer = ViewLayers.Opening, Text = (opening.Code ?? "未编号") + " · " + groups[index].Count() + " 樘",
+                    X = x, Y = y-750, Height = 250 });
+                document.Dimensions.Add(new ViewDimension { Layer = ViewLayers.Dimension, Vertical = false,
+                    From = x, To = x+opening.Width, AnchorPosition = y, LinePosition = y-400 });
+                document.Dimensions.Add(new ViewDimension { Layer = ViewLayers.Dimension, Vertical = true,
+                    From = y, To = y+opening.Height, AnchorPosition = x+opening.Width, LinePosition = x+opening.Width+400 });
+            }
+            Normalize(document);
+            return document;
+        }
+
         private sealed class ScheduleRow
         {
             public string Code;
@@ -463,7 +531,7 @@ namespace BatchPdfPublisher.BuildingModel
 
         private static string DescribeType(OpeningTypeModel type)
         {
-            if (type == null) return "类型库里没有这一条";
+            if (type == null) return "默认做法";
             var division = string.IsNullOrWhiteSpace(type.DivisionPreset) ? "—" : type.DivisionPreset;
             var mode = string.IsNullOrWhiteSpace(type.OpeningMode) ? "—" : type.OpeningMode;
             return division + " / " + mode + (string.IsNullOrWhiteSpace(type.Material) ? "" : "，" + type.Material);
@@ -529,10 +597,14 @@ namespace BatchPdfPublisher.BuildingModel
             // 逐墙画封口会把内部交接线也推到 CAD，并在端点角部留下缺口。
             var unionVolume = new BuildingVolume();
             var unionFirst = true;
-            var joinedIds = OrthogonalWallUnion.AddJoinedWalls(unionVolume, model, walls, ref unionFirst);
+            // 平面符号表示所有门窗，断墙也必须使用同一组洞口，不能因窗台高于剖切面而贯穿窗符号。
+            var planModel = BuildingModelJson.FromJson(BuildingModelJson.ToJson(model));
+            foreach (var opening in planModel.Openings)
+            { opening.Sill = 0; opening.Height = 1000000d; }
+            var joinedIds = OrthogonalWallUnion.AddJoinedWalls(unionVolume, planModel, walls, ref unionFirst);
             AddJoinedWallPlanBoundary(document, unionVolume,
                 storey.Elevation + Math.Min(1200d, storey.Height / 2d));
-            foreach (var seam in WallJunctionLines.Resolve(model, walls,
+            foreach (var seam in WallJunctionLines.Resolve(planModel, walls,
                 storey.Elevation + Math.Min(1200d, storey.Height / 2d)))
                 AddLine(document, ViewLayers.Cut,
                     seam.Item1.X, seam.Item1.Y, seam.Item2.X, seam.Item2.Y);
@@ -540,7 +612,6 @@ namespace BatchPdfPublisher.BuildingModel
             // 其他墙：洞口把墙断开，两段面线 + 洞口两端的封口
             foreach (var wall in walls)
             {
-                if (joinedIds.Contains(wall.Id)) continue;
                 var spans = OpeningsOnWall(wall, openings)
                     .Select(o => OpeningEdges(wall, o))
                     .OrderBy(e => e[0])
@@ -549,11 +620,12 @@ namespace BatchPdfPublisher.BuildingModel
                 var cursor = 0d;
                 foreach (var span in spans)
                 {
-                    if (span[0] - cursor > 1d) AddWallFaces(document, wall, cursor, span[0]);
+                    if (span[0] - cursor > 1d) AddPlanWallSegment(document, wall, cursor, span[0], !joinedIds.Contains(wall.Id));
                     cursor = Math.Max(cursor, span[1]);
                 }
-                if (length - cursor > 1d) AddWallFaces(document, wall, cursor, length);
-                foreach (var span in spans) AddWallFaces(document, wall, span[0], span[1], jambsOnly: true);
+                if (length - cursor > 1d) AddPlanWallSegment(document, wall, cursor, length, !joinedIds.Contains(wall.Id));
+                if (!joinedIds.Contains(wall.Id))
+                    foreach (var span in spans) AddWallFaces(document, wall, span[0], span[1], jambsOnly: true);
             }
 
             // 门窗图例
@@ -578,11 +650,10 @@ namespace BatchPdfPublisher.BuildingModel
             foreach (var column in model.Columns ?? new List<ColumnModel>())
             {
                 if (column == null || !string.Equals(column.StoreyId, storey.Id, StringComparison.OrdinalIgnoreCase)) continue;
-                var halfWidth = Math.Max(1d, column.Width) / 2d;
-                var halfDepth = Math.Max(1d, column.Depth) / 2d;
-                AddRect(document, ViewLayers.Cut,
-                    column.X - halfWidth, column.Y - halfDepth, column.X + halfWidth, column.Y + halfDepth);
+                AddStructuralOutline(document,StructuralGeometry.ColumnOutline(column),ViewLayers.Cut);
             }
+            foreach(var beam in model.Beams.Where(b=>b.StoreyId==storey.Id))
+                AddStructuralOutline(document,StructuralGeometry.BeamOutline(beam),ViewLayers.Elevation);
 
             foreach (var slab in model.Slabs.Where(s => s != null
                 && string.Equals(s.StoreyId, storey.Id, StringComparison.OrdinalIgnoreCase)))
@@ -599,7 +670,7 @@ namespace BatchPdfPublisher.BuildingModel
 
             // 轴网与房间：平面图的两个"信息层"
             var bounds = PlanBounds(walls);
-            AddPlanAxes(document, model, bounds[0], bounds[1], bounds[2], bounds[3], view.Scale);
+            AddPlanAxes(document, model, bounds[0], bounds[1], bounds[2], bounds[3], view.Scale,storey.Id);
             AddPlanRooms(document, model, storey.Id, view.Scale, walls);
             AddPlanStairs(document, model, storey, view.Scale);
 
@@ -648,22 +719,27 @@ namespace BatchPdfPublisher.BuildingModel
         /// 每条都带"图上元素 ↔ 模型构件"的锚点，平面里也能点选轴线。
         /// </summary>
         private static void AddPlanAxes(ViewDocument document, BuildingModelDocument model,
-            double minX, double maxX, double minY, double maxY, int scale)
+            double minX, double maxX, double minY, double maxY, int scale,string storeyId)
         {
-            var axes = BuildingAxisLayout.Resolve(model);
+            var axes = BuildingAxisLayout.Resolve(model, storeyId);
             if (axes.Count == 0) return;
             var margin = Math.Max(3200d, Math.Max(1, scale) * 32d);      // 轴线伸出建筑 3200：轴号圆圈要落最外一道尺寸线之外
             var radius = Math.Max(400d, Math.Max(1, scale) * 4d);        // 轴号圆圈半径 400（图上 4mm）
             var textHeight = Math.Max(250d, Math.Max(1, scale) * 2.5d);
 
-            foreach (var axis in axes)
+            foreach (var axis in axes.Where(a=>!a.Hidden&&!a.Deleted))
             {
-                var start = axis.ExtentStart > 0.5d || axis.ExtentEnd > 0.5d
+                var start = axis.ExtentStart != 0d || axis.ExtentEnd != 0d
                     ? Math.Min(axis.ExtentStart, axis.ExtentEnd)
                     : (axis.Vertical ? minY : minX) - margin;
-                var end = axis.ExtentStart > 0.5d || axis.ExtentEnd > 0.5d
+                var end = axis.ExtentStart != 0d || axis.ExtentEnd != 0d
                     ? Math.Max(axis.ExtentStart, axis.ExtentEnd)
                     : (axis.Vertical ? maxY : maxX) + margin;
+                if(axis.StartRemoved||axis.EndRemoved) {
+                    var shortened=BuildingAxisLayout.Extents(model,axis,storeyId,margin);
+                    if(axis.StartRemoved) start=shortened[0];
+                    if(axis.EndRemoved) end=shortened[1];
+                }
                 if (end - start < 1d) continue;
 
                 if (axis.Vertical)
@@ -673,8 +749,8 @@ namespace BatchPdfPublisher.BuildingModel
                         Layer = ViewLayers.Axis, LineType = "CENTER",
                         X1 = axis.Position, Y1 = start, X2 = axis.Position, Y2 = end
                     });
-                    AddAxisBubble(document, axis.StartName ?? axis.Name, axis.Position, start - radius * 0.4d, radius, textHeight);
-                    AddAxisBubble(document, axis.EndName ?? axis.Name, axis.Position, end + radius * 0.4d, radius, textHeight);
+                    if(!axis.StartHidden&&!axis.StartRemoved) AddAxisBubble(document, axis.StartName ?? axis.Name, axis.Position, start - radius * 0.4d, radius, textHeight);
+                    if(!axis.EndHidden&&!axis.EndRemoved) AddAxisBubble(document, axis.EndName ?? axis.Name, axis.Position, end + radius * 0.4d, radius, textHeight);
                     document.Anchors.Add(new ViewAnchor
                     {
                         Kind = "axis", ElementId = axis.Id,
@@ -688,8 +764,8 @@ namespace BatchPdfPublisher.BuildingModel
                         Layer = ViewLayers.Axis, LineType = "CENTER",
                         X1 = start, Y1 = axis.Position, X2 = end, Y2 = axis.Position
                     });
-                    AddAxisBubble(document, axis.StartName ?? axis.Name, start - radius * 0.4d, axis.Position, radius, textHeight);
-                    AddAxisBubble(document, axis.EndName ?? axis.Name, end + radius * 0.4d, axis.Position, radius, textHeight);
+                    if(!axis.StartHidden&&!axis.StartRemoved) AddAxisBubble(document, axis.StartName ?? axis.Name, start - radius * 0.4d, axis.Position, radius, textHeight);
+                    if(!axis.EndHidden&&!axis.EndRemoved) AddAxisBubble(document, axis.EndName ?? axis.Name, end + radius * 0.4d, axis.Position, radius, textHeight);
                     document.Anchors.Add(new ViewAnchor
                     {
                         Kind = "axis", ElementId = axis.Id,
@@ -969,6 +1045,11 @@ namespace BatchPdfPublisher.BuildingModel
             AddLine(document, ViewLayers.Cut, end.X + nx, end.Y + ny, end.X - nx, end.Y - ny);
         }
 
+        private static void AddPlanWallSegment(ViewDocument document, WallModel wall, double from, double to, bool outline)
+        {
+            if (outline) AddWallFaces(document, wall, from, to);
+        }
+
         public static List<ViewLine> CreatePlanDetailSymbols(BuildingModelDocument model, string storeyId)
         {
             var document = new ViewDocument();
@@ -977,10 +1058,15 @@ namespace BatchPdfPublisher.BuildingModel
                 if (walls.TryGetValue(opening.HostWallId, out var wall))
                     AddOpeningPlanSymbol(document, wall, opening);
             foreach (var column in model.Columns.Where(c => c.StoreyId == storeyId))
-                AddRect(document, ViewLayers.Cut, column.X - Math.Max(1d, column.Width) / 2d,
-                    column.Y - Math.Max(1d, column.Depth) / 2d, column.X + Math.Max(1d, column.Width) / 2d,
-                    column.Y + Math.Max(1d, column.Depth) / 2d);
+                AddStructuralOutline(document,StructuralGeometry.ColumnOutline(column),ViewLayers.Cut);
+            foreach(var beam in model.Beams.Where(b=>b.StoreyId==storeyId))
+                AddStructuralOutline(document,StructuralGeometry.BeamOutline(beam),ViewLayers.Elevation);
             return document.Lines;
+        }
+        private static void AddStructuralOutline(ViewDocument document,List<PointModel> outline,string layer)
+        {
+            for(var i=0;i<outline.Count;i++)
+            {var a=outline[i];var b=outline[(i+1)%outline.Count];document.Lines.Add(new ViewLine {Layer=layer,X1=a.X,Y1=a.Y,X2=b.X,Y2=b.Y});}
         }
 
         /// <summary>平面门窗图例：窗 = 两条玻璃线；门 = 一条扇线 + 90° 开启弧（弧用短线拟合）。</summary>
@@ -1040,16 +1126,24 @@ namespace BatchPdfPublisher.BuildingModel
             var code = (opening.Code ?? string.Empty).Trim();
             if (code.Length == 0) return;
             var height = Math.Max(150d, Math.Max(1, scale) * 2d);
-            var first = PlanPoint(wall, opening.Offset - opening.Width / 2d);
-            var second = PlanPoint(wall, opening.Offset + opening.Width / 2d);
+            var length = WallLength(wall);
+            if (length < 1) return;
+            var center = PlanPoint(wall, opening.Offset);
+            center = WallReferenceGeometry.BodyPoint(wall, center.X, center.Y);
+            var angle = Math.Atan2(wall.Y2-wall.Y1, wall.X2-wall.X1);
+            if (angle > Math.PI/2) angle -= Math.PI;
+            if (angle < -Math.PI/2) angle += Math.PI;
+            var ux = Math.Cos(angle); var uy = Math.Sin(angle);
+            // 编号沿墙排列，放在开启扇相反的一侧，避免压在门弧或墙线里。
+            var gap = (wall.Thickness > .5 ? wall.Thickness : 200)/2 + height*1.2;
             var estimated = height * 0.62d * code.Length;
             document.Texts.Add(new ViewText
             {
                 Layer = ViewLayers.Opening,
                 Text = code,
-                X = (first.X + second.X) / 2d - estimated / 2d,
-                Y = Math.Min(first.Y, second.Y) - height * 1.2d,
-                Height = height
+                X = center.X - ux*estimated/2 + uy*gap,
+                Y = center.Y - uy*estimated/2 - ux*gap,
+                Height = height, Rotation = angle*180/Math.PI
             });
         }
 
@@ -1100,9 +1194,9 @@ namespace BatchPdfPublisher.BuildingModel
                 openingYs.Add(a.Y); openingYs.Add(b.Y);
             }
 
-            var axes = BuildingAxisLayout.Resolve(model);
-            var axisXs = axes.Where(a => a.Vertical).Select(a => a.Position).ToList();
-            var axisYs = axes.Where(a => !a.Vertical).Select(a => a.Position).ToList();
+            var axes = BuildingAxisLayout.Resolve(model, view.StoreyIds?.FirstOrDefault());
+            var axisXs = axes.Where(a => !a.Deleted && a.Vertical).Select(a => a.Position).ToList();
+            var axisYs = axes.Where(a => !a.Deleted && !a.Vertical).Select(a => a.Position).ToList();
 
             AddPlanChain(document, openingXs, minY, minY - 1200d, false, "洞口定位（横向）", true);
             if (axisXs.Count > 0)
@@ -1350,24 +1444,15 @@ namespace BatchPdfPublisher.BuildingModel
                 {
                     U0 = ou0, U1 = ou1, Z0 = oz0, Z1 = oz1,
                     Depth = body.HasValue ? body.Value.Depth + 100d : 0d,                // 画在墙前面
-                    Layer = ViewLayers.Opening
+                    Layer = ViewLayers.Opening, Opening = opening
                 });
                 // 可点选锚点 + 洞口编号：预览里点一下就认得出是哪一樘，落图后也是门窗表联动的依据
-                document.Anchors.Add(new ViewAnchor
-                {
-                    Kind = "opening", ElementId = opening.Id,
-                    X1 = ou0, Y1 = oz0, X2 = ou1, Y2 = oz1
-                });
-                AddOpeningLabel(document, opening, ou0, ou1, oz0, oz1, scale);
 
                 // 立面门窗的分格与开启线：按编号查类型库，查不到就只留洞口轮廓
                 var type = OpeningElevationAdapter.Resolve(openingLibrary, opening);
                 if (type == null)
                 {
-                    var label = string.IsNullOrWhiteSpace(opening.Code) ? opening.Kind : opening.Code;
-                    var note = "门窗「" + label + "」不在类型库里：立面只画洞口轮廓（在 CAD 里用 TQLX 导出类型库后可补上分格与开启线）。";
-                    if (!string.IsNullOrWhiteSpace(label) && !warnings.Contains(note)) warnings.Add(note);
-                    continue;
+                    // 没有深化做法时也使用共用生成器的默认门窗框，不能把整樘门窗退成空矩形。
                 }
                 var mirrored = frame.U(wall.X2, wall.Y2) < frame.U(wall.X1, wall.Y1);   // 背立面看到的是镜像
                 openingDetails.Add(new OpeningDetail
@@ -1616,6 +1701,7 @@ namespace BatchPdfPublisher.BuildingModel
                 new PointModel(column.X + halfW, column.Y + halfD),
                 new PointModel(column.X - halfW, column.Y + halfD)
             };
+            corners=StructuralGeometry.ColumnOutline(column);
 
             var proj = frame.P(column.X, column.Y);
             var span = Math.Sqrt(halfW * halfW + halfD * halfD);
@@ -1654,7 +1740,7 @@ namespace BatchPdfPublisher.BuildingModel
             var outline = slab.Outline ?? new List<PointModel>();
             if (outline.Count < 3) return;
             var zTop = model.TopElevationOf(slab);
-            var zBase = zTop - (slab.Thickness > 0.5d ? slab.Thickness : 120d);
+            var zBase = zTop - (slab.Thickness > 0.5d ? slab.Thickness : 100d);
 
             double[] ps, us;
             ToPlane(outline, frame, out ps, out us);
@@ -1828,18 +1914,22 @@ namespace BatchPdfPublisher.BuildingModel
                 AzimuthDegrees = view.AzimuthDegrees, ElevationDegrees = view.ElevationDegrees,
                 Zoom = 1d, Perspective = view.Perspective
             };
-            var faces = VolumeRenderer.Project(volume, camera);
+            var faces = VolumeRenderer.Project(volume, camera,edgesOnly:true,includeHiddenEdges:false);
+            var edgeKeys=new HashSet<string>(StringComparer.Ordinal);
             foreach (var face in faces)
             {
                 foreach (var segment in face.Edges ?? new List<List<PointModel>>())
                 {
                     if (segment == null || segment.Count < 2) continue;
+                    var a=segment[0];var b=segment[1];
+                    var first=Math.Round(a.X,3).ToString("R",System.Globalization.CultureInfo.InvariantCulture)+","+Math.Round(a.Y,3).ToString("R",System.Globalization.CultureInfo.InvariantCulture);
+                    var last=Math.Round(b.X,3).ToString("R",System.Globalization.CultureInfo.InvariantCulture)+","+Math.Round(b.Y,3).ToString("R",System.Globalization.CultureInfo.InvariantCulture);
+                    if(!edgeKeys.Add(string.CompareOrdinal(first,last)<=0 ? first+"|"+last : last+"|"+first))continue;
                     AddLine(document, ViewLayers.Axonometric,
                         segment[0].X, segment[0].Y, segment[1].X, segment[1].Y);
                 }
             }
-            document.Warnings.Add("轴测图：体量 " + volume.Faces.Count + " 面，可见 " + faces.Count
-                + " 面，方位 " + Math.Round(camera.AzimuthDegrees) + "°、仰角 " + Math.Round(camera.ElevationDegrees)
+            document.Warnings.Add("轴测边线图：仅显示可见边线，体量 " + volume.Faces.Count + " 面，方位 " + Math.Round(camera.AzimuthDegrees) + "°、仰角 " + Math.Round(camera.ElevationDegrees)
                 + "°（改角度重算即可换一个方向）。");
             AddTitle(document, view);
             Normalize(document);
@@ -2125,6 +2215,7 @@ namespace BatchPdfPublisher.BuildingModel
                 circle.Y -= zMin;
             }
             foreach (var text in document.Texts) { text.X -= uMin; text.Y -= zMin; }
+            SheetComposer.LayoutDimensionText(document);
         }
     }
 }

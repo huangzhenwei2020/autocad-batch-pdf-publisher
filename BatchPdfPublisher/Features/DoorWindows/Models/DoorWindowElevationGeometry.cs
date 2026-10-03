@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -114,19 +114,7 @@ namespace BatchPdfPublisher.Models
                 if (isWindow)
                 {
                     var gap = item.HasInstallationGap ? Math.Max(0d, item.InstallationGap) : 0d;
-                    var clearHeight = Math.Max(1d, item.Height - gap * 2d);
-                    var layoutValue = onLeft ? item.BayLeftCellLayout : item.BayRightCellLayout;
-                    var layout = ParseCellLayout(layoutValue);
-                    if (layout.Count == 0)
-                        layout.Add(new DoorWindowLayoutCell { Left = 0d, Bottom = 0d, Right = depth, Top = clearHeight, Opening = "固定", Material = "玻璃" });
-                    NormalizeBayLayout(layout, depth, clearHeight);
-                    var sideItem = new DoorWindowScheduleItem
-                    {
-                        Width = depth, Height = clearHeight, ElevationType = "普通窗", DivisionPreset = "自定义", OpeningMode = "自定义",
-                        HasInstallationGap = false, InstallationGap = 0d, HasOuterFrame = item.HasOuterFrame, OuterFrameWidth = item.OuterFrameWidth,
-                        HasMullion = item.HasMullion, MullionWidth = item.MullionWidth, Material = "玻璃",
-                        CustomCellLayout = SerializeCellLayout(layout), CellOpeningModes = string.Join("|", layout.Select(cell => cell.Opening ?? "固定"))
-                    };
+                    var sideItem = CreateBayReturnItem(item, onLeft);
                     var sideGeometry = Build(sideItem);
                     var offsetX = onLeft ? -depth : geometry.HoleWidth;
                     foreach (var line in sideGeometry.Lines.Where(line => line.Role != DoorWindowLineRole.Hole))
@@ -146,6 +134,25 @@ namespace BatchPdfPublisher.Models
             }
         }
 
+        public static DoorWindowScheduleItem CreateBayReturnItem(DoorWindowScheduleItem item, bool onLeft)
+        {
+            var depth=NormalizeBayDepth(onLeft ? item.BayLeftDepth : item.BayRightDepth);
+            var gap=item.HasInstallationGap ? Math.Max(0d,item.InstallationGap) : 0d;
+            var clearHeight = Math.Max(1d, item.Height - gap * 2d);
+            var layoutValue = onLeft ? item.BayLeftCellLayout : item.BayRightCellLayout;
+            var layout = ParseCellLayout(layoutValue);
+            if (layout.Count == 0)
+                layout.Add(new DoorWindowLayoutCell { Left = 0d, Bottom = 0d, Right = depth, Top = clearHeight, Opening = "固定", Material = "玻璃" });
+            NormalizeBayLayout(layout, depth, clearHeight);
+            return new DoorWindowScheduleItem
+            {
+                Width = depth, Height = clearHeight, ElevationType = "普通窗", DivisionPreset = "自定义", OpeningMode = "自定义",
+                HasInstallationGap = false, InstallationGap = 0d, HasOuterFrame = item.HasOuterFrame, OuterFrameWidth = item.OuterFrameWidth,
+                HasMullion = item.HasMullion, MullionWidth = item.MullionWidth, Material = "玻璃",
+                CustomCellLayout = SerializeCellLayout(layout), CellOpeningModes = string.Join("|", layout.Select(cell => cell.Opening ?? "固定"))
+            };
+        }
+
         private static void NormalizeBayLayout(IList<DoorWindowLayoutCell> cells, double width, double height)
         {
             if (cells == null || cells.Count == 0) return;
@@ -155,7 +162,7 @@ namespace BatchPdfPublisher.Models
             foreach (var cell in cells) { cell.Left *= sx; cell.Right *= sx; cell.Bottom *= sy; cell.Top *= sy; }
         }
 
-        private static double NormalizeBayDepth(double value)
+        public static double NormalizeBayDepth(double value)
         {
             if (double.IsNaN(value) || double.IsInfinity(value) || value <= 0d) return 600d;
             return Math.Min(5000d, value);
@@ -409,6 +416,19 @@ namespace BatchPdfPublisher.Models
             }
         }
 
+        public static double[] PanelBounds(DoorWindowCell cell, IList<DoorWindowCell> cells, DoorWindowScheduleItem item)
+        {
+            var outer=item.HasOuterFrame ? Math.Max(0,item.OuterFrameWidth) : 0;
+            var mullion=item.HasMullion ? Math.Max(0,item.MullionWidth) : 0;
+            DoorWindowCell Neighbor(bool vertical,double coordinate) => cells.FirstOrDefault(other=> !ReferenceEquals(other,cell)
+                && (vertical ? (Math.Abs(other.Left-coordinate)<.05 || Math.Abs(other.Right-coordinate)<.05) && Math.Min(cell.Top,other.Top)-Math.Max(cell.Bottom,other.Bottom)>.05
+                : (Math.Abs(other.Bottom-coordinate)<.05 || Math.Abs(other.Top-coordinate)<.05) && Math.Min(cell.Right,other.Right)-Math.Max(cell.Left,other.Left)>.05));
+            double Inset(bool vertical,double coordinate) { var other=Neighbor(vertical,coordinate); return other==null ? outer : vertical && MergeDoorDivider(cell,other) ? 0 : mullion/2; }
+            var w=(cell.Right-cell.Left)*.45;var h=(cell.Top-cell.Bottom)*.45;
+            return new[] {cell.Left+Math.Min(w,Inset(true,cell.Left)),cell.Bottom+(Neighbor(false,cell.Bottom)==null && IsNShapedDoor(item,cell) ? 0 : Math.Min(h,Inset(false,cell.Bottom))),
+                cell.Right-Math.Min(w,Inset(true,cell.Right)),cell.Top-Math.Min(h,Inset(false,cell.Top))};
+        }
+
         private static void AddProfileWidthLines(DoorWindowElevationGeometry geometry, IList<DoorWindowCell> cells, double outerWidth, double mullionWidth, DoorWindowScheduleItem item)
         {
             const double tolerance = .05d; var keys = new HashSet<string>();
@@ -424,7 +444,8 @@ namespace BatchPdfPublisher.Models
                 var topInset = topNeighbor == null ? outerWidth : SharedInset(cell, topNeighbor, mullionWidth);
                 leftInset = Math.Min(Math.Max(0d, leftInset), width * .45d); rightInset = Math.Min(Math.Max(0d, rightInset), width * .45d);
                 bottomInset = Math.Min(Math.Max(0d, bottomInset), height * .45d); topInset = Math.Min(Math.Max(0d, topInset), height * .45d);
-                var l = cell.Left + leftInset; var r = cell.Right - rightInset; var b = cell.Bottom + bottomInset; var t = cell.Top - topInset;
+                var bounds=PanelBounds(cell,cells,item);
+                var l=bounds[0];var b=bounds[1];var r=bounds[2];var t=bounds[3];
                 if (!nShapedBottom && (bottomNeighbor != null && mullionWidth > 0d || bottomNeighbor == null && outerWidth > 0d))
                     Add(l, b, r, b);
                 if (rightNeighbor != null && mullionWidth > 0d && !MergeDoorDivider(cell, rightNeighbor) || rightNeighbor == null && outerWidth > 0d) Add(r, b, r, t);
@@ -505,7 +526,7 @@ namespace BatchPdfPublisher.Models
             }
         }
 
-        private static bool IsOperable(string opening)
+        public static bool IsOperable(string opening)
         {
             var value = (opening ?? string.Empty).Trim();
             return value != "" && value != "固定" && value != "未设置" && value != "百叶";
@@ -584,25 +605,8 @@ namespace BatchPdfPublisher.Models
 
         private static DoorWindowCell FixedFrameArea(DoorWindowElevationGeometry geometry, DoorWindowScheduleItem item, DoorWindowCell cell)
         {
-            const double tolerance = .05d;
-            var outer = item.HasOuterFrame ? Math.Max(0d, item.OuterFrameWidth) : 0d;
-            var mullion = item.HasMullion ? Math.Max(0d, item.MullionWidth) : 0d;
-            DoorWindowCell Neighbor(bool vertical, double coordinate)
-            {
-                foreach (var other in geometry.Cells.Where(x => !ReferenceEquals(x, cell)))
-                {
-                    if (vertical && (Math.Abs(other.Left - coordinate) < tolerance || Math.Abs(other.Right - coordinate) < tolerance) && Math.Min(cell.Top, other.Top) - Math.Max(cell.Bottom, other.Bottom) > tolerance) return other;
-                    if (!vertical && (Math.Abs(other.Bottom - coordinate) < tolerance || Math.Abs(other.Top - coordinate) < tolerance) && Math.Min(cell.Right, other.Right) - Math.Max(cell.Left, other.Left) > tolerance) return other;
-                }
-                return null;
-            }
-            var leftNeighbor = Neighbor(true, cell.Left); var rightNeighbor = Neighbor(true, cell.Right);
-            var bottomNeighbor = Neighbor(false, cell.Bottom); var topNeighbor = Neighbor(false, cell.Top);
-            var left = cell.Left + (leftNeighbor == null ? outer : MergeDoorDivider(cell, leftNeighbor) ? 0d : mullion / 2d);
-            var right = cell.Right - (rightNeighbor == null ? outer : MergeDoorDivider(cell, rightNeighbor) ? 0d : mullion / 2d);
-            var bottom = cell.Bottom + (bottomNeighbor == null && IsNShapedDoor(item, cell) ? 0d : bottomNeighbor == null ? outer : mullion / 2d);
-            var top = cell.Top - (topNeighbor == null ? outer : mullion / 2d);
-            return new DoorWindowCell(left, bottom, right, top) { Opening = cell.Opening, IsDoor = cell.IsDoor };
+            var bounds=PanelBounds(cell,geometry.Cells,item);
+            return new DoorWindowCell(bounds[0],bounds[1],bounds[2],bounds[3]) {Opening=cell.Opening,IsDoor=cell.IsDoor};
         }
 
         private static bool IsNShapedDoor(DoorWindowScheduleItem item, DoorWindowCell cell)

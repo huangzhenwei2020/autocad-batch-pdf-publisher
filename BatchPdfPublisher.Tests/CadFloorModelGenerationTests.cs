@@ -95,6 +95,26 @@ internal static class CadFloorModelGenerationTests
         var registry=new CadFloorPlanRegistry { ModelPath=path,Floors=new List<CadFloorPlanCapture> { capture } };
         var generated=CadFloorModelGeneration.Build(model,registry,"first");
         Check(model.Walls.Count==0 && generated.Walls.Count==1 && generated.Openings.Count==1,"Build must be atomic and not mutate the original.");
+        var independent=BuildingModelJson.FromJson(BuildingModelJson.ToJson(model));
+        independent.Storeys[1].TemplateStoreyId=null;
+        var both=registry.Clone();var second=registry.Clone().Floors[0];
+        second.Floor.Storey=independent.Storeys[1];second.Floor.Alignment.StoreyId="2F";both.Floors.Add(second);
+        var populated=CadFloorModelGeneration.Build(independent,both);
+        var editable=new BuildingModelEditSession(populated);
+        var edited=BuildingModelJson.FromJson(BuildingModelJson.ToJson(populated)).Storeys;
+        edited[1].TemplateStoreyId="1F";
+        Check(editable.TryReplaceStoreys(edited,out var editError,allowContentChanges:true),editError);
+        var reimport=CadFloorModelGeneration.Build(editable.Model,both);
+        Check(reimport.Walls.Count==1 && reimport.Openings.Count==1 && both.Floors.Count==2,
+            "Reimport must omit inactive reference-floor captures without mutating the original registration.");
+        Check(editable.Undo(),"Undo floor source edit.");
+        edited=edited.Where(s=>s.Id!="2F").ToList();
+        Check(editable.TryReplaceStoreys(edited,out editError,allowContentChanges:true),editError);
+        Check(CadFloorModelGeneration.Build(editable.Model,both).Walls.Count==1,
+            "Deleted floors must not be recreated by old CAD captures.");
+        var sync=both.Clone();sync.ReconcileStoreys(editable.Model);
+        Check(sync.Floors.Count==1 && sync.Floors[0].Floor.Storey.Height==editable.Model.Storeys[0].Height,
+            "Registration must use the current model's active floors and dimensions.");
         Check(generated.Walls[0].X1==0 && generated.Walls[0].X2==6000 && generated.Openings[0].Offset==1400,"Imported geometry must use model coordinates.");
         Check(generated.Walls[0].Height==0 && generated.HeightOf(generated.Walls[0])==3000,
             "Imported walls must follow model storeys instead of storing the native CAD height.");
@@ -127,6 +147,15 @@ internal static class CadFloorModelGenerationTests
         wall.Fields.First(f=>f.Name=="Height").Number=3000;
         Check(registry.BuildSchedule(generated).Single().Quantity==2,"The standard reference must reuse the source and count real floor instances.");
         Check(BuildingVolumeBuilder.Build(generated).Faces.Where(f=>f.Kind=="wall").Select(f=>f.StoreyId).Distinct().Count()==2,"Standard references must generate their wall volumes.");
+        var rangeModel=BuildingModelJson.FromJson(BuildingModelJson.ToJson(model));
+        rangeModel.Storeys=StoreyElevationLayout.Resolve(StandardStoreyLayout.ExpandRanges(new[] {
+            new StoreyModel { Id="1F",Name="1～12层",Height=3000 } }),"1F",0);
+        var rangeGenerated=CadFloorModelGeneration.Build(rangeModel,registry,"range");
+        Check(rangeGenerated.Walls.Count==1 && StandardStoreyLayout.Materialize(rangeGenerated).Walls.Count==12
+            && registry.BuildSchedule(rangeGenerated).Single().Quantity==12,"One standard-range CAD capture must generate twelve actual floors and count twelve openings.");
+        var rangeRow=new CadFloorRegistrationRow { Storey=rangeGenerated.FindStorey("1F") };
+        Check(rangeRow.Name=="1～12层" && rangeRow.ElevationDisplay=="0～33000" && rangeRow.CanRegister,
+            "CAD registration must display the range and per-floor elevations, with one active capture action.");
         var session=new BuildingModelEditSession(model); string error;
         Check(session.TryImportCadFloors(registry,"first",out error),error);
         Check(session.Undo() && session.Model.Walls.Count==0 && session.Model.Openings.Count==0,"Generation must undo as one edit.");

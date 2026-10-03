@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
@@ -21,15 +21,20 @@
     <EmbeddedResource Include="..\Resources\Ribbon\ios-icons.png" LogicalName="Wanluo.Ribbon.IosIcons.png" />
     <Compile Include="..\Shared\ProductVersion.cs" Link="Infrastructure\ProductVersion.cs" />
     <!-- 建筑模型的纯逻辑层：与建模程序、测试工程共用同一份源码（只链接插件用到的三个文件）。 -->
+    <Compile Include="..\Shared\BuildingModel\StructuralGeometry.cs" />
+    <Compile Include="..\Shared\BuildingModel\CadStructuralRegistration.cs" />
     <Compile Include="..\Shared\BuildingModel\ModelTypes.cs" Link="Features\BuildingModel\Shared\ModelTypes.cs" />
     <Compile Include="..\Shared\BuildingModel\BuildingAxisLayout.cs" Link="Features\BuildingModel\Shared\BuildingAxisLayout.cs" />
     <Compile Include="..\Shared\BuildingModel\BuildingModelJson.cs" Link="Features\BuildingModel\Shared\BuildingModelJson.cs" />
     <Compile Include="..\Shared\BuildingModel\OrthographicProjector.cs" Link="Features\BuildingModel\Shared\OrthographicProjector.cs" />
     <Compile Include="..\Shared\BuildingModel\OpeningElevationAdapter.cs" Link="Features\BuildingModel\Shared\OpeningElevationAdapter.cs" />
+    <Compile Include="..\Shared\BuildingModel\OpeningConstruction.cs" Link="Features\BuildingModel\Shared\OpeningConstruction.cs" />
+    <Compile Include="..\Shared\BuildingModel\OpeningLayoutEditing.cs" Link="Features\BuildingModel\Shared\OpeningLayoutEditing.cs" />
     <Compile Include="..\Shared\BuildingModel\SheetComposer.cs" Link="Features\BuildingModel\Shared\SheetComposer.cs" />
     <Compile Include="..\Shared\BuildingModel\StudioLaunch.cs" Link="Features\BuildingModel\Shared\StudioLaunch.cs" />
     <Compile Include="..\Shared\BuildingModel\CadFloorPlanRegistry.cs" Link="Features\BuildingModel\Shared\CadFloorPlanRegistry.cs" />
     <Compile Include="..\Shared\BuildingModel\CadFloorModelGeneration.cs" Link="Features\BuildingModel\Shared\CadFloorModelGeneration.cs" />
+    <Compile Include="..\Shared\BuildingModel\CadFloorSlabGeneration.cs" Link="Features\BuildingModel\Shared\CadFloorSlabGeneration.cs" />
     <Compile Include="..\Shared\BuildingModel\CadOpeningJambPlacement.cs" Link="Features\BuildingModel\Shared\CadOpeningJambPlacement.cs" />
     <Compile Include="..\Shared\BuildingModel\CadBuildingObjectProbe.cs" Link="Features\BuildingModel\Shared\CadBuildingObjectProbe.cs" />
     <Compile Include="..\Shared\BuildingModel\CadFloorRegistrationAlignment.cs" Link="Features\BuildingModel\Shared\CadFloorRegistrationAlignment.cs" />

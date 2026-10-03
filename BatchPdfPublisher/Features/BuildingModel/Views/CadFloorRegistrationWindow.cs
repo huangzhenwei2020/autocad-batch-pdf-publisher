@@ -15,7 +15,10 @@ namespace BatchPdfPublisher.Views
     public sealed class CadFloorRegistrationRow : INotifyPropertyChanged
     {
         public StoreyModel Storey { get; set; }
-        public string Name => Storey.Name;
+        public string Name => Storey.StandardFloorRange ?? Storey.Name;
+        public string ElevationDisplay => StandardStoreyLayout.TryParseRange(Storey.StandardFloorRange,out var first,out var last)
+            ? Storey.Elevation.ToString("0.##") + "～" + (Storey.Elevation+(last-first)*Storey.Height).ToString("0.##")
+            : Storey.Elevation.ToString("0.##");
         public double Elevation => Storey.Elevation;
         public double Height => Storey.Height;
         public bool CanRegister => string.IsNullOrWhiteSpace(Storey.TemplateStoreyId);
@@ -36,6 +39,7 @@ namespace BatchPdfPublisher.Views
         private readonly TextBlock _modelLabel = new TextBlock { Text = "请先打开建筑模型并保存楼层。", TextTrimming = TextTrimming.CharacterEllipsis };
         private readonly TextBlock _error = new TextBlock { Foreground = Brushes.Firebrick, TextWrapping = TextWrapping.Wrap };
         private readonly TextBox _x = new TextBox { Text = "0" }, _y = new TextBox { Text = "0" }, _unitScale = new TextBox { Text = "1" };
+        private readonly TextBox _slabThickness = new TextBox { Text = "100" };
         private readonly Func<Window, CadFloorRegistrationContext, bool> _pickDatum;
         private readonly Func<Window, CadFloorRegistrationContext, CadFloorPlanCapture> _capture;
         private readonly Func<Window,CadFloorPlanRegistry,BuildingModelDocument,bool,bool> _editOpenings;
@@ -56,7 +60,7 @@ namespace BatchPdfPublisher.Views
                 root.RowDefinitions.Add(new RowDefinition { Height = h });
             root.Children.Add(new TextBlock { Text = "逐层登记建筑平面", FontSize = 24, FontWeight = FontWeights.SemiBold });
             _modelLabel.Margin = new Thickness(0, 12, 0, 14); Grid.SetRow(_modelLabel, 1); root.Children.Add(_modelLabel);
-            foreach (var c in new[] { new[] { "楼层", "Name" }, new[] { "标高 mm", "Elevation" }, new[] { "层高 mm", "Height" }, new[] { "平面来源", "SourceName" }, new[] { "登记状态", "Status" } })
+            foreach (var c in new[] { new[] { "楼层 / 范围", "Name" }, new[] { "标高 mm", "ElevationDisplay" }, new[] { "每层层高 mm", "Height" }, new[] { "平面", "SourceName" }, new[] { "登记状态", "Status" } })
                 _floors.Columns.Add(new DataGridTextColumn { Header = c[0], Binding = new Binding(c[1]), MinWidth = c[1] == "Status" ? 120 : 90,
                     Width = new DataGridLength(c[1] == "Status" ? 2 : 1, DataGridLengthUnitType.Star) });
             AddAction("拾取基点", PickDatum); AddAction("框选登记平面", Capture);
@@ -65,6 +69,10 @@ namespace BatchPdfPublisher.Views
             settings.Children.Add(new TextBlock { Text = "每层拾取同一个建筑位置（如同一轴线交点），再框选该层平面。拾取后自动返回本窗口，可继续登记下一层。\n方向沿当前 CAD 坐标系 X 轴，无需再拾取方向点。标准层来源登记一次，引用层自动复用并分别统计。",
                 TextWrapping = TextWrapping.Wrap, Foreground = Brushes.DimGray });
             var advanced = new Expander { Header = "坐标与单位设置", Margin = new Thickness(0, 10, 0, 0) };
+            var slabSettings=new StackPanel { Orientation=Orientation.Horizontal,Margin=new Thickness(0,10,0,0) };
+            AddInput(slabSettings,"楼板厚度 mm",_slabThickness);
+            slabSettings.Children.Add(new TextBlock { Text="外墙围合自动生成楼板；楼梯、电梯、井按房间边界开洞。",VerticalAlignment=VerticalAlignment.Center,Foreground=Brushes.DimGray });
+            settings.Children.Add(slabSettings);
             var coords = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 8) };
             AddInput(coords, "模型基点 X", _x); AddInput(coords, "Y", _y); AddInput(coords, "1 CAD 单位 = mm", _unitScale); advanced.Content = coords; settings.Children.Add(advanced);
             Grid.SetRow(settings, 3); root.Children.Add(settings); Grid.SetRow(_error, 4); root.Children.Add(_error);
@@ -74,7 +82,14 @@ namespace BatchPdfPublisher.Views
                 open.Click+=(s,e)=> { try { EditOpeningTable(label=="补充门窗位置"); } catch(Exception ex) { _error.Text=ex.Message; } };actions.Children.Add(open);
             }
             var generate = new Button { Content = "生成建筑模型", Padding = new Thickness(14, 8, 14, 8), IsEnabled = generateModel != null };
-            generate.Click += (s,e) => { try { _readPlan?.Invoke(_registry);generateModel?.Invoke(_registry); Close(); } catch (Exception ex) { _error.Text = ex.Message; } }; actions.Children.Add(generate);
+            generate.Click += (s,e) => { try {
+                double thickness;
+                if(!double.TryParse(_slabThickness.Text,NumberStyles.Float,CultureInfo.InvariantCulture,out thickness)
+                    || double.IsNaN(thickness) || double.IsInfinity(thickness) || thickness<=0.5)
+                    throw new InvalidDataException("请输入大于 0.5 mm 的有效楼板厚度。");
+                _registry.SlabThickness=thickness;
+                _readPlan?.Invoke(_registry);generateModel?.Invoke(_registry); Close();
+            } catch (Exception ex) { _error.Text = ex.Message; } }; actions.Children.Add(generate);
             var close = new Button { Content = "关闭", IsCancel = true, Padding = new Thickness(18, 8, 18, 8), Margin = new Thickness(8, 0, 0, 0) };
             close.Click += (s, e) => Close(); actions.Children.Add(close); Grid.SetRow(actions, 5); root.Children.Add(actions);
             Content = root;
@@ -103,6 +118,8 @@ namespace BatchPdfPublisher.Views
             var model = BuildingModelJson.LoadModel(path);
             if (model.Storeys == null || model.Storeys.Count == 0) throw new InvalidDataException("模型没有楼层，请先在建筑模型中设置并保存。");
             _path = Path.GetFullPath(path); _model = model; _registry = CadFloorPlanRegistry.Load(_path);
+            _registry.ReconcileStoreys(model);
+            _slabThickness.Text=_registry.ResolvedSlabThickness.ToString(CultureInfo.InvariantCulture);
             _contexts.Clear();
             foreach (var floor in model.Storeys.Where(f => f != null && string.IsNullOrWhiteSpace(f.TemplateStoreyId)))
             {
@@ -113,8 +130,8 @@ namespace BatchPdfPublisher.Views
             }
             if (model.Storeys.Any(f => f == null || (!string.IsNullOrWhiteSpace(f.TemplateStoreyId) && !_contexts.ContainsKey(f.TemplateStoreyId))))
                 throw new InvalidDataException("标准层来源无效，请在建筑模型中修正并保存。");
-            _floors.ItemsSource = model.Storeys.Select(f => new CadFloorRegistrationRow { Storey = f,
-                SourceName = string.IsNullOrWhiteSpace(f.TemplateStoreyId) ? "本层" : model.Storeys.First(s => string.Equals(s.Id, f.TemplateStoreyId, StringComparison.OrdinalIgnoreCase)).Name }).ToList();
+            _floors.ItemsSource = model.Storeys.Where(f=>string.IsNullOrWhiteSpace(f.StandardGroupId) || f.StandardGroupId==f.Id).Select(f => new CadFloorRegistrationRow { Storey = f,
+                SourceName = !string.IsNullOrWhiteSpace(f.StandardFloorRange) ? "共用标准层平面" : string.IsNullOrWhiteSpace(f.TemplateStoreyId) ? "本层" : model.Storeys.First(s => string.Equals(s.Id, f.TemplateStoreyId, StringComparison.OrdinalIgnoreCase)).Name }).ToList();
             _modelLabel.Text = "当前建筑模型：" + model.Name;
             var saved = _contexts.Values.FirstOrDefault(c => c.DirectionPoint != null);
             if (saved != null) { _x.Text = saved.Alignment.ModelBase.X.ToString(CultureInfo.InvariantCulture); _y.Text = saved.Alignment.ModelBase.Y.ToString(CultureInfo.InvariantCulture); _unitScale.Text = saved.Alignment.MillimetresPerCadUnit.ToString(CultureInfo.InvariantCulture); }
@@ -158,6 +175,8 @@ namespace BatchPdfPublisher.Views
                 var context = Context(row); var capture = _registry.Find(context.Storey.Id);
                 row.Status = capture != null && SameDatum(context.Alignment, capture.Floor.Alignment)
                     ? "已登记 · 门窗 " + capture.Openings.Count(x => x.Include)
+                        + " · 柱 " + capture.Probe.Entities.Count(e=>CadStructuralRegistration.IsColumn(e.DxfName))
+                        + " · 梁 " + capture.Probe.Entities.Count(e=>CadStructuralRegistration.IsBeam(e.DxfName))
                     : context.DirectionPoint == null ? "未拾取基点" : "基点已拾取 · 待框选";
                 if (!string.IsNullOrWhiteSpace(row.Storey.TemplateStoreyId)) row.Status = "复用 " + row.SourceName + " · " + row.Status;
             }

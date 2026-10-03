@@ -49,6 +49,10 @@ namespace BatchPdfPublisher.BuildingModel
         public StoreyKind Kind { get; set; }
         /// <summary>Standard-floor source. Null means this floor owns its own plan elements.</summary>
         public string TemplateStoreyId { get; set; }
+        /// <summary>标准层组标识；组首层拥有平面，其余实际楼层自动复用。</summary>
+        public string StandardGroupId { get; set; }
+        /// <summary>仅组首层保存用户输入的范围，例如 4～15层。</summary>
+        public string StandardFloorRange { get; set; }
         /// <summary>结构标高（mm）。</summary>
         public double Elevation { get; set; }
         /// <summary>层高（mm）。</summary>
@@ -162,11 +166,12 @@ namespace BatchPdfPublisher.BuildingModel
         public string StoreyId { get; set; }
         public List<PointModel> Outline { get; set; } = new List<PointModel>();
         public List<SlabOpeningModel> Openings { get; set; } = new List<SlabOpeningModel>();
-        public double Thickness { get; set; } = 120d;
+        public double Thickness { get; set; } = 100d;
         /// <summary>板顶标高（mm）。</summary>
         public double TopElevation { get; set; }
         /// <summary>Relative to floor datum; null preserves legacy absolute elevation.</summary>
         public double? TopOffset { get; set; }
+        public bool FollowsStoreyTop { get; set; }
     }
 
     public sealed class SlabOpeningModel
@@ -180,8 +185,30 @@ namespace BatchPdfPublisher.BuildingModel
     /// 一条轴线（整栋通用）。<see cref="Vertical"/> = 沿 Y 方向的竖轴（标 X 位置，轴号 1、2、3…），
     /// 否则是沿 X 方向的横轴（标 Y 位置，轴号 A、B、C…）。<see cref="ExtentStart/End"/> 为 0 表示按建筑范围自动延伸。
     /// </summary>
+    public sealed class DrawingScaleSettings
+    {
+        public int Plan { get; set; } = 100;
+        public int Elevation { get; set; } = 100;
+        public int Section { get; set; } = 50;
+        public int Axonometric { get; set; } = 100;
+        public int OpeningElevation { get; set; } = 50;
+        public int For(ViewKind kind) {
+            switch(kind) { case ViewKind.Plan:return Plan;case ViewKind.Elevation:return Elevation;
+                case ViewKind.Section:return Section;case ViewKind.Axonometric:return Axonometric;
+                case ViewKind.OpeningElevation:return OpeningElevation;default:return 100; }
+        }
+    }
+
     public sealed class AxisModel
     {
+        public bool? AutomaticNumber { get; set; }
+        public bool Hidden { get; set; }
+        public bool Deleted { get; set; }
+        public bool StartHidden { get; set; }
+        public bool EndHidden { get; set; }
+        public bool StartRemoved { get; set; }
+        public bool EndRemoved { get; set; }
+
         public string Id { get; set; }
         /// <summary>轴号（1/2/3… 或 A/B/C…）。</summary>
         public string Name { get; set; }
@@ -228,6 +255,8 @@ namespace BatchPdfPublisher.BuildingModel
     public sealed class ColumnModel
     {
         public string Id { get; set; }
+        public string Code { get; set; }
+        public double RotationDegrees { get; set; }
         public string StoreyId { get; set; }
         public double X { get; set; }
         public double Y { get; set; }
@@ -236,6 +265,21 @@ namespace BatchPdfPublisher.BuildingModel
         /// <summary>柱高；0 表示取所属楼层的层高。</summary>
         public double Height { get; set; }
         public double BaseOffset { get; set; }
+        public double TopOffset { get; set; }
+    }
+
+    /// <summary>直梁：轴线、矩形截面；梁顶随所属楼层顶标高，偏移单位 mm。</summary>
+    public sealed class BeamModel
+    {
+        public string Id { get; set; }
+        public string Code { get; set; }
+        public string StoreyId { get; set; }
+        public double X1 { get; set; }
+        public double Y1 { get; set; }
+        public double X2 { get; set; }
+        public double Y2 { get; set; }
+        public double Width { get; set; } = 300d;
+        public double Depth { get; set; } = 500d;
         public double TopOffset { get; set; }
     }
 
@@ -307,6 +351,11 @@ namespace BatchPdfPublisher.BuildingModel
         public List<WallModel> Walls { get; set; } = new List<WallModel>();
         public List<OpeningModel> Openings { get; set; } = new List<OpeningModel>();
         public List<CadPendingOpening> PendingOpenings { get; set; } = new List<CadPendingOpening>();
+        public List<SlabModel> Slabs { get; set; } = new List<SlabModel>();
+        public List<ColumnModel> Columns { get; set; } = new List<ColumnModel>();
+        public List<BeamModel> Beams { get; set; } = new List<BeamModel>();
+        public List<string> StructureMessages { get; set; } = new List<string>();
+        public List<string> SlabMessages { get; set; } = new List<string>();
     }
 
     public sealed class CadPendingOpening
@@ -327,19 +376,32 @@ namespace BatchPdfPublisher.BuildingModel
         public int SchemaVersion { get; set; } = BuildingModelSchema.Version;
         public string Name { get; set; }
         public CadModelImportState CadImport { get; set; }
+        public List<OpeningTypeModel> OpeningTypes { get; set; } = new List<OpeningTypeModel>();
+        public List<OpeningTypeModel> OpeningTemplates { get; set; } = new List<OpeningTypeModel>();
+        public List<OpeningInstanceOverride> OpeningOverrides { get; set; } = new List<OpeningInstanceOverride>();
+        public double? OpeningEditorSnapStep { get; set; }
         public List<StoreyModel> Storeys { get; set; } = new List<StoreyModel>();
         public List<WallModel> Walls { get; set; } = new List<WallModel>();
         public List<OpeningModel> Openings { get; set; } = new List<OpeningModel>();
         public List<SlabModel> Slabs { get; set; } = new List<SlabModel>();
         public List<ColumnModel> Columns { get; set; } = new List<ColumnModel>();
+        public List<BeamModel> Beams { get; set; } = new List<BeamModel>();
+        [System.Runtime.Serialization.OnDeserializing]
+        private void InitialiseStructure(System.Runtime.Serialization.StreamingContext context)
+        { Beams = new List<BeamModel>(); }
         /// <summary>楼梯：挂楼层（双跑：两跑梯段 + 休息平台）。</summary>
         public List<StairModel> Stairs { get; set; } = new List<StairModel>();
         /// <summary>坡屋面：挂楼层（檐口矩形 + 屋脊方向 + 坡度）。</summary>
         public List<RoofModel> Roofs { get; set; } = new List<RoofModel>();
         /// <summary>轴网：整栋通用（不挂楼层），平面图靠它标轴线尺寸与轴号。</summary>
         public List<AxisModel> Axes { get; set; } = new List<AxisModel>();
+        /// <summary>Optional floor-specific axis catalogues; absent entries share the building axes.</summary>
+        public Dictionary<string, List<AxisModel>> StoreyAxes { get; set; } = new Dictionary<string, List<AxisModel>>();
         /// <summary>房间：挂楼层，平面图里标房间名与面积。</summary>
         public List<RoomModel> Rooms { get; set; } = new List<RoomModel>();
+        /// <summary>Null uses the default drawing catalogue; a saved list contains the user's views.</summary>
+        public List<ViewDefinitionModel> DrawingViews { get; set; }
+        public DrawingScaleSettings DrawingScales { get; set; }
 
         public StoreyModel FindStorey(string id)
         {
@@ -381,8 +443,18 @@ namespace BatchPdfPublisher.BuildingModel
             return (FindStorey(column.StoreyId)?.Elevation ?? 0d) + column.BaseOffset;
         }
 
+        public double TopElevationOf(BeamModel beam)
+        {
+            var floor = FindStorey(beam.StoreyId);
+            return (floor?.Elevation ?? 0d) + (floor?.Height ?? 3000d) + beam.TopOffset;
+        }
+
         public double TopElevationOf(SlabModel slab)
         {
+            if(slab.FollowsStoreyTop) {
+                var floor=FindStorey(slab.StoreyId);
+                return (floor?.Elevation ?? 0)+(floor?.Height ?? 0)+slab.TopOffset.GetValueOrDefault();
+            }
             return slab.TopOffset.HasValue
                 ? (FindStorey(slab.StoreyId)?.Elevation ?? 0d) + slab.TopOffset.Value
                 : slab.TopElevation;
@@ -420,7 +492,8 @@ namespace BatchPdfPublisher.BuildingModel
         /// 轴测图：把三维体量按轴测/透视投出来，只画可见的**轮廓线**（走 <see cref="VolumeRenderer"/> 的消隐）。
         /// 相机角度用 <see cref="ViewDefinitionModel.AzimuthDegrees"/> / <see cref="ViewDefinitionModel.ElevationDegrees"/>。
         /// </summary>
-        Axonometric = 5
+        Axonometric = 5,
+        OpeningElevation = 6
     }
 
     /// <summary>立面方向：南 = 从南往北看（默认取"从 -Y 看向 +Y"）。</summary>
@@ -494,6 +567,8 @@ namespace BatchPdfPublisher.BuildingModel
         public double Y { get; set; }
         /// <summary>字高（mm，已按出图比例换算到模型空间）。</summary>
         public double Height { get; set; } = 250d;
+        /// <summary>文字在图面中的逆时针旋转角（度）。</summary>
+        public double Rotation { get; set; }
     }
 
     /// <summary>视图里的一块填充（剖面剖切填充）。</summary>
@@ -609,6 +684,8 @@ namespace BatchPdfPublisher.BuildingModel
         public string Text { get; set; }
         /// <summary>这条尺寸是什么（层高 / 洞口定位 / 总高…），只用于提示与日志。</summary>
         public string Note { get; set; }
+        public double? TextX { get; set; }
+        public double? TextY { get; set; }
     }
 
     // ───────────────────────── "提取图纸"的中间格式 ─────────────────────────
@@ -662,6 +739,12 @@ namespace BatchPdfPublisher.BuildingModel
     /// 来源是插件里已有的项目门窗参数（`DoorWindowElevationPreference`）与立面模板
     /// （`DoorWindowElevationTemplate`），因此**不需要用户重新录一遍**。
     /// </summary>
+    public sealed class OpeningInstanceOverride
+    {
+        public string OpeningId { get; set; }
+        public string TypeCode { get; set; }
+    }
+
     public sealed class OpeningTypeModel
     {
         public string Code { get; set; }
@@ -670,6 +753,18 @@ namespace BatchPdfPublisher.BuildingModel
         public double Width { get; set; } = 1500d;
         public double Height { get; set; } = 1800d;
         public double Sill { get; set; } = 900d;
+
+        public double? FrameDepth { get; set; }
+        public double? MullionDepth { get; set; }
+        public double? SashWidth { get; set; }
+        public double? SashClearance { get; set; }
+        public double? SashDepth { get; set; }
+        public double? GlassThickness { get; set; }
+        public double? PanelThickness { get; set; }
+        public double? BayCapThickness { get; set; }
+        public double? OpenAngle { get; set; }
+        public double? InstallationOffset { get; set; }
+        public string InstallationPosition { get; set; }
 
         // 立面做法（P1.5 先存下来，落图阶段用于画分格与开启线）
         public string ElevationType { get; set; }

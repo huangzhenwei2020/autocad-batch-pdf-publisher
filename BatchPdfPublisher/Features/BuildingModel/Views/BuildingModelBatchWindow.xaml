@@ -288,6 +288,7 @@
               <Button Content="全选" Style="{StaticResource TextAction}" Click="SelectAllButton_Click"/>
               <TextBlock Text="/" VerticalAlignment="Center" Foreground="#829DB6" Margin="2,0"/>
               <Button Content="清空" Style="{StaticResource TextAction}" Click="ClearButton_Click"/>
+              <Button Content="刷新" Style="{StaticResource TextAction}" Click="RefreshButton_Click"/>
             </StackPanel>
           </Grid>
         </Grid>

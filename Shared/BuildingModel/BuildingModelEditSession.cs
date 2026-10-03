@@ -16,8 +16,45 @@ namespace BatchPdfPublisher.BuildingModel
         public bool CanUndo { get { return _history.CanUndo; } }
         public bool CanRedo { get { return _history.CanRedo; } }
 
+        public bool TryReplaceDrawingViews(System.Collections.Generic.IEnumerable<ViewDefinitionModel> views, out string error)
+        {
+            error = null;
+            if (views == null) { error = "图纸目录为空。"; return false; }
+            var list = views.ToList();
+            if (list.Any(v => v == null || string.IsNullOrWhiteSpace(v.Id) || v.Id == "." || v.Id == ".."
+                || v.Id.IndexOfAny(new[] { '/', '\\', ':', '*', '?', '"', '<', '>', '|' }) >= 0
+                || string.IsNullOrWhiteSpace(v.Title) || v.Scale < 1 || v.Scale > 10000
+                || !Enum.IsDefined(typeof(ViewKind), v.Kind) || v.Kind == ViewKind.Sheet
+                || !Finite(v.CutPosition) || !Finite(v.ViewDepth) || v.ViewDepth < 0
+                || !Finite(v.AzimuthDegrees) || !Finite(v.ElevationDegrees) || Math.Abs(v.ElevationDegrees) >= 89
+                || !Enum.IsDefined(typeof(ElevationDirection), v.Direction) || !Enum.IsDefined(typeof(SectionAxis), v.CutAxis)
+                || (v.ViewSign != 1 && v.ViewSign != -1)
+                || (v.StoreyIds != null && v.StoreyIds.Any(id => Model.FindStorey(id) == null))))
+            { error = "图名、比例、楼层或投影参数无效。"; return false; }
+            if (list.GroupBy(v => v.Id, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1))
+            { error = "图纸目录存在重复条目。"; return false; }
+            var candidate = Clone(Model);
+            candidate.DrawingViews = list;
+            Commit(Clone(candidate));
+            return true;
+        }
+
+        public bool TrySetDrawingScales(DrawingScaleSettings settings, bool applyExisting, out string error)
+        {
+            error=null;
+            if(settings==null || new[] {settings.Plan,settings.Elevation,settings.Section,settings.Axonometric,settings.OpeningElevation}.Any(n=>n<1||n>10000))
+            { error="出图比例应为 1～10000 的整数。";return false; }
+            var candidate=Clone(Model);
+            candidate.DrawingScales=settings;
+            if(applyExisting) {
+                candidate.DrawingViews=DrawingViewCatalogue.Resolve(candidate);
+                foreach(var view in candidate.DrawingViews) if(view.Kind!=ViewKind.Schedule) view.Scale=settings.For(view.Kind);
+            }
+            Commit(Clone(candidate));return true;
+        }
+
         /// <summary>Replace building-wide explicit axes as one undoable edit. Derived wall axes stay automatic.</summary>
-        public bool TryReplaceAxes(System.Collections.Generic.IEnumerable<AxisModel> axes, out string error)
+        public bool TryReplaceAxes(System.Collections.Generic.IEnumerable<AxisModel> axes, out string error, string storeyId = null)
         {
             error = null;
             if (axes == null) { error = "轴网为空。"; return false; }
@@ -34,17 +71,35 @@ namespace BatchPdfPublisher.BuildingModel
                     || c == '-' || c == '/' || c == '\''))))
             { error = "轴号最多 24 个字符，仅支持英文字母、数字、-、/ 和撇号。"; return false; }
             var candidate = Clone(Model);
-            candidate.Axes = replacement.Select(a => new AxisModel
+            var copied = replacement.Select(a => new AxisModel
             {
                 Id = a.Id, Name = a.Name?.Trim(), StartName = a.StartName?.Trim(),
                 EndName = a.EndName?.Trim(), Vertical = a.Vertical, Position = a.Position,
-                ExtentStart = a.ExtentStart, ExtentEnd = a.ExtentEnd
+                ExtentStart = a.ExtentStart, ExtentEnd = a.ExtentEnd,
+                AutomaticNumber=a.AutomaticNumber,Hidden=a.Hidden,Deleted=a.Deleted,StartHidden=a.StartHidden,EndHidden=a.EndHidden,StartRemoved=a.StartRemoved,EndRemoved=a.EndRemoved
             }).ToList();
+            if(storeyId == null) candidate.Axes=copied;
+            else {
+                if(candidate.FindStorey(storeyId)==null) {error="楼层不存在。";return false;}
+                if(candidate.StoreyAxes==null)candidate.StoreyAxes=new System.Collections.Generic.Dictionary<string,System.Collections.Generic.List<AxisModel>>();
+                candidate.StoreyAxes[storeyId]=copied;
+            }
             Commit(candidate);
             return true;
         }
 
-        public bool TryReplaceStoreys(System.Collections.Generic.IEnumerable<StoreyModel> storeys, out string error)
+        public bool TrySetIndependentAxes(string storeyId, bool independent, out string error)
+        {
+            error=null;if(Model.FindStorey(storeyId)==null){error="楼层不存在。";return false;}
+            var candidate=Clone(Model);
+            if(candidate.StoreyAxes==null)candidate.StoreyAxes=new System.Collections.Generic.Dictionary<string,System.Collections.Generic.List<AxisModel>>();
+            if(independent) {if(!candidate.StoreyAxes.ContainsKey(storeyId))candidate.StoreyAxes[storeyId]=BuildingAxisLayout.Resolve(candidate);}
+            else candidate.StoreyAxes.Remove(storeyId);
+            Commit(candidate);return true;
+        }
+
+        public bool TryReplaceStoreys(System.Collections.Generic.IEnumerable<StoreyModel> storeys, out string error,
+            bool allowContentChanges = false)
         {
             error = null;
             if (storeys == null) { error = "楼层列表为空。"; return false; }
@@ -66,24 +121,28 @@ namespace BatchPdfPublisher.BuildingModel
                 if (source == null || Same(source.Id, storey.Id)
                     || !string.IsNullOrWhiteSpace(source.TemplateStoreyId))
                 { error = "标准层来源必须是另一独立楼层，不能形成引用链。"; return false; }
-                if (Model.Walls.Any(w => Same(w.StoreyId, storey.Id))
+                if (!allowContentChanges && (Model.Walls.Any(w => Same(w.StoreyId, storey.Id))
                     || Model.Columns.Any(c => Same(c.StoreyId, storey.Id))
+                    || Model.Beams.Any(c => Same(c.StoreyId, storey.Id))
                     || Model.Slabs.Any(s => Same(s.StoreyId, storey.Id))
                     || Model.Stairs.Any(s => Same(s.StoreyId, storey.Id))
                     || Model.Roofs.Any(r => Same(r.StoreyId, storey.Id))
-                    || Model.Rooms.Any(r => Same(r.StoreyId, storey.Id)))
+                    || Model.Rooms.Any(r => Same(r.StoreyId, storey.Id))))
                 { error = "该楼层已有独立构件，请先移走再设为标准层引用。"; return false; }
             }
-            if (Model.Walls.Any(w => !ids.Contains(w.StoreyId))
+            if (!allowContentChanges && (Model.Walls.Any(w => !ids.Contains(w.StoreyId))
                 || Model.Columns.Any(c => !ids.Contains(c.StoreyId))
+                || Model.Beams.Any(c => !ids.Contains(c.StoreyId))
                 || Model.Slabs.Any(s => !ids.Contains(s.StoreyId))
                 || Model.Stairs.Any(s => !ids.Contains(s.StoreyId))
                 || Model.Roofs.Any(r => !ids.Contains(r.StoreyId))
-                || Model.Rooms.Any(r => !ids.Contains(r.StoreyId)))
+                || Model.Rooms.Any(r => !ids.Contains(r.StoreyId))))
             { error = "已有构件所在的楼层不能删除。"; return false; }
             var candidate = Clone(Model);
+            if (allowContentChanges) ReplaceStoreyContents(candidate, replacement);
             candidate.Storeys = replacement.Select(s => new StoreyModel
             { Id = s.Id.Trim(), Name = s.Name.Trim(), Kind = s.Kind, TemplateStoreyId = s.TemplateStoreyId?.Trim(),
+                StandardGroupId = s.StandardGroupId, StandardFloorRange = s.StandardFloorRange,
                 Elevation = s.Elevation, Height = s.Height }).ToList();
             if (candidate.Slabs.Any(s => s.TopOffset.HasValue && !Finite(s.TopOffset.Value))
                 || candidate.Columns.Any(c => !Finite(c.BaseOffset) || !Finite(c.TopOffset)
@@ -111,6 +170,16 @@ namespace BatchPdfPublisher.BuildingModel
                     ? after.Elevation + after.Height - before.Elevation - before.Height
                     : after.Elevation - before.Elevation;
             }
+            // Keep CAD slab baselines aligned with floor datums without accepting unrelated manual edits.
+            foreach (var slab in candidate.CadImport?.Slabs ?? new System.Collections.Generic.List<SlabModel>())
+            {
+                var before = Model.FindStorey(slab.StoreyId);
+                var after = candidate.FindStorey(slab.StoreyId);
+                if (before == null || after == null || slab.TopOffset.HasValue) continue;
+                var followsTop = Math.Abs(slab.TopElevation - before.Elevation - before.Height) < 1d;
+                slab.TopElevation += followsTop ? after.Elevation + after.Height - before.Elevation - before.Height
+                    : after.Elevation - before.Elevation;
+            }
             foreach (var wall in candidate.Walls)
             {
                 var height = wall.Height > 0d ? wall.Height : candidate.FindStorey(wall.StoreyId)?.Height ?? 0d;
@@ -130,6 +199,58 @@ namespace BatchPdfPublisher.BuildingModel
             }
             Commit(candidate);
             return true;
+        }
+
+        private void ReplaceStoreyContents(BuildingModelDocument candidate,
+            System.Collections.Generic.List<StoreyModel> replacement)
+        {
+            var independent = new System.Collections.Generic.HashSet<string>(replacement
+                .Where(s => string.IsNullOrWhiteSpace(s.TemplateStoreyId)).Select(s => s.Id), StringComparer.OrdinalIgnoreCase);
+            var detached = new System.Collections.Generic.HashSet<string>(replacement.Where(s => independent.Contains(s.Id)
+                && !string.IsNullOrWhiteSpace(Model.FindStorey(s.Id)?.TemplateStoreyId)).Select(s => s.Id), StringComparer.OrdinalIgnoreCase);
+            var physical = detached.Count == 0 ? null : Clone(StandardStoreyLayout.Materialize(Model));
+            var removedWalls = new System.Collections.Generic.HashSet<string>(candidate.Walls
+                .Where(w => !independent.Contains(w.StoreyId) || detached.Contains(w.StoreyId)).Select(w => w.Id), StringComparer.OrdinalIgnoreCase);
+            candidate.Walls.RemoveAll(w => removedWalls.Contains(w.Id));
+            candidate.Openings.RemoveAll(o => removedWalls.Contains(o.HostWallId));
+            candidate.Columns.RemoveAll(c => !independent.Contains(c.StoreyId) || detached.Contains(c.StoreyId));
+            candidate.Beams.RemoveAll(c => !independent.Contains(c.StoreyId) || detached.Contains(c.StoreyId));
+            candidate.Slabs.RemoveAll(s => !independent.Contains(s.StoreyId) || detached.Contains(s.StoreyId));
+            candidate.Stairs.RemoveAll(s => !independent.Contains(s.StoreyId) || detached.Contains(s.StoreyId));
+            candidate.Roofs.RemoveAll(r => !independent.Contains(r.StoreyId) || detached.Contains(r.StoreyId));
+            candidate.Rooms.RemoveAll(r => !independent.Contains(r.StoreyId) || detached.Contains(r.StoreyId));
+            if (physical != null)
+            {
+                var walls = physical.Walls.Where(w => detached.Contains(w.StoreyId)).ToList();
+                var wallIds = new System.Collections.Generic.HashSet<string>(walls.Select(w => w.Id), StringComparer.OrdinalIgnoreCase);
+                candidate.Walls.AddRange(walls);
+                candidate.Openings.AddRange(physical.Openings.Where(o => wallIds.Contains(o.HostWallId)));
+                candidate.Columns.AddRange(physical.Columns.Where(c => detached.Contains(c.StoreyId)));
+                candidate.Beams.AddRange(physical.Beams.Where(c => detached.Contains(c.StoreyId)));
+                candidate.Slabs.AddRange(physical.Slabs.Where(s => detached.Contains(s.StoreyId)));
+                candidate.Stairs.AddRange(physical.Stairs.Where(s => detached.Contains(s.StoreyId)));
+                candidate.Roofs.AddRange(physical.Roofs.Where(r => detached.Contains(r.StoreyId)));
+                candidate.Rooms.AddRange(physical.Rooms.Where(r => detached.Contains(r.StoreyId)));
+                BuildingElementNames.EnsureWallCodes(candidate);
+            }
+            if (candidate.CadImport != null)
+            {
+                var imported = candidate.CadImport;
+                var removed = new System.Collections.Generic.HashSet<string>(imported.Walls
+                    .Where(w => !independent.Contains(w.StoreyId)).Select(w => w.Id), StringComparer.OrdinalIgnoreCase);
+                imported.Walls.RemoveAll(w => removed.Contains(w.Id));
+                imported.Openings.RemoveAll(o => removed.Contains(o.HostWallId));
+                imported.Slabs?.RemoveAll(s => !independent.Contains(s.StoreyId));
+                imported.Columns?.RemoveAll(s => !independent.Contains(s.StoreyId));
+                imported.Beams?.RemoveAll(s => !independent.Contains(s.StoreyId));
+                imported.PendingOpenings?.RemoveAll(o => !independent.Contains(o.StoreyId));
+            }
+            if (candidate.DrawingViews != null)
+            {
+                var ids = new System.Collections.Generic.HashSet<string>(replacement.Select(s => s.Id), StringComparer.OrdinalIgnoreCase);
+                candidate.DrawingViews.RemoveAll(v => v.StoreyIds != null && v.StoreyIds.Count > 0 && !v.StoreyIds.Any(ids.Contains));
+                foreach (var view in candidate.DrawingViews) view.StoreyIds?.RemoveAll(id => !ids.Contains(id));
+            }
         }
 
         public bool TryUpsertSlab(SlabModel source, out string id, out string error)
@@ -265,6 +386,7 @@ namespace BatchPdfPublisher.BuildingModel
                 var opening = candidate.Openings.FirstOrDefault(x => x != null && Same(x.Id, id));
                 if (opening != null) candidate.Openings.Remove(opening);
                 else if (candidate.Columns.RemoveAll(x => x != null && Same(x.Id, id)) == 0
+                    && candidate.Beams.RemoveAll(x => x != null && Same(x.Id, id)) == 0
                     && candidate.Slabs.RemoveAll(x => x != null && Same(x.Id, id)) == 0
                     && candidate.Stairs.RemoveAll(x => x != null && Same(x.Id, id)) == 0
                     && candidate.Roofs.RemoveAll(x => x != null && Same(x.Id, id)) == 0

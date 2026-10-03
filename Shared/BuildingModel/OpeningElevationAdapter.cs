@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using BatchPdfPublisher.Models;
 
 namespace BatchPdfPublisher.BuildingModel
@@ -33,6 +33,7 @@ namespace BatchPdfPublisher.BuildingModel
             double width, double height, bool simplifiedDetail = false)
         {
             if (opening == null) throw new ArgumentNullException(nameof(opening));
+            type=type ?? OpeningConstruction.Default(opening);
             var kind = string.IsNullOrWhiteSpace(opening.Kind) ? "窗" : opening.Kind.Trim();
             var isDoor = kind.IndexOf("门", StringComparison.Ordinal) >= 0;
             var item = new DoorWindowScheduleItem
@@ -53,12 +54,12 @@ namespace BatchPdfPublisher.BuildingModel
                 HasMullion = type == null || type.HasMullion,
                 MullionWidth = type == null ? 50d : type.MullionWidth,
                 DoorFrameType = type == null || string.IsNullOrWhiteSpace(type.DoorFrameType) ? "N型" : type.DoorFrameType,
-                DoorFrameWidth = type == null || simplifiedDetail ? 0d : Math.Max(0d, type.DoorFrameWidth),
+                DoorFrameWidth = type == null || simplifiedDetail ? 0d : Math.Max(0d, type.DoorFrameWidth > 0 ? type.DoorFrameWidth : type.SashWidth ?? 0d),
                 CustomColumnRatios = type == null ? null : type.CustomColumnRatios,
                 CustomRowRatios = type == null ? null : type.CustomRowRatios,
                 CustomColumnWidths = type == null ? null : type.CustomColumnWidths,
                 CustomRowHeights = type == null ? null : type.CustomRowHeights,
-                CustomCellLayout = type == null ? null : type.CustomCellLayout,
+                CustomCellLayout = OpeningConstruction.ScaledLayout(type,width>0.5 ? width : opening.Width,height>0.5 ? height : opening.Height),
                 CellOpeningModes = type == null ? null : type.CellOpeningModes,
                 DoorPlacement = type == null || string.IsNullOrWhiteSpace(type.DoorPlacement) ? "靠左" : type.DoorPlacement,
                 DoorEdgeDistance = type == null ? 0d : type.DoorEdgeDistance,

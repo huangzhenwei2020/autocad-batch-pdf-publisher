@@ -7,14 +7,26 @@ using BatchPdfPublisher.BuildingModel;
 
 namespace BuildingModelStudio.AvaloniaProbe;
 
-internal enum PlanTool { Select, Wall, Door, Window, Slab, SlabOutline, SlabHoleRectangle, SlabHolePolygon }
+internal enum PlanTool { Select, Wall, Door, Window, Slab, SlabOutline, SlabHoleRectangle, SlabHolePolygon, Column, Beam }
 internal enum PlanAxisConstraint { Free, X, Y }
 
-internal sealed class PlanEditorCanvas : Control
+internal sealed partial class PlanEditorCanvas : Control
 {
     private BuildingModelDocument _model = SampleModelFactory.CreateEmptyModel("空模型");
     private string _storeyId = "1F";
+    private string _axisStoreyId = "1F";
     private string? _selectedId;
+    private readonly HashSet<string> _selectedIds=new();
+    private readonly HashSet<string> _hiddenIds=new(),_frozenIds=new();
+    private bool Visible(string id)=>!_hiddenIds.Contains(id);
+    private bool Selectable(string id)=>Visible(id)&&!_frozenIds.Contains(id);
+    internal bool IsElementShown(string id)=>Visible(id);
+    internal bool IsElementSelectable(string id)=>Selectable(id);
+    internal void SetViewState(IEnumerable<string> hidden,IEnumerable<string> frozen)
+    {
+        _hiddenIds.Clear();_hiddenIds.UnionWith(hidden);_frozenIds.Clear();_frozenIds.UnionWith(frozen);
+        IndexOrthogonalJunctions();RebuildPlanSymbols();InvalidateVisual();
+    }
     private PointModel? _wallStart;
     private PointModel? _cursor;
     private readonly List<PointModel> _contour = new();
@@ -58,6 +70,7 @@ internal sealed class PlanEditorCanvas : Control
     private Dictionary<string, WallEndpointMove>? _gripPreview;
     private readonly List<(WallModel horizontal, WallModel vertical)> _orthogonalJunctions = new();
     private List<AxisModel> _resolvedAxes = new();
+    private List<(AxisModel Axis,PointModel Start,PointModel End)>? _axisEndpointCache;
     private double _scale = 0.07;
     private double _centerX;
     private double _centerY;
@@ -66,6 +79,10 @@ internal sealed class PlanEditorCanvas : Control
     private bool _moving;
     private bool _copying;
     private PointModel? _moveBase;
+    public bool GridVisible { get; set; }
+    public double PickboxSize { get; set; } = 8;
+    public double CrosshairPercent { get; set; } = 10;
+    public string CrosshairColor { get; set; } = "#B3D8E1";
     public PlanTool Tool { get; set; }
     public PlanAxisConstraint AxisConstraint { get; private set; }
     public bool IsMoving => _moving;
@@ -75,7 +92,12 @@ internal sealed class PlanEditorCanvas : Control
     public bool OrthogonalEnabled { get; private set; }
     public double PolarStepDegrees { get; private set; } = 45d;
     public event Func<PointModel, PointModel, bool>? WallRequested;
+    public event Func<PointModel, PointModel, bool>? BeamRequested;
+    public event Func<PointModel,bool>? ColumnRequested;
+    internal bool CreateColumn(PointModel center)=>ColumnRequested?.Invoke(center)==true;
+    internal bool CreateBeam(PointModel start,PointModel end)=>BeamRequested?.Invoke(start,end)==true;
     public event Action<string, string, double>? OpeningRequested;
+    public event Action<string?>? OpeningActivated;
     public event Action<string?>? ElementPicked;
     public event Action<string, int, PointModel>? WallGripReleased;
     public event Action<string>? SnapChanged;
@@ -116,7 +138,9 @@ internal sealed class PlanEditorCanvas : Control
     public bool BeginMove(bool copy = false)
     {
         if (_selectedId == null || (!_model.Walls.Any(w => w.Id == _selectedId && w.StoreyId == _storeyId)
-            && !_model.Slabs.Any(s => s.Id == _selectedId && s.StoreyId == _storeyId)))
+            && !_model.Slabs.Any(s => s.Id == _selectedId && s.StoreyId == _storeyId)
+            && !_model.Columns.Any(c=>c.Id==_selectedId&&c.StoreyId==_storeyId)
+            && !_model.Beams.Any(b=>b.Id==_selectedId&&b.StoreyId==_storeyId)))
             return false;
         CancelDraft();
         Tool = PlanTool.Select;
@@ -162,7 +186,7 @@ internal sealed class PlanEditorCanvas : Control
     {
         Focusable = true;
         ClipToBounds = true;
-        Cursor = new Cursor(StandardCursorType.Cross);
+        Cursor = new Cursor(StandardCursorType.None);
         LostFocus += (_, _) =>
         {
             _shiftHeld = false;
@@ -172,15 +196,17 @@ internal sealed class PlanEditorCanvas : Control
 
     public void SetModel(BuildingModelDocument model, string storeyId)
     {
+        _axisEndpointCache=null;_axisGhostCache=null;
         _model = model;
         _slabGeometry.Clear();
         foreach (var slab in model.Slabs) _slabGeometry[slab.Id] = SlabGeometry.Build(slab);
+        _axisStoreyId=storeyId;
         _storeyId = model.FindStorey(storeyId)?.TemplateStoreyId ?? storeyId;
         _gripPreview = null;
         _moving = false;
         _copying = false;
         _moveBase = null;
-        _resolvedAxes = BuildingAxisLayout.Resolve(model);
+        _resolvedAxes = BuildingAxisLayout.Resolve(model, _axisStoreyId);
         IndexOrthogonalJunctions();
         RebuildPlanSymbols();
         if (!_fitted) Fit();
@@ -189,7 +215,10 @@ internal sealed class PlanEditorCanvas : Control
 
     public void SetStorey(string id)
     {
+        _axisEndpointCache=null;_axisGhostCache=null;
+        _axisStoreyId=id;
         _storeyId = _model.FindStorey(id)?.TemplateStoreyId ?? id;
+        _resolvedAxes=BuildingAxisLayout.Resolve(_model,id);
         CancelDraft();
         IndexOrthogonalJunctions();
         RebuildPlanSymbols();
@@ -198,14 +227,18 @@ internal sealed class PlanEditorCanvas : Control
 
     private void RebuildPlanSymbols()
     {
-        _planSymbols = OrthographicProjector.CreatePlanDetailSymbols(_model, _storeyId);
+        var view=new BuildingModelDocument {Walls=_model.Walls.Where(w=>Visible(w.Id)).ToList(),
+            Openings=_model.Openings.Where(o=>Visible(o.Id)).ToList()};
+        _planSymbols = OrthographicProjector.CreatePlanDetailSymbols(view, _storeyId);
     }
 
     public void SetSelection(string? id)
     {
+        _selectedIds.Clear();if(id!=null)_selectedIds.Add(id);
         _selectedId = id;
         InvalidateVisual();
     }
+    public void SetSelections(IEnumerable<string> ids){_selectedIds.Clear();foreach(var id in ids)_selectedIds.Add(id);_selectedId=_selectedIds.LastOrDefault();InvalidateVisual();}
 
     public void CancelDraft()
     {
@@ -290,10 +323,15 @@ internal sealed class PlanEditorCanvas : Control
             _fitted = false;
             return;
         }
-        var points = _model.Walls.Where(w => w.StoreyId == _storeyId)
+        var points = _model.Walls.Where(w => w.StoreyId == _storeyId && Visible(w.Id))
             .SelectMany(w => new[] { new PointModel(w.X1, w.Y1), new PointModel(w.X2, w.Y2) })
-            .Concat(_model.Slabs.Where(s => s.StoreyId == _storeyId)
-                .SelectMany(s => s.Outline ?? new List<PointModel>())).ToArray();
+            .Concat(_model.Slabs.Where(s => s.StoreyId == _storeyId && Visible(s.Id))
+                .SelectMany(s => s.Outline ?? new List<PointModel>()))
+            .Concat(_model.Columns.Where(c=>c.StoreyId==_storeyId&&Visible(c.Id)).SelectMany(StructuralGeometry.ColumnOutline))
+            .Concat(_model.Beams.Where(b=>b.StoreyId==_storeyId&&Visible(b.Id)).SelectMany(StructuralGeometry.BeamOutline))
+            .Concat(AxisEndpoints().SelectMany(axis=>new[] {
+                new PointModel(axis.Start.X-450,axis.Start.Y-450),new PointModel(axis.Start.X+450,axis.Start.Y+450),
+                new PointModel(axis.End.X-450,axis.End.Y-450),new PointModel(axis.End.X+450,axis.End.Y+450) })).ToArray();
         if (points.Length == 0) { _centerX = _centerY = 0; _scale = 0.07; }
         else
         {
@@ -303,9 +341,8 @@ internal sealed class PlanEditorCanvas : Control
             var maxY = points.Max(p => p.Y);
             _centerX = (minX + maxX) / 2;
             _centerY = (minY + maxY) / 2;
-            var axisBand = Math.Clamp(Math.Min(size.Width, size.Height) * 0.28d, 100d, 180d);
-            _scale = Math.Clamp(Math.Min((size.Width - axisBand) / Math.Max(1000, maxX - minX),
-                (size.Height - axisBand) / Math.Max(1000, maxY - minY)), 0.01, 0.5);
+            _scale = Math.Clamp(Math.Min((size.Width - 48) / Math.Max(1000, maxX - minX),
+                (size.Height - 48) / Math.Max(1000, maxY - minY)), 0.001, 0.5);
         }
         _fitted = true;
         InvalidateVisual();
@@ -366,7 +403,7 @@ internal sealed class PlanEditorCanvas : Control
     private PointModel Snap(Point p, string? excludedWallId = null)
     {
         var world = World(p);
-        var from = Tool == PlanTool.Wall ? _wallStart : IsContourTool ? _contour.LastOrDefault() : null;
+        var from = Tool is PlanTool.Wall or PlanTool.Beam ? _wallStart : IsContourTool ? _contour.LastOrDefault() : null;
         var snapped = PlanEditing.Snap(_model, _storeyId, world.X, world.Y, 10d / _scale,
             from != null, from?.X ?? 0, from?.Y ?? 0, excludedWallId, _resolvedAxes);
         if (snapped.Kind != _snapKind && (Tool == PlanTool.Wall || _gripWallId != null || _moving))
@@ -404,6 +441,7 @@ internal sealed class PlanEditorCanvas : Control
             return;
         }
         if (!buttons.IsLeftButtonPressed) return;
+        if(AxisMode!=AxisEditMode.Off) { HandleAxisEditClick(point);e.Handled=true;return; }
         if (IsContourTool)
         {
             var end = Snap(point);
@@ -461,7 +499,8 @@ internal sealed class PlanEditorCanvas : Control
                 }
             }
         }
-        if (Tool == PlanTool.Wall)
+        if(Tool==PlanTool.Column)CreateColumn(Snap(point));
+        else if (Tool == PlanTool.Wall || Tool==PlanTool.Beam)
         {
             var end = Snap(point);
             if (_wallStart == null) _wallStart = end;
@@ -470,7 +509,7 @@ internal sealed class PlanEditorCanvas : Control
                 var start = _wallStart;
                 if (Math.Sqrt(Math.Pow(end.X - start.X, 2) + Math.Pow(end.Y - start.Y, 2)) >= 10)
                 {
-                    if (WallRequested?.Invoke(start, end) == true) _wallStart = end;
+                    if ((Tool==PlanTool.Beam ? CreateBeam(start,end) : WallRequested?.Invoke(start, end)==true)) _wallStart = end;
                 }
             }
         }
@@ -482,11 +521,11 @@ internal sealed class PlanEditorCanvas : Control
         }
         else
         {
-            var hole = _model.Slabs.Where(s => s.StoreyId == _storeyId)
+            var hole = _model.Slabs.Where(s => s.StoreyId == _storeyId && Selectable(s.Id))
                 .SelectMany(s => (s.Openings ?? new()).Select(o => (slab: s, opening: o)))
                 .FirstOrDefault(h => InsideContour(World(point), h.opening.Outline));
             if (hole.opening != null) SlabOpeningPicked?.Invoke(hole.slab.Id, hole.opening.Id);
-            else ElementPicked?.Invoke(HitElement(point));
+            else {var id=HitElement(point);ElementPicked?.Invoke(id);if(e.ClickCount==2)OpeningActivated?.Invoke(id);}
         }
         InvalidateVisual();
     }
@@ -514,10 +553,14 @@ internal sealed class PlanEditorCanvas : Control
             InvalidateVisual();
             return;
         }
-        if (Tool == PlanTool.Wall || _moving || IsContourTool) _cursor = Snap(point);
+        if(AxisMode!=AxisEditMode.Off) { UpdateAxisEditHover(point);InvalidateVisual();return; }
+        if (Tool == PlanTool.Wall || Tool==PlanTool.Beam || Tool==PlanTool.Column || _moving || IsContourTool) _cursor = Snap(point);
         else { _cursor = World(point); _snapKind = PlanEditing.SnapNone; }
         InvalidateVisual();
     }
+
+    protected override void OnPointerExited(PointerEventArgs e)
+    { base.OnPointerExited(e); _lastPointer=null; InvalidateVisual(); }
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
@@ -544,14 +587,23 @@ internal sealed class PlanEditorCanvas : Control
     {
         base.OnPointerWheelChanged(e);
         var p = e.GetPosition(this);
+        ZoomAt(p, e.Delta.Y);
+        e.Handled = true;
+    }
+
+    internal void ZoomAt(Point p, double wheelDelta)
+    {
         var before = World(p);
-        _scale = Math.Clamp(_scale * Math.Pow(1.15, e.Delta.Y), 0.002, 2);
+        _scale = Math.Clamp(_scale * Math.Pow(1.15, wheelDelta), 0.00001, 10);
         var after = World(p);
         _centerX += before.X - after.X;
         _centerY += before.Y - after.Y;
         InvalidateVisual();
-        e.Handled = true;
     }
+
+    internal double PixelsPerMillimetre => _scale;
+    internal Point ModelToScreen(PointModel point) => Screen(point.X, point.Y);
+    private double Stroke(double millimetres = 15) => millimetres * _scale;
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
@@ -582,9 +634,9 @@ internal sealed class PlanEditorCanvas : Control
     private (WallModel? wall, double offset) HitWall(Point p)
     {
         WallModel? hit = null;
-        var best = 16d;
+        var best = PickboxSize/2;
         var offset = 0d;
-        foreach (var wall in _model.Walls.Where(w => w.StoreyId == _storeyId))
+        foreach (var wall in _model.Walls.Where(w => w.StoreyId == _storeyId && Selectable(w.Id)))
         {
             var a = Screen(wall.X1, wall.Y1);
             var b = Screen(wall.X2, wall.Y2);
@@ -593,7 +645,7 @@ internal sealed class PlanEditorCanvas : Control
             if (lengthSquared < 1) continue;
             var t = Math.Clamp(((p.X - a.X) * dx + (p.Y - a.Y) * dy) / lengthSquared, 0, 1);
             var nearest = new Point(a.X + t * dx, a.Y + t * dy);
-            var distance = Distance(nearest, p);
+            var distance = Math.Max(0,Distance(nearest,p)-wall.Thickness*_scale/2);
             if (distance < best)
             {
                 best = distance; hit = wall;
@@ -605,7 +657,12 @@ internal sealed class PlanEditorCanvas : Control
 
     private string? HitElement(Point p)
     {
-        foreach (var opening in _model.Openings)
+        var structurePoint=World(p);
+        foreach(var c in _model.Columns.Where(c=>c.StoreyId==_storeyId&&Selectable(c.Id)))
+            if(InsideContour(structurePoint,StructuralGeometry.ColumnOutline(c)))return c.Id;
+        foreach(var b in _model.Beams.Where(b=>b.StoreyId==_storeyId&&Selectable(b.Id)))
+            if(InsideContour(structurePoint,StructuralGeometry.BeamOutline(b)))return b.Id;
+        foreach (var opening in _model.Openings.Where(o=>Selectable(o.Id)))
         {
             var wall = _model.Walls.FirstOrDefault(w => w.Id == opening.HostWallId && w.StoreyId == _storeyId);
             if (wall == null) continue;
@@ -620,12 +677,12 @@ internal sealed class PlanEditorCanvas : Control
             var dx = b.X - a.X; var dy = b.Y - a.Y;
             var distanceAlong = Math.Clamp(((p.X - a.X) * dx + (p.Y - a.Y) * dy)
                 / Math.Max(1, dx * dx + dy * dy), 0, 1);
-            if (Distance(new Point(a.X + distanceAlong * dx, a.Y + distanceAlong * dy), p) < 14)
+            if (Distance(new Point(a.X + distanceAlong * dx, a.Y + distanceAlong * dy), p) < PickboxSize/2)
                 return opening.Id;
         }
         var wallHit = HitWall(p).wall;
         if (wallHit != null) return wallHit.Id;
-        foreach (var slab in _model.Slabs.Where(s => s.StoreyId == _storeyId))
+        foreach (var slab in _model.Slabs.Where(s => s.StoreyId == _storeyId && Selectable(s.Id)))
         {
             if (slab.Outline == null || slab.Outline.Count < 3) continue;
             foreach (var contour in _slabGeometry[slab.Id].Contours)
@@ -636,7 +693,7 @@ internal sealed class PlanEditorCanvas : Control
                     var dx = b.X - a.X; var dy = b.Y - a.Y;
                     var t = Math.Clamp(((p.X - a.X) * dx + (p.Y - a.Y) * dy)
                         / Math.Max(1, dx * dx + dy * dy), 0, 1);
-                    if (Distance(p, new Point(a.X + t * dx, a.Y + t * dy)) < 10) return slab.Id;
+                    if (Distance(p, new Point(a.X + t * dx, a.Y + t * dy)) < PickboxSize/2) return slab.Id;
                 }
         }
         var world = World(p);
@@ -660,6 +717,7 @@ internal sealed class PlanEditorCanvas : Control
     {
         base.Render(context);
         context.FillRectangle(new SolidColorBrush(Color.Parse("#111A25")), new Rect(Bounds.Size));
+        if(GridVisible) {
         var gridPen = new Pen(new SolidColorBrush(Color.Parse("#263545")), 1);
         var min = World(new Point(0, Bounds.Height));
         var max = World(new Point(Bounds.Width, 0));
@@ -677,8 +735,9 @@ internal sealed class PlanEditorCanvas : Control
             context.DrawLine(gridPen, Screen(x, min.Y), Screen(x, max.Y));
         for (var y = Math.Ceiling(min.Y / spacing) * spacing; y <= max.Y; y += spacing)
             context.DrawLine(gridPen, Screen(min.X, y), Screen(max.X, y));
-        DrawAxes(context, min, max);
-        foreach (var slab in _model.Slabs.Where(s => s.StoreyId == _storeyId))
+        }
+        DrawAxes(context);
+        foreach (var slab in _model.Slabs.Where(s => s.StoreyId == _storeyId && Visible(s.Id)))
         {
             if (slab.Outline == null || slab.Outline.Count < 3) continue;
             var geometry = _slabGeometry[slab.Id];
@@ -693,25 +752,25 @@ internal sealed class PlanEditorCanvas : Control
                     drawing.EndFigure(true);
                 }
             }
-            context.DrawGeometry(new SolidColorBrush(Color.Parse(slab.Id == _selectedId
+            context.DrawGeometry(new SolidColorBrush(Color.Parse(_selectedIds.Contains(slab.Id)
                 ? "#28313A" : "#192530")), null, fill);
-            var pen = new Pen(new SolidColorBrush(Color.Parse(slab.Id == _selectedId ? "#FFC46B" : "#A7B8C5")), 1.5);
+            var pen = new Pen(new SolidColorBrush(Color.Parse(_selectedIds.Contains(slab.Id) ? "#FFC46B" : "#A7B8C5")), Stroke(20));
             foreach (var contour in geometry.Contours)
                 for (var i = 0; i < contour.Count; i++)
                     context.DrawLine(pen, Screen(contour[i].X, contour[i].Y),
                         Screen(contour[(i + 1) % contour.Count].X, contour[(i + 1) % contour.Count].Y));
-            if (slab.Id == _selectedId) DrawSlabAnnotations(context, slab);
+            if (_selectedIds.Contains(slab.Id)) DrawSlabAnnotations(context, slab);
         }
-        foreach (var wall in _model.Walls.Where(w => w.StoreyId == _storeyId))
+        foreach (var wall in _model.Walls.Where(w => w.StoreyId == _storeyId && Visible(w.Id)))
         {
-            var selected = wall.Id == _selectedId;
+            var selected = _selectedIds.Contains(wall.Id);
             var (first, second) = PreviewWallBody(wall);
             if (_slabGeometry.ContainsKey(_selectedId ?? ""))
             {
                 var dx = second.X - first.X; var dy = second.Y - first.Y;
                 var length = Math.Sqrt(dx * dx + dy * dy);
                 if (length < .001) continue;
-                var half = Math.Clamp(wall.Thickness * _scale, 3, 30) / 2;
+                var half = wall.Thickness * _scale / 2;
                 var normal = new Vector(-dy / length * half, dx / length * half);
                 var body = new StreamGeometry();
                 using (var draw = body.Open())
@@ -720,23 +779,23 @@ internal sealed class PlanEditorCanvas : Control
                     draw.LineTo(second - normal); draw.LineTo(first - normal); draw.EndFigure(true);
                 }
                 context.DrawGeometry(new SolidColorBrush(Color.Parse("#334652")),
-                    new Pen(new SolidColorBrush(Color.Parse("#8298A8")), 1), body);
+                    new Pen(new SolidColorBrush(Color.Parse("#8298A8")), Stroke()), body);
                 continue;
             }
             var pen = new Pen(new SolidColorBrush(Color.Parse(selected ? "#FFC46B" : "#9BC4E9")),
-                Math.Clamp(wall.Thickness * _scale, 3, 30));
+                wall.Thickness * _scale);
             context.DrawLine(pen, first, second);
         }
         DrawOrthogonalJunctions(context);
         foreach (var seam in WallJunctionLines.Resolve(_model,
-            _model.Walls.Where(w => w.StoreyId == _storeyId),
+            _model.Walls.Where(w => w.StoreyId == _storeyId && Visible(w.Id)),
             (_model.FindStorey(_storeyId)?.Elevation ?? 0d) + 1200d))
-            context.DrawLine(new Pen(new SolidColorBrush(Color.Parse("#59768F")), 1),
+            context.DrawLine(new Pen(new SolidColorBrush(Color.Parse("#59768F")), Stroke()),
                 Screen(seam.Item1.X, seam.Item1.Y), Screen(seam.Item2.X, seam.Item2.Y));
-        foreach (var wall in _model.Walls.Where(w => w.StoreyId == _storeyId))
-            context.DrawLine(new Pen(new SolidColorBrush(Color.Parse("#192D3C")), 1),
+        foreach (var wall in _model.Walls.Where(w => w.StoreyId == _storeyId && Visible(w.Id)))
+            context.DrawLine(new Pen(new SolidColorBrush(Color.Parse("#192D3C")), Stroke()),
                 PreviewWallEndpoint(wall, 0), PreviewWallEndpoint(wall, 1));
-        foreach (var opening in _model.Openings)
+        foreach (var opening in _model.Openings.Where(o=>Visible(o.Id)))
         {
             var wall = _model.Walls.FirstOrDefault(w => w.Id == opening.HostWallId && w.StoreyId == _storeyId);
             if (wall == null) continue;
@@ -750,19 +809,28 @@ internal sealed class PlanEditorCanvas : Control
             var b = new Point(first.X + (second.X - first.X) * t2,
                 first.Y + (second.Y - first.Y) * t2);
             context.DrawLine(new Pen(new SolidColorBrush(Color.Parse("#111A25")),
-                Math.Clamp(wall.Thickness * _scale + 2, 5, 32)), a, b);
+                wall.Thickness * _scale), a, b);
             if (!opening.HasSwingLeaf() || _moving || _gripPreview != null)
-                context.DrawLine(new Pen(new SolidColorBrush(Color.Parse(opening.Id == _selectedId
-                    ? "#FFC46B" : "#5AD4EC")), 3), a, b);
+                context.DrawLine(new Pen(new SolidColorBrush(Color.Parse(_selectedIds.Contains(opening.Id)
+                    ? "#FFC46B" : "#5AD4EC")), Stroke(25)), a, b);
         }
         if (!_moving && _gripPreview == null)
             foreach (var line in _planSymbols)
                 context.DrawLine(new Pen(new SolidColorBrush(Color.Parse(line.Layer == ViewLayers.Opening
-                    ? "#A7B8C5" : "#58788F")), 1), Screen(line.X1, line.Y1), Screen(line.X2, line.Y2));
+                    ? "#A7B8C5" : "#58788F")), Stroke()), Screen(line.X1, line.Y1), Screen(line.X2, line.Y2));
+        void DrawStructure(string id,List<PointModel> outline)
+        {
+            if(_moving&&id==_selectedId&&_moveBase!=null&&_cursor!=null)
+                outline=outline.Select(p=>new PointModel(p.X+_cursor.X-_moveBase.X,p.Y+_cursor.Y-_moveBase.Y)).ToList();
+            var pen=new Pen(new SolidColorBrush(Color.Parse(_selectedIds.Contains(id)?"#FFC46B":"#8CB4D5")),Stroke(20));
+            for(var i=0;i<outline.Count;i++)context.DrawLine(pen,Screen(outline[i].X,outline[i].Y),Screen(outline[(i+1)%outline.Count].X,outline[(i+1)%outline.Count].Y));
+        }
+        foreach(var c in _model.Columns.Where(c=>c.StoreyId==_storeyId&&Visible(c.Id)))DrawStructure(c.Id,StructuralGeometry.ColumnOutline(c));
+        foreach(var b in _model.Beams.Where(b=>b.StoreyId==_storeyId&&Visible(b.Id)))DrawStructure(b.Id,StructuralGeometry.BeamOutline(b));
         if (_slabGeometry.TryGetValue(_selectedId ?? "", out var selectedSlabGeometry))
             foreach (var contour in selectedSlabGeometry.Contours)
                 for (var i = 0; i < contour.Count; i++)
-                    context.DrawLine(new Pen(new SolidColorBrush(Color.Parse("#FFC46B")), 2),
+                    context.DrawLine(new Pen(new SolidColorBrush(Color.Parse("#FFC46B")), Stroke(30)),
                         Screen(contour[i].X, contour[i].Y),
                         Screen(contour[(i + 1) % contour.Count].X, contour[(i + 1) % contour.Count].Y));
         foreach (var pending in _model.CadImport?.PendingOpenings ?? new List<CadPendingOpening>())
@@ -770,13 +838,14 @@ internal sealed class PlanEditorCanvas : Control
             if (pending.StoreyId != _storeyId || pending.ReferencePosition == null) continue;
             var p = Screen(pending.ReferencePosition.X, pending.ReferencePosition.Y);
             var brush = new SolidColorBrush(Color.Parse("#FFCC66"));
-            var pen = new Pen(brush, 2);
-            context.DrawEllipse(null, pen, p, 7, 7);
-            context.DrawLine(pen, new Point(p.X - 10, p.Y), new Point(p.X + 10, p.Y));
-            context.DrawLine(pen, new Point(p.X, p.Y - 10), new Point(p.X, p.Y + 10));
+            var pen = new Pen(brush, Stroke(25));
+            var radius=100*_scale;var arm=150*_scale;
+            context.DrawEllipse(null, pen, p, radius, radius);
+            context.DrawLine(pen, new Point(p.X - arm, p.Y), new Point(p.X + arm, p.Y));
+            context.DrawLine(pen, new Point(p.X, p.Y - arm), new Point(p.X, p.Y + arm));
             var label = new FormattedText(pending.Code + " · 待定位（参考）",
-                CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface.Default, 12, brush);
-            context.DrawText(label, new Point(p.X + 12, p.Y - label.Height / 2));
+                CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface.Default, 600*_scale, brush);
+            context.DrawText(label, new Point(p.X + 180*_scale, p.Y - label.Height / 2));
         }
         var selectedWall = _model.Walls.FirstOrDefault(w => w.Id == _selectedId && w.StoreyId == _storeyId);
         if (selectedWall != null)
@@ -807,9 +876,10 @@ internal sealed class PlanEditorCanvas : Control
             var dx = _cursor.X - _moveBase.X;
             var dy = _cursor.Y - _moveBase.Y;
             var preview = new Pen(new SolidColorBrush(Color.Parse("#65E8B2")),
-                Math.Clamp(selectedWall.Thickness * _scale, 3, 30));
-            context.DrawLine(preview, Screen(selectedWall.X1 + dx, selectedWall.Y1 + dy),
-                Screen(selectedWall.X2 + dx, selectedWall.Y2 + dy));
+                selectedWall.Thickness * _scale);
+            var body = PreviewWallBody(selectedWall);
+            context.DrawLine(preview, body.first + new Vector(dx*_scale,-dy*_scale),
+                body.second + new Vector(dx*_scale,-dy*_scale));
             context.DrawLine(new Pen(new SolidColorBrush(Color.Parse("#65E8B2")), 1),
                 Screen(_moveBase.X, _moveBase.Y), Screen(_cursor.X, _cursor.Y));
         }
@@ -817,7 +887,7 @@ internal sealed class PlanEditorCanvas : Control
             && _slabGeometry.TryGetValue(_selectedId ?? "", out var movingSlab))
         {
             var dx = _cursor.X - _moveBase.X; var dy = _cursor.Y - _moveBase.Y;
-            var pen = new Pen(new SolidColorBrush(Color.Parse("#65E8B2")), 2);
+            var pen = new Pen(new SolidColorBrush(Color.Parse("#65E8B2")), Stroke(25));
             foreach (var contour in movingSlab.Contours)
                 for (var i = 0; i < contour.Count; i++)
                 {
@@ -837,6 +907,17 @@ internal sealed class PlanEditorCanvas : Control
             context.DrawLine(pen, new Point(p.X - 9, p.Y), new Point(p.X + 9, p.Y));
             context.DrawLine(pen, new Point(p.X, p.Y - 9), new Point(p.X, p.Y + 9));
         }
+        if(_lastPointer is Point cursor && _panStart == null) {
+            var cursorPen=new Pen(new SolidColorBrush(Color.Parse(CrosshairColor)),1);
+            var half=Math.Max(2,PickboxSize/2);
+            var length=Math.Max(Bounds.Width,Bounds.Height)*CrosshairPercent/100/2;
+            context.DrawRectangle(null,cursorPen,new Rect(cursor.X-half,cursor.Y-half,half*2,half*2));
+            context.DrawLine(cursorPen,new Point(cursor.X-length,cursor.Y),new Point(cursor.X-half,cursor.Y));
+            context.DrawLine(cursorPen,new Point(cursor.X+half,cursor.Y),new Point(cursor.X+length,cursor.Y));
+            context.DrawLine(cursorPen,new Point(cursor.X,cursor.Y-length),new Point(cursor.X,cursor.Y-half));
+            context.DrawLine(cursorPen,new Point(cursor.X,cursor.Y+half),new Point(cursor.X,cursor.Y+length));
+        }
+        DrawAxisEditOverlay(context);
         var origin = new Point(26, Bounds.Height - 26);
         var xPen = new Pen(new SolidColorBrush(Color.Parse("#FF5A5A")), 2);
         var yPen = new Pen(new SolidColorBrush(Color.Parse("#67BF57")), 2);
@@ -854,120 +935,105 @@ internal sealed class PlanEditorCanvas : Control
     {
         var outerA = Screen(slab.Outline.Min(p => p.X), slab.Outline.Max(p => p.Y));
         var outerB = Screen(slab.Outline.Max(p => p.X), slab.Outline.Min(p => p.Y));
-        if (outerB.X - outerA.X < 100 || outerB.Y - outerA.Y < 100) return;
-        if (outerA.Y >= 28)
-        {
-            var gap = Math.Min(48, outerA.Y - 26);
-            DrawDimension(context, new Point(outerA.X, outerA.Y - gap), new Point(outerB.X, outerA.Y - gap),
-                (outerB.X - outerA.X) / _scale, false);
-        }
-        var rightGap = Math.Min(48, Bounds.Width - outerB.X - 12);
-        if (rightGap >= 12)
-            DrawDimension(context, new Point(outerB.X + rightGap, outerA.Y), new Point(outerB.X + rightGap, outerB.Y),
-                (outerB.Y - outerA.Y) / _scale, true);
+        var gap = 700*_scale;
+        DrawDimension(context, new Point(outerA.X, outerA.Y - gap), new Point(outerB.X, outerA.Y - gap),
+            (outerB.X - outerA.X) / _scale, false);
+        DrawDimension(context, new Point(outerB.X + gap, outerA.Y), new Point(outerB.X + gap, outerB.Y),
+            (outerB.Y - outerA.Y) / _scale, true);
         foreach (var hole in slab.Openings ?? new())
         {
             var a = Screen(hole.Outline.Min(p => p.X), hole.Outline.Max(p => p.Y));
             var b = Screen(hole.Outline.Max(p => p.X), hole.Outline.Min(p => p.Y));
             var center = new Point((a.X + b.X) / 2, (a.Y + b.Y) / 2);
-            if (b.X - a.X < 55 || b.Y - a.Y < 55) continue;
-            var crossing = new Pen(new SolidColorBrush(Color.Parse("#506475")), 1);
+            var crossing = new Pen(new SolidColorBrush(Color.Parse("#506475")), Stroke());
             context.DrawLine(crossing, a, b);
             context.DrawLine(crossing, new Point(b.X, a.Y), new Point(a.X, b.Y));
             var text = new FormattedText(hole.Name ?? "洞口", CultureInfo.CurrentCulture,
-                FlowDirection.LeftToRight, Typeface.Default, 15, Brushes.White);
+                FlowDirection.LeftToRight, Typeface.Default, 250*_scale, Brushes.White);
             context.FillRectangle(new SolidColorBrush(Color.Parse("#111A25")),
-                new Rect(center.X - text.Width / 2 - 4, center.Y - text.Height / 2, text.Width + 8, text.Height));
+                new Rect(center.X - text.Width / 2 - 60*_scale, center.Y - text.Height / 2, text.Width + 120*_scale, text.Height));
             context.DrawText(text, new Point(center.X - text.Width / 2, center.Y - text.Height / 2));
-            DrawDimension(context, new Point(a.X, a.Y - 20), new Point(b.X, a.Y - 20),
+            DrawDimension(context, new Point(a.X, a.Y - 300*_scale), new Point(b.X, a.Y - 300*_scale),
                 (b.X - a.X) / _scale, false);
-            DrawDimension(context, new Point(a.X - 20, a.Y), new Point(a.X - 20, b.Y),
+            DrawDimension(context, new Point(a.X - 300*_scale, a.Y), new Point(a.X - 300*_scale, b.Y),
                 (b.Y - a.Y) / _scale, true);
         }
     }
 
-    private static void DrawDimension(DrawingContext context, Point a, Point b, double mm, bool vertical)
+    private void DrawDimension(DrawingContext context, Point a, Point b, double mm, bool vertical)
     {
-        var pen = new Pen(new SolidColorBrush(Color.Parse("#D4E0E8")), 1);
+        var pen = new Pen(new SolidColorBrush(Color.Parse("#D4E0E8")), Stroke());
         context.DrawLine(pen, a, b);
         foreach (var p in new[] { a, b })
-            context.DrawLine(pen, vertical ? new Point(p.X - 6, p.Y) : new Point(p.X, p.Y - 6),
-                vertical ? new Point(p.X + 6, p.Y) : new Point(p.X, p.Y + 6));
-        var dx = vertical ? 0 : 5; var dy = vertical ? 5 : 0;
+            context.DrawLine(pen, vertical ? new Point(p.X - 100*_scale, p.Y) : new Point(p.X, p.Y - 100*_scale),
+                vertical ? new Point(p.X + 100*_scale, p.Y) : new Point(p.X, p.Y + 100*_scale));
+        var dx = vertical ? 0 : 80*_scale; var dy = vertical ? 80*_scale : 0;
         context.DrawLine(pen, a, new Point(a.X + dx + dy, a.Y + dy - dx));
         context.DrawLine(pen, a, new Point(a.X + dx - dy, a.Y + dy + dx));
         context.DrawLine(pen, b, new Point(b.X - dx + dy, b.Y - dy - dx));
         context.DrawLine(pen, b, new Point(b.X - dx - dy, b.Y - dy + dx));
         var text = new FormattedText(mm.ToString("0.##", CultureInfo.InvariantCulture),
-            CultureInfo.InvariantCulture, FlowDirection.LeftToRight, Typeface.Default, 15, Brushes.White);
+            CultureInfo.InvariantCulture, FlowDirection.LeftToRight, Typeface.Default, 250*_scale, Brushes.White);
         if (vertical)
         {
             using var transform = context.PushTransform(Matrix.CreateRotation(-Math.PI / 2)
-                * Matrix.CreateTranslation((a.X + b.X) / 2 - 12, (a.Y + b.Y) / 2));
+                * Matrix.CreateTranslation((a.X + b.X) / 2 - 200*_scale, (a.Y + b.Y) / 2));
             context.DrawText(text, new Point(-text.Width / 2, -text.Height / 2));
         }
-        else context.DrawText(text, new Point((a.X + b.X) / 2 - text.Width / 2, a.Y - text.Height - 2));
+        else context.DrawText(text, new Point((a.X + b.X) / 2 - text.Width / 2, a.Y - text.Height - 50*_scale));
     }
 
-    private void DrawAxes(DrawingContext context, PointModel min, PointModel max)
+    private void DrawAxes(DrawingContext context)
     {
-        var brush = new SolidColorBrush(Color.Parse("#6A9AA8"));
-        var pen = new Pen(brush, 1, new DashStyle(new[] { 10d, 4d, 2d, 4d }, 0));
-        var labelBrush = new SolidColorBrush(Color.Parse("#B3D8E1"));
-        foreach (var axis in _resolvedAxes)
-        {
-            if (axis == null || double.IsNaN(axis.Position) || double.IsInfinity(axis.Position)) continue;
-            var named = !string.IsNullOrWhiteSpace(axis.Name);
-            if (axis.Vertical)
-            {
-                if (axis.Position < min.X || axis.Position > max.X) continue;
-                var start = axis.ExtentStart == 0 && axis.ExtentEnd == 0 ? min.Y : axis.ExtentStart;
-                var end = axis.ExtentStart == 0 && axis.ExtentEnd == 0 ? max.Y : axis.ExtentEnd;
-                var a = Screen(axis.Position, Math.Max(start, min.Y));
-                var b = Screen(axis.Position, Math.Min(end, max.Y));
-                if (a.Y < b.Y) continue;
-                context.DrawLine(pen, a, b);
-                if (named)
-                {
-                    DrawAxisBubble(context, axis.StartName ?? axis.Name,
-                        new Point(a.X, Math.Min(Bounds.Height - 18, a.Y - 17)), labelBrush);
-                    DrawAxisBubble(context, axis.EndName ?? axis.Name,
-                        new Point(b.X, Math.Max(18, b.Y + 17)), labelBrush);
-                }
-            }
-            else
-            {
-                if (axis.Position < min.Y || axis.Position > max.Y) continue;
-                var start = axis.ExtentStart == 0 && axis.ExtentEnd == 0 ? min.X : axis.ExtentStart;
-                var end = axis.ExtentStart == 0 && axis.ExtentEnd == 0 ? max.X : axis.ExtentEnd;
-                var a = Screen(Math.Max(start, min.X), axis.Position);
-                var b = Screen(Math.Min(end, max.X), axis.Position);
-                if (a.X > b.X) continue;
-                context.DrawLine(pen, a, b);
-                if (named)
-                {
-                    DrawAxisBubble(context, axis.StartName ?? axis.Name,
-                        new Point(Math.Max(18, a.X + 17), a.Y), labelBrush);
-                    DrawAxisBubble(context, axis.EndName ?? axis.Name,
-                        new Point(Math.Min(Bounds.Width - 18, b.X - 17), b.Y), labelBrush);
-                }
-            }
+        var brush=new SolidColorBrush(Color.Parse("#6A9AA8"));
+        var pen=new Pen(brush,Stroke(10),new DashStyle(new[] { 10d,4d,2d,4d },0));
+        var labels=new SolidColorBrush(Color.Parse("#B3D8E1"));
+        foreach(var endpoints in AxisEndpoints()) {
+            var axis=endpoints.Axis;
+            if(axis.Hidden||axis.Deleted)continue;
+            var a=Screen(endpoints.Start.X,endpoints.Start.Y);var b=Screen(endpoints.End.X,endpoints.End.Y);
+            context.DrawLine(pen,a,b);
+            if(string.IsNullOrWhiteSpace(axis.Name))continue;
+            if(!axis.StartHidden&&!axis.StartRemoved) DrawAxisBubble(context,axis.StartName ?? axis.Name,a,labels);
+            if(!axis.EndHidden&&!axis.EndRemoved) DrawAxisBubble(context,axis.EndName ?? axis.Name,b,labels);
         }
+    }
+
+    private IReadOnlyList<(AxisModel Axis,PointModel Start,PointModel End)> AxisEndpoints()
+    {
+        if(_axisEndpointCache!=null)return _axisEndpointCache;
+        _axisEndpointCache=new();
+        var walls=_model.Walls.Where(w=>w.StoreyId==_storeyId).ToArray();
+        var minX=walls.Length==0?-1500:walls.Min(w=>Math.Min(w.X1,w.X2)-w.Thickness/2);
+        var maxX=walls.Length==0?1500:walls.Max(w=>Math.Max(w.X1,w.X2)+w.Thickness/2);
+        var minY=walls.Length==0?-1500:walls.Min(w=>Math.Min(w.Y1,w.Y2)-w.Thickness/2);
+        var maxY=walls.Length==0?1500:walls.Max(w=>Math.Max(w.Y1,w.Y2)+w.Thickness/2);
+        foreach(var axis in _resolvedAxes.Where(a=>AxisMode!=AxisEditMode.Off||(!a.Hidden&&!a.Deleted))) {
+            var automatic=axis.ExtentStart==0&&axis.ExtentEnd==0;
+            var start=automatic?(axis.Vertical?minY:minX)-4500:Math.Min(axis.ExtentStart,axis.ExtentEnd);
+            var end=automatic?(axis.Vertical?maxY:maxX)+4500:Math.Max(axis.ExtentStart,axis.ExtentEnd);
+            if(axis.StartRemoved||axis.EndRemoved) {var shortened=BuildingAxisLayout.Extents(_model,axis,_storeyId,4500);
+                if(axis.StartRemoved)start=shortened[0];if(axis.EndRemoved)end=shortened[1];}
+            _axisEndpointCache.Add((axis,axis.Vertical?new PointModel(axis.Position,start):new PointModel(start,axis.Position),
+                axis.Vertical?new PointModel(axis.Position,end):new PointModel(end,axis.Position)));
+        }
+        return _axisEndpointCache;
     }
 
     private void DrawOrthogonalJunctions(DrawingContext context)
     {
         foreach (var (horizontal, vertical) in _orthogonalJunctions)
         {
+            if(!Visible(horizontal.Id)||!Visible(vertical.Id))continue;
             if (_gripPreview != null && _gripWallId != null
                 && (horizontal.Id == _gripWallId || vertical.Id == _gripWallId)) continue;
             var horizontalBody = PreviewWallBody(horizontal);
             var verticalBody = PreviewWallBody(vertical);
             var x = (verticalBody.first.X + verticalBody.second.X) / 2;
             var y = (horizontalBody.first.Y + horizontalBody.second.Y) / 2;
-            var width = Math.Clamp(vertical.Thickness * _scale, 3, 30);
-            var height = Math.Clamp(horizontal.Thickness * _scale, 3, 30);
-            var color = horizontal.Id == _selectedId || vertical.Id == _selectedId ? "#FFC46B"
+            var width = vertical.Thickness * _scale;
+            var height = horizontal.Thickness * _scale;
+            var color = _selectedIds.Contains(horizontal.Id) || _selectedIds.Contains(vertical.Id) ? "#FFC46B"
                 : _slabGeometry.ContainsKey(_selectedId ?? "") ? "#334652" : "#9BC4E9";
             context.FillRectangle(new SolidColorBrush(Color.Parse(color)),
                 new Rect(x - width / 2, y - height / 2, width, height));
@@ -977,7 +1043,7 @@ internal sealed class PlanEditorCanvas : Control
     private void IndexOrthogonalJunctions()
     {
         _orthogonalJunctions.Clear();
-        var walls = _model.Walls.Where(w => w.StoreyId == _storeyId).ToArray();
+        var walls = _model.Walls.Where(w => w.StoreyId == _storeyId && Visible(w.Id)).ToArray();
         for (var i = 0; i < walls.Length; i++)
         for (var j = i + 1; j < walls.Length; j++)
         {
@@ -1003,12 +1069,12 @@ internal sealed class PlanEditorCanvas : Control
         }
     }
 
-    private static void DrawAxisBubble(DrawingContext context, string name, Point center, IBrush brush)
+    private void DrawAxisBubble(DrawingContext context, string name, Point center, IBrush brush)
     {
-        var pen = new Pen(brush, 1);
-        context.DrawEllipse(new SolidColorBrush(Color.Parse("#111A25")), pen, center, 14, 14);
+        var pen = new Pen(brush, Stroke(15));
+        context.DrawEllipse(new SolidColorBrush(Color.Parse("#111A25")), pen, center, 450*_scale, 450*_scale);
         var text = new FormattedText(name, CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
-            Typeface.Default, 12, brush);
+            Typeface.Default, 600*_scale, brush);
         context.DrawText(text, new Point(center.X - text.Width / 2, center.Y - text.Height / 2));
     }
 }

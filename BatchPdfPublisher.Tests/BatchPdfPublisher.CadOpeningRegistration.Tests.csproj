@@ -4,9 +4,11 @@
     <UseWPF>true</UseWPF><EnableDefaultCompileItems>false</EnableDefaultCompileItems>
   </PropertyGroup>
   <ItemGroup>
+    <None Include="Fixtures/SlabNativeCoordinateNoise.json" CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="../BuildingModel.Core/BuildingModel.Core.csproj" />
     <Compile Include="CadOpeningRegistrationTests.cs" />
     <Compile Include="CadFloorModelGenerationTests.cs" />
+    <Compile Include="CadFloorSlabGenerationTests.cs" />
     <Compile Include="CadOpeningScheduleRulesTests.cs" />
     <Compile Include="../BatchPdfPublisher/Features/DoorWindows/Services/DoorWindowElevationSuggestionService.cs" Link="DoorWindowElevationSuggestionService.cs" />
     <Compile Include="../BatchPdfPublisher/Features/BuildingModel/Views/CadFloorRegistrationWindow.cs" Link="CadFloorRegistrationWindow.cs" />

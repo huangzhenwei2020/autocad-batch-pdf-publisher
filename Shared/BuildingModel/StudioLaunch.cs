@@ -31,7 +31,8 @@ namespace BatchPdfPublisher.BuildingModel
             get
             {
                 var kind = Kind == ViewKind.Sheet ? "图纸" : Kind == ViewKind.Plan ? "平面"
-                    : Kind == ViewKind.Section ? "剖面" : Kind == ViewKind.Schedule ? "门窗表" : "立面";
+                    : Kind == ViewKind.Section ? "剖面" : Kind == ViewKind.Schedule ? "门窗表"
+                    : Kind == ViewKind.OpeningElevation ? "门窗立面" : Kind == ViewKind.Axonometric ? "轴测" : "立面";
                 return (Pending ? "★" : "　") + "[" + kind + "] " + (string.IsNullOrWhiteSpace(Title) ? Id : Title)
                     + "　" + Modified.ToString("MM-dd HH:mm");
             }

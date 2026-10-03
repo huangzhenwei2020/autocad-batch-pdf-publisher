@@ -38,6 +38,10 @@ namespace BatchPdfPublisher.BuildingModel
         /// <summary>法线在屏幕右／上方向的投影（把面沿法线平移时，投影里就平移这个量）。</summary>
         public double NormalU { get; set; }
         public double NormalV { get; set; }
+        public bool HasDepthPlane { get; set; }
+        public double DepthSlopeU { get; set; }
+        public double DepthSlopeV { get; set; }
+        public double DepthIntercept { get; set; }
         /// <summary>法线是不是朝着相机（false = 背面）。</summary>
         public bool Visible { get; set; }
     }
@@ -92,7 +96,8 @@ namespace BatchPdfPublisher.BuildingModel
         private static readonly double[] Sun = Normalize(-0.45d, -0.55d, 0.70d);
 
         /// <summary>投影整个体量；结果已按"从远到近"排好序。</summary>
-        public static List<VolumeFace2D> Project(BuildingVolume volume, VolumeCamera camera)
+        public static List<VolumeFace2D> Project(BuildingVolume volume, VolumeCamera camera, Action<string> reportProgress = null,
+            bool edgesOnly = false, bool includeHiddenEdges = true)
         {
             var result = new List<VolumeFace2D>();
             if (volume == null || volume.Faces.Count == 0) return result;
@@ -171,15 +176,43 @@ namespace BatchPdfPublisher.BuildingModel
                     NormalU = face.NormalX * right[0] + face.NormalY * right[1] + face.NormalZ * right[2],
                     NormalV = face.NormalX * up[0] + face.NormalY * up[1] + face.NormalZ * up[2]
                 });
+                var projectedFace = result[result.Count-1];
+                var normalDepth = face.NormalX*forward[0]+face.NormalY*forward[1]+face.NormalZ*forward[2];
+                if (!view.Perspective && Math.Abs(normalDepth)>1e-8)
+                {
+                    projectedFace.HasDepthPlane = true;
+                    projectedFace.DepthSlopeU = -projectedFace.NormalU/normalDepth;
+                    projectedFace.DepthSlopeV = -projectedFace.NormalV/normalDepth;
+                    projectedFace.DepthIntercept = projectedFace.Depth
+                        - projectedFace.DepthSlopeU*projected.Average(p=>p.X)
+                        - projectedFace.DepthSlopeV*projected.Average(p=>p.Y);
+                }
             }
 
             // 注意：判"内部贴合面"要用**全部**面（含背面）—— 贴在一起的两块，朝外的那面正好背着相机时，
             // 用它对面那块来盖住它才对；先用背面剔除会把判据本身剔掉。
-            var kept = DropFacesBehindParallelPlanes(DropHiddenInterfaces(result))
-                .Where(item => item.Visible).ToList();
+            reportProgress?.Invoke("projected "+result.Count);
+            if(edgesOnly) {
+                // Topology cleanup only: remove coincident interior interfaces and
+                // shared coplanar subdivision edges, then keep front and back edges.
+                var mesh=result.GroupBy(f=>f.PlaneId ?? string.Empty).SelectMany(g=>ResolveCoincident(g.ToList())).ToList();
+                SuppressCoplanarEdges(mesh);
+                if(!includeHiddenEdges) {
+                    mesh=mesh.Where(f=>f.Visible).OrderByDescending(f=>f.Depth).ToList();
+                    HideEdgesBehindNearerFaces(mesh);
+                }
+                reportProgress?.Invoke("mesh edges");
+                return mesh;
+            }
+            var interfaces=DropHiddenInterfaces(result);
+            reportProgress?.Invoke("interfaces "+interfaces.Count);
+            var kept = DropFacesBehindParallelPlanes(interfaces).Where(item => item.Visible).ToList();
+            reportProgress?.Invoke("parallel "+kept.Count);
             var ordered = kept.OrderByDescending(item => item.Depth).ToList();      // 远的先画
             SuppressCoplanarEdges(ordered);
+            reportProgress?.Invoke("coplanar");
             HideEdgesBehindNearerFaces(ordered);
+            reportProgress?.Invoke("hidden edges");
             return ordered;
         }
 
@@ -195,6 +228,7 @@ namespace BatchPdfPublisher.BuildingModel
             if (ordered == null || ordered.Count < 2) return;
             // 预先算好每个面投影的外包框：绝大部分"更近的面"跟这条边根本不相干，靠它快速跳过
             var boxes = ordered.Select(face => Bounds(face.Points)).ToArray();
+            var spatial = new FaceBoundsIndex(boxes,Enumerable.Range(0,ordered.Count).ToArray());
             for (var index = 0; index < ordered.Count; index++)
             {
                 var face = ordered[index];
@@ -204,13 +238,21 @@ namespace BatchPdfPublisher.BuildingModel
                 {
                     if (segment == null || segment.Count < 2) continue;
                     var remaining = new List<List<PointModel>> { segment };
-                    for (var nearer = index + 1; nearer < ordered.Count && remaining.Count > 0; nearer++)
+                    var a=segment[0];var b=segment[1];
+                    if(a==null || b==null)continue;
+                    var candidates=new List<int>();
+                    spatial.Query(Math.Min(a.X,b.X),Math.Min(a.Y,b.Y),Math.Max(a.X,b.X),Math.Max(a.Y,b.Y),candidates);
+                    candidates.Sort(); // Keep the same clipping order as the original face list.
+                    foreach(var nearer in candidates)
                     {
+                        if(remaining.Count==0)break;
+                        if(!face.HasDepthPlane && nearer<=index)continue;
+                        if (nearer == index) continue;
                         var cover = ordered[nearer];
                         var box = boxes[nearer];
                         var next = new List<List<PointModel>>();
                         foreach (var part in remaining)
-                            next.AddRange(SubtractPolygon(part, cover.Points, box));
+                            next.AddRange(SubtractPolygon(part, cover.Points, box, face, cover));
                         remaining = next;
                     }
                     visible.AddRange(remaining);
@@ -219,9 +261,40 @@ namespace BatchPdfPublisher.BuildingModel
             }
         }
 
+        // Screen-space bounds only prune faces that cannot intersect the original edge.
+        // The exact polygon/depth clipping remains unchanged for all candidates.
+        private sealed class FaceBoundsIndex
+        {
+            private readonly double[][] _boxes;
+            private readonly double[] _bounds;
+            private readonly int[] _items;
+            private readonly FaceBoundsIndex _left,_right;
+            public FaceBoundsIndex(double[][] boxes,int[] items)
+            {
+                _boxes=boxes;
+                _bounds=new[] { items.Min(i=>boxes[i][0]),items.Min(i=>boxes[i][1]),
+                    items.Max(i=>boxes[i][2]),items.Max(i=>boxes[i][3]) };
+                if(items.Length<=16) { _items=items;return; }
+                var axis=_bounds[2]-_bounds[0]>=_bounds[3]-_bounds[1] ? 0 : 1;
+                var sorted=items.OrderBy(i=>boxes[i][axis]+boxes[i][axis+2]).ToArray();
+                var middle=sorted.Length/2;
+                _left=new FaceBoundsIndex(boxes,sorted.Take(middle).ToArray());
+                _right=new FaceBoundsIndex(boxes,sorted.Skip(middle).ToArray());
+            }
+            public void Query(double minX,double minY,double maxX,double maxY,List<int> matches)
+            {
+                if(maxX<_bounds[0] || minX>_bounds[2] || maxY<_bounds[1] || minY>_bounds[3])return;
+                if(_items==null) { _left.Query(minX,minY,maxX,maxY,matches);_right.Query(minX,minY,maxX,maxY,matches);return; }
+                foreach(var i in _items) {
+                    var box=_boxes[i];
+                    if(maxX>=box[0] && minX<=box[2] && maxY>=box[1] && minY<=box[3])matches.Add(i);
+                }
+            }
+        }
+
         /// <summary>线段减去一块凸/凹多边形（返回剩下没被盖住的段）。</summary>
         private static List<List<PointModel>> SubtractPolygon(List<PointModel> segment, List<PointModel> polygon,
-            double[] box)
+            double[] box, VolumeFace2D source = null, VolumeFace2D cover = null)
         {
             var result = new List<List<PointModel>>();
             if (segment == null || segment.Count < 2 || polygon == null || polygon.Count < 3) { result.Add(segment); return result; }
@@ -239,6 +312,15 @@ namespace BatchPdfPublisher.BuildingModel
 
             // 1) 求出线段与多边形各边的交点参数 t（0..1），加上两端点
             var cuts = new List<double> { 0d, 1d };
+            Func<double,double,double> depthGap = (x,y) => source != null && cover != null && source.HasDepthPlane && cover.HasDepthPlane
+                ? source.DepthIntercept-cover.DepthIntercept+(source.DepthSlopeU-cover.DepthSlopeU)*x+(source.DepthSlopeV-cover.DepthSlopeV)*y
+                : 1d;
+            var gapA = depthGap(a.X,a.Y); var gapB = depthGap(b.X,b.Y);
+            if (Math.Abs(gapA-gapB)>1e-9)
+            {
+                var crossing = (.1-gapA)/(gapB-gapA);
+                if (crossing>0 && crossing<1) cuts.Add(crossing);
+            }
             for (var index = 0; index < polygon.Count; index++)
             {
                 var p = polygon[index];
@@ -264,12 +346,13 @@ namespace BatchPdfPublisher.BuildingModel
                 var mid = (t0 + t1) / 2d;
                 var x = a.X + dx * mid;
                 var y = a.Y + dy * mid;
-                if (CoveredStrict(polygon, x, y)) continue;
-                result.Add(new List<PointModel>
-                {
-                    new PointModel(a.X + dx * t0, a.Y + dy * t0),
-                    new PointModel(a.X + dx * t1, a.Y + dy * t1)
-                });
+                if (depthGap(x,y)>.1 && CoveredStrict(polygon, x, y)) continue;
+                var start = new PointModel(a.X + dx * t0, a.Y + dy * t0);
+                var end = new PointModel(a.X + dx * t1, a.Y + dy * t1);
+                var previous = result.LastOrDefault();
+                if (previous != null && Math.Abs(previous[1].X-start.X)<1e-6 && Math.Abs(previous[1].Y-start.Y)<1e-6)
+                    previous[1] = end;
+                else result.Add(new List<PointModel> { start,end });
             }
             return result;
         }
@@ -323,19 +406,26 @@ namespace BatchPdfPublisher.BuildingModel
                 var layers = line.GroupBy(face => Math.Round(face.PlaneOffset / 0.5d, MidpointRounding.AwayFromZero))
                     .OrderBy(layer => layer.Key)
                     .ToList();
+                var covers=layers.Select(layer=>layer.Where(f=>f.Visible).ToList()).ToArray();
+                var coverIndexes=covers.Select(cover=>cover.Count==0 ? null : new FaceBoundsIndex(
+                    cover.Select(f=>Bounds(f.Points)).ToArray(),Enumerable.Range(0,cover.Count).ToArray())).ToArray();
                 foreach (var layer in layers) kept.AddRange(layer);
                 for (var index = 0; index < layers.Count; index++)
                 {
                     foreach (var face in layers[index])
                     {
                         if (!face.Visible) continue;                       // 背面的本来就不画
+                        var faceBounds=Bounds(face.Points);
                         for (var ahead = index + 1; ahead < layers.Count; ahead++)
                         {
                             var gap = (layers[ahead].Key - layers[index].Key) * 0.5d;
                             if (gap > maxGap + 0.5d) break;
                             if (gap <= 0.5d) continue;
-                            var cover = layers[ahead].Where(item => item.Visible).ToList();
-                            if (cover.Count == 0) continue;
+                            if(coverIndexes[ahead]==null)continue;
+                            var matches=new List<int>();
+                            coverIndexes[ahead].Query(faceBounds[0]-.05,faceBounds[1]-.05,faceBounds[2]+.05,faceBounds[3]+.05,matches);
+                            var cover=matches.Select(i=>covers[ahead][i]).ToList();
+                            if(cover.Count==0)continue;
                             if (!MostlyCovered(face, cover)) continue;
                             kept.Remove(face);
                             break;
@@ -394,14 +484,17 @@ namespace BatchPdfPublisher.BuildingModel
             {
                 var unique = ResolveCoincident(group.ToList());
                 if (unique.Count < 2) { kept.AddRange(unique); continue; }
+                var spatial=new FaceBoundsIndex(unique.Select(f=>Bounds(f.Points)).ToArray(),Enumerable.Range(0,unique.Count).ToArray());
                 foreach (var face in unique)
                 {
                     var covered = true;
                     foreach (var sample in SamplePoints(face))
                     {
                         var inside = false;
-                        foreach (var other in unique)
+                        var matches=new List<int>();spatial.Query(sample.X-.05,sample.Y-.05,sample.X+.05,sample.Y+.05,matches);
+                        foreach (var candidate in matches)
                         {
+                            var other=unique[candidate];
                             if (ReferenceEquals(other, face)) continue;
                             if (!Inside(other.Points, sample.X, sample.Y)) continue;
                             inside = true;
@@ -425,12 +518,24 @@ namespace BatchPdfPublisher.BuildingModel
         {
             var result = new List<VolumeFace2D>();
             var clusters = new List<List<VolumeFace2D>>();
-            foreach (var face in faces)
+            if(faces.Count==0)return result;
+            var boxes=faces.Select(f=>Bounds(f.Points)).ToArray();
+            var spatial=new FaceBoundsIndex(boxes,Enumerable.Range(0,faces.Count).ToArray());
+            var representatives=Enumerable.Repeat(-1,faces.Count).ToArray();
+            for(var index=0;index<faces.Count;index++)
             {
+                var face=faces[index];var box=boxes[index];
                 var found = false;
-                foreach (var cluster in clusters)
-                    if (SamePolygon(cluster[0].Points, face.Points)) { cluster.Add(face); found = true; break; }
+                var matches=new List<int>();
+                spatial.Query(box[0]-.05,box[1]-.05,box[2]+.05,box[3]+.05,matches);matches.Sort();
+                foreach(var candidate in matches) {
+                    if(candidate>=index)break;
+                    if(representatives[candidate]<0)continue;
+                    var cluster=clusters[representatives[candidate]];
+                    if(SamePolygon(cluster[0].Points,face.Points)) { cluster.Add(face);found=true;break; }
+                }
                 if (found) continue;
+                representatives[index]=clusters.Count;
                 clusters.Add(new List<VolumeFace2D> { face });
             }
             foreach (var cluster in clusters)
@@ -575,20 +680,26 @@ namespace BatchPdfPublisher.BuildingModel
                     byPlane[face.PlaneKey] = list = new List<VolumeFace2D>();
                 list.Add(face);
             }
+            var indexes=byPlane.ToDictionary(pair=>pair.Key,pair=>new FaceBoundsIndex(
+                pair.Value.Select(f=>Bounds(f.Points)).ToArray(),Enumerable.Range(0,pair.Value.Count).ToArray()),StringComparer.Ordinal);
 
             foreach (var face in faces)
             {
                 face.Edges = new List<List<PointModel>>();
-                var neighbours = face.PlaneKey != null && byPlane.TryGetValue(face.PlaneKey, out var same)
-                    ? same.Where(other => !ReferenceEquals(other, face)).ToList()
-                    : new List<VolumeFace2D>();
                 for (var index = 0; index < face.Points.Count; index++)
                 {
                     var a = face.Points[index];
                     var b = face.Points[(index + 1) % face.Points.Count];
                     if (a == null || b == null) continue;
                     var covered = new List<double[]>();
-                    foreach (var other in neighbours) CollectCoverage(other, a, b, covered);
+                    if(face.PlaneKey!=null && indexes.TryGetValue(face.PlaneKey,out var spatial)) {
+                        var matches=new List<int>();
+                        spatial.Query(Math.Min(a.X,b.X)-.35,Math.Min(a.Y,b.Y)-.35,Math.Max(a.X,b.X)+.35,Math.Max(a.Y,b.Y)+.35,matches);
+                        foreach(var candidate in matches) {
+                            var other=byPlane[face.PlaneKey][candidate];
+                            if(!ReferenceEquals(other,face))CollectCoverage(other,a,b,covered);
+                        }
+                    }
                     EmitUncovered(face.Edges, a, b, covered);
                 }
             }

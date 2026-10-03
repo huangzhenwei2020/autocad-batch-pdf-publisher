@@ -71,13 +71,14 @@ namespace BatchPdfPublisher.BuildingModel
     /// 已知简化（P4 后续）：**门窗洞口还没在体量上开洞**（洞口位置在立面投影里已经处理），
     /// 斜墙按轴线方向的矩形处理，楼梯/坡屋面还没做。
     /// </summary>
-    public static class BuildingVolumeBuilder
+    public static partial class BuildingVolumeBuilder
     {
-        public static BuildingVolume Build(BuildingModelDocument model, string storeyId = null)
+        public static BuildingVolume Build(BuildingModelDocument model, string storeyId = null, bool includeOpeningParts = true)
         {
             var volume = new BuildingVolume();
             if (model == null) return volume;
             model = StandardStoreyLayout.Materialize(model);
+            var partCache=new Dictionary<string,List<OpeningPart>>();
             var onlyOne = !string.IsNullOrWhiteSpace(storeyId);
             var first = true;
 
@@ -99,8 +100,8 @@ namespace BatchPdfPublisher.BuildingModel
             {
                 var z0 = model.BaseElevationOf(wall);
                 var z1 = z0 + model.HeightOf(wall);
-                if (merged.Contains(wall.Id)) AddMergedWallOpeningParts(volume, wall, model, z0, z1, ref first);
-                else AddWallWithOpenings(volume, wall, model, z0, z1, ref first);
+                if (merged.Contains(wall.Id)) AddMergedWallOpeningParts(volume, wall, model, z0, z1, ref first, includeOpeningParts, partCache);
+                else AddWallWithOpenings(volume, wall, model, z0, z1, ref first, includeOpeningParts, partCache);
             }
             foreach (var column in model.Columns ?? new List<ColumnModel>())
             {
@@ -109,6 +110,14 @@ namespace BatchPdfPublisher.BuildingModel
                 var z0 = model.BaseElevationOf(column);
                 var z1 = z0 + model.HeightOf(column);
                 AddColumnBox(volume, column, z0, z1, ref first);
+            }
+            foreach(var beam in model.Beams ?? new List<BeamModel>())
+            {
+                if(beam==null || (onlyOne && !Same(beam.StoreyId,storeyId)))continue;
+                var top=model.TopElevationOf(beam);
+                var outline=StructuralGeometry.BeamOutline(beam);
+                if(outline.Count==4 && beam.Depth>.5)AddPrism(volume,outline.Select(p=>new Point3DModel(p.X,p.Y,top-beam.Depth)).ToList(),
+                    top-beam.Depth,top,"beam",beam.StoreyId,beam.Id,ref first);
             }
             foreach (var slab in model.Slabs ?? new List<SlabModel>())
             {
@@ -148,15 +157,20 @@ namespace BatchPdfPublisher.BuildingModel
                         End = new Point3DModel(wall.X2 + ux * 1200d, wall.Y2 + uy * 1200d, z), ElementId = wall.Id
                     });
                 }
-                foreach (var axis in BuildingAxisLayout.Resolve(model))
+                foreach (var axis in BuildingAxisLayout.Resolve(model, storeyId))
                 {
-                    if (axis == null || !IsFinite(axis.Position)) continue;
+                    if (axis == null || axis.Hidden || axis.Deleted || !IsFinite(axis.Position)) continue;
                     var from = axis.ExtentStart == 0 && axis.ExtentEnd == 0
                         ? (axis.Vertical ? volume.MinY - 4500d : volume.MinX - 4500d)
                         : Math.Min(axis.ExtentStart, axis.ExtentEnd);
                     var to = axis.ExtentStart == 0 && axis.ExtentEnd == 0
                         ? (axis.Vertical ? volume.MaxY + 4500d : volume.MaxX + 4500d)
                         : Math.Max(axis.ExtentStart, axis.ExtentEnd);
+                    if(axis.StartRemoved||axis.EndRemoved) {
+                        var shortened=BuildingAxisLayout.Extents(model,axis,storeyId,4500d);
+                        if(axis.StartRemoved) from=shortened[0];
+                        if(axis.EndRemoved) to=shortened[1];
+                    }
                     var z = volume.MinZ + 2d;
                     volume.GuideLines.Add(new VolumeGuideLine
                     {
@@ -165,8 +179,8 @@ namespace BatchPdfPublisher.BuildingModel
                         End = axis.Vertical ? new Point3DModel(axis.Position, to, z)
                             : new Point3DModel(to, axis.Position, z),
                         ElementId = axis.Id, Label = axis.Name,
-                        StartLabel = string.IsNullOrWhiteSpace(axis.StartName) ? axis.Name : axis.StartName,
-                        EndLabel = string.IsNullOrWhiteSpace(axis.EndName) ? axis.Name : axis.EndName,
+                        StartLabel = axis.StartHidden || axis.StartRemoved ? "" : (string.IsNullOrWhiteSpace(axis.StartName) ? axis.Name : axis.StartName),
+                        EndLabel = axis.EndHidden || axis.EndRemoved ? "" : (string.IsNullOrWhiteSpace(axis.EndName) ? axis.Name : axis.EndName),
                         IsBuildingAxis = true
                     });
                 }
@@ -284,7 +298,7 @@ namespace BatchPdfPublisher.BuildingModel
         /// 于是窗和门在三维里就是真的洞（这是体量生成最关键的一步 —— 不然建筑永远是个实心方块）。
         /// </summary>
         private static void AddWallWithOpenings(BuildingVolume volume, WallModel wall, BuildingModelDocument model,
-            double z0, double z1, ref bool first)
+            double z0, double z1, ref bool first, bool includeOpeningParts, Dictionary<string,List<OpeningPart>> partCache)
         {
             var length = Math.Sqrt((wall.X2 - wall.X1) * (wall.X2 - wall.X1) + (wall.Y2 - wall.Y1) * (wall.Y2 - wall.Y1));
             if (length < 1d || z1 - z0 < 1d) return;
@@ -321,35 +335,127 @@ namespace BatchPdfPublisher.BuildingModel
             }
             if (length - cursor > 1d) AddWallSegment(volume, wall, cursor, length, z0, z1, ref first);
 
-            // 门联窗与窗显示闭合框和玻璃；普通门保留开启门扇。
-            foreach (var opening in openings)
-            {
-                if (opening.Source.HasSwingLeaf())
-                    AddDoorLeaf(volume, wall, opening.Start, opening.End, z0 + opening.Sill, z0 + opening.Head,
-                        wall.StoreyId, opening.Source.Id, ref first);
-                else
-                    AddWindowParts(volume, wall, opening.Start, opening.End, z0 + opening.Sill, z0 + opening.Head,
-                        wall.StoreyId, opening.Source.Id, ref first);
-            }
+            if(includeOpeningParts)
+                foreach(var opening in openings)
+                    AddConstruction(volume,wall,model,opening.Source,z0,ref first,partCache);
         }
 
         private static void AddMergedWallOpeningParts(BuildingVolume volume, WallModel wall,
-            BuildingModelDocument model, double z0, double z1, ref bool first)
+            BuildingModelDocument model, double z0, double z1, ref bool first, bool includeOpeningParts, Dictionary<string,List<OpeningPart>> partCache)
         {
-            var length = Math.Sqrt(Math.Pow(wall.X2 - wall.X1, 2) + Math.Pow(wall.Y2 - wall.Y1, 2));
-            foreach (var opening in model.Openings ?? new List<OpeningModel>())
-            {
-                if (opening == null || !Same(opening.HostWallId, wall.Id)) continue;
-                var start = Math.Max(0d, opening.Offset - opening.Width / 2d);
-                var end = Math.Min(length, opening.Offset + opening.Width / 2d);
-                var sill = z0 + Math.Max(0d, opening.Sill);
-                var head = Math.Min(z1, sill + Math.Max(0d, opening.Height));
-                if (end - start < 1d || head - sill < 1d) continue;
-                if (opening.HasSwingLeaf())
-                    AddDoorLeaf(volume, wall, start, end, sill, head,
-                        wall.StoreyId, opening.Id, ref first);
-                else AddWindowParts(volume, wall, start, end, sill, head,
-                    wall.StoreyId, opening.Id, ref first);
+            if(!includeOpeningParts)return;
+            foreach(var opening in model.Openings.Where(o=>Same(o.HostWallId,wall.Id)))
+                AddConstruction(volume,wall,model,opening,z0,ref first,partCache);
+        }
+
+        public static BuildingVolume BuildOpeningParts(BuildingModelDocument source)
+        {
+            var model=StandardStoreyLayout.Materialize(source);var volume=new BuildingVolume();var first=true;var partCache=new Dictionary<string,List<OpeningPart>>();
+            foreach(var wall in model.Walls)
+                foreach(var opening in model.Openings.Where(o=>Same(o.HostWallId,wall.Id)))
+                    AddConstruction(volume,wall,model,opening,model.BaseElevationOf(wall),ref first,partCache);
+            return volume;
+        }
+        private static void AddConstruction(BuildingVolume volume,WallModel wall,BuildingModelDocument model,
+            OpeningModel opening,double z0,ref bool first,Dictionary<string,List<OpeningPart>> partCache)
+        {
+            var type=OpeningConstruction.Resolve(model,opening);
+            var length=Math.Sqrt(Math.Pow(wall.X2-wall.X1,2)+Math.Pow(wall.Y2-wall.Y1,2));if(length<.001)return;
+            var ux=(wall.X2-wall.X1)/length;var uy=(wall.Y2-wall.Y1)/length;
+            var start=WallReferenceGeometry.BodyPoint(wall,wall.X1+ux*(opening.Offset-opening.Width/2),wall.Y1+uy*(opening.Offset-opening.Width/2));
+            var bayDirection=1d;
+            if(type.ElevationType=="凸窗") {
+                var mid=new PointModel(start.X+ux*opening.Width/2,start.Y+uy*opening.Width/2);
+                var distance=Math.Max(300,wall.Thickness*1.5);
+                var plus=new PointModel(mid.X-uy*distance,mid.Y+ux*distance);var minus=new PointModel(mid.X+uy*distance,mid.Y-ux*distance);
+                var outlines=model.Slabs.Where(s=>Same(s.StoreyId,wall.StoreyId)&&s.Outline!=null&&s.Outline.Count>=3).Select(s=>s.Outline).ToList();
+                var insidePlus=outlines.Any(r=>SlabGeometry.Contains(plus,r));var insideMinus=outlines.Any(r=>SlabGeometry.Contains(minus,r));
+                if(insidePlus && !insideMinus)bayDirection=-1;
+            }
+            var key=string.Join("|",opening.Code,opening.Kind,opening.Width.ToString("R",System.Globalization.CultureInfo.InvariantCulture),opening.Height.ToString("R",System.Globalization.CultureInfo.InvariantCulture),wall.Thickness.ToString("R",System.Globalization.CultureInfo.InvariantCulture));
+            if(!partCache.TryGetValue(key,out var parts)){parts=OpeningConstruction.Build(opening,type,wall.Thickness);partCache.Add(key,parts);}
+            var frameStart=volume.Faces.Count;
+            foreach(var part in parts) {
+                var corners=new List<Point3DModel>();
+                var lower=z0+opening.Sill+part.Bottom;var upper=z0+opening.Sill+part.Top;
+                foreach(var pair in new[] {new[]{part.Left,-part.Depth/2},new[]{part.Right,-part.Depth/2},new[]{part.Right,part.Depth/2},new[]{part.Left,part.Depth/2}}) {
+                    var x=pair[0];var y=pair[1]+part.NormalOffset;
+                    if(part.Face==0 && type.ElevationType=="凸窗") {
+                        var depth=type.BayLeftDepth+(type.BayRightDepth-type.BayLeftDepth)*x/opening.Width;
+                        y=part.Kind=="bay-cap" ? pair[1]+part.Depth/2 : y+depth;
+                    }
+                    if(part.Face!=0){var along=y; y=x; x=part.Face<0 ? -along : opening.Width+along;}
+                    var cell=part.Cell;var angle=(type.OpenAngle??0)*Math.PI/180;
+                    if(cell!=null && angle>0 && part.Face==0 && (cell.Opening??"").Contains("平开")) {
+                        var right=(cell.Opening??"").Contains("右");var pivot=right ? cell.Right : cell.Left;
+                        var a=right ? -angle : angle;var dx=x-pivot;var dy=y-part.NormalOffset;
+                        x=pivot+dx*Math.Cos(a)-dy*Math.Sin(a);y=part.NormalOffset+dx*Math.Sin(a)+dy*Math.Cos(a);
+                    }
+                    if(type.ElevationType=="凸窗")y*=bayDirection;
+                    corners.Add(new Point3DModel(start.X+ux*x-uy*y,start.Y+uy*x+ux*y,lower));
+                }
+                var faceStart=volume.Faces.Count;
+                AddPrism(volume,corners,lower,upper,part.Kind,wall.StoreyId,opening.Id,ref first);
+                var suspended=part.Cell!=null && (part.Cell.Opening=="上悬"||part.Cell.Opening=="下悬");
+                if(suspended && (type.OpenAngle??0)>0 && part.Face==0) {
+                    var pivotZ=z0+opening.Sill+(part.Cell.Opening=="上悬" ? part.Cell.Top : part.Cell.Bottom);
+                    var pivotNormal=part.NormalOffset;var a=(type.OpenAngle??0)*Math.PI/180*(part.Cell.Opening=="上悬" ? 1 : -1);
+                    foreach(var face in volume.Faces.Skip(faceStart)) {
+                        foreach(var p in face.Points) {
+                            var normal=-uy*(p.X-start.X)+ux*(p.Y-start.Y)-pivotNormal;var dz=p.Z-pivotZ;
+                            var newNormal=normal*Math.Cos(a)-dz*Math.Sin(a);var newZ=normal*Math.Sin(a)+dz*Math.Cos(a);
+                            p.X-=uy*(newNormal-normal);p.Y+=ux*(newNormal-normal);p.Z=pivotZ+newZ;
+                            volume.MinX=Math.Min(volume.MinX,p.X);volume.MaxX=Math.Max(volume.MaxX,p.X);
+                            volume.MinY=Math.Min(volume.MinY,p.Y);volume.MaxY=Math.Max(volume.MaxY,p.Y);
+                            volume.MinZ=Math.Min(volume.MinZ,p.Z);volume.MaxZ=Math.Max(volume.MaxZ,p.Z);
+                        }
+                        var n=-uy*face.NormalX+ux*face.NormalY;var z=face.NormalZ;
+                        var nn=n*Math.Cos(a)-z*Math.Sin(a);face.NormalX-=uy*(nn-n);face.NormalY+=ux*(nn-n);face.NormalZ=n*Math.Sin(a)+z*Math.Cos(a);
+                    }
+                }
+            }
+            JoinOpeningFrames(volume,frameStart,start,ux,uy);
+            JoinOpeningFrames(volume,frameStart,start,ux,uy,"sash");
+        }
+
+        // Union rectangular frame members before rendering/export. Cell rails are construction
+        // pieces, not visible panel divisions; their touching end faces must not become edges.
+        private static void JoinOpeningFrames(BuildingVolume volume,int begin,PointModel origin,double ux,double uy,string kind="frame")
+        {
+            var source=volume.Faces.Skip(begin).Where(f=>f.Kind==kind).ToList();
+            if(source.Count==0)return;
+            var boxes=new List<double[]>();var consumed=new List<VolumeFace>();
+            for(var i=0;i+5<source.Count;i+=6){
+                var faces=source.Skip(i).Take(6).ToList();
+                var points=faces.SelectMany(f=>f.Points).Select(p=>new[]{Math.Round((p.X-origin.X)*ux+(p.Y-origin.Y)*uy,6),Math.Round(-(p.X-origin.X)*uy+(p.Y-origin.Y)*ux,6),Math.Round(p.Z,6)}).ToList();
+                var lo=Enumerable.Range(0,3).Select(a=>points.Min(p=>p[a])).ToArray();var hi=Enumerable.Range(0,3).Select(a=>points.Max(p=>p[a])).ToArray();
+                if(points.Any(p=>Enumerable.Range(0,3).Any(a=>Math.Abs(p[a]-lo[a])>.00001&&Math.Abs(p[a]-hi[a])>.00001)))continue;
+                boxes.Add(new[]{lo[0],hi[0],lo[1],hi[1],lo[2],hi[2]});consumed.AddRange(faces);
+            }
+            if(boxes.Count<2)return;
+            var axes=Enumerable.Range(0,3).Select(a=>boxes.SelectMany(b=>new[]{b[a*2],b[a*2+1]}).Distinct().OrderBy(v=>v).ToArray()).ToArray();
+            var nx=axes[0].Length-1;var ny=axes[1].Length-1;var nz=axes[2].Length-1;
+            if((long)nx*ny*nz>500000)return;
+            var cells=new bool[nx,ny,nz];
+            foreach(var box in boxes){
+                var bounds=Enumerable.Range(0,6).Select(a=>Array.BinarySearch(axes[a/2],box[a])).ToArray();
+                for(var x=bounds[0];x<bounds[1];x++)for(var y=bounds[2];y<bounds[3];y++)for(var z=bounds[4];z<bounds[5];z++)cells[x,y,z]=true;
+            }
+            var removed=new HashSet<VolumeFace>(consumed);volume.Faces.RemoveAll(f=>removed.Contains(f));
+            var sample=source[0];
+            for(var x=0;x<nx;x++)for(var y=0;y<ny;y++)for(var z=0;z<nz;z++){
+                if(!cells[x,y,z])continue;var indices=new[]{x,y,z};
+                for(var axis=0;axis<3;axis++)for(var sign=-1;sign<=1;sign+=2){
+                    var next=(int[])indices.Clone();next[axis]+=sign;
+                    if(next[0]>=0&&next[0]<nx&&next[1]>=0&&next[1]<ny&&next[2]>=0&&next[2]<nz&&cells[next[0],next[1],next[2]])continue;
+                    var a=(axis+1)%3;var b=(axis+2)%3;var face=new VolumeFace {Kind=kind,StoreyId=sample.StoreyId,ElementId=sample.ElementId};
+                    var localNormal=new double[3];localNormal[axis]=sign;face.NormalX=ux*localNormal[0]-uy*localNormal[1];face.NormalY=uy*localNormal[0]+ux*localNormal[1];face.NormalZ=localNormal[2];
+                    foreach(var corner in new[]{new[]{0,0},new[]{1,0},new[]{1,1},new[]{0,1}}){
+                        var p=new double[3];p[axis]=axes[axis][indices[axis]+(sign>0?1:0)];p[a]=axes[a][indices[a]+corner[0]];p[b]=axes[b][indices[b]+corner[1]];
+                        face.Points.Add(new Point3DModel(origin.X+ux*p[0]-uy*p[1],origin.Y+uy*p[0]+ux*p[1],p[2]));
+                    }
+                    if(sign<0)face.Points.Reverse();volume.Faces.Add(face);
+                }
             }
         }
 
@@ -456,6 +562,7 @@ namespace BatchPdfPublisher.BuildingModel
                 new Point3DModel(column.X + halfWidth, column.Y + halfDepth, z0),
                 new Point3DModel(column.X - halfWidth, column.Y + halfDepth, z0)
             };
+            corners=StructuralGeometry.ColumnOutline(column).Select(p=>new Point3DModel(p.X,p.Y,z0)).ToList();
             AddPrism(volume, corners, z0, z1, "column", column.StoreyId, column.Id, ref first);
         }
 
@@ -464,7 +571,7 @@ namespace BatchPdfPublisher.BuildingModel
             var outline = (slab.Outline ?? new List<PointModel>())
                 .Where(p => p != null && IsFinite(p.X) && IsFinite(p.Y)).ToList();
             if (outline.Count < 3) return;
-            var thickness = slab.Thickness > 0.5d ? slab.Thickness : 120d;
+            var thickness = slab.Thickness > 0.5d ? slab.Thickness : 100d;
             var z1 = topElevation;
             var z0 = z1 - thickness;
             var geometry = SlabGeometry.Build(slab);

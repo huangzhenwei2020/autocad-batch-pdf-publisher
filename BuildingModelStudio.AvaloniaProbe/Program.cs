@@ -29,6 +29,17 @@ internal static class Program
     public static bool GizmoCheck { get; private set; }
     public static bool ShortcutCheck { get; private set; }
     public static bool SlabCheck { get; private set; }
+    public static bool ParameterCheck { get; private set; }
+    public static bool OpeningEditorCheck { get; private set; }
+    public static bool BrowserCheck { get; private set; }
+    public static bool AxisCheck {get;private set;}
+    public static bool StructureCheck { get; private set; }
+    public static bool DrawingCheck { get; private set; }
+    public static bool StoreyCheck { get; private set; }
+    public static bool ZoomCheck { get; private set; }
+    public static double SnapshotZoom { get; private set; }
+    public static bool SnapshotDrawing { get; private set; }
+    public static ViewKind SnapshotDrawingKind { get; private set; } = ViewKind.Plan;
     public static string? ModelPath { get; private set; }
     public static bool CreateMissingProjectModel { get; private set; }
     public static string? ProjectModelName { get; private set; }
@@ -56,6 +67,9 @@ internal static class Program
             return 0;
         }
         Smoke = args.Contains("--smoke", StringComparer.OrdinalIgnoreCase);
+        BrowserCheck=args.Contains("--browser-check",StringComparer.OrdinalIgnoreCase);
+        AxisCheck=args.Contains("--axis-check",StringComparer.OrdinalIgnoreCase);
+        StructureCheck=args.Contains("--structure-check",StringComparer.OrdinalIgnoreCase);
         CadGenerationCheck = args.Contains("--cad-generation-check", StringComparer.OrdinalIgnoreCase);
         var cameraIndex = Array.IndexOf(args, "--snapshot-camera");
         if (cameraIndex >= 0)
@@ -76,12 +90,25 @@ internal static class Program
             if (displayModeIndex + 1 >= args.Length
                 || !Enum.TryParse<ModelViewport.DisplayMode>(args[displayModeIndex + 1],
                     true, out var displayMode))
-                throw new ArgumentException("--snapshot-display-mode 应为 Wireframe、Solid、Shaded 或 Lit。");
+                throw new ArgumentException("--snapshot-display-mode 应为 Wireframe、Solid、SolidEdges、Shaded 或 Lit。");
             SnapshotDisplayMode = displayMode;
         }
         GizmoCheck = args.Contains("--gizmo-check", StringComparer.OrdinalIgnoreCase);
         ShortcutCheck = args.Contains("--shortcut-check", StringComparer.OrdinalIgnoreCase);
         SlabCheck = args.Contains("--slab-check", StringComparer.OrdinalIgnoreCase);
+        ParameterCheck = args.Contains("--parameter-check", StringComparer.OrdinalIgnoreCase);
+        DrawingCheck = args.Contains("--drawing-check", StringComparer.OrdinalIgnoreCase);
+        OpeningEditorCheck=args.Contains("--opening-editor-check",StringComparer.OrdinalIgnoreCase);
+        StoreyCheck = args.Contains("--storey-check", StringComparer.OrdinalIgnoreCase);
+        ZoomCheck = args.Contains("--zoom-check", StringComparer.OrdinalIgnoreCase);
+        var zoomIndex=Array.IndexOf(args,"--snapshot-zoom");
+        if(zoomIndex>=0 && zoomIndex+1<args.Length)SnapshotZoom=double.Parse(args[zoomIndex+1],System.Globalization.CultureInfo.InvariantCulture);
+        var drawingIndex=Array.IndexOf(args,"--snapshot-drawing");
+        if(drawingIndex>=0 && drawingIndex+1<args.Length) {
+            SnapshotPath=Path.GetFullPath(args[drawingIndex+1]);SnapshotDrawing=true;
+        }
+        var drawingKindIndex=Array.IndexOf(args,"--drawing-kind");
+        if(drawingKindIndex>=0 && drawingKindIndex+1<args.Length)SnapshotDrawingKind=Enum.Parse<ViewKind>(args[drawingKindIndex+1],true);
         var index = Array.IndexOf(args, "--snapshot");
         if (index >= 0 && index + 1 < args.Length) SnapshotPath = Path.GetFullPath(args[index + 1]);
         index = Array.IndexOf(args, "--snapshot-plan");
@@ -179,6 +206,18 @@ internal static class Program
 
     private static void RunPickCheck()
     {
+        var boxModel=new BuildingModelDocument();
+        boxModel.Storeys.Add(new StoreyModel { Id="1F",Height=3000 });
+        boxModel.Walls.Add(new WallModel { Id="box",StoreyId="1F",X1=0,Y1=0,X2=1000,Y2=0,Thickness=200 });
+        if(ModelMeshEdges.Build(BuildingVolumeBuilder.Build(boxModel)).Count!=12)
+            throw new InvalidOperationException("实体边线应保留长方体的 12 条棱。");
+        var split=new BuildingVolume();
+        for(var x=0;x<2;x++)split.Faces.Add(new VolumeFace { StoreyId="1F",NormalZ=1,
+            Points=new List<Point3DModel> { new(x,0,0),new(x+1,0,0),new(x+1,1,0),new(x,1,0) } });
+        if(ModelMeshEdges.Build(split).Count!=6)throw new InvalidOperationException("共面细分边应隐藏。");
+        split.Faces[1].StoreyId="2F";
+        if(ModelMeshEdges.Build(split).Count!=7)throw new InvalidOperationException("不同楼层的分界边应保留。");
+        Console.WriteLine("MESH_EDGES_OK box=12 coplanar=6 storeySeam=7");
         var scene = ModelViewport.PrepareScene(BuildingVolumeBuilder.Build(SampleModelFactory.CreateTwoStoreyHouse()));
         var projection = Matrix4x4.CreatePerspectiveFieldOfView(0.8f, 760f / 715f, 0.1f, 100f);
         var checkedPoints = 0;

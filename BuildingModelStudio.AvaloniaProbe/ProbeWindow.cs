@@ -73,6 +73,9 @@ internal sealed partial class ProbeWindow : Window
     private readonly BlenderIntegration _blender = BlenderIntegration.Load();
     private CancellationTokenSource? _publishCancellation;
     private string? _selectedId;
+    private readonly HashSet<string> _selectedVisualIds=new();
+    private bool _syncingSelection;
+    private bool _additiveSceneSelection;
     private string? _filePath;
     private readonly DispatcherTimer _cadImportTimer = new() { Interval = TimeSpan.FromSeconds(1) };
     private bool _cadImportBusy;
@@ -110,6 +113,7 @@ internal sealed partial class ProbeWindow : Window
 
     public ProbeWindow()
     {
+        ApplyInteractionSettings();
         Title = "万落建筑模型";
         Width = 1500;
         Height = 900;
@@ -147,9 +151,13 @@ internal sealed partial class ProbeWindow : Window
             _selectedId = affectedId;
             await RefreshModelAsync(copy ? "已复制墙及门窗" : "已变换墙");
         };
-        _viewport.ElementPicked += SelectById;
-        _planCanvas.ElementPicked += SelectById;
+        _viewport.ElementPicked += id=>SelectById(id,_additiveSceneSelection);
+        _planCanvas.ElementPicked += id=>SelectById(id,_additiveSceneSelection);
+        _planCanvas.AddHandler(PointerPressedEvent,(_,e)=>_additiveSceneSelection=e.KeyModifiers.HasFlag(KeyModifiers.Control)||e.KeyModifiers.HasFlag(KeyModifiers.Shift),Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        _planCanvas.OpeningActivated += id=>_ = OpenOpeningEditorAsync(id);
         _planCanvas.ContourRequested += CommitSlabContour;
+        WireStructureTools();
+        _planCanvas.AxisEditRequested+=request=>_ = ApplyAxisClickAsync(request);
         _planCanvas.SlabOpeningPicked += SelectSlabOpening;
         _planCanvas.MoveStageChanged += text => _status.Text = text;
         _planCanvas.MoveRequested += async (id, from, to, copy) =>
@@ -174,7 +182,7 @@ internal sealed partial class ProbeWindow : Window
             {
                 StoreyId = (_storeyChooser.SelectedItem as StoreyItem)?.Id ?? "1F",
                 X1 = start.X, Y1 = start.Y, X2 = end.X, Y2 = end.Y,
-                Thickness = 240, Height = wallHeight
+                Thickness = 200, Height = wallHeight
             }, out var id, out var error)) { _status.Text = error; return false; }
             _selectedId = id;
             _ = RefreshModelAsync("已新增墙");
@@ -310,8 +318,8 @@ internal sealed partial class ProbeWindow : Window
         save.Click += async (_, _) => await SaveModelAsync(false);
         var saveAs = new Button { Content = "另存为" };
         saveAs.Click += async (_, _) => await SaveModelAsync(true);
-        var axisSettings = new Button { Content = "轴号设置" };
-        axisSettings.Click += async (_, _) => await OpenAxisSettingsAsync();
+        var axisSettings = new Button { Content = "轴网编辑" };
+        axisSettings.Click += (_, _) => BeginAxisEditing();
         var resetView = new Button { Content = "视图复位" };
         resetView.Click += (_, _) => ResetActiveView();
         var frameSelection = new Button { Content = "聚焦所选" };
@@ -336,18 +344,23 @@ internal sealed partial class ProbeWindow : Window
         browserSearch.TextChanged += (_, _) => FilterElementList(browserSearch.Text);
         _elements.SelectionChanged += (_, _) =>
         {
+            if(_syncingSelection)return;
             _selectedId = (_elements.SelectedItem as ElementItem)?.Id;
             if (_selectedId != null && _browserNodes.TryGetValue(_selectedId, out var browserNode))
                 browserNode.IsSelected = true;
             _viewport.SelectElement(_selectedId);
+            _selectedVisualIds.Clear();if(_selectedId!=null)_selectedVisualIds.Add(_selectedId);
             _planCanvas.SetSelection(_selectedId);
             UpdateGizmoSelection();
             RefreshProperties();
         };
         Grid.SetRow(_browserTree, 2);
         _browserTree.Margin = new Thickness(8, 5, 8, 8);
+        ScrollViewer.SetHorizontalScrollBarVisibility(_browserTree,ScrollBarVisibility.Disabled);
+        _browserTree.Styles.Add(new Style(s=>s.OfType<TreeViewItem>().Template().OfType<ContentPresenter>()){Setters={new Setter(ContentPresenter.HorizontalContentAlignmentProperty,HorizontalAlignment.Stretch)}});
         _browserTree.FontSize = 15;
         tree.Children.Add(_browserTree);
+        _browserTree.SelectionChanged+=(_,_)=>{if(_syncingSelection)return;var selected=_browserNodes.FirstOrDefault(p=>ReferenceEquals(p.Value,_browserTree.SelectedItem));if(selected.Key!=null)SelectById(selected.Key);};
         var leftToggle = new Button { Width = 30, Height = 30,
             HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
             Margin = new Thickness(0, 14, 7, 0) };
@@ -368,14 +381,28 @@ internal sealed partial class ProbeWindow : Window
         };
         Grid.SetRow(leftHost, 2);
         root.Children.Add(leftHost);
+        var browserResize=new Border {Width=6,Background=Brushes.Transparent,HorizontalAlignment=HorizontalAlignment.Right,Cursor=new Cursor(StandardCursorType.SizeWestEast)};
+        Point? browserDrag=null;double browserDragWidth=0;
+        browserResize.PointerPressed+=(_,e)=>{if(!tree.IsVisible)return;browserDrag=e.GetPosition(root);browserDragWidth=root.ColumnDefinitions[0].Width.Value;e.Pointer.Capture(browserResize);e.Handled=true;};
+        browserResize.PointerMoved+=(_,e)=>{if(browserDrag is not Point start)return;_browserWidth=Math.Clamp(browserDragWidth+e.GetPosition(root).X-start.X,210,650);updateSideLayout();e.Handled=true;};
+        browserResize.PointerReleased+=(_,e)=>{browserDrag=null;e.Pointer.Capture(null);e.Handled=true;};
+        browserResize.PointerCaptureLost+=(_,_)=>browserDrag=null;
+        ToolTip.SetTip(browserResize,"拖动调整项目浏览器宽度");leftHost.Children.Add(browserResize);
 
         var viewportHost = new Grid();
         viewportHost.Children.Add(_viewport);
         var viewportInput = new Border { Background = Brushes.Transparent };
         viewportInput.PointerPressed += (_, e) =>
         {
+            _additiveSceneSelection=e.KeyModifiers.HasFlag(KeyModifiers.Control)||e.KeyModifiers.HasFlag(KeyModifiers.Shift);
             var buttons = e.GetCurrentPoint(viewportInput).Properties;
             var selecting = buttons.IsLeftButtonPressed;
+            if(selecting && e.ClickCount==2 && !_movingInViewport) {
+                var id=_viewport.PickElement(e.GetPosition(_viewport));
+                if(StandardStoreyLayout.Materialize(_session.Model).Openings.Any(o=>o.Id==id)) {
+                    e.Handled=true;_ = OpenOpeningEditorAsync(id);return;
+                }
+            }
             if (_movingInViewport && selecting)
             {
                 var wall = _session.Model.Walls.FirstOrDefault(w => w.Id == _selectedId);
@@ -453,6 +480,7 @@ internal sealed partial class ProbeWindow : Window
         {
             (ModelViewport.DisplayMode.Wireframe, "线框", "grid-3x3"),
             (ModelViewport.DisplayMode.Solid, "实体", "box"),
+            (ModelViewport.DisplayMode.SolidEdges, "实体边线", "box"),
             (ModelViewport.DisplayMode.Shaded, "着色", "layers"),
             (ModelViewport.DisplayMode.Lit, "光照", "app-window")
         })
@@ -478,7 +506,7 @@ internal sealed partial class ProbeWindow : Window
             displayButtons.Add(mode, button);
             displayModes.Children.Add(button);
         }
-        var initialDisplayMode = Program.SnapshotDisplayMode ?? ModelViewport.DisplayMode.Shaded;
+        var initialDisplayMode = Program.SnapshotDisplayMode ?? ModelViewport.DisplayMode.SolidEdges;
         _viewport.SetDisplayMode(initialDisplayMode);
         foreach (var entry in displayButtons)
             entry.Value.Background = new SolidColorBrush(Color.Parse(
@@ -507,7 +535,7 @@ internal sealed partial class ProbeWindow : Window
         viewTools.Children.Add(preciseMove3D);
         // View tools live in the ribbon; the viewport remains unobstructed.
 
-        var planLayout = new Grid { RowDefinitions = new RowDefinitions("42,*") };
+        var planLayout = new Grid { RowDefinitions = new RowDefinitions("42,Auto,*") };
         var planTools = new StackPanel
         {
             Orientation = Orientation.Horizontal, Spacing = 3
@@ -517,7 +545,7 @@ internal sealed partial class ProbeWindow : Window
         _storeyChooser.SelectionChanged += (_, _) =>
         {
             if (!_refreshingStoreys && _storeyChooser.SelectedItem is StoreyItem floor)
-                _planCanvas.SetStorey(floor.Id);
+            { _planCanvas.SetStorey(floor.Id);SyncAxisScope();ApplyBrowserViewState(); }
         };
         _storeyChooser.Height = 32;
         var planViewStrip = new StackPanel { Orientation = Orientation.Horizontal,
@@ -571,14 +599,15 @@ internal sealed partial class ProbeWindow : Window
         fitPlan.Click += (_, _) => _planCanvas.Fit();
         planViewStrip.Children.Add(fitPlan);
         planLayout.Children.Add(planViewStrip);
-        Grid.SetRow(_planCanvas, 1);
+        var axisEditStrip=BuildAxisEditStrip();Grid.SetRow(axisEditStrip,1);planLayout.Children.Add(axisEditStrip);
+        Grid.SetRow(_planCanvas, 2);
         planLayout.Children.Add(_planCanvas);
 
         var modelTab = new TabItem { Header = "三维视图", Content = viewportHost,
             FontSize = 15, MinWidth = 116, Height = 32 };
         var planTab = new TabItem { Header = "平面视图", Content = planLayout,
             FontSize = 15, MinWidth = 116, Height = 32 };
-        var drawingTab = new TabItem { Header = "图纸视图", IsEnabled = false,
+        var drawingTab = new TabItem { Header = "图纸视图", Content = BuildDrawingTab(),
             FontSize = 15, MinWidth = 116, Height = 32 };
         _workspaces.Margin = new Thickness(0, 0, 4, 0);
         _workspaces.Items.Add(modelTab);
@@ -595,7 +624,11 @@ internal sealed partial class ProbeWindow : Window
                 tab.BorderThickness = new Thickness(1);
             }
         }
-        _workspaces.SelectionChanged += (_, _) => UpdateWorkspaceTabs();
+        _workspaces.SelectionChanged += (_, e) => {
+            if(!ReferenceEquals(e.Source,_workspaces))return;
+            UpdateWorkspaceTabs();RefreshProperties();
+            if(_workspaces.SelectedIndex==2) { FocusDrawingBrowser();_drawingPreviewTask=RefreshDrawingViewAsync(); }
+        };
         _workspaces.SelectedIndex = Program.Smoke || Program.SnapshotPath != null ? 0 : 1;
         UpdateWorkspaceTabs();
         Grid.SetRow(_workspaces, 2);
@@ -663,8 +696,8 @@ internal sealed partial class ProbeWindow : Window
             tree.IsVisible = showTree;
             rightPanel.IsVisible = rightExpanded;
             propertyRailLabel.IsVisible = !rightExpanded;
-            var leftWidth = showTree ? Math.Clamp(available * 0.18, 190, 284) : 38;
             var rightWidth = rightExpanded ? Math.Clamp(available * 0.245, 290, 390) : 36;
+            var leftWidth = showTree ? Math.Clamp(_browserWidth,210,Math.Max(210,Math.Min(650,available-rightWidth-380))) : 38;
             if (Math.Abs(root.ColumnDefinitions[0].Width.Value - leftWidth) > 0.5)
                 root.ColumnDefinitions[0].Width = new GridLength(leftWidth);
             if (Math.Abs(root.ColumnDefinitions[2].Width.Value - rightWidth) > 0.5)
@@ -695,6 +728,7 @@ internal sealed partial class ProbeWindow : Window
                 button.FontSize = compactHeader ? 14 : 16;
             }
         };
+        _resizeBrowserWidth=width=>{_browserWidth=width;updateSideLayout();};
         root.SizeChanged += (_, _) => updateSideLayout();
         _showSlabProperties = () => { rightExpanded = true; updateSideLayout(); };
 
@@ -714,11 +748,13 @@ internal sealed partial class ProbeWindow : Window
         }
         var structuralTools = new StackPanel { Spacing = 2,
             VerticalAlignment = VerticalAlignment.Center };
-        foreach (var name in new[] { "楼板", "柱", "楼梯" })
+        foreach (var name in new[] { "楼板", "柱", "梁", "楼梯" })
         {
-            var button = name == "楼板" ? Action("楼板", () => BeginSlabTool(PlanTool.Slab)) : Planned(name);
+            var button = name == "楼板" ? Action("楼板", () => BeginSlabTool(PlanTool.Slab))
+                : name=="柱" ? Action("绘制柱",()=>BeginStructureTool(PlanTool.Column))
+                : name=="梁" ? Action("绘制梁",()=>BeginStructureTool(PlanTool.Beam)) : Planned(name);
             button.Classes.Add("ribbon-list");
-            button.Opacity = 0.62;
+            button.Opacity = button.IsEnabled ? 1 : 0.62;
             structuralTools.Children.Add(button);
         }
         static Border Group(string title, params Control[] controls)
@@ -747,6 +783,7 @@ internal sealed partial class ProbeWindow : Window
         }
         pages["建模"] = Page(
             Group("建筑构件", planTools),
+            Group("门窗设计", Action("门窗表 / 分格",()=>_ = OpenOpeningTypesAsync())),
             Group("结构构件", structuralTools),
             Group("基准设置", axisSettings, globalStoreys, Planned("标高")),
             Group("修改", Action("移动", () => BeginMove()),
@@ -755,6 +792,7 @@ internal sealed partial class ProbeWindow : Window
                 Action("删除", () => _ = DeleteSelectedAsync())),
             Group("编辑", Planned("相交"), Planned("修剪"), Planned("延伸")));
         pages["构件"] = Page(
+            Group("梁柱",Action("绘制柱",()=>BeginStructureTool(PlanTool.Column)),Action("绘制梁",()=>BeginStructureTool(PlanTool.Beam))),
             Group("楼板", Action("绘制楼板", () => BeginSlabTool(PlanTool.Slab)),
                 Action("编辑轮廓", () => BeginSlabTool(PlanTool.SlabOutline))),
             Group("洞口", Action("矩形洞口", () => BeginSlabTool(PlanTool.SlabHoleRectangle)),
@@ -768,7 +806,7 @@ internal sealed partial class ProbeWindow : Window
                 Action("复制 CO", () => BeginMove(true)), deleteSelected),
             Group("绘制约束", _orthoButton, _polarButton), Group("绘制参数", parameterTools));
         pages["标注"] = Page(Group("轴线与楼层",
-            Action("轴号设置", () => _ = OpenAxisSettingsAsync()),
+            Action("轴网编辑", BeginAxisEditing),
             Action("楼层设置", () => _ = OpenStoreySettingsAsync())));
         pages["视图"] = Page(
             Group("三维操作", viewTools),
@@ -789,7 +827,8 @@ internal sealed partial class ProbeWindow : Window
         pages["出图"] = Page(Group("CAD 输出", _publish, _sendToCad, cancelPublish),
             Group("三维模型 GLB", _exportBuilding, _exportStorey, _cancelExport, openInBlender));
         pages["管理"] = Page(Group("模型文件", open, save, saveAs),
-            Group("项目设置", Action("楼层设置", () => _ = OpenStoreySettingsAsync())));
+            Group("项目设置", Action("楼层设置", () => _ = OpenStoreySettingsAsync()),
+                Action("系统设置", () => _ = OpenSystemSettingsAsync())));
         void StyleRibbonControl(Control control, bool inRibbon = true)
         {
             switch (control)
@@ -1006,6 +1045,8 @@ internal sealed partial class ProbeWindow : Window
         "多边形洞口" => ("pentagon", "PH"),
         "删除洞口" => ("hole-delete", "DH"),
         "柱" => ("box", null),
+        "绘制柱" => ("box", "CL"),
+        "绘制梁" => ("box", "BM"),
         "楼梯" => ("layers", null),
         "标高" => ("layers", null),
         "移动" or "基点移动 M" => ("move", "M"),
@@ -1022,7 +1063,8 @@ internal sealed partial class ProbeWindow : Window
         "删除" => ("trash", "Del"),
         "删除选中" => ("trash", "Del"),
         "楼层设置" => ("layers", "LS"),
-        "轴号设置" => ("grid-3x3", "AX"),
+        "轴网编辑" => ("grid-3x3", "AX"),
+        "系统设置" => ("panel-top", "OPTIONS"),
         "打开模型" => ("folder-open", "Ctrl+O"),
         "保存" => ("save", "Ctrl+S"),
         "另存为" => ("file-plus", "Ctrl+Shift+S"),
@@ -1175,11 +1217,17 @@ internal sealed partial class ProbeWindow : Window
         {
             var loaded = await Task.Run(() =>
             {
-                var session = new BuildingModelEditSession(BuildingModelJson.LoadModel(path));
+                var source=BuildingModelJson.LoadModel(path);
+                var libraryPath=Path.Combine(Path.GetDirectoryName(path)!,"openings.json");
+                var library=File.Exists(libraryPath) ? BuildingModelJson.LoadOpeningLibrary(libraryPath) : null;
+                source.OpeningTypes=OpeningConstruction.Library(source,library).Types;
+                var session = new BuildingModelEditSession(source);
                 return (session, scene: ModelViewport.PrepareScene(BuildingVolumeBuilder.Build(session.Model)));
             });
             if (generation != _sceneGeneration) return false;
             _session = loaded.session;
+            _hiddenVisualIds.Clear();_frozenVisualIds.Clear();_isolatedBrowserKey=null;
+            _viewport.SetViewState(Array.Empty<string>(),Array.Empty<string>());
             if (_filePath != null) StudioLaunch.RemoveSession(_filePath);
             _filePath = path;
             _cadRequestSeen = null;
@@ -1232,7 +1280,10 @@ internal sealed partial class ProbeWindow : Window
             _viewport.ResetView(); _planCanvas.Fit();
             if (!await SaveModelAsync(false)) throw new IOException(_status.Text);
             CadModelGenerationRequest.Acknowledge(path, requestId, null);
-            _status.Text = $"已生成并保存建筑模型 · 登记墙 {_session.Model.CadImport!.Walls.Count} · 门窗洞口 {_session.Model.CadImport.Openings.Count} · 待定位门窗 {_session.Model.CadImport.PendingOpenings?.Count ?? 0} · Ctrl+Z 可撤销";
+            var imported=_session.Model.CadImport!;
+            _status.Text = $"已生成并保存建筑模型 · 墙 {imported.Walls.Count} · 门窗 {imported.Openings.Count} · 楼板 {imported.Slabs?.Count ?? 0} · 板洞 {imported.Slabs?.Sum(s=>s.Openings.Count) ?? 0} · 待定位门窗 {imported.PendingOpenings?.Count ?? 0} · Ctrl+Z 可撤销";
+            if(imported.SlabMessages?.Count>0)_status.Text += " · "+string.Join("；",imported.SlabMessages);
+            if(imported.StructureMessages?.Count>0)_status.Text += " · "+string.Join("；",imported.StructureMessages);
             Activate();
         }
         catch (Exception ex)
@@ -1368,6 +1419,11 @@ internal sealed partial class ProbeWindow : Window
             return;
         }
         if (HasChanges && !await SaveModelAsync(false)) return;
+        if (DrawingViewCatalogue.Resolve(_session.Model).Count == 0)
+        {
+            _status.Text = "图纸目录为空，请先新增图纸。";
+            return;
+        }
         var path = _filePath;
         var session = _session;
         var revision = session.Revision;
@@ -1388,7 +1444,11 @@ internal sealed partial class ProbeWindow : Window
                 var libraryPath = Path.Combine(modelFolder, "openings.json");
                 var library = File.Exists(libraryPath)
                     ? BuildingModelJson.LoadOpeningLibrary(libraryPath) : null;
-                var views = BuildingModelViewPublisher.Generate(model, library, token.ThrowIfCancellationRequested);
+                var views = BuildingModelViewPublisher.Generate(model, library, token.ThrowIfCancellationRequested,
+                    (index,count,title)=>Avalonia.Threading.Dispatcher.UIThread.Post(()=> {
+                        if(ReferenceEquals(_publishCancellation,cancellation) && !cancellation.IsCancellationRequested)
+                            _status.Text=$"正在生成 {index}/{count}：{title}；完成后才能在 CAD 落图。";
+                    }));
                 var stage = Path.Combine(modelFolder, ".views-staging-" + Guid.NewGuid().ToString("N"));
                 try
                 {
@@ -1513,7 +1573,9 @@ internal sealed partial class ProbeWindow : Window
                 _items.Add(new ElementItem { Id = slab.Id, Label = $"{floor.Name} · 楼板  {slab.Code ?? slab.Id}" });
             if (!columnsByStorey.TryGetValue(floor.Id, out var columns)) columns = new();
             foreach (var column in columns)
-                _items.Add(new ElementItem { Id = column.Id, Label = $"{floor.Name} · 柱  {column.Id}" });
+                _items.Add(new ElementItem { Id = column.Id, Label = $"{floor.Name} · 柱  {column.Code ?? "柱"}" });
+            foreach(var beam in model.Beams.Where(b=>b.StoreyId==floor.Id))
+                _items.Add(new ElementItem {Id=beam.Id,Label=$"{floor.Name} · 梁 {beam.Code ?? "梁"}"});
             if (!stairsByStorey.TryGetValue(floor.Id, out var stairs)) stairs = new();
             foreach (var stair in stairs)
                 _items.Add(new ElementItem { Id = stair.Id, Label = $"{floor.Name} · 楼梯  {stair.Id}" });
@@ -1535,33 +1597,48 @@ internal sealed partial class ProbeWindow : Window
     {
         _browserTree.Items.Clear();
         _browserNodes.Clear();
-        var model = _session.Model;
-        var project = new TreeViewItem { Header = BrowserHeader(model.Name, "folder-open"), IsExpanded = true };
-        var floors = new TreeViewItem { Header = BrowserHeader("楼层", "layers"), IsExpanded = true };
+        _browserStateUpdates.Clear();_browserElementFloors.Clear();
+        var model = BrowserPhysicalModel();
+        foreach(var w in model.Walls)_browserElementFloors[w.Id]=w.StoreyId;
+        foreach(var o in model.Openings)_browserElementFloors[o.Id]=model.Walls.FirstOrDefault(w=>w.Id==o.HostWallId)?.StoreyId??"";
+        foreach(var s in model.Slabs)_browserElementFloors[s.Id]=s.StoreyId;
+        foreach(var c in model.Columns)_browserElementFloors[c.Id]=c.StoreyId;
+        foreach(var b in model.Beams)_browserElementFloors[b.Id]=b.StoreyId;
+        foreach(var s in model.Stairs)_browserElementFloors[s.Id]=s.StoreyId;
+        foreach(var r in model.Roofs)_browserElementFloors[r.Id]=r.StoreyId;
+        var all=_browserElementFloors.Keys.ToArray();
+        var project = new TreeViewItem { Header = BrowserStateHeader(model.Name, "folder-open",all,"project"), IsExpanded = true };
+        var floors = new TreeViewItem { Header = BrowserStateHeader("楼层", "layers",all,"floors"), IsExpanded = true };
         project.Items.Add(floors);
         var wallStoreys = model.Walls.ToDictionary(w => w.Id, w => w.StoreyId);
         var matches = _elementFilter.Length == 0 ? null : _items
             .Where(item => item.Label.Contains(_elementFilter,
                 StringComparison.CurrentCultureIgnoreCase))
             .Select(item => item.Id).ToHashSet();
-        bool Matches(string id) => matches == null || matches.Contains(id);
+        bool Matches(string id) => matches == null || matches.Contains(StandardStoreyLayout.SourceElementId(_session.Model,id)??id);
         void AddCategory(TreeViewItem floorNode, string name,
             IEnumerable<(string id, string label)> elements)
         {
-            var entries = elements.Where(x => Matches(x.id)).ToList();
+            var group=elements.ToList();var entries = group.Where(x => Matches(x.id)).ToList();
             if (entries.Count == 0) return;
             var icon = name switch { "墙" => "wall-plan", "门窗" => "door-open",
                 "楼板" => "slab-outline", "柱" => "box", _ => "layers" };
-            var category = new TreeViewItem { Header = BrowserHeader($"{name} ({entries.Count})", icon),
+            var category = new TreeViewItem { Header = BrowserStateHeader($"{name} ({entries.Count})", icon,group.Select(x=>x.id),$"category:{floorNode.Tag}:{name}"),
                 IsExpanded = _elementFilter.Length > 0 || entries.Count < 12 };
             foreach (var (id, label) in entries)
             {
-                var leaf = new TreeViewItem { Header = new Border { Child = BrowserHeader(label, icon),
+                var leaf = new TreeViewItem { Header = new Border { Child = BrowserStateHeader(label, icon,new[]{id},"element:"+id),
                     BorderBrush = new SolidColorBrush(Color.Parse("#38D4FF")),
-                    BorderThickness = new Thickness(id == _selectedId ? 3 : 0, 0, 0, 0),
+                    BorderThickness = new Thickness(_selectedVisualIds.Contains(id) ? 3 : 0, 0, 0, 0),
                     Padding = new Thickness(4, 0) } };
-                ToolTip.SetTip(leaf, id);
-                leaf.PointerPressed += (_, _) => SelectById(id);
+                ToolTip.SetTip(leaf, label);
+                leaf.AddHandler(PointerPressedEvent,(_, e) => {
+                    if(IsBrowserControl(e.Source))return;
+                    if(_hiddenVisualIds.Contains(id)||_frozenVisualIds.Contains(id)){e.Handled=true;return;}
+                    if(name=="门窗" && e.ClickCount==2){_ = OpenOpeningEditorAsync(id);e.Handled=true;return;}
+                    if(_workspaces.SelectedIndex==2)_workspaces.SelectedIndex=1;
+                    SelectById(id,e.KeyModifiers.HasFlag(KeyModifiers.Control)||e.KeyModifiers.HasFlag(KeyModifiers.Shift));e.Handled=true;
+                },Avalonia.Interactivity.RoutingStrategies.Tunnel);
                 category.Items.Add(leaf);
                 _browserNodes[id] = leaf;
                 if (name == "楼板")
@@ -1582,8 +1659,9 @@ internal sealed partial class ProbeWindow : Window
         {
             var floorNode = new TreeViewItem
             {
-                Header = BrowserHeader($"{floor.Name}  (标高 {floor.Elevation:0} mm)"
-                    + (string.IsNullOrWhiteSpace(floor.TemplateStoreyId) ? "" : " · 标准层"), "layers"),
+                Tag=floor.Id,
+                Header = BrowserStateHeader($"{floor.Name}  (标高 {floor.Elevation:0} mm)"
+                    + (string.IsNullOrWhiteSpace(_session.Model.FindStorey(floor.Id)?.TemplateStoreyId) ? "" : " · 标准层"), "layers",_browserElementFloors.Where(p=>p.Value==floor.Id).Select(p=>p.Key),"floor:"+floor.Id),
                 IsExpanded = _elementFilter.Length > 0 || floor == model.Storeys.FirstOrDefault()
             };
             if (!string.IsNullOrWhiteSpace(floor.TemplateStoreyId))
@@ -1597,24 +1675,28 @@ internal sealed partial class ProbeWindow : Window
             AddCategory(floorNode, "楼板", model.Slabs.Where(x => x.StoreyId == floor.Id)
                 .Select(x => (x.Id, "楼板  " + (x.Code ?? x.Id))));
             AddCategory(floorNode, "柱", model.Columns.Where(x => x.StoreyId == floor.Id)
-                .Select(x => (x.Id, "柱  " + x.Id)));
+                .Select(x => (x.Id, "柱  " + (x.Code ?? "柱"))));
+            AddCategory(floorNode,"梁",model.Beams.Where(x=>x.StoreyId==floor.Id).Select(x=>(x.Id,"梁  "+(x.Code??"梁"))));
             AddCategory(floorNode, "楼梯", model.Stairs.Where(x => x.StoreyId == floor.Id)
                 .Select(x => (x.Id, "楼梯  " + x.Id)));
             AddCategory(floorNode, "屋面", model.Roofs.Where(x => x.StoreyId == floor.Id)
                 .Select(x => (x.Id, "屋面  " + x.Id)));
             if (floorNode.Items.Count > 0) floors.Items.Add(floorNode);
         }
+        AddDrawingBrowserNodes(project);
         _browserTree.Items.Add(project);
-        if (_selectedId != null && _browserNodes.TryGetValue(_selectedId, out var selected))
+        if(_workspaces.SelectedIndex==2 && _drawingId!=null && _drawingBrowserNodes.TryGetValue(_drawingId,out var drawingSelected))
+            drawingSelected.IsSelected=true;
+        else if (_selectedId != null && _browserNodes.TryGetValue(_selectedId, out var selected))
             selected.IsSelected = true;
     }
 
     private async Task OpenAxisSettingsAsync()
     {
-        var dialog = new AxisSettingsWindow(_session.Model);
+        var dialog = new AxisSettingsWindow(_session.Model, AxisFloorId);
         if (!await dialog.ShowDialog<bool>(this)) return;
-        if (_session.TryReplaceAxes(dialog.ResultAxes, out var error))
-            await RefreshModelAsync("轴号已更新");
+        if (_session.TryReplaceAxes(dialog.ResultAxes, out var error,AxisScope))
+            await RefreshModelAsync("轴网已更新（可撤销）");
         else _status.Text = error;
     }
 
@@ -1632,22 +1714,24 @@ internal sealed partial class ProbeWindow : Window
         }
         finally { _refreshingStoreys = false; }
         _planCanvas.SetModel(_session.Model, (_storeyChooser.SelectedItem as StoreyItem)?.Id ?? "1F");
+        SyncAxisScope();
+        ApplyBrowserViewState();
     }
 
-    private void SelectById(string? id)
+    private void SelectById(string? id)=>SelectById(id,false);
+    private void SelectById(string? id,bool toggle)
     {
+        if(id!=null&&(_hiddenVisualIds.Contains(id)||_frozenVisualIds.Contains(id)))return;
         var visualId = id;
+        if(!toggle)_selectedVisualIds.Clear();
+        if(visualId!=null){if(toggle&&!_selectedVisualIds.Add(visualId))_selectedVisualIds.Remove(visualId);else _selectedVisualIds.Add(visualId);}
+        visualId=_selectedVisualIds.LastOrDefault();id=visualId;
         id = StandardStoreyLayout.SourceElementId(_session.Model, id);
         var item = _items.FirstOrDefault(x => x.Id == id);
-        if (!ReferenceEquals(_elements.SelectedItem, item))
-        {
-            _elements.SelectedItem = item;
-            if (visualId != id) _viewport.SelectElement(visualId);
-            return;
-        }
+        _syncingSelection=true;_elements.SelectedItem=item;_syncingSelection=false;
         _selectedId = item?.Id;
-        _viewport.SelectElement(visualId ?? _selectedId);
-        _planCanvas.SetSelection(_selectedId);
+        _viewport.SelectElements(_selectedVisualIds);
+        _planCanvas.SetSelections(_selectedVisualIds.Select(x=>StandardStoreyLayout.SourceElementId(_session.Model,x)).Where(x=>x!=null)!);
         UpdateGizmoSelection();
         RefreshProperties();
     }
@@ -1664,18 +1748,21 @@ internal sealed partial class ProbeWindow : Window
 
     private void ResetActiveView()
     {
+        if(_workspaces.SelectedIndex==2) { _drawingCanvas.Fit();return; }
         if (_workspaces.SelectedIndex == 1) _planCanvas.Fit();
         else { _viewport.ResetView(); _gizmo.InvalidateVisual(); }
     }
 
     private void FrameActiveSelection()
     {
+        if(_workspaces.SelectedIndex==2) { _drawingCanvas.Fit();return; }
         if (_workspaces.SelectedIndex == 1) _planCanvas.FrameSelection();
         else { _viewport.FrameSelection(); _gizmo.InvalidateVisual(); }
     }
 
     private void SetPlanTool(PlanTool tool)
     {
+        EndAxisEditing();
         _planCanvas.Tool = tool;
         _planCanvas.CancelDraft();
         foreach (var entry in _planToolButtons)
@@ -1710,6 +1797,9 @@ internal sealed partial class ProbeWindow : Window
 
     private void CancelActiveCommand()
     {
+        CancelParameterPreview();
+        RefreshProperties();
+        if(_workspaces.SelectedIndex==2)_drawingPreviewTask=RefreshDrawingViewAsync();
         _commandInput.Clear();
         _gizmo.Cancel();
         CancelMove();
@@ -1755,6 +1845,8 @@ internal sealed partial class ProbeWindow : Window
         switch (command.ToUpperInvariant())
         {
             case "SL": BeginSlabTool(PlanTool.Slab); return;
+            case "CL": BeginStructureTool(PlanTool.Column); return;
+            case "BM": BeginStructureTool(PlanTool.Beam); return;
             case "EC": BeginSlabTool(PlanTool.SlabOutline); return;
             case "RH": BeginSlabTool(PlanTool.SlabHoleRectangle); return;
             case "PH": BeginSlabTool(PlanTool.SlabHolePolygon); return;
@@ -1763,7 +1855,8 @@ internal sealed partial class ProbeWindow : Window
             case "DR": _workspaces.SelectedIndex = 1; SetPlanTool(PlanTool.Door); return;
             case "WN": _workspaces.SelectedIndex = 1; SetPlanTool(PlanTool.Window); return;
             case "LS": _ = OpenStoreySettingsAsync(); return;
-            case "AX": _ = OpenAxisSettingsAsync(); return;
+            case "AX": BeginAxisEditing(); return;
+            case "OPTIONS": _ = OpenSystemSettingsAsync(); return;
             case "PL": _workspaces.SelectedIndex = 1; return;
             case "3D": _workspaces.SelectedIndex = 0; return;
             case "ZF": ResetActiveView(); return;
@@ -1808,8 +1901,9 @@ internal sealed partial class ProbeWindow : Window
     {
         if (_session.Model.Slabs.Any(s => s.Id == _selectedId)) _workspaces.SelectedIndex = 1;
         if (_session.Model.Walls.All(w => w.Id != _selectedId)
-            && _session.Model.Slabs.All(s => s.Id != _selectedId))
-        { _status.Text = "请先选择要操作的墙或楼板。"; return; }
+            && _session.Model.Slabs.All(s => s.Id != _selectedId)
+            && _session.Model.Columns.All(c=>c.Id!=_selectedId)&&_session.Model.Beams.All(b=>b.Id!=_selectedId))
+        { _status.Text = "请先选择要操作的墙、楼板、梁或柱。"; return; }
         _gizmo.Cancel();
         _commandInput.PlaceholderText = "可输入 @ΔX,ΔY 精确提交，例如 @300,0";
         if (_workspaces.SelectedIndex == 1)
@@ -1852,12 +1946,14 @@ internal sealed partial class ProbeWindow : Window
     {
         string affectedId, error;
         var slab = _session.Model.Slabs.Any(s => s.Id == id);
+        var structure=_session.Model.Columns.Any(c=>c.Id==id)||_session.Model.Beams.Any(b=>b.Id==id);
         if (!(slab ? _session.TryTransformSlab(id, dx, dy, copy, out affectedId, out error)
+            : structure ? _session.TryTransformStructure(id,dx,dy,copy,out affectedId,out error)
             : _session.TryTransformWall(id, dx, dy, 0, copy, out affectedId, out error)))
         { _status.Text = error; return; }
         _selectedId = affectedId;
         _commandInput.PlaceholderText = "输入命令：M 移动 / CO 复制";
-        await RefreshModelAsync(slab ? (copy ? "已复制楼板及洞口" : "已移动楼板及洞口")
+        await RefreshModelAsync(structure ? (copy ? "已复制梁柱":"已移动梁柱") : slab ? (copy ? "已复制楼板及洞口" : "已移动楼板及洞口")
             : copy ? "已复制墙及门窗" : "已移动墙（长度保持不变）");
     }
 
@@ -1874,12 +1970,13 @@ internal sealed partial class ProbeWindow : Window
                 return;
             }
         }
+        if (e.Key == Key.Escape)
+        { e.Handled = true; CancelActiveCommand(); return; }
         var editingOtherField = ShortcutEditingText(e.Source) && !IsCommandInput(e.Source);
         if (editingOtherField) return;
         if (e.Key == Key.Home)
         { e.Handled = true; ResetActiveView(); return; }
-        if (e.Key == Key.Escape)
-        { e.Handled = true; CancelActiveCommand(); return; }
+        if (e.Key == Key.F7) { ToggleGrid(); e.Handled=true;return; }
         if (e.Key == Key.F8)
         { e.Handled = true; SetOrthogonal(!_planCanvas.OrthogonalEnabled); return; }
         if (e.Key == Key.F10)
@@ -1975,6 +2072,7 @@ internal sealed partial class ProbeWindow : Window
 
     private async Task DeleteSelectedAsync()
     {
+        if(_workspaces.SelectedIndex==2) { await RemoveDrawingAsync();return; }
         if (!_session.TryDeleteElement(_selectedId ?? "", out var error))
         { _status.Text = error; return; }
         _gizmo.Cancel();
@@ -1993,30 +2091,34 @@ internal sealed partial class ProbeWindow : Window
 
     private void RefreshProperties()
     {
+        CancelParameterPreview();_slabPreviewReady=false;
+        _syncingSelection=true;
         foreach (var entry in _browserNodes)
             if (entry.Value.Header is Border border)
-                border.BorderThickness = new Thickness(entry.Key == _selectedId ? 3 : 0, 0, 0, 0);
+                border.BorderThickness = new Thickness(_workspaces.SelectedIndex!=2 && _selectedVisualIds.Contains(entry.Key) ? 3 : 0, 0, 0, 0);
+        _syncingSelection=false;
         _properties.Children.Clear();
         _slabFooter.IsVisible = false;
         _propertyHeading.Text = "属性";
         if (_slabPropertyMark != null) _slabPropertyMark.IsVisible = false;
         _slabPropertyCode.IsVisible = false;
+        if(_workspaces.SelectedIndex==2) { BuildDrawingProperties();return; }
         var slab = _session.Model.Slabs.FirstOrDefault(s => s.Id == _selectedId);
         if (slab != null) { BuildSlabProperties(slab); return; }
         _slabDraft = null;
         _properties.Margin = new Thickness(16);
         _properties.Spacing = 12;
+        if(BuildStructureProperties())return;
         if (_selectedId == null)
         {
             _properties.Children.Add(new TextBlock { Text = "点击视口中的构件或从左侧列表选择。", TextWrapping = TextWrapping.Wrap });
             return;
         }
-        _properties.Children.Add(new TextBlock { Text = "构件 ID  " + _selectedId, TextWrapping = TextWrapping.Wrap });
         var wall = _session.Model.Walls.FirstOrDefault(x => x.Id == _selectedId);
         if (wall != null)
         {
             var length = Math.Sqrt(Math.Pow(wall.X2 - wall.X1, 2) + Math.Pow(wall.Y2 - wall.Y1, 2));
-            _properties.Children.Add(new TextBlock { Text = $"楼层 {wall.StoreyId} · 墙高 0 表示随楼层" });
+            _properties.Children.Add(new TextBlock { Text = $"墙 {wall.Code} · {_session.Model.FindStorey(wall.StoreyId)?.Name} · 墙高 0 表示随楼层" });
             var lengthField = AddNumberField("墙长（mm）", length);
             var bodyOffset = WallReferenceGeometry.BodyOffset(wall);
             var leftField = AddNumberField("轴线左侧墙厚（mm）", wall.Thickness / 2d + bodyOffset);
@@ -2033,6 +2135,8 @@ internal sealed partial class ProbeWindow : Window
                 return (success, error);
             });
             _properties.Children.Add(apply);
+            BindParameterPreview(new[] { lengthField,leftField,rightField,heightField },(trial,values)=>
+                trial.TrySetWallGeometryBySides(wall.Id,values[0],values[1],values[2],values[3],out _));
             _properties.Children.Add(new TextBlock { Text = "整墙定位（门窗随墙移动）", FontWeight = FontWeight.Bold, Margin = new Thickness(0, 12, 0, 0) });
             var deltaXField = AddNumberField("水平位移 X（mm）", 0);
             var deltaYField = AddNumberField("竖直位移 Y（mm）", 0);
@@ -2061,7 +2165,10 @@ internal sealed partial class ProbeWindow : Window
         var opening = _session.Model.Openings.FirstOrDefault(x => x.Id == _selectedId);
         if (opening != null)
         {
-            _properties.Children.Add(new TextBlock { Text = $"{opening.Kind} · 宿主墙 {opening.HostWallId}", TextWrapping = TextWrapping.Wrap });
+            var editOpening=InspectorButton("编辑分格与三维构造");
+            editOpening.Click+=(_,_)=>_ = OpenOpeningEditorAsync(opening.Id);_properties.Children.Add(editOpening);
+            var host=_session.Model.Walls.FirstOrDefault(w=>w.Id==opening.HostWallId);
+            _properties.Children.Add(new TextBlock { Text = $"{opening.Kind} {opening.Code} · 宿主墙 {host?.Code}", TextWrapping = TextWrapping.Wrap });
             var offsetField = AddNumberField("沿墙中心定位（mm）", opening.Offset);
             var widthField = AddNumberField("洞口宽（mm）", opening.Width);
             var heightField = AddNumberField("洞口高（mm）", opening.Height);
@@ -2074,6 +2181,8 @@ internal sealed partial class ProbeWindow : Window
                 return (success, error);
             });
             _properties.Children.Add(apply);
+            BindParameterPreview(new[] { offsetField,widthField,heightField,sillField },(trial,values)=>
+                trial.TrySetOpeningGeometry(opening.Id,values[0],values[1],values[2],values[3],out _));
         }
         else _properties.Children.Add(new TextBlock { Text = "此构件当前只支持选择。" });
     }
@@ -2122,17 +2231,20 @@ internal sealed partial class ProbeWindow : Window
         }
         var result = edit(values);
         if (!result.success) { _status.Text = result.error; return; }
-        await RefreshModelAsync("已更新构件 " + _selectedId);
+        await RefreshModelAsync("已应用构件参数");
     }
 
     private async Task RefreshModelAsync(string message)
     {
+        CancelParameterPreview();
         var generation = ++_sceneGeneration;
         var model = _session.Model;
         var selected = _selectedId;
+        var selectedVisuals=_selectedVisualIds.ToArray();
         BuildElementList();
         RefreshStoreys();
         SelectById(selected);
+        if(selectedVisuals.Length>1){_selectedVisualIds.Clear();foreach(var id in selectedVisuals)_selectedVisualIds.Add(id);_viewport.SelectElements(selectedVisuals);_planCanvas.SetSelections(selectedVisuals.Select(id=>StandardStoreyLayout.SourceElementId(_session.Model,id)).Where(id=>id!=null)!);}
         RefreshProperties();
         RefreshHistoryButtons();
         UpdateTitle();
@@ -2155,7 +2267,7 @@ internal sealed partial class ProbeWindow : Window
     {
         var dialog = new StoreySettingsWindow(_session.Model);
         if (!await dialog.ShowDialog<bool>(this)) return;
-        if (_session.TryReplaceStoreys(dialog.ResultStoreys, out var error))
+        if (_session.TryReplaceStoreys(dialog.ResultStoreys, out var error, allowContentChanges: true))
             await RefreshModelAsync("楼层已更新");
         else _status.Text = error;
     }
@@ -2246,18 +2358,38 @@ internal sealed partial class ProbeWindow : Window
         {
             var emptyProject = Program.CreateMissingProjectModel && _session.Model.Walls.Count == 0
                 && _session.Model.Columns.Count == 0 && _session.Model.Slabs.Count == 0;
-            if (!_viewport.FrameRendered && !emptyProject && DateTime.UtcNow - started < TimeSpan.FromSeconds(12)) return;
+            if ((!_viewport.FrameRendered || !_viewport.EdgeOverlayReady) && !emptyProject && DateTime.UtcNow - started < TimeSpan.FromSeconds(12)) return;
             timer.Stop();
             if (Program.SnapshotProperties && Program.SnapshotRibbon == "构件")
                 SelectById(_session.Model.Slabs.FirstOrDefault()?.Id);
             var slabSuccess = !Program.SlabCheck || await RunSlabSmokeCheckAsync();
-            if (Program.SnapshotPath != null && (_viewport.FrameRendered || emptyProject))
+            if(Program.AxisCheck){try{await RunAxisCheckAsync();}catch(Exception ex){Console.WriteLine("AXIS_FAILED "+ex);slabSuccess=false;}}
+            if(Program.StructureCheck){try{await RunStructureCheckAsync();}catch(Exception ex){Console.WriteLine("STRUCTURE_FAILED "+ex);slabSuccess=false;}}
+            if(Program.BrowserCheck){try{await RunBrowserStateCheckAsync();}catch(Exception ex){Console.WriteLine("BROWSER_STATE_FAILED "+ex);slabSuccess=false;}}
+            if(Program.ParameterCheck)slabSuccess &= await RunParameterPreviewCheckAsync();
+            if(Program.DrawingCheck)slabSuccess &= await RunDrawingCheckAsync();
+            if(Program.OpeningEditorCheck)slabSuccess &= await RunOpeningEditorCheckAsync();
+            if(Program.ZoomCheck)slabSuccess &= await RunZoomCheckAsync();
+            if(Program.StoreyCheck) {
+                try { await StoreySettingsWindow.RunEditingCheckAsync(_session.Model); }
+                catch(Exception ex) { Console.Error.WriteLine("STOREY_EDITING_UI_FAILED "+ex);slabSuccess=false; }
+            }
+            if(Program.SnapshotDrawing) {
+                var drawing=_drawingCatalogue.FirstOrDefault(v=>v.Kind==Program.SnapshotDrawingKind);
+                if(drawing!=null) { SelectDrawing(drawing.Id);await _drawingPreviewTask; }
+            }
+            if (Program.SnapshotPath != null && (_viewport.FrameRendered || emptyProject) && _viewport.EdgeOverlayReady)
             {
                 if (Program.SnapshotPlan) _workspaces.SelectedIndex = 1;
                 await Task.Delay(200);
+                if(Program.SnapshotZoom!=0) {
+                    if(Program.SnapshotDrawing)_drawingCanvas.ZoomAt(new Point(_drawingCanvas.Bounds.Width/2,_drawingCanvas.Bounds.Height/2),Program.SnapshotZoom);
+                    else if(Program.SnapshotPlan)_planCanvas.ZoomAt(new Point(_planCanvas.Bounds.Width/2,_planCanvas.Bounds.Height/2),Program.SnapshotZoom);
+                    await Task.Delay(100);
+                }
                 Window? settingsDialog = null;
                 if (Program.SnapshotAxes)
-                    settingsDialog = new AxisSettingsWindow(_session.Model);
+                    settingsDialog = new AxisSettingsWindow(_session.Model, AxisFloorId);
                 else if (Program.SnapshotStoreys)
                     settingsDialog = new StoreySettingsWindow(_session.Model);
                 if (settingsDialog != null) { settingsDialog.Show(this); await Task.Delay(350); }
@@ -2276,6 +2408,7 @@ internal sealed partial class ProbeWindow : Window
             if (Program.GizmoCheck) success &= RunGizmoSmokeCheck() && RunCameraSmokeCheck();
             if (Program.ShortcutCheck) success &= RunShortcutSmokeCheck();
             success &= slabSuccess;
+            if(Program.SnapshotDrawing)success &= _drawingCanvas.View!=null;
             if (Program.CadGenerationCheck)
             {
                 var result=CadModelGenerationRequest.LoadResult(_filePath!);
@@ -2288,7 +2421,7 @@ internal sealed partial class ProbeWindow : Window
             Console.WriteLine(success ? (emptyProject ? "AVALONIA_EMPTY_PROJECT_OK " + _filePath
                 : hit != null ? "AVALONIA_GPU_PICK_OK " + hit
                     : "AVALONIA_SNAPSHOT_RENDER_OK center=empty") : "AVALONIA_GPU_OR_PICK_FAILED");
-            if (Program.GizmoCheck || Program.ShortcutCheck || Program.SlabCheck) _closeConfirmed = true;
+            if (Program.GizmoCheck || Program.ShortcutCheck || Program.SlabCheck || Program.ParameterCheck || Program.DrawingCheck || Program.OpeningEditorCheck || Program.StoreyCheck || Program.ZoomCheck || Program.StructureCheck || Program.AxisCheck) _closeConfirmed = true;
             Close();
         };
         if (IsVisible) timer.Start();

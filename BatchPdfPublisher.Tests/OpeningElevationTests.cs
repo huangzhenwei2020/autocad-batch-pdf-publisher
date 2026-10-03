@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -312,8 +312,14 @@ internal static class OpeningElevationTests
         // 换一个方位角：看到的轮廓不一样
         definition.AzimuthDegrees = 215d;
         var other = OrthographicProjector.Project(model, definition, null);
-        Assert(other.Lines.Count != lines.Count, "换方位角后轮廓线数应该变（35° " + lines.Count
-            + " vs 215° " + other.Lines.Count + "）");
+        Assert(other.Lines.Zip(view.Lines,(a,b)=>Math.Abs(a.X1-b.X1)+Math.Abs(a.Y1-b.Y1)).Any(distance=>distance>.1),
+            "边线模式换方位角后坐标应改变，边数可以保持一致");
+        var boxModel=new BuildingModelDocument();
+        boxModel.Storeys.Add(new StoreyModel { Id="1F",Name="一层",Height=3000 });
+        boxModel.Walls.Add(new WallModel { Id="box",StoreyId="1F",X1=0,Y1=0,X2=1000,Y2=0,Thickness=200 });
+        var boxEdges=OrthographicProjector.Project(boxModel,SampleModelFactory.CreateAxonometricView("box"));
+        Assert(boxEdges.Lines.Count(l=>l.Layer==ViewLayers.Axonometric)==9,
+            "轴测实体边线模式只显示长方体可见的 9 条边，背面 3 条边必须被遮挡");
         // 透视也能出图，且坐标有限
         definition.Perspective = true;
         var perspective = OrthographicProjector.Project(model, definition, null);
@@ -401,11 +407,10 @@ internal static class OpeningElevationTests
             Offset = 1500d, Width = 1500d, Height = 1800d, Sill = 900d
         });
         var windowWall = BuildingVolumeBuilder.Build(single, null);
-        // 4 块墙（24 面）+ 窗框 4 块（24 面）+ 玻璃 1 块（6 面）= 54 面
-        Assert(windowWall.Faces.Count == 54, "一樘窗应是 4 块墙 + 4 块窗框 + 1 块玻璃（54 面），实际 "
-            + windowWall.Faces.Count);
-        Assert(windowWall.Faces.Count(f => f.Kind == "frame") == 24 && windowWall.Faces.Count(f => f.Kind == "glass") == 6,
-            "窗框 24 面、玻璃 6 面");
+        Assert(windowWall.Faces.Count(f=>f.Kind=="wall")==24 && windowWall.Faces.Any(f=>f.Kind=="sash"),
+            "默认窗应保留洞口四周墙体及原立面双扇窗的扇框。");
+        Assert(windowWall.Faces.Count(f => f.Kind == "frame") >= 24 && windowWall.Faces.Count(f => f.Kind == "glass") == 12,
+            "默认双扇窗应保留固定框及两块玻璃，实际玻璃面数 "+windowWall.Faces.Count(f=>f.Kind=="glass"));
         // 窗台以下那块墙（0~900）的顶面应正好在 900 高 —— 这就是"窗台"
         Assert(windowWall.Faces.Any(f => f.IsUp && Math.Abs(f.Points.Max(p => p.Z) - 900d) < 1e-6d),
             "应有窗台面（标高 900）");
@@ -420,8 +425,8 @@ internal static class OpeningElevationTests
             Offset = 1500d, Width = 900d, Height = 2100d, Sill = 0d
         });
         var doorWall = BuildingVolumeBuilder.Build(single, null);
-        Assert(doorWall.Faces.Count == 24, "落地门应是 3 块墙（18 面）+ 门扇（6 面）= 24 面，实际 "
-            + doorWall.Faces.Count);
+        Assert(doorWall.Faces.Any(f=>f.Kind=="frame")&&!doorWall.Faces.Any(f=>f.Kind=="sash"),
+            "普通门按原立面默认不另加扇框，保留 N 型外框与闭合门板。");
         Assert(doorWall.Faces.Count(f => f.Kind == "door") == 6, "门扇应为 6 面");
         Assert(!doorWall.Faces.Any(f => f.IsUp && Math.Abs(f.Points.Max(p => p.Z) - 0d) < 1e-6d && false), "门下不该有窗台面");
 
@@ -455,9 +460,9 @@ internal static class OpeningElevationTests
         Console.WriteLine("   三维体量：整栋 " + volume.Faces.Count + " 面（7440×5640×6900）、一层 "
             + firstFloor.Faces.Count + " 面、一樘窗 = 4 块墙 + 4 块窗框 + 玻璃（54 面）、落地门 24 面；"
             + "35°/28° 可见 " + faces.Count + " 面并按深度排序；取景比例 " + Math.Round(scale, 4));
-        // 体量是"一堆小方块"拼出来的，所以真正看得见的面只是少数（其余是背面与贴在一起的内部面）；
+        // 框条已并集，内部面不再计入体量；过滤仍应剔除多数背面和被遮挡面。
         // 一遍过滤以后再跑一遍"藏在墙里"的规则不该再丢掉任何面（幂等 = 判据稳定）。
-        Assert(faces.Count < volume.Faces.Count * 0.4d, "可见面应远少于体量面数："
+        Assert(faces.Count < volume.Faces.Count * 0.5d, "可见面应少于体量面数的一半："
             + faces.Count + "/" + volume.Faces.Count);
         Assert(VolumeRenderer.DropFacesBehindParallelPlanes(faces).Count == faces.Count,
             "过滤过一遍以后不该还能丢掉面（判据应稳定）");
@@ -923,7 +928,8 @@ internal static class OpeningElevationTests
         foreach (var direction in new[] { "elev-south", "elev-north", "elev-east", "elev-west" })
             tight.ViewIds.Add(direction);
         var tightSheet = SheetComposer.Compose(views, tight);
-        Assert(tightSheet.Warnings.Any(w => w.IndexOf("超出图纸格", StringComparison.Ordinal) >= 0), "塞不下时应给出超格提示：" + string.Join(" / ", tightSheet.Warnings.ToArray()));
+        Assert(tightSheet.Warnings.Any(w => w.Contains("扩展图框")) && tightSheet.PaperWidth > 210 && tightSheet.PaperHeight > 297,
+            "塞不下时应扩大图框并保留比例，不能把超格视图继续重叠输出");
 
         // 找不到的视图要提示，而不是崩
         var missing = new SheetDefinitionModel { Id = "sheet-missing", Number = "建施-97", Title = "缺视图" };
@@ -1197,13 +1203,12 @@ internal static class OpeningElevationTests
         var plain = Project(model, ElevationDirection.South, library: null);
         var detailed = Project(model, ElevationDirection.South, library: library);
 
-        // 没有类型库时只画洞口轮廓：4 条边
+        // 没有类型库时采用共用生成器的默认框，不再退成空矩形。
         var plainEdges = plain.Lines.Count(l => l.Layer == ViewLayers.Opening);
-        Assert(plainEdges == 4, "没有类型库时门窗应只有洞口 4 条边，实际 " + plainEdges);
-        Assert(plain.Warnings.Any(w => w.IndexOf("不在类型库里", StringComparison.Ordinal) >= 0),
-            "没有类型库时应提示信息缺失");
+        Assert(plainEdges >= 8, "没有类型库时应采用原门窗立面默认分格与框料，实际 " + plainEdges);
+        Assert(!plain.Warnings.Any(w => w.Contains("不在类型库里")), "默认门窗不应要求用户先建立类型库");
 
-        Assert(detailed.Lines.Count(l => l.Layer == ViewLayers.Opening) > plainEdges + 6,
+        Assert(detailed.Lines.Count(l => l.Layer == ViewLayers.Opening) > 8,
             "有类型库时门窗线条应明显多于洞口轮廓，实际 " + detailed.Lines.Count(l => l.Layer == ViewLayers.Opening));
         Assert(!detailed.Warnings.Any(w => w.IndexOf("不在类型库里", StringComparison.Ordinal) >= 0),
             "有类型库时不应再提示信息缺失");

@@ -12,6 +12,7 @@ namespace BatchPdfPublisher.BuildingModel
         {
             var result = ordered.Select(s => new StoreyModel
             { Id = s.Id, Name = s.Name, Kind = s.Kind, TemplateStoreyId = s.TemplateStoreyId,
+                StandardGroupId = s.StandardGroupId, StandardFloorRange = s.StandardFloorRange,
                 Height = s.Height, Elevation = s.Elevation }).ToList();
             var anchor = result.FindIndex(s => string.Equals(s.Id, anchorId,
                 StringComparison.OrdinalIgnoreCase));

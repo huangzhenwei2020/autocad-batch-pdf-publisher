@@ -8,6 +8,15 @@ namespace BatchPdfPublisher.BuildingModel
     /// <summary>Validated outer boundary, voids and double-precision triangulation in millimetres.</summary>
     public sealed class SlabGeometry
     {
+        public static bool Contains(PointModel p,IList<PointModel> ring)
+        {
+            var inside=false;
+            for(int i=0,j=ring.Count-1;i<ring.Count;j=i++) {
+                var a=ring[j];var b=ring[i];
+                if((a.Y>p.Y)!=(b.Y>p.Y) && p.X<(b.X-a.X)*(p.Y-a.Y)/(b.Y-a.Y)+a.X)inside=!inside;
+            }
+            return inside;
+        }
         private const double Tolerance = 1e-6d;
         public List<List<PointModel>> Contours { get; private set; }
         public List<List<PointModel>> Triangles { get; private set; }

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -20,10 +20,42 @@ internal static class BuildingModelProjectionTests
     /// <summary>样例：轴线 7200×5400，外墙 240 厚 → 投影外轮廓 7440×5640。</summary>
     private const double OuterWidth = 7440d;
 
-    private static void Main()
+    private static void Main(string[] args)
     {
         try
         {
+            if(args.Length==4 && args[0]=="--publish-fixture") {
+                if(!File.ReadAllBytes(args[1]).SequenceEqual(File.ReadAllBytes(args[2])))throw new InvalidOperationException("Model changed since fixture generation.");
+                var folder=Path.GetDirectoryName(Path.GetFullPath(args[1]));
+                var stage=Path.Combine(folder,".views-staging-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(stage);
+                var views=Directory.GetFiles(args[3],"*.view.json").Select(BuildingModelJson.LoadView).ToList();
+                foreach(var view in views)BuildingModelJson.SaveView(Path.Combine(stage,view.Id+".json"),view);
+                var sheets=views.Where(v=>v.Kind==ViewKind.Sheet).ToList();
+                if(!StudioLaunch.WritePendingFile(Path.Combine(stage,StudioLaunch.PendingFileName),sheets.Select(v=>new StudioPendingEntry {
+                    Id=v.Id,FilePath=Path.Combine(folder,StudioLaunch.ViewsFolderName,v.Id+".json") })))throw new IOException("Pending write failed.");
+                StudioLaunch.CommitStagedViews(folder,stage);
+                var entries=StudioLaunch.ListViews(folder);
+                Assert(entries.Count==views.Count && entries.Count(v=>v.Pending)==sheets.Count,"CAD must read all published views and pending sheets.");
+                Console.WriteLine("CAD_PUBLISH_VERIFIED views="+entries.Count+" pending="+sheets.Count);return;
+            }
+            if(args.Length==2 && args[0]=="--profile-volume") {
+                var timer=System.Diagnostics.Stopwatch.StartNew();
+                var source=BuildingModelJson.LoadModel(args[1]);
+                var volume=BuildingVolumeBuilder.Build(source,null);
+                Console.WriteLine(timer.Elapsed+" volume "+volume.Faces.Count);
+                VolumeRenderer.Project(volume,new VolumeCamera(),stage=>Console.WriteLine(timer.Elapsed+" "+stage));
+                return;
+            }
+            if (args.Length == 3 && args[0] == "--drafting-fixture")
+            {
+                var fixture = BuildingModelJson.LoadModel(args[1]);
+                Directory.CreateDirectory(args[2]);
+                foreach (var output in BuildingModelViewPublisher.Generate(fixture,null,null,
+                    (index,count,title)=>Console.WriteLine("GENERATING "+index+"/"+count+" "+title)))
+                    BuildingModelJson.SaveView(Path.Combine(args[2],output.Id+".view.json"),output);
+                Console.WriteLine("CAD_DRAFTING_FIXTURE_OK"); return;
+            }
+            CadDraftingRegression();
             var model = SampleModelFactory.CreateTwoStoreyHouse();
             SouthElevationShowsOutlineAndOpenings(model);
             ElevationDirectionsAreMirrored(model);
@@ -34,18 +66,63 @@ internal static class BuildingModelProjectionTests
             VolumeIdentityTests.Run();
             SlabGeometryTests.Run();
             BuildingModelEditSessionTests.Run();
+            DrawingViewCatalogueTests.Run();
             JsonRoundTripsWithoutLoss(model);
             RegisteredFramePaperSizeIsPreserved();
             ViewGenerationCanBeCancelled(model);
             PlanEditingTests.Run();
             OpeningTypeLibraryTests.Run();
             OpeningElevationTests.Run();
+            OpeningConstructionTests.Run();
         }
         catch (Exception exception)
         {
             Console.Error.WriteLine("FAIL " + exception);
             Environment.ExitCode = 1;
         }
+    }
+
+    private static void CadDraftingRegression()
+    {
+        var model = new BuildingModelDocument();
+        model.Storeys.Add(new StoreyModel { Id="1F",Name="一层",Height=4000 });
+        model.Walls.Add(new WallModel { Id="A",StoreyId="1F",X1=0,Y1=0,X2=6000,Y2=0,Thickness=200,Height=4000 });
+        model.Walls.Add(new WallModel { Id="B",StoreyId="1F",X1=6000,Y1=0,X2=6000,Y2=6000,Thickness=200,Height=4000 });
+        model.Openings.Add(new OpeningModel { Id="O",HostWallId="B",Kind="窗",Code="C1818",Offset=3000,Width=1800,Height=1800,Sill=1500 });
+        var plan = OrthographicProjector.Project(model,SampleModelFactory.CreatePlanView(model.Storeys[0]));
+        var x=6000-plan.OriginX;var y=3000-plan.OriginY;
+        Assert(!plan.Lines.Any(l=>l.Layer==ViewLayers.Cut && Math.Abs(l.X1-l.X2)<.01 && Math.Abs(Math.Abs(l.X1-x)-100)<.01
+            && Math.Min(l.Y1,l.Y2)<y && Math.Max(l.Y1,l.Y2)>y),"高窗洞口不能被融合墙线贯穿");
+        Assert(plan.Texts.Any(t=>t.Text=="C1818" && Math.Abs(t.Rotation-90)<.01),"竖墙窗编号必须沿墙旋转");
+        Assert(plan.Hatches.Count==0,"平面图必须只输出墙线和门窗，不生成填充");
+        Assert(!plan.Hatches.Any(h=>h.Boundary.Min(p=>p.X)<x && h.Boundary.Max(p=>p.X)>x
+            && h.Boundary.Min(p=>p.Y)<y && h.Boundary.Max(p=>p.Y)>y),"窗洞不能被墙填充覆盖");
+        var front = OrthographicProjector.Project(model,new ViewDefinitionModel { Id="south",Kind=ViewKind.Elevation,Direction=ElevationDirection.South,Scale=100 });
+        Assert(!front.Texts.Any(t=>t.Text=="C1818"),"侧向不可见窗不能留下孤立编号");
+        var views = Enumerable.Range(0,4).Select(i=>new ViewDocument { Id="v"+i,Scale=100,
+            Lines=new List<ViewLine> { new ViewLine { Layer="v"+i,X1=0,Y1=0,X2=35000,Y2=15000 } },
+            Texts=new List<ViewText> { new ViewText { Layer="v"+i,Text="图名",X=0,Y=-3000,Height=300 } },
+            Dimensions=new List<ViewDimension> { new ViewDimension { Vertical=false,From=0,To=35000,AnchorPosition=0,LinePosition=-2000 } } }).ToList();
+        foreach(var v in views)SheetComposer.LayoutDimensionText(v);
+        var sheet=SheetComposer.ComposeModelSpace(views,new SheetDefinitionModel { Id="sheet",Paper="A3",ViewIds=views.Select(v=>v.Id).ToList() });
+        var rectangles=views.Select(v=>sheet.Lines.Single(l=>l.Layer==v.Id)).ToList();
+        for(var i=0;i<rectangles.Count;i++)for(var j=i+1;j<rectangles.Count;j++)
+            Assert(!(rectangles[i].X1<rectangles[j].X2 && rectangles[i].X2>rectangles[j].X1 && rectangles[i].Y1<rectangles[j].Y2 && rectangles[i].Y2>rectangles[j].Y1),"真实尺寸视图排版不能互相重叠");
+        Assert(sheet.Dimensions.All(d=>Math.Abs(d.To-d.From-35000)<.01),"扩大图框不能改变实测尺寸");
+        var farFace=new VolumeFace2D { HasDepthPlane=true,DepthIntercept=0,Points=new List<PointModel> { new PointModel(0,-1),new PointModel(10,-1),new PointModel(10,1),new PointModel(0,1) },
+            Edges=new List<List<PointModel>> { new List<PointModel> { new PointModel(0,0),new PointModel(10,0) } } };
+        var slopeFace=new VolumeFace2D { HasDepthPlane=true,DepthIntercept=5,DepthSlopeU=-1,
+            Points=new List<PointModel> { new PointModel(0,-1),new PointModel(10,-1),new PointModel(10,1),new PointModel(0,1) } };
+        VolumeRenderer.HideEdgesBehindNearerFaces(new List<VolumeFace2D> {farFace,slopeFace});
+        Assert(farFace.Edges.Count==1 && Math.Abs(farFace.Edges[0][0].X)<.01 && Math.Abs(farFace.Edges[0][1].X-5.1)<.01,
+            "轴测边消隐必须按交点实际深度，不能按整面平均深度误删");
+        var tiny=new VolumeFace2D { PlaneId="same",Points=new List<PointModel> {
+            new PointModel(0,1),new PointModel(1,1),new PointModel(1,1.2),new PointModel(0,1.2) } };
+        var toleranceCover=new VolumeFace2D { PlaneId="same",Points=new List<PointModel> {
+            new PointModel(.04,0),new PointModel(10,0),new PointModel(10,10),new PointModel(.04,10) } };
+        Assert(!VolumeRenderer.DropHiddenInterfaces(new List<VolumeFace2D> { tiny,toleranceCover }).Contains(tiny),
+            "空间筛选必须保留覆盖算法的 0.05 mm 边界容差");
+        Console.WriteLine("PASS CAD 出图：高窗断墙、墙填充、竖向编号、不可见编号过滤、真实比例无重叠排版、轴测逐点深度");
     }
 
     private static void RegisteredFramePaperSizeIsPreserved()

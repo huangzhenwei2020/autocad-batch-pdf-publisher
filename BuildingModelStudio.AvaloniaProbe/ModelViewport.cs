@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Diagnostics;
 using Avalonia;
@@ -15,7 +15,7 @@ namespace BuildingModelStudio.AvaloniaProbe;
 internal sealed class ModelViewport : OpenGlControlBase
 {
     private const int GuideLinesPrimitive = 0x0001; // GL_LINES
-    internal enum DisplayMode { Wireframe, Solid, Shaded, Lit }
+    internal enum DisplayMode { Wireframe, Solid, Shaded, Lit, SolidEdges }
     [StructLayout(LayoutKind.Sequential)]
     internal struct Vertex
     {
@@ -77,9 +77,14 @@ internal sealed class ModelViewport : OpenGlControlBase
     private BuildingVolume? _wireframePreparingFor;
     private MeshSnapshot? _uploaded;
     private BuildingVolume _volume;
+    private PreparedScene? _unfilteredScene;
+    private readonly HashSet<string> _hiddenElements=new(),_frozenElements=new();
     private string? _selectedId;
     private float _selectedIndex;
-    private DisplayMode _displayMode = DisplayMode.Shaded;
+    private readonly HashSet<string> _selectedElements=new();
+    private MeshSnapshot? _selectionSnapshot;
+    private bool _selectionDirty;
+    private DisplayMode _displayMode = DisplayMode.SolidEdges;
     private int _program;
     private int _vertexShader;
     private int _fragmentShader;
@@ -110,12 +115,15 @@ internal sealed class ModelViewport : OpenGlControlBase
     internal double LastSynchronizedFrameMs
         => Stopwatch.GetElapsedTime(0, Interlocked.Read(ref _lastSynchronizedFrameTicks)).TotalMilliseconds;
     internal string GpuRenderer { get; private set; } = "unknown";
+    internal PreparedScene CurrentScene => _unfilteredScene ?? new(_volume,_baseSnapshot);
+    internal string? PickElement(Point point)=>Pick(point);
     public event Action<string?>? ElementPicked;
 
     public ModelViewport(BuildingVolume volume) : this(PrepareScene(volume)) { }
 
     public ModelViewport(PreparedScene scene)
     {
+        _unfilteredScene=scene;
         _volume = scene.Volume;
         _snapshot = _baseSnapshot = scene.Snapshot;
     }
@@ -124,6 +132,25 @@ internal sealed class ModelViewport : OpenGlControlBase
         => new PreparedScene(volume, BuildSnapshot(volume));
 
     public void SetScene(PreparedScene scene)
+    {
+        _unfilteredScene=scene;
+        SetRenderedScene(FilterScene(scene));
+    }
+    internal void SetViewState(IEnumerable<string> hidden,IEnumerable<string> frozen)
+    {
+        var changed=!_hiddenElements.SetEquals(hidden);
+        _hiddenElements.Clear();_hiddenElements.UnionWith(hidden);
+        _frozenElements.Clear();_frozenElements.UnionWith(frozen);
+        if(changed)SetRenderedScene(FilterScene(CurrentScene));
+    }
+    private PreparedScene FilterScene(PreparedScene scene)
+    {
+        if(_hiddenElements.Count==0)return scene;
+        var v=scene.Volume;
+        return PrepareScene(new BuildingVolume {MinX=v.MinX,MinY=v.MinY,MinZ=v.MinZ,MaxX=v.MaxX,MaxY=v.MaxY,MaxZ=v.MaxZ,
+            Faces=v.Faces.Where(f=>!_hiddenElements.Contains(f.ElementId)).ToList(),GuideLines=v.GuideLines.Where(g=>!_hiddenElements.Contains(g.ElementId)).ToList()});
+    }
+    private void SetRenderedScene(PreparedScene scene)
     {
         var oldCenter = _volume.Center;
         var oldScale = (float)(10d / Math.Max(1d, _volume.Diagonal));
@@ -138,9 +165,10 @@ internal sealed class ModelViewport : OpenGlControlBase
             (float)(newCenter.Y - worldY) * newScale);
         _distance *= newScale / oldScale;
         _snapshot = _baseSnapshot = scene.Snapshot;
+        _selectionDirty=true;
         _wireframeSnapshot = null;
         _wireframePreparingFor = null;
-        if (_displayMode == DisplayMode.Wireframe) PrepareWireframe();
+        if (UsesEdges(_displayMode)) PrepareWireframe();
         _selectedIndex = _selectedId != null && _snapshot.ElementIndexes.TryGetValue(_selectedId, out var index)
             ? index : 0f;
         RequestNextFrameRendering();
@@ -148,17 +176,26 @@ internal sealed class ModelViewport : OpenGlControlBase
 
     public void SelectElement(string? id)
     {
+        _selectedElements.Clear();if(id!=null)_selectedElements.Add(id);_selectionDirty=true;
         _selectedId = id;
         _selectedIndex = id != null && _snapshot.ElementIndexes.TryGetValue(id, out var index)
             ? index : 0f;
         RequestNextFrameRendering();
     }
+    public void SelectElements(IEnumerable<string> ids)
+    {
+        _selectedElements.Clear();foreach(var id in ids)_selectedElements.Add(id);
+        _selectedId=_selectedElements.LastOrDefault();_selectedIndex=0;_selectionDirty=true;RequestNextFrameRendering();
+    }
+    internal int SelectedElementCount=>_selectedElements.Count;
+    internal bool IsElementVisible(string id)=>_baseSnapshot.ElementIndexes.ContainsKey(id);
+    internal int HighlightedElementCount=>_snapshot.Vertices.Where(v=>v.ElementIndex<0).Select(v=>v.ElementIndex).Distinct().Count();
 
     internal void SetDisplayMode(DisplayMode mode)
     {
         if (_displayMode == mode) return;
         _displayMode = mode;
-        if (mode == DisplayMode.Wireframe) PrepareWireframe();
+        if (UsesEdges(mode)) PrepareWireframe();
         else _snapshot = _baseSnapshot;
         RequestNextFrameRendering();
     }
@@ -187,12 +224,15 @@ internal sealed class ModelViewport : OpenGlControlBase
                 _wireframePreparingFor = null;
                 if (!task.IsCompletedSuccessfully) return;
                 _wireframeSnapshot = task.Result;
-                if (_displayMode != DisplayMode.Wireframe) return;
+                if (!UsesEdges(_displayMode)) return;
                 _snapshot = _wireframeSnapshot;
                 RequestNextFrameRendering();
             });
         }, TaskScheduler.Default);
     }
+
+    private static bool UsesEdges(DisplayMode mode) => mode==DisplayMode.Wireframe || mode==DisplayMode.SolidEdges;
+    internal bool EdgeOverlayReady => !UsesEdges(_displayMode) || _snapshot.EdgeVertexCount>0 || _volume.Faces.Count==0;
 
     public void ResetView()
     {
@@ -218,7 +258,7 @@ internal sealed class ModelViewport : OpenGlControlBase
         return found;
     }
 
-    public void FrameSelection()
+    public void FrameSelection(bool tight=false)
     {
         if (!TryBounds(_selectedId, out var min, out var max)
             && !TryBounds(null, out min, out max)) return;
@@ -227,6 +267,17 @@ internal sealed class ModelViewport : OpenGlControlBase
         var aspect = Math.Max(0.1f, (float)(Bounds.Width / Math.Max(1, Bounds.Height)));
         var halfAngle = Math.Min(0.4f, MathF.Atan(MathF.Tan(0.4f) * aspect));
         _distance = Math.Max(0.2f, radius / MathF.Sin(halfAngle) * 1.1f);
+        if(tight){
+            var orientation=OrbitView(_yaw,_pitch,1,Vector3.Zero);
+            var tanY=MathF.Tan(.4f);var tanX=tanY*aspect;var distance=.2f;
+            // Fit every bounding-box corner in camera space, including its depth.
+            // This fills a narrow editor preview without clipping wide/bay types.
+            foreach(var x in new[]{min.X,max.X})foreach(var y in new[]{min.Y,max.Y})foreach(var z in new[]{min.Z,max.Z}){
+                var corner=Vector3.TransformNormal(new Vector3(x,y,z)-_target,orientation);
+                distance=Math.Max(distance,corner.Z+Math.Max(Math.Abs(corner.X)/tanX,Math.Abs(corner.Y)/tanY)*1.14f+.1f);
+            }
+            _distance=distance;
+        }
         RequestNextFrameRendering();
     }
 
@@ -326,8 +377,10 @@ internal sealed class ModelViewport : OpenGlControlBase
             var color = face.Kind switch
             {
                 "wall" => new Vector3(0.48f, 0.72f, 0.92f),
-                "slab" => new Vector3(0.72f, 0.76f, 0.82f),
+                "slab" or "bay-cap" => new Vector3(0.72f, 0.76f, 0.82f),
                 "roof" => new Vector3(0.42f, 0.68f, 0.8f),
+                "frame" or "sash" => new Vector3(.48f,.55f,.60f),
+                "glass" => new Vector3(.66f,.83f,.9f),
                 _ => new Vector3(0.62f, 0.78f, 0.89f)
             };
             var brightness = Math.Clamp(0.6f + (float)face.NormalZ * 0.2f
@@ -349,19 +402,21 @@ internal sealed class ModelViewport : OpenGlControlBase
                 vertices.Add(a); vertices.Add(b); vertices.Add(c);
                 triangles.Add(new PickTriangle(a.Position, b.Position, c.Position, face.ElementId, triangles.Count));
             }
-            for (var i = 0; edges != null && i < face.Points.Count; i++)
-            {
-                edges.Add(ToVertex(face.Points[i], center, scale, color, elementIndex, normal));
-                edges.Add(ToVertex(face.Points[(i + 1) % face.Points.Count], center, scale,
-                    color, elementIndex, normal));
-            }
+        }
+        if(edges!=null)foreach(var edge in ModelMeshEdges.Build(volume)) {
+            var elementIndex=edge.ElementId!=null && elementIndexes.TryGetValue(edge.ElementId,out var index) ? index : 0f;
+            var color=new Vector3(.35f,.55f,.7f);
+            edges.Add(ToVertex(edge.Start,center,scale,color,elementIndex));
+            edges.Add(ToVertex(edge.End,center,scale,color,elementIndex));
         }
         var triangleVertexCount = vertices.Count;
         if (edges != null) vertices.AddRange(edges);
         var edgeVertexCount = edges?.Count ?? 0;
         foreach (var line in volume.GuideLines)
         {
-            if (line?.Start == null || line.End == null) continue;
+            // Wall junction seams are drafting helpers, not mesh edges. They have
+            // no component identity and would float above hidden storeys.
+            if (line?.Start == null || line.End == null || line.IsWallJoint) continue;
             var color = line.IsBuildingAxis ? new Vector3(0.3f, 0.85f, 0.75f)
                 : line.IsWallJoint ? new Vector3(0.23f, 0.36f, 0.5f)
                 : new Vector3(1f, 0.7f, 0.25f);
@@ -533,21 +588,26 @@ internal sealed class ModelViewport : OpenGlControlBase
             varying vec3 vNormal;
             varying float vSelected;
             uniform float uSelectedElement;
+            uniform float uEdgePass;
             uniform mat4 uProjection;
             uniform mat4 uView;
             uniform mat4 uModel;
             void main() {
-                vSelected = uSelectedElement > 0.5 && abs(aElement - uSelectedElement) < 0.5
+                vSelected = aElement < -0.5 || (uSelectedElement > 0.5 && abs(aElement - uSelectedElement) < 0.5)
                     ? 1.0 : 0.0;
                 vColor = vSelected > 0.5 ? vec3(1.0, 0.72, 0.18) : aColor;
                 vNormal = aNormal;
-                gl_Position = uProjection * uView * uModel * vec4(aPos, 1.0);
+                vec4 viewPos = uView * uModel * vec4(aPos, 1.0);
+
+                gl_Position = uProjection * viewPos;
+                if(uEdgePass > 0.5) gl_Position.z -= 0.000001 * gl_Position.w;
             }");
         var fragmentSource = ShaderSource(GlVersion, true, @"
             varying vec3 vColor;
             varying vec3 vNormal;
             varying float vSelected;
             uniform float uDisplayMode;
+            uniform float uEdgePass;
             void main() {
                 vec3 color = vColor;
                 if (uDisplayMode < 0.5 && vSelected < 0.5)
@@ -555,6 +615,7 @@ internal sealed class ModelViewport : OpenGlControlBase
                 else if (uDisplayMode > 1.5 && uDisplayMode < 2.5 && vSelected < 0.5)
                     color *= 0.55 + 0.45 * max(dot(normalize(vNormal),
                         normalize(vec3(0.35, 0.8, 0.45))), 0.0);
+                if(uEdgePass > 0.5) color = vSelected > 0.5 ? vec3(1.0,0.72,0.18) : vec3(0.10,0.13,0.16);
                 gl_FragColor = vec4(color, 1.0);
             }");
         _vertexShader = gl.CreateShader(GL_VERTEX_SHADER);
@@ -627,6 +688,11 @@ internal sealed class ModelViewport : OpenGlControlBase
         gl.UseProgram(_program);
         gl.BindVertexArray(_array);
         var snapshot = _snapshot;
+        if(_selectionDirty || !ReferenceEquals(_selectionSnapshot,snapshot)){
+            var selectedIndexes=new HashSet<float>(_selectedElements.Where(snapshot.ElementIndexes.ContainsKey).Select(id=>snapshot.ElementIndexes[id]));
+            for(var i=0;i<snapshot.Vertices.Length;i++){var index=Math.Abs(snapshot.Vertices[i].ElementIndex);snapshot.Vertices[i].ElementIndex=selectedIndexes.Contains(index)?-index:index;}
+            _selectionSnapshot=snapshot;_selectionDirty=false;_uploaded=null;
+        }
         if (!ReferenceEquals(snapshot, _uploaded)) Upload(gl, snapshot);
         var model = Matrix4x4.Identity;
         var view = CameraView();
@@ -635,6 +701,7 @@ internal sealed class ModelViewport : OpenGlControlBase
         gl.UniformMatrix4fv(gl.GetUniformLocationString(_program, "uView"), 1, false, &view);
         gl.UniformMatrix4fv(gl.GetUniformLocationString(_program, "uProjection"), 1, false, &projection);
         gl.Uniform1f(gl.GetUniformLocationString(_program, "uSelectedElement"), _selectedIndex);
+        gl.Uniform1f(gl.GetUniformLocationString(_program, "uEdgePass"),0f);
         gl.Uniform1f(gl.GetUniformLocationString(_program, "uDisplayMode"),
             _displayMode == DisplayMode.Solid ? 0f
                 : _displayMode == DisplayMode.Lit ? 2f : 1f);
@@ -642,6 +709,15 @@ internal sealed class ModelViewport : OpenGlControlBase
             gl.DrawArrays(GuideLinesPrimitive, snapshot.TriangleVertexCount,
                 snapshot.EdgeVertexCount);
         else gl.DrawArrays(GL_TRIANGLES, 0, snapshot.TriangleVertexCount);
+        if(_displayMode==DisplayMode.SolidEdges && snapshot.EdgeVertexCount>0) {
+            // The solid pass supplies depth. Edges behind surfaces fail this same
+            // depth test; a tiny projected-depth offset prevents coplanar flicker.
+            gl.DepthMask(0);gl.DepthFunc(0x0203); // GL_LEQUAL
+            gl.Uniform1f(gl.GetUniformLocationString(_program,"uEdgePass"),1f);
+            gl.DrawArrays(GuideLinesPrimitive,snapshot.TriangleVertexCount,snapshot.EdgeVertexCount);
+            gl.Uniform1f(gl.GetUniformLocationString(_program,"uEdgePass"),0f);
+            gl.DepthMask(1);gl.DepthFunc(GL_LESS);
+        }
         var guideStart = snapshot.TriangleVertexCount + snapshot.EdgeVertexCount;
         if (snapshot.Vertices.Length > guideStart)
         {
@@ -669,10 +745,10 @@ internal sealed class ModelViewport : OpenGlControlBase
             (float)(Bounds.Width / Bounds.Height), 0.1f, 100f);
         var x = (float)(point.X / Bounds.Width * 2 - 1);
         var y = (float)(1 - point.Y / Bounds.Height * 2);
-        return PickNormalized(_snapshot, model * view * projection, x, y);
+        return PickNormalized(_snapshot, model * view * projection, x, y,_frozenElements);
     }
 
-    private static string? PickNormalized(MeshSnapshot snapshot, Matrix4x4 transform, float x, float y)
+    private static string? PickNormalized(MeshSnapshot snapshot, Matrix4x4 transform, float x, float y,ISet<string>? frozen=null)
     {
         if (snapshot.PickNodes.Length == 0 || !Matrix4x4.Invert(transform, out var inverse)
             || !Unproject(x, y, 0f, inverse, out var origin)
@@ -696,7 +772,7 @@ internal sealed class ModelViewport : OpenGlControlBase
             for (var i = node.Start; i < node.Start + node.Count; i++)
             {
                 var triangle = snapshot.Triangles[i];
-                if (string.IsNullOrWhiteSpace(triangle.ElementId)) continue;
+                if (string.IsNullOrWhiteSpace(triangle.ElementId) || frozen?.Contains(triangle.ElementId)==true) continue;
                 if (!IntersectsTriangle(origin, direction, triangle, out var distance)
                     || distance > bestDistance + 1e-5f
                     || (Math.Abs(distance - bestDistance) <= 1e-5f && triangle.DrawIndex >= bestDrawIndex)) continue;
@@ -833,7 +909,8 @@ internal sealed class ModelViewport : OpenGlControlBase
         {
             if (!_orbitPivotSet)
             {
-                SetSelectionOrbitPivot();
+                // Preserve the current orbit center; selecting an off-center
+                // object must not recenter the camera when rotation starts.
                 _orbitPivotSet = true;
             }
             _yaw += (float)(now.X - previous.X) * 0.008f;
