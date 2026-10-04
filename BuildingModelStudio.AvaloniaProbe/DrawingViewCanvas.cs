@@ -13,7 +13,7 @@ internal sealed class DrawingViewCanvas : Control
     private readonly List<ViewLine> _lines = new();
     private readonly List<ViewText> _texts = new();
     private readonly List<DimensionLabel> _dimensionLabels = new();
-    private sealed record DimensionLabel(string Text, Point Center, double FontHeight, double Width, double Height, bool Vertical)
+    private sealed record DimensionLabel(string Text, Point Center, double FontHeight, double Width, double Height, bool Vertical,double WidthFactor)
     {
         public Rect Bounds => new(Center.X-(Vertical ? Height : Width)/2,Center.Y-(Vertical ? Width : Height)/2,
             Vertical ? Height : Width,Vertical ? Width : Height);
@@ -58,13 +58,9 @@ internal sealed class DrawingViewCanvas : Control
         _view=view;_lines.Clear();_texts.Clear();_dimensionLabels.Clear();
         if(view!=null) {
             _lines.AddRange(view.Lines);_texts.AddRange(view.Texts);
-            var fontHeight=Math.Max(1,view.Scale)*2.5;
-            var gap=fontHeight*.35;
-            var occupied=_texts.Where(t=>t.Height>0).Select(t=> {
-                var size=TextSize(t.Text ?? "",t.Height);
-                return new Rect(t.X,t.Y,size.Width,size.Height);
-            }).ToList();
+            SheetComposer.LayoutDimensionText(view);
             foreach(var d in view.Dimensions) {
+                if(Math.Abs(d.To-d.From)<.5)continue;
                 var from=d.Vertical ? new PointModel(d.LinePosition,d.From) : new PointModel(d.From,d.LinePosition);
                 var to=d.Vertical ? new PointModel(d.LinePosition,d.To) : new PointModel(d.To,d.LinePosition);
                 var a=d.Vertical ? new PointModel(d.AnchorPosition,d.From) : new PointModel(d.From,d.AnchorPosition);
@@ -72,25 +68,13 @@ internal sealed class DrawingViewCanvas : Control
                 Line(from,to,d.Layer);Line(a,from,d.Layer);Line(b,to,d.Layer);
                 var tick=Math.Max(1,view.Scale)*1.2;
                 foreach(var p in new[] {from,to})Line(new PointModel(p.X-tick,p.Y-tick),new PointModel(p.X+tick,p.Y+tick),d.Layer);
-                var text=string.IsNullOrWhiteSpace(d.Text) ? Math.Abs(d.To-d.From).ToString("0.###",CultureInfo.InvariantCulture) : d.Text;
+                var text=DrawingAnnotationSettings.DimensionText(d);
+                var fontHeight=d.TextHeight;
                 var size=TextSize(text,fontHeight);
                 var mid=(d.From+d.To)/2;
-                DimensionLabel label;
-                var lane=0;
-                do {
-                    var offset=gap+size.Height/2+lane*size.Height*1.5;
-                    label=new DimensionLabel(text,d.Vertical ? new Point(d.LinePosition-offset,mid) : new Point(mid,d.LinePosition+offset),
-                        fontHeight,size.Width,size.Height,d.Vertical);
-                    lane++;
-                } while(occupied.Any(b=>b.Intersects(label.Bounds.Inflate(gap))) && lane<1000);
-                if(d.TextX.HasValue && d.TextY.HasValue)
-                    label=new DimensionLabel(text,new Point(d.TextX.Value,d.TextY.Value),fontHeight,size.Width,size.Height,d.Vertical);
-                occupied.Add(label.Bounds);
+                var factor=Math.Min(d.TextWidthFactor,Math.Abs(d.To-d.From)*.9/Math.Max(1,size.Width));
+                var label=new DimensionLabel(text,new Point(d.TextX??mid,d.TextY??mid),fontHeight,size.Width*factor,size.Height,d.Vertical,factor);
                 _dimensionLabels.Add(label);
-                if(lane>1) {
-                    var end=d.Vertical ? new PointModel(label.Bounds.Right+gap,mid) : new PointModel(mid,label.Bounds.Bottom-gap);
-                    Line(d.Vertical ? new PointModel(d.LinePosition,mid) : new PointModel(mid,d.LinePosition),end,d.Layer);
-                }
             }
         }
         Fit();
@@ -162,13 +146,13 @@ internal sealed class DrawingViewCanvas : Control
             var font=text.Height*_scale;
             var formatted=new FormattedText(text.Text ?? "",CultureInfo.CurrentCulture,FlowDirection.LeftToRight,Typeface.Default,font,Brushes.Black);
             var p=Screen(text.X,text.Y);
-            using(context.PushTransform(Matrix.CreateRotation(-text.Rotation*Math.PI/180)*Matrix.CreateTranslation(p.X,p.Y)))
+            using(context.PushTransform(Matrix.CreateScale(text.WidthFactor>0?text.WidthFactor:1,1)*Matrix.CreateRotation(-text.Rotation*Math.PI/180)*Matrix.CreateTranslation(p.X,p.Y)))
                 context.DrawText(formatted,new Point(0,-formatted.Height));
         }
         foreach(var label in _dimensionLabels) {
             var text=new FormattedText(label.Text,CultureInfo.CurrentCulture,FlowDirection.LeftToRight,Typeface.Default,label.FontHeight*_scale,Brushes.Black);
             var center=Screen(label.Center.X,label.Center.Y);
-            using(context.PushTransform(Matrix.CreateRotation(label.Vertical ? -Math.PI/2 : 0)*Matrix.CreateTranslation(center.X,center.Y))) {
+            using(context.PushTransform(Matrix.CreateScale(label.WidthFactor,1)*Matrix.CreateRotation(label.Vertical ? -Math.PI/2 : 0)*Matrix.CreateTranslation(center.X,center.Y))) {
                 var pad=label.FontHeight*.1*_scale;
                 context.FillRectangle(new SolidColorBrush(Color.Parse("#FAFCFF")),new Rect(-text.Width/2-pad,-text.Height/2-pad,text.Width+2*pad,text.Height+2*pad));
                 context.DrawText(text,new Point(-text.Width/2,-text.Height/2));

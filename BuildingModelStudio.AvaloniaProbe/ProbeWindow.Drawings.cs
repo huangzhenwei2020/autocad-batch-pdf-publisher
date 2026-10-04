@@ -21,6 +21,9 @@ internal sealed partial class ProbeWindow
     private string? _drawingId;
     private ViewDefinitionModel? _drawingDraft;
     private TextBox? _drawingTitle,_drawingScale,_drawingCut,_drawingDepth,_drawingYaw,_drawingPitch;
+    private TextBox? _drawingTextHeight,_drawingWidthFactor,_drawingAxisDiameter;
+    private readonly TextBox _quickDrawingScale=new() {Width=72,Height=32,VerticalContentAlignment=VerticalAlignment.Center};
+    private bool _applyingQuickScale;
     private ComboBox? _drawingFloor,_drawingDirection,_drawingCutAxis,_drawingSign;
     private CheckBox? _drawingPerspective;
     private bool _refreshingDrawings,_buildingDrawingProperties;
@@ -33,6 +36,10 @@ internal sealed partial class ProbeWindow
         var root=new Grid { RowDefinitions=new RowDefinitions("Auto,*,Auto") };
         var toolbar=new WrapPanel { Orientation=Orientation.Horizontal,Margin=new Thickness(8,4) };
         toolbar.Children.Add(_drawingChooser);
+        toolbar.Children.Add(new TextBlock {Text="1:",Margin=new Thickness(8,0,4,0),VerticalAlignment=VerticalAlignment.Center});
+        toolbar.Children.Add(_quickDrawingScale);
+        _quickDrawingScale.KeyDown+=async(_,e)=>{if(e.Key==Avalonia.Input.Key.Enter){e.Handled=true;await ApplyQuickDrawingScaleAsync();}};
+        _quickDrawingScale.LostFocus+=async(_,_)=>await ApplyQuickDrawingScaleAsync();
         var kinds=new[] { ViewKind.Plan,ViewKind.Elevation,ViewKind.Section,ViewKind.Axonometric,ViewKind.Schedule,ViewKind.OpeningElevation };
         var addKind=new ComboBox { ItemsSource=kinds.Select(DrawingViewCatalogue.KindName).ToArray(),SelectedIndex=0,Height=32,Width=100,Margin=new Thickness(6,0) };
         toolbar.Children.Add(addKind);
@@ -61,6 +68,7 @@ internal sealed partial class ProbeWindow
         try {
             var items=_drawingCatalogue.Select(v=>new DrawingItem { Definition=v }).ToList();
             _drawingChooser.ItemsSource=items;_drawingChooser.SelectedItem=items.FirstOrDefault(i=>i.Definition.Id==_drawingId);
+            _quickDrawingScale.Text=items.FirstOrDefault(i=>i.Definition.Id==_drawingId)?.Definition.Scale.ToString()??"";
         } finally { _refreshingDrawings=false; }
         var drawings=new TreeViewItem { Header=BrowserHeader("图纸","file-axis-3d"),IsExpanded=true };
         foreach(var group in _drawingCatalogue.GroupBy(v=>v.Kind)) {
@@ -84,7 +92,8 @@ internal sealed partial class ProbeWindow
     {
         _drawingId=id;_workspaces.SelectedIndex=2;
         _refreshingDrawings=true;
-        try { _drawingChooser.SelectedItem=(_drawingChooser.ItemsSource as IEnumerable<DrawingItem>)?.FirstOrDefault(i=>i.Definition.Id==id); }
+        try { _drawingChooser.SelectedItem=(_drawingChooser.ItemsSource as IEnumerable<DrawingItem>)?.FirstOrDefault(i=>i.Definition.Id==id);
+            _quickDrawingScale.Text=_drawingCatalogue.FirstOrDefault(v=>v.Id==id)?.Scale.ToString()??""; }
         finally { _refreshingDrawings=false; }
         _showSlabProperties?.Invoke();RefreshProperties();
         foreach(var node in _drawingBrowserNodes)if(node.Value.Header is Border border)border.BorderThickness=new Thickness(node.Key==id ? 3 : 0,0,0,0);
@@ -104,6 +113,23 @@ internal sealed partial class ProbeWindow
     private static ViewDefinitionModel CopyDrawing(ViewDefinitionModel view)=>BuildingModelJson.FromJson(BuildingModelJson.ToJson(
         new BuildingModelDocument { DrawingViews=new() { view } })).DrawingViews[0];
     private static string DrawingJson(ViewDefinitionModel view)=>BuildingModelJson.ToJson(new BuildingModelDocument { DrawingViews=new() { view } });
+
+    private async Task ApplyQuickDrawingScaleAsync()
+    {
+        if(_refreshingDrawings||_applyingQuickScale||_workspaces.SelectedIndex!=2)return;
+        var list=DrawingViewCatalogue.Resolve(_session.Model);var current=list.FirstOrDefault(v=>v.Id==_drawingId);
+        if(current==null)return;
+        if(!int.TryParse(_quickDrawingScale.Text,out var scale)||scale<1||scale>10000) {
+            _status.Text="比例应为 1～10000 的整数。";_quickDrawingScale.Text=current.Scale.ToString();return;
+        }
+        if(scale==current.Scale)return;
+        _applyingQuickScale=true;
+        try {
+            current.Scale=scale;
+            if(!_session.TryReplaceDrawingViews(list,out var error)){_status.Text=error;return;}
+            await RefreshModelAsync("出图比例已改为 1:"+scale+" · 可撤销");await _drawingPreviewTask;
+        } finally {_applyingQuickScale=false;}
+    }
 
     private async Task AddDrawingAsync(ViewKind kind)
     {
@@ -166,16 +192,20 @@ internal sealed partial class ProbeWindow
         if(source==null) { _properties.Children.Add(new TextBlock { Text="新增图纸或从项目浏览器选择图纸。" });_buildingDrawingProperties=false;return; }
         _drawingDraft=CopyDrawing(source);
         TextBox TextField(string name,string value) {
-            var field=new TextBox { Text=value,MinHeight=34 };
+            var field=new TextBox { Text=value,Height=32,VerticalContentAlignment=VerticalAlignment.Center };
             _properties.Children.Add(new TextBlock { Text=name });_properties.Children.Add(field);
             field.TextChanged+=(_,_)=> { if(_properties.Children.Contains(field))PreviewDrawingParameters(); };return field;
         }
         ComboBox Choice(string name,IEnumerable<object> values,int selected) {
-            var field=new ComboBox { ItemsSource=values,SelectedIndex=selected,MinHeight=34,HorizontalAlignment=HorizontalAlignment.Stretch };
+            var field=new ComboBox { ItemsSource=values,SelectedIndex=selected,Height=32,HorizontalAlignment=HorizontalAlignment.Stretch };
             _properties.Children.Add(new TextBlock { Text=name });_properties.Children.Add(field);
             field.SelectionChanged+=(_,_)=>PreviewDrawingParameters();return field;
         }
         _drawingTitle=TextField("图名",source.Title);_drawingScale=TextField("比例 1:",source.Scale.ToString());
+        var annotations=DrawingAnnotationSettings.Resolve(_session.Model,source);
+        _drawingTextHeight=TextField("文字高度 mm",Mm(annotations.TextHeight));
+        _drawingWidthFactor=TextField("宽度因子",Mm(annotations.WidthFactor));
+        _drawingAxisDiameter=TextField("轴号直径 mm",Mm(annotations.AxisDiameter));
         _properties.Children.Add(new TextBlock { Text=DrawingViewCatalogue.KindName(source.Kind),Foreground=Brushes.LightSkyBlue });
         _drawingFloor=_drawingDirection=_drawingCutAxis=_drawingSign=null;
         _drawingCut=_drawingDepth=_drawingYaw=_drawingPitch=null;_drawingPerspective=null;
@@ -213,6 +243,10 @@ internal sealed partial class ProbeWindow
     {
         draft=null;if(_drawingDraft==null || !int.TryParse(_drawingScale?.Text,out var scale) || scale<1 || scale>10000 || string.IsNullOrWhiteSpace(_drawingTitle?.Text))return false;
         var value=CopyDrawing(_drawingDraft);value.Title=_drawingTitle.Text.Trim();value.Scale=scale;
+        if(!TryNumber(_drawingTextHeight?.Text,out var height)||!TryNumber(_drawingWidthFactor?.Text,out var width)||
+            !TryNumber(_drawingAxisDiameter?.Text,out var diameter))return false;
+        value.Annotations=new() {TextHeight=height,WidthFactor=width,AxisDiameter=diameter};
+        if(!DrawingAnnotationSettings.Valid(value.Annotations))return false;
         if(value.Kind==ViewKind.Plan) {
             if(_drawingFloor?.SelectedItem is not StoreyItem floor)return false;value.StoreyIds=new() { floor.Id };
         }
@@ -246,6 +280,22 @@ internal sealed partial class ProbeWindow
         }
         try {
             var original=BuildingModelJson.ToJson(_session.Model);var count=_drawingCatalogue.Count;
+            SelectDrawing(_drawingCatalogue.First(v=>v.Kind==ViewKind.Plan).Id);await Flush();
+            _drawingTextHeight!.Text="3.5";_drawingWidthFactor!.Text="0.7";_drawingAxisDiameter!.Text="10";await Flush();
+            if(_drawingCanvas.View?.Annotations?.TextHeight!=3.5||_drawingCanvas.View.Annotations.WidthFactor!=.7||
+                BuildingModelJson.ToJson(_session.Model)!=original)throw new InvalidOperationException("文字参数预览失败或提前写入模型");
+            var validPreview=_drawingCanvas.View;
+            _drawingTextHeight.Text="-";await Flush();
+            if(_drawingCanvas.View!=validPreview)throw new InvalidOperationException("无效文字参数覆盖了有效预览");
+            RefreshProperties();
+            _quickDrawingScale.Text="200";await ApplyQuickDrawingScaleAsync();await Flush();
+            if(_drawingCanvas.View?.Scale!=200||_session.Model.DrawingViews.Single(v=>v.Id==_drawingId).Scale!=200)
+                throw new InvalidOperationException("顶栏比例没有立即提交与刷新");
+            var scaled=BuildingModelJson.ToJson(_session.Model);
+            _quickDrawingScale.Text="-";await ApplyQuickDrawingScaleAsync();await Flush();
+            if(BuildingModelJson.ToJson(_session.Model)!=scaled)throw new InvalidOperationException("非法顶栏比例写入模型");
+            if(!_session.Undo()||BuildingModelJson.ToJson(_session.Model)!=original)throw new InvalidOperationException("顶栏比例不能整笔撤销");
+            await RefreshModelAsync("比例检查完成");await Flush();
             foreach(var kind in new[] { ViewKind.Plan,ViewKind.Elevation,ViewKind.Section,ViewKind.Axonometric,ViewKind.Schedule,ViewKind.OpeningElevation }) {
                 SelectDrawing(_drawingCatalogue.First(v=>v.Kind==kind).Id);await Flush();
                 if(_drawingCanvas.View?.Kind!=kind || _drawingCanvas.View.Lines.Count+_drawingCanvas.View.Texts.Count==0)
@@ -282,7 +332,7 @@ internal sealed partial class ProbeWindow
                     throw new InvalidOperationException("编辑器图纸生成与 CAD 待落图清单不完整："+_status.Text);
                 Console.WriteLine("DRAWING_CAD_PUBLISH_OK catalogue="+_drawingCatalogue.Count+" cached="+entries.Count);
             }
-            Console.WriteLine("DRAWING_UI_CHECK_OK all-kinds default-catalogue add copy remove live-preview invalid-input apply undo redo");
+            Console.WriteLine("DRAWING_UI_CHECK_OK all-kinds default-catalogue add copy remove live-preview invalid-input apply undo redo quick-scale typography-preview");
             return true;
         } catch(Exception ex) { Console.Error.WriteLine("DRAWING_UI_CHECK_FAILED "+ex);return false; }
     }

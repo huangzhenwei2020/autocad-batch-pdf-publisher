@@ -80,7 +80,7 @@ namespace BatchPdfPublisher.BuildingModel
                 Roofs = new List<RoofModel>(model.Roofs),
                 Rooms = new List<RoomModel>(model.Rooms),
                 Axes = model.Axes, StoreyAxes=model.StoreyAxes,
-                DrawingScales=model.DrawingScales,DrawingViews = model.DrawingViews, OpeningTypes=model.OpeningTypes, OpeningTemplates=model.OpeningTemplates, OpeningOverrides=model.OpeningOverrides,OpeningEditorSnapStep=model.OpeningEditorSnapStep
+                Annotations=model.Annotations,DrawingScales=model.DrawingScales,DrawingViews = model.DrawingViews, OpeningTypes=model.OpeningTypes, OpeningTemplates=model.OpeningTemplates, OpeningOverrides=model.OpeningOverrides,OpeningEditorSnapStep=model.OpeningEditorSnapStep
             };
             foreach (var target in model.Storeys.Where(s => !string.IsNullOrWhiteSpace(s.TemplateStoreyId)))
             {
@@ -108,7 +108,10 @@ namespace BatchPdfPublisher.BuildingModel
                     {
                         Id = InstanceId(opening.Id), HostWallId = InstanceId(opening.HostWallId),
                         Code = opening.Code, Kind = opening.Kind, Offset = opening.Offset,
-                        Width = opening.Width, Height = opening.Height, Sill = opening.Sill
+                        Width = opening.Width, Height = opening.Height, Sill = opening.Sill, ThresholdHeight=opening.ThresholdHeight,
+                        PlanFlipAlong=opening.PlanFlipAlong,PlanFlipNormal=opening.PlanFlipNormal,
+                        PlanLabelAlong=opening.PlanLabelAlong,PlanLabelNormal=opening.PlanLabelNormal,
+                        PlanOpenAngle=opening.PlanOpenAngle,OpenIn3D=opening.OpenIn3D,CodeManuallyEdited=opening.CodeManuallyEdited
                     });
                 foreach (var slab in model.Slabs.Where(s => Same(s.StoreyId, source.Id)))
                 {

@@ -36,6 +36,7 @@ internal sealed class OpeningEditorWindow : Window
     private readonly CheckBox _outer=new() {Content="外框"},_mullion=new() {Content="分隔框"},_gap=new() {Content="安装缝"};
     private readonly CheckBox _sash=new() {Content="扇框 / 门套"};
     private readonly ComboBox _kind=new() {ItemsSource=new[]{"普通窗","高窗","带形窗","转角窗","拱形窗","普通门","推拉门","防火门","人防门","门联窗","百叶","百叶窗","百叶门","凸窗"}};
+    private readonly ComboBox _planStyle=new() {ItemsSource=new[]{"按立面","折叠门","卷帘门","旋转门","矩形凸窗","梯形凸窗","转角窗"}};
     private readonly ComboBox _doorFrame=new() {ItemsSource=new[]{"N型","口型"}};
     private readonly ComboBox _doorPlacement=new() {ItemsSource=new[]{"靠左","居中","靠右"}};
     private readonly ComboBox _position=new() {ItemsSource=new[]{"居中","靠内","靠外"}};
@@ -120,7 +121,10 @@ internal sealed class OpeningEditorWindow : Window
             enabled.IsCheckedChanged+=(_,_)=>row.IsEnabled=enabled.IsChecked==true;
         }
         var divisionPanel=panel;panel=new StackPanel {Spacing=7};divisionPanel.Children.Add(new Expander {Header="门窗类型与整体设置",IsExpanded=false,Content=panel,HorizontalAlignment=HorizontalAlignment.Stretch});
-        Label("门窗类型");panel.Children.Add(_kind);Label("分格预设");
+        Label("门窗类型");panel.Children.Add(_kind);
+        Label("平面形式");panel.Children.Add(_planStyle);Field("planInset","凸窗斜边收进 · mm",type.PlanReturnInset??0);
+        _planStyle.SelectionChanged+=(_,_)=>{if(_fields["planInset"].Parent is Control row)row.IsVisible=_planStyle.SelectedItem?.ToString()=="梯形凸窗";if(!_updating)QueuePreview();};
+        Label("分格预设");
         _presets=new ComboBox {ItemsSource=new[]{"单格","双扇等分","三扇等分","四扇等分","五扇等分","上亮","侧亮","上亮+侧亮","拱形亮子","门联窗","自定义"},SelectedIndex=0};panel.Children.Add(_presets);
         _presets.SelectionChanged+=(_,_)=>{if(_updating||_presets.SelectedItem?.ToString()=="自定义")return;StoreFace();var preset=_presets.SelectedItem?.ToString();if(_face.SelectedIndex==0){_draft.DivisionPreset=preset;_draft.CustomCellLayout=null;}LoadFace(preset);StoreFace();QueuePreview();};
         var doorOptions=new StackPanel {Spacing=8};panel.Children.Add(doorOptions);
@@ -160,7 +164,7 @@ internal sealed class OpeningEditorWindow : Window
         var cancel=new Button {Content="取消",Padding=new Thickness(18,8)};Grid.SetColumn(cancel,2);footer.Children.Add(cancel);
         apply.Click+=(_,_)=>{if(!ReadDraft())return;StoreFace();var error=OpeningConstruction.Validate(opening,_draft);if(error!=null){_status.Text=error;return;}
             Close(new OpeningEditResult {Type=OpeningConstruction.Copy(_draft),OnlyInstance=_single.IsChecked==true,Templates=_templates,SnapStep=_canvas.Snap});};cancel.Click+=(_,_)=>Close();
-        foreach(var combo in new[]{_kind,_presets,_material,_openingMode,_doorFrame,_doorPlacement,_position,_left,_right})combo.HorizontalAlignment=HorizontalAlignment.Stretch;
+        foreach(var combo in new[]{_kind,_planStyle,_presets,_material,_openingMode,_doorFrame,_doorPlacement,_position,_left,_right})combo.HorizontalAlignment=HorizontalAlignment.Stretch;
         Content=root;
         _canvas.Changed+=()=>{StoreFace();QueuePreview();};_canvas.SelectionChanged+=UpdateSelection;_canvas.Error+=message=>_status.Text=message;
         _material.SelectionChanged+=(_,_)=>ApplyCell();_openingMode.SelectionChanged+=(_,_)=>ApplyCell();_door.IsCheckedChanged+=(_,_)=>ApplyCell();_deleted.IsCheckedChanged+=(_,_)=>ApplyCell();
@@ -190,6 +194,10 @@ internal sealed class OpeningEditorWindow : Window
     }
     private void LoadControls()
     {
+        _updating=true;
+        if(!_planStyle.Items.Cast<string>().Contains(_draft.PlanStyle??"按立面"))_planStyle.ItemsSource=_planStyle.Items.Cast<string>().Append(_draft.PlanStyle).ToArray();
+        _planStyle.SelectedItem=_draft.PlanStyle??"按立面";
+        _fields["planInset"].Text=(_draft.PlanReturnInset??0).ToString("0.###",CultureInfo.InvariantCulture);
         if(!string.IsNullOrWhiteSpace(_draft.ElevationType) && !_kind.Items.Cast<string>().Contains(_draft.ElevationType))_kind.ItemsSource=_kind.Items.Cast<string>().Append(_draft.ElevationType).ToArray();
         if(!string.IsNullOrWhiteSpace(_draft.DivisionPreset) && !_presets.Items.Cast<string>().Contains(_draft.DivisionPreset))_presets.ItemsSource=_presets.Items.Cast<string>().Append(_draft.DivisionPreset).ToArray();
         _updating=true;_face.IsEnabled=_face.IsVisible=_draft.ElevationType=="凸窗";_presets.SelectedItem=_draft.DivisionPreset??"单格";_kind.SelectedItem=_draft.ElevationType??"普通窗";_position.SelectedItem=_draft.InstallationPosition??"居中";_doorFrame.SelectedItem=_draft.DoorFrameType??"N型";_doorPlacement.SelectedItem=_draft.DoorPlacement??"靠左";
@@ -207,6 +215,7 @@ internal sealed class OpeningEditorWindow : Window
         var values=new Dictionary<string,double>();foreach(var key in _fields.Keys.Where(k=>k!="cellWidth"&&k!="cellHeight")) {
             if(!Number(key,out var value)){_status.Text="请输入完整有效的尺寸。";return false;}values[key]=value;
         }
+        _draft.PlanStyle=_planStyle.SelectedItem?.ToString()??"按立面";_draft.PlanReturnInset=values["planInset"];
         _draft.OuterFrameWidth=values["outer"];_draft.FrameDepth=values["frameDepth"];_draft.MullionWidth=values["mullion"];_draft.MullionDepth=values["mullionDepth"];
         _draft.SashWidth=_sash.IsChecked==true ? values["sashWidth"] : 0;_draft.DoorFrameWidth=_draft.SashWidth.Value;_draft.SashDepth=values["sashDepth"];
         _draft.GlassThickness=values["glass"];_draft.PanelThickness=values["panel"];_draft.InstallationGap=values["gap"];_draft.InstallationOffset=values["offset"];_draft.OpenAngle=values["angle"];

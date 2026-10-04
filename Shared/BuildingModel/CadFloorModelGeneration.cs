@@ -100,6 +100,13 @@ namespace BatchPdfPublisher.BuildingModel
                 slabMessages.AddRange(floorMessages.Select(m=>floor.Name+" · "+m));
                 foreach (var source in capture.Openings.Where(o=>o.Include))
                 {
+                    var manual=model.CadImport?.ResolvedOpenings?.FirstOrDefault(p=>p.StoreyId==floor.Id&&p.SourceHandle==source.SourceHandle);
+                    var placed=manual==null?null:model.Openings.FirstOrDefault(o=>o.Id==manual.OpeningId);
+                    if(placed!=null) {
+                        if(!hostMap.Values.Any(w=>w.Id==placed.HostWallId)||Math.Abs(placed.Width-source.Width.Value)>.5||Math.Abs(placed.Height-source.Height.Value)>.5)
+                            throw new InvalidDataException(source.Code+" 在模型中已定位，重新登记的宿主或尺寸发生变化，请核对后再生成。");
+                        openings.Add(CopyOpening(placed));continue;
+                    }
                     var probe = capture.Probe.Entities.FirstOrDefault(e=>string.Equals(e.Handle,source.SourceHandle,StringComparison.OrdinalIgnoreCase));
                     var placement=source.Placement ?? CadOpeningJambPlacement.Find(capture.Floor,
                         probe,source.Width.Value);
@@ -134,7 +141,7 @@ namespace BatchPdfPublisher.BuildingModel
                         throw new InvalidDataException(source.Code + " 的洞口顶部超出宿主墙，请核对墙高和离地高度。");
                     openings.Add(new OpeningModel { Id=Identity("opening",capture.Probe.DrawingFingerprint,floor.Id,source.SourceHandle),
                         HostWallId=host.Id,Code=codes[source],Kind=source.ModelKind,Offset=location.DistanceFromWallStart,
-                        Width=source.Width.Value,Height=source.Height.Value,Sill=sill });
+                        Width=source.Width.Value,Height=source.Height.Value,Sill=sill,OpenIn3D=false });
                 }
             }
             if (walls.Count==0 && columns.Count==0 && beams.Count==0) throw new InvalidDataException("没有可生成的墙、梁或柱，请重新登记平面。");
@@ -148,6 +155,7 @@ namespace BatchPdfPublisher.BuildingModel
             model.Beams.RemoveAll(b=>oldBeamIds.Contains(b.Id));model.Beams.AddRange(beams);
             var oldWallIds = new HashSet<string>(previous.Walls.Select(w=>w.Id));
             var oldOpeningIds = new HashSet<string>(previous.Openings.Select(o=>o.Id));
+            oldOpeningIds.UnionWith((model.CadImport?.ResolvedOpenings??new List<CadResolvedOpening>()).Select(r=>r.OpeningId));
             var oldSlabIds=new HashSet<string>(previousSlabs.Select(s=>s.Id));
             var slabCodes=new HashSet<string>(model.Slabs.Where(s=>!oldSlabIds.Contains(s.Id) && !string.IsNullOrWhiteSpace(s.Code)).Select(s=>s.Code),StringComparer.OrdinalIgnoreCase);
             foreach(var slab in slabs.Where(s=>!string.IsNullOrWhiteSpace(s.Code)))
@@ -162,6 +170,10 @@ namespace BatchPdfPublisher.BuildingModel
                 throw new InvalidDataException("登记构件 ID 与现有模型冲突，未修改模型。");
             foreach(var fresh in openings) {
                 var old=model.Openings.FirstOrDefault(o=>o.Id==fresh.Id);
+                if(old!=null){fresh.PlanFlipAlong=old.PlanFlipAlong;fresh.PlanFlipNormal=old.PlanFlipNormal;
+                    fresh.PlanLabelAlong=old.PlanLabelAlong;fresh.PlanLabelNormal=old.PlanLabelNormal;
+                    fresh.PlanOpenAngle=old.PlanOpenAngle;fresh.OpenIn3D=old.OpenIn3D;fresh.CodeManuallyEdited=old.CodeManuallyEdited;fresh.ThresholdHeight=old.ThresholdHeight;
+                    if(old.CodeManuallyEdited)fresh.Code=old.Code;}
                 if(old!=null && (model.OpeningTypes??new List<OpeningTypeModel>()).Any(t=>t.Code==old.Code))fresh.Code=old.Code;
             }
             model.Walls.RemoveAll(w=>oldWallIds.Contains(w.Id)); model.Openings.RemoveAll(o=>oldOpeningIds.Contains(o.Id));
@@ -182,6 +194,7 @@ namespace BatchPdfPublisher.BuildingModel
             var structureBaseline=BuildingModelJson.FromJson(BuildingModelJson.ToJson(new BuildingModelDocument {Columns=columns,Beams=beams}));
             model.CadImport = new CadModelImportState { RequestId=requestId,
                 Walls=walls.Select(CopyWall).ToList(),Openings=openings.Select(CopyOpening).ToList(),PendingOpenings=pending,
+                ResolvedOpenings=(model.CadImport?.ResolvedOpenings??new List<CadResolvedOpening>()).Where(r=>openings.Any(o=>o.Id==r.OpeningId)).ToList(),
                 Slabs=slabs.Select(CopySlab).ToList(),SlabMessages=slabMessages.Distinct().ToList(),
                 Columns=structureBaseline.Columns,Beams=structureBaseline.Beams,StructureMessages=structureMessages.Distinct().ToList() };
             return model;
@@ -214,7 +227,10 @@ namespace BatchPdfPublisher.BuildingModel
             using (var hash=SHA256.Create()) return "CAD-"+kind+"-"+BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(drawing.ToUpperInvariant()+"|"+floor.ToUpperInvariant()+"|"+handle.ToUpperInvariant()))).Replace("-","").Substring(0,24);
         }
         private static WallModel CopyWall(WallModel w) => new WallModel { Id=w.Id,Code=w.Code,StoreyId=w.StoreyId,X1=w.X1,Y1=w.Y1,X2=w.X2,Y2=w.Y2,Thickness=w.Thickness,AxisOffset=w.AxisOffset,AxisPlacement=w.AxisPlacement,Height=w.Height,Material=w.Material };
-        private static OpeningModel CopyOpening(OpeningModel o) => new OpeningModel { Id=o.Id,HostWallId=o.HostWallId,Code=o.Code,Kind=o.Kind,Offset=o.Offset,Width=o.Width,Height=o.Height,Sill=o.Sill };
+        private static OpeningModel CopyOpening(OpeningModel o) => new OpeningModel { Id=o.Id,HostWallId=o.HostWallId,Code=o.Code,Kind=o.Kind,Offset=o.Offset,Width=o.Width,Height=o.Height,Sill=o.Sill,ThresholdHeight=o.ThresholdHeight,
+            PlanFlipAlong=o.PlanFlipAlong,PlanFlipNormal=o.PlanFlipNormal,
+            PlanLabelAlong=o.PlanLabelAlong,PlanLabelNormal=o.PlanLabelNormal,
+            PlanOpenAngle=o.PlanOpenAngle,OpenIn3D=o.OpenIn3D,CodeManuallyEdited=o.CodeManuallyEdited };
         private static SlabModel CopySlab(SlabModel s)=>new SlabModel { Id=s.Id,Code=s.Code,StoreyId=s.StoreyId,Thickness=s.Thickness,TopElevation=s.TopElevation,TopOffset=s.TopOffset,FollowsStoreyTop=s.FollowsStoreyTop,
             Outline=s.Outline.Select(p=>new PointModel(p.X,p.Y)).ToList(),Openings=s.Openings.Select(o=>new SlabOpeningModel {
                 Id=o.Id,Name=o.Name,Outline=o.Outline.Select(p=>new PointModel(p.X,p.Y)).ToList() }).ToList() };
@@ -224,7 +240,7 @@ namespace BatchPdfPublisher.BuildingModel
             && a.Thickness==b.Thickness && a.TopElevation==b.TopElevation && a.TopOffset==b.TopOffset && a.FollowsStoreyTop==b.FollowsStoreyTop && SameRing(a.Outline,b.Outline)
             && a.Openings.Count==(b.Openings?.Count ?? 0) && !a.Openings.Where((o,i)=>o.Id!=b.Openings[i].Id || o.Name!=b.Openings[i].Name || !SameRing(o.Outline,b.Openings[i].Outline)).Any();
         private static bool SameWall(WallModel a,WallModel b) => b!=null && a.Id==b.Id && a.Code==b.Code && a.StoreyId==b.StoreyId && a.X1==b.X1 && a.Y1==b.Y1 && a.X2==b.X2 && a.Y2==b.Y2 && a.Thickness==b.Thickness && a.AxisOffset==b.AxisOffset && a.AxisPlacement==b.AxisPlacement && a.Height==b.Height && a.Material==b.Material;
-        private static bool SameOpening(OpeningModel a,OpeningModel b) => b!=null && a.Id==b.Id && a.HostWallId==b.HostWallId && a.Code==b.Code && a.Kind==b.Kind && a.Offset==b.Offset && a.Width==b.Width && a.Height==b.Height && a.Sill==b.Sill;
+        private static bool SameOpening(OpeningModel a,OpeningModel b) => b!=null && a.Id==b.Id && a.HostWallId==b.HostWallId && (a.Code==b.Code||b.CodeManuallyEdited) && a.Kind==b.Kind && a.Offset==b.Offset && a.Width==b.Width && a.Height==b.Height && a.Sill==b.Sill;
     }
 
     public sealed class CadModelGenerationRequest

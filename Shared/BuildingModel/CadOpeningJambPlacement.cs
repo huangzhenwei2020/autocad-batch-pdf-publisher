@@ -67,6 +67,7 @@ namespace BatchPdfPublisher.BuildingModel
                         if(!candidates.Any(x=>x.HostSourceHandle==placement.HostSourceHandle && Math.Abs(x.DistanceFromWallStart-placement.DistanceFromWallStart)<0.5))candidates.Add(placement);
                     } catch(System.IO.InvalidDataException) { }
                 }
+                FindSlidingTracks(floor,opening,wall,width,candidates);
                 FindDoorSwings(floor,opening,wall,width,candidates);
             }
             if(candidates.Count>0)return candidates.Count==1 ? candidates[0] : null;
@@ -96,6 +97,37 @@ namespace BatchPdfPublisher.BuildingModel
             return candidates.Count==1 ? candidates[0] : null;
         }
         private sealed class Hinge { public double Outer,Closed,LeafWidth; }
+        private static void FindSlidingTracks(CadFloorRegistrationContext floor,CadBuildingProbeEntity opening,
+            CadBuildingProbeEntity wall,double width,List<CadOpeningPlacement> candidates)
+        {
+            var code=opening.Fields?.FirstOrDefault(f=>f.Name=="OpeningCode")?.Text??"";
+            if(!code.Trim().StartsWith("TLM",StringComparison.OrdinalIgnoreCase))return;
+            var a=wall.CurveStart;var b=wall.CurveEnd;var scale=floor.Alignment.MillimetresPerCadUnit;
+            var dx=b.X-a.X;var dy=b.Y-a.Y;var length=Math.Sqrt(dx*dx+dy*dy);dx/=length;dy/=length;
+            var tracks=new List<double[]>();
+            foreach(var line in opening.DisplaySegments??new List<CadProbeSegment>()) {
+                var p=line.Start;var q=line.End;if(p==null||q==null)continue;
+                var tp=(p.X-a.X)*dx+(p.Y-a.Y)*dy;var tq=(q.X-a.X)*dx+(q.Y-a.Y)*dy;
+                var np=-(p.X-a.X)*dy+(p.Y-a.Y)*dx;var nq=-(q.X-a.X)*dy+(q.Y-a.Y)*dx;
+                if(new[]{tp,tq,np,nq,p.Z,q.Z}.Any(v=>double.IsNaN(v)||double.IsInfinity(v))
+                    ||Math.Abs(np-nq)*scale>.5||Math.Abs(tp-tq)*scale<width*.3
+                    ||Math.Abs(np-wall.CandidateAxisOffset.Value)>wall.CandidateThickness.Value/2+.5/scale
+                    ||Math.Abs(nq-wall.CandidateAxisOffset.Value)>wall.CandidateThickness.Value/2+.5/scale
+                    ||Math.Abs(p.Z-a.Z)*scale>.5||Math.Abs(q.Z-a.Z)*scale>.5)continue;
+                tracks.Add(new[]{Math.Min(tp,tq),Math.Max(tp,tq),(np+nq)/2});
+            }
+            for(var i=0;i<tracks.Count;i++)for(var j=i+1;j<tracks.Count;j++) {
+                var p=tracks[i];var q=tracks[j];var low=Math.Min(p[0],q[0]);var high=Math.Max(p[1],q[1]);
+                if(Math.Abs(p[2]-q[2])*scale<1||Math.Abs((high-low)*scale-width)>.5
+                    ||Math.Min(p[1],q[1])-Math.Max(p[0],q[0])<-.5/scale)continue;
+                try {
+                    var placement=CadOpeningPlacement.Create(floor,wall.Handle,new PointModel(a.X,a.Y),new PointModel(b.X,b.Y),
+                        new PointModel(a.X+low*dx,a.Y+low*dy),new PointModel(a.X+high*dx,a.Y+high*dy),width);
+                    placement.Source="推拉门自身两轨门扇：搭接、原生整宽、墙厚范围及唯一宿主核验";
+                    if(!candidates.Any(c=>c.HostSourceHandle==placement.HostSourceHandle&&Math.Abs(c.DistanceFromWallStart-placement.DistanceFromWallStart)<.5))candidates.Add(placement);
+                }catch(System.IO.InvalidDataException) { }
+            }
+        }
         private static void FindDoorSwings(CadFloorRegistrationContext floor,CadBuildingProbeEntity opening,CadBuildingProbeEntity wall,
             double width,List<CadOpeningPlacement> candidates)
         {

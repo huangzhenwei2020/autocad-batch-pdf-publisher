@@ -514,6 +514,9 @@ namespace BatchPdfPublisher.BuildingModel
             if (type.Height > 0.5d) opening.Height = type.Height;
             var isDoor = (opening.Kind ?? string.Empty).IndexOf("门", StringComparison.Ordinal) >= 0;
             opening.Sill = isDoor ? 0d : Math.Max(0d, type.Sill);
+            opening.ThresholdHeight = isDoor ? type.ThresholdHeight : 0;
+            opening.PlanOpenAngle = type.PlanOpenAngle;
+            opening.OpenIn3D = type.DefaultOpenIn3D;
         }
 
         /// <summary>在类型库里按编号找类型（忽略大小写与首尾空格）。</summary>

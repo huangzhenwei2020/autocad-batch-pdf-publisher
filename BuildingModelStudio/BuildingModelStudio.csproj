@@ -30,6 +30,7 @@
     <Compile Include="VolumeSelfTest.cs" />
     <!-- 建筑模型的纯逻辑层：与主插件、测试工程共用同一份源码（本仓库既有做法：源码链接，不新增 DLL）。 -->
     <Compile Include="..\Shared\BuildingModel\ModelTypes.cs" Link="Shared\ModelTypes.cs" />
+    <Compile Include="..\Shared\BuildingModel\DrawingAnnotationSettings.cs" />
     <Compile Include="..\Shared\BuildingModel\StructuralGeometry.cs" Link="Shared\StructuralGeometry.cs" />
     <Compile Include="..\Shared\BuildingModel\BuildingModelJson.cs" Link="Shared\BuildingModelJson.cs" />
     <Compile Include="..\Shared\BuildingModel\ModelEditHistory.cs" Link="Shared\ModelEditHistory.cs" />

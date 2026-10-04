@@ -3,7 +3,7 @@ using System.Globalization;
 namespace BuildingModelStudio.AvaloniaProbe;
 
 internal enum ModelCommandKind
-{ Unknown, Wall, Move, Copy, Mirror, Fillet, Polar, Ortho, Select, GizmoMove, Rotate }
+{ Unknown, Wall, Move, Copy, Mirror, Fillet, Polar, Ortho, Select, GizmoMove, Rotate, Opening }
 
 internal static class ModelCommandCatalog
 {
@@ -13,6 +13,7 @@ internal static class ModelCommandCatalog
         return command switch
         {
             "WA" or "WALL" or "画墙" => ModelCommandKind.Wall,
+            "MM" or "门窗" => ModelCommandKind.Opening,
             "M" or "MOVE" or "移动" => ModelCommandKind.Move,
             "CO" or "COPY" or "复制" => ModelCommandKind.Copy,
             "MI" or "MIRROR" or "镜像" => ModelCommandKind.Mirror,

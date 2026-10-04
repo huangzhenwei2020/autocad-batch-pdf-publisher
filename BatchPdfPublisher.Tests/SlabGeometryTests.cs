@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using BatchPdfPublisher.BuildingModel;
+using BatchPdfPublisher.Models;
 
 internal static class SlabGeometryTests
 {
@@ -103,7 +104,11 @@ internal static class SlabGeometryTests
             new ColumnModel { Id = "KZ-3", StoreyId = "2F", X = 6000, Y = 5000, Width = 300, Depth = 300 },
             new ColumnModel { Id = "KZ-4", StoreyId = "2F", X = 0, Y = 5000, Width = 300, Depth = 300 } };
         var symbols = OrthographicProjector.CreatePlanDetailSymbols(designModel, "2F");
-        Assert(symbols.Count(l => l.Layer == ViewLayers.Opening) == 9
+        var door=designModel.Openings.Single(o=>o.Id=="M1524");
+        var doorCells=DoorWindowElevationGeometryBuilder.Build(OpeningElevationAdapter.ToScheduleItem(door,
+            OpeningConstruction.Resolve(designModel,door),door.Width,door.Height)).Cells;
+        var expectedLines=OpeningPlanGeometry.Build(door,OpeningConstruction.Resolve(designModel,door),240).Count;
+        Assert(symbols.Count(l => l.Layer == ViewLayers.Opening) == expectedLines
             && symbols.Count(l => l.Layer == ViewLayers.Cut) == 16
             && symbols.Any(l => l.X1 == -150), "视口门窗及柱图例缺边或偏离原始毫米坐标");
         File.WriteAllText(".artifacts/slab-openings/design-model.json", BuildingModelJson.ToJson(designModel));

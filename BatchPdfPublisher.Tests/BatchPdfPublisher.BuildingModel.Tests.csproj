@@ -13,6 +13,7 @@
     <Compile Include="..\Shared\BuildingModel\SlabGeometry.cs" Link="Shared\SlabGeometry.cs" />
     <Compile Include="SlabGeometryTests.cs" />
     <Compile Include="BuildingModelProjectionTests.cs" />
+    <Compile Include="DrawingAnnotationTests.cs" />
     <Compile Include="DrawingViewCatalogueTests.cs" />
     <Compile Include="VolumeIdentityTests.cs" />
     <Compile Include="BuildingModelEditSessionTests.cs" />
@@ -22,10 +23,12 @@
     <Compile Include="..\Shared\BuildingModel\WallGripPropagation.cs" Link="Shared\WallGripPropagation.cs" />
     <Compile Include="..\Shared\BuildingModel\BuildingModelViewPublisher.cs" Link="Shared\BuildingModelViewPublisher.cs" />
     <Compile Include="..\Shared\BuildingModel\DrawingViewCatalogue.cs" Link="Shared\DrawingViewCatalogue.cs" />
+    <Compile Include="..\Shared\BuildingModel\DrawingAnnotationSettings.cs" />
     <Compile Include="PlanEditingTests.cs" />
     <Compile Include="OpeningTypeLibraryTests.cs" />
     <Compile Include="OpeningElevationTests.cs" />
     <Compile Include="OpeningConstructionTests.cs" />
+    <Compile Include="OpeningPlanGeometryTests.cs" />
     <!-- 建筑模型的纯逻辑层：程序与插件共用同一份源码（见 BuildingModelStudio 与主插件 csproj）。 -->
     <Compile Include="..\Shared\BuildingModel\ModelTypes.cs" Link="Shared\ModelTypes.cs" />
     <Compile Include="..\Shared\BuildingModel\BuildingModelJson.cs" Link="Shared\BuildingModelJson.cs" />
@@ -45,6 +48,7 @@
     <Compile Include="..\Shared\BuildingModel\VolumeRenderer.cs" Link="Features\BuildingModel\Shared\VolumeRenderer.cs" />
     <Compile Include="..\Shared\BuildingModel\OpeningElevationAdapter.cs" Link="Shared\OpeningElevationAdapter.cs" />
     <Compile Include="..\Shared\BuildingModel\OpeningConstruction.cs" Link="Shared\OpeningConstruction.cs" />
+    <Compile Include="..\Shared\BuildingModel\OpeningPlanGeometry.cs" />
     <Compile Include="..\Shared\BuildingModel\OpeningLayoutEditing.cs" Link="Shared\OpeningLayoutEditing.cs" />
     <Compile Include="..\Shared\BuildingModel\BuildingModelEditSession.Openings.cs" Link="Shared\BuildingModelEditSession.Openings.cs" />
     <Compile Include="..\Shared\BuildingModel\SampleModelFactory.cs" Link="Shared\SampleModelFactory.cs" />

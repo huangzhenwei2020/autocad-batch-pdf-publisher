@@ -120,7 +120,53 @@ internal static class OpeningConstructionTests
         var track0=leafParts.Where(p=>p.Cell.Left==0).ToList();var track1=leafParts.Where(p=>p.Cell.Left==900).ToList();
         Check(track0.All(p=>p.NormalOffset==-26)&&track1.All(p=>p.NormalOffset==26),"推拉扇的框和面板须同步处于独立前后轨道。");
         Check(track0.Max(p=>p.Right)>track1.Min(p=>p.Left)&&track0.Min(p=>p.Left)>=0&&track1.Max(p=>p.Right)<=1800,"推拉扇交接处须搭接，外围不能超出洞口。");
-        Console.WriteLine("PASS 门窗三维编辑：共享默认、固定外框、双扇门缝、推拉轨道错位与搭接、100 mm 默认进深");
+        var planModel=SampleModelFactory.CreateEmptyModel("推拉平面");
+        planModel.Walls.Add(new WallModel {Id="host",StoreyId="1F",X2=3000,Thickness=200});
+        doorOpening.Code="TLM1825";planModel.Openings.Add(doorOpening);
+        doubleDoor.Code=doorOpening.Code;planModel.OpeningTypes.Add(doubleDoor);
+        var planLines=OrthographicProjector.CreatePlanDetailSymbols(planModel,"1F");
+        Check(!doorOpening.HasSwingLeaf()&&planLines.Count>8&&planLines.All(l=>Math.Max(Math.Abs(l.Y1),Math.Abs(l.Y2))<300),"推拉门平面须绘制双轨、搭接及箭头，不得画大开启弧。");
+        doorOpening.Code="M1825";doubleDoor.Code="M1825";
+        planLines=OrthographicProjector.CreatePlanDetailSymbols(planModel,"1F");
+        Check(planLines.All(l=>Math.Max(Math.Abs(l.Y1),Math.Abs(l.Y2))<300),
+            "普通门编号也必须遵循保存的推拉做法，不能仅靠 TLM 前缀判断。");
+        foreach(var c in sliding)c.Opening=c.Left==0?"左平开":"右平开";
+        doubleDoor.CustomCellLayout=DoorWindowElevationGeometryBuilder.SerializeCellLayout(sliding);
+        planLines=OrthographicProjector.CreatePlanDetailSymbols(planModel,"1F");
+        var swingParts=OpeningConstruction.Build(doorOpening,doubleDoor,200).Where(p=>p.Bottom<=1200&&p.Top>1200).ToArray();
+        var swingLeaves=swingParts.Where(p=>p.Cell!=null).GroupBy(p=>p.Cell.Left).ToArray();
+        var leafSpan=swingLeaves.Max(g=>g.Max(p=>p.Right)-g.Min(p=>p.Left));
+        var frameFront=swingParts.Where(p=>p.Kind=="frame").Select(p=>p.NormalOffset+p.Depth/2).DefaultIfEmpty(0).Max();
+        var hingeNormal=swingParts.Any(p=>p.Kind=="frame")?frameFront+swingLeaves.SelectMany(g=>g).Max(p=>p.Depth)/2+2:0;
+        Check(planLines.Count>=34&&planLines.Max(l=>Math.Max(l.Y1,l.Y2))==leafSpan+hingeNormal&&leafSpan<900,
+            "普通双扇门必须按立面分扇，不能生成整宽开启弧。");
+        var beforeFlip=planLines;
+        var gripSession=new BuildingModelEditSession(planModel);
+        Check(gripSession.TrySetOpeningPlacement("double","host",1600,true,true,out error),error);
+        var flipped=OrthographicProjector.CreatePlanDetailSymbols(gripSession.Model,"1F");
+        Check(flipped.Count==beforeFlip.Count&&flipped.Zip(beforeFlip,(a,b)=>
+            Math.Abs(a.X1-(3100-b.X1))<.001&&Math.Abs(a.Y1+b.Y1)<.001).All(x=>x),
+            "门轴与开启侧必须按实例镜像，并保持真实毫米坐标。");
+        Check(gripSession.Model.OpeningTypes[0].CustomCellLayout==doubleDoor.CustomCellLayout,"方向夹点不能改共享立面类型。");
+        var savedGrip=BuildingModelJson.ToJson(gripSession.Model);
+        Check(BuildingModelJson.FromJson(savedGrip).Openings[0].PlanFlipNormal,"实例方向未持久化。");
+        Check(!gripSession.TrySetOpeningPlacement("double","host",100,true,true,out error)
+            &&BuildingModelJson.ToJson(gripSession.Model)==savedGrip,"越墙端拖动必须完整回滚。");
+        var moveModel=BuildingModelJson.FromJson(savedGrip);
+        moveModel.Walls.Add(new WallModel {Id="other",StoreyId="1F",X1=4000,X2=4000,Y2=3000,Thickness=200});
+        moveModel.Storeys.Add(new StoreyModel {Id="2F",Height=3000,Elevation=3000,TemplateStoreyId="1F"});
+        moveModel.Walls.Add(new WallModel {Id="up",StoreyId="2F",X2=6000,Thickness=200});
+        var moveSession=new BuildingModelEditSession(moveModel);
+        Check(moveSession.TrySetOpeningPlacement("double","other",1500,true,true,out error),error);
+        Check(moveSession.Model.Openings[0].HostWallId=="other"&&StandardStoreyLayout.Materialize(moveSession.Model)
+            .Openings.All(o=>o.PlanFlipAlong&&o.PlanFlipNormal),"换宿主和标准层必须保留实例方向。");
+        var movedJson=BuildingModelJson.ToJson(moveSession.Model);
+        Check(!moveSession.TrySetOpeningPlacement("double","up",1500,false,false,out error)
+            &&BuildingModelJson.ToJson(moveSession.Model)==movedJson,"夹点不能跨楼层换宿主。");
+        Check(!moveSession.TrySetOpeningPlacement("double","other",double.NaN,false,false,out error),"夹点不能接受非有限坐标。");
+        Check(gripSession.Undo()&&gripSession.Model.Openings[0].Offset==1500&&!gripSession.Model.Openings[0].PlanFlipAlong,
+            "移动和方向调整必须一次撤销。");
+        Console.WriteLine("PASS 门窗三维编辑：共享默认、固定外框、双扇门缝、推拉轨道、普通门分扇及实例方向夹点");
     }
     private static void Check(bool value,string message){if(!value)throw new InvalidOperationException(message);}
 }

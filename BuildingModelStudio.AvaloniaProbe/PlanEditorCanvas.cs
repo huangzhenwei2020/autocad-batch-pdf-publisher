@@ -7,7 +7,7 @@ using BatchPdfPublisher.BuildingModel;
 
 namespace BuildingModelStudio.AvaloniaProbe;
 
-internal enum PlanTool { Select, Wall, Door, Window, Slab, SlabOutline, SlabHoleRectangle, SlabHolePolygon, Column, Beam }
+internal enum PlanTool { Select, Wall, Opening, Slab, SlabOutline, SlabHoleRectangle, SlabHolePolygon, Column, Beam }
 internal enum PlanAxisConstraint { Free, X, Y }
 
 internal sealed partial class PlanEditorCanvas : Control
@@ -32,6 +32,20 @@ internal sealed partial class PlanEditorCanvas : Control
     private readonly List<PointModel> _contour = new();
     private readonly Dictionary<string, SlabGeometry> _slabGeometry = new();
     private List<ViewLine> _planSymbols = new();
+    private readonly Dictionary<string,List<ViewLine>> _openingSymbols=new();
+    private List<Tuple<PointModel,PointModel>> _planSeams=new();
+    private CadPendingOpening? _pendingOpening;
+    private WallModel? _pendingWall;
+    private double _pendingOffset;
+    private bool _pendingPlacementLocked;
+    public event Func<CadPendingOpening,string,double,bool>? PendingOpeningRequested;
+    internal bool HasPendingPlacement=>_pendingOpening!=null;
+    internal bool ConfirmPendingPlacement()
+    {
+        if(!_pendingPlacementLocked||_pendingOpening==null||_pendingWall==null)return false;
+        if(PendingOpeningRequested?.Invoke(_pendingOpening,_pendingWall.Id,_pendingOffset)!=true)return false;
+        _pendingOpening=null;_pendingWall=null;_pendingPlacementLocked=false;InvalidateVisual();return true;
+    }
     public event Action<string, string>? SlabOpeningPicked;
     public bool IsContourTool => Tool is PlanTool.Slab or PlanTool.SlabOutline
         or PlanTool.SlabHoleRectangle or PlanTool.SlabHolePolygon;
@@ -84,6 +98,10 @@ internal sealed partial class PlanEditorCanvas : Control
     public double CrosshairPercent { get; set; } = 10;
     public string CrosshairColor { get; set; } = "#B3D8E1";
     public PlanTool Tool { get; set; }
+    internal OpeningPlacementChoice? PlacementOpeningChoice {get;private set;}
+    internal OpeningTypeModel? PlacementOpeningType=>PlacementOpeningChoice?.Type;
+    internal void SetOpeningPlacementType(OpeningTypeModel? type)=>SetOpeningPlacement(type==null?null:OpeningPlacementChoice.FromType(type));
+    internal void SetOpeningPlacement(OpeningPlacementChoice? choice){PlacementOpeningChoice=choice;_openingPreviewCache.Clear();InvalidateVisual();}
     public PlanAxisConstraint AxisConstraint { get; private set; }
     public bool IsMoving => _moving;
     public bool IsCopyingMove => _copying;
@@ -196,6 +214,9 @@ internal sealed partial class PlanEditorCanvas : Control
 
     public void SetModel(BuildingModelDocument model, string storeyId)
     {
+        _pendingOpening=null;_pendingWall=null;_pendingPlacementLocked=false;
+        CancelOpeningGrip();_openingPreviewCache.Clear();
+        if (!_axisBatchPending) ClearAxisSelection();
         _axisEndpointCache=null;_axisGhostCache=null;
         _model = model;
         _slabGeometry.Clear();
@@ -227,21 +248,35 @@ internal sealed partial class PlanEditorCanvas : Control
 
     private void RebuildPlanSymbols()
     {
-        var view=new BuildingModelDocument {Walls=_model.Walls.Where(w=>Visible(w.Id)).ToList(),
-            Openings=_model.Openings.Where(o=>Visible(o.Id)).ToList()};
+        _openingPreviewCache.Clear();_openingHandleCache.Clear();_openingCodeTextCache.Clear();_openingSymbols.Clear();_openingPickRegions.Clear();_preselectedId=null;
+        var view=new BuildingModelDocument {Walls=_model.Walls.Where(w=>Visible(w.Id)).ToList()};
         _planSymbols = OrthographicProjector.CreatePlanDetailSymbols(view, _storeyId);
+        foreach(var opening in _model.Openings.Where(o=>Visible(o.Id))) {
+            var wall=_model.Walls.FirstOrDefault(w=>w.Id==opening.HostWallId&&w.StoreyId==_storeyId&&Visible(w.Id));
+            if(wall==null)continue;
+            var symbols=new BuildingModelDocument {Walls=new(){wall},Openings=new(){opening},OpeningTypes=_model.OpeningTypes,OpeningOverrides=_model.OpeningOverrides};
+            _openingSymbols[opening.Id]=OrthographicProjector.CreatePlanDetailSymbols(OpeningConstruction.ApplyOverrides(symbols),_storeyId);
+            var code=_model.OpeningOverrides?.FirstOrDefault(o=>o.OpeningId==opening.Id)?.TypeCode??OpeningConstruction.EffectiveCode(opening);
+            var type=_model.OpeningTypes.FirstOrDefault(t=>string.Equals(t.Code,code,StringComparison.OrdinalIgnoreCase))??OpeningConstruction.Default(opening);
+            _openingPickRegions[opening.Id]=OpeningPlanGeometry.SelectionRegions(opening,type,wall.Thickness);
+        }
+        _planSeams=WallJunctionLines.Resolve(_model,view.Walls.Where(w=>w.StoreyId==_storeyId),(_model.FindStorey(_storeyId)?.Elevation??0)+1200).ToList();
     }
 
     public void SetSelection(string? id)
     {
+        if(id!=_selectedId)CancelOpeningGrip();
         _selectedIds.Clear();if(id!=null)_selectedIds.Add(id);
         _selectedId = id;
         InvalidateVisual();
     }
-    public void SetSelections(IEnumerable<string> ids){_selectedIds.Clear();foreach(var id in ids)_selectedIds.Add(id);_selectedId=_selectedIds.LastOrDefault();InvalidateVisual();}
+    public void SetSelections(IEnumerable<string> ids){var selection=ids.ToList();if(!_selectedIds.SetEquals(selection))CancelOpeningGrip();_selectedIds.Clear();foreach(var id in selection)_selectedIds.Add(id);_selectedId=_selectedIds.LastOrDefault();InvalidateVisual();}
 
     public void CancelDraft()
     {
+        CancelOpeningGrip();
+        _pendingOpening=null;_pendingWall=null;_pendingPlacementLocked=false;
+        if (!_axisBatchPending) ClearAxisSelection();
         _moving = false;
         _copying = false;
         _moveBase = null;
@@ -301,10 +336,12 @@ internal sealed partial class PlanEditorCanvas : Control
 
     public void FrameSelection()
     {
+        _openingCodeTextCache.Clear();
         if (_selectedId == null || Bounds.Width <= 50 || Bounds.Height <= 50)
         { Fit(); return; }
-        var points = BuildingVolumeBuilder.Build(_model, _storeyId).Faces
-            .Where(f => f.ElementId == _selectedId).SelectMany(f => f.Points).ToArray();
+        var points = _openingSymbols.TryGetValue(_selectedId,out var symbols)&&symbols.Count>0
+            ? symbols.SelectMany(l=>new[]{new Point3DModel(l.X1,l.Y1,0),new Point3DModel(l.X2,l.Y2,0)}).ToArray()
+            : BuildingVolumeBuilder.Build(_model, _storeyId).Faces.Where(f => f.ElementId == _selectedId).SelectMany(f => f.Points).ToArray();
         if (points.Length == 0) { Fit(); return; }
         var minX = points.Min(p => p.X); var maxX = points.Max(p => p.X);
         var minY = points.Min(p => p.Y); var maxY = points.Max(p => p.Y);
@@ -318,6 +355,7 @@ internal sealed partial class PlanEditorCanvas : Control
 
     private void FitToSize(Size size)
     {
+        _openingCodeTextCache.Clear();
         if (size.Width <= 50 || size.Height <= 50)
         {
             _fitted = false;
@@ -329,9 +367,10 @@ internal sealed partial class PlanEditorCanvas : Control
                 .SelectMany(s => s.Outline ?? new List<PointModel>()))
             .Concat(_model.Columns.Where(c=>c.StoreyId==_storeyId&&Visible(c.Id)).SelectMany(StructuralGeometry.ColumnOutline))
             .Concat(_model.Beams.Where(b=>b.StoreyId==_storeyId&&Visible(b.Id)).SelectMany(StructuralGeometry.BeamOutline))
+            .Concat(_openingSymbols.Values.SelectMany(lines=>lines).SelectMany(l=>new[]{new PointModel(l.X1,l.Y1),new PointModel(l.X2,l.Y2)}))
             .Concat(AxisEndpoints().SelectMany(axis=>new[] {
-                new PointModel(axis.Start.X-450,axis.Start.Y-450),new PointModel(axis.Start.X+450,axis.Start.Y+450),
-                new PointModel(axis.End.X-450,axis.End.Y-450),new PointModel(axis.End.X+450,axis.End.Y+450) })).ToArray();
+                new PointModel(axis.Start.X-AxisBubbleRadius,axis.Start.Y-AxisBubbleRadius),new PointModel(axis.Start.X+AxisBubbleRadius,axis.Start.Y+AxisBubbleRadius),
+                new PointModel(axis.End.X-AxisBubbleRadius,axis.End.Y-AxisBubbleRadius),new PointModel(axis.End.X+AxisBubbleRadius,axis.End.Y+AxisBubbleRadius) })).ToArray();
         if (points.Length == 0) { _centerX = _centerY = 0; _scale = 0.07; }
         else
         {
@@ -434,14 +473,41 @@ internal sealed partial class PlanEditorCanvas : Control
         _lastPointer = point;
         UpdateShiftConstraint(point, _shiftHeld || e.KeyModifiers.HasFlag(KeyModifiers.Shift));
         var buttons = e.GetCurrentPoint(this).Properties;
+        if(HandleOpeningCenterPress(e))return;
         if (buttons.IsMiddleButtonPressed || buttons.IsRightButtonPressed)
         {
+            _axisPress=null;
             _panStart = point;
             e.Pointer.Capture(this);
             return;
         }
         if (!buttons.IsLeftButtonPressed) return;
-        if(AxisMode!=AxisEditMode.Off) { HandleAxisEditClick(point);e.Handled=true;return; }
+        if(AxisMode!=AxisEditMode.Off) {
+            HandleAxisEditPress(point,e.KeyModifiers.HasFlag(KeyModifiers.Shift));
+            e.Handled=true;return;
+        }
+        if(HasOpeningGrip) {MoveOpeningGrip(point);FinishOpeningGrip();e.Handled=true;return;}
+        if(Tool==PlanTool.Select&&TryBeginOpeningGrip(point)) {e.Pointer.Capture(this);e.Handled=true;InvalidateVisual();return;}
+        if(Tool==PlanTool.Select&&!_moving) {
+            if(_pendingOpening!=null) {
+                var hit=HitWall(point);_pendingWall=hit.wall;_pendingOffset=hit.offset;
+                _pendingPlacementLocked=hit.wall!=null;
+                MoveStageChanged?.Invoke(hit.wall==null?"请选择门窗所在的墙；Esc 取消":"位置预览：回车或空格放置门窗，Esc 取消；再次点击可换位置");
+                e.Handled=true;InvalidateVisual();return;
+            }
+            var pending=(_model.CadImport?.PendingOpenings??new()).FirstOrDefault(p=> {
+                if(p.StoreyId!=_storeyId||p.ReferencePosition==null)return false;
+                var origin=Screen(p.ReferencePosition.X,p.ReferencePosition.Y);
+                var label=new FormattedText(p.Code+" · 点击放置",CultureInfo.CurrentCulture,FlowDirection.LeftToRight,Typeface.Default,
+                    DrawingAnnotationSettings.Resolve(_model).TextHeight*AxisAnnotationScale*_scale,Brushes.White);
+                return Distance(point,origin)<=10||new Rect(origin.X+180*_scale,origin.Y-label.Height/2,label.Width,label.Height).Contains(point);
+            });
+            if(pending!=null) {
+                _pendingOpening=pending;_pendingWall=null;_pendingPlacementLocked=false;
+                MoveStageChanged?.Invoke("移动 "+pending.Code+" 到所在墙的位置，点击预览，回车确认；Esc 取消");
+                e.Handled=true;InvalidateVisual();return;
+            }
+        }
         if (IsContourTool)
         {
             var end = Snap(point);
@@ -513,10 +579,10 @@ internal sealed partial class PlanEditorCanvas : Control
                 }
             }
         }
-        else if (Tool == PlanTool.Door || Tool == PlanTool.Window)
+        else if (Tool == PlanTool.Opening && PlacementOpeningType!=null)
         {
             var hit = HitWall(point);
-            if (hit.wall != null) OpeningRequested?.Invoke(Tool == PlanTool.Door ? "门" : "窗",
+            if (hit.wall != null) OpeningRequested?.Invoke(PlacementOpeningType.Kind,
                 hit.wall.Id, hit.offset);
         }
         else
@@ -554,17 +620,38 @@ internal sealed partial class PlanEditorCanvas : Control
             return;
         }
         if(AxisMode!=AxisEditMode.Off) { UpdateAxisEditHover(point);InvalidateVisual();return; }
+        if(_openingGripDraft!=null){MoveOpeningGrip(point);InvalidateVisual();return;}
+        _openingGripHover=null;_preselectedId=null;
+        if(Tool==PlanTool.Select&&!_moving&&_pendingOpening==null&&_panStart==null) {
+            _openingGripHover=OpeningGripHover(point);
+            _preselectedId=_openingGripHover!=null?_selectedId:HitElement(point);
+        }
+        if(_pendingOpening!=null&&!_pendingPlacementLocked) {var hit=HitWall(point);_pendingWall=hit.wall;_pendingOffset=hit.offset;}
         if (Tool == PlanTool.Wall || Tool==PlanTool.Beam || Tool==PlanTool.Column || _moving || IsContourTool) _cursor = Snap(point);
         else { _cursor = World(point); _snapKind = PlanEditing.SnapNone; }
         InvalidateVisual();
     }
 
     protected override void OnPointerExited(PointerEventArgs e)
-    { base.OnPointerExited(e); _lastPointer=null; InvalidateVisual(); }
+    { base.OnPointerExited(e); _lastPointer=null;_preselectedId=null;_openingGripHover=null; InvalidateVisual(); }
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
         base.OnPointerReleased(e);
+        if(HandleOpeningCenterRelease(e))return;
+        if(_openingGripDraft!=null&&e.InitialPressMouseButton==MouseButton.Left) {
+            if(!_openingGripClickMode) {
+                if(_openingGripMoved){MoveOpeningGrip(e.GetPosition(this));FinishOpeningGrip();}else _openingGripClickMode=true;
+            }
+            _openingReleasingCapture=true;
+            try {if(e.Pointer.Captured==this)e.Pointer.Capture(null);}finally{_openingReleasingCapture=false;}
+            e.Handled=true;return;
+        }
+        if (AxisMode!=AxisEditMode.Off && e.InitialPressMouseButton==MouseButton.Left && _axisPress!=null) {
+            FinishAxisSelection(e.GetPosition(this));
+            if(e.Pointer.Captured==this)e.Pointer.Capture(null);
+            e.Handled=true;return;
+        }
         _panStart = null;
         if (_gripWallId != null && _gripPosition != null)
         {
@@ -586,13 +673,24 @@ internal sealed partial class PlanEditorCanvas : Control
     protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
     {
         base.OnPointerWheelChanged(e);
+        if(_axisPress!=null){e.Handled=true;return;}
         var p = e.GetPosition(this);
         ZoomAt(p, e.Delta.Y);
         e.Handled = true;
     }
 
+    protected override void OnPointerCaptureLost(PointerCaptureLostEventArgs e)
+    {
+        base.OnPointerCaptureLost(e);
+        if(!_openingReleasingCapture)CancelOpeningGrip();
+        if(!_openingReleasingCapture)_openingCenterRightDown=false;
+        _axisPress=null;
+        InvalidateVisual();
+    }
+
     internal void ZoomAt(Point p, double wheelDelta)
     {
+        _openingCodeTextCache.Clear();
         var before = World(p);
         _scale = Math.Clamp(_scale * Math.Pow(1.15, wheelDelta), 0.00001, 10);
         var after = World(p);
@@ -608,6 +706,19 @@ internal sealed partial class PlanEditorCanvas : Control
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
+        if(HasOpeningGrip&&e.Key is Key.Space or Key.Enter) {
+            ConfirmOpeningGrip();e.Handled=true;return;
+        }
+        if(_pendingOpening!=null&&e.Key is Key.Space or Key.Enter) {
+            ConfirmPendingPlacement();
+            e.Handled=true;InvalidateVisual();return;
+        }
+        if(AxisMode!=AxisEditMode.Off && e.Key is Key.Space or Key.Enter) {
+            ConfirmAxisSelection();e.Handled=true;return;
+        }
+        if(AxisMode!=AxisEditMode.Off && e.Key==Key.Escape) {
+            if(!_axisBatchPending)ClearAxisSelection();e.Handled=true;return;
+        }
         if (IsContourTool && e.Key == Key.Enter)
         { CompleteContour(); e.Handled = true; return; }
         if (IsContourTool && e.Key == Key.Back)
@@ -657,29 +768,12 @@ internal sealed partial class PlanEditorCanvas : Control
 
     private string? HitElement(Point p)
     {
+        var openingHit=HitOpening(p);if(openingHit!=null)return openingHit;
         var structurePoint=World(p);
         foreach(var c in _model.Columns.Where(c=>c.StoreyId==_storeyId&&Selectable(c.Id)))
             if(InsideContour(structurePoint,StructuralGeometry.ColumnOutline(c)))return c.Id;
         foreach(var b in _model.Beams.Where(b=>b.StoreyId==_storeyId&&Selectable(b.Id)))
             if(InsideContour(structurePoint,StructuralGeometry.BeamOutline(b)))return b.Id;
-        foreach (var opening in _model.Openings.Where(o=>Selectable(o.Id)))
-        {
-            var wall = _model.Walls.FirstOrDefault(w => w.Id == opening.HostWallId && w.StoreyId == _storeyId);
-            if (wall == null) continue;
-            var length = Math.Sqrt(Math.Pow(wall.X2 - wall.X1, 2) + Math.Pow(wall.Y2 - wall.Y1, 2));
-            if (length < 1) continue;
-            var start = (opening.Offset - opening.Width / 2) / length;
-            var end = (opening.Offset + opening.Width / 2) / length;
-            var a = Screen(wall.X1 + (wall.X2 - wall.X1) * start,
-                wall.Y1 + (wall.Y2 - wall.Y1) * start);
-            var b = Screen(wall.X1 + (wall.X2 - wall.X1) * end,
-                wall.Y1 + (wall.Y2 - wall.Y1) * end);
-            var dx = b.X - a.X; var dy = b.Y - a.Y;
-            var distanceAlong = Math.Clamp(((p.X - a.X) * dx + (p.Y - a.Y) * dy)
-                / Math.Max(1, dx * dx + dy * dy), 0, 1);
-            if (Distance(new Point(a.X + distanceAlong * dx, a.Y + distanceAlong * dy), p) < PickboxSize/2)
-                return opening.Id;
-        }
         var wallHit = HitWall(p).wall;
         if (wallHit != null) return wallHit.Id;
         foreach (var slab in _model.Slabs.Where(s => s.StoreyId == _storeyId && Selectable(s.Id)))
@@ -764,6 +858,7 @@ internal sealed partial class PlanEditorCanvas : Control
         foreach (var wall in _model.Walls.Where(w => w.StoreyId == _storeyId && Visible(w.Id)))
         {
             var selected = _selectedIds.Contains(wall.Id);
+            var preselected = ShowSelectionPreview && _preselectedId == wall.Id;
             var (first, second) = PreviewWallBody(wall);
             if (_slabGeometry.ContainsKey(_selectedId ?? ""))
             {
@@ -778,18 +873,17 @@ internal sealed partial class PlanEditorCanvas : Control
                     draw.BeginFigure(first + normal, true); draw.LineTo(second + normal);
                     draw.LineTo(second - normal); draw.LineTo(first - normal); draw.EndFigure(true);
                 }
-                context.DrawGeometry(new SolidColorBrush(Color.Parse("#334652")),
+                context.DrawGeometry(preselected?Brushes.Cyan:new SolidColorBrush(Color.Parse("#334652")),
                     new Pen(new SolidColorBrush(Color.Parse("#8298A8")), Stroke()), body);
                 continue;
             }
-            var pen = new Pen(new SolidColorBrush(Color.Parse(selected ? "#FFC46B" : "#9BC4E9")),
+            // Highlight the wall body before opening cuts so the preview stays continuous without filling holes.
+            var pen = new Pen(preselected?Brushes.Cyan:new SolidColorBrush(Color.Parse(selected ? "#FFC46B" : "#9BC4E9")),
                 wall.Thickness * _scale);
             context.DrawLine(pen, first, second);
         }
         DrawOrthogonalJunctions(context);
-        foreach (var seam in WallJunctionLines.Resolve(_model,
-            _model.Walls.Where(w => w.StoreyId == _storeyId && Visible(w.Id)),
-            (_model.FindStorey(_storeyId)?.Elevation ?? 0d) + 1200d))
+        foreach (var seam in _planSeams)
             context.DrawLine(new Pen(new SolidColorBrush(Color.Parse("#59768F")), Stroke()),
                 Screen(seam.Item1.X, seam.Item1.Y), Screen(seam.Item2.X, seam.Item2.Y));
         foreach (var wall in _model.Walls.Where(w => w.StoreyId == _storeyId && Visible(w.Id)))
@@ -797,6 +891,7 @@ internal sealed partial class PlanEditorCanvas : Control
                 PreviewWallEndpoint(wall, 0), PreviewWallEndpoint(wall, 1));
         foreach (var opening in _model.Openings.Where(o=>Visible(o.Id)))
         {
+            if(opening.Id==_openingGripDraft?.Id&&!_openingLabelGrip)continue;
             var wall = _model.Walls.FirstOrDefault(w => w.Id == opening.HostWallId && w.StoreyId == _storeyId);
             if (wall == null) continue;
             var (first, second) = PreviewWallBody(wall);
@@ -808,16 +903,22 @@ internal sealed partial class PlanEditorCanvas : Control
                 first.Y + (second.Y - first.Y) * t1);
             var b = new Point(first.X + (second.X - first.X) * t2,
                 first.Y + (second.Y - first.Y) * t2);
-            context.DrawLine(new Pen(new SolidColorBrush(Color.Parse("#111A25")),
+            if(OpeningPlanGeometry.CutsWall(opening))context.DrawLine(new Pen(new SolidColorBrush(Color.Parse("#111A25")),
                 wall.Thickness * _scale), a, b);
-            if (!opening.HasSwingLeaf() || _moving || _gripPreview != null)
+            if (_moving || _gripPreview != null)
                 context.DrawLine(new Pen(new SolidColorBrush(Color.Parse(_selectedIds.Contains(opening.Id)
                     ? "#FFC46B" : "#5AD4EC")), Stroke(25)), a, b);
         }
         if (!_moving && _gripPreview == null)
+        {
             foreach (var line in _planSymbols)
                 context.DrawLine(new Pen(new SolidColorBrush(Color.Parse(line.Layer == ViewLayers.Opening
                     ? "#A7B8C5" : "#58788F")), Stroke()), Screen(line.X1, line.Y1), Screen(line.X2, line.Y2));
+            foreach(var pair in _openingSymbols.Where(p=>p.Key!=_openingGripDraft?.Id||_openingLabelGrip))foreach(var line in pair.Value)
+                context.DrawLine(new Pen(new SolidColorBrush(Color.Parse(_selectedIds.Contains(pair.Key)?"#FFC46B":"#A7B8C5")),1,
+                    line.LineType=="HIDDEN"?new DashStyle(new[]{4d,3d},0):null),Screen(line.X1,line.Y1),Screen(line.X2,line.Y2));
+            DrawOpeningCodes(context);
+        }
         void DrawStructure(string id,List<PointModel> outline)
         {
             if(_moving&&id==_selectedId&&_moveBase!=null&&_cursor!=null)
@@ -843,10 +944,45 @@ internal sealed partial class PlanEditorCanvas : Control
             context.DrawEllipse(null, pen, p, radius, radius);
             context.DrawLine(pen, new Point(p.X - arm, p.Y), new Point(p.X + arm, p.Y));
             context.DrawLine(pen, new Point(p.X, p.Y - arm), new Point(p.X, p.Y + arm));
-            var label = new FormattedText(pending.Code + " · 待定位（参考）",
-                CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface.Default, 600*_scale, brush);
+            var label = new FormattedText(pending.Code + " · 点击放置",
+                CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface.Default,
+                DrawingAnnotationSettings.Resolve(_model).TextHeight*AxisAnnotationScale*_scale, brush);
             context.DrawText(label, new Point(p.X + 180*_scale, p.Y - label.Height / 2));
         }
+        if(_pendingOpening!=null&&_pendingWall!=null) {
+            var wall=_pendingWall;var length=Math.Sqrt(Math.Pow(wall.X2-wall.X1,2)+Math.Pow(wall.Y2-wall.Y1,2));
+            var from=_pendingOffset-_pendingOpening.Width/2;var to=_pendingOffset+_pendingOpening.Width/2;
+            var ux=(wall.X2-wall.X1)/length;var uy=(wall.Y2-wall.Y1)/length;
+            var a=WallReferenceGeometry.BodyPoint(wall,wall.X1+ux*from,wall.Y1+uy*from);
+            var b=WallReferenceGeometry.BodyPoint(wall,wall.X1+ux*to,wall.Y1+uy*to);
+            var normal=new Vector(-uy*wall.Thickness*_scale/2,-ux*wall.Thickness*_scale/2);
+            var first=Screen(a.X,a.Y);var second=Screen(b.X,b.Y);
+            var previewPen=new Pen(from<0||to>length?Brushes.OrangeRed:Brushes.Cyan,2);
+            context.DrawLine(new Pen(new SolidColorBrush(Color.Parse("#111A25")),wall.Thickness*_scale),first,second);
+            context.DrawLine(previewPen,first+normal,second+normal);context.DrawLine(previewPen,first-normal,second-normal);
+            context.DrawLine(previewPen,first+normal,first-normal);context.DrawLine(previewPen,second+normal,second-normal);
+            DrawOpeningPreviewSymbols(context,wall,new OpeningModel {Code=_pendingOpening.Code,Kind=_pendingOpening.Kind,
+                Offset=_pendingOffset,Width=_pendingOpening.Width,Height=_pendingOpening.Height},previewPen);
+        }
+        if(_pendingOpening!=null&&_lastPointer is Point pendingPointer) {
+            var text=new FormattedText(_pendingPlacementLocked?"回车 / 空格确认 · Esc 取消":"移动到目标墙，点击确定位置",
+                CultureInfo.CurrentCulture,FlowDirection.LeftToRight,Typeface.Default,12,Brushes.White);
+            var x=Math.Clamp(pendingPointer.X+14,4,Math.Max(4,Bounds.Width-text.Width-12));
+            var y=Math.Clamp(pendingPointer.Y+18,4,Math.Max(4,Bounds.Height-text.Height-8));
+            context.FillRectangle(new SolidColorBrush(Color.Parse("#233340")),new Rect(x-4,y-4,text.Width+8,text.Height+8));
+            context.DrawText(text,new Point(x,y));
+        }
+        DrawOpeningGrips(context);
+        if(Tool==PlanTool.Opening&&PlacementOpeningType!=null&&_lastPointer is Point placementPointer) {
+            var hit=HitWall(placementPointer);
+            if(hit.wall!=null) {
+                var type=PlacementOpeningType;
+                var opening=PlacementOpeningChoice!.CreateOpening(hit.wall.Id,hit.offset);
+                var valid=hit.offset>=type.Width/2&&hit.offset+type.Width/2<=OpeningWallLength(hit.wall);
+                DrawOpeningPreviewSymbols(context,hit.wall,opening,new Pen(valid?Brushes.Cyan:Brushes.OrangeRed,2),type);
+            }
+        }
+        DrawSelectionPreview(context);
         var selectedWall = _model.Walls.FirstOrDefault(w => w.Id == _selectedId && w.StoreyId == _storeyId);
         if (selectedWall != null)
         {
@@ -907,7 +1043,7 @@ internal sealed partial class PlanEditorCanvas : Control
             context.DrawLine(pen, new Point(p.X - 9, p.Y), new Point(p.X + 9, p.Y));
             context.DrawLine(pen, new Point(p.X, p.Y - 9), new Point(p.X, p.Y + 9));
         }
-        if(_lastPointer is Point cursor && _panStart == null) {
+        if(AxisMode==AxisEditMode.Off && _lastPointer is Point cursor && _panStart == null) {
             var cursorPen=new Pen(new SolidColorBrush(Color.Parse(CrosshairColor)),1);
             var half=Math.Max(2,PickboxSize/2);
             var length=Math.Max(Bounds.Width,Bounds.Height)*CrosshairPercent/100/2;
@@ -1003,20 +1139,9 @@ internal sealed partial class PlanEditorCanvas : Control
     {
         if(_axisEndpointCache!=null)return _axisEndpointCache;
         _axisEndpointCache=new();
-        var walls=_model.Walls.Where(w=>w.StoreyId==_storeyId).ToArray();
-        var minX=walls.Length==0?-1500:walls.Min(w=>Math.Min(w.X1,w.X2)-w.Thickness/2);
-        var maxX=walls.Length==0?1500:walls.Max(w=>Math.Max(w.X1,w.X2)+w.Thickness/2);
-        var minY=walls.Length==0?-1500:walls.Min(w=>Math.Min(w.Y1,w.Y2)-w.Thickness/2);
-        var maxY=walls.Length==0?1500:walls.Max(w=>Math.Max(w.Y1,w.Y2)+w.Thickness/2);
-        foreach(var axis in _resolvedAxes.Where(a=>AxisMode!=AxisEditMode.Off||(!a.Hidden&&!a.Deleted))) {
-            var automatic=axis.ExtentStart==0&&axis.ExtentEnd==0;
-            var start=automatic?(axis.Vertical?minY:minX)-4500:Math.Min(axis.ExtentStart,axis.ExtentEnd);
-            var end=automatic?(axis.Vertical?maxY:maxX)+4500:Math.Max(axis.ExtentStart,axis.ExtentEnd);
-            if(axis.StartRemoved||axis.EndRemoved) {var shortened=BuildingAxisLayout.Extents(_model,axis,_storeyId,4500);
-                if(axis.StartRemoved)start=shortened[0];if(axis.EndRemoved)end=shortened[1];}
-            _axisEndpointCache.Add((axis,axis.Vertical?new PointModel(axis.Position,start):new PointModel(start,axis.Position),
-                axis.Vertical?new PointModel(axis.Position,end):new PointModel(end,axis.Position)));
-        }
+        foreach(var placement in BuildingAxisLayout.Layout(_model,_storeyId,4500,AxisBubbleRadius,includeGhosts:AxisMode!=AxisEditMode.Off))
+            if(AxisMode!=AxisEditMode.Off||(!placement.Axis.Hidden&&!placement.Axis.Deleted))
+                _axisEndpointCache.Add((placement.Axis,placement.Start,placement.End));
         return _axisEndpointCache;
     }
 
@@ -1033,7 +1158,8 @@ internal sealed partial class PlanEditorCanvas : Control
             var y = (horizontalBody.first.Y + horizontalBody.second.Y) / 2;
             var width = vertical.Thickness * _scale;
             var height = horizontal.Thickness * _scale;
-            var color = _selectedIds.Contains(horizontal.Id) || _selectedIds.Contains(vertical.Id) ? "#FFC46B"
+            var color = ShowSelectionPreview && (_preselectedId==horizontal.Id || _preselectedId==vertical.Id) ? "#00FFFF"
+                : _selectedIds.Contains(horizontal.Id) || _selectedIds.Contains(vertical.Id) ? "#FFC46B"
                 : _slabGeometry.ContainsKey(_selectedId ?? "") ? "#334652" : "#9BC4E9";
             context.FillRectangle(new SolidColorBrush(Color.Parse(color)),
                 new Rect(x - width / 2, y - height / 2, width, height));
@@ -1072,9 +1198,14 @@ internal sealed partial class PlanEditorCanvas : Control
     private void DrawAxisBubble(DrawingContext context, string name, Point center, IBrush brush)
     {
         var pen = new Pen(brush, Stroke(15));
-        context.DrawEllipse(new SolidColorBrush(Color.Parse("#111A25")), pen, center, 450*_scale, 450*_scale);
+        context.DrawEllipse(new SolidColorBrush(Color.Parse("#111A25")), pen, center, AxisBubbleRadius*_scale, AxisBubbleRadius*_scale);
         var text = new FormattedText(name, CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
-            Typeface.Default, 600*_scale, brush);
-        context.DrawText(text, new Point(center.X - text.Width / 2, center.Y - text.Height / 2));
+            Typeface.Default, DrawingAnnotationSettings.Resolve(_model).TextHeight*AxisAnnotationScale*_scale, brush);
+        var width=DrawingAnnotationSettings.Resolve(_model).WidthFactor;
+        width=Math.Min(width,AxisBubbleRadius*_scale*1.6/Math.Max(1,text.Width));
+        using(context.PushTransform(Matrix.CreateScale(width,1)*Matrix.CreateTranslation(center.X,center.Y)))
+            context.DrawText(text, new Point(-text.Width/2,-text.Height/2));
     }
+    private int AxisAnnotationScale => _model.DrawingScales?.Plan ?? 100;
+    private double AxisBubbleRadius => DrawingAnnotationSettings.Resolve(_model).AxisDiameter*AxisAnnotationScale/2;
 }

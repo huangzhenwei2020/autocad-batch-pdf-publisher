@@ -981,15 +981,18 @@ internal static class OpeningElevationTests
         Assert(HasPlanLine(cut, X(5850d), Y(-120d), X(7320d), Y(-120d)), "门右到东墙外皮（5850→7320）没画出来");
         Assert(!HasPlanLine(cut, X(1450d), Y(-120d), X(2950d), Y(-120d)), "窗洞范围内的墙面线不该画出来");
         Assert(HasPlanLine(cut, X(1450d), Y(-120d), X(1450d), Y(120d)), "窗左门垛封口没画出来");
-        // 窗：两条玻璃线（墙厚内侧 ±42）
-        Assert(HasPlanLine(opening, X(1450d), Y(42d), X(2950d), Y(42d)) && HasPlanLine(opening, X(1450d), Y(-42d), X(2950d), Y(-42d)),
-            "窗的两条玻璃线没画出来");
-        // 门：扇线（从门垛沿墙法线出 900）+ 8 段开启弧（弧终点落在另一侧门垛上）
-        Assert(HasPlanLine(opening, X(4950d), Y(0d), X(4950d), Y(900d)), "门的扇线（4950,0 → 4950,900）没画出来");
-        var arcReachesJamb = opening.Any(l => (Math.Abs(l.X1 - X(5850d)) < Tolerance && Math.Abs(l.Y1 - Y(0d)) < Tolerance)
-            || (Math.Abs(l.X2 - X(5850d)) < Tolerance && Math.Abs(l.Y2 - Y(0d)) < Tolerance));
-        Assert(arcReachesJamb, "门的 90° 开启弧应扫到另一侧门垛（5850,0）");
-        Assert(opening.Count == 15, "一层平面的门窗图例应有 15 条线（3 窗×2 + 1 门×9），实际 " + opening.Count);
+        // Saved construction controls glass thickness, frames and leaf outlines.
+        var expected=OrthographicProjector.CreatePlanDetailSymbols(model,storey.Id).Where(l=>l.Layer==ViewLayers.Opening).ToList();
+        Assert(expected.All(l=>HasPlanLine(opening,X(l.X1),Y(l.Y1),X(l.X2),Y(l.Y2))),"平面缺少保存做法中的框扇或玻璃线");
+        var door=model.Openings.First(o=>o.Kind=="门"&&model.Walls.Any(w=>w.Id==o.HostWallId&&w.StoreyId==storey.Id));
+        var doorType=OpeningConstruction.Resolve(model,door);
+        var doorParts=OpeningConstruction.Build(door,doorType,240).Where(p=>p.Bottom<=1200&&p.Top>1200).ToArray();
+        var leafRight=doorParts.Where(p=>p.Cell!=null).Max(p=>p.Right);
+        var hingeNormal=doorParts.Where(p=>p.Kind=="frame").Max(p=>p.NormalOffset+p.Depth/2)
+            +doorParts.Where(p=>p.Cell!=null).Max(p=>p.Depth)/2+(doorType.SashClearance??2);
+        Assert(opening.Any(l=>Math.Abs(l.X2-X(4950+leafRight))<Tolerance&&Math.Abs(l.Y2-Y(hingeNormal))<Tolerance),
+            "开启弧闭合端应位于净扇边界，不得落在门框外边或墙轴线上");
+        Assert(opening.Count==expected.Count,"平面编辑与图纸投影的门窗图例不一致");
         // 柱断面
         var column = model.Columns.First(c => string.Equals(c.StoreyId, storey.Id, StringComparison.OrdinalIgnoreCase));
         Assert(HasPlanLine(cut, X(column.X - column.Width / 2d), Y(column.Y - column.Depth / 2d),
@@ -1169,7 +1172,7 @@ internal static class OpeningElevationTests
 
         var label = view.Texts.FirstOrDefault(t => t.Layer == ViewLayers.Opening && t.Text == "C1518");
         Assert(label != null, "立面上应标出洞口编号 C1518");
-        Assert(Math.Abs(label.Height - 200d) < Tolerance, "1:100 的编号字高应为 200mm，实际 " + label.Height);
+        Assert(Math.Abs(label.Height - 250d) < Tolerance, "1:100 的编号应采用统一纸面字高 2.5mm（模型 250mm），实际 " + label.Height);
         Assert(Math.Abs(label.Y - (580d - z)) < Tolerance, "有窗台的窗，编号应写在洞口下方（模型 y=580），实际 " + (label.Y + z));
         var estimated = label.Height * 0.62d * "C1518".Length;
         Assert(Math.Abs(label.X + estimated / 2d - (1500d - u)) < 1d, "编号应大致居中在洞口上（模型 x=1500）");
@@ -1184,7 +1187,7 @@ internal static class OpeningElevationTests
         Assert(doorLabel != null, "落地门也要标编号");
         var doorLabelY = doorLabel.Y + doorView.OriginY;
         Assert(doorLabelY > 2100d && doorLabelY < 3000d, "落地门的编号应写在洞口上方（2100 以上、层高以内），实际 " + doorLabelY);
-        Console.WriteLine("   锚点与编号：洞口锚点 1 个（750,900)-(2250,2700)、编号 C1518 字高 200 写在窗下、门编号写在门上方（"
+        Console.WriteLine("   锚点与编号：洞口锚点 1 个（750,900)-(2250,2700)、编号 C1518 字高 250 写在窗下、门编号写在门上方（"
             + Math.Round(doorLabelY) + "）");
     }
 

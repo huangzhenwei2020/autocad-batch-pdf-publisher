@@ -32,6 +32,43 @@ namespace BatchPdfPublisher.BuildingModel
             return BuildingModelJson.FromJson(BuildingModelJson.ToJson(new BuildingModelDocument {
                 OpeningTypes=new List<OpeningTypeModel>{type} })).OpeningTypes[0];
         }
+        public static bool SameConstruction(OpeningTypeModel a,OpeningTypeModel b)
+        {
+            if(a==null||b==null||!Same(a.Code?.Trim(),b.Code?.Trim()))return false;
+            OpeningTypeModel Normalize(OpeningTypeModel source) {
+                var copy=Copy(source);copy.Code="";copy.Source="";copy.Remarks="";
+                copy.Sill=0;copy.ThresholdHeight=0;copy.PlanOpenAngle=90;copy.DefaultOpenIn3D=false;
+                return copy;
+            }
+            string Json(OpeningTypeModel type)=>BuildingModelJson.ToJson(new BuildingModelDocument {OpeningTypes=new List<OpeningTypeModel>{Normalize(type)}});
+            return Json(a)==Json(b);
+        }
+        public static List<double[]> ThresholdSpans(OpeningModel opening,OpeningTypeModel type)
+        {
+            var spans=new List<double[]>();
+            if(opening.ThresholdHeight<=0||!(opening.Kind??"").Contains("门"))return spans;
+            var item=OpeningElevationAdapter.ToScheduleItem(opening,type,opening.Width,opening.Height);
+            var geometry=DoorWindowElevationGeometryBuilder.Build(item);
+            foreach(var cell in geometry.Cells.Where(c=>!c.IsDeleted&&c.IsDoor&&c.Bottom<=geometry.FrameBottom+.05).OrderBy(c=>c.Left)) {
+                var left=cell.Left<=geometry.FrameLeft+.05?0:Math.Max(0,cell.Left);
+                var right=cell.Right>=geometry.FrameRight-.05?opening.Width:Math.Min(opening.Width,cell.Right);
+                if(right<=left)continue;
+                if(spans.Count>0&&left<=spans[spans.Count-1][1]+.05)spans[spans.Count-1][1]=Math.Max(right,spans[spans.Count-1][1]);
+                else spans.Add(new[]{left,right});
+            }
+            var combined=(opening.Kind??"").Contains("门联窗")||(opening.Kind??"").Contains("门连窗")
+                ||(opening.Code??"").StartsWith("MLC",StringComparison.OrdinalIgnoreCase)||(type.ElevationType??"").Contains("门联窗");
+            // Legacy sliding doors can carry window-style cells; the door semantic still owns the full threshold.
+            if(spans.Count==0&&!combined)spans.Add(new[]{0d,opening.Width});
+            return spans;
+        }
+        public static string ValidateThreshold(OpeningModel opening)
+        {
+            var threshold=opening.ThresholdHeight;
+            if(double.IsNaN(threshold)||double.IsInfinity(threshold)||threshold<0||threshold>=opening.Height)
+                return "门槛高须不小于 0 且小于洞口高度；0 表示无门槛。";
+            return threshold>0&&!(opening.Kind??"").Contains("门")?"窗不能设置门槛。":null;
+        }
         public static OpeningTypeLibraryDocument Library(BuildingModelDocument model,OpeningTypeLibraryDocument external=null)
         {
             var types=(model.OpeningTypes ?? new List<OpeningTypeModel>()).Where(t=>t!=null).ToList();
@@ -40,7 +77,8 @@ namespace BatchPdfPublisher.BuildingModel
         }
         public static OpeningTypeModel Resolve(BuildingModelDocument model,OpeningModel opening)
         {
-            var type=Library(model).FindType(EffectiveCode(opening));
+            var code=model.OpeningOverrides?.FirstOrDefault(o=>Same(o.OpeningId,opening.Id))?.TypeCode??EffectiveCode(opening);
+            var type=Library(model).FindType(code);
             if(type!=null){
                 if(type.ElevationType=="凸窗" && (type.BayLeftDepth!=DoorWindowElevationGeometryBuilder.NormalizeBayDepth(type.BayLeftDepth) || type.BayRightDepth!=DoorWindowElevationGeometryBuilder.NormalizeBayDepth(type.BayRightDepth))){
                     type=Copy(type);type.BayLeftDepth=DoorWindowElevationGeometryBuilder.NormalizeBayDepth(type.BayLeftDepth);type.BayRightDepth=DoorWindowElevationGeometryBuilder.NormalizeBayDepth(type.BayRightDepth);
@@ -108,6 +146,8 @@ namespace BatchPdfPublisher.BuildingModel
             var geometry=DoorWindowElevationGeometryBuilder.Build(mainItem);
             var parts=new List<OpeningPart>();
             BuildFace(geometry,mainItem,0);
+            foreach(var span in ThresholdSpans(opening,type))parts.Add(new OpeningPart {
+                Left=span[0],Right=span[1],Bottom=0,Top=opening.ThresholdHeight,Depth=wallThickness,Kind="threshold",Face=0});
             if(type.ElevationType=="凸窗") {
                 if(type.BayLeftSide=="窗")Return(-1,type.BayLeftDepth,type.BayLeftCellLayout);
                 else parts.Add(new OpeningPart {Left=0,Right=type.BayLeftDepth,Bottom=0,Top=opening.Height,Depth=wallThickness,Kind="wall",Face=-1});
@@ -140,6 +180,7 @@ namespace BatchPdfPublisher.BuildingModel
                     Rail(cell.Left,cell.Bottom,cell.Right,b,false);
                     Rail(cell.Left,t,cell.Right,cell.Top,false);
                     Rail(cell.Left,b,l,t,true);Rail(r,b,cell.Right,t,true);
+                    if(cell.IsDoor&&cell.Bottom<=g.FrameBottom+.05)b=Math.Max(b,opening.ThresholdHeight);
                     var swing=DoorWindowElevationGeometryBuilder.IsOperable(cell.Opening) && cell.Opening!="无";
                     // Moving leaves remain separate solids even when their fixed divider
                     // is omitted. Keep the clearance in the leaf, never in the opening.
@@ -188,6 +229,12 @@ namespace BatchPdfPublisher.BuildingModel
         }
         public static string Validate(OpeningModel opening,OpeningTypeModel type)
         {
+            if(new[]{opening.Width,opening.Height,opening.Sill}.Any(x=>double.IsNaN(x)||double.IsInfinity(x))||opening.Width<=0||opening.Height<=0||opening.Sill<0)
+                return "洞口宽高须为有效正数，窗台高不能为负。";
+            var thresholdError=ValidateThreshold(opening);if(thresholdError!=null)return thresholdError;
+            var inset=type.PlanReturnInset??0;
+            if(double.IsNaN(inset)||double.IsInfinity(inset)||inset<0||inset>=opening.Width/2)
+                return "凸窗斜边收进须不小于 0 且小于洞口宽度的一半。";
             var numbers=new[] {type.FrameDepth??100,type.MullionDepth??100,type.SashDepth??50,type.GlassThickness??6,type.PanelThickness??40,type.BayCapThickness??100};
             if(numbers.Any(x=>double.IsNaN(x)||double.IsInfinity(x)||x<=0||x>2000))return "框料进深和面板厚度必须为 0～2000 mm 内的正数。";
             var angle=type.OpenAngle??0;

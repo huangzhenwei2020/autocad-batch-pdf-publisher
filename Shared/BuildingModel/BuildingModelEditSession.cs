@@ -24,6 +24,7 @@ namespace BatchPdfPublisher.BuildingModel
             if (list.Any(v => v == null || string.IsNullOrWhiteSpace(v.Id) || v.Id == "." || v.Id == ".."
                 || v.Id.IndexOfAny(new[] { '/', '\\', ':', '*', '?', '"', '<', '>', '|' }) >= 0
                 || string.IsNullOrWhiteSpace(v.Title) || v.Scale < 1 || v.Scale > 10000
+                || (v.Annotations != null && !DrawingAnnotationSettings.Valid(v.Annotations))
                 || !Enum.IsDefined(typeof(ViewKind), v.Kind) || v.Kind == ViewKind.Sheet
                 || !Finite(v.CutPosition) || !Finite(v.ViewDepth) || v.ViewDepth < 0
                 || !Finite(v.AzimuthDegrees) || !Finite(v.ElevationDegrees) || Math.Abs(v.ElevationDegrees) >= 89
@@ -54,7 +55,8 @@ namespace BatchPdfPublisher.BuildingModel
         }
 
         /// <summary>Replace building-wide explicit axes as one undoable edit. Derived wall axes stay automatic.</summary>
-        public bool TryReplaceAxes(System.Collections.Generic.IEnumerable<AxisModel> axes, out string error, string storeyId = null)
+        public bool TryReplaceAxes(System.Collections.Generic.IEnumerable<AxisModel> axes, out string error, string storeyId = null,
+            DrawingAnnotationSettings annotations = null)
         {
             error = null;
             if (axes == null) { error = "轴网为空。"; return false; }
@@ -71,6 +73,10 @@ namespace BatchPdfPublisher.BuildingModel
                     || c == '-' || c == '/' || c == '\''))))
             { error = "轴号最多 24 个字符，仅支持英文字母、数字、-、/ 和撇号。"; return false; }
             var candidate = Clone(Model);
+            if(annotations != null) {
+                if(!DrawingAnnotationSettings.Valid(annotations)){error="文字高度、宽度因子或轴号直径无效（直径至少为字高两倍）。";return false;}
+                candidate.Annotations=annotations;
+            }
             var copied = replacement.Select(a => new AxisModel
             {
                 Id = a.Id, Name = a.Name?.Trim(), StartName = a.StartName?.Trim(),
@@ -348,6 +354,9 @@ namespace BatchPdfPublisher.BuildingModel
         }
 
         public bool TryAddOpening(OpeningModel source, out string id, out string error)
+            => TryAddOpening(source,null,out id,out error);
+
+        public bool TryAddOpening(OpeningModel source, OpeningTypeModel type, out string id, out string error)
         {
             id = null;
             error = null;
@@ -355,11 +364,23 @@ namespace BatchPdfPublisher.BuildingModel
             var wall = Model.Walls.FirstOrDefault(x => x != null && Same(x.Id, source.HostWallId));
             if (wall == null) { error = "门窗的宿主墙不存在。"; return false; }
             var candidate = Clone(Model);
+            if(type!=null) {
+                if(string.IsNullOrWhiteSpace(type.Code)||!Same(type.Code.Trim(),source.Code)) {error="门窗编号与所选类型不一致。";return false;}
+                if(type.Width!=source.Width||type.Height!=source.Height||!Same(type.Kind,source.Kind)) {error="门窗尺寸或类别与所选类型不一致。";return false;}
+                error=OpeningConstruction.Validate(source,type);if(error!=null)return false;
+                var existing=candidate.OpeningTypes.FirstOrDefault(t=>Same(t.Code,type.Code.Trim()));
+                if(existing!=null) {
+                      if(!OpeningConstruction.SameConstruction(type,existing)) {error="该编号的项目做法已变化，请重新选择门窗。";return false;}
+                } else {var copy=OpeningConstruction.Copy(type);copy.Code=copy.Code.Trim();candidate.OpeningTypes.Add(copy);}
+            }
             var opening = new OpeningModel
             {
                 Id = "O-" + Guid.NewGuid().ToString("N"), HostWallId = wall.Id,
                 Kind = source.Kind, Code = source.Code, Offset = source.Offset,
-                Width = source.Width, Height = source.Height, Sill = source.Sill
+                Width = source.Width, Height = source.Height, Sill = source.Sill, ThresholdHeight=source.ThresholdHeight,
+                PlanFlipAlong=source.PlanFlipAlong,PlanFlipNormal=source.PlanFlipNormal,
+                PlanLabelAlong=source.PlanLabelAlong,PlanLabelNormal=source.PlanLabelNormal,
+                PlanOpenAngle=source.PlanOpenAngle,OpenIn3D=source.OpenIn3D??false,CodeManuallyEdited=source.CodeManuallyEdited
             };
             candidate.Openings.Add(opening);
             error = ValidateOpeningGeometry(candidate,
@@ -598,7 +619,10 @@ namespace BatchPdfPublisher.BuildingModel
                     {
                         Id = "O-" + Guid.NewGuid().ToString("N"), HostWallId = target.Id,
                         Kind = opening.Kind, Code = opening.Code, Offset = opening.Offset,
-                        Width = opening.Width, Height = opening.Height, Sill = opening.Sill
+                        Width = opening.Width, Height = opening.Height, Sill = opening.Sill, ThresholdHeight=opening.ThresholdHeight,
+                        PlanFlipAlong=opening.PlanFlipAlong,PlanFlipNormal=opening.PlanFlipNormal,
+                        PlanLabelAlong=opening.PlanLabelAlong,PlanLabelNormal=opening.PlanLabelNormal,
+                        PlanOpenAngle=opening.PlanOpenAngle,OpenIn3D=opening.OpenIn3D,CodeManuallyEdited=opening.CodeManuallyEdited
                     });
                 }
             }
@@ -691,6 +715,12 @@ namespace BatchPdfPublisher.BuildingModel
         public bool TrySetOpeningGeometry(string id, double offset, double width, double height,
             double sill, out string error)
         {
+            var source=Model.Openings.FirstOrDefault(o=>Same(o.Id,id));
+            return TrySetOpeningGeometry(id,offset,width,height,sill,source?.ThresholdHeight??0,out error);
+        }
+
+        public bool TrySetOpeningGeometry(string id,double offset,double width,double height,double sill,double thresholdHeight,out string error)
+        {
             error = null;
             if (!Finite(offset) || !Finite(width) || !Finite(height) || !Finite(sill))
             { error = "洞口参数必须是有限数值。"; return false; }
@@ -705,6 +735,7 @@ namespace BatchPdfPublisher.BuildingModel
             opening.Width = width;
             opening.Height = height;
             opening.Sill = sill;
+            opening.ThresholdHeight = thresholdHeight;
             error = ValidateOpeningGeometry(candidate, wall, opening);
             if (error != null) return false;
             Commit(candidate);
@@ -753,6 +784,8 @@ namespace BatchPdfPublisher.BuildingModel
         {
             var error = PlanEditing.ValidateOpening(model, wall, opening);
             if (error != null) return error;
+            error=OpeningConstruction.ValidateThreshold(opening);
+            if(error!=null)return error;
             var storey = model.FindStorey(wall.StoreyId);
             var wallHeight = wall.Height > 0d ? wall.Height : (storey == null ? 0d : storey.Height);
             if (!Finite(wallHeight) || wallHeight <= 0d)

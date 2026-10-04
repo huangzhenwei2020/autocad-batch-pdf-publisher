@@ -124,7 +124,25 @@ namespace BatchPdfPublisher.BuildingModel
             if (File.Exists(file))
             {
                 var path = File.ReadAllText(file, Encoding.UTF8).Trim();
-                if (!File.Exists(path)) throw new FileNotFoundException("当前打开的建筑模型尚未保存或已移动，请回建筑模型保存。", path);
+                if (!File.Exists(path))
+                {
+                    // Only recover the same project-local model after moving the project root.
+                    var parent = string.IsNullOrWhiteSpace(path) ? null : Path.GetDirectoryName(path);
+                    var modelsRoot = parent == null ? null : Path.GetDirectoryName(parent);
+                    var moved = parent == null ? null : Path.Combine(projectFolder, ModelFolderName,
+                        Path.GetFileName(parent), Path.GetFileName(path));
+                    if (!HasLiveSession(path) && modelsRoot != null
+                        && string.Equals(Path.GetFileName(modelsRoot), ModelFolderName, StringComparison.OrdinalIgnoreCase)
+                        && !string.IsNullOrWhiteSpace(modelName)
+                        && string.Equals(Path.GetFileName(parent), modelName.Trim(), StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(Path.GetFileName(path), "model.json", StringComparison.OrdinalIgnoreCase)
+                        && File.Exists(moved))
+                    {
+                        RememberActiveModel(projectFolder, moved);
+                        return Path.GetFullPath(moved);
+                    }
+                    throw new FileNotFoundException("当前记录的建筑模型文件不存在，请在建筑模型中打开正确的模型并保存。\n记录路径：" + path, path);
+                }
                 return Path.GetFullPath(path);
             }
             var folder = FindModelFolder(projectFolder, modelName);

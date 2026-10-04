@@ -193,6 +193,7 @@ namespace BatchPdfPublisher.Services
                     {
                         TextString = text.Text ?? string.Empty,
                         Height = text.Height > 0.5d ? text.Height : 250d,
+                        WidthFactor = text.WidthFactor>0?text.WidthFactor:1,
                         Rotation = text.Rotation * Math.PI / 180d,
                         Position = new Point3d(anchor.X + text.X, anchor.Y + text.Y, 0d)
                     };
@@ -233,7 +234,10 @@ namespace BatchPdfPublisher.Services
                         editor.WriteMessage("\n标注样式创建失败，改用当前标注样式：" + exception.Message);
                     }
                     var dimensionSettings = (DimStyleTableRecord)transaction.GetObject(dimensionStyle,OpenMode.ForRead);
-                    SheetComposer.LayoutDimensionText(view,dimensionSettings.Dimtxt*Math.Max(1,dimensionSettings.Dimscale));
+                    SheetComposer.LayoutDimensionText(view);
+                    var variableTextStyle=EnsureVariableDimensionTextStyle(document.Database,transaction,dimensionSettings.Dimtxsty);
+                    var dimensionTextStyle=(TextStyleTableRecord)transaction.GetObject(variableTextStyle,OpenMode.ForRead);
+                    var styleWidth=Math.Max(.01,dimensionTextStyle.XScale);
                     foreach (var dimension in view.Dimensions)
                     {
                         if (dimension == null) continue;
@@ -243,6 +247,17 @@ namespace BatchPdfPublisher.Services
                         try
                         {
                             var entity = CreateDimension(dimension, anchor, dimensionStyle);
+                            using(var overrides=(DimStyleTableRecord)dimensionSettings.Clone()) {
+                                overrides.Dimtxsty=variableTextStyle;entity.SetDimstyleData(overrides);
+                            }
+                            entity.Dimscale=Math.Max(1,view.Scale);
+                            entity.Dimtmove=2;
+                            entity.Dimtxt=dimension.TextHeight/Math.Max(1,view.Scale);
+                            entity.Dimdec=0;entity.Dimrnd=1;entity.Dimtix=true;entity.Dimtofl=true;
+                            entity.Dimlfac=1;entity.Dimlunit=2;entity.Dimalt=false;
+                            entity.Dimjust=0;entity.Dimtih=false;entity.Dimtoh=false;
+                            entity.DimensionText="{\\W"+(dimension.TextWidthFactor/styleWidth).ToString("0.######",System.Globalization.CultureInfo.InvariantCulture)+";"+
+                                (string.IsNullOrWhiteSpace(dimension.Text)?"<>":dimension.Text)+"}";
                             ApplyLayer(entity, string.IsNullOrWhiteSpace(dimension.Layer) ? ViewLayers.Dimension : dimension.Layer, layerIds);
                             space.AppendEntity(entity);
                             transaction.AddNewlyCreatedDBObject(entity, true);
@@ -1333,6 +1348,26 @@ namespace BatchPdfPublisher.Services
         /// 两个被量点在 (AnchorPosition, From/To)，尺寸线摆在 LinePosition 处。
         /// 文字留空 → CAD 按实际距离自己量出数值（改了模型重算视图，数值也跟着对）。
         /// </summary>
+        private static ObjectId EnsureVariableDimensionTextStyle(Database database,Transaction transaction,ObjectId source)
+        {
+            if(source.IsNull)source=database.Textstyle;
+            var original=(TextStyleTableRecord)transaction.GetObject(source,OpenMode.ForRead);
+            if(original.TextSize==0)return source;
+            // A fixed-height CAD text style ignores DIMTXT. Derive an owned variable-height
+            // style with the same fonts, without changing the user's drafting standard.
+            var table=(TextStyleTable)transaction.GetObject(database.TextStyleTableId,OpenMode.ForRead);
+            var name="WL-模型-标注-"+source.Handle;
+            TextStyleTableRecord target;
+            if(table.Has(name))target=(TextStyleTableRecord)transaction.GetObject(table[name],OpenMode.ForWrite);
+            else {
+                table.UpgradeOpen();target=new TextStyleTableRecord {Name=name};table.Add(target);
+                transaction.AddNewlyCreatedDBObject(target,true);
+            }
+            target.Font=original.Font;target.FileName=original.FileName;target.BigFontFileName=original.BigFontFileName;
+            target.TextSize=0;target.XScale=original.XScale;target.ObliquingAngle=original.ObliquingAngle;
+            return target.ObjectId;
+        }
+
         private static RotatedDimension CreateDimension(ViewDimension dimension, Point3d anchor, ObjectId dimensionStyle)
         {
             Point3d first, second, linePoint;
@@ -1354,7 +1389,7 @@ namespace BatchPdfPublisher.Services
             var entity = new RotatedDimension(rotation, first, second, linePoint, dimension.Text ?? string.Empty, dimensionStyle);
             if (dimension.TextX.HasValue && dimension.TextY.HasValue)
             {
-                entity.Dimtmove = 1;
+                entity.Dimtmove = 2;
                 entity.TextPosition = new Point3d(anchor.X+dimension.TextX.Value,anchor.Y+dimension.TextY.Value,0);
             }
             return entity;

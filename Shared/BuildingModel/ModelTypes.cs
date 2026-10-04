@@ -147,6 +147,20 @@ namespace BatchPdfPublisher.BuildingModel
         /// <summary>窗台高（相对所属楼层标高，mm）。</summary>
         public double Sill { get; set; }
 
+        /// <summary>门槛相对洞口底的高度（mm）；0 表示无门槛。</summary>
+        public double ThresholdHeight { get; set; }
+
+        public bool PlanFlipAlong { get; set; }
+        public bool PlanFlipNormal { get; set; }
+        public double PlanOpenAngle { get; set; } = 90d;
+        /// <summary>Null preserves an explicitly opened legacy construction type.</summary>
+        public bool? OpenIn3D { get; set; }
+        public bool CodeManuallyEdited { get; set; }
+
+        /// <summary>Plan code displacement along the host wall and its normal (mm).</summary>
+        public double PlanLabelAlong { get; set; }
+        public double PlanLabelNormal { get; set; }
+
         /// <summary>组合门窗只显示闭合构件；旧模型误标为门时仍按 MLC 编号识别。</summary>
         public bool HasSwingLeaf()
         {
@@ -154,7 +168,9 @@ namespace BatchPdfPublisher.BuildingModel
             var combined = kind.IndexOf("门联窗", StringComparison.Ordinal) >= 0
                 || kind.IndexOf("门连窗", StringComparison.Ordinal) >= 0
                 || (Code ?? string.Empty).Trim().StartsWith("MLC", StringComparison.OrdinalIgnoreCase);
-            return !combined && kind.IndexOf("门", StringComparison.Ordinal) >= 0;
+            var sliding=(Code??string.Empty).Trim().StartsWith("TLM",StringComparison.OrdinalIgnoreCase)
+                ||kind.IndexOf("推拉",StringComparison.Ordinal)>=0;
+            return !combined && !sliding && kind.IndexOf("门", StringComparison.Ordinal) >= 0;
         }
     }
 
@@ -351,11 +367,19 @@ namespace BatchPdfPublisher.BuildingModel
         public List<WallModel> Walls { get; set; } = new List<WallModel>();
         public List<OpeningModel> Openings { get; set; } = new List<OpeningModel>();
         public List<CadPendingOpening> PendingOpenings { get; set; } = new List<CadPendingOpening>();
+        public List<CadResolvedOpening> ResolvedOpenings { get; set; } = new List<CadResolvedOpening>();
         public List<SlabModel> Slabs { get; set; } = new List<SlabModel>();
         public List<ColumnModel> Columns { get; set; } = new List<ColumnModel>();
         public List<BeamModel> Beams { get; set; } = new List<BeamModel>();
         public List<string> StructureMessages { get; set; } = new List<string>();
         public List<string> SlabMessages { get; set; } = new List<string>();
+    }
+
+    public sealed class CadResolvedOpening
+    {
+        public string StoreyId { get; set; }
+        public string SourceHandle { get; set; }
+        public string OpeningId { get; set; }
     }
 
     public sealed class CadPendingOpening
@@ -402,6 +426,7 @@ namespace BatchPdfPublisher.BuildingModel
         /// <summary>Null uses the default drawing catalogue; a saved list contains the user's views.</summary>
         public List<ViewDefinitionModel> DrawingViews { get; set; }
         public DrawingScaleSettings DrawingScales { get; set; }
+        public DrawingAnnotationSettings Annotations { get; set; }
 
         public StoreyModel FindStorey(string id)
         {
@@ -522,6 +547,7 @@ namespace BatchPdfPublisher.BuildingModel
         public int Scale { get; set; } = 100;
 
         // 立面
+        public DrawingAnnotationSettings Annotations { get; set; }
         public ElevationDirection Direction { get; set; } = ElevationDirection.South;
 
         // 剖面
@@ -567,6 +593,7 @@ namespace BatchPdfPublisher.BuildingModel
         public double Y { get; set; }
         /// <summary>字高（mm，已按出图比例换算到模型空间）。</summary>
         public double Height { get; set; } = 250d;
+        public double WidthFactor { get; set; } = 1d;
         /// <summary>文字在图面中的逆时针旋转角（度）。</summary>
         public double Rotation { get; set; }
     }
@@ -597,6 +624,7 @@ namespace BatchPdfPublisher.BuildingModel
         public string Id { get; set; }
         public string Title { get; set; }
         public int Scale { get; set; } = 100;
+        public DrawingAnnotationSettings Annotations { get; set; }
         public ViewKind Kind { get; set; }
         /// <summary>Sheet geometry is in real model millimetres; only the frame is scaled.</summary>
         public bool ModelSpaceSheet { get; set; }
@@ -686,6 +714,8 @@ namespace BatchPdfPublisher.BuildingModel
         public string Note { get; set; }
         public double? TextX { get; set; }
         public double? TextY { get; set; }
+        public double TextHeight { get; set; }
+        public double TextWidthFactor { get; set; }
     }
 
     // ───────────────────────── "提取图纸"的中间格式 ─────────────────────────
@@ -753,6 +783,9 @@ namespace BatchPdfPublisher.BuildingModel
         public double Width { get; set; } = 1500d;
         public double Height { get; set; } = 1800d;
         public double Sill { get; set; } = 900d;
+        public double ThresholdHeight { get; set; }
+        public double PlanOpenAngle { get; set; } = 90d;
+        public bool DefaultOpenIn3D { get; set; }
 
         public double? FrameDepth { get; set; }
         public double? MullionDepth { get; set; }
@@ -770,6 +803,8 @@ namespace BatchPdfPublisher.BuildingModel
         public string ElevationType { get; set; }
         public string DivisionPreset { get; set; }
         public string OpeningMode { get; set; }
+        public string PlanStyle { get; set; } = "按立面";
+        public double? PlanReturnInset { get; set; }
         public bool HasOuterFrame { get; set; } = true;
         public double OuterFrameWidth { get; set; } = 50d;
         public bool HasMullion { get; set; } = true;

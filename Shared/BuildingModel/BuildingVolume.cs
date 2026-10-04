@@ -350,9 +350,16 @@ namespace BatchPdfPublisher.BuildingModel
 
         public static BuildingVolume BuildOpeningParts(BuildingModelDocument source)
         {
+            return BuildOpeningParts(source,null);
+        }
+
+        public static BuildingVolume BuildOpeningParts(BuildingModelDocument source, string sourceOpeningId)
+        {
             var model=StandardStoreyLayout.Materialize(source);var volume=new BuildingVolume();var first=true;var partCache=new Dictionary<string,List<OpeningPart>>();
+            var openings=model.Openings.Where(o=>sourceOpeningId==null
+                || Same(StandardStoreyLayout.SourceElementId(source,o.Id),sourceOpeningId)).ToLookup(o=>o.HostWallId,StringComparer.OrdinalIgnoreCase);
             foreach(var wall in model.Walls)
-                foreach(var opening in model.Openings.Where(o=>Same(o.HostWallId,wall.Id)))
+                foreach(var opening in openings[wall.Id])
                     AddConstruction(volume,wall,model,opening,model.BaseElevationOf(wall),ref first,partCache);
             return volume;
         }
@@ -372,7 +379,7 @@ namespace BatchPdfPublisher.BuildingModel
                 var insidePlus=outlines.Any(r=>SlabGeometry.Contains(plus,r));var insideMinus=outlines.Any(r=>SlabGeometry.Contains(minus,r));
                 if(insidePlus && !insideMinus)bayDirection=-1;
             }
-            var key=string.Join("|",opening.Code,opening.Kind,opening.Width.ToString("R",System.Globalization.CultureInfo.InvariantCulture),opening.Height.ToString("R",System.Globalization.CultureInfo.InvariantCulture),wall.Thickness.ToString("R",System.Globalization.CultureInfo.InvariantCulture));
+            var key=string.Join("|",opening.Code,opening.Kind,opening.Width.ToString("R",System.Globalization.CultureInfo.InvariantCulture),opening.Height.ToString("R",System.Globalization.CultureInfo.InvariantCulture),wall.Thickness.ToString("R",System.Globalization.CultureInfo.InvariantCulture),opening.ThresholdHeight.ToString("R",System.Globalization.CultureInfo.InvariantCulture));
             if(!partCache.TryGetValue(key,out var parts)){parts=OpeningConstruction.Build(opening,type,wall.Thickness);partCache.Add(key,parts);}
             var frameStart=volume.Faces.Count;
             foreach(var part in parts) {
@@ -385,12 +392,14 @@ namespace BatchPdfPublisher.BuildingModel
                         y=part.Kind=="bay-cap" ? pair[1]+part.Depth/2 : y+depth;
                     }
                     if(part.Face!=0){var along=y; y=x; x=part.Face<0 ? -along : opening.Width+along;}
-                    var cell=part.Cell;var angle=(type.OpenAngle??0)*Math.PI/180;
+                    var cell=part.Cell;var angle=(opening.OpenIn3D.HasValue?(opening.OpenIn3D.Value?opening.PlanOpenAngle:0):(type.OpenAngle??0))*Math.PI/180;
                     if(cell!=null && angle>0 && part.Face==0 && (cell.Opening??"").Contains("平开")) {
                         var right=(cell.Opening??"").Contains("右");var pivot=right ? cell.Right : cell.Left;
                         var a=right ? -angle : angle;var dx=x-pivot;var dy=y-part.NormalOffset;
                         x=pivot+dx*Math.Cos(a)-dy*Math.Sin(a);y=part.NormalOffset+dx*Math.Sin(a)+dy*Math.Cos(a);
                     }
+                    if(opening.PlanFlipAlong)x=opening.Width-x;
+                    if(opening.PlanFlipNormal)y=-y;
                     if(type.ElevationType=="凸窗")y*=bayDirection;
                     corners.Add(new Point3DModel(start.X+ux*x-uy*y,start.Y+uy*x+ux*y,lower));
                 }

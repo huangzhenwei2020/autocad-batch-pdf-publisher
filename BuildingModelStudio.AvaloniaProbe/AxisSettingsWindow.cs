@@ -11,6 +11,9 @@ internal sealed class AxisSettingsWindow : Window
     private sealed record Entry(AxisModel Axis, CheckBox Auto, TextBox Main, TextBox Start, TextBox End,
         ComboBox StartState, ComboBox EndState, ComboBox LineState);
     private readonly List<Entry> _entries=new();
+    private readonly TextBox _height=new() {Width=65,Height=32},_width=new() {Width=65,Height=32},_diameter=new() {Width=65,Height=32};
+    private readonly TextBlock _validation=new() {Foreground=Brushes.OrangeRed};
+    public DrawingAnnotationSettings ResultAnnotations {get;private set;}=new();
     public List<AxisModel> ResultAxes {get;private set;}=new();
     internal static readonly string[] EndStates={"显示轴号","隐藏轴号","删除轴号·短线"};
     internal static readonly string[] LineStates={"显示轴线","隐藏轴线","删除轴线"};
@@ -24,6 +27,13 @@ internal sealed class AxisSettingsWindow : Window
         var help=new TextBlock {Text=(model.StoreyAxes?.ContainsKey(storeyId??"")==true?"本层独立轴网。":"整栋共用轴网。")+"隐藏保留编号；删除端部轴号后，该端缩至墙外 500 mm；删除整条轴线才重排自动编号。修改可撤销。",TextWrapping=TextWrapping.Wrap};
         Grid.SetRow(help,1);root.Children.Add(help);
         var toolbar=new WrapPanel {Orientation=Orientation.Horizontal};
+        ResultAnnotations=DrawingAnnotationSettings.Resolve(model);
+        _height.Text=ResultAnnotations.TextHeight.ToString("0.##");_width.Text=ResultAnnotations.WidthFactor.ToString("0.##");
+        _diameter.Text=ResultAnnotations.AxisDiameter.ToString("0.##");
+        foreach(var field in new[] {("文字高度 mm",_height),("宽度因子",_width),("轴号直径 mm",_diameter)}) {
+            toolbar.Children.Add(new TextBlock {Text=field.Item1,Margin=new Thickness(6),VerticalAlignment=VerticalAlignment.Center});
+            toolbar.Children.Add(field.Item2);
+        }
         foreach(var side in new[] {"左","右","上","下"}) {
             toolbar.Children.Add(new TextBlock {Text=side+"侧",Margin=new Thickness(8),VerticalAlignment=VerticalAlignment.Center});
             foreach(var show in new[] {true,false}) {
@@ -59,7 +69,10 @@ internal sealed class AxisSettingsWindow : Window
         Grid.SetRow(scroll,3);root.Children.Add(scroll);
         var actions=new StackPanel {Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right,Spacing=10};
         var cancel=new Button {Content="取消"};cancel.Click+=(_,_)=>Close(false);
-        var apply=new Button {Content="应用轴网"};apply.Click+=(_,_)=>{Collect();Close(true);};actions.Children.Add(cancel);actions.Children.Add(apply);
+        var apply=new Button {Content="应用轴网"};apply.Click+=(_,_)=>{
+            if(!ReadAnnotations(out var settings)){_validation.Text="参数无效：轴号直径至少为文字高度的两倍。";return;}
+            ResultAnnotations=settings;Collect();Close(true);
+        };actions.Children.Add(_validation);actions.Children.Add(cancel);actions.Children.Add(apply);
         Grid.SetRow(actions,4);root.Children.Add(actions);Content=root;
     }
     internal void SetSide(string side,bool visible)
@@ -79,6 +92,12 @@ internal sealed class AxisSettingsWindow : Window
             StartHidden=e.StartState.SelectedIndex==1,EndHidden=e.EndState.SelectedIndex==1,
             StartRemoved=e.StartState.SelectedIndex==2,EndRemoved=e.EndState.SelectedIndex==2,
             Hidden=e.LineState.SelectedIndex==1,Deleted=e.LineState.SelectedIndex==2 }).ToList();
+    }
+    private bool ReadAnnotations(out DrawingAnnotationSettings settings) {
+        settings=new();
+        if(!double.TryParse(_height.Text,out var height)||!double.TryParse(_width.Text,out var width)||!double.TryParse(_diameter.Text,out var diameter))return false;
+        settings.TextHeight=height;settings.WidthFactor=width;settings.AxisDiameter=diameter;
+        return DrawingAnnotationSettings.Valid(settings);
     }
     private static Grid Row()=>new() {ColumnDefinitions=new("165,50,85,100,100,165,165,135"),ColumnSpacing=8,MinHeight=38};
     private static void Cell(Grid row,int column,Control control){control.VerticalAlignment=VerticalAlignment.Center;Grid.SetColumn(control,column);row.Children.Add(control);}

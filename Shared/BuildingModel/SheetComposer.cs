@@ -66,37 +66,23 @@ namespace BatchPdfPublisher.BuildingModel
             return Papers.FirstOrDefault(p => string.Equals(p.Name, wanted, StringComparison.OrdinalIgnoreCase)) ?? Papers[1];
         }
 
-        /// <summary>在模型坐标中错开短尺寸文字；CAD 和预览共用结果。</summary>
+        /// <summary>Keep dimension text centred inside its own measured interval.</summary>
         public static void LayoutDimensionText(ViewDocument view, double fontHeight = 0)
         {
-            var font = fontHeight > 0 ? fontHeight : Math.Max(1,view.Scale)*2.5;
-            var occupied = new List<double[]>();
-            foreach (var text in view.Texts)
-            {
-                var w = (text.Text ?? "").Length*text.Height;
-                var angle = text.Rotation*Math.PI/180;
-                var x2 = text.X+w*Math.Cos(angle)-text.Height*Math.Sin(angle);
-                var y2 = text.Y+w*Math.Sin(angle)+text.Height*Math.Cos(angle);
-                occupied.Add(new[] { Math.Min(text.X,x2),Math.Min(text.Y,y2),Math.Max(text.X,x2),Math.Max(text.Y,y2) });
-            }
+            var settings=view.Annotations??new DrawingAnnotationSettings();
             foreach (var d in view.Dimensions)
             {
-                var text = string.IsNullOrWhiteSpace(d.Text) ? Math.Abs(d.To-d.From).ToString("0.###",System.Globalization.CultureInfo.InvariantCulture) : d.Text;
-                var length = Math.Max(font,text.Length*font*.8);
+                var font=fontHeight>0?fontHeight:d.TextHeight>0?d.TextHeight:Math.Max(1,view.Scale)*settings.TextHeight;
+                var text=DrawingAnnotationSettings.DimensionText(d);
+                var span=Math.Abs(d.To-d.From);
                 var mid = (d.From+d.To)/2;
-                double[] box = null;
-                for (var lane = 0; lane < 1000; lane++)
-                {
-                    var offset = font*(1.1+lane*1.8);
-                    var outward = d.LinePosition < d.AnchorPosition ? -1d : 1d;
-                    d.TextX = d.Vertical ? d.LinePosition+outward*offset : mid;
-                    d.TextY = d.Vertical ? mid : d.LinePosition+outward*offset;
-                    var w = d.Vertical ? font*1.4 : length; var h = d.Vertical ? length : font*1.4;
-                    box = new[] { d.TextX.Value-w/2-font*.2,d.TextY.Value-h/2-font*.2,
-                        d.TextX.Value+w/2+font*.2,d.TextY.Value+h/2+font*.2 };
-                    if (!occupied.Any(b => b[0]<box[2] && b[2]>box[0] && b[1]<box[3] && b[3]>box[1])) break;
-                }
-                occupied.Add(box);
+                var outward=d.LinePosition<d.AnchorPosition?-1d:1d;
+                d.TextX=d.Vertical?d.LinePosition+outward*font*.8:mid;
+                d.TextY=d.Vertical?mid:d.LinePosition+outward*font*.8;
+                d.TextHeight=font;
+                // Short intervals compress glyph width, not text height or geometry.
+                var width=d.TextWidthFactor>0?d.TextWidthFactor:settings.WidthFactor;
+                d.TextWidthFactor=Math.Min(width,Math.Max(.001,span*.9/Math.Max(1,text.Length*font*.8)));
             }
         }
 
@@ -356,10 +342,10 @@ namespace BatchPdfPublisher.BuildingModel
                 if (text == null || string.IsNullOrEmpty(text.Text)) continue;
                 document.Texts.Add(new ViewText
                 {
-                    Layer = text.Layer, Text = text.Text,
+                    Layer = text.Layer, Text = text.Text, WidthFactor=text.WidthFactor,
                     Rotation = text.Rotation,
                     X = text.X * scale + offsetX, Y = text.Y * scale + offsetY,
-                    Height = Math.Max(1.8d, text.Height * scale)      // 纸面上不小于 1.8mm，不然印出来看不清
+                    Height = text.Height * scale
                 });
             }
             foreach (var hatch in view.Hatches ?? new List<ViewHatch>())
@@ -388,7 +374,8 @@ namespace BatchPdfPublisher.BuildingModel
                     AnchorPosition = dimension.AnchorPosition * scale + (dimension.Vertical ? offsetX : offsetY),
                     LinePosition = dimension.LinePosition * scale + (dimension.Vertical ? offsetX : offsetY),
                     Text = document.ModelSpaceSheet ? dimension.Text : value,
-                    Note = dimension.Note
+                    Note = dimension.Note, TextHeight=dimension.TextHeight*scale,
+                    TextWidthFactor=dimension.TextWidthFactor
                 });
             }
 

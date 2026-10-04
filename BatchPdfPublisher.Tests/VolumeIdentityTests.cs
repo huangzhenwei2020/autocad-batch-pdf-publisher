@@ -124,14 +124,14 @@ internal static class VolumeIdentityTests
             var plan=OrthographicProjector.ProjectPlan(model,new ViewDefinitionModel { Kind=ViewKind.Plan,
                 StoreyIds=new System.Collections.Generic.List<string> { "1F" } },null);
             var symbols=plan.Lines.Where(l=>l.Layer==ViewLayers.Opening).ToList();
-            Assert(symbols.Count==2 && symbols.All(l=>Math.Abs((-wall.Y2*(l.X2-l.X1)+wall.X2*(l.Y2-l.Y1))/length)<.01
-                && Math.Abs(Math.Sqrt(Math.Pow(l.X2-l.X1,2)+Math.Pow(l.Y2-l.Y1,2))-opening.Width)<.01),
-                "门联窗平面图也不能画外伸门扇和开启弧");
+            Assert(symbols.Count>2 && symbols.Any(l=>Math.Abs((-wall.Y2*(l.X2-l.X1)+wall.X2*(l.Y2-l.Y1))/length)<.01)
+                &&symbols.Any(l=>Math.Abs((-wall.Y2*(l.X2-l.X1)+wall.X2*(l.Y2-l.Y1))/length)>10),
+                "门联窗平面应按立面分区绘制门扇和窗线，不能将整洞口当成一扇门或两条窗线");
             opening.Code="M3627"; opening.Kind="门";
             Assert(BuildingVolumeBuilder.Build(model).Faces.Any(f=>f.ElementId==opening.Id && (f.Kind=="door" || f.Kind=="glass")),
                 "普通门应按门窗立面默认做法保留实体面板（带亮子的高门为玻璃门）");
         }
-        Console.WriteLine("PASS 门联窗闭合显示：正交融合墙、斜墙、名称别字和旧 MLC 门类别均不画开启扇");
+        Console.WriteLine("PASS 门联窗：三维保持闭合，平面按立面门窗分区，兼容斜墙、名称别字和旧 MLC 门类别");
     }
 
     private static void CheckNearOrthogonalCorner()

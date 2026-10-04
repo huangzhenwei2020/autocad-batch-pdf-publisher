@@ -16,6 +16,16 @@ internal static class CadOpeningRegistrationTests
     [STAThread]
     private static void Main(string[] args)
     {
+        if(args.Length==2 && args[0]=="--inspect-opening-geometry") {
+            using(var stream=File.OpenRead(args[1])) {
+                var inspectionRegistry=(CadFloorPlanRegistry)new System.Runtime.Serialization.Json.DataContractJsonSerializer(typeof(CadFloorPlanRegistry)).ReadObject(stream);
+                foreach(var floor in inspectionRegistry.Floors)foreach(var opening in floor.Openings.Where(o=>o.Include&&o.Placement==null)) {
+                    var inspectionPlacement=CadOpeningJambPlacement.Find(floor.Floor,floor.Probe.Entities.FirstOrDefault(e=>e.Handle==opening.SourceHandle),opening.Width.GetValueOrDefault());
+                    Console.WriteLine("OPENING_GEOMETRY floor="+floor.Floor.Storey.Id+" handle="+opening.SourceHandle+" code="+opening.ModelCode+" host="+(inspectionPlacement?.HostSourceHandle??"UNRESOLVED")+" source="+inspectionPlacement?.Source);
+                }
+            }
+            return;
+        }
         if(args.Length==2 && args[0]=="--queue-registration") {
             var request=CadModelGenerationRequest.Queue(CadFloorPlanRegistry.Load(args[1]));
             Console.WriteLine("QUEUED_NATIVE_REGISTRATION "+request.Id);
@@ -220,6 +230,22 @@ internal static class CadOpeningRegistrationTests
         StudioLaunch.RememberActiveModel(workflowOutput,switchedModelPath);
         Check(StudioLaunch.ActiveModelPath(workflowOutput,"unrelated-name") == switchedModelPath, "Open/save-as updates CAD's model path.");
         Check(CadFloorPlanRegistry.Load(switchedModelPath).Floors.Count == 0, "A different model must not inherit another model's registration.");
+        var relocatedProject = Path.Combine(workflowOutput,"moved-project");
+        var relocatedModel = Path.Combine(relocatedProject,StudioLaunch.ModelFolderName,"relocated","model.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(relocatedModel));
+        BuildingModelJson.SaveModel(relocatedModel,workflowModel);
+        var missingModel = Path.Combine(workflowOutput,"old-project",StudioLaunch.ModelFolderName,"relocated","model.json");
+        StudioLaunch.RememberActiveModel(relocatedProject,missingModel);
+        Check(StudioLaunch.ActiveModelPath(relocatedProject,"relocated") == relocatedModel,
+            "Moved project resolves the same project-local model.");
+        Check(File.ReadAllText(Path.Combine(relocatedProject,StudioLaunch.ModelFolderName,"当前模型.txt")).Trim() == relocatedModel,
+            "Moved project repairs the stale active-model marker.");
+        StudioLaunch.RememberActiveModel(relocatedProject,missingModel);
+        try { StudioLaunch.ActiveModelPath(relocatedProject,"different-model"); throw new Exception("Wrong model silently selected."); }
+        catch (FileNotFoundException) { }
+        StudioLaunch.RememberActiveModel(relocatedProject,Path.Combine(workflowOutput,"missing-custom.json"));
+        try { StudioLaunch.ActiveModelPath(relocatedProject,"relocated"); throw new Exception("Custom model silently replaced."); }
+        catch (FileNotFoundException) { }
         var reviewWindow = new CadFloorOpeningReviewWindow(firstCapture);
         var reviewContent = (FrameworkElement)reviewWindow.Content;
         reviewContent.Measure(new Size(960,590)); reviewContent.Arrange(new Rect(new Size(960,590))); reviewContent.UpdateLayout();

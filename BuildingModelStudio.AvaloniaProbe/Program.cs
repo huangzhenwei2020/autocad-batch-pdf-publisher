@@ -30,7 +30,9 @@ internal static class Program
     public static bool ShortcutCheck { get; private set; }
     public static bool SlabCheck { get; private set; }
     public static bool ParameterCheck { get; private set; }
+    public static bool ParameterPerfCheck { get; private set; }
     public static bool OpeningEditorCheck { get; private set; }
+    public static bool OpeningPlanCheck {get;private set;}
     public static bool BrowserCheck { get; private set; }
     public static bool AxisCheck {get;private set;}
     public static bool StructureCheck { get; private set; }
@@ -97,8 +99,10 @@ internal static class Program
         ShortcutCheck = args.Contains("--shortcut-check", StringComparer.OrdinalIgnoreCase);
         SlabCheck = args.Contains("--slab-check", StringComparer.OrdinalIgnoreCase);
         ParameterCheck = args.Contains("--parameter-check", StringComparer.OrdinalIgnoreCase);
+        ParameterPerfCheck = args.Contains("--parameter-perf-check", StringComparer.OrdinalIgnoreCase);
         DrawingCheck = args.Contains("--drawing-check", StringComparer.OrdinalIgnoreCase);
         OpeningEditorCheck=args.Contains("--opening-editor-check",StringComparer.OrdinalIgnoreCase);
+        OpeningPlanCheck=args.Contains("--opening-plan-check",StringComparer.OrdinalIgnoreCase);
         StoreyCheck = args.Contains("--storey-check", StringComparer.OrdinalIgnoreCase);
         ZoomCheck = args.Contains("--zoom-check", StringComparer.OrdinalIgnoreCase);
         var zoomIndex=Array.IndexOf(args,"--snapshot-zoom");

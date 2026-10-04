@@ -13,6 +13,81 @@ namespace BatchPdfPublisher.BuildingModel
     {
         private const double Tolerance = 0.5d;
 
+        public sealed class Placement
+        {
+            public AxisModel Axis { get; set; }
+            public PointModel Start { get; set; }
+            public PointModel End { get; set; }
+            public PointModel StartLabel { get; set; }
+            public PointModel EndLabel { get; set; }
+        }
+
+        // Keep axis coordinates exact. Resolve crowded bubbles by extending outwards,
+        // never by moving an axis or placing its label inside the building.
+        public static List<Placement> Layout(BuildingModelDocument model, string storeyId,
+            double margin, double radius, bool includeGhosts = false)
+        {
+            var axes=Resolve(model,storeyId);
+            var walls=model.Walls.Where(w=>storeyId==null||w.StoreyId==storeyId).ToList();
+            var xs=walls.SelectMany(w=>new[] {Math.Min(w.X1,w.X2)-w.Thickness/2,Math.Max(w.X1,w.X2)+w.Thickness/2})
+                .Concat(axes.Where(a=>a.Vertical).Select(a=>a.Position)).ToList();
+            var ys=walls.SelectMany(w=>new[] {Math.Min(w.Y1,w.Y2)-w.Thickness/2,Math.Max(w.Y1,w.Y2)+w.Thickness/2})
+                .Concat(axes.Where(a=>!a.Vertical).Select(a=>a.Position)).ToList();
+            var structure=model.Slabs.Where(s=>storeyId==null||s.StoreyId==storeyId).SelectMany(s=>s.Outline??new List<PointModel>())
+                .Concat(model.Columns.Where(c=>storeyId==null||c.StoreyId==storeyId).SelectMany(StructuralGeometry.ColumnOutline))
+                .Concat(model.Beams.Where(b=>storeyId==null||b.StoreyId==storeyId).SelectMany(StructuralGeometry.BeamOutline))
+                .Concat(model.Roofs.Where(r=>storeyId==null||r.StoreyId==storeyId).SelectMany(r=>new[] {new PointModel(r.X,r.Y),new PointModel(r.X+r.Width,r.Y+r.Depth)}));
+            foreach(var p in structure){xs.Add(p.X);ys.Add(p.Y);}
+            foreach(var wall in walls)foreach(var p in new[] {WallReferenceGeometry.BodyPoint(wall,wall.X1,wall.Y1),WallReferenceGeometry.BodyPoint(wall,wall.X2,wall.Y2)}) {
+                xs.Add(p.X-wall.Thickness/2);xs.Add(p.X+wall.Thickness/2);
+                ys.Add(p.Y-wall.Thickness/2);ys.Add(p.Y+wall.Thickness/2);
+            }
+            var minX=xs.Count==0?-1500:xs.Min();var maxX=xs.Count==0?1500:xs.Max();
+            var minY=ys.Count==0?-1500:ys.Min();var maxY=ys.Count==0?1500:ys.Max();
+            var result=new List<Placement>();
+            foreach(var vertical in new[] {true,false}) {
+                var group=axes.Where(a=>a.Vertical==vertical).OrderBy(a=>a.Position).ToList();
+                var lo=(vertical?minY:minX)-Math.Max(margin,radius*3);
+                var hi=(vertical?maxY:maxX)+Math.Max(margin,radius*3);
+                foreach(var axis in group.Where(a=>(includeGhosts||(!a.Hidden&&!a.Deleted))&&(a.ExtentStart!=0||a.ExtentEnd!=0))) {
+                    lo=Math.Min(lo,Math.Min(axis.ExtentStart,axis.ExtentEnd));
+                    hi=Math.Max(hi,Math.Max(axis.ExtentStart,axis.ExtentEnd));
+                }
+                var starts=new List<PointModel>();var ends=new List<PointModel>();var separation=radius*2.02;
+                foreach(var axis in group) {
+                    var startVisible=includeGhosts||(!axis.Hidden&&!axis.Deleted&&!axis.StartHidden&&!axis.StartRemoved);
+                    var endVisible=includeGhosts||(!axis.Hidden&&!axis.Deleted&&!axis.EndHidden&&!axis.EndRemoved);
+                    var startOffset=startVisible?MinimumBubbleOffset(starts,axis.Position,separation):0;
+                    var endOffset=endVisible?MinimumBubbleOffset(ends,axis.Position,separation):0;
+                    if(startVisible)starts.Add(new PointModel(axis.Position,startOffset));
+                    if(endVisible)ends.Add(new PointModel(axis.Position,endOffset));
+                    var start=lo-startOffset;var end=hi+endOffset;
+                    var a=vertical?new PointModel(axis.Position,start):new PointModel(start,axis.Position);
+                    var b=vertical?new PointModel(axis.Position,end):new PointModel(end,axis.Position);
+                    var shortened=Extents(model,axis,storeyId,margin);
+                    result.Add(new Placement {Axis=axis,StartLabel=a,EndLabel=b,
+                        Start=axis.StartRemoved?(vertical?new PointModel(axis.Position,shortened[0]):new PointModel(shortened[0],axis.Position)):a,
+                        End=axis.EndRemoved?(vertical?new PointModel(axis.Position,shortened[1]):new PointModel(shortened[1],axis.Position)):b});
+                }
+            }
+            return result;
+        }
+
+        private static double MinimumBubbleOffset(List<PointModel> occupied, double position, double separation)
+        {
+            // Circle distance defines forbidden intervals, not fixed staggered rows.
+            var intervals=occupied.Where(p=>Math.Abs(p.X-position)<separation).Select(p=> {
+                var distance=Math.Sqrt(separation*separation-Math.Pow(p.X-position,2));
+                return new PointModel(p.Y-distance,p.Y+distance);
+            }).OrderBy(p=>p.X);
+            var offset=0d;
+            foreach(var interval in intervals) {
+                if(interval.X>offset)break;
+                if(interval.Y>offset)offset=interval.Y;
+            }
+            return offset;
+        }
+
         public static List<AxisModel> Resolve(BuildingModelDocument model, string storeyId = null)
         {
             var result = new List<AxisModel>();

@@ -63,7 +63,15 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
                 return false;
             }
 
-            var activePath = modelPath ?? StudioLaunch.ActiveModelPath(projectFolder, modelName);
+            string activePath;
+            try { activePath = modelPath ?? StudioLaunch.ActiveModelPath(projectFolder, modelName); }
+            catch (Exception exception)
+            {
+                editor.WriteMessage("\n读取建筑模型路径失败：" + exception.Message);
+                Autodesk.AutoCAD.ApplicationServices.Application.ShowAlertDialog(
+                    "建筑模型未打开：\n" + exception.Message);
+                return false;
+            }
             if (activePath != null && StudioLaunch.HasLiveSession(activePath)) return true;
             var executable = ResolveExecutable(editor);
             if (string.IsNullOrWhiteSpace(executable)) return false;

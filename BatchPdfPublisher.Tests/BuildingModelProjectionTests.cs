@@ -56,6 +56,7 @@ internal static class BuildingModelProjectionTests
                 Console.WriteLine("CAD_DRAFTING_FIXTURE_OK"); return;
             }
             CadDraftingRegression();
+            DrawingAnnotationTests.Run();
             var model = SampleModelFactory.CreateTwoStoreyHouse();
             SouthElevationShowsOutlineAndOpenings(model);
             ElevationDirectionsAreMirrored(model);
@@ -74,6 +75,7 @@ internal static class BuildingModelProjectionTests
             OpeningTypeLibraryTests.Run();
             OpeningElevationTests.Run();
             OpeningConstructionTests.Run();
+            OpeningPlanGeometryTests.Run();
         }
         catch (Exception exception)
         {
@@ -91,8 +93,9 @@ internal static class BuildingModelProjectionTests
         model.Openings.Add(new OpeningModel { Id="O",HostWallId="B",Kind="窗",Code="C1818",Offset=3000,Width=1800,Height=1800,Sill=1500 });
         var plan = OrthographicProjector.Project(model,SampleModelFactory.CreatePlanView(model.Storeys[0]));
         var x=6000-plan.OriginX;var y=3000-plan.OriginY;
-        Assert(!plan.Lines.Any(l=>l.Layer==ViewLayers.Cut && Math.Abs(l.X1-l.X2)<.01 && Math.Abs(Math.Abs(l.X1-x)-100)<.01
-            && Math.Min(l.Y1,l.Y2)<y && Math.Max(l.Y1,l.Y2)>y),"高窗洞口不能被融合墙线贯穿");
+        Assert(plan.Lines.Any(l=>l.Layer==ViewLayers.Cut && Math.Abs(l.X1-l.X2)<.01 && Math.Abs(Math.Abs(l.X1-x)-100)<.01
+            && Math.Min(l.Y1,l.Y2)<y && Math.Max(l.Y1,l.Y2)>y),"剖切面以上的高窗不得断开墙线");
+        Assert(plan.Lines.Where(l=>l.Layer==ViewLayers.Opening).All(l=>l.LineType=="HIDDEN"),"高窗必须投影虚线");
         Assert(plan.Texts.Any(t=>t.Text=="C1818" && Math.Abs(t.Rotation-90)<.01),"竖墙窗编号必须沿墙旋转");
         Assert(plan.Hatches.Count==0,"平面图必须只输出墙线和门窗，不生成填充");
         Assert(!plan.Hatches.Any(h=>h.Boundary.Min(p=>p.X)<x && h.Boundary.Max(p=>p.X)>x
@@ -122,7 +125,7 @@ internal static class BuildingModelProjectionTests
             new PointModel(.04,0),new PointModel(10,0),new PointModel(10,10),new PointModel(.04,10) } };
         Assert(!VolumeRenderer.DropHiddenInterfaces(new List<VolumeFace2D> { tiny,toleranceCover }).Contains(tiny),
             "空间筛选必须保留覆盖算法的 0.05 mm 边界容差");
-        Console.WriteLine("PASS CAD 出图：高窗断墙、墙填充、竖向编号、不可见编号过滤、真实比例无重叠排版、轴测逐点深度");
+        Console.WriteLine("PASS CAD 出图：高窗不断墙且虚线投影、墙填充、竖向编号、不可见编号过滤、真实比例无重叠排版、轴测逐点深度");
     }
 
     private static void RegisteredFramePaperSizeIsPreserved()

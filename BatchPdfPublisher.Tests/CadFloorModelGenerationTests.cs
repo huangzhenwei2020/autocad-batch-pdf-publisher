@@ -33,6 +33,16 @@ internal static class CadFloorModelGenerationTests
         var location=CadOpeningJambPlacement.Find(floor,source,800);
         Check(location!=null && location.DistanceFromWallStart==1400,"Own jambs must locate the opening exactly on the host.");
         Check(CadOpeningJambPlacement.Find(floor,source,900)==null,"Wrong jamb width must not locate an opening.");
+        var slidingSource=new CadBuildingProbeEntity {Handle="TLM",DxfName="TCH_OPENING",
+            Fields=new List<CadProbeField>{new CadProbeField {Name="OpeningCode",Text="TLM0822"}},
+            DisplaySegments=new List<CadProbeSegment>{Segment(1100,180,1520,180),Segment(1480,220,1900,220)}};
+        Check(CadOpeningJambPlacement.Find(floor,slidingSource,800)?.DistanceFromWallStart==1400,"Overlapping sliding tracks must recover exact native aperture.");
+        Check(CadOpeningJambPlacement.Find(floor,slidingSource,900)==null,"Sliding tracks must match native width.");
+        var duplicateHost=new CadBuildingProbeEntity {Handle="duplicate",DxfName="TCH_WALL",StraightHorizontalLineVerified=true,
+            CurveStart=wall.CurveStart,CurveEnd=wall.CurveEnd,CandidateThickness=200,CandidateAxisOffset=0};
+        floor.WallCandidates.Add(duplicateHost);
+        Check(CadOpeningJambPlacement.Find(floor,slidingSource,800)==null,"Sliding tracks cannot guess between two hosts.");
+        floor.WallCandidates.Remove(duplicateHost);
         source.DisplaySegments=new List<CadProbeSegment> { Segment(1100,200,1100,300),Segment(1900,200,1900,300) };
         Check(CadOpeningJambPlacement.Find(floor,source,800)==null,"Partial door leaf lines must not be accepted as jambs.");
         source.DisplaySegments=new List<CadProbeSegment> { Segment(1100,100,1900,100) };
@@ -95,6 +105,14 @@ internal static class CadFloorModelGenerationTests
         var registry=new CadFloorPlanRegistry { ModelPath=path,Floors=new List<CadFloorPlanCapture> { capture } };
         var generated=CadFloorModelGeneration.Build(model,registry,"first");
         Check(model.Walls.Count==0 && generated.Walls.Count==1 && generated.Openings.Count==1,"Build must be atomic and not mutate the original.");
+        var pendingRegistry=registry.Clone();pendingRegistry.Floors[0].Openings.Add(new CadFloorOpeningItem {
+            SourceHandle="manual-pending",Code="TLM0822",Kind="门",Width=800,Height=2200});
+        var withPending=CadFloorModelGeneration.Build(generated,pendingRegistry);
+        var pendingSession=new BuildingModelEditSession(withPending);
+        Check(pendingSession.TryPlacePendingOpening("1F","manual-pending",withPending.Walls[0].Id,3500,out var manualId,out var pendingError),pendingError);
+        var rebuiltPending=CadFloorModelGeneration.Build(pendingSession.Model,pendingRegistry);
+        Check(rebuiltPending.Openings.Count==2&&rebuiltPending.Openings.Any(o=>o.Id==manualId&&o.Offset==3500)
+            &&rebuiltPending.CadImport.PendingOpenings.Count==0,"Reimport must preserve a model-placed pending opening without duplication or a new pending mark.");
         var independent=BuildingModelJson.FromJson(BuildingModelJson.ToJson(model));
         independent.Storeys[1].TemplateStoreyId=null;
         var both=registry.Clone();var second=registry.Clone().Floors[0];
@@ -161,7 +179,14 @@ internal static class CadFloorModelGenerationTests
         Check(session.Undo() && session.Model.Walls.Count==0 && session.Model.Openings.Count==0,"Generation must undo as one edit.");
         Check(session.Redo() && session.Model.Openings.Count==1,"Generation must redo all components.");
         var id=session.Model.Walls[0].Id;
+        session.Model.Openings[0].PlanLabelAlong=75;session.Model.Openings[0].PlanLabelNormal=125;
+        session.Model.Openings[0].PlanOpenAngle=30;session.Model.Openings[0].OpenIn3D=true;
+        session.Model.Openings[0].ThresholdHeight=80;
+        session.Model.Openings[0].Code="C-自定义";session.Model.Openings[0].CodeManuallyEdited=true;
         Check(session.TryImportCadFloors(registry,"second",out error) && session.Model.Walls.Count==1 && session.Model.Walls[0].Id==id,"Reimport must replace stable source identities without duplicates.");
+        Check(session.Model.Openings[0].PlanLabelAlong==75&&session.Model.Openings[0].PlanLabelNormal==125,"Reimport must preserve edited plan code displacement.");
+        Check(session.Model.Openings[0].PlanOpenAngle==30&&session.Model.Openings[0].OpenIn3D==true&&session.Model.Openings[0].Code=="C-自定义","Reimport must preserve instance angle, 3D switch and edited code.");
+        Check(session.Model.Openings[0].ThresholdHeight==80,"Reimport must preserve instance threshold height.");
         item.Placement=CadOpeningPlacement.Create(floor,"W1",new PointModel(100,200),new PointModel(6100,200),new PointModel(2100,200),new PointModel(2900,200),800);
         Check(session.TryImportCadFloors(registry,"third",out error) && session.Model.Openings[0].Offset==2400,"Reframing moved openings must update existing instances.");
         session.Model.Walls.Add(new WallModel { Id="manual",StoreyId="1F",X1=10000,X2=15000,Thickness=200 });

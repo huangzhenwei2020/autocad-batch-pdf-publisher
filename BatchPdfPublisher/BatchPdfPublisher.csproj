@@ -58,11 +58,13 @@
     <Compile Include="..\Shared\BuildingModel\StructuralGeometry.cs" />
     <Compile Include="..\Shared\BuildingModel\CadStructuralRegistration.cs" />
     <Compile Include="..\Shared\BuildingModel\ModelTypes.cs"><Link>Features\BuildingModel\Shared\ModelTypes.cs</Link></Compile>
+    <Compile Include="..\Shared\BuildingModel\DrawingAnnotationSettings.cs" />
     <Compile Include="..\Shared\BuildingModel\BuildingAxisLayout.cs"><Link>Features\BuildingModel\Shared\BuildingAxisLayout.cs</Link></Compile>
     <Compile Include="..\Shared\BuildingModel\BuildingModelJson.cs"><Link>Features\BuildingModel\Shared\BuildingModelJson.cs</Link></Compile>
     <Compile Include="..\Shared\BuildingModel\OrthographicProjector.cs"><Link>Features\BuildingModel\Shared\OrthographicProjector.cs</Link></Compile>
     <Compile Include="..\Shared\BuildingModel\OpeningElevationAdapter.cs"><Link>Features\BuildingModel\Shared\OpeningElevationAdapter.cs</Link></Compile>
     <Compile Include="..\Shared\BuildingModel\OpeningConstruction.cs"><Link>Features\BuildingModel\Shared\OpeningConstruction.cs</Link></Compile>
+    <Compile Include="..\Shared\BuildingModel\OpeningPlanGeometry.cs" />
     <Compile Include="..\Shared\BuildingModel\OpeningLayoutEditing.cs"><Link>Features\BuildingModel\Shared\OpeningLayoutEditing.cs</Link></Compile>
     <Compile Include="..\Shared\BuildingModel\SheetComposer.cs"><Link>Features\BuildingModel\Shared\SheetComposer.cs</Link></Compile>
     <Compile Include="..\Shared\BuildingModel\StudioLaunch.cs"><Link>Features\BuildingModel\Shared\StudioLaunch.cs</Link></Compile>
