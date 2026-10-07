@@ -15,6 +15,9 @@ internal sealed partial class ProbeWindow
     {
         void Check(bool ok,string message){if(!ok)throw new InvalidOperationException(message);}
         var saved=_session;var selection=_selectedId;
+        var libraryRoot=System.IO.Path.GetFullPath(".artifacts/component-library/test-library-"+Guid.NewGuid().ToString("N"));
+        var previousLibraryRoot=Environment.GetEnvironmentVariable("WANLUO_COMPONENT_LIBRARY_ROOT");
+        Environment.SetEnvironmentVariable("WANLUO_COMPONENT_LIBRARY_ROOT",libraryRoot);
         var model=SampleModelFactory.CreateEmptyModel("门窗 MM 选型放置");model.Storeys[0].Height=6000;
         model.Walls.Add(new WallModel {Id="host",StoreyId="1F",X2=24000,Thickness=200});
         var project=OpeningPlacementCatalog.BuiltIns().First(e=>e.Type.Code=="M0921").Type;
@@ -30,12 +33,17 @@ internal sealed partial class ProbeWindow
             _commandInput.Text+="m";
             _commandInput.RaiseEvent(new KeyEventArgs {RoutedEvent=KeyDownEvent,Key=Key.Enter});await Task.Delay(180);
             var window=_openingPlacementWindow??throw new InvalidOperationException("MM 没有打开统一门窗窗口");
-            window.Width=Width<1000?720:900;window.Height=Width<1000?560:700;await Task.Delay(100);
-            Check(window.Entries.Count==25&&window.Entries.Count(e=>e.Type.Code=="M0921")==1,"项目、模板与内置类型没有正确去重");
+            window.Width=Width<1000?820:1440;window.Height=Width<1000?650:920;await Task.Delay(250);
+            Check(window.LibraryLoaded,"公共库未完成载入");
+            Check(window.Entries.Count==26&&window.Entries.Count(e=>e.Type.Code=="M0921")==1,"项目、模板与内置类型没有正确去重");
             Check(window.Entries.Single(e=>e.Type.Code=="M0921").Type.Width==1000,"内置类型覆盖项目定义");
             foreach(var entry in window.Entries){window.Choices.SelectedItem=entry;
                 Check(window.PlanPreview.Lines.Count>0&&window.ElevationPreview.Lines.Count>0,"类型平面/立面没有预览 "+entry.Type.Code);
             }
+            window.Choices.SelectedItem=window.Entries.Single(e=>e.Type.Code=="C0915");
+            Check(window.AngleInput.IsEnabled&&window.AnglePresets.IsEnabled&&!window.OpenIn3DInput.IsEnabled,"MM 平开窗参数没有区分平面角度和三维构造");
+            window.AnglePresets.SelectedIndex=1;
+            Check(window.AngleInput.Text=="45"&&window.PlanPreview.Lines.Count(l=>l.OpeningArcId?.StartsWith("swing-")==true)==OpeningPlanGeometry.SwingArcSegments,"MM 平开窗没有实际开扇及虚线弧预览");
             window.Category.SelectedItem="窗";
             Check(window.Choices.Items.OfType<OpeningPlacementEntry>().All(e=>!e.IsDoor)&&window.Choices.ItemCount==12,"窗筛选混入门");
             window.Category.SelectedItem="门";
@@ -51,14 +59,33 @@ internal sealed partial class ProbeWindow
             Check(window.Place.IsEnabled&&window.PlanPreview.Lines.Take(2).All(l=>Math.Abs(l.Y1)==100&&l.X2==1600),"插入前门槛参数没有反映到墙边平面线");
             window.ThresholdInput.Text="-1";Check(!window.Place.IsEnabled&&!window.SaveTemplate.IsEnabled,"非法门槛仍可放置/保存模板");window.ThresholdInput.Text="80";
             Check(window.Search.Bounds.Height>=32&&window.Place.Bounds.Height==32,"门窗窗口控件高度不统一");
-            Check(window.PlanPreview.Bounds.Width>100&&window.PlanPreview.Bounds.Height>=100&&window.ElevationPreview.Bounds.Height>=100,"小窗口预览被挤没");
+            window.PreviewTabs.SelectedIndex=1;await Task.Delay(80);Check(window.ElevationPreview.Bounds.Width>100&&window.ElevationPreview.Bounds.Height>=100,"立面预览被挤没");
+            window.PreviewTabs.SelectedIndex=2;await Task.Delay(180);Check(window.VolumePreview.Bounds.Width>100&&window.VolumePreview.FaceCount>0,"三维预览为空");
+            window.PreviewTabs.SelectedIndex=0;await Task.Delay(80);Check(window.PlanPreview.Bounds.Width>100&&window.PlanPreview.Bounds.Height>=100,"平面预览被挤没");
+            Check(window.PreviewTabs.Items.OfType<TabItem>().Select(t=>t.Bounds.Top).Distinct().Count()==1,"小窗口预览页签换行");
+            window.SettingsScroll.Offset=new Vector(0,1000);await Task.Delay(80);
             var checkPoint=window.OpenIn3DInput.TranslatePoint(new Point(0,window.OpenIn3DInput.Bounds.Height),window)!.Value;
             Check(checkPoint.Y<window.Height-64,"小窗口的三维开启控件被固定底栏裁切");
             foreach(var field in new[]{window.CodeInput,window.WidthInput,window.HeightInput,window.SillInput,window.ThresholdInput,window.AngleInput})Check(field.Bounds.Width>100&&field.Bounds.Height==32,"插入参数尺寸不统一");
             Check(window.SaveTemplate.Bounds.Height==32&&window.SaveTemplate.Bounds.Right<window.Width,"保存模板按钮被裁切");
+            window.SettingsScroll.Offset=default;await Task.Delay(80);
+            var publicAsset=await window.SavePublicDraftAsync("自测推拉门");await window.ReloadLibraryAsync();
+            Check(publicAsset!=null&&window.Entries.Count(e=>e.Source=="公共库")==1,"公共库保存/重新载入失败");
+            Check(window.WidthInput.Text=="1600"&&window.ThresholdInput.Text=="80","公共库后台载入覆盖未提交的插入参数");
+            var exportPath=System.IO.Path.Combine(System.IO.Path.GetDirectoryName(libraryRoot)!,"export-"+Guid.NewGuid()+".wlopkg");
+            new ComponentAssetLibrary(libraryRoot).Export(publicAsset!,exportPath);
+            var imported=await window.ImportPublicPackageAsync(exportPath);
+            Check(imported.Sha256==publicAsset!.Sha256&&window.Entries.Count(e=>e.Source=="公共库")==1,"导入流程改变资源内容或重复入库");
+            Check(BuildingModelJson.ToJson(_session.Model)==before,"公共库操作修改项目模型");
+            window.SourceFilter.SelectedItem="公共库";Check(window.Choices.ItemCount==1&&window.Place.IsEnabled,"公共库无法选型放置");
+            window.SetListMode(true);await Task.Delay(80);Check(window.Choices.ItemCount==1&&window.Place.IsEnabled,"列表切换丢失选择");window.SetListMode(false);
+            window.SourceFilter.SelectedIndex=0;
+            window.Choices.SelectedItem=window.Entries.Single(e=>e.Type.Code=="M1525");await Task.Delay(250);
+            foreach(var scroll in window.Choices.GetVisualDescendants().OfType<ScrollViewer>())scroll.Offset=default;await Task.Delay(80);
             var visual=ElementComposition.GetElementVisual(window)!;
             var bitmap=await visual.Compositor.CreateCompositionVisualSnapshot(visual,1);
             bitmap.Save(System.IO.Path.GetFullPath($".artifacts/opening-symbols/{(int)window.Width}x{(int)window.Height}-opening-parameters.png"),PngBitmapEncoderOptions.Default);
+            window.SourceFilter.SelectedItem="公共库";window.Choices.SelectedItem=window.Entries.Single(e=>e.Source=="公共库");
             window.Place.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             for(var i=0;i<50&&_openingPlacementWindow!=null;i++)await Task.Delay(30);
             Check(_openingPlacementWindow==null&&_planCanvas.Tool==PlanTool.Opening&&_planCanvas.PlacementOpeningType?.Code=="TLM-自测1600","选择类型后没有进入统一放置模式");
@@ -112,9 +139,10 @@ internal sealed partial class ProbeWindow
             Check(_session.Undo()&&_session.Model.Openings.Single(o=>o.Id==door.Id).ThresholdHeight==120,"属性门槛没有一次撤销");
             Check(_session.Undo()&&BuildingModelJson.ToJson(_session.Model)==templateJson,"模板插入不能原子撤销");
             Check(_session.Undo()&&BuildingModelJson.ToJson(_session.Model)==placed,"保存模板不能单独撤销");
-            Console.WriteLine("OPENING_PICKER_OK MM enter space builtIns24 editableCode dimensions sill threshold previews templateSave filter reopen instanceDefaults projectIsolation wallClicks invalidRollback undo propertyThreshold escape");
+            Console.WriteLine("OPENING_PICKER_OK MM enter space builtIns25 publicLibrary grid list previewTabs editableCode dimensions sill threshold templateSave filter reopen instanceDefaults projectIsolation wallClicks invalidRollback undo propertyThreshold escape");
         } finally {
             _openingPlacementWindow?.Close();_session=saved;SetPlanTool(PlanTool.Select);await RefreshModelAsync("门窗选型校对完成");SelectById(selection);
+            Environment.SetEnvironmentVariable("WANLUO_COMPONENT_LIBRARY_ROOT",previousLibraryRoot);
         }
     }
 }

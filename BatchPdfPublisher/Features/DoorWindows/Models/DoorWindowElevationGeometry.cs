@@ -70,7 +70,14 @@ namespace BatchPdfPublisher.Models
                 FrameLeft = left, FrameBottom = bottom, FrameRight = right, FrameTop = top
             };
             var cells = CreateCells(item, left, bottom, right, top);
-            foreach (var cell in cells) if (string.IsNullOrWhiteSpace(cell.Opening)) cell.Opening = item.OpeningMode;
+            var cellModes=(item.CellOpeningModes ?? string.Empty).Split(new[] {'|'},StringSplitOptions.None);
+            for(var index=0;index<cells.Count;index++) {
+                var cell=cells[index];
+                if(string.IsNullOrWhiteSpace(cell.Opening))cell.Opening=item.DivisionPreset=="自定义"&&cellModes.Length==cells.Count
+                    ?cellModes[index]:item.OpeningMode;
+                // Resolve paired modes once so elevation, plan, picking and 3D share the same hinges.
+                if(cell.Opening=="双扇平开")cell.Opening=cell.Left<(left+right)/2d?"左平开":"右平开";
+            }
             MarkDoorCells(item, cells, left, right);
             result.Cells.AddRange(cells);
             if (item.HasInstallationGap && gap > 0d) result.Lines.AddRange(BuildInstallationGapOutline(cells, gap));
@@ -562,12 +569,10 @@ namespace BatchPdfPublisher.Models
             }
             if (mode == "双扇平开")
             {
-                // Adjacent leaves hinge at the shared mullion.  The previous
-                // test used the outside jamb and mirrored every paired symbol.
                 foreach (var source in geometry.Cells)
                 {
                     var cell = OpeningArea(geometry, item, source);
-                    AddSideHung(geometry.Lines, cell, cell.Left >= (geometry.FrameLeft + geometry.FrameRight) / 2d);
+                    ApplyOpeningMode(geometry,cell,source.Opening);
                 }
                 return;
             }
@@ -637,13 +642,14 @@ namespace BatchPdfPublisher.Models
             else if (mode == "下悬") AddHung(geometry.Lines, cell, false);
             else if (mode == "中悬")
             {
-                // 中悬窗：窗扇绕水平中轴旋转，画成顶边铰接 + 中部轴线的双三角示意。
+                // Both triangles point to the horizontal pivot axis.
                 var middleY = (cell.Bottom + cell.Top) / 2d;
+                var middleX = (cell.Left + cell.Right) / 2d;
                 geometry.Lines.Add(new DoorWindowLineSegment(cell.Left, middleY, cell.Right, middleY, DoorWindowLineRole.Opening));
-                geometry.Lines.Add(new DoorWindowLineSegment(cell.Left, middleY, (cell.Left + cell.Right) / 2d, cell.Top, DoorWindowLineRole.Opening));
-                geometry.Lines.Add(new DoorWindowLineSegment(cell.Right, middleY, (cell.Left + cell.Right) / 2d, cell.Top, DoorWindowLineRole.Opening));
-                geometry.Lines.Add(new DoorWindowLineSegment(cell.Left, middleY, (cell.Left + cell.Right) / 2d, cell.Bottom, DoorWindowLineRole.Opening));
-                geometry.Lines.Add(new DoorWindowLineSegment(cell.Right, middleY, (cell.Left + cell.Right) / 2d, cell.Bottom, DoorWindowLineRole.Opening));
+                geometry.Lines.Add(new DoorWindowLineSegment(cell.Left, cell.Top, middleX, middleY, DoorWindowLineRole.Opening));
+                geometry.Lines.Add(new DoorWindowLineSegment(cell.Right, cell.Top, middleX, middleY, DoorWindowLineRole.Opening));
+                geometry.Lines.Add(new DoorWindowLineSegment(cell.Left, cell.Bottom, middleX, middleY, DoorWindowLineRole.Opening));
+                geometry.Lines.Add(new DoorWindowLineSegment(cell.Right, cell.Bottom, middleX, middleY, DoorWindowLineRole.Opening));
             }
             else if (mode == "百叶")
                 for (var index = 1; index < 7; index++) { var y = cell.Bottom + (cell.Top - cell.Bottom) * index / 7d; geometry.Lines.Add(new DoorWindowLineSegment(cell.Left, y, cell.Right, y, DoorWindowLineRole.Opening)); }
@@ -743,15 +749,16 @@ namespace BatchPdfPublisher.Models
         private static void AddSideHung(ICollection<DoorWindowLineSegment> lines, DoorWindowCell cell, bool hingeLeft)
         {
             var hingeX = hingeLeft ? cell.Left : cell.Right; var freeX = hingeLeft ? cell.Right : cell.Left; var middleY = (cell.Bottom + cell.Top) / 2d;
-            lines.Add(new DoorWindowLineSegment(hingeX, cell.Bottom, freeX, middleY, DoorWindowLineRole.Opening));
-            lines.Add(new DoorWindowLineSegment(freeX, middleY, hingeX, cell.Top, DoorWindowLineRole.Opening));
+            // Elevation tips point to the physical hinge, not the handle.
+            lines.Add(new DoorWindowLineSegment(freeX, cell.Bottom, hingeX, middleY, DoorWindowLineRole.Opening));
+            lines.Add(new DoorWindowLineSegment(hingeX, middleY, freeX, cell.Top, DoorWindowLineRole.Opening));
         }
 
         private static void AddHung(ICollection<DoorWindowLineSegment> lines, DoorWindowCell cell, bool hingeTop)
         {
             var hingeY = hingeTop ? cell.Top : cell.Bottom; var freeY = hingeTop ? cell.Bottom : cell.Top; var middleX = (cell.Left + cell.Right) / 2d;
-            lines.Add(new DoorWindowLineSegment(cell.Left, hingeY, middleX, freeY, DoorWindowLineRole.Opening));
-            lines.Add(new DoorWindowLineSegment(middleX, freeY, cell.Right, hingeY, DoorWindowLineRole.Opening));
+            lines.Add(new DoorWindowLineSegment(cell.Left, freeY, middleX, hingeY, DoorWindowLineRole.Opening));
+            lines.Add(new DoorWindowLineSegment(middleX, hingeY, cell.Right, freeY, DoorWindowLineRole.Opening));
         }
 
         private static void AddSlidingArrow(ICollection<DoorWindowLineSegment> lines, DoorWindowCell cell, bool pointsRight, double verticalOffsetFactor = 0d)

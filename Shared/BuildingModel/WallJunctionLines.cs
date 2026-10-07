@@ -12,7 +12,7 @@ namespace BatchPdfPublisher.BuildingModel
         {
             var result = new List<Tuple<PointModel, PointModel>>();
             var ends = walls.Where(w => w != null &&
-                    (Math.Abs(w.Y2 - w.Y1) < 0.001d) != (Math.Abs(w.X2 - w.X1) < 0.001d))
+                    (Math.Abs(w.Y2 - w.Y1) <= 0.01d) != (Math.Abs(w.X2 - w.X1) <= 0.01d))
                 .SelectMany(w => new[] {
                     Tuple.Create(w, new PointModel(w.X1, w.Y1), new PointModel(w.X2, w.Y2)),
                     Tuple.Create(w, new PointModel(w.X2, w.Y2), new PointModel(w.X1, w.Y1)) })
@@ -31,8 +31,8 @@ namespace BatchPdfPublisher.BuildingModel
                 else if (nodes.Any(e => Math.Abs(model.BaseElevationOf(e.Item1)
                     - model.BaseElevationOf(nodes[0].Item1)) > 0.5d
                     || Math.Abs(model.HeightOf(e.Item1) - model.HeightOf(nodes[0].Item1)) > 0.5d)) continue;
-                var h = nodes.Where(e => Math.Abs(e.Item1.Y2 - e.Item1.Y1) < 0.001d).ToArray();
-                var v = nodes.Where(e => Math.Abs(e.Item1.X2 - e.Item1.X1) < 0.001d).ToArray();
+                var h = nodes.Where(e => Math.Abs(e.Item1.Y2 - e.Item1.Y1) <= 0.01d).ToArray();
+                var v = nodes.Where(e => Math.Abs(e.Item1.X2 - e.Item1.X1) <= 0.01d).ToArray();
                 var x = nodes[0].Item2.X; var y = nodes[0].Item2.Y;
                 if (h.Length == 1 && v.Length == 1)
                 {
@@ -78,7 +78,7 @@ namespace BatchPdfPublisher.BuildingModel
         {
             var half = wall.Thickness / 2d;
             var offset = WallReferenceGeometry.BodyOffset(wall);
-            var direction = Math.Abs(wall.X2 - wall.X1) < 0.001d
+            var direction = Math.Abs(wall.X2 - wall.X1) <= 0.01d
                 ? -Math.Sign(wall.Y2 - wall.Y1) : Math.Sign(wall.X2 - wall.X1);
             var center = axis + direction * offset;
             return Tuple.Create(center - half, center + half);

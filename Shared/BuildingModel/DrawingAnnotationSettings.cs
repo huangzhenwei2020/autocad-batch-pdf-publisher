@@ -1,8 +1,31 @@
 using System;
 using System.Globalization;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace BatchPdfPublisher.BuildingModel
 {
+    public static class DrawingLineWeights
+    {
+        // AutoCAD LineWeight values, in hundredths of a paper millimetre.
+        public static readonly int[] Values = { 0,5,9,13,15,18,20,25,30,35,40,50,53,60,70,80,90,100,106,120,140,158,200,211 };
+        public static bool Valid(Dictionary<string,int> weights) => weights == null
+            || weights.All(p=>ViewLayers.Find(p.Key)!=null && Values.Contains(p.Value));
+        public static int Resolve(string layer,int? weight=null) => weight.HasValue && Values.Contains(weight.Value)
+            ? weight.Value : ViewLayers.Find(layer)?.LineWeight ?? 13;
+        public static ViewDocument Apply(ViewDocument document,ViewDefinitionModel definition)
+        {
+            int? Weight(string layer) => definition.LineWeights!=null && layer!=null
+                && definition.LineWeights.TryGetValue(layer,out var value) && Values.Contains(value) ? (int?)value : null;
+            foreach(var line in document.Lines)line.LineWeight=Weight(line.Layer);
+            foreach(var text in document.Texts)text.LineWeight=Weight(text.Layer);
+            foreach(var circle in document.Circles)circle.LineWeight=Weight(circle.Layer);
+            foreach(var hatch in document.Hatches)hatch.LineWeight=Weight(hatch.Layer);
+            foreach(var dimension in document.Dimensions)dimension.LineWeight=Weight(dimension.Layer);
+            return document;
+        }
+    }
+
     public sealed class DrawingAnnotationSettings
     {
         public double TextHeight { get; set; } = 2.5;

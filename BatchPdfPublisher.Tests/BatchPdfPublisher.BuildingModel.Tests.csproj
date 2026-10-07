@@ -14,6 +14,7 @@
     <Compile Include="SlabGeometryTests.cs" />
     <Compile Include="BuildingModelProjectionTests.cs" />
     <Compile Include="DrawingAnnotationTests.cs" />
+    <Compile Include="DrawingLineworkTests.cs" />
     <Compile Include="DrawingViewCatalogueTests.cs" />
     <Compile Include="VolumeIdentityTests.cs" />
     <Compile Include="BuildingModelEditSessionTests.cs" />

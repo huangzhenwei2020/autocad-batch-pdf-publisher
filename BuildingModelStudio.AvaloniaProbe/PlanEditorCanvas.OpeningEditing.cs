@@ -26,6 +26,9 @@ internal sealed partial class PlanEditorCanvas
     private readonly Dictionary<(string,double,bool),FormattedText> _openingCodeTextCache=new();
     private Point _openingGripPress;
     internal int OpeningPreviewBuildCount {get;private set;}
+    internal bool OpeningPreviewMatches(string id,IReadOnlyList<ViewLine> expected)=>_openingSymbols.TryGetValue(id,out var actual)
+        &&actual.Count==expected.Count&&actual.Zip(expected,(a,b)=>Math.Abs(a.X1-b.X1)<.001&&Math.Abs(a.Y1-b.Y1)<.001
+            &&Math.Abs(a.X2-b.X2)<.001&&Math.Abs(a.Y2-b.Y2)<.001).All(equal=>equal);
     public event Func<OpeningModel,bool>? OpeningGripRequested;
     public event Func<OpeningModel,bool>? OpeningLabelRequested;
     public event Action<Point?,double,bool>? OpeningDistanceChanged;
@@ -41,7 +44,12 @@ internal sealed partial class PlanEditorCanvas
         var key=(code,opening.Kind,opening.Width,opening.Height,opening.Sill,wall.Thickness,opening.PlanFlipAlong,opening.PlanFlipNormal,opening.PlanOpenAngle);
         if(!_openingHandleCache.TryGetValue(key,out var handle)) {
             var type=_model.OpeningTypes.FirstOrDefault(t=>string.Equals(t.Code,code,StringComparison.OrdinalIgnoreCase))??OpeningConstruction.Default(opening);
-            handle=OpeningPlanGeometry.DirectionHandle(opening,type,wall.Thickness);
+            try {handle=OpeningPlanGeometry.DirectionHandle(opening,type,wall.Thickness);}
+            catch(Exception ex) when(ex is InvalidOperationException or ArgumentException) {
+                // Invalid legacy/draft grids must not terminate Avalonia's render loop.
+                System.Diagnostics.Trace.WriteLine($"Opening direction grip {opening.Id}: {ex.Message}");
+                handle=null;
+            }
             _openingHandleCache[key]=handle;
         }
         return handle;
@@ -210,12 +218,31 @@ internal sealed partial class PlanEditorCanvas
             var model=new BuildingModelDocument {Walls=new(){localWall},OpeningTypes=placementType==null?_model.OpeningTypes:new(){placementType},
                 Openings=new(){new OpeningModel {Id="local",HostWallId="local",Code=code,Kind=opening.Kind,Offset=opening.Width/2,
                     Width=opening.Width,Height=opening.Height,Sill=opening.Sill,ThresholdHeight=opening.ThresholdHeight,PlanFlipAlong=opening.PlanFlipAlong,PlanFlipNormal=opening.PlanFlipNormal,PlanOpenAngle=opening.PlanOpenAngle}}};
-            lines=OrthographicProjector.CreatePlanDetailSymbols(model,"local");_openingPreviewCache[key]=lines;OpeningPreviewBuildCount++;
+            try {lines=OrthographicProjector.CreatePlanDetailSymbols(model,"local");}
+            catch(Exception ex) when(ex is InvalidOperationException or ArgumentException) {
+                System.Diagnostics.Trace.WriteLine($"Opening grip preview {opening.Id}: {ex.Message}");
+                lines=new();
+            }
+            _openingPreviewCache[key]=lines;OpeningPreviewBuildCount++;
         }
         var length=OpeningWallLength(wall);var ux=(wall.X2-wall.X1)/length;var uy=(wall.Y2-wall.Y1)/length;
         var from=opening.Offset-opening.Width/2;var start=WallReferenceGeometry.BodyPoint(wall,wall.X1+ux*from,wall.Y1+uy*from);
-        foreach(var line in lines)context.DrawLine(pen,Screen(start.X+ux*line.X1-uy*line.Y1,start.Y+uy*line.X1+ux*line.Y1),
-            Screen(start.X+ux*line.X2-uy*line.Y2,start.Y+uy*line.X2+ux*line.Y2));
+        DrawOpeningSymbolLines(context,lines,(x,y)=>Screen(start.X+ux*x-uy*y,start.Y+uy*x+ux*y),pen);
+    }
+    internal static void DrawOpeningSymbolLines(DrawingContext context,List<ViewLine> lines,Func<double,double,Point> map,Pen pen)
+    {
+        foreach(var line in lines.Where(l=>l.OpeningArcId==null))
+            context.DrawLine(line.LineType=="HIDDEN"?new Pen(pen.Brush,pen.Thickness,new DashStyle(new[]{4d,3d},0)):pen,
+                map(line.X1,line.Y1),map(line.X2,line.Y2));
+        var brush=pen.Brush is ISolidColorBrush color?new SolidColorBrush(color.Color,.55):pen.Brush;
+        var arcPen=new Pen(brush,pen.Thickness,new DashStyle(new[]{5d,3d},0),PenLineCap.Flat,PenLineJoin.Round);
+        foreach(var arc in lines.Where(l=>l.OpeningArcId!=null).GroupBy(l=>l.OpeningArcId)) {
+            var geometry=new StreamGeometry();using(var path=geometry.Open()) {
+                var first=arc.First();path.BeginFigure(map(first.X1,first.Y1),false);
+                foreach(var line in arc)path.LineTo(map(line.X2,line.Y2));path.EndFigure(false);
+            }
+            context.DrawGeometry(null,arcPen,geometry);
+        }
     }
     private void DrawOpeningGrips(DrawingContext context)
     {

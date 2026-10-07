@@ -167,6 +167,94 @@ internal static class OpeningConstructionTests
         Check(gripSession.Undo()&&gripSession.Model.Openings[0].Offset==1500&&!gripSession.Model.Openings[0].PlanFlipAlong,
             "移动和方向调整必须一次撤销。");
         Console.WriteLine("PASS 门窗三维编辑：共享默认、固定外框、双扇门缝、推拉轨道、普通门分扇及实例方向夹点");
+        WindowHingeChecks();
+    }
+    private static void WindowHingeChecks()
+    {
+        var model=SampleModelFactory.CreateEmptyModel("C1215 casement hinges");
+        model.Walls.Add(new WallModel {Id="hinge-host",StoreyId="1F",X2=4000,Thickness=200});
+        var opening=new OpeningModel {Id="hinge-window",HostWallId="hinge-host",Code="C1215",Kind="窗",Width=1200,Height=1500,Sill=900,Offset=2000,OpenIn3D=false,PlanOpenAngle=35};
+        var type=OpeningConstruction.Default(opening);type.HasOuterFrame=true;type.OuterFrameWidth=50;type.HasMullion=true;type.MullionWidth=50;
+        type.SashWidth=40;type.SashDepth=50;type.FrameDepth=100;type.MullionDepth=70;type.SashClearance=2;type.DivisionPreset="自定义";
+        type.CustomCellLayout=DoorWindowElevationGeometryBuilder.SerializeCellLayout(new[]{
+            new DoorWindowLayoutCell {Right=600,Top=1500,Opening="左平开",Material="玻璃"},
+            new DoorWindowLayoutCell {Left=600,Right=1200,Top=1500,Opening="右平开",Material="玻璃"}});
+        model.Openings.Add(opening);model.OpeningTypes.Add(type);
+        foreach(var oblique in new[]{false,true})foreach(var along in new[]{false,true})foreach(var normal in new[]{false,true}) {
+            var wall=model.Walls[0];wall.Y2=oblique?1500:0;opening.PlanFlipAlong=along;opening.PlanFlipNormal=normal;
+            var length=Math.Sqrt(wall.X2*wall.X2+wall.Y2*wall.Y2);var ux=wall.X2/length;var uy=wall.Y2/length;
+            var origin=WallReferenceGeometry.BodyPoint(wall,ux*(opening.Offset-opening.Width/2),uy*(opening.Offset-opening.Width/2));
+            type.OpenAngle=0;var closed=BuildingVolumeBuilder.BuildOpeningParts(model);
+            var closedGlass=closed.Faces.Where(f=>f.Kind=="glass").ToArray();
+            Check(closedGlass.Length==12,"双扇窗应有两块完整玻璃实体");
+            foreach(var angle in new[]{15d,30,45,80,90,120,180})foreach(var flag in new bool?[]{null,false,true}) {
+                opening.OpenIn3D=flag;type.OpenAngle=angle;var opened=BuildingVolumeBuilder.BuildOpeningParts(model);
+                var openGlass=opened.Faces.Where(f=>f.Kind=="glass").ToArray();
+                Check(openGlass.Length==closedGlass.Length,"窗开启后丢面");
+                for(var leaf=0;leaf<2;leaf++) {
+                    var pivot=leaf==0?52d:1148d;var pivotNormal=52d;
+                    var a=(leaf==0?angle:-angle)*Math.PI/180;
+                    var expected=closedGlass.Skip(leaf*6).Take(6).SelectMany(f=>f.Points).Select(p=> {
+                        var dx=p.X-origin.X;var dy=p.Y-origin.Y;var x=dx*ux+dy*uy;var y=-dx*uy+dy*ux;
+                        if(along)x=1200-x;if(normal)y=-y;
+                        dx=x-pivot;dy=y-pivotNormal;
+                        x=pivot+dx*Math.Cos(a)-dy*Math.Sin(a);y=pivotNormal+dx*Math.Sin(a)+dy*Math.Cos(a);
+                        if(along)x=1200-x;if(normal)y=-y;
+                        return new Point3DModel(origin.X+ux*x-uy*y,origin.Y+uy*x+ux*y,p.Z);
+                    }).ToArray();
+                    var actual=openGlass.Skip(leaf*6).Take(6).SelectMany(f=>f.Points).ToArray();
+                    Check(expected.Length==actual.Length&&expected.Zip(actual,(p,q)=>Math.Abs(p.X-q.X)<.000001&&Math.Abs(p.Y-q.Y)<.000001&&Math.Abs(p.Z-q.Z)<.000001).All(v=>v),"窗未按净扇与固定框接合轴刚性旋转："+angle+" / "+flag);
+                    var x=along?1200-pivot:pivot;var y=normal?-pivotNormal:pivotNormal;
+                    var axis=new Point3DModel(origin.X+ux*x-uy*y,origin.Y+uy*x+ux*y,opening.Sill+1448);
+                    Check(opened.Faces.Where(f=>f.Kind=="sash").SelectMany(f=>f.Points).Any(p=>Math.Abs(p.X-axis.X)<.000001&&Math.Abs(p.Y-axis.Y)<.000001&&Math.Abs(p.Z-axis.Z)<.000001),"合页上的净扇角点随开启角度漂移");
+                }
+                string FrameKey(VolumeFace f)=>string.Join(";",f.Points.Select(p=>$"{p.X:R},{p.Y:R},{p.Z:R}"));
+                Check(closed.Faces.Where(f=>f.Kind=="frame").Select(FrameKey).SequenceEqual(opened.Faces.Where(f=>f.Kind=="frame").Select(FrameKey)),"窗开启带动了固定框");
+            }
+        }
+        model.Walls[0].Y2=0;opening.PlanFlipAlong=false;opening.OpenIn3D=false;
+        foreach(var mode in new[]{"上悬","下悬"})foreach(var flip in new[]{false,true}) {
+            var hung=OpeningConstruction.Copy(type);hung.CustomCellLayout=DoorWindowElevationGeometryBuilder.SerializeCellLayout(new[]{new DoorWindowLayoutCell {Right=1200,Top=1500,Opening=mode,Material="玻璃"}});
+            model.OpeningTypes[0]=hung;opening.PlanFlipNormal=flip;hung.OpenAngle=0;
+            var closed=BuildingVolumeBuilder.BuildOpeningParts(model).Faces.Where(f=>f.Kind=="glass").SelectMany(f=>f.Points).ToArray();
+            hung.OpenAngle=80;var actual=BuildingVolumeBuilder.BuildOpeningParts(model).Faces.Where(f=>f.Kind=="glass").SelectMany(f=>f.Points).ToArray();
+            var pivotZ=opening.Sill+(mode=="上悬"?1448:52);var a=80*Math.PI/180*(mode=="上悬"?1:-1);
+            var expected=closed.Select(p=> {
+                var y=(flip?-p.Y:p.Y)-52;var z=p.Z-pivotZ;
+                var normal=52+y*Math.Cos(a)-z*Math.Sin(a);
+                return new Point3DModel(p.X,flip?-normal:normal,pivotZ+y*Math.Sin(a)+z*Math.Cos(a));
+            }).ToArray();
+            Check(expected.Zip(actual,(p,q)=>Math.Abs(p.X-q.X)<.000001&&Math.Abs(p.Y-q.Y)<.000001&&Math.Abs(p.Z-q.Z)<.000001).All(v=>v),"悬窗扇框与玻璃未采用同一净扇轴或镜像后轴翻转错误");
+        }
+        model.OpeningTypes[0]=type;opening.PlanFlipNormal=false;type.OpenAngle=0;
+        model.Storeys.RemoveAll(s=>s.Id=="2F");model.Storeys.Add(new StoreyModel {Id="2F",Height=3000,Elevation=3000,TemplateStoreyId="1F"});
+        var session=new BuildingModelEditSession(model);var original=BuildingModelJson.ToJson(session.Model);
+        var draft=OpeningConstruction.Copy(type);draft.OpenAngle=80;
+        Check(session.TrySetOpeningConstruction(opening.Id+"@STD@2F",draft,true,out var error),error);
+        var volume=BuildingVolumeBuilder.BuildOpeningParts(session.Model);
+        double Span(string id){var points=volume.Faces.Where(f=>f.ElementId==id&&f.Kind=="glass").SelectMany(f=>f.Points).ToArray();return points.Max(p=>p.Y)-points.Min(p=>p.Y);}
+        Check(Span(opening.Id)<10&&Span(opening.Id+"@STD@2F")>400,"标准层特殊窗角度未进入场景或影响了来源层");
+        var restored=BuildingModelJson.FromJson(BuildingModelJson.ToJson(session.Model));
+        Check(BuildingVolumeBuilder.BuildOpeningParts(restored).Faces.Count==volume.Faces.Count,"保存重开丢失窗开启构造");
+        Check(session.Undo()&&BuildingModelJson.ToJson(session.Model)==original,"窗开启及编号覆盖不能一次撤销");
+        type.OpenAngle=80;
+        System.IO.Directory.CreateDirectory(".artifacts/opening-hinge");
+        System.IO.File.WriteAllText(".artifacts/opening-hinge/c1215.json",BuildingModelJson.ToJson(model));
+        var doorModel=SampleModelFactory.CreateEmptyModel("Explicit 3D door angle");
+        doorModel.Walls.Add(new WallModel {Id="door-host",StoreyId="1F",X2=4000,Thickness=200});
+        var door=new OpeningModel {Id="angle-door",HostWallId="door-host",Kind="门",Code="M1215",Width=1200,Height=1500,Offset=2000,OpenIn3D=true,PlanOpenAngle=20};
+        var doorType=OpeningConstruction.Copy(type);doorType.Code=door.Code;doorType.Kind="门";
+        doorType.CustomCellLayout=DoorWindowElevationGeometryBuilder.SerializeCellLayout(new[]{
+            new DoorWindowLayoutCell {Right=600,Top=1500,Opening="左平开",IsDoor=true,Material="玻璃"},
+            new DoorWindowLayoutCell {Left=600,Right=1200,Top=1500,Opening="右平开",IsDoor=true,Material="玻璃"}});
+        doorModel.Openings.Add(door);doorModel.OpeningTypes.Add(doorType);
+        var span=OpeningConstruction.Build(door,doorType,200).Where(p=>p.Kind=="sash").GroupBy(p=>p.Cell).Max(g=>g.Max(p=>p.Right)-g.Min(p=>p.Left));
+        double DoorNormal()=>BuildingVolumeBuilder.BuildOpeningParts(doorModel).Faces.Where(f=>f.Kind=="sash").SelectMany(f=>f.Points).Max(p=>p.Y);
+        Check(Math.Abs(DoorNormal()-(52+span*Math.Sin(80*Math.PI/180)))<.000001,"门的显式三维角度被平面角度覆盖");
+        door.OpenIn3D=false;Check(DoorNormal()<100,"门的显式关闭开关被类型角度覆盖");
+        door.OpenIn3D=true;doorType.OpenAngle=0;
+        Check(Math.Abs(DoorNormal()-(52+span*Math.Sin(20*Math.PI/180)))<.000001,"无类型三维角度时门不再沿用实例平面角度");
+        Console.WriteLine("PASS C1215 window scene angle80 importedFalse fixedFrames commonNetHinge rigidGlassSash mirrors oblique angles standardInstance persistence undo");
     }
     private static void Check(bool value,string message){if(!value)throw new InvalidOperationException(message);}
 }

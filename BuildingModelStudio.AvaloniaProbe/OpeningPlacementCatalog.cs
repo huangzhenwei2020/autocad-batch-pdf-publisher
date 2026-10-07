@@ -3,7 +3,7 @@ using BatchPdfPublisher.Models;
 
 namespace BuildingModelStudio.AvaloniaProbe;
 
-internal sealed record OpeningPlacementEntry(OpeningTypeModel Type,string Name,string Source)
+internal sealed record OpeningPlacementEntry(OpeningTypeModel Type,string Name,string Source,ComponentAsset? Asset=null)
 {
     internal bool IsDoor=>(Type.Kind??"").Contains("门");
     internal string SearchText=>$"{Type.Code} {Name} {Type.Kind} {Source}";
@@ -37,6 +37,11 @@ internal static class OpeningPlacementCatalog
         var entries=new List<OpeningPlacementEntry>();
         Add("M0921","单扇平开门",900,2100,"普通门",new[]{900d},new[]{"左平开"});
         Add("M1825","双扇平开门",1800,2500,"普通门",new[]{900d,900},new[]{"左平开","右平开"});
+        Add("M1525","双扇平开门 · 带上亮",1500,2500,"普通门",new[]{750d,750},new[]{"左平开","右平开"});
+        entries.Last().Type.CustomCellLayout=DoorWindowElevationGeometryBuilder.SerializeCellLayout(new[]{
+            new DoorWindowLayoutCell {Left=0,Right=750,Top=2200,IsDoor=true,Material="玻璃",Opening="左平开"},
+            new DoorWindowLayoutCell {Left=750,Right=1500,Top=2200,IsDoor=true,Material="玻璃",Opening="右平开"},
+            new DoorWindowLayoutCell {Left=0,Right=1500,Bottom=2200,Top=2500,Material="玻璃",Opening="固定"}});
         Add("M1221","子母门",1200,2100,"普通门",new[]{300d,900},new[]{"左平开","右平开"});
         Add("TLM0921","单扇推拉门",900,2100,"推拉门",new[]{900d},new[]{"右推拉"});
         Add("TLM1525","双扇推拉门",1500,2500,"推拉门",new[]{750d,750},new[]{"左推拉","右推拉"});

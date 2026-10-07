@@ -214,6 +214,53 @@ internal sealed partial class ProbeWindow
         _planCanvas.Fit();await Task.Delay(180);
         await SaveOpeningCheck("angle-45-properties.png");
         Console.WriteLine("OPENING_PRESENTATION_OK presets15/30/45/90 customAngle codeEdit defaultClosed 3Dswitch instanceIsolation invalidRollback undo controlBounds");
+        var casementModel=BuildingModelJson.LoadModel(System.IO.Path.GetFullPath(".artifacts/window-directions/c1824.json"));
+        _session=new BuildingModelEditSession(casementModel);await RefreshModelAsync("开启窗方向校对");SelectById("casement");_planCanvas.Fit();await Task.Delay(180);
+        var windowBefore=BuildingModelJson.ToJson(_session.Model);
+        Check(Field<TextBox>("OpeningPlanAngle").Text=="90"&&!_properties.GetVisualDescendants().OfType<CheckBox>().Any(c=>c.Name=="OpeningOpenIn3D"),"窗平面角度缺失或误加门的三维开关");
+        foreach(var angle in new[]{15,30,45,90}) {
+            Field<ComboBox>("OpeningAnglePresets").SelectedIndex=Array.IndexOf(new[]{90,45,30,15},angle);
+            Field<TextBox>("OpeningPlanAngle").RaiseEvent(new KeyEventArgs {RoutedEvent=KeyDownEvent,Key=Key.Enter});await Task.Delay(220);
+            Check(_session.Model.Openings[0].PlanOpenAngle==angle&&_session.Model.OpeningTypes[0].OpenAngle==80,"窗的平面角度未保存或改动三维角度");
+            var changedWindow=_session.Model.Openings[0];
+            var windowSymbol=OpeningPlanGeometry.Build(changedWindow,OpeningConstruction.Resolve(_session.Model,changedWindow),200);
+            Check(windowSymbol.Count(l=>l.OpeningArcId?.StartsWith("swing-")==true)==2*OpeningPlanGeometry.SwingArcSegments,"窗角度应用后丢失两扇开启弧");
+            Check(windowSymbol.Count(l=>l.OpeningArcId?.StartsWith("window-leaf-")==true)==2&&windowSymbol.Where(l=>l.OpeningArcId!=null).All(l=>l.LineType=="DASHED"&&l.StrokeAreaId==null),"窗开启部分没有全部使用无厚度虚线");
+            if(angle!=90){Check(_session.Undo()&&BuildingModelJson.ToJson(_session.Model)==windowBefore,"窗角度不能一次撤销");await RefreshModelAsync("窗角度预设校对");SelectById("casement");}
+        }
+        _planCanvas.FrameSelection();SelectById(null);Move(new PointModel(1400,400));
+        Check(_planCanvas.PreselectedElement=="casement","窗开启区域不能预选");Click(last);Check(_selectedId=="casement","窗开启区域不能点击选择");
+        _planCanvas.Fit();
+        Check(_openingContextTools.Children.OfType<Button>().Take(2).All(b=>b.IsEnabled),"平开窗的翻转按钮仍禁用");
+        foreach(var name in new[]{"FlipOpeningAlong","FlipOpeningNormal"}) {
+            Field<Button>(name).RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));await _openingApplyTask;
+            Check(name=="FlipOpeningAlong"?_session.Model.Openings[0].PlanFlipAlong:_session.Model.Openings[0].PlanFlipNormal,"窗属性翻转按钮未提交 "+name);
+            Check(_session.Undo()&&BuildingModelJson.ToJson(_session.Model)==windowBefore,"窗属性翻转不能一次撤销");
+            await RefreshModelAsync("窗翻转按钮校对完成");SelectById("casement");
+        }
+        Press(_planCanvas.OpeningGripPoint(true));Move(new PointModel(2200,-700),true);
+        Check(_planCanvas.HasOpeningGrip&&BuildingModelJson.ToJson(_session.Model)==windowBefore,"窗方向预览提前写入模型");
+        Release();await Task.Delay(220);
+        Check(!_planCanvas.HasOpeningGrip&&_session.Model.Openings[0].PlanFlipAlong&&_session.Model.Openings[0].PlanFlipNormal,"窗方向夹点拖动松手未提交");
+        _planCanvas.FrameSelection();_planCanvas.ZoomAt(new Point(_planCanvas.Bounds.Width/2,_planCanvas.Bounds.Height/2),-2);
+        await Task.Delay(100);await SaveOpeningCheck("casement-directions.png");_planCanvas.Fit();
+        Check(_session.Undo()&&BuildingModelJson.ToJson(_session.Model)==windowBefore,"窗方向拖动无法一次撤销");
+        await RefreshModelAsync("窗方向取消校对");SelectById("casement");Click(_planCanvas.OpeningGripPoint(true));Move(new PointModel(2200,-700));
+        _planCanvas.RaiseEvent(new KeyEventArgs {RoutedEvent=KeyDownEvent,Key=Key.Escape});
+        Check(!_planCanvas.HasOpeningGrip&&BuildingModelJson.ToJson(_session.Model)==windowBefore,"窗方向 Esc 取消写入模型");
+        _workspaces.SelectedIndex=0;SelectById("casement");await Task.Delay(150);
+        Check(Field<Button>("FlipOpeningNormal").IsEnabled,"三维视图不能调整窗内外方向");
+        Field<Button>("FlipOpeningNormal").RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));await _openingApplyTask;
+        Check(_session.Model.Openings[0].PlanFlipNormal,"三维属性按钮未保存窗方向");
+        var expectedWindow=BuildingVolumeBuilder.BuildOpeningParts(_session.Model,"casement");
+        string WindowPoints(BuildingVolume volume)=>string.Join(";",volume.Faces.Where(f=>f.ElementId=="casement"&&f.Kind=="glass")
+            .SelectMany(f=>f.Points).Select(p=>$"{p.X:R},{p.Y:R},{p.Z:R}"));
+        Check(WindowPoints(expectedWindow)==WindowPoints(_viewport.CurrentScene.Volume),"窗方向提交后主场景未刷新真实玻璃位置");
+        _viewport.SetDisplayMode(ModelViewport.DisplayMode.Shaded);_viewport.RotateForBenchmark(MathF.PI);FrameActiveSelection();_viewport.SelectElements(Array.Empty<string>());
+        var windowFrame=_viewport.RenderedFrameCount;await WaitForFrameAsync(_viewport.CurrentScene.VertexCount,windowFrame);
+        await SaveOpeningCheck("casement-3d-direction.png");
+        Console.WriteLine("WINDOW_DIRECTION_UI_OK casementTransom toolbar inspector dragRelease escape atomicUndo 3Dcontrols planAngle15-30-45-90 realSwingArcs selectionSector");
+        _workspaces.SelectedIndex=1;await Task.Delay(100);
         await RunWallSelectionPreviewCheckAsync();
         await RunOpeningPlacementCheckAsync();
         foreach(var name in new[]{"door","window"}) {

@@ -38,7 +38,8 @@ namespace BatchPdfPublisher.Services
             F("building_export", "提取图纸给模型", "TQTZ", "TQTZ", "建筑模型", "提", "把当前图纸的墙线、门窗块与图层信息导出成中间文件，交给万落建筑模型程序去建模。", null, "提取图纸"),
             F("building_place_view", "模型视图落图", "LTTZ", "LTTZ", "建筑模型", "落", "读取万落建筑模型程序生成的视图文件（立面/剖面），按制图标准把线、文字与填充画进当前图纸。", null, "视图落图"),
             F("building_opening_types", "导出门窗类型库", "TQLX", "TQLX", "建筑模型", "型", "把当前项目的门窗参数与立面做法模板导出成类型库文件，供万落建筑模型程序放门窗时直接选用。", null, "导出类型"),
-            F("building_open_studio", "打开建模程序", "JZMX", "JZMX", "建筑模型", "模", "启动新版万落建筑模型程序并载入当前项目：在三维视口选择构件、修改墙与门窗参数，保存并生成 CAD 视图，再用 LTTZ 落图。", null, "建筑模型")
+            F("building_open_studio", "打开建模程序", "JZMX", "JZMX", "建筑模型", "模", "启动新版万落建筑模型程序并载入当前项目：在三维视口选择构件、修改墙与门窗参数，保存并生成 CAD 视图，再用 LTTZ 落图。", null, "建筑模型"),
+            F("building_component_library", "图库", "WLLIBRARY", "TK", "建筑模型", "库", "按门、窗类别选择 CAD 平面块，填写基点、洞口尺寸及 X/Y 方向并导出原生矢量符号。", null, "图库")
         };
 
         /// <summary>固定功能。图层命令由 <see cref="All"/> 动态合成，不写在这里。</summary>

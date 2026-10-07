@@ -57,6 +57,7 @@ internal static class BuildingModelProjectionTests
             }
             CadDraftingRegression();
             DrawingAnnotationTests.Run();
+            DrawingLineworkTests.Run();
             var model = SampleModelFactory.CreateTwoStoreyHouse();
             SouthElevationShowsOutlineAndOpenings(model);
             ElevationDirectionsAreMirrored(model);

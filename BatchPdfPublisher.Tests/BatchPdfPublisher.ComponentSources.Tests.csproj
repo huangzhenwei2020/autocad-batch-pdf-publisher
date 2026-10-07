@@ -1,0 +1,4 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net8.0</TargetFramework><OutputType>Exe</OutputType><ImplicitUsings>enable</ImplicitUsings><EnableDefaultCompileItems>false</EnableDefaultCompileItems></PropertyGroup>
+  <ItemGroup><ProjectReference Include="../BuildingModel.Core/BuildingModel.Core.csproj" /><Compile Include="ComponentSourceTests.cs" /></ItemGroup>
+</Project>

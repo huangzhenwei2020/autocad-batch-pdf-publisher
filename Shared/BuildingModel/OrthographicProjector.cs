@@ -91,7 +91,7 @@ namespace BatchPdfPublisher.BuildingModel
             }
             foreach(var dimension in result.Dimensions){dimension.TextHeight=0;dimension.TextWidthFactor=0;}
             SheetComposer.LayoutDimensionText(result);
-            return result;
+            return DrawingLineWeights.Apply(result,view);
         }
 
         private static ViewDocument ProjectCore(BuildingModelDocument model, ViewDefinitionModel view,
@@ -177,6 +177,14 @@ namespace BatchPdfPublisher.BuildingModel
             {
                 var count = document.Lines.Count;
                 EmitRectEdges(rect, nearer, document.Lines);
+                if(document.Lines.Count>count) {
+                    var area=new ViewStrokeArea {Id="profile-"+document.StrokeAreas.Count,
+                        Contours=new List<List<PointModel>> {new List<PointModel> {
+                            new PointModel(rect.U0,rect.Z0),new PointModel(rect.U1,rect.Z0),
+                            new PointModel(rect.U1,rect.Z1),new PointModel(rect.U0,rect.Z1)}}};
+                    document.StrokeAreas.Add(area);
+                    foreach(var line in document.Lines.Skip(count))line.StrokeAreaId=area.Id;
+                }
                 if (rect.Opening != null && document.Lines.Count > count)
                 {
                     AddOpeningLabel(document, rect.Opening, rect.U0, rect.U1, rect.Z0, rect.Z1, view.Scale);
@@ -636,10 +644,7 @@ namespace BatchPdfPublisher.BuildingModel
             var joinedIds = OrthogonalWallUnion.AddJoinedWalls(unionVolume, planModel, walls, ref unionFirst);
             AddJoinedWallPlanBoundary(document, unionVolume,
                 storey.Elevation + cutHeight);
-            foreach (var seam in WallJunctionLines.Resolve(planModel, walls,
-                storey.Elevation + cutHeight))
-                AddLine(document, ViewLayers.Cut,
-                    seam.Item1.X, seam.Item1.Y, seam.Item2.X, seam.Item2.Y);
+            // Ownership seams belong to the model editor, not the published drawing.
 
             // 其他墙：洞口把墙断开，两段面线 + 洞口两端的封口
             foreach (var wall in walls)
@@ -657,8 +662,6 @@ namespace BatchPdfPublisher.BuildingModel
                     cursor = Math.Max(cursor, span[1]);
                 }
                 if (length - cursor > 1d) AddPlanWallSegment(document, wall, cursor, length, !joinedIds.Contains(wall.Id));
-                if (!joinedIds.Contains(wall.Id))
-                    foreach (var span in spans) AddWallFaces(document, wall, span[0], span[1], jambsOnly: true);
             }
 
             // 门窗图例
@@ -695,12 +698,17 @@ namespace BatchPdfPublisher.BuildingModel
             {
                 if (slab.Outline == null || slab.Outline.Count < 3) continue;
                 var geometry = SlabGeometry.Build(slab);
+                var area=new ViewStrokeArea {Id="slab-"+slab.Id,Contours=geometry.Contours
+                    .Select(c=>c.Select(p=>new PointModel(p.X,p.Y)).ToList()).ToList()};
+                document.StrokeAreas.Add(area);
+                var firstLine=document.Lines.Count;
                 foreach (var contour in geometry.Contours)
                     for (var i = 0; i < contour.Count; i++)
                     {
                         var a = contour[i]; var b = contour[(i + 1) % contour.Count];
-                        AddLine(document, ViewLayers.Slab, a.X, a.Y, b.X, b.Y);
+                        AddVisibleSlabEdge(document,a,b,walls);
                     }
+                foreach(var line in document.Lines.Skip(firstLine))line.StrokeAreaId=area.Id;
             }
 
             // 轴网与房间：平面图的两个"信息层"
@@ -715,9 +723,42 @@ namespace BatchPdfPublisher.BuildingModel
             return document;
         }
 
+        private static void AddVisibleSlabEdge(ViewDocument document,PointModel a,PointModel b,List<WallModel> walls)
+        {
+            var spans=new List<Interval> {new Interval(0,1)};
+            foreach(var wall in walls) {
+                var length=WallLength(wall);if(length<.001)continue;
+                var ux=(wall.X2-wall.X1)/length;var uy=(wall.Y2-wall.Y1)/length;
+                var offset=WallReferenceGeometry.BodyOffset(wall);
+                var half=(wall.Thickness>.5?wall.Thickness:200)/2;
+                var x=(a.X-wall.X1)*ux+(a.Y-wall.Y1)*uy;
+                var y=-(a.X-wall.X1)*uy+(a.Y-wall.Y1)*ux-offset;
+                var dx=(b.X-a.X)*ux+(b.Y-a.Y)*uy;
+                var dy=-(b.X-a.X)*uy+(b.Y-a.Y)*ux;
+                var lo=0d;var hi=1d;
+                bool Clip(double start,double delta,double min,double max) {
+                    if(Math.Abs(delta)<1e-9)return start>=min-.01&&start<=max+.01;
+                    var t0=(min-start)/delta;var t1=(max-start)/delta;
+                    lo=Math.Max(lo,Math.Min(t0,t1));hi=Math.Min(hi,Math.Max(t0,t1));return hi>lo;
+                }
+                if(!Clip(x,dx,0,length)||!Clip(y,dy,-half,half))continue;
+                var remaining=new List<Interval>();
+                foreach(var span in spans) {
+                    if(hi<=span.A||lo>=span.B){remaining.Add(span);continue;}
+                    if(lo>span.A)remaining.Add(new Interval(span.A,lo));
+                    if(hi<span.B)remaining.Add(new Interval(hi,span.B));
+                }
+                spans=remaining;if(spans.Count==0)return;
+            }
+            foreach(var span in spans)
+                AddLine(document,ViewLayers.Slab,a.X+(b.X-a.X)*span.A,a.Y+(b.Y-a.Y)*span.A,
+                    a.X+(b.X-a.X)*span.B,a.Y+(b.Y-a.Y)*span.B);
+        }
+
         private static void AddJoinedWallPlanBoundary(ViewDocument document, BuildingVolume volume,
             double cutElevation)
         {
+            var firstLine=document.Lines.Count;
             var groups = volume.Faces.Where(f => f.Kind == "wall" && Math.Abs(f.NormalZ) < 0.5d
                 && f.Points.Count >= 2 && f.Points.Min(p => p.Z) <= cutElevation + 0.001d
                 && f.Points.Max(p => p.Z) >= cutElevation - 0.001d)
@@ -747,6 +788,9 @@ namespace BatchPdfPublisher.BuildingModel
                     if (index < spans.Count) { start = spans[index][0]; end = spans[index][1]; }
                 }
             }
+            var area=new ViewStrokeArea {Id="joined-wall-"+document.StrokeAreas.Count};
+            document.StrokeAreas.Add(area);
+            foreach(var line in document.Lines.Skip(firstLine))line.StrokeAreaId=area.Id;
         }
 
         /// <summary>
@@ -1063,6 +1107,7 @@ namespace BatchPdfPublisher.BuildingModel
             var nx = -(wall.Y2 - wall.Y1) / length * half;
             var ny = (wall.X2 - wall.X1) / length * half;
 
+            var firstLine=document.Lines.Count;
             if (!jambsOnly)
             {
                 AddLine(document, ViewLayers.Cut, start.X + nx, start.Y + ny, end.X + nx, end.Y + ny);
@@ -1070,6 +1115,11 @@ namespace BatchPdfPublisher.BuildingModel
             }
             AddLine(document, ViewLayers.Cut, start.X + nx, start.Y + ny, start.X - nx, start.Y - ny);   // 封口
             AddLine(document, ViewLayers.Cut, end.X + nx, end.Y + ny, end.X - nx, end.Y - ny);
+            if(!jambsOnly) {
+                var area=new ViewStrokeArea {Id="wall-"+document.StrokeAreas.Count};
+                document.StrokeAreas.Add(area);
+                foreach(var line in document.Lines.Skip(firstLine))line.StrokeAreaId=area.Id;
+            }
         }
 
         private static void AddPlanWallSegment(ViewDocument document, WallModel wall, double from, double to, bool outline)
@@ -1092,8 +1142,9 @@ namespace BatchPdfPublisher.BuildingModel
         }
         private static void AddStructuralOutline(ViewDocument document,List<PointModel> outline,string layer)
         {
+            var area=new ViewStrokeArea {Id="structure-"+document.StrokeAreas.Count};document.StrokeAreas.Add(area);
             for(var i=0;i<outline.Count;i++)
-            {var a=outline[i];var b=outline[(i+1)%outline.Count];document.Lines.Add(new ViewLine {Layer=layer,X1=a.X,Y1=a.Y,X2=b.X,Y2=b.Y});}
+            {var a=outline[i];var b=outline[(i+1)%outline.Count];document.Lines.Add(new ViewLine {Layer=layer,StrokeAreaId=area.Id,X1=a.X,Y1=a.Y,X2=b.X,Y2=b.Y});}
         }
 
         /// <summary>按立面分格与平面类型生成图例，再变换到宿主墙的局部坐标。</summary>
@@ -1103,11 +1154,13 @@ namespace BatchPdfPublisher.BuildingModel
             var ux=(wall.X2-wall.X1)/length;var uy=(wall.Y2-wall.Y1)/length;
             var p=PlanPoint(wall,opening.Offset-opening.Width/2);
             var start=WallReferenceGeometry.BodyPoint(wall,p.X,p.Y);
-            foreach(var line in OpeningPlanGeometry.Build(opening,type,wall.Thickness))
+            foreach(var line in OpeningPlanGeometry.Build(opening,type,wall.Thickness,document.StrokeAreas))
                 document.Lines.Add(new ViewLine {Layer=ViewLayers.Opening,
+                    StrokeAreaId=line.StrokeAreaId,
+                    OpeningArcId=line.OpeningArcId==null?null:opening.Id+"-"+line.OpeningArcId,
                     X1=start.X+ux*line.X1-uy*line.Y1,Y1=start.Y+uy*line.X1+ux*line.Y1,
                     X2=start.X+ux*line.X2-uy*line.Y2,Y2=start.Y+uy*line.X2+ux*line.Y2,
-                    LineType=OpeningPlanGeometry.CutsWall(opening)?null:"HIDDEN"});
+                    LineType=OpeningPlanGeometry.CutsWall(opening)?line.LineType:"HIDDEN"});
         }
 
         public static ViewText CreatePlanOpeningLabel(WallModel wall,OpeningModel opening,double height,double widthFactor)
@@ -2174,6 +2227,9 @@ namespace BatchPdfPublisher.BuildingModel
             document.OriginX = uMin;
             document.OriginY = zMin;
             foreach (var line in document.Lines) { line.X1 -= uMin; line.X2 -= uMin; line.Y1 -= zMin; line.Y2 -= zMin; }
+            foreach(var area in document.StrokeAreas)
+                foreach(var contour in area.Contours)
+                    foreach(var point in contour){point.X-=uMin;point.Y-=zMin;}
             // 锚点（图上元素 ↔ 模型构件）也在视图坐标里，必须一起平移 ——
             // 否则预览点选会按"没平移的位置"去命中，点到的地方和看到的窗对不上。
             foreach (var anchor in document.Anchors)

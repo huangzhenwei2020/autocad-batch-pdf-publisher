@@ -5,6 +5,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.Styling;
+using Avalonia.VisualTree;
 using BatchPdfPublisher.BuildingModel;
 using BatchPdfPublisher.Models;
 using System.Globalization;
@@ -15,6 +16,7 @@ internal sealed class OpeningEditResult
 {
     internal OpeningTypeModel Type=null!;
     internal bool OnlyInstance;
+    internal OpeningSizeConflictChoice SizeConflictChoice;
     internal double SnapStep;
     internal Dictionary<string,OpeningTypeModel> Templates=new();
 }
@@ -25,8 +27,10 @@ internal sealed class OpeningEditorWindow : Window
     private OpeningTypeModel _draft;
     private readonly OpeningLayoutCanvas _canvas=new() { MinHeight=300 };
     private readonly ModelViewport _preview=new(new BuildingVolume());
-    private readonly CheckBox _single=new() { Content="仅修改当前这一樘（自动添加编号后缀）" };
+    private readonly CheckBox _single=new() { Content="仅当前樘（自动独立编号；洞口共用层同步）",IsChecked=true };
     private readonly TextBlock _status=new() { TextWrapping=TextWrapping.Wrap };
+    private readonly TextBlock _openingSummary=new() {FontSize=13,Foreground=new SolidColorBrush(Color.Parse("#9CACBD"))};
+    private readonly int _sameCodeCount;
     private readonly TextBlock _selectionSummary=new() {FontSize=13,FontWeight=FontWeight.SemiBold,Margin=new Thickness(12,10)};
     private readonly Dictionary<string,TextBox> _fields=new();
     private readonly Dictionary<string,OpeningTypeModel> _templates=new();
@@ -44,14 +48,19 @@ internal sealed class OpeningEditorWindow : Window
     private readonly ComboBox _left=new() {ItemsSource=new[]{"墙","窗"}},_right=new() {ItemsSource=new[]{"墙","窗"}};
     private readonly DispatcherTimer _timer=new() {Interval=TimeSpan.FromMilliseconds(100)};
     internal event Action<OpeningTypeModel,bool>? PreviewChanged;
+    internal Func<OpeningTypeModel,bool,Task<(OpeningSizeConflictChoice? Choice,string? Error)>>? ConfirmSizeChange;
+    internal Func<double,double,string>? SizeCodePreview;
     private bool _updating,_closed,_previewReady;
     private int _loadedFace;
     private ComboBox _presets=null!;
     private TabControl _inspectorTabs=null!;
     private int _generation;
+    private Task _applyTask=Task.CompletedTask;
     internal OpeningEditorWindow(OpeningModel opening,OpeningTypeModel type,int count,IEnumerable<OpeningTypeModel>? templates,double snapStep=5)
     {
-        _opening=opening;_draft=OpeningConstruction.Copy(type);OpeningConstruction.ResizeType(_draft,opening.Width,opening.Height);
+        _opening=BuildingModelJson.FromJson(BuildingModelJson.ToJson(new BuildingModelDocument {Openings=new(){opening}})).Openings.Single();
+        _sameCodeCount=count;
+        _draft=OpeningConstruction.Copy(type);OpeningConstruction.ResizeType(_draft,opening.Width,opening.Height);
         foreach(var template in templates??Enumerable.Empty<OpeningTypeModel>())_templates[template.Code]=OpeningConstruction.Copy(template);
         Background=new SolidColorBrush(Color.Parse("#101925"));FontSize=13;
         var controlBrush=new SolidColorBrush(Color.Parse("#243345"));var lineBrush=new SolidColorBrush(Color.Parse("#34465A"));
@@ -62,7 +71,7 @@ internal sealed class OpeningEditorWindow : Window
         var root=new Grid {RowDefinitions=new("Auto,*,Auto"),Margin=new Thickness(14)};
         var header=new StackPanel {Spacing=5};
         header.Children.Add(new TextBlock {Text=$"门窗分格设计  /  {opening.Code}",FontSize=22,FontWeight=FontWeight.Bold});
-        header.Children.Add(new TextBlock {Text=$"{opening.Kind}   ·   洞口 {opening.Width:0.#} × {opening.Height:0.#} mm   ·   同编号 {count} 樘（含标准层）",FontSize=13,Foreground=new SolidColorBrush(Color.Parse("#9CACBD"))});
+        _openingSummary.Text=$"{opening.Kind}   ·   洞口 {opening.Width:0.#} × {opening.Height:0.#} mm   ·   同编号 {count} 樘（含标准层）";header.Children.Add(_openingSummary);
         var topBar=new Grid {ColumnDefinitions=new("*,Auto"),Margin=new Thickness(0,0,0,14)};topBar.Children.Add(header);Grid.SetColumn(_single,1);_single.VerticalAlignment=VerticalAlignment.Center;topBar.Children.Add(_single);root.Children.Add(topBar);
         var body=new Grid {ColumnDefinitions=new("164,*,300"),ColumnSpacing=10,Margin=new Thickness(0,4,0,16)};Grid.SetRow(body,1);root.Children.Add(body);
         var leftArea=new Grid();Grid.SetColumn(leftArea,1);body.Children.Add(leftArea);
@@ -120,8 +129,10 @@ internal sealed class OpeningEditorWindow : Window
             panel.Children.Add(new Border {Child=card,Padding=new Thickness(10),CornerRadius=new CornerRadius(6),Background=new SolidColorBrush(Color.Parse("#203342"))});
             enabled.IsCheckedChanged+=(_,_)=>row.IsEnabled=enabled.IsChecked==true;
         }
+        Label("洞口尺寸");Field("width","洞口宽 mm",opening.Width);Field("height","洞口高 mm",opening.Height);
         var divisionPanel=panel;panel=new StackPanel {Spacing=7};divisionPanel.Children.Add(new Expander {Header="门窗类型与整体设置",IsExpanded=false,Content=panel,HorizontalAlignment=HorizontalAlignment.Stretch});
         Label("门窗类型");panel.Children.Add(_kind);
+        ToolTip.SetTip(_single,"勾选：当前樘使用独立编号；取消勾选：同编号全部。标准层仍共用平面洞口，单层洞口修改须先解除共用。");
         Label("平面形式");panel.Children.Add(_planStyle);Field("planInset","凸窗斜边收进 · mm",type.PlanReturnInset??0);
         _planStyle.SelectionChanged+=(_,_)=>{if(_fields["planInset"].Parent is Control row)row.IsVisible=_planStyle.SelectedItem?.ToString()=="梯形凸窗";if(!_updating)QueuePreview();};
         Label("分格预设");
@@ -160,10 +171,19 @@ internal sealed class OpeningEditorWindow : Window
         var templateName=new TextBox {PlaceholderText="模板名称"};panel.Children.Add(templateName);var saveTemplate=new Button {Content="保存为项目模板（应用后保存）"};saveTemplate.Click+=(_,_)=>{if(!ReadDraft()||string.IsNullOrWhiteSpace(templateName.Text))return;StoreFace();_templates[templateName.Text.Trim()]=OpeningConstruction.Copy(_draft);chooser.ItemsSource=_templates.Keys.ToArray();_status.Text="模板已加入草稿，应用后保存。";};panel.Children.Add(saveTemplate);
         tabs.ItemsSource=tabItems;
         var footer=new Grid {ColumnDefinitions=new("*,Auto,Auto")};Grid.SetRow(footer,2);root.Children.Add(footer);footer.Children.Add(_status);_status.Foreground=new SolidColorBrush(Color.Parse("#9CACBD"));_status.VerticalAlignment=VerticalAlignment.Center;_status.FontSize=12;
-        var apply=new Button {Content="应用并关闭",Background=new SolidColorBrush(Color.Parse("#237CD4")),BorderBrush=new SolidColorBrush(Color.Parse("#399BED")),Margin=new Thickness(12,0),Padding=new Thickness(18,8)};Grid.SetColumn(apply,1);footer.Children.Add(apply);
+        var apply=new Button {Name="ApplyOpeningEditor",Content="应用并关闭",Background=new SolidColorBrush(Color.Parse("#237CD4")),BorderBrush=new SolidColorBrush(Color.Parse("#399BED")),Margin=new Thickness(12,0),Padding=new Thickness(18,8)};Grid.SetColumn(apply,1);footer.Children.Add(apply);
         var cancel=new Button {Content="取消",Padding=new Thickness(18,8)};Grid.SetColumn(cancel,2);footer.Children.Add(cancel);
-        apply.Click+=(_,_)=>{if(!ReadDraft())return;StoreFace();var error=OpeningConstruction.Validate(opening,_draft);if(error!=null){_status.Text=error;return;}
-            Close(new OpeningEditResult {Type=OpeningConstruction.Copy(_draft),OnlyInstance=_single.IsChecked==true,Templates=_templates,SnapStep=_canvas.Snap});};cancel.Click+=(_,_)=>Close();
+        async Task ApplyAsync() {if(!ReadDraft())return;StoreFace();var error=OpeningConstruction.Validate(_opening,_draft);if(error!=null){_status.Text=error;return;}
+            apply.IsEnabled=false;
+            try {
+                var draft=OpeningConstruction.Copy(_draft);
+                var single=_single.IsChecked==true;
+                var decision=ConfirmSizeChange==null?(Choice:(OpeningSizeConflictChoice?)OpeningSizeConflictChoice.CreateNew,Error:(string?)null):await ConfirmSizeChange(draft,single);
+                if(decision.Choice==null){_status.Text=decision.Error??"已取消应用，门窗草稿保留。";return;}
+                Close(new OpeningEditResult {Type=draft,OnlyInstance=single,Templates=_templates,SnapStep=_canvas.Snap,SizeConflictChoice=decision.Choice.Value});
+            } finally {apply.IsEnabled=true;}
+        }
+        apply.Click+=(_,_)=>_applyTask=ApplyAsync();cancel.Click+=(_,_)=>Close();
         foreach(var combo in new[]{_kind,_planStyle,_presets,_material,_openingMode,_doorFrame,_doorPlacement,_position,_left,_right})combo.HorizontalAlignment=HorizontalAlignment.Stretch;
         Content=root;
         _canvas.Changed+=()=>{StoreFace();QueuePreview();};_canvas.SelectionChanged+=UpdateSelection;_canvas.Error+=message=>_status.Text=message;
@@ -204,7 +224,7 @@ internal sealed class OpeningEditorWindow : Window
         _outer.IsChecked=_draft.HasOuterFrame;_mullion.IsChecked=_draft.HasMullion;_gap.IsChecked=_draft.HasInstallationGap;
         _sash.IsChecked=(_draft.SashWidth??_draft.DoorFrameWidth)>0;
         _left.SelectedItem=_draft.BayLeftSide??"墙";_right.SelectedItem=_draft.BayRightSide??"墙";
-        var values=new Dictionary<string,double>{{"outer",_draft.OuterFrameWidth},{"frameDepth",_draft.FrameDepth??100},{"mullion",_draft.MullionWidth},{"mullionDepth",_draft.MullionDepth??100},
+        var values=new Dictionary<string,double>{{"width",_opening.Width},{"height",_opening.Height},{"outer",_draft.OuterFrameWidth},{"frameDepth",_draft.FrameDepth??100},{"mullion",_draft.MullionWidth},{"mullionDepth",_draft.MullionDepth??100},
             {"sashWidth",_draft.SashWidth??_draft.DoorFrameWidth},{"sashDepth",_draft.SashDepth??50},{"glass",_draft.GlassThickness??6},{"panel",_draft.PanelThickness??40},{"gap",_draft.InstallationGap},{"offset",_draft.InstallationOffset??0},
             {"angle",_draft.OpenAngle??0},{"leftDepth",_draft.BayLeftDepth},{"rightDepth",_draft.BayRightDepth},{"doorEdge",_draft.DoorEdgeDistance},{"bayCap",_draft.BayCapThickness??100},{"sashClearance",_draft.SashClearance??2}};
         foreach(var entry in values)_fields[entry.Key].Text=entry.Value.ToString("0.###",CultureInfo.InvariantCulture);_updating=false;
@@ -214,6 +234,11 @@ internal sealed class OpeningEditorWindow : Window
     {
         var values=new Dictionary<string,double>();foreach(var key in _fields.Keys.Where(k=>k!="cellWidth"&&k!="cellHeight")) {
             if(!Number(key,out var value)){_status.Text="请输入完整有效的尺寸。";return false;}values[key]=value;
+        }
+        var minimum=2*(_gap.IsChecked==true?values["gap"]:0)+Math.Max(2,2*(_outer.IsChecked==true?values["outer"]:0));
+        if(values["width"]<=minimum||values["height"]<=minimum){_status.Text="洞口宽高不足以容纳外框和安装缝。";return false;}
+        if(_loadedFace!=0&&(values["width"]!=_opening.Width||values["height"]!=_opening.Height)) {
+            _status.Text="请切换到主面再修改整体洞口尺寸。";return false;
         }
         _draft.PlanStyle=_planStyle.SelectedItem?.ToString()??"按立面";_draft.PlanReturnInset=values["planInset"];
         _draft.OuterFrameWidth=values["outer"];_draft.FrameDepth=values["frameDepth"];_draft.MullionWidth=values["mullion"];_draft.MullionDepth=values["mullionDepth"];
@@ -227,6 +252,10 @@ internal sealed class OpeningEditorWindow : Window
         _draft.SashClearance=values["sashClearance"];
         if(values["snap"]<0 || values["snap"]>1000){_status.Text="移动步长须在 0～1000 mm 之间，0 表示自由移动。";return false;}
         _canvas.Snap=values["snap"];
+        _opening.Width=values["width"];_opening.Height=values["height"];
+        _draft.Width=_opening.Width;_draft.Height=_opening.Height;
+        _openingSummary.Text=$"{_opening.Kind}   ·   洞口 {_opening.Width:0.#} × {_opening.Height:0.#} mm   ·   同编号 {_sameCodeCount} 樘（含标准层）";
+        if(SizeCodePreview!=null)_openingSummary.Text+="   ·   "+SizeCodePreview(_opening.Width,_opening.Height);
         if(_canvas.State!=null) {
             var gap=_draft.HasInstallationGap ? _draft.InstallationGap : 0;
             var w=_face.SelectedIndex==1 ? _draft.BayLeftDepth : _face.SelectedIndex==2 ? _draft.BayRightDepth : _opening.Width-2*gap;
@@ -295,7 +324,8 @@ internal sealed class OpeningEditorWindow : Window
             var scene=await Task.Run(()=> {
                 var local=new BuildingModelDocument();local.Storeys.Add(new StoreyModel {Id="preview",Height=_opening.Height+_opening.Sill+200});
                 local.Walls.Add(new WallModel {Id="host",StoreyId="preview",X2=_opening.Width,Thickness=200});
-                local.Openings.Add(new OpeningModel {Id="opening",Code=type.Code,Kind=_opening.Kind,HostWallId="host",Offset=_opening.Width/2,Width=_opening.Width,Height=_opening.Height,Sill=0});
+                local.Openings.Add(new OpeningModel {Id="opening",Code=type.Code,Kind=_opening.Kind,HostWallId="host",Offset=_opening.Width/2,Width=_opening.Width,Height=_opening.Height,Sill=0,
+                    PlanFlipAlong=_opening.PlanFlipAlong,PlanFlipNormal=_opening.PlanFlipNormal,PlanOpenAngle=_opening.PlanOpenAngle,OpenIn3D=_opening.OpenIn3D});
                 local.OpeningTypes.Add(type);return ModelViewport.PrepareScene(BuildingVolumeBuilder.BuildOpeningParts(local));
             });
             if(_closed||generation!=_generation)return;_preview.SetScene(scene);if(!_previewReady){FramePreview();_previewReady=true;}PreviewChanged?.Invoke(type,_single.IsChecked==true);
@@ -306,10 +336,16 @@ internal sealed class OpeningEditorWindow : Window
     {
         _preview.ResetView();_preview.FrameSelection(tight:true);
     }
-    internal async Task RunUiCheckAsync()
+    internal async Task RunUiCheckAsync(bool cancel=false)
     {
         await Task.Delay(500);
         string? error=null;
+        var originalOpeningHeight=_opening.Height;
+        _fields["height"].Text="2";await Task.Delay(180);
+        if(_opening.Height!=originalOpeningHeight)throw new InvalidOperationException("不完整洞口尺寸改变了有效分格。");
+        _fields["height"].Text=(originalOpeningHeight-100).ToString(CultureInfo.InvariantCulture);await Task.Delay(300);
+        if(_opening.Height!=originalOpeningHeight-100||Math.Abs(_canvas.State.Height-(_opening.Height-(_gap.IsChecked==true?2*_draft.InstallationGap:0)))>.01)
+            throw new InvalidOperationException("洞口高修改未同步整体分格。");
         _gap.IsChecked=false;
         if(!ReadDraft())throw new InvalidOperationException(_status.Text);
         StoreFace();
@@ -332,6 +368,7 @@ internal sealed class OpeningEditorWindow : Window
         _canvas.Selected.Clear();_canvas.Selected.Add(1);_canvas.Notify();
         _openingMode.SelectedItem="右平开";_fields["glass"].Text="12";_fields["frameDepth"].Text="100";
         await Task.Delay(2000);
+        _single.IsChecked=true;await Task.Delay(800);_single.IsChecked=false;await Task.Delay(800);
         if(Environment.GetEnvironmentVariable("WANLUO_OPENING_CHECK_SLIDING")=="1"){
             _canvas.State.Edit(cells=>{foreach(var c in cells)if(DoorWindowElevationGeometryBuilder.IsOperable(c.Opening))c.Opening="双向推拉";},out _);_canvas.Notify();await Task.Delay(1200);
         }
@@ -346,7 +383,12 @@ internal sealed class OpeningEditorWindow : Window
             _inspectorTabs.SelectedIndex=1;await Task.Delay(300);await SaveCheckImage("sliding-construction-ui.png");
         }
         if(!ReadDraft())throw new InvalidOperationException(_status.Text);StoreFace();
-        Close(new OpeningEditResult {Type=OpeningConstruction.Copy(_draft),OnlyInstance=false,Templates=_templates,SnapStep=_canvas.Snap});
+        if(cancel)Close();else {
+            this.GetVisualDescendants().OfType<Button>().Single(b=>b.Name=="ApplyOpeningEditor")
+                .RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+            await _applyTask;
+            if(!_closed)throw new InvalidOperationException("分格编辑应用失败："+_status.Text);
+        }
     }
     private async Task SaveCheckImage(string name)
     {

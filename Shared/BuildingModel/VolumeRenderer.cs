@@ -97,7 +97,7 @@ namespace BatchPdfPublisher.BuildingModel
 
         /// <summary>投影整个体量；结果已按"从远到近"排好序。</summary>
         public static List<VolumeFace2D> Project(BuildingVolume volume, VolumeCamera camera, Action<string> reportProgress = null,
-            bool edgesOnly = false, bool includeHiddenEdges = true)
+            bool edgesOnly = false, bool includeHiddenEdges = true, bool fillPreviewOnly = false)
         {
             var result = new List<VolumeFace2D>();
             if (volume == null || volume.Faces.Count == 0) return result;
@@ -192,6 +192,8 @@ namespace BatchPdfPublisher.BuildingModel
             // 注意：判"内部贴合面"要用**全部**面（含背面）—— 贴在一起的两块，朝外的那面正好背着相机时，
             // 用它对面那块来盖住它才对；先用背面剔除会把判据本身剔掉。
             reportProgress?.Invoke("projected "+result.Count);
+            // Resource thumbnails need fills, not architectural interface or edge cleanup.
+            if(fillPreviewOnly)return result.Where(f=>f.Visible).OrderByDescending(f=>f.Depth).ToList();
             if(edgesOnly) {
                 // Topology cleanup only: remove coincident interior interfaces and
                 // shared coplanar subdivision edges, then keep front and back edges.

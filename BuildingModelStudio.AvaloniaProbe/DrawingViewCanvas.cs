@@ -13,6 +13,7 @@ internal sealed class DrawingViewCanvas : Control
     private readonly List<ViewLine> _lines = new();
     private readonly List<ViewText> _texts = new();
     private readonly List<DimensionLabel> _dimensionLabels = new();
+    private readonly List<(string Layer,int? Weight,bool Dashed,bool OpeningArc,StreamGeometry Geometry,Geometry? Interior)> _strokes=new();
     private sealed record DimensionLabel(string Text, Point Center, double FontHeight, double Width, double Height, bool Vertical,double WidthFactor)
     {
         public Rect Bounds => new(Center.X-(Vertical ? Height : Width)/2,Center.Y-(Vertical ? Width : Height)/2,
@@ -22,12 +23,17 @@ internal sealed class DrawingViewCanvas : Control
     private bool _fitPending = true;
     private Point? _pan;
     public ViewDocument? View => _view;
+    internal Action<PointModel,double>? PickRequested;
 
     public DrawingViewCanvas()
     {
         ClipToBounds = true; Focusable = true;
         PointerPressed += (_, e) => {
             if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed && !e.GetCurrentPoint(this).Properties.IsMiddleButtonPressed) return;
+            if(PickRequested!=null&&e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) {
+                var pixel=e.GetPosition(this);PickRequested(new PointModel(_centerX+(pixel.X-Bounds.Width/2)/_scale,_centerY-(pixel.Y-Bounds.Height/2)/_scale),8/_scale);
+                e.Handled=true;return;
+            }
             _pan = e.GetPosition(this); e.Pointer.Capture(this); e.Handled = true;
         };
         PointerMoved += (_, e) => {
@@ -65,9 +71,9 @@ internal sealed class DrawingViewCanvas : Control
                 var to=d.Vertical ? new PointModel(d.LinePosition,d.To) : new PointModel(d.To,d.LinePosition);
                 var a=d.Vertical ? new PointModel(d.AnchorPosition,d.From) : new PointModel(d.From,d.AnchorPosition);
                 var b=d.Vertical ? new PointModel(d.AnchorPosition,d.To) : new PointModel(d.To,d.AnchorPosition);
-                Line(from,to,d.Layer);Line(a,from,d.Layer);Line(b,to,d.Layer);
+                Line(from,to,d.Layer,d.LineWeight);Line(a,from,d.Layer,d.LineWeight);Line(b,to,d.Layer,d.LineWeight);
                 var tick=Math.Max(1,view.Scale)*1.2;
-                foreach(var p in new[] {from,to})Line(new PointModel(p.X-tick,p.Y-tick),new PointModel(p.X+tick,p.Y+tick),d.Layer);
+                foreach(var p in new[] {from,to})Line(new PointModel(p.X-tick,p.Y-tick),new PointModel(p.X+tick,p.Y+tick),d.Layer,d.LineWeight);
                 var text=DrawingAnnotationSettings.DimensionText(d);
                 var fontHeight=d.TextHeight;
                 var size=TextSize(text,fontHeight);
@@ -77,10 +83,60 @@ internal sealed class DrawingViewCanvas : Control
                 _dimensionLabels.Add(label);
             }
         }
-        Fit();
+        BuildStrokePaths();Fit();
     }
 
-    private void Line(PointModel a,PointModel b,string layer)=>_lines.Add(new ViewLine { Layer=layer,X1=a.X,Y1=a.Y,X2=b.X,Y2=b.Y });
+    private void Line(PointModel a,PointModel b,string layer,int? weight)=>_lines.Add(new ViewLine { Layer=layer,LineWeight=weight,X1=a.X,Y1=a.Y,X2=b.X,Y2=b.Y });
+
+    private void BuildStrokePaths()
+    {
+        _strokes.Clear();
+        var areas=(_view?.StrokeAreas ?? new()).ToDictionary(a=>a.Id);
+        foreach(var group in _lines.GroupBy(l=>(l.Layer,l.LineWeight,l.StrokeAreaId,l.OpeningArcId,Dashed:l.Layer==ViewLayers.Axis||l.LineType=="HIDDEN"||l.LineType=="DASHED"))) {
+            var edges=group.ToArray();var used=new bool[edges.Length];
+            (double,double) Key(double x,double y)=>(Math.Round(x,6),Math.Round(y,6));
+            var nodes=new Dictionary<(double,double),List<int>>();
+            for(var i=0;i<edges.Length;i++)foreach(var key in new[]{Key(edges[i].X1,edges[i].Y1),Key(edges[i].X2,edges[i].Y2)}) {
+                if(!nodes.TryGetValue(key,out var incident))nodes[key]=incident=new();incident.Add(i);
+            }
+            var area=group.Key.StrokeAreaId!=null&&areas.TryGetValue(group.Key.StrokeAreaId,out var matched)?matched:null;
+            var closedInterior=area!=null&&area.Contours.Count==0&&nodes.Values.All(n=>n.Count%2==0);
+            var geometry=new StreamGeometry();
+            using(var path=geometry.Open()) {
+                path.SetFillRule(FillRule.EvenOdd);
+                void Trace(int index,(double,double) start) {
+                    var current=start;path.BeginFigure(new Point(start.Item1,start.Item2),closedInterior);
+                    while(!used[index]) {
+                        used[index]=true;var edge=edges[index];
+                        var reverse=Key(edge.X2,edge.Y2)==current;
+                        var x=reverse?edge.X1:edge.X2;var y=reverse?edge.Y1:edge.Y2;
+                        current=Key(x,y);path.LineTo(new Point(x,y));
+                        if(current==start){path.EndFigure(true);return;}
+                        var incident=nodes[current];
+                        if((group.Key.Dashed&&group.Key.OpeningArcId==null)||(!closedInterior&&incident.Count!=2))break;
+                        var next=incident.FirstOrDefault(i=>!used[i],-1);if(next<0)break;index=next;
+                    }
+                    path.EndFigure(false);
+                }
+                // Open chains first; the remaining degree-two components are closed contours.
+                foreach(var node in nodes.Where(n=>n.Value.Count!=2))
+                    foreach(var index in node.Value)if(!used[index])Trace(index,node.Key);
+                for(var i=0;i<edges.Length;i++)if(!used[i])Trace(i,Key(edges[i].X1,edges[i].Y1));
+            }
+            Geometry? interior=closedInterior?geometry:null;
+            if(area?.Contours.Count>0) {
+                var clip=new StreamGeometry();using(var path=clip.Open()) {
+                    path.SetFillRule(FillRule.EvenOdd);
+                    foreach(var contour in area.Contours.Where(c=>c.Count>=3)) {
+                        path.BeginFigure(new Point(contour[0].X,contour[0].Y),true);
+                        foreach(var p in contour.Skip(1))path.LineTo(new Point(p.X,p.Y));path.EndFigure(true);
+                    }
+                }
+                interior=clip;
+            }
+            _strokes.Add((group.Key.Layer,group.Key.LineWeight,group.Key.Dashed,group.Key.OpeningArcId!=null,geometry,interior));
+        }
+    }
     private static Size TextSize(string text,double height)
     {
         var measured=new FormattedText(text,CultureInfo.CurrentCulture,FlowDirection.LeftToRight,Typeface.Default,100,Brushes.Black);
@@ -123,24 +179,41 @@ internal sealed class DrawingViewCanvas : Control
                 path.BeginFigure(Screen(hatch.Boundary[0].X,hatch.Boundary[0].Y),true);
                 foreach(var p in hatch.Boundary.Skip(1))path.LineTo(Screen(p.X,p.Y));path.EndFigure(true);
             }
-            context.DrawGeometry(new SolidColorBrush(Color.Parse("#DDE6EE")),Pen(hatch.Layer,Brushes.SlateGray),geometry);
+            context.DrawGeometry(new SolidColorBrush(Color.Parse("#DDE6EE")),null,geometry);
+            using(context.PushGeometryClip(geometry)) {
+                var border=Pen(hatch.Layer,Brushes.SlateGray,weight:hatch.LineWeight);
+                context.DrawGeometry(null,new Pen(border.Brush,border.Thickness*2,lineCap:PenLineCap.Square,lineJoin:PenLineJoin.Miter),geometry);
+            }
             if (string.Equals(hatch.Pattern,"SOLID",StringComparison.OrdinalIgnoreCase)) continue;
             var angle=hatch.Angle*Math.PI/180;var tx=Math.Cos(angle);var ty=Math.Sin(angle);var nx=-ty;var ny=tx;
             var ns=hatch.Boundary.Select(p=>p.X*nx+p.Y*ny).ToArray();var ts=hatch.Boundary.Select(p=>p.X*tx+p.Y*ty).ToArray();
             var spacing=hatch.Spacing>0 ? hatch.Spacing : 2.5*Math.Max(1,hatch.Scale)*Math.Max(1,_view.Scale);
             using(context.PushGeometryClip(geometry)) {
-                var pen=Pen(hatch.Layer,Brushes.SlateGray);
+                var pen=Pen(hatch.Layer,Brushes.SlateGray,weight:hatch.LineWeight);
                 for(var n=Math.Floor(ns.Min()/spacing)*spacing;n<=ns.Max();n+=spacing)
                     context.DrawLine(pen,Screen(ts.Min()*tx+n*nx,ts.Min()*ty+n*ny),Screen(ts.Max()*tx+n*nx,ts.Max()*ty+n*ny));
             }
         }
-        foreach(var line in _lines) {
-            var axis=line.Layer==ViewLayers.Axis;
-            var hidden=axis || line.LineType=="HIDDEN";
-            var pen=Pen(line.Layer,axis ? Brushes.SlateGray : new SolidColorBrush(Color.Parse(line.Layer==ViewLayers.Opening ? "#275D80" : "#253746")),hidden);
-            context.DrawLine(pen,Screen(line.X1,line.Y1),Screen(line.X2,line.Y2));
+        using(context.PushTransform(Matrix.CreateScale(_scale,-_scale)*Matrix.CreateTranslation(
+            Bounds.Width/2-_centerX*_scale,Bounds.Height/2+_centerY*_scale)))
+        foreach(var stroke in _strokes) {
+            var axis=stroke.Layer==ViewLayers.Axis;
+            IBrush brush=stroke.OpeningArc?new SolidColorBrush(Color.Parse("#91A0AB")):
+                axis?Brushes.SlateGray:new SolidColorBrush(Color.Parse(stroke.Layer==ViewLayers.Opening?"#275D80":"#253746"));
+            var thickness=DrawingLineWeights.Resolve(stroke.Layer,stroke.Weight)/100d*Math.Max(1,_view.Scale);
+            var ink=thickness==0?1/_scale:thickness;
+            var pen=new Pen(brush,ink*(stroke.Interior!=null?2:1),
+                stroke.Dashed?new DashStyle(stroke.OpeningArc?new[]{2d*_view.Scale/ink,1d*_view.Scale/ink}:new[]{50d,25d},0):null,
+                stroke.Dashed?PenLineCap.Flat:PenLineCap.Square,PenLineJoin.Miter);
+            if(stroke.Interior!=null) {
+                using(context.PushGeometryClip(stroke.Interior))context.DrawGeometry(null,pen,stroke.Geometry);
+            } else context.DrawGeometry(null,pen,stroke.Geometry);
         }
-        foreach(var circle in _view.Circles)context.DrawEllipse(null,Pen(circle.Layer,Brushes.SlateGray),Screen(circle.X,circle.Y),circle.Radius*_scale,circle.Radius*_scale);
+        foreach(var circle in _view.Circles) {
+            var pen=Pen(circle.Layer,Brushes.SlateGray,weight:circle.LineWeight);var radius=circle.Radius*_scale;
+            var ink=Math.Min(radius,pen.Thickness);var center=Screen(circle.X,circle.Y);
+            context.DrawEllipse(null,new Pen(pen.Brush,ink),center,radius-ink/2,radius-ink/2);
+        }
         foreach(var text in _texts) {
             if(text.Height<=0)continue;
             var font=text.Height*_scale;
@@ -160,10 +233,10 @@ internal sealed class DrawingViewCanvas : Control
         }
     }
 
-    private Pen Pen(string layer,IBrush brush,bool dashed=false)
+    private Pen Pen(string layer,IBrush brush,bool dashed=false,int? weight=null)
     {
-        var weight=ViewLayers.Find(layer)?.LineWeight ?? 13;
-        return new Pen(brush,Math.Max(1,weight)/100d*Math.Max(1,_view?.Scale ?? 100)*_scale,
-            dashed ? new DashStyle(new[] { 50d,25d },0) : null);
+        var resolved=DrawingLineWeights.Resolve(layer,weight);
+        return new Pen(brush,resolved==0?1:resolved/100d*Math.Max(1,_view?.Scale ?? 100)*_scale,
+            dashed ? new DashStyle(new[] { 50d,25d },0) : null,PenLineCap.Square,PenLineJoin.Miter);
     }
 }

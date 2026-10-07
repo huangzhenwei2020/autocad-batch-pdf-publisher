@@ -8,22 +8,43 @@ namespace BatchPdfPublisher.BuildingModel
     // Local coordinates: opening left jamb is (0,0), wall normal is positive Y.
     public static class OpeningPlanGeometry
     {
-        public static List<ViewLine> Build(OpeningModel opening, OpeningTypeModel type, double thickness)
+        public const int SwingArcSegments=64;
+        public static List<ViewLine> Build(OpeningModel opening, OpeningTypeModel type, double thickness, List<ViewStrokeArea> strokeAreas=null)
         {
             type=type??OpeningConstruction.Default(opening);
             var lines=new List<ViewLine>();
             var width=opening.Width;var half=Math.Max(1,thickness/2);
             var style=type?.PlanStyle??"按立面";
             var item=OpeningElevationAdapter.ToScheduleItem(opening,type,width,opening.Height);
-            void Line(double x,double y,double xx,double yy) {
+            void Line(double x,double y,double xx,double yy,string openingPath=null) {
                 if(opening.PlanFlipAlong){x=width-x;xx=width-xx;}
                 if(opening.PlanFlipNormal){y=-y;yy=-yy;}
-                lines.Add(new ViewLine {Layer=ViewLayers.Opening,X1=x,Y1=y,X2=xx,Y2=yy});
+                lines.Add(new ViewLine {Layer=ViewLayers.Opening,X1=x,Y1=y,X2=xx,Y2=yy,
+                    OpeningArcId=openingPath,LineType=openingPath==null?null:"DASHED"});
             }
-            void Rect(double l,double b,double r,double t){Line(l,b,r,b);Line(r,b,r,t);Line(r,t,l,t);Line(l,t,l,b);}
-            void Arrow(double from,double to,double y) {
-                Line(from,y,to,y);var direction=to>from?1:-1;var size=Math.Min(60,Math.Abs(to-from)/3);
-                Line(to,y,to-direction*size,y-size/2);Line(to,y,to-direction*size,y+size/2);
+            void Polygon(params PointModel[] points) {
+                var first=lines.Count;
+                for(var i=0;i<points.Length;i++) {var a=points[i];var b=points[(i+1)%points.Length];Line(a.X,a.Y,b.X,b.Y);}
+                if(strokeAreas==null)return;
+                var id="opening-"+strokeAreas.Count;
+                strokeAreas.Add(new ViewStrokeArea {Id=id});
+                foreach(var line in lines.Skip(first))line.StrokeAreaId=id;
+            }
+            void Rect(double l,double b,double r,double t)=>Polygon(new PointModel(l,b),new PointModel(r,b),new PointModel(r,t),new PointModel(l,t));
+            void Arrow(double from,double to,double y,string openingPath=null) {
+                Line(from,y,to,y,openingPath==null?null:openingPath+"-shaft");var direction=to>from?1:-1;var size=Math.Min(60,Math.Abs(to-from)/3);
+                if(openingPath==null){Line(to,y,to-direction*size,y-size/2);Line(to,y,to-direction*size,y+size/2);}
+                else {Line(to-direction*size,y-size/2,to,y,openingPath+"-head");Line(to,y,to-direction*size,y+size/2,openingPath+"-head");}
+            }
+            void ArcArrow(double x,double y,double radius,double start,double end,double size) {
+                for(var j=0;j<24;j++) {
+                    var a=start+(end-start)*j/24;var b=start+(end-start)*(j+1)/24;
+                    Line(x+radius*Math.Cos(a),y+radius*Math.Sin(a),x+radius*Math.Cos(b),y+radius*Math.Sin(b));
+                }
+                var ax=x+radius*Math.Cos(end);var ay=y+radius*Math.Sin(end);
+                var sign=Math.Sign(end-start);var tx=-sign*Math.Sin(end);var ty=sign*Math.Cos(end);
+                Line(ax,ay,ax-tx*size-ty*size*.45,ay-ty*size+tx*size*.45);
+                Line(ax,ay,ax-tx*size+ty*size*.45,ay-ty*size-tx*size*.45);
             }
             var depth=type.BayLeftDepth>0?type.BayLeftDepth:600;
             var form=style=="按立面"?(item.ElevationType??""):style;
@@ -37,9 +58,16 @@ namespace BatchPdfPublisher.BuildingModel
                     for(var i=0;i<48;i++){var a=i*Math.PI/24;var b=(i+1)*Math.PI/24;
                         Line(radius+r*Math.Cos(a),r*Math.Sin(a),radius+r*Math.Cos(b),r*Math.Sin(b));}
                 var panel=(type.PanelThickness??40)/2;
-                Rect(0,-panel,width,panel);Rect(radius-panel,-radius,radius+panel,radius);return lines;
+                Rect(0,-panel,width,panel);Rect(radius-panel,-radius,radius+panel,radius);
+                ArcArrow(radius,0,radius*1.15,Math.PI*.18,Math.PI*.4,Math.Min(60,width*.04));return lines;
             }
-            if(form=="卷帘门"){Rect(0,-half*.4,width,half*.4);Line(0,0,width,0);Line(0,-half*.2,width,-half*.2);Line(0,half*.2,width,half*.2);return lines;}
+            if(form=="卷帘门"){
+                Rect(0,-half*.4,width,half*.4);Line(0,0,width,0);Line(0,-half*.2,width,-half*.2);Line(0,half*.2,width,half*.2);
+                var radius=Math.Min(60,width*.04);var cx=width-radius*2;var cy=half+radius*1.8;
+                for(var j=0;j<48;j++){var a=j*Math.PI/24;var b=(j+1)*Math.PI/24;
+                    Line(cx+radius*.6*Math.Cos(a),cy+radius*.6*Math.Sin(a),cx+radius*.6*Math.Cos(b),cy+radius*.6*Math.Sin(b));}
+                ArcArrow(cx,cy,radius,Math.PI*.15,Math.PI*1.65,radius*.4);return lines;
+            }
             if(form=="折叠门") {
                 var cut=Math.Max(0,Math.Min(opening.Height-.01,1200-opening.Sill));
                 var panels=DoorWindowElevationGeometryBuilder.Build(item).Cells.Where(c=>!c.IsDeleted&&c.Bottom<=cut&&c.Top>cut).OrderBy(c=>c.Left).Take(12).ToList();
@@ -48,9 +76,8 @@ namespace BatchPdfPublisher.BuildingModel
                     var step=(panels[i].Right-panels[i].Left)/Math.Sqrt(2);
                     var p=new PointModel(previous.X+step,previous.Y+(i%2==0?step:-step));
                     var normal=panelThickness/Math.Sqrt(2);var sign=i%2==0?-1:1;
-                    Line(previous.X+sign*normal,previous.Y+normal,p.X+sign*normal,p.Y+normal);
-                    Line(previous.X-sign*normal,previous.Y-normal,p.X-sign*normal,p.Y-normal);
-                    Line(p.X+sign*normal,p.Y+normal,p.X-sign*normal,p.Y-normal);previous=p;
+                    Polygon(new PointModel(previous.X+sign*normal,previous.Y+normal),new PointModel(p.X+sign*normal,p.Y+normal),
+                        new PointModel(p.X-sign*normal,p.Y-normal),new PointModel(previous.X-sign*normal,previous.Y-normal));previous=p;
                 }
                 Arrow(width*.25,width*.7,-half*.6);return lines;
             }
@@ -64,6 +91,14 @@ namespace BatchPdfPublisher.BuildingModel
             var section=Math.Max(0,Math.Min(opening.Height-.01,1200-opening.Sill));
             var parts=OpeningConstruction.Build(opening,type,thickness)
                 .Where(p=>p.Face==0&&p.Bottom<=section&&p.Top>section).ToList();
+            void ClosedLeaf(DoorWindowCell cell,double l,double r) {
+                var leaf=parts.Where(p=>SameCell(p.Cell,cell)).ToList();
+                if(leaf.Count>0)foreach(var part in leaf) {
+                    var left=Math.Max(l,part.Left);var right=Math.Min(r,part.Right);
+                    if(right>left)Rect(left,part.NormalOffset-part.Depth/2,right,part.NormalOffset+part.Depth/2);
+                }
+                else {var inset=Math.Min(half*.35,60);Line(l,inset,r,inset);Line(l,-inset,r,-inset);}
+            }
             foreach(var frame in parts.Where(p=>p.Kind=="frame"))
                 Rect(frame.Left,frame.NormalOffset-frame.Depth/2,frame.Right,frame.NormalOffset+frame.Depth/2);
             var cells=DoorWindowElevationGeometryBuilder.Build(item).Cells
@@ -78,27 +113,42 @@ namespace BatchPdfPublisher.BuildingModel
                     Rect(l,track-sashDepth/2,r,track+sashDepth/2);
                     Line(l,track,r,track);
                     var direction=mode.Contains("左推拉")?-1:mode.Contains("右推拉")?1:i%2==0?-1:1;
-                    var center=(l+r)/2;Arrow(center-direction*(r-l)*.2,center+direction*(r-l)*.2,-half-Math.Max(60,half*.7));
-                } else if(c.IsDoor&&mode.Contains("平开")) {
+                    var center=(l+r)/2;Arrow(center-direction*(r-l)*.2,center+direction*(r-l)*.2,-half-Math.Max(60,half*.7),c.IsDoor?null:"window-slide-"+i);
+                } else if(mode.Contains("平开")) {
                     var hinge=mode.Contains("右平开")?r:l;var direction=hinge==r?-1:1;var span=r-l;
                     var leafThickness=projection.Depth;var hingeY=SwingHingeNormal(projection,c,parts,type.SashClearance??2);
                     var angle=AngleRadians(opening);var dx=direction*Math.Cos(angle);var dy=Math.Sin(angle);
                     var nx=-dy*leafThickness/2;var ny=dx*leafThickness/2;
                     var ex=hinge+span*dx;var ey=hingeY+span*dy;
-                    Line(hinge+nx,hingeY+ny,ex+nx,ey+ny);Line(ex+nx,ey+ny,ex-nx,ey-ny);
-                    Line(ex-nx,ey-ny,hinge-nx,hingeY-ny);Line(hinge-nx,hingeY-ny,hinge+nx,hingeY+ny);
-                    if(angle>0)for(var j=0;j<16;j++){var a=angle*(1-j/16d);var b=angle*(1-(j+1)/16d);
-                        Line(hinge+direction*span*Math.Cos(a),hingeY+span*Math.Sin(a),hinge+direction*span*Math.Cos(b),hingeY+span*Math.Sin(b));}
+                    if(c.IsDoor)Polygon(new PointModel(hinge+nx,hingeY+ny),new PointModel(ex+nx,ey+ny),
+                        new PointModel(ex-nx,ey-ny),new PointModel(hinge-nx,hingeY-ny));
+                    else {
+                        ClosedLeaf(c,l,r);
+                        if(angle>0)Line(hinge,hingeY,ex,ey,"window-leaf-"+i);
+                    }
+                    if(angle>0) {
+                        var radius=span*.78;var end=angle*.7;
+                        for(var j=0;j<24;j++) {
+                            var a=angle*(.25+.45*j/24);var b=angle*(.25+.45*(j+1)/24);
+                            Line(hinge+direction*radius*Math.Cos(a),hingeY+radius*Math.Sin(a),
+                                hinge+direction*radius*Math.Cos(b),hingeY+radius*Math.Sin(b),c.IsDoor?null:"window-arrow-"+i);
+                        }
+                        var ax=hinge+direction*radius*Math.Cos(end);var ay=hingeY+radius*Math.Sin(end);
+                        var tx=-direction*Math.Sin(end);var ty=Math.Cos(end);
+                        var size=Math.Min(55,radius*angle*.12);
+                        if(c.IsDoor) {
+                            Line(ax,ay,ax-tx*size-ty*size*.45,ay-ty*size+tx*size*.45);
+                            Line(ax,ay,ax-tx*size+ty*size*.45,ay-ty*size-tx*size*.45);
+                        } else {
+                            Line(ax-tx*size-ty*size*.45,ay-ty*size+tx*size*.45,ax,ay,"window-arrow-head-"+i);
+                            Line(ax,ay,ax-tx*size+ty*size*.45,ay-ty*size-tx*size*.45,"window-arrow-head-"+i);
+                        }
+                    }
+                    if(angle>0)for(var j=0;j<SwingArcSegments;j++){var a=angle*(1-j/(double)SwingArcSegments);var b=angle*(1-(j+1)/(double)SwingArcSegments);
+                        Line(hinge+direction*span*Math.Cos(a),hingeY+span*Math.Sin(a),hinge+direction*span*Math.Cos(b),hingeY+span*Math.Sin(b),"swing-"+i);}
                 } else if(mode=="百叶"||item.ElevationType.Contains("百叶")) {
                     Rect(l,-half*.6,r,half*.6);for(var y=-half*.4;y<half*.5;y+=Math.Max(10,half*.2))Line(l,y,r,y);
-                } else {
-                    var leaf=parts.Where(p=>SameCell(p.Cell,c)).ToList();
-                    if(leaf.Count>0)foreach(var part in leaf) {
-                        var left=Math.Max(l,part.Left);var right=Math.Min(r,part.Right);
-                        if(right>left)Rect(left,part.NormalOffset-part.Depth/2,right,part.NormalOffset+part.Depth/2);
-                    }
-                    else {var inset=Math.Min(half*.35,60);Line(l,inset,r,inset);Line(l,-inset,r,-inset);}
-                }
+                } else ClosedLeaf(c,l,r);
             }
             return lines;
         }
@@ -108,8 +158,11 @@ namespace BatchPdfPublisher.BuildingModel
             type=type??OpeningConstruction.Default(opening);
             var item=OpeningElevationAdapter.ToScheduleItem(opening,type,opening.Width,opening.Height);
             var section=Math.Max(0,Math.Min(opening.Height-.01,1200-opening.Sill));
-            var cells=DoorWindowElevationGeometryBuilder.Build(item).Cells.Where(c=>!c.IsDeleted&&c.Bottom<=section&&c.Top>section).OrderBy(c=>c.Left).ToList();
-            var swing=cells.FirstOrDefault(c=>c.IsDoor&&(c.Opening??item.OpeningMode??"").Contains("平开"));
+            var geometry=DoorWindowElevationGeometryBuilder.Build(item);
+            var cells=geometry.Cells.Where(c=>!c.IsDeleted&&c.Bottom<=section&&c.Top>section).OrderBy(c=>c.Left).ToList();
+            var swing=cells.FirstOrDefault(c=>(c.IsDoor||CutsWall(opening))&&(c.Opening??item.OpeningMode??"").Contains("平开"));
+            var windowSwing=cells.FirstOrDefault(c=>!c.IsDoor&&(c.Opening??item.OpeningMode??"").Contains("平开"))
+                ??geometry.Cells.FirstOrDefault(c=>!c.IsDeleted&&!c.IsDoor&&c.Left>=0&&c.Right<=opening.Width&&(c.Opening??item.OpeningMode??"").Contains("平开"));
             PointModel result=null;
             if((type?.PlanStyle??"按立面")=="按立面"&&swing!=null) {
                 var parts=OpeningConstruction.Build(opening,type,thickness).Where(p=>p.Face==0&&p.Bottom<=section&&p.Top>section).ToList();
@@ -118,6 +171,16 @@ namespace BatchPdfPublisher.BuildingModel
                 if(span<1)return null;
                 result=new PointModel((right?leaf.Right:leaf.Left)+(right?-1:1)*span*Math.Cos(AngleRadians(opening)),
                     SwingHingeNormal(leaf,swing,parts,type.SashClearance??2)+span*Math.Sin(AngleRadians(opening)));
+                result.X=Math.Round(result.X,9);result.Y=Math.Round(result.Y,9);
+            }
+            else if((type?.PlanStyle??"按立面")=="按立面"&&windowSwing!=null) {
+                var leafSection=(windowSwing.Bottom+windowSwing.Top)/2;
+                var parts=OpeningConstruction.Build(opening,type,thickness).Where(p=>p.Face==0&&p.Bottom<=leafSection&&p.Top>leafSection).ToList();
+                var leaf=ProjectLeaf(windowSwing,parts,type.SashClearance??2);
+                var right=(windowSwing.Opening??item.OpeningMode??"").Contains("右平开");
+                var span=leaf.Right-leaf.Left;if(span<1)return null;
+                result=new PointModel((right?leaf.Right:leaf.Left)+(right?-1:1)*span*Math.Cos(AngleRadians(opening)),
+                    SwingHingeNormal(leaf,windowSwing,parts,type.SashClearance??2)+span*Math.Sin(AngleRadians(opening)));
                 result.X=Math.Round(result.X,9);result.Y=Math.Round(result.Y,9);
             }
             else if((type?.PlanStyle??"按立面")=="按立面"&&cells.Any(c=>(c.Opening??item.OpeningMode??"").Contains("推拉")))
@@ -139,6 +202,13 @@ namespace BatchPdfPublisher.BuildingModel
             return DoorWindowElevationGeometryBuilder.Build(item).Cells.Any(c=>!c.IsDeleted&&c.IsDoor&&(c.Opening??item.OpeningMode??"").Contains("平开"));
         }
 
+        public static bool HasPlanSwing(OpeningModel opening,OpeningTypeModel type)
+        {
+            if((type?.PlanStyle??"按立面")!="按立面")return false;
+            var item=OpeningElevationAdapter.ToScheduleItem(opening,type,opening.Width,opening.Height);
+            return DoorWindowElevationGeometryBuilder.Build(item).Cells.Any(c=>!c.IsDeleted&&(c.Opening??item.OpeningMode??"").Contains("平开"));
+        }
+
         public static List<List<PointModel>> SelectionRegions(OpeningModel opening,OpeningTypeModel type,double thickness)
         {
             type=type??OpeningConstruction.Default(opening);
@@ -150,7 +220,7 @@ namespace BatchPdfPublisher.BuildingModel
                 var item=OpeningElevationAdapter.ToScheduleItem(opening,type,opening.Width,opening.Height);
                 var section=Math.Max(0,Math.Min(opening.Height-.01,1200-opening.Sill));
                 var parts=OpeningConstruction.Build(opening,type,thickness).Where(p=>p.Face==0&&p.Bottom<=section&&p.Top>section).ToList();
-                foreach(var cell in DoorWindowElevationGeometryBuilder.Build(item).Cells.Where(c=>!c.IsDeleted&&c.IsDoor
+                foreach(var cell in DoorWindowElevationGeometryBuilder.Build(item).Cells.Where(c=>!c.IsDeleted
                     &&c.Bottom<=section&&c.Top>section&&(c.Opening??item.OpeningMode??"").Contains("平开"))) {
                     var leaf=ProjectLeaf(cell,parts,type.SashClearance??2);
                     var right=(cell.Opening??item.OpeningMode??"").Contains("右平开");var hinge=right?leaf.Right:leaf.Left;

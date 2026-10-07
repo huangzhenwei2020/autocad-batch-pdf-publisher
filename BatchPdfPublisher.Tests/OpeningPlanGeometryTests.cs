@@ -50,6 +50,13 @@ internal static class OpeningPlanGeometryTests
         PlacementTypeChecks(doors,windows);
         ThresholdChecks(doors,windows);
         FrameClearanceChecks(doors,windows);
+        ElevationHingeTipChecks();
+        PairedHingeChecks();
+        HeightEditChecks();
+        ScopedSizeChecks();
+        WindowHeightLimitChecks();
+        WindowDirectionAndArcChecks(doors);
+        WindowPlanSwingChecks();
         Directory.CreateDirectory(".artifacts/opening-symbols");
         File.WriteAllText(".artifacts/opening-symbols/door-atlas.json",BuildingModelJson.ToJson(doors));
         File.WriteAllText(".artifacts/opening-symbols/window-atlas.json",BuildingModelJson.ToJson(windows));
@@ -62,6 +69,274 @@ internal static class OpeningPlanGeometryTests
             File.WriteAllText($".artifacts/opening-symbols/frame-leaf-{index}.json",BuildingModelJson.ToJson(closeup));
         }
         Console.WriteLine("PASS opening plan atlas 24 types originalCodes leafRadii frames tracks mirror highWindow rotatedWall handles serialization");
+    }
+    private static void WindowDirectionAndArcChecks(BuildingModelDocument doors)
+    {
+        var model=SampleModelFactory.CreateEmptyModel("Window directions");model.Storeys[0].Height=4000;
+        model.Walls.Add(new WallModel {Id="casement-host",StoreyId="1F",X2=7000,Thickness=200});
+        var opening=new OpeningModel {Id="casement",HostWallId="casement-host",Code="C1824",Kind="窗",Width=1800,Height=2400,Sill=400,Offset=2000,OpenIn3D=false};
+        model.Openings.Add(opening);
+        var type=OpeningConstruction.Default(opening);type.DivisionPreset="自定义";type.OpenAngle=80;
+        type.CustomCellLayout=DoorWindowElevationGeometryBuilder.SerializeCellLayout(new[]{
+            new DoorWindowLayoutCell {Right=900,Top=2000,Opening="左平开",Material="玻璃"},
+            new DoorWindowLayoutCell {Left=900,Right=1800,Top=2000,Opening="右平开",Material="玻璃"},
+            new DoorWindowLayoutCell {Right=1800,Bottom=2000,Top=2400,Opening="固定",Material="玻璃"}});
+        model.OpeningTypes.Add(type);
+        var baseline=OpeningPlanGeometry.DirectionHandle(opening,type,200);
+        Check(baseline!=null,"带固定亮子的平开窗缺方向夹点");
+        Check(!OpeningPlanGeometry.HasSwingDoor(opening,type)&&OpeningPlanGeometry.HasPlanSwing(opening,type),"平开窗的平面角度和门三维开关未区分");
+        var lines=OpeningPlanGeometry.Build(opening,type,200);
+        Check(lines.Count(l=>l.OpeningArcId?.StartsWith("swing-")==true)==2*OpeningPlanGeometry.SwingArcSegments,"双平开窗没有按两扇分别画弧");
+        var session=new BuildingModelEditSession(model);var before=BuildingModelJson.ToJson(session.Model);
+        foreach(var along in new[]{false,true})foreach(var normal in new[]{false,true}) {
+            Check(session.TrySetOpeningPlacement(opening.Id,opening.HostWallId,opening.Offset,along,normal,out var error),"窗方向提交失败 "+error);
+            var changed=session.Model.Openings[0];var handle=OpeningPlanGeometry.DirectionHandle(changed,type,200);
+            Check(Math.Abs(handle.X-(along?opening.Width-baseline.X:baseline.X))<.001&&Math.Abs(handle.Y-(normal?-baseline.Y:baseline.Y))<.001,"窗方向夹点镜像错误");
+            Check(BuildingModelJson.ToJson(new BuildingModelDocument {OpeningTypes=session.Model.OpeningTypes})==BuildingModelJson.ToJson(new BuildingModelDocument {OpeningTypes=model.OpeningTypes}),"实例翻转改变类型");
+            var reopened=BuildingModelJson.FromJson(BuildingModelJson.ToJson(session.Model));
+            Check(reopened.Openings[0].PlanFlipAlong==along&&reopened.Openings[0].PlanFlipNormal==normal,"窗方向保存丢失");
+            if(along||normal){Check(session.Undo()&&BuildingModelJson.ToJson(session.Model)==before,"窗方向不是一次撤销");}
+        }
+        opening.Sill=2000;Check(OpeningPlanGeometry.DirectionHandle(opening,type,200)!=null,"高平开窗缺方向控件");
+        var fixedType=OpeningConstruction.Copy(type);fixedType.CustomCellLayout=DoorWindowElevationGeometryBuilder.SerializeCellLayout(new[]{new DoorWindowLayoutCell {Right=1800,Top=2400,Opening="固定",Material="玻璃"}});
+        Check(OpeningPlanGeometry.DirectionHandle(opening,fixedType,200)==null,"固定窗产生无效方向控件");
+        var door=doors.Openings[0];var doorType=doors.OpeningTypes[0];
+        var local=OpeningPlanGeometry.Build(door,doorType,200);
+        Check(local.Count(l=>l.OpeningArcId!=null)==OpeningPlanGeometry.SwingArcSegments&&local.Where(l=>l.OpeningArcId!=null).All(l=>l.LineType=="DASHED"&&l.StrokeAreaId==null),"主开启弧未使用独立连续虚线");
+        Check(local.Where(l=>l.OpeningArcId==null).All(l=>l.LineType==null),"门框、门扇或箭头被改成虚线");
+        var world=OrthographicProjector.CreatePlanDetailSymbols(doors,"1F");
+        Check(world.Count(l=>l.OpeningArcId!=null)==doors.Openings.Sum(o=>OpeningPlanGeometry.Build(o,OpeningConstruction.Resolve(doors,o),200).Count(l=>l.OpeningArcId!=null)),"投影丢失开启弧标识");
+        Check(world.Where(l=>l.OpeningArcId!=null).All(l=>l.LineType=="DASHED"),"投影丢失虚线");
+        Directory.CreateDirectory(".artifacts/window-directions");opening.Sill=400;
+        File.WriteAllText(".artifacts/window-directions/c1824.json",BuildingModelJson.ToJson(model));
+        Console.WriteLine("PASS window direction transom highWindow fixedDisabled mirrors instanceTypeIsolation undo persistence swingArcContinuousDashed solidFrames");
+    }
+    private static void WindowPlanSwingChecks()
+    {
+        var model=SampleModelFactory.CreateEmptyModel("C1216 plan casement");model.Storeys[0].Height=3500;
+        var wall=new WallModel {Id="window-host",StoreyId="1F",X2=4000,Thickness=200};model.Walls.Add(wall);
+        var opening=new OpeningModel {Id="window",HostWallId=wall.Id,Code="C1216",Kind="窗",Width=1200,Height=1600,Sill=900,Offset=2000,OpenIn3D=false};
+        var type=OpeningConstruction.Default(opening);type.DivisionPreset="自定义";type.OpenAngle=80;
+        type.CustomCellLayout=DoorWindowElevationGeometryBuilder.SerializeCellLayout(new[]{
+            new DoorWindowLayoutCell {Right=600,Top=1600,Opening="左平开",Material="玻璃"},
+            new DoorWindowLayoutCell {Left=600,Right=1200,Top=1600,Opening="右平开",Material="玻璃"}});
+        model.Openings.Add(opening);model.OpeningTypes.Add(type);
+        var volumeBefore=BuildingVolumeBuilder.BuildOpeningParts(model).Faces.SelectMany(f=>f.Points).Select(p=>$"{p.X:R}|{p.Y:R}|{p.Z:R}").ToArray();
+        foreach(var angle in new[]{0d,15,30,45,90,37.5,120,180})foreach(var along in new[]{false,true})foreach(var normal in new[]{false,true}) {
+            opening.PlanOpenAngle=angle;opening.PlanFlipAlong=along;opening.PlanFlipNormal=normal;
+            var areas=new List<ViewStrokeArea>();var lines=OpeningPlanGeometry.Build(opening,type,200,areas);
+            var arcs=lines.Where(l=>l.OpeningArcId?.StartsWith("swing-")==true).GroupBy(l=>l.OpeningArcId).ToArray();
+            Check(arcs.Length==(angle==0?0:2)&&arcs.All(g=>g.Count()==OpeningPlanGeometry.SwingArcSegments&&g.All(l=>l.LineType=="DASHED")),"C1216 两扇平开弧数量或线型错误");
+            var handle=OpeningPlanGeometry.DirectionHandle(opening,type,200);
+            var regions=OpeningPlanGeometry.SelectionRegions(opening,type,200);
+            Check(regions.Count==3&&Math.Abs(regions[1].Last().X-handle.X)<.00001&&Math.Abs(regions[1].Last().Y-handle.Y)<.00001,"窗的预选扇形没有跟随自由端");
+            if(angle>0)Check(Math.Abs(arcs[0].First().X1-handle.X)<.00001&&Math.Abs(arcs[0].First().Y1-handle.Y)<.00001,"窗的圆夹点不在实际扇线及弧的自由端");
+            Check(lines.Where(l=>l.StrokeAreaId!=null).All(l=>l.LineType==null),"窗框、扇线变成虚线");
+            var indications=lines.Where(l=>l.OpeningArcId!=null).ToArray();
+            Check(indications.Length==(angle==0?0:2*(OpeningPlanGeometry.SwingArcSegments+27))&&indications.All(l=>l.LineType=="DASHED"&&l.StrokeAreaId==null),"窗开启线、弧或箭头不是无厚度虚线");
+            var leaves=indications.Where(l=>l.OpeningArcId.StartsWith("window-leaf-")).ToArray();
+            Check(leaves.Length==(angle==0?0:2),"每个开启窗扇应只有一条虚线，不能画扇厚轮廓");
+            if(angle>0)Check(Math.Abs(leaves[0].X2-handle.X)<.00001&&Math.Abs(leaves[0].Y2-handle.Y)<.00001,"窗的单线开启扇端点不在夹点");
+            opening.PlanOpenAngle=0;var closed=OpeningPlanGeometry.Build(opening,type,200);opening.PlanOpenAngle=angle;
+            string Key(ViewLine line)=>$"{line.X1:R}|{line.Y1:R}|{line.X2:R}|{line.Y2:R}";
+            Check(lines.Where(l=>l.OpeningArcId==null).Select(Key).SequenceEqual(closed.Select(Key)),"开启时原闭合窗框及玻璃线消失或改变");
+        }
+        opening.PlanFlipAlong=false;opening.PlanFlipNormal=false;opening.PlanOpenAngle=90;
+        var session=new BuildingModelEditSession(model);var before=BuildingModelJson.ToJson(session.Model);
+        Check(session.TrySetOpeningPresentation(opening.Id,opening.Code,30,false,out var error),"窗平面角度不能保存 "+error);
+        Check(session.Model.Openings[0].PlanOpenAngle==30&&session.Model.Openings[0].OpenIn3D==false&&session.Model.OpeningTypes[0].OpenAngle==80,"平面角度改动了窗的三维构造参数");
+        Check(BuildingVolumeBuilder.BuildOpeningParts(session.Model).Faces.SelectMany(f=>f.Points).Select(p=>$"{p.X:R}|{p.Y:R}|{p.Z:R}").SequenceEqual(volumeBefore),"窗平面角度改变三维实际几何");
+        Check(session.Undo()&&BuildingModelJson.ToJson(session.Model)==before,"窗角度不是一次撤销");
+        var mixed=OpeningConstruction.Copy(type);mixed.CustomCellLayout=DoorWindowElevationGeometryBuilder.SerializeCellLayout(new[]{
+            new DoorWindowLayoutCell {Right=600,Top=1600,Opening="左平开",Material="玻璃"},
+            new DoorWindowLayoutCell {Left=600,Right=1200,Top=1600,Opening="固定",Material="玻璃"}});
+        Check(OpeningPlanGeometry.Build(opening,mixed,200).Count(l=>l.OpeningArcId?.StartsWith("swing-")==true)==OpeningPlanGeometry.SwingArcSegments,"固定格也生成了平开弧");
+        var sliding=OpeningConstruction.Copy(type);sliding.CustomCellLayout=type.CustomCellLayout.Replace("左平开","左推拉").Replace("右平开","右推拉");
+        var slidingLines=OpeningPlanGeometry.Build(opening,sliding,200);
+        Check(!OpeningPlanGeometry.HasPlanSwing(opening,sliding)&&slidingLines.All(l=>l.OpeningArcId?.StartsWith("swing-")!=true),"推拉窗错误画平开弧");
+        Check(slidingLines.Count(l=>l.OpeningArcId?.StartsWith("window-slide-")==true)==6&&slidingLines.Where(l=>l.OpeningArcId!=null).All(l=>l.LineType=="DASHED"&&l.StrokeAreaId==null),"推拉窗开启箭头不是单线虚线");
+        wall.X2=2400;wall.Y2=3200;var world=OrthographicProjector.CreatePlanDetailSymbols(model,"1F");
+        var local=OpeningPlanGeometry.Build(opening,type,200);var origin=WallReferenceGeometry.BodyPoint(wall,840,1120);
+        Check(world.Zip(local,(a,b)=>Math.Abs(a.X1-(origin.X+.6*b.X1-.8*b.Y1))<.001&&Math.Abs(a.Y1-(origin.Y+.8*b.X1+.6*b.Y1))<.001&&a.LineType==b.LineType).All(b=>b),"斜墙窗开启符号投影不一致");
+        wall.X2=4000;wall.Y2=0;opening.PlanOpenAngle=90;
+        Directory.CreateDirectory(".artifacts/window-directions");File.WriteAllText(".artifacts/window-directions/c1216.json",BuildingModelJson.ToJson(model));
+        Console.WriteLine("PASS C1216 plan casement leftRightLeaves lightDashedArcs angle15-30-45-90-custom mirrors freeEndGrip selection fixedAndSlidingDistinct obliqueProjection 3Dunchanged undo");
+    }
+    private static void ScopedSizeChecks()
+    {
+        var model=SampleModelFactory.CreateEmptyModel("Scoped opening sizes");
+        model.Walls.Add(new WallModel {Id="size-host",StoreyId="1F",X2=6000,Thickness=200});
+        model.Storeys.RemoveAll(s=>s.Id=="2F");
+        model.Storeys.Add(new StoreyModel {Id="2F",Name="二层",Height=2800,Elevation=3000,TemplateStoreyId="1F"});
+        model.Openings.Add(new OpeningModel {Id="size-a",HostWallId="size-host",Code="M1525",Kind="门",Width=1500,Height=2500,Offset=1700});
+        model.Openings.Add(new OpeningModel {Id="size-b",HostWallId="size-host",Code="M1525",Kind="门",Width=1500,Height=2500,Offset=4500});
+        var type=OpeningConstruction.Default(model.Openings[0]);type.DivisionPreset="自定义";
+        type.CustomCellLayout=DoorWindowElevationGeometryBuilder.SerializeCellLayout(new[]{
+            new DoorWindowLayoutCell {Right=750,Top=2200,IsDoor=true,Opening="左平开",Material="玻璃"},
+            new DoorWindowLayoutCell {Left=750,Right=1500,Top=2200,IsDoor=true,Opening="右平开",Material="玻璃"},
+            new DoorWindowLayoutCell {Bottom=2200,Right=1500,Top=2500,Opening="固定",Material="玻璃"}});
+        model.OpeningTypes.Add(type);
+        var target=OpeningConstruction.Default(new OpeningModel {Code="M1621",Kind="门",Width=1600,Height=2100});target.GlassThickness=16;
+        model.OpeningTypes.Add(target);
+        var session=new BuildingModelEditSession(model);var original=BuildingModelJson.ToJson(session.Model);
+        var plan=session.PlanOpeningSizeCode("size-a",1600,2100,out var planError);
+        Check(plan!=null&&plan.HasConflict&&plan.CanMerge&&plan.Code=="M1621"&&plan.NewCode=="M1621A",planError??"未返回可合并编号决策");
+        Check(BuildingModelJson.ToJson(session.Model)==original,"编号决策改写模型");
+        Check(session.TrySetOpeningParameters("size-a",1700,1600,2100,0,0,true,out var error),error);
+        var a=session.Model.Openings.Single(o=>o.Id=="size-a");var b=session.Model.Openings.Single(o=>o.Id=="size-b");
+        Check(a.Code=="M1621A"&&a.Width==1600&&a.Height==2100,"单樘尺寸变更未创建无冲突尺寸编号");
+        Check(b.Code=="M1525"&&b.Width==1500&&b.Height==2500,"单樘尺寸变更影响其他位置");
+        var physical=StandardStoreyLayout.Materialize(session.Model);
+        Check(physical.Openings.Single(o=>o.Id=="size-a@STD@2F").Code==a.Code&&physical.Openings.Single(o=>o.Id=="size-a@STD@2F").Height==2100,"共用平面洞口不同步");
+        Check(session.Model.OpeningTypes.Single(t=>t.Code==a.Code).Height==2100&&OpeningConstruction.Validate(a,OpeningConstruction.Resolve(session.Model,a))==null,"新编号分格未随洞口尺寸更新");
+        Check(session.Undo()&&BuildingModelJson.ToJson(session.Model)==original,"单樘尺寸、编号和类型不能一起撤销");
+        Check(session.TrySetOpeningParameters("size-a",1700,1600,2100,0,0,false,out error),error);
+        Check(StandardStoreyLayout.Materialize(session.Model).Openings.All(o=>o.Code=="M1621A"&&o.Width==1600&&o.Height==2100),"同编号尺寸批改或新尺寸编号不完整");
+        Check(session.Undo()&&BuildingModelJson.ToJson(session.Model)==original,"批量尺寸不能一次撤销");
+        Check(session.TrySetOpeningParameters("size-a",1700,1600,2100,0,0,true,out error,OpeningSizeConflictChoice.MergeExisting),error);
+        a=session.Model.Openings.Single(o=>o.Id=="size-a");
+        Check(a.Code=="M1621"&&OpeningConstruction.Resolve(session.Model,a).GlassThickness==16
+            &&session.Model.OpeningTypes.All(t=>t.Code!="M1621A")&&session.Model.Openings.Single(o=>o.Id=="size-b").Code=="M1525","合并未采用已有构造或影响其他位置");
+        Check(session.Undo()&&BuildingModelJson.ToJson(session.Model)==original,"合并不能一次撤销");
+        Check(session.TrySetOpeningParameters("size-a",1700,1600,2100,0,0,false,out error,OpeningSizeConflictChoice.MergeExisting),error);
+        Check(StandardStoreyLayout.Materialize(session.Model).Openings.All(o=>o.Code=="M1621"&&o.Height==2100),"整组未合并已有类型");
+        Check(session.Undo()&&BuildingModelJson.ToJson(session.Model)==original,"整组合并不能一次撤销");
+        plan=session.PlanOpeningSizeCode("size-a",1600,2105,out planError);
+        Check(plan!=null&&plan.HasConflict&&!plan.CanMerge,"同尺寸式编号但实际尺寸不同仍允许合并");
+        Check(!session.TrySetOpeningParameters("size-a",1700,1600,2105,0,0,true,out error,OpeningSizeConflictChoice.MergeExisting)
+            &&BuildingModelJson.ToJson(session.Model)==original,"不匹配类型合并未整笔回滚");
+        foreach(var size in new[]{(width:3500d,height:2100d),(width:1600d,height:2900d),(width:1600d,height:2d)}) {
+            Check(!session.TrySetOpeningParameters("size-a",1700,size.width,size.height,0,0,false,out error)&&!string.IsNullOrWhiteSpace(error),"批量洞口冲突或层高无效仍提交："+size.width+"x"+size.height+" / "+error);
+            Check(BuildingModelJson.ToJson(session.Model)==original,"批量尺寸失败未整批回滚");
+        }
+        var draft=OpeningConstruction.Copy(type);OpeningConstruction.ResizeType(draft,1600,2100);draft.GlassThickness=12;
+        Check(session.TrySetOpeningDefinition("size-a",draft,true,out error),error);
+        var reopened=BuildingModelJson.FromJson(BuildingModelJson.ToJson(session.Model));
+        Check(reopened.Openings.Single(o=>o.Id=="size-a").Height==2100&&OpeningConstruction.Resolve(reopened,reopened.Openings.Single(o=>o.Id=="size-a")).GlassThickness==12,"分格编辑尺寸未保存");
+        Console.WriteLine("PASS opening scoped sizes single group automaticCode conflictPlan mergeExisting adoptConstruction suffix mismatchRollback standardPlan layout persistence undo");
+    }
+    private static void WindowHeightLimitChecks()
+    {
+        var model=SampleModelFactory.CreateEmptyModel("C0722 height limit");model.FindStorey("1F").Height=3000;
+        model.Walls.Add(new WallModel {Id="height-limit-host",StoreyId="1F",X2=2000,Thickness=200});
+        var opening=new OpeningModel {Id="height-limit",HostWallId="height-limit-host",Code="C0722",Kind="窗",Width=700,Height=2200,Sill=800,Offset=747.89530825003};
+        model.Openings.Add(opening);model.OpeningTypes.Add(OpeningConstruction.Default(opening));
+        var session=new BuildingModelEditSession(model);var original=BuildingModelJson.ToJson(session.Model);
+        Check(!session.TrySetOpeningParameters(opening.Id,opening.Offset,900,2600,800,0,true,out var error)
+            &&new[]{"800","2600","3400","3000","2200"}.All(error.Contains),"截图洞口超高缺少完整数值提示："+error);
+        Check(BuildingModelJson.ToJson(session.Model)==original&&!session.CanUndo,"超高洞口改写了模型或撤销历史");
+        Check(session.TrySetOpeningParameters(opening.Id,opening.Offset,900,2200,800,0,true,out error),error);
+        Check(session.Model.Openings.Single().Code=="C0922"&&session.Model.Openings.Single().Width==900,"有效窗尺寸没有生成 C0922");
+        Check(session.Undo()&&BuildingModelJson.ToJson(session.Model)==original,"洞口尺寸与编号没有一次撤销");
+        Console.WriteLine("PASS screenshot C0722 heightLimit numericError atomicReject validC0922 oneUndo");
+    }
+    private static void HeightEditChecks()
+    {
+        var model=SampleModelFactory.CreateEmptyModel("Height edit regression");
+        model.Walls.Add(new WallModel {Id="host",StoreyId="1F",X2=4000,Thickness=200});
+        var opening=new OpeningModel {Id="height-door",HostWallId="host",Code="M1525",Kind="门",Width=1500,Height=2500,Offset=2000};
+        var type=OpeningConstruction.Default(opening);
+        type.DivisionPreset="自定义";type.HasInstallationGap=true;type.InstallationGap=20;
+        type.CustomCellLayout=DoorWindowElevationGeometryBuilder.SerializeCellLayout(new[]{
+            new DoorWindowLayoutCell {Right=730,Top=2200,IsDoor=true,Opening="左平开",Material="玻璃"},
+            new DoorWindowLayoutCell {Left=730,Right=1460,Top=2200,IsDoor=true,Opening="右平开",Material="玻璃"},
+            new DoorWindowLayoutCell {Bottom=2200,Right=1460,Top=2460,Opening="固定",Material="玻璃"}});
+        model.Openings.Add(opening);model.OpeningTypes.Add(type);
+        var session=new BuildingModelEditSession(model);
+        var original=BuildingModelJson.ToJson(session.Model);var revision=session.Revision;
+        foreach(var height in new[]{0d,2,21,40,double.NaN,double.PositiveInfinity,4000}) {
+            Check(!session.TrySetOpeningGeometry(opening.Id,2000,1500,height,0,out var error)&&!string.IsNullOrWhiteSpace(error),
+                "过小或无效门高进入预览模型："+height);
+            Check(session.Revision==revision&&BuildingModelJson.ToJson(session.Model)==original,"拒绝门高修改后模型或撤销历史变化");
+        }
+        Check(session.TrySetOpeningGeometry(opening.Id,2000,1500,2100,0,out var validError),"有效门高被拒绝："+validError);
+        var resized=session.Model.Openings.Single();var resizedType=session.Model.OpeningTypes.Single();
+        Check(resizedType.Height==2500&&resizedType.CustomCellLayout==type.CustomCellLayout,"实例尺寸修改覆盖共享分格定义");
+        Check(OpeningConstruction.Validate(resized,resizedType)==null,"门高修改后分格无效");
+        Check(OpeningPlanGeometry.DirectionHandle(resized,resizedType,200)!=null,"门高修改后方向夹点丢失");
+        Check(OpeningPlanGeometry.Build(resized,resizedType,200).Count>0&&OpeningPlanGeometry.SelectionRegions(resized,resizedType,200).Count==3,
+            "门高修改后平面或预选区域无效");
+        Check(BuildingVolumeBuilder.BuildOpeningParts(session.Model).Faces.Count>0,"门高修改后三维构造为空");
+        Check(session.Undo()&&BuildingModelJson.ToJson(session.Model)==original,"门高修改不能一次撤销");
+        Check(session.Redo()&&session.Model.Openings.Single().Height==2100,"门高修改不能重做");
+        Console.WriteLine("PASS opening height custom-grid gap invalid-input render geometry undo redo");
+    }
+    private static void ElevationHingeTipChecks()
+    {
+        foreach(var kind in new[]{"门","窗"})foreach(var mode in new[]{"左平开","右平开","上悬","下悬","中悬"}) {
+            var opening=new OpeningModel {Code="TIP",Kind=kind,Width=1000,Height=2000};
+            var type=OpeningConstruction.Default(opening);type.DivisionPreset="自定义";
+            type.CustomCellLayout=DoorWindowElevationGeometryBuilder.SerializeCellLayout(new[]{
+                new DoorWindowLayoutCell {Right=1000,Top=2000,IsDoor=kind=="门",Opening=mode,Material="无"}});
+            var geometry=DoorWindowElevationGeometryBuilder.Build(OpeningElevationAdapter.ToScheduleItem(opening,type,1000,2000));
+            var lines=geometry.Lines.Where(l=>l.Role==DoorWindowLineRole.Opening).ToArray();
+            if(mode=="中悬") {
+                Check(lines.Length==5&&lines.Skip(1).All(l=>Math.Abs(l.Y2-(lines[0].Y1+lines[0].Y2)/2)<.001),
+                    kind+"中悬开启线尖端未指向中轴");
+            } else {
+                Check(lines.Length==2&&Math.Abs(lines[0].X2-lines[1].X1)<.001&&Math.Abs(lines[0].Y2-lines[1].Y1)<.001,
+                    kind+mode+"开启线尖端不连续");
+                var tip=lines[0];
+                Check(mode=="左平开"?tip.X2<tip.X1:mode=="右平开"?tip.X2>tip.X1:
+                    mode=="上悬"?tip.Y2>tip.Y1:tip.Y2<tip.Y1,kind+mode+"开启线尖端未指向合页");
+            }
+        }
+        Console.WriteLine("PASS elevation hinge tips doors/windows left/right/top/bottom/pivot");
+    }
+    private static void PairedHingeChecks()
+    {
+        var opening=new OpeningModel {Id="pair",HostWallId="host",Code="M1525",Kind="门",Width=1500,Height=2500,Offset=1500,OpenIn3D=true};
+        var generic=OpeningConstruction.Default(opening);generic.DivisionPreset="双扇等分";
+        generic.CustomCellLayout=null;generic.CellOpeningModes=null;generic.OpeningMode="双扇平开";
+        var geometry=DoorWindowElevationGeometryBuilder.Build(OpeningElevationAdapter.ToScheduleItem(opening,generic,1500,2500));
+        Check(geometry.Cells[0].Opening=="左平开"&&geometry.Cells[1].Opening=="右平开","通用双扇合页未放在两侧外框");
+        var openingLines=geometry.Lines.Where(l=>l.Role==DoorWindowLineRole.Opening).ToArray();
+        Check(openingLines.Length==4&&openingLines[0].X2<100&&openingLines[2].X2>1400,
+            "双扇门立面折线尖端未指向外侧合页");
+        var explicitType=OpeningConstruction.Copy(generic);explicitType.DivisionPreset="自定义";
+        explicitType.CustomCellLayout=DoorWindowElevationGeometryBuilder.SerializeCellLayout(new[]{
+            new DoorWindowLayoutCell {Right=750,Top=2500,IsDoor=true,Opening="左平开",Material=geometry.Cells[0].Material},
+            new DoorWindowLayoutCell {Left=750,Right=1500,Top=2500,IsDoor=true,Opening="右平开",Material=geometry.Cells[1].Material}});
+        bool SameLines(List<ViewLine> a,List<ViewLine> b)=>a.Count==b.Count&&a.Zip(b,(x,y)=>
+            Math.Abs(x.X1-y.X1)<.001&&Math.Abs(x.Y1-y.Y1)<.001&&Math.Abs(x.X2-y.X2)<.001&&Math.Abs(x.Y2-y.Y2)<.001).All(v=>v);
+        foreach(var angle in new[]{15d,30,45,90})foreach(var along in new[]{false,true})foreach(var normal in new[]{false,true}) {
+            opening.PlanOpenAngle=angle;opening.PlanFlipAlong=along;opening.PlanFlipNormal=normal;
+            Check(SameLines(OpeningPlanGeometry.Build(opening,generic,200),OpeningPlanGeometry.Build(opening,explicitType,200)),
+                "通用双扇与显式立面分格的平面不一致");
+            var a=OpeningPlanGeometry.DirectionHandle(opening,generic,200);var b=OpeningPlanGeometry.DirectionHandle(opening,explicitType,200);
+            Check(Math.Abs(a.X-b.X)<.001&&Math.Abs(a.Y-b.Y)<.001,"双扇夹点未采用立面合页");
+            var regions=OpeningPlanGeometry.SelectionRegions(opening,generic,200);
+            Check(regions.Count==3&&Math.Abs(regions[1].Last().X-a.X)<.001&&Math.Abs(regions[1].Last().Y-a.Y)<.001,
+                "双扇预选区域与开启弧不一致");
+            var model=SampleModelFactory.CreateEmptyModel("Paired hinge check");
+            model.Walls.Add(new WallModel {Id="host",StoreyId="1F",X2=3000,Thickness=200});opening.HostWallId="host";
+            model.Openings.Add(opening);model.OpeningTypes.Add(generic);
+            var genericPoints=BuildingVolumeBuilder.BuildOpeningParts(model).Faces.SelectMany(f=>f.Points).ToArray();
+            model.OpeningTypes[0]=explicitType;
+            var explicitPoints=BuildingVolumeBuilder.BuildOpeningParts(model).Faces.SelectMany(f=>f.Points).ToArray();
+            Check(genericPoints.Length==explicitPoints.Length&&genericPoints.Zip(explicitPoints,(x,y)=>
+                Math.Abs(x.X-y.X)<.001&&Math.Abs(x.Y-y.Y)<.001&&Math.Abs(x.Z-y.Z)<.001).All(v=>v),
+                "通用双扇三维合页未采用同一分格");
+        }
+        var modesType=OpeningConstruction.Copy(explicitType);
+        modesType.CustomCellLayout="0,0,750,2500,,1,0,"+geometry.Cells[0].Material+"|750,0,1500,2500,,1,0,"+geometry.Cells[1].Material;
+        modesType.CellOpeningModes="左平开|右平开";modesType.OpeningMode="固定";
+        Check(SameLines(OpeningPlanGeometry.Build(opening,modesType,200),OpeningPlanGeometry.Build(opening,explicitType,200)),
+            "旧逐格开启参数被整体开启方式覆盖");
+        var fixture=SampleModelFactory.CreateEmptyModel("M1525 transom paired leaves");
+        fixture.Walls.Add(new WallModel {Id="host",StoreyId="1F",X2=3500,Thickness=200});
+        opening.PlanOpenAngle=90;opening.PlanFlipAlong=false;opening.PlanFlipNormal=false;opening.OpenIn3D=false;opening.Offset=1750;
+        fixture.Openings.Add(opening);
+        explicitType.CustomCellLayout=DoorWindowElevationGeometryBuilder.SerializeCellLayout(new[]{
+            new DoorWindowLayoutCell {Right=750,Top=2235.77,IsDoor=true,Opening="左平开",Material="玻璃"},
+            new DoorWindowLayoutCell {Left=750,Right=1500,Top=2235.77,IsDoor=true,Opening="右平开",Material="玻璃"},
+            new DoorWindowLayoutCell {Right=1500,Bottom=2235.77,Top=2500,Opening="固定",Material="玻璃"}});
+        fixture.OpeningTypes.Add(explicitType);
+        var sectors=OpeningPlanGeometry.SelectionRegions(opening,explicitType,200);
+        Check(sectors.Count==3&&sectors[1][0].X<100&&sectors[2][0].X>1400,"显式外合页双扇被改成中间合页或固定亮子成为门扇");
+        Directory.CreateDirectory(".artifacts/opening-symbols");
+        BuildingModelJson.SaveModel(".artifacts/opening-symbols/m1525-paired-transom.json",fixture);
+        Console.WriteLine("PASS paired opening hinges generic/per-cell elevation-plan-3D grip selection angles mirrors fixedTransom");
     }
     private static void CenterChecks(BuildingModelDocument atlas)
     {
@@ -102,7 +377,7 @@ internal static class OpeningPlanGeometryTests
             Check(lines.All(l=>new[]{l.X1,l.Y1,l.X2,l.Y2}.All(Finite)),"开启角度非有限坐标");
             var regions=OpeningPlanGeometry.SelectionRegions(opening,type,200);
             Check(Math.Abs(regions[1].Last().X-handle.X)<.00001&&Math.Abs(regions[1].Last().Y-handle.Y)<.00001,"预选扇形未跟随开启角度");
-            if(angle>0)Check(Math.Abs(lines[lines.Count-16].X1-handle.X)<.00001&&Math.Abs(lines[lines.Count-16].Y1-handle.Y)<.00001,"开启弧端点不在门扇夹点");
+            if(angle>0)Check(Math.Abs(lines[lines.Count-OpeningPlanGeometry.SwingArcSegments].X1-handle.X)<.00001&&Math.Abs(lines[lines.Count-OpeningPlanGeometry.SwingArcSegments].Y1-handle.Y)<.00001,"开启弧端点不在门扇夹点");
         }
         opening.PlanFlipAlong=false;opening.PlanFlipNormal=false;opening.PlanOpenAngle=30;
         var closed=BuildingVolumeBuilder.BuildOpeningParts(model).Faces.Where(f=>f.ElementId==opening.Id&&f.Kind=="door").SelectMany(f=>f.Points).ToList();

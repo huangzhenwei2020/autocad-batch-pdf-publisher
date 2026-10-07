@@ -10,6 +10,10 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="BuildingModelGlbExporter.cs" />
+    <Compile Include="ComponentAssetLibrary.cs" />
+    <Compile Include="ComponentAssetLibrary.External.cs" />
+    <Compile Include="ComponentAuthorDraft.cs" />
+    <Compile Include="ComponentGlbInspector.cs" />
     <PackageReference Include="SharpGLTF.Toolkit" Version="1.0.7" />
     <PackageReference Include="LibTessDotNet" Version="1.1.15" />
     <Compile Include="..\Shared\BuildingModel\*.cs" Link="Shared\%(Filename)%(Extension)" />

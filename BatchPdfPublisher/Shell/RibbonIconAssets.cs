@@ -85,6 +85,9 @@ namespace BatchPdfPublisher.Services
                     images.Add(id, Rasterize(icon, 32));
                     SmallImages.Add(id, Rasterize(icon, 16));
                 }
+                images.Add("building_component_library", images["building_opening_types"]);
+                ScaledImages.Add("building_component_library", ScaledImages["building_opening_types"]);
+                SmallImages.Add("building_component_library", SmallImages["building_opening_types"]);
                 foreach (var feature in FeatureRegistry.Items)
                     if (!images.ContainsKey(feature.Id))
                         throw new InvalidDataException("功能区缺少图标：" + feature.Id);

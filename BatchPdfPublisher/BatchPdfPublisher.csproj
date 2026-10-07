@@ -57,6 +57,8 @@
          样例工厂与平面编辑逻辑只有程序用，不进插件（避免把死代码编进发布 DLL）。 -->
     <Compile Include="..\Shared\BuildingModel\StructuralGeometry.cs" />
     <Compile Include="..\Shared\BuildingModel\CadStructuralRegistration.cs" />
+    <Compile Include="..\Shared\BuildingModel\ComponentPlanSymbol.cs" />
+    <Compile Include="..\Shared\BuildingModel\ComponentCatalog.cs" />
     <Compile Include="..\Shared\BuildingModel\ModelTypes.cs"><Link>Features\BuildingModel\Shared\ModelTypes.cs</Link></Compile>
     <Compile Include="..\Shared\BuildingModel\DrawingAnnotationSettings.cs" />
     <Compile Include="..\Shared\BuildingModel\BuildingAxisLayout.cs"><Link>Features\BuildingModel\Shared\BuildingAxisLayout.cs</Link></Compile>

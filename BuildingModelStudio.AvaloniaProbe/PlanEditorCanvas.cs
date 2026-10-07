@@ -255,10 +255,18 @@ internal sealed partial class PlanEditorCanvas : Control
             var wall=_model.Walls.FirstOrDefault(w=>w.Id==opening.HostWallId&&w.StoreyId==_storeyId&&Visible(w.Id));
             if(wall==null)continue;
             var symbols=new BuildingModelDocument {Walls=new(){wall},Openings=new(){opening},OpeningTypes=_model.OpeningTypes,OpeningOverrides=_model.OpeningOverrides};
-            _openingSymbols[opening.Id]=OrthographicProjector.CreatePlanDetailSymbols(OpeningConstruction.ApplyOverrides(symbols),_storeyId);
             var code=_model.OpeningOverrides?.FirstOrDefault(o=>o.OpeningId==opening.Id)?.TypeCode??OpeningConstruction.EffectiveCode(opening);
             var type=_model.OpeningTypes.FirstOrDefault(t=>string.Equals(t.Code,code,StringComparison.OrdinalIgnoreCase))??OpeningConstruction.Default(opening);
-            _openingPickRegions[opening.Id]=OpeningPlanGeometry.SelectionRegions(opening,type,wall.Thickness);
+            try {
+                _openingSymbols[opening.Id]=OrthographicProjector.CreatePlanDetailSymbols(OpeningConstruction.ApplyOverrides(symbols),_storeyId);
+                _openingPickRegions[opening.Id]=OpeningPlanGeometry.SelectionRegions(opening,type,wall.Thickness);
+            }
+            catch(Exception ex) when(ex is InvalidOperationException or ArgumentException) {
+                System.Diagnostics.Trace.WriteLine($"Opening plan geometry {opening.Id}: {ex.Message}");
+                _openingSymbols[opening.Id]=new();
+                var half=wall.Thickness/2;
+                _openingPickRegions[opening.Id]=new() {new() {new(0,-half),new(opening.Width,-half),new(opening.Width,half),new(0,half)}};
+            }
         }
         _planSeams=WallJunctionLines.Resolve(_model,view.Walls.Where(w=>w.StoreyId==_storeyId),(_model.FindStorey(_storeyId)?.Elevation??0)+1200).ToList();
     }
@@ -914,9 +922,9 @@ internal sealed partial class PlanEditorCanvas : Control
             foreach (var line in _planSymbols)
                 context.DrawLine(new Pen(new SolidColorBrush(Color.Parse(line.Layer == ViewLayers.Opening
                     ? "#A7B8C5" : "#58788F")), Stroke()), Screen(line.X1, line.Y1), Screen(line.X2, line.Y2));
-            foreach(var pair in _openingSymbols.Where(p=>p.Key!=_openingGripDraft?.Id||_openingLabelGrip))foreach(var line in pair.Value)
-                context.DrawLine(new Pen(new SolidColorBrush(Color.Parse(_selectedIds.Contains(pair.Key)?"#FFC46B":"#A7B8C5")),1,
-                    line.LineType=="HIDDEN"?new DashStyle(new[]{4d,3d},0):null),Screen(line.X1,line.Y1),Screen(line.X2,line.Y2));
+            foreach(var pair in _openingSymbols.Where(p=>p.Key!=_openingGripDraft?.Id||_openingLabelGrip))
+                DrawOpeningSymbolLines(context,pair.Value,(x,y)=>Screen(x,y),
+                    new Pen(new SolidColorBrush(Color.Parse(_selectedIds.Contains(pair.Key)?"#FFC46B":"#A7B8C5")),1));
             DrawOpeningCodes(context);
         }
         void DrawStructure(string id,List<PointModel> outline)

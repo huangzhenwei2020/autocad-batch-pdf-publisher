@@ -172,6 +172,7 @@ namespace BatchPdfPublisher.Services
 
                 foreach (var line in view.Lines ?? new List<ViewLine>())
                 {
+                    if(line.OpeningArcId!=null)continue;
                     if (!string.IsNullOrWhiteSpace(line.Layer) && skipLayers.Contains(line.Layer)) continue;
                     var entity = new Line(
                         new Point3d(anchor.X + line.X1, anchor.Y + line.Y1, 0d),
@@ -180,10 +181,25 @@ namespace BatchPdfPublisher.Services
                         || string.Equals(line.LineType, "HIDDEN", StringComparison.OrdinalIgnoreCase)
                         ? "Hidden" : line.Layer;
                     ApplyLayer(entity, lineLayer, layerIds);
+                    ApplyLineWeight(entity,line.LineWeight);
                     space.AppendEntity(entity);
                     transaction.AddNewlyCreatedDBObject(entity, true);
                     generatedIds.Add(entity.ObjectId);
                     Bump(counts, line.Layer);
+                }
+
+                foreach(var arc in (view.Lines??new List<ViewLine>()).Where(l=>l.OpeningArcId!=null).GroupBy(l=>l.OpeningArcId))
+                {
+                    var first=arc.First();if(skipLayers.Contains(first.Layer??string.Empty))continue;
+                    var entity=new Polyline {Plinegen=true};
+                    entity.AddVertexAt(0,new Point2d(anchor.X+first.X1,anchor.Y+first.Y1),0,0,0);
+                    foreach(var line in arc)entity.AddVertexAt(entity.NumberOfVertices,new Point2d(anchor.X+line.X2,anchor.Y+line.Y2),0,0,0);
+                    ApplyLayer(entity,first.Layer,layerIds);ApplyLineWeight(entity,first.LineWeight);
+                    entity.Color=Autodesk.AutoCAD.Colors.Color.FromRgb(145,160,171);
+                    entity.LinetypeId=EnsureOpeningArcLineType(document.Database,transaction);
+                    entity.LinetypeScale=Math.Max(1,view.Scale);
+                    space.AppendEntity(entity);transaction.AddNewlyCreatedDBObject(entity,true);
+                    generatedIds.Add(entity.ObjectId);Bump(counts,first.Layer);
                 }
 
                 foreach (var text in view.Texts ?? new List<ViewText>())
@@ -198,6 +214,7 @@ namespace BatchPdfPublisher.Services
                         Position = new Point3d(anchor.X + text.X, anchor.Y + text.Y, 0d)
                     };
                     ApplyLayer(entity, text.Layer, layerIds);
+                    ApplyLineWeight(entity,text.LineWeight);
                     space.AppendEntity(entity);
                     transaction.AddNewlyCreatedDBObject(entity, true);
                     generatedIds.Add(entity.ObjectId);
@@ -212,6 +229,7 @@ namespace BatchPdfPublisher.Services
                     var entity = new Circle(new Point3d(anchor.X + circle.X, anchor.Y + circle.Y, 0d), Vector3d.ZAxis,
                         Math.Abs(circle.Radius));
                     ApplyLayer(entity, circle.Layer, layerIds);
+                    ApplyLineWeight(entity,circle.LineWeight);
                     space.AppendEntity(entity);
                     transaction.AddNewlyCreatedDBObject(entity, true);
                     generatedIds.Add(entity.ObjectId);
@@ -259,6 +277,10 @@ namespace BatchPdfPublisher.Services
                             entity.DimensionText="{\\W"+(dimension.TextWidthFactor/styleWidth).ToString("0.######",System.Globalization.CultureInfo.InvariantCulture)+";"+
                                 (string.IsNullOrWhiteSpace(dimension.Text)?"<>":dimension.Text)+"}";
                             ApplyLayer(entity, string.IsNullOrWhiteSpace(dimension.Layer) ? ViewLayers.Dimension : dimension.Layer, layerIds);
+                            ApplyLineWeight(entity,dimension.LineWeight);
+                            if(dimension.LineWeight.HasValue) {
+                                entity.Dimlwd=entity.LineWeight;entity.Dimlwe=entity.LineWeight;
+                            }
                             space.AppendEntity(entity);
                             transaction.AddNewlyCreatedDBObject(entity, true);
                             generatedIds.Add(entity.ObjectId);
@@ -282,6 +304,7 @@ namespace BatchPdfPublisher.Services
                     transaction.AddNewlyCreatedDBObject(entity, true);
                     entity.SetDatabaseDefaults(document.Database);
                     ApplyLayer(entity, hatch.Layer, layerIds);
+                    ApplyLineWeight(entity,hatch.LineWeight);
                     ApplyHatchPattern(entity, hatch, editor);
                     var loop = new Point2dCollection();
                     foreach (var point in hatch.Boundary) loop.Add(new Point2d(anchor.X + point.X, anchor.Y + point.Y));
@@ -1405,6 +1428,23 @@ namespace BatchPdfPublisher.Services
                 entity.ColorIndex = 256;      // 随层
                 entity.LineWeight = LineWeight.ByLayer;
                 entity.Linetype = "ByLayer";
+        }
+
+        private static void ApplyLineWeight(Entity entity,int? weight)
+        {
+            if(weight.HasValue && DrawingLineWeights.Values.Contains(weight.Value))
+                entity.LineWeight=(LineWeight)weight.Value;
+        }
+
+        private static ObjectId EnsureOpeningArcLineType(Database database,Transaction transaction)
+        {
+            const string name="WL_OPENING_SWING";
+            var table=(LinetypeTable)transaction.GetObject(database.LinetypeTableId,OpenMode.ForRead);
+            if(table.Has(name))return table[name];
+            table.UpgradeOpen();
+            var record=new LinetypeTableRecord {Name=name,AsciiDescription="Door swing: 2 mm dash, 1 mm gap",NumDashes=2,PatternLength=3};
+            record.SetDashLengthAt(0,2);record.SetDashLengthAt(1,-1);
+            var id=table.Add(record);transaction.AddNewlyCreatedDBObject(record,true);return id;
         }
 
         private static void ApplyLineType(Transaction transaction, Database database, Entity entity, string lineType)

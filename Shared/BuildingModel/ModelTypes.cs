@@ -153,7 +153,7 @@ namespace BatchPdfPublisher.BuildingModel
         public bool PlanFlipAlong { get; set; }
         public bool PlanFlipNormal { get; set; }
         public double PlanOpenAngle { get; set; } = 90d;
-        /// <summary>Null preserves an explicitly opened legacy construction type.</summary>
+        /// <summary>Door presentation switch; null preserves legacy angles. Windows use construction OpenAngle.</summary>
         public bool? OpenIn3D { get; set; }
         public bool CodeManuallyEdited { get; set; }
 
@@ -548,6 +548,8 @@ namespace BatchPdfPublisher.BuildingModel
 
         // 立面
         public DrawingAnnotationSettings Annotations { get; set; }
+        /// <summary>Per-view CAD lineweight overrides, in hundredths of a paper millimetre.</summary>
+        public Dictionary<string, int> LineWeights { get; set; }
         public ElevationDirection Direction { get; set; } = ElevationDirection.South;
 
         // 剖面
@@ -576,6 +578,11 @@ namespace BatchPdfPublisher.BuildingModel
     public sealed class ViewLine
     {
         public string Layer { get; set; }
+        public int? LineWeight { get; set; }
+        /// <summary>Physical interior used for inward ink; null keeps symbolic strokes centered.</summary>
+        public string StrokeAreaId { get; set; }
+        /// <summary>Continuous light dashed opening indication path; null for physical outlines.</summary>
+        public string OpeningArcId { get; set; }
         public double X1 { get; set; }
         public double Y1 { get; set; }
         public double X2 { get; set; }
@@ -588,6 +595,7 @@ namespace BatchPdfPublisher.BuildingModel
     public sealed class ViewText
     {
         public string Layer { get; set; }
+        public int? LineWeight { get; set; }
         public string Text { get; set; }
         public double X { get; set; }
         public double Y { get; set; }
@@ -602,6 +610,7 @@ namespace BatchPdfPublisher.BuildingModel
     public sealed class ViewHatch
     {
         public string Layer { get; set; }
+        public int? LineWeight { get; set; }
         /// <summary>填充图案名（CAD 里的 PAT 名；P0 用 ANSI31 = 45° 细线）。</summary>
         public string Pattern { get; set; } = "ANSI31";
         /// <summary>预定义图案的比例（Spacing &gt; 0 时不用它）。</summary>
@@ -641,6 +650,7 @@ namespace BatchPdfPublisher.BuildingModel
         public double OriginX { get; set; }
         public double OriginY { get; set; }
         public List<ViewLine> Lines { get; set; } = new List<ViewLine>();
+        public List<ViewStrokeArea> StrokeAreas { get; set; } = new List<ViewStrokeArea>();
         public List<ViewText> Texts { get; set; } = new List<ViewText>();
         public List<ViewHatch> Hatches { get; set; } = new List<ViewHatch>();
         /// <summary>圆（轴号圆圈、索引符号等）：落图时建成 CAD 的 Circle。</summary>
@@ -660,6 +670,13 @@ namespace BatchPdfPublisher.BuildingModel
         public string ModelRevision { get; set; }
         /// <summary>投影过程中的提示（例如斜墙按包围盒近似）。</summary>
         public List<string> Warnings { get; set; } = new List<string>();
+    }
+
+    public sealed class ViewStrokeArea
+    {
+        public string Id { get; set; }
+        // Empty contours use the closed boundary lines carrying this id.
+        public List<List<PointModel>> Contours { get; set; } = new List<List<PointModel>>();
     }
 
     /// <summary>
@@ -682,6 +699,7 @@ namespace BatchPdfPublisher.BuildingModel
     public sealed class ViewCircle
     {
         public string Layer { get; set; }
+        public int? LineWeight { get; set; }
         public double X { get; set; }
         public double Y { get; set; }
         public double Radius { get; set; }
@@ -698,6 +716,7 @@ namespace BatchPdfPublisher.BuildingModel
     public sealed class ViewDimension
     {
         public string Layer { get; set; }
+        public int? LineWeight { get; set; }
         /// <summary>true = 竖直尺寸（量 Z），false = 水平尺寸（量 U）。</summary>
         public bool Vertical { get; set; } = true;
         /// <summary>被量范围的起点（竖直：Z；水平：U）。</summary>

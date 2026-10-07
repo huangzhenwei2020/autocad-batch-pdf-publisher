@@ -363,6 +363,41 @@ namespace BatchPdfPublisher.BuildingModel
                     AddConstruction(volume,wall,model,opening,model.BaseElevationOf(wall),ref first,partCache);
             return volume;
         }
+        private sealed class ConstructionLeafHinge
+        {
+            public double Along,Normal,Shift,Elevation;
+        }
+
+        private static Dictionary<BatchPdfPublisher.Models.DoorWindowCell,ConstructionLeafHinge> ConstructionHinges(List<OpeningPart> parts,double clearance)
+        {
+            var result=new Dictionary<BatchPdfPublisher.Models.DoorWindowCell,ConstructionLeafHinge>();
+            foreach(var group in parts.Where(p=>p.Face==0&&p.Cell!=null).GroupBy(p=>p.Cell)) {
+                var cell=group.Key;var mode=cell.Opening??"";
+                var swing=mode.Contains("平开");var suspended=mode=="上悬"||mode=="下悬";
+                if(!swing&&!suspended)continue;
+                var left=group.Min(p=>p.Left);var right=group.Max(p=>p.Right);
+                var bottom=group.Min(p=>p.Bottom);var top=group.Max(p=>p.Top);
+                var along=mode.Contains("右")?right:left;
+                var elevation=mode=="上悬"?top:bottom;
+                var front=group.Max(p=>p.NormalOffset+p.Depth/2);
+                var frames=parts.Where(p=>p.Face==0&&p.Kind=="frame"&&(swing
+                    ?Math.Min(p.Top,top)-Math.Max(p.Bottom,bottom)>.001
+                        &&Math.Abs((mode.Contains("右")?p.Left:p.Right)-(along+(mode.Contains("右")?clearance:-clearance)))<.05
+                    :Math.Min(p.Right,right)-Math.Max(p.Left,left)>.001
+                        &&Math.Abs((mode=="上悬"?p.Bottom:p.Top)-(elevation+(mode=="上悬"?clearance:-clearance)))<.05)).ToList();
+                var normal=frames.Count>0?frames.Max(p=>p.NormalOffset+p.Depth/2)+clearance:front;
+                result.Add(cell,new ConstructionLeafHinge {Along=along,Normal=normal,Shift=normal-front,Elevation=elevation});
+            }
+            return result;
+        }
+
+        private static double ConstructionOpenAngle(OpeningModel opening,OpeningTypeModel type,BatchPdfPublisher.Models.DoorWindowCell cell)
+        {
+            // The instance switch belongs to door presentation; imported windows carry false too.
+            return cell?.IsDoor==true&&opening.OpenIn3D.HasValue
+                ?opening.OpenIn3D.Value?(type.OpenAngle>0?type.OpenAngle.Value:opening.PlanOpenAngle):0:type.OpenAngle??0;
+        }
+
         private static void AddConstruction(BuildingVolume volume,WallModel wall,BuildingModelDocument model,
             OpeningModel opening,double z0,ref bool first,Dictionary<string,List<OpeningPart>> partCache)
         {
@@ -381,22 +416,27 @@ namespace BatchPdfPublisher.BuildingModel
             }
             var key=string.Join("|",opening.Code,opening.Kind,opening.Width.ToString("R",System.Globalization.CultureInfo.InvariantCulture),opening.Height.ToString("R",System.Globalization.CultureInfo.InvariantCulture),wall.Thickness.ToString("R",System.Globalization.CultureInfo.InvariantCulture),opening.ThresholdHeight.ToString("R",System.Globalization.CultureInfo.InvariantCulture));
             if(!partCache.TryGetValue(key,out var parts)){parts=OpeningConstruction.Build(opening,type,wall.Thickness);partCache.Add(key,parts);}
+            var hinges=ConstructionHinges(parts,type.SashClearance??2);
             var frameStart=volume.Faces.Count;
             foreach(var part in parts) {
+                var cell=part.Cell;
+                var hinge=cell!=null&&hinges.TryGetValue(cell,out var leafHinge)?leafHinge:null;
+                var openAngle=ConstructionOpenAngle(opening,type,cell)*Math.PI/180;
                 var corners=new List<Point3DModel>();
                 var lower=z0+opening.Sill+part.Bottom;var upper=z0+opening.Sill+part.Top;
                 foreach(var pair in new[] {new[]{part.Left,-part.Depth/2},new[]{part.Right,-part.Depth/2},new[]{part.Right,part.Depth/2},new[]{part.Left,part.Depth/2}}) {
-                    var x=pair[0];var y=pair[1]+part.NormalOffset;
+                    var x=pair[0];var y=pair[1]+part.NormalOffset+(hinge?.Shift??0);
                     if(part.Face==0 && type.ElevationType=="凸窗") {
                         var depth=type.BayLeftDepth+(type.BayRightDepth-type.BayLeftDepth)*x/opening.Width;
                         y=part.Kind=="bay-cap" ? pair[1]+part.Depth/2 : y+depth;
                     }
                     if(part.Face!=0){var along=y; y=x; x=part.Face<0 ? -along : opening.Width+along;}
-                    var cell=part.Cell;var angle=(opening.OpenIn3D.HasValue?(opening.OpenIn3D.Value?opening.PlanOpenAngle:0):(type.OpenAngle??0))*Math.PI/180;
-                    if(cell!=null && angle>0 && part.Face==0 && (cell.Opening??"").Contains("平开")) {
-                        var right=(cell.Opening??"").Contains("右");var pivot=right ? cell.Right : cell.Left;
-                        var a=right ? -angle : angle;var dx=x-pivot;var dy=y-part.NormalOffset;
-                        x=pivot+dx*Math.Cos(a)-dy*Math.Sin(a);y=part.NormalOffset+dx*Math.Sin(a)+dy*Math.Cos(a);
+                    if(hinge!=null && openAngle>0 && (cell.Opening??"").Contains("平开")) {
+                        var right=(cell.Opening??"").Contains("右");var pivot=hinge.Along;
+                        var pivotNormal=hinge.Normal;
+                        if(type.ElevationType=="凸窗")pivotNormal+=type.BayLeftDepth+(type.BayRightDepth-type.BayLeftDepth)*pivot/opening.Width;
+                        var a=right ? -openAngle : openAngle;var dx=x-pivot;var dy=y-pivotNormal;
+                        x=pivot+dx*Math.Cos(a)-dy*Math.Sin(a);y=pivotNormal+dx*Math.Sin(a)+dy*Math.Cos(a);
                     }
                     if(opening.PlanFlipAlong)x=opening.Width-x;
                     if(opening.PlanFlipNormal)y=-y;
@@ -406,9 +446,10 @@ namespace BatchPdfPublisher.BuildingModel
                 var faceStart=volume.Faces.Count;
                 AddPrism(volume,corners,lower,upper,part.Kind,wall.StoreyId,opening.Id,ref first);
                 var suspended=part.Cell!=null && (part.Cell.Opening=="上悬"||part.Cell.Opening=="下悬");
-                if(suspended && (type.OpenAngle??0)>0 && part.Face==0) {
-                    var pivotZ=z0+opening.Sill+(part.Cell.Opening=="上悬" ? part.Cell.Top : part.Cell.Bottom);
-                    var pivotNormal=part.NormalOffset;var a=(type.OpenAngle??0)*Math.PI/180*(part.Cell.Opening=="上悬" ? 1 : -1);
+                if(suspended && openAngle>0 && hinge!=null) {
+                    var pivotZ=z0+opening.Sill+hinge.Elevation;
+                    var flip=(opening.PlanFlipNormal?-1:1)*(type.ElevationType=="凸窗"?bayDirection:1);
+                    var pivotNormal=hinge.Normal*flip;var a=openAngle*(part.Cell.Opening=="上悬" ? 1 : -1)*flip;
                     foreach(var face in volume.Faces.Skip(faceStart)) {
                         foreach(var p in face.Points) {
                             var normal=-uy*(p.X-start.X)+ux*(p.Y-start.Y)-pivotNormal;var dz=p.Z-pivotZ;

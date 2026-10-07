@@ -39,8 +39,14 @@ internal static class BuildingModelGlbExportTests
             var glb = ModelRoot.Load(path);
             var volume = BuildingVolumeBuilder.Build(model);
             CheckGeometry(glb, volume);
-            Assert(result.TriangleCount < volume.Faces.Sum(f => f.Points.Count - 2) / 2,
+            var sourceWallTriangles=volume.Faces.Where(f=>f.Kind=="wall").Sum(f=>f.Points.Count-2);
+            var exportedWallTriangles=glb.LogicalNodes.Where(n=>n.Mesh!=null&&n.Extras?["kind"]?.GetValue<string>()=="wall")
+                .Sum(n=>n.Mesh.Primitives.Sum(p=>p.GetIndices().Count/3));
+            Console.WriteLine($"Mesh counts total {volume.Faces.Sum(f=>f.Points.Count-2)} -> {result.TriangleCount}; walls {sourceWallTriangles} -> {exportedWallTriangles}");
+            // Only wall patches are unioned; changing frame/leaf detail must not skew this metric.
+            Assert(exportedWallTriangles < sourceWallTriangles / 2,
                 "墙面网格没有显著减少。");
+            Assert(result.TriangleCount<=volume.Faces.Sum(f=>f.Points.Count-2),"导出增加了整栋模型三角面。");
             Console.WriteLine("PASS 网格优化：" + volume.Faces.Sum(f => f.Points.Count - 2)
                 + " → " + result.TriangleCount + " 个三角面");
             Assert(result.StoreyCount == 2 && result.ElementCount ==
@@ -162,9 +168,11 @@ internal static class BuildingModelGlbExportTests
             var wall = sheet.Lines.First(l => l.Layer == ViewLayers.Cut);
             Assert(Math.Abs(wall.X2 - wall.X1 - 6000) < 1e-6, "建筑被比例缩放。");
             var frame = sheet.Lines.First(l => l.Layer == ViewLayers.SheetFrame);
-            Assert(Math.Abs(frame.X2 - frame.X1 - 420d * denominator) < 1e-6, "图框放大倍数错误。");
-            Assert(sheet.ModelSpaceSheet && sheet.Scale == denominator && sheet.PaperWidth == 420,
+            Assert(Math.Abs(frame.X2 - frame.X1 - sheet.PaperWidth * denominator) < 1e-6, "图框放大倍数错误。");
+            Assert(sheet.ModelSpaceSheet && sheet.Scale == denominator && sheet.PaperWidth >= 420,
                 "模型空间和纸张尺寸元数据错误。");
+            Assert(denominator==1?sheet.PaperWidth>420&&sheet.Warnings.Any(w=>w.Contains("扩展图框")):sheet.PaperWidth==420,
+                "图框应仅在真实尺寸内容放不下时扩展，不能缩小建筑。");
             Assert(Math.Abs(sheet.Dimensions[0].To - sheet.Dimensions[0].From - 6000) < 1e-6
                 && string.IsNullOrEmpty(sheet.Dimensions[0].Text), "标注不是实测尺寸。");
         }

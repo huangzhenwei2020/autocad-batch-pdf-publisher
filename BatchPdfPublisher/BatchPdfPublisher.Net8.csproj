@@ -23,6 +23,8 @@
     <!-- 建筑模型的纯逻辑层：与建模程序、测试工程共用同一份源码（只链接插件用到的三个文件）。 -->
     <Compile Include="..\Shared\BuildingModel\StructuralGeometry.cs" />
     <Compile Include="..\Shared\BuildingModel\CadStructuralRegistration.cs" />
+    <Compile Include="..\Shared\BuildingModel\ComponentPlanSymbol.cs" />
+    <Compile Include="..\Shared\BuildingModel\ComponentCatalog.cs" />
     <Compile Include="..\Shared\BuildingModel\ModelTypes.cs" Link="Features\BuildingModel\Shared\ModelTypes.cs" />
     <Compile Include="..\Shared\BuildingModel\DrawingAnnotationSettings.cs" />
     <Compile Include="..\Shared\BuildingModel\BuildingAxisLayout.cs" Link="Features\BuildingModel\Shared\BuildingAxisLayout.cs" />

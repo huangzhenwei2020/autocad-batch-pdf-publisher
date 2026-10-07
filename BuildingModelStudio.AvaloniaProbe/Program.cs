@@ -33,6 +33,8 @@ internal static class Program
     public static bool ParameterPerfCheck { get; private set; }
     public static bool OpeningEditorCheck { get; private set; }
     public static bool OpeningPlanCheck {get;private set;}
+    public static bool ComponentSourceCheck {get;private set;}
+    public static bool ComponentPackageCheck {get;private set;}
     public static bool BrowserCheck { get; private set; }
     public static bool AxisCheck {get;private set;}
     public static bool StructureCheck { get; private set; }
@@ -69,6 +71,8 @@ internal static class Program
             return 0;
         }
         Smoke = args.Contains("--smoke", StringComparer.OrdinalIgnoreCase);
+        ComponentSourceCheck=args.Contains("--component-source-check",StringComparer.OrdinalIgnoreCase);
+        ComponentPackageCheck=args.Contains("--component-package-check",StringComparer.OrdinalIgnoreCase);
         BrowserCheck=args.Contains("--browser-check",StringComparer.OrdinalIgnoreCase);
         AxisCheck=args.Contains("--axis-check",StringComparer.OrdinalIgnoreCase);
         StructureCheck=args.Contains("--structure-check",StringComparer.OrdinalIgnoreCase);

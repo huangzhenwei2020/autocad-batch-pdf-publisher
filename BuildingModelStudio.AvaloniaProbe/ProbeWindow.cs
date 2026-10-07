@@ -850,6 +850,7 @@ internal sealed partial class ProbeWindow : Window
         pages["出图"] = Page(Group("CAD 输出", _publish, _sendToCad, cancelPublish),
             Group("三维模型 GLB", _exportBuilding, _exportStorey, _cancelExport, openInBlender));
         pages["管理"] = Page(Group("模型文件", open, save, saveAs),
+            Group("构件资源", Action("图库",()=>_ = OpenComponentLibraryAsync()),Action("构件校验",()=>_ = new ComponentSourceInspectionWindow().ShowDialog(this))),
             Group("项目设置", Action("楼层设置", () => _ = OpenStoreySettingsAsync()),
                 Action("系统设置", () => _ = OpenSystemSettingsAsync())));
         void StyleRibbonControl(Control control, bool inRibbon = true)
@@ -1088,6 +1089,8 @@ internal sealed partial class ProbeWindow : Window
         "删除" => ("trash", "Del"),
         "删除选中" => ("trash", "Del"),
         "楼层设置" => ("layers", "LS"),
+        "构件校验" => ("box", "WLASSETCHECK"),
+        "图库" => ("box", "WLLIBRARY"),
         "轴网编辑" => ("grid-3x3", "AX"),
         "系统设置" => ("panel-top", "OPTIONS"),
         "打开模型" => ("folder-open", "Ctrl+O"),
@@ -1910,6 +1913,8 @@ internal sealed partial class ProbeWindow : Window
             case "DR": _ = OpenOpeningPlacementAsync("门"); return;
             case "WN": _ = OpenOpeningPlacementAsync("窗"); return;
             case "LS": _ = OpenStoreySettingsAsync(); return;
+            case "WLASSETCHECK": _ = new ComponentSourceInspectionWindow().ShowDialog(this); return;
+            case "WLLIBRARY": _ = OpenComponentLibraryAsync(); return;
             case "AX": BeginAxisEditing(); return;
             case "OPTIONS": _ = OpenSystemSettingsAsync(); return;
             case "PL": _workspaces.SelectedIndex = 1; return;
@@ -2169,6 +2174,7 @@ internal sealed partial class ProbeWindow : Window
 
     private void RefreshProperties()
     {
+        _openingParameterDraftInvalid=false;
         var contextOpening=_selectedVisualIds.Count==1?_session.Model.Openings.FirstOrDefault(o=>o.Id==_selectedId):null;
         _openingContextTools.IsVisible=contextOpening!=null;
         if(contextOpening!=null) {
@@ -2255,6 +2261,13 @@ internal sealed partial class ProbeWindow : Window
             var host=_session.Model.Walls.FirstOrDefault(w=>w.Id==opening.HostWallId);
             _properties.Children.Add(new TextBlock { Text = $"{opening.Kind} {opening.Code} · 宿主墙 {host?.Code}", TextWrapping = TextWrapping.Wrap });
             BuildOpeningPresentationProperties(opening);
+            var sharedPlan=host!=null&&_session.Model.Storeys.Any(s=>s.TemplateStoreyId==host.StoreyId);
+            var sizeScope=new ComboBox {Name="OpeningSizeScope",ItemsSource=new[]{sharedPlan?"当前平面这一樘（共用层同步）":"当前这一樘（尺寸改变自动新编号）","同编号全部（按新尺寸改编号）"},SelectedIndex=0,
+                MinHeight=36,HorizontalAlignment=HorizontalAlignment.Stretch,FontSize=13};
+            _properties.Children.Add(new TextBlock {Text="洞口尺寸修改范围",FontSize=13});_properties.Children.Add(sizeScope);
+            _properties.Children.Add(new TextBlock {Name="OpeningSizePreview",IsVisible=false,FontSize=12,TextWrapping=TextWrapping.Wrap,Foreground=new SolidColorBrush(Color.Parse("#A7B8C5"))});
+            var onlySizeInstance=true;sizeScope.SelectionChanged+=(_,_)=>onlySizeInstance=sizeScope.SelectedIndex==0;
+            ToolTip.SetTip(sizeScope,"宽高与分格一起修改；定位、窗台和门槛只改当前樘。共用标准层的洞口位置与尺寸同步。仅单层修改请先解除楼层共用。");
             var offsetField = AddNumberField("沿墙中心定位（mm）", opening.Offset,"OpeningOffset");
             var widthField = AddNumberField("洞口宽（mm）", opening.Width,"OpeningWidth");
             var heightField = AddNumberField("洞口高（mm）", opening.Height,"OpeningHeight");
@@ -2262,6 +2275,8 @@ internal sealed partial class ProbeWindow : Window
             var thresholdField=(opening.Kind??"").Contains("门")?AddNumberField("门槛高（mm）",opening.ThresholdHeight,"OpeningThresholdHeight"):null;
             var geometryFields=new List<TextBox> {offsetField,widthField,heightField,sillField};
             if(thresholdField!=null){ToolTip.SetTip(thresholdField,"0 表示无门槛；相对洞口底的高度");geometryFields.Add(thresholdField);}
+            _properties.Children.Add(new TextBlock {Name="OpeningParameterFeedback",IsVisible=false,FontSize=13,
+                TextWrapping=TextWrapping.Wrap,Foreground=new SolidColorBrush(Color.Parse("#FFB888"))});
             var originalGeometry=new[]{opening.Offset,opening.Width,opening.Height,opening.Sill,opening.ThresholdHeight};
             double[] GeometryValues(double[] values)
             {
@@ -2273,19 +2288,14 @@ internal sealed partial class ProbeWindow : Window
             }
             var apply = InspectorButton("应用门窗参数");
             apply.Name="ApplyOpeningGeometry";
-            apply.Click += (_, _) => _geometryApplyTask=ApplyGeometryAsync(
-                geometryFields, values =>
-            {
-                values=GeometryValues(values);
-                var success = _session.TrySetOpeningGeometry(opening.Id, values[0], values[1], values[2], values[3], values.Length>4?values[4]:0, out var error);
-                return (success, error);
-            },opening.Id);
+            apply.Click += (_, _) => _geometryApplyTask=ApplyOpeningGeometryAsync(opening.Id,geometryFields,onlySizeInstance,GeometryValues);
             _properties.Children.Add(apply);
             BindParameterPreview(geometryFields,(trial,values)=>
             {
                 values=GeometryValues(values);
-                return trial.TrySetOpeningGeometry(opening.Id,values[0],values[1],values[2],values[3],values.Length>4?values[4]:0,out _);
-            },opening.Id);
+                var success=trial.TrySetOpeningParameters(opening.Id,values[0],values[1],values[2],values[3],values.Length>4?values[4]:0,onlySizeInstance,out var error);
+                return (success,error);
+            },opening.Id,sizeScope);
         }
         else _properties.Children.Add(new TextBlock { Text = "此构件当前只支持选择。" });
     }
@@ -2332,13 +2342,8 @@ internal sealed partial class ProbeWindow : Window
                 return;
             }
         }
-        var inputGeneration=_parameterInputGeneration;
         var original=_session.Model;
-        if(!_parameterPreviewTask.IsCompleted)
-        {
-            await _parameterPreviewTask;
-            if(inputGeneration!=_parameterInputGeneration || !ReferenceEquals(original,_session.Model))return;
-        }
+        // Apply confirms these values now; an unfinished preview must not make Esc cancel the commit.
         var result = edit(values);
         if (!result.success) { _status.Text = result.error; return; }
         await RefreshModelAsync("已应用构件参数",openingId==null?null:original,openingId);
@@ -2487,6 +2492,8 @@ internal sealed partial class ProbeWindow : Window
             var slabSuccess = !Program.SlabCheck || await RunSlabSmokeCheckAsync();
             if(Program.AxisCheck){try{await RunAxisCheckAsync();}catch(Exception ex){Console.WriteLine("AXIS_FAILED "+ex);slabSuccess=false;}}
             if(Program.OpeningPlanCheck){try{await RunOpeningPlanCheckAsync();}catch(Exception ex){Console.WriteLine("OPENING_PLAN_FAILED "+ex);slabSuccess=false;}}
+            if(Program.ComponentSourceCheck){try{await RunComponentSourceCheckAsync();}catch(Exception ex){Console.WriteLine("COMPONENT_SOURCE_UI_FAILED "+ex);slabSuccess=false;}}
+            if(Program.ComponentPackageCheck){try{await RunComponentPackageCheckAsync();}catch(Exception ex){Console.WriteLine("COMPONENT_PACKAGE_UI_FAILED "+ex);slabSuccess=false;}}
             if(Program.StructureCheck){try{await RunStructureCheckAsync();}catch(Exception ex){Console.WriteLine("STRUCTURE_FAILED "+ex);slabSuccess=false;}}
             if(Program.BrowserCheck){try{await RunBrowserStateCheckAsync();}catch(Exception ex){Console.WriteLine("BROWSER_STATE_FAILED "+ex);slabSuccess=false;}}
             if(Program.ParameterCheck)slabSuccess &= await RunParameterPreviewCheckAsync();
@@ -2526,6 +2533,15 @@ internal sealed partial class ProbeWindow : Window
             }
             var hit = _viewport.FrameRendered
                 ? _viewport.PickAt(new Point(_viewport.Bounds.Width / 2, _viewport.Bounds.Height / 2)) : null;
+            if(Program.OpeningEditorCheck&&_viewport.FrameRendered&&hit==null) {
+                // A single wall's view center can be inside its window hole; pick an actual face instead.
+                foreach(var face in _viewport.CurrentScene.Volume.Faces.Where(f=>f.Points.Count>=3&&_session.Model.Walls.Any(w=>w.Id==f.ElementId))) {
+                    var p=_viewport.ProjectModelPoint(face.Points.Average(p=>p.X),face.Points.Average(p=>p.Y),face.Points.Average(p=>p.Z));
+                    if(p==null||p.Value.X<0||p.Value.Y<0||p.Value.X>=_viewport.Bounds.Width||p.Value.Y>=_viewport.Bounds.Height)continue;
+                    var candidate=_viewport.PickAt(p.Value);
+                    if(candidate!=face.ElementId)continue;hit=candidate;break;
+                }
+            }
             var success = emptyProject ? _filePath == Program.ModelPath && File.Exists(_filePath)
                 : _viewport.FrameRendered && (hit != null
                     || (Program.SnapshotCamera.HasValue && Program.SnapshotPath != null));
@@ -2545,7 +2561,7 @@ internal sealed partial class ProbeWindow : Window
             Console.WriteLine(success ? (emptyProject ? "AVALONIA_EMPTY_PROJECT_OK " + _filePath
                 : hit != null ? "AVALONIA_GPU_PICK_OK " + hit
                     : "AVALONIA_SNAPSHOT_RENDER_OK center=empty") : "AVALONIA_GPU_OR_PICK_FAILED");
-            if (Program.GizmoCheck || Program.ShortcutCheck || Program.SlabCheck || Program.ParameterCheck || Program.ParameterPerfCheck || Program.DrawingCheck || Program.OpeningEditorCheck || Program.OpeningPlanCheck || Program.StoreyCheck || Program.ZoomCheck || Program.StructureCheck || Program.AxisCheck) _closeConfirmed = true;
+            if (Program.GizmoCheck || Program.ShortcutCheck || Program.SlabCheck || Program.ParameterCheck || Program.ParameterPerfCheck || Program.DrawingCheck || Program.OpeningEditorCheck || Program.OpeningPlanCheck || Program.ComponentSourceCheck || Program.ComponentPackageCheck || Program.StoreyCheck || Program.ZoomCheck || Program.StructureCheck || Program.AxisCheck) _closeConfirmed = true;
             Close();
         };
         if (IsVisible) timer.Start();

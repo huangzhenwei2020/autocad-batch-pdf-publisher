@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework><UseWPF>true</UseWPF><OutputType>Exe</OutputType>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../BuildingModel.Core/BuildingModel.Core.csproj" />
+    <Compile Include="ComponentPlanUiTests.cs" />
+    <Compile Include="../BatchPdfPublisher/Features/BuildingModel/Views/CadComponentPlanWindow.cs" Link="CadComponentPlanWindow.cs" />
+    <Compile Include="../BatchPdfPublisher/Features/BuildingModel/Views/CadComponentLibraryWindow.cs" Link="CadComponentLibraryWindow.cs" />
+  </ItemGroup>
+</Project>

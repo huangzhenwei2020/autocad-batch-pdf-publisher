@@ -25,6 +25,7 @@ namespace BatchPdfPublisher.BuildingModel
                 || v.Id.IndexOfAny(new[] { '/', '\\', ':', '*', '?', '"', '<', '>', '|' }) >= 0
                 || string.IsNullOrWhiteSpace(v.Title) || v.Scale < 1 || v.Scale > 10000
                 || (v.Annotations != null && !DrawingAnnotationSettings.Valid(v.Annotations))
+                || !DrawingLineWeights.Valid(v.LineWeights)
                 || !Enum.IsDefined(typeof(ViewKind), v.Kind) || v.Kind == ViewKind.Sheet
                 || !Finite(v.CutPosition) || !Finite(v.ViewDepth) || v.ViewDepth < 0
                 || !Finite(v.AzimuthDegrees) || !Finite(v.ElevationDegrees) || Math.Abs(v.ElevationDegrees) >= 89
@@ -738,6 +739,8 @@ namespace BatchPdfPublisher.BuildingModel
             opening.ThresholdHeight = thresholdHeight;
             error = ValidateOpeningGeometry(candidate, wall, opening);
             if (error != null) return false;
+            error = OpeningConstruction.Validate(opening, OpeningConstruction.Resolve(candidate, opening));
+            if (error != null) return false;
             Commit(candidate);
             return true;
         }
@@ -791,7 +794,9 @@ namespace BatchPdfPublisher.BuildingModel
             if (!Finite(wallHeight) || wallHeight <= 0d)
                 return "宿主墙没有有效高度或楼层。";
             if (opening.Sill + opening.Height > wallHeight + 0.5d)
-                return "洞口顶部超出宿主墙高度（" + Math.Round(wallHeight) + " mm）。";
+                return "洞口顶部：窗台 " + Math.Round(opening.Sill) + " + 洞口 " + Math.Round(opening.Height) + " = "
+                    + Math.Round(opening.Sill+opening.Height) + " mm，超出宿主墙高度 " + Math.Round(wallHeight)
+                    + " mm；当前窗台下洞口高最多 " + Math.Round(Math.Max(0,wallHeight-opening.Sill)) + " mm。";
             return null;
         }
 

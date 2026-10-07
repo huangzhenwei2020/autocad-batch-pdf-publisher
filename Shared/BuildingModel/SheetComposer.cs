@@ -316,6 +316,13 @@ namespace BatchPdfPublisher.BuildingModel
             var offsetX = cell[0] + (cellWidth - viewWidth) / 2d - bounds[0] * scale;
             var offsetY = cell[1] + (cellHeight - viewHeight) / 2d - bounds[1] * scale + ViewTitleSpace;
 
+            var areaIds=new Dictionary<string,string>();
+            var arcPrefix="sheet-cell-"+document.Lines.Count+"-";
+            foreach(var area in view.StrokeAreas ?? new List<ViewStrokeArea>()) {
+                var id="sheet-area-"+document.StrokeAreas.Count;areaIds[area.Id]=id;
+                document.StrokeAreas.Add(new ViewStrokeArea {Id=id,Contours=area.Contours.Select(c=>c
+                    .Select(p=>new PointModel(p.X*scale+offsetX,p.Y*scale+offsetY)).ToList()).ToList()});
+            }
             foreach (var line in view.Lines ?? new List<ViewLine>())
             {
                 if (line == null) continue;
@@ -323,6 +330,9 @@ namespace BatchPdfPublisher.BuildingModel
                 {
                     Layer = line.Layer,
                     LineType = line.LineType,
+                    OpeningArcId = line.OpeningArcId==null?null:arcPrefix+line.OpeningArcId,
+                    LineWeight = line.LineWeight,
+                    StrokeAreaId = line.StrokeAreaId!=null&&areaIds.TryGetValue(line.StrokeAreaId,out var areaId)?areaId:null,
                     X1 = line.X1 * scale + offsetX, Y1 = line.Y1 * scale + offsetY,
                     X2 = line.X2 * scale + offsetX, Y2 = line.Y2 * scale + offsetY
                 });
@@ -333,6 +343,7 @@ namespace BatchPdfPublisher.BuildingModel
                 document.Circles.Add(new ViewCircle
                 {
                     Layer = circle.Layer,
+                    LineWeight = circle.LineWeight,
                     X = circle.X * scale + offsetX, Y = circle.Y * scale + offsetY,
                     Radius = circle.Radius * scale
                 });
@@ -343,6 +354,7 @@ namespace BatchPdfPublisher.BuildingModel
                 document.Texts.Add(new ViewText
                 {
                     Layer = text.Layer, Text = text.Text, WidthFactor=text.WidthFactor,
+                    LineWeight = text.LineWeight,
                     Rotation = text.Rotation,
                     X = text.X * scale + offsetX, Y = text.Y * scale + offsetY,
                     Height = text.Height * scale
@@ -354,6 +366,7 @@ namespace BatchPdfPublisher.BuildingModel
                 document.Hatches.Add(new ViewHatch
                 {
                     Layer = hatch.Layer, Pattern = hatch.Pattern, Scale = hatch.Scale, Angle = hatch.Angle,
+                    LineWeight = hatch.LineWeight,
                     Spacing = string.Equals(hatch.Pattern,"SOLID",StringComparison.OrdinalIgnoreCase) ? 0 : Math.Max(0.3d, hatch.Spacing * scale),
                     Boundary = hatch.Boundary.Where(p => p != null)
                         .Select(p => new PointModel(p.X * scale + offsetX, p.Y * scale + offsetY)).ToList()
@@ -369,6 +382,7 @@ namespace BatchPdfPublisher.BuildingModel
                 document.Dimensions.Add(new ViewDimension
                 {
                     Layer = dimension.Layer, Vertical = dimension.Vertical,
+                    LineWeight = dimension.LineWeight,
                     From = dimension.From * scale + (dimension.Vertical ? offsetY : offsetX),
                     To = dimension.To * scale + (dimension.Vertical ? offsetY : offsetX),
                     AnchorPosition = dimension.AnchorPosition * scale + (dimension.Vertical ? offsetX : offsetY),

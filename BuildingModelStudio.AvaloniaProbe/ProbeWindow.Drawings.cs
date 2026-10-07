@@ -22,6 +22,8 @@ internal sealed partial class ProbeWindow
     private ViewDefinitionModel? _drawingDraft;
     private TextBox? _drawingTitle,_drawingScale,_drawingCut,_drawingDepth,_drawingYaw,_drawingPitch;
     private TextBox? _drawingTextHeight,_drawingWidthFactor,_drawingAxisDiameter;
+    private readonly Dictionary<string,ComboBox> _drawingWeights=new();
+    private sealed record WeightItem(int? Value,string Label) {public override string ToString()=>Label;}
     private readonly TextBox _quickDrawingScale=new() {Width=72,Height=32,VerticalContentAlignment=VerticalAlignment.Center};
     private bool _applyingQuickScale;
     private ComboBox? _drawingFloor,_drawingDirection,_drawingCutAxis,_drawingSign;
@@ -191,6 +193,7 @@ internal sealed partial class ProbeWindow
         var source=_drawingCatalogue.FirstOrDefault(v=>v.Id==_drawingId);
         if(source==null) { _properties.Children.Add(new TextBlock { Text="新增图纸或从项目浏览器选择图纸。" });_buildingDrawingProperties=false;return; }
         _drawingDraft=CopyDrawing(source);
+        _drawingWeights.Clear();
         TextBox TextField(string name,string value) {
             var field=new TextBox { Text=value,Height=32,VerticalContentAlignment=VerticalAlignment.Center };
             _properties.Children.Add(new TextBlock { Text=name });_properties.Children.Add(field);
@@ -225,7 +228,21 @@ internal sealed partial class ProbeWindow
             _drawingPerspective=new CheckBox { Content="透视",IsChecked=source.Perspective };
             _drawingPerspective.IsCheckedChanged+=(_,_)=>PreviewDrawingParameters();_properties.Children.Add(_drawingPerspective);
         }
-        _properties.Children.Add(new TextBlock { Text="参数变化会预览；应用后保存到模型，Ctrl+Z 可撤销。",TextWrapping=TextWrapping.Wrap });
+        var weights=new StackPanel {Spacing=2};
+        foreach(var style in ViewLayers.All) {
+            var label=style.Name==ViewLayers.Cut?"墙柱剖切":style.Name==ViewLayers.Elevation?"可见轮廓":style.Name.Replace("WL-模型-","");
+            var items=new[]{new WeightItem(null,"随图层 ("+(style.LineWeight/100d).ToString("0.00")+")")}
+                .Concat(DrawingLineWeights.Values.Select(n=>new WeightItem(n,(n/100d).ToString("0.00")))).ToArray();
+            var selected=source.LineWeights!=null&&source.LineWeights.TryGetValue(style.Name,out var value)?(int?)value:null;
+            var choice=new ComboBox {ItemsSource=items,SelectedItem=items.First(i=>i.Value==selected),Height=32,
+                HorizontalAlignment=HorizontalAlignment.Stretch};
+            ToolTip.SetTip(choice,style.Description+" · mm");
+            var row=new Grid {ColumnDefinitions=new ColumnDefinitions("100,*")};
+            row.Children.Add(new TextBlock {Text=label,VerticalAlignment=VerticalAlignment.Center});
+            Grid.SetColumn(choice,1);row.Children.Add(choice);weights.Children.Add(row);
+            _drawingWeights[style.Name]=choice;choice.SelectionChanged+=(_,_)=>PreviewDrawingParameters();
+        }
+        _properties.Children.Add(new Expander {Header="线宽 mm",Content=weights,HorizontalAlignment=HorizontalAlignment.Stretch});
         var apply=InspectorButton("应用图纸参数");
         apply.Click+=async(_,_)=> {
             if(!ReadDrawingDraft(out var draft)) { _status.Text="图名、比例或投影参数无效。";return; }
@@ -247,6 +264,9 @@ internal sealed partial class ProbeWindow
             !TryNumber(_drawingAxisDiameter?.Text,out var diameter))return false;
         value.Annotations=new() {TextHeight=height,WidthFactor=width,AxisDiameter=diameter};
         if(!DrawingAnnotationSettings.Valid(value.Annotations))return false;
+        var overrides=_drawingWeights.Where(p=>(p.Value.SelectedItem as WeightItem)?.Value!=null)
+            .ToDictionary(p=>p.Key,p=>((WeightItem)p.Value.SelectedItem!).Value!.Value);
+        value.LineWeights=overrides.Count==0?null:overrides;
         if(value.Kind==ViewKind.Plan) {
             if(_drawingFloor?.SelectedItem is not StoreyItem floor)return false;value.StoreyIds=new() { floor.Id };
         }
@@ -279,6 +299,7 @@ internal sealed partial class ProbeWindow
             await _drawingPreviewTask;
         }
         try {
+            RunDrawingLineworkRasterCheck();
             var original=BuildingModelJson.ToJson(_session.Model);var count=_drawingCatalogue.Count;
             SelectDrawing(_drawingCatalogue.First(v=>v.Kind==ViewKind.Plan).Id);await Flush();
             _drawingTextHeight!.Text="3.5";_drawingWidthFactor!.Text="0.7";_drawingAxisDiameter!.Text="10";await Flush();
@@ -288,6 +309,26 @@ internal sealed partial class ProbeWindow
             _drawingTextHeight.Text="-";await Flush();
             if(_drawingCanvas.View!=validPreview)throw new InvalidOperationException("无效文字参数覆盖了有效预览");
             RefreshProperties();
+            _drawingWeights[ViewLayers.Cut].SelectedIndex=Array.IndexOf(DrawingLineWeights.Values,70)+1;
+            _drawingWeights[ViewLayers.Opening].SelectedIndex=Array.IndexOf(DrawingLineWeights.Values,25)+1;
+            await Flush();
+            _properties.Children.OfType<Expander>().Single().IsExpanded=true;
+            await Task.Delay(350);_drawingWeights[ViewLayers.Cut].BringIntoView();await Task.Delay(100);
+            using(var image=new Avalonia.Media.Imaging.RenderTargetBitmap(new PixelSize((int)Bounds.Width,(int)Bounds.Height),new Vector(96,96))) {
+                image.Render(this);image.Save(Path.GetFullPath($".artifacts/drawing-linework/lineweights-ui-{(int)Bounds.Width}x{(int)Bounds.Height}.png"),
+                    Avalonia.Media.Imaging.PngBitmapEncoderOptions.Default);
+            }
+            if(_drawingWeights.Any(p=>p.Value.Bounds.Width<100||p.Value.Bounds.Height<32))
+                throw new InvalidOperationException("线宽选项在小窗口被挤压或裁切："+string.Join(";",_drawingWeights.Select(p=>p.Key+"="+p.Value.Bounds)));
+            if(!_drawingCanvas.View!.Lines.Where(l=>l.Layer==ViewLayers.Cut).All(l=>l.LineWeight==70)
+                ||!_drawingCanvas.View.Lines.Where(l=>l.Layer==ViewLayers.Opening).All(l=>l.LineWeight==25)
+                ||BuildingModelJson.ToJson(_session.Model)!=original)throw new InvalidOperationException("线宽预览失败或提前保存");
+            _properties.Children.OfType<Button>().First(b=>Equals(b.Content,"应用图纸参数"))
+                .RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));await Flush();
+            if(_session.Model.DrawingViews.Single(v=>v.Id==_drawingId).LineWeights[ViewLayers.Cut]!=70)
+                throw new InvalidOperationException("线宽没有保存");
+            if(!_session.Undo()||BuildingModelJson.ToJson(_session.Model)!=original)throw new InvalidOperationException("线宽不能整笔撤销");
+            await RefreshModelAsync("线宽检查完成");await Flush();
             _quickDrawingScale.Text="200";await ApplyQuickDrawingScaleAsync();await Flush();
             if(_drawingCanvas.View?.Scale!=200||_session.Model.DrawingViews.Single(v=>v.Id==_drawingId).Scale!=200)
                 throw new InvalidOperationException("顶栏比例没有立即提交与刷新");
@@ -332,7 +373,7 @@ internal sealed partial class ProbeWindow
                     throw new InvalidOperationException("编辑器图纸生成与 CAD 待落图清单不完整："+_status.Text);
                 Console.WriteLine("DRAWING_CAD_PUBLISH_OK catalogue="+_drawingCatalogue.Count+" cached="+entries.Count);
             }
-            Console.WriteLine("DRAWING_UI_CHECK_OK all-kinds default-catalogue add copy remove live-preview invalid-input apply undo redo quick-scale typography-preview");
+            Console.WriteLine("DRAWING_UI_CHECK_OK all-kinds default-catalogue add copy remove live-preview invalid-input apply undo redo quick-scale typography-preview cad-lineweights-preview-save-undo");
             return true;
         } catch(Exception ex) { Console.Error.WriteLine("DRAWING_UI_CHECK_FAILED "+ex);return false; }
     }

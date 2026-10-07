@@ -1196,7 +1196,7 @@ internal static class OpeningElevationTests
     /// <summary>
     /// 一道 3000 长的墙、中间一樘 1500×1800@900 的窗（编号 C1518，做法「双扇等分 + 左平开」）。
     /// 生成器给出的几何是可以手算的：两格各 750 宽；外框 50；两扇都是可开启扇，
-    /// 所以中间的竖挺合成一条线；每扇的开启线是"合页角 → 对侧中点 → 另一角"的两段折线。
+    /// 所以中间的竖挺合成一条线；每扇的开启线尖端指向实际合页。
     /// </summary>
     private static void DrawsMullionsAndOpeningLines()
     {
@@ -1228,11 +1228,11 @@ internal static class OpeningElevationTests
         Assert(HasLine(detailed, 800d - u, 950d - z, 1500d - u, 950d - z), "缺少第一格的下框线（y=950）");
         Assert(HasLine(detailed, 1500d - u, 950d - z, 2200d - u, 950d - z), "缺少第二格的下框线（y=950）");
         Assert(HasLine(detailed, 2200d - u, 950d - z, 2200d - u, 2650d - z), "缺少第二格的右框线（x=2200）");
-        // 开启线（左平开）：合页在左，折线打到右中
-        Assert(HasLine(detailed, 800d - u, 950d - z, 1500d - u, 1800d - z), "第一扇缺少「左下 → 右中」的开启线");
-        Assert(HasLine(detailed, 1500d - u, 1800d - z, 800d - u, 2650d - z), "第一扇缺少「右中 → 左上」的开启线");
-        Assert(HasLine(detailed, 1500d - u, 950d - z, 2200d - u, 1800d - z), "第二扇缺少「左下 → 右中」的开启线");
-        Assert(HasLine(detailed, 2200d - u, 1800d - z, 1500d - u, 2650d - z), "第二扇缺少「右中 → 左上」的开启线");
+        // 左平开：折线尖端指向左合页。
+        Assert(HasLine(detailed, 1500d - u, 950d - z, 800d - u, 1800d - z), "第一扇缺少指向左合页的开启线");
+        Assert(HasLine(detailed, 800d - u, 1800d - z, 1500d - u, 2650d - z), "第一扇缺少指向左合页的开启线（第二段）");
+        Assert(HasLine(detailed, 2200d - u, 950d - z, 1500d - u, 1800d - z), "第二扇缺少指向左合页的开启线");
+        Assert(HasLine(detailed, 1500d - u, 1800d - z, 2200d - u, 2650d - z), "第二扇缺少指向左合页的开启线（第二段）");
 
         Console.WriteLine("   分格与开启线：洞口 4 条边 + 做法 11 条 = " + detailLines
             + " 条（中挺 x=1500、外框内边 6 条、开启线 4 段）");
@@ -1251,10 +1251,10 @@ internal static class OpeningElevationTests
 
         // 洞口 x∈[750,2250]；北立面 U=-x → 洞口局部 x=0 对应 U=-750（视图右边）。
         // 第一扇（局部 50..750）的合页在局部 50 → U=-800。
-        Assert(HasLine(north, -800d - u, 950d - z, -1500d - u, 1800d - z), "北立面第一扇开启线没有镜像");
-        Assert(HasLine(north, -1500d - u, 1800d - z, -800d - u, 2650d - z), "北立面第一扇开启线没有镜像（第二段）");
+        Assert(HasLine(north, -1500d - u, 950d - z, -800d - u, 1800d - z), "北立面第一扇开启线没有镜像");
+        Assert(HasLine(north, -800d - u, 1800d - z, -1500d - u, 2650d - z), "北立面第一扇开启线没有镜像（第二段）");
         // 不镜像的话会画成 U = ou0 + x = -2250 + x：这两段就是错的画法
-        Assert(!HasLine(north, -2200d - u, 950d - z, -1500d - u, 1800d - z), "北立面开启线画成了南立面的方向");
+        Assert(!HasLine(north, -1500d - u, 950d - z, -2200d - u, 1800d - z), "北立面开启线画成了南立面的方向");
         Console.WriteLine("   背立面镜像：开启线合页侧随视线反向（U=-800 一侧）");
     }
 
@@ -1309,9 +1309,9 @@ internal static class OpeningElevationTests
         // 左边固定扇（局部 50..875）不应有开启线：这两段就是"如果它是平开扇"会有的线
         Assert(!HasLine(view, 800d - u, 950d - z, 1625d - u, 1800d - z), "固定扇不应有开启线");
         Assert(!HasLine(view, 1625d - u, 1800d - z, 800d - u, 2650d - z), "固定扇不应有开启线（第二段）");
-        // 右边平开扇：门扇（IsDoor=1）底边落地（N 型门框不画下框），合页在左 → 折线打到右中
-        Assert(HasLine(view, 1675d - u, 900d - z, 2200d - u, 1775d - z), "右扇缺少「左下 → 右中」的开启线");
-        Assert(HasLine(view, 2200d - u, 1775d - z, 1675d - u, 2650d - z), "右扇缺少「右中 → 左上」的开启线");
+        // 门扇底边落地，立面折线尖端指向左侧合页。
+        Assert(HasLine(view, 2200d - u, 900d - z, 1675d - u, 1775d - z), "右扇缺少指向左合页的开启线");
+        Assert(HasLine(view, 1675d - u, 1775d - z, 2200d - u, 2650d - z), "右扇缺少指向左合页的开启线（第二段）");
         // 固定扇的材料是玻璃 → 生成器会画 3 条玻璃符号线（也说明"材料"字段传到了生成器）
         var glassMarks = view.Lines.Count(l => l.Layer == ViewLayers.Opening
             && Math.Abs(l.X2 - l.X1) > 1d && Math.Abs(l.Y2 - l.Y1) > 1d
@@ -1361,8 +1361,8 @@ internal static class OpeningElevationTests
         Assert(ShortDiagonalCount(at50) == 3, "1:50 应有 3 条玻璃材料符号线，实际 " + ShortDiagonalCount(at50));
         // 两种比例都要有外框内边与开启线
         Assert(HasLine(at100, 800d - u, 950d - z, 2200d - u, 950d - z), "1:100 缺少外框内边");
-        Assert(HasLine(at100, 800d - u, 950d - z, 2200d - u, 1800d - z), "1:100 缺少开启线");
-        Assert(HasLine(at50, 820d - u50, 970d - z50, 2180d - u50, 1800d - z50), "1:50 缺少开启线");
+        Assert(HasLine(at100, 2200d - u, 950d - z, 800d - u, 1800d - z), "1:100 缺少指向合页的开启线");
+        Assert(HasLine(at50, 2180d - u50, 970d - z50, 820d - u50, 1800d - z50), "1:50 缺少指向合页的开启线");
         Console.WriteLine("   详简之分：1:100 " + count100 + " 条（无安装缝/门扇内框/材料符号）/ 1:50 " + count50 + " 条（全画）");
     }
 

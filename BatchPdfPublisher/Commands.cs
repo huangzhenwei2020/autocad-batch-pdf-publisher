@@ -191,6 +191,32 @@ namespace BatchPdfPublisher
             TianzhengBuildingProbeService.Execute(Application.DocumentManager.MdiActiveDocument, true);
         }
 
+        [CommandMethod("WLCOMPONENTPLAN")]
+        public void ExportComponentPlanSymbol()
+        {
+            CadComponentSymbolExporter.Execute(Application.DocumentManager.MdiActiveDocument);
+        }
+
+        [CommandMethod("WLLIBRARY")]
+        public void OpenSharedComponentLibrary()
+        {
+            CadComponentLibraryService.Execute(Application.DocumentManager.MdiActiveDocument);
+        }
+
+        [CommandMethod("WLLIBRARYQA")]
+        public void CheckSharedComponentLibrary()
+        {
+            var document=Application.DocumentManager.MdiActiveDocument;if(document==null)return;
+            try{CadComponentLibraryService.RunNativeCheck(document);}catch(System.Exception ex){document.Editor.WriteMessage("\nCAD_COMPONENT_LIBRARY_FAILED "+ex);}
+        }
+
+        [CommandMethod("WLCOMPONENTPLANQA")]
+        public void CheckComponentPlanExtraction()
+        {
+            var document=Application.DocumentManager.MdiActiveDocument;if(document==null)return;
+            try{CadComponentSymbolExporter.RunNativeCheck(document);}catch(System.Exception ex){document.Editor.WriteMessage("\nCAD_COMPONENT_SOURCE_NATIVE_FAILED "+ex);}
+        }
+
         [CommandMethod("LINEVISION", CommandFlags.Session)]
         [CommandMethod("TXZCAD", CommandFlags.Session)]
         [CommandMethod("TXC", CommandFlags.Session)]
