@@ -17,8 +17,9 @@ namespace BatchPdfPublisher.BuildingModel
         public int ModelRevision { get; set; }
         public string ModelHash { get; set; }
         public string ModelPlanHash { get; set; }
+        public bool IsDeleted { get; set; }
         public bool IsModelCurrent => ModelRevision > 0 && ModelPlanHash == PlanHash;
-        public override string ToString() => Plan.Code + " · " + Plan.Name;
+        public override string ToString() => ComponentPlanSymbols.DisplayName(Plan);
     }
 
     public sealed class ComponentCatalogSnapshot
@@ -51,19 +52,27 @@ namespace BatchPdfPublisher.BuildingModel
                 if (dir.Exists && (dir.Attributes & FileAttributes.ReparsePoint) != 0)
                     throw new IOException("图库路径不允许包含链接目录。");
         }
-        public ComponentCatalogSnapshot Load()
+        public ComponentCatalogSnapshot Load(bool includeDeleted = false)
         {
             SafeDirectory(RecordsPath);
             var result = new ComponentCatalogSnapshot();
             if (!Directory.Exists(RecordsPath)) return result;
             foreach (var path in Directory.EnumerateFiles(RecordsPath, "*.json")) {
-                try { var record = Read(path); if (Path.GetFileName(path) != record.AssetId + ".json") throw new InvalidDataException("资源标识与文件不一致。"); result.Records.Add(record); }
+                try { var record = Read(path); if (Path.GetFileName(path) != record.AssetId + ".json") throw new InvalidDataException("资源标识与文件不一致。"); if(includeDeleted||!record.IsDeleted)result.Records.Add(record); }
                 catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is System.Runtime.Serialization.SerializationException || ex is ArgumentException)
                 { result.Errors.Add(Path.GetFileName(path) + ": " + ex.Message); }
             }
             return result;
         }
-        public ComponentCatalogRecord Get(string id) { SafeDirectory(RecordsPath); return Read(PathFor(id)); }
+        public ComponentCatalogRecord Get(string id) { SafeDirectory(RecordsPath); var record=Read(PathFor(id));if(record.IsDeleted)throw new IOException("图库资源已删除，请刷新图库。");return record; }
+        public ComponentCatalogRecord SetDeleted(string id,int expectedVersion,bool deleted)
+        {
+            using(Lock()) {
+                var record=Read(PathFor(id));if(record.Version!=expectedVersion)throw new IOException("图库已被修改，请刷新后重试。");
+                if(!deleted&&!string.IsNullOrWhiteSpace(record.Plan.Code)&&Load().Records.Any(r=>r.AssetId!=id&&r.Plan.Category==record.Plan.Category&&string.Equals(r.Plan.Code,record.Plan.Code,StringComparison.OrdinalIgnoreCase)))throw new InvalidDataException("该编号已有资源，请先处理编号冲突再恢复。");
+                if(record.IsDeleted==deleted)return record;record.IsDeleted=deleted;record.Version=checked(record.Version+1);Write(record);return record;
+            }
+        }
         private static bool Digest(string value) => value != null && value.Length == 64 && value.All(Uri.IsHexDigit);
         private static void Validate(ComponentCatalogRecord record)
         {
@@ -104,12 +113,13 @@ namespace BatchPdfPublisher.BuildingModel
             plan = ComponentPlanSymbols.Load(ComponentPlanSymbols.Bytes(plan));
             var hash = Hash(ComponentPlanSymbols.Bytes(plan));
             using (Lock()) {
-                var records = Load();
+                var records = Load(true);
                 if (records.Errors.Count > 0) throw new InvalidDataException("请先处理图库损坏记录：" + records.Errors[0]);
                 var existing = id == null ? null : records.Records.FirstOrDefault(r => r.AssetId == id);
+                if(existing?.IsDeleted==true)throw new IOException("图库资源已删除，请刷新图库；需要时先恢复资源。");
                 if(modelRevision>0&&existing!=null)return existing;
                 if ((existing?.Version ?? 0) != expectedVersion) throw new IOException("图库已被修改，请刷新后重试。");
-                if (records.Records.Any(r => r.AssetId != id && r.Plan.Category == plan.Category && string.Equals(r.Plan.Code, plan.Code, StringComparison.OrdinalIgnoreCase)))
+                if (!string.IsNullOrWhiteSpace(plan.Code) && records.Records.Any(r => !r.IsDeleted && r.AssetId != id && r.Plan.Category == plan.Category && !string.IsNullOrWhiteSpace(r.Plan.Code) && string.Equals(r.Plan.Code, plan.Code, StringComparison.OrdinalIgnoreCase)))
                     throw new InvalidDataException("该类别已有此编号，请选择原记录更新，或使用新编号。");
                 if (existing != null && existing.PlanHash == hash) return existing;
                 var record = existing ?? new ComponentCatalogRecord { AssetId = id ?? Guid.NewGuid().ToString("D") };

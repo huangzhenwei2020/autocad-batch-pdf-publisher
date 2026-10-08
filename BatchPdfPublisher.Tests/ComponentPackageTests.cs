@@ -23,6 +23,7 @@ internal static class ComponentPackageTests
             var windowPath=Path.Combine(root,"window.glb");MakeWindow(windowPath);
             var plan=Plan("C1216","Window",1200,1600,100);var planPath=Path.Combine(root,"window.wlplan.json");ComponentPlanSymbols.Save(planPath,plan);
             CheckCatalog(Path.Combine(run,"shared-catalog"),plan);
+            CheckDecorationDoor(root,run,library);
             Check(ComponentPlanSymbols.Pick(plan,new PointModel(500,1),2)==0,"Nearest native line was not picked");
             Check(ComponentPlanSymbols.Pick(plan,new PointModel(500,500),2)==-1,"Distant line was picked");
             var curvePlan=Plan("C0915","Window",900,1500,100);
@@ -145,12 +146,54 @@ internal static class ComponentPackageTests
         Reject(()=>studio.AttachModel(linked,2,new string('b',64)),"Model paired to outdated CAD plan");
         var recovered=studio.AttachModel(changed,2,new string('b',64));
         Check(cad.Get(record.AssetId).IsModelCurrent&&recovered.AssetId==record.AssetId,"Re-pair changed resource identity");
+        var deleted=cad.SetDeleted(record.AssetId,recovered.Version,true);
+        Check(studio.Load().Records.Count==0&&studio.Load(true).Records.Single().IsDeleted,"共享资源删除未同步或不支持恢复");
+        Reject(()=>studio.Get(record.AssetId),"删除后仍能插入资源");Reject(()=>studio.AttachModel(recovered,3,new string('b',64)),"旧作者窗口复活已删除资源");Reject(()=>cad.SetDeleted(record.AssetId,recovered.Version,false),"旧版本恢复覆盖删除状态");
+        var restored=cad.SetDeleted(record.AssetId,deleted.Version,false);Check(studio.Load().Records.Single().AssetId==record.AssetId&&restored.ModelHash==recovered.ModelHash&&restored.PlanHash==recovered.PlanHash,"恢复资源丢失身份或配对模型");
         var sibling=ComponentPlanSymbols.Load(ComponentPlanSymbols.Bytes(original));sibling.Code="C0915";sibling.Name=sibling.Code;
         cad.SavePlan(sibling);
         var corrupt=Path.Combine(cad.RecordsPath,Guid.NewGuid()+".json");File.WriteAllText(corrupt,"broken");
         Check(studio.Load().Records.Count==2&&studio.Load().Errors.Count==1,"Bad catalog record concealed valid resources");
         Reject(()=>cad.SavePlan(sibling),"Catalog corruption was ignored during duplicate validation");
         Console.WriteLine("COMPONENT_CATALOG_OK sharedIdentity CADOnly visibleInStudio duplicateCode noOp optimisticConcurrency invalidation preservedModel recover badRecordIsolation");
+    }
+    private static void CheckDecorationDoor(string root,string run,ComponentAssetLibrary ignored)
+    {
+        var library=new ComponentAssetLibrary(Path.Combine(run,"decoration-library"));
+        var catalog=new ComponentCatalog(library.Root);
+        var plan=Plan("","Door",900,2100,100);plan.SchemaVersion=3;plan.Name="平板单开装修门";plan.DoorAssembly="SingleSwing";
+        plan.Parts=new(){new ComponentPlanPart {Name="门套",Role="Frame",Primitives=new(){0,1}},new ComponentPlanPart {Name="主门扇",Role="PrimaryLeaf",Primitives=new(){2}},new ComponentPlanPart {Name="开启示意",Role="OpeningSymbol",Primitives=new(){3}}};
+        var record=catalog.SavePlan(plan);var second=catalog.SavePlan(plan);
+        Check(record.AssetId!=second.AssetId&&catalog.Load().Records.Count==2,"未定编号的资源不能独立入库");
+        var roundtrip=catalog.Get(record.AssetId).Plan;
+        var original=ComponentPlanSymbols.Bytes(roundtrip);
+        var basePoint=ComponentPlanSymbols.SuggestedInsertionBase(roundtrip);Check(basePoint.X==0&&basePoint.Y==0,"正常资源的基点被改动");
+        var offset=ComponentPlanSymbols.Load(original);foreach(var p in offset.Primitives){p.X1+=2300;p.X2+=2300;p.Y1+=4200;p.Y2+=4200;}
+        basePoint=ComponentPlanSymbols.SuggestedInsertionBase(offset);Check(basePoint.X==2300&&basePoint.Y==4200,"历史远离原点的资源未选择局部基点");
+        Check(ComponentPlanSymbols.Bytes(roundtrip).SequenceEqual(original),"计算插入基点改写了共享记录");
+        Check(ComponentPlanSymbols.RoleColor("Frame")!=ComponentPlanSymbols.RoleColor("Casing")&&ComponentPlanSymbols.RoleColor("Frame")!=ComponentPlanSymbols.RoleColor("PrimaryLeaf")&&ComponentPlanSymbols.RoleLineType("OpeningSymbol")=="DASHED","门的部件样式未区分");
+        offset.Primitives.Add(new ComponentPlanPrimitive {Kind="Arc",X1=2300,Y1=4200,Radius=900,SweepDegrees=90});offset.Parts[1].Primitives.Add(4);
+        Check(ComponentPlanSymbols.PrimitiveRole(offset,4)=="OpeningSymbol","旧门扇里的开启弧未使用开启样式");
+        Check(roundtrip.Code==""&&roundtrip.Parts[0].PartId==plan.Parts[0].PartId&&ComponentPlanSymbols.ReferenceCode(roundtrip)=="M0921","资源名称、部件身份或参考编号丢失");
+        var changed=ComponentPlanSymbols.Load(ComponentPlanSymbols.Bytes(plan));changed.Parts[1].Primitives.Add(0);
+        Reject(()=>ComponentPlanSymbols.Validate(changed),"重复部件归属未拒绝");
+        changed.Parts[1].Primitives=new(){99};Reject(()=>ComponentPlanSymbols.Validate(changed),"越界图元未拒绝");
+        changed.Parts[1].Primitives=new(){2};changed.DoorAssembly="Guess";Reject(()=>ComponentPlanSymbols.Validate(changed),"未知门型未拒绝");
+        var glbPath=Path.Combine(root,"door.glb");var model=ModelRoot.CreateModel();
+        Box(model,"frame_left",0,-50,0,50,50,2100);Box(model,"frame_right",850,-50,0,900,50,2100);Box(model,"frame_top",50,-50,2050,850,50,2100);
+        Box(model,"leaf",52,-20,2,848,20,2048);Box(model,"handle",740,-35,950,820,-20,970);model.SaveGLB(glbPath);
+        var bytes=File.ReadAllBytes(glbPath);var mesh=ComponentGlbInspector.Inspect(bytes);
+        var parts=new[]{new ComponentPartDefinition {Name="门套",Role="Frame",MeshNodes=mesh.Nodes.Where(n=>n.Name.StartsWith("frame_")).Select(n=>n.Index).ToList(),PlanPartId=plan.Parts[0].PartId,PlanPrimitives=new(){0,1}},
+            new ComponentPartDefinition {Name="主门扇",Role="Panel",MeshNodes=mesh.Nodes.Where(n=>n.Name=="leaf").Select(n=>n.Index).ToList(),PlanPartId=plan.Parts[1].PartId,PlanPrimitives=new(){2}},
+            new ComponentPartDefinition {Name="把手",Role="Hardware",MeshNodes=mesh.Nodes.Where(n=>n.Name=="handle").Select(n=>n.Index).ToList()}};
+        var fallback=new OpeningTypeModel {Code="M0921",Kind="门",Width=900,Height=2100,HasInstallationGap=false};
+        var asset=library.SaveExternal(plan.Name,plan,bytes,new ComponentSourceFrame(),parts,fallback,assetId:record.AssetId);
+        catalog.AttachModel(record,asset.Manifest.Revision,asset.Sha256);
+        Check(catalog.Get(record.AssetId).IsModelCurrent&&asset.ExternalContent.Plan.Code==""&&asset.Manifest.External.Parts[0].MeshNodes.Count==3,"名称入库不能配对三维或合并门套");
+        parts[0].PlanPrimitives.Add(2);Reject(()=>library.SaveExternal(plan.Name,plan,bytes,new ComponentSourceFrame(),parts,fallback),"CAD 部件与三维图元关联失配未拒绝");parts[0].PlanPrimitives.Remove(2);
+        parts[2].PlanPartId=plan.Parts[2].PartId;parts[2].PlanPrimitives=new(){3};Reject(()=>library.SaveExternal(plan.Name,plan,bytes,new ComponentSourceFrame(),parts,fallback),"开启示意被绑定成三维实体");
+        ComponentPlanSymbols.Save(Path.Combine(root,"door.wlplan.json"),plan);File.Copy(asset.PackagePath,Path.Combine(root,"door.wlopkg"),true);
+        Console.WriteLine("DECORATION_DOOR_CONTRACT_OK optionalCode stableParts referenceCode sharedRecord groupedFrame semanticBinding invalidPart rejectedSymbol");
     }
     private static ComponentPlanSymbol Plan(string code,string category,double width,double height,double depth)
     {

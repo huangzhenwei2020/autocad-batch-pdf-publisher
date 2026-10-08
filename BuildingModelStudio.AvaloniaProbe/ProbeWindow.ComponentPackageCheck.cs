@@ -68,6 +68,10 @@ internal sealed partial class ProbeWindow
             await manager.ReloadAsync();
             for(var i=0;i<100&&(manager.ExternalCount!=2||manager.CatalogCount!=2);i++)await Task.Delay(25);
             if(manager.ExternalCount!=2||manager.CatalogCount!=2)throw new Exception($"同一资源修订重复显示或外部椅兼容失败：模型 {manager.ExternalCount} / 共享 {manager.CatalogCount}。");
+            var deleteHead=catalog.Get(record.AssetId);var deleted=catalog.SetDeleted(record.AssetId,deleteHead.Version,true);
+            for(var i=0;i<100&&manager.CatalogCount!=1;i++)await Task.Delay(25);
+            await manager.ReloadAsync();if(manager.CatalogCount!=1||manager.ExternalCount!=1||catalog.Load().Records.Any(r=>r.AssetId==record.AssetId))throw new Exception("CAD 删除未同步到三维图库，或旧模型包复活了已删除资源。");
+            catalog.SetDeleted(record.AssetId,deleted.Version,false);await manager.ReloadAsync();if(manager.CatalogCount!=2||manager.ExternalCount!=2)throw new Exception("恢复共享资源后模型配对或稳定身份丢失。");
             manager.SelectExternal("C1216");var copy=await manager.RetainSelectedAsync();
             if(copy.Sha256!=asset.Sha256||!File.ReadAllBytes(modelPath).SequenceEqual(modelBytes))throw new Exception("项目副本修改语义模型。");
             manager.Search.Text="不存在的资源";await Task.Delay(100);if(manager.Assets.ItemCount!=0)throw new Exception("空搜索未清空。");
@@ -78,8 +82,37 @@ internal sealed partial class ProbeWindow
         var reopened=new ComponentPairingWindow(library,catalog.Get(record.AssetId));reopened.Show(this);
         try{await reopened.LoadExistingAsync(asset);if(reopened.Parts.ItemCount!=5||reopened.Plan?.Code!="C1216")throw new Exception("已配对资源不能直接继续编辑。");}
         finally{reopened.CloseForCheck();}
+        var doorPlan=ComponentPlanSymbols.Load(Path.Combine(root,"door.wlplan.json"));
+        var doorRecord=catalog.SavePlan(doorPlan);
+        var doorEditor=new ComponentPairingWindow(library,doorRecord) {Width=Width,Height=Height};doorEditor.Show(this);
+        ComponentAsset doorAsset;
+        try {
+            await doorEditor.LoadMeshAsync(Path.Combine(root,"door.glb"));
+            if(doorEditor.CadPart.ItemCount!=3||doorEditor.Plan?.Name!=doorPlan.Name||doorEditor.Plan.Code!="")throw new Exception("CAD 部件或未定编号资源未同步。");
+            var frameParts=doorEditor.Parts.ItemsSource!.Cast<ComponentPartDefinition>().Where(p=>p.Name.StartsWith("frame_")).ToArray();
+            doorEditor.Parts.SelectedItems!.Clear();foreach(var part in frameParts)doorEditor.Parts.SelectedItems.Add(part);doorEditor.MergeParts();
+            if(doorEditor.Parts.ItemCount!=3||((ComponentPartDefinition)doorEditor.Parts.SelectedItem!).MeshNodes.Count!=3)throw new Exception("门套的多个实际节点不能合并。");
+            doorEditor.BindCadPart(doorPlan.Parts[0].PartId);
+            doorEditor.BindCadPart(null);
+            var unlinkedFrame=(ComponentPartDefinition)doorEditor.Parts.SelectedItem!;
+            if(unlinkedFrame.PlanPartId!=null||unlinkedFrame.PlanPrimitives.Count!=0)throw new Exception("取消整组关联后未释放二维图元。");
+            doorEditor.BindCadPart(doorPlan.Parts[0].PartId);
+            doorEditor.Parts.SelectedItem=doorEditor.Parts.ItemsSource!.Cast<ComponentPartDefinition>().Single(p=>p.Name=="leaf");doorEditor.BindCadPart(doorPlan.Parts[1].PartId);
+            doorEditor.Parts.SelectedItem=doorEditor.Parts.ItemsSource!.Cast<ComponentPartDefinition>().Single(p=>p.Name=="handle");
+            try{doorEditor.BindCadPart(doorPlan.Parts[0].PartId);throw new Exception("已关联 CAD 部件被重复绑定。");}catch(InvalidDataException){}
+            try{doorEditor.BindCadPart(doorPlan.Parts[2].PartId);throw new Exception("开启弧被关联成三维实体。");}catch(InvalidDataException){}
+            doorAsset=await doorEditor.PublishAsync();
+            if(doorAsset.Manifest.External.Code!=""||doorAsset.Manifest.OpeningType.Code!="M0921"||doorAsset.Manifest.External.Parts.Count(p=>p.PlanPartId!=null)!=2)throw new Exception("发布丢失部件关系或提前改变资源编号。");
+            var doorDraft=Path.Combine(run,"door.wlodraft");await doorEditor.SaveDraftAsync(doorDraft);await doorEditor.LoadDraftAsync(doorDraft);
+            if(doorEditor.Parts.ItemsSource!.Cast<ComponentPartDefinition>().Count(p=>p.PlanPartId!=null)!=2)throw new Exception("恢复草稿丢失 CAD 部件关联。");
+            doorEditor.Parts.SelectedItem=doorEditor.Parts.ItemsSource!.Cast<ComponentPartDefinition>().Single(p=>p.PlanPartId==doorPlan.Parts[1].PartId);
+            await Task.Delay(150);await SnapshotComponentWindow(doorEditor,Path.Combine(root,$"decoration-pairing-{(int)Width}x{(int)Height}.png"));
+        }finally{doorEditor.CloseForCheck();}
+        var doorReopen=new ComponentPairingWindow(library,catalog.Get(doorRecord.AssetId));doorReopen.Show(this);
+        try{await doorReopen.LoadExistingAsync(doorAsset);if(doorReopen.Parts.ItemsSource!.Cast<ComponentPartDefinition>().Count(p=>p.PlanPartId!=null)!=2)throw new Exception("重开资源丢失 CAD 部件关联。");}
+        finally{doorReopen.CloseForCheck();}
         if(BuildingModelJson.ToJson(_session.Model)!=before||!File.ReadAllBytes(planPath).SequenceEqual(planBytes)||!File.ReadAllBytes(meshPath).SequenceEqual(meshBytes))throw new Exception("图库改了工程或来源文件。");
-        Console.WriteLine("COMPONENT_PACKAGE_UI_OK sharedCatalog liveCadSync CADOnlyPreview preloadedPlan modelOnlyImport stableIdentity oneRecordPerResource reopenExisting realParts nativeGLB GPU nativePlanBinding drafts invalidFrame publish resumedRevisions mixedLibrary isolatedPreview projectCopy emptySearch smallBounds unchangedModelAndSources");
+        Console.WriteLine("COMPONENT_PACKAGE_UI_OK sharedDelete liveDeleteSync noResurrection restorePair sharedCatalog liveCadSync CADOnlyPreview preloadedPlan modelOnlyImport stableIdentity oneRecordPerResource reopenExisting realParts nativeGLB GPU nativePlanBinding drafts invalidFrame publish resumedRevisions mixedLibrary isolatedPreview projectCopy emptySearch smallBounds decorationParts mergeFrame semanticBinding optionalCode unchangedModelAndSources");
     }
     private static async Task SnapshotComponentWindow(Window window,string path)
     {

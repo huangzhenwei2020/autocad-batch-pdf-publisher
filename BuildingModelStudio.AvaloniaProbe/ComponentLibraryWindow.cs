@@ -12,7 +12,7 @@ internal sealed class ComponentLibraryWindow : Window
 {
     private sealed record Entry(string Name,string Code,string Category,OpeningTypeModel? Type,ComponentAsset? Asset,string Source,ComponentCatalogRecord? Record=null)
     {
-        public override string ToString()=>Code+" · "+Name;
+        public override string ToString()=>string.IsNullOrWhiteSpace(Code)?Name:Code+" · "+Name;
     }
     private readonly ComponentAssetLibrary _library;
     private readonly ComponentCatalog _catalog;
@@ -96,8 +96,8 @@ internal sealed class ComponentLibraryWindow : Window
         if(!_listMode&&entry.Asset?.ExternalContent is { } content){var shape=new ComponentShapePreview {Height=170};_=shape.SetVolumeAsync(content.Volume);tile.Children.Add(shape);}
         else if(!_listMode&&entry.Record!=null){var plan=new DrawingViewCanvas {Width=190,Height=170,IsHitTestVisible=false};plan.SizeChanged+=(_,_)=>plan.Fit();plan.SetView(ComponentPlanSymbols.Preview(entry.Record.Plan));tile.Children.Add(plan);}
         else if(!_listMode&&entry.Type!=null){var shape=new OpeningVolumePreview {Height=170};shape.SetType(entry.Type);tile.Children.Add(shape);}
-        tile.Children.Add(new TextBlock {Text=entry.Code,FontSize=16,FontWeight=FontWeight.SemiBold});
-        tile.Children.Add(new TextBlock {Text=entry.Name,TextWrapping=TextWrapping.Wrap});
+        tile.Children.Add(new TextBlock {Text=string.IsNullOrWhiteSpace(entry.Code)?entry.Name:entry.Code,FontSize=16,FontWeight=FontWeight.SemiBold,TextWrapping=TextWrapping.Wrap});
+        if(!string.IsNullOrWhiteSpace(entry.Code))tile.Children.Add(new TextBlock {Text=entry.Name,TextWrapping=TextWrapping.Wrap});
         tile.Children.Add(new TextBlock {Text=entry.Record!=null?(entry.Record.IsModelCurrent&&entry.Asset!=null?"CAD / 三维已配对":entry.Record.ModelRevision>0?"三维待复核":"待补充三维"):entry.Asset?.IsExternal==true?"外部构件 · 固定规格 · 静态":"参数门窗",FontSize=12,Foreground=Brushes.LightGray});
         var size=entry.Asset?.Manifest.External;
         tile.Children.Add(new TextBlock {Text=entry.Record!=null?$"{entry.Record.Plan.Width:0.#} × {entry.Record.Plan.Height:0.#}":size!=null?$"{size.Width:0.#} × {size.Height:0.#}":$"{entry.Type?.Width:0.#} × {entry.Type?.Height:0.#}",FontSize=12});
@@ -115,7 +115,7 @@ internal sealed class ComponentLibraryWindow : Window
         try {
             var loaded=await Task.Run(()=>{
                 var common=_library.Load(_lifetime.Token);
-                var catalog=_catalog.Load();
+                var catalog=_catalog.Load(true);
                 // Migrate validated older paired resources once, preserving their stable identity.
                 foreach(var asset in common.Assets.Where(a=>a.IsExternal).GroupBy(a=>a.Manifest.AssetId).Select(g=>g.OrderByDescending(a=>a.Manifest.Revision).First())) {
                     if(catalog.Records.Any(r=>r.AssetId==asset.Manifest.AssetId))continue;
@@ -124,14 +124,14 @@ internal sealed class ComponentLibraryWindow : Window
                 }
                 var current=_catalog.Load();current.Errors.AddRange(catalog.Errors);
                 var project=_modelPath!=null?new ComponentAssetLibrary(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(_modelPath))!,"components")).Load(_lifetime.Token):new ComponentLibrarySnapshot();
-                return (common,project,catalog:current);
+                return (common,project,catalog:current,known:catalog.Records.Concat(current.Records).Select(r=>r.AssetId).ToHashSet());
             },_lifetime.Token);
             if(_closed)return;
             _entries.Clear();
             foreach(var entry in OpeningPlacementCatalog.Create(_model))_entries.Add(new(entry.Name,entry.Type.Code,entry.IsDoor?"门":"窗",entry.Type,null,entry.Source));
             void Add(ComponentLibrarySnapshot snapshot,string source) {
                 foreach(var asset in snapshot.Assets.GroupBy(a=>a.Manifest.AssetId).Select(g=>g.OrderByDescending(a=>a.Manifest.Revision).First())) {
-                    if(source=="公共库"&&loaded.catalog.Records.Any(r=>r.AssetId==asset.Manifest.AssetId))continue;
+                    if(source=="公共库"&&loaded.known.Contains(asset.Manifest.AssetId))continue;
                     var type=asset.Manifest.OpeningType;var definition=asset.Manifest.External;
                     _entries.Add(new(asset.Manifest.Name,definition?.Code??type.Code,asset.Manifest.Category=="Furniture"?"家具":(type.Kind??"").Contains("门")?"门":"窗",type,asset,source));
                 }
@@ -172,7 +172,7 @@ internal sealed class ComponentLibraryWindow : Window
     {
         var generation=++_selectionGeneration;_parts.Children.Clear();
         if(Assets.SelectedItem is not Entry entry){_heading.Text="未选择资源";_details.Text="";ProjectCopy.IsEnabled=false;Export.IsEnabled=false;_tabs.IsVisible=false;_parameterPreview.IsVisible=false;return;}
-        _heading.Text=entry.Code;ProjectCopy.IsEnabled=!_busy&&entry.Asset!=null&&_modelPath!=null;Export.IsEnabled=!_busy&&entry.Asset!=null;
+        _heading.Text=string.IsNullOrWhiteSpace(entry.Code)?entry.Name:entry.Code;ProjectCopy.IsEnabled=!_busy&&entry.Asset!=null&&_modelPath!=null;Export.IsEnabled=!_busy&&entry.Asset!=null;
         _new.IsEnabled=!_busy&&entry.Record!=null;
         _details.Text=entry.Name+"\n来源："+entry.Source+(entry.Asset!=null?$" · 修订 {entry.Asset.Manifest.Revision}":"");
         var content=entry.Asset?.ExternalContent;_tabs.IsVisible=content!=null;_parameterPreview.IsVisible=content==null;

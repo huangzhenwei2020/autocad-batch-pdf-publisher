@@ -6,7 +6,10 @@
   <ItemGroup>
     <ProjectReference Include="../BuildingModel.Core/BuildingModel.Core.csproj" />
     <Compile Include="ComponentPlanUiTests.cs" />
+    <Compile Include="../BatchPdfPublisher/Features/BuildingModel/Views/CadComponentPartPreview.cs" Link="CadComponentPartPreview.cs" />
     <Compile Include="../BatchPdfPublisher/Features/BuildingModel/Views/CadComponentPlanWindow.cs" Link="CadComponentPlanWindow.cs" />
     <Compile Include="../BatchPdfPublisher/Features/BuildingModel/Views/CadComponentLibraryWindow.cs" Link="CadComponentLibraryWindow.cs" />
+    <Compile Include="../BatchPdfPublisher/Features/BuildingModel/Views/CadLibraryDoorEditWindow.cs" Link="CadLibraryDoorEditWindow.cs" />
+    <Compile Include="../BatchPdfPublisher/Features/BuildingModel/Views/CadPlanRegionWindow.cs" Link="CadPlanRegionWindow.cs" />
   </ItemGroup>
 </Project>

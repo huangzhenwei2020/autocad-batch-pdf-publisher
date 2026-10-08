@@ -517,7 +517,7 @@ foreach ($registeredCommand in $registeredCommands) {
 
 # 功能区是网格排版，按钮文字统一用四字简称（见 FeatureRegistry.F 的最后一个参数）。
 # 名字长短不一排版就不齐整，而"不齐整"在代码评审里看不出来，只有装上才看得见，
-# 所以在这里卡住：每个 F(...) 调用的最后一个字符串参数必须是恰好四个字。
+# 常规入口保留四字规则；用户约定的单入口“图库”按功能 ID 精确例外。
 $featureLines = $featureText -split "`r?`n" | Where-Object { $_ -match '^\s*F\("' }
 if ($featureLines.Count -eq 0) { throw '未能从功能登记表里解析出 F(...) 条目。' }
 foreach ($line in $featureLines) {
@@ -526,11 +526,12 @@ foreach ($line in $featureLines) {
         throw "功能登记表条目缺少四字简称（F(...) 的最后一个字符串参数）：$($line.Trim())"
     }
     $text = $shortName.Groups[1].Value
-    if ($text.Length -ne 4) {
+    $approvedLibrary = $line -match '^\s*F\("building_component_library",' -and $text -eq '图库'
+    if ($text.Length -ne 4 -and -not $approvedLibrary) {
         throw "功能简称必须是四个字，实际为「$text」（$($text.Length) 个字）：$($line.Trim())"
     }
 }
-Write-Host "功能简称校验通过：$($featureLines.Count) 个功能均为四字简称" -ForegroundColor DarkGray
+Write-Host "功能简称校验通过：$($featureLines.Count) 个功能符合简称规则（含已确认的图库入口）" -ForegroundColor DarkGray
 
 # 图层直达快捷键靠 AutoLISP 直接调用 .NET 的 LispFunction 传目标图层和预选集
 # （setenv 只是兼容通道，AutoCAD 不保证它同步进 Windows 进程环境块）。函数名写在

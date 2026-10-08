@@ -41,6 +41,13 @@ namespace BatchPdfPublisher.Services
                     settings.Axis="X";settings.X=2000;settings.Y=-1000;
                     fromUi=Extract(tx,rootId,Frame(settings,Matrix3d.Rotation(Math.PI/2,Vector3d.ZAxis,Point3d.Origin)),settings.Code,settings.Category,settings.Width,settings.Height);
                     if(Math.Abs(fromUi.Primitives[0].X2-1200)>.001||Math.Abs(fromUi.Primitives[0].Y2)>.001)throw new InvalidDataException("UI 旋转 UCS X 方向错误。");
+                    var decorationSettings=new CadComponentPlanSettings {BlockHandle=rootId.Handle.ToString(),Code="",Name="装修门原生部件检查",Category="Door",Axis="Y",DoorAssembly="SingleSwing",
+                        X=1000,Y=2000,Z=0,Width=1200,Height=1600,MillimetresPerCadUnit=1,
+                        Parts=new List<ComponentPlanPart> {new ComponentPlanPart {Name="门套",Role="Frame",Primitives=new List<int> {0}}}};
+                    var decoration=ApplyAuthorSettings(Extract(tx,rootId,Frame(decorationSettings,Matrix3d.Identity),"M1216","Door",1200,1600),decorationSettings,true);
+                    var roundtrip=ComponentPlanSymbols.Load(ComponentPlanSymbols.Bytes(decoration));
+                    if(roundtrip.Code!=""||roundtrip.Parts.Count!=1||roundtrip.Parts[0].Primitives[0]!=0||roundtrip.Primitives.Count!=7)
+                        throw new InvalidDataException("装修门名称入库或原生部件图元丢失。");
                     var root=(BlockReference)tx.GetObject(rootId,OpenMode.ForWrite);root.ScaleFactors=new Scale3d(-2,2,2);
                     var mirrored=Extract(tx,rootId,new ComponentPlanFrame(1000,2000,0,0,1,1),"C1216","Window",1200,1600);
                     if(mirrored.Primitives.Where(p=>p.Kind=="Arc").Any(p=>p.SweepDegrees>=0))throw new InvalidDataException("CAD 镜像开启弧方向错误。");
@@ -49,7 +56,7 @@ namespace BatchPdfPublisher.Services
                     if(!refused)throw new InvalidDataException("非等比圆弧未拒绝。");
                     // No commit: all mutations are isolated to a temporary side database.
                 }
-                document.Editor.WriteMessage("\nCAD_COMPONENT_SOURCE_NATIVE_OK line arc circle bulge nested rotation scale mirror textCandidate nonuniformReject temporaryDatabase ui-Y ui-X-rotatedUcs");
+                document.Editor.WriteMessage("\nCAD_COMPONENT_SOURCE_NATIVE_OK line arc circle bulge nested rotation scale mirror textCandidate nonuniformReject temporaryDatabase ui-Y ui-X-rotatedUcs decorationParts optionalCode");
             }
         }
         public static void Execute(Document document, string category = "Window", Func<ComponentPlanSymbol,string> store = null,ComponentPlanSymbol initial=null)
@@ -69,7 +76,9 @@ namespace BatchPdfPublisher.Services
                             using(var tx=document.Database.TransactionManager.StartTransaction()) {
                                 var block=(BlockReference)tx.GetObject(selected.ObjectId,OpenMode.ForRead);
                                 var record=(BlockTableRecord)tx.GetObject(block.BlockTableRecord,OpenMode.ForRead);
-                                return new CadComponentPlanBlock {Handle=selected.ObjectId.Handle.ToString(),Name=record.Name};
+                                var origin=block.Position.TransformBy(ucs.Inverse());
+                                return new CadComponentPlanBlock {Handle=selected.ObjectId.Handle.ToString(),Name=record.Name,
+                                    BasePoint=new[]{origin.X,origin.Y,origin.Z}};
                             }
                         }
                     },
@@ -82,20 +91,17 @@ namespace BatchPdfPublisher.Services
                         }
                     },
                     (owner,settings) => {
-                        ComponentPlanSymbol symbol;
-                        using(var tx=document.Database.TransactionManager.StartTransaction()) {
-                            var id=document.Database.GetObjectId(false,new Handle(Convert.ToInt64(settings.BlockHandle,16)),0);
-                            symbol=Extract(tx,id,Frame(settings,ucs),settings.Code,settings.Category,settings.Width,settings.Height);
-                        }
+                        var symbol=Inspect(document,settings,ucs,true);
+                        if(settings.SourceHash!=ComponentPlanSymbols.GeometryHash(symbol))throw new InvalidDataException("CAD 平面已变化，请刷新预览并重新核对部件。");
                         if(store!=null)return store(symbol);
                         using(var save=new System.Windows.Forms.SaveFileDialog {Title=settings.Category=="Door"?"导出门平面":"导出窗平面",
-                            Filter="CAD 构件符号 (*.wlplan.json)|*.wlplan.json",FileName=SafeFileName(symbol.Code)+".wlplan.json",OverwritePrompt=true}) {
+                            Filter="CAD 构件符号 (*.wlplan.json)|*.wlplan.json",FileName=SafeFileName(symbol.Name)+".wlplan.json",OverwritePrompt=true}) {
                             if(save.ShowDialog(new DialogOwner(owner))!=System.Windows.Forms.DialogResult.OK)return null;
                             ComponentPlanSymbols.Save(save.FileName,symbol);
                             editor.WriteMessage("\n已导出原生矢量符号："+save.FileName);
                             return "已导出："+save.FileName+"\n图元 "+symbol.Primitives.Count+" · 编号候选 "+symbol.TextCandidates.Count;
                         }
-                    },store==null?"导出平面":"平面入库");
+                    },store==null?"导出平面":"平面入库",(owner,settings)=>Inspect(document,settings,ucs,false));
                 if(initial!=null)window.SetInitialPlan(initial);
                 Application.ShowModalWindow(window);
             }catch(Exception ex){editor.WriteMessage("\n构件符号未导出："+ex.Message);}
@@ -107,6 +113,24 @@ namespace BatchPdfPublisher.Services
             public DialogOwner(System.Windows.Window window){Handle=new System.Windows.Interop.WindowInteropHelper(window).Handle;}
         }
         private static string SafeFileName(string code)=>new string(code.Select(c=>Path.GetInvalidFileNameChars().Contains(c)?'_':c).ToArray());
+        public static ComponentPlanSymbol Inspect(Document document,CadComponentPlanSettings settings,Matrix3d ucs,bool includeParts)
+        {
+            using(var tx=document.Database.TransactionManager.StartTransaction()) {
+                var id=document.Database.GetObjectId(false,new Handle(Convert.ToInt64(settings.BlockHandle,16)),0);
+                var reference=new ComponentPlanSymbol {Code=settings.Code,Category=settings.Category,Width=settings.Width,Height=settings.Height};
+                var symbol=Extract(tx,id,Frame(settings,ucs),ComponentPlanSymbols.ReferenceCode(reference),settings.Category,settings.Width,settings.Height);
+                return ApplyAuthorSettings(symbol,settings,includeParts);
+            }
+        }
+        private static ComponentPlanSymbol ApplyAuthorSettings(ComponentPlanSymbol symbol,CadComponentPlanSettings settings,bool includeParts)
+        {
+            symbol.Name=string.IsNullOrWhiteSpace(settings.Name)?settings.Code:settings.Name;
+            if(settings.Category=="Door") {
+                symbol.SchemaVersion=3;symbol.Code=settings.Code;symbol.DoorAssembly=settings.DoorAssembly??"SingleSwing";
+                symbol.Parts=includeParts?settings.Parts:new List<ComponentPlanPart>();
+            }
+            ComponentPlanSymbols.Validate(symbol);return symbol;
+        }
         public static ComponentPlanFrame Frame(CadComponentPlanSettings settings,Matrix3d ucs)
         {
             settings.Validate();

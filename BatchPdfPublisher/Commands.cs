@@ -209,6 +209,16 @@ namespace BatchPdfPublisher
             var document=Application.DocumentManager.MdiActiveDocument;if(document==null)return;
             try{CadComponentLibraryService.RunNativeCheck(document);}catch(System.Exception ex){document.Editor.WriteMessage("\nCAD_COMPONENT_LIBRARY_FAILED "+ex);}
         }
+        [CommandMethod("WLEDITLIBDOOR")]
+        public void EditLibraryDoor(){try{CadComponentLibraryService.EditPlacedDoor(Application.DocumentManager.MdiActiveDocument);}catch(System.Exception ex){Application.DocumentManager.MdiActiveDocument?.Editor.WriteMessage("\n"+ex.Message);}}
+        [CommandMethod("WLCADPLANEDIT")]
+        public void EditCadPlanRegion(){try{CadPlanRegionService.Execute(Application.DocumentManager.MdiActiveDocument);}catch(System.Exception ex){Application.DocumentManager.MdiActiveDocument?.Editor.WriteMessage("\n"+ex.Message);}}
+        [CommandMethod("WLCADPLANQA")]
+        public void CheckCadPlanRegion(){var document=Application.DocumentManager.MdiActiveDocument;if(document==null)return;try{CadPlanRegionService.RunNativeCheck(document);}catch(System.Exception ex){document.Editor.WriteMessage("\nCAD_REGION_NATIVE_FAILED "+ex);}}
+        [CommandMethod("WLLIBDOORQA")]
+        public void CheckLibraryDoorWalls(){var document=Application.DocumentManager.MdiActiveDocument;if(document==null)return;try{CadLibraryDoorPlacement.RunNativeCheck(document);}catch(System.Exception ex){document.Editor.WriteMessage("\nCAD_LIBRARY_WALL_FAILED "+ex);}}
+        [CommandMethod("WLLIBWALLSYNC")]
+        public void SynchronizeLibraryWallCuts(){var document=Application.DocumentManager.MdiActiveDocument;if(document==null)return;try{using(var tx=document.Database.TransactionManager.StartTransaction()){CadLibraryDoorPlacement.Synchronize(document.Database,tx);tx.Commit();}document.Editor.Regen();}catch(System.Exception ex){document.Editor.WriteMessage("\n"+ex.Message);}}
 
         [CommandMethod("WLCOMPONENTPLANQA")]
         public void CheckComponentPlanExtraction()

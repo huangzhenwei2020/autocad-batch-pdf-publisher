@@ -34,7 +34,7 @@ namespace BatchPdfPublisher.BuildingModel
                 throw new InvalidDataException("草稿版本或字段无效。");
             foreach(var part in draft.Parts)
                 if(part==null||part.Name==null||part.Name.Length>100||part.Name.Any(char.IsControl)||part.PartId?.Length>64||part.Role?.Length>64
-                    ||part.SizeMode?.Length>64||part.MotionKind?.Length>64||part.MeshNodes==null||part.MeshNodes.Count>256||part.PlanPrimitives==null||part.PlanPrimitives.Count>ComponentPlanSymbols.MaxPrimitives)
+                    ||part.PlanPartId?.Length>64||part.SizeMode?.Length>64||part.MotionKind?.Length>64||part.MeshNodes==null||part.MeshNodes.Count>256||part.PlanPrimitives==null||part.PlanPrimitives.Count>ComponentPlanSymbols.MaxPrimitives)
                     throw new InvalidDataException("草稿部件数量或字段超限。");
         }
         public static void SaveDraft(string path,ComponentAuthorDraft draft,CancellationToken cancellation=default)

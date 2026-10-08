@@ -22,6 +22,7 @@ namespace BatchPdfPublisher.BuildingModel
         public string Role { get; set; } = "Fixed";
         public List<int> MeshNodes { get; set; } = new List<int>();
         public List<int> PlanPrimitives { get; set; } = new List<int>();
+        public string PlanPartId { get; set; }
         // Capability gates stay explicit until the joint size/motion solver is implemented.
         public string SizeMode { get; set; } = "Fixed";
         public string MotionKind { get; set; } = "Fixed";
@@ -50,8 +51,8 @@ namespace BatchPdfPublisher.BuildingModel
         public ViewDocument PartPlan(ComponentPartDefinition part)
         {
             if(part.PlanPrimitives.Count==0)return new ViewDocument();
-            return ComponentPlanSymbols.Preview(new ComponentPlanSymbol {SchemaVersion=Plan.SchemaVersion,Category=Plan.Category,
-                Code=Plan.Code,Name=Plan.Name,Width=Plan.Width,Height=Plan.Height,Depth=Plan.Depth,
+            return ComponentPlanSymbols.Preview(new ComponentPlanSymbol {SchemaVersion=ComponentPlanSymbols.IsDecorationDoor(Plan)?1:Plan.SchemaVersion,Category=Plan.Category,
+                Code=ComponentPlanSymbols.ReferenceCode(Plan),Name=Plan.Name,Width=Plan.Width,Height=Plan.Height,Depth=Plan.Depth,
                 Primitives=part.PlanPrimitives.Select(i=>Plan.Primitives[i]).ToList()});
         }
     }
@@ -88,19 +89,21 @@ namespace BatchPdfPublisher.BuildingModel
                 ||!Guid.TryParseExact(manifest.AssetId,"D",out _)||manifest.Revision<1||!Text(manifest.Name,100))
                 throw new InvalidDataException("外部资源版本、身份、类别或名称无效。");
             var definition=manifest.External;
-            if(definition==null||!Text(definition.Code,64)||definition.Parts==null||definition.Parts.Count==0||definition.Parts.Count>256)
+            if(definition==null||definition.Parts==null||definition.Parts.Count==0||definition.Parts.Count>256)
                 throw new InvalidDataException("缺少有效编号或部件。");
             var planBytes=ReadEntry(zip.GetEntry(PlanEntry),ComponentPlanSymbols.MaxBytes,cancellation);
             var modelBytes=ReadEntry(zip.GetEntry(ModelEntry),ComponentGlbInspector.MaxBytes,cancellation);
             if(Hash(planBytes)!=definition.PlanSha256||Hash(modelBytes)!=definition.ModelSha256)
                 throw new InvalidDataException("资源文件与清单哈希不一致。");
             var plan=ComponentPlanSymbols.Load(planBytes);
+            if((!ComponentPlanSymbols.IsDecorationDoor(plan)&&!Text(definition.Code,64))
+                ||(!string.IsNullOrWhiteSpace(definition.Code)&&!Text(definition.Code,64)))throw new InvalidDataException("资源参考编号无效。");
             if(plan.Code!=definition.Code||(manifest.Category=="Furniture")!=(plan.Category=="Furniture"))
                 throw new InvalidDataException("平面类别/编号与资源清单不一致。");
             if(manifest.Category=="DoorWindow") {
                 Validate(new ComponentAssetManifest {Name=manifest.Name,AssetId=manifest.AssetId,Revision=manifest.Revision,OpeningType=manifest.OpeningType});
                 var type=manifest.OpeningType;
-                if(type.Code!=definition.Code||Math.Abs(type.Width-plan.Width)>.01||Math.Abs(type.Height-plan.Height)>.01
+                if(type.Code!=ComponentPlanSymbols.ReferenceCode(plan)||Math.Abs(type.Width-plan.Width)>.01||Math.Abs(type.Height-plan.Height)>.01
                     ||(plan.Category=="Door")!=((type.Kind??"").Contains("门")))
                     throw new InvalidDataException("参数回退的编号、类别和洞口尺寸不一致。");
             } else if(manifest.OpeningType!=null)throw new InvalidDataException("家具不能附带门窗类型或开洞参数。");
@@ -111,6 +114,7 @@ namespace BatchPdfPublisher.BuildingModel
                 ||(plan.Category=="Furniture"&&Math.Abs(plan.Depth-definition.Depth)>1))
                 throw new InvalidDataException("CAD 与三维尺寸不一致（容差 1 mm）；不会自动拉伸模型。");
             var nodeIds=new HashSet<int>(mesh.Nodes.Select(n=>n.Index));var bound=new HashSet<int>();var primitiveIds=new HashSet<int>();var partIds=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var planPartIds=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach(var part in definition.Parts) {
                 if(part==null||!Guid.TryParseExact(part.PartId,"D",out _)||!partIds.Add(part.PartId)||!Text(part.Name,100)
                     ||!new[]{"Fixed","Frame","Panel","Hardware","Body"}.Contains(part.Role)
@@ -119,6 +123,12 @@ namespace BatchPdfPublisher.BuildingModel
                 if(part.SizeMode!="Fixed"||part.MotionKind!="Fixed")throw new InvalidDataException("当前仅发布固定尺寸/静态部件；可变尺寸和开闭驱动尚未开放。");
                 foreach(var node in part.MeshNodes)if(!nodeIds.Contains(node)||!bound.Add(node))throw new InvalidDataException("三维节点不存在或重复绑定。");
                 foreach(var index in part.PlanPrimitives)if(index<0||index>=plan.Primitives.Count||!primitiveIds.Add(index))throw new InvalidDataException("二维图元不存在或重复绑定。");
+                if(part.PlanPartId!=null) {
+                    var planPart=plan.Parts?.FirstOrDefault(p=>p.PartId==part.PlanPartId);
+                    if(planPart==null||planPart.Role=="OpeningSymbol"||!planPartIds.Add(part.PlanPartId)
+                        ||!new HashSet<int>(part.PlanPrimitives).SetEquals(planPart.Primitives))
+                        throw new InvalidDataException("CAD 部件关联不存在、重复或与其平面图元不一致；开启示意不能作为三维实体。");
+                }
             }
             if(!bound.SetEquals(nodeIds))throw new InvalidDataException("存在未绑定的三维节点。");
             return new ComponentAsset {Manifest=manifest,ExternalContent=new ExternalComponentContent {Plan=plan,Mesh=mesh,Volume=volume}};

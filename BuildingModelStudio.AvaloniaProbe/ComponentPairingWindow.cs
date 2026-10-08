@@ -20,6 +20,9 @@ internal sealed class ComponentPairingWindow : Window
     internal readonly RadioButton AlongX=new(){Content="X",IsChecked=true},AlongY=new(){Content="Y"};
     internal readonly ComboBox PartRole=new(){ItemsSource=new[]{"固定部件","外框","面板 / 门扇","五金","柜体"},SelectedIndex=0};
     internal readonly ListBox Parts=new();
+    internal readonly ComboBox CadPart=new();
+    private readonly TextBlock _currentPart=new(){Text="部件配对",FontSize=20,FontWeight=FontWeight.SemiBold,VerticalAlignment=VerticalAlignment.Center,TextTrimming=TextTrimming.CharacterEllipsis};
+    private readonly List<ComponentPlanPart> _cadParts=new();
     internal readonly ModelViewport Volume=new(ModelViewport.PrepareScene(new BuildingVolume()));
     internal readonly DrawingViewCanvas PlanView=new();
     internal readonly ComponentShapePreview Isolated=new(){Height=190};
@@ -57,7 +60,7 @@ internal sealed class ComponentPairingWindow : Window
         ComponentUi.Theme(this);
         var root=new Grid {RowDefinitions=new("52,52,*,64"),Margin=new Thickness(10),RowSpacing=8};
         var top=new Grid {ColumnDefinitions=new("*,Auto")};
-        top.Children.Add(new TextBlock {Text="部件配对",FontSize=20,FontWeight=FontWeight.SemiBold,VerticalAlignment=VerticalAlignment.Center});
+        top.Children.Add(_currentPart);
         Grid.SetColumn(_dimensions,1);top.Children.Add(_dimensions);_dimensions.VerticalAlignment=VerticalAlignment.Center;root.Children.Add(top);
         var toolbar=new StackPanel {Orientation=Orientation.Horizontal,Spacing=8};
         _cad=ComponentUi.Tool("folder-open","导入 CAD 符号",()=>_=BrowseAsync(true));
@@ -68,23 +71,26 @@ internal sealed class ComponentPairingWindow : Window
         _planOverlay=new ComponentPlanOverlay(PlanView);_bindPlan.IsCheckedChanged+=(_,_)=>{PlanView.PickRequested=_bindPlan.IsChecked==true?BindPlanAt:null;};
         Grid.SetRow(toolbar,1);root.Children.Add(toolbar);
         _body=new Grid {ColumnDefinitions=new("220,*,350"),ColumnSpacing=8};Grid.SetRow(_body,2);root.Children.Add(_body);
-        var left=new Grid {RowDefinitions=new("*,Auto")};left.Children.Add(Parts);
+        var left=new Grid {RowDefinitions=new("*,Auto,Auto")};left.Children.Add(Parts);Parts.SelectionMode=SelectionMode.Multiple;
+        var merge=ComponentUi.Tool("combine","合并选中部件",MergeParts);Grid.SetRow(merge,1);left.Children.Add(merge);
         var single=new StackPanel {Spacing=6,Margin=new Thickness(10)};single.Children.Add(new TextBlock {Text="选中部件预览",FontWeight=FontWeight.SemiBold});single.Children.Add(Isolated);single.Children.Add(_partSize);
-        Grid.SetRow(single,1);left.Children.Add(single);_body.Children.Add(ComponentUi.Region("部件",left));
+        Grid.SetRow(single,2);left.Children.Add(single);_body.Children.Add(ComponentUi.Region("部件",left));
         _paired=new Grid {ColumnDefinitions=new("*,*"),ColumnSpacing=8};
         _planRegion=ComponentUi.Region("CAD 平面",new Grid {Children={PlanView,_planOverlay}});_meshRegion=ComponentUi.Region("三维配对",Volume);
         _paired.Children.Add(_planRegion);Grid.SetColumn(_meshRegion,1);_paired.Children.Add(_meshRegion);Grid.SetColumn(_paired,1);_body.Children.Add(_paired);
         var fields=new StackPanel {Spacing=8,Margin=new Thickness(12)};
-        ComponentUi.Field(fields,"资源名称",ResourceName);ComponentUi.Field(fields,"编号",_code);
+        ComponentUi.Field(fields,"资源名称",ResourceName);ComponentUi.Field(fields,"参考编号",_code);
+        fields.Children.Add(new Border {Height=1,Background=ComponentUi.Edge});
+        ComponentUi.Field(fields,"部件名称",PartName);ComponentUi.Field(fields,"部件角色",PartRole);
+        ComponentUi.Field(fields,"对应的 CAD 入库部件",CadPart);
+        fields.Children.Add(ComponentUi.Tool("check","关联当前 CAD 部件",()=>{try{BindCadPart(CadPart.SelectedIndex>0?_cadParts[CadPart.SelectedIndex-1].PartId:null);}catch(Exception ex){_state.Text=ex.Message;}}));
+        fields.Children.Add(_binding);fields.Children.Add(ComponentUi.Tool("check","应用部件",ApplyPart));
         fields.Children.Add(new Border {Height=1,Background=ComponentUi.Edge});
         fields.Children.Add(new TextBlock {Text="三维基点 · mm",FontWeight=FontWeight.SemiBold});
         ComponentUi.Field(fields,"X",OriginX);ComponentUi.Field(fields,"Y",OriginY);ComponentUi.Field(fields,"Z",OriginZ);
         var axis=new StackPanel {Orientation=Orientation.Horizontal,Spacing=20,Children={AlongX,AlongY}};
         ComponentUi.Field(fields,"沿墙方向",axis);
         fields.Children.Add(ComponentUi.Tool("check","应用基点",()=>_=RefreshAlignedAsync()));
-        fields.Children.Add(new Border {Height=1,Background=ComponentUi.Edge});
-        ComponentUi.Field(fields,"部件名称",PartName);ComponentUi.Field(fields,"部件角色",PartRole);
-        fields.Children.Add(_binding);fields.Children.Add(ComponentUi.Tool("check","应用部件",ApplyPart));
         fields.Children.Add(new Border {Height=1,Background=ComponentUi.Edge});
         fields.Children.Add(new TextBlock {Text="尺寸：固定规格\n运动：静态",TextWrapping=TextWrapping.Wrap,Foreground=Brushes.LightGray});
         var inspector=ComponentUi.Region("属性 · 当前部件",ComponentUi.Scroll(fields));Grid.SetColumn(inspector,2);_body.Children.Add(inspector);
@@ -106,7 +112,7 @@ internal sealed class ComponentPairingWindow : Window
         Closing+=(_,e)=>{if(_busy){e.Cancel=true;_state.Text="正在保存资源";}else if(_dirty&&!_closeAllowed){e.Cancel=true;_=ConfirmCloseAsync();}};
         Closed+=(_,_)=>{_closed=true;_lifetime.Cancel();_source?.Cancel();};
         if(record!=null) {
-            Title="补充三维 · "+record.Plan.Code;_cad.IsVisible=false;ResourceName.IsReadOnly=true;
+            Title="补充三维 · "+record.Plan.Name;_cad.IsVisible=false;ResourceName.IsReadOnly=true;
             _assetId=record.AssetId;
             _revision=record.ModelRevision;
             SetPlan(ComponentPlanSymbols.Load(ComponentPlanSymbols.Bytes(record.Plan)));_dirty=false;
@@ -117,7 +123,7 @@ internal sealed class ComponentPairingWindow : Window
     private void SetPlan(ComponentPlanSymbol plan)
     {
         Plan=plan;_planOverlay.Plan=plan;_planOverlay.Indices=Array.Empty<int>();_planOverlay.InvalidateVisual();
-        PlanView.SetView(ComponentPlanSymbols.Preview(plan));_code.Text=plan.Code;
+        PlanView.SetView(ComponentPlanSymbols.Preview(plan));_code.Text=string.IsNullOrWhiteSpace(plan.Code)?"未指定 · 项目选型时生成":plan.Code;UpdateCadParts();
         _loading=true;ResourceName.Text=plan.Name;_loading=false;
         _dimensions.Text=$"{plan.Width:0.###} × {plan.Height:0.###} mm";
     }
@@ -133,7 +139,7 @@ internal sealed class ComponentPairingWindow : Window
         });
         Mesh=await Task.Run(()=>ComponentGlbInspector.Inspect(bytes,_lifetime.Token));_meshBytes=bytes;
         _parts.Clear();_parts.AddRange(asset.Manifest.External.Parts.Select(p=>new ComponentPartDefinition {PartId=p.PartId,Name=p.Name,Role=p.Role,MeshNodes=p.MeshNodes.ToList(),
-            PlanPrimitives=_record.PlanHash==_record.ModelPlanHash?p.PlanPrimitives.ToList():new()}));
+            PlanPartId=_record.PlanHash==_record.ModelPlanHash?p.PlanPartId:null,PlanPrimitives=_record.PlanHash==_record.ModelPlanHash?p.PlanPrimitives.ToList():new()}));
         var frame=asset.Manifest.External.ModelFrame;
         _loading=true;OriginX.Text=frame.X.ToString("G17",CultureInfo.InvariantCulture);OriginY.Text=frame.Y.ToString("G17",CultureInfo.InvariantCulture);OriginZ.Text=frame.Z.ToString("G17",CultureInfo.InvariantCulture);
         AlongX.IsChecked=frame.AlongAxis=="X";AlongY.IsChecked=frame.AlongAxis=="Y";_loading=false;
@@ -177,7 +183,7 @@ internal sealed class ComponentPairingWindow : Window
         var generation=++_planGeneration;
         var plan=await Task.Run(()=>ComponentPlanSymbols.Load(path),_lifetime.Token);if(_closed||generation!=_planGeneration)return;
         Plan=plan;_planOverlay.Plan=plan;_planOverlay.Indices=Array.Empty<int>();_planOverlay.InvalidateVisual();
-        foreach(var part in _parts)part.PlanPrimitives.Clear();PlanView.SetView(ComponentPlanSymbols.Preview(plan));_code.Text=plan.Code;
+        foreach(var part in _parts){part.PlanPrimitives.Clear();part.PlanPartId=null;}PlanView.SetView(ComponentPlanSymbols.Preview(plan));_code.Text=string.IsNullOrWhiteSpace(plan.Code)?"未指定 · 项目选型时生成":plan.Code;UpdateCadParts();
         _loading=true;ResourceName.Text=plan.Name;_loading=false;_dirty=true;
         _dimensions.Text=$"{plan.Width:0.###} × {plan.Height:0.###} mm";UpdateState();
         } finally{SetBusy(false);}
@@ -223,10 +229,36 @@ internal sealed class ComponentPairingWindow : Window
         part.Name=PartName.Text.Trim();part.Role=Roles[Math.Max(0,PartRole.SelectedIndex)];_dirty=true;
         var index=Parts.SelectedIndex;Parts.ItemsSource=_parts.ToArray();Parts.SelectedIndex=index;UpdateState();
     }
+    private void UpdateCadParts()
+    {
+        _cadParts.Clear();_cadParts.AddRange(Plan?.Parts?.Where(p=>p.Role!="OpeningSymbol"&&p.Primitives.Count>0)??Enumerable.Empty<ComponentPlanPart>());
+        CadPart.ItemsSource=new[]{"未关联 / 手动绑定"}.Concat(_cadParts.Select(p=>p.Name+" · "+p.Primitives.Count+" 条图元")).ToArray();CadPart.SelectedIndex=0;
+    }
+    internal void BindCadPart(string? id)
+    {
+        if(_busy||Parts.SelectedItem is not ComponentPartDefinition part)return;
+        if(id==null){if(part.PlanPartId!=null)part.PlanPrimitives.Clear();part.PlanPartId=null;_dirty=true;_=SelectPartAsync();return;}
+        var cad=_cadParts.FirstOrDefault(p=>p.PartId==id)??throw new InvalidDataException("CAD 部件不可用。");
+        if(_parts.Any(p=>!ReferenceEquals(p,part)&&(p.PlanPartId==id||p.PlanPrimitives.Intersect(cad.Primitives).Any())))throw new InvalidDataException("该 CAD 部件已关联其他三维部件；请先取消原关联或合并三维部件。");
+        part.PlanPartId=cad.PartId;part.PlanPrimitives=cad.Primitives.ToList();part.Name=cad.Name;
+        part.Role=cad.Role=="Frame"||cad.Role=="Casing"?"Frame":cad.Role=="PrimaryLeaf"||cad.Role=="SecondaryLeaf"||cad.Role=="FixedPanel"?"Panel":cad.Role=="Handle"||cad.Role=="Hardware"?"Hardware":"Fixed";
+        _dirty=true;var index=Parts.SelectedIndex;Parts.ItemsSource=_parts.ToArray();Parts.SelectedIndex=index;_=SelectPartAsync();
+    }
+    internal void MergeParts()
+    {
+        if(_busy||Parts.SelectedItems==null)return;var selected=Parts.SelectedItems.Cast<ComponentPartDefinition>().ToArray();
+        if(selected.Length<2){_state.Text="按 Ctrl 选择多个三维部件，再合并为一个门套或门扇。";return;}
+        if(selected.Select(p=>p.PlanPartId).Where(id=>id!=null).Distinct().Count()>1){_state.Text="选中部件关联了不同 CAD 部件，请先取消关联。";return;}
+        var first=selected[0];first.MeshNodes=selected.SelectMany(p=>p.MeshNodes).Distinct().ToList();first.PlanPrimitives=selected.SelectMany(p=>p.PlanPrimitives).Distinct().ToList();first.PlanPartId=selected.Select(p=>p.PlanPartId).FirstOrDefault(id=>id!=null);
+        if(first.PlanPartId!=null&&_cadParts.FirstOrDefault(p=>p.PartId==first.PlanPartId) is {} linked)first.PlanPrimitives=linked.Primitives.ToList();
+        foreach(var other in selected.Skip(1))_parts.Remove(other);_dirty=true;Parts.ItemsSource=_parts.ToArray();Parts.SelectedItem=first;UpdateState();
+    }
     private async Task SelectPartAsync()
     {
         if(Parts.SelectedItem is not ComponentPartDefinition part||Mesh==null)return;
         _loading=true;PartName.Text=part.Name;PartRole.SelectedIndex=Math.Max(0,Array.IndexOf(Roles,part.Role));_loading=false;
+        CadPart.SelectedIndex=part.PlanPartId==null?0:_cadParts.FindIndex(p=>p.PartId==part.PlanPartId)+1;
+        _currentPart.Text="当前配对 · "+part.Name;
         _binding.Text="三维节点："+string.Join("、",Mesh.Nodes.Where(n=>part.MeshNodes.Contains(n.Index)).Select(n=>n.Name))+"\n二维图元："+part.PlanPrimitives.Count;
         _planOverlay.Indices=part.PlanPrimitives;_planOverlay.InvalidateVisual();
         Volume.SelectElements(part.MeshNodes.Select(n=>"node-"+n));
@@ -242,6 +274,7 @@ internal sealed class ComponentPairingWindow : Window
         var index=ComponentPlanSymbols.Pick(Plan,point,tolerance);if(index<0)return;
         var owner=_parts.FirstOrDefault(p=>p.PlanPrimitives.Contains(index));
         if(owner!=null&&!ReferenceEquals(owner,part)){_state.Text="该图元已关联："+owner.Name;return;}
+        if(part.PlanPartId!=null){_state.Text="当前部件沿用 CAD 整组标注；取消部件关联后可手动改绑单条图元。";return;}
         if(!part.PlanPrimitives.Remove(index))part.PlanPrimitives.Add(index);_dirty=true;_planOverlay.Indices=part.PlanPrimitives;_planOverlay.InvalidateVisual();_=SelectPartAsync();
     }
     private void UpdateState()
@@ -254,10 +287,10 @@ internal sealed class ComponentPairingWindow : Window
         if(_busy||_source!=null||Plan==null||Mesh==null||_meshBytes==null)throw new InvalidOperationException("请先完成 CAD 与 GLB 来源载入。");
         if(string.IsNullOrWhiteSpace(PartName.Text))throw new InvalidDataException("部件名称不能为空。");
         ApplyPart();var frame=Frame();var plan=ComponentPlanSymbols.Load(ComponentPlanSymbols.Bytes(Plan));
-        var fallback=plan.Category=="Furniture"?null:new OpeningTypeModel {Code=plan.Code,Kind=plan.Category=="Door"?"门":"窗",Width=plan.Width,Height=plan.Height,
+        var fallback=plan.Category=="Furniture"?null:new OpeningTypeModel {Code=ComponentPlanSymbols.ReferenceCode(plan),Kind=plan.Category=="Door"?"门":"窗",Width=plan.Width,Height=plan.Height,
             Sill=plan.Category=="Door"?0:900,ElevationType=plan.Category=="Door"?"普通门":"普通窗",HasInstallationGap=false,
             CustomCellLayout=BatchPdfPublisher.Models.DoorWindowElevationGeometryBuilder.SerializeCellLayout(new[]{new BatchPdfPublisher.Models.DoorWindowLayoutCell {Right=plan.Width,Top=plan.Height,Opening="固定",Material="玻璃",IsDoor=plan.Category=="Door"}})};
-        var parts=_parts.Select(p=>new ComponentPartDefinition {PartId=p.PartId,Name=p.Name,Role=p.Role,MeshNodes=p.MeshNodes.ToList(),PlanPrimitives=p.PlanPrimitives.ToList()}).ToArray();
+        var parts=_parts.Select(p=>new ComponentPartDefinition {PartId=p.PartId,Name=p.Name,Role=p.Role,PlanPartId=p.PlanPartId,MeshNodes=p.MeshNodes.ToList(),PlanPrimitives=p.PlanPrimitives.ToList()}).ToArray();
         var name=ResourceName.Text??"";var bytes=_meshBytes;
         var signature=JsonSerializer.Serialize(new {name,plan,frame,parts,hash=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes))});
         if(Published!=null&&signature==_publishedSignature){_dirty=false;return Published;}
@@ -284,7 +317,7 @@ internal sealed class ComponentPairingWindow : Window
     }
     private void SetBusy(bool busy)
     {
-        _busy=busy;foreach(var control in new Control[]{_cad,_glb,ResourceName,Parts,PartName,PartRole,OriginX,OriginY,OriginZ,AlongX,AlongY})control.IsEnabled=!busy;
+        _busy=busy;foreach(var control in new Control[]{_cad,_glb,ResourceName,Parts,PartName,PartRole,CadPart,OriginX,OriginY,OriginZ,AlongX,AlongY})control.IsEnabled=!busy;
         Publish.IsEnabled=!busy&&_source==null&&Plan!=null&&Mesh!=null;
     }
     internal async Task SaveDraftAsync(string path)
@@ -310,7 +343,7 @@ internal sealed class ComponentPairingWindow : Window
                 _assetId=loaded.d.BasedOnAssetId;_revision=Math.Max(_revision,loaded.d.BasedOnRevision);Published=null;
                 ResourceName.Text=loaded.d.Name;OriginX.Text=loaded.d.OriginX;OriginY.Text=loaded.d.OriginY;OriginZ.Text=loaded.d.OriginZ;
                 AlongX.IsChecked=loaded.d.AlongAxis=="X";AlongY.IsChecked=loaded.d.AlongAxis=="Y";
-                _code.Text=Plan?.Code??"";_dimensions.Text=Plan==null?"":$"{Plan.Width:0.###} × {Plan.Height:0.###} mm";
+                _code.Text=string.IsNullOrWhiteSpace(Plan?.Code)?"未指定 · 项目选型时生成":Plan.Code;UpdateCadParts();_dimensions.Text=Plan==null?"":$"{Plan.Width:0.###} × {Plan.Height:0.###} mm";
                 _planOverlay.Plan=Plan;PlanView.SetView(Plan==null?null:ComponentPlanSymbols.Preview(Plan));Parts.ItemsSource=_parts.ToArray();Parts.SelectedIndex=_parts.Count>0?0:-1;
                 if(Mesh==null){Volume.SetScene(ModelViewport.PrepareScene(new BuildingVolume()));await Isolated.SetVolumeAsync(new BuildingVolume());}
                 else await RefreshAlignedAsync();
@@ -320,7 +353,7 @@ internal sealed class ComponentPairingWindow : Window
     }
     private async Task<bool> SaveDraftUiAsync()
     {
-        var file=await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions {Title="保存配对草稿",SuggestedFileName=(Plan?.Code??"构件")+".wlodraft",DefaultExtension="wlodraft"});
+        var file=await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions {Title="保存配对草稿",SuggestedFileName=(Plan?.Name??"构件")+".wlodraft",DefaultExtension="wlodraft"});
         var path=file?.TryGetLocalPath();if(path==null)return false;
         try{await SaveDraftAsync(path);return true;}catch(OperationCanceledException){return false;}catch(Exception ex){_state.Text="草稿未保存："+ex.Message;return false;}
     }
