@@ -94,8 +94,8 @@ namespace BatchPdfPublisher.Views
                 Margin = new Padding(6, 0, 6, 4) };
             _newTabButton = CreateTabButton("新建图框", PublisherForm.UiIcon.Document, false);
             _registeredTabButton = CreateTabButton("已登记图框", PublisherForm.UiIcon.Document, false);
-            _insertRegisteredButton = ActionButton("插入登记图框", PublisherForm.UiIcon.Down, InsertRegisteredFrame, true);
-            _rangeButton = ActionButton("写入排版范围", PublisherForm.UiIcon.Select, WriteLayoutRange);
+            _insertRegisteredButton = ActionButton("插入登记图框", PublisherForm.UiIcon.Down, () => RunCad(InsertRegisteredFrame), true);
+            _rangeButton = ActionButton("写入排版范围", PublisherForm.UiIcon.Select, () => RunCad(WriteLayoutRange));
 
             _documentBinding = new ModelessDocumentBinding(this, document);
             Build();
@@ -887,6 +887,17 @@ namespace BatchPdfPublisher.Views
             var frame = _frameList.SelectedItem as FrameDefinition;
             if (frame == null) throw new InvalidOperationException("请先选择已登记的图框。");
             var scale = ParseScale(_insertScale.Text);
+            string error;
+            if (!FrameTemplateStore.TryPrepare(_document, frame, out error))
+            {
+                if (MessageBox.Show(error + "\r\n\r\n是否选择含原图框的 DWG 补齐模板？已有登记参数会保留，不修改源图纸。",
+                    "补齐图框模板", MessageBoxButtons.YesNo, MessageBoxIcon.Information) != DialogResult.Yes) return;
+                using (var chooser = new OpenFileDialog { Title = "选择包含“" + frame.BlockName + "”的原图纸", Filter = "CAD 图纸 (*.dwg)|*.dwg", CheckFileExists = true })
+                {
+                    if (chooser.ShowDialog() != DialogResult.OK) return;
+                    if (!FrameTemplateStore.TryRecover(frame, new[] { chooser.FileName }, out error)) throw new InvalidOperationException(error);
+                }
+            }
             if (FrameCreationService.InsertRegisteredFrame(_document, frame, scale)) _refresh?.Invoke();
         }
 

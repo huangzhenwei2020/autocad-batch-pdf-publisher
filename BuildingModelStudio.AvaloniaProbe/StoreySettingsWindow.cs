@@ -21,7 +21,7 @@ internal sealed class StoreySettingsWindow : Window
     private readonly Dictionary<string,TextBlock> _rangeSummaries = new();
     public List<StoreyModel> ResultStoreys { get; private set; } = new();
 
-    public StoreySettingsWindow(BuildingModelDocument model)
+    public StoreySettingsWindow(BuildingModelDocument model, bool saveToFile=false)
     {
         Title = "楼层设置"; Width = 960; Height = 540;
         MinWidth = 960; MinHeight = 360;
@@ -98,7 +98,7 @@ internal sealed class StoreySettingsWindow : Window
         var addMachine = new Button { Content = "新增机房层" };
         addMachine.Click += (_, _) => AddSpecialStorey(StoreyKind.MachineRoom, "MR", "机房层");
         cancel.Click += (_, _) => Close(false);
-        var save = new Button { Content = "应用楼层" };
+        var save = new Button { Content = saveToFile?"应用并保存":"应用楼层" };
         save.Click += (_, _) => { if (Collect()) Close(true); };
         actions.Children.Add(addBasement); actions.Children.Add(add);
         actions.Children.Add(addStandard);

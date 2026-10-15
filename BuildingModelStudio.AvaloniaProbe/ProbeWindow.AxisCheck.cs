@@ -33,7 +33,9 @@ internal sealed partial class ProbeWindow
         }
         var placementOriginal=BuildingModelJson.ToJson(_session.Model);
         PlacementClick(new PointModel(3000,2000));Require(_planCanvas.HasPendingPlacement,"参考门窗不能点选移动。");
+        _pendingOpeningSizeCheck=dialog=>{dialog.Close();return Task.CompletedTask;};
         PlacementClick(new PointModel(100,0));Require(!_planCanvas.ConfirmPendingPlacement(),"超墙端洞口错误提交。");
+        await _pendingOpeningApplyTask;_pendingOpeningSizeCheck=null;
         Require(BuildingModelJson.ToJson(_session.Model)==placementOriginal,"失败预览写入模型。");
         PlacementClick(new PointModel(3000,0));
         await Snapshot(this,"pending-opening-placement-ui.png");

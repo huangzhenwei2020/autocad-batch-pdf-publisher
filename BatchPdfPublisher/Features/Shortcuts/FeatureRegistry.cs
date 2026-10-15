@@ -30,6 +30,8 @@ namespace BatchPdfPublisher.Services
             F("detail_layout", "大样排版", "WLDYLAYOUT", "DYPB", "建筑工具", "排", "逐个框选大样并自动计算边界，在登记图框中拖拽排序和分页排版。", null, "大样排版"),
             F("line_vision", "图像转 CAD", "LINEVISION", "TXC", "建筑工具", "绘", "识别建筑线稿、扫描图或截图中的线条，预览确认后生成可编辑 CAD 图元。", "TXC", "图像转绘"),
             F("room_rename", "房间改名", "FJGM", "FJGM", "建筑工具", "房", "以一个天正房间为样板，批量修改匹配房间的名称。", null, "房间改名"),
+            F("room_statistics", "房间统计", "FJTJ", "FJTJ", "建筑工具", "房", "框选天正房间，按名称及面积统计数量，生成房间统计表。", null, "房间统计"),
+            F("room_statistics_summary", "房间统计汇总", "FJHZ", "FJHZ", "建筑工具", "总", "框选已有房间统计表，筛选房间名称并汇总数量和数量占比，不统计面积。", null, "房间汇总"),
             F("shortcut_settings", "快捷键设置", "WLHOTKEYS", "KJJPZ", "系统设置", "键", "统一查看、修改和恢复万落建筑工具的快捷键。", null, "快捷设置"),
             F("menubar", "菜单栏开关", "WLMENUBAR", "CDL", "系统设置", "菜", "显示或隐藏 AutoCAD 经典菜单栏；从隐藏切回显示时会自动把万落建筑工具下拉菜单挂回菜单栏。", null, "菜单开关"),
             F("cloud_sync", "云同步", "WLCLOUDSYNC", "YTB", "系统设置", "云", "同步通用配置、跨项目方案库、图框模板和项目文件，并保留冲突副本与历史版本。", null, "云端同步"),

@@ -432,10 +432,10 @@ namespace BatchPdfPublisher.Views
         {
             var mode = opening ?? string.Empty; if (mode == "" || mode == "固定") return;
             var left = rect.Left + 3f; var right = rect.Right - 3f; var top = rect.Top + 3f; var bottom = rect.Bottom - 3f; var middleX = (left + right) / 2f; var middleY = (top + bottom) / 2f;
-            if (mode == "左平开") { graphics.DrawLine(pen, left, top, right, middleY); graphics.DrawLine(pen, right, middleY, left, bottom); }
-            else if (mode == "右平开") { graphics.DrawLine(pen, right, top, left, middleY); graphics.DrawLine(pen, left, middleY, right, bottom); }
-            else if (mode == "上悬") { graphics.DrawLine(pen, left, top, middleX, bottom); graphics.DrawLine(pen, middleX, bottom, right, top); }
-            else if (mode == "下悬") { graphics.DrawLine(pen, left, bottom, middleX, top); graphics.DrawLine(pen, middleX, top, right, bottom); }
+            if (mode == "左平开") graphics.DrawLines(pen, new[] { new PointF(right, top), new PointF(left, middleY), new PointF(right, bottom) });
+            else if (mode == "右平开") graphics.DrawLines(pen, new[] { new PointF(left, top), new PointF(right, middleY), new PointF(left, bottom) });
+            else if (mode == "上悬") graphics.DrawLines(pen, new[] { new PointF(left, bottom), new PointF(middleX, top), new PointF(right, bottom) });
+            else if (mode == "下悬") graphics.DrawLines(pen, new[] { new PointF(left, top), new PointF(middleX, bottom), new PointF(right, top) });
             else if (mode == "推拉" || mode == "右推拉") DrawSlidingArrow(graphics, pen, left, right, middleY, true);
             else if (mode == "左推拉") DrawSlidingArrow(graphics, pen, left, right, middleY, false);
             else if (mode == "双向推拉") DrawSlidingArrow(graphics, pen, left, right, middleY, leftHalf);

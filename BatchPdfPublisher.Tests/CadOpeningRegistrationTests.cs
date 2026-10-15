@@ -16,6 +16,91 @@ internal static class CadOpeningRegistrationTests
     [STAThread]
     private static void Main(string[] args)
     {
+        if(args.Length==2&&args[0]=="--inspect-slab-topology") {
+            var topologyPath=Path.GetFullPath(args[1]);Check(topologyPath.StartsWith(Path.GetFullPath(".artifacts")+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase),"Private copies only.");
+            var topologyRegistry=CadFloorPlanRegistry.Load(topologyPath);
+            foreach(var capture in topologyRegistry.Floors){var alignment=capture.Floor.Alignment;var scale=alignment.MillimetresPerCadUnit;
+                var walls=capture.Floor.WallCandidates.Where(w=>w!=null&&(w.StraightHorizontalLineVerified||CadBuildingProbeRules.VerifyCircularWall(w))
+                    &&w.CurveStart!=null&&w.CurveEnd!=null&&!(capture.ExcludedWallHandles??new List<string>()).Contains(w.Handle)).Select(w=>{
+                    var a=alignment.ToModel(new PointModel(w.CurveStart.X,w.CurveStart.Y));var b=alignment.ToModel(new PointModel(w.CurveEnd.X,w.CurveEnd.Y));
+                    return new WallModel {Id=w.Handle,StoreyId=capture.Floor.Storey.Id,X1=a.X,Y1=a.Y,X2=b.X,Y2=b.Y,
+                        Thickness=w.CandidateThickness.HasValue?w.CandidateThickness.Value*scale:200,AxisOffset=w.CandidateAxisOffset.GetValueOrDefault()*scale,Bulge=w.CurveBulge};}).ToList();
+                try{var slabs=CadFloorSlabGeneration.Build(walls,new List<CadRoomLabel>(),topologyRegistry.ResolvedSlabThickness,capture.Floor.Storey.Id,new List<string>());
+                    Console.WriteLine("TOPOLOGY_OK floor="+capture.Floor.Storey.Id+" slabs="+slabs.Count);}
+                catch(ArgumentException ex){if(ex.Data["SlabSnapshot"] is string snapshot)File.WriteAllText(Path.Combine(Path.GetDirectoryName(topologyPath),"invalid-slab-"+capture.Floor.Storey.Id+".json"),snapshot);
+                    Console.WriteLine("TOPOLOGY_INVALID floor="+capture.Floor.Storey.Id+" "+ex.Message);}
+            }return;
+        }
+        if(args.Length==3 && args[0]=="--verify-replacement") {
+            var copyPath=Path.GetFullPath(args[1]);var outputPath=Path.GetFullPath(args[2]);
+            var privateRoot=Path.GetFullPath(".artifacts")+Path.DirectorySeparatorChar;
+            Check(copyPath.StartsWith(privateRoot,StringComparison.OrdinalIgnoreCase) && outputPath.StartsWith(privateRoot,StringComparison.OrdinalIgnoreCase),"Private copies only.");
+            var original=BuildingModelJson.LoadModel(copyPath);CadFloorPlanRegistry replacementRegistry;
+            using(var stream=File.OpenRead(copyPath+".cad-floors.json"))
+                replacementRegistry=(CadFloorPlanRegistry)new System.Runtime.Serialization.Json.DataContractJsonSerializer(typeof(CadFloorPlanRegistry)).ReadObject(stream);
+            replacementRegistry.ModelPath=copyPath;replacementRegistry.ReplaceRegisteredConstruction=true;
+            foreach(var capture in replacementRegistry.Floors)capture.Floor.ModelPath=copyPath;
+            var fresh=CadFloorModelGeneration.Build(new BuildingModelDocument {Storeys=original.Storeys},replacementRegistry);
+            var session=new BuildingModelEditSession(original);var before=BuildingModelJson.ToJson(session.Model);
+            Check(session.TryImportCadFloors(replacementRegistry,"private-replacement",out var error),error);
+            var replacementResult=session.Model;var floors=new HashSet<string>(replacementRegistry.Floors.Select(c=>c.Floor.Storey.Id));
+            Check(!replacementResult.CadImport.StructureMessages.Any(m=>m.Contains("整批") || m.Contains("本次自动更新已跳过")),"Real replacement skipped: "+string.Join(";",replacementResult.CadImport.StructureMessages));
+            foreach(var wall in fresh.Walls) {
+                var actual=replacementResult.Walls.Single(w=>w.Id==wall.Id);
+                Check(actual.X1==wall.X1 && actual.Y1==wall.Y1 && actual.X2==wall.X2 && actual.Y2==wall.Y2 && actual.Bulge==wall.Bulge,"Edited wall not replaced: "+actual.Code);
+            }
+            Check(replacementResult.Walls.Count(w=>floors.Contains(w.StoreyId))==fresh.Walls.Count && replacementResult.Slabs.Count(s=>floors.Contains(s.StoreyId))==fresh.Slabs.Count,"Old construction remained.");
+            foreach(var opening in fresh.Openings) {
+                var actual=replacementResult.Openings.Single(o=>o.Id==opening.Id);
+                Check(actual.HostWallId==opening.HostWallId && actual.Offset==opening.Offset && actual.Width==opening.Width && actual.Height==opening.Height && actual.Sill==opening.Sill,"CAD placement was not restored.");
+                var old=original.Openings.FirstOrDefault(o=>o.Id==actual.Id && o.Code==actual.Code && Math.Round(o.Width/10)==Math.Round(actual.Width/10) && Math.Round(o.Height/10)==Math.Round(actual.Height/10));
+                if(old!=null) {
+                    var expectedType=OpeningConstruction.Copy(OpeningConstruction.Resolve(original,old));
+                    OpeningConstruction.ResizeType(expectedType,actual.Width,actual.Height);
+                    var actualType=OpeningConstruction.Copy(OpeningConstruction.Resolve(replacementResult,actual));
+                    OpeningConstruction.ResizeType(actualType,actual.Width,actual.Height);
+                    Check(OpeningConstruction.SameConstruction(expectedType,actualType),"Matching edited definition lost: "+actual.Code+" "+string.Join(";",replacementResult.CadImport.StructureMessages));
+                }
+            }
+            var repeat=CadFloorModelGeneration.Build(BuildingModelJson.FromJson(BuildingModelJson.ToJson(replacementResult)),replacementRegistry);
+            Check(repeat.Walls.Count==replacementResult.Walls.Count && repeat.Openings.Count==replacementResult.Openings.Count && repeat.OpeningOverrides.Count==replacementResult.OpeningOverrides.Count,"Repeat duplicates.");
+            Check(session.Undo() && BuildingModelJson.ToJson(session.Model)==before && session.Redo(),"Real project atomic undo failed.");
+            BuildingModelJson.SaveModel(outputPath,replacementResult);
+            Console.WriteLine("REAL_REPLACEMENT_OK walls="+original.Walls.Count+"->"+replacementResult.Walls.Count+" slabs="+original.Slabs.Count+"->"+replacementResult.Slabs.Count
+                +" openings="+original.Openings.Count+"->"+replacementResult.Openings.Count+" arcs="+replacementResult.Walls.Count(w=>Math.Abs(w.Bulge)>1e-10)+" freshGeometry matchingDefinitions repeated oneUndo privateCopyOnly");
+            foreach(var message in replacementResult.CadImport.StructureMessages)Console.WriteLine("NOTICE "+message);
+            return;
+        }
+        if(args.Length==3 && args[0]=="--verify-local-opening-reimport") {
+            var copyPath=Path.GetFullPath(args[1]);var verifiedOutput=Path.GetFullPath(args[2]);
+            if(!copyPath.StartsWith(Path.GetFullPath(".artifacts")+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase)
+                ||!verifiedOutput.StartsWith(Path.GetFullPath(".artifacts")+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Real-project verification must use private artifact copies only.");
+            var before=BuildingModelJson.LoadModel(copyPath);CadFloorPlanRegistry copyRegistry;
+            using(var stream=File.OpenRead(copyPath+".cad-floors.json"))
+                copyRegistry=(CadFloorPlanRegistry)new System.Runtime.Serialization.Json.DataContractJsonSerializer(typeof(CadFloorPlanRegistry)).ReadObject(stream);
+            copyRegistry.ModelPath=copyPath;
+            foreach(var floor in copyRegistry.Floors)floor.Floor.ModelPath=copyPath;
+            foreach(var datum in copyRegistry.Datums ?? new List<CadFloorRegistrationContext>())datum.ModelPath=copyPath;
+            var generated=CadFloorModelGeneration.Build(before,copyRegistry,"private-reimport-check");
+            var expectedArcs=copyRegistry.Floors.Sum(c=>c.Floor.WallCandidates.Count(w=>w.CircularHorizontalArcVerified
+                && !(c.ExcludedWallHandles??new List<string>()).Contains(w.Handle)));
+            Check(generated.Walls.Count(w=>Math.Abs(w.Bulge)>1e-10)>=expectedArcs,"Real-project arcs were still skipped: "+string.Join(";",generated.CadImport.StructureMessages));
+            foreach(var old in before.Openings) {
+                var after=generated.Openings.FirstOrDefault(o=>o.Id==old.Id);
+                Check(after!=null && after.Code==old.Code && after.Width==old.Width && after.Height==old.Height
+                    && after.Offset==old.Offset && after.ThresholdHeight==old.ThresholdHeight,"Real-project opening changed: "+old.Code);
+            }
+            var beforeTypes=BuildingModelJson.ToJson(new BuildingModelDocument {OpeningTypes=before.OpeningTypes,OpeningOverrides=before.OpeningOverrides,OpeningTemplates=before.OpeningTemplates});
+            Check(beforeTypes==BuildingModelJson.ToJson(new BuildingModelDocument {OpeningTypes=generated.OpeningTypes,OpeningOverrides=generated.OpeningOverrides,OpeningTemplates=generated.OpeningTemplates}),"Real-project layouts or templates changed.");
+            var repeat=CadFloorModelGeneration.Build(generated,copyRegistry,"private-repeat-check");
+            Check(repeat.Walls.Count==generated.Walls.Count && repeat.Openings.Count==generated.Openings.Count,"Repeated import duplicated real-project geometry.");
+            BuildingModelJson.SaveModel(verifiedOutput,generated);
+            Console.WriteLine("REAL_PROJECT_REIMPORT_OK walls="+before.Walls.Count+"->"+generated.Walls.Count+" arcs="+expectedArcs
+                +" preservedOpenings="+before.Openings.Count+" slabs="+generated.Slabs.Count+" libraryPreserved repeatedNoDuplicates privateCopyOnly");
+            foreach(var message in generated.CadImport.StructureMessages)Console.WriteLine("NOTICE "+message);
+            return;
+        }
         if(args.Length==2 && args[0]=="--inspect-opening-geometry") {
             using(var stream=File.OpenRead(args[1])) {
                 var inspectionRegistry=(CadFloorPlanRegistry)new System.Runtime.Serialization.Json.DataContractJsonSerializer(typeof(CadFloorPlanRegistry)).ReadObject(stream);
@@ -55,6 +140,7 @@ internal static class CadOpeningRegistrationTests
             catch(InvalidDataException ex) { Console.WriteLine("READ_ONLY_BUILD_BLOCKED "+ex.Message); }
             return;
         }
+        ModelProjectWorkflowTests.Run();
         var probe = new CadBuildingProbeDocument { DrawingFingerprint = "test-drawing", DrawingPath = "test.dwg" };
         probe.Entities.Add(new CadBuildingProbeEntity { Handle = "A1", DxfName = "TCH_OPENING", Layer = "A_WINDOW",
             Fields = new List<CadProbeField> { CadBuildingProbeRules.Field("Width", true, 800d, null), CadBuildingProbeRules.Field("Height", true, 2200d, null) } });
@@ -337,6 +423,8 @@ internal static class CadOpeningRegistrationTests
             "Cancelling a pick must preserve prior location, confirmation and row selection.");
         placementWindow.Close();
         CadFloorModelGenerationTests.Run();
+        CadCurvedWallRegistrationTests.Run();
+        CadReimportLocalOpeningTests.Run();
         CadFloorSlabGenerationTests.Run();
         CadOpeningScheduleRulesTests.Run();
         Console.WriteLine("PASS: active model path, multi-floor registration, model generation/undo/reimport, safe jamb recognition, standard references, schedule/sill rollback and WPF actions.");

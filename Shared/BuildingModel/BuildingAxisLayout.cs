@@ -116,7 +116,7 @@ namespace BatchPdfPublisher.BuildingModel
                 });
             }
             foreach (var wall in (model.Walls ?? new List<WallModel>())
-                .Where(w => w != null && !isolated).OrderBy(w => w.X1).ThenBy(w => w.Y1).ThenBy(w => w.Id))
+                .Where(w => w != null && Math.Abs(w.Bulge) < 1e-10 && !isolated).OrderBy(w => w.X1).ThenBy(w => w.Y1).ThenBy(w => w.Id))
             {
                 var vertical = Math.Abs(wall.X2 - wall.X1) <= Tolerance;
                 var horizontal = Math.Abs(wall.Y2 - wall.Y1) <= Tolerance;

@@ -95,14 +95,27 @@ namespace BatchPdfPublisher.BuildingModel
         }
         public bool Center(IEnumerable<int> indices,out string error)
         {
-            var selected=new HashSet<int>(indices);
+            var selected=new HashSet<int>(indices??Enumerable.Empty<int>());
             return Edit(cells=>{
-                var group=selected.Select(i=>cells[i]).OrderBy(c=>c.Left).ToArray();
-                if(group.Length==0 || group.Any(c=>c.IsDeleted || Math.Abs(c.Bottom-group[0].Bottom)>.05 || Math.Abs(c.Top-group[0].Top)>.05)
-                    || group.Skip(1).Where((c,i)=>Math.Abs(group[i].Right-c.Left)>.05).Any())throw new InvalidOperationException("请选择同一行的连续面板。");
-                var left=group.First().Left;var right=group.Last().Right;var side=(Width-(right-left))/2;
+                if(selected.Count==0||selected.Any(i=>i<0||i>=cells.Count))throw new InvalidOperationException("请选择需要居中的分格组。");
+                var group=selected.Select(i=>cells[i]).ToArray();
+                var left=group.Min(c=>c.Left);var right=group.Max(c=>c.Right);
+                var bottom=group.Min(c=>c.Bottom);var top=group.Max(c=>c.Top);
+                // A tiled rectangle may span several rows; its internal divisions move rigidly.
+                if(group.Any(c=>c.IsDeleted)||Math.Abs((right-left)*(top-bottom)-group.Sum(c=>(c.Right-c.Left)*(c.Top-c.Bottom)))>.1)
+                    throw new InvalidOperationException("请选择组成完整矩形的连续分格；上下多排可一起选中。");
+                var side=(Width-(right-left))/2;
                 if(side<50 || left<.05 || right>Width-.05)throw new InvalidOperationException("居中须在两侧保留可调整的邻格，至少 50 mm。");
-                foreach(var pair in cells.Select((c,i)=>new{c,i}).Where(p=>!selected.Contains(p.i) && Math.Abs(p.c.Bottom-group[0].Bottom)<.05 && Math.Abs(p.c.Top-group[0].Top)<.05)){
+                var neighbours=cells.Select((c,i)=>new{c,i}).Where(p=>!selected.Contains(p.i)&&p.c.Top>bottom+.05&&p.c.Bottom<top-.05).ToArray();
+                if(neighbours.Any(p=>p.c.Bottom<bottom-.05||p.c.Top>top+.05))
+                    throw new InvalidOperationException("所选组上下边界须与两侧邻格对齐，请补选相接的分格。");
+                var leftSide=neighbours.Where(p=>p.c.Right<=left+.05).ToArray();
+                var rightSide=neighbours.Where(p=>p.c.Left>=right-.05).ToArray();
+                if(leftSide.Length+rightSide.Length!=neighbours.Length
+                    ||Math.Abs(left*(top-bottom)-leftSide.Sum(p=>(p.c.Right-p.c.Left)*(p.c.Top-p.c.Bottom)))>.1
+                    ||Math.Abs((Width-right)*(top-bottom)-rightSide.Sum(p=>(p.c.Right-p.c.Left)*(p.c.Top-p.c.Bottom)))>.1)
+                    throw new InvalidOperationException("两侧须有完整相接的邻格，不能跨过缺口居中。");
+                foreach(var pair in neighbours){
                     var c=pair.c;
                     if(c.Right<=left+.05){c.Left=c.Left/left*side;c.Right=c.Right/left*side;}
                     else if(c.Left>=right-.05){c.Left=side+right-left+(c.Left-right)/(Width-right)*side;c.Right=side+right-left+(c.Right-right)/(Width-right)*side;}

@@ -16,6 +16,14 @@ namespace BatchPdfPublisher.BuildingModel
     /// <summary>Same cells and net panel boundaries for elevation and physical construction.</summary>
     public static class OpeningConstruction
     {
+        public static double FitRoundedOpeningSize(double requested,double maximum)
+        {
+            if(double.IsNaN(requested)||double.IsInfinity(requested)||double.IsNaN(maximum)||double.IsInfinity(maximum)
+                ||maximum<=0||requested<=maximum||requested-maximum>5.000001)return requested;
+            if(Math.Round(requested/10,MidpointRounding.AwayFromZero)!=Math.Round(maximum/10,MidpointRounding.AwayFromZero))return requested;
+            // Fit inward at millimetre precision instead of extending the host or weakening validation.
+            return Math.Min(requested,Math.Floor(maximum+1e-7));
+        }
         public static string AlphabeticSuffix(int index)
         {
             var value=index+1;var result="";
@@ -75,10 +83,11 @@ namespace BatchPdfPublisher.BuildingModel
             types.AddRange((external?.Types ?? new List<OpeningTypeModel>()).Where(t=>t!=null && !types.Any(x=>Same(x.Code,t.Code))));
             return new OpeningTypeLibraryDocument { ProjectName=model.Name,Types=types };
         }
-        public static OpeningTypeModel Resolve(BuildingModelDocument model,OpeningModel opening)
+        public static OpeningTypeModel Resolve(BuildingModelDocument model,OpeningModel opening,OpeningTypeLibraryDocument external=null)
         {
-            var code=model.OpeningOverrides?.FirstOrDefault(o=>Same(o.OpeningId,opening.Id))?.TypeCode??EffectiveCode(opening);
-            var type=Library(model).FindType(code);
+            var change=model.OpeningOverrides?.FirstOrDefault(o=>Same(o.OpeningId,opening.Id));
+            var code=change?.TypeCode??EffectiveCode(opening);
+            var type=change?.Definition ?? Library(model,external).FindType(code);
             if(type!=null){
                 if(type.ElevationType=="凸窗" && (type.BayLeftDepth!=DoorWindowElevationGeometryBuilder.NormalizeBayDepth(type.BayLeftDepth) || type.BayRightDepth!=DoorWindowElevationGeometryBuilder.NormalizeBayDepth(type.BayRightDepth))){
                     type=Copy(type);type.BayLeftDepth=DoorWindowElevationGeometryBuilder.NormalizeBayDepth(type.BayLeftDepth);type.BayRightDepth=DoorWindowElevationGeometryBuilder.NormalizeBayDepth(type.BayRightDepth);
@@ -92,6 +101,9 @@ namespace BatchPdfPublisher.BuildingModel
             var item=new DoorWindowScheduleItem {Code=EffectiveCode(opening),Width=opening.Width,Height=opening.Height,
                 ElevationType=opening.HasSwingLeaf() ? "普通门" : opening.Kind=="门联窗" || opening.Kind=="门连窗" ? "门联窗" : opening.Kind=="百叶" ? "百叶" : "普通窗",
                 SillHeight=opening.Sill,SillHeightFromCadRegistration=true,SourceNote="CAD 楼层登记"};
+            // Keep the combined door's 2200 mm row literal; scaling an installation-gap layout would enlarge it.
+            if(BatchPdfPublisher.Services.DoorWindowElevationSuggestionService.InferTypeFromCode(item.Code,item.ElevationType)=="门联窗")
+                {item.HasInstallationGap=false;item.InstallationGap=0;}
             BatchPdfPublisher.Services.DoorWindowElevationSuggestionService.Apply(item);
             var result=new OpeningTypeModel {Code=item.Code,Kind=opening.Kind,Width=opening.Width,Height=opening.Height,Sill=opening.Sill,
                 FrameDepth=100,MullionDepth=100,SashDepth=50,GlassThickness=6,PanelThickness=40,OpenAngle=0};
@@ -135,7 +147,7 @@ namespace BatchPdfPublisher.BuildingModel
         {
             if(model?.OpeningOverrides==null || model.OpeningOverrides.Count==0)return model;
             var clone=BuildingModelJson.FromJson(BuildingModelJson.ToJson(model));
-            foreach(var o in clone.Openings) { var change=clone.OpeningOverrides.FirstOrDefault(x=>Same(x.OpeningId,o.Id)); if(change!=null)o.Code=change.TypeCode; }
+            foreach(var o in clone.Openings) { var change=clone.OpeningOverrides.FirstOrDefault(x=>Same(x.OpeningId,o.Id)); if(!string.IsNullOrWhiteSpace(change?.TypeCode))o.Code=change.TypeCode; }
             return clone;
         }
         public static List<OpeningPart> Build(OpeningModel opening,OpeningTypeModel type,double wallThickness)

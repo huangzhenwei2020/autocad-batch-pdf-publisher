@@ -502,6 +502,20 @@ foreach ($requiredResource in @(
 }
 
 $featureSource = Join-Path $repositoryRoot 'BatchPdfPublisher\Features\Shortcuts\FeatureRegistry.cs'
+# Exercise the actual embedded artwork and every registered icon before delivery.
+# Core-console command tests do not initialize the GUI Ribbon.
+$iconTest = Join-Path $PSScriptRoot 'Test-RibbonIcons.ps1'
+foreach ($record in $buildRecords) {
+    $iconPlugin = Join-Path $OutputRoot ('CadApi\' + $record.Band + '\BatchPdfPublisher.dll')
+    if ($record.Band -eq 'R24') {
+        $iconHost = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        & $iconHost -NoProfile -NonInteractive -STA -ExecutionPolicy Bypass -File $iconTest -PluginPath $iconPlugin
+    } else {
+        $iconHost = Find-DotNet8
+        & $iconHost run --project (Join-Path $repositoryRoot 'BatchPdfPublisher.Tests\BatchPdfPublisher.RibbonIcons.Tests.csproj') -c Release -- $iconPlugin
+    }
+    if ($LASTEXITCODE -ne 0) { throw ($record.Band + ' Ribbon icon verification failed.') }
+}
 $commandSource = Join-Path $repositoryRoot 'BatchPdfPublisher\Commands.cs'
 if (-not (Test-Path -LiteralPath $featureSource) -or -not (Test-Path -LiteralPath $commandSource)) { throw '缺少统一功能登记表或命令入口。' }
 $featureText = Get-Content -LiteralPath $featureSource -Raw

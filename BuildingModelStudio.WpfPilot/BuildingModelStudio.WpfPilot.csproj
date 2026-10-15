@@ -22,4 +22,5 @@
     <Compile Include="..\Shared\BuildingModel\SampleModelFactory.cs" Link="Shared\SampleModelFactory.cs" />
     <Compile Include="..\Shared\BuildingModel\SheetComposer.cs" Link="Shared\SheetComposer.cs" />
   </ItemGroup>
+  <ItemGroup><Compile Include="..\Shared\BuildingModel\CurveGeometry.cs" /></ItemGroup>
 </Project>

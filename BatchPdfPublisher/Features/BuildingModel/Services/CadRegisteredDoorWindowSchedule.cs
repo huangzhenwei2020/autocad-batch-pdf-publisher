@@ -23,7 +23,8 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
         public static DoorWindowScheduleReadResult Load()
         {
             var project = new PublishPlanStore().GetActiveProject();
-            var path = StudioLaunch.ActiveModelPath(project?.ProjectFolder, project?.Name);
+            var document=Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
+            var path = StudioLaunch.ActiveModelPath(project?.ProjectFolder, project?.Name,document?.Database.FingerprintGuid.ToString());
             if (path == null) return null;
             var registry = CadFloorPlanRegistry.Load(path);
             if (registry.Floors.Count == 0) return null;

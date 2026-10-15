@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="RoomStatisticsTests.cs" />
+    <Compile Include="../BatchPdfPublisher/Features/Rooms/Services/RoomStatistics.cs" Link="RoomStatistics.cs" />
+    <Compile Include="../BatchPdfPublisher/Infrastructure/FloorStatisticsRules.cs" Link="FloorStatisticsRules.cs" />
+  </ItemGroup>
+</Project>

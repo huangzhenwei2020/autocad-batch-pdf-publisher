@@ -22,6 +22,14 @@ namespace BatchPdfPublisher.Services
                 var recordId = reference.IsDynamicBlock ? reference.DynamicBlockTableRecord : reference.BlockTableRecord;
                 var record = transaction.GetObject(recordId, OpenMode.ForRead) as BlockTableRecord;
                 if (record == null) return string.Empty;
+                return DefinitionSignature(record, transaction);
+            }
+            catch { return string.Empty; }
+        }
+        public static string DefinitionSignature(BlockTableRecord record, Transaction transaction)
+        {
+            try
+            {
                 var parts = new List<string>();
                 foreach (ObjectId id in record)
                 {

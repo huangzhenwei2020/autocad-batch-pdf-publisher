@@ -44,6 +44,7 @@ namespace BatchPdfPublisher.BuildingModel
             var building = root.UseScene(0).CreateNode(model.Name ?? "建筑模型");
             var floors = new Dictionary<string, Node>(StringComparer.OrdinalIgnoreCase);
             var materials = new Dictionary<string, MaterialBuilder>(StringComparer.Ordinal);
+            var schemaMaterials = new Dictionary<MaterialBuilder, SharpGLTF.Schema2.Material>();
             var result = new GlbExportResult();
             foreach (var group in volume.Faces.GroupBy(f => (f.StoreyId, f.ElementId)))
             {
@@ -90,7 +91,16 @@ namespace BatchPdfPublisher.BuildingModel
                     }
                 }
                 if (triangles == 0) throw new InvalidOperationException("构件没有有效三角面：" + group.Key.ElementId);
-                root.CreateMeshes(mesh);
+                // Each conversion has its own material cache unless we supply a shared one.
+                root.CreateMeshes<MaterialBuilder>(builder =>
+                {
+                    if (!schemaMaterials.TryGetValue(builder, out var shared))
+                    {
+                        shared = root.CreateMaterial(builder);
+                        schemaMaterials.Add(builder, shared);
+                    }
+                    return shared;
+                }, mesh);
                 var element = floor.CreateNode(name);
                 element.Mesh = root.LogicalMeshes[root.LogicalMeshes.Count - 1];
                 element.Extras = new JsonObject { ["elementId"] = group.Key.ElementId,

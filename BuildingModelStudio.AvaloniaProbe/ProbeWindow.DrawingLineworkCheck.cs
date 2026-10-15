@@ -10,6 +10,7 @@ internal sealed partial class ProbeWindow
 {
     private static void RunDrawingLineworkRasterCheck()
     {
+        RunWallColumnRasterCheck();
         var folder=Path.GetFullPath(".artifacts/drawing-linework");Directory.CreateDirectory(folder);
         var drawing=new DrawingViewCanvas();drawing.Measure(new Size(900,600));drawing.Arrange(new Rect(0,0,900,600));
         var view=new ViewDocument {Scale=100,Lines=new() {
@@ -150,5 +151,34 @@ internal sealed partial class ProbeWindow
             if(Ink(-5)||Ink(41)||Ink(87)||!Ink(5)||!Ink(47))throw new InvalidOperationException("门框门扇线宽侵占真实安装间隙");
         }
         Console.WriteLine("DRAWING_FRAME_INWARD_PIXELS_OK twoMillimetreClearancePreserved");
+    }
+    private static void RunWallColumnRasterCheck()
+    {
+        var folder=Path.GetFullPath(".artifacts/wall-column-drawing");Directory.CreateDirectory(folder);
+        var model=SampleModelFactory.CreateEmptyModel("Wall column raster");
+        model.Walls.Add(new WallModel {Id="wall",StoreyId="1F",X1=-1000,X2=1000,Thickness=800});
+        model.Columns.Add(new ColumnModel {Id="column",StoreyId="1F",Width=400,Depth=400});
+        var definition=SampleModelFactory.CreatePlanView(model.Storeys[0]);definition.LineWeights=new() {[ViewLayers.Cut]=70};
+        foreach(var size in new[]{new PixelSize(900,600),new PixelSize(1280,720)})foreach(var thickness in new[]{800d,200}) {
+            model.Walls[0].Thickness=thickness;
+            var view=OrthographicProjector.Project(model,definition);
+            var drawing=new DrawingViewCanvas();drawing.Measure(new Size(size.Width,size.Height));drawing.Arrange(new Rect(0,0,size.Width,size.Height));
+            drawing.SetView(new ViewDocument {Scale=100,StrokeAreas=view.StrokeAreas,Lines=view.Lines.Where(l=>l.Layer==ViewLayers.Cut).ToList()});
+            drawing.ZoomAt(new Point(size.Width/2d,size.Height/2d),Math.Log(.35/drawing.PixelsPerMillimetre)/Math.Log(1.18));
+            using var image=new RenderTargetBitmap(size,new Vector(96,96));image.Render(drawing);
+            image.Save(Path.Combine(folder,$"priority-{size.Width}-{thickness}.png"),PngBitmapEncoderOptions.Default);
+            using var pixels=new WriteableBitmap(size,new Vector(96,96),PixelFormat.Bgra8888,AlphaFormat.Premul);
+            using var buffer=pixels.Lock();image.CopyPixels(buffer);var bytes=new byte[buffer.RowBytes*size.Height];Marshal.Copy(buffer.Address,bytes,0,bytes.Length);
+            bool Ink(double x,double y) {
+                var p=drawing.ModelToScreen(new PointModel(x-view.OriginX,y-view.OriginY));
+                var px=(int)Math.Round(p.X);var py=(int)Math.Round(p.Y);
+                if(px<0||py<0||px>=size.Width||py>=size.Height)throw new InvalidOperationException("Column priority sample outside image");
+                var offset=py*buffer.RowBytes+px*4;return bytes[offset]<140&&bytes[offset+1]<120&&bytes[offset+2]<100;
+            }
+            if(Ink(-185,0)||!Ink(0,thickness/2-20)||Ink(0,thickness/2+20))
+                throw new InvalidOperationException("Column boundary remains across the wall, or wall ink changed its dimensions");
+            if(thickness==200 && (!Ink(-185,150)||Ink(-220,150)))throw new InvalidOperationException("Exposed column edge or inward stroke is incorrect");
+        }
+        Console.WriteLine("DRAWING_COLUMN_PRIORITY_PIXELS_OK buriedHidden partialExposed inwardStroke unchangedWall twoSizes");
     }
 }

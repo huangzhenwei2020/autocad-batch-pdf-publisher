@@ -74,7 +74,7 @@ namespace BatchPdfPublisher.BuildingModel
             double tolerance, out double fraction)
         {
             fraction = 0d;
-            if (wall == null || tolerance < 0d || double.IsNaN(tolerance) || double.IsInfinity(tolerance)) return false;
+            if (wall == null || Math.Abs(wall.Bulge) > 1e-10 || tolerance < 0d || double.IsNaN(tolerance) || double.IsInfinity(tolerance)) return false;
             var dx = wall.X2 - wall.X1;
             var dy = wall.Y2 - wall.Y1;
             var squared = dx * dx + dy * dy;
@@ -159,8 +159,9 @@ namespace BatchPdfPublisher.BuildingModel
             // 2) 墙的夹点（端点/中点）
             foreach (var wall in walls)
             {
-                var midpointX = (wall.X1 + wall.X2) / 2d;
-                var midpointY = (wall.Y1 + wall.Y2) / 2d;
+                var midpoint = CurveGeometry.ForWall(wall).At(.5);
+                var midpointX = midpoint.X;
+                var midpointY = midpoint.Y;
                 if (Near(x, y, wall.X1, wall.Y1, tolerance)) return new PlanHit { Kind = "wall", Id = wall.Id, Grip = 0 };
                 if (Near(x, y, wall.X2, wall.Y2, tolerance)) return new PlanHit { Kind = "wall", Id = wall.Id, Grip = 1 };
                 if (Near(x, y, midpointX, midpointY, tolerance)) return new PlanHit { Kind = "wall", Id = wall.Id, Grip = 2 };
@@ -199,7 +200,7 @@ namespace BatchPdfPublisher.BuildingModel
             foreach (var wall in walls)
             {
                 var half = Math.Max(1d, wall.Thickness) / 2d;
-                if (DistanceToSegment(x, y, wall.X1, wall.Y1, wall.X2, wall.Y2) <= half + tolerance)
+                if (CurveGeometry.ForWall(wall).DistanceTo(x,y,WallReferenceGeometry.BodyOffset(wall)) <= half + tolerance)
                     return new PlanHit { Kind = "wall", Id = wall.Id, Grip = -1 };
             }
 
@@ -337,21 +338,23 @@ namespace BatchPdfPublisher.BuildingModel
                 }
                 if (result.Snapped) return result;
 
-                var near = walls.Where(w => DistanceToSegment(x, y, w.X1, w.Y1, w.X2, w.Y2) <= tolerance)
+                var near = walls.Where(w => CurveGeometry.ForWall(w).DistanceTo(x,y) <= tolerance)
                     .ToList();
                 best = tolerance;
                 for (var i = 0; i < near.Count; i++)
                 for (var j = i + 1; j < near.Count; j++)
                 {
-                    if (!TrySegmentIntersection(near[i], near[j], out var ix, out var iy)) continue;
-                    Consider(x, y, ix, iy, SnapIntersection, tolerance, ref best, result);
+                    foreach(var point in CurveGeometry.Intersections(CurveGeometry.ForWall(near[i]),CurveGeometry.ForWall(near[j])))
+                        Consider(x,y,point.X,point.Y,SnapIntersection,tolerance,ref best,result);
                 }
                 if (result.Snapped) return result;
 
                 best = tolerance;
                 foreach (var wall in near)
-                    Consider(x, y, (wall.X1 + wall.X2) / 2d, (wall.Y1 + wall.Y2) / 2d,
-                        SnapMidpoint, tolerance, ref best, result);
+                {
+                    var mid = CurveGeometry.ForWall(wall).At(.5);
+                    Consider(x,y,mid.X,mid.Y,SnapMidpoint,tolerance,ref best,result);
+                }
                 if (result.Snapped) return result;
 
                 // A discrete axis intersection must not lose to a nearby continuous wall projection.
@@ -373,6 +376,12 @@ namespace BatchPdfPublisher.BuildingModel
                     best = tolerance;
                     foreach (var wall in near)
                     {
+                        if (Math.Abs(wall.Bulge) > 1e-10)
+                        {
+                            var curve = CurveGeometry.ForWall(wall); var fraction = curve.Parameter(fromX,fromY);
+                            if (fraction > 0 && fraction < 1) { var foot=curve.At(fraction); Consider(x,y,foot.X,foot.Y,SnapPerpendicular,tolerance,ref best,result); }
+                            continue;
+                        }
                         var dx = wall.X2 - wall.X1;
                         var dy = wall.Y2 - wall.Y1;
                         var lengthSquared = dx * dx + dy * dy;
@@ -387,9 +396,8 @@ namespace BatchPdfPublisher.BuildingModel
                 best = tolerance;
                 foreach (var wall in near)
                 {
-                    var t = ParameterOnSegment(x, y, wall.X1, wall.Y1, wall.X2, wall.Y2);
-                    Consider(x, y, wall.X1 + t * (wall.X2 - wall.X1),
-                        wall.Y1 + t * (wall.Y2 - wall.Y1), SnapNearest, tolerance, ref best, result);
+                    var curve=CurveGeometry.ForWall(wall); var point=curve.At(curve.Parameter(x,y));
+                    Consider(x,y,point.X,point.Y,SnapNearest,tolerance,ref best,result);
                 }
                 if (result.Snapped) return result;
                 best = tolerance;
@@ -413,6 +421,7 @@ namespace BatchPdfPublisher.BuildingModel
         private static bool TrySegmentIntersection(WallModel a, WallModel b, out double x, out double y)
         {
             x = y = 0d;
+            if (Math.Abs(a.Bulge)>1e-10 || Math.Abs(b.Bulge)>1e-10) return false;
             var ax = a.X2 - a.X1; var ay = a.Y2 - a.Y1;
             var bx = b.X2 - b.X1; var by = b.Y2 - b.Y1;
             var cross = ax * by - ay * bx;
@@ -441,6 +450,15 @@ namespace BatchPdfPublisher.BuildingModel
         public static string ValidateWall(WallModel wall)
         {
             if (wall == null) return "墙为空。";
+            if (!CurveGeometry.Finite(wall.Bulge)) return "墙圆弧参数无效。";
+            if (Math.Abs(wall.Bulge)>1e-10)
+            {
+                try {
+                    var curve=CurveGeometry.ForWall(wall);
+                    if (curve.Radius-Math.Sign(curve.Sweep)*WallReferenceGeometry.BodyOffset(wall)-wall.Thickness/2 <= .5)
+                        return "弧墙内侧半径必须大于 0.5 mm，请增大半径或减小墙厚。";
+                } catch(ArgumentException ex) { return ex.Message; }
+            }
             var length = Math.Sqrt((wall.X2 - wall.X1) * (wall.X2 - wall.X1) + (wall.Y2 - wall.Y1) * (wall.Y2 - wall.Y1));
             if (length < 10d) return "墙太短（不足 10mm），已忽略。";
             if (wall.Thickness <= 0d) return "墙厚必须大于 0。";
@@ -457,6 +475,7 @@ namespace BatchPdfPublisher.BuildingModel
         public static string ValidateOpening(BuildingModelDocument model, WallModel wall, OpeningModel opening)
         {
             if (model == null || wall == null || opening == null) return "洞口或宿主墙为空。";
+            if (Math.Abs(wall.Bulge)>1e-10) return "当前门窗仅支持直墙；弧墙洞口需后续专用做法。";
             var length = Math.Sqrt((wall.X2 - wall.X1) * (wall.X2 - wall.X1) + (wall.Y2 - wall.Y1) * (wall.Y2 - wall.Y1));
             var half = opening.Width / 2d;
             if (opening.Width <= 0d || opening.Height <= 0d) return "洞口宽高必须大于 0。";
@@ -534,7 +553,7 @@ namespace BatchPdfPublisher.BuildingModel
         public static double WallLength(WallModel wall)
         {
             if (wall == null) return 0d;
-            return Math.Sqrt((wall.X2 - wall.X1) * (wall.X2 - wall.X1) + (wall.Y2 - wall.Y1) * (wall.Y2 - wall.Y1));
+            return CurveGeometry.ForWall(wall).Length;
         }
 
         private static bool Same(string left, string right)

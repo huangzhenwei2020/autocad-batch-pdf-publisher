@@ -12,6 +12,7 @@
     <PackageReference Include="LibTessDotNet" Version="1.1.15" />
     <Compile Include="..\Shared\BuildingModel\SlabGeometry.cs" Link="Shared\SlabGeometry.cs" />
     <Compile Include="SlabGeometryTests.cs" />
+    <Compile Include="CurveWallSlabTests.cs" />
     <Compile Include="BuildingModelProjectionTests.cs" />
     <Compile Include="DrawingAnnotationTests.cs" />
     <Compile Include="DrawingLineworkTests.cs" />
@@ -28,6 +29,7 @@
     <Compile Include="PlanEditingTests.cs" />
     <Compile Include="OpeningTypeLibraryTests.cs" />
     <Compile Include="OpeningElevationTests.cs" />
+    <Compile Include="OpeningElevationStyleTests.cs" />
     <Compile Include="OpeningConstructionTests.cs" />
     <Compile Include="OpeningPlanGeometryTests.cs" />
     <!-- 建筑模型的纯逻辑层：程序与插件共用同一份源码（见 BuildingModelStudio 与主插件 csproj）。 -->
@@ -58,4 +60,6 @@
     <Compile Include="..\BatchPdfPublisher\Features\DoorWindows\Services\DoorWindowElevationSuggestionService.cs" Link="DoorWindows\DoorWindowElevationSuggestionService.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\DoorWindows\Models\DoorWindowElevationGeometry.cs" Link="DoorWindows\DoorWindowElevationGeometry.cs" />
   </ItemGroup>
+  <ItemGroup><Compile Include="..\Shared\BuildingModel\CurveGeometry.cs" /></ItemGroup>
+  <ItemGroup><Compile Include="..\Shared\BuildingModel\BuildingModelEditSession.Curves.cs" /></ItemGroup>
 </Project>

@@ -24,6 +24,9 @@
     <Compile Include="..\Shared\BuildingModel\StructuralGeometry.cs" />
     <Compile Include="..\Shared\BuildingModel\CadStructuralRegistration.cs" />
     <Compile Include="..\Shared\BuildingModel\ComponentPlanSymbol.cs" />
+    <Compile Include="..\Shared\BuildingModel\CadPlanUnderlay.cs" />
+    <Compile Include="..\Shared\BuildingModel\BuildingModelProjectWorkflow.cs" />
+    <Compile Include="..\Shared\BuildingModel\StoreyElevationLayout.cs" />
     <Compile Include="..\Shared\BuildingModel\ComponentCatalog.cs" />
     <Compile Include="..\Shared\BuildingModel\ModelTypes.cs" Link="Features\BuildingModel\Shared\ModelTypes.cs" />
     <Compile Include="..\Shared\BuildingModel\DrawingAnnotationSettings.cs" />
@@ -38,6 +41,11 @@
     <Compile Include="..\Shared\BuildingModel\StudioLaunch.cs" Link="Features\BuildingModel\Shared\StudioLaunch.cs" />
     <Compile Include="..\Shared\BuildingModel\CadFloorPlanRegistry.cs" Link="Features\BuildingModel\Shared\CadFloorPlanRegistry.cs" />
     <Compile Include="..\Shared\BuildingModel\CadFloorModelGeneration.cs" Link="Features\BuildingModel\Shared\CadFloorModelGeneration.cs" />
+    <Compile Include="..\Shared\BuildingModel\BuildingModelCatalog.cs" />
+    <EmbeddedResource Include="..\BuildingModelStudio.AvaloniaProbe\Resources\Icons\file-plus.png;..\BuildingModelStudio.AvaloniaProbe\Resources\Icons\folder-open.png;..\BuildingModelStudio.AvaloniaProbe\Resources\Icons\save.png;..\BuildingModelStudio.AvaloniaProbe\Resources\Icons\copy.png;..\BuildingModelStudio.AvaloniaProbe\Resources\Icons\rotate-ccw.png">
+      <LogicalName>WanLuo.ModelManager.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+    <Compile Include="..\Shared\BuildingModel\BuildingModelFileRequest.cs" />
     <Compile Include="..\Shared\BuildingModel\CadFloorSlabGeneration.cs" Link="Features\BuildingModel\Shared\CadFloorSlabGeneration.cs" />
     <Compile Include="..\Shared\BuildingModel\CadOpeningJambPlacement.cs" Link="Features\BuildingModel\Shared\CadOpeningJambPlacement.cs" />
     <Compile Include="..\Shared\BuildingModel\CadBuildingObjectProbe.cs" Link="Features\BuildingModel\Shared\CadBuildingObjectProbe.cs" />
@@ -65,6 +73,7 @@
   <ItemGroup Condition="'$(UseAutoCadNuGet)' == 'true'">
     <PackageReference Include="AutoCAD.NET" Version="25.0.1" PrivateAssets="all" ExcludeAssets="runtime" />
   </ItemGroup>
+  <ItemGroup><Compile Include="..\Shared\BuildingModel\CurveGeometry.cs" /></ItemGroup>
 </Project>
 
 

@@ -14,6 +14,18 @@ internal static class BuildingModelGlbExportTests
         try
         {
             var model = SampleModelFactory.CreateTwoStoreyHouse();
+            if (args.Length == 3 && args[0] == "--export-model")
+            {
+                var source = BuildingModelJson.LoadModel(args[1]);
+                var snapshot = BuildingModelJson.ToJson(source);
+                var exported = BuildingModelGlbExporter.Export(source, args[2]);
+                var loaded = ModelRoot.Load(args[2]);
+                CheckGeometry(loaded, BuildingVolumeBuilder.Build(source));
+                Assert(snapshot == BuildingModelJson.ToJson(source), "导出修改了源模型。");
+                CheckSharedMaterials(loaded);
+                Console.WriteLine($"REAL_GLB_EXPORT_OK elements={exported.ElementCount} triangles={exported.TriangleCount} materials={loaded.LogicalMaterials.Count}");
+                return 0;
+            }
             if (args.Length == 2 && args[0] == "--cad-fixture")
             {
                 var plan = new ViewDocument { Id = "qa-plan", Title = "Scale QA", Scale = 100 };
@@ -39,6 +51,7 @@ internal static class BuildingModelGlbExportTests
             var glb = ModelRoot.Load(path);
             var volume = BuildingVolumeBuilder.Build(model);
             CheckGeometry(glb, volume);
+            CheckSharedMaterials(glb);
             var sourceWallTriangles=volume.Faces.Where(f=>f.Kind=="wall").Sum(f=>f.Points.Count-2);
             var exportedWallTriangles=glb.LogicalNodes.Where(n=>n.Mesh!=null&&n.Extras?["kind"]?.GetValue<string>()=="wall")
                 .Sum(n=>n.Mesh.Primitives.Sum(p=>p.GetIndices().Count/3));
@@ -69,6 +82,7 @@ internal static class BuildingModelGlbExportTests
             var floor = model.Storeys[0];
             BuildingModelGlbExporter.Export(model, path, floor.Id);
             var single = ModelRoot.Load(path);
+            CheckSharedMaterials(single);
             CheckGeometry(single, BuildingVolumeBuilder.Build(model, floor.Id));
             Assert(single.LogicalNodes.Where(n => n.Mesh != null).All(n =>
                 n.Extras?["storeyId"]?.GetValue<string>() == floor.Id), "单层导出混入其他楼层。");
@@ -78,6 +92,7 @@ internal static class BuildingModelGlbExportTests
                 Height = 3600, TemplateStoreyId = floor.Id });
             BuildingModelGlbExporter.Export(model, path, "STD3");
             var standard = ModelRoot.Load(path);
+            CheckSharedMaterials(standard);
             CheckGeometry(standard, BuildingVolumeBuilder.Build(model, "STD3"));
             Assert(standard.LogicalNodes.Where(n => n.Mesh != null).All(n =>
                 n.Extras?["elementId"]?.GetValue<string>() != n.Extras?["sourceElementId"]?.GetValue<string>()),
@@ -96,6 +111,7 @@ internal static class BuildingModelGlbExportTests
             Assert(Math.Abs(topArea - 3f) < 0.0001, "凹楼板三角形跨越缺口。");
             Console.WriteLine("PASS GLB 凹楼板三角剖分保持 3 平方米面积");
             CheckSlabOpenings(path);
+            CheckCurvedWallsAndSlabs(path);
             CheckIndependentWallMesh(path);
             CheckModelSpaceSheets();
             CheckDisplayCodes();
@@ -103,6 +119,31 @@ internal static class BuildingModelGlbExportTests
         }
         catch (Exception ex) { Console.Error.WriteLine("FAIL " + ex); return 1; }
         finally { Directory.Delete(folder, true); }
+    }
+
+    private static void CheckSharedMaterials(ModelRoot model)
+    {
+        Assert(model.LogicalMaterials.GroupBy(m => m.Name).All(g => g.Count() == 1),
+            "同类构件重复创建了材质。");
+        Assert(model.LogicalMeshes.SelectMany(m => m.Primitives).GroupBy(p => p.Material.Name)
+            .All(g => g.All(p => ReferenceEquals(p.Material, g.First().Material))), "跨构件未复用材质。");
+        var glass = model.LogicalMaterials.FirstOrDefault(m => m.Name == "glass");
+        Assert(glass == null || (glass.Alpha == AlphaMode.BLEND && glass.DoubleSided), "共享材质丢失玻璃透明／双面设置。");
+        Console.WriteLine("PASS GLB SharedMaterials count=" + model.LogicalMaterials.Count);
+    }
+
+    private static void CheckCurvedWallsAndSlabs(string path)
+    {
+        var model=new BuildingModelDocument { Name="Curves" };
+        model.Storeys.Add(new StoreyModel { Id="1F",Height=3000 });
+        model.Walls.Add(new WallModel { Id="arc",StoreyId="1F",X1=1000,X2=-1000,Bulge=1,Thickness=200 });
+        model.Slabs.Add(new SlabModel { Id="round",StoreyId="1F",Thickness=150,TopElevation=150,
+            Outline=new List<PointModel> { new(1100,0) { Bulge=1 },new(-1100,0),new(-1100,-1000),new(1100,-1000) } });
+        var before=BuildingModelJson.ToJson(model);
+        BuildingModelGlbExporter.Export(model,path);
+        CheckGeometry(ModelRoot.Load(path),BuildingVolumeBuilder.Build(model));
+        Assert(before==BuildingModelJson.ToJson(model),"圆弧导出修改了语义数据。");
+        Console.WriteLine("PASS GLB 弧墙及圆弧楼板尺寸、面积、法线和构件身份");
     }
 
     private static void CheckSlabOpenings(string path)

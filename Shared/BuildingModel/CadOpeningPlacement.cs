@@ -27,6 +27,8 @@ namespace BatchPdfPublisher.BuildingModel
             var hosts = floor.WallCandidates.Where(w => w != null && string.Equals(w.Handle, hostHandle, StringComparison.OrdinalIgnoreCase)).ToList();
             if (string.IsNullOrWhiteSpace(hostHandle) || hosts.Count != 1 || !CadBuildingProbeRules.IsWall(hosts[0].DxfName))
                 throw new InvalidDataException("宿主必须是本次框选中的唯一一面天正墙。");
+            if(hosts[0].CircularHorizontalArcVerified || CadBuildingProbeRules.VerifyCircularWall(hosts[0]))
+                throw new InvalidDataException("弧墙门窗暂保留参照，不能使用直墙洞口定位方式。");
             if (!Finite(width) || width <= 0.5) throw new InvalidDataException("请先补充洞口宽度。");
             var a = floor.Alignment.ToModel(wallStart); var b = floor.Alignment.ToModel(wallEnd);
             var p = floor.Alignment.ToModel(openingStart); var q = floor.Alignment.ToModel(openingEnd);

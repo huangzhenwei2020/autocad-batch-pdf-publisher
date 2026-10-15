@@ -7,7 +7,7 @@ using BatchPdfPublisher.BuildingModel;
 
 namespace BuildingModelStudio.AvaloniaProbe;
 
-internal enum PlanTool { Select, Wall, Opening, Slab, SlabOutline, SlabHoleRectangle, SlabHolePolygon, Column, Beam }
+internal enum PlanTool { Select, Wall, ArcWall, Fillet, Opening, Slab, SlabOutline, SlabHoleRectangle, SlabHolePolygon, Column, Beam }
 internal enum PlanAxisConstraint { Free, X, Y }
 
 internal sealed partial class PlanEditorCanvas : Control
@@ -40,6 +40,7 @@ internal sealed partial class PlanEditorCanvas : Control
     private bool _pendingPlacementLocked;
     public event Func<CadPendingOpening,string,double,bool>? PendingOpeningRequested;
     internal bool HasPendingPlacement=>_pendingOpening!=null;
+    internal void ClearPendingPlacement(){_pendingOpening=null;_pendingWall=null;_pendingPlacementLocked=false;InvalidateVisual();}
     internal bool ConfirmPendingPlacement()
     {
         if(!_pendingPlacementLocked||_pendingOpening==null||_pendingWall==null)return false;
@@ -62,6 +63,7 @@ internal sealed partial class PlanEditorCanvas : Control
 
     internal bool CompleteContour()
     {
+        if(_arcEnd!=null)return false;
         var points = Tool == PlanTool.SlabHoleRectangle && _contour.Count == 2
             ? RectangleContour(_contour[0], _contour[1]) : _contour.ToList();
         if (points.Count < 3) return false;
@@ -282,6 +284,7 @@ internal sealed partial class PlanEditorCanvas : Control
 
     public void CancelDraft()
     {
+        CancelCurveDraft();
         CancelOpeningGrip();
         _pendingOpening=null;_pendingWall=null;_pendingPlacementLocked=false;
         if (!_axisBatchPending) ClearAxisSelection();
@@ -370,12 +373,13 @@ internal sealed partial class PlanEditorCanvas : Control
             return;
         }
         var points = _model.Walls.Where(w => w.StoreyId == _storeyId && Visible(w.Id))
-            .SelectMany(w => new[] { new PointModel(w.X1, w.Y1), new PointModel(w.X2, w.Y2) })
+            .SelectMany(w => CurveGeometry.ForWall(w).BoundsPoints())
             .Concat(_model.Slabs.Where(s => s.StoreyId == _storeyId && Visible(s.Id))
                 .SelectMany(s => s.Outline ?? new List<PointModel>()))
             .Concat(_model.Columns.Where(c=>c.StoreyId==_storeyId&&Visible(c.Id)).SelectMany(StructuralGeometry.ColumnOutline))
             .Concat(_model.Beams.Where(b=>b.StoreyId==_storeyId&&Visible(b.Id)).SelectMany(StructuralGeometry.BeamOutline))
             .Concat(_openingSymbols.Values.SelectMany(lines=>lines).SelectMany(l=>new[]{new PointModel(l.X1,l.Y1),new PointModel(l.X2,l.Y2)}))
+            .Concat(UnderlayVisible&&Underlay!=null?Underlay.Region:new List<PointModel>())
             .Concat(AxisEndpoints().SelectMany(axis=>new[] {
                 new PointModel(axis.Start.X-AxisBubbleRadius,axis.Start.Y-AxisBubbleRadius),new PointModel(axis.Start.X+AxisBubbleRadius,axis.Start.Y+AxisBubbleRadius),
                 new PointModel(axis.End.X-AxisBubbleRadius,axis.End.Y-AxisBubbleRadius),new PointModel(axis.End.X+AxisBubbleRadius,axis.End.Y+AxisBubbleRadius) })).ToArray();
@@ -453,7 +457,8 @@ internal sealed partial class PlanEditorCanvas : Control
         var from = Tool is PlanTool.Wall or PlanTool.Beam ? _wallStart : IsContourTool ? _contour.LastOrDefault() : null;
         var snapped = PlanEditing.Snap(_model, _storeyId, world.X, world.Y, 10d / _scale,
             from != null, from?.X ?? 0, from?.Y ?? 0, excludedWallId, _resolvedAxes);
-        if (snapped.Kind != _snapKind && (Tool == PlanTool.Wall || _gripWallId != null || _moving))
+        snapped = SnapUnderlay(world.X,world.Y,10d/_scale,snapped,from??_moveBase);
+        if (snapped.Kind != _snapKind && (Tool is PlanTool.Wall or PlanTool.Beam or PlanTool.Column || IsContourTool || _gripWallId != null || _moving))
             SnapChanged?.Invoke(snapped.Kind);
         _snapKind = snapped.Kind;
         PointModel? anchor = _wallStart ?? _moveBase
@@ -490,6 +495,7 @@ internal sealed partial class PlanEditorCanvas : Control
             return;
         }
         if (!buttons.IsLeftButtonPressed) return;
+        if(HandleCurveClick(point)){e.Handled=true;InvalidateVisual();return;}
         if(AxisMode!=AxisEditMode.Off) {
             HandleAxisEditPress(point,e.KeyModifiers.HasFlag(KeyModifiers.Shift));
             e.Handled=true;return;
@@ -559,6 +565,15 @@ internal sealed partial class PlanEditorCanvas : Control
             {
                 var first = Screen(wall.X1, wall.Y1);
                 var second = Screen(wall.X2, wall.Y2);
+                if(Math.Abs(wall.Bulge)>1e-10)
+                {
+                    var mid=CurveGeometry.ForWall(wall).At(.5);
+                    if(Distance(point,Screen(mid.X,mid.Y))<=12)
+                    {
+                        _gripWallId=wall.Id;_gripIndex=2;_gripPosition=mid;_gripPress=point;_gripMoved=false;
+                        e.Pointer.Capture(this);e.Handled=true;return;
+                    }
+                }
                 if (Distance(point, first) <= 12 || Distance(point, second) <= 12)
                 {
                     _gripWallId = wall.Id;
@@ -597,7 +612,7 @@ internal sealed partial class PlanEditorCanvas : Control
         {
             var hole = _model.Slabs.Where(s => s.StoreyId == _storeyId && Selectable(s.Id))
                 .SelectMany(s => (s.Openings ?? new()).Select(o => (slab: s, opening: o)))
-                .FirstOrDefault(h => InsideContour(World(point), h.opening.Outline));
+                .FirstOrDefault(h => InsideContour(World(point), CurveGeometry.Expand(h.opening.Outline)));
             if (hole.opening != null) SlabOpeningPicked?.Invoke(hole.slab.Id, hole.opening.Id);
             else {var id=HitElement(point);ElementPicked?.Invoke(id);if(e.ClickCount==2)OpeningActivated?.Invoke(id);}
         }
@@ -630,12 +645,12 @@ internal sealed partial class PlanEditorCanvas : Control
         if(AxisMode!=AxisEditMode.Off) { UpdateAxisEditHover(point);InvalidateVisual();return; }
         if(_openingGripDraft!=null){MoveOpeningGrip(point);InvalidateVisual();return;}
         _openingGripHover=null;_preselectedId=null;
-        if(Tool==PlanTool.Select&&!_moving&&_pendingOpening==null&&_panStart==null) {
+        if((Tool==PlanTool.Select||Tool==PlanTool.Fillet)&&!_moving&&_pendingOpening==null&&_panStart==null) {
             _openingGripHover=OpeningGripHover(point);
             _preselectedId=_openingGripHover!=null?_selectedId:HitElement(point);
         }
         if(_pendingOpening!=null&&!_pendingPlacementLocked) {var hit=HitWall(point);_pendingWall=hit.wall;_pendingOffset=hit.offset;}
-        if (Tool == PlanTool.Wall || Tool==PlanTool.Beam || Tool==PlanTool.Column || _moving || IsContourTool) _cursor = Snap(point);
+        if (Tool == PlanTool.Wall || Tool==PlanTool.ArcWall || Tool==PlanTool.Beam || Tool==PlanTool.Column || _moving || IsContourTool) _cursor = Snap(point);
         else { _cursor = World(point); _snapKind = PlanEditing.SnapNone; }
         InvalidateVisual();
     }
@@ -757,6 +772,11 @@ internal sealed partial class PlanEditorCanvas : Control
         var offset = 0d;
         foreach (var wall in _model.Walls.Where(w => w.StoreyId == _storeyId && Selectable(w.Id)))
         {
+            if(Math.Abs(wall.Bulge)>1e-10) {
+                var curve=CurveGeometry.ForWall(wall);var world=World(p);var fraction=curve.Parameter(world.X,world.Y);
+                var arcDistance=Math.Max(0,curve.DistanceTo(world.X,world.Y,WallReferenceGeometry.BodyOffset(wall))*_scale-wall.Thickness*_scale/2);
+                if(arcDistance<best){best=arcDistance;hit=wall;offset=fraction*curve.Length;}continue;
+            }
             var a = Screen(wall.X1, wall.Y1);
             var b = Screen(wall.X2, wall.Y2);
             var dx = b.X - a.X; var dy = b.Y - a.Y;
@@ -800,7 +820,7 @@ internal sealed partial class PlanEditorCanvas : Control
         }
         var world = World(p);
         return _model.Slabs.LastOrDefault(s => s.StoreyId == _storeyId
-            && InsideContour(world, s.Outline) && !(s.Openings ?? new()).Any(o => InsideContour(world, o.Outline)))?.Id;
+            && InsideContour(world, _slabGeometry[s.Id].Contours[0]) && !_slabGeometry[s.Id].Contours.Skip(1).Any(c=>InsideContour(world,c)))?.Id;
     }
 
     private static bool InsideContour(PointModel point, List<PointModel> contour)
@@ -857,16 +877,21 @@ internal sealed partial class PlanEditorCanvas : Control
             context.DrawGeometry(new SolidColorBrush(Color.Parse(_selectedIds.Contains(slab.Id)
                 ? "#28313A" : "#192530")), null, fill);
             var pen = new Pen(new SolidColorBrush(Color.Parse(_selectedIds.Contains(slab.Id) ? "#FFC46B" : "#A7B8C5")), Stroke(20));
-            foreach (var contour in geometry.Contours)
+            foreach (var contour in new[]{slab.Outline}.Concat(slab.Openings.Select(o=>o.Outline)))
                 for (var i = 0; i < contour.Count; i++)
-                    context.DrawLine(pen, Screen(contour[i].X, contour[i].Y),
-                        Screen(contour[(i + 1) % contour.Count].X, contour[(i + 1) % contour.Count].Y));
+                    DrawCurve(context,pen,new CurveGeometry(contour[i],contour[(i+1)%contour.Count],contour[i].Bulge));
             if (_selectedIds.Contains(slab.Id)) DrawSlabAnnotations(context, slab);
         }
+        DrawUnderlay(context);
         foreach (var wall in _model.Walls.Where(w => w.StoreyId == _storeyId && Visible(w.Id)))
         {
             var selected = _selectedIds.Contains(wall.Id);
-            var preselected = ShowSelectionPreview && _preselectedId == wall.Id;
+            var preselected = (ShowSelectionPreview && _preselectedId == wall.Id)||_filletFirst==wall.Id;
+            if(Math.Abs(wall.Bulge)>1e-10) {
+                var curve=CurveGeometry.ForWall(PreviewCurveWall(wall));
+                DrawCurve(context,new Pen(preselected?Brushes.Cyan:new SolidColorBrush(Color.Parse(selected?"#FFC46B":"#9BC4E9")),wall.Thickness*_scale),curve,WallReferenceGeometry.BodyOffset(wall));
+                continue;
+            }
             var (first, second) = PreviewWallBody(wall);
             if (_slabGeometry.ContainsKey(_selectedId ?? ""))
             {
@@ -895,8 +920,7 @@ internal sealed partial class PlanEditorCanvas : Control
             context.DrawLine(new Pen(new SolidColorBrush(Color.Parse("#59768F")), Stroke()),
                 Screen(seam.Item1.X, seam.Item1.Y), Screen(seam.Item2.X, seam.Item2.Y));
         foreach (var wall in _model.Walls.Where(w => w.StoreyId == _storeyId && Visible(w.Id)))
-            context.DrawLine(new Pen(new SolidColorBrush(Color.Parse("#192D3C")), Stroke()),
-                PreviewWallEndpoint(wall, 0), PreviewWallEndpoint(wall, 1));
+            DrawCurve(context,new Pen(new SolidColorBrush(Color.Parse("#192D3C")),Stroke()),CurveGeometry.ForWall(PreviewCurveWall(wall)));
         foreach (var opening in _model.Openings.Where(o=>Visible(o.Id)))
         {
             if(opening.Id==_openingGripDraft?.Id&&!_openingLabelGrip)continue;
@@ -936,12 +960,12 @@ internal sealed partial class PlanEditorCanvas : Control
         }
         foreach(var c in _model.Columns.Where(c=>c.StoreyId==_storeyId&&Visible(c.Id)))DrawStructure(c.Id,StructuralGeometry.ColumnOutline(c));
         foreach(var b in _model.Beams.Where(b=>b.StoreyId==_storeyId&&Visible(b.Id)))DrawStructure(b.Id,StructuralGeometry.BeamOutline(b));
-        if (_slabGeometry.TryGetValue(_selectedId ?? "", out var selectedSlabGeometry))
-            foreach (var contour in selectedSlabGeometry.Contours)
+        var selectedSlab=_model.Slabs.FirstOrDefault(s=>s.Id==_selectedId);
+        if (selectedSlab!=null)
+            foreach (var contour in new[]{selectedSlab.Outline}.Concat(selectedSlab.Openings.Select(o=>o.Outline)))
                 for (var i = 0; i < contour.Count; i++)
-                    context.DrawLine(new Pen(new SolidColorBrush(Color.Parse("#FFC46B")), Stroke(30)),
-                        Screen(contour[i].X, contour[i].Y),
-                        Screen(contour[(i + 1) % contour.Count].X, contour[(i + 1) % contour.Count].Y));
+                    DrawCurve(context,new Pen(new SolidColorBrush(Color.Parse("#FFC46B")), Stroke(30)),
+                        new CurveGeometry(contour[i],contour[(i+1)%contour.Count],contour[i].Bulge));
         foreach (var pending in _model.CadImport?.PendingOpenings ?? new List<CadPendingOpening>())
         {
             if (pending.StoreyId != _storeyId || pending.ReferencePosition == null) continue;
@@ -999,9 +1023,15 @@ internal sealed partial class PlanEditorCanvas : Control
             var gripBrush = new SolidColorBrush(Color.Parse("#FFC46B"));
             context.FillRectangle(gripBrush, new Rect(first.X - 5, first.Y - 5, 10, 10));
             context.FillRectangle(gripBrush, new Rect(second.X - 5, second.Y - 5, 10, 10));
+            if(Math.Abs(selectedWall.Bulge)>1e-10) {
+                var mid=CurveGeometry.ForWall(selectedWall).At(.5);var screen=Screen(mid.X,mid.Y);
+                context.FillRectangle(Brushes.Cyan,new Rect(screen.X-6,screen.Y-6,12,12));
+            }
         }
-        if (_wallStart != null && _cursor != null)
-            context.DrawLine(new Pen(new SolidColorBrush(Color.Parse("#65E8B2")), 2),
+        DrawCurveDraft(context);
+        if (_wallStart != null && _cursor != null && _arcEnd==null)
+            if(Tool is PlanTool.Wall or PlanTool.ArcWall)DrawWallDraft(context,new CurveGeometry(_wallStart,_cursor,0));
+            else context.DrawLine(new Pen(new SolidColorBrush(Color.Parse("#65E8B2")), 2),
                 Screen(_wallStart.X, _wallStart.Y), Screen(_cursor.X, _cursor.Y));
         if (IsContourTool && _contour.Count > 0)
         {
@@ -1011,7 +1041,8 @@ internal sealed partial class PlanEditorCanvas : Control
                 points = RectangleContour(_contour[0], _cursor);
             else if (_cursor != null) points.Add(_cursor);
             for (var i = 0; i + 1 < points.Count; i++)
-                context.DrawLine(pen, Screen(points[i].X, points[i].Y), Screen(points[i + 1].X, points[i + 1].Y));
+                if(Math.Abs(points[i].X-points[i+1].X)+Math.Abs(points[i].Y-points[i+1].Y)>1e-6)
+                    DrawCurve(context,pen,new CurveGeometry(points[i],points[i+1],points[i].Bulge));
             if (points.Count >= 3) context.DrawLine(pen, Screen(points[points.Count - 1].X, points[points.Count - 1].Y),
                 Screen(points[0].X, points[0].Y));
         }
@@ -1021,9 +1052,7 @@ internal sealed partial class PlanEditorCanvas : Control
             var dy = _cursor.Y - _moveBase.Y;
             var preview = new Pen(new SolidColorBrush(Color.Parse("#65E8B2")),
                 selectedWall.Thickness * _scale);
-            var body = PreviewWallBody(selectedWall);
-            context.DrawLine(preview, body.first + new Vector(dx*_scale,-dy*_scale),
-                body.second + new Vector(dx*_scale,-dy*_scale));
+            DrawCurve(context,preview,CurveGeometry.ForWall(selectedWall),WallReferenceGeometry.BodyOffset(selectedWall),new Vector(dx*_scale,-dy*_scale));
             context.DrawLine(new Pen(new SolidColorBrush(Color.Parse("#65E8B2")), 1),
                 Screen(_moveBase.X, _moveBase.Y), Screen(_cursor.X, _cursor.Y));
         }
@@ -1077,8 +1106,9 @@ internal sealed partial class PlanEditorCanvas : Control
 
     private void DrawSlabAnnotations(DrawingContext context, SlabModel slab)
     {
-        var outerA = Screen(slab.Outline.Min(p => p.X), slab.Outline.Max(p => p.Y));
-        var outerB = Screen(slab.Outline.Max(p => p.X), slab.Outline.Min(p => p.Y));
+        var outline=CurveGeometry.Expand(slab.Outline);
+        var outerA = Screen(outline.Min(p => p.X), outline.Max(p => p.Y));
+        var outerB = Screen(outline.Max(p => p.X), outline.Min(p => p.Y));
         var gap = 700*_scale;
         DrawDimension(context, new Point(outerA.X, outerA.Y - gap), new Point(outerB.X, outerA.Y - gap),
             (outerB.X - outerA.X) / _scale, false);
@@ -1086,8 +1116,9 @@ internal sealed partial class PlanEditorCanvas : Control
             (outerB.Y - outerA.Y) / _scale, true);
         foreach (var hole in slab.Openings ?? new())
         {
-            var a = Screen(hole.Outline.Min(p => p.X), hole.Outline.Max(p => p.Y));
-            var b = Screen(hole.Outline.Max(p => p.X), hole.Outline.Min(p => p.Y));
+            var holeOutline=CurveGeometry.Expand(hole.Outline);
+            var a = Screen(holeOutline.Min(p => p.X), holeOutline.Max(p => p.Y));
+            var b = Screen(holeOutline.Max(p => p.X), holeOutline.Min(p => p.Y));
             var center = new Point((a.X + b.X) / 2, (a.Y + b.Y) / 2);
             var crossing = new Pen(new SolidColorBrush(Color.Parse("#506475")), Stroke());
             context.DrawLine(crossing, a, b);
@@ -1177,7 +1208,7 @@ internal sealed partial class PlanEditorCanvas : Control
     private void IndexOrthogonalJunctions()
     {
         _orthogonalJunctions.Clear();
-        var walls = _model.Walls.Where(w => w.StoreyId == _storeyId && Visible(w.Id)).ToArray();
+        var walls = _model.Walls.Where(w => w.StoreyId == _storeyId && Visible(w.Id)&&Math.Abs(w.Bulge)<1e-10).ToArray();
         for (var i = 0; i < walls.Length; i++)
         for (var j = i + 1; j < walls.Length; j++)
         {

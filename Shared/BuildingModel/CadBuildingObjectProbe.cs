@@ -55,6 +55,9 @@ namespace BatchPdfPublisher.BuildingModel
         public CadProbePoint BoundsMin { get; set; }
         public CadProbePoint BoundsMax { get; set; }
         public bool StraightHorizontalLineVerified { get; set; }
+        public bool CircularHorizontalArcVerified { get; set; }
+        public double CurveBulge { get; set; }
+        public List<CadProbePoint> CurveSamples { get; set; } = new List<CadProbePoint>();
         public double? CurveLength { get; set; }
         public List<CadProbeSegment> DisplaySegments { get; set; } = new List<CadProbeSegment>();
         public List<CadProbeArc> DisplayArcs { get; set; } = new List<CadProbeArc>();
@@ -93,6 +96,44 @@ namespace BatchPdfPublisher.BuildingModel
 
     public static class CadBuildingProbeRules
     {
+        public static bool VerifyCircularWall(CadBuildingProbeEntity entity)
+        {
+            if(entity==null)return false;
+            entity.CircularHorizontalArcVerified=false;entity.CurveBulge=0;
+            var samples=entity.CurveSamples;
+            if(!IsWall(entity.DxfName) || entity.StraightHorizontalLineVerified || samples==null || samples.Count!=9
+                || entity.CurveStart==null || entity.CurveEnd==null || !entity.CurveLength.HasValue
+                || !CurveGeometry.Finite(entity.CurveLength.Value) || entity.CurveLength.Value<=0
+                || samples.Concat(new[]{entity.CurveStart,entity.CurveEnd}).Any(p=>p==null
+                    || !CurveGeometry.Finite(p.X) || !CurveGeometry.Finite(p.Y) || !CurveGeometry.Finite(p.Z)))return false;
+            var tolerance=Math.Max(1e-8,entity.CurveLength.Value*1e-8);
+            try
+            {
+                var first=samples[0];var last=samples[8];
+                if(Distance(first,entity.CurveStart)>tolerance || Distance(last,entity.CurveEnd)>tolerance
+                    || samples.Any(p=>Math.Abs(p.Z-first.Z)>tolerance))return false;
+                var a=new PointModel(first.X,first.Y);var b=new PointModel(last.X,last.Y);
+                var bulge=CurveGeometry.ThroughBulge(a,b,new PointModel(samples[4].X,samples[4].Y));
+                var arc=new CurveGeometry(a,b,bulge);
+                if(!arc.IsArc || Math.Abs(arc.Length-entity.CurveLength.Value)>tolerance*4)return false;
+                // Native samples are taken at equal arc-length stations, not arbitrary curve parameters.
+                for(var i=0;i<samples.Count;i++)
+                {
+                    var expected=arc.At(i/8d);var p=samples[i];
+                    if(Math.Sqrt((p.X-expected.X)*(p.X-expected.X)+(p.Y-expected.Y)*(p.Y-expected.Y))>tolerance*4)return false;
+                }
+                entity.CurveBulge=bulge;entity.CircularHorizontalArcVerified=true;
+                entity.CurveStatus="原生水平圆弧定位已核验";
+                return true;
+            }
+            catch(ArgumentException) { return false; }
+        }
+        private static double Distance(CadProbePoint a,CadProbePoint b)
+        {
+            if(a==null || b==null)return double.PositiveInfinity;
+            return Math.Sqrt((a.X-b.X)*(a.X-b.X)+(a.Y-b.Y)*(a.Y-b.Y)+(a.Z-b.Z)*(a.Z-b.Z));
+        }
+
         public static bool IsWall(string dxf) => string.Equals(dxf,"TCH_WALL",StringComparison.OrdinalIgnoreCase)
             || string.Equals(dxf,"TCH_CURTAIN_WALL",StringComparison.OrdinalIgnoreCase);
         public static string Classify(string dxf, string com)

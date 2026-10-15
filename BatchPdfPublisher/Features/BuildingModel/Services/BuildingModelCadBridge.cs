@@ -174,30 +174,19 @@ namespace BatchPdfPublisher.Services
                 {
                     if(line.OpeningArcId!=null)continue;
                     if (!string.IsNullOrWhiteSpace(line.Layer) && skipLayers.Contains(line.Layer)) continue;
-                    var entity = new Line(
-                        new Point3d(anchor.X + line.X1, anchor.Y + line.Y1, 0d),
-                        new Point3d(anchor.X + line.X2, anchor.Y + line.Y2, 0d));
-                    var lineLayer = string.Equals(line.LineType, "DASHED", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(line.LineType, "HIDDEN", StringComparison.OrdinalIgnoreCase)
-                        ? "Hidden" : line.Layer;
-                    ApplyLayer(entity, lineLayer, layerIds);
-                    ApplyLineWeight(entity,line.LineWeight);
+                    var entity=CreateViewLineEntity(line,anchor);
+                    ApplyViewLineAppearance(entity,line,layerIds);
                     space.AppendEntity(entity);
                     transaction.AddNewlyCreatedDBObject(entity, true);
                     generatedIds.Add(entity.ObjectId);
                     Bump(counts, line.Layer);
                 }
 
-                foreach(var arc in (view.Lines??new List<ViewLine>()).Where(l=>l.OpeningArcId!=null).GroupBy(l=>l.OpeningArcId))
+                foreach(var chain in BuildOpeningPathChains(view.Lines??new List<ViewLine>()))
                 {
-                    var first=arc.First();if(skipLayers.Contains(first.Layer??string.Empty))continue;
-                    var entity=new Polyline {Plinegen=true};
-                    entity.AddVertexAt(0,new Point2d(anchor.X+first.X1,anchor.Y+first.Y1),0,0,0);
-                    foreach(var line in arc)entity.AddVertexAt(entity.NumberOfVertices,new Point2d(anchor.X+line.X2,anchor.Y+line.Y2),0,0,0);
-                    ApplyLayer(entity,first.Layer,layerIds);ApplyLineWeight(entity,first.LineWeight);
-                    entity.Color=Autodesk.AutoCAD.Colors.Color.FromRgb(145,160,171);
-                    entity.LinetypeId=EnsureOpeningArcLineType(document.Database,transaction);
-                    entity.LinetypeScale=Math.Max(1,view.Scale);
+                    var first=chain.Appearance;if(skipLayers.Contains(first.Layer??string.Empty))continue;
+                    var entity=CreateOpeningPathPolyline(chain,anchor);
+                    ApplyOpeningPathAppearance(entity,first,layerIds,document.Database,transaction,view.Scale);
                     space.AppendEntity(entity);transaction.AddNewlyCreatedDBObject(entity,true);
                     generatedIds.Add(entity.ObjectId);Bump(counts,first.Layer);
                 }
@@ -441,7 +430,8 @@ namespace BatchPdfPublisher.Services
         {
             var points = new List<Point2d>();
             foreach (var line in view.Lines ?? new List<ViewLine>())
-            { points.Add(new Point2d(line.X1, line.Y1)); points.Add(new Point2d(line.X2, line.Y2)); }
+            { points.Add(new Point2d(line.X1, line.Y1)); points.Add(new Point2d(line.X2, line.Y2));
+                if(Math.Abs(line.Bulge)>1e-10)foreach(var p in CurveGeometry.ForLine(line).BoundsPoints())points.Add(new Point2d(p.X,p.Y)); }
             foreach (var circle in view.Circles ?? new List<ViewCircle>())
             {
                 var r = Math.Abs(circle.Radius);
@@ -1063,12 +1053,179 @@ namespace BatchPdfPublisher.Services
             }
         }
 
+        private static Entity CreateViewLineEntity(ViewLine line, Point3d anchor)
+        {
+            if(Math.Abs(line.Bulge)>1e-10) {
+                var arc=new Polyline();
+                arc.AddVertexAt(0,new Point2d(anchor.X+line.X1,anchor.Y+line.Y1),line.Bulge,0,0);
+                arc.AddVertexAt(1,new Point2d(anchor.X+line.X2,anchor.Y+line.Y2),0,0,0);
+                return arc;
+            }
+            return new Line(new Point3d(anchor.X+line.X1,anchor.Y+line.Y1,0),
+                new Point3d(anchor.X+line.X2,anchor.Y+line.Y2,0));
+        }
+
+        internal sealed class OpeningPathChain
+        {
+            public ViewLine Appearance;
+            public readonly List<Point2d> Points=new List<Point2d>();
+            public readonly List<double> Bulges=new List<double>();
+        }
+
+        internal static List<OpeningPathChain> BuildOpeningPathChains(IEnumerable<ViewLine> source)
+        {
+            var result=new List<OpeningPathChain>();
+            foreach(var group in source.Where(l=>l!=null&&l.OpeningArcId!=null)
+                .GroupBy(l=>new {l.OpeningArcId,l.Layer,l.LineType,l.LineWeight,l.OpeningRole,l.OpeningUsesWindowAppearance}))
+            {
+                var edges=group.Where(l=>l.X1!=l.X2||l.Y1!=l.Y2).ToArray();
+                var used=new bool[edges.Length];
+                var nodes=new Dictionary<Tuple<double,double>,List<int>>();
+                Tuple<double,double> Key(double x,double y)=>Tuple.Create(x,y);
+                void Add(Tuple<double,double> key,int index)
+                {
+                    if(!nodes.TryGetValue(key,out var incident))nodes[key]=incident=new List<int>();
+                    incident.Add(index);
+                }
+                for(var i=0;i<edges.Length;i++)
+                {
+                    Add(Key(edges[i].X1,edges[i].Y1),i);Add(Key(edges[i].X2,edges[i].Y2),i);
+                }
+                void Trace(int index,Tuple<double,double> start)
+                {
+                    var chain=new OpeningPathChain {Appearance=edges[index]};
+                    chain.Points.Add(new Point2d(start.Item1,start.Item2));
+                    var current=start;
+                    while(!used[index])
+                    {
+                        var edge=edges[index];used[index]=true;
+                        var reverse=Key(edge.X2,edge.Y2).Equals(current);
+                        current=reverse?Key(edge.X1,edge.Y1):Key(edge.X2,edge.Y2);
+                        chain.Bulges.Add(reverse?-edge.Bulge:edge.Bulge);
+                        chain.Points.Add(new Point2d(current.Item1,current.Item2));
+                        var incident=nodes[current];
+                        if(current.Equals(start)||incident.Count!=2)break;
+                        index=-1;
+                        foreach(var candidate in incident)if(!used[candidate]){index=candidate;break;}
+                        if(index<0)break;
+                    }
+                    result.Add(chain);
+                }
+                // Exact endpoint keys preserve even tiny clipping gaps; branches stop a chain.
+                foreach(var node in nodes.Where(n=>n.Value.Count!=2))
+                    foreach(var index in node.Value)if(!used[index])Trace(index,node.Key);
+                for(var i=0;i<edges.Length;i++)if(!used[i])Trace(i,Key(edges[i].X1,edges[i].Y1));
+            }
+            return result;
+        }
+
+        internal static Polyline CreateOpeningPathPolyline(OpeningPathChain chain,Point3d anchor)
+        {
+            var entity=new Polyline(chain.Points.Count) {Closed=false,Plinegen=true,Elevation=anchor.Z};
+            for(var i=0;i<chain.Points.Count;i++)
+                entity.AddVertexAt(i,new Point2d(anchor.X+chain.Points[i].X,anchor.Y+chain.Points[i].Y),
+                    i<chain.Bulges.Count?chain.Bulges[i]:0,0,0);
+            return entity;
+        }
+
+        private static void ApplyOpeningPathAppearance(Polyline entity,ViewLine line,Dictionary<string,ObjectId> layers,
+            Database database,Transaction transaction,int scale)
+        {
+            ApplyViewLineAppearance(entity,line,layers);
+            if(line.OpeningRole!=null)return;
+            entity.Color=Autodesk.AutoCAD.Colors.Color.FromRgb(145,160,171);
+            entity.LinetypeId=EnsureOpeningArcLineType(database,transaction);
+            entity.LinetypeScale=Math.Max(1,scale);
+        }
+
+        public static void RunCurveNativeCheck(Document document)
+        {
+            var dbmod=Convert.ToInt32(AcApplication.GetSystemVariable("DBMOD"));
+            var model=new BuildingModelDocument { Name="Curve QA" };
+            model.Storeys.Add(new StoreyModel { Id="1F",Height=3000 });
+            model.Walls.Add(new WallModel { Id="arc",StoreyId="1F",X1=1000,X2=-1000,Bulge=1,Thickness=200 });
+            model.Slabs.Add(new SlabModel { Id="round",StoreyId="1F",Thickness=150,TopElevation=150,
+                Outline=new List<PointModel> { new PointModel(1500,-2000) { Bulge=1 },
+                    new PointModel(-1500,-2000),new PointModel(-1500,-3000),new PointModel(1500,-3000) } });
+            var view=OrthographicProjector.Project(model,new ViewDefinitionModel { Id="qa",Kind=ViewKind.Plan,
+                Scale=100,StoreyIds=new List<string>{"1F"} });
+            var curves=view.Lines.Where(l=>Math.Abs(l.Bulge)>1e-10).ToList();
+            if(curves.Count!=3)throw new InvalidDataException("墙和板未生成三个独立圆弧。");
+            using(var db=new Database(true,true))
+            using(var tx=db.TransactionManager.StartTransaction()) {
+                var layers=EnsureViewLayers(db,tx);
+                var space=(BlockTableRecord)tx.GetObject(db.CurrentSpaceId,OpenMode.ForWrite);
+                var anchor=new Point3d(12345,6789,0);
+                foreach(var line in curves) {
+                    var native=(Polyline)CreateViewLineEntity(line,anchor);
+                    ApplyLayer(native,line.Layer,layers);ApplyLineWeight(native,line.LineWeight);
+                    space.AppendEntity(native);tx.AddNewlyCreatedDBObject(native,true);
+                    var expected=CurveGeometry.ForLine(line);var actual=native.GetArcSegment2dAt(0);
+                    if(native.NumberOfVertices!=2||Math.Abs(actual.Radius-expected.Radius)>.000001
+                        || Math.Abs(native.Length-expected.Length)>.000001
+                        || native.GetPoint2dAt(0).GetDistanceTo(new Point2d(anchor.X+line.X1,anchor.Y+line.Y1))>.000001
+                        || native.LayerId!=layers[line.Layer])
+                        throw new InvalidDataException("CAD 圆弧落图尺寸、基点或规范图层错误。");
+                }
+                tx.Commit();
+            }
+            if(Convert.ToInt32(AcApplication.GetSystemVariable("DBMOD"))!=dbmod)
+                throw new InvalidDataException("圆弧检查修改了当前图纸。");
+            document.Editor.WriteMessage("\nCAD_CURVE_NATIVE_OK wall slab nativeBulge radius arcLength 1to1 translatedAnchor standardLayers unchangedDrawing");
+        }
+
+        public static void RunActiveViewsNativeCheck(Document document)
+        {
+            var dbmod=Convert.ToInt32(AcApplication.GetSystemVariable("DBMOD"));
+            var root=Path.Combine(Path.GetTempPath(),"WanLuoActiveViews-"+Guid.NewGuid().ToString("N"));
+            try
+            {
+                foreach(var name in new[]{"Old","Edited"})
+                {
+                    var folder=Path.Combine(root,StudioLaunch.ModelFolderName,name);
+                    BuildingModelJson.SaveModel(Path.Combine(folder,"model.json"),new BuildingModelDocument { Name=name });
+                    var view=new ViewDocument { Id="same-id",Title=name,Kind=ViewKind.Plan };
+                    view.Lines.Add(new ViewLine { X2=name=="Old"?1000:7600,Layer=ViewLayers.Cut });
+                    BuildingModelJson.SaveView(Path.Combine(folder,StudioLaunch.ViewsFolderName,"same-id.json"),view);
+                }
+                var modelPath=Path.Combine(root,StudioLaunch.ModelFolderName,"Edited","model.json");
+                StudioLaunch.RememberActiveModel(root,modelPath);
+                var source=StudioLaunch.ActiveViewSource(root,"Old");
+                var entry=source.Entries.Single();
+                var oldView=Path.Combine(root,StudioLaunch.ModelFolderName,"Old",StudioLaunch.ViewsFolderName,"same-id.json");
+                if(source.ModelPath!=modelPath||ViewSourceKey(entry.FilePath,entry.Id)==ViewSourceKey(oldView,entry.Id))
+                    throw new InvalidDataException("当前模型来源或同 ID 隔离错误。");
+                using(var db=new Database(true,true))
+                using(var tx=db.TransactionManager.StartTransaction())
+                {
+                    var layers=EnsureViewLayers(db,tx);
+                    var space=(BlockTableRecord)tx.GetObject(db.CurrentSpaceId,OpenMode.ForWrite);
+                    var view=BuildingModelJson.LoadView(entry.FilePath);
+                    var native=(Line)CreateViewLineEntity(view.Lines.Single(),new Point3d(12345,6789,0));
+                    ApplyLayer(native,ViewLayers.Cut,layers);
+                    space.AppendEntity(native);tx.AddNewlyCreatedDBObject(native,true);
+                    if(Math.Abs(native.Length-7600)>1e-6||Math.Abs(native.StartPoint.X-12345)>1e-6)
+                        throw new InvalidDataException("落图读到了旧模型的几何。");
+                    tx.Commit();
+                }
+                StudioLaunch.RememberActiveModel(root,Path.Combine(root,"missing.json"));
+                try { StudioLaunch.ActiveViewSource(root,"Old");throw new InvalidOperationException("失效当前模型回退旧模型。"); }
+                catch(FileNotFoundException) { }
+                if(Convert.ToInt32(AcApplication.GetSystemVariable("DBMOD"))!=dbmod)
+                    throw new InvalidDataException("当前模型落图检查修改了图纸。");
+                document.Editor.WriteMessage("\nCAD_ACTIVE_VIEWS_NATIVE_OK currentModel sameIdIsolation actualGeometry 1to1 invalidSourceNoFallback unchangedDrawing");
+            }
+            finally { if(Directory.Exists(root))Directory.Delete(root,true); }
+        }
+
         private static Dictionary<string, ObjectId> EnsureViewLayers(Database database, Transaction transaction)
         {
             var profile = DraftingStandardService.LoadProfile();
             var layers = new Dictionary<string, ObjectId>(StringComparer.OrdinalIgnoreCase);
             layers.Add("Hidden", DraftingStandardService.EnsureLayerFor(database, transaction,
                 DraftingStandardProfile.HiddenKey, profile));
+            foreach(var key in new[]{OpeningElevationAdapter.WindowLayerKey,OpeningElevationAdapter.DoorLayerKey,OpeningElevationAdapter.MarkLayerKey})
+                layers.Add(key,DraftingStandardService.EnsureLayerFor(database,transaction,key,profile));
             foreach (var style in ViewLayers.All)
             {
                 var key = style.Name == ViewLayers.SheetFrame ? DraftingStandardProfile.FrameKey
@@ -1101,8 +1258,14 @@ namespace BatchPdfPublisher.Services
             {
                 document.Editor.WriteMessage("\n读取当前项目失败：" + exception.Message);
             }
-            var modelFolder = StudioLaunch.FindModelFolder(projectFolder, projectName);
-            var entries = StudioLaunch.ListViews(modelFolder);
+            StudioViewSource source;
+            try { source = StudioLaunch.ActiveViewSource(projectFolder, projectName,document.Database.FingerprintGuid.ToString()); }
+            catch (Exception exception)
+            {
+                document.Editor.WriteMessage("\n读取当前模型视图失败：" + exception.Message);
+                return null;
+            }
+            var entries = source.Entries;
             try
             {
                 var placed = FindPlacedSourceKeys(document.Database);
@@ -1120,10 +1283,10 @@ namespace BatchPdfPublisher.Services
                 document.Editor.WriteMessage("\n读取项目图框失败：" + exception.Message);
                 frames = new List<FrameDefinition>();
             }
-            var dialog = new BuildingModelBatchWindow(projectName, entries, frames, () => {
-                var refreshed=StudioLaunch.ListViews(modelFolder);
+            var dialog = new BuildingModelBatchWindow(projectName, source, frames, () => {
+                var refreshed=StudioLaunch.ActiveViewSource(projectFolder, projectName,document.Database.FingerprintGuid.ToString());
                 var placed=FindPlacedSourceKeys(document.Database);
-                foreach(var entry in refreshed)entry.Placed=placed.Contains(ViewSourceKey(entry.FilePath,entry.Id));
+                foreach(var entry in refreshed.Entries)entry.Placed=placed.Contains(ViewSourceKey(entry.FilePath,entry.Id));
                 return refreshed;
             });
             return AcApplication.ShowModalWindow(dialog) == true ? dialog : null;
@@ -1144,17 +1307,24 @@ namespace BatchPdfPublisher.Services
             {
                 // 读项目失败就当没有项目，直接走文件浏览
             }
-            var modelFolder = StudioLaunch.FindModelFolder(projectFolder, modelName);
-            var entries = StudioLaunch.ListViews(modelFolder);
+            StudioViewSource source;
+            try { source = StudioLaunch.ActiveViewSource(projectFolder, modelName,document.Database.FingerprintGuid.ToString()); }
+            catch (Exception exception)
+            {
+                editor.WriteMessage("\n读取当前模型视图失败：" + exception.Message);
+                return null;
+            }
+            var modelFolder = source.ModelPath == null ? null : Path.GetDirectoryName(source.ModelPath);
+            var entries = source.Entries;
             if (entries.Count == 0)
             {
                 if (modelFolder != null)
-                    editor.WriteMessage("\n当前项目的模型目录里还没有视图：" + modelFolder
+                    editor.WriteMessage("\n当前模型的目录里还没有视图：" + modelFolder
                         + "\n先在建模程序里「生成全部视图」（CAD 里执行 JZMX 打开建模程序）。");
                 return null;
             }
 
-            editor.WriteMessage("\n请选择要落图的图纸/视图（当前项目：" + (modelName ?? "未命名") + "）：");
+            editor.WriteMessage("\n请选择要落图的图纸/视图（当前模型：" + source.ModelName + "）：\n" + source.ModelPath);
             for (var index = 0; index < entries.Count; index++)
                 editor.WriteMessage("\n  " + (index + 1).ToString("00") + "）" + entries[index].Display);
             editor.WriteMessage("\n  00）浏览其它文件…");
@@ -1434,6 +1604,220 @@ namespace BatchPdfPublisher.Services
         {
             if(weight.HasValue && DrawingLineWeights.Values.Contains(weight.Value))
                 entity.LineWeight=(LineWeight)weight.Value;
+        }
+        private static void ApplyViewLineAppearance(Entity entity,ViewLine line,Dictionary<string,ObjectId> layers)
+        {
+            var layer=OpeningElevationAdapter.LayerKey(line)??(line.LineType=="DASHED"||line.LineType=="HIDDEN"?"Hidden":line.Layer);
+            ApplyLayer(entity,layer,layers);
+            if(line.OpeningRole=="SashFrame")entity.ColorIndex=8;
+            ApplyLineWeight(entity,line.LineWeight);
+        }
+        public static void RunElevationStyleNativeCheck(Document document)
+        {
+            var dbmod=Convert.ToInt32(AcApplication.GetSystemVariable("DBMOD"));
+            var model=new BuildingModelDocument {Name="Elevation QA"};model.Storeys.Add(new StoreyModel {Id="1F",Height=3000});
+            model.Walls.Add(new WallModel {Id="host",StoreyId="1F",X2=5000,Thickness=200});
+            model.Openings.Add(new OpeningModel {Id="window",HostWallId="host",Code="C1215",Kind="窗",Width=1200,Height=1500,Sill=900,Offset=1500});
+            model.Openings.Add(new OpeningModel {Id="door",HostWallId="host",Code="M0921",Kind="门",Width=900,Height=2100,Offset=3500});
+            foreach(var opening in model.Openings){var type=OpeningConstruction.Default(opening);type.DoorFrameWidth=40;
+                type.OpeningMode=opening.Kind=="窗"?"双扇平开":"左平开";model.OpeningTypes.Add(type);}
+            var view=OrthographicProjector.ProjectOpeningElevations(model,new ViewDefinitionModel {Id="style-check",Kind=ViewKind.OpeningElevation,Scale=50},OpeningConstruction.Library(model));
+            var typed=view.Lines.Where(l=>l.OpeningRole!=null).ToList();var marks=0;var windows=0;var doors=0;var sashes=0;
+            using(var db=new Database(true,true))using(var tx=db.TransactionManager.StartTransaction())
+            {
+                var layers=EnsureViewLayers(db,tx);var space=(BlockTableRecord)tx.GetObject(db.CurrentSpaceId,OpenMode.ForWrite);
+                foreach(var line in typed.Where(l=>l.OpeningArcId==null))
+                {
+                    var entity=CreateViewLineEntity(line,new Point3d(1234,5678,0));ApplyViewLineAppearance(entity,line,layers);
+                    space.AppendEntity(entity);tx.AddNewlyCreatedDBObject(entity,true);
+                    var key=OpeningElevationAdapter.LayerKey(line);
+                    var expected=DraftingStandardService.EnsureLayerFor(db,tx,key);
+                    if(entity.LayerId!=expected||entity.ColorIndex!=(line.OpeningRole=="SashFrame"?8:256)||entity.Linetype!="ByLayer")
+                        throw new InvalidDataException("建筑立面门窗样式与门窗立面图层不一致。");
+                    if(key==OpeningElevationAdapter.MarkLayerKey)
+                    {
+                        if(line.LineType!="DASHED")throw new InvalidDataException("开启线没有保留虚线。");marks++;
+                        var layer=(LayerTableRecord)tx.GetObject(expected,OpenMode.ForRead);
+                        var style=DraftingStandardService.LoadProfile();
+                        var setting=style.Layers.First(p=>p.Key==key);
+                        if(setting.TrueColorRgb<0&&layer.Color.ColorIndex!=setting.ColorIndex)throw new InvalidDataException("门窗开启图层颜色未随制图标准。");
+                    }
+                    if(key==OpeningElevationAdapter.WindowLayerKey)windows++;
+                    if(key==OpeningElevationAdapter.DoorLayerKey)doors++;
+                    if(line.OpeningRole=="SashFrame")sashes++;
+                }
+                RunOpeningPathNativeCheck(db,tx,space,layers,typed,view.Scale);
+                marks+=typed.Count(l=>l.OpeningArcId!=null&&OpeningElevationAdapter.LayerKey(l)==OpeningElevationAdapter.MarkLayerKey);
+                tx.Commit();
+            }
+            if(marks==0||windows==0||doors==0||sashes==0||Convert.ToInt32(AcApplication.GetSystemVariable("DBMOD"))!=dbmod)
+                throw new InvalidDataException("立面样式检查缺少门、窗、开启线或修改了当前图纸。");
+            document.Editor.WriteMessage("\nELEVATION_STYLE_NATIVE_OK sharedLayers byLayerColor sashAci8 dashedOpening cleanGeometry pairedOpenPL C1121 centeredMLC manualHingesAllowed exactEndpoints disconnectedNoBridge unchangedDrawing");
+            RunWallColumnNativeCheck(document);
+        }
+
+        private static void RunOpeningPathNativeCheck(Database db,Transaction tx,BlockTableRecord space,
+            Dictionary<string,ObjectId> layers,List<ViewLine> projected,int scale)
+        {
+            var anchor=new Point3d(1234,5678,0);
+            var markLayer=DraftingStandardService.EnsureLayerFor(db,tx,OpeningElevationAdapter.MarkLayerKey);
+            var layer=(LayerTableRecord)tx.GetObject(markLayer,OpenMode.ForRead);
+            var lineType=(LinetypeTableRecord)tx.GetObject(layer.LinetypeObjectId,OpenMode.ForRead);
+            if(!string.Equals(lineType.Name,"DASHED",StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("Opening path layer must retain DASHED.");
+
+            List<Polyline> Emit(IEnumerable<ViewLine> source)
+            {
+                var entities=new List<Polyline>();
+                foreach(var chain in BuildOpeningPathChains(source))
+                {
+                    var entity=CreateOpeningPathPolyline(chain,anchor);
+                    ApplyOpeningPathAppearance(entity,chain.Appearance,layers,db,tx,scale);
+                    space.AppendEntity(entity);tx.AddNewlyCreatedDBObject(entity,true);entities.Add(entity);
+                    if(entity.LayerId!=markLayer||entity.Linetype!="ByLayer"||chain.Appearance.LineType!="DASHED")
+                        throw new InvalidDataException("Opening path changed layer or line type.");
+                }
+                return entities;
+            }
+            Tuple<double,double,double,double,double> EdgeKey(double x,double y,double xx,double yy,double bulge)
+            {
+                if(x>xx||x==xx&&y>yy)return Tuple.Create(xx,yy,x,y,-bulge);
+                return Tuple.Create(x,y,xx,yy,bulge);
+            }
+            void CheckEdges(List<Polyline> entities,IEnumerable<ViewLine> source)
+            {
+                var expected=source.Where(l=>l.OpeningArcId!=null&&(l.X1!=l.X2||l.Y1!=l.Y2))
+                    .GroupBy(l=>EdgeKey(anchor.X+l.X1,anchor.Y+l.Y1,anchor.X+l.X2,anchor.Y+l.Y2,l.Bulge))
+                    .ToDictionary(g=>g.Key,g=>g.Count());
+                foreach(var entity in entities)
+                {
+                    if(entity.Closed||!entity.Plinegen||entity.Elevation!=anchor.Z)
+                        throw new InvalidDataException("Opening path must be an open native PL with continuous dashes.");
+                    for(var i=0;i<entity.NumberOfVertices-1;i++)
+                    {
+                        var a=entity.GetPoint2dAt(i);var b=entity.GetPoint2dAt(i+1);
+                        var key=EdgeKey(a.X,a.Y,b.X,b.Y,entity.GetBulgeAt(i));
+                        if(!expected.TryGetValue(key,out var count)||count==0)
+                            throw new InvalidDataException("Opening PL introduced a phantom link or moved an endpoint.");
+                        expected[key]=count-1;
+                    }
+                }
+                if(expected.Values.Any(count=>count!=0))throw new InvalidDataException("Opening PL lost a visible segment.");
+            }
+            ViewLine Reversed(ViewLine l)=>new ViewLine {Layer=l.Layer,LineType=l.LineType,LineWeight=l.LineWeight,
+                OpeningRole=l.OpeningRole,OpeningUsesWindowAppearance=l.OpeningUsesWindowAppearance,OpeningArcId=l.OpeningArcId,
+                X1=l.X2,Y1=l.Y2,X2=l.X1,Y2=l.Y1,Bulge=-l.Bulge};
+
+            var projectedPaths=projected.Where(l=>l.OpeningArcId!=null).ToList();
+            if(projectedPaths.Count==0)throw new InvalidDataException("Projected elevation lost opening path identities.");
+            CheckEdges(Emit(projectedPaths.AsEnumerable().Reverse().Select(Reversed)),projectedPaths);
+            var pair=new DoorWindowScheduleItem {Code="PLPAIR",Width=1500,Height=2500,ElevationType="普通门",
+                DivisionPreset="双扇等分",OpeningMode="双扇平开",HasInstallationGap=false,HasOuterFrame=true,OuterFrameWidth=50,
+                HasMullion=true,MullionWidth=50,DoorFrameType="N型",DoorFrameWidth=40};
+            var pairLines=OpeningElevationAdapter.CleanGeometryLines(DoorWindowElevationGeometryBuilder.Build(pair).Lines)
+                .Where(l=>l.OpeningPathId!=null).Select(l=>OpeningElevationAdapter.ElevationLine(l,false)).ToList();
+            var nativePair=Emit(pairLines.AsEnumerable().Reverse().Select(Reversed));
+            if(pairLines.Select(l=>l.OpeningArcId).Distinct().Count()!=2||nativePair.Count!=2
+                ||nativePair.Any(p=>p.NumberOfVertices!=3)
+                ||!nativePair.Any(p=>p.GetPoint2dAt(1).X==anchor.X+50)
+                ||!nativePair.Any(p=>p.GetPoint2dAt(1).X==anchor.X+1450))
+                throw new InvalidDataException("Paired leaves require distinct three-vertex PLs with exterior hinge tips.");
+            CheckEdges(nativePair,pairLines);
+
+            void CheckDirect(DoorWindowScheduleItem item,List<ViewLine> paths)
+            {
+                var before=new HashSet<ObjectId>(space.Cast<ObjectId>());
+                DoorWindowElevationInsertionService.AppendGeometryForNativeCheck(item,anchor,space,tx);
+                var direct=space.Cast<ObjectId>().Where(id=>!before.Contains(id)).Select(id=>(Entity)tx.GetObject(id,OpenMode.ForRead))
+                    .Where(e=>e.LayerId==markLayer&&e is Polyline p&&p.Plinegen).Cast<Polyline>().ToList();
+                if(direct.Count!=2||direct.Any(p=>p.NumberOfVertices!=3||p.Linetype!="ByLayer"
+                    ||!DoorWindowElevationMetadataService.TryRead(p,out var metadata)||metadata.Code!=item.Code))
+                    throw new InvalidDataException(item.Code+": direct CAD elevation lost a leaf PL or its metadata.");
+                CheckEdges(direct,paths);
+            }
+            CheckDirect(pair,pairLines);
+            var hung=new DoorWindowScheduleItem {Code="HUNG",Width=1500,Height=1500,ElevationType="普通窗",
+                DivisionPreset="双扇等分",OpeningMode="上悬",HasInstallationGap=false};
+            var hungPaths=OpeningElevationAdapter.CleanGeometryLines(DoorWindowElevationGeometryBuilder.Build(hung).Lines)
+                .Where(l=>l.OpeningPathId!=null).Select(l=>OpeningElevationAdapter.ElevationLine(l,true)).ToList();
+            var nativeHung=Emit(hungPaths.AsEnumerable().Reverse().Select(Reversed));
+            if(nativeHung.Count!=2||nativeHung.Any(p=>p.NumberOfVertices!=3||p.GetPoint2dAt(1).Y!=anchor.Y+1450))
+                throw new InvalidDataException("Top-hung leaves require separate three-vertex PLs with top hinge tips.");
+            CheckEdges(nativeHung,hungPaths);CheckDirect(hung,hungPaths);
+
+            void CheckDefault(DoorWindowScheduleItem item,bool combined,bool inward=false)
+            {
+                var geometry=DoorWindowElevationGeometryBuilder.Build(item);
+                var leaves=geometry.Cells.Where(c=>c.Opening=="左平开"||c.Opening=="右平开").OrderBy(c=>c.Left).ToList();
+                if(leaves.Count!=2||leaves[0].Opening!=(inward?"右平开":"左平开")||leaves[1].Opening!=(inward?"左平开":"右平开"))
+                    throw new InvalidDataException(item.Code+": default/user hinge directions were not preserved.");
+                if(combined&&(item.DoorPlacement!="居中"||leaves.Any(c=>!c.IsDoor)
+                    ||leaves.Any(c=>c.Right-c.Left!=750||c.Top-c.Bottom!=2200)
+                    ||(leaves[0].Left+leaves[1].Right)/2!=item.Width/2))
+                    throw new InvalidDataException(item.Code+": centered 1500 x 2200 door defaults changed.");
+                var paths=OpeningElevationAdapter.CleanGeometryLines(geometry.Lines)
+                    .Where(l=>l.OpeningPathId!=null).Select(l=>OpeningElevationAdapter.ElevationLine(l,OpeningElevationAdapter.UsesWindowAppearance(item))).ToList();
+                var native=Emit(paths.AsEnumerable().Reverse().Select(Reversed));
+                if(paths.Count!=4||paths.Select(l=>l.OpeningArcId).Distinct().Count()!=2
+                    ||native.Count!=2||native.Any(p=>p.NumberOfVertices!=3))
+                    throw new InvalidDataException(item.Code+": default leaves require two three-vertex PLs.");
+                for(var i=0;i<leaves.Count;i++)
+                {
+                    var bounds=DoorWindowElevationGeometryBuilder.PanelBounds(leaves[i],geometry.Cells,item);
+                    var tip=new Point2d(anchor.X+bounds[leaves[i].Opening=="左平开"?0:2],anchor.Y+(bounds[1]+bounds[3])/2);
+                    if(!native.Any(p=>p.GetPoint2dAt(1).Equals(tip)))
+                        throw new InvalidDataException(item.Code+": native PL tip moved from its configured hinge.");
+                }
+                CheckEdges(native,paths);CheckDirect(item,paths);
+            }
+            var windowDefault=new DoorWindowScheduleItem {Code="C1121",Width=1100,Height=2100};
+            DoorWindowElevationSuggestionService.Apply(windowDefault);CheckDefault(windowDefault,false);
+            foreach(var width in new[]{2000d,2400d,7600d})
+            {
+                var combined=new DoorWindowScheduleItem {Code="MLC"+(width/100).ToString("00")+"27",Width=width,Height=2700,
+                    HasInstallationGap=false,InstallationGap=0};
+                DoorWindowElevationSuggestionService.Apply(combined);CheckDefault(combined,true);
+                var oldLayout=DoorWindowElevationGeometryBuilder.ParseCellLayout(combined.CustomCellLayout);
+                foreach(var cell in oldLayout.Where(c=>c.IsDoor))cell.Opening=cell.Opening=="左平开"?"右平开":"左平开";
+                combined.CustomCellLayout=DoorWindowElevationGeometryBuilder.SerializeCellLayout(oldLayout);
+                combined.CellOpeningModes=string.Join("|",oldLayout.Select(c=>c.Opening));CheckDefault(combined,true,true);
+            }
+
+            ViewLine Piece(double x,double y,double xx,double yy,string id="clipped")=>new ViewLine {
+                Layer=ViewLayers.Opening,OpeningRole="Opening",LineType="DASHED",OpeningArcId=id,X1=x,Y1=y,X2=xx,Y2=yy};
+            var clipped=new[] {Piece(0,0,5,5),Piece(10,10,20,20),Piece(20,20,30,0),
+                Piece(30,0,40,5,"other-leaf"),Piece(30.001,0,40,5)};
+            var disconnected=Emit(clipped.Reverse().Select(Reversed));
+            if(disconnected.Count!=4||disconnected.Count(p=>p.NumberOfVertices==3)!=1)
+                throw new InvalidDataException("Clipped paths crossed a gap or joined adjacent leaves.");
+            CheckEdges(disconnected,clipped);
+        }
+        private static void RunWallColumnNativeCheck(Document document)
+        {
+            var dbmod=Convert.ToInt32(AcApplication.GetSystemVariable("DBMOD"));
+            var model=new BuildingModelDocument {Name="Column drawing QA",Storeys=new List<StoreyModel> {new StoreyModel {Id="1F",Height=3000}}};
+            model.Walls.Add(new WallModel {Id="wall",StoreyId="1F",X1=-2000,X2=2000,Thickness=800});
+            model.Columns.Add(new ColumnModel {Id="column",StoreyId="1F",Width=400,Depth=400});
+            var without=BuildingModelJson.FromJson(BuildingModelJson.ToJson(model));without.Columns.Clear();
+            using(var db=new Database(true,true))using(var tx=db.TransactionManager.StartTransaction()) {
+                var layers=EnsureViewLayers(db,tx);var space=(BlockTableRecord)tx.GetObject(db.CurrentSpaceId,OpenMode.ForWrite);
+                foreach(var definition in new[] {new ViewDefinitionModel {Id="plan",Kind=ViewKind.Plan,StoreyIds=new List<string>{"1F"}},
+                    new ViewDefinitionModel {Id="elevation",Kind=ViewKind.Elevation},new ViewDefinitionModel {Id="section",Kind=ViewKind.Section},
+                    new ViewDefinitionModel {Id="axon",Kind=ViewKind.Axonometric}}) {
+                    var view=OrthographicProjector.Project(model,definition);var reference=OrthographicProjector.Project(without,definition);
+                    if(view.Lines.Count!=reference.Lines.Count || !view.Lines.Zip(reference.Lines,(a,b)=>a.Layer==b.Layer
+                        && Math.Abs(a.X1-b.X1)<.001 && Math.Abs(a.Y1-b.Y1)<.001 && Math.Abs(a.X2-b.X2)<.001 && Math.Abs(a.Y2-b.Y2)<.001).All(b=>b)
+                        || view.Hatches.Count!=reference.Hatches.Count)throw new InvalidDataException("墙柱重叠仍产生柱线或重复剖面填充。");
+                    foreach(var line in view.Lines) {
+                        var entity=CreateViewLineEntity(line,new Point3d(1234,5678,0));ApplyViewLineAppearance(entity,line,layers);
+                        space.AppendEntity(entity);tx.AddNewlyCreatedDBObject(entity,true);
+                    }
+                }
+                tx.Commit();
+            }
+            if(!BuildingVolumeBuilder.Build(model).Faces.Any(f=>f.Kind=="column") || Convert.ToInt32(AcApplication.GetSystemVariable("DBMOD"))!=dbmod)
+                throw new InvalidDataException("图纸去柱影响了模型柱或当前图纸。");
+            document.Editor.WriteMessage("\nWALL_COLUMN_NATIVE_OK plan elevation section axon noCoveredColumn noDuplicateHatch nativeEntities semanticColumn unchangedDrawing");
         }
 
         private static ObjectId EnsureOpeningArcLineType(Database database,Transaction transaction)

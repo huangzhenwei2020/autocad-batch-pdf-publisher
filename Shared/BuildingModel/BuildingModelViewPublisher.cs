@@ -110,6 +110,7 @@ namespace BatchPdfPublisher.BuildingModel
             if (!StudioLaunch.WritePending(folder, marked.Select(entry => new StudioPendingEntry
                 { Id = entry.Id, FilePath = entry.FilePath })))
                 throw new IOException("写入 CAD 待落图清单失败。");
+            StudioLaunch.RememberActiveModel(Path.GetDirectoryName(modelsRoot), modelFilePath);
             return new CadPublishResult
             {
                 ViewCount = count,

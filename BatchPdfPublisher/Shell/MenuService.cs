@@ -135,6 +135,7 @@ namespace BatchPdfPublisher.Services
             if (document == null) return; // 还没有图纸，交给 Idle 继续重试
             try
             {
+                if (!document.Editor.IsQuiescent) return;
                 // 菜单栏默认是隐藏的（MENUBAR 初值 0）。不先把它打开，下面挂上去的
                 // 弹菜单也看不见——这正是"菜单明明加载了却找不到"的原因。
                 if (!IsMenuBarVisible()) SetMenuBarVisible(true);

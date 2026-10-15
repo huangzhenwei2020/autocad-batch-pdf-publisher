@@ -95,7 +95,7 @@ namespace BatchPdfPublisher.Views
             {
                 customCellLayout = CreateDefaultCellLayout(
                     openingType, clearWidth, clearHeight, normalizedMaterial);
-                cellOpeningModes = openingType == 1 ? "左平开" : "右平开|左平开";
+                cellOpeningModes = openingType == 1 ? "左平开" : "左平开|右平开";
             }
             return new DoorWindowScheduleItem
             {
@@ -132,9 +132,9 @@ namespace BatchPdfPublisher.Views
                     + ",左平开,1,0," + material;
             var middle = width / 2.0;
             return "0,0," + number(middle) + "," + number(height)
-                + ",右平开,0,0," + material + "|"
+                + ",左平开,0,0," + material + "|"
                 + number(middle) + ",0," + number(width) + "," + number(height)
-                + ",左平开,0,0," + material;
+                + ",右平开,0,0," + material;
         }
 
         private static DoorWindowDivisionEditResult BuildResult(DoorWindowScheduleItem item)

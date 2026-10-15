@@ -45,7 +45,6 @@ internal sealed partial class ProbeWindow : Window
     private readonly TabControl _workspaces = new();
     private readonly ComboBox _storeyChooser = new() { Width = 130 };
     private bool _slabRibbonActive;
-    private readonly TextBox _newWallHeight = new() { Width = 110, Text = "0", PlaceholderText = "墙高 mm" };
     private readonly ListBox _elements = new();
     private readonly TreeView _browserTree = new();
     private readonly Dictionary<string, TreeViewItem> _browserNodes = new();
@@ -69,6 +68,8 @@ internal sealed partial class ProbeWindow : Window
     private readonly Button _exportBuilding = new() { Content = "导出整栋" };
     private readonly Button _exportStorey = new() { Content = "导出当前楼层" };
     private readonly Button _cancelExport = new() { Content = "取消导出", IsEnabled = false };
+    private readonly Button _blenderLog = new() { Content = "Blender 日志", IsEnabled = false };
+    private string? _lastBlenderRun;
     private CancellationTokenSource? _exportCancellation;
     private bool _choosingExport;
     private readonly BlenderIntegration _blender = BlenderIntegration.Load();
@@ -177,24 +178,22 @@ internal sealed partial class ProbeWindow : Window
                 ? "F8 正交：当前锁定垂直方向。" : "按住 Shift：当前锁定垂直方向；松开恢复自由。",
             _ => "自由画墙。"
         };
-        _planCanvas.WallRequested += (start, end) =>
-        {
-            if (!TryNumber(_newWallHeight.Text, out var wallHeight) || wallHeight < 0)
-            { _status.Text = "新墙高度请输入非负毫米数；0 表示随楼层。"; return false; }
-            if (!_session.TryAddWall(new WallModel
-            {
-                StoreyId = (_storeyChooser.SelectedItem as StoreyItem)?.Id ?? "1F",
-                X1 = start.X, Y1 = start.Y, X2 = end.X, Y2 = end.Y,
-                Thickness = 200, Height = wallHeight
-            }, out var id, out var error)) { _status.Text = error; return false; }
-            _selectedId = id;
-            _ = RefreshModelAsync("已新增墙");
-            return true;
-        };
+        ConnectCurveEditing();
+        _planCanvas.WallRequested += (start, end) => AddDrawnWall(start,end);
         _planCanvas.WallGripReleased += async (id, index, position) =>
         {
             var wall = _session.Model.Walls.FirstOrDefault(w => w.Id == id);
             if (wall == null) return;
+            if(index==2)
+            {
+                if(!_session.TrySetWallArcThrough(id,position,out var curveError)){_status.Text=curveError;return;}
+                await RefreshModelAsync("已调整弧墙弧度 · Ctrl+Z 可撤销");return;
+            }
+            if(Math.Abs(wall.Bulge)>1e-10)
+            {
+                if(!_session.TryMoveWallGripOnly(id,index,position.X,position.Y,out var curveError)){_status.Text=curveError;return;}
+                await RefreshModelAsync("已调整弧墙端点 · Ctrl+Z 可撤销");return;
+            }
             var ox = index == 0 ? wall.X1 : wall.X2;
             var oy = index == 0 ? wall.Y1 : wall.Y2;
             var entered = await new MovementInputWindow(position.X - ox, position.Y - oy, 0)
@@ -215,8 +214,9 @@ internal sealed partial class ProbeWindow : Window
             await RefreshModelAsync("已放置 "+opening.Code+" · 继续点墙放置，Esc 退出");
         };
         _planCanvas.PendingOpeningRequested += (pending,wallId,offset)=> {
+            if(_pendingOpeningSizeBusy)return false;
             if(!_session.TryPlacePendingOpening(pending.StoreyId,pending.SourceHandle,wallId,offset,out var id,out var error))
-                {_status.Text=error;return false;}
+                {_status.Text=error;if(!_pendingOpeningSizeBusy)_pendingOpeningApplyTask=AdjustPendingOpeningAsync(pending,wallId,offset);return false;}
             _selectedId=id;
             _=RefreshModelAsync("已定位 "+pending.Code+" 并生成墙洞口 · Ctrl+Z 可撤销");
             return true;
@@ -255,6 +255,7 @@ internal sealed partial class ProbeWindow : Window
             AutomationProperties.SetName(button, tip);
             return button;
         }
+        quickAccess.Children.Add(Quick("file-plus", "新建模型  Ctrl+N", () => _ = NewModelAsync()));
         quickAccess.Children.Add(Quick("folder-open", "打开模型  Ctrl+O", () => _ = OpenModelAsync()));
         quickAccess.Children.Add(Quick("save", "保存  Ctrl+S", () => _ = SaveModelAsync(false)));
         _quickUndo = Quick("undo-2", "撤销  Ctrl+Z", () => _ = UndoModelAsync());
@@ -336,6 +337,10 @@ internal sealed partial class ProbeWindow : Window
         var deleteSelected = new Button { Content = "删除选中" };
         deleteSelected.Click += async (_, _) => await DeleteSelectedAsync();
         var open = new Button { Content = "打开模型" };
+        var modelManager = new Button { Content = "模型管理" };
+        modelManager.Click += async (_, _) => await ManageModelsAsync();
+        var newModel = new Button { Content = "新建模型" };
+        newModel.Click += async (_, _) => await NewModelAsync();
         open.Click += async (_, _) => await OpenModelAsync();
         var save = new Button { Content = "保存" };
         save.Click += async (_, _) => await SaveModelAsync(false);
@@ -558,7 +563,7 @@ internal sealed partial class ProbeWindow : Window
         viewTools.Children.Add(preciseMove3D);
         // View tools live in the ribbon; the viewport remains unobstructed.
 
-        var planLayout = new Grid { RowDefinitions = new RowDefinitions("42,Auto,*") };
+        var planLayout = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,*") };
         var planTools = new StackPanel
         {
             Orientation = Orientation.Horizontal, Spacing = 3
@@ -585,16 +590,18 @@ internal sealed partial class ProbeWindow : Window
         };
         foreach (var (label, tool) in new[]
         {
-            ("选择", PlanTool.Select), ("画墙", PlanTool.Wall), ("门窗",PlanTool.Opening)
+            ("选择", PlanTool.Select), ("墙体", PlanTool.Wall), ("门窗",PlanTool.Opening)
         })
         {
             var button = new Button { Content = label };
             button.Click += (_, _) =>
             {
-                if(tool==PlanTool.Opening)_ = OpenOpeningPlacementAsync();else SetPlanTool(tool);
+                if(tool==PlanTool.Opening)_ = OpenOpeningPlacementAsync();
+                else if(tool==PlanTool.Wall)_wallDrawingTask=OpenWallDrawingAsync();
+                else SetPlanTool(tool);
             };
             _planToolButtons[tool] = button;
-            if (tool is PlanTool.Wall or PlanTool.Opening) planTools.Children.Add(button);
+            if (tool is PlanTool.Wall or PlanTool.ArcWall or PlanTool.Opening) planTools.Children.Add(button);
         }
         _polarButton.Click += (_, _) => SetPolar(!_planCanvas.PolarEnabled,
             _planCanvas.PolarStepDegrees);
@@ -602,9 +609,6 @@ internal sealed partial class ProbeWindow : Window
         var parameterTools = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
         parameterTools.Children.Add(new TextBlock { Text = "精确墙长", VerticalAlignment = VerticalAlignment.Center });
         parameterTools.Children.Add(wallLength);
-        parameterTools.Children.Add(new TextBlock { Text = "新墙高（0=随楼层）",
-            VerticalAlignment = VerticalAlignment.Center });
-        parameterTools.Children.Add(_newWallHeight);
         var delete = new Button { Content = "删除选中" };
         var preciseMovePlan = new Button { Content = "基点移动 M" };
         preciseMovePlan.Click += (_, _) => BeginMove();
@@ -612,13 +616,16 @@ internal sealed partial class ProbeWindow : Window
         var fitPlan = new Button { Content = "缩放适应" };
         fitPlan.Click += (_, _) => _planCanvas.Fit();
         planViewStrip.Children.Add(fitPlan);
+        planViewStrip.Children.Add(BuildUnderlayControls());
         foreach(var label in new[]{"左右翻转","内外翻转","编辑立面","沿墙居中"}) {
             var button=new Button {Content=label,Height=32,Padding=new Thickness(10,0),CornerRadius=new CornerRadius(0)};
             SetCommandVisual(button,label,true);ToolTip.SetTip(button,label);
             button.Click+=(_,_)=> {if(label=="编辑立面")_ = OpenOpeningEditorAsync(_selectedId);else if(label=="沿墙居中")_ = CenterSelectedOpeningAsync();else _ = FlipSelectedOpeningAsync(label=="左右翻转");};
             _openingContextTools.Children.Add(button);
         }
-        planLayout.Children.Add(planViewStrip);
+        planLayout.Children.Add(new ScrollViewer {Content=planViewStrip,
+            HorizontalScrollBarVisibility=Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
+            VerticalScrollBarVisibility=Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled});
         var axisEditStrip=BuildAxisEditStrip();Grid.SetRow(axisEditStrip,1);planLayout.Children.Add(axisEditStrip);
         Grid.SetRow(_planCanvas, 2);
         planLayout.Children.Add(_planCanvas);
@@ -813,11 +820,11 @@ internal sealed partial class ProbeWindow : Window
                 Action("复制", () => BeginMove(true)),
                 Planned("旋转"), Planned("镜像"), Planned("偏移"), Planned("阵列"),
                 Action("删除", () => _ = DeleteSelectedAsync())),
-            Group("编辑", Planned("相交"), Planned("修剪"), Planned("延伸")));
+            Group("编辑", Action("圆角",()=>_ = BeginFilletAsync()), Planned("相交"), Planned("修剪"), Planned("延伸")));
         pages["构件"] = Page(
             Group("梁柱",Action("绘制柱",()=>BeginStructureTool(PlanTool.Column)),Action("绘制梁",()=>BeginStructureTool(PlanTool.Beam))),
             Group("楼板", Action("绘制楼板", () => BeginSlabTool(PlanTool.Slab)),
-                Action("编辑轮廓", () => BeginSlabTool(PlanTool.SlabOutline))),
+                Action("编辑轮廓", () => BeginSlabTool(PlanTool.SlabOutline)),Action("圆弧边",()=>_planCanvas.BeginContourArc()),Action("圆角",()=>_ = BeginFilletAsync())),
             Group("洞口", Action("矩形洞口", () => BeginSlabTool(PlanTool.SlabHoleRectangle)),
                 Action("多边形洞口", () => BeginSlabTool(PlanTool.SlabHolePolygon)),
                 Action("删除洞口", DeleteSlabOpening)),
@@ -839,6 +846,12 @@ internal sealed partial class ProbeWindow : Window
         _exportBuilding.Click += (_, _) => _ = ExportGlbAsync(false);
         _exportStorey.Click += (_, _) => _ = ExportGlbAsync(true);
         _cancelExport.Click += (_, _) => _exportCancellation?.Cancel();
+        _blenderLog.Click += (_, _) =>
+        {
+            if (_lastBlenderRun == null || !Directory.Exists(_lastBlenderRun)) return;
+            try { Process.Start(new ProcessStartInfo(_lastBlenderRun) { UseShellExecute = true }); }
+            catch (Exception ex) { _status.Text = "日志目录打开失败：" + ex.Message; }
+        };
         var openInBlender = new CheckBox { Content = "导出后用 Blender 打开", IsChecked = _blender.OpenAfterExport,
             VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0) };
         openInBlender.IsCheckedChanged += (_, _) =>
@@ -848,8 +861,8 @@ internal sealed partial class ProbeWindow : Window
             catch (Exception ex) { _status.Text = "Blender 选项保存失败：" + ex.Message; }
         };
         pages["出图"] = Page(Group("CAD 输出", _publish, _sendToCad, cancelPublish),
-            Group("三维模型 GLB", _exportBuilding, _exportStorey, _cancelExport, openInBlender));
-        pages["管理"] = Page(Group("模型文件", open, save, saveAs),
+            Group("三维模型 GLB", _exportBuilding, _exportStorey, _cancelExport, _blenderLog, openInBlender));
+        pages["管理"] = Page(Group("模型文件", modelManager, newModel, open, save, saveAs),
             Group("构件资源", Action("图库",()=>_ = OpenComponentLibraryAsync()),Action("构件校验",()=>_ = new ComponentSourceInspectionWindow().ShowDialog(this))),
             Group("项目设置", Action("楼层设置", () => _ = OpenStoreySettingsAsync()),
                 Action("系统设置", () => _ = OpenSystemSettingsAsync())));
@@ -880,7 +893,7 @@ internal sealed partial class ProbeWindow : Window
                     button.BorderBrush = new SolidColorBrush(Color.Parse("#38556E"));
                     button.BorderThickness = inRibbon ? new Thickness(0) : new Thickness(1);
                     button.CornerRadius = new CornerRadius(4);
-                    if (inRibbon && button.Content is "画墙")
+                    if (inRibbon && button.Content is "墙体")
                     {
                         button.MinWidth = 78;
                         button.BorderBrush = new SolidColorBrush(Color.Parse("#4B81AE"));
@@ -1047,7 +1060,8 @@ internal sealed partial class ProbeWindow : Window
                 {
                     // Do not replace a model another process created after the existence check.
                     if (!File.Exists(path))
-                        BuildingModelJson.SaveModel(path, SampleModelFactory.CreateEmptyModel(name));
+                        try {BuildingModelProjectWorkflow.CreateNew(path, BuildingModelProjectWorkflow.Empty(name));}
+                        catch(IOException) when(File.Exists(path)) { }
                 });
             }
             catch (Exception ex)
@@ -1063,6 +1077,10 @@ internal sealed partial class ProbeWindow : Window
     {
         "选择" or "选择 Q" => ("mouse-pointer-2", "Q"),
         "画墙" => ("wall-plan", "WA"),
+        "墙体" => ("wall-plan", "WA"),
+        "弧墙" => ("wall-plan", "AW"),
+        "圆角" => ("rotate-ccw", "F"),
+        "圆弧边" => ("rotate-ccw", "A"),
         "门窗" => ("columns-2", "MM"),
         "楼板" => ("layers", null),
         "绘制楼板" => ("slab-outline", "SL"),
@@ -1094,6 +1112,8 @@ internal sealed partial class ProbeWindow : Window
         "轴网编辑" => ("grid-3x3", "AX"),
         "系统设置" => ("panel-top", "OPTIONS"),
         "打开模型" => ("folder-open", "Ctrl+O"),
+        "模型管理" => ("layers", "JZGL"),
+        "新建模型" => ("file-plus", "Ctrl+N"),
         "保存" => ("save", "Ctrl+S"),
         "另存为" => ("file-plus", "Ctrl+Shift+S"),
         "生成 CAD 视图" => ("file-axis-3d", "PV"),
@@ -1101,6 +1121,7 @@ internal sealed partial class ProbeWindow : Window
         "导出整栋" => ("box", "EG"),
         "导出当前楼层" => ("layers", "EF"),
         "取消导出" => ("undo-2", null),
+        "Blender 日志" => ("folder-open", null),
         "取消生成" => ("undo-2", null),
         "视图复位" => ("maximize", "Home"),
         "聚焦所选" => ("maximize", "Z"),
@@ -1222,11 +1243,12 @@ internal sealed partial class ProbeWindow : Window
 
     private void UpdateTitle()
     {
-        Title = $"万落建筑模型 [{ReleaseRevision}] · {(_filePath == null ? "未命名样例" : Path.GetFileName(_filePath))}{(HasChanges ? " *" : "")}";
+        Title = $"万落建筑模型 [{ReleaseRevision}] · {_session.Model.Name}{(_filePath == null ? " · 未保存" : "")}{(HasChanges ? " *" : "")}";
     }
 
     private async Task OpenModelAsync()
     {
+        if(_loadingModel||_savingModel||_modelCommandBusy||_cadImportBusy||_storeyRequestBusy)return;
         if (!await ConfirmSavedAsync()) return;
         var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
@@ -1242,7 +1264,12 @@ internal sealed partial class ProbeWindow : Window
 
     private async Task<bool> LoadModelAsync(string path)
     {
-        if (_cadImportBusy) { _status.Text = "正在生成 CAD 登记模型，请稍后打开其他模型。"; return false; }
+        if (_cadImportBusy || _storeyRequestBusy || _loadingModel || _savingModel) { _status.Text = "正在更新模型，请稍后打开其他模型。"; return false; }
+        if(StudioLaunch.HasLiveSession(path)&&!StudioLaunch.IsCurrentSession(path))
+        { _status.Text="此模型已在其他窗口打开，请通过模型管理激活该窗口。";return false; }
+        _loadingModel=true;
+        var loadingContent=Content as Control;var loadingEnabled=loadingContent?.IsEnabled??true;
+        if(loadingContent!=null)loadingContent.IsEnabled=false;
         var generation = ++_sceneGeneration;
         _status.Text = "正在后台打开模型…";
         try
@@ -1257,16 +1284,19 @@ internal sealed partial class ProbeWindow : Window
                 return (session, scene: ModelViewport.PrepareScene(BuildingVolumeBuilder.Build(session.Model)));
             });
             if (generation != _sceneGeneration) return false;
+            StudioLaunch.RegisterSession(path);
+            CancelActiveCommand();
             _session = loaded.session;
             _hiddenVisualIds.Clear();_frozenVisualIds.Clear();_isolatedBrowserKey=null;
             _viewport.SetViewState(Array.Empty<string>(),Array.Empty<string>());
-            if (_filePath != null) StudioLaunch.RemoveSession(_filePath);
+            if (_filePath != null&&!string.Equals(_filePath,path,StringComparison.OrdinalIgnoreCase)) StudioLaunch.RemoveSession(_filePath);
             _filePath = path;
             _cadRequestSeen = null;
+            await ReloadUnderlaysAsync();
             _cadRequestStamp = 0;
             StudioLaunch.RegisterSession(path);
             _savedJson = BuildingModelJson.ToJson(_session.Model);
-            StudioLaunch.RememberActiveModel(Program.ProjectFolder, path);
+            RememberCurrentModel();
             _viewport.SetScene(loaded.scene);
             _sceneModel=_session.Model;
             _viewport.ResetView();
@@ -1276,7 +1306,7 @@ internal sealed partial class ProbeWindow : Window
             SelectById(_items.FirstOrDefault()?.Id);
             RefreshHistoryButtons();
             UpdateTitle();
-            _status.Text = "已打开 " + path;
+            _status.Text = "已打开 " + _session.Model.Name+" · "+path+_modelManagementWarning;
             return true;
         }
         catch (Exception ex)
@@ -1285,11 +1315,16 @@ internal sealed partial class ProbeWindow : Window
             if (Program.Smoke) Console.Error.WriteLine(_status.Text);
             return false;
         }
+        finally { _loadingModel=false;if(loadingContent!=null)loadingContent.IsEnabled=loadingEnabled; }
     }
 
     private async Task ReceiveCadGenerationAsync()
     {
-        if (_cadImportBusy || _filePath == null || !StudioLaunch.IsCurrentSession(_filePath)) return;
+        await ReceiveModelFileRequestAsync();
+        if(_modelCommandBusy||_modelManagerOpen||_modelNameDialogOpen||_loadingModel||_savingModel||OwnedWindows.Any(w=>w.IsVisible))return;
+        await ReloadUnderlaysAsync();
+        await ReceiveCadStoreysAsync();
+        if (_cadImportBusy || _storeyRequestBusy || _filePath == null || !StudioLaunch.IsCurrentSession(_filePath)) return;
         var path = _filePath;
         var requestPath = CadModelGenerationRequest.FilePath(path);
         if (!File.Exists(requestPath)) return;
@@ -1330,7 +1365,21 @@ internal sealed partial class ProbeWindow : Window
 
     private async Task<bool> SaveModelAsync(bool saveAs)
     {
-        if (_cadImportBusy && saveAs) { _status.Text = "正在生成 CAD 登记模型，请稍后另存。"; return false; }
+        if(_savingModel||_loadingModel)return false;
+        _savingModel=true;
+        try { return await SaveModelCoreAsync(saveAs); }
+        finally { _savingModel=false; }
+    }
+    private async Task<bool> SaveModelCoreAsync(bool saveAs)
+    {
+        if ((_cadImportBusy || _storeyRequestBusy) && saveAs) { _status.Text = "正在更新 CAD 登记模型，请稍后另存。"; return false; }
+        if(saveAs&&ModelProject!=null)
+        {
+            // The copy loader must run after saving has released its guard.
+            _savingModel=false;
+            try {return await SaveManagedCopyAsync(this);}catch(Exception ex){_status.Text="另存失败："+ex.Message;return false;}
+            finally{_savingModel=true;}
+        }
         var path = saveAs ? null : _filePath;
         if (path == null)
         {
@@ -1347,16 +1396,18 @@ internal sealed partial class ProbeWindow : Window
         }
         try
         {
+            if(StudioLaunch.HasLiveSession(path)&&!StudioLaunch.IsCurrentSession(path))throw new IOException("此文件正由其他模型窗口编辑，不能覆盖。");
             var snapshotJson = BuildingModelJson.ToJson(_session.Model);
             await Task.Run(() => BuildingModelJson.SaveModel(path, BuildingModelJson.FromJson(snapshotJson)));
             if (_filePath != null && _filePath != path) StudioLaunch.RemoveSession(_filePath);
             _filePath = path;
             StudioLaunch.RegisterSession(path);
+            await ReloadUnderlaysAsync();
             _savedJson = snapshotJson;
-            StudioLaunch.RememberActiveModel(Program.ProjectFolder, path);
+            RememberCurrentModel();
             UpdateTitle();
             var current = BuildingModelJson.ToJson(_session.Model) == snapshotJson;
-            _status.Text = current ? "已保存 " + path : "保存期间模型又有修改；当前版本仍需保存。";
+            _status.Text = (current ? "已保存 " + path : "保存期间模型又有修改；当前版本仍需保存。")+_modelManagementWarning;
             return current;
         }
         catch (Exception ex) { _status.Text = "保存失败：" + ex.Message; return false; }
@@ -1395,7 +1446,11 @@ internal sealed partial class ProbeWindow : Window
             var result = await Task.Run(() => BuildingModelGlbExporter.Export(
                 BuildingModelJson.FromJson(snapshot), path, storey?.Id, cancellation.Token));
             _status.Text = $"已导出 {result.StoreyCount} 层、{result.ElementCount} 个构件 → {path}";
-            if (shouldOpenBlender) await OpenExportInBlenderAsync(path);
+            if (shouldOpenBlender)
+            {
+                _cancelExport.Content = "取消打开";
+                await OpenExportInBlenderAsync(path, cancellation.Token);
+            }
         }
         catch (OperationCanceledException) { _status.Text = "三维模型导出已取消。"; }
         catch (Exception ex) { _status.Text = "三维模型导出失败：" + ex.Message; }
@@ -1405,11 +1460,12 @@ internal sealed partial class ProbeWindow : Window
             _exportCancellation = null;
             cancellation?.Dispose();
             _cancelExport.IsEnabled = false;
+            _cancelExport.Content = "取消导出";
             _exportBuilding.IsEnabled = _exportStorey.IsEnabled = true;
         }
     }
 
-    private async Task OpenExportInBlenderAsync(string path)
+    private async Task OpenExportInBlenderAsync(string path, CancellationToken cancellation)
     {
         try
         {
@@ -1427,19 +1483,21 @@ internal sealed partial class ProbeWindow : Window
             }
             var script = Path.Combine(AppContext.BaseDirectory, "Resources", "Blender", "OpenGlb.py");
             if (!File.Exists(script)) throw new FileNotFoundException("缺少 Blender 导入脚本。", script);
-            var start = new ProcessStartInfo(executable) { UseShellExecute = false,
-                WorkingDirectory = Path.GetDirectoryName(executable)! };
-            start.ArgumentList.Add("--python");
-            start.ArgumentList.Add(script);
-            start.ArgumentList.Add("--");
-            start.ArgumentList.Add(Path.GetFullPath(path));
-            using var process = Process.Start(start);
-            if (process == null) throw new InvalidOperationException("Blender 未启动。");
+            var progress = new Progress<BlenderLaunchProgress>(update =>
+            {
+                _status.Text = update.Message;
+                _lastBlenderRun = update.RunDirectory;
+                _blenderLog.IsEnabled = true;
+                ToolTip.SetTip(_blenderLog, update.RunDirectory);
+            });
+            var runRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "WanLuo", "BuildingModel", "BlenderRuns");
+            await BlenderLaunchService.OpenAsync(executable, path, script, runRoot, progress, cancellation);
             _blender.ExecutablePath = executable;
             try { _blender.Save(); }
             catch (Exception ex) { _status.Text += "；程序路径未记住：" + ex.Message; }
-            _status.Text += "；已启动 Blender 导入模型。";
         }
+        catch (OperationCanceledException) { _status.Text = "GLB 已保存；已取消 Blender 自动打开。"; }
         catch (Exception ex) { _status.Text += "；文件已导出，Blender 启动失败：" + ex.Message; }
     }
 
@@ -1522,6 +1580,7 @@ internal sealed partial class ProbeWindow : Window
             cancellation.Token.ThrowIfCancellationRequested();
             var oldBackup = StudioLaunch.CommitStagedViews(modelFolder, staging);
             staging = null;
+            RememberCurrentModel();
             if (markForCad)
                 _status.Text = $"已生成 {result.views.Count} 张视图，待落图 {chosen.Length} 张；回到 CAD 执行 LTTZ。";
             else _status.Text = $"已生成 {result.views.Count} 张 CAD 视图 → {viewsFolder}";
@@ -1543,7 +1602,7 @@ internal sealed partial class ProbeWindow : Window
         }
     }
 
-    private async Task<bool> ConfirmSavedAsync()
+    private async Task<bool> ConfirmSavedAsync(Window? owner=null)
     {
         if (!HasChanges) return true;
         var dialog = new Window
@@ -1563,14 +1622,14 @@ internal sealed partial class ProbeWindow : Window
         }
         content.Children.Add(actions);
         dialog.Content = content;
-        var result = await dialog.ShowDialog<string?>(this);
+        var result = await dialog.ShowDialog<string?>(owner??this);
         if (result == "discard") return true;
         return result == "save" && await SaveModelAsync(false);
     }
 
     private async void OnClosing(object? sender, CancelEventArgs e)
     {
-        if (_cadImportBusy) { e.Cancel = true; _status.Text = "正在生成登记模型，请稍后关闭。"; return; }
+        if (_cadImportBusy || _storeyRequestBusy || _modelCommandBusy || _loadingModel || _savingModel || _modelManagerOpen) { e.Cancel = true; _status.Text = "正在更新模型，请稍后关闭。"; return; }
         if (_closeConfirmed || !HasChanges) return;
         e.Cancel = true;
         if (await ConfirmSavedAsync())
@@ -1825,9 +1884,10 @@ internal sealed partial class ProbeWindow : Window
         if(tool!=PlanTool.Opening)_planCanvas.SetOpeningPlacementType(null);
         foreach (var entry in _planToolButtons)
             entry.Value.Background = new SolidColorBrush(Color.Parse(
-                entry.Key == tool ? "#1768A7" : "#20364A"));
+                entry.Key == tool || entry.Key==PlanTool.Wall && tool==PlanTool.ArcWall ? "#1768A7" : "#20364A"));
         _status.Text = tool == PlanTool.Wall
             ? "画墙 WA：点起点，指向方向后可直接输入长度，空格/回车确认，Esc 退出。"
+            : tool==PlanTool.ArcWall ? "弧墙 AW：指定起点、终点、弧线经过点；Esc 退出。"
             : tool == PlanTool.Select ? "选择 Q：点击墙或门窗选择构件。"
             : "请点选宿主墙上的位置。";
         _planCanvas.Focus();
@@ -1869,6 +1929,10 @@ internal sealed partial class ProbeWindow : Window
     private void ExecuteCommand(string? input)
     {
         var command = input?.Trim() ?? "";
+        if(_planCanvas.Tool==PlanTool.Fillet&&ModelCommandCatalog.TryLength(command,out var radius))
+        {_planCanvas.FilletRadius=radius;_status.Text="圆角半径："+radius+" mm；继续点选，Esc 退出。";_planCanvas.Focus();return;}
+        if(command.StartsWith("F ",StringComparison.OrdinalIgnoreCase)&&TryNumber(command.Substring(2),out var filletRadius))
+        {_ = BeginFilletAsync(filletRadius);return;}
         if (_workspaces.SelectedIndex == 1 && _planCanvas.HasWallStart
             && ModelCommandCatalog.TryPolarLength(command, out var polarLength, out var angleDegrees))
         {
@@ -1902,6 +1966,9 @@ internal sealed partial class ProbeWindow : Window
         { SetPolar(true, polarStep); return; }
         switch (command.ToUpperInvariant())
         {
+            case "AW": _wallDrawingTask=OpenWallDrawingAsync(true);return;
+            case "A" when _planCanvas.IsContourTool: _planCanvas.BeginContourArc();return;
+            case "L" when _planCanvas.IsContourTool: _planCanvas.EndContourArc();return;
             case "SL": BeginSlabTool(PlanTool.Slab); return;
             case "CL": BeginStructureTool(PlanTool.Column); return;
             case "BM": BeginStructureTool(PlanTool.Beam); return;
@@ -1913,6 +1980,7 @@ internal sealed partial class ProbeWindow : Window
             case "DR": _ = OpenOpeningPlacementAsync("门"); return;
             case "WN": _ = OpenOpeningPlacementAsync("窗"); return;
             case "LS": _ = OpenStoreySettingsAsync(); return;
+            case "JZGL": _ = ManageModelsAsync(); return;
             case "WLASSETCHECK": _ = new ComponentSourceInspectionWindow().ShowDialog(this); return;
             case "WLLIBRARY": _ = OpenComponentLibraryAsync(); return;
             case "AX": BeginAxisEditing(); return;
@@ -1930,8 +1998,7 @@ internal sealed partial class ProbeWindow : Window
         {
             case ModelCommandKind.Opening: _ = OpenOpeningPlacementAsync(); break;
             case ModelCommandKind.Wall:
-                _workspaces.SelectedIndex = 1;
-                SetPlanTool(PlanTool.Wall); break;
+                _wallDrawingTask=OpenWallDrawingAsync(); break;
             case ModelCommandKind.Move: BeginMove(false); break;
             case ModelCommandKind.Copy: BeginMove(true); break;
             case ModelCommandKind.Polar:
@@ -1951,7 +2018,7 @@ internal sealed partial class ProbeWindow : Window
             case ModelCommandKind.Mirror:
                 _status.Text = "MI 镜像尚未实现；当前模型不会被修改。"; break;
             case ModelCommandKind.Fillet:
-                _status.Text = "F 圆角尚未实现；当前模型不会被修改。"; break;
+                _ = BeginFilletAsync(); break;
             default:
                 _status.Text = string.IsNullOrWhiteSpace(input) ? "请输入命令。"
                     : "未知命令：" + input.Trim(); break;
@@ -2044,6 +2111,8 @@ internal sealed partial class ProbeWindow : Window
         }
         if (e.KeyModifiers.HasFlag(KeyModifiers.Control))
         {
+            if (e.Key == Key.N)
+            { e.Handled = true; _ = NewModelAsync(); return; }
             if (e.Key == Key.O)
             { e.Handled = true; _ = OpenModelAsync(); return; }
             if (e.Key == Key.S)
@@ -2208,9 +2277,10 @@ internal sealed partial class ProbeWindow : Window
         var wall = _session.Model.Walls.FirstOrDefault(x => x.Id == _selectedId);
         if (wall != null)
         {
-            var length = Math.Sqrt(Math.Pow(wall.X2 - wall.X1, 2) + Math.Pow(wall.Y2 - wall.Y1, 2));
+            var length = CurveGeometry.ForWall(wall).Length;
             _properties.Children.Add(new TextBlock { Text = $"墙 {wall.Code} · {_session.Model.FindStorey(wall.StoreyId)?.Name} · 墙高 0 表示随楼层" });
-            var lengthField = AddNumberField("墙长（mm）", length);
+            if(Math.Abs(wall.Bulge)>1e-10) _properties.Children.Add(new TextBlock {Text="弧墙 · 半径 "+Mm(CurveGeometry.ForWall(wall).Radius)+" mm"});
+            var lengthField = AddNumberField(Math.Abs(wall.Bulge)>1e-10?"弧长（mm）":"墙长（mm）", length);
             var bodyOffset = WallReferenceGeometry.BodyOffset(wall);
             var leftField = AddNumberField("轴线左侧墙厚（mm）", wall.Thickness / 2d + bodyOffset);
             var rightField = AddNumberField("轴线右侧墙厚（mm）", wall.Thickness / 2d - bodyOffset);
@@ -2392,11 +2462,20 @@ internal sealed partial class ProbeWindow : Window
 
     private async Task OpenStoreySettingsAsync()
     {
-        var dialog = new StoreySettingsWindow(_session.Model);
-        if (!await dialog.ShowDialog<bool>(this)) return;
-        if (_session.TryReplaceStoreys(dialog.ResultStoreys, out var error, allowContentChanges: true))
-            await RefreshModelAsync("楼层已更新");
-        else _status.Text = error;
+        if(_storeyRequestBusy||_cadImportBusy)return;
+        _storeyDialogOpen=true;
+        try
+        {
+            var dialog = new StoreySettingsWindow(_session.Model,saveToFile:_filePath!=null);
+            if (!await dialog.ShowDialog<bool>(this)) return;
+            if (_session.TryReplaceStoreys(dialog.ResultStoreys, out var error, allowContentChanges: true))
+            {
+                await RefreshModelAsync("楼层已更新");
+                if(_filePath!=null)await SaveModelAsync(false);
+            }
+            else _status.Text = error;
+        }
+        finally{_storeyDialogOpen=false;}
     }
 
     private void RefreshHistoryButtons()
@@ -2495,6 +2574,13 @@ internal sealed partial class ProbeWindow : Window
             if(Program.ComponentSourceCheck){try{await RunComponentSourceCheckAsync();}catch(Exception ex){Console.WriteLine("COMPONENT_SOURCE_UI_FAILED "+ex);slabSuccess=false;}}
             if(Program.ComponentPackageCheck){try{await RunComponentPackageCheckAsync();}catch(Exception ex){Console.WriteLine("COMPONENT_PACKAGE_UI_FAILED "+ex);slabSuccess=false;}}
             if(Program.StructureCheck){try{await RunStructureCheckAsync();}catch(Exception ex){Console.WriteLine("STRUCTURE_FAILED "+ex);slabSuccess=false;}}
+            if(Program.UnderlayCheck){try{await RunUnderlayCheckAsync();}catch(Exception ex){Console.WriteLine("CAD_UNDERLAY_UI_FAILED "+ex);slabSuccess=false;}}
+            if(Program.CurvesCheck){try{await RunCurvesCheckAsync();}catch(Exception ex){Console.WriteLine("CURVE_UI_FAILED "+ex);slabSuccess=false;}}
+            if(Program.WallDrawingCheck){try{await RunWallDrawingCheckAsync();}catch(Exception ex){Console.WriteLine("WALL_DRAWING_UI_FAILED "+ex);slabSuccess=false;}}
+            if(Program.OpeningEditorInteractionCheck){try{await RunOpeningEditorInteractionCheckAsync();}catch(Exception ex){Console.WriteLine("OPENING_EDITOR_INTERACTION_FAILED "+ex);slabSuccess=false;}}
+            if(Program.ProjectWorkflowCheck){try{await RunProjectWorkflowCheckAsync();}catch(Exception ex){Console.WriteLine("MODEL_PROJECT_STUDIO_UI_FAILED "+ex);slabSuccess=false;}}
+            if(Program.ModelManagementCheck){try{await RunModelManagementCheckAsync();}catch(Exception ex){Console.WriteLine("MODEL_MANAGEMENT_STUDIO_FAILED "+ex);_modelManagerWindow?.Close();_modelManagerOpen=false;slabSuccess=false;}}
+            if(Program.ElevationStyleCheck){try{RunElevationStyleRasterCheck();}catch(Exception ex){Console.WriteLine("ELEVATION_STYLE_PIXELS_FAILED "+ex);slabSuccess=false;}}
             if(Program.BrowserCheck){try{await RunBrowserStateCheckAsync();}catch(Exception ex){Console.WriteLine("BROWSER_STATE_FAILED "+ex);slabSuccess=false;}}
             if(Program.ParameterCheck)slabSuccess &= await RunParameterPreviewCheckAsync();
             if(Program.ParameterPerfCheck)slabSuccess &= await RunParameterPerfCheckAsync();
@@ -2546,8 +2632,9 @@ internal sealed partial class ProbeWindow : Window
                 : _viewport.FrameRendered && (hit != null
                     || (Program.SnapshotCamera.HasValue && Program.SnapshotPath != null));
             if (Program.GizmoCheck) success &= RunGizmoSmokeCheck() && RunCameraSmokeCheck();
-            if (Program.ShortcutCheck) success &= RunShortcutSmokeCheck();
+            if (Program.ShortcutCheck) success &= await RunShortcutSmokeCheckAsync();
             success &= slabSuccess;
+            if(Program.ModelManagementCheck)_closeConfirmed=true;
             if(Program.SnapshotDrawing)success &= _drawingCanvas.View!=null;
             if (Program.CadGenerationCheck)
             {
@@ -2561,7 +2648,7 @@ internal sealed partial class ProbeWindow : Window
             Console.WriteLine(success ? (emptyProject ? "AVALONIA_EMPTY_PROJECT_OK " + _filePath
                 : hit != null ? "AVALONIA_GPU_PICK_OK " + hit
                     : "AVALONIA_SNAPSHOT_RENDER_OK center=empty") : "AVALONIA_GPU_OR_PICK_FAILED");
-            if (Program.GizmoCheck || Program.ShortcutCheck || Program.SlabCheck || Program.ParameterCheck || Program.ParameterPerfCheck || Program.DrawingCheck || Program.OpeningEditorCheck || Program.OpeningPlanCheck || Program.ComponentSourceCheck || Program.ComponentPackageCheck || Program.StoreyCheck || Program.ZoomCheck || Program.StructureCheck || Program.AxisCheck) _closeConfirmed = true;
+            if (Program.OpeningEditorInteractionCheck || Program.WallDrawingCheck || Program.CurvesCheck || Program.GizmoCheck || Program.ShortcutCheck || Program.SlabCheck || Program.ParameterCheck || Program.ParameterPerfCheck || Program.DrawingCheck || Program.OpeningEditorCheck || Program.OpeningPlanCheck || Program.ComponentSourceCheck || Program.ComponentPackageCheck || Program.StoreyCheck || Program.ZoomCheck || Program.StructureCheck || Program.AxisCheck || Program.UnderlayCheck || Program.ProjectWorkflowCheck) _closeConfirmed = true;
             Close();
         };
         if (IsVisible) timer.Start();
@@ -2651,7 +2738,7 @@ internal sealed partial class ProbeWindow : Window
         return passed;
     }
 
-    private bool RunShortcutSmokeCheck()
+    private async Task<bool> RunShortcutSmokeCheckAsync()
     {
         _workspaces.SelectedIndex = 0;
         _viewport.SelectElement("1F-S");
@@ -2738,7 +2825,12 @@ internal sealed partial class ProbeWindow : Window
         _viewport.RaiseEvent(new KeyEventArgs { RoutedEvent = KeyDownEvent, Key = Key.W });
         _commandInput.Text += "A";
         _commandInput.RaiseEvent(new KeyEventArgs { RoutedEvent = KeyDownEvent, Key = Key.Space });
-        var wallStarted = _workspaces.SelectedIndex == 1 && _planCanvas.Tool == PlanTool.Wall;
+        await Task.Delay(80);
+        var wallWindow=_wallDrawingWindow;
+        var wallDialogOpened=wallWindow!=null;
+        if(wallWindow!=null){wallWindow.Choices.SelectedIndex=0;wallWindow.Confirm();}
+        if(_wallDrawingTask!=null)await _wallDrawingTask;
+        var wallStarted = wallDialogOpened && _workspaces.SelectedIndex == 1 && _planCanvas.Tool == PlanTool.Wall;
         _planCanvas.RaiseEvent(new KeyEventArgs { RoutedEvent = KeyDownEvent, Key = Key.Escape });
         var wallCancelled = _planCanvas.Tool == PlanTool.Select;
         var doorCommand = ModelCommandCatalog.Resolve("mm")==ModelCommandKind.Opening;

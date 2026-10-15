@@ -35,7 +35,9 @@ namespace BatchPdfPublisher.Services
             }
             if (type == "门联窗")
             {
-                item.DivisionPreset = "门联窗"; item.OpeningMode = "双扇平开"; return;
+                if (item.Width >= 2000d) ApplyCombinedDefaults(item);
+                else { item.DivisionPreset = "门联窗"; item.OpeningMode = "双扇平开"; }
+                return;
             }
             if (type == "百叶" || type == "百叶窗" || type == "百叶门")
             {
@@ -79,7 +81,7 @@ namespace BatchPdfPublisher.Services
         {
             if (item == null) return;
             var type = (item.ElevationType ?? string.Empty).Trim();
-            if (type.Contains("门"))
+            if (type.Contains("门") && !IsWindowType(type))
             {
                 item.HasOuterFrame = true;
                 item.HasMullion = true;
@@ -177,6 +179,29 @@ namespace BatchPdfPublisher.Services
             item.CustomColumnWidths = item.CustomRowHeights = null;
         }
 
+        private static void ApplyCombinedDefaults(DoorWindowScheduleItem item)
+        {
+            var width = ClearWidth(item); var height = ClearHeight(item);
+            var doorWidth = Math.Min(1500d, width); var doorHeight = Math.Min(2200d, height);
+            var left = (width - doorWidth) / 2d; var middle = width / 2d; var right = left + doorWidth;
+            var cells = new List<DoorWindowLayoutCell>();
+            FixedSide(0d, left); FixedSide(right, width);
+            cells.Add(new DoorWindowLayoutCell { Left = left, Right = middle, Top = doorHeight, Opening = "左平开", Material = "玻璃", IsDoor = true });
+            cells.Add(new DoorWindowLayoutCell { Left = middle, Right = right, Top = doorHeight, Opening = "右平开", Material = "玻璃", IsDoor = true });
+            if (height > doorHeight)
+                cells.Add(new DoorWindowLayoutCell { Left = left, Right = right, Bottom = doorHeight, Top = height, Opening = "固定", Material = "玻璃" });
+            item.DoorPlacement = "居中"; item.DoorEdgeDistance = 0d;
+            ApplyCustomLayout(item, cells, "双扇平开");
+            void FixedSide(double start, double end)
+            {
+                if (end <= start) return;
+                var count = PanelCount(end - start, 1000d);
+                for (var index = 0; index < count; index++)
+                    cells.Add(new DoorWindowLayoutCell { Left = start + (end-start)*index/count, Right = start + (end-start)*(index+1)/count,
+                        Top = height, Opening = "固定", Material = "玻璃" });
+            }
+        }
+
         private static void AddRow(ICollection<DoorWindowLayoutCell> cells, double width, int count, double bottom, double top, Func<int, string> opening, string material, bool isDoor)
         {
             if (top <= bottom || width <= 0d) return;
@@ -208,14 +233,14 @@ namespace BatchPdfPublisher.Services
         private static string WindowLeafOpening(int index, int count)
         {
             if (count <= 1) return "左平开";
-            return index * 2 < count ? "右平开" : "左平开";
+            return index % 2 == 0 ? "左平开" : "右平开";
         }
 
         private static string DoorLeafOpening(string type, int index, int count)
         {
             if (type == "推拉门") return count <= 1 ? "右推拉" : "双向推拉";
             if (count <= 1) return "左平开";
-            return index * 2 < count ? "右平开" : "左平开";
+            return index % 2 == 0 ? "左平开" : "右平开";
         }
 
         public static string InferAtlas(string code, string type, string note)

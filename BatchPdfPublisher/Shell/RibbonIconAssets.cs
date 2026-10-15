@@ -88,6 +88,16 @@ namespace BatchPdfPublisher.Services
                 images.Add("building_component_library", images["building_opening_types"]);
                 ScaledImages.Add("building_component_library", ScaledImages["building_opening_types"]);
                 SmallImages.Add("building_component_library", SmallImages["building_opening_types"]);
+                foreach (var alias in new Dictionary<string, string>
+                {
+                    { "room_statistics", "cad_table_xlsx" },
+                    { "room_statistics_summary", "catalog" }
+                })
+                {
+                    images.Add(alias.Key, images[alias.Value]);
+                    ScaledImages.Add(alias.Key, ScaledImages[alias.Value]);
+                    SmallImages.Add(alias.Key, SmallImages[alias.Value]);
+                }
                 foreach (var feature in FeatureRegistry.Items)
                     if (!images.ContainsKey(feature.Id))
                         throw new InvalidDataException("功能区缺少图标：" + feature.Id);

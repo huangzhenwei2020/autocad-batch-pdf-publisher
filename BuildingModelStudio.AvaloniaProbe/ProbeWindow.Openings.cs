@@ -8,6 +8,7 @@ internal sealed partial class ProbeWindow
 {
     private bool _openingEditorBusy;
     private int _openingPreviewGeneration;
+    private Func<OpeningEditorWindow,Task>? _openingEditorCheckDriver;
     private async Task OpenOpeningEditorAsync(string? id,bool check=false,bool cancelCheck=false)
     {
         if(_openingEditorBusy || id==null)return;
@@ -21,11 +22,15 @@ internal sealed partial class ProbeWindow
         CancelParameterPreview();_openingEditorBusy=true;
         var original=_session.Model;var restore=_viewport.CurrentScene;var planPreviewActive=false;
         var count=physical.Openings.Count(o=>string.Equals(o.Code,opening.Code,StringComparison.OrdinalIgnoreCase));
-        var window=new OpeningEditorWindow(opening,OpeningConstruction.Resolve(physical,opening),count,original.OpeningTemplates,original.OpeningEditorSnapStep??5);
+        var window=new OpeningEditorWindow(opening,OpeningConstruction.Resolve(physical,opening),count,original.OpeningTemplates,original.OpeningEditorSnapStep??5,
+            _session.GetOpeningSizeLimits(id,false),_session.GetOpeningSizeLimits(id,true));
         window.ConfirmSizeChange=async(type,single)=> {
+            var choice=await ResolveOpeningSizeConflictAsync(window,id,type.Width,type.Height,true,
+                single?"仅当前樘（洞口共用层同步）":$"同编号全部（{count} 樘，含标准层）");
+            if(choice==null)return (null,null);
             var trial=new BuildingModelEditSession(original);
-            if(!trial.TrySetOpeningDefinition(id,type,single,out var error))return (null,error);
-            return (await ResolveOpeningSizeConflictAsync(window,id,type.Width,type.Height),null);
+            if(!trial.TrySetOpeningDefinition(id,type,single,out var error,conflictChoice:choice.Value))return (null,error);
+            return (choice,null);
         };
         window.SizeCodePreview=(width,height)=> {
             if(width==opening.Width&&height==opening.Height)return "编号 "+opening.Code;
@@ -40,6 +45,7 @@ internal sealed partial class ProbeWindow
             return Task.CompletedTask;
         };
         if(check)window.Opened+=async (_,_)=> {try{await window.RunUiCheckAsync(cancelCheck);}catch(Exception ex){checkFailure=ex;window.Close();}};
+        if(_openingEditorCheckDriver!=null)window.Opened+=async(_,_)=>{try{await _openingEditorCheckDriver(window);}catch(Exception ex){checkFailure=ex;window.Close();}};
         var fixedVolume=Task.Run(()=>BuildingVolumeBuilder.Build(original,includeOpeningParts:false));
         window.PreviewChanged+=(type,single)=>_ = PreviewAsync(type,single);
         try {

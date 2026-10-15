@@ -179,6 +179,21 @@ namespace BatchPdfPublisher
             BuildingModelStudioLauncher.Open(document);
         }
 
+        [CommandMethod("JZGL")]
+        public void ManageBuildingModels()
+        {
+            try { CadModelManagementService.Show(Application.DocumentManager.MdiActiveDocument); }
+            catch(System.Exception ex){Application.ShowAlertDialog("模型管理：\n"+ex.Message);}
+        }
+
+        [CommandMethod("WLMODELSQA")]
+        public void CheckBuildingModelManagement()
+        {
+            var document=Application.DocumentManager.MdiActiveDocument;if(document==null)return;
+            try{CadModelManagementService.CheckNative(document);}
+            catch(System.Exception ex){document.Editor.WriteMessage("\nMODEL_MANAGEMENT_NATIVE_FAILED "+ex);}
+        }
+
         [CommandMethod("WLTZPROBE")]
         public void InspectNativeBuildingObjects()
         {
@@ -215,6 +230,18 @@ namespace BatchPdfPublisher
         public void EditCadPlanRegion(){try{CadPlanRegionService.Execute(Application.DocumentManager.MdiActiveDocument);}catch(System.Exception ex){Application.DocumentManager.MdiActiveDocument?.Editor.WriteMessage("\n"+ex.Message);}}
         [CommandMethod("WLCADPLANQA")]
         public void CheckCadPlanRegion(){var document=Application.DocumentManager.MdiActiveDocument;if(document==null)return;try{CadPlanRegionService.RunNativeCheck(document);}catch(System.Exception ex){document.Editor.WriteMessage("\nCAD_REGION_NATIVE_FAILED "+ex);}}
+        [CommandMethod("WLCADUNDERLAYQA")]
+        public void CheckCadPlanUnderlay(){var document=Application.DocumentManager.MdiActiveDocument;if(document==null)return;try{CadPlanUnderlayCapture.RunNativeCheck(document);}catch(System.Exception ex){document.Editor.WriteMessage("\nCAD_UNDERLAY_NATIVE_FAILED "+ex);}}
+        [CommandMethod("WLCURVEQA")]
+        public void CheckBuildingCurves(){var document=Application.DocumentManager.MdiActiveDocument;if(document==null)return;try{BuildingModelCadBridge.RunCurveNativeCheck(document);}catch(System.Exception ex){document.Editor.WriteMessage("\nCAD_CURVE_NATIVE_FAILED "+ex);}}
+        [CommandMethod("WLREGISTEREDARCQA")]
+        public void CheckRegisteredArcWalls(){var document=Application.DocumentManager.MdiActiveDocument;if(document==null)return;try{BatchPdfPublisher.Features.BuildingModel.Services.TianzhengBuildingProbeService.RunCurvedWallNativeCheck(document);}catch(System.Exception ex){document.Editor.WriteMessage("\nCAD_REGISTERED_ARC_NATIVE_FAILED "+ex);}}
+        [CommandMethod("WLACTIVEVIEWQA")]
+        public void CheckCurrentModelViews(){var document=Application.DocumentManager.MdiActiveDocument;if(document==null)return;try{BuildingModelCadBridge.RunActiveViewsNativeCheck(document);}catch(System.Exception ex){document.Editor.WriteMessage("\nCAD_ACTIVE_VIEWS_NATIVE_FAILED "+ex);}}
+        [CommandMethod("WLELEVATIONSTYLEQA")]
+        public void CheckElevationPresentation(){var document=Application.DocumentManager.MdiActiveDocument;if(document==null)return;try{BuildingModelCadBridge.RunElevationStyleNativeCheck(document);}catch(System.Exception ex){document.Editor.WriteMessage("\nELEVATION_STYLE_NATIVE_FAILED "+ex);}}
+        [CommandMethod("WLFRAMEQA")]
+        public void CheckFrameTemplateRecovery(){var document=Application.DocumentManager.MdiActiveDocument;if(document==null)return;try{FrameTemplateStore.RunNativeCheck(document);}catch(System.Exception ex){document.Editor.WriteMessage("\nFRAME_TEMPLATE_NATIVE_FAILED "+ex);}}
         [CommandMethod("WLLIBDOORQA")]
         public void CheckLibraryDoorWalls(){var document=Application.DocumentManager.MdiActiveDocument;if(document==null)return;try{CadLibraryDoorPlacement.RunNativeCheck(document);}catch(System.Exception ex){document.Editor.WriteMessage("\nCAD_LIBRARY_WALL_FAILED "+ex);}}
         [CommandMethod("WLLIBWALLSYNC")]
@@ -243,6 +270,21 @@ namespace BatchPdfPublisher
             _lineVisionForm = new LineVisionForm(document);
             _lineVisionForm.FormClosed += (sender, args) => _lineVisionForm = null;
             Application.ShowModelessDialog(_lineVisionForm);
+        }
+
+        [CommandMethod("FJTJ")]
+        [CommandMethod("WLROOMSTAT")]
+        public void RoomStatisticsCommand()
+        {
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document != null) Application.ShowModelessDialog(new TianzhengRoomStatisticsForm(document));
+        }
+
+        [CommandMethod("FJHZ")]
+        public void RoomStatisticsSummaryCommand()
+        {
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document != null) Application.ShowModelessDialog(new TianzhengRoomStatisticsForm(document, true));
         }
 
         [CommandMethod("FJGM")]
@@ -887,9 +929,12 @@ namespace BatchPdfPublisher
             // are supplied non-interactively. Recover the normal AutoCAD UI even
             // if an earlier launcher run was interrupted before restoring FILEDIA.
             try { Application.SetSystemVariable("FILEDIA", 1); } catch { }
-            RibbonService.RefreshNow();
-            MenuService.InstallWhenReady();
-            ShortcutAliasService.Install(null, true);
+            if (!IsCoreConsole)
+            {
+                RibbonService.RefreshNow();
+                MenuService.InstallWhenReady();
+                ShortcutAliasService.Install(null, true);
+            }
             WriteStartupReceipt("BPPSTARTUP");
         }
 

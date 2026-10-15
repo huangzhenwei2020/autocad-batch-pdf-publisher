@@ -13,6 +13,7 @@ namespace BatchPdfPublisher.Models
         { X1 = x1; Y1 = y1; X2 = x2; Y2 = y2; Role = role; }
         public double X1, Y1, X2, Y2;
         public DoorWindowLineRole Role;
+        public string OpeningPathId;
     }
 
     public sealed class DoorWindowCell
@@ -125,7 +126,8 @@ namespace BatchPdfPublisher.Models
                     var sideGeometry = Build(sideItem);
                     var offsetX = onLeft ? -depth : geometry.HoleWidth;
                     foreach (var line in sideGeometry.Lines.Where(line => line.Role != DoorWindowLineRole.Hole))
-                        geometry.Lines.Add(new DoorWindowLineSegment(line.X1 + offsetX, line.Y1 + gap, line.X2 + offsetX, line.Y2 + gap, line.Role));
+                        geometry.Lines.Add(new DoorWindowLineSegment(line.X1 + offsetX, line.Y1 + gap, line.X2 + offsetX, line.Y2 + gap, line.Role)
+                            { OpeningPathId = line.OpeningPathId == null ? null : (onLeft ? "bay-left-" : "bay-right-") + line.OpeningPathId });
                     // 侧窗格也纳入整体门窗的尺寸边界，生成标注时与正面一起连续标注。
                     foreach (var cell in sideGeometry.Cells)
                         geometry.Cells.Add(new DoorWindowCell(cell.Left + offsetX, cell.Bottom + gap, cell.Right + offsetX, cell.Top + gap)
@@ -750,16 +752,22 @@ namespace BatchPdfPublisher.Models
         {
             var hingeX = hingeLeft ? cell.Left : cell.Right; var freeX = hingeLeft ? cell.Right : cell.Left; var middleY = (cell.Bottom + cell.Top) / 2d;
             // Elevation tips point to the physical hinge, not the handle.
-            lines.Add(new DoorWindowLineSegment(freeX, cell.Bottom, hingeX, middleY, DoorWindowLineRole.Opening));
-            lines.Add(new DoorWindowLineSegment(hingeX, middleY, freeX, cell.Top, DoorWindowLineRole.Opening));
+            var path = OpeningPath(cell);
+            lines.Add(new DoorWindowLineSegment(freeX, cell.Bottom, hingeX, middleY, DoorWindowLineRole.Opening) { OpeningPathId = path });
+            lines.Add(new DoorWindowLineSegment(hingeX, middleY, freeX, cell.Top, DoorWindowLineRole.Opening) { OpeningPathId = path });
         }
 
         private static void AddHung(ICollection<DoorWindowLineSegment> lines, DoorWindowCell cell, bool hingeTop)
         {
             var hingeY = hingeTop ? cell.Top : cell.Bottom; var freeY = hingeTop ? cell.Bottom : cell.Top; var middleX = (cell.Left + cell.Right) / 2d;
-            lines.Add(new DoorWindowLineSegment(cell.Left, freeY, middleX, hingeY, DoorWindowLineRole.Opening));
-            lines.Add(new DoorWindowLineSegment(middleX, hingeY, cell.Right, freeY, DoorWindowLineRole.Opening));
+            var path = OpeningPath(cell);
+            lines.Add(new DoorWindowLineSegment(cell.Left, freeY, middleX, hingeY, DoorWindowLineRole.Opening) { OpeningPathId = path });
+            lines.Add(new DoorWindowLineSegment(middleX, hingeY, cell.Right, freeY, DoorWindowLineRole.Opening) { OpeningPathId = path });
         }
+
+        private static string OpeningPath(DoorWindowCell cell) => string.Join(":", new[] { cell.Left, cell.Bottom, cell.Right, cell.Top }
+            .Select(value => value.ToString("R", CultureInfo.InvariantCulture)));
+
 
         private static void AddSlidingArrow(ICollection<DoorWindowLineSegment> lines, DoorWindowCell cell, bool pointsRight, double verticalOffsetFactor = 0d)
         {

@@ -58,6 +58,7 @@ internal static class BuildingModelProjectionTests
             CadDraftingRegression();
             DrawingAnnotationTests.Run();
             DrawingLineworkTests.Run();
+            OpeningElevationStyleTests.Run();
             var model = SampleModelFactory.CreateTwoStoreyHouse();
             SouthElevationShowsOutlineAndOpenings(model);
             ElevationDirectionsAreMirrored(model);
@@ -67,6 +68,7 @@ internal static class BuildingModelProjectionTests
             WallAndOpeningEditUpdatesElevationAndSection();
             VolumeIdentityTests.Run();
             SlabGeometryTests.Run();
+            CurveWallSlabTests.Run();
             BuildingModelEditSessionTests.Run();
             DrawingViewCatalogueTests.Run();
             JsonRoundTripsWithoutLoss(model);

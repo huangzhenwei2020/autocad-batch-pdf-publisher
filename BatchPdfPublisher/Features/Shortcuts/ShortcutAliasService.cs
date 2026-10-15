@@ -42,6 +42,7 @@ namespace BatchPdfPublisher.Services
         {
             document = document ?? Application.DocumentManager.MdiActiveDocument;
             if (document == null) return;
+            if (!document.Editor.IsQuiescent) return;
             if (!force)
             {
                 var now = DateTime.UtcNow;

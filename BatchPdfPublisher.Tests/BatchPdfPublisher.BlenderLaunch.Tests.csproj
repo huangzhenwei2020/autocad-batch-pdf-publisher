@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="BlenderLaunchTests.cs" />
+    <Compile Include="../BuildingModelStudio.AvaloniaProbe/BlenderLaunchService.cs" Link="BlenderLaunchService.cs" />
+    <Compile Include="../BuildingModelStudio.AvaloniaProbe/BlenderProcessGuard.cs" Link="BlenderProcessGuard.cs" />
+  </ItemGroup>
+</Project>

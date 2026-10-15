@@ -846,6 +846,41 @@ internal static class OpeningElevationTests
             StudioLaunch.RemovePending(modelFolder, "sheet-1");
             Assert(StudioLaunch.ReadPending(modelFolder) == null, "落完图后待落图文件应被删掉");
             Assert(StudioLaunch.ListViews(modelFolder).All(entry => !entry.Pending), "落完图后不该再有 ★");
+            BuildingModelJson.SaveModel(Path.Combine(modelFolder, "model.json"), new BuildingModelDocument { Name = "住宅楼" });
+            var activeFolder = Path.Combine(projectFolder, StudioLaunch.ModelFolderName, "当前编辑楼");
+            var activePath = Path.Combine(activeFolder, "model.json");
+            BuildingModelJson.SaveModel(activePath, new BuildingModelDocument { Name = "当前编辑楼" });
+            var activeView = new ViewDocument { Id = sheet.Id, Title = "当前编辑楼图纸", Kind = ViewKind.Sheet };
+            activeView.Lines.Add(new ViewLine { X2 = 7600, Layer = ViewLayers.Cut });
+            var activeViewPath = Path.Combine(activeFolder, StudioLaunch.ViewsFolderName, sheet.Id + ".json");
+            BuildingModelJson.SaveView(activeViewPath, activeView);
+            StudioLaunch.RememberActiveModel(projectFolder, activePath);
+            var source = StudioLaunch.ActiveViewSource(projectFolder, "住宅楼");
+            Assert(source.ModelPath == activePath && source.ModelName == "当前编辑楼"
+                && source.Entries.Count == 1 && source.Entries[0].FilePath == activeViewPath,
+                "落图必须跟随当前编辑模型，不能按项目名称取旧图纸");
+            Assert(BuildingModelJson.LoadView(source.Entries[0].FilePath).Lines[0].X2 == 7600,
+                "同 ID 图纸必须读取当前模型的几何");
+            activeView.Lines[0].X2 = 8800;
+            BuildingModelJson.SaveView(activeViewPath, activeView);
+            Assert(BuildingModelJson.LoadView(StudioLaunch.ActiveViewSource(projectFolder, "住宅楼").Entries[0].FilePath).Lines[0].X2 == 8800,
+                "刷新应读取重新生成的当前模型视图");
+            var emptyPath = Path.Combine(projectFolder, StudioLaunch.ModelFolderName, "未出图楼", "model.json");
+            BuildingModelJson.SaveModel(emptyPath, new BuildingModelDocument());
+            StudioLaunch.RememberActiveModel(projectFolder, emptyPath);
+            Assert(StudioLaunch.ActiveViewSource(projectFolder, "住宅楼").Entries.Count == 0,
+                "当前模型没有视图时不能回退到旧模型");
+            StudioLaunch.RememberActiveModel(projectFolder, Path.Combine(activeFolder, "missing.json"));
+            try { StudioLaunch.ActiveViewSource(projectFolder, "住宅楼"); throw new Exception("失效来源悄悄回退旧模型"); }
+            catch (FileNotFoundException) { }
+            var customPath = Path.Combine(modelFolder, "独立模型.json");
+            BuildingModelJson.SaveModel(customPath, new BuildingModelDocument());
+            StudioLaunch.RememberActiveModel(projectFolder, customPath);
+            try { StudioLaunch.ActiveViewSource(projectFolder, "住宅楼"); throw new Exception("独立 JSON 借用了同目录其他模型的视图"); }
+            catch (InvalidOperationException) { }
+            StudioLaunch.RememberActiveModel(projectFolder, Path.Combine(modelFolder, "model.json"));
+            Assert(StudioLaunch.ActiveViewSource(projectFolder, "当前编辑楼").Entries.Count == 2,
+                "切回原模型应恢复它自己的图纸");
             Console.WriteLine("   启动与取件：参数、发布目录候选、模型目录定位、视图清单（跳过坏文件）、待落图写读清 都符合预期");
         }
         finally { try { Directory.Delete(root, true); } catch { } }
@@ -1219,8 +1254,8 @@ internal static class OpeningElevationTests
         var u = detailed.OriginX;
         var z = detailed.OriginY;
         var detailLines = detailed.Lines.Count(l => l.Layer == ViewLayers.Opening);
-        // 洞口 4 条边 + 11 条做法线（外框内边 6 条、中挺 1 条、开启线 4 段）
-        Assert(detailLines == 15, "门窗线条应为 15 条（洞口 4 + 做法 11），实际 " + detailLines);
+        // Outer edges are not doubled; the two touching lower/upper frame segments become one each.
+        Assert(detailLines == 13, "去重并合并框线后门窗应为 13 条，实际 " + detailLines);
         // 中挺：洞口中间 x=1500 的竖线（两扇都可开启 → 框线并成一条，落在上下框内边之间）
         Assert(HasLine(detailed, 1500d - u, 950d - z, 1500d - u, 2650d - z),
             "缺少中间的分格竖线（x=1500、y=950→2650）");
@@ -1455,6 +1490,14 @@ internal static class OpeningElevationTests
         foreach (var line in view.Lines)
         {
             if (!string.Equals(line.Layer, ViewLayers.Opening, StringComparison.Ordinal)) continue;
+            if(line.OpeningRole=="Frame"||line.OpeningRole=="Mullion"||line.OpeningRole=="SashFrame")
+            {
+                var dx=line.X2-line.X1;var dy=line.Y2-line.Y1;var length=Math.Sqrt(dx*dx+dy*dy);
+                bool Inside(double x,double y)=>length>0&&Math.Abs((x-line.X1)*dy-(y-line.Y1)*dx)/length<Tolerance
+                    &&(x-line.X1)*dx+(y-line.Y1)*dy>=-Tolerance*length
+                    &&(x-line.X1)*dx+(y-line.Y1)*dy<=length*length+Tolerance*length;
+                if(Inside(x1,y1)&&Inside(x2,y2))return true;
+            }
             var forward = Math.Abs(line.X1 - x1) < Tolerance && Math.Abs(line.Y1 - y1) < Tolerance
                 && Math.Abs(line.X2 - x2) < Tolerance && Math.Abs(line.Y2 - y2) < Tolerance;
             var backward = Math.Abs(line.X1 - x2) < Tolerance && Math.Abs(line.Y1 - y2) < Tolerance

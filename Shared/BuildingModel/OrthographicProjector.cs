@@ -43,6 +43,9 @@ namespace BatchPdfPublisher.BuildingModel
             public string Layer;
             public bool IsCut;
             public OpeningModel Opening;
+            public bool OpeningWindow;
+            public List<Rect> WallPriorityMasks;
+            public string ColumnId;
         }
 
         private sealed class Interval
@@ -144,7 +147,7 @@ namespace BatchPdfPublisher.BuildingModel
             foreach (var column in model.Columns ?? new List<ColumnModel>())
             {
                 if (column == null || !Include(includeAll, view.StoreyIds, column.StoreyId)) continue;
-                AddColumn(model, column, frame, isSection, cutProj, view.ViewDepth, rects, cutRects);
+                AddColumn(model, column, frame, isSection, cutProj, view.ViewDepth, rects, cutRects,true);
             }
             foreach(var beam in model.Beams)
             {
@@ -171,12 +174,28 @@ namespace BatchPdfPublisher.BuildingModel
                 AddRoofProfile(model, roof, frame, isSection, cutProj, view.ViewDepth, rects, extraLines);
             }
 
+            // Adjacent height bands of one column must not introduce artificial cap seams.
+            var columnBands=rects.Where(r=>r.ColumnId!=null).GroupBy(r=>r.ColumnId)
+                .ToDictionary(g=>g.Key,g=>g.ToList(),StringComparer.OrdinalIgnoreCase);
+            for(var i=0;i<rects.Count;i++) {
+                var current=rects[i];if(current.ColumnId==null)continue;
+                current.WallPriorityMasks=new List<Rect>(current.WallPriorityMasks ?? new List<Rect>());
+                foreach(var other in columnBands[current.ColumnId]) {
+                    if(Math.Abs(current.Z1-other.Z0)<Epsilon)
+                        current.WallPriorityMasks.Add(new Rect {U0=other.U0,U1=other.U1,Z0=current.Z1,Z1=current.Z1});
+                    if(Math.Abs(current.Z0-other.Z1)<Epsilon)
+                        current.WallPriorityMasks.Add(new Rect {U0=other.U0,U1=other.U1,Z0=current.Z0,Z1=current.Z0});
+                }
+                rects[i]=current;
+            }
             // 近的在前：近的矩形负责把远的边裁掉（剖切矩形最靠前）。
             var nearer = new List<Rect>();
             foreach (var rect in rects.OrderByDescending(r => r.Depth))
             {
                 var count = document.Lines.Count;
-                EmitRectEdges(rect, nearer, document.Lines);
+                EmitRectEdges(rect, rect.WallPriorityMasks==null ? nearer : nearer.Concat(rect.WallPriorityMasks).ToList(), document.Lines);
+                if(rect.Opening!=null)foreach(var line in document.Lines.Skip(count))
+                {line.OpeningRole="Hole";line.OpeningUsesWindowAppearance=rect.OpeningWindow;line.LineType="DASHED";}
                 if(document.Lines.Count>count) {
                     var area=new ViewStrokeArea {Id="profile-"+document.StrokeAreas.Count,
                         Contours=new List<List<PointModel>> {new List<PointModel> {
@@ -184,6 +203,7 @@ namespace BatchPdfPublisher.BuildingModel
                             new PointModel(rect.U1,rect.Z1),new PointModel(rect.U0,rect.Z1)}}};
                     document.StrokeAreas.Add(area);
                     foreach(var line in document.Lines.Skip(count))line.StrokeAreaId=area.Id;
+                    if(rect.Opening!=null)foreach(var detail in openingDetails.Where(d=>d.OpeningId==rect.Opening.Id))detail.OutlineAreaId=area.Id;
                 }
                 if (rect.Opening != null && document.Lines.Count > count)
                 {
@@ -191,17 +211,18 @@ namespace BatchPdfPublisher.BuildingModel
                     document.Anchors.Add(new ViewAnchor { Kind = "opening", ElementId = rect.Opening.Id,
                         X1 = rect.U0, Y1 = rect.Z0, X2 = rect.U1, Y2 = rect.Z1 });
                 }
-                nearer.Add(rect);
+                nearer.AddRange(ColumnOcclusionRects(rect));
             }
             foreach (var cut in cutRects) document.Hatches.Add(CreateHatch(cut, view));
             document.Lines.AddRange(extraLines);      // 剖面上的窗台线/窗顶线（在剖切面之内，不必再遮挡）
 
             // 门窗分格/开启线：同样要被前面的墙挡住（用同一批矩形做遮挡裁剪）
-            foreach (var detail in openingDetails) EmitOpeningDetail(detail, rects, document.Lines);
+            foreach (var detail in openingDetails) EmitOpeningDetail(detail, nearer, document.Lines);
 
             AddLevelAnnotations(model, view, document);
             AddDimensions(model, view, document);
             AddTitle(document, view);
+            if(view.Kind==ViewKind.Elevation)document.Lines=OpeningElevationAdapter.CleanLines(document.Lines);
             Normalize(document);
             return document;
         }
@@ -499,7 +520,9 @@ namespace BatchPdfPublisher.BuildingModel
             for (var index = 0; index < rows.Count; index++)
             {
                 var row = rows[index];
-                var type = library == null ? null : library.FindType(row.Code);
+                var instance=model.Openings.FirstOrDefault(o=>string.Equals(o.Code,row.Code,StringComparison.OrdinalIgnoreCase)
+                    && Math.Abs(o.Width-row.Width)<.01 && Math.Abs(o.Height-row.Height)<.01);
+                var type = instance==null ? library?.FindType(row.Code) : OpeningConstruction.Resolve(model,instance,library);
                 var cells = new[]
                 {
                     row.Code,
@@ -543,14 +566,20 @@ namespace BatchPdfPublisher.BuildingModel
                 var opening = groups[index].First();
                 var x = index % 3 * stepX; var y = -(index / 3) * stepY;
                 DoorWindowElevationGeometry geometry;
-                try { geometry = DoorWindowElevationGeometryBuilder.Build(OpeningElevationAdapter.ToScheduleItem(opening,
-                    OpeningElevationAdapter.Resolve(library, opening), opening.Width, opening.Height)); }
+                DoorWindowScheduleItem item;
+                try {item=OpeningElevationAdapter.ToScheduleItem(opening,OpeningConstruction.Resolve(model,opening,library),opening.Width,opening.Height);
+                    geometry = DoorWindowElevationGeometryBuilder.Build(item); }
                 catch (Exception ex) {
                     document.Warnings.Add(opening.Code + "：门窗做法无效，已采用默认做法。" + ex.Message);
-                    geometry = DoorWindowElevationGeometryBuilder.Build(OpeningElevationAdapter.ToScheduleItem(opening,null,opening.Width,opening.Height));
+                    item=OpeningElevationAdapter.ToScheduleItem(opening,null,opening.Width,opening.Height);
+                    geometry = DoorWindowElevationGeometryBuilder.Build(item);
                 }
                 foreach (var line in geometry.Lines)
-                    document.Lines.Add(new ViewLine { Layer = ViewLayers.Opening, X1 = x+line.X1, Y1 = y+line.Y1, X2 = x+line.X2, Y2 = y+line.Y2 });
+                {
+                    var detailLine=OpeningElevationAdapter.ElevationLine(line,OpeningElevationAdapter.UsesWindowAppearance(item),x,y);
+                    if(detailLine.OpeningArcId!=null)detailLine.OpeningArcId=opening.Id+"-"+detailLine.OpeningArcId;
+                    document.Lines.Add(detailLine);
+                }
                 document.Texts.Add(new ViewText { Layer = ViewLayers.Opening, Text = (opening.Code ?? "未编号") + " · " + groups[index].Count() + " 樘",
                     X = x, Y = y-750, Height = 250 });
                 document.Dimensions.Add(new ViewDimension { Layer = ViewLayers.Dimension, Vertical = false,
@@ -558,6 +587,7 @@ namespace BatchPdfPublisher.BuildingModel
                 document.Dimensions.Add(new ViewDimension { Layer = ViewLayers.Dimension, Vertical = true,
                     From = y, To = y+opening.Height, AnchorPosition = x+opening.Width, LinePosition = x+opening.Width+400 });
             }
+            document.Lines=OpeningElevationAdapter.CleanLines(document.Lines);
             Normalize(document);
             return document;
         }
@@ -654,6 +684,7 @@ namespace BatchPdfPublisher.BuildingModel
                     .Select(o => OpeningEdges(wall, o))
                     .OrderBy(e => e[0])
                     .ToList();
+                if(Math.Abs(wall.Bulge)>1e-10) { AddCurvedPlanWall(document,wall);continue; }
                 var length = WallLength(wall);
                 var cursor = 0d;
                 foreach (var span in spans)
@@ -664,12 +695,13 @@ namespace BatchPdfPublisher.BuildingModel
                 if (length - cursor > 1d) AddPlanWallSegment(document, wall, cursor, length, !joinedIds.Contains(wall.Id));
             }
 
+            RemoveTangentCaps(document,walls);
             // 门窗图例
             foreach (var opening in openings)
             {
                 var host = FindHostWall(model, opening);
                 if (host == null) continue;
-                AddOpeningPlanSymbol(document, host, opening,OpeningConstruction.Library(model,openingLibrary).FindType(OpeningConstruction.EffectiveCode(opening)));
+                AddOpeningPlanSymbol(document, host, opening,OpeningConstruction.Resolve(model,opening,openingLibrary));
                 var first = PlanPoint(host, opening.Offset - opening.Width / 2d);
                 var second = PlanPoint(host, opening.Offset + opening.Width / 2d);
                 var pad = (host.Thickness > 0.5d ? host.Thickness : 200d) / 2d;
@@ -688,7 +720,7 @@ namespace BatchPdfPublisher.BuildingModel
             foreach (var column in model.Columns ?? new List<ColumnModel>())
             {
                 if (column == null || !string.Equals(column.StoreyId, storey.Id, StringComparison.OrdinalIgnoreCase)) continue;
-                AddStructuralOutline(document,StructuralGeometry.ColumnOutline(column),ViewLayers.Cut);
+                AddDrawingColumnOutline(document,model,column,storey.Elevation+cutHeight);
             }
             foreach(var beam in model.Beams.Where(b=>b.StoreyId==storey.Id))
                 AddStructuralOutline(document,StructuralGeometry.BeamOutline(beam),ViewLayers.Elevation);
@@ -698,15 +730,16 @@ namespace BatchPdfPublisher.BuildingModel
             {
                 if (slab.Outline == null || slab.Outline.Count < 3) continue;
                 var geometry = SlabGeometry.Build(slab);
-                var area=new ViewStrokeArea {Id="slab-"+slab.Id,Contours=geometry.Contours
-                    .Select(c=>c.Select(p=>new PointModel(p.X,p.Y)).ToList()).ToList()};
+                var area=new ViewStrokeArea {Id="slab-"+slab.Id,Contours=new[] {slab.Outline}.Concat(slab.Openings.Select(o=>o.Outline))
+                    .Select(c=>c.Select(p=>new PointModel(p.X,p.Y) {Bulge=p.Bulge}).ToList()).ToList()};
                 document.StrokeAreas.Add(area);
                 var firstLine=document.Lines.Count;
-                foreach (var contour in geometry.Contours)
+                foreach (var contour in new[] {slab.Outline}.Concat(slab.Openings.Select(o=>o.Outline)))
                     for (var i = 0; i < contour.Count; i++)
                     {
-                        var a = contour[i]; var b = contour[(i + 1) % contour.Count];
-                        AddVisibleSlabEdge(document,a,b,walls);
+                        var a=contour[i];var b=contour[(i+1)%contour.Count];
+                        if(Math.Abs(a.Bulge)<1e-10) AddVisibleSlabEdge(document,a,b,walls);
+                        else AddVisibleSlabArc(document,a,b,walls);
                     }
                 foreach(var line in document.Lines.Skip(firstLine))line.StrokeAreaId=area.Id;
             }
@@ -725,8 +758,75 @@ namespace BatchPdfPublisher.BuildingModel
 
         private static void AddVisibleSlabEdge(ViewDocument document,PointModel a,PointModel b,List<WallModel> walls)
         {
+            AddVisibleSlabEdgeCore(document,a,b,walls);
+        }
+
+        private static void AddCurvedPlanWall(ViewDocument document,WallModel wall)
+        {
+            var c=CurveGeometry.ForWall(wall);var offset=WallReferenceGeometry.BodyOffset(wall);var half=wall.Thickness/2;
+            var area=new ViewStrokeArea {Id="arc-wall-"+wall.Id,Contours=new List<List<PointModel>> {CurveGeometry.WallBoundary(wall)}};
+            document.StrokeAreas.Add(area);
+            foreach(var side in new[] {offset+half,offset-half}) {
+                var a=c.At(0,side);var b=c.At(1,side);
+                document.Lines.Add(new ViewLine {Layer=ViewLayers.Cut,StrokeAreaId=area.Id,X1=a.X,Y1=a.Y,X2=b.X,Y2=b.Y,Bulge=wall.Bulge});
+            }
+            foreach(var t in new[] {0d,1d}) {
+                var a=c.At(t,offset+half);var b=c.At(t,offset-half);
+                document.Lines.Add(new ViewLine {Layer=ViewLayers.Cut,StrokeAreaId=area.Id,X1=a.X,Y1=a.Y,X2=b.X,Y2=b.Y});
+            }
+        }
+
+        private static void RemoveTangentCaps(ViewDocument document,List<WallModel> walls)
+        {
+            var ends=walls.SelectMany(w=>new[] {Tuple.Create(w,0d),Tuple.Create(w,1d)}).ToArray();
+            for(var i=0;i<ends.Length;i++) for(var j=i+1;j<ends.Length;j++) {
+                var a=ends[i];var b=ends[j];if(a.Item1.Id==b.Item1.Id)continue;
+                if(Math.Abs(a.Item1.Bulge)<1e-10&&Math.Abs(b.Item1.Bulge)<1e-10)continue;
+                var ca=CurveGeometry.ForWall(a.Item1);var cb=CurveGeometry.ForWall(b.Item1);
+                var p=ca.At(a.Item2,WallReferenceGeometry.BodyOffset(a.Item1));var q=cb.At(b.Item2,WallReferenceGeometry.BodyOffset(b.Item1));
+                var u=ca.Tangent(a.Item2);var v=cb.Tangent(b.Item2);
+                if(Math.Abs(p.X-q.X)>.01||Math.Abs(p.Y-q.Y)>.01||Math.Abs(u.X*v.Y-u.Y*v.X)>1e-6
+                    || (u.X*v.X+u.Y*v.Y)*(a.Item2==b.Item2?1:-1)>-.999999
+                    ||Math.Abs(a.Item1.Thickness-b.Item1.Thickness)>.01)continue;
+                document.Lines.RemoveAll(l=>Math.Abs(l.Bulge)<1e-10&&l.Layer==ViewLayers.Cut
+                    &&Math.Abs((l.X1+l.X2)/2-p.X)<.01&&Math.Abs((l.Y1+l.Y2)/2-p.Y)<.01
+                    &&Math.Abs((l.X2-l.X1)*u.X+(l.Y2-l.Y1)*u.Y)<.01);
+            }
+        }
+
+        private static void AddVisibleSlabArc(ViewDocument document,PointModel a,PointModel b,List<WallModel> walls)
+        {
+            var c=new CurveGeometry(a,b,a.Bulge);
+            var samples=c.Sample();
+            bool Hidden(PointModel p)=>walls.Any(w=>CurveGeometry.ForWall(w).DistanceTo(p.X,p.Y,WallReferenceGeometry.BodyOffset(w))<=w.Thickness/2+.6);
+            if(samples.All(p=>!Hidden(p))) {
+                document.Lines.Add(new ViewLine {Layer=ViewLayers.Elevation,X1=a.X,Y1=a.Y,X2=b.X,Y2=b.Y,Bulge=a.Bulge});return;
+            }
+            // Split only at visibility changes; retained pieces remain native arcs.
+            int start=-1;
+            for(var i=0;i<samples.Count-1;i++) {
+                var visible=!Hidden(c.At((i+.5)/(samples.Count-1)));
+                if(visible&&start<0)start=i;
+                if(start>=0&&(!visible||i==samples.Count-2)) {
+                    var end=visible?i+1:i;var p=c.At((double)start/(samples.Count-1));var q=c.At((double)end/(samples.Count-1));
+                    if(end>start)document.Lines.Add(new ViewLine {Layer=ViewLayers.Elevation,X1=p.X,Y1=p.Y,X2=q.X,Y2=q.Y,
+                        Bulge=Math.Tan(c.Sweep*(end-start)/(samples.Count-1)/4)});
+                    start=-1;
+                }
+            }
+        }
+
+        private static void AddVisibleSlabEdgeCore(ViewDocument document,PointModel a,PointModel b,List<WallModel> walls)
+        {
             var spans=new List<Interval> {new Interval(0,1)};
             foreach(var wall in walls) {
+                if(Math.Abs(wall.Bulge)>1e-10) {
+                    var c=CurveGeometry.ForWall(wall);var arcHalf=wall.Thickness/2;
+                    if(c.DistanceTo((a.X+b.X)/2,(a.Y+b.Y)/2,WallReferenceGeometry.BodyOffset(wall))<=arcHalf+.6
+                        && c.DistanceTo(a.X,a.Y,WallReferenceGeometry.BodyOffset(wall))<=arcHalf+.6
+                        && c.DistanceTo(b.X,b.Y,WallReferenceGeometry.BodyOffset(wall))<=arcHalf+.6) return;
+                    continue;
+                }
                 var length=WallLength(wall);if(length<.001)continue;
                 var ux=(wall.X2-wall.X1)/length;var uy=(wall.Y2-wall.Y1)/length;
                 var offset=WallReferenceGeometry.BodyOffset(wall);
@@ -1069,9 +1169,7 @@ namespace BatchPdfPublisher.BuildingModel
 
         private static double WallLength(WallModel wall)
         {
-            var dx = wall.X2 - wall.X1;
-            var dy = wall.Y2 - wall.Y1;
-            return Math.Sqrt(dx * dx + dy * dy);
+            return CurveGeometry.ForWall(wall).Length;
         }
 
         /// <summary>洞口沿墙轴线的起止距离（到墙起点）。</summary>
@@ -1146,6 +1244,16 @@ namespace BatchPdfPublisher.BuildingModel
             for(var i=0;i<outline.Count;i++)
             {var a=outline[i];var b=outline[(i+1)%outline.Count];document.Lines.Add(new ViewLine {Layer=layer,StrokeAreaId=area.Id,X1=a.X,Y1=a.Y,X2=b.X,Y2=b.Y});}
         }
+        private static void AddDrawingColumnOutline(ViewDocument document,BuildingModelDocument model,ColumnModel column,double cutElevation)
+        {
+            var elevation=Math.Min(cutElevation,model.BaseElevationOf(column)+model.HeightOf(column)-.01);
+            var band=ColumnDrawingGeometry.At(model,column,elevation);
+            if(band.Contours.Count==0)return;
+            var area=new ViewStrokeArea {Id="column-"+column.Id,Contours=band.Contours};document.StrokeAreas.Add(area);
+            foreach(var line in ColumnDrawingGeometry.VisibleOutline(column,band)) {
+                line.Layer=ViewLayers.Cut;line.StrokeAreaId=area.Id;document.Lines.Add(line);
+            }
+        }
 
         /// <summary>按立面分格与平面类型生成图例，再变换到宿主墙的局部坐标。</summary>
         private static void AddOpeningPlanSymbol(ViewDocument document, WallModel wall, OpeningModel opening,OpeningTypeModel type)
@@ -1204,6 +1312,13 @@ namespace BatchPdfPublisher.BuildingModel
             foreach (var wall in walls)
             {
                 var half = (wall.Thickness > 0.5d ? wall.Thickness : 200d) / 2d;
+                if(Math.Abs(wall.Bulge)>1e-10) {
+                    foreach(var p in CurveGeometry.ForWall(wall).BoundsPoints(WallReferenceGeometry.BodyOffset(wall))) {
+                        minX=Math.Min(minX,p.X-half);maxX=Math.Max(maxX,p.X+half);
+                        minY=Math.Min(minY,p.Y-half);maxY=Math.Max(maxY,p.Y+half);
+                    }
+                    continue;
+                }
                 var a = WallReferenceGeometry.BodyPoint(wall, wall.X1, wall.Y1);
                 var b = WallReferenceGeometry.BodyPoint(wall, wall.X2, wall.Y2);
                 minX = Math.Min(minX, Math.Min(a.X, b.X) - half);
@@ -1382,6 +1497,17 @@ namespace BatchPdfPublisher.BuildingModel
             List<OpeningDetail> openingDetails, OpeningTypeLibraryDocument openingLibrary, int scale,
             ViewDocument document)
         {
+            if(Math.Abs(wall.Bulge)>1e-10)
+            {
+                var samples=CurveGeometry.ForWall(wall).Sample();
+                for(var i=0;i+1<samples.Count;i++) {
+                    var a=samples[i];var b=samples[i+1];
+                    var piece=new WallModel {Id=wall.Id,StoreyId=wall.StoreyId,X1=a.X,Y1=a.Y,X2=b.X,Y2=b.Y,
+                        Thickness=wall.Thickness,Height=wall.Height,AxisOffset=WallReferenceGeometry.BodyOffset(wall)};
+                    AddWall(model,piece,frame,isSection,cutProj,viewDepth,rects,cutRects,extraLines,openingDetails,openingLibrary,scale,document);
+                }
+                return;
+            }
             var warnings = document.Warnings;
             var simplifiedDetail = scale >= 100;      // 1:100 及更小按简化画法（见 §5.5 比例分级）
             var dx = wall.X2 - wall.X1;
@@ -1489,16 +1615,17 @@ namespace BatchPdfPublisher.BuildingModel
                 var oz0 = Math.Max(zBase + opening.Sill, zBase);
                 var oz1 = Math.Min(oz0 + opening.Height, zTop);
                 if (oz1 - oz0 < 0.5d) continue;
+                var type = OpeningConstruction.Resolve(model,opening,openingLibrary);
+                var openingWindow=OpeningElevationAdapter.UsesWindowAppearance(opening,type);
                 rects.Add(new Rect
                 {
                     U0 = ou0, U1 = ou1, Z0 = oz0, Z1 = oz1,
                     Depth = body.HasValue ? body.Value.Depth + 100d : 0d,                // 画在墙前面
-                    Layer = ViewLayers.Opening, Opening = opening
+                    Layer = ViewLayers.Opening, Opening = opening,OpeningWindow=openingWindow
                 });
                 // 可点选锚点 + 洞口编号：预览里点一下就认得出是哪一樘，落图后也是门窗表联动的依据
 
                 // 立面门窗的分格与开启线：按编号查类型库，查不到就只留洞口轮廓
-                var type = OpeningElevationAdapter.Resolve(openingLibrary, opening);
                 if (type == null)
                 {
                     // 没有深化做法时也使用共用生成器的默认门窗框，不能把整樘门窗退成空矩形。
@@ -1508,6 +1635,8 @@ namespace BatchPdfPublisher.BuildingModel
                 {
                     Area = new Rect { U0 = ou0, U1 = ou1, Z0 = oz0, Z1 = oz1, Depth = body.HasValue ? body.Value.Depth + 100d : 0d, Layer = ViewLayers.Opening },
                     Mirrored = mirrored,
+                    WindowAppearance=openingWindow,
+                    OpeningId=opening.Id,
                     Segments = BuildOpeningDetail(opening, type, ou1 - ou0, oz1 - oz0, simplifiedDetail, warnings)
                 });
             }
@@ -1542,6 +1671,8 @@ namespace BatchPdfPublisher.BuildingModel
         private struct DetailSegment
         {
             public double X1, Y1, X2, Y2;
+            public DoorWindowLineRole Role;
+            public string OpeningPathId;
         }
 
         /// <summary>一个洞口的分格/开启线，等所有矩形收齐后再按遮挡裁剪输出。</summary>
@@ -1549,6 +1680,8 @@ namespace BatchPdfPublisher.BuildingModel
         {
             public Rect Area;
             public bool Mirrored;
+            public bool WindowAppearance;
+            public string OpeningId,OutlineAreaId;
             public List<DetailSegment> Segments;
         }
 
@@ -1570,8 +1703,8 @@ namespace BatchPdfPublisher.BuildingModel
                     if (Math.Abs(line.X2 - line.X1) < 0.05d && Math.Abs(line.Y2 - line.Y1) < 0.05d) continue;
                     // 正好落在洞口四边上的分格线不用再画：洞口轮廓那 4 条边已经画了，
                     // 否则 CAD 里会出现两条完全重合的线（用户最烦这个）。
-                    if (OnHoleBoundary(line.X1, line.Y1, line.X2, line.Y2, width, height)) continue;
-                    segments.Add(new DetailSegment { X1 = line.X1, Y1 = line.Y1, X2 = line.X2, Y2 = line.Y2 });
+                    if (line.Role==DoorWindowLineRole.Hole&&OnHoleBoundary(line.X1, line.Y1, line.X2, line.Y2, width, height)) continue;
+                    segments.Add(new DetailSegment { X1 = line.X1, Y1 = line.Y1, X2 = line.X2, Y2 = line.Y2,Role=line.Role,OpeningPathId=line.OpeningPathId });
                 }
             }
             catch (Exception exception)
@@ -1610,7 +1743,7 @@ namespace BatchPdfPublisher.BuildingModel
                 pieces.Add(new DetailSegment
                 {
                     X1 = ToViewU(segment.X1, detail), Y1 = area.Z0 + segment.Y1,
-                    X2 = ToViewU(segment.X2, detail), Y2 = area.Z0 + segment.Y2
+                    X2 = ToViewU(segment.X2, detail), Y2 = area.Z0 + segment.Y2,Role=segment.Role,OpeningPathId=segment.OpeningPathId
                 });
             }
             foreach (var other in allRects)
@@ -1624,10 +1757,14 @@ namespace BatchPdfPublisher.BuildingModel
             foreach (var piece in pieces)
             {
                 if (Math.Abs(piece.X2 - piece.X1) < 0.5d && Math.Abs(piece.Y2 - piece.Y1) < 0.5d) continue;
-                var key = Math.Round(piece.X1, 2) + ":" + Math.Round(piece.Y1, 2)
+                var key = piece.Role+":"+Math.Round(piece.X1, 2) + ":" + Math.Round(piece.Y1, 2)
                     + ":" + Math.Round(piece.X2, 2) + ":" + Math.Round(piece.Y2, 2);
                 if (!emitted.Add(key)) continue;
-                output.Add(new ViewLine { Layer = area.Layer, X1 = piece.X1, Y1 = piece.Y1, X2 = piece.X2, Y2 = piece.Y2 });
+                var line=OpeningElevationAdapter.ElevationLine(new DoorWindowLineSegment(piece.X1,piece.Y1,piece.X2,piece.Y2,piece.Role),detail.WindowAppearance);
+                if(piece.OpeningPathId!=null)line.OpeningArcId=detail.OpeningId+"-"+piece.OpeningPathId;
+                if(piece.Role==DoorWindowLineRole.Frame&&OnHoleBoundary(piece.X1-area.U0,piece.Y1-area.Z0,piece.X2-area.U0,piece.Y2-area.Z0,area.U1-area.U0,area.Z1-area.Z0))
+                    line.StrokeAreaId=detail.OutlineAreaId;
+                output.Add(line);
             }
         }
 
@@ -1651,13 +1788,13 @@ namespace BatchPdfPublisher.BuildingModel
                     result.Add(new DetailSegment
                     {
                         X1 = segment.X1, Y1 = segment.Y1,
-                        X2 = segment.X1 + enter * dx, Y2 = segment.Y1 + enter * dy
+                        X2 = segment.X1 + enter * dx, Y2 = segment.Y1 + enter * dy,Role=segment.Role,OpeningPathId=segment.OpeningPathId
                     });
                 if (exit < 1d - 1e-6d)
                     result.Add(new DetailSegment
                     {
                         X1 = segment.X1 + exit * dx, Y1 = segment.Y1 + exit * dy,
-                        X2 = segment.X2, Y2 = segment.Y2
+                        X2 = segment.X2, Y2 = segment.Y2,Role=segment.Role,OpeningPathId=segment.OpeningPathId
                     });
             }
             return result;
@@ -1737,8 +1874,14 @@ namespace BatchPdfPublisher.BuildingModel
         // ───────────────────────────── 柱 / 楼板 ─────────────────────────────
 
         private static void AddColumn(BuildingModelDocument model, ColumnModel column, Frame frame, bool isSection,
-            double cutProj, double viewDepth, List<Rect> rects, List<Rect> cutRects)
+            double cutProj, double viewDepth, List<Rect> rects, List<Rect> cutRects,bool wallPriority=false)
         {
+            if(wallPriority) {
+                var bands=ColumnDrawingGeometry.Build(model,column);
+                if(bands.Any(b=>b.HasOverlap)) {
+                    AddDrawingColumnBands(column.Id,bands,frame,isSection,cutProj,viewDepth,rects,cutRects);return;
+                }
+            }
             var halfW = (column.Width > 0.5d ? column.Width : 400d) / 2d;
             var halfD = (column.Depth > 0.5d ? column.Depth : 400d) / 2d;
             var zBase = model.BaseElevationOf(column);
@@ -1781,6 +1924,62 @@ namespace BatchPdfPublisher.BuildingModel
 
             var body = Silhouette(corners, zBase, zTop, frame, ViewLayers.Elevation);
             if (body.HasValue) rects.Add(body.Value);
+        }
+        private static void AddDrawingColumnBands(string columnId,List<ColumnDrawingBand> bands,Frame frame,bool isSection,double cutProj,double viewDepth,List<Rect> rects,List<Rect> cutRects)
+        {
+            foreach(var band in bands) {
+                if(band.Contours.Count==0)continue;
+                if(isSection) {
+                    var spans=new List<Interval>();
+                    foreach(var triangle in band.Triangles) {
+                        double[] ps,us;ToPlane(triangle,frame,out ps,out us);double first,last;
+                        if(TryClipAtP(ps,us,cutProj,out first,out last) && last-first>.5)spans.Add(new Interval(first,last));
+                    }
+                    var merged=new List<Interval>();
+                    foreach(var span in spans.OrderBy(s=>s.A)) {
+                        if(merged.Count>0 && span.A<=merged.Last().B+Epsilon)merged.Last().B=Math.Max(merged.Last().B,span.B);
+                        else merged.Add(new Interval(span.A,span.B));
+                    }
+                    if(merged.Count>0) {
+                        foreach(var span in merged) {
+                            var cut=new Rect {U0=span.A,U1=span.B,Z0=band.Bottom,Z1=band.Top,Depth=double.MaxValue-1,
+                                Layer=ViewLayers.Cut,IsCut=true,ColumnId=columnId};rects.Add(cut);cutRects.Add(cut);
+                        }
+                        continue;
+                    }
+                }
+                foreach(var contour in band.Contours) {
+                    if(isSection && (contour.Min(p=>frame.P(p.X,p.Y))<cutProj-Epsilon
+                        || viewDepth>.5 && contour.Min(p=>frame.P(p.X,p.Y))>cutProj+viewDepth))continue;
+                    var body=Silhouette(contour,band.Bottom,band.Top,frame,ViewLayers.Elevation);
+                    if(!body.HasValue)continue;
+                    var value=body.Value;
+                    value.ColumnId=columnId;
+                    value.WallPriorityMasks=band.WallMasks.Select(m=>Silhouette(m,band.Bottom,band.Top,frame,ViewLayers.Elevation))
+                        .Where(r=>r.HasValue).Select(r=>r.Value).ToList();
+                    rects.Add(value);
+                }
+            }
+        }
+        private static List<Rect> ColumnOcclusionRects(Rect rect)
+        {
+            var result=new List<Rect> {rect};
+            foreach(var mask in rect.WallPriorityMasks ?? new List<Rect>()) {
+                var next=new List<Rect>();
+                foreach(var piece in result) {
+                    var left=Math.Max(piece.U0,mask.U0);var right=Math.Min(piece.U1,mask.U1);
+                    var bottom=Math.Max(piece.Z0,mask.Z0);var top=Math.Min(piece.Z1,mask.Z1);
+                    if(right-left<Epsilon || top-bottom<Epsilon){next.Add(piece);continue;}
+                    void Add(double u0,double u1,double z0,double z1) {
+                        if(u1-u0<Epsilon || z1-z0<Epsilon)return;
+                        var part=piece;part.U0=u0;part.U1=u1;part.Z0=z0;part.Z1=z1;part.WallPriorityMasks=null;next.Add(part);
+                    }
+                    Add(piece.U0,left,piece.Z0,piece.Z1);Add(right,piece.U1,piece.Z0,piece.Z1);
+                    Add(left,right,piece.Z0,bottom);Add(left,right,top,piece.Z1);
+                }
+                result=next;
+            }
+            return result;
         }
 
         private static void AddSlab(BuildingModelDocument model, SlabModel slab, Frame frame, bool isSection, double cutProj, double viewDepth,
@@ -1950,7 +2149,7 @@ namespace BatchPdfPublisher.BuildingModel
                 Kind = ViewKind.Axonometric,
                 Scale = Math.Max(1, view.Scale)
             };
-            var volume = BuildingVolumeBuilder.Build(model, null);
+            var volume = BuildingVolumeBuilder.BuildForDrawing(model);
             if (volume.Faces.Count == 0)
             {
                 document.Warnings.Add("模型里还没有可以出轴测图的构件（墙/柱/楼板/楼梯/屋面都为空）。");
@@ -2216,6 +2415,9 @@ namespace BatchPdfPublisher.BuildingModel
             {
                 uMin = Math.Min(uMin, Math.Min(line.X1, line.X2));
                 zMin = Math.Min(zMin, Math.Min(line.Y1, line.Y2));
+                if(Math.Abs(line.Bulge)>1e-10) foreach(var p in CurveGeometry.ForLine(line).BoundsPoints()) {
+                    uMin=Math.Min(uMin,p.X);zMin=Math.Min(zMin,p.Y);
+                }
             }
             foreach (var hatch in document.Hatches)
                 foreach (var point in hatch.Boundary)

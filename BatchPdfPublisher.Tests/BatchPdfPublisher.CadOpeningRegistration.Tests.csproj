@@ -7,11 +7,15 @@
     <None Include="Fixtures/SlabNativeCoordinateNoise.json" CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="../BuildingModel.Core/BuildingModel.Core.csproj" />
     <Compile Include="CadOpeningRegistrationTests.cs" />
+    <Compile Include="ModelProjectWorkflowTests.cs" />
     <Compile Include="CadFloorModelGenerationTests.cs" />
+    <Compile Include="CadCurvedWallRegistrationTests.cs" />
+    <Compile Include="CadReimportLocalOpeningTests.cs" />
     <Compile Include="CadFloorSlabGenerationTests.cs" />
     <Compile Include="CadOpeningScheduleRulesTests.cs" />
     <Compile Include="../BatchPdfPublisher/Features/DoorWindows/Services/DoorWindowElevationSuggestionService.cs" Link="DoorWindowElevationSuggestionService.cs" />
     <Compile Include="../BatchPdfPublisher/Features/BuildingModel/Views/CadFloorRegistrationWindow.cs" Link="CadFloorRegistrationWindow.cs" />
+    <Compile Include="../BatchPdfPublisher/Features/BuildingModel/Views/CadModelProjectWindow.cs" Link="CadModelProjectWindow.cs" />
     <Compile Include="../BatchPdfPublisher/Features/BuildingModel/Views/CadFloorOpeningReviewWindow.cs" Link="CadFloorOpeningReviewWindow.cs" />
     <Compile Include="../BatchPdfPublisher/Features/BuildingModel/Views/CadRegisteredOpeningTableWindow.cs" Link="CadRegisteredOpeningTableWindow.cs" />
     <Compile Include="../BatchPdfPublisher/Features/BuildingModel/Views/TianzhengOpeningRegistrationWindow.cs" Link="TianzhengOpeningRegistrationWindow.cs" />

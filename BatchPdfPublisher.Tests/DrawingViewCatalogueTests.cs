@@ -37,7 +37,7 @@ internal static class DrawingViewCatalogueTests
         var definition=catalogue.First(v=>v.Kind==ViewKind.OpeningElevation);
         var detail=OrthographicProjector.Project(one,definition,null);
         var expected=DoorWindowElevationGeometryBuilder.Build(OpeningElevationAdapter.ToScheduleItem(opening,null,opening.Width,opening.Height));
-        Check(detail.Lines.Count==expected.Lines.Count && detail.Dimensions.Count==2,"Opening drawings must use the existing elevation algorithm and actual sizes.");
+        Check(detail.Lines.Count==OpeningElevationAdapter.CleanGeometryLines(expected.Lines).Count && detail.Dimensions.Count==2,"Opening drawings must use the existing elevation algorithm, remove duplicate strokes and preserve actual sizes.");
         one.Openings.Add(new OpeningModel { Id="duplicate",HostWallId=opening.HostWallId,Code=opening.Code,Kind=opening.Kind,
             Width=opening.Width,Height=opening.Height,Sill=opening.Sill });
         var merged=OrthographicProjector.Project(one,definition,null);

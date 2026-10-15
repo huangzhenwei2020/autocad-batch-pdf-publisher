@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using BatchPdfPublisher.Models;
 using BatchPdfPublisher.Services;
 
 internal static class PublishPlanStoreTests
@@ -22,6 +23,13 @@ internal static class PublishPlanStoreTests
             var store = new PublishPlanStore();
             var project = store.CreateProject("恢复测试", projectFolder);
             project.PlotStyle = "first.ctb";
+            project.Frames.Add(new FrameDefinition
+            {
+                BlockName = "旧图框", PaperSize = "A1", PaperOrientation = "横向",
+                TemplateSourceDrawingPath = Path.Combine(root, "source-frame.dwg"),
+                PrintScaleAttributeTag = "比例", DefaultPrintScale = "1:100",
+                HasLayoutRange = true, LayoutLeftMargin = 20, Note = "原备注"
+            });
             store.SaveProject(project);
             project.PlotStyle = "second.ctb";
             store.SaveProject(project);
@@ -31,6 +39,13 @@ internal static class PublishPlanStoreTests
             var recovered = new PublishPlanStore().LoadProjects();
             var restored = recovered.Single(item => item.Name == "恢复测试");
             Assert(restored.PlotStyle == "first.ctb", "project backup was not restored");
+            var restoredFrame = restored.Frames.Single();
+            Assert(restoredFrame.RegistrationId == null && restoredFrame.TemplateRelativePath == null
+                && restoredFrame.TemplateSourceDrawingPath == Path.Combine(root, "source-frame.dwg")
+                && restoredFrame.PrintScaleAttributeTag == "比例" && restoredFrame.DefaultPrintScale == "1:100"
+                && restoredFrame.HasLayoutRange && restoredFrame.LayoutLeftMargin == 20 && restoredFrame.Note == "原备注",
+                "legacy frame metadata or source drawing was not preserved");
+            Console.WriteLine("PASS PreservesLegacyFrameSourceAndSettings");
             Assert(Directory.GetFiles(Path.GetDirectoryName(settingsPath), "项目列表.json.corrupt-*").Length == 1,
                 "corrupt project file was not quarantined");
             Assert(!string.IsNullOrWhiteSpace(PublishPlanStore.LastRecoveryNotice), "project recovery notice missing");

@@ -543,14 +543,8 @@ namespace BatchPdfPublisherLauncher
             TryDelete(LoadReceiptPath);
             var startupScript = Path.Combine(EnsureDirectory(Path.Combine(UserDataRoot, "Temp")), "BatchPdfPublisher." + Guid.NewGuid().ToString("N") + ".scr");
             var loadableAssemblies = installedAssemblies.Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-            var trustedDirectories = string.Join(";", loadableAssemblies.Select(Path.GetDirectoryName).Distinct(StringComparer.OrdinalIgnoreCase).Select(x => x.Replace('\\', '/')));
-            var loadCommands = BuildNetloadCommandStream(loadableAssemblies);
-            File.WriteAllText(startupScript,
-                "(setvar \"FILEDIA\" 0)\r\n" +
-                "(setvar \"TRUSTEDPATHS\" (strcat (getvar \"TRUSTEDPATHS\") \";" + EscapeLispString(trustedDirectories) + "\"))\r\n" +
-                loadCommands +
-                "(setvar \"FILEDIA\" 1)\r\n" +
-                "BPPSTARTUP\r\n", Encoding.Default);
+            File.WriteAllText(startupScript, CadLoadScriptBuilder.ForScript(loadableAssemblies), Encoding.Default);
+            var sentUtc = DateTime.UtcNow;
             Process.Start(new ProcessStartInfo
             {
                 FileName = platform.Executable,
@@ -565,7 +559,7 @@ namespace BatchPdfPublisherLauncher
             if (!WaitForCadProcess(45))
                 throw new InvalidOperationException(platform.DisplayName + " 启动后没有检测到 AutoCAD 进程。请确认平台可以单独正常启动。\r\n\r\n插件文件已经安装，进入 CAD 后仍可手工执行 BPPUBLISH。\r\n\r\n如使用天正，请从选择列表中选择“T20 天正建筑”，不要选择普通 AutoCAD 2022。 ");
 
-            if (!WaitForLoadReceipt(60))
+            if (!WaitForLoadReceipt(60, loadableAssemblies.FirstOrDefault(), 0, sentUtc))
                 throw new InvalidOperationException(platform.DisplayName + " 已启动，但插件在 60 秒内没有返回加载成功信息。\r\n\r\n请关闭 CAD 后重试；日志：" + LaunchLogPath);
             Log(loadableAssemblies.Length > 0 ? "插件已通过启动脚本确认加载成功" : "插件已通过统一 Bundle 确认加载成功");
         }
@@ -666,6 +660,7 @@ namespace BatchPdfPublisherLauncher
             TryDelete(LoadReceiptPath);
             var progIds = new[] { progId }.Concat(KnownProgIds())
                 .Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var submitted = false;
             for (var attempt = 0; attempt < 15; attempt++)
             {
                 try
@@ -678,20 +673,29 @@ namespace BatchPdfPublisherLauncher
                         catch (Exception exception) { last = exception; }
                     }
                     if (application == null) throw last ?? new InvalidOperationException("AutoCAD COM 服务尚未注册");
+                    var state = application.GetType().InvokeMember("GetAcadState", BindingFlags.InvokeMethod, null, application, null);
+                    if (!Convert.ToBoolean(state.GetType().InvokeMember("IsQuiescent", BindingFlags.GetProperty, null, state, null)))
+                        throw new InvalidOperationException("CAD 正在执行命令或等待输入，请先按 Esc 回到空闲命令行。");
                     var document = application.GetType().InvokeMember("ActiveDocument", BindingFlags.GetProperty, null, application, null);
                     var loadableAssemblies = installedAssemblies.Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-                    var directories = string.Join(";", loadableAssemblies.Select(Path.GetDirectoryName).Distinct(StringComparer.OrdinalIgnoreCase).Select(x => x.Replace('\\', '/')));
-                    SendCommand(document,
-                        "(setvar \"FILEDIA\" 0)\r\n" +
-                        "(setvar \"TRUSTEDPATHS\" (strcat (getvar \"TRUSTEDPATHS\") \";" + EscapeLispString(directories) + "\"))\r\n" +
-                        BuildNetloadCommandStream(loadableAssemblies) +
-                        "(setvar \"FILEDIA\" 1)\r\n" +
-                        "BPPSTARTUP\r\n");
-                    if (!WaitForLoadReceipt(30)) throw new InvalidOperationException("已发送 NETLOAD，但目标 CAD 没有返回加载成功信息");
+                    var window = application.GetType().InvokeMember("HWND", BindingFlags.GetProperty, null, application, null);
+                    uint pid;
+                    GetWindowThreadProcessId(new IntPtr(Convert.ToInt64(window)), out pid);
+                    if (pid == 0) throw new InvalidOperationException("无法确认目标 CAD 进程，未发送加载命令。");
+                    var sentUtc = DateTime.UtcNow;
+                    submitted = true;
+                    SendCommand(document, CadLoadScriptBuilder.ForCom(loadableAssemblies));
+                    if (!WaitForLoadReceipt(30, loadableAssemblies.FirstOrDefault(), (int)pid, sentUtc))
+                        throw new InvalidOperationException("已发送一次加载请求，但目标 CAD 尚未完成 BPPSTARTUP。未重复排队；请检查命令行和启动日志。");
                     Log("已向运行中的 AutoCAD 加载插件并收到成功回执；未自动打开 BPP 面板");
                     return true;
                 }
-                catch (Exception exception) { Log("COM 尝试 " + (attempt + 1) + " 失败: " + exception.Message); Thread.Sleep(1000); }
+                catch (Exception exception)
+                {
+                    Log("COM 尝试 " + (attempt + 1) + " 失败: " + exception.Message);
+                    if (submitted) throw;
+                    Thread.Sleep(1000);
+                }
             }
             return false;
         }
@@ -706,6 +710,9 @@ namespace BatchPdfPublisherLauncher
         {
             document.GetType().InvokeMember("SendCommand", BindingFlags.InvokeMethod, null, document, new object[] { command });
         }
+
+        [DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
 
         internal static void Log(string message)
         {
@@ -935,24 +942,14 @@ namespace BatchPdfPublisherLauncher
             }
         }
 
-        private static string EscapeLispString(string value)
-        {
-            return (value ?? string.Empty).Replace("\\", "/").Replace("\"", "\\\"");
-        }
-
-        private static string BuildNetloadCommandStream(IEnumerable<string> assemblies)
-        {
-            return string.Join(string.Empty, assemblies.Select(x =>
-                "_.NETLOAD\r\n\"" + x.Replace('\\', '/') + "\"\r\n"));
-        }
-
-        private static bool WaitForLoadReceipt(int seconds)
+        private static bool WaitForLoadReceipt(int seconds, string assembly, int pid, DateTime sinceUtc)
         {
             for (var i = 0; i < seconds * 2; i++)
             {
                 try
                 {
-                    if (File.Exists(LoadReceiptPath) && new FileInfo(LoadReceiptPath).Length > 0) return true;
+                    if (File.Exists(LoadReceiptPath) && CadLoadScriptBuilder.HasCompleteReceipt(
+                        File.ReadAllText(LoadReceiptPath), assembly, pid, sinceUtc)) return true;
                 }
                 catch { }
                 Thread.Sleep(500);

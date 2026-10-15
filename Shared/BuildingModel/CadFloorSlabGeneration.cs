@@ -16,6 +16,7 @@ namespace BatchPdfPublisher.BuildingModel
         {
             var result = new List<SlabModel>();
             if (walls.Count == 0) return result;
+            if(walls.Any(w=>Math.Abs(w.Bulge)>1e-10))return BuildCurved(walls,labels,thickness,floor,messages);
             // Work near the origin, including the signed native wall-axis offset.
             var origin = new PointModel(walls[0].X1, walls[0].Y1);
             var tess = new Tess();
@@ -96,21 +97,108 @@ namespace BatchPdfPublisher.BuildingModel
                 var clipped=Contours(cut,origin);
                 var shells=clipped.Where(r=>!clipped.Any(other=>other!=r && Inside(r[0],other))).ToList();
                 foreach(var shell in shells.OrderBy(r=>r.Min(p=>p.X)).ThenBy(r=>r.Min(p=>p.Y))) {
+                    if(IsMicroSliver(shell,100,.5)) {messages.Add(floor+"：已清理裁剪产生的微小边角（面积 ≤100 mm²、宽度 ≤0.5 mm），未作为独立楼板。");continue;}
                     var slab=new SlabModel { StoreyId=floor,Thickness=thickness,TopOffset=0,FollowsStoreyTop=true,Outline=shell };
                     foreach(var hole in clipped.Except(shells).Where(r=>Inside(r[0],shell))) {
                         var label=voids.Values.FirstOrDefault(l=>Inside(l.Position,hole));
+                        if(label==null&&IsMicroSliver(hole)) {
+                            messages.Add(floor+"：已清理裁剪产生的微小细缝（面积 ≤10 mm²、宽度 ≤0.05 mm），未作为楼板洞口。");continue;
+                        }
                         slab.Openings.Add(new SlabOpeningModel { Id="room-"+slab.Openings.Count,Name=label?.Name ?? "板洞",Outline=hole });
                     }
                     var error=SlabGeometry.Validate(slab);
                     if(error!=null) {
-                        var exception=new ArgumentException(floor+" 自动楼板轮廓无效："+error);
-                        exception.Data["SlabSnapshot"]=BuildingModelJson.ToJson(new BuildingModelDocument { Slabs=new List<SlabModel> { slab } });
-                        throw exception;
+                        messages.Add(floor+" 自动楼板轮廓无效，已跳过本块楼板，其他构件继续生成："+error);continue;
                     }
                     result.Add(slab);
                 }
             }
             if(result.Count==0 && voids.Count==0)messages.Add("墙体未形成闭合范围，未自动生成楼板。");
+            return result;
+        }
+        private static bool IsMicroSliver(IList<PointModel> ring,double maximumArea=10,double maximumWidth=.05)
+        {
+            if(Math.Abs(Area(ring))>maximumArea)return false;
+            var longest=Enumerable.Range(0,ring.Count).OrderByDescending(i=>Distance(ring[i],ring[(i+1)%ring.Count])).First();
+            var a=ring[longest];var b=ring[(longest+1)%ring.Count];var length=Distance(a,b);if(length<=0)return false;
+            var offsets=ring.Select(p=>((p.X-a.X)*(b.Y-a.Y)-(p.Y-a.Y)*(b.X-a.X))/length).ToArray();
+            return offsets.Max()-offsets.Min()<=maximumWidth;
+        }
+
+        private static List<SlabModel> BuildCurved(IList<WallModel> walls,IEnumerable<CadRoomLabel> labels,
+            double thickness,string floor,IList<string> messages)
+        {
+            var segments=new List<WallModel>();var borders=new List<CurveGeometry>();
+            foreach(var wall in walls)
+            {
+                var curve=CurveGeometry.ForWall(wall);
+                if(!curve.IsArc) { segments.Add(wall);continue; }
+                var offset=WallReferenceGeometry.BodyOffset(wall);
+                var points=curve.Sample(offset,.1);
+                for(var i=0;i<points.Count-1;i++)segments.Add(new WallModel {
+                    Id=wall.Id+"-arc-"+i,StoreyId=wall.StoreyId,Thickness=wall.Thickness,AxisOffset=0,
+                    X1=points[i].X,Y1=points[i].Y,X2=points[i+1].X,Y2=points[i+1].Y });
+                foreach(var side in new[]{-1,1})
+                {
+                    var borderOffset=offset+side*wall.Thickness/2;
+                    borders.Add(new CurveGeometry(curve.At(0,borderOffset),curve.At(1,borderOffset),wall.Bulge));
+                }
+            }
+            if(segments.Count>5000)
+            {
+                messages.Add("圆弧围合范围过于复杂，已生成墙体；楼板请在模型中绘制。");
+                return new List<SlabModel>();
+            }
+            // Keep the established footprint/void solver; only its working geometry is tessellated.
+            var slabs=Build(segments,labels,thickness,floor,messages);
+            foreach(var slab in slabs)
+            {
+                var outline=slab.Outline;var holes=slab.Openings.Select(o=>o.Outline).ToList();
+                slab.Outline=RestoreArcEdges(outline,borders);
+                for(var i=0;i<holes.Count;i++)slab.Openings[i].Outline=RestoreArcEdges(holes[i],borders);
+                if(SlabGeometry.Validate(slab)!=null)
+                {
+                    slab.Outline=outline;
+                    for(var i=0;i<holes.Count;i++)slab.Openings[i].Outline=holes[i];
+                    messages.Add("圆弧楼板交接处保留精细采样轮廓，墙体仍为真实圆弧。");
+                }
+            }
+            return slabs;
+        }
+
+        private static List<PointModel> RestoreArcEdges(IList<PointModel> ring,IList<CurveGeometry> borders)
+        {
+            var matches=Enumerable.Repeat(-1,ring.Count).ToArray();var directions=new int[ring.Count];
+            for(var i=0;i<ring.Count;i++)
+            {
+                var a=ring[i];var b=ring[(i+1)%ring.Count];
+                for(var j=0;j<borders.Count;j++)
+                {
+                    var arc=borders[j];var ta=arc.Parameter(a.X,a.Y);var tb=arc.Parameter(b.X,b.Y);
+                    if(Math.Abs(tb-ta)<1e-8 || Math.Abs(tb-ta)>.2 || arc.DistanceTo(a.X,a.Y)>.25
+                        ||arc.DistanceTo(b.X,b.Y)>.25 ||arc.DistanceTo((a.X+b.X)/2,(a.Y+b.Y)/2)>.25)continue;
+                    matches[i]=j;directions[i]=Math.Sign(tb-ta);break;
+                }
+            }
+            var start=Enumerable.Range(0,ring.Count).FirstOrDefault(i=>matches[i]!=matches[(i+ring.Count-1)%ring.Count]
+                || directions[i]!=directions[(i+ring.Count-1)%ring.Count]);
+            var result=new List<PointModel>();
+            for(var count=0;count<ring.Count;)
+            {
+                var index=(start+count)%ring.Count;var match=matches[index];var run=1;
+                while(match>=0 && count+run<ring.Count && matches[(index+run)%ring.Count]==match
+                    && directions[(index+run)%ring.Count]==directions[index])run++;
+                var point=new PointModel(ring[index].X,ring[index].Y);
+                if(match>=0 && run>=2)
+                {
+                    var arc=borders[match];var end=ring[(index+run)%ring.Count];
+                    var ta=arc.Parameter(point.X,point.Y);var tb=arc.Parameter(end.X,end.Y);
+                    // Boundary stations already lie within 0.25 mm of the native circle.
+                    point.Bulge=Math.Tan(arc.Sweep*(tb-ta)/4);
+                }
+                else run=1;
+                result.Add(point);count+=run;
+            }
             return result;
         }
         private static List<List<PointModel>> Contours(Tess tess,PointModel origin)

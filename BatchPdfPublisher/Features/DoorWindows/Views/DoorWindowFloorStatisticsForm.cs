@@ -122,12 +122,7 @@ namespace BatchPdfPublisher.Views
 
         private static bool TryParseFloorCount(string text, out int count)
         {
-            count = 1;
-            var match = Regex.Match(text ?? string.Empty, @"(\d+)\s*[~～至\-—]\s*(\d+)");
-            int first, last;
-            if (!match.Success || !int.TryParse(match.Groups[1].Value, out first) || !int.TryParse(match.Groups[2].Value, out last)) return false;
-            count = Math.Abs(last - first) + 1;
-            return count > 0 && count <= 999;
+            return FloorStatisticsRules.TryParseFloorCount(text, out count);
         }
 
         private void Remove() { if (_grid.CurrentRow == null || _grid.CurrentRow.Index < 0 || _grid.CurrentRow.Index >= _sources.Count) return; _sources.RemoveAt(_grid.CurrentRow.Index); RefreshGrid(); }

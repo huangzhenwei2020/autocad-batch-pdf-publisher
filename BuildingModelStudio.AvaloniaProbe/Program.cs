@@ -32,9 +32,16 @@ internal static class Program
     public static bool ParameterCheck { get; private set; }
     public static bool ParameterPerfCheck { get; private set; }
     public static bool OpeningEditorCheck { get; private set; }
+    public static bool OpeningEditorInteractionCheck { get; private set; }
     public static bool OpeningPlanCheck {get;private set;}
     public static bool ComponentSourceCheck {get;private set;}
     public static bool ComponentPackageCheck {get;private set;}
+    public static bool UnderlayCheck {get;private set;}
+    public static bool CurvesCheck {get;private set;}
+    public static bool WallDrawingCheck {get;private set;}
+    public static bool ProjectWorkflowCheck {get;private set;}
+    public static bool ModelManagementCheck {get;private set;}
+    public static bool ElevationStyleCheck {get;private set;}
     public static bool BrowserCheck { get; private set; }
     public static bool AxisCheck {get;private set;}
     public static bool StructureCheck { get; private set; }
@@ -48,6 +55,8 @@ internal static class Program
     public static bool CreateMissingProjectModel { get; private set; }
     public static string? ProjectModelName { get; private set; }
     public static string? ProjectFolder { get; private set; }
+    public static string? CadFingerprint {get;private set;}
+    public static string? CadDrawingPath {get;private set;}
 
     [STAThread]
     private static int Main(string[] args)
@@ -73,6 +82,12 @@ internal static class Program
         Smoke = args.Contains("--smoke", StringComparer.OrdinalIgnoreCase);
         ComponentSourceCheck=args.Contains("--component-source-check",StringComparer.OrdinalIgnoreCase);
         ComponentPackageCheck=args.Contains("--component-package-check",StringComparer.OrdinalIgnoreCase);
+        UnderlayCheck=args.Contains("--underlay-check",StringComparer.OrdinalIgnoreCase);
+        CurvesCheck=args.Contains("--curves-check",StringComparer.OrdinalIgnoreCase);
+        WallDrawingCheck=args.Contains("--wall-drawing-check",StringComparer.OrdinalIgnoreCase);
+        ProjectWorkflowCheck=args.Contains("--project-workflow-check",StringComparer.OrdinalIgnoreCase);
+        ModelManagementCheck=args.Contains("--model-management-check",StringComparer.OrdinalIgnoreCase);
+        ElevationStyleCheck=args.Contains("--elevation-style-check",StringComparer.OrdinalIgnoreCase);
         BrowserCheck=args.Contains("--browser-check",StringComparer.OrdinalIgnoreCase);
         AxisCheck=args.Contains("--axis-check",StringComparer.OrdinalIgnoreCase);
         StructureCheck=args.Contains("--structure-check",StringComparer.OrdinalIgnoreCase);
@@ -106,6 +121,7 @@ internal static class Program
         ParameterPerfCheck = args.Contains("--parameter-perf-check", StringComparer.OrdinalIgnoreCase);
         DrawingCheck = args.Contains("--drawing-check", StringComparer.OrdinalIgnoreCase);
         OpeningEditorCheck=args.Contains("--opening-editor-check",StringComparer.OrdinalIgnoreCase);
+        OpeningEditorInteractionCheck=args.Contains("--opening-editor-interaction-check",StringComparer.OrdinalIgnoreCase);
         OpeningPlanCheck=args.Contains("--opening-plan-check",StringComparer.OrdinalIgnoreCase);
         StoreyCheck = args.Contains("--storey-check", StringComparer.OrdinalIgnoreCase);
         ZoomCheck = args.Contains("--zoom-check", StringComparer.OrdinalIgnoreCase);
@@ -162,6 +178,10 @@ internal static class Program
         }
         var projectIndex = Array.IndexOf(args, "--project");
         var cadProjectIndex = Array.IndexOf(args, "--cad-project");
+        var fingerprintIndex=Array.IndexOf(args,"--cad-fingerprint");
+        if(fingerprintIndex>=0&&fingerprintIndex+1<args.Length)CadFingerprint=args[fingerprintIndex+1];
+        var cadDrawingIndex=Array.IndexOf(args,"--cad-drawing");
+        if(cadDrawingIndex>=0&&cadDrawingIndex+1<args.Length)CadDrawingPath=args[cadDrawingIndex+1];
         if (cadProjectIndex >= 0 && cadProjectIndex + 1 < args.Length) ProjectFolder = Path.GetFullPath(args[cadProjectIndex + 1]);
         var modelIndex = Array.IndexOf(args, "--model");
         if (projectIndex >= 0)

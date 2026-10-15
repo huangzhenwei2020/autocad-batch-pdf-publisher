@@ -557,8 +557,19 @@ namespace BatchPdfPublisher.Services
         {
             const double tolerance = .01d;
             // 门带玻璃亮子时整套沿用窗的青色图层与线型，避免门扇、亮子出现两种做法。
-            var mainLayer = UsesWindowAppearance(item) ? doorWindowLayers.Window : doorWindowLayers.Door;
-            foreach (var roleGroup in geometry.Lines.GroupBy(x => x.Role))
+            var window = BatchPdfPublisher.BuildingModel.OpeningElevationAdapter.UsesWindowAppearance(item);
+            var mainLayer = window ? doorWindowLayers.Window : doorWindowLayers.Door;
+            var cleaned = BatchPdfPublisher.BuildingModel.OpeningElevationAdapter.CleanGeometryLines(geometry.Lines);
+            var paths = cleaned.Where(line => line.OpeningPathId != null)
+                .Select(line => BatchPdfPublisher.BuildingModel.OpeningElevationAdapter.ElevationLine(line, window));
+            foreach (var chain in BuildingModelCadBridge.BuildOpeningPathChains(paths))
+            {
+                var polyline = BuildingModelCadBridge.CreateOpeningPathPolyline(chain, origin);
+                polyline.LayerId = doorWindowLayers.OpeningHole;
+                polyline.Linetype = "ByLayer";
+                AppendTagged(space, transaction, polyline, metadata);
+            }
+            foreach (var roleGroup in cleaned.Where(line => line.OpeningPathId == null).GroupBy(x => x.Role))
             {
                 var segments = roleGroup.ToList(); var used = new bool[segments.Count];
                 // 按端点哈希索引，把"找下一条相连线段"从 O(n) 扫描降为 O(1) 查找，
@@ -654,16 +665,6 @@ namespace BatchPdfPublisher.Services
             bool Matches(Point2d point, double x, double y) { return point.GetDistanceTo(new Point2d(x, y)) <= tolerance; }
         }
 
-        private static bool UsesWindowAppearance(DoorWindowScheduleItem item)
-        {
-            var type = item == null ? string.Empty : item.ElevationType ?? string.Empty;
-            if (type.Contains("窗")) return true;
-            if (!type.Contains("门")) return false;
-            // 只有门上亮存在时才改用窗的做法；普通门仍保持原来的门图层表达。
-            return DoorWindowElevationGeometryBuilder.ParseCellLayout(item.CustomCellLayout)
-                .Any(x => !x.IsDoor && string.Equals(x.Material, "玻璃", StringComparison.Ordinal));
-        }
-
         private static DoorWindowLayers EnsureDoorWindowLayers(Database database, Transaction transaction)
         {
             // 三个图层改由制图标准提供，颜色/线型/线宽随标准变化，
@@ -674,6 +675,14 @@ namespace BatchPdfPublisher.Services
                 Door = DraftingStandardService.EnsureLayerFor(database, transaction, DraftingStandardProfile.DoorWindowDoorLayerKey),
                 OpeningHole = DraftingStandardService.EnsureLayerFor(database, transaction, DraftingStandardProfile.DoorWindowOpeningLayerKey)
             };
+        }
+
+        internal static void AppendGeometryForNativeCheck(DoorWindowScheduleItem item, Point3d origin,
+            BlockTableRecord space, Transaction transaction)
+        {
+            DoorWindowElevationMetadataService.EnsureRegistered(space.Database, transaction);
+            AppendGeometry(DoorWindowElevationGeometryBuilder.Build(item), origin, space, transaction, null,
+                EnsureDoorWindowLayers(space.Database, transaction), DoorWindowElevationMetadata.Create(item, origin, 50, null), item);
         }
 
         private static void InsertContinuous(IList<ElevationPlacement> elevations, Point3d origin, int scale, BlockTableRecord space, Transaction transaction, DraftingStandardResources resources, ObjectId dimensionStyle, DoorWindowLayers doorWindowLayers, Action<int, int, string> progress, bool useTianzhengTitle = true)

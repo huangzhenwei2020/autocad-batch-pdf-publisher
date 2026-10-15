@@ -51,7 +51,7 @@ internal sealed partial class ProbeWindow
         if(error!=null)_status.Text=error;
     }
 
-    private async Task<OpeningSizeConflictChoice?> ResolveOpeningSizeConflictAsync(Window owner,string id,double width,double height)
+    private async Task<OpeningSizeConflictChoice?> ResolveOpeningSizeConflictAsync(Window owner,string id,double width,double height,bool editedDefinition=false,string? scope=null)
     {
         var sourceId=StandardStoreyLayout.SourceElementId(_session.Model,id);
         var source=_session.Model.Openings.FirstOrDefault(o=>o.Id==sourceId);
@@ -60,7 +60,7 @@ internal sealed partial class ProbeWindow
         var plan=_session.PlanOpeningSizeCode(id,width,height,out var error);
         if(plan==null){_status.Text=error;return null;}
         if(!plan.HasConflict)return OpeningSizeConflictChoice.CreateNew;
-        var dialog=new OpeningSizeConflictWindow(plan,width,height);
+        var dialog=new OpeningSizeConflictWindow(plan,width,height,editedDefinition,scope);
         Exception? failure=null;
         if(_openingSizeConflictCheck!=null)dialog.Opened+=async(_,_)=> {
             try{await _openingSizeConflictCheck(dialog);}catch(Exception ex){failure=ex;dialog.Close();}
@@ -83,6 +83,8 @@ internal sealed partial class ProbeWindow
         if(!trial.TrySetOpeningParameters(id,values[0],values[1],values[2],values[3],values.Length>4?values[4]:0,onlyInstance,out var error)) {
             UpdateOpeningParameterFeedback(id,values,error);return;
         }
+        var fitted=trial.Model.Openings.First(o=>o.Id==StandardStoreyLayout.SourceElementId(trial.Model,id));
+        values[1]=fitted.Width;values[2]=fitted.Height;
         _openingSizeConflictBusy=true;
         try {
             var choice=await ResolveOpeningSizeConflictAsync(this,id,values[1],values[2]);

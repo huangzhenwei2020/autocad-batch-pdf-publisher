@@ -4,7 +4,7 @@ using System.Linq;
 
 namespace BatchPdfPublisher.BuildingModel
 {
-    public enum OpeningSizeConflictChoice { CreateNew, MergeExisting }
+    public enum OpeningSizeConflictChoice { CreateNew, MergeExisting, MergeEditedDefinition }
     public sealed class OpeningSizeCodePlan
     {
         public string Code { get; internal set; }
@@ -12,9 +12,49 @@ namespace BatchPdfPublisher.BuildingModel
         public bool HasConflict { get; internal set; }
         public bool CanMerge { get; internal set; }
         public string MergeError { get; internal set; }
+        public bool CanUpdateDefinition { get; internal set; }
+        public string UpdateDefinitionError { get; internal set; }
+    }
+    public sealed class PendingOpeningPlacementPlan
+    {
+        public double Width { get; internal set; }
+        public double Height { get; internal set; }
+        public double Sill { get; internal set; }
+        public double MaximumWidth { get; internal set; }
+        public double MaximumHeight { get; internal set; }
+        public double SuggestedWidth { get; internal set; }
+        public double SuggestedHeight { get; internal set; }
+        public OpeningSizeCodePlan CodePlan { get; internal set; }
+        public string Error { get; internal set; }
     }
     public sealed partial class BuildingModelEditSession
     {
+        public double[] GetOpeningSizeLimits(string id,bool onlyInstance,double? offset=null,double? sill=null)
+        {
+            var physical=StandardStoreyLayout.Materialize(Model);
+            var sourceId=StandardStoreyLayout.SourceElementId(Model,id);
+            var selected=physical.Openings.FirstOrDefault(o=>Same(o.Id,id))??physical.Openings.FirstOrDefault(o=>Same(o.Id,sourceId));
+            if(selected==null)return new[]{double.PositiveInfinity,double.PositiveInfinity};
+            var code=OpeningConstruction.EffectiveCode(selected);
+            var affected=physical.Openings.Where(o=>onlyInstance
+                ?Same(StandardStoreyLayout.SourceElementId(Model,o.Id),sourceId)
+                :Same(OpeningConstruction.EffectiveCode(o),code));
+            var width=double.PositiveInfinity;var height=double.PositiveInfinity;
+            foreach(var opening in affected)
+            {
+                var wall=physical.Walls.FirstOrDefault(w=>Same(w.Id,opening.HostWallId));
+                if(wall==null||Math.Abs(wall.Bulge)>1e-10)continue;
+                var isSelected=Same(StandardStoreyLayout.SourceElementId(Model,opening.Id),sourceId);
+                var center=isSelected&&offset.HasValue?offset.Value:opening.Offset;
+                var bottom=isSelected&&sill.HasValue?sill.Value:opening.Sill;
+                var length=Math.Sqrt(Math.Pow(wall.X2-wall.X1,2)+Math.Pow(wall.Y2-wall.Y1,2));
+                width=Math.Min(width,Math.Max(0,2*Math.Min(center,length-center)));
+                var wallHeight=wall.Height>0?wall.Height:physical.FindStorey(wall.StoreyId)?.Height??0;
+                height=Math.Min(height,Math.Max(0,wallHeight-bottom));
+            }
+            return new[]{width,height};
+        }
+
         public OpeningSizeCodePlan PlanOpeningSizeCode(string id,double width,double height,out string error)
         {
             error=null;
@@ -22,10 +62,15 @@ namespace BatchPdfPublisher.BuildingModel
             var sourceId=StandardStoreyLayout.SourceElementId(Model,id);
             var opening=physical.Openings.FirstOrDefault(o=>Same(o.Id,id))??physical.Openings.FirstOrDefault(o=>Same(o.Id,sourceId));
             if(opening==null){error="未找到门窗。";return null;}
+            return PlanOpeningSizeCode(physical,opening,width,height,out error);
+        }
+        private OpeningSizeCodePlan PlanOpeningSizeCode(BuildingModelDocument physical,OpeningModel opening,double width,double height,out string error,bool preserveCode=false)
+        {
+            error=null;
             if(!Finite(width)||!Finite(height)||width<=0||height<=0){error="洞口宽高必须是有效正数。";return null;}
             var originalCode=OpeningConstruction.EffectiveCode(opening);
             var match=System.Text.RegularExpressions.Regex.Match(originalCode,@"^([A-Za-z]+)\d{4}[A-Za-z]*$");
-            var code=match.Success?OpeningConstruction.SizeCode(match.Groups[1].Value,width,height):originalCode;
+            var code=!preserveCode&&match.Success?OpeningConstruction.SizeCode(match.Groups[1].Value,width,height):originalCode;
             if(code.Length>56)code=code.Substring(0,56);
             var used=new HashSet<string>(physical.Openings.Select(OpeningConstruction.EffectiveCode)
                 .Concat((Model.OpeningTypes??new List<OpeningTypeModel>()).Select(t=>t.Code)),StringComparer.OrdinalIgnoreCase);
@@ -34,6 +79,9 @@ namespace BatchPdfPublisher.BuildingModel
             var plan=new OpeningSizeCodePlan {Code=code,NewCode=fresh,HasConflict=used.Contains(code)};
             if(plan.HasConflict) {
                 var target=FindOpeningMergeType(physical,code);
+                plan.CanUpdateDefinition=target!=null&&target.Kind==opening.Kind
+                    &&physical.Openings.Where(o=>Same(OpeningConstruction.EffectiveCode(o),code)).All(o=>o.Kind==opening.Kind);
+                if(!plan.CanUpdateDefinition)plan.UpdateDefinitionError="已有编号的门窗类别不同，不能同步当前分格。";
                 if(target==null||target.Kind!=opening.Kind||Math.Abs(target.Width-width)>.001||Math.Abs(target.Height-height)>.001
                     ||physical.Openings.Where(o=>Same(OpeningConstruction.EffectiveCode(o),code))
                         .Any(o=>o.Kind!=opening.Kind||Math.Abs(o.Width-width)>.001||Math.Abs(o.Height-height)>.001))
@@ -80,6 +128,11 @@ namespace BatchPdfPublisher.BuildingModel
             var sourceId=StandardStoreyLayout.SourceElementId(Model,id);
             var source=Model.Openings.FirstOrDefault(o=>Same(o.Id,sourceId));
             if(source==null){error="未找到门窗。";return false;}
+            var limits=GetOpeningSizeLimits(id,onlyInstance,offset,sill);
+            var fittedWidth=OpeningConstruction.FitRoundedOpeningSize(draft.Width,limits[0]);
+            var fittedHeight=OpeningConstruction.FitRoundedOpeningSize(draft.Height,limits[1]);
+            if(fittedWidth!=draft.Width||fittedHeight!=draft.Height)
+            {draft=OpeningConstruction.Copy(draft);OpeningConstruction.ResizeType(draft,fittedWidth,fittedHeight);}
             if(draft.Width==source.Width&&draft.Height==source.Height&&!offset.HasValue&&!sill.HasValue&&!threshold.HasValue)
                 return TrySetOpeningConstruction(id,draft,onlyInstance,out error,templates,snapStep);
             var candidate=Clone(Model);
@@ -92,13 +145,18 @@ namespace BatchPdfPublisher.BuildingModel
                 .Where(o=>Same(OpeningConstruction.EffectiveCode(o),originalCode)).Select(o=>o.Id).ToArray();
             var plan=PlanOpeningSizeCode(id,draft.Width,draft.Height,out error);
             if(plan==null)return false;
-            var merge=plan.HasConflict&&conflictChoice==OpeningSizeConflictChoice.MergeExisting;
-            if(merge&&!plan.CanMerge){error=plan.MergeError;return false;}
+            var merge=plan.HasConflict&&(conflictChoice==OpeningSizeConflictChoice.MergeExisting
+                ||conflictChoice==OpeningSizeConflictChoice.MergeEditedDefinition);
+            if(merge&&(conflictChoice==OpeningSizeConflictChoice.MergeEditedDefinition?!plan.CanUpdateDefinition:!plan.CanMerge)){
+                error=conflictChoice==OpeningSizeConflictChoice.MergeEditedDefinition?plan.UpdateDefinitionError:plan.MergeError;return false;}
             var code=merge?plan.Code:plan.NewCode;
-            var type=OpeningConstruction.Copy(merge?FindOpeningMergeType(StandardStoreyLayout.Materialize(candidate),code):draft);
+            var type=OpeningConstruction.Copy(merge&&conflictChoice==OpeningSizeConflictChoice.MergeExisting
+                ?FindOpeningMergeType(StandardStoreyLayout.Materialize(candidate),code):draft);
             type.Code=code;type.Kind=source.Kind;
             candidate.OpeningTypes.RemoveAll(t=>Same(t.Code,code));candidate.OpeningTypes.Add(type);
             var ids=new HashSet<string>(affected,StringComparer.OrdinalIgnoreCase);
+            if(merge&&conflictChoice==OpeningSizeConflictChoice.MergeEditedDefinition)
+                ids.UnionWith(displayed.Openings.Where(o=>Same(OpeningConstruction.EffectiveCode(o),code)).Select(o=>o.Id));
             foreach(var opening in candidate.Openings.Where(o=>ids.Contains(o.Id))) {
                 opening.Width=type.Width;opening.Height=type.Height;opening.Code=code;
                 opening.CodeManuallyEdited=true;
@@ -208,6 +266,69 @@ namespace BatchPdfPublisher.BuildingModel
             candidate.CadImport.ResolvedOpenings.Add(new CadResolvedOpening {StoreyId=storeyId,SourceHandle=sourceHandle,OpeningId=opening.Id});
             Commit(candidate);id=opening.Id;return true;
         }
+        public PendingOpeningPlacementPlan PlanPendingOpeningPlacement(string storeyId,string sourceHandle,string wallId,double offset,
+            double? width=null,double? height=null,double? sill=null)
+        {
+            var plan=new PendingOpeningPlacementPlan();
+            var pending=Model.CadImport?.PendingOpenings?.SingleOrDefault(p=>Same(p.StoreyId,storeyId)&&Same(p.SourceHandle,sourceHandle));
+            var wall=Model.Walls.FirstOrDefault(w=>Same(w.Id,wallId)&&Same(w.StoreyId,storeyId));
+            if(pending==null||wall==null){plan.Error="请选择该门窗所在楼层的墙。";return plan;}
+            if(!Finite(offset)||Math.Abs(wall.Bulge)>1e-10){plan.Error="请选择直墙上的有效定位中心。";return plan;}
+            var wallHeight=wall.Height>0?wall.Height:Model.FindStorey(storeyId)?.Height??0;
+            foreach(var reference in Model.Storeys.Where(s=>Same(s.TemplateStoreyId,storeyId)))
+                wallHeight=Math.Min(wallHeight,wall.Height>0?wall.Height:reference.Height);
+            var length=Math.Sqrt(Math.Pow(wall.X2-wall.X1,2)+Math.Pow(wall.Y2-wall.Y1,2));
+            if(!Finite(length)||length<=0){plan.Error="宿主墙没有有效长度。";return plan;}
+            plan.Sill=sill??Math.Max(0,Math.Min(pending.Kind=="窗"?900:0,wallHeight-pending.Height));
+            plan.MaximumWidth=Math.Max(0,2*Math.Min(offset,length-offset));
+            foreach(var other in Model.Openings.Where(o=>Same(o.HostWallId,wallId)))
+                plan.MaximumWidth=Math.Min(plan.MaximumWidth,Math.Max(0,2*(Math.Abs(other.Offset-offset)-other.Width/2)));
+            plan.MaximumHeight=Math.Max(0,wallHeight-plan.Sill);
+            plan.Width=width??pending.Width;plan.Height=height??pending.Height;
+            if(!Finite(plan.Width)||!Finite(plan.Height)||!Finite(plan.Sill)||plan.Width<=0||plan.Height<=0||plan.Sill<0
+                ||!Finite(wallHeight)||wallHeight<=0){plan.Error="洞口宽高须为有效正数，窗台高须为非负毫米数。";return plan;}
+            plan.Width=OpeningConstruction.FitRoundedOpeningSize(plan.Width,plan.MaximumWidth);
+            plan.Height=OpeningConstruction.FitRoundedOpeningSize(plan.Height,plan.MaximumHeight);
+            plan.SuggestedWidth=ClosestInside(plan.Width,plan.MaximumWidth);
+            plan.SuggestedHeight=ClosestInside(plan.Height,plan.MaximumHeight);
+            var opening=new OpeningModel {Id="pending-preview",HostWallId=wallId,Code=pending.Code,Kind=pending.Kind,
+                Offset=offset,Width=plan.Width,Height=plan.Height,Sill=plan.Sill};
+            plan.Error=ValidateOpeningGeometry(Model,wall,opening);
+            if(plan.Error==null&&plan.Height>plan.MaximumHeight+.5)plan.Error="洞口顶部超出共用标准层可用高度。";
+            var changed=plan.Width!=pending.Width||plan.Height!=pending.Height;
+            plan.CodePlan=PlanOpeningSizeCode(StandardStoreyLayout.Materialize(Model),opening,plan.Width,plan.Height,out var codeError,!changed);
+            if(plan.Error==null)plan.Error=codeError;
+            return plan;
+        }
+        private static double ClosestInside(double requested,double maximum)
+        {
+            if(requested<=maximum)return Math.Round(requested,0,MidpointRounding.AwayFromZero)<=maximum
+                ?Math.Round(requested,0,MidpointRounding.AwayFromZero):Math.Floor(maximum);
+            var fitted=OpeningConstruction.FitRoundedOpeningSize(requested,maximum);
+            return fitted!=requested?fitted:Math.Floor(maximum/10)*10;
+        }
+        public bool TryPlacePendingOpening(string storeyId,string sourceHandle,string wallId,double offset,double width,double height,double sill,
+            OpeningSizeConflictChoice choice,out string id,out string error)
+        {
+            id=null;var plan=PlanPendingOpeningPlacement(storeyId,sourceHandle,wallId,offset,width,height,sill);error=plan.Error;
+            if(error!=null)return false;
+            if(choice==OpeningSizeConflictChoice.MergeEditedDefinition){error="待放置门窗不能覆盖已有类型的做法。";return false;}
+            var candidate=Clone(Model);var pending=candidate.CadImport.PendingOpenings.Single(p=>Same(p.StoreyId,storeyId)&&Same(p.SourceHandle,sourceHandle));
+            var merge=plan.CodePlan.HasConflict&&choice==OpeningSizeConflictChoice.MergeExisting;
+            if(merge&&!plan.CodePlan.CanMerge){error=plan.CodePlan.MergeError??"已有编号的尺寸或类别不同，不能合并。";return false;}
+            var code=merge?plan.CodePlan.Code:plan.CodePlan.NewCode;
+            var opening=new OpeningModel {Id="O-"+Guid.NewGuid().ToString("N"),HostWallId=wallId,Code=code,Kind=pending.Kind,
+                Offset=offset,Width=plan.Width,Height=plan.Height,Sill=plan.Sill,OpenIn3D=false};
+            var type=merge?FindOpeningMergeType(StandardStoreyLayout.Materialize(candidate),code):null;
+            if(type==null){var sourceType=OpeningConstruction.Library(candidate).FindType(pending.Code);
+                type=sourceType==null?OpeningConstruction.Default(opening):OpeningConstruction.Copy(sourceType);OpeningConstruction.ResizeType(type,plan.Width,plan.Height);
+                type.Code=code;type.Kind=pending.Kind;candidate.OpeningTypes.Add(type);}
+            error=OpeningConstruction.Validate(opening,type);if(error!=null)return false;
+            candidate.Openings.Add(opening);candidate.CadImport.PendingOpenings.Remove(pending);
+            candidate.CadImport.ResolvedOpenings=candidate.CadImport.ResolvedOpenings??new List<CadResolvedOpening>();
+            candidate.CadImport.ResolvedOpenings.Add(new CadResolvedOpening {StoreyId=storeyId,SourceHandle=sourceHandle,OpeningId=opening.Id});
+            Commit(candidate);id=opening.Id;return true;
+        }
         public bool TrySetOpeningConstruction(string openingId,OpeningTypeModel draft,bool onlyInstance,out string error,IDictionary<string,OpeningTypeModel> templates=null,double? snapStep=null)
         {
             error=null;
@@ -230,6 +351,8 @@ namespace BatchPdfPublisher.BuildingModel
             }
             var affected=onlyInstance ? new[]{selected} : physical.Openings.Where(o=>Same(OpeningConstruction.EffectiveCode(o),originalCode)).ToArray();
             foreach(var o in affected) {error=OpeningConstruction.Validate(o,type);if(error!=null)return false;}
+            var sourceIds=new HashSet<string>(affected.Select(o=>StandardStoreyLayout.SourceElementId(Model,o.Id)),StringComparer.OrdinalIgnoreCase);
+            candidate.OpeningOverrides.RemoveAll(o=>o.Definition!=null && sourceIds.Contains(StandardStoreyLayout.SourceElementId(Model,o.OpeningId)));
             type.Code=code;type.Width=selected.Width;type.Height=selected.Height;type.Kind=selected.Kind;
             candidate.OpeningTypes.RemoveAll(t=>Same(t.Code,code));candidate.OpeningTypes.Add(type);
             if(string.IsNullOrWhiteSpace(selected.Code) && !onlyInstance)
@@ -248,6 +371,8 @@ namespace BatchPdfPublisher.BuildingModel
                 if(affected.Length==0){error="门窗类型已变化，请重新打开门窗表。";return false;}
                 var type=OpeningConstruction.Copy(entry.Value);type.Code=entry.Key;
                 foreach(var opening in affected){error=OpeningConstruction.Validate(opening,type);if(error!=null)return false;}
+                var sourceIds=new HashSet<string>(affected.Select(o=>StandardStoreyLayout.SourceElementId(Model,o.Id)),StringComparer.OrdinalIgnoreCase);
+                candidate.OpeningOverrides.RemoveAll(o=>o.Definition!=null && sourceIds.Contains(StandardStoreyLayout.SourceElementId(Model,o.OpeningId)));
                 candidate.OpeningTypes.RemoveAll(t=>Same(t.Code??"",entry.Key));candidate.OpeningTypes.Add(type);
                 foreach(var o in candidate.Openings.Where(o=>string.IsNullOrWhiteSpace(o.Code)&&Same(OpeningConstruction.EffectiveCode(o),entry.Key)))o.Code=entry.Key;
             }

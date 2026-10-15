@@ -11,7 +11,17 @@ using BatchPdfPublisher.Views;
 internal static class CadFloorModelGenerationTests
 {
     private static void Check(bool success,string message) { if(!success)throw new Exception(message); }
-    private static void Reject(Action action) { try { action(); } catch(InvalidDataException) { return; } throw new Exception("Invalid generation accepted."); }
+    private static string Geometry(BuildingModelDocument model)
+    {
+        var copy=BuildingModelJson.FromJson(BuildingModelJson.ToJson(model));copy.CadImport=null;
+        return BuildingModelJson.ToJson(copy);
+    }
+    private static void WarnAndPreserve(BuildingModelDocument model,CadFloorPlanRegistry registry)
+    {
+        var before=Geometry(model);var result=CadFloorModelGeneration.Build(model,registry,"warning-only");
+        Check(Geometry(result)==before&&result.CadImport.RequestId=="warning-only"&&result.CadImport.StructureMessages.Count>0,
+            "Recognition or update failure must retain the model and return a nonblocking warning.");
+    }
     public static void Run()
     {
         var folder=Path.GetFullPath(".artifacts/cad-floor-workflow-20261001/generation-"+Guid.NewGuid().ToString("N")); Directory.CreateDirectory(folder);
@@ -161,7 +171,7 @@ internal static class CadFloorModelGenerationTests
         legacy.Walls[0].Height=4500; legacy.CadImport.Walls[0].Height=4500;
         Check(CadFloorModelGeneration.Build(legacy,registry).Walls[0].Height==0,
             "Reimport must repair old fixed-height CAD walls without changing their source identities.");
-        legacy.Walls[0].Height=4400; Reject(()=>CadFloorModelGeneration.Build(legacy,registry));
+        legacy.Walls[0].Height=4400; WarnAndPreserve(legacy,registry);
         wall.Fields.First(f=>f.Name=="Height").Number=3000;
         Check(registry.BuildSchedule(generated).Single().Quantity==2,"The standard reference must reuse the source and count real floor instances.");
         Check(BuildingVolumeBuilder.Build(generated).Faces.Where(f=>f.Kind=="wall").Select(f=>f.StoreyId).Distinct().Count()==2,"Standard references must generate their wall volumes.");
@@ -204,7 +214,8 @@ internal static class CadFloorModelGenerationTests
         Check(CadFloorModelGeneration.Build(model,registry).Openings[0].Sill==100,"Default sill must fit the shortest actual reference-floor wall without changing native opening size.");
         item.Sill=0;
         Check(CadFloorModelGeneration.Build(model,registry).Openings[0].Sill==0,"Explicit zero must override default window sill.");
-        item.Sill=900; Reject(()=>CadFloorModelGeneration.Build(model,registry));
+        item.Sill=900;Check(CadFloorModelGeneration.Build(model,registry).CadImport.PendingOpenings.Count==1,
+            "A too-high opening must become pending rather than block generation.");
         item.Code="—"; item.Sill=null; item.Height=1200;
         Check(CadFloorModelGeneration.Build(model,registry).Openings[0].Code=="C0812","Legacy missing-label placeholders must become explicit default size codes.");
         item.Code=null;
@@ -214,7 +225,11 @@ internal static class CadFloorModelGenerationTests
         Check(CadFloorModelGeneration.Build(model,registry).Openings[0].Kind=="门","Existing explicit categories must survive automatic defaults.");
         item.Code="M01"; item.Height=2200; item.Sill=0;
         before=BuildingModelJson.ToJson(session.Model); revision=session.Revision; item.Width=double.NaN;
-        Check(!session.TryImportCadFloors(registry,"invalid",out error) && before==BuildingModelJson.ToJson(session.Model) && session.Revision==revision,"Invalid dimensions must still reject the whole edit without changing history."); item.Width=800;
+        var geometry=Geometry(session.Model);
+        Check(session.TryImportCadFloors(registry,"invalid",out error)&&geometry==Geometry(session.Model)
+            &&session.Revision==revision+1&&session.Model.CadImport.StructureMessages.Count>0,
+            "Invalid registration dimensions must warn without corrupting geometry or blocking the model.");
+        Check(session.Undo()&&before==BuildingModelJson.ToJson(session.Model),"Warning-only generation must undo cleanly.");item.Width=800;
         item.Placement=null;
         var withoutLocation=CadFloorModelGeneration.Build(model,registry);
         Check(withoutLocation.Walls.Count==1 && withoutLocation.Openings.Count==0
@@ -247,15 +262,16 @@ internal static class CadFloorModelGenerationTests
         CadModelGenerationRequest.Acknowledge(path,pendingRequest.Id,null);
         capture.Openings.RemoveAt(capture.Openings.Count-1);
         capture.Probe.Entities.Clear();
-        wall.StraightHorizontalLineVerified=false; Reject(()=>CadFloorModelGeneration.Build(model,registry)); wall.StraightHorizontalLineVerified=true;
-        wall.Fields.First(f=>f.Name=="Elevation").Number=double.NaN; Reject(()=>CadFloorModelGeneration.Build(model,registry)); wall.Fields.First(f=>f.Name=="Elevation").Number=0;
+        wall.StraightHorizontalLineVerified=false; WarnAndPreserve(model,registry); wall.StraightHorizontalLineVerified=true;
+        wall.Fields.First(f=>f.Name=="Elevation").Number=double.NaN; WarnAndPreserve(model,registry); wall.Fields.First(f=>f.Name=="Elevation").Number=0;
         wall.Fields.First(f=>f.Name=="Height").Number=null;
         Check(CadFloorModelGeneration.Build(model,registry).Walls[0].Height==0,"Missing native wall height must still use the configured model storey height.");
-        item.Height=2900; Reject(()=>CadFloorModelGeneration.Build(model,registry)); item.Height=2200;
+        item.Height=2900;Check(CadFloorModelGeneration.Build(model,registry).CadImport.PendingOpenings.Count==1,
+            "Opening height errors must not block walls or the editable model.");item.Height=2200;
         wall.Fields.First(f=>f.Name=="Height").Number=3000;
         session.Model.Walls.First(w=>w.Id==id).Thickness=250;
         before=BuildingModelJson.ToJson(session.Model);
-        Check(!session.TryImportCadFloors(registry,"changed",out error) && before==BuildingModelJson.ToJson(session.Model),"Manual changes to imported elements must be protected.");
+        WarnAndPreserve(session.Model,registry);
         item.Kind="待确认"; item.Sill=null;
         var request=CadModelGenerationRequest.Queue(registry);
         Check(CadModelGenerationRequest.Load(path).Id==request.Id,"Generation request must round-trip geometry and source identity.");
@@ -269,13 +285,199 @@ internal static class CadFloorModelGenerationTests
         StudioLaunch.RegisterSession(path); Check(StudioLaunch.HasLiveSession(path),"Live editor marker must match a live process.");
         StudioLaunch.RemoveSession(path); Check(!StudioLaunch.HasLiveSession(path),"Editor marker must be removed on close.");
         var invoked=false;
-        var window=new CadFloorRegistrationWindow(path,generateModel:r=>{ invoked=true; });
+        var window=new CadFloorRegistrationWindow(path,generateModel:r=>{ invoked=true;Check(r.ReplaceRegisteredConstruction,"CAD UI must default to explicit replacement."); });
         var root=(FrameworkElement)window.Content; root.Measure(new Size(1060,610)); root.Arrange(new Rect(new Size(1060,610))); root.UpdateLayout();
         var buttons=Descendants(root).OfType<Button>().ToList();
         Check(!buttons.Any(b=>(b.Content as string)=="门窗表与立面"),"Registration must not send the user to elevations.");
         buttons.Single(b=>(b.Content as string)=="生成建筑模型").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         Check(invoked,"Generate button must invoke the model generation action.");
+        var safeWindow=new CadFloorRegistrationWindow(path,generateModel:r=>Check(!r.ReplaceRegisteredConstruction,"Safe-update choice lost."));
+        var safeRoot=(FrameworkElement)safeWindow.Content;safeRoot.Measure(new Size(1060,610));safeRoot.Arrange(new Rect(new Size(1060,610)));safeRoot.UpdateLayout();
+        Descendants(safeRoot).OfType<ComboBox>().Single(c=>c.Name=="CadGenerationMode").SelectedIndex=1;
+        Descendants(safeRoot).OfType<Button>().Single(b=>(b.Content as string)=="生成建筑模型").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        foreach(var readFailure in new[] {false,true})
+        {
+            var submitted=false;
+            var nonblocking=new CadFloorRegistrationWindow(path,generateModel:r=>{
+                submitted=true;var safe=CadFloorModelGeneration.Build(BuildingModelJson.LoadModel(path),r);
+                Check(r.ModelPath==path,"A failed CAD read must not replace the registry target with its partial draft.");
+                Check(Geometry(safe)==Geometry(BuildingModelJson.LoadModel(path))&&safe.CadImport.StructureMessages.Count>0,
+                    "CAD pre-generation failure must keep a safe editable model.");
+                if(readFailure)Check(r.GenerationWarning.Contains("源对象无法读取"),"CAD read warning did not reach the model request.");
+            },readPlan:r=>{if(readFailure){r.Floors.Clear();r.ModelPath="wrong-path";throw new InvalidDataException("源对象无法读取");}});
+            var panel=(FrameworkElement)nonblocking.Content;panel.Measure(new Size(1060,610));panel.Arrange(new Rect(new Size(1060,610)));panel.UpdateLayout();
+            if(!readFailure)Descendants(panel).OfType<TextBox>().Single(t=>t.Name=="CadSlabThickness").Text="invalid";
+            Descendants(panel).OfType<Button>().Single(b=>(b.Content as string)=="生成建筑模型").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Check(submitted,"CAD thickness or re-read warnings must not block the Generate button.");
+        }
+        RunReferenceOnlyTests(model,registry,rebuiltPending,folder);
+        RunNonBlockingTests(model,registry,generated);
+        RunRoundedOpeningFitTests(model,registry);
         Console.WriteLine("GENERATION_FIXTURE "+path);
+    }
+    private static void RunRoundedOpeningFitTests(BuildingModelDocument original,CadFloorPlanRegistry source)
+    {
+        var model=BuildingModelJson.FromJson(BuildingModelJson.ToJson(original));
+        model.Storeys[0].Height=4000;model.Storeys[1].Height=3108;
+        var registry=source.Clone();var capture=registry.Floors[0];var wall=capture.Floor.WallCandidates.Single();
+        wall.CurveStart=new CadProbePoint {X=100,Y=200};wall.CurveEnd=new CadProbePoint {X=3868,Y=200};
+        capture.Openings=new List<CadFloorOpeningItem> {new CadFloorOpeningItem {
+            SourceHandle="rounded-opening",Code="MLC04B",Kind="门联窗",Width=3770,Height=2210,Sill=900,
+            Placement=CadOpeningPlacement.Create(capture.Floor,wall.Handle,new PointModel(100,200),new PointModel(3868,200),
+                new PointModel(100,200),new PointModel(3868,200),3770) }};
+        capture.Probe.Entities=new List<CadBuildingProbeEntity> {new CadBuildingProbeEntity {
+            Handle="rounded-opening",BoundsMin=new CadProbePoint {X=100,Y=100},BoundsMax=new CadProbePoint {X=3868,Y=300} }};
+        var before=BuildingModelJson.ToJson(model);
+        foreach(var replacement in new[] {false,true})
+        {
+            registry.ReplaceRegisteredConstruction=replacement;
+            var fitted=CadFloorModelGeneration.Build(model,registry,"rounded-fit");
+            Check(fitted.Walls.Count==1&&fitted.Openings.Count==1&&fitted.CadImport.PendingOpenings.Count==0,
+                "Rounding-only CAD discrepancies must not suppress a verified wall or opening.");
+            var opening=fitted.Openings.Single();var baseline=fitted.CadImport.Openings.Single();
+            Check(opening.Code=="MLC04B"&&opening.Width==3768&&opening.Height==2208&&opening.Offset==1884&&opening.Sill==900
+                &&fitted.Walls.Single().X2==3768,
+                "Generated dimensions must fit actual wall endpoints and the shortest shared storey without moving or extending geometry.");
+            Check(baseline.Id==opening.Id&&baseline.Width==opening.Width&&baseline.Height==opening.Height&&baseline.Offset==opening.Offset,
+                "The CAD baseline must store fitted physical dimensions, not the oversized nominal dimensions.");
+            Check(StandardStoreyLayout.Materialize(fitted).Openings.All(o=>o.Width==3768&&o.Height==2208),
+                "Standard-storey instances must reuse the fitted physical opening.");
+            Check(fitted.CadImport.StructureMessages.Any(m=>m.Contains("MLC04B")&&m.Contains("3770")&&m.Contains("3768")
+                &&m.Contains("2210")&&m.Contains("2208")),"CAD fit adjustments must be reported.");
+            var repeated=CadFloorModelGeneration.Build(fitted,registry,"rounded-repeat");
+            Check(Geometry(repeated)==Geometry(fitted)&&repeated.CadImport.Openings.Single().Width==3768
+                &&repeated.CadImport.PendingOpenings.Count==0,"Repeated CAD generation must remain fitted without treating its own baseline as a local edit.");
+            Check(BuildingModelJson.ToJson(model)==before&&capture.Openings.Single().Width==3770&&capture.Openings.Single().Height==2210
+                &&capture.Openings.Single().Placement.PickedWidth==3768&&wall.CurveEnd.X==3868,
+                "CAD fitting must not rewrite source geometry, registration dimensions or picked endpoints.");
+        }
+        registry.ReplaceRegisteredConstruction=false;
+        var offsetRegistry=registry.Clone();var offsetCapture=offsetRegistry.Floors[0];var offsetWall=offsetCapture.Floor.WallCandidates.Single();
+        offsetWall.CurveEnd.X=6100;
+        offsetCapture.Openings.Single().Placement=CadOpeningPlacement.Create(offsetCapture.Floor,offsetWall.Handle,
+            new PointModel(100,200),new PointModel(6100,200),new PointModel(100,200),new PointModel(3868,200),3770);
+        var offsetFit=CadFloorModelGeneration.Build(model,offsetRegistry);
+        Check(offsetFit.Openings.Single().Width==3768&&offsetFit.Openings.Single().Offset==1884&&offsetFit.Walls.Single().X2==6000,
+            "The width limit must use the current symmetric center, not the entire wall length or a recentered opening.");
+        var fractional=registry.Clone();var fractionalCapture=fractional.Floors[0];fractionalCapture.Floor.WallCandidates.Single().CurveEnd.X=3868.6;
+        fractionalCapture.Openings.Single().Placement=CadOpeningPlacement.Create(fractionalCapture.Floor,wall.Handle,
+            new PointModel(100,200),new PointModel(3868.6,200),new PointModel(100,200),new PointModel(3868.6,200),3770);
+        Check(CadFloorModelGeneration.Build(model,fractional).Openings.Single().Width==3768,
+            "A fractional actual limit must fit inward to whole millimetres.");
+        var boundary=registry.Clone();boundary.Floors[0].Openings.Single().Height=2213;
+        Check(CadFloorModelGeneration.Build(model,boundary).Openings.Single().Height==2208,
+            "An exactly 5 mm discrepancy in the same 10 mm bucket must fit inward.");
+        foreach(var requestedWidth in new[] {3774d,3780d})
+        {
+            var oversized=registry.Clone();oversized.Floors[0].Openings.Single().Width=requestedWidth;
+            var rejected=CadFloorModelGeneration.Build(model,oversized);
+            Check(rejected.Walls.Count==1&&rejected.Openings.Count==0&&rejected.CadImport.PendingOpenings.Single().Width==requestedWidth
+                &&rejected.CadImport.PendingOpenings.Single().ReferencePosition.X==1884,
+                "Genuinely oversized CAD openings must retain their requested size and reference without blocking walls.");
+        }
+        var otherBucket=registry.Clone();var bucketCapture=otherBucket.Floors[0];bucketCapture.Floor.WallCandidates.Single().CurveEnd.X=3864;
+        bucketCapture.Openings.Single().Width=3766;
+        bucketCapture.Openings.Single().Placement=CadOpeningPlacement.Create(bucketCapture.Floor,wall.Handle,
+            new PointModel(100,200),new PointModel(3864,200),new PointModel(100,200),new PointModel(3864,200),3766);
+        var bucketRejected=CadFloorModelGeneration.Build(model,otherBucket);
+        Check(bucketRejected.Walls.Count==1&&bucketRejected.Openings.Count==0&&bucketRejected.CadImport.PendingOpenings.Single().Width==3766
+            &&bucketRejected.CadImport.PendingOpenings.Single().Reason.Contains("端部"),
+            "Even a verified 2 mm picked-width discrepancy must remain pending when its actual limit is in a different 10 mm bucket.");
+        foreach(var requestedHeight in new[] {2214d,2216d})
+        {
+            var tall=registry.Clone();tall.Floors[0].Openings.Single().Height=requestedHeight;
+            var heightRejected=CadFloorModelGeneration.Build(model,tall);
+            Check(heightRejected.Walls.Count==1&&heightRejected.Openings.Count==0&&heightRejected.CadImport.PendingOpenings.Single().Height==requestedHeight,
+                "A height overflow greater than 5 mm must remain a reference, including requests in the same 10 mm bucket.");
+        }
+        Console.WriteLine("CAD_ROUNDED_OPENING_FIT_OK width3770To3768 shortestSharedHeight inwardWholeMm fixedCenter baseline repeat sourcePreserved oversizePending");
+    }
+    private static void RunReferenceOnlyTests(BuildingModelDocument empty, CadFloorPlanRegistry source,
+        BuildingModelDocument existing, string folder)
+    {
+        var registry=source.Clone();var capture=registry.Floors[0];capture.Floor.WallCandidates.Clear();
+        capture.Openings.ForEach(o=>o.Placement=null);
+        capture.Underlay=new CadPlanUnderlay { Primitives=new List<ComponentPlanPrimitive> {
+            new ComponentPlanPrimitive { Kind="Line",SourceLayer="普通线",X1=100,Y1=200,X2=6100,Y2=200 } } };
+        capture.Probe.Entities=new List<CadBuildingProbeEntity> {
+            new CadBuildingProbeEntity { Handle="M1",BoundsMin=new CadProbePoint {X=1100,Y=100},BoundsMax=new CadProbePoint {X=1900,Y=300} },
+            new CadBuildingProbeEntity { Handle="invalid-column",DxfName="TCH_COLUMN" } };
+        string RegistryJson(CadFloorPlanRegistry value)
+        {
+            using(var stream=new MemoryStream()) {
+                new System.Runtime.Serialization.Json.DataContractJsonSerializer(typeof(CadFloorPlanRegistry)).WriteObject(stream,value);
+                return Convert.ToBase64String(stream.ToArray());
+            }
+        }
+        var emptyBefore=BuildingModelJson.ToJson(empty);var registryBefore=RegistryJson(registry);
+        var session=new BuildingModelEditSession(empty);
+        Check(session.TryImportCadFloors(registry,"reference-only",out var error),error);
+        Check(session.Model.Walls.Count==0&&session.Model.Openings.Count==0&&session.Model.Columns.Count==0&&session.Model.Beams.Count==0,
+            "Reference-only generation must succeed without inventing construction.");
+        Check(session.Model.CadImport.PendingOpenings.Single().ReferencePosition.X==1400
+            &&session.Model.CadImport.StructureMessages.Any(m=>m.Contains("未识别到可生成")),
+            "No recognised construction must warn and retain opening reference positions.");
+        Check(BuildingModelJson.ToJson(empty)==emptyBefore&&RegistryJson(registry)==registryBefore,
+            "Reference-only generation must not mutate the source model or underlay registration.");
+        Check(session.Model.Storeys.Count==2&&session.Model.Storeys[1].TemplateStoreyId=="1F",
+            "Reference-only generation must preserve standard storeys.");
+        Check(session.Undo()&&BuildingModelJson.ToJson(session.Model)==emptyBefore&&session.Redo(),
+            "Reference-only generation must undo and redo as one edit.");
+        registry.ModelPath=Path.Combine(folder,"reference-only.json");capture.Floor.ModelPath=registry.ModelPath;
+        BuildingModelJson.SaveModel(registry.ModelPath,empty);
+        registry.SaveFloor(capture);var request=CadModelGenerationRequest.Queue(registry);
+        Check(CadModelGenerationRequest.Load(registry.ModelPath).Id==request.Id,"Reference-only request must queue.");
+        BuildingModelJson.SaveModel(registry.ModelPath,session.Model);
+        Check(BuildingModelJson.LoadModel(registry.ModelPath).CadImport.PendingOpenings.Count==1
+            &&CadFloorPlanRegistry.Load(registry.ModelPath).Floors[0].Underlay.Primitives.Count==1,
+            "Reference-only model and CAD underlay must survive reopening.");
+        CadModelGenerationRequest.Acknowledge(registry.ModelPath,request.Id,null);
+        Check(CadModelGenerationRequest.LoadResult(registry.ModelPath).Succeeded&&!File.Exists(CadModelGenerationRequest.FilePath(registry.ModelPath)),
+            "Reference-only request must acknowledge success without replay.");
+        var retained=BuildingModelJson.FromJson(BuildingModelJson.ToJson(existing));
+        retained.Walls[0].Thickness+=25;
+        retained.Columns.Add(new ColumnModel {Id="manual-column",StoreyId="1F",X=7000,Y=1000,Width=400,Depth=400});
+        retained.Beams.Add(new BeamModel {Id="manual-beam",StoreyId="1F",X1=7000,Y1=1000,X2=10000,Y2=1000,Width=200,Depth=500});
+        var geometryBefore=BuildingModelJson.ToJson(new BuildingModelDocument {Walls=retained.Walls,Openings=retained.Openings,
+            Slabs=retained.Slabs,Columns=retained.Columns,Beams=retained.Beams});
+        var baselineBefore=BuildingModelJson.ToJson(new BuildingModelDocument {Walls=retained.CadImport.Walls,Openings=retained.CadImport.Openings});
+        var reference=CadFloorModelGeneration.Build(retained,registry,"keep-existing");
+        Check(BuildingModelJson.ToJson(new BuildingModelDocument {Walls=reference.Walls,Openings=reference.Openings,
+            Slabs=reference.Slabs,Columns=reference.Columns,Beams=reference.Beams})==geometryBefore,
+            "An empty recognition result must not delete imported, edited or manual construction.");
+        Check(BuildingModelJson.ToJson(new BuildingModelDocument {Walls=reference.CadImport.Walls,Openings=reference.CadImport.Openings})==baselineBefore
+            &&reference.CadImport.ResolvedOpenings.Count==retained.CadImport.ResolvedOpenings.Count&&reference.CadImport.PendingOpenings.Count==0,
+            "Reference-only refresh must preserve import protection and already placed openings without duplicate markers.");
+        var blank=registry.Clone();blank.Floors[0].Openings.Clear();blank.Floors[0].Probe.Entities.Clear();
+        Check(CadFloorModelGeneration.Build(empty,blank).Walls.Count==0,"A plain CAD-line-only floor must generate an empty model.");
+        capture.Openings[0].Width=double.NaN;
+        WarnAndPreserve(empty,registry);
+        Console.WriteLine("CAD_REFERENCE_ONLY_OK plainLines pending save queue ack undo standardFloors existingGeometry baselineProtection invalidSize");
+    }
+    private static void RunNonBlockingTests(BuildingModelDocument model,CadFloorPlanRegistry registry,BuildingModelDocument generated)
+    {
+        foreach(var change in new Action<CadBuildingProbeEntity>[] {
+            w=>w.StraightHorizontalLineVerified=false,w=>w.CurveStart=null,
+            w=>w.CandidateAxisOffset=null,w=>w.CandidateThickness=-10,
+            w=>w.Fields.First(f=>f.Name=="Elevation").Number=100,
+            w=>w.Fields.First(f=>f.Name=="Elevation").Number=null,
+            w=>w.CurveEnd.X=double.NaN,w=>w.CurveEnd=w.CurveStart,w=>w.Handle=null })
+        {
+            var mixed=registry.Clone();var bad=registry.Clone().Floors[0].Floor.WallCandidates[0];bad.Handle="bad-wall";change(bad);
+            mixed.Floors[0].Floor.WallCandidates.Add(bad);
+            var built=CadFloorModelGeneration.Build(model,mixed);
+            Check(built.Walls.Count==1&&built.Openings.Count==1&&built.CadImport.StructureMessages.Any(m=>m.Contains("已跳过")),
+                "One unsupported wall must not block the valid wall and opening.");
+        }
+        var noFloors=registry.Clone();noFloors.Floors.Clear();WarnAndPreserve(model,noFloors);
+        var duplicate=registry.Clone();duplicate.Floors.Add(duplicate.Floors[0]);WarnAndPreserve(model,duplicate);
+        var invalidSlab=registry.Clone();invalidSlab.SlabThickness=-10;WarnAndPreserve(model,invalidSlab);
+        var absentIdentity=registry.Clone();absentIdentity.Floors[0].Probe.DrawingFingerprint=null;WarnAndPreserve(model,absentIdentity);
+        var oldSkipped=registry.Clone();oldSkipped.Floors[0].Floor.WallCandidates[0].StraightHorizontalLineVerified=false;
+        var preserved=CadFloorModelGeneration.Build(generated,oldSkipped);
+        Check(Geometry(preserved)==Geometry(generated)&&preserved.CadImport.Walls.Count==1,
+            "An unverified old wall must keep its geometry and import baseline.");
+        Console.WriteLine("CAD_NONBLOCKING_GENERATION_OK mixedWalls missingCurve thickness offset elevation finiteGeometry identity noFloors duplicates slabSetting preserveImported");
     }
     private static CadProbeSegment Segment(double x1,double y1,double x2,double y2) => new CadProbeSegment { Start=new CadProbePoint { X=x1,Y=y1 },End=new CadProbePoint { X=x2,Y=y2 } };
     private static IEnumerable<DependencyObject> Descendants(DependencyObject root) { for(var i=0;i<VisualTreeHelper.GetChildrenCount(root);i++) { var child=VisualTreeHelper.GetChild(root,i);yield return child;foreach(var nested in Descendants(child))yield return nested; } }

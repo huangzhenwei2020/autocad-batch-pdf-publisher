@@ -376,5 +376,5 @@ internal sealed partial class PlanEditorCanvas
         context.DrawText(text,new Point(x,y));
     }
     private bool ShowSelectionPreview=>_preselectedId!=null&&_lastPointer!=null&&!HasOpeningGrip
-        &&Tool==PlanTool.Select&&!_moving&&AxisMode==AxisEditMode.Off;
+        &&(Tool==PlanTool.Select||Tool==PlanTool.Fillet)&&!_moving&&AxisMode==AxisEditMode.Off;
 }

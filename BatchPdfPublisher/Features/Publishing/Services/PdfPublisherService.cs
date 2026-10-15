@@ -535,8 +535,10 @@ namespace BatchPdfPublisher.Services
                     + "；CAD实例方向=" + sheet.PaperOrientation
                     + "；目标毫米=" + FormatMillimeters(target[0], target[1])
                     + "；图纸标注比例=" + sheet.PrintScale
+                    + "；绘图仪=" + settings.PlotConfigurationName
                     + "；介质=" + settings.CanonicalMediaName
                     + "；驱动纸张毫米=" + FormatMillimeters(paper.X, paper.Y)
+                    + "；驱动边距毫米=" + settings.PlotPaperMargins
                     + "；旋转=" + settings.PlotRotation
                     + "；适合纸张=" + settings.UseStandardScale + "/" + settings.StdScaleType
                     + "；居中=" + settings.PlotCentered
@@ -848,12 +850,10 @@ namespace BatchPdfPublisher.Services
             var plotWindow = GetPlotWindowInDcs(sheet, Application.DocumentManager.MdiActiveDocument);
             ApplyPlotStep("预设图框范围", () => validator.SetPlotWindowArea(settings, plotWindow));
             ApplyPlotStep("设置窗口打印类型", () => validator.SetPlotType(settings, Autodesk.AutoCAD.DatabaseServices.PlotType.Window));
-            ApplyPlotStep("居中打印", () => validator.SetPlotCentered(settings, true));
             // “打印比例”是图纸属性，不能直接作为 CAD 的 PlotScale。若把
             // 1:100 写入 PlotScale，会把 420 mm 的图框缩成 4.2 mm。
             // 始终让选定图框窗口适配页面，才能保证 PDF 与图框比例一致。
-            ApplyPlotStep("设置适合纸张比例", () => validator.SetUseStandardScale(settings, true));
-            ApplyPlotStep("设置缩放类型", () => validator.SetStdScaleType(settings, StdScaleType.ScaleToFit));
+            ApplyPlotStep("刷新 PDF 绘图仪列表", () => validator.RefreshLists(settings));
             var device = ChoosePdfDevice(validator);
             InitializePdfDevice(validator, settings, layout, device);
             // AutoCAD 2022 validates custom metric media against the paper-unit
@@ -925,6 +925,11 @@ namespace BatchPdfPublisher.Services
                 normalizeToTargetPaper = false;
             }
             ApplyPlotStep("设置 CAD 打印方向", () => validator.SetPlotRotation(settings, rotation));
+            // Recompute fit and centering after media/rotation, not with the
+            // copied layout's previous printable area.
+            ApplyPlotStep("设置适合纸张比例", () => validator.SetUseStandardScale(settings, true));
+            ApplyPlotStep("设置缩放类型", () => validator.SetStdScaleType(settings, StdScaleType.ScaleToFit));
+            ApplyPlotStep("居中打印", () => validator.SetPlotCentered(settings, true));
             var style = string.IsNullOrWhiteSpace(sheet.PlotStyle) || string.Equals(sheet.PlotStyle, "使用输出设置", StringComparison.OrdinalIgnoreCase)
                 ? defaultPlotStyle
                 : sheet.PlotStyle;
@@ -1030,9 +1035,10 @@ namespace BatchPdfPublisher.Services
                 // 加了 0.2 惩罚，把最该选的介质排到最后。
                 var bundledMedia = IsBundledMedia(media);
                 var fullBleed = media.IndexOf("full_bleed", StringComparison.OrdinalIgnoreCase) >= 0
-                    || media.IndexOf("expand", StringComparison.OrdinalIgnoreCase) >= 0
                     || bundledMedia;
-                if (string.Equals(marginMode, "无白边（满幅）", StringComparison.OrdinalIgnoreCase) && !fullBleed) score += 0.2d;
+                // Auto and explicit white-edge modes both start with full bleed.
+                // The merger applies the requested 3 mm inset exactly once.
+                if (!fullBleed) score += 0.2d;
                 // Prefer the millimetre, zero-margin media shipped with the plug-in.
                 // PdfMerger then applies the selected 0 mm or 3 mm edge policy.
                 if (bundledMedia) score -= 0.05d;
@@ -1069,9 +1075,8 @@ namespace BatchPdfPublisher.Services
                 var areaScore = width * height / Math.Max(1d, targetWidth * targetHeight);
                 var ratioScore = Math.Abs(width / height - targetWidth / targetHeight);
                 var score = areaScore + ratioScore;
-                var fullBleed = media.IndexOf("full_bleed", StringComparison.OrdinalIgnoreCase) >= 0
-                    || media.IndexOf("expand", StringComparison.OrdinalIgnoreCase) >= 0;
-                if (string.Equals(marginMode, "无白边（满幅）", StringComparison.OrdinalIgnoreCase) && !fullBleed) score += .2d;
+                var fullBleed = media.IndexOf("full_bleed", StringComparison.OrdinalIgnoreCase) >= 0;
+                if (!fullBleed) score += .2d;
                 if (score < bestScore) { bestScore = score; best = media; }
             }
             if (!string.IsNullOrWhiteSpace(best)) return best;

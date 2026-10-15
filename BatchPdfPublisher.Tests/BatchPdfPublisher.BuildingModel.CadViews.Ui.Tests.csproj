@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF><OutputType>Exe</OutputType>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <EnableDefaultPageItems>false</EnableDefaultPageItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../BuildingModel.Core/BuildingModel.Core.csproj" />
+    <Compile Include="BuildingModelCadViewsUiTests.cs" />
+    <Compile Include="../BatchPdfPublisher/Features/BuildingModel/Views/BuildingModelBatchWindow.xaml.cs" />
+    <Page Include="../BatchPdfPublisher/Features/BuildingModel/Views/BuildingModelBatchWindow.xaml" Link="BuildingModelBatchWindow.xaml" />
+    <Compile Include="../BatchPdfPublisher/Features/BuildingModel/Views/BuildingModelChoiceWindow.xaml.cs" />
+    <Page Include="../BatchPdfPublisher/Features/BuildingModel/Views/BuildingModelChoiceWindow.xaml" Link="BuildingModelChoiceWindow.xaml" />
+    <Compile Include="../BatchPdfPublisher/Features/Frames/Models/FrameDefinition.cs" />
+    <Compile Include="../BatchPdfPublisher/Features/Publishing/Services/PaperSizeCatalog.cs" />
+  </ItemGroup>
+</Project>

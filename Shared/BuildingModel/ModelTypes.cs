@@ -23,6 +23,8 @@ namespace BatchPdfPublisher.BuildingModel
     {
         public double X { get; set; }
         public double Y { get; set; }
+        /// <summary>Outgoing boundary arc, tan(signed sweep / 4); zero is a straight edge.</summary>
+        public double Bulge { get; set; }
 
         public PointModel() { }
         public PointModel(double x, double y) { X = x; Y = y; }
@@ -73,6 +75,7 @@ namespace BatchPdfPublisher.BuildingModel
         public double Y1 { get; set; }
         public double X2 { get; set; }
         public double Y2 { get; set; }
+        public double Bulge { get; set; }
         public double Thickness { get; set; } = 200d;
         /// <summary>定位轴线在墙中、左面或右面；旧模型默认为墙中。</summary>
         public WallAxisPlacement AxisPlacement { get; set; } = WallAxisPlacement.Center;
@@ -123,6 +126,11 @@ namespace BatchPdfPublisher.BuildingModel
 
         public static PointModel BodyPoint(WallModel wall, double x, double y)
         {
+            if (Math.Abs(wall.Bulge) > 1e-10d)
+            {
+                var curve = CurveGeometry.ForWall(wall);
+                return curve.At(curve.Parameter(x, y), BodyOffset(wall));
+            }
             var dx = wall.X2 - wall.X1; var dy = wall.Y2 - wall.Y1;
             var length = Math.Sqrt(dx * dx + dy * dy);
             if (length < 1e-9d) return new PointModel(x, y);
@@ -577,12 +585,16 @@ namespace BatchPdfPublisher.BuildingModel
     /// <summary>视图里的一条线（已投影到视图平面：U 水平、Z 竖向、单位 mm）。</summary>
     public sealed class ViewLine
     {
+        public double Bulge { get; set; }
         public string Layer { get; set; }
         public int? LineWeight { get; set; }
         /// <summary>Physical interior used for inward ink; null keeps symbolic strokes centered.</summary>
         public string StrokeAreaId { get; set; }
         /// <summary>Continuous light dashed opening indication path; null for physical outlines.</summary>
         public string OpeningArcId { get; set; }
+        /// <summary>Elevation role retained through clipping and sheet placement; null for legacy/plan lines.</summary>
+        public string OpeningRole { get; set; }
+        public bool? OpeningUsesWindowAppearance { get; set; }
         public double X1 { get; set; }
         public double Y1 { get; set; }
         public double X2 { get; set; }
@@ -792,6 +804,7 @@ namespace BatchPdfPublisher.BuildingModel
     {
         public string OpeningId { get; set; }
         public string TypeCode { get; set; }
+        public OpeningTypeModel Definition { get; set; }
     }
 
     public sealed class OpeningTypeModel

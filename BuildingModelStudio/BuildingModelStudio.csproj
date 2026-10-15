@@ -52,6 +52,7 @@
     <Compile Include="..\BatchPdfPublisher\Features\DoorWindows\Models\DoorWindowScheduleItem.cs" Link="DoorWindows\DoorWindowScheduleItem.cs" />
     <Compile Include="..\BatchPdfPublisher\Features\DoorWindows\Models\DoorWindowElevationGeometry.cs" Link="DoorWindows\DoorWindowElevationGeometry.cs" />
   </ItemGroup>
+  <ItemGroup><Compile Include="..\Shared\BuildingModel\CurveGeometry.cs" /></ItemGroup>
 </Project>
 
 

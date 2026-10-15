@@ -9,6 +9,7 @@ internal static class ModelMeshEdges
     {
         public required Point3DModel A,B;
         public string? ElementId,StoreyId;
+        public string? SmoothSurfaceId;
         public double NX,NY,NZ;
         public int Count;
         public bool Crease;
@@ -25,11 +26,14 @@ internal static class ModelMeshEdges
             var key=ka.CompareTo(kb)<=0 ? (ka,kb) : (kb,ka);
             if(!edges.TryGetValue(key,out var edge)) {
                 edges[key]=new Edge { A=a,B=b,ElementId=face.ElementId,StoreyId=face.StoreyId,
-                    NX=face.NormalX,NY=face.NormalY,NZ=face.NormalZ,Count=1 };
+                    NX=face.NormalX,NY=face.NormalY,NZ=face.NormalZ,Count=1,
+                    SmoothSurfaceId=face.SmoothSurfaceId };
             } else {
                 edge.Count++;
                 var dot=edge.NX*face.NormalX+edge.NY*face.NormalY+edge.NZ*face.NormalZ;
-                if(Math.Abs(dot)<.99999 || edge.StoreyId!=face.StoreyId)edge.Crease=true;
+                var smooth=edge.SmoothSurfaceId!=null && edge.SmoothSurfaceId==face.SmoothSurfaceId
+                    && edge.ElementId==face.ElementId && dot>Math.Cos(5.1*Math.PI/180);
+                if((Math.Abs(dot)<.99999 && !smooth) || edge.StoreyId!=face.StoreyId)edge.Crease=true;
             }
         }
         return edges.Values.Where(e=>e.Count==1 || e.Crease).Select(e=>new VolumeGuideLine {

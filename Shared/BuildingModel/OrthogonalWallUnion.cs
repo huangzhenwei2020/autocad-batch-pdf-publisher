@@ -36,6 +36,7 @@ namespace BatchPdfPublisher.BuildingModel
             var fullBoxes = new List<Box>();
             foreach (var wall in walls)
             {
+                if (Math.Abs(wall.Bulge) > 1e-10) continue;
                 if (string.IsNullOrWhiteSpace(wall.Id)) continue;
                 var horizontal = Horizontal(wall);
                 var vertical = Math.Abs(wall.X2 - wall.X1) <= AxisTolerance;

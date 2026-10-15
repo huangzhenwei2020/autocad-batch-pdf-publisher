@@ -49,22 +49,25 @@ namespace BatchPdfPublisher.Views
         private string _filter = "全部";
         private bool _ready;
         private FrameDefinition _selectedFrame;
-        private readonly Func<List<StudioViewEntry>> _reloadEntries;
+        private readonly Func<StudioViewSource> _reloadEntries;
+        private readonly string _projectName;
+        private string _modelPath;
 
         public IReadOnlyList<StudioViewEntry> SelectedEntries { get; private set; }
         public BuildingFrameMode FrameMode => ProjectFrameRadio.IsChecked == true ? BuildingFrameMode.Project
             : NoFrameRadio.IsChecked == true ? BuildingFrameMode.None : BuildingFrameMode.BuiltIn;
         public FrameDefinition SelectedFrame => FrameMode == BuildingFrameMode.Project ? _selectedFrame : null;
 
-        public BuildingModelBatchWindow(string projectName, IEnumerable<StudioViewEntry> entries,
-            IEnumerable<FrameDefinition> frames, Func<List<StudioViewEntry>> reloadEntries = null)
+        public BuildingModelBatchWindow(string projectName, StudioViewSource source,
+            IEnumerable<FrameDefinition> frames, Func<StudioViewSource> reloadEntries = null)
         {
             _reloadEntries=reloadEntries;
+            _projectName=projectName;
             InitializeComponent();
-            ProjectText.Text = "当前项目：" + (string.IsNullOrWhiteSpace(projectName) ? "未选择" : projectName);
+            SetSourceLabel(source);
             _frames = (frames ?? Enumerable.Empty<FrameDefinition>())
                 .Where(frame => frame != null && !string.IsNullOrWhiteSpace(frame.BlockName)).ToList();
-            _rows = (entries ?? Enumerable.Empty<StudioViewEntry>())
+            _rows = (source.Entries ?? Enumerable.Empty<StudioViewEntry>())
                 .Where(entry => entry != null && !string.IsNullOrWhiteSpace(entry.FilePath))
                 .Select(entry => new BuildingModelBatchRow { Entry = entry }).ToList();
             var firstSheet = _rows.Select(row => row.Entry).FirstOrDefault(entry => entry.Kind == ViewKind.Sheet);
@@ -146,17 +149,44 @@ namespace BatchPdfPublisher.Views
         private void RefreshButton_Click(object sender, RoutedEventArgs args)
         {
             if(_reloadEntries==null)return;
-            try {
-                var entries=_reloadEntries();
-                var selected=new HashSet<string>(_rows.Where(r=>r.IsChecked).Select(r=>r.Entry.Id));
+            try { ReloadSource(_reloadEntries()); }
+            catch(Exception ex) { ClearSourceError(ex); }
+        }
+
+        private void SetSourceLabel(StudioViewSource source)
+        {
+            _modelPath=source.ModelPath;
+            ProjectText.Text="当前项目："+(_projectName ?? "未选择")+"\n当前模型："+(source.ModelName ?? "未选择");
+            ProjectText.ToolTip=source.ModelPath;
+        }
+
+        private static string EntryKey(StudioViewEntry entry) => entry.FilePath + "|" + entry.Id;
+
+        private bool ReloadSource(StudioViewSource source)
+        {
+                var sameModel=string.Equals(_modelPath,source.ModelPath,StringComparison.OrdinalIgnoreCase);
+                var selected=new HashSet<string>(sameModel
+                    ? _rows.Where(r=>r.IsChecked).Select(r=>EntryKey(r.Entry)) : Enumerable.Empty<string>(),
+                    StringComparer.OrdinalIgnoreCase);
                 foreach(var row in _rows)row.PropertyChanged-=Row_PropertyChanged;
                 _rows.Clear();
-                foreach(var entry in entries) {
-                    var row=new BuildingModelBatchRow { Entry=entry,IsChecked=selected.Contains(entry.Id) };
+                SetSourceLabel(source);
+                foreach(var entry in source.Entries) {
+                    var row=new BuildingModelBatchRow { Entry=entry,IsChecked=selected.Contains(EntryKey(entry)) };
                     row.PropertyChanged+=Row_PropertyChanged;_rows.Add(row);
                 }
                 _filteredRows.Refresh();UpdateFramePanel();UpdateCount();
-            } catch(Exception ex) { SelectedCountText.Text="刷新失败："+ex.Message; }
+                if(!sameModel)SelectedCountText.Text="当前模型已切换，请重新勾选图纸。";
+                else if(_rows.Count==0)SelectedCountText.Text="当前模型没有已生成的视图。";
+                return sameModel;
+        }
+
+        private void ClearSourceError(Exception ex)
+        {
+            foreach(var row in _rows)row.PropertyChanged-=Row_PropertyChanged;
+            _rows.Clear();
+            _filteredRows.Refresh();UpdateFramePanel();UpdateCount();
+            SelectedCountText.Text="读取当前模型失败："+ex.Message;
         }
 
         private void Row_PropertyChanged(object sender, PropertyChangedEventArgs args)
@@ -167,7 +197,8 @@ namespace BatchPdfPublisher.Views
         private void UpdateCount()
         {
             var count = _rows.Count(row => row.IsChecked);
-            SelectedCountText.Text = "已勾选 " + count + " 项 · 仅勾选项会落图";
+            SelectedCountText.Text = _rows.Count == 0 ? "当前模型没有已生成的视图。"
+                : "已勾选 " + count + " 项 · 仅勾选项会落图";
             StartButton.Content = "开始落图（" + count + " 项）";
             StartButton.IsEnabled = count > 0;
             UpdateFrameWarning();
@@ -248,6 +279,11 @@ namespace BatchPdfPublisher.Views
 
         private void StartButton_Click(object sender, RoutedEventArgs args)
         {
+            if(_reloadEntries!=null)
+            {
+                try { if(!ReloadSource(_reloadEntries()))return; }
+                catch(Exception ex) { ClearSourceError(ex);return; }
+            }
             var selected = _rows.Where(row => row.IsChecked).ToList();
             if (selected.Count == 0) return;
             var mismatch = selected.FirstOrDefault(row => !FrameMatches(row.Entry));

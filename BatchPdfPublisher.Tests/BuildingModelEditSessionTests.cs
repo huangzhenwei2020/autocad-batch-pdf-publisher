@@ -128,6 +128,8 @@ internal static class BuildingModelEditSessionTests
             Assert(south.Lines.Max(x => Math.Max(x.X1, x.X2))
                 > originalSouth.Lines.Max(x => Math.Max(x.X1, x.X2)), "落盘视图未包含编辑后的墙长");
             var pushed = BuildingModelViewPublisher.PublishToCad(modelFile, session.Model);
+            Assert(StudioLaunch.ActiveViewSource(outputFolder, "其他项目名").ModelPath == modelFile,
+                "推送 CAD 后当前落图模型未切换到实际发布模型");
             Assert(pushed.ViewCount == count && pushed.PendingCount > 0
                 && File.Exists(pushed.PendingFilePath), "推到 CAD 未生成待落图清单");
             var listed = StudioLaunch.ListViews(modelFolder);
@@ -149,6 +151,8 @@ internal static class BuildingModelEditSessionTests
             }
             foreach (var file in Directory.GetFiles(modelFolder)) File.Delete(file);
             Directory.Delete(modelFolder);
+            var activeModelFile = Path.Combine(outputFolder, StudioLaunch.ModelFolderName, "当前模型.txt");
+            if (File.Exists(activeModelFile)) File.Delete(activeModelFile);
             Directory.Delete(Path.Combine(outputFolder, StudioLaunch.ModelFolderName));
             Directory.Delete(outputFolder);
         }

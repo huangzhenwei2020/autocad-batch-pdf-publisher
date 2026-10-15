@@ -29,13 +29,25 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
             var choice = new BatchPdfPublisher.Views.BuildingModelChoiceWindow("建筑模型",
                 "打开模型进行编辑，或先核验 CAD 中天正墙门窗的可读参数。",
                 new[] {
+                    new BatchPdfPublisher.Views.BuildingModelChoice { Value = 4, Title = "模型管理", Subtitle = "当前 CAD 图纸关联的建筑模型", Badge = "管理" },
+                    new BatchPdfPublisher.Views.BuildingModelChoice { Value = 3, Title = "新建建筑模型", Subtitle = "设置模型名称和楼层，直接创建空模型", Badge = "新建" },
                     new BatchPdfPublisher.Views.BuildingModelChoice { Value = 0, Title = "打开建筑模型", Subtitle = "打开当前项目的新版建筑模型", Badge = "建模" },
                     new BatchPdfPublisher.Views.BuildingModelChoice { Value = 1, Title = "天正墙门窗字段核验", Subtitle = "只读选择对象、检查原始参数并导出核验记录；暂不创建模型", Badge = "只读" },
-                    new BatchPdfPublisher.Views.BuildingModelChoice { Value = 2, Title = "CAD 楼层登记核对", Subtitle = "使用当前建筑模型；逐层登记平面后生成墙与门窗洞口", Badge = "登记" }
+                    new BatchPdfPublisher.Views.BuildingModelChoice { Value = 2, Title = "CAD 楼层登记核对", Subtitle = "新建或打开模型、设置楼层、逐层登记 CAD 平面", Badge = "登记" }
                 }, false, "继续") { Title = "建筑模型" };
             if (Autodesk.AutoCAD.ApplicationServices.Application.ShowModalWindow(choice) != true) return;
+            if(choice.SelectedValue==4)
+            {
+                try{CadModelManagementService.Show(document);}catch(Exception ex){Autodesk.AutoCAD.ApplicationServices.Application.ShowAlertDialog("模型管理：\n"+ex.Message);}return;
+            }
             if (choice.SelectedValue == 1) { TianzhengBuildingProbeService.Execute(document); return; }
             if (choice.SelectedValue == 2) { TianzhengBuildingProbeService.Execute(document, true); return; }
+            if (choice.SelectedValue == 3)
+            {
+                try { var path=CadModelProjectService.Create(null);if(path!=null)OpenCurrentModel(document,path); }
+                catch(Exception ex) { Autodesk.AutoCAD.ApplicationServices.Application.ShowAlertDialog("新建模型失败：\n"+ex.Message); }
+                return;
+            }
 
             OpenCurrentModel(document);
         }
@@ -64,7 +76,7 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
             }
 
             string activePath;
-            try { activePath = modelPath ?? StudioLaunch.ActiveModelPath(projectFolder, modelName); }
+            try { activePath = modelPath ?? StudioLaunch.ActiveModelPath(projectFolder, modelName,document.Database.FingerprintGuid.ToString()); }
             catch (Exception exception)
             {
                 editor.WriteMessage("\n读取建筑模型路径失败：" + exception.Message);
@@ -72,7 +84,17 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
                     "建筑模型未打开：\n" + exception.Message);
                 return false;
             }
-            if (activePath != null && StudioLaunch.HasLiveSession(activePath)) return true;
+            if (activePath != null && StudioLaunch.HasLiveSession(activePath))
+            {
+                try
+                {
+                    CadModelManagementService.Remember(document,activePath);
+                    if(!File.Exists(BuildingModelFileRequests.RequestPath(activePath)))
+                        BuildingModelFileRequests.Queue(activePath,"Activate",projectFolder,document.Database.FingerprintGuid.ToString(),document.Name);
+                    return true;
+                }
+                catch(Exception ex){editor.WriteMessage("\n激活模型失败："+ex.Message);return false;}
+            }
             var executable = ResolveExecutable(editor);
             if (string.IsNullOrWhiteSpace(executable)) return false;
 
@@ -82,6 +104,7 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
             try
             {
                 if (activePath != null) arguments = "--cad-project \"" + projectFolder.TrimEnd('\\', '/') + "\" --model \"" + activePath + "\"";
+                arguments += " --cad-fingerprint \""+document.Database.FingerprintGuid+"\" --cad-drawing \""+document.Name+"\"";
                 Process.Start(new ProcessStartInfo
                 {
                     FileName = executable,
@@ -89,6 +112,7 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
                     UseShellExecute = true,
                     WorkingDirectory = Path.GetDirectoryName(executable) ?? projectFolder
                 });
+                if(activePath!=null)CadModelManagementService.Remember(document,activePath);
                 editor.WriteMessage("\n已启动建模程序：" + executable);
                 editor.WriteMessage("\n项目：" + projectFolder + "　模型：" + (modelName ?? "（默认）")
                     + (modelFolder == null ? "（还不存在，程序里会按这个名字新建）" : ""));

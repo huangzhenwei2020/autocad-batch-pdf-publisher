@@ -18,7 +18,8 @@ namespace BatchPdfPublisher.Views
             public int Number { get; set; }
             public double? Thickness => Source.CandidateThickness;
             public double? Height => CadFloorModelGeneration.Number(Source,"Height");
-            public string Status => Source.StraightHorizontalLineVerified ? "直墙定位已核验" : "定位不支持，须排除或重新核对";
+            public string Status => Source.StraightHorizontalLineVerified ? "直墙定位已核验"
+                : Source.CircularHorizontalArcVerified ? "弧墙定位已核验" : "定位未核验，保留参照并跳过";
         }
         public CadFloorOpeningReviewWindow(CadFloorPlanCapture capture,
             Func<Window,CadFloorOpeningItem,CadOpeningPlacement> pickPlacement = null)

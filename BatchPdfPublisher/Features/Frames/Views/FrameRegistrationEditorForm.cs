@@ -417,6 +417,7 @@ namespace BatchPdfPublisher.Views
                     ? Guid.NewGuid().ToString("N") : _existing.RegistrationId,
                 BlockName = _block.Text,
                 TemplateRelativePath = _existing?.TemplateRelativePath,
+                TemplateSourceDrawingPath = _existing?.TemplateSourceDrawingPath,
                 AttributeTagSignature = _attributeTagSignature ?? _existing?.AttributeTagSignature,
                 DefinitionSignature = _definitionSignature ?? _existing?.DefinitionSignature,
                 ReferenceAspectRatio = _referenceAspectRatio > 0d ? _referenceAspectRatio : _existing?.ReferenceAspectRatio ?? 0d,

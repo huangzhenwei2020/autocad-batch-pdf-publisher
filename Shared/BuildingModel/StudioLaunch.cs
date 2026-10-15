@@ -39,6 +39,14 @@ namespace BatchPdfPublisher.BuildingModel
         }
     }
 
+    /// <summary>落图清单及其模型来源，防止相同视图 ID 在模型之间混用。</summary>
+    public sealed class StudioViewSource
+    {
+        public string ModelPath { get; set; }
+        public string ModelName { get; set; }
+        public List<StudioViewEntry> Entries { get; set; } = new List<StudioViewEntry>();
+    }
+
     /// <summary>待落图清单里的一条。</summary>
     public sealed class StudioPendingEntry
     {
@@ -67,26 +75,49 @@ namespace BatchPdfPublisher.BuildingModel
             using (var process = System.Diagnostics.Process.GetCurrentProcess())
                 return process.Id + "|" + process.StartTime.ToUniversalTime().Ticks;
         }
+        internal static string ReadMetadata(string path)
+        {
+            using(var stream=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete))
+            using(var reader=new StreamReader(stream,Encoding.UTF8))return reader.ReadToEnd();
+        }
+        internal static void ReplaceMetadata(string temporary,string path,string backup=null)
+        {
+            for(var attempt=0;;attempt++)
+            {
+                try {if(File.Exists(path))File.Replace(temporary,path,backup);else File.Move(temporary,path);return;}
+                catch(IOException) when(attempt<5) {Thread.Sleep(40);}
+            }
+        }
         public static void RegisterSession(string modelPath)
         {
             var file=modelPath+".studio-session.txt"; var temp=file+"."+Guid.NewGuid().ToString("N")+".tmp";
-            try { File.WriteAllText(temp, SessionToken()); if(File.Exists(file))File.Replace(temp,file,null); else File.Move(temp,file); }
-            finally { if(File.Exists(temp))File.Delete(temp); }
+            string key;
+            using(var hash=SHA256.Create())key=BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(Path.GetFullPath(modelPath).ToUpperInvariant()))).Replace("-","");
+            using(var gate=new Mutex(false,"WanLuoModelSession-"+key))
+            {
+                try {if(!gate.WaitOne(TimeSpan.FromSeconds(5)))throw new IOException("模型窗口正在打开，请稍后重试。");}catch(AbandonedMutexException){}
+                try
+                {
+                    if(HasLiveSession(modelPath)&&!IsCurrentSession(modelPath))throw new IOException("此模型已在其他窗口打开，不能重复编辑。");
+                    File.WriteAllText(temp,SessionToken());ReplaceMetadata(temp,file);
+                }
+                finally {if(File.Exists(temp))File.Delete(temp);gate.ReleaseMutex();}
+            }
         }
         public static bool IsCurrentSession(string modelPath)
         {
-            try { return File.ReadAllText(modelPath+".studio-session.txt")==SessionToken(); } catch { return false; }
+            try { return ReadMetadata(modelPath+".studio-session.txt")==SessionToken(); } catch { return false; }
         }
         public static void RemoveSession(string modelPath)
         {
             try { var file = modelPath + ".studio-session.txt";
-                if (File.Exists(file) && File.ReadAllText(file) == SessionToken()) File.Delete(file); }
+                if (File.Exists(file) && ReadMetadata(file) == SessionToken()) File.Delete(file); }
             catch { }
         }
         public static bool HasLiveSession(string modelPath)
         {
             try {
-                var parts = File.ReadAllText(modelPath + ".studio-session.txt").Split('|');
+                var parts = ReadMetadata(modelPath + ".studio-session.txt").Split('|');
                 using (var process = System.Diagnostics.Process.GetProcessById(int.Parse(parts[0])))
                     return !process.HasExited && process.StartTime.ToUniversalTime().Ticks == long.Parse(parts[1]);
             } catch { return false; }
@@ -112,7 +143,7 @@ namespace BatchPdfPublisher.BuildingModel
             try
             {
                 File.WriteAllText(temporary, Path.GetFullPath(modelPath), Encoding.UTF8);
-                if (File.Exists(file)) File.Replace(temporary, file, null); else File.Move(temporary, file);
+                ReplaceMetadata(temporary,file);
             }
             finally { if (File.Exists(temporary)) File.Delete(temporary); }
         }
@@ -123,7 +154,7 @@ namespace BatchPdfPublisher.BuildingModel
             var file = Path.Combine(projectFolder, ModelFolderName, "当前模型.txt");
             if (File.Exists(file))
             {
-                var path = File.ReadAllText(file, Encoding.UTF8).Trim();
+                var path = ReadMetadata(file).Trim();
                 if (!File.Exists(path))
                 {
                     // Only recover the same project-local model after moving the project root.
@@ -147,6 +178,38 @@ namespace BatchPdfPublisher.BuildingModel
             }
             var folder = FindModelFolder(projectFolder, modelName);
             return folder == null ? null : Path.Combine(folder, "model.json");
+        }
+
+        public static string ActiveModelPath(string projectFolder,string modelName,string drawingFingerprint)
+        {
+            var file=DrawingActivePath(projectFolder,drawingFingerprint);
+            if(file==null||!File.Exists(file))return ActiveModelPath(projectFolder,modelName);
+            var recorded=ReadMetadata(file).Trim();
+            if(string.IsNullOrWhiteSpace(recorded))throw new InvalidDataException("当前 CAD 图纸模型记录为空，请在模型管理中重新选择。");
+            var path=Path.IsPathRooted(recorded)?Path.GetFullPath(recorded):Path.GetFullPath(Path.Combine(projectFolder,recorded));
+            if(!Path.IsPathRooted(recorded)&&!path.StartsWith(Path.GetFullPath(projectFolder).TrimEnd(Path.DirectorySeparatorChar)+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("当前 CAD 图纸模型的相对路径越出项目目录。");
+            if(!File.Exists(path))throw new FileNotFoundException("当前 CAD 图纸关联的模型不存在，请在模型管理中重新选择。",path);
+            return path;
+        }
+        public static void RememberActiveModel(string projectFolder,string modelPath,string drawingFingerprint)
+        {
+            RememberActiveModel(projectFolder,modelPath);
+            var file=DrawingActivePath(projectFolder,drawingFingerprint);if(file==null)return;
+            Directory.CreateDirectory(Path.GetDirectoryName(file));
+            var root=Path.GetFullPath(projectFolder).TrimEnd(Path.DirectorySeparatorChar)+Path.DirectorySeparatorChar;
+            var full=Path.GetFullPath(modelPath);
+            var value=full.StartsWith(root,StringComparison.OrdinalIgnoreCase)?full.Substring(root.Length):full;
+            var temp=file+"."+Guid.NewGuid().ToString("N")+".tmp";
+            try {File.WriteAllText(temp,value,Encoding.UTF8);ReplaceMetadata(temp,file);}
+            finally {if(File.Exists(temp))File.Delete(temp);}
+        }
+        private static string DrawingActivePath(string projectFolder,string fingerprint)
+        {
+            if(string.IsNullOrWhiteSpace(projectFolder)||string.IsNullOrWhiteSpace(fingerprint))return null;
+            string key;
+            using(var hash=SHA256.Create())key=BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(fingerprint.ToUpperInvariant()))).Replace("-","");
+            return Path.Combine(projectFolder,ModelFolderName,".drawing-models",key+".txt");
         }
 
         /// <summary>待落图标记文件路径：<c>&lt;模型目录&gt;\views\待落图.txt</c>。</summary>
@@ -380,6 +443,23 @@ namespace BatchPdfPublisher.BuildingModel
             }
             var children = Directory.GetDirectories(root);
             return children.Length == 1 ? children[0] : null;
+        }
+
+        public static StudioViewSource ActiveViewSource(string projectFolder, string modelName,string drawingFingerprint=null)
+        {
+            var path = ActiveModelPath(projectFolder, modelName,drawingFingerprint);
+            if (path == null) return new StudioViewSource();
+            if (!File.Exists(path))
+                throw new FileNotFoundException("当前模型文件不存在，请在建筑模型中打开正确的模型并保存。", path);
+            if (!string.Equals(Path.GetFileName(path), "model.json", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("当前模型尚未保存到独立的模型目录，请在建筑模型中另存为 建筑模型/<名称>/model.json 并生成视图。");
+            var folder = Path.GetDirectoryName(path);
+            return new StudioViewSource
+            {
+                ModelPath = Path.GetFullPath(path),
+                ModelName = Path.GetFileName(folder),
+                Entries = ListViews(folder)
+            };
         }
 
         /// <summary>

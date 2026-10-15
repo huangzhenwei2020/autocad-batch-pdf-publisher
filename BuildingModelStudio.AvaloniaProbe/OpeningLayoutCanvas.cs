@@ -26,6 +26,19 @@ internal sealed class OpeningLayoutCanvas : Control
     private (bool vertical,double coordinate,double along)? _divider;
     private OpeningLayoutEditing? _dragOriginal;
     private double _target;
+    private Point? _boxStart;
+    private Point _boxCurrent;
+    private bool _boxShift;
+    internal bool IsDraggingDivider=>_divider!=null;
+    internal bool HasSelectionBox=>_boxStart!=null;
+    internal Point ModelToScreen(double x,double y)=>Screen(x,y);
+    internal OpeningLayoutCanvas(){Focusable=true;}
+    internal bool CancelInteraction()
+    {
+        if(_boxStart!=null){_boxStart=null;InvalidateVisual();return true;}
+        if(_dragOriginal!=null){State=_dragOriginal;_dragOriginal=null;_divider=null;Cursor=null;Notify();return true;}
+        return false;
+    }
     private Rect Area=>new(62,62,Math.Max(1,Bounds.Width-104),Math.Max(1,Bounds.Height-104));
     private double Scale=>Math.Min(Area.Width/Math.Max(1,State.Width),Area.Height/Math.Max(1,State.Height))*_zoom;
     private Point Screen(double x,double y)=>new(Area.Center.X+(x-State.Width/2)*Scale+_pan.X,Area.Center.Y-(y-State.Height/2)*Scale+_pan.Y);
@@ -44,7 +57,7 @@ internal sealed class OpeningLayoutCanvas : Control
             var cell=State.Cells[i];var rect=new Rect(Screen(cell.Left,cell.Top),Screen(cell.Right,cell.Bottom));
             var color=cell.IsDeleted ? "#30343A" : Selected.Contains(i) ? "#71358AB8" : cell.Material=="实板" ? "#AA6C6358" : "#80506979";
             context.FillRectangle(new SolidColorBrush(Color.Parse(color)),rect);
-            var text=new FormattedText($"{cell.Right-cell.Left:0.#} × {cell.Top-cell.Bottom:0.#}\n{(cell.IsDeleted ? "已删除" : cell.Opening)} · {cell.Material}",CultureInfo.CurrentCulture,FlowDirection.LeftToRight,Typeface.Default,12,new SolidColorBrush(Color.Parse("#C1D1DF")));
+            var text=new FormattedText($"{cell.Right-cell.Left:0} × {cell.Top-cell.Bottom:0}\n{(cell.IsDeleted ? "已删除" : cell.Opening)} · {cell.Material}",CultureInfo.CurrentCulture,FlowDirection.LeftToRight,Typeface.Default,12,new SolidColorBrush(Color.Parse("#C1D1DF")));
             if(rect.Width>text.Width+12 && rect.Height>52)context.DrawText(text,new Point(rect.Center.X-text.Width/2,rect.Center.Y-text.Height/2-16));
         }
         try {
@@ -63,6 +76,11 @@ internal sealed class OpeningLayoutCanvas : Control
         foreach(var i in Selected.Where(i=>i>=0&&i<State.Cells.Count)){var c=State.Cells[i];context.DrawRectangle(null,new Pen(new SolidColorBrush(Color.Parse("#65C7FF")),2),new Rect(Screen(c.Left,c.Top),Screen(c.Right,c.Bottom)));}
         DrawDimensions(context);
         if(_divider is { } d)context.DrawLine(new Pen(Brushes.OrangeRed,2),d.vertical ? Screen(_target,0) : Screen(0,_target),d.vertical ? Screen(_target,State.Height) : Screen(State.Width,_target));
+        if(_boxStart is Point from){
+            var crossing=_boxCurrent.X<from.X;var rect=new Rect(from,_boxCurrent).Normalize();
+            context.DrawRectangle(new SolidColorBrush(Color.Parse(crossing?"#243CBA8B":"#242D8FDA")),
+                new Pen(new SolidColorBrush(Color.Parse(crossing?"#65E8B2":"#65C7FF")),1,crossing?DashStyle.Dash:null),rect);
+        }
     }
     private void DrawDimensions(DrawingContext context)
     {
@@ -71,17 +89,30 @@ internal sealed class OpeningLayoutCanvas : Control
         void Label(string value,Point at){var text=new FormattedText(value,CultureInfo.CurrentCulture,FlowDirection.LeftToRight,Typeface.Default,12,brush);context.DrawText(text,new Point(at.X-text.Width/2,at.Y-text.Height/2));}
         var y=a.Y-24;context.DrawLine(pen,new Point(a.X,y),new Point(b.X,y));
         foreach(var x in new[]{a.X,b.X}){context.DrawLine(pen,new Point(x,a.Y-5),new Point(x,y-6));context.DrawLine(pen,new Point(x-3,y+3),new Point(x+3,y-3));}
-        Label(State.Width.ToString("0.#",CultureInfo.InvariantCulture),new Point((a.X+b.X)/2,y-13));
+        Label(State.Width.ToString("0",CultureInfo.InvariantCulture),new Point((a.X+b.X)/2,y-13));
         var dx=a.X-24;context.DrawLine(pen,new Point(dx,a.Y),new Point(dx,b.Y));
         foreach(var yy in new[]{a.Y,b.Y}){context.DrawLine(pen,new Point(a.X-5,yy),new Point(dx-6,yy));context.DrawLine(pen,new Point(dx-3,yy+3),new Point(dx+3,yy-3));}
-        using(context.PushTransform(Matrix.CreateRotation(-Math.PI/2)*Matrix.CreateTranslation(dx-13,(a.Y+b.Y)/2)))Label(State.Height.ToString("0.#",CultureInfo.InvariantCulture),new Point(0,0));
+        using(context.PushTransform(Matrix.CreateRotation(-Math.PI/2)*Matrix.CreateTranslation(dx-13,(a.Y+b.Y)/2)))Label(State.Height.ToString("0",CultureInfo.InvariantCulture),new Point(0,0));
     }
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
         base.OnPointerPressed(e);if(State==null)return;var p=e.GetPosition(this);var buttons=e.GetCurrentPoint(this).Properties;
         if(buttons.IsMiddleButtonPressed || buttons.IsRightButtonPressed){_panStart=p;e.Pointer.Capture(this);return;}
         if(!buttons.IsLeftButtonPressed)return;
+        Focus();
+        if(_boxStart is Point from){
+            var rect=new Rect(World(from),World(p)).Normalize();var crossing=p.X<from.X;
+            var indices=Enumerable.Range(0,State.Cells.Count).Where(i=>{
+                var c=State.Cells[i];var cell=new Rect(new Point(c.Left,c.Bottom),new Point(c.Right,c.Top));
+                return crossing?rect.Intersects(cell):rect.Contains(cell);
+            }).ToArray();
+            if(!_boxShift&&!e.KeyModifiers.HasFlag(KeyModifiers.Shift))Selected.Clear();
+            foreach(var picked in indices)if(_boxShift||e.KeyModifiers.HasFlag(KeyModifiers.Shift)){if(!Selected.Add(picked))Selected.Remove(picked);}else Selected.Add(picked);
+            _boxStart=null;Notify(false);e.Handled=true;return;
+        }
         var w=World(p);
+        var index=State.Cells.FindIndex(c=>w.X>=c.Left && w.X<=c.Right && w.Y>=c.Bottom && w.Y<=c.Top);
+        if(index<0){_boxStart=p;_boxCurrent=p;_boxShift=e.KeyModifiers.HasFlag(KeyModifiers.Shift);InvalidateVisual();e.Handled=true;return;}
         var vertical=State.Cells.SelectMany(c=>new[]{c.Left,c.Right}).Where(x=>x>0.05 && x<State.Width-.05).Distinct().OrderBy(x=>Math.Abs(x-w.X)).FirstOrDefault(double.NaN);
         var horizontal=State.Cells.SelectMany(c=>new[]{c.Bottom,c.Top}).Where(y=>y>.05 && y<State.Height-.05).Distinct().OrderBy(y=>Math.Abs(y-w.Y)).FirstOrDefault(double.NaN);
         var vd=double.IsNaN(vertical) ? double.PositiveInfinity : Math.Abs(vertical-w.X);
@@ -94,13 +125,13 @@ internal sealed class OpeningLayoutCanvas : Control
                 Cursor=new Cursor(v ? StandardCursorType.SizeWestEast : StandardCursorType.SizeNorthSouth);e.Pointer.Capture(this);return;
             }
         }
-        var index=State.Cells.FindIndex(c=>w.X>=c.Left && w.X<=c.Right && w.Y>=c.Bottom && w.Y<=c.Top);
         if(!e.KeyModifiers.HasFlag(KeyModifiers.Shift))Selected.Clear();
         if(index>=0 && !Selected.Add(index))Selected.Remove(index);Notify(false);e.Handled=true;
     }
     protected override void OnPointerMoved(PointerEventArgs e)
     {
         var p=e.GetPosition(this);
+        if(_boxStart!=null){_boxCurrent=p;InvalidateVisual();}
         if(_panStart is Point previous){_pan+=p-previous;_panStart=p;InvalidateVisual();}
         if(_divider is {} divider && _dragOriginal is {} original){
             var target=divider.coordinate+(divider.vertical ? p.X-_dragPress.X : _dragPress.Y-p.Y)/_dragScale;_target=target;
@@ -111,7 +142,7 @@ internal sealed class OpeningLayoutCanvas : Control
     }
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
-        if(_divider is {} divider && _dragOriginal is {} original){State=original;if(!State.MoveDivider(divider.vertical,divider.coordinate,_target,out var error,divider.along,Snap))Error?.Invoke(error);Notify();}
+        if(_divider is {} divider && _dragOriginal is {} original){State=original;if(!State.MoveDivider(divider.vertical,divider.coordinate,_target,out var error,divider.along,Snap))Error?.Invoke(error);_divider=null;_dragOriginal=null;Notify();}
         _divider=null;_dragOriginal=null;_panStart=null;Cursor=null;e.Pointer.Capture(null);InvalidateVisual();
     }
     protected override void OnPointerCaptureLost(PointerCaptureLostEventArgs e)
@@ -120,5 +151,5 @@ internal sealed class OpeningLayoutCanvas : Control
         if(_dragOriginal is {} original){State=original;_dragOriginal=null;_divider=null;Notify();}
         _panStart=null;Cursor=null;
     }
-    protected override void OnPointerWheelChanged(PointerWheelEventArgs e){if(_divider==null)_zoom=Math.Clamp(_zoom*Math.Pow(1.15,e.Delta.Y),.2,20);InvalidateVisual();e.Handled=true;}
+    protected override void OnPointerWheelChanged(PointerWheelEventArgs e){if(_divider==null&&_boxStart==null)_zoom=Math.Clamp(_zoom*Math.Pow(1.15,e.Delta.Y),.2,20);InvalidateVisual();e.Handled=true;}
 }

@@ -76,6 +76,7 @@ namespace BatchPdfPublisher.BuildingModel
 
     public sealed class CadFloorPlanCapture
     {
+        public CadPlanUnderlay Underlay { get; set; }
         public CadFloorRegistrationContext Floor { get; set; }
         public CadBuildingProbeDocument Probe { get; set; }
         public List<CadFloorOpeningItem> Openings { get; set; } = new List<CadFloorOpeningItem>();
@@ -104,6 +105,7 @@ namespace BatchPdfPublisher.BuildingModel
 
         public void ValidateSchedule()
         {
+            Underlay?.Validate();
             Floor.ValidateCapture();
             if (Probe == null || Openings == null || Openings.Any(x=>x == null || string.IsNullOrWhiteSpace(x.SourceHandle))
                 || Openings.Select(x=>x.SourceHandle).Distinct(StringComparer.OrdinalIgnoreCase).Count() != Openings.Count)
@@ -147,6 +149,9 @@ namespace BatchPdfPublisher.BuildingModel
 
     public sealed class CadFloorPlanRegistry
     {
+        public string GenerationWarning { get; set; }
+        // Only explicit registration UI requests replace construction; legacy requests remain safe updates.
+        public bool ReplaceRegisteredConstruction { get; set; }
         public int SchemaVersion { get; set; } = 1;
         public string ModelPath { get; set; }
         // Nullable preserves the 100 mm default when reading older registration files.
@@ -262,6 +267,10 @@ namespace BatchPdfPublisher.BuildingModel
             }
         }
         public CadFloorPlanCapture Find(string storeyId) => Floors.FirstOrDefault(f => string.Equals(f.Floor.Storey.Id, storeyId, StringComparison.OrdinalIgnoreCase));
+        public void SaveUnderlays(CadFloorPlanRegistry snapshot, long expectedFileStamp)
+        {
+            ReplaceFrom(snapshot, expectedFileStamp);
+        }
         public CadFloorRegistrationContext FindDatum(string storeyId) => (Datums ?? new List<CadFloorRegistrationContext>())
             .FirstOrDefault(f => string.Equals(f.Storey.Id, storeyId, StringComparison.OrdinalIgnoreCase)) ?? Find(storeyId)?.Floor;
         public void SaveDatum(CadFloorRegistrationContext context)

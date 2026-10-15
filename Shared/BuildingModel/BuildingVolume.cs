@@ -14,6 +14,7 @@ namespace BatchPdfPublisher.BuildingModel
         public string ElementId { get; set; }
         /// <summary>所属楼层（用于"只显示某层"与着色）。</summary>
         public string StoreyId { get; set; }
+        public string SmoothSurfaceId { get; set; }
         /// <summary>面法线（单位向量，朝外）。</summary>
         public double NormalX { get; set; }
         public double NormalY { get; set; }
@@ -74,6 +75,10 @@ namespace BatchPdfPublisher.BuildingModel
     public static partial class BuildingVolumeBuilder
     {
         public static BuildingVolume Build(BuildingModelDocument model, string storeyId = null, bool includeOpeningParts = true)
+            => BuildCore(model,storeyId,includeOpeningParts,false);
+        public static BuildingVolume BuildForDrawing(BuildingModelDocument model)
+            => BuildCore(model,null,true,true);
+        private static BuildingVolume BuildCore(BuildingModelDocument model,string storeyId,bool includeOpeningParts,bool wallPriorityColumns)
         {
             var volume = new BuildingVolume();
             if (model == null) return volume;
@@ -100,7 +105,8 @@ namespace BatchPdfPublisher.BuildingModel
             {
                 var z0 = model.BaseElevationOf(wall);
                 var z1 = z0 + model.HeightOf(wall);
-                if (merged.Contains(wall.Id)) AddMergedWallOpeningParts(volume, wall, model, z0, z1, ref first, includeOpeningParts, partCache);
+                if (Math.Abs(wall.Bulge)>1e-10) AddCurvedWall(volume,wall,z0,z1,ref first);
+                else if (merged.Contains(wall.Id)) AddMergedWallOpeningParts(volume, wall, model, z0, z1, ref first, includeOpeningParts, partCache);
                 else AddWallWithOpenings(volume, wall, model, z0, z1, ref first, includeOpeningParts, partCache);
             }
             foreach (var column in model.Columns ?? new List<ColumnModel>())
@@ -109,7 +115,8 @@ namespace BatchPdfPublisher.BuildingModel
                 if (onlyOne && !Same(column.StoreyId, storeyId)) continue;
                 var z0 = model.BaseElevationOf(column);
                 var z1 = z0 + model.HeightOf(column);
-                AddColumnBox(volume, column, z0, z1, ref first);
+                if(wallPriorityColumns)AddDrawingColumn(volume,model,column,z0,z1,ref first);
+                else AddColumnBox(volume, column, z0, z1, ref first);
             }
             foreach(var beam in model.Beams ?? new List<BeamModel>())
             {
@@ -123,7 +130,9 @@ namespace BatchPdfPublisher.BuildingModel
             {
                 if (slab == null) continue;
                 if (onlyOne && !Same(slab.StoreyId, storeyId)) continue;
+                var firstFace=volume.Faces.Count;
                 AddSlabPrism(volume, slab, model.TopElevationOf(slab), ref first);
+                MarkCurvedSlabSurfaces(volume.Faces.Skip(firstFace),slab);
             }
             foreach (var stair in model.Stairs ?? new List<StairModel>())
             {
@@ -143,6 +152,7 @@ namespace BatchPdfPublisher.BuildingModel
                     : walls.Min(wall => model.BaseElevationOf(wall));
                 foreach (var wall in walls)
                 {
+                    if (Math.Abs(wall.Bulge)>1e-10) continue;
                     if (!onlyOne && Math.Abs(model.BaseElevationOf(wall) - guideElevation) > 0.001d)
                         continue;
                     var z = model.BaseElevationOf(wall) + 2d;
@@ -614,6 +624,53 @@ namespace BatchPdfPublisher.BuildingModel
             };
             corners=StructuralGeometry.ColumnOutline(column).Select(p=>new Point3DModel(p.X,p.Y,z0)).ToList();
             AddPrism(volume, corners, z0, z1, "column", column.StoreyId, column.Id, ref first);
+        }
+        private static void AddDrawingColumn(BuildingVolume volume,BuildingModelDocument model,ColumnModel column,double bottom,double top,ref bool first)
+        {
+            var bands=ColumnDrawingGeometry.Build(model,column);
+            if(!bands.Any(b=>b.HasOverlap)){AddColumnBox(volume,column,bottom,top,ref first);return;}
+            foreach(var band in bands) {
+                foreach(var triangle in band.Triangles) {
+                    var begin=volume.Faces.Count;
+                    AddPrism(volume,triangle.Select(p=>new Point3DModel(p.X,p.Y,band.Bottom)).ToList(),band.Bottom,band.Top,
+                        "column",column.StoreyId,column.Id,ref first);
+                    var sides=volume.Faces.Skip(begin).Where(f=>Math.Abs(f.NormalZ)<.5).ToList();
+                    foreach(var side in sides)volume.Faces.Remove(side);
+                }
+                foreach(var ring in band.Contours)for(var i=0;i<ring.Count;i++) {
+                    var a=ring[i];var b=ring[(i+1)%ring.Count];var dx=b.X-a.X;var dy=b.Y-a.Y;var length=Math.Sqrt(dx*dx+dy*dy);
+                    if(length<.001 || ColumnDrawingGeometry.Covered(new PointModel((a.X+b.X)/2,(a.Y+b.Y)/2),band.WallMasks))continue;
+                    volume.Faces.Add(new VolumeFace {Kind="column",StoreyId=column.StoreyId,ElementId=column.Id,NormalX=dy/length,NormalY=-dx/length,
+                        Points=new List<Point3DModel> {new Point3DModel(a.X,a.Y,band.Bottom),new Point3DModel(b.X,b.Y,band.Bottom),
+                            new Point3DModel(b.X,b.Y,band.Top),new Point3DModel(a.X,a.Y,band.Top)}});
+                }
+            }
+        }
+
+        private static void AddCurvedWall(BuildingVolume volume, WallModel wall, double bottom, double top, ref bool first)
+        {
+            if (top-bottom<1) return;
+            var count=volume.Faces.Count;
+            AddSlabPrism(volume,new SlabModel { Id=wall.Id,StoreyId=wall.StoreyId,
+                Thickness=top-bottom,TopElevation=top,Outline=CurveGeometry.WallOutline(wall) },top,ref first);
+            foreach(var face in volume.Faces.Skip(count)) {
+                face.Kind="wall";
+                if(Math.Abs(face.NormalZ)<.001) face.SmoothSurfaceId=wall.Id+"/curve";
+            }
+        }
+
+        private static void MarkCurvedSlabSurfaces(IEnumerable<VolumeFace> faces, SlabModel slab)
+        {
+            var surface=0;
+            foreach(var ring in new[]{slab.Outline}.Concat(slab.Openings.Select(o=>o.Outline)))
+            for(var i=0;i<ring.Count;i++) {
+                if(Math.Abs(ring[i].Bulge)<1e-10) continue;
+                var curve=new CurveGeometry(ring[i],ring[(i+1)%ring.Count],ring[i].Bulge);
+                var id=slab.Id+"/curve/"+(surface++);
+                foreach(var face in faces.Where(f=>Math.Abs(f.NormalZ)<.001))
+                    if(face.Points.All(p=>curve.DistanceTo(p.X,p.Y)<.6))
+                        face.SmoothSurfaceId=id;
+            }
         }
 
         private static void AddSlabPrism(BuildingVolume volume, SlabModel slab, double topElevation, ref bool first)

@@ -60,6 +60,11 @@ internal static class CadFloorSlabGenerationTests
         var disconnected=Walls(Ring(0,0,4000,0,4000,4000,0,4000));
         disconnected.AddRange(Walls(Ring(10000,0,14000,0,14000,4000,10000,4000)));
         Check(Build(disconnected).Count==2,"Disjoint closed buildings must retain separate slab contours.");
+        var sliverWalls=Walls(Ring(0,0,6000,0,6000,4000,0,4000));
+        sliverWalls.AddRange(Walls(Ring(10000,0,10200.25,0,10200.25,250,10000,250)));
+        var sliverMessages=new List<string>();var sliverSlabs=CadFloorSlabGeneration.Build(sliverWalls,new List<CadRoomLabel>(),100,"1F",sliverMessages);
+        Check(sliverSlabs.Count==1&&sliverMessages.Any(m=>m.Contains("微小边角"))&&SlabGeometry.Validate(sliverSlabs.Single())==null,
+            "Sub-millimetre clipping slivers must not become independent slab elements or block the valid floor.");
         foreach(var offset in new[] { -100d,100d }) {
             var biased=Build(Walls(Ring(0,0,6000,0,6000,4000,0,4000),offset));
             Check(biased.Count==1 && SlabGeometry.Validate(biased[0])==null,"Face-aligned walls must join without corner leaks.");
@@ -149,8 +154,9 @@ internal static class CadFloorSlabGenerationTests
         Check(session.TryImportCadFloors(registry,"slabs",out error) && session.Model.Slabs.Count==1,"Live import must include slabs.");
         Check(session.Undo() && session.Model.Slabs.Count==0 && session.Redo() && session.Model.Slabs.Count==1,"Undo and redo must include slabs and holes.");
         generated.Slabs[0].Openings[0].Name="手动调整";
-        try { CadFloorModelGeneration.Build(generated,registry);throw new Exception("Edited slab was overwritten."); }
-        catch(InvalidDataException) { }
+        var protectedSlab=CadFloorModelGeneration.Build(generated,registry);
+        Check(protectedSlab.Slabs[0].Openings[0].Name=="手动调整"&&protectedSlab.CadImport.StructureMessages.Count>0,
+            "Edited slab must be protected by a warning without blocking the editable model.");
         var legacy=BuildingModelJson.FromJson(BuildingModelJson.ToJson(updated));legacy.CadImport.Slabs=null;
         legacy.Slabs.Clear();Check(CadFloorModelGeneration.Build(legacy,registry).Slabs.Count==1,"Older import state without a slab baseline must upgrade safely.");
         Check(new SlabModel().Thickness==100 && new WallModel().Thickness==200,"Editor and CAD defaults must agree.");

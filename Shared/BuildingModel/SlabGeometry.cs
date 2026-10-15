@@ -92,7 +92,9 @@ namespace BatchPdfPublisher.BuildingModel
         {
             if (input == null || input.Any(p => p == null || !Finite(p.X) || !Finite(p.Y)))
                 throw new ArgumentException("楼板轮廓包含无效坐标。");
-            var ring = input.Select(p => new PointModel(p.X, p.Y)).ToList();
+            var vertices = input.Select(p => new PointModel(p.X, p.Y) { Bulge = p.Bulge }).ToList();
+            if (vertices.Count > 1 && Near(vertices[0], vertices[vertices.Count - 1])) vertices.RemoveAt(vertices.Count - 1);
+            var ring = CurveGeometry.Expand(vertices);
             if (ring.Count > 1 && Near(ring[0], ring[ring.Count - 1])) ring.RemoveAt(ring.Count - 1);
             if (ring.Count < 3 || Math.Abs(Area(ring)) < 0.5d)
                 throw new ArgumentException("楼板轮廓至少需要三个点及有效面积。");

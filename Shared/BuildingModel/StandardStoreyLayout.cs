@@ -80,7 +80,7 @@ namespace BatchPdfPublisher.BuildingModel
                 Roofs = new List<RoofModel>(model.Roofs),
                 Rooms = new List<RoomModel>(model.Rooms),
                 Axes = model.Axes, StoreyAxes=model.StoreyAxes,
-                Annotations=model.Annotations,DrawingScales=model.DrawingScales,DrawingViews = model.DrawingViews, OpeningTypes=model.OpeningTypes, OpeningTemplates=model.OpeningTemplates, OpeningOverrides=model.OpeningOverrides,OpeningEditorSnapStep=model.OpeningEditorSnapStep
+                Annotations=model.Annotations,DrawingScales=model.DrawingScales,DrawingViews = model.DrawingViews, OpeningTypes=model.OpeningTypes, OpeningTemplates=model.OpeningTemplates, OpeningOverrides=new List<OpeningInstanceOverride>(model.OpeningOverrides ?? new List<OpeningInstanceOverride>()),OpeningEditorSnapStep=model.OpeningEditorSnapStep
             };
             foreach (var target in model.Storeys.Where(s => !string.IsNullOrWhiteSpace(s.TemplateStoreyId)))
             {
@@ -99,11 +99,15 @@ namespace BatchPdfPublisher.BuildingModel
                     expanded.Walls.Add(new WallModel
                     {
                         Id = InstanceId(wall.Id), Code = wall.Code, StoreyId = target.Id, X1 = wall.X1, Y1 = wall.Y1,
-                        X2 = wall.X2, Y2 = wall.Y2, Thickness = wall.Thickness,
+                        X2 = wall.X2, Y2 = wall.Y2, Thickness = wall.Thickness, Bulge = wall.Bulge,
                         AxisPlacement = wall.AxisPlacement, AxisOffset = wall.AxisOffset,
                         Height = wall.Height, Material = wall.Material
                     });
                 foreach (var opening in model.Openings.Where(o => sourceWallIds.Contains(o.HostWallId)))
+                {
+                    var change=model.OpeningOverrides?.FirstOrDefault(o=>Same(o.OpeningId,opening.Id));
+                    if(change!=null)expanded.OpeningOverrides.Add(new OpeningInstanceOverride {
+                        OpeningId=InstanceId(opening.Id),TypeCode=change.TypeCode,Definition=change.Definition });
                     expanded.Openings.Add(new OpeningModel
                     {
                         Id = InstanceId(opening.Id), HostWallId = InstanceId(opening.HostWallId),
@@ -113,6 +117,7 @@ namespace BatchPdfPublisher.BuildingModel
                         PlanLabelAlong=opening.PlanLabelAlong,PlanLabelNormal=opening.PlanLabelNormal,
                         PlanOpenAngle=opening.PlanOpenAngle,OpenIn3D=opening.OpenIn3D,CodeManuallyEdited=opening.CodeManuallyEdited
                     });
+                }
                 foreach (var slab in model.Slabs.Where(s => Same(s.StoreyId, source.Id)))
                 {
                     var atTop = Math.Abs(slab.TopElevation - source.Elevation - source.Height) < 1d;

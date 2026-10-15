@@ -11,7 +11,7 @@ namespace BatchPdfPublisher.BuildingModel
             BuildingModelDocument model, IEnumerable<WallModel> walls, double? cutElevation = null)
         {
             var result = new List<Tuple<PointModel, PointModel>>();
-            var ends = walls.Where(w => w != null &&
+            var ends = walls.Where(w => w != null && Math.Abs(w.Bulge) < 1e-10 &&
                     (Math.Abs(w.Y2 - w.Y1) <= 0.01d) != (Math.Abs(w.X2 - w.X1) <= 0.01d))
                 .SelectMany(w => new[] {
                     Tuple.Create(w, new PointModel(w.X1, w.Y1), new PointModel(w.X2, w.Y2)),

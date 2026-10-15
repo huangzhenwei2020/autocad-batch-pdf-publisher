@@ -321,7 +321,7 @@ namespace BatchPdfPublisher.BuildingModel
             foreach(var area in view.StrokeAreas ?? new List<ViewStrokeArea>()) {
                 var id="sheet-area-"+document.StrokeAreas.Count;areaIds[area.Id]=id;
                 document.StrokeAreas.Add(new ViewStrokeArea {Id=id,Contours=area.Contours.Select(c=>c
-                    .Select(p=>new PointModel(p.X*scale+offsetX,p.Y*scale+offsetY)).ToList()).ToList()});
+                    .Select(p=>new PointModel(p.X*scale+offsetX,p.Y*scale+offsetY) {Bulge=p.Bulge}).ToList()).ToList()});
             }
             foreach (var line in view.Lines ?? new List<ViewLine>())
             {
@@ -329,7 +329,10 @@ namespace BatchPdfPublisher.BuildingModel
                 document.Lines.Add(new ViewLine
                 {
                     Layer = line.Layer,
+                    Bulge = line.Bulge,
                     LineType = line.LineType,
+                    OpeningRole = line.OpeningRole,
+                    OpeningUsesWindowAppearance = line.OpeningUsesWindowAppearance,
                     OpeningArcId = line.OpeningArcId==null?null:arcPrefix+line.OpeningArcId,
                     LineWeight = line.LineWeight,
                     StrokeAreaId = line.StrokeAreaId!=null&&areaIds.TryGetValue(line.StrokeAreaId,out var areaId)?areaId:null,
@@ -407,6 +410,7 @@ namespace BatchPdfPublisher.BuildingModel
                 if (line == null) continue;
                 Include(Math.Min(line.X1, line.X2), Math.Min(line.Y1, line.Y2));
                 Include(Math.Max(line.X1, line.X2), Math.Max(line.Y1, line.Y2));
+                if(Math.Abs(line.Bulge)>1e-10)foreach(var p in CurveGeometry.ForLine(line).BoundsPoints())Include(p.X,p.Y);
             }
             foreach (var circle in view.Circles ?? new List<ViewCircle>())
             {

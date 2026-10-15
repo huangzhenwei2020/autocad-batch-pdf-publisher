@@ -8,6 +8,10 @@ internal static class OpeningConstructionTests
 {
     internal static void Run()
     {
+        CheckRoundedOpeningFit();
+        CheckPendingSizeAdaptation();
+        CheckDefaultCombinedAndOpeningPaths();
+        CheckEditedMergeCollections();
         var model=SampleModelFactory.CreateEmptyModel("门窗构造回归");
         model.Walls.Add(new WallModel {Id="wall",StoreyId="1F",X2=6000,Y2=1000,Thickness=200});
         model.Openings.Add(new OpeningModel {Id="a",HostWallId="wall",Code="C1518",Width=1500,Height=1800,Sill=900,Offset=1800});
@@ -103,6 +107,7 @@ internal static class OpeningConstructionTests
         }
         var equal=new OpeningLayoutEditing(1000,1200,new[]{new DoorWindowLayoutCell {Right=200,Top=1200},new DoorWindowLayoutCell {Left=200,Right=500,Top=1200},new DoorWindowLayoutCell {Left=500,Right=1000,Top=1200}});
         Check(equal.Center(new[]{1},out error)&&equal.Cells[1].Left==350&&equal.Cells[1].Right==650,"居中应保留所选格宽并调整左右邻格。");
+        CheckMultiRowCenter();
         Check(equal.Equalize(new[]{0,1,2},true,out error),error);
         Check(equal.Cells.All(c=>Math.Abs(c.Right-c.Left-1000d/3)<.01),"同行等宽须保持整体框口。");
         Check(equal.MoveDivider(true,equal.Cells[0].Right,351,out error,600,20)&&equal.LastDividerCoordinate==360,"移动步长与最终中梃坐标一致。");
@@ -168,6 +173,31 @@ internal static class OpeningConstructionTests
             "移动和方向调整必须一次撤销。");
         Console.WriteLine("PASS 门窗三维编辑：共享默认、固定外框、双扇门缝、推拉轨道、普通门分扇及实例方向夹点");
         WindowHingeChecks();
+    }
+    private static void CheckPendingSizeAdaptation()
+    {
+        var model=SampleModelFactory.CreateEmptyModel("Pending aperture sizes");model.Storeys.RemoveAll(s=>s.Id!="1F");model.Storeys[0].Height=3000;
+        model.Storeys.Add(new(){Id="2F",TemplateStoreyId="1F",Elevation=3000,Height=2800});
+        model.Walls.Add(new(){Id="host",StoreyId="1F",X1=6000,X2=0,Thickness=200});
+        model.CadImport=new(){PendingOpenings=new(){new(){StoreyId="1F",SourceHandle="pending",Code="MLC8035",Kind="门联窗",Width=8000,Height=3500}}};
+        var session=new BuildingModelEditSession(model);var original=BuildingModelJson.ToJson(session.Model);
+        var plan=session.PlanPendingOpeningPlacement("1F","pending","host",3000);
+        Check(plan.Error!=null&&plan.MaximumWidth==6000&&plan.MaximumHeight==2800&&plan.SuggestedWidth==6000&&plan.SuggestedHeight==2800,"待放置尺寸未按墙端和最短共用层适配。");
+        Check(!session.TryPlacePendingOpening("1F","pending","host",3000,8000,3500,0,OpeningSizeConflictChoice.CreateNew,out _,out _)&&BuildingModelJson.ToJson(session.Model)==original,"非法待放置尺寸提交或丢失参考。");
+        Check(session.TryPlacePendingOpening("1F","pending","host",3000,6000,2800,0,OpeningSizeConflictChoice.CreateNew,out var id,out var error),error);
+        var placed=session.Model.Openings.Single();Check(placed.Code=="MLC6028"&&placed.Offset==3000&&placed.Width==6000&&placed.Height==2800,"尺寸适配没有同步编号或误改位置。");
+        var cells=BatchPdfPublisher.Models.DoorWindowElevationGeometryBuilder.ParseCellLayout(OpeningConstruction.Resolve(session.Model,placed).CustomCellLayout);
+        Check(cells.Count(c=>c.IsDoor&&c.Right-c.Left==750&&c.Top-c.Bottom==2200)==2,"新适配 MLC 的默认居中门被按旧尺寸压缩。");
+        Check(session.Model.CadImport.PendingOpenings.Count==0&&session.Model.CadImport.ResolvedOpenings.Single().OpeningId==id,"待放置关联记录未原子提交。");
+        var applied=BuildingModelJson.ToJson(session.Model);Check(session.Undo()&&BuildingModelJson.ToJson(session.Model)==original&&session.Redo()&&BuildingModelJson.ToJson(session.Model)==applied,"适配放置不能一步撤销重做。");
+        Check(BuildingModelJson.ToJson(BuildingModelJson.FromJson(applied))==applied,"适配放置持久化丢失。");
+        session.Undo();var collision=session.Model;collision.Openings.Add(new(){Id="occupied",HostWallId="host",Code="C1015",Kind="窗",Width=1000,Height=1500,Offset=3000});
+        session=new(collision);plan=session.PlanPendingOpeningPlacement("1F","pending","host",1000);
+        Check(plan.SuggestedWidth==2000,"适配未考虑相邻洞口。");plan=session.PlanPendingOpeningPlacement("1F","pending","host",2900);
+        Check(plan.SuggestedWidth==0&&plan.Error!=null,"已占用中心仍给出自动适配。");
+        plan=session.PlanPendingOpeningPlacement("1F","pending","host",1000,1200,1500,800);Check(plan.Error==null&&plan.MaximumHeight==2000,"手动窗台高未参与共用层限值。");
+        plan=session.PlanPendingOpeningPlacement("1F","pending","host",double.NaN);Check(plan.Error!=null,"非法定位中心未拒绝。");
+        Console.WriteLine("PASS pending aperture manual/fit limits reversedHost neighbours standardHeight automaticCode defaultMLC1500 sourcePreserved atomicUndo redo persistence");
     }
     private static void WindowHingeChecks()
     {
@@ -255,6 +285,161 @@ internal static class OpeningConstructionTests
         door.OpenIn3D=true;doorType.OpenAngle=0;
         Check(Math.Abs(DoorNormal()-(52+span*Math.Sin(20*Math.PI/180)))<.000001,"无类型三维角度时门不再沿用实例平面角度");
         Console.WriteLine("PASS C1215 window scene angle80 importedFalse fixedFrames commonNetHinge rigidGlassSash mirrors oblique angles standardInstance persistence undo");
+    }
+    private static void CheckMultiRowCenter()
+    {
+        var cells=new List<DoorWindowLayoutCell>{new DoorWindowLayoutCell {Right=1915,Top=3000,Material="玻璃",Opening="固定"}};
+        for(var column=0;column<4;column++)foreach(var row in new[]{0,1})cells.Add(new DoorWindowLayoutCell {
+            Left=1915+column*750,Right=1915+(column+1)*750,Bottom=row==0?0:2200,Top=row==0?2200:3000,
+            IsDoor=row==0,Material=row==0?"实板":"玻璃",Opening=row==0?"左平开":"固定"});
+        cells.Add(new DoorWindowLayoutCell {Left=4915,Right=7660,Top=3000,Material="玻璃",Opening="固定"});
+        var state=new OpeningLayoutEditing(7660,3000,cells);var selected=Enumerable.Range(1,8).ToArray();
+        var before=DoorWindowElevationGeometryBuilder.SerializeCellLayout(state.Cells);
+        var original=DoorWindowElevationGeometryBuilder.ParseCellLayout(before);
+        Check(state.Center(selected,out var error),error);
+        Check(state.Cells[0].Right==2330&&state.Cells[9].Left==5330,"MLC01C 八格居中后两侧不等宽。");
+        foreach(var i in selected){var a=original[i];var b=state.Cells[i];
+            Check(b.Left-a.Left==415&&b.Right-a.Right==415&&b.Bottom==a.Bottom&&b.Top==a.Top,
+                "跨排居中改变内部尺寸或上下分格。");
+            Check(a.Material==b.Material&&a.Opening==b.Opening&&a.IsDoor==b.IsDoor,"居中改变面板构造。");}
+        var after=DoorWindowElevationGeometryBuilder.SerializeCellLayout(state.Cells);
+        Check(state.Undo()&&DoorWindowElevationGeometryBuilder.SerializeCellLayout(state.Cells)==before&&state.Undo(true)
+            &&DoorWindowElevationGeometryBuilder.SerializeCellLayout(state.Cells)==after,"跨排居中撤销／重做不完整。");
+        Check(state.Center(selected,out error),error);
+        Check(state.Undo()&&DoorWindowElevationGeometryBuilder.SerializeCellLayout(state.Cells)==before,"重复居中增加了撤销步骤。");
+        Check(!state.Center(selected.Where(i=>i!=4),out error)&&DoorWindowElevationGeometryBuilder.SerializeCellLayout(state.Cells)==before,"漏选一格居中仍修改几何。");
+        Check(!state.Center(new[]{0,1},out error)&&DoorWindowElevationGeometryBuilder.SerializeCellLayout(state.Cells)==before,"非矩形居中修改了几何。");
+        var splitSides=new List<DoorWindowLayoutCell>{new DoorWindowLayoutCell {Right=1915,Top=2200},new DoorWindowLayoutCell {Right=1915,Bottom=2200,Top=3000}};
+        splitSides.AddRange(original.Skip(1).Take(8));splitSides.Add(new DoorWindowLayoutCell {Left=4915,Right=7660,Top=2200});splitSides.Add(new DoorWindowLayoutCell {Left=4915,Right=7660,Bottom=2200,Top=3000});
+        var partial=new OpeningLayoutEditing(7660,3000,splitSides);var bottomIds=new[]{2,4,6,8};
+        Check(partial.Center(bottomIds,out error),error);
+        Check(partial.Cells[0].Right==2330&&partial.Cells[1].Right==1915&&partial.Cells[10].Left==5330&&partial.Cells[11].Left==4915,"部分行居中影响了其他行。");
+        Console.WriteLine("PASS layout multiRowCenter MLC01C eightCells rigidDimensions equalSides partialBand neighbourAlignment rejectIncomplete atomicUndo noOp");
+    }
+    private static void CheckEditedMergeCollections()
+    {
+        var model=SampleModelFactory.CreateEmptyModel("Edited merge collections");
+        foreach(var floor in new[]{"1F","2F","3F"}) {
+            if(floor!="1F")model.Storeys.Add(new StoreyModel {Id=floor,Height=4000,Elevation=floor=="2F"?4000:8000});
+            model.Walls.Add(new WallModel {Id="wall-"+floor,StoreyId=floor,X2=12000,Height=4000});
+            model.Openings.Add(new OpeningModel {Id="source-"+floor,HostWallId="wall-"+floor,Kind="门联窗",Code="MLC01B",Width=7599.672341,Height=3000,Offset=6000});
+        }
+        model.Storeys.Add(new StoreyModel {Id="4F",TemplateStoreyId="1F",Height=4000,Elevation=12000});
+        model.Walls.Add(new WallModel {Id="target-wall",StoreyId="1F",Y1=15000,Y2=15000,X2=12000,Height=4000});
+        model.Openings.Add(new OpeningModel {Id="target",HostWallId="target-wall",Kind="门联窗",Code="MLC01B",Width=7599.672341,Height=3000,Offset=6000});
+        model.OpeningTypes.Add(OpeningConstruction.Default(model.Openings[0]));
+        var session=new BuildingModelEditSession(model);var draft=OpeningConstruction.Copy(model.OpeningTypes[0]);
+        draft.DivisionPreset="双扇等分";draft.GlassThickness=12;
+        var before=BuildingModelJson.ToJson(session.Model);
+        Check(session.TrySetOpeningDefinition("source-1F",draft,false,out var error),error);
+        var physical=StandardStoreyLayout.Materialize(session.Model);
+        Check(physical.Openings.All(o=>OpeningConstruction.Resolve(physical,o).GlassThickness==12),"同编号分格未应用到集合或标准层。");
+        Check(session.Model.Openings.All(o=>o.Width==7599.672341),"分格编辑改变了原始精确洞口宽。");
+        Check(session.Undo()&&BuildingModelJson.ToJson(session.Model)==before,"同编号分格没有一步撤销。");
+        // A size conflict targets a different existing definition; both collections share the edited result.
+        session.Model.Openings.Single(o=>o.Id=="target").Height=2800;
+        session.Model.Openings.Single(o=>o.Id=="target").Code="MLC02";
+        var target=OpeningConstruction.Default(session.Model.Openings.Single(o=>o.Id=="target"));target.GlassThickness=6;session.Model.OpeningTypes.Add(target);
+        foreach(var o in session.Model.Openings.Where(o=>o.Id.StartsWith("source-")))o.Code="MLC02";
+        session.Model.OpeningTypes[0].Code="MLC02-old";
+        // Give sources a numeric size code so their resized code resolves to the existing target.
+        target.Code="MLC7628";session.Model.Openings.Single(o=>o.Id=="target").Code=target.Code;
+        foreach(var o in session.Model.Openings.Where(o=>o.Id.StartsWith("source-")))o.Code="MLC7630";
+        session.Model.OpeningTypes[0].Code="MLC7630";
+        draft.Code="MLC7630";OpeningConstruction.ResizeType(draft,7599.672341,2800);
+        session=new BuildingModelEditSession(session.Model);
+        before=BuildingModelJson.ToJson(session.Model);
+        Check(session.TrySetOpeningDefinition("source-1F",draft,false,out error,conflictChoice:OpeningSizeConflictChoice.MergeEditedDefinition),error);
+        physical=StandardStoreyLayout.Materialize(session.Model);
+        Check(physical.Openings.All(o=>o.Code=="MLC7628"&&OpeningConstruction.Resolve(physical,o).GlassThickness==12),"并入类型丢弃了草稿或未同步集合。");
+        Check(session.Undo()&&BuildingModelJson.ToJson(session.Model)==before,"并入更新没有原子撤销。");
+        Check(session.TrySetOpeningDefinition("source-1F",draft,false,out error),error);
+        Check(session.Model.Openings.Where(o=>o.Id.StartsWith("source-")).All(o=>o.Code=="MLC7628A")
+            &&session.Model.Openings.Single(o=>o.Id=="target").Code=="MLC7628","后缀新建范围丢失或修改已有类型。");
+        Check(session.Undo()&&BuildingModelJson.ToJson(session.Model)==before,"后缀集合未一步撤销。");
+        var invalid=OpeningConstruction.Copy(draft);invalid.GlassThickness=-1;
+        Check(!session.TrySetOpeningDefinition("source-1F",invalid,false,out error,conflictChoice:OpeningSizeConflictChoice.MergeEditedDefinition)
+            &&BuildingModelJson.ToJson(session.Model)==before,"非法并入部分提交。");
+        Console.WriteLine("PASS edited definition collections mergeKeepsDraft groupSuffix targetUnchanged exactWidth standardFloors atomicUndo invalidRollback");
+    }
+    private static void CheckDefaultCombinedAndOpeningPaths()
+    {
+        foreach(var width in new[]{2000d,2400d,7600d})foreach(var height in new[]{2100d,2200d,3000d})
+        {
+            var opening=new OpeningModel {Id="combined",Kind="门联窗",Code="MLC",Width=width,Height=height};
+            var type=OpeningConstruction.Default(opening);
+            var cells=DoorWindowElevationGeometryBuilder.ParseCellLayout(type.CustomCellLayout);
+            var doors=cells.Where(c=>c.IsDoor).OrderBy(c=>c.Left).ToArray();
+            Check(doors.Length==2&&doors.All(c=>c.Bottom==0&&c.Top==Math.Min(height,2200)&&c.Right-c.Left==750),"MLC >=2000 应有居中 1500 宽、2200 高双开扇，低洞口不得出界。");
+            Check(doors[0].Left==(width-1500)/2&&doors[1].Right==(width+1500)/2&&doors[0].Opening=="左平开"&&doors[1].Opening=="右平开","MLC 双开扇应居中且合页在两外侧。");
+            Check(cells.Where(c=>!c.IsDoor).All(c=>c.Opening=="固定")&&Math.Abs(cells.Sum(c=>(c.Right-c.Left)*(c.Top-c.Bottom))-width*height)<.01,"MLC 固定窗／亮子应完整填满其余洞口。");
+            Check(type.SashWidth==50&&type.DoorFrameWidth==50&&type.DoorPlacement=="居中"&&OpeningConstruction.Validate(opening,type)==null,"MLC 默认扇框和有效构造未同步。");
+        }
+        foreach(var code in new[]{"C1121","FC1518","TC1818","DXC3018","GC0912","BYC1518","MLC1824"})
+        {
+            var opening=new OpeningModel {Code=code,Kind=code.StartsWith("MLC")?"门联窗":"窗",Width=1800,Height=2400};
+            var type=OpeningConstruction.Default(opening);
+            Check(type.SashWidth==50&&type.DoorFrameWidth==50,"窗和 MLC 默认必须打开扇框／门套："+code);
+        }
+        var item=new DoorWindowScheduleItem {Width=1100,Height=2100,ElevationType="普通窗",DivisionPreset="自定义",HasInstallationGap=false,
+            CustomCellLayout="0,0,550,2100,右平开,0,0,玻璃|550,0,1100,2100,左平开,0,0,玻璃"};
+        var saved=item.CustomCellLayout;
+        var geometry=DoorWindowElevationGeometryBuilder.Build(item);
+        Check(item.CustomCellLayout==saved&&geometry.Cells[0].Opening=="右平开"&&geometry.Cells[1].Opening=="左平开","用户手动设置的相对合页必须保留，不能强制套用默认方向。");
+        var paths=OpeningElevationAdapter.CleanGeometryLines(geometry.Lines).Where(l=>l.OpeningPathId!=null).GroupBy(l=>l.OpeningPathId).ToArray();
+        Check(paths.Length==2&&paths.All(g=>g.Count()==2),"每扇开启线应保留独立双段路径身份。");
+        foreach(var path in paths)
+        {
+            var lines=path.ToArray();
+            Check(Math.Abs(lines[0].X2-lines[1].X1)<.01&&Math.Abs(lines[0].Y2-lines[1].Y1)<.01,"每扇开启线必须连续经过合页尖头。");
+            var tip=lines[0].X2;var free=lines[0].X1;
+            Check(free<550?tip>free:tip<free,"用户设置的相对尖头必须仍指向实际合页。");
+        }
+        var model=SampleModelFactory.CreateEmptyModel("默认开启路径");
+        model.Walls.Add(new WallModel {Id="host",StoreyId="1F",X2=8000,Thickness=200});
+        foreach(var offset in new[]{1500d,4500d})model.Openings.Add(new OpeningModel {Id="w"+offset,HostWallId="host",Code="C1121",Kind="窗",Width=1100,Height=2100,Sill=800,Offset=offset});
+        foreach(var direction in new[]{ElevationDirection.South,ElevationDirection.North})
+        {
+            var view=OrthographicProjector.Project(model,new ViewDefinitionModel {Id=direction.ToString(),Kind=ViewKind.Elevation,Direction=direction,Scale=100},null);
+            var grouped=view.Lines.Where(l=>l.OpeningRole=="Opening").GroupBy(l=>l.OpeningArcId).ToArray();
+            Check(grouped.Length==4&&grouped.All(g=>g.Key!=null&&g.Count()==2&&g.All(l=>l.LineType=="DASHED")),"前后立面必须保留每樘每扇的独立虚线路径。");
+        }
+        var custom=OpeningConstruction.Default(model.Openings[0]);custom.SashWidth=0;custom.DoorFrameWidth=0;custom.CustomCellLayout="0,0,1100,2100,固定,0,0,玻璃";
+        model.OpeningTypes.Add(custom);var before=BuildingModelJson.ToJson(model);
+        Check(OpeningConstruction.Resolve(model,model.Openings[0]).SashWidth==0&&BuildingModelJson.ToJson(model)==before,"新默认不能重置已有用户关闭的扇框及分格。");
+        Console.WriteLine("PASS opening defaults MLC2000 centered1500 height2200 shortHole fixedSides sashEnabled outwardDefaults manualInwardHingesAllowed continuousIndependentPaths mirroredViews customPreserved");
+    }
+    private static void CheckRoundedOpeningFit()
+    {
+        Check(OpeningConstruction.FitRoundedOpeningSize(3770,3768)==3768,"3770 的小幅取整误差应向内适配为 3768，不能拉长墙。");
+        Check(OpeningConstruction.FitRoundedOpeningSize(3770,3768.672)==3768,"自动适配必须向内取整毫米，不能再次越界。");
+        Check(OpeningConstruction.FitRoundedOpeningSize(3770,3764)==3770&&OpeningConstruction.FitRoundedOpeningSize(3800,3768)==3800,"真实超限不能被自动适配掩盖。");
+        Check(OpeningConstruction.FitRoundedOpeningSize(3760,3768)==3760&&OpeningConstruction.FitRoundedOpeningSize(3745,3744)==3745,"不跨越不同 10 mm 档位，不改已合法尺寸。");
+        var model=SampleModelFactory.CreateEmptyModel("MLC04B 取整适配");model.Storeys.RemoveAll(s=>s.Id!="1F");model.Storeys[0].Height=3000;
+        model.Storeys.Add(new StoreyModel {Id="2F",Name="标准层",Elevation=3000,Height=3000,TemplateStoreyId="1F"});
+        model.Walls.Add(new WallModel {Id="short",StoreyId="1F",X2=3768,Thickness=200});
+        model.Walls.Add(new WallModel {Id="long",StoreyId="1F",X2=4000,Y1=5000,Y2=5000,Thickness=200});
+        model.Openings.Add(new OpeningModel {Id="a",HostWallId="short",Code="MLC04B",Kind="门联窗",Offset=1884,Width=3768,Height=3000});
+        model.Openings.Add(new OpeningModel {Id="b",HostWallId="long",Code="MLC04B",Kind="门联窗",Offset=2000,Width=3768,Height=3000});
+        model.OpeningTypes.Add(OpeningConstruction.Default(model.Openings[0]));
+        var session=new BuildingModelEditSession(model);var before=BuildingModelJson.ToJson(session.Model);
+        var draft=OpeningConstruction.Copy(model.OpeningTypes[0]);OpeningConstruction.ResizeType(draft,3770,3000);draft.GlassThickness=12;
+        Check(session.TrySetOpeningDefinition("a",draft,false,out var error),error);
+        var physical=StandardStoreyLayout.Materialize(session.Model);
+        Check(physical.Openings.Count==4&&physical.Openings.All(o=>o.Width==3768&&o.Code=="MLC04B"),"同编号及标准层必须采用统一可用尺寸，不误改编号。");
+        Check(physical.Openings.All(o=>OpeningConstruction.Resolve(physical,o).GlassThickness==12),"自动适配不得丢弃编辑的分格／构造。");
+        Check(session.Model.Walls.Single(w=>w.Id=="short").X2==3768&&PlanEditing.ValidateOpening(physical,physical.Walls.First(w=>w.Id=="short"),physical.Openings.First(o=>o.Id=="a"))==null,"不能延长墙或放宽几何校验。");
+        var changed=BuildingModelJson.ToJson(session.Model);
+        Check(session.Undo()&&BuildingModelJson.ToJson(session.Model)==before&&session.Redo()&&BuildingModelJson.ToJson(session.Model)==changed,"自动适配和构造必须原子撤销重做。");
+        var saved=BuildingModelJson.FromJson(changed);
+        Check(saved.Openings.All(o=>o.Width==3768)&&OpeningConstruction.Resolve(saved,saved.Openings[0]).GlassThickness==12,"保存重开不得恢复超限草稿。");
+        OpeningConstruction.ResizeType(draft,3800,3000);
+        Check(!session.TrySetOpeningDefinition("a",draft,false,out error)&&BuildingModelJson.ToJson(session.Model)==changed,"真实超限必须拒绝且保留模型。");
+        Check(session.TrySetOpeningGeometry("a",1884,3770,3000,0,out error)&&session.Model.Openings.First(o=>o.Id=="a").Width==3768,"属性参数路径也应适配取整误差。");
+        session.Model.Storeys.First(s=>s.Id=="2F").Height=2998;
+        var limits=session.GetOpeningSizeLimits("a",true);
+        Check(limits[0]==3768&&limits[1]==2998,"仅当前樘也必须核对洞口共用标准层的可用高度。");
+        Console.WriteLine("PASS opening roundedFit MLC04B 3770to3768 inwardWholeMillimetre sharedStandardFloors preserveCode construction atomicUndo save strictReject propertyPath unchangedWall");
     }
     private static void Check(bool value,string message){if(!value)throw new InvalidOperationException(message);}
 }

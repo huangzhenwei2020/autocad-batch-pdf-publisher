@@ -13,7 +13,7 @@ internal sealed class DrawingViewCanvas : Control
     private readonly List<ViewLine> _lines = new();
     private readonly List<ViewText> _texts = new();
     private readonly List<DimensionLabel> _dimensionLabels = new();
-    private readonly List<(string Layer,int? Weight,bool Dashed,bool OpeningArc,StreamGeometry Geometry,Geometry? Interior)> _strokes=new();
+    private readonly List<(string Layer,int? Weight,bool Dashed,bool OpeningArc,string? OpeningRole,bool? WindowAppearance,StreamGeometry Geometry,Geometry? Interior)> _strokes=new();
     private sealed record DimensionLabel(string Text, Point Center, double FontHeight, double Width, double Height, bool Vertical,double WidthFactor)
     {
         public Rect Bounds => new(Center.X-(Vertical ? Height : Width)/2,Center.Y-(Vertical ? Width : Height)/2,
@@ -92,7 +92,7 @@ internal sealed class DrawingViewCanvas : Control
     {
         _strokes.Clear();
         var areas=(_view?.StrokeAreas ?? new()).ToDictionary(a=>a.Id);
-        foreach(var group in _lines.GroupBy(l=>(l.Layer,l.LineWeight,l.StrokeAreaId,l.OpeningArcId,Dashed:l.Layer==ViewLayers.Axis||l.LineType=="HIDDEN"||l.LineType=="DASHED"))) {
+        foreach(var group in _lines.GroupBy(l=>(l.Layer,l.LineWeight,l.StrokeAreaId,l.OpeningArcId,l.OpeningRole,l.OpeningUsesWindowAppearance,Dashed:l.Layer==ViewLayers.Axis||l.LineType=="HIDDEN"||l.LineType=="DASHED"))) {
             var edges=group.ToArray();var used=new bool[edges.Length];
             (double,double) Key(double x,double y)=>(Math.Round(x,6),Math.Round(y,6));
             var nodes=new Dictionary<(double,double),List<int>>();
@@ -110,7 +110,12 @@ internal sealed class DrawingViewCanvas : Control
                         used[index]=true;var edge=edges[index];
                         var reverse=Key(edge.X2,edge.Y2)==current;
                         var x=reverse?edge.X1:edge.X2;var y=reverse?edge.Y1:edge.Y2;
-                        current=Key(x,y);path.LineTo(new Point(x,y));
+                        current=Key(x,y);
+                        if(Math.Abs(edge.Bulge)>1e-10) {
+                            var curve=CurveGeometry.ForLine(edge);
+                            path.ArcTo(new Point(x,y),new Size(curve.Radius,curve.Radius),0,Math.Abs(curve.Sweep)>Math.PI,
+                                (reverse?-edge.Bulge:edge.Bulge)>0?SweepDirection.Clockwise:SweepDirection.CounterClockwise);
+                        } else path.LineTo(new Point(x,y));
                         if(current==start){path.EndFigure(true);return;}
                         var incident=nodes[current];
                         if((group.Key.Dashed&&group.Key.OpeningArcId==null)||(!closedInterior&&incident.Count!=2))break;
@@ -129,12 +134,20 @@ internal sealed class DrawingViewCanvas : Control
                     path.SetFillRule(FillRule.EvenOdd);
                     foreach(var contour in area.Contours.Where(c=>c.Count>=3)) {
                         path.BeginFigure(new Point(contour[0].X,contour[0].Y),true);
-                        foreach(var p in contour.Skip(1))path.LineTo(new Point(p.X,p.Y));path.EndFigure(true);
+                        for(var i=0;i<contour.Count;i++) {
+                            var a=contour[i];var b=contour[(i+1)%contour.Count];
+                            if(Math.Abs(a.Bulge)>1e-10) {
+                                var curve=new CurveGeometry(a,b,a.Bulge);
+                                path.ArcTo(new Point(b.X,b.Y),new Size(curve.Radius,curve.Radius),0,Math.Abs(curve.Sweep)>Math.PI,
+                                    a.Bulge>0?SweepDirection.Clockwise:SweepDirection.CounterClockwise);
+                            } else path.LineTo(new Point(b.X,b.Y));
+                        }
+                        path.EndFigure(true);
                     }
                 }
                 interior=clip;
             }
-            _strokes.Add((group.Key.Layer,group.Key.LineWeight,group.Key.Dashed,group.Key.OpeningArcId!=null,geometry,interior));
+            _strokes.Add((group.Key.Layer,group.Key.LineWeight,group.Key.Dashed,group.Key.OpeningArcId!=null,group.Key.OpeningRole,group.Key.OpeningUsesWindowAppearance,geometry,interior));
         }
     }
     private static Size TextSize(string text,double height)
@@ -147,7 +160,7 @@ internal sealed class DrawingViewCanvas : Control
     public void Fit()
     {
         if(Bounds.Width<20 || Bounds.Height<20) { _fitPending=true;return; }
-        var points=_lines.SelectMany(l=>new[] {new PointModel(l.X1,l.Y1),new PointModel(l.X2,l.Y2)})
+        var points=_lines.SelectMany(l=>Math.Abs(l.Bulge)>1e-10?CurveGeometry.ForLine(l).BoundsPoints():new List<PointModel> {new(l.X1,l.Y1),new(l.X2,l.Y2)})
             .Concat(_texts.SelectMany(t=>new[] {new PointModel(t.X,t.Y),new PointModel(t.X+(t.Text?.Length ?? 0)*t.Height,t.Y+t.Height)}))
             .Concat((_view?.Circles ?? new()).SelectMany(c=>new[] {new PointModel(c.X-c.Radius,c.Y-c.Radius),new PointModel(c.X+c.Radius,c.Y+c.Radius)}))
             .Concat((_view?.Hatches ?? new()).SelectMany(h=>h.Boundary)).ToArray();
@@ -198,12 +211,15 @@ internal sealed class DrawingViewCanvas : Control
             Bounds.Width/2-_centerX*_scale,Bounds.Height/2+_centerY*_scale)))
         foreach(var stroke in _strokes) {
             var axis=stroke.Layer==ViewLayers.Axis;
-            IBrush brush=stroke.OpeningArc?new SolidColorBrush(Color.Parse("#91A0AB")):
+            var mark=stroke.OpeningRole=="Opening"||stroke.OpeningRole=="Hole";
+            IBrush brush=stroke.OpeningArc||mark?new SolidColorBrush(Color.Parse("#91A0AB")):
+                stroke.OpeningRole=="SashFrame"?Brushes.Gray:stroke.WindowAppearance==true?new SolidColorBrush(Color.Parse("#087C96")):
                 axis?Brushes.SlateGray:new SolidColorBrush(Color.Parse(stroke.Layer==ViewLayers.Opening?"#275D80":"#253746"));
-            var thickness=DrawingLineWeights.Resolve(stroke.Layer,stroke.Weight)/100d*Math.Max(1,_view.Scale);
+            if(stroke.OpeningRole!=null&&!mark&&stroke.OpeningRole!="SashFrame"&&stroke.WindowAppearance==false)brush=new SolidColorBrush(Color.Parse("#253746"));
+            var thickness=(stroke.OpeningRole!=null?OpeningElevationAdapter.PaperWeight(stroke.OpeningRole,stroke.Weight):DrawingLineWeights.Resolve(stroke.Layer,stroke.Weight))/100d*Math.Max(1,_view.Scale);
             var ink=thickness==0?1/_scale:thickness;
             var pen=new Pen(brush,ink*(stroke.Interior!=null?2:1),
-                stroke.Dashed?new DashStyle(stroke.OpeningArc?new[]{2d*_view.Scale/ink,1d*_view.Scale/ink}:new[]{50d,25d},0):null,
+                stroke.Dashed?new DashStyle(stroke.OpeningArc||mark?new[]{2d*_view.Scale/ink,1d*_view.Scale/ink}:new[]{50d,25d},0):null,
                 stroke.Dashed?PenLineCap.Flat:PenLineCap.Square,PenLineJoin.Miter);
             if(stroke.Interior!=null) {
                 using(context.PushGeometryClip(stroke.Interior))context.DrawGeometry(null,pen,stroke.Geometry);

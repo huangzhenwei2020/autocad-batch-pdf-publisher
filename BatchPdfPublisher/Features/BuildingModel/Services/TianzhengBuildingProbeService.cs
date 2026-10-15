@@ -34,15 +34,16 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
                 if (registration)
                 {
                     var project = new BatchPdfPublisher.Services.PublishPlanStore().GetActiveProject();
-                    var path = StudioLaunch.ActiveModelPath(project?.ProjectFolder, project?.Name);
-                    if (path == null) throw new InvalidOperationException("请先打开当前项目的建筑模型，设置并保存楼层，再进行 CAD 楼层登记。");
+                    string path;
+                    try { path=StudioLaunch.ActiveModelPath(project?.ProjectFolder, project?.Name,document.Database.FingerprintGuid.ToString()); }
+                    catch(FileNotFoundException) { path=null;document.Editor.WriteMessage("\n上次模型路径已失效，请在登记窗口新建或打开模型。"); }
                     var window = new CadFloorRegistrationWindow(path,
                         (owner, floor) => PickFloorDatum(document, owner, floor),
                         (owner, floor) => CaptureFloor(document, owner, floor),
                         registry => {
                             // Validate before starting anything; the live editor merges and validates again.
-                            var preview=CadFloorModelGeneration.Build(BuildingModelJson.LoadModel(path), registry);
-                            if (!BuildingModelStudioLauncher.OpenCurrentModel(document, path))
+                            var preview=CadFloorModelGeneration.Build(BuildingModelJson.LoadModel(registry.ModelPath), registry);
+                            if (!BuildingModelStudioLauncher.OpenCurrentModel(document, registry.ModelPath))
                                 throw new InvalidOperationException("建筑模型程序未启动，尚未提交生成请求。");
                             CadModelGenerationRequest.Queue(registry);
                             document.Editor.WriteMessage("\n已提交生成建筑模型：墙、门窗洞口和楼板将一并更新，可撤销本次生成。");
@@ -52,7 +53,12 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
                         (owner,registry,model,locations) => Application.ShowModalWindow(new CadRegisteredOpeningTableWindow(registry,model,
                             (table,capture,item)=>PickOpeningPlacement(document,table,new CadOpeningRegistrationRow { SourceHandle=item.SourceHandle,Code=item.ModelCode,Width=item.Width },capture.Floor),
                             draft=>ReadRegisteredPlan(document,draft,false),locations) { Owner=owner })==true,
-                        registry=>ReadRegisteredPlan(document,registry,true));
+                        registry=>ReadRegisteredPlan(document,registry,true),
+                        registry=>CadPlanUnderlayCapture.Update(document,registry),
+                        owner=>{var next=CadModelProjectService.Create(owner);if(next!=null)CadModelManagementService.Remember(document,next);return next;},
+                        owner=>{var next=CadModelProjectService.Open(owner);if(next!=null)CadModelManagementService.Remember(document,next);return next;},
+                        (owner,modelPath)=>CadModelProjectService.EditStoreys(document,owner,modelPath),
+                        owner=>CadModelManagementService.Show(document,owner));
                     Application.ShowModalWindow(window);
                     return;
                 }
@@ -105,13 +111,18 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
                 floor.RegionMax = new PointModel(polygon.Cast<Point3d>().Max(p=>p.X),polygon.Cast<Point3d>().Max(p=>p.Y));
                 floor.RegionPolygon = polygon.Cast<Point3d>().Select(p=>new PointModel(p.X,p.Y)).ToList();
                 var selection = editor.SelectCrossingPolygon(polygon, new SelectionFilter(new[] { new TypedValue(0,"TCH_WALL,TCH_CURTAIN_WALL,TCH_OPENING,TCH_COLUMN,TCH_BEAM") }));
-                if (selection.Status != PromptStatus.OK) throw new InvalidOperationException("框选范围内未找到天正墙或门窗洞口，请重新框选。");
-                report = ReadSelection(document, selection, true);
+                report = selection.Status == PromptStatus.OK ? ReadSelection(document, selection, true)
+                    : new CadBuildingProbeDocument { DrawingPath=document.Name, DrawingFingerprint=document.Database.FingerprintGuid.ToString() };
             }
             ReadRegionWalls(document,floor,report);
             var selectedWalls=RegionWallHandles(floor,report);
             ReadRoomLabels(document,floor,report);
             var capture = CadFloorPlanCapture.FromProbe(floor, report);
+            capture.Underlay = CadPlanUnderlayCapture.Read(document.Database, floor);
+            if (report.Entities.Count == 0 && capture.Underlay.Primitives.Count == 0 && capture.Underlay.Texts.Count == 0)
+                throw new InvalidOperationException("框选范围内没有可登记或可作为参照的对象。");
+            document.Editor.WriteMessage("\n参照底图 " + capture.Underlay.Primitives.Count + " 个图元；跳过不支持对象 " + capture.Underlay.UnsupportedEntities + " 个。");
+            if (report.Entities.Count == 0) return capture;
             RetainUsedWalls(capture,selectedWalls);
             var review = new CadFloorOpeningReviewWindow(capture, (window, item) =>
                 PickOpeningPlacement(document, window, new CadOpeningRegistrationRow { SourceHandle = item.SourceHandle, Width = item.Width }, floor)) { Owner = owner };
@@ -192,6 +203,7 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
                     if(item.CodeSource!="门窗表编号与尺寸" && !CadOpeningDefaults.HasCode(item.Code)
                         && item.Placement?.Source?.StartsWith("本洞口原生门扇",StringComparison.Ordinal)==true)item.Kind="门";
                 }
+                capture.Underlay=CadPlanUnderlayCapture.Read(document.Database,capture.Floor);
                 report.DbmodAfter=Dbmod();capture.Probe=report;RetainUsedWalls(capture,previousWalls);
             }
             if(persist)registry.ReplaceFrom(draft,stamp);
@@ -410,6 +422,13 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
             catch { record.Note = "无法读取包围范围；不使用包围框推断定位线。"; }
             var curve = entity as Curve;
             record.CurveStatus = "未提供曲线接口；定位线待适配，不用包围框代替";
+            ReadNativeWallCurve(curve,record);
+            CadBuildingProbeRules.DeriveWall(record);
+            if(curtain) { ReadOpeningLabel(entity,record);CadBuildingProbeRules.DeriveCurtainWall(record,1); }
+        }
+
+        internal static void ReadNativeWallCurve(Curve curve,CadBuildingProbeEntity record)
+        {
             if (curve != null)
             {
                 try
@@ -426,11 +445,67 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
                         && Math.Abs(length-chord)<0.000001 && Math.Abs(start.Z-end.Z)<0.000001
                         && curve.GetPointAtParameter((curve.StartParam + curve.EndParam)/2).DistanceTo((curve.StartPoint + (curve.EndPoint-curve.StartPoint)*0.5))<0.000001;
                     record.CurveStatus = "原生曲线采样已读取；是否为墙定位线及直线须核验";
+                    if(!record.StraightHorizontalLineVerified && CadBuildingProbeRules.IsWall(record.DxfName))
+                    {
+                        var firstDistance=curve.GetDistanceAtParameter(curve.StartParam);
+                        var lastDistance=curve.GetDistanceAtParameter(curve.EndParam);
+                        record.CurveSamples=Enumerable.Range(0,9).Select(i=>Point(curve.GetPointAtDist(
+                            firstDistance+(lastDistance-firstDistance)*i/8d))).ToList();
+                        CadBuildingProbeRules.VerifyCircularWall(record);
+                    }
                 }
                 catch (Exception exception) { record.CurveStatus = "曲线不可读：" + exception.Message; }
             }
-            CadBuildingProbeRules.DeriveWall(record);
-            if(curtain) { ReadOpeningLabel(entity,record);CadBuildingProbeRules.DeriveCurtainWall(record,1); }
+        }
+
+        public static void RunCurvedWallNativeCheck(Document document)
+        {
+            var dbmod=Dbmod();
+            var poly=new Polyline();poly.AddVertexAt(0,new Point2d(4000,0),-Math.Tan(Math.PI/8),0,0);
+            poly.AddVertexAt(1,new Point2d(0,-4000),0,0,0);
+            var mixed=new Polyline();mixed.AddVertexAt(0,new Point2d(4000,0),Math.Tan(Math.PI/8),0,0);
+            mixed.AddVertexAt(1,new Point2d(0,4000),0,0,0);mixed.AddVertexAt(2,new Point2d(0,8000),0,0,0);
+            var tilted=new Arc(Point3d.Origin,4000,0,Math.PI/2);
+            tilted.TransformBy(Matrix3d.Rotation(Math.PI/6,Vector3d.XAxis,Point3d.Origin));
+            var mirrored=new Arc(Point3d.Origin,4000,0,Math.PI/2);
+            mirrored.TransformBy(Matrix3d.Mirroring(new Plane(Point3d.Origin,Vector3d.XAxis)));
+            var curves=new Curve[] {new Arc(Point3d.Origin,4000,0,Math.PI/2),poly,
+                new Arc(Point3d.Origin,4000,0,3*Math.PI/2),mirrored,
+                new Ellipse(Point3d.Origin,Vector3d.ZAxis,new Vector3d(4000,0,0),.6,0,Math.PI/2),
+                tilted,new Circle(Point3d.Origin,Vector3d.ZAxis,4000),mixed};
+            try
+            {
+                for(var i=0;i<curves.Length;i++)
+                {
+                    var source=new CadBuildingProbeEntity { Handle="QA-"+i,DxfName="TCH_WALL",Category="天正墙候选",
+                        Fields=new List<CadProbeField> {CadBuildingProbeRules.Field("LeftWidth",true,80d,null),
+                            CadBuildingProbeRules.Field("RightWidth",true,120d,null),CadBuildingProbeRules.Field("Elevation",true,0d,null)} };
+                    ReadNativeWallCurve(curves[i],source);CadBuildingProbeRules.DeriveWall(source);
+                    if(source.CircularHorizontalArcVerified!=(i<4))throw new InvalidDataException("原生曲线核验错误："+i+" "+source.CurveStatus);
+                    if(i>=4)continue;
+                    var nativeCurve=new CurveGeometry(new PointModel(source.CurveStart.X,source.CurveStart.Y),
+                        new PointModel(source.CurveEnd.X,source.CurveEnd.Y),source.CurveBulge);
+                    var nativeArc=curves[i] as Arc;
+                    var expectedSign=nativeArc==null?Math.Sign(poly.GetBulgeAt(0)):Math.Sign(nativeArc.Normal.Z);
+                    if(Math.Abs(nativeCurve.Radius-4000)>1e-5 || Math.Sign(source.CurveBulge)!=expectedSign)
+                        throw new InvalidDataException("Native arc i="+i+" radius="+nativeCurve.Radius+" bulge="+source.CurveBulge+" expectedSign="+expectedSign);
+                    var model=BuildingModelProjectWorkflow.Empty("Arc QA");
+                    var floor=CadFloorRegistrationContext.Create(Path.Combine(Path.GetTempPath(),"arc-qa","model.json"),model,"1F",new PointModel(0,0),1);
+                    floor.SetSourceDatum(new PointModel(0,0),new PointModel(10,0));
+                    floor.RegionMin=new PointModel(-9000,-9000);floor.RegionMax=new PointModel(9000,9000);
+                    floor.RegionPolygon=new List<PointModel> {new PointModel(-9000,-9000),new PointModel(9000,-9000),new PointModel(9000,9000),new PointModel(-9000,9000)};
+                    floor.WallCandidates.Add(source);
+                    var registry=new CadFloorPlanRegistry {ModelPath=floor.ModelPath,Floors=new List<CadFloorPlanCapture> {
+                        new CadFloorPlanCapture {Floor=floor,Probe=new CadBuildingProbeDocument { DrawingFingerprint="native-arc-qa",Entities=new List<CadBuildingProbeEntity>{source} } } } };
+                    var generated=CadFloorModelGeneration.Build(model,registry);
+                    if(generated.Walls.Count!=1 || Math.Abs(generated.Walls[0].Bulge-source.CurveBulge)>1e-8
+                        ||generated.Walls[0].Thickness!=200 || generated.Walls[0].AxisOffset!=-20)
+                        throw new InvalidDataException("原生圆弧未进入登记模型。");
+                }
+                if(Dbmod()!=dbmod)throw new InvalidDataException("弧墙核验修改了当前图纸。");
+                document.Editor.WriteMessage("\nCAD_REGISTERED_ARC_NATIVE_OK nativeArc bulgePolyline clockwise majorArc mirrored rejectEllipse tilted fullCircle mixedCurve verifiedSamples generateModel thicknessOffset unchangedDrawing");
+            }
+            finally { foreach(var curve in curves)curve.Dispose(); }
         }
 
         private static CadOpeningPlacement PickOpeningPlacement(Document document, System.Windows.Window window,

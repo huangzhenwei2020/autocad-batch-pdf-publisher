@@ -343,7 +343,7 @@ namespace BatchPdfPublisher.BuildingModel
                 Id = "W-" + Guid.NewGuid().ToString("N"),
                 StoreyId = string.IsNullOrWhiteSpace(storey.TemplateStoreyId)
                     ? source.StoreyId : storey.TemplateStoreyId,
-                X1 = source.X1, Y1 = source.Y1, X2 = source.X2, Y2 = source.Y2,
+                X1 = source.X1, Y1 = source.Y1, X2 = source.X2, Y2 = source.Y2, Bulge = source.Bulge,
                 Thickness = source.Thickness, Height = source.Height, Material = source.Material,
                 AxisPlacement = source.AxisPlacement, AxisOffset = source.AxisOffset
             };
@@ -440,13 +440,14 @@ namespace BatchPdfPublisher.BuildingModel
                 var split = false;
                 foreach (var host in model.Walls.ToArray())
                 {
+                    if (Math.Abs(host.Bulge) > 1e-10) continue;
                     var hostHorizontal = Math.Abs(host.Y2 - host.Y1) <= 0.001d;
                     var hostVertical = Math.Abs(host.X2 - host.X1) <= 0.001d;
                     if (hostHorizontal == hostVertical) continue;
                     var length = hostHorizontal ? Math.Abs(host.X2 - host.X1) : Math.Abs(host.Y2 - host.Y1);
                     foreach (var branch in model.Walls.ToArray())
                     {
-                        if (ReferenceEquals(host, branch) || !Same(host.StoreyId, branch.StoreyId)
+                        if (Math.Abs(branch.Bulge) > 1e-10 || ReferenceEquals(host, branch) || !Same(host.StoreyId, branch.StoreyId)
                             || Math.Min(model.BaseElevationOf(host) + model.HeightOf(host),
                                 model.BaseElevationOf(branch) + model.HeightOf(branch))
                                 - Math.Max(model.BaseElevationOf(host), model.BaseElevationOf(branch)) <= 0.5d) continue;
@@ -611,7 +612,7 @@ namespace BatchPdfPublisher.BuildingModel
                 {
                     Id = "W-" + Guid.NewGuid().ToString("N"), StoreyId = source.StoreyId,
                     Thickness = source.Thickness, Height = source.Height, Material = source.Material,
-                    AxisPlacement = source.AxisPlacement, AxisOffset = source.AxisOffset
+                    AxisPlacement = source.AxisPlacement, AxisOffset = source.AxisOffset, Bulge = source.Bulge
                 };
                 candidate.Walls.Add(target);
                 foreach (var opening in candidate.Openings.Where(x => x != null && Same(x.HostWallId, id)).ToArray())
@@ -677,7 +678,7 @@ namespace BatchPdfPublisher.BuildingModel
             if (wall == null) { error = "未找到墙：" + id; return false; }
             var dx = wall.X2 - wall.X1;
             var dy = wall.Y2 - wall.Y1;
-            var previousLength = Math.Sqrt(dx * dx + dy * dy);
+            var previousLength = CurveGeometry.ForWall(wall).Length;
             if (previousLength < 1e-9d) { error = "墙轴线长度为零。"; return false; }
             wall.X2 = wall.X1 + dx / previousLength * length;
             wall.Y2 = wall.Y1 + dy / previousLength * length;
@@ -732,6 +733,9 @@ namespace BatchPdfPublisher.BuildingModel
             if (opening == null) { error = "未找到洞口：" + id; return false; }
             var wall = candidate.Walls.FirstOrDefault(x => x != null && Same(x.Id, opening.HostWallId));
             if (wall == null) { error = "洞口宿主墙不存在：" + opening.HostWallId; return false; }
+            var limits=GetOpeningSizeLimits(id,true,offset,sill);
+            width=OpeningConstruction.FitRoundedOpeningSize(width,limits[0]);
+            height=OpeningConstruction.FitRoundedOpeningSize(height,limits[1]);
             opening.Offset = offset;
             opening.Width = width;
             opening.Height = height;

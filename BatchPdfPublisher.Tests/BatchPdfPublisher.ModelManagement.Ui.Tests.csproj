@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework><OutputType>Exe</OutputType><UseWPF>true</UseWPF><EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../BuildingModel.Core/BuildingModel.Core.csproj" />
+    <Compile Include="ModelManagementUiTests.cs" />
+    <Compile Include="../BatchPdfPublisher/Features/BuildingModel/Views/CadModelManagerWindow.cs" Link="CadModelManagerWindow.cs" />
+    <Compile Include="../BatchPdfPublisher/Features/BuildingModel/Views/CadComponentPlanWindow.cs" Link="CadComponentPlanWindow.cs" />
+    <Compile Include="../BatchPdfPublisher/Features/BuildingModel/Views/CadComponentPartPreview.cs" Link="CadComponentPartPreview.cs" />
+    <EmbeddedResource Include="../BuildingModelStudio.AvaloniaProbe/Resources/Icons/file-plus.png;../BuildingModelStudio.AvaloniaProbe/Resources/Icons/folder-open.png;../BuildingModelStudio.AvaloniaProbe/Resources/Icons/save.png;../BuildingModelStudio.AvaloniaProbe/Resources/Icons/copy.png;../BuildingModelStudio.AvaloniaProbe/Resources/Icons/rotate-ccw.png">
+      <LogicalName>WanLuo.ModelManager.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+</Project>
