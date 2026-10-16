@@ -44,7 +44,7 @@ internal static class ModelProjectWorkflowTests
         Check(!File.Exists(BuildingModelProjectWorkflow.RequestPath(path))&&File.ReadAllBytes(path).SequenceEqual(bytes),"Cancel alters saved model.");
         foreach(var width in new[] {780d,940d})
         {
-            var dialog=new CadModelProjectWindow(model,true);var content=(FrameworkElement)dialog.Content;((Grid)content).Background=dialog.Background;
+            var dialog=new CadModelProjectWindow(model,true);var content=(FrameworkElement)dialog.Content;
             content.Measure(new Size(width-36,500));content.Arrange(new Rect(new Size(width-36,500)));content.UpdateLayout();
             var buttons=Descendants(content).OfType<Button>().Where(b=>b.Content is string).ToArray();
             buttons.Single(b=>(string)b.Content=="新增楼层").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
@@ -62,6 +62,7 @@ internal static class ModelProjectWorkflowTests
         Check(Descendants(root).OfType<DataGrid>().Single().Items.Count==1,"Cancelling model chooser clears current registration.");
         root.UpdateLayout();Render(root,Path.Combine(folder,"cad-registration.png"),1000,610);registration.Close();
         Console.WriteLine("MODEL_PROJECT_WORKFLOW_OK empty duplicate names activePath range basement roof machineRoom liveMerge undo conflict cancellation cadUi "+folder);
+        CadModelWorkspaceTests.Run();
     }
     private static void Render(FrameworkElement content,string path,double width,double height)
     {

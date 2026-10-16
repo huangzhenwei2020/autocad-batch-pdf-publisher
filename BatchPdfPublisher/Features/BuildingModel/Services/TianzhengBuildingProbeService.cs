@@ -58,7 +58,8 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
                         owner=>{var next=CadModelProjectService.Create(owner);if(next!=null)CadModelManagementService.Remember(document,next);return next;},
                         owner=>{var next=CadModelProjectService.Open(owner);if(next!=null)CadModelManagementService.Remember(document,next);return next;},
                         (owner,modelPath)=>CadModelProjectService.EditStoreys(document,owner,modelPath),
-                        owner=>CadModelManagementService.Show(document,owner));
+                        owner=>CadModelManagementService.Show(document,owner),
+                        CadModelManagementService.WorkspaceHost(document));
                     Application.ShowModalWindow(window);
                     return;
                 }

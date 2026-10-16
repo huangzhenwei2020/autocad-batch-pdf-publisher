@@ -29,7 +29,7 @@ namespace BatchPdfPublisher.Views
         public event PropertyChangedEventHandler PropertyChanged;
     }
 
-    public sealed class CadFloorRegistrationWindow : Window
+    public sealed partial class CadFloorRegistrationWindow : Window
     {
         private BuildingModelDocument _model;
         private string _path;
@@ -56,10 +56,24 @@ namespace BatchPdfPublisher.Views
             Func<Window, CadFloorRegistrationContext, CadFloorPlanCapture> capture = null, Action<CadFloorPlanRegistry> generateModel = null,
             Func<Window,CadFloorPlanRegistry,BuildingModelDocument,bool,bool> editOpenings=null,Action<CadFloorPlanRegistry> readPlan=null,
             Action<CadFloorPlanRegistry> updateUnderlay=null, Func<Window,string> createModel=null,
-            Func<Window,string> openModel=null, Func<Window,string,Task> editStoreys=null,Func<Window,string> manageModels=null)
+            Func<Window,string> openModel=null, Func<Window,string,Task> editStoreys=null,Func<Window,string> manageModels=null,
+            CadModelWorkspaceHost workspace=null)
         {
             _pickDatum = pickDatum; _capture = capture;_editOpenings=editOpenings;_readPlan=readPlan;
             _updateUnderlay=updateUnderlay;
+            if(workspace!=null)
+            {
+                _workspace=workspace;_workspaceGenerate=generateModel;_workspaceRead=readPlan;
+                BuildWorkspace();
+                if(modelPath!=null)
+                {
+                    try{LoadModel(modelPath);}
+                    catch(Exception ex) when(ex is IOException||ex is ArgumentException||ex is InvalidOperationException||ex is System.Runtime.Serialization.SerializationException)
+                    {_workspaceStatus.Text="上次模型无法读取，请新建或打开模型："+ex.Message;}
+                }
+                RefreshModels();
+                return;
+            }
             Title = "CAD 楼层登记核对"; Width = 1100; Height = 610; MinWidth = 820; MinHeight = 500;
             UseLayoutRounding = true; FontSize = 14; FontFamily = new FontFamily("Microsoft YaHei UI");
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
@@ -179,7 +193,8 @@ namespace BatchPdfPublisher.Views
             }
             if (model.Storeys.Any(f => f == null || (!string.IsNullOrWhiteSpace(f.TemplateStoreyId) && !contexts.ContainsKey(f.TemplateStoreyId))))
                 throw new InvalidDataException("标准层来源无效，请在建筑模型中修正并保存。");
-            if(_model==null || !string.Equals(_path,nextPath,StringComparison.OrdinalIgnoreCase))_slabThickness.Text=registry.ResolvedSlabThickness.ToString(CultureInfo.InvariantCulture);
+            if(_workspace!=null || _model==null || !string.Equals(_path,nextPath,StringComparison.OrdinalIgnoreCase))_slabThickness.Text=registry.ResolvedSlabThickness.ToString(CultureInfo.InvariantCulture);
+            if(_workspace!=null) { _floorEditor=null;_workspaceOriginalHash=null;_generationMode.SelectedIndex=!File.Exists(CadFloorPlanRegistry.FilePath(nextPath))||registry.ReplaceRegisteredConstruction?0:1; }
             _path=nextPath;_model=model;_registry=registry;
             _contexts.Clear();foreach(var pair in contexts)_contexts.Add(pair.Key,pair.Value);
             _floors.ItemsSource = model.Storeys.Where(f=>string.IsNullOrWhiteSpace(f.StandardGroupId) || f.StandardGroupId==f.Id).Select(f => new CadFloorRegistrationRow { Storey = f,
@@ -211,6 +226,7 @@ namespace BatchPdfPublisher.Views
                 throw new InvalidDataException("请输入有效基点坐标和单位倍率。");
             var next = CadFloorRegistrationContext.Create(_path, _model, context.Storey.Id, new PointModel(x, y), scale);
             if (_pickDatum == null || !_pickDatum(this, next)) return;
+            if(_workspace!=null){_workspace.EnsureDocument?.Invoke();CheckWorkspaceFiles();}
             _registry.SaveDatum(next); _contexts[context.Storey.Id] = next; RefreshStatus();
         }
         private void Capture(CadFloorRegistrationRow row)
@@ -222,6 +238,7 @@ namespace BatchPdfPublisher.Views
             draft.SetSourceDatum(context.Alignment.CadBase, context.DirectionPoint);
             var captured = _capture(this, draft);
             if (captured == null) return;
+            if(_workspace!=null){_workspace.EnsureDocument?.Invoke();CheckWorkspaceFiles();}
             _registry.SaveFloor(captured); _contexts[context.Storey.Id] = captured.Floor; RefreshStatus();
         }
         private void RefreshStatus()
@@ -236,6 +253,7 @@ namespace BatchPdfPublisher.Views
                     : context.DirectionPoint == null ? "未拾取基点" : "基点已拾取 · 待框选";
                 if (!string.IsNullOrWhiteSpace(row.Storey.TemplateStoreyId)) row.Status = "复用 " + row.SourceName + " · " + row.Status;
             }
+            RefreshWorkspace();
         }
         private static bool SameDatum(CadFloorRegistrationAlignment a, CadFloorRegistrationAlignment b) =>
             a.CadBase.X == b.CadBase.X && a.CadBase.Y == b.CadBase.Y && a.ModelBase.X == b.ModelBase.X && a.ModelBase.Y == b.ModelBase.Y

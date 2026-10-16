@@ -46,6 +46,18 @@ internal static class CadLoadScriptTests
         Require(!CadLoadScriptBuilder.HasCompleteReceipt(Receipt("BPPSTARTUP", 123, "C:/wrong/main.dll", DateTime.UtcNow), main, 123, start), "Wrong assembly receipt accepted");
         Require(CadLoadScriptBuilder.HasCompleteReceipt(Receipt("BPPSTARTUP", 123, main, DateTime.UtcNow), main, 123, start), "Completion rejected");
         Require(CadLoadScriptBuilder.HasCompleteReceipt(Receipt("BPPSTARTUP", 123, main, DateTime.UtcNow), null, 0, start), "Bundle receipt rejected");
+        Require(CadStartupGate.DeferLoad("T20 天正建筑 V9.0",3)&&CadStartupGate.DeferLoad("T30 天正建筑",1),"Tianzheng explicit loads must wait outside SCR startup");
+        Require(!CadStartupGate.DeferLoad("无天正",3)&&!CadStartupGate.DeferLoad(null,3)&&!CadStartupGate.DeferLoad("T20",0),"Vanilla/bundle startup changed");
+        Require(CadStartupGate.MatchesRelease("24.1s (LMS Tech)","24.1")&&CadStartupGate.MatchesRelease("24.1.51.0","24.1")
+            &&!CadStartupGate.MatchesRelease("24.10s","24.1")&&!CadStartupGate.MatchesRelease("24.3s","24.1")&&!CadStartupGate.MatchesRelease(null,"24.1"),"COM version suffix or wrong release matching");
+        var gate=new CadStartupGate();
+        bool Ready(int pid,string document,bool quiet,int seconds)=>gate.Observe(pid,document,quiet,TimeSpan.FromSeconds(seconds));
+        Require(!Ready(123,"Drawing1",true,0)&&!Ready(123,"Drawing1",true,8),"First quiet interval was treated as complete startup");
+        Require(!Ready(123,"Drawing1",false,12)&&!Ready(123,"Drawing1",true,13)&&!Ready(123,"Drawing1",true,20)&&Ready(123,"Drawing1",true,21),"Busy startup did not restart stability interval");
+        Require(!Ready(123,"OtherDrawing",true,22)&&Ready(123,"OtherDrawing",true,30),"Document change did not reset idle interval");
+        Require(!Ready(124,"OtherDrawing",true,31)&&!Ready(124,"OtherDrawing",true,39)&&Ready(124,"OtherDrawing",true,46),"Different CAD reused first process readiness");
+        Require(!Ready(0,null,false,47)&&!Ready(124,"OtherDrawing",true,48)&&Ready(124,"OtherDrawing",true,56),"Lost COM connection retained idle interval");
+        Console.WriteLine("CAD_STARTUP_GATE_OK TianzhengOnly minimumStartup sustainedIdle busy document process lostConnection");
         Console.WriteLine("CAD_LOAD_SCRIPT_TESTS_OK singleForm oneComEnter scriptNewline paths errorRecovery trustedDedup stage pid assembly freshReceipt bundle");
     }
 }

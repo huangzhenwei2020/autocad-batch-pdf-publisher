@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="BuildingModelSceneExportTests.cs" />
+    <Compile Include="BuildingModelNativeExportTests.cs" />
+    <Compile Include="FbxPlanarFacesTests.cs" />
+    <Compile Include="../BuildingModelStudio.AvaloniaProbe/ModelExportService.cs" Link="ModelExportService.cs" />
+    <Compile Include="../BuildingModelStudio.AvaloniaProbe/BlenderProcessGuard.cs" Link="BlenderProcessGuard.cs" />
+    <ProjectReference Include="../BuildingModel.Core/BuildingModel.Core.csproj" />
+    <ProjectReference Include="../BuildingModel.ExportWorker/BuildingModel.ExportWorker.csproj" />
+  </ItemGroup>
+</Project>

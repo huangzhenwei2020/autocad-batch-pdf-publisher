@@ -9,5 +9,6 @@
   <ItemGroup>
     <Compile Include="CadLoadScriptTests.cs" />
     <Compile Include="../BatchPdfPublisherLauncher/CadLoadScriptBuilder.cs" Link="CadLoadScriptBuilder.cs" />
+    <Compile Include="../BatchPdfPublisherLauncher/CadStartupGate.cs" Link="CadStartupGate.cs" />
   </ItemGroup>
 </Project>

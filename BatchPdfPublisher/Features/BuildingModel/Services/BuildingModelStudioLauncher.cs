@@ -24,32 +24,7 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
         public static void Open(Document document)
         {
             if (document == null) return;
-            var editor = document.Editor;
-
-            var choice = new BatchPdfPublisher.Views.BuildingModelChoiceWindow("建筑模型",
-                "打开模型进行编辑，或先核验 CAD 中天正墙门窗的可读参数。",
-                new[] {
-                    new BatchPdfPublisher.Views.BuildingModelChoice { Value = 4, Title = "模型管理", Subtitle = "当前 CAD 图纸关联的建筑模型", Badge = "管理" },
-                    new BatchPdfPublisher.Views.BuildingModelChoice { Value = 3, Title = "新建建筑模型", Subtitle = "设置模型名称和楼层，直接创建空模型", Badge = "新建" },
-                    new BatchPdfPublisher.Views.BuildingModelChoice { Value = 0, Title = "打开建筑模型", Subtitle = "打开当前项目的新版建筑模型", Badge = "建模" },
-                    new BatchPdfPublisher.Views.BuildingModelChoice { Value = 1, Title = "天正墙门窗字段核验", Subtitle = "只读选择对象、检查原始参数并导出核验记录；暂不创建模型", Badge = "只读" },
-                    new BatchPdfPublisher.Views.BuildingModelChoice { Value = 2, Title = "CAD 楼层登记核对", Subtitle = "新建或打开模型、设置楼层、逐层登记 CAD 平面", Badge = "登记" }
-                }, false, "继续") { Title = "建筑模型" };
-            if (Autodesk.AutoCAD.ApplicationServices.Application.ShowModalWindow(choice) != true) return;
-            if(choice.SelectedValue==4)
-            {
-                try{CadModelManagementService.Show(document);}catch(Exception ex){Autodesk.AutoCAD.ApplicationServices.Application.ShowAlertDialog("模型管理：\n"+ex.Message);}return;
-            }
-            if (choice.SelectedValue == 1) { TianzhengBuildingProbeService.Execute(document); return; }
-            if (choice.SelectedValue == 2) { TianzhengBuildingProbeService.Execute(document, true); return; }
-            if (choice.SelectedValue == 3)
-            {
-                try { var path=CadModelProjectService.Create(null);if(path!=null)OpenCurrentModel(document,path); }
-                catch(Exception ex) { Autodesk.AutoCAD.ApplicationServices.Application.ShowAlertDialog("新建模型失败：\n"+ex.Message); }
-                return;
-            }
-
-            OpenCurrentModel(document);
+            TianzhengBuildingProbeService.Execute(document,true);
         }
 
         public static bool OpenCurrentModel(Document document, string modelPath = null)

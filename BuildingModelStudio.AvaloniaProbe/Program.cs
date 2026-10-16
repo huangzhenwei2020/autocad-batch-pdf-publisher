@@ -41,6 +41,7 @@ internal static class Program
     public static bool WallDrawingCheck {get;private set;}
     public static bool ProjectWorkflowCheck {get;private set;}
     public static bool ModelManagementCheck {get;private set;}
+    public static bool ModelExportCheck {get;private set;}
     public static bool ElevationStyleCheck {get;private set;}
     public static bool BrowserCheck { get; private set; }
     public static bool AxisCheck {get;private set;}
@@ -61,6 +62,8 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args.Length > 0 && args[0] == "--model-export-worker")
+            return BatchPdfPublisher.BuildingModel.Export.ModelExportWorker.Run(args[1..]);
         if (args.Contains("--pick-check", StringComparer.OrdinalIgnoreCase))
         {
             RunPickCheck();
@@ -87,6 +90,7 @@ internal static class Program
         WallDrawingCheck=args.Contains("--wall-drawing-check",StringComparer.OrdinalIgnoreCase);
         ProjectWorkflowCheck=args.Contains("--project-workflow-check",StringComparer.OrdinalIgnoreCase);
         ModelManagementCheck=args.Contains("--model-management-check",StringComparer.OrdinalIgnoreCase);
+        ModelExportCheck=args.Contains("--model-export-check",StringComparer.OrdinalIgnoreCase);
         ElevationStyleCheck=args.Contains("--elevation-style-check",StringComparer.OrdinalIgnoreCase);
         BrowserCheck=args.Contains("--browser-check",StringComparer.OrdinalIgnoreCase);
         AxisCheck=args.Contains("--axis-check",StringComparer.OrdinalIgnoreCase);

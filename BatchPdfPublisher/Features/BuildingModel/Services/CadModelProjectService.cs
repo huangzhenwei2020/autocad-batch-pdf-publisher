@@ -37,8 +37,13 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
             var preview = BuildingModelJson.FromJson(BuildingModelJson.ToJson(original)); preview.Storeys = dialog.ResultStoreys;
             if (BuildingModelProjectWorkflow.StoreysHash(preview) == BuildingModelProjectWorkflow.StoreysHash(original)) return;
             if (MessageBox.Show(owner, "将应用并保存楼层设置。删除楼层或改为共用平面会同步处理本层构件；模型窗口中的其他修改也会一并保存。继续吗？", "楼层设置", MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK) return;
-            if (!BuildingModelStudioLauncher.OpenCurrentModel(document, path)) throw new IOException("模型程序未启动，楼层尚未修改。");
-            var request = BuildingModelProjectWorkflow.Queue(path, BuildingModelProjectWorkflow.StoreysHash(original), dialog.ResultStoreys);
+            await ApplyStoreys(document,path,BuildingModelProjectWorkflow.StoreysHash(original),dialog.ResultStoreys);
+        }
+        public static async Task ApplyStoreys(Document document,string path,string expectedHash,System.Collections.Generic.List<StoreyModel> storeys)
+        {
+            if(!StudioLaunch.HasLiveSession(path)&&!BuildingModelStudioLauncher.OpenCurrentModel(document,path))
+                throw new IOException("模型程序未启动，楼层尚未修改。");
+            var request = BuildingModelProjectWorkflow.Queue(path, expectedHash, storeys);
             try
             {
                 for (var i = 0; i < 120; i++)

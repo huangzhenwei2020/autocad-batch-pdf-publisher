@@ -10,6 +10,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="BuildingModelGlbExporter.cs" />
+    <Compile Include="BuildingExportScene.cs" />
     <Compile Include="ComponentAssetLibrary.cs" />
     <Compile Include="ComponentAssetLibrary.External.cs" />
     <Compile Include="ComponentAuthorDraft.cs" />

@@ -488,6 +488,10 @@ namespace BatchPdfPublisher.BuildingModel
         {
             using (var stream=File.OpenRead(FilePath(modelPath))) return (CadModelGenerationRequest)new DataContractJsonSerializer(typeof(CadModelGenerationRequest)).ReadObject(stream);
         }
+        public static void Cancel(string modelPath,string id)
+        {
+            WithGate(modelPath,()=>{var path=FilePath(modelPath);if(File.Exists(path)&&Load(modelPath).Id==id)File.Delete(path);});
+        }
         public static CadModelGenerationResult LoadResult(string modelPath)
         {
             using(var stream=File.OpenRead(modelPath+".cad-generate-result.json"))

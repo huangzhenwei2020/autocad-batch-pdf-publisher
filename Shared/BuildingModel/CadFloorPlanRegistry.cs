@@ -279,7 +279,7 @@ namespace BatchPdfPublisher.BuildingModel
             ValidateModelDatum(context);
             var next = (Datums ?? new List<CadFloorRegistrationContext>()).Where(f => !string.Equals(f.Storey.Id, context.Storey.Id, StringComparison.OrdinalIgnoreCase)).ToList();
             next.Add(context);
-            Write(new CadFloorPlanRegistry { ModelPath = ModelPath, Floors = Floors, Datums = next, SlabThickness=SlabThickness });
+            Write(new CadFloorPlanRegistry { ModelPath = ModelPath, Floors = Floors, Datums = next, SlabThickness=SlabThickness, ReplaceRegisteredConstruction=ReplaceRegisteredConstruction });
             Datums = next;
         }
         private void ValidateModelDatum(CadFloorRegistrationContext context)
@@ -352,7 +352,7 @@ namespace BatchPdfPublisher.BuildingModel
             next.Add(capture);
             var datums = (Datums ?? new List<CadFloorRegistrationContext>()).Where(f => !string.Equals(f.Storey.Id,capture.Floor.Storey.Id,StringComparison.OrdinalIgnoreCase)).ToList();
             datums.Add(capture.Floor);
-            Write(new CadFloorPlanRegistry { ModelPath = ModelPath, Floors = next, Datums = datums, SlabThickness=SlabThickness });
+            Write(new CadFloorPlanRegistry { ModelPath = ModelPath, Floors = next, Datums = datums, SlabThickness=SlabThickness, ReplaceRegisteredConstruction=ReplaceRegisteredConstruction });
             Floors = next; Datums = datums;
         }
         private void Write(CadFloorPlanRegistry snapshot)

@@ -33,12 +33,12 @@ $OutputRoot = [System.IO.Path]::GetFullPath($OutputRoot)
 $distRoot = [System.IO.Path]::GetFullPath((Join-Path $repositoryRoot 'dist'))
 $artifactRoot = Join-Path $repositoryRoot '.artifacts\release'
 
-# The standalone tray agent executes the launcher binary itself. Stop only that
-# command-line mode before replacing dist; the normal launcher/CAD processes are
-# left untouched. The rebuilt launcher starts the agent again on its next run.
-Get-CimInstance Win32_Process -Filter "Name='万落建筑工具启动器.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -match '(?i)--cloud-sync-agent' } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+# A staged build must not stop the user's active installation or tray agent.
+# Refuse a locked target instead; installation requires a separate close confirmation.
+$targetLauncher = [System.IO.Path]::GetFullPath((Join-Path $OutputRoot '万落建筑工具启动器.exe'))
+$targetAgent = Get-CimInstance Win32_Process -Filter "Name='万落建筑工具启动器.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.ExecutablePath -and [string]::Equals($_.ExecutablePath, $targetLauncher, [System.StringComparison]::OrdinalIgnoreCase) }
+if ($targetAgent) { throw '目标目录的启动器或后台同步仍在运行，请保存并退出后再构建到此目录。' }
 
 function Assert-ChildPath([string]$Path, [string]$Parent, [string]$Description) {
     $fullPath = [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
@@ -443,6 +443,13 @@ if (Test-Path -LiteralPath $studioProject) {
     if (-not (Test-Path -LiteralPath (Join-Path $studioOutput 'Avalonia.Controls.dll'))) {
         throw '建模程序缺少 Avalonia 依赖；发布件不能回退成旧 WinForms 程序。'
     }
+    foreach ($name in @('WanLuo.ModelExport.dll', 'AssimpNetter.dll', 'licenses\AssimpNetter-LICENSE.txt', 'licenses\Assimp-native-LICENSE.txt')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $studioOutput $name))) { throw "三维导出组件缺少文件：$name" }
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $studioOutput 'runtimes\win-x64\native\assimp.dll')) -and
+        -not (Test-Path -LiteralPath (Join-Path $studioOutput 'assimp.dll'))) {
+        throw '三维导出组件缺少 Windows x64 Assimp 运行库。'
+    }
     Get-ChildItem $studioOutput -Recurse -Filter '*.pdb' -File -ErrorAction SilentlyContinue | Remove-Item -Force
     # Avalonia 编辑器需要 .NET 8 运行时。
     @'
@@ -478,6 +485,8 @@ $manifest = [ordered]@{
     LauncherSha256 = (Get-FileHash -LiteralPath $launcher -Algorithm SHA256).Hash
     StudioSha256 = $(if (Test-Path -LiteralPath (Join-Path $OutputRoot '建筑模型\万落建筑模型.exe')) { (Get-FileHash -LiteralPath (Join-Path $OutputRoot '建筑模型\万落建筑模型.exe') -Algorithm SHA256).Hash } else { $null })
     StudioImplementation = 'Avalonia'
+    ModelExportImplementation = 'FBX-AssimpNetter6.0.5; SKP-local-SketchUp2026-CAPI'
+    SketchUpNativeRuntimeBundled = $false
     PaddleOcrIncluded = [bool]$IncludePaddleOcr
     PaddleOcrSha256 = $(if ($paddleOcrWorker) { (Get-FileHash -LiteralPath $paddleOcrWorker -Algorithm SHA256).Hash } else { $null })
     Bands = $buildRecords

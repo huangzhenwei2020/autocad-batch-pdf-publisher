@@ -541,14 +541,21 @@ namespace BatchPdfPublisherLauncher
         {
             Log("启动平台: " + platform.DisplayName);
             TryDelete(LoadReceiptPath);
-            var startupScript = Path.Combine(EnsureDirectory(Path.Combine(UserDataRoot, "Temp")), "BatchPdfPublisher." + Guid.NewGuid().ToString("N") + ".scr");
             var loadableAssemblies = installedAssemblies.Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-            File.WriteAllText(startupScript, CadLoadScriptBuilder.ForScript(loadableAssemblies), Encoding.Default);
+            var deferred=CadStartupGate.DeferLoad(platform.TianzhengName,loadableAssemblies.Length);
+            var previousPids=Process.GetProcessesByName("acad").Select(p=>p.Id).ToArray();
+            var arguments=platform.Arguments;
+            if(!deferred)
+            {
+                var startupScript = Path.Combine(EnsureDirectory(Path.Combine(UserDataRoot, "Temp")), "BatchPdfPublisher." + Guid.NewGuid().ToString("N") + ".scr");
+                File.WriteAllText(startupScript, CadLoadScriptBuilder.ForScript(loadableAssemblies), Encoding.Default);
+                arguments+=" /b \""+startupScript+"\"";
+            }
             var sentUtc = DateTime.UtcNow;
             Process.Start(new ProcessStartInfo
             {
                 FileName = platform.Executable,
-                Arguments = platform.Arguments + " /b \"" + startupScript + "\"",
+                Arguments = arguments,
                 // AutoCAD resolves stand-alone custom PAT files from the process startup
                 // directory and caches that lookup. Start in the plugin's portable hatch
                 // asset folder; no AutoCAD support folder or registry profile is modified.
@@ -556,12 +563,72 @@ namespace BatchPdfPublisherLauncher
                 UseShellExecute = true
             });
 
+            if(deferred)
+            {
+                Log("天正便携加载：不在 /b 启动脚本中 NETLOAD，等待本次目标 CAD 持续空闲后提交一次。");
+                LoadAfterPlatformReady(platform,loadableAssemblies,previousPids);
+                return;
+            }
+
             if (!WaitForCadProcess(45))
                 throw new InvalidOperationException(platform.DisplayName + " 启动后没有检测到 AutoCAD 进程。请确认平台可以单独正常启动。\r\n\r\n插件文件已经安装，进入 CAD 后仍可手工执行 BPPUBLISH。\r\n\r\n如使用天正，请从选择列表中选择“T20 天正建筑”，不要选择普通 AutoCAD 2022。 ");
 
             if (!WaitForLoadReceipt(60, loadableAssemblies.FirstOrDefault(), 0, sentUtc))
                 throw new InvalidOperationException(platform.DisplayName + " 已启动，但插件在 60 秒内没有返回加载成功信息。\r\n\r\n请关闭 CAD 后重试；日志：" + LaunchLogPath);
             Log(loadableAssemblies.Length > 0 ? "插件已通过启动脚本确认加载成功" : "插件已通过统一 Bundle 确认加载成功");
+        }
+
+        private static void LoadAfterPlatformReady(PlatformOption platform,string[] assemblies,int[] previousPids)
+        {
+            var watch=Stopwatch.StartNew();var gate=new CadStartupGate();
+            var lastState="等待目标 CAD 注册 COM 服务";
+            while(watch.Elapsed<TimeSpan.FromSeconds(120))
+            {
+                object application=null,document=null,state=null;
+                var submitted=false;
+                try
+                {
+                    // Do not fall back to another installed version or an older session.
+                    application=Marshal.GetActiveObject(platform.ProgId);
+                    var window=application.GetType().InvokeMember("HWND",BindingFlags.GetProperty,null,application,null);
+                    uint pid;GetWindowThreadProcessId(new IntPtr(Convert.ToInt64(window)),out pid);
+                    if(pid==0||previousPids.Contains((int)pid))throw new InvalidOperationException("目标 COM 仍指向之前的 CAD 窗口");
+                    var version=Convert.ToString(application.GetType().InvokeMember("Version",BindingFlags.GetProperty,null,application,null));
+                    if(!CadStartupGate.MatchesRelease(version,platform.Release))
+                        throw new InvalidOperationException("目标 CAD 版本不匹配："+version);
+                    document=application.GetType().InvokeMember("ActiveDocument",BindingFlags.GetProperty,null,application,null);
+                    state=application.GetType().InvokeMember("GetAcadState",BindingFlags.InvokeMethod,null,application,null);
+                    var quiet=Convert.ToBoolean(state.GetType().InvokeMember("IsQuiescent",BindingFlags.GetProperty,null,state,null))
+                        && Convert.ToInt32(document.GetType().InvokeMember("GetVariable",BindingFlags.InvokeMethod,null,document,new object[]{"CMDACTIVE"}))==0
+                        && string.IsNullOrEmpty(Convert.ToString(document.GetType().InvokeMember("GetVariable",BindingFlags.InvokeMethod,null,document,new object[]{"CMDNAMES"})));
+                    var name=Convert.ToString(document.GetType().InvokeMember("Name",BindingFlags.GetProperty,null,document,null));
+                    var fullName=Convert.ToString(document.GetType().InvokeMember("FullName",BindingFlags.GetProperty,null,document,null));
+                    quiet=quiet&&!string.IsNullOrWhiteSpace(name);
+                    lastState="CAD PID="+pid+"，"+(quiet?"等待持续空闲":"启动或命令尚未结束");
+                    if(gate.Observe((int)pid,name+"|"+fullName,quiet,watch.Elapsed))
+                    {
+                        var since=DateTime.UtcNow;submitted=true;
+                        Log("天正目标 CAD 已持续空闲，提交唯一加载请求：PID="+pid+"，版本="+version);
+                        SendCommand(document,CadLoadScriptBuilder.ForCom(assemblies));
+                        if(!WaitForLoadReceipt(30,assemblies[0],(int)pid,since))
+                            throw new InvalidOperationException("已发送一次空闲加载请求，但目标 CAD 尚未完成 BPPSTARTUP；未重复排队，请检查 CAD 命令历史。");
+                        Log("天正插件已通过空闲加载确认成功：PID="+pid);
+                        return;
+                    }
+                }
+                catch(Exception ex)
+                {
+                    if(submitted)throw;
+                    lastState=ex.GetBaseException().Message;gate.Observe(0,null,false,watch.Elapsed);
+                }
+                finally
+                {
+                    foreach(var value in new[]{state,document,application})
+                        if(value!=null&&Marshal.IsComObject(value))try{Marshal.ReleaseComObject(value);}catch{ }
+                }
+                Thread.Sleep(500);
+            }
+            throw new InvalidOperationException("天正已启动，但目标 CAD 在 120 秒内未达到稳定空闲状态，未发送加载命令，也未取消你的操作。\r\n"+lastState+"\r\n日志："+LaunchLogPath);
         }
 
         private static void UninstallPlugin()

@@ -182,7 +182,7 @@ namespace BatchPdfPublisher
         [CommandMethod("JZGL")]
         public void ManageBuildingModels()
         {
-            try { CadModelManagementService.Show(Application.DocumentManager.MdiActiveDocument); }
+            try { TianzhengBuildingProbeService.Execute(Application.DocumentManager.MdiActiveDocument,true); }
             catch(System.Exception ex){Application.ShowAlertDialog("模型管理：\n"+ex.Message);}
         }
 

@@ -861,6 +861,7 @@ internal sealed partial class ProbeWindow : Window
             catch (Exception ex) { _status.Text = "Blender 选项保存失败：" + ex.Message; }
         };
         pages["出图"] = Page(Group("CAD 输出", _publish, _sendToCad, cancelPublish),
+            Group("Max / SketchUp", Action("三维模型导出", () => _ = OpenModelExportAsync())),
             Group("三维模型 GLB", _exportBuilding, _exportStorey, _cancelExport, _blenderLog, openInBlender));
         pages["管理"] = Page(Group("模型文件", modelManager, newModel, open, save, saveAs),
             Group("构件资源", Action("图库",()=>_ = OpenComponentLibraryAsync()),Action("构件校验",()=>_ = new ComponentSourceInspectionWindow().ShowDialog(this))),
@@ -1118,6 +1119,7 @@ internal sealed partial class ProbeWindow : Window
         "另存为" => ("file-plus", "Ctrl+Shift+S"),
         "生成 CAD 视图" => ("file-axis-3d", "PV"),
         "推到 CAD" => ("send", "SC"),
+        "三维模型导出" => ("box", null),
         "导出整栋" => ("box", "EG"),
         "导出当前楼层" => ("layers", "EF"),
         "取消导出" => ("undo-2", null),
@@ -1411,6 +1413,21 @@ internal sealed partial class ProbeWindow : Window
             return current;
         }
         catch (Exception ex) { _status.Text = "保存失败：" + ex.Message; return false; }
+    }
+
+    private async Task OpenModelExportAsync()
+    {
+        if (_exportCancellation != null || _choosingExport)
+        { _status.Text = "请等待当前导出完成。"; return; }
+        _choosingExport = true;
+        try
+        {
+            var model = BuildingModelJson.FromJson(BuildingModelJson.ToJson(_session.Model));
+            var storey = (_storeyChooser.SelectedItem as StoreyItem)?.Id;
+            await new ModelExportWindow(model, storey).ShowDialog(this);
+        }
+        catch (Exception ex) { _status.Text = "导出窗口打开失败：" + ex.Message; }
+        finally { _choosingExport = false; }
     }
 
     private async Task ExportGlbAsync(bool currentStorey)
@@ -2580,6 +2597,7 @@ internal sealed partial class ProbeWindow : Window
             if(Program.OpeningEditorInteractionCheck){try{await RunOpeningEditorInteractionCheckAsync();}catch(Exception ex){Console.WriteLine("OPENING_EDITOR_INTERACTION_FAILED "+ex);slabSuccess=false;}}
             if(Program.ProjectWorkflowCheck){try{await RunProjectWorkflowCheckAsync();}catch(Exception ex){Console.WriteLine("MODEL_PROJECT_STUDIO_UI_FAILED "+ex);slabSuccess=false;}}
             if(Program.ModelManagementCheck){try{await RunModelManagementCheckAsync();}catch(Exception ex){Console.WriteLine("MODEL_MANAGEMENT_STUDIO_FAILED "+ex);_modelManagerWindow?.Close();_modelManagerOpen=false;slabSuccess=false;}}
+            if(Program.ModelExportCheck){try{await RunModelExportCheckAsync();}catch(Exception ex){Console.WriteLine("MODEL_EXPORT_UI_FAILED "+ex);slabSuccess=false;}}
             if(Program.ElevationStyleCheck){try{RunElevationStyleRasterCheck();}catch(Exception ex){Console.WriteLine("ELEVATION_STYLE_PIXELS_FAILED "+ex);slabSuccess=false;}}
             if(Program.BrowserCheck){try{await RunBrowserStateCheckAsync();}catch(Exception ex){Console.WriteLine("BROWSER_STATE_FAILED "+ex);slabSuccess=false;}}
             if(Program.ParameterCheck)slabSuccess &= await RunParameterPreviewCheckAsync();
@@ -2634,7 +2652,7 @@ internal sealed partial class ProbeWindow : Window
             if (Program.GizmoCheck) success &= RunGizmoSmokeCheck() && RunCameraSmokeCheck();
             if (Program.ShortcutCheck) success &= await RunShortcutSmokeCheckAsync();
             success &= slabSuccess;
-            if(Program.ModelManagementCheck)_closeConfirmed=true;
+            if(Program.ModelManagementCheck||Program.ModelExportCheck)_closeConfirmed=true;
             if(Program.SnapshotDrawing)success &= _drawingCanvas.View!=null;
             if (Program.CadGenerationCheck)
             {

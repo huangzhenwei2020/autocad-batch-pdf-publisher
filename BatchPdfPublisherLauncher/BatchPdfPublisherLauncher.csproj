@@ -40,6 +40,7 @@
   <ItemGroup>
     <Compile Include="Program.cs" />
     <Compile Include="CadLoadScriptBuilder.cs" />
+    <Compile Include="CadStartupGate.cs" />
     <Compile Include="CloudSyncAgentContext.cs" />
     <Compile Include="CloudSyncHistoryForm.cs" />
     <Compile Include="CloudSyncCoordinatorStub.cs" />
