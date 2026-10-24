@@ -75,6 +75,65 @@ namespace BatchPdfPublisher.BuildingModel
             var json = BuildingModelJson.ToJson(new BuildingModelDocument { Storeys = model.Storeys });
             using (var hash = SHA256.Create()) return BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(json))).Replace("-", "");
         }
+        public static string ModelFileHash(string path)
+        {
+            using(var stream=File.OpenRead(path))using(var hash=SHA256.Create())
+                return BitConverter.ToString(hash.ComputeHash(stream)).Replace("-","");
+        }
+        public static string ReplaceExisting(string path,BuildingModelDocument model,string expectedHash)
+        {
+            ValidateName(model.Name);ValidateStoreys(model.Storeys);
+            path=Path.GetFullPath(path);
+            var project=BuildingModelCatalog.InferProject(path);
+            if(project==null||!string.Equals(path,BuildingModelJson.ModelFilePath(project,model.Name),StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("替换模型须使用项目内同名的独立模型目录。");
+            if(string.IsNullOrWhiteSpace(expectedHash))throw new ArgumentException("替换前必须核对原模型。");
+            var folder=Path.GetDirectoryName(path);var parent=Path.GetDirectoryName(folder);
+            var suffix=DateTime.Now.ToString("yyyyMMdd-HHmmss")+"-"+Guid.NewGuid().ToString("N");
+            var backup=Path.Combine(parent,".model-replaced-"+model.Name.Trim()+"-"+suffix);
+            var stage=Path.Combine(parent,".model-new-"+suffix);
+            // All directory moves stay among verified siblings in the model root.
+            if(Path.GetDirectoryName(backup)!=parent||Path.GetDirectoryName(stage)!=parent)
+                throw new IOException("模型备份路径无效。");
+            WithGate(path,()=>
+            {
+                if(StudioLaunch.HasLiveSession(path))throw new IOException("旧模型仍在三维窗口中打开，请保存并关闭该模型后再替换。");
+                if(ModelFileHash(path)!=expectedHash)throw new IOException("旧模型已在其他窗口修改，请重新确认替换；当前草稿保留。");
+                if((File.GetAttributes(folder)&FileAttributes.ReparsePoint)!=0
+                    ||Directory.EnumerateFileSystemEntries(folder,"*",SearchOption.AllDirectories)
+                        .Any(item=>(File.GetAttributes(item)&FileAttributes.ReparsePoint)!=0))
+                    throw new IOException("模型目录包含链接，未替换；请另建模型或先检查目录。");
+                Directory.CreateDirectory(stage);
+                try
+                {
+                    File.WriteAllText(Path.Combine(stage,"model.json"),BuildingModelJson.ToJson(model),new UTF8Encoding(false));
+                    if(StudioLaunch.HasLiveSession(path)||ModelFileHash(path)!=expectedHash)
+                        throw new IOException("旧模型的状态已改变，请重新确认替换。");
+                    Directory.Move(folder,backup);
+                    try{Directory.Move(stage,folder);}
+                    catch(Exception commitError)
+                    {
+                        try
+                        {
+                            if(Directory.Exists(folder))throw new IOException("目标目录在替换期间发生变化。");
+                            Directory.Move(backup,folder);
+                        }
+                        catch(Exception restoreError)
+                        {throw new IOException("替换未完成，旧模型完整保留在备份目录："+backup,new AggregateException(commitError,restoreError));}
+                        throw;
+                    }
+                }
+                finally
+                {
+                    if(Directory.Exists(stage))
+                    {
+                        File.Delete(Path.Combine(stage,"model.json"));
+                        Directory.Delete(stage,false);
+                    }
+                }
+            });
+            return backup;
+        }
         public static void CreateCopy(string sourcePath,string targetPath,BuildingModelDocument snapshot,string name)
         {
             ValidateName(name);ValidateStoreys(snapshot.Storeys);

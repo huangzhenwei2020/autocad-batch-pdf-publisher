@@ -12,10 +12,12 @@ namespace BatchPdfPublisher.BuildingModel
 {
     public static class CadFloorModelGeneration
     {
-        public static BuildingModelDocument Build(BuildingModelDocument current, CadFloorPlanRegistry registry, string requestId = null)
+        public static BuildingModelDocument Build(BuildingModelDocument current, CadFloorPlanRegistry registry, string requestId = null,
+            Action<CadGenerationProgress> progress = null)
         {
+            progress?.Invoke(new CadGenerationProgress {Stage="准备登记数据"});
             try { return registry?.ReplaceRegisteredConstruction==true
-                    ? BuildReplacement(current,registry,requestId) : BuildVerified(current,registry,requestId); }
+                    ? BuildReplacement(current,registry,requestId,progress) : BuildVerified(current,registry,requestId,progress); }
             catch (Exception ex) when (ex is InvalidDataException || ex is ArgumentException || ex is InvalidOperationException)
             {
                 // Recognition or merge failure must not prevent opening a safe, editable model.
@@ -27,7 +29,7 @@ namespace BatchPdfPublisher.BuildingModel
                 return retained;
             }
         }
-        private static BuildingModelDocument BuildReplacement(BuildingModelDocument current,CadFloorPlanRegistry registry,string requestId)
+        private static BuildingModelDocument BuildReplacement(BuildingModelDocument current,CadFloorPlanRegistry registry,string requestId,Action<CadGenerationProgress> progress)
         {
             var prepared=BuildingModelJson.FromJson(BuildingModelJson.ToJson(current));
             registry=registry.Clone();registry.ReconcileStoreys(prepared);
@@ -52,7 +54,8 @@ namespace BatchPdfPublisher.BuildingModel
             // Build against an empty import baseline, then merge only unaffected floor metadata.
             // The outer transaction returns the original model if the fresh build is unsafe.
             prepared.CadImport=new CadModelImportState();
-            var result=BuildVerified(prepared,registry,requestId);
+            var result=BuildVerified(prepared,registry,requestId,progress);
+            progress?.Invoke(new CadGenerationProgress {Stage="保留匹配的门窗做法"});
             var fresh=result.CadImport;
             var retained=0;
             foreach(var opening in fresh.Openings)
@@ -122,7 +125,7 @@ namespace BatchPdfPublisher.BuildingModel
             => string.Equals(OpeningConstruction.EffectiveCode(a).Trim(),OpeningConstruction.EffectiveCode(b).Trim(),StringComparison.OrdinalIgnoreCase)
                 && Math.Round(a.Width/10,MidpointRounding.AwayFromZero)==Math.Round(b.Width/10,MidpointRounding.AwayFromZero)
                 && Math.Round(a.Height/10,MidpointRounding.AwayFromZero)==Math.Round(b.Height/10,MidpointRounding.AwayFromZero);
-        private static BuildingModelDocument BuildVerified(BuildingModelDocument current, CadFloorPlanRegistry registry, string requestId)
+        private static BuildingModelDocument BuildVerified(BuildingModelDocument current, CadFloorPlanRegistry registry, string requestId,Action<CadGenerationProgress> progress)
         {
             if (!string.IsNullOrWhiteSpace(registry?.GenerationWarning))
                 throw new InvalidDataException(registry.GenerationWarning);
@@ -155,8 +158,10 @@ namespace BatchPdfPublisher.BuildingModel
             var pending = new List<CadPendingOpening>();
             var slabs=new List<SlabModel>();var slabMessages=new List<string>();
             var hostMaps = new Dictionary<string,Dictionary<string,WallModel>>(StringComparer.OrdinalIgnoreCase);
+            var completedFloors=0;
             foreach (var capture in registry.Floors)
             {
+                progress?.Invoke(new CadGenerationProgress {Stage="生成楼层："+capture.Floor.Storey.Name,Completed=completedFloors,Total=registry.Floors.Count});
                 capture.ValidateSchedule();
                 CadStructuralRegistration.Add(capture,(kind,handle)=>Identity(kind,capture.Probe.DrawingFingerprint,capture.Floor.Storey.Id,handle),
                     columns,beams,structureMessages);
@@ -249,7 +254,9 @@ namespace BatchPdfPublisher.BuildingModel
                     slabs.Add(slab);
                 }
                 slabMessages.AddRange(floorMessages.Select(m=>floor.Name+" · "+m));
+                progress?.Invoke(new CadGenerationProgress {Stage="生成楼层："+floor.Name,Completed=++completedFloors,Total=registry.Floors.Count});
             }
+            progress?.Invoke(new CadGenerationProgress {Stage="匹配门窗与合并模型"});
             if (walls.Count==0 && columns.Count==0 && beams.Count==0)
             {
                 // A reference-only capture is not an instruction to delete existing construction.
@@ -456,33 +463,38 @@ namespace BatchPdfPublisher.BuildingModel
             if (string.IsNullOrWhiteSpace(drawing)) throw new InvalidDataException("来源图纸缺少指纹。");
             using (var hash=SHA256.Create()) return "CAD-"+kind+"-"+BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(drawing.ToUpperInvariant()+"|"+floor.ToUpperInvariant()+"|"+handle.ToUpperInvariant()))).Replace("-","").Substring(0,24);
         }
-        private static WallModel CopyWall(WallModel w) => new WallModel { Id=w.Id,Code=w.Code,StoreyId=w.StoreyId,X1=w.X1,Y1=w.Y1,X2=w.X2,Y2=w.Y2,Bulge=w.Bulge,Thickness=w.Thickness,AxisOffset=w.AxisOffset,AxisPlacement=w.AxisPlacement,Height=w.Height,Material=w.Material };
+        private static WallModel CopyWall(WallModel w) => new WallModel { Id=w.Id,Code=w.Code,StoreyId=w.StoreyId,X1=w.X1,Y1=w.Y1,X2=w.X2,Y2=w.Y2,Bulge=w.Bulge,Thickness=w.Thickness,AxisOffset=w.AxisOffset,AxisPlacement=w.AxisPlacement,Height=w.Height,Material=w.Material,Purpose=w.Purpose,BaseOffset=w.BaseOffset };
         private static OpeningModel CopyOpening(OpeningModel o) => new OpeningModel { Id=o.Id,HostWallId=o.HostWallId,Code=o.Code,Kind=o.Kind,Offset=o.Offset,Width=o.Width,Height=o.Height,Sill=o.Sill,ThresholdHeight=o.ThresholdHeight,
             PlanFlipAlong=o.PlanFlipAlong,PlanFlipNormal=o.PlanFlipNormal,
             PlanLabelAlong=o.PlanLabelAlong,PlanLabelNormal=o.PlanLabelNormal,
             PlanOpenAngle=o.PlanOpenAngle,OpenIn3D=o.OpenIn3D,CodeManuallyEdited=o.CodeManuallyEdited };
-        private static SlabModel CopySlab(SlabModel s)=>new SlabModel { Id=s.Id,Code=s.Code,StoreyId=s.StoreyId,Thickness=s.Thickness,TopElevation=s.TopElevation,TopOffset=s.TopOffset,FollowsStoreyTop=s.FollowsStoreyTop,
+        private static SlabModel CopySlab(SlabModel s)=>new SlabModel { Id=s.Id,Code=s.Code,StoreyId=s.StoreyId,Thickness=s.Thickness,TopElevation=s.TopElevation,TopOffset=s.TopOffset,FollowsStoreyTop=s.FollowsStoreyTop,Purpose=s.Purpose,
             Outline=s.Outline.Select(p=>new PointModel(p.X,p.Y) {Bulge=p.Bulge}).ToList(),Openings=s.Openings.Select(o=>new SlabOpeningModel {
                 Id=o.Id,Name=o.Name,Outline=o.Outline.Select(p=>new PointModel(p.X,p.Y) {Bulge=p.Bulge}).ToList() }).ToList() };
         private static bool SameRing(IList<PointModel> a,IList<PointModel> b)=>a!=null && b!=null && a.Count==b.Count
             && !a.Where((p,i)=>p.X!=b[i].X || p.Y!=b[i].Y || p.Bulge!=b[i].Bulge).Any();
         private static bool SameSlab(SlabModel a,SlabModel b)=>b!=null && a.Id==b.Id && a.Code==b.Code && a.StoreyId==b.StoreyId
-            && a.Thickness==b.Thickness && a.TopElevation==b.TopElevation && a.TopOffset==b.TopOffset && a.FollowsStoreyTop==b.FollowsStoreyTop && SameRing(a.Outline,b.Outline)
+            && a.Purpose==b.Purpose && a.Thickness==b.Thickness && a.TopElevation==b.TopElevation && a.TopOffset==b.TopOffset && a.FollowsStoreyTop==b.FollowsStoreyTop && SameRing(a.Outline,b.Outline)
             && a.Openings.Count==(b.Openings?.Count ?? 0) && !a.Openings.Where((o,i)=>o.Id!=b.Openings[i].Id || o.Name!=b.Openings[i].Name || !SameRing(o.Outline,b.Openings[i].Outline)).Any();
-        private static bool SameWall(WallModel a,WallModel b) => b!=null && a.Id==b.Id && a.Code==b.Code && a.StoreyId==b.StoreyId && a.X1==b.X1 && a.Y1==b.Y1 && a.X2==b.X2 && a.Y2==b.Y2 && a.Bulge==b.Bulge && a.Thickness==b.Thickness && a.AxisOffset==b.AxisOffset && a.AxisPlacement==b.AxisPlacement && a.Height==b.Height && a.Material==b.Material;
+        private static bool SameWall(WallModel a,WallModel b) => b!=null && a.Id==b.Id && a.Code==b.Code && a.StoreyId==b.StoreyId && a.X1==b.X1 && a.Y1==b.Y1 && a.X2==b.X2 && a.Y2==b.Y2 && a.Bulge==b.Bulge && a.Thickness==b.Thickness && a.AxisOffset==b.AxisOffset && a.AxisPlacement==b.AxisPlacement && a.Height==b.Height && a.Material==b.Material && a.Purpose==b.Purpose && a.BaseOffset==b.BaseOffset;
         private static bool SameOpening(OpeningModel a,OpeningModel b) => b!=null && a.Id==b.Id && a.HostWallId==b.HostWallId && (a.Code==b.Code||b.CodeManuallyEdited) && a.Kind==b.Kind && a.Offset==b.Offset && a.Width==b.Width && a.Height==b.Height && a.Sill==b.Sill;
     }
 
-    public sealed class CadModelGenerationRequest
+    public sealed partial class CadModelGenerationRequest
     {
         public string Id { get; set; }
         public CadFloorPlanRegistry Registry { get; set; }
         public static string FilePath(string modelPath) => modelPath + ".cad-generate.json";
-        public static CadModelGenerationRequest Queue(CadFloorPlanRegistry registry)
+        public static CadModelGenerationRequest Queue(CadFloorPlanRegistry registry,Action<CadGenerationProgress> progress=null)
         {
             var request = new CadModelGenerationRequest { Id=Guid.NewGuid().ToString("N"),Registry=registry };
-            CadFloorModelGeneration.Build(BuildingModelJson.LoadModel(registry.ModelPath),registry,request.Id);
-            WithGate(registry.ModelPath,()=>Write(FilePath(registry.ModelPath),request,typeof(CadModelGenerationRequest))); return request;
+            CadFloorModelGeneration.Build(BuildingModelJson.LoadModel(registry.ModelPath),registry,request.Id,progress);
+            WithGate(registry.ModelPath,()=>
+            {
+                if(File.Exists(FilePath(registry.ModelPath)))throw new IOException("该模型已有生成请求，请等待完成后重试。");
+                Write(FilePath(registry.ModelPath),request,typeof(CadModelGenerationRequest));
+                WriteProgressOptional(registry.ModelPath,new CadGenerationProgress {RequestId=request.Id,Stage="等待模型窗口接收",State="waiting",UpdatedUtc=DateTime.UtcNow.ToString("O")});
+            });return request;
         }
         public static CadModelGenerationRequest Load(string modelPath)
         {
@@ -502,7 +514,11 @@ namespace BatchPdfPublisher.BuildingModel
             WithGate(modelPath,()=> {
                 Write(modelPath+".cad-generate-result.json",new CadModelGenerationResult { RequestId=id,Error=error,Succeeded=error==null },typeof(CadModelGenerationResult));
                 // Never replay a completed request after undo/save/reopen, and never remove a newer request.
-                if(File.Exists(FilePath(modelPath)) && Load(modelPath).Id==id) File.Delete(FilePath(modelPath));
+                if(File.Exists(FilePath(modelPath)) && Load(modelPath).Id==id)
+                {
+                    WriteProgressOptional(modelPath,new CadGenerationProgress {RequestId=id,Stage=error==null?"模型已生成并保存":"生成未完成",State=error==null?"completed":"failed",Completed=error==null?1:0,Total=1,UpdatedUtc=DateTime.UtcNow.ToString("O")});
+                    File.Delete(FilePath(modelPath));
+                }
             });
         }
         private static void WithGate(string modelPath,Action action)

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -11,6 +12,7 @@ using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using BatchPdfPublisher.BuildingModel;
 
 namespace BatchPdfPublisher.Views
@@ -24,6 +26,14 @@ namespace BatchPdfPublisher.Views
         private readonly ListBox _workFloors=new ListBox();
         private readonly ContentControl _workspaceContent=new ContentControl();
         private readonly TextBlock _currentStudio=new TextBlock(), _workspaceStatus=new TextBlock {TextWrapping=TextWrapping.Wrap};
+        private readonly ProgressBar _generationProgress=new ProgressBar {Minimum=0,Maximum=100,Height=6,IsIndeterminate=true};
+        private readonly TextBlock _generationStage=new TextBlock {TextWrapping=TextWrapping.Wrap},_generationElapsed=new TextBlock();
+        private readonly StackPanel _generationPanel=new StackPanel {Visibility=Visibility.Collapsed,Margin=new Thickness(0,0,10,6)};
+        private readonly System.Diagnostics.Stopwatch _generationClock=new System.Diagnostics.Stopwatch();
+        private readonly DispatcherTimer _generationTimer=new DispatcherTimer {Interval=TimeSpan.FromMilliseconds(250)};
+        private long _generationEpoch;
+        private bool _generationActive;
+        private readonly TextBlock _cadContextStatus=new TextBlock {TextWrapping=TextWrapping.Wrap,Visibility=Visibility.Collapsed};
         private readonly TextBlock _previewTitle=new TextBlock(), _sourceText=new TextBlock(), _selectedStatus=new TextBlock();
         private readonly TextBox _floorNameText=new TextBox(), _floorHeightText=new TextBox();
         private readonly ComboBox _planeSource=new ComboBox {MinHeight=32,SelectedValuePath="Key"};
@@ -40,6 +50,27 @@ namespace BatchPdfPublisher.Views
         private static Brush WorkspaceBrush(string value)=>new SolidColorBrush((Color)ColorConverter.ConvertFromString(value));
         public string TargetModelPath => _path;
         public bool WorkspaceBusy => _workspaceBusy;
+        public void SetCadContextState(string message)
+        {
+            _cadContextStatus.Text=message??"";
+            _cadContextStatus.Visibility=string.IsNullOrEmpty(message)?Visibility.Collapsed:Visibility.Visible;
+        }
+        private async Task WorkspaceCad(Action action,bool hide=true)
+        {
+            var shown=hide&&IsVisible;
+            if(shown)Hide();
+            try
+            {
+                if(_workspace.RunCad!=null)await _workspace.RunCad(action);
+                else {_workspace.EnsureDocument?.Invoke();action();}
+            }
+            finally
+            {
+                // Completion may run inline while CAD unwinds its native callback.
+                // Restore the WPF window in a fresh dispatcher operation instead.
+                if(shown)await Dispatcher.InvokeAsync(new Action(()=>{Show();Activate();}),DispatcherPriority.ContextIdle);
+            }
+        }
 
         private void BuildWorkspace()
         {
@@ -71,7 +102,7 @@ namespace BatchPdfPublisher.Views
             void Item(string caption,Func<Task> action){var item=new MenuItem {Header=caption};item.Click+=async(s,e)=>await WorkspaceRun(action);more.ContextMenu.Items.Add(item);}
             Item("另存为",SaveWorkspaceAs);Item("刷新模型与登记",()=>ReloadWorkspace());
             Item("模型文件位置",()=>{RequireModel();System.Diagnostics.Process.Start("explorer.exe","/select,\""+_path+"\"");return Task.CompletedTask;});
-            Item("天正字段核验",()=>{_workspace.EnsureDocument?.Invoke();_workspace.Probe?.Invoke(this);return Task.CompletedTask;});
+            Item("天正字段核验",()=>WorkspaceCad(()=>_workspace.Probe?.Invoke(this)));
             header.Children.Add(more);_workspaceRoot.Children.Add(header);
             var nav=new DockPanel {Margin=new Thickness(18,0,18,0)};
             _currentStudio.Foreground=WorkspaceBrush("#9DAAB9");_currentStudio.VerticalAlignment=VerticalAlignment.Center;DockPanel.SetDock(_currentStudio,Dock.Right);nav.Children.Add(_currentStudio);
@@ -84,9 +115,17 @@ namespace BatchPdfPublisher.Views
                 _navigation.Add(button);tabs.Children.Add(button);
             }
             nav.Children.Add(tabs);Grid.SetRow(nav,1);_workspaceRoot.Children.Add(nav);
-            _workspaceContent.Margin=new Thickness(18,10,18,0);Grid.SetRow(_workspaceContent,2);_workspaceRoot.Children.Add(_workspaceContent);
+            var body=new DockPanel();_cadContextStatus.Foreground=WorkspaceBrush("#E8BE70");_cadContextStatus.Margin=new Thickness(18,8,18,0);
+            DockPanel.SetDock(_cadContextStatus,Dock.Top);body.Children.Add(_cadContextStatus);
+            _workspaceContent.Margin=new Thickness(18,10,18,0);body.Children.Add(_workspaceContent);Grid.SetRow(body,2);_workspaceRoot.Children.Add(body);
             var footer=new Grid {Margin=new Thickness(18,10,18,14)};footer.ColumnDefinitions.Add(new ColumnDefinition());footer.ColumnDefinitions.Add(new ColumnDefinition {Width=GridLength.Auto});
-            _workspaceStatus.Foreground=WorkspaceBrush("#AEB9C8");_workspaceStatus.VerticalAlignment=VerticalAlignment.Center;footer.Children.Add(_workspaceStatus);
+            _workspaceStatus.Foreground=WorkspaceBrush("#AEB9C8");_workspaceStatus.VerticalAlignment=VerticalAlignment.Center;
+            var state=new StackPanel {VerticalAlignment=VerticalAlignment.Center};
+            var progressHeader=new DockPanel {Margin=new Thickness(0,0,0,5)};DockPanel.SetDock(_generationElapsed,Dock.Right);
+            _generationElapsed.Margin=new Thickness(12,0,0,0);progressHeader.Children.Add(_generationElapsed);progressHeader.Children.Add(_generationStage);
+            _generationPanel.Children.Add(progressHeader);_generationPanel.Children.Add(_generationProgress);state.Children.Add(_generationPanel);state.Children.Add(_workspaceStatus);footer.Children.Add(state);
+            _generationTimer.Tick+=(s,e)=>_generationElapsed.Text="已用时 "+_generationClock.Elapsed.ToString(@"mm\:ss");
+            Closed+=(s,e)=>{_generationTimer.Stop();_generationActive=false;_generationEpoch++;};
             var actions=new StackPanel {Orientation=Orientation.Horizontal};
             actions.Children.Add(WorkspaceTool("box","打开三维",OpenWorkspaceStudio));
             var generate=WorkspaceTool("box","生成并打开",GenerateWorkspace);generate.Background=WorkspaceBrush("#087FDD");actions.Children.Add(generate);
@@ -158,13 +197,31 @@ namespace BatchPdfPublisher.Views
             var dimensions=new FrameworkElementFactory(typeof(TextBlock));var binding=new MultiBinding {StringFormat="{0} / {1} mm"};binding.Bindings.Add(new Binding("ElevationDisplay"));binding.Bindings.Add(new Binding("Height"));dimensions.SetBinding(TextBlock.TextProperty,binding);dimensions.SetValue(TextBlock.FontSizeProperty,12d);dimensions.SetValue(FrameworkElement.MarginProperty,new Thickness(0,5,0,0));panel.AppendChild(dimensions);
             return new DataTemplate {VisualTree=panel};
         }
-        private async Task WorkspaceRun(Func<Task> action)
+        private Task WorkspaceRun(Func<Task> action)
+        {
+            // A modeless CAD callback can carry AutoCAD's synchronization context.
+            // Capture WPF for the whole operation, without leaking it back to CAD.
+            var previous=SynchronizationContext.Current;
+            try
+            {
+                SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(Dispatcher));
+                return WorkspaceRunCore(action);
+            }
+            finally{SynchronizationContext.SetSynchronizationContext(previous);}
+        }
+        private async Task WorkspaceRunCore(Func<Task> action)
         {
             if(_workspaceBusy)return;
+            var previousStatus=_workspaceStatus.Text;
             _workspaceBusy=true;_workspaceRoot.IsEnabled=false;
             try { _workspaceStatus.Text="正在处理…";await action(); }
             catch(Exception ex) { _workspaceStatus.Text=ex.Message; }
-            finally { _workspaceBusy=false;_workspaceRoot.IsEnabled=true; }
+            finally
+            {
+                if(_workspaceStatus.Text=="正在处理…")
+                    _workspaceStatus.Text=string.IsNullOrEmpty(previousStatus)||previousStatus=="正在处理…"?"就绪":previousStatus;
+                _workspaceBusy=false;_workspaceRoot.IsEnabled=true;
+            }
         }
         private void ShowWorkspacePage(int page)
         {
@@ -235,7 +292,7 @@ namespace BatchPdfPublisher.Views
             panel.Children.Add(new TextBlock {Text="同编号、同洞口尺寸保留门窗做法；位置按 CAD 更新。未登记楼层不动。",TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,16,0,12),Foreground=WorkspaceBrush("#AEB9C8")});
             panel.Children.Add(WorkspaceTool("rotate-ccw","只更新参照底图",async()=>
             {
-                if(!await SaveWorkspace())return;CheckWorkspaceFiles();_workspace.EnsureDocument?.Invoke();_updateUnderlay?.Invoke(_registry);ReloadWorkspaceModel();_workspaceStatus.Text="参照底图已更新，模型构件未改变。";
+                if(!await SaveWorkspace())return;await WorkspaceCad(()=>{CheckWorkspaceFiles();_updateUnderlay?.Invoke(_registry);});ReloadWorkspaceModel();_workspaceStatus.Text="参照底图已更新，模型构件未改变。";
             }));
             return new ScrollViewer {Content=panel,VerticalScrollBarVisibility=ScrollBarVisibility.Auto};
         }
@@ -334,10 +391,19 @@ namespace BatchPdfPublisher.Views
             }
             var mode=_generationMode.SelectedIndex;
             var floors=_floorEditor.CollectStoreys();
+            string replacementBackup=null;
             if(_creatingModel)
             {
                 var name=_floorEditor.ModelName;var fresh=BuildingModelProjectWorkflow.Empty(name);fresh.Storeys=floors;
-                var target=BuildingModelJson.ModelFilePath(_workspace.ProjectFolder,name);BuildingModelProjectWorkflow.CreateNew(target,fresh);
+                var target=BuildingModelJson.ModelFilePath(_workspace.ProjectFolder,name);
+                if(File.Exists(target))
+                {
+                    var expected=BuildingModelProjectWorkflow.ModelFileHash(target);
+                    var answer=AskWorkspace("替换已有模型","已存在同名模型“"+name+"”。是否备份并替换？\n\n替换后按当前楼层设置创建空模型，原模型、CAD 登记和图纸等整个模型目录会自动保留为备份，不与新模型混用。\n选择“否”或“取消”保留旧模型和当前草稿。",MessageBoxButton.YesNoCancel);
+                    if(answer!=MessageBoxResult.Yes){_workspaceStatus.Text="已取消替换，旧模型未改动，当前草稿保留。";return false;}
+                    replacementBackup=BuildingModelProjectWorkflow.ReplaceExisting(target,fresh,expected);
+                }
+                else BuildingModelProjectWorkflow.CreateNew(target,fresh);
                 BuildingModelCatalog.Register(_workspace.ProjectFolder,target,_workspace.DrawingFingerprint,_workspace.DrawingName);
                 _creatingModel=false;_floorEditor=null;_workspaceOriginalHash=null;LoadModel(target);ShowWorkspacePage(1);
             }
@@ -355,13 +421,14 @@ namespace BatchPdfPublisher.Views
                 }
                 else if(_workspace.Save!=null) {await _workspace.Save(_path);ReloadWorkspaceModel();}
             }
+            _workspace.EnsureDocument?.Invoke();
             _slabThickness.Text=thickness.ToString(CultureInfo.InvariantCulture);_generationMode.SelectedIndex=mode;
             if(!File.Exists(CadFloorPlanRegistry.FilePath(_path))||_registry.ResolvedSlabThickness!=thickness||_registry.ReplaceRegisteredConstruction!=(mode==0))
             {
                 var draft=_registry.Clone();draft.SlabThickness=thickness;draft.ReplaceRegisteredConstruction=mode==0;
                 _registry.SaveUnderlays(draft,_registryStamp);_registryStamp=RegistryStamp();_registry=draft;
             }
-            _loadedOptions=WorkspaceOptions();_workspaceStatus.Text="已保存："+_model.Name;RefreshModels();return true;
+            _loadedOptions=WorkspaceOptions();_workspaceStatus.Text="已保存："+_model.Name+(replacementBackup==null?"":" · 旧模型备份："+replacementBackup);RefreshModels();return true;
         }
         private async Task BeginNewModel()
         {
@@ -405,24 +472,60 @@ namespace BatchPdfPublisher.Views
             var row=_workFloors.SelectedItem as CadFloorRegistrationRow;if(row==null)throw new InvalidOperationException("请先选择楼层。");
             if(row.Storey.Id!=selected)throw new InvalidOperationException("楼层来源已改变，请重新选择登记楼层。");
             _floors.SelectedItem=row;
-            if(datum)PickDatum(row);else Capture(row);
+            await WorkspaceCad(()=>{CheckWorkspaceFiles();if(datum)PickDatum(row);else Capture(row);});
             _modelStamp=File.GetLastWriteTimeUtc(_path).Ticks;_registryStamp=RegistryStamp();_loadedOptions=WorkspaceOptions();RefreshWorkspace();
         }
         private async Task GenerateWorkspace()
         {
+            var epoch=++_generationEpoch;_generationActive=true;_generationClock.Restart();_generationTimer.Start();_generationPanel.Visibility=Visibility.Visible;
+            var succeeded=false;
+            void Report(CadGenerationProgress step)
+            {
+                void Apply()
+                {
+                    if(!_generationActive||epoch!=_generationEpoch)return;
+                    var count=Math.Max(0,Math.Min(step.Completed,step.Total));
+                    _generationStage.Text=step.Stage+(step.Total>0?" · "+count+"/"+step.Total+"（当前阶段 "+(int)(count*100d/step.Total)+"%）":"");
+                    _generationProgress.IsIndeterminate=step.Total<=0;_generationProgress.Value=step.Total>0?count*100d/step.Total:0;
+                }
+                if(Dispatcher.CheckAccess())Apply();else Dispatcher.BeginInvoke(new Action(Apply));
+            }
+            try
+            {
+            Report(new CadGenerationProgress {Stage="保存楼层与登记设置"});
+            if(IsVisible)await Dispatcher.Yield(DispatcherPriority.Render);
             double thickness;
             var invalid=!double.TryParse(_slabThickness.Text,NumberStyles.Float,CultureInfo.InvariantCulture,out thickness)||double.IsNaN(thickness)||double.IsInfinity(thickness)||thickness<=.5;
             if(!await SaveWorkspace(true))return;CheckWorkspaceFiles();_workspace.EnsureDocument?.Invoke();
             var registry=_registry.Clone();registry.ReplaceRegisteredConstruction=_generationMode.SelectedIndex==0;
             registry.GenerationWarning=invalid?"楼板厚度无效，本次保留已有模型，可进入模型后调整。":null;
-            try{_workspaceRead?.Invoke(registry);}catch(Exception ex){registry.GenerationWarning=(registry.GenerationWarning==null?"":registry.GenerationWarning+"；")+"CAD 重新读取未完成："+ex.Message;}
-            if(_workspace.Generate!=null)await _workspace.Generate(registry);else _workspaceGenerate?.Invoke(registry);
+            Report(new CadGenerationProgress {Stage="读取 CAD 登记平面（"+registry.Floors.Count+" 组楼层）"});
+            if(IsVisible)await Dispatcher.Yield(DispatcherPriority.Render);
+            await WorkspaceCad(()=>
+            {
+                try{_workspaceRead?.Invoke(registry);}catch(Exception ex){registry.GenerationWarning=(registry.GenerationWarning==null?"":registry.GenerationWarning+"；")+"CAD 重新读取未完成："+ex.Message;}
+            },hide:false);
+            _workspace.EnsureDocument?.Invoke();
+            if(_workspace.GenerateWithProgress!=null)await _workspace.GenerateWithProgress(registry,Report);
+            else if(_workspace.Generate!=null)await _workspace.Generate(registry);
+            else
+            {
+                if(_workspaceGenerate==null)throw new InvalidOperationException("模型生成服务不可用。");
+                _workspaceGenerate(registry);_workspaceStatus.Text="已提交生成请求，请在三维窗口查看结果。";return;
+            }
             ReloadWorkspaceModel();_workspaceStatus.Text="生成请求已完成："+_model.Name;
+            Report(new CadGenerationProgress {Stage="模型已生成并保存",Completed=1,Total=1,State="completed"});succeeded=true;
+            }
+            finally
+            {
+                _generationClock.Stop();_generationTimer.Stop();_generationElapsed.Text="已用时 "+_generationClock.Elapsed.ToString(@"mm\:ss");
+                _generationActive=false;if(!succeeded)_generationPanel.Visibility=Visibility.Collapsed;
+            }
         }
         private async Task EditWorkspaceOpenings(bool locations)
         {
             if(!await SaveWorkspace())return;CheckWorkspaceFiles();_workspace.EnsureDocument?.Invoke();
-            EditOpeningTable(locations);ReloadWorkspaceModel();
+            await WorkspaceCad(()=>{CheckWorkspaceFiles();EditOpeningTable(locations);});ReloadWorkspaceModel();
         }
         private static bool SamePath(string a,string b)=>!string.IsNullOrWhiteSpace(a)&&!string.IsNullOrWhiteSpace(b)&&string.Equals(Path.GetFullPath(a),Path.GetFullPath(b),StringComparison.OrdinalIgnoreCase);
         private MessageBoxResult AskWorkspace(string title,string text,MessageBoxButton buttons)=>_workspace.Confirm!=null?_workspace.Confirm(title,text,buttons):MessageBox.Show(this,text,title,buttons,MessageBoxImage.Question,MessageBoxResult.Cancel);

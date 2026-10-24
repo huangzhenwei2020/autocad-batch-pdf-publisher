@@ -23,11 +23,17 @@ internal sealed partial class ProbeWindow
         {
             await Task.Delay(200);
             await window.OperationTask;
+            var notice=new ModelExportResult(Path.Combine(folder,"repaired.fbx"),folder,3,257,192,65000,100000,15000)
+                {Warnings=Enumerable.Range(1,4).Select(i=>$"FBX 微小面已自动清理：一层 · 墙 W-{i}，1 个退化面，原面积合计 0.001 mm²；构件与材质保留。").ToArray()};
+            window.Status.Text=ModelExportWindow.SavedStatus(notice);
+            Check(window.Status.Text.Contains("已保存")&&window.Status.Text.Contains("微小面已自动清理")
+                &&window.Status.Text.Contains("另有 2 项"),"Repair warning is missing from successful export status.");
             foreach (var size in new[] { new Size(560, 500), new Size(800, 660) })
             {
                 window.Width = size.Width; window.Height = size.Height;
                 window.TargetSelector.SelectedIndex = 1;
                 await Task.Delay(160);
+                window.Status.Text=ModelExportWindow.SavedStatus(notice);
                 var visual = ElementComposition.GetElementVisual(window)!;
                 using var bitmap = await visual.Compositor.CreateCompositionVisualSnapshot(visual, 1);
                 bitmap.Save(Path.Combine(folder, "skp-" + size.Width + ".png"), PngBitmapEncoderOptions.Default);

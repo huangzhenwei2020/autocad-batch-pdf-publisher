@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using Autodesk.AutoCAD.ApplicationServices;
@@ -19,6 +20,8 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
             var root=Path.GetFullPath(project.ProjectFolder);var fingerprint=document.Database.FingerprintGuid.ToString();
             void Ensure()
             {
+                if(!Application.DocumentManager.Cast<Document>().Any(d=>ReferenceEquals(d,document)))
+                    throw new InvalidOperationException("工作台对应的 CAD 图纸已关闭；当前草稿仍保留，请勿向其他图纸登记。");
                 if(!ReferenceEquals(Application.DocumentManager.MdiActiveDocument,document)||document.Database.FingerprintGuid.ToString()!=fingerprint)
                     throw new InvalidOperationException("请切回工作台对应的 CAD 图纸。");
                 var active=new PublishPlanStore().GetActiveProject();
@@ -26,10 +29,49 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
                     throw new InvalidOperationException("当前项目已改变，请重新打开建筑模型工作台。");
             }
             string Current(){try{return StudioLaunch.ActiveModelPath(root,project.Name,fingerprint);}catch(FileNotFoundException){return null;}}
+            async Task Generate(CadFloorPlanRegistry registry,Action<CadGenerationProgress> report)
+            {
+                Ensure();
+                if(File.Exists(CadModelGenerationRequest.FilePath(registry.ModelPath)))throw new IOException("该模型已有生成请求，请等待完成后重试。");
+                report?.Invoke(new CadGenerationProgress {Stage="启动建筑模型窗口"});
+                if(!BuildingModelStudioLauncher.OpenCurrentModel(document,registry.ModelPath))throw new IOException("模型程序未启动，未提交生成请求。");
+                var request=await Task.Run(()=>CadModelGenerationRequest.Queue(registry,step=>
+                {
+                    step.Stage="校验登记 · "+step.Stage;report?.Invoke(step);
+                }));
+                var started=false;var terminal=false;var clock=System.Diagnostics.Stopwatch.StartNew();
+                try
+                {
+                    report?.Invoke(new CadGenerationProgress {Stage="等待模型窗口接收",State="waiting"});
+                    while(clock.Elapsed.TotalSeconds<(started?600:45))
+                    {
+                        await Task.Delay(250);
+                        try
+                        {
+                            var step=CadModelGenerationRequest.LoadProgress(registry.ModelPath,request.Id);
+                            if(step!=null)
+                            {
+                                started|=step.State=="running";
+                                if(step.State=="running"||step.State=="waiting")report?.Invoke(step);
+                            }
+                        }
+                        catch(Exception ex) when(ex is IOException||ex is UnauthorizedAccessException||ex is System.Runtime.Serialization.SerializationException){}
+                        if(!File.Exists(registry.ModelPath+".cad-generate-result.json"))continue;
+                        var result=CadModelGenerationRequest.LoadResult(registry.ModelPath);if(result.RequestId!=request.Id)continue;
+                        terminal=true;
+                        if(!result.Succeeded)throw new IOException(result.Error);
+                        Ensure();Remember(document,registry.ModelPath);
+                        report?.Invoke(new CadGenerationProgress {Stage="模型已生成并保存",State="completed",Completed=1,Total=1});return;
+                    }
+                    throw new IOException(started?"三维生成尚未确认完成，请检查模型窗口；已开始的任务未取消，请勿重复提交。":"模型尚未接收生成请求，请检查三维窗口；未处理请求已取消，可重试。");
+                }
+                finally{if(terminal||!started)CadModelGenerationRequest.Cancel(registry.ModelPath,request.Id);}
+            }
             return new CadModelWorkspaceHost
             {
                 ProjectFolder=root,ProjectName=project.Name,DrawingFingerprint=fingerprint,DrawingName=document.Name,
                 CurrentModel=Current,EnsureDocument=Ensure,Theme=CadComponentPlanWindow.CreateTheme,
+                RunCad=action=>CadModelWorkspaceService.RunCadAsync(document,Ensure,action),
                 Open=async path=>{Ensure();if(StudioLaunch.HasLiveSession(path))await Send(document,path,"Activate");
                     else if(!BuildingModelStudioLauncher.OpenCurrentModel(document,path))throw new IOException("建筑模型窗口未启动。");Remember(document,path);},
                 Save=async path=>{Ensure();if(StudioLaunch.HasLiveSession(path))await Send(document,path,"Save");else BuildingModelJson.LoadModel(path);},
@@ -43,27 +85,8 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
                     else BuildingModelProjectWorkflow.CreateCopy(path,target,BuildingModelJson.LoadModel(path),naming.ModelName);
                     BuildingModelCatalog.Register(root,target,fingerprint,document.Name);return target;
                 },
-                Generate=async registry=>
-                {
-                    Ensure();
-                    if(File.Exists(CadModelGenerationRequest.FilePath(registry.ModelPath)))throw new IOException("该模型已有生成请求，请等待完成后重试。");
-                    if(!BuildingModelStudioLauncher.OpenCurrentModel(document,registry.ModelPath))throw new IOException("模型程序未启动，未提交生成请求。");
-                    var request=CadModelGenerationRequest.Queue(registry);
-                    try
-                    {
-                        for(var i=0;i<180;i++)
-                        {
-                            await Task.Delay(250);
-                            if(!File.Exists(registry.ModelPath+".cad-generate-result.json"))continue;
-                            var result=CadModelGenerationRequest.LoadResult(registry.ModelPath);if(result.RequestId!=request.Id)continue;
-                            if(!result.Succeeded)throw new IOException(result.Error);Remember(document,registry.ModelPath);
-                            return;
-                        }
-                        throw new IOException("模型尚未确认生成，请检查三维窗口；未处理请求已取消，可重试。");
-                    }
-                    finally{CadModelGenerationRequest.Cancel(registry.ModelPath,request.Id);}
-                },
-                Probe=owner=>{Ensure();using(document.Editor.StartUserInteraction(owner))TianzhengBuildingProbeService.Execute(document);}
+                Generate=registry=>Generate(registry,null),GenerateWithProgress=Generate,
+                Probe=owner=>{Ensure();using(CadModelWorkspaceService.BeginInteraction(document,owner))TianzhengBuildingProbeService.Execute(document);}
             };
         }
         public static void CheckNative(Document document)

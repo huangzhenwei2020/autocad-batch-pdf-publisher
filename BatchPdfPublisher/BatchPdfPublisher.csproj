@@ -82,6 +82,7 @@
     <Compile Include="..\Shared\BuildingModel\StudioLaunch.cs"><Link>Features\BuildingModel\Shared\StudioLaunch.cs</Link></Compile>
     <Compile Include="..\Shared\BuildingModel\CadFloorPlanRegistry.cs"><Link>Features\BuildingModel\Shared\CadFloorPlanRegistry.cs</Link></Compile>
     <Compile Include="..\Shared\BuildingModel\CadFloorModelGeneration.cs"><Link>Features\BuildingModel\Shared\CadFloorModelGeneration.cs</Link></Compile>
+    <Compile Include="..\Shared\BuildingModel\CadGenerationProgress.cs"><Link>Features\BuildingModel\Shared\CadGenerationProgress.cs</Link></Compile>
     <Compile Include="..\Shared\BuildingModel\CadFloorSlabGeneration.cs"><Link>Features\BuildingModel\Shared\CadFloorSlabGeneration.cs</Link></Compile>
     <Compile Include="..\Shared\BuildingModel\CadOpeningJambPlacement.cs"><Link>Features\BuildingModel\Shared\CadOpeningJambPlacement.cs</Link></Compile>
     <Compile Include="..\Shared\BuildingModel\BuildingVolume.cs"><Link>Features\BuildingModel\Shared\BuildingVolume.cs</Link></Compile>

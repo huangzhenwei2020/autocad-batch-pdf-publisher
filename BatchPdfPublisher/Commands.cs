@@ -55,6 +55,24 @@ namespace BatchPdfPublisher
             Application.ShowModalDialog(new ShortcutSettingsForm());
         }
 
+        [CommandMethod("WLLINECORRECT", CommandFlags.UsePickSet)]
+        public void CorrectLines()
+        {
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document == null) return;
+            try
+            {
+                using (var form = new LineCorrectionForm(document))
+                {
+                    if (Application.ShowModalDialog(form) != System.Windows.Forms.DialogResult.OK) return;
+                    int skipped;
+                    var count = LineCorrectionService.Apply(document, form.SelectedIds, form.Options, out skipped);
+                    document.Editor.WriteMessage("\n线条校正完成：修改 " + count + " 个对象，跳过或保留方向 " + skipped + " 个。\n");
+                }
+            }
+            catch (System.Exception ex) { document.Editor.WriteMessage("\n线条校正未完成：" + ex.Message + "\n"); }
+        }
+
         /// <summary>
         /// 显示/隐藏 AutoCAD 经典菜单栏。AutoCAD 2022～2025 都还支持菜单栏，
         /// 只是 MENUBAR 初值为 0 默认隐藏，所以插件菜单加载了也看不见。

@@ -78,6 +78,9 @@ namespace BatchPdfPublisher.BuildingModel
         private const double MaximumCoordinateMillimetres = 1_000_000_000_000d;
         // Only numerical duplicates, not architectural rounding (one nanometre).
         private const double DuplicatePointToleranceMillimetres = 0.000001d;
+        // Cross-contour CAD junction noise, capped at a tenth of a micrometre.
+        // Real 0.001 mm details remain ten times larger; never round to a grid.
+        private const double WallJunctionToleranceMillimetres = 0.0001d;
 
         public static BuildingExportScene Build(BuildingModelDocument source, string storeyId = null,
             bool nearOrigin = true, CancellationToken cancellation = default)
@@ -116,6 +119,7 @@ namespace BatchPdfPublisher.BuildingModel
                 var localBounds = Bounds(group, cancellation);
                 var anchor = new[] { localBounds[0], localBounds[1], elevation };
                 var local = group.Select(face => Localize(face, anchor)).ToList();
+                WeldNumericalWallVertices(local, cancellation);
                 var mesh = new BuildingExportMesh();
                 var vertices = new Dictionary<(double, double, double), int>();
                 // Match GLB's per-element wall union; non-wall faces stay independent.
@@ -172,17 +176,38 @@ namespace BatchPdfPublisher.BuildingModel
                     candidates.Add((canonical, meshIndex));
                 }
                 var sourceId = StandardStoreyLayout.SourceElementId(model, elementId);
-                var wall = model.Walls.FirstOrDefault(item => item.Id == sourceId);
-                var opening = model.Openings.FirstOrDefault(item => item.Id == sourceId);
                 scene.Instances.Add(new BuildingExportInstance { Id = elementId, SourceId = sourceId,
                     StoreyId = floorId, MeshIndex = meshIndex, Kind = group.First().Kind,
-                    Name = wall != null ? BuildingElementNames.Wall(wall)
-                        : opening != null ? BuildingElementNames.Opening(opening) : elementId,
+                    Name = ElementName(model, sourceId),
                     Translation = new[] { anchor[0] - scene.OriginMillimetres[0],
                         anchor[1] - scene.OriginMillimetres[1], anchor[2] - scene.OriginMillimetres[2] } });
             }
             cancellation.ThrowIfCancellationRequested();
             return scene;
+        }
+
+        private static string ElementName(BuildingModelDocument model, string id)
+        {
+            bool IsCode(string code) => !string.IsNullOrWhiteSpace(code) && code != id
+                && !code.StartsWith("CAD-", StringComparison.OrdinalIgnoreCase) && !Guid.TryParse(code, out _);
+            string Label(string prefix, string code, string letter, int index)
+                => prefix + " " + (IsCode(code) ? code.Trim() : letter + "-" + (index + 1).ToString("D2", CultureInfo.InvariantCulture));
+            var wall = model.Walls.FindIndex(e => e.Id == id);
+            if (wall >= 0) return Label(model.Walls[wall].Purpose == WallPurpose.Parapet ? "女儿墙" : "墙", model.Walls[wall].Code, "W", wall);
+            var opening = model.Openings.FirstOrDefault(e => e.Id == id);
+            if (opening != null) return IsCode(opening.Code) ? opening.Code.Trim()
+                : Label(opening.Kind ?? "门窗", null, "MC", model.Openings.IndexOf(opening));
+            var slab = model.Slabs.FindIndex(e => e.Id == id);
+            if (slab >= 0) return Label(model.Slabs[slab].Purpose == SlabPurpose.Balcony ? "阳台" : "楼板", model.Slabs[slab].Code, "B", slab);
+            var column = model.Columns.FindIndex(e => e.Id == id);
+            if (column >= 0) return Label("柱", model.Columns[column].Code, "Z", column);
+            var beam = model.Beams.FindIndex(e => e.Id == id);
+            if (beam >= 0) return Label("梁", model.Beams[beam].Code, "L", beam);
+            var stair = model.Stairs.FindIndex(e => e.Id == id);
+            if (stair >= 0) return Label("楼梯", null, "T", stair);
+            var roof = model.Roofs.FindIndex(e => e.Id == id);
+            if (roof >= 0) return Label("屋面", null, "R", roof);
+            return "构件";
         }
 
         private static double[] Bounds(IEnumerable<VolumeFace> faces, CancellationToken cancellation)
@@ -221,6 +246,47 @@ namespace BatchPdfPublisher.BuildingModel
                 NormalX = face.NormalX, NormalY = face.NormalY, NormalZ = face.NormalZ,
                 Points = face.Points.Select(point => new Point3DModel(point.X - anchor[0],
                     point.Y - anchor[1], point.Z - anchor[2])).ToList() };
+
+        private static void WeldNumericalWallVertices(List<VolumeFace> faces, CancellationToken cancellation)
+        {
+            // Junction caps can repeat the same endpoint in different contours.
+            // Share a bounded representative before union, not after triangulation;
+            // this removes numerical slivers without discarding surface triangles.
+            var walls = faces.Where(face => face.Kind == "wall").ToArray();
+            var buckets = new Dictionary<(long, long, long), List<Point3DModel>>();
+            var replacements = new Dictionary<(double, double, double), Point3DModel>();
+            const double tolerance = WallJunctionToleranceMillimetres;
+            (long X, long Y, long Z) Cell(Point3DModel p) =>
+                ((long)Math.Floor(p.X / tolerance), (long)Math.Floor(p.Y / tolerance), (long)Math.Floor(p.Z / tolerance));
+            foreach (var key in walls.SelectMany(face => face.Points).Select(p => (p.X, p.Y, p.Z))
+                .Distinct().OrderBy(p => p.X).ThenBy(p => p.Y).ThenBy(p => p.Z))
+            {
+                cancellation.ThrowIfCancellationRequested();
+                var point = new Point3DModel(key.X, key.Y, key.Z);
+                var cell = Cell(point);
+                Point3DModel nearest = null;
+                var distanceSquared = tolerance * tolerance;
+                for (var x = -1; x <= 1; x++)
+                for (var y = -1; y <= 1; y++)
+                for (var z = -1; z <= 1; z++)
+                    if (buckets.TryGetValue((cell.X + x, cell.Y + y, cell.Z + z), out var candidates))
+                        foreach (var candidate in candidates)
+                        {
+                            var dx = point.X - candidate.X; var dy = point.Y - candidate.Y; var dz = point.Z - candidate.Z;
+                            var squared = dx * dx + dy * dy + dz * dz;
+                            if (squared <= distanceSquared) { nearest = candidate; distanceSquared = squared; }
+                        }
+                if (nearest == null)
+                {
+                    nearest = point;
+                    if (!buckets.TryGetValue(cell, out var candidates)) buckets.Add(cell, candidates = new List<Point3DModel>());
+                    candidates.Add(point);
+                }
+                replacements.Add(key, nearest);
+            }
+            foreach (var face in walls)
+                face.Points = face.Points.Select(p => replacements[(p.X, p.Y, p.Z)]).ToList();
+        }
 
         private static IEnumerable<(Vec3 A, Vec3 B, Vec3 C)> Triangulate(
             IEnumerable<VolumeFace> patches, CancellationToken cancellation)

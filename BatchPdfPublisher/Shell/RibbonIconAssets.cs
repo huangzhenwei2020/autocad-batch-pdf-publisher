@@ -91,6 +91,7 @@ namespace BatchPdfPublisher.Services
                 foreach (var alias in new Dictionary<string, string>
                 {
                     { "room_statistics", "cad_table_xlsx" },
+                    { "line_correction", "drawing_scale" },
                     { "room_statistics_summary", "catalog" }
                 })
                 {

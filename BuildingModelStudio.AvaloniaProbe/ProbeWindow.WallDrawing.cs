@@ -8,7 +8,7 @@ internal sealed partial class ProbeWindow
     private WallDrawingChoice _wallDrawingChoice=new();
     private Task? _wallDrawingTask;
 
-    private async Task OpenWallDrawingAsync(bool? curved=null)
+    private async Task OpenWallDrawingAsync(bool? curved=null,bool parapet=false)
     {
         if(_wallDrawingWindow!=null){_wallDrawingWindow.Activate();return;}
         if(_openingEditorBusy)return;
@@ -16,10 +16,12 @@ internal sealed partial class ProbeWindow
         var storey=(_storeyChooser.SelectedItem as StoreyItem)?.Id??_session.Model.Storeys.FirstOrDefault()?.Id;
         var height=_session.Model.FindStorey(storey)?.Height??3000;
         var choice=curved.HasValue?_wallDrawingChoice with {Curved=curved.Value}:_wallDrawingChoice;
+        if(parapet)choice=choice with {Purpose=WallPurpose.Parapet,Height=1100,BaseOffset=0};
         var window=new WallDrawingWindow(choice,height);_wallDrawingWindow=window;
         try {
             var result=await window.ShowDialog<WallDrawingChoice?>(this);if(result==null)return;
             _wallDrawingChoice=result;_planCanvas.SetWallDrawing(result);
+            if(result.Purpose==WallPurpose.Parapet){BeginOutdoorDrawing(false,result);return;}
             _workspaces.SelectedIndex=1;SetPlanTool(result.Curved?PlanTool.ArcWall:PlanTool.Wall);
         }finally{_wallDrawingWindow=null;}
     }

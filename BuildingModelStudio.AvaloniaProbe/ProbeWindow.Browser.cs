@@ -136,6 +136,7 @@ internal sealed partial class ProbeWindow
             SelectById(null);foreach(var id in retained)SelectById(id,true);
         }
         foreach(var update in _browserStateUpdates)update();
+        if(_outdoor!=null){ClearOutdoorReferenceHover();UpdateOutdoorPreview();}
         _status.Text="显示与冻结已更新 · Alt 单击眼睛可独立显示，再次单击全部显示";
     }
 }

@@ -101,7 +101,7 @@ namespace BatchPdfPublisher.BuildingModel
                         Id = InstanceId(wall.Id), Code = wall.Code, StoreyId = target.Id, X1 = wall.X1, Y1 = wall.Y1,
                         X2 = wall.X2, Y2 = wall.Y2, Thickness = wall.Thickness, Bulge = wall.Bulge,
                         AxisPlacement = wall.AxisPlacement, AxisOffset = wall.AxisOffset,
-                        Height = wall.Height, Material = wall.Material
+                        Height = wall.Height, Material = wall.Material, Purpose = wall.Purpose, BaseOffset = wall.BaseOffset
                     });
                 foreach (var opening in model.Openings.Where(o => sourceWallIds.Contains(o.HostWallId)))
                 {
@@ -126,7 +126,7 @@ namespace BatchPdfPublisher.BuildingModel
                         Id = InstanceId(slab.Id), Code = slab.Code, StoreyId = target.Id, Outline = slab.Outline,
                         Openings = (slab.Openings ?? new List<SlabOpeningModel>()).Select(o => new SlabOpeningModel
                         { Id = InstanceId(o.Id), Name = o.Name, Outline = o.Outline }).ToList(),
-                        Thickness = slab.Thickness, TopOffset = slab.TopOffset,FollowsStoreyTop=slab.FollowsStoreyTop,
+                        Thickness = slab.Thickness, TopOffset = slab.TopOffset,FollowsStoreyTop=slab.FollowsStoreyTop, Purpose = slab.Purpose,
                         TopElevation = slab.TopElevation + (atTop ? topShift : baseShift)
                     });
                 }

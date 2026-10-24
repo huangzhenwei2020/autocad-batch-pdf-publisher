@@ -274,8 +274,15 @@ internal sealed class ModelExportWindow : Window
             });
             var result=await Task.Run(()=>ModelExportService.ExportAsync(_model,path,format,storeyId,nearOrigin,apiDirectory,progress,job.Token));
             Result=result;_runDirectory=result.RunDirectory;
-            Status.Text=$"已保存 · {result.Storeys:N0} 层 · {result.Elements:N0} 构件 · {result.Meshes:N0} 网格 · {result.Polygons:N0} 多边形 · {result.Bytes:N0} 字节\n{result.Path}";
+            Status.Text=SavedStatus(result);
         } finally {_job=null;}
+    }
+    internal static string SavedStatus(ModelExportResult result)
+    {
+        var text=$"已保存 · {result.Storeys:N0} 层 · {result.Elements:N0} 构件 · {result.Meshes:N0} 网格 · {result.Polygons:N0} 多边形 · {result.Bytes:N0} 字节\n{result.Path}";
+        var repairs=result.Warnings.Where(w=>w.StartsWith("FBX 微小面已自动清理：",StringComparison.Ordinal)).ToArray();
+        return repairs.Length==0?text:text+"\n"+string.Join("\n",repairs.Take(2))
+            +(repairs.Length>2?$"\n另有 {repairs.Length-2} 项，详情见日志及同名 .wanluo.json 文件。":"");
     }
     private Task OpenFolderAsync(string? directory)
     {

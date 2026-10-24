@@ -300,6 +300,18 @@ namespace BatchPdfPublisher.BuildingModel
                 candidate.Slabs.Add(replacement);
             }
             else candidate.Slabs[index] = replacement;
+            if(replacement.Purpose==SlabPurpose.Balcony)
+            {
+                var physical=StandardStoreyLayout.Materialize(candidate);
+                foreach(var target in physical.Slabs.Where(s=>Same(StandardStoreyLayout.SourceElementId(candidate,s.Id),replacement.Id)))
+                foreach(var other in physical.Slabs.Where(s=>!Same(s.Id,target.Id)))
+                {
+                    var top=physical.TopElevationOf(target);var otherTop=physical.TopElevationOf(other);
+                    if(Math.Min(top,otherTop)-Math.Max(top-target.Thickness,otherTop-other.Thickness)<=.5)continue;
+                    if(SlabGeometry.InteriorOverlaps(target,other))
+                    {error="阳台与已有楼板重叠，请调整轮廓或选用已有楼板。";return false;}
+                }
+            }
             Commit(candidate);
             id = replacement.Id;
             return true;
@@ -333,7 +345,8 @@ namespace BatchPdfPublisher.BuildingModel
             var storey = Model.FindStorey(source.StoreyId);
             if (storey == null) { error = "墙所属楼层不存在。"; return false; }
             if (!Finite(source.X1) || !Finite(source.Y1) || !Finite(source.X2) || !Finite(source.Y2)
-                || !Finite(source.Thickness) || !Finite(source.Height) || source.Height < 0d)
+                || !Finite(source.Thickness) || !Finite(source.Height) || source.Height < 0d
+                || !Finite(source.BaseOffset) || !Enum.IsDefined(typeof(WallPurpose),source.Purpose))
             { error = "墙的坐标、厚度和高度必须是有限且有效的数值。"; return false; }
             error = PlanEditing.ValidateWall(source);
             if (error != null) return false;
@@ -345,13 +358,26 @@ namespace BatchPdfPublisher.BuildingModel
                     ? source.StoreyId : storey.TemplateStoreyId,
                 X1 = source.X1, Y1 = source.Y1, X2 = source.X2, Y2 = source.Y2, Bulge = source.Bulge,
                 Thickness = source.Thickness, Height = source.Height, Material = source.Material,
-                AxisPlacement = source.AxisPlacement, AxisOffset = source.AxisOffset
+                AxisPlacement = source.AxisPlacement, AxisOffset = source.AxisOffset,
+                Purpose = source.Purpose, BaseOffset = source.BaseOffset
             };
             candidate.Walls.Add(wall);
             if (!SplitOrthogonalTConnections(candidate, true, out error)) return false;
             Commit(candidate);
             id = wall.Id;
             return true;
+        }
+
+        /// <summary>Validate the whole path on an isolated session; publish one history entry.</summary>
+        public bool TryAddWallPath(System.Collections.Generic.IEnumerable<WallModel> walls,
+            out string id, out string error)
+        {
+            id=null;error=null;
+            var list=walls == null ? null : walls.ToList();
+            if(list==null || list.Count==0 || list.Count>256){error="墙路径应包含 1～256 段。";return false;}
+            var trial=new BuildingModelEditSession(Clone(Model));
+            foreach(var wall in list) if(!trial.TryAddWall(wall,out id,out error)){id=null;return false;}
+            Commit(trial.Model);return true;
         }
 
         public bool TryAddOpening(OpeningModel source, out string id, out string error)
@@ -474,7 +500,7 @@ namespace BatchPdfPublisher.BuildingModel
                             {
                                 Id = "W-" + Guid.NewGuid().ToString("N"), StoreyId = host.StoreyId,
                                 X1 = endpoint.X, Y1 = endpoint.Y, X2 = host.X2, Y2 = host.Y2,
-                                Thickness = host.Thickness, Height = host.Height,
+                                Thickness = host.Thickness, Height = host.Height, Purpose = host.Purpose, BaseOffset = host.BaseOffset,
                                 Material = host.Material, AxisPlacement = host.AxisPlacement,
                                 AxisOffset = host.AxisOffset
                             };
@@ -612,6 +638,7 @@ namespace BatchPdfPublisher.BuildingModel
                 {
                     Id = "W-" + Guid.NewGuid().ToString("N"), StoreyId = source.StoreyId,
                     Thickness = source.Thickness, Height = source.Height, Material = source.Material,
+                    Purpose = source.Purpose, BaseOffset = source.BaseOffset,
                     AxisPlacement = source.AxisPlacement, AxisOffset = source.AxisOffset, Bulge = source.Bulge
                 };
                 candidate.Walls.Add(target);
@@ -650,18 +677,19 @@ namespace BatchPdfPublisher.BuildingModel
             => TrySetWallGeometryCore(id, length, thickness, height, placement, null, out error);
 
         public bool TrySetWallGeometryBySides(string id, double length, double left, double right,
-            double height, out string error)
+            double height, out string error, double? baseOffset = null)
         {
             if (!Finite(left) || !Finite(right) || left < 0d || right < 0d || left + right <= 0d)
             { error = "轴线左右两侧墙厚必须是非负有限数值，且总墙厚大于 0。"; return false; }
             return TrySetWallGeometryCore(id, length, left + right, height,
-                WallAxisPlacement.Center, (left - right) / 2d, out error);
+                WallAxisPlacement.Center, (left - right) / 2d, out error, baseOffset);
         }
 
         private bool TrySetWallGeometryCore(string id, double length, double thickness, double height,
-            WallAxisPlacement placement, double? axisOffset, out string error)
+            WallAxisPlacement placement, double? axisOffset, out string error, double? baseOffset = null)
         {
             error = null;
+            if(baseOffset.HasValue && !Finite(baseOffset.Value)) { error="墙底偏移必须为有效数字。";return false; }
             if (!Enum.IsDefined(typeof(WallAxisPlacement), placement))
             { error = "墙定位轴线只能位于墙中、左面或右面。"; return false; }
             if (!Finite(length) || length < 10d)
@@ -684,6 +712,7 @@ namespace BatchPdfPublisher.BuildingModel
             wall.Y2 = wall.Y1 + dy / previousLength * length;
             wall.Thickness = thickness;
             wall.Height = height;
+            if(baseOffset.HasValue)wall.BaseOffset=baseOffset.Value;
             wall.AxisPlacement = placement;
             wall.AxisOffset = axisOffset;
             error = ValidateWallAndOpenings(candidate, wall);

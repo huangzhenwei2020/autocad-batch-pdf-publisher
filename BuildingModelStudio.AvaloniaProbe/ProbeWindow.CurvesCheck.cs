@@ -54,9 +54,11 @@ internal sealed partial class ProbeWindow
         CancelActiveCommand();Require(_session.Undo(),"楼板圆角不能撤销。");await RefreshModelAsync("已撤销楼板圆角");
         Require(_session.Model.Slabs[0].Outline.Count(p=>p.Bulge!=0)==1,"圆角撤销范围错误。");
         _planCanvas.SetModel(_session.Model,"1F");SetPlanTool(PlanTool.ArcWall);
+        // In a narrow viewport, nearby slab corners otherwise fall inside the 10 px snap radius.
+        if(Width<1000)_planCanvas.ZoomAt(new Point(_planCanvas.Bounds.Width/2,_planCanvas.Bounds.Height/2),4);
         Click(new(3500,0));Click(new(5500,0));Hover(new(4500,1000));await Snapshot("arc-draft.png");Click(new(4500,1000));
         if(_curveApplyTask!=null)await _curveApplyTask;
-        Require(_session.Model.Walls.Count(w=>w.Bulge!=0)==2,"三点画弧墙没有提交。");
+        Require(_session.Model.Walls.Count(w=>w.Bulge!=0)==2,"三点画弧墙没有提交："+_status.Text);
         var newArc=_session.Model.Walls.Last();var newCurve=CurveGeometry.ForWall(newArc);
         Require(Math.Abs(newCurve.Radius-1000)<.01,"三点弧墙参数错误。");
         SetPlanTool(PlanTool.Select);SelectById(newArc.Id);_planCanvas.FrameSelection();await Snapshot("arc-wall.png");

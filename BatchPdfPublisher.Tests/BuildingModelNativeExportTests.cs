@@ -26,6 +26,8 @@ internal static class BuildingModelNativeExportTests
             }
             BuildingModelSceneExportTests.Run();
             FbxPlanarFacesTests.Run();
+            FbxPrecisionCleanupTests.Run();
+            FbxDisplayLayerTests.Run();
             await CheckCommitRecoveryAsync();
             if (args.Length == 0) return 0;
             var executable = Path.GetFullPath(args[0]);
@@ -131,13 +133,15 @@ internal static class BuildingModelNativeExportTests
                 var snapshotJson = BuildingModelJson.ToJson(snapshot);
                 File.WriteAllText(Path.Combine(folder, "private-fixture.scene.json"),
                     JsonSerializer.Serialize(BuildingExportSceneBuilder.Build(snapshot)));
-                foreach (var format in api == null ? new[] { ModelExportFormat.Fbx }
+                foreach (var format in api == null || args.Contains("--fbx-fixture-only") ? new[] { ModelExportFormat.Fbx }
                     : new[] { ModelExportFormat.Fbx, ModelExportFormat.Skp })
                 {
                     result = await ModelExportService.ExportAsync(snapshot,
                         Path.Combine(folder, "private-fixture." + (format == ModelExportFormat.Fbx ? "fbx" : "skp")),
                         format, null, true, api, progress, CancellationToken.None, executable);
                     VerifyManifest(result, snapshotJson, snapshot);
+                    if(format==ModelExportFormat.Fbx&&args.Contains("--expect-fbx-cleanup"))
+                        Check(result.Warnings.Any(w=>w.StartsWith("FBX 微小面已自动清理：",StringComparison.Ordinal)),"Cleanup warnings missing from result/sidecar.");
                     Check(result.Elements == BuildingExportSceneBuilder.Build(snapshot).Instances.Count,
                         "Private fixture lost elements during native export.");
                 }
@@ -220,8 +224,14 @@ internal static class BuildingModelNativeExportTests
             && meta.RootElement.GetProperty("SerializedTriangleEquivalent").GetInt32() == result.Triangles,
             "Displayed/serialized topology statistics differ.");
         if (Path.GetExtension(result.Path).Equals(".fbx", StringComparison.OrdinalIgnoreCase))
+        {
             Check(meta.RootElement.GetProperty("PlanarPartition").GetString() == "ConvexWithCornerCuts",
                 "FBX did not report the corner-preserving partition policy.");
+            Check(meta.RootElement.GetProperty("DisplayLayerCount").GetInt32() == result.Storeys
+                && meta.RootElement.GetProperty("DisplayLayers").GetArrayLength() == result.Storeys
+                && meta.RootElement.GetProperty("ObjectNames").GetArrayLength() == result.Elements,
+                "FBX floor layers or readable-name mapping missing.");
+        }
         Check(BuildingModelJson.ToJson(source) == original, "Export changed source model.");
     }
 }

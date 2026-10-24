@@ -15,17 +15,6 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
 {
     internal static class TianzhengBuildingProbeService
     {
-        // Candidates, not a semantic map. Preserve failed/empty reads individually.
-        private static readonly string[] Properties =
-        {
-            "ObjectName", "Name", "Style", "Type", "Code", "Number", "Scale",
-            "LeftWidth", "RightWidth", "Width", "Thickness", "Height", "WallHeight",
-            "FloorHeight", "StoreyHeight", "Elevation", "BaseElevation", "BottomElevation",
-            "Sill", "SillHeight", "WindowSillHeight", "Location", "Position", "InsertionPoint",
-            "StartPoint", "EndPoint", "Rotation", "Direction", "OpeningDirection",
-            "IsMirrored", "Mirror", "HostWall", "HostWallId", "WallHandle"
-        };
-
         public static void Execute(Document document, bool registration = false)
         {
             if (document == null) return;
@@ -33,6 +22,7 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
             {
                 if (registration)
                 {
+                    if(CadModelWorkspaceService.Activate(document))return;
                     var project = new BatchPdfPublisher.Services.PublishPlanStore().GetActiveProject();
                     string path;
                     try { path=StudioLaunch.ActiveModelPath(project?.ProjectFolder, project?.Name,document.Database.FingerprintGuid.ToString()); }
@@ -60,11 +50,11 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
                         (owner,modelPath)=>CadModelProjectService.EditStoreys(document,owner,modelPath),
                         owner=>CadModelManagementService.Show(document,owner),
                         CadModelManagementService.WorkspaceHost(document));
-                    Application.ShowModalWindow(window);
+                    CadModelWorkspaceService.Show(document,window);
                     return;
                 }
                 var selection = document.Editor.GetSelection(new PromptSelectionOptions
-                    { MessageForAdding = "\n选择要核验的天正墙、门、窗（最多 100 个；只读，不修改图纸）：" });
+                    { MessageForAdding = "\n选择要核验的天正构件或 CAD 对照线（最多 100 个；只读）：" });
                 if (selection.Status != PromptStatus.OK) return;
                 var report = ReadSelection(document, selection, false);
                 Application.ShowModalWindow(new TianzhengBuildingProbeWindow(report));
@@ -75,7 +65,7 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
         private static bool PickFloorDatum(Document document, System.Windows.Window owner, CadFloorRegistrationContext floor)
         {
             var editor = document.Editor;
-            using (editor.StartUserInteraction(owner))
+            using (CadModelWorkspaceService.BeginInteraction(document,owner))
             {
                 var ucs = editor.CurrentUserCoordinateSystem;
                 if (!ucs.CoordinateSystem3d.Zaxis.IsParallelTo(Vector3d.ZAxis))
@@ -92,7 +82,7 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
         private static CadFloorPlanCapture CaptureFloor(Document document, System.Windows.Window owner, CadFloorRegistrationContext floor)
         {
             var editor = document.Editor; CadBuildingProbeDocument report;
-            using (editor.StartUserInteraction(owner))
+            using (CadModelWorkspaceService.BeginInteraction(document,owner))
             {
                 var ucs = editor.CurrentUserCoordinateSystem;
                 if (!ucs.CoordinateSystem3d.Zaxis.IsParallelTo(Vector3d.ZAxis))
@@ -135,7 +125,7 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
             var ids = selection.Value.GetObjectIds().Distinct().ToArray();
             if (ids.Length > (registration ? 5000 : 100)) throw new InvalidOperationException("对象数量超过上限，请缩小框选范围。");
             var report = new CadBuildingProbeDocument { CapturedAt = DateTimeOffset.Now.ToString("O"), DrawingPath = document.Name,
-                DrawingFingerprint = document.Database.FingerprintGuid.ToString(), CadVersion = SystemVariable("ACADVER"),
+                DrawingFingerprint = document.Database.FingerprintGuid.ToString(), CadVersion = SystemVariable("ACADVER"), DrawingUnits = SystemVariable("INSUNITS"),
                 DbmodBefore = Dbmod(), TianzhengEnvironment = EnvironmentDescription() };
             using (var transaction = document.Database.TransactionManager.StartOpenCloseTransaction())
             {
@@ -384,8 +374,10 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
         private static void ReadEntity(Entity entity, CadBuildingProbeEntity record, bool registration, Extents3d? knownBounds = null)
         {
             record.DxfName = entity.GetRXClass() == null ? "" : entity.GetRXClass().DxfName;
+            record.RxClassName = entity.GetRXClass()?.Name;
             record.ManagedType = entity.GetType().FullName;
             record.Layer = entity.Layer;
+            if (!registration) CadBuildingDiagnosticGeometry.Read(entity, record);
             if(CadStructuralRegistration.IsStructure(record.DxfName))
             {
                 // Use read-only display geometry; do not probe unverified Tianzheng COM getters.
@@ -398,15 +390,14 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
             var curtain=string.Equals(record.DxfName,"TCH_CURTAIN_WALL",StringComparison.OrdinalIgnoreCase);
             object com = null;
             string comError = null;
-            try { if(!curtain)com = entity.AcadObject; }
+            var safeProperties = CadBuildingProbeRules.VerifiedProperties(record.DxfName);
+            if (safeProperties.Length == 0 && !curtain)
+                record.Note = "此类型尚无已核验属性白名单；未调用 COM 属性。";
+            try { if(safeProperties.Length > 0)com = entity.AcadObject; }
             catch (Exception exception) { comError = exception.GetType().Name + ": " + exception.Message; }
-            // Production registration only reads the three opening getters already
-            // verified in CAD 2022/T20 V9. Never enumerate native getters: even some
-            // publicly advertised getters can raise native access violations.
-            var safeProperties = string.Equals(record.DxfName, "TCH_WALL", StringComparison.OrdinalIgnoreCase)
-                ? new[] { "ObjectName", "LeftWidth", "RightWidth", "Height", "Elevation" }
-                : new[] { "ObjectName", "Width", "Height" };
-            foreach (var name in curtain ? new string[0] : registration ? safeProperties : Properties)
+            // Registration and diagnostics share the verified whitelist. Even
+            // publicly declared getters can raise native access violations.
+            foreach (var name in safeProperties)
             {
                 object value;
                 string error;
@@ -420,10 +411,10 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
                 var bounds = knownBounds ?? entity.GeometricExtents;
                 record.BoundsMin = Point(bounds.MinPoint); record.BoundsMax = Point(bounds.MaxPoint);
             }
-            catch { record.Note = "无法读取包围范围；不使用包围框推断定位线。"; }
+            catch { record.Note = (record.Note ?? "") + "无法读取包围范围；不使用包围框推断定位线。"; }
             var curve = entity as Curve;
             record.CurveStatus = "未提供曲线接口；定位线待适配，不用包围框代替";
-            ReadNativeWallCurve(curve,record);
+            if (CadBuildingProbeRules.IsWall(record.DxfName)) ReadNativeWallCurve(curve,record);
             CadBuildingProbeRules.DeriveWall(record);
             if(curtain) { ReadOpeningLabel(entity,record);CadBuildingProbeRules.DeriveCurtainWall(record,1); }
         }

@@ -22,6 +22,46 @@ internal static class CadFloorModelGenerationTests
         Check(Geometry(result)==before&&result.CadImport.RequestId=="warning-only"&&result.CadImport.StructureMessages.Count>0,
             "Recognition or update failure must retain the model and return a nonblocking warning.");
     }
+    private static void CheckGenerationProgress(string path,CadFloorPlanRegistry registry,CadModelGenerationRequest request)
+    {
+        Check(CadModelGenerationRequest.LoadProgress(path,"wrong-job")==null,"Progress leaked across jobs.");
+        Check(CadModelGenerationRequest.LoadProgress(path,request.Id).State=="waiting","Queued progress must be indeterminate waiting.");
+        try{CadModelGenerationRequest.Queue(registry);throw new Exception("Duplicate job replaced pending request.");}catch(IOException){}
+        Check(CadModelGenerationRequest.Load(path).Id==request.Id,"Duplicate queue changed request identity.");
+        CadModelGenerationRequest.ReportProgress(path,new CadGenerationProgress {RequestId=request.Id,Stage="floor",Completed=1,Total=2});
+        Check(CadModelGenerationRequest.LoadProgress(path,request.Id).Completed==1,"Progress did not round-trip.");
+        var source=BuildingModelJson.LoadModel(path);var original=BuildingModelJson.ToJson(source);
+        var session=new BuildingModelEditSession(source);var steps=new List<CadGenerationProgress>();
+        session.ImportCadFloorsAsync(registry,request.Id,steps.Add).GetAwaiter().GetResult();
+        Check(steps.Any(p=>p.Total==registry.Floors.Count&&p.Completed==p.Total)
+            &&steps.All(p=>p.Total<=0||p.Completed>=0&&p.Completed<=p.Total),"Floor progress has no truthful denominator.");
+        Check(session.Model.CadImport.RequestId==request.Id&&session.Undo()&&BuildingModelJson.ToJson(session.Model)==original,
+            "Async generation must commit in one undoable edit.");
+        Check(BuildingModelJson.ToJson(source)==original,"Async generation mutated its input snapshot.");
+        var conflict=new BuildingModelEditSession(BuildingModelJson.FromJson(original));
+        using(var entered=new System.Threading.ManualResetEventSlim())
+        using(var release=new System.Threading.ManualResetEventSlim())
+        {
+            var task=conflict.ImportCadFloorsAsync(registry,"conflict",p=>{entered.Set();if(!release.Wait(5000))throw new TimeoutException();});
+            try
+            {
+                Check(entered.Wait(5000),"Async generation did not start.");
+                Check(conflict.TryReplaceDrawingViews(new List<ViewDefinitionModel>(),out var error),error);
+            }
+            finally{release.Set();}
+            try{task.GetAwaiter().GetResult();throw new Exception("Async generation overwrote intervening edit.");}catch(InvalidOperationException){}
+        }
+        Check(conflict.Model.CadImport?.RequestId!="conflict","Revision conflict committed generated data.");
+        var blockedPath=Path.Combine(Path.GetDirectoryName(path),"progress-unavailable","model.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(blockedPath));BuildingModelJson.SaveModel(blockedPath,source);
+        Directory.CreateDirectory(CadModelGenerationRequest.ProgressPath(blockedPath));
+        var blockedRegistry=registry.Clone();blockedRegistry.ModelPath=blockedPath;
+        var blockedRequest=CadModelGenerationRequest.Queue(blockedRegistry);
+        CadModelGenerationRequest.Acknowledge(blockedPath,blockedRequest.Id,null);
+        Check(CadModelGenerationRequest.LoadResult(blockedPath).Succeeded&&!File.Exists(CadModelGenerationRequest.FilePath(blockedPath)),
+            "Unavailable optional progress sidecar prevented the authoritative result.");
+        Console.WriteLine("CAD_GENERATION_PROGRESS_CORE_OK requestIsolation duplicateQueue floorCounts backgroundSnapshot oneUndo revisionConflict");
+    }
     public static void Run()
     {
         var folder=Path.GetFullPath(".artifacts/cad-floor-workflow-20261001/generation-"+Guid.NewGuid().ToString("N")); Directory.CreateDirectory(folder);
@@ -275,11 +315,18 @@ internal static class CadFloorModelGenerationTests
         item.Kind="待确认"; item.Sill=null;
         var request=CadModelGenerationRequest.Queue(registry);
         Check(CadModelGenerationRequest.Load(path).Id==request.Id,"Generation request must round-trip geometry and source identity.");
+        CheckGenerationProgress(path,registry,request);
         CadModelGenerationRequest.Acknowledge(path,"an-older-request",null);
         Check(CadModelGenerationRequest.Load(path).Id==request.Id,"Acknowledging an older request must preserve the newer job.");
         CadModelGenerationRequest.Acknowledge(path,request.Id,"validation error");
+        Check(CadModelGenerationRequest.LoadProgress(path,request.Id).State=="failed"
+            &&CadModelGenerationRequest.LoadProgress(path,request.Id).Completed==0,"Failed generation must not show complete progress.");
+        CadModelGenerationRequest.ReportProgress(path,new CadGenerationProgress {RequestId=request.Id,Stage="late heartbeat"});
+        Check(CadModelGenerationRequest.LoadProgress(path,request.Id).State=="failed","Late heartbeat replaced terminal state.");
         Check(!File.Exists(CadModelGenerationRequest.FilePath(path)) && !CadModelGenerationRequest.LoadResult(path).Succeeded,"Completed/rejected jobs must not replay after undo and reopen.");
-        CadModelGenerationRequest.Queue(registry);
+        var nextRequest=CadModelGenerationRequest.Queue(registry);
+        CadModelGenerationRequest.ReportProgress(path,new CadGenerationProgress {RequestId=request.Id,Stage="old heartbeat"});
+        Check(CadModelGenerationRequest.LoadProgress(path,nextRequest.Id).State=="waiting","Old heartbeat overwrote the next job.");
         BuildingModelJson.SaveModel(path,generated);
         Check(BuildingModelJson.LoadModel(path).CadImport.RequestId=="first","Import baseline and request id must persist.");
         StudioLaunch.RegisterSession(path); Check(StudioLaunch.HasLiveSession(path),"Live editor marker must match a live process.");

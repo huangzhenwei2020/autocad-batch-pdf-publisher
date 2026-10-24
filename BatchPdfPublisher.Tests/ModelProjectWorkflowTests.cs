@@ -25,6 +25,7 @@ internal static class ModelProjectWorkflowTests
         var path=BuildingModelJson.ModelFilePath(folder,model.Name);BuildingModelProjectWorkflow.CreateNew(path,model);var bytes=File.ReadAllBytes(path);
         try {BuildingModelProjectWorkflow.CreateNew(path,model);throw new Exception("Duplicate replaced existing model.");}catch(IOException) { }
         Check(File.ReadAllBytes(path).SequenceEqual(bytes),"Duplicate create changes file.");
+        CheckReplacement(folder);
         try {BuildingModelProjectWorkflow.Empty("..");throw new Exception("Unsafe model name accepted.");}catch(ArgumentException) { }
         StudioLaunch.RememberActiveModel(folder,path);Check(StudioLaunch.ActiveModelPath(folder,"other")==path,"CAD and Studio do not use the same active path.");
         var floors=StoreyElevationLayout.Resolve(StandardStoreyLayout.ExpandRanges(new[] {
@@ -63,6 +64,32 @@ internal static class ModelProjectWorkflowTests
         root.UpdateLayout();Render(root,Path.Combine(folder,"cad-registration.png"),1000,610);registration.Close();
         Console.WriteLine("MODEL_PROJECT_WORKFLOW_OK empty duplicate names activePath range basement roof machineRoom liveMerge undo conflict cancellation cadUi "+folder);
         CadModelWorkspaceTests.Run();
+    }
+    private static void CheckReplacement(string folder)
+    {
+        var model=BuildingModelProjectWorkflow.Empty("替换测试");
+        var path=BuildingModelJson.ModelFilePath(folder,model.Name);
+        BuildingModelProjectWorkflow.CreateNew(path,model);
+        var registry=path+".cad-floors.json";File.WriteAllText(registry,"old-registration");
+        var views=Path.Combine(Path.GetDirectoryName(path),"views");Directory.CreateDirectory(views);File.WriteAllText(Path.Combine(views,"old.dxf"),"old-drawing");
+        var before=File.ReadAllBytes(path);var expected=BuildingModelProjectWorkflow.ModelFileHash(path);
+        var next=BuildingModelProjectWorkflow.Empty(model.Name);next.Storeys[0].Height=5900;
+        try{BuildingModelProjectWorkflow.ReplaceExisting(path,next,"stale");throw new Exception("stale replacement accepted");}catch(IOException){}
+        Check(File.ReadAllBytes(path).SequenceEqual(before),"stale replacement changed model");
+        StudioLaunch.RegisterSession(path);
+        try
+        {
+            try{BuildingModelProjectWorkflow.ReplaceExisting(path,next,expected);throw new Exception("live model replaced");}catch(IOException){}
+            Check(File.ReadAllBytes(path).SequenceEqual(before)&&File.ReadAllText(registry)=="old-registration","live model guard changes files");
+        }
+        finally{StudioLaunch.RemoveSession(path);}
+        var backup=BuildingModelProjectWorkflow.ReplaceExisting(path,next,expected);
+        Check(BuildingModelJson.LoadModel(path).Storeys[0].Height==5900&&!File.Exists(registry)&&!Directory.Exists(views),"replacement inherits stale registration or drawings");
+        Check(File.ReadAllBytes(Path.Combine(backup,"model.json")).SequenceEqual(before)
+            &&File.ReadAllText(Path.Combine(backup,"model.json.cad-floors.json"))=="old-registration"
+            &&File.ReadAllText(Path.Combine(backup,"views","old.dxf"))=="old-drawing","replacement backup incomplete");
+        Check(BuildingModelCatalog.List(folder).Count(e=>e.Name==model.Name)==1,"backup appears as another active model");
+        Console.WriteLine("MODEL_REPLACEMENT_OK explicitSnapshot liveGuard staleGuard fullBackup cleanRegistration cleanViews hiddenBackup");
     }
     private static void Render(FrameworkElement content,string path,double width,double height)
     {

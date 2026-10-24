@@ -59,6 +59,7 @@ namespace BatchPdfPublisher.BuildingModel
         public string StartLabel { get; set; }
         public string EndLabel { get; set; }
         public bool IsBuildingAxis { get; set; }
+        public bool IsWorkingPlane { get; set; }
         public bool IsWallJoint { get; set; }
     }
 

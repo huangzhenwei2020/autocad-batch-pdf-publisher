@@ -450,6 +450,8 @@ namespace BatchPdfPublisher.BuildingModel
         public static string ValidateWall(WallModel wall)
         {
             if (wall == null) return "墙为空。";
+            if (!CurveGeometry.Finite(wall.BaseOffset) || !Enum.IsDefined(typeof(WallPurpose),wall.Purpose)) return "墙底偏移或墙体用途无效。";
+            if (wall.Purpose==WallPurpose.Parapet && (!CurveGeometry.Finite(wall.Height)||wall.Height<10)) return "女儿墙须设置至少 10 mm 的独立高度。";
             if (!CurveGeometry.Finite(wall.Bulge)) return "墙圆弧参数无效。";
             if (Math.Abs(wall.Bulge)>1e-10)
             {

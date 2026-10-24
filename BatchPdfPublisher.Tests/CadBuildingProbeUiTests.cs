@@ -27,6 +27,12 @@ internal static class CadBuildingProbeUiTests
                 entity.Fields.Add(CadBuildingProbeRules.Field("RightWidth", true, 100d, null));
                 entity.Fields.Add(CadBuildingProbeRules.Field("Height", false, null, "MissingMemberException: 对象未提供该属性"));
                 CadBuildingProbeRules.DeriveWall(entity); report.Entities.Add(entity);
+                entity.GeometryPaths.Add(new CadProbeGeometryPath { Kind = "Polyline", Closed = true,
+                    PreviewPoints = new System.Collections.Generic.List<CadProbePoint> {
+                        new CadProbePoint { X = 1000000, Y = 2000000, Z = 3000 },
+                        new CadProbePoint { X = 1003000, Y = 2000000, Z = 3000 },
+                        new CadProbePoint { X = 1003000, Y = 2001200, Z = 3000 },
+                        new CadProbePoint { X = 1000000, Y = 2001200, Z = 3000 } } });
             }
             foreach (var size in new[] { new Size(1060, 640), new Size(560, 320) })
             {
@@ -38,7 +44,8 @@ internal static class CadBuildingProbeUiTests
                 var footer = root.Children.OfType<Grid>().Last();
                 var list = body.Children.OfType<ListBox>().Single();
                 var right = body.Children.OfType<Grid>().Single();
-                var table = right.Children.OfType<DataGrid>().Single();
+                var tabs = right.Children.OfType<TabControl>().Single();
+                var table = (DataGrid)((TabItem)tabs.Items[0]).Content;
                 if (table.Items.Count != 3 || list.Items.Count != 100) throw new Exception("核验数据没有绑定");
                 if (table.ActualHeight < 100) throw new Exception("小窗口字段表被挤没了");
                 var footerBounds = footer.TransformToAncestor(root).TransformBounds(new Rect(footer.RenderSize));
@@ -54,9 +61,37 @@ internal static class CadBuildingProbeUiTests
                     var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
                     using (var file = File.Create(Path.Combine(args[0], "probe-" + (int)size.Width + ".png"))) encoder.Save(file);
                 }
+                tabs.SelectedIndex = 1; root.UpdateLayout();
+                var geometryPanel = (DockPanel)((TabItem)tabs.Items[1]).Content;
+                var tools = geometryPanel.Children.OfType<WrapPanel>().Single();
+                var reference = tools.Children.OfType<ComboBox>().First();
+                reference.SelectedIndex = 1;
+                if (report.Entities[99].ReferenceKind != "阳台" || report.Entities[0].ReferenceKind != null)
+                    throw new Exception("对照类别串到其他对象");
+                var preview = geometryPanel.Children.OfType<FrameworkElement>().Last();
+                if (preview.ActualWidth < 50 || preview.ActualHeight < 50) throw new Exception("小窗口原始几何预览不可见");
+                var image = new RenderTargetBitmap((int)preview.ActualWidth, (int)preview.ActualHeight, 96, 96, PixelFormats.Pbgra32);
+                var drawing = new DrawingVisual();
+                using (var dc = drawing.RenderOpen()) dc.DrawRectangle(new VisualBrush(preview), null, new Rect(preview.RenderSize));
+                image.Render(drawing);
+                var pixels = new byte[image.PixelWidth * image.PixelHeight * 4]; image.CopyPixels(pixels, image.PixelWidth * 4, 0);
+                var foreground = 0;
+                for (var p = 0; p < pixels.Length; p += 4)
+                    if (pixels[p] > 150 && pixels[p + 1] > 150 && pixels[p + 2] > 90) foreground++;
+                if (args.Length > 0)
+                {
+                    var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(image));
+                    using (var file = File.Create(Path.Combine(args[0], "probe-geometry-" + (int)size.Width + ".png"))) encoder.Save(file);
+                }
+                if (foreground < 50) throw new Exception("实际几何预览空白 " + preview.ActualWidth + "x" + preview.ActualHeight + " pixels=" + foreground);
+                reference.SelectedIndex = 0;
                 window.Close();
                 Console.WriteLine("PASS 核验窗口 " + size.Width + "×" + size.Height + "：100对象、字段切换、表格可见、按钮在边界内");
             }
+            var legacy = new CadBuildingProbeDocument { Entities = new System.Collections.Generic.List<CadBuildingProbeEntity> {
+                new CadBuildingProbeEntity { Handle = "legacy", GeometryPaths = null, Fields = new System.Collections.Generic.List<CadProbeField>() } } };
+            var legacyWindow = new TianzhengBuildingProbeWindow(legacy); legacyWindow.Close();
+            Console.WriteLine("PASS 旧核验记录缺少几何仍可打开");
             return 0;
         }
         catch (Exception exception) { Console.Error.WriteLine(exception); return 1; }

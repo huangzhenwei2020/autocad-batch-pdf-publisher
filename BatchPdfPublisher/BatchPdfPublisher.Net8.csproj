@@ -41,6 +41,7 @@
     <Compile Include="..\Shared\BuildingModel\StudioLaunch.cs" Link="Features\BuildingModel\Shared\StudioLaunch.cs" />
     <Compile Include="..\Shared\BuildingModel\CadFloorPlanRegistry.cs" Link="Features\BuildingModel\Shared\CadFloorPlanRegistry.cs" />
     <Compile Include="..\Shared\BuildingModel\CadFloorModelGeneration.cs" Link="Features\BuildingModel\Shared\CadFloorModelGeneration.cs" />
+    <Compile Include="..\Shared\BuildingModel\CadGenerationProgress.cs" Link="Features\BuildingModel\Shared\CadGenerationProgress.cs" />
     <Compile Include="..\Shared\BuildingModel\BuildingModelCatalog.cs" />
     <EmbeddedResource Include="..\BuildingModelStudio.AvaloniaProbe\Resources\Icons\file-plus.png;..\BuildingModelStudio.AvaloniaProbe\Resources\Icons\folder-open.png;..\BuildingModelStudio.AvaloniaProbe\Resources\Icons\save.png;..\BuildingModelStudio.AvaloniaProbe\Resources\Icons\copy.png;..\BuildingModelStudio.AvaloniaProbe\Resources\Icons\rotate-ccw.png">
       <LogicalName>WanLuo.ModelManager.%(Filename)%(Extension)</LogicalName>

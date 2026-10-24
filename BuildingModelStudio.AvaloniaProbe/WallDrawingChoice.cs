@@ -3,17 +3,21 @@ using BatchPdfPublisher.BuildingModel;
 namespace BuildingModelStudio.AvaloniaProbe;
 
 internal sealed record WallDrawingChoice(bool Curved=false,double Thickness=200,double Height=0,
-    WallAxisPlacement AxisPlacement=WallAxisPlacement.Center,double? AxisOffset=null,string Material="")
+    WallAxisPlacement AxisPlacement=WallAxisPlacement.Center,double? AxisOffset=null,string Material="",
+    WallPurpose Purpose=WallPurpose.Building,double BaseOffset=0)
 {
     internal WallModel CreateWall(string storeyId,PointModel start,PointModel end,double bulge=0)=>new()
     {
         StoreyId=storeyId,X1=start.X,Y1=start.Y,X2=end.X,Y2=end.Y,Bulge=bulge,
-        Thickness=Thickness,Height=Height,AxisPlacement=AxisPlacement,AxisOffset=AxisOffset,Material=Material.Trim()
+        Thickness=Thickness,Height=Height,AxisPlacement=AxisPlacement,AxisOffset=AxisOffset,Material=Material.Trim(),
+        Purpose=Purpose,BaseOffset=BaseOffset
     };
 
     internal string? Validate()
     {
         if(!double.IsFinite(Thickness)||Thickness<10||Thickness>10000)return "墙厚应为 10～10000 mm。";
+        if(!double.IsFinite(BaseOffset)||Math.Abs(BaseOffset)>100000)return "墙底偏移应为 -100000～100000 mm。";
+        if(Purpose==WallPurpose.Parapet&&Height<10)return "女儿墙需要独立设置高度，至少 10 mm。";
         if(!double.IsFinite(Height)||Height<0||Height>100000)return "墙高应为 0～100000 mm；0 表示随楼层。";
         if(AxisOffset.HasValue&&(!double.IsFinite(AxisOffset.Value)||Math.Abs(AxisOffset.Value)>10000))
             return "定位偏移应为 -10000～10000 mm。";

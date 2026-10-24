@@ -18,11 +18,36 @@ namespace BatchPdfPublisher.BuildingModel
             return inside;
         }
         private const double Tolerance = 1e-6d;
+        /// <summary>Positive-area overlap only; touching slab edges are allowed. Voids are respected.</summary>
+        public static bool InteriorOverlaps(SlabModel a, SlabModel b)
+        {
+            var first=Build(a);var second=Build(b);
+            var firstRing=first.Contours[0];var secondRing=second.Contours[0];
+            if(firstRing.Max(p=>p.X)<=secondRing.Min(p=>p.X)+Tolerance||secondRing.Max(p=>p.X)<=firstRing.Min(p=>p.X)+Tolerance
+                ||firstRing.Max(p=>p.Y)<=secondRing.Min(p=>p.Y)+Tolerance||secondRing.Max(p=>p.Y)<=firstRing.Min(p=>p.Y)+Tolerance)return false;
+            foreach(var x in first.Triangles) foreach(var y in second.Triangles)
+            {
+                var separated=false;
+                foreach(var triangle in new[] {x,y}) for(var i=0;i<3;i++)
+                {
+                    var p=triangle[i];var q=triangle[(i+1)%3];var nx=-(q.Y-p.Y);var ny=q.X-p.X;
+                    var length=Math.Sqrt(nx*nx+ny*ny);nx/=length;ny/=length;
+                    var xMin=double.PositiveInfinity;var xMax=double.NegativeInfinity;
+                    var yMin=double.PositiveInfinity;var yMax=double.NegativeInfinity;
+                    foreach(var v in x){var n=v.X*nx+v.Y*ny;xMin=Math.Min(xMin,n);xMax=Math.Max(xMax,n);}
+                    foreach(var v in y){var n=v.X*nx+v.Y*ny;yMin=Math.Min(yMin,n);yMax=Math.Max(yMax,n);}
+                    if(Math.Min(xMax,yMax)-Math.Max(xMin,yMin)<=Tolerance)separated=true;
+                }
+                if(!separated)return true;
+            }
+            return false;
+        }
         public List<List<PointModel>> Contours { get; private set; }
         public List<List<PointModel>> Triangles { get; private set; }
 
         public static string Validate(SlabModel slab)
         {
+            if(slab!=null&&!Enum.IsDefined(typeof(SlabPurpose),slab.Purpose))return "楼板用途无效。";
             if (slab == null || !Finite(slab.Thickness) || slab.Thickness <= 0.5d)
                 return "楼板板厚必须有效，且大于 0.5 mm。";
             try { Build(slab); return null; }

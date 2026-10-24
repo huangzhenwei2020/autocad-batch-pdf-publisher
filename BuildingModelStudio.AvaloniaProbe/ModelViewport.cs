@@ -189,6 +189,7 @@ internal sealed class ModelViewport : OpenGlControlBase
     }
     internal int SelectedElementCount=>_selectedElements.Count;
     internal bool IsElementVisible(string id)=>_baseSnapshot.ElementIndexes.ContainsKey(id);
+    internal bool IsElementHidden(string id)=>_hiddenElements.Contains(id);
     internal int HighlightedElementCount=>_snapshot.Vertices.Where(v=>v.ElementIndex<0).Select(v=>v.ElementIndex).Distinct().Count();
 
     internal void SetDisplayMode(DisplayMode mode)
@@ -355,9 +356,9 @@ internal sealed class ModelViewport : OpenGlControlBase
         var scale = (float)(10d / Math.Max(1d, _volume.Diagonal));
         var planeY = (float)(elevation - center.Z) * scale;
         var dy = far.Y - near.Y;
-        if (Math.Abs(dy) < 1e-6f) return false;
+        if (Math.Abs(dy) < 1e-4f*(far-near).Length()) return false;
         var t = (planeY - near.Y) / dy;
-        if (t <= 0f) return false;
+        if (t <= 0f || t > 1f) return false;
         var hit = near + t * (far - near);
         result = new PointModel(hit.X / scale + center.X, center.Y - hit.Z / scale);
         return double.IsFinite(result.X) && double.IsFinite(result.Y);
@@ -417,7 +418,8 @@ internal sealed class ModelViewport : OpenGlControlBase
             // Wall junction seams are drafting helpers, not mesh edges. They have
             // no component identity and would float above hidden storeys.
             if (line?.Start == null || line.End == null || line.IsWallJoint) continue;
-            var color = line.IsBuildingAxis ? new Vector3(0.3f, 0.85f, 0.75f)
+            var color = line.IsWorkingPlane ? new Vector3(.23f,.36f,.45f)
+                : line.IsBuildingAxis ? new Vector3(0.3f, 0.85f, 0.75f)
                 : line.IsWallJoint ? new Vector3(0.23f, 0.36f, 0.5f)
                 : new Vector3(1f, 0.7f, 0.25f);
             vertices.Add(ToVertex(line.Start, center, scale, color, 0));
@@ -749,7 +751,12 @@ internal sealed class ModelViewport : OpenGlControlBase
     }
 
     private static string? PickNormalized(MeshSnapshot snapshot, Matrix4x4 transform, float x, float y,ISet<string>? frozen=null)
+        =>PickSurfaceNormalized(snapshot,transform,x,y,out _,frozen);
+
+    private static string? PickSurfaceNormalized(MeshSnapshot snapshot,Matrix4x4 transform,float x,float y,
+        out Vector3 hit,ISet<string>? frozen=null,bool ignoreOutdoorPreview=false)
     {
+        hit=default;
         if (snapshot.PickNodes.Length == 0 || !Matrix4x4.Invert(transform, out var inverse)
             || !Unproject(x, y, 0f, inverse, out var origin)
             || !Unproject(x, y, 1f, inverse, out var far)) return null;
@@ -773,6 +780,7 @@ internal sealed class ModelViewport : OpenGlControlBase
             {
                 var triangle = snapshot.Triangles[i];
                 if (string.IsNullOrWhiteSpace(triangle.ElementId) || frozen?.Contains(triangle.ElementId)==true) continue;
+                if(ignoreOutdoorPreview&&triangle.ElementId.StartsWith("outdoor-preview-",StringComparison.Ordinal))continue;
                 if (!IntersectsTriangle(origin, direction, triangle, out var distance)
                     || distance > bestDistance + 1e-5f
                     || (Math.Abs(distance - bestDistance) <= 1e-5f && triangle.DrawIndex >= bestDrawIndex)) continue;
@@ -781,7 +789,24 @@ internal sealed class ModelViewport : OpenGlControlBase
                 bestId = triangle.ElementId;
             }
         }
+        if(bestId!=null)hit=origin+bestDistance*direction;
         return bestId;
+    }
+
+    internal bool IsReferenceElementAvailable(string id)=>IsElementVisible(id)&&!_frozenElements.Contains(id);
+    internal bool IsElementFrozen(string id)=>_frozenElements.Contains(id);
+
+    internal bool IsModelPointVisible(double x,double y,double z,bool ignoreOutdoorPreview=false)
+    {
+        var pixel=ProjectModelPoint(x,y,z);
+        if(pixel==null||pixel.Value.X<0||pixel.Value.Y<0||pixel.Value.X>Bounds.Width||pixel.Value.Y>Bounds.Height)return false;
+        var transform=ViewProjection();var nx=(float)(pixel.Value.X/Bounds.Width*2-1);var ny=(float)(1-pixel.Value.Y/Bounds.Height*2);
+        if(PickSurfaceNormalized(_baseSnapshot,transform,nx,ny,out var hit,ignoreOutdoorPreview:ignoreOutdoorPreview)==null)return true;
+        var center=_volume.Center;var scale=(float)(10d/Math.Max(1,_volume.Diagonal));
+        var point=new Vector3((float)(x-center.X)*scale,(float)(z-center.Z)*scale,(float)(center.Y-y)*scale);
+        var direction=new Vector3(MathF.Cos(_pitch)*MathF.Sin(_yaw),MathF.Sin(_pitch),MathF.Cos(_pitch)*MathF.Cos(_yaw));
+        // World-space depth test tolerates only rendering precision, never another floor behind the surface.
+        return Vector3.Dot(point-hit,-direction)<=Math.Max(2*scale,2e-5f);
     }
 
     internal string? PickAt(Point point) => Pick(point);

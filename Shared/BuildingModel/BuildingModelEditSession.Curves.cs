@@ -16,7 +16,8 @@ namespace BatchPdfPublisher.BuildingModel
             { error = "请选择同一楼层的两面不同直墙。"; return false; }
             if (Math.Abs(a.Bulge) > 1e-10 || Math.Abs(b.Bulge) > 1e-10)
             { error = "墙圆角目前选择两面直墙；弧墙可通过端点及弧度调整。"; return false; }
-            if (Math.Abs(a.Thickness - b.Thickness) > .01 || Math.Abs(candidate.HeightOf(a) - candidate.HeightOf(b)) > .01)
+            if (Math.Abs(a.Thickness - b.Thickness) > .01 || Math.Abs(candidate.HeightOf(a) - candidate.HeightOf(b)) > .01
+                || a.Purpose != b.Purpose || Math.Abs(a.BaseOffset-b.BaseOffset)>.01)
             { error = "圆角两侧墙厚和墙高须一致，请先调整墙体参数。"; return false; }
             var ax = a.X2 - a.X1; var ay = a.Y2 - a.Y1;
             var bx = b.X2 - b.X1; var by = b.Y2 - b.Y1;
@@ -55,7 +56,8 @@ namespace BatchPdfPublisher.BuildingModel
             {
                 var arc = new WallModel { Id = "W-" + Guid.NewGuid().ToString("N"), StoreyId = a.StoreyId,
                     X1 = p.X, Y1 = p.Y, X2 = q.X, Y2 = q.Y, Bulge = bulge,
-                    Thickness = a.Thickness, Height = a.Height, Material = a.Material, AxisOffset = offsetA };
+                    Thickness = a.Thickness, Height = a.Height, Material = a.Material, AxisOffset = offsetA,
+                    Purpose = a.Purpose, BaseOffset = a.BaseOffset };
                 error = PlanEditing.ValidateWall(arc); if (error != null) return false;
                 candidate.Walls.Add(arc); arcId = arc.Id;
                 if(roundRelatedSlabs) foreach(var slab in candidate.Slabs.Where(s=>Same(s.StoreyId,a.StoreyId)))

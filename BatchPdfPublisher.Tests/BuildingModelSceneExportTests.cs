@@ -9,15 +9,39 @@ internal static class BuildingModelSceneExportTests
     public static void Run()
     {
         CheckScopeIdentityAndMaterials();
+        CheckReadableNames();
         CheckStandardFloorReuse();
         CheckReuseRequiresGeometryAndMaterials();
         CheckLargeCoordinates();
         CheckNumericalContourDuplicates();
+        CheckNumericalWallJunctions();
         CheckWallHoleAndIndependentWalls();
         CheckSlabHolesAndConcavity();
         CheckCurvesAndStaticPose();
         CheckRejectionsAndCancellation();
         Console.WriteLine("PASS neutral static scene: scope, identity, reuse, origin, holes, winding, curves and cancellation");
+    }
+
+    private static void CheckReadableNames()
+    {
+        var model = SampleModelFactory.CreateTwoStoreyHouse();
+        model.Beams.Add(new BeamModel { Id = "CAD-beam-123", StoreyId = "1F", X2 = 5000 });
+        model.Stairs.Add(new StairModel { Id = "CAD-stair-123", StoreyId = "1F", X = 10000 });
+        model.Roofs.Add(new RoofModel { Id = "CAD-roof-123", StoreyId = "2F" });
+        model.Slabs[0].Purpose = SlabPurpose.Balcony;
+        model.Walls[0].Purpose = WallPurpose.Parapet;
+        model.Columns[0].Code = "Z-用户编号";
+        model.Openings[0].Code = "CAD-generated-opening-id";
+        var before = BuildingModelJson.ToJson(model);
+        var scene = BuildingExportSceneBuilder.Build(model);
+        string Name(string id) => scene.Instances.Single(i => i.SourceId == id).Name;
+        Assert(Name(model.Beams[0].Id) == "梁 L-01" && Name(model.Stairs[0].Id) == "楼梯 T-01"
+            && Name(model.Roofs[0].Id) == "屋面 R-01", "Beam/stair/roof names use IDs rather than short labels.");
+        Assert(Name(model.Slabs[0].Id).StartsWith("阳台 B-") && Name(model.Walls[0].Id).StartsWith("女儿墙 W-"),
+            "Outdoor component names lost semantic type.");
+        Assert(Name(model.Columns[0].Id) == "柱 Z-用户编号" && Name(model.Openings[0].Id).StartsWith("窗 MC-"),
+            "Readable codes or automatic opening fallback changed.");
+        Assert(before == BuildingModelJson.ToJson(model), "Readable names modified project codes/IDs.");
     }
 
     private static void CheckScopeIdentityAndMaterials()
@@ -45,6 +69,9 @@ internal static class BuildingModelSceneExportTests
             "Export did not generate a display wall code on its private clone.");
         Assert(scene.Instances.First(instance => instance.Id == model.Openings[0].Id).Name == model.Openings[0].Code,
             "Opening display name was lost.");
+        Assert(scene.Instances.First(instance => instance.Id == model.Columns[0].Id).Name.StartsWith("柱 Z-")
+            && scene.Instances.Where(instance => model.Slabs.Any(s => s.Id == instance.Id)).All(instance => instance.Name.StartsWith("楼板 B-")),
+            "Uncoded columns/slabs still display internal IDs.");
         Assert(!scene.Instances.Any(instance => model.Axes.Any(axis => axis.Id == instance.Id)), "Guides became geometry.");
         var single = BuildingExportSceneBuilder.Build(model, "2f");
         CheckGeometry(single, BuildingVolumeBuilder.Build(model, "2F"));
@@ -184,6 +211,71 @@ internal static class BuildingModelSceneExportTests
             Close(triangles.SelectMany(t => t).Max(p => p[0]), width, 0.000002,
                 "Cleanup changed a real submillimetre dimension.");
         }
+    }
+
+    private static void CheckNumericalWallJunctions()
+    {
+        var weld = typeof(BuildingExportSceneBuilder).GetMethod("WeldNumericalWallVertices",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+        var triangulate = typeof(BuildingExportSceneBuilder).GetMethod("Triangulate",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+        VolumeFace Cap(string kind, params (double X, double Y)[] points) => new VolumeFace
+        {
+            Kind = kind, NormalZ = 1,
+            Points = points.Select(p => new Point3DModel(p.X, p.Y, 0)).ToList()
+        };
+        // Independent overlapping contours form a return at the junction. Nearly
+        // equal endpoints in different contours must be shared BEFORE union.
+        foreach (var reverse in new[] { false, true })
+        foreach (var noise in new[] { 0.000005, 0.000025, 0.00008 })
+        {
+            var faces = new List<VolumeFace>
+            {
+                Cap("wall", (0, 0), (4000, 0), (4000, 200), (0, 200)),
+                Cap("wall", (4000 + noise, 0), (4200, 200), (4000, 100)),
+                Cap("wall", (4000.001, 300), (4200.001, 300), (4200.001, 500), (4000.001, 500)),
+                Cap("glass", (4000 + 0.000005, 0), (4100, 0), (4100, 100))
+            };
+            var original = faces.SelectMany(f => f.Points).Select(p => new[] { p.X, p.Y, p.Z }).ToArray();
+            var glass = faces.Last();
+            var detail = faces[2];
+            if (reverse) faces.Reverse();
+            weld.Invoke(null, new object[] { faces, CancellationToken.None });
+            var points = faces.Where(f => f.Kind == "wall").SelectMany(f => f.Points).ToArray();
+            Assert(points.Count(p => p.X == 4000 && p.Y == 0) == 2,
+                "Near-equal junction endpoints in separate wall contours were not shared.");
+            Close(glass.Points[0].X, 4000.000005, 1e-10, "Wall repair changed a non-wall surface.");
+            Close(detail.Points[0].X, 4000.001, 1e-10, "Wall repair removed a real micrometre detail.");
+            var ordered = reverse ? faces.AsEnumerable().Reverse() : faces;
+            foreach (var pair in ordered.SelectMany(f => f.Points).Zip(original))
+                Assert(Math.Sqrt(Math.Pow(pair.First.X - pair.Second[0], 2)
+                    + Math.Pow(pair.First.Y - pair.Second[1], 2) + Math.Pow(pair.First.Z - pair.Second[2], 2)) <= 0.0001,
+                    "Wall junction repair exceeded its bounded displacement.");
+            var raw = ((IEnumerable<(LibTessDotNet.Double.Vec3 A, LibTessDotNet.Double.Vec3 B,
+                LibTessDotNet.Double.Vec3 C)>)triangulate.Invoke(null,
+                    new object[] { faces.Where(f => f.Kind == "wall").ToArray(), CancellationToken.None })!).ToArray();
+            var triangles = raw.Select(t => new[] { new[] { t.A.X, t.A.Y, t.A.Z },
+                new[] { t.B.X, t.B.Y, t.B.Z }, new[] { t.C.X, t.C.Y, t.C.Z } }).ToArray();
+            Close(triangles.Sum(Area), 850000, 0.001, "Junction repair changed the union area.");
+            foreach (var t in triangles)
+            {
+                System.Numerics.Vector3 Single(double[] p) => new((float)p[0], (float)p[1], (float)p[2]);
+                Assert(System.Numerics.Vector3.Cross(Single(t[1]) - Single(t[0]),
+                    Single(t[2]) - Single(t[0])).LengthSquared() > 0,
+                    "A numerical wall-junction sliver reached FBX float precision.");
+            }
+        }
+        // A chain of nearby points must not transitively collapse beyond the cap.
+        var chain = new List<VolumeFace> { Cap("wall", (0, 0), (0.00008, 0), (0.00016, 0), (1, 1)) };
+        weld.Invoke(null, new object[] { chain, CancellationToken.None });
+        Close(chain[0].Points[2].X, 0.00016, 1e-12, "Numerical weld chained beyond its tolerance.");
+        var outside = new List<VolumeFace> { Cap("wall", (0, 0), (0.000101, 0), (1, 1)) };
+        weld.Invoke(null, new object[] { outside, CancellationToken.None });
+        Close(outside[0].Points[1].X, 0.000101, 1e-12, "Wall repair exceeded its absolute cap.");
+        var diagonal = new List<VolumeFace> { Cap("wall", (0, 0), (0.00008, 0.00008), (1, 1)) };
+        weld.Invoke(null, new object[] { diagonal, CancellationToken.None });
+        Close(diagonal[0].Points[1].X, 0.00008, 1e-12, "Wall repair did not use Euclidean distance.");
+        Close(diagonal[0].Points[1].Y, 0.00008, 1e-12, "Wall repair removed a diagonal feature outside the cap.");
     }
 
     private static void CheckWallHoleAndIndependentWalls()

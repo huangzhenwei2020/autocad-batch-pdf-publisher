@@ -39,6 +39,8 @@ internal static class Program
     public static bool UnderlayCheck {get;private set;}
     public static bool CurvesCheck {get;private set;}
     public static bool WallDrawingCheck {get;private set;}
+    public static bool OutdoorDrawingCheck {get;private set;}
+    public static bool OutdoorReferenceCheck {get;private set;}
     public static bool ProjectWorkflowCheck {get;private set;}
     public static bool ModelManagementCheck {get;private set;}
     public static bool ModelExportCheck {get;private set;}
@@ -119,6 +121,8 @@ internal static class Program
             SnapshotDisplayMode = displayMode;
         }
         GizmoCheck = args.Contains("--gizmo-check", StringComparer.OrdinalIgnoreCase);
+        OutdoorDrawingCheck=args.Contains("--outdoor-drawing-check",StringComparer.OrdinalIgnoreCase);
+        OutdoorReferenceCheck=args.Contains("--outdoor-reference-check",StringComparer.OrdinalIgnoreCase);
         ShortcutCheck = args.Contains("--shortcut-check", StringComparer.OrdinalIgnoreCase);
         SlabCheck = args.Contains("--slab-check", StringComparer.OrdinalIgnoreCase);
         ParameterCheck = args.Contains("--parameter-check", StringComparer.OrdinalIgnoreCase);

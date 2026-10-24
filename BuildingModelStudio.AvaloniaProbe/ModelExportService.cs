@@ -9,7 +9,10 @@ namespace BuildingModelStudio.AvaloniaProbe;
 internal enum ModelExportFormat { Fbx, Skp }
 internal sealed record ModelExportProgress(string Message, string RunDirectory);
 internal sealed record ModelExportResult(string Path, string RunDirectory, int Storeys, int Elements,
-    int Meshes, int Triangles, long Bytes, int Polygons);
+    int Meshes, int Triangles, long Bytes, int Polygons)
+{
+    internal string[] Warnings {get;init;}=Array.Empty<string>();
+}
 
 internal static class ModelExportService
 {
@@ -99,11 +102,14 @@ internal static class ModelExportService
                     throw new InvalidDataException("导出文件校验失败，原文件未改动。");
             }
             var metadata = root.GetProperty("Manifest").GetRawText();
+            var notices=root.GetProperty("Manifest").TryGetProperty("Warnings",out var warnings)
+                ?warnings.EnumerateArray().Select(w=>w.GetString()??"").ToArray():Array.Empty<string>();
             token.ThrowIfCancellationRequested();
             await CommitAsync(output, destination, metadata, token);
             return new(destination, run, root.GetProperty("Storeys").GetInt32(), root.GetProperty("Elements").GetInt32(),
                 root.GetProperty("Meshes").GetInt32(), root.GetProperty("Triangles").GetInt32(), bytes,
-                root.TryGetProperty("Polygons", out var polygons) ? polygons.GetInt32() : root.GetProperty("Triangles").GetInt32());
+                root.TryGetProperty("Polygons", out var polygons) ? polygons.GetInt32() : root.GetProperty("Triangles").GetInt32())
+                {Warnings=notices};
         }
         finally { Gate.Release(); }
     }

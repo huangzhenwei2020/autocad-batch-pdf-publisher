@@ -14,8 +14,8 @@ namespace BatchPdfPublisher.BuildingModel.Export;
 /// <summary>
 /// Static millimetre/Z-up FBX export through AssimpNetter, without an Autodesk SDK.
 /// AssimpNetter 6.0.5's bundled native exporter duplicates shared geometry and can
-/// discard node metadata. IDs/origin therefore also have a node-name fallback;
-/// Validate reports those native limitations rather than claiming FBX instancing.
+/// discard node metadata. A transport-only pass restores custom properties and
+/// native display layers without changing geometry or claiming FBX instancing.
 /// </summary>
 internal static class BuildingFbxWriter
 {
@@ -32,7 +32,8 @@ internal static class BuildingFbxWriter
         ArgumentNullException.ThrowIfNull(scene);
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         cancellation.ThrowIfCancellationRequested();
-        var output = CreateScene(scene, cancellation);
+        var cleanupWarnings = new List<string>();
+        var output = CreateScene(scene, cancellation, cleanupWarnings);
         var fullPath = Path.GetFullPath(path);
         var directory = Path.GetDirectoryName(fullPath)!;
         Directory.CreateDirectory(directory);
@@ -51,10 +52,12 @@ internal static class BuildingFbxWriter
                     throw new IOException("Assimp could not export the binary FBX file.");
             }
             cancellation.ThrowIfCancellationRequested();
+            FbxDisplayLayers.Apply(temporaryPath, scene, output, cancellation);
             var result = ValidateFile(output, scene, temporaryPath, cancellation);
+            result.Warnings.InsertRange(0, cleanupWarnings);
             cancellation.ThrowIfCancellationRequested();
             File.Move(temporaryPath, fullPath, overwrite: true);
-            Console.WriteLine(FormattableString.Invariant($"FBX_VALIDATED instances={result.InstanceCount} neutralMeshDefinitions={result.NeutralMeshDefinitionCount} inputMeshParts={result.ExportInputMeshPartCount} readbackMeshParts={result.MeshCount} materials={result.MaterialCount} polygons={result.PolygonCount} triangleEquivalent={result.TriangleCount} weldedControlPoints=True units=mm up=Z sharedMeshes={result.PreservesSharedMeshes} identityMetadata={result.PreservesIdentityMetadata} originMetadata={result.PreservesOriginMetadata} boundsMm={string.Join(",", result.BoundsMillimetres.Select(Number))}"));
+            Console.WriteLine(FormattableString.Invariant($"FBX_VALIDATED instances={result.InstanceCount} displayLayers={result.DisplayLayerCount} neutralMeshDefinitions={result.NeutralMeshDefinitionCount} inputMeshParts={result.ExportInputMeshPartCount} readbackMeshParts={result.MeshCount} materials={result.MaterialCount} polygons={result.PolygonCount} triangleEquivalent={result.TriangleCount} weldedControlPoints=True units=mm up=Z sharedMeshes={result.PreservesSharedMeshes} identityMetadata={result.PreservesIdentityMetadata} originMetadata={result.PreservesOriginMetadata} boundsMm={string.Join(",", result.BoundsMillimetres.Select(Number))}"));
             foreach (var warning in result.Warnings) Console.WriteLine("FBX_WARNING " + warning);
             return result;
         }
@@ -75,12 +78,16 @@ internal static class BuildingFbxWriter
         ArgumentNullException.ThrowIfNull(scene);
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         cancellation.ThrowIfCancellationRequested();
-        return ValidateFile(CreateScene(scene, cancellation), scene, path, cancellation);
+        var cleanupWarnings = new List<string>();
+        var result = ValidateFile(CreateScene(scene, cancellation, cleanupWarnings), scene, path, cancellation);
+        result.Warnings.InsertRange(0, cleanupWarnings);
+        return result;
     }
 
     internal sealed class ValidationResult
     {
         public int InstanceCount { get; internal set; }
+        public int DisplayLayerCount { get; internal set; }
         public int NeutralMeshDefinitionCount { get; internal set; }
         public int ExportInputMeshPartCount { get; internal set; }
         /// <summary>Actual Assimp readback meshes; FBX geometry is split by material on import.</summary>
@@ -96,7 +103,7 @@ internal static class BuildingFbxWriter
         public List<string> Warnings { get; } = new();
     }
 
-    private static Scene CreateScene(BuildingExportScene source, CancellationToken cancellation)
+    private static Scene CreateScene(BuildingExportScene source, CancellationToken cancellation, List<string>? cleanupWarnings = null)
     {
         var origin = Point(source.OriginMillimetres, "scene origin");
         if (source.Storeys == null || source.Materials == null || source.Meshes == null
@@ -104,6 +111,9 @@ internal static class BuildingFbxWriter
             throw new ArgumentException("The export scene is incomplete or contains no instances.");
 
         var scene = new Scene { Name = source.Name ?? "", RootNode = new Node("Root") };
+        var presentation = FbxPresentation.For(source);
+        var floorNames = presentation.Floors.ToDictionary(f => f.StoreyId, f => f.GroupName, StringComparer.Ordinal);
+        var elementNames = presentation.Elements.ToDictionary(e => e.Id, e => e.NodeName, StringComparer.Ordinal);
         Set(scene.Metadata, "UnitScaleFactor", MillimetreUnitScale);
         Set(scene.Metadata, "OriginalUnitScaleFactor", MillimetreUnitScale);
         Set(scene.Metadata, "UpAxis", 2);
@@ -118,7 +128,7 @@ internal static class BuildingFbxWriter
 
         // The exporter omits the aiScene root, so the named scene is a child.
         var originText = string.Join(",", new[] { origin.X, origin.Y, origin.Z }.Select(Number));
-        var building = new Node(NodeName("Scene", source.Name, "origin-mm=" + originText));
+        var building = new Node(presentation.BuildingName);
         Set(building.Metadata, OriginKey, originText);
         Set(building.Metadata, "WL_Name", source.Name ?? "");
         scene.RootNode.Children.Add(building);
@@ -129,7 +139,7 @@ internal static class BuildingFbxWriter
             cancellation.ThrowIfCancellationRequested();
             if (floor == null) throw new ArgumentException("The scene contains a missing storey.");
             var id = floor.Id ?? "";
-            var node = new Node(NodeName("Storey", floor.Name, id));
+            var node = new Node(floorNames[id]);
             Set(node.Metadata, StoreyIdKey, id);
             Set(node.Metadata, "WL_Name", floor.Name ?? "");
             Set(node.Metadata, "WL_ElevationMillimetres", Finite(floor.Elevation));
@@ -177,11 +187,12 @@ internal static class BuildingFbxWriter
                 throw new ArgumentException("An instance refers to an unknown mesh: " + instance.Id);
             if (!meshMap.TryGetValue(instance.MeshIndex, out var indices))
             {
-                indices = AddMesh(source.Meshes[instance.MeshIndex], scene, materialMap, cancellation);
+                indices = AddMesh(source.Meshes[instance.MeshIndex], scene, materialMap, cancellation, cleanupWarnings,
+                    (source.Storeys.First(f=>f.Id==instance.StoreyId).Name ?? instance.StoreyId)+" · "+instance.Name);
                 meshMap.Add(instance.MeshIndex, indices);
             }
             var translation = Point(instance.Translation, "instance translation").ToSingle();
-            var node = new Node(NodeName("Element", instance.Name, instance.Id))
+            var node = new Node(elementNames[instance.Id])
             {
                 // AssimpNetter marshals Matrix4x4 without transposition. Assimp
                 // expects translation in M14/M24/M34 (column-vector convention).
@@ -200,7 +211,7 @@ internal static class BuildingFbxWriter
     }
 
     private static int[] AddMesh(BuildingExportMesh source, Scene target, int[] materialMap,
-        CancellationToken cancellation)
+        CancellationToken cancellation, List<string>? cleanupWarnings, string label)
     {
         if (source == null || source.Vertices == null || source.Triangles == null
             || source.Triangles.Count == 0)
@@ -212,6 +223,9 @@ internal static class BuildingFbxWriter
             points[i] = Point(source.Vertices[i], "mesh vertex");
         }
         var normals = new D3[source.Triangles.Count];
+        var omitted = new bool[source.Triangles.Count];
+        var removedArea = 0d;var totalArea = 0d;var removedCount = 0;
+        var retainedMaterials = new HashSet<int>();var authoredMaterials = new HashSet<int>();
         var smoothNormals = new Dictionary<(D3, string), D3>();
         for (var i = 0; i < source.Triangles.Count; i++)
         {
@@ -222,6 +236,21 @@ internal static class BuildingFbxWriter
                 || (uint)triangle.MaterialIndex >= (uint)materialMap.Length)
                 throw new ArgumentException("A mesh triangle has an invalid vertex or material index.");
             var normal = D3.Cross(points[triangle.B] - points[triangle.A], points[triangle.C] - points[triangle.A]);
+            var area = Length(normal)/2;totalArea += area;
+            if(!double.IsFinite(area))throw new ArgumentException("The scene contains non-finite triangle area.");
+            authoredMaterials.Add(triangle.MaterialIndex);
+            var a=points[triangle.A].ToSingle();var b=points[triangle.B].ToSingle();var c=points[triangle.C].ToSingle();
+            if(Vector3.Cross(b-a,c-a).LengthSquared()==0f)
+            {
+                var longest=Math.Max(Length(points[triangle.B]-points[triangle.A]),
+                    Math.Max(Length(points[triangle.C]-points[triangle.A]),Length(points[triangle.C]-points[triangle.B])));
+                // Only zero-area transport faces may be omitted. Bound both the
+                // original sliver height and its absolute/cumulative surface loss.
+                if(area>0.1 || (longest>0 && 2*area/longest>0.01))
+                    throw new ArgumentException("构件存在超出自动修复范围的几何精度损失，请检查："+label);
+                omitted[i]=true;removedArea+=area;removedCount++;continue;
+            }
+            retainedMaterials.Add(triangle.MaterialIndex);
             normals[i] = normal.Unit();
             // Compute area-weighted smooth normals before splitting by material,
             // so a material boundary does not introduce an artificial hard edge.
@@ -236,10 +265,20 @@ internal static class BuildingFbxWriter
             }
         }
 
+        if(removedCount>0)
+        {
+            if(removedCount==source.Triangles.Count || !authoredMaterials.SetEquals(retainedMaterials)
+                || removedArea>Math.Min(1d,totalArea*1e-6))
+                throw new ArgumentException("微小面清理将丢失构件或明显几何，未生成不完整文件："+label);
+            cleanupWarnings?.Add(FormattableString.Invariant(
+                $"FBX 微小面已自动清理：{label}，{removedCount} 个退化面，原面积合计 {removedArea:G6} mm²；构件与材质保留。"));
+        }
+
         var parts = new Dictionary<int, (Mesh Mesh, Dictionary<(D3, Vector3, string), int> Vertices, List<string> Surfaces)>();
         for (var i = 0; i < source.Triangles.Count; i++)
         {
             cancellation.ThrowIfCancellationRequested();
+            if(omitted[i])continue;
             var triangle = source.Triangles[i];
             var material = materialMap[triangle.MaterialIndex];
             if (!parts.TryGetValue(material, out var part))
@@ -315,7 +354,8 @@ internal static class BuildingFbxWriter
         var expectedNodes = Nodes(expected.RootNode).Skip(1).ToArray();
         if (Nodes(actual.RootNode).Count() != expectedNodes.Length + 1)
             throw new InvalidDataException("FBX readback changed the scene hierarchy.");
-        var result = new ValidationResult { NeutralMeshDefinitionCount = source.Meshes.Count,
+        var result = new ValidationResult { DisplayLayerCount = FbxDisplayLayers.Validate(path, source, cancellation),
+            NeutralMeshDefinitionCount = source.Meshes.Count,
             ExportInputMeshPartCount = expected.MeshCount, MeshCount = actual.MeshCount,
             MaterialCount = actual.MaterialCount };
         var expectedMeshIndices = expected.Meshes.Select((mesh, index) => (mesh, index))
@@ -375,9 +415,9 @@ internal static class BuildingFbxWriter
         if (!result.PreservesSharedMeshes)
             result.Warnings.Add("The bundled Assimp FBX exporter duplicated shared geometry. Placements are correct, but native FBX geometry instancing is not preserved.");
         if (!result.PreservesIdentityMetadata)
-            result.Warnings.Add("The bundled Assimp FBX exporter did not preserve all element/storey metadata. Stable element/storey IDs and names are retained in node names.");
+            result.Warnings.Add("The FBX importer did not expose all custom properties. Stable identities remain in FBX Properties70 and the export manifest.");
         if (!result.PreservesOriginMetadata)
-            result.Warnings.Add("The bundled Assimp FBX exporter omitted origin metadata. The exact source origin in millimetres is retained in the scene node name.");
+            result.Warnings.Add("The FBX importer did not expose origin metadata. The exact source origin remains in FBX Properties70 and the export manifest.");
         return result;
     }
 
@@ -389,6 +429,7 @@ internal static class BuildingFbxWriter
         var expectedBounds = EmptyBounds();
         var actualBounds = EmptyBounds();
         var meshBounds = new Dictionary<int, double[]>();
+        var elementNames = FbxPresentation.For(source).Elements.ToDictionary(e => e.Id, e => e.NodeName, StringComparer.Ordinal);
         foreach (var instance in source.Instances)
         {
             cancellation.ThrowIfCancellationRequested();
@@ -406,7 +447,7 @@ internal static class BuildingFbxWriter
                 meshBounds.Add(instance.MeshIndex, localBounds);
             }
 
-            var node = actualNodes[NodeName("Element", instance.Name, instance.Id)].Single();
+            var node = actualNodes[elementNames[instance.Id]].Single();
             var worldTranslation = new double[3];
             // Every node's linear transform was checked against the authored
             // identity above. Accumulate translations in double precision: a
@@ -578,6 +619,7 @@ internal static class BuildingFbxWriter
         => metadata.Add(key, new Metadata.Entry(MetaDataType.Double, value));
     private static void Set(Metadata metadata, string key, int value)
         => metadata.Add(key, new Metadata.Entry(MetaDataType.Int32, value));
+    private static double Length(D3 value) => Math.Sqrt(value.X*value.X+value.Y*value.Y+value.Z*value.Z);
     private static string Number(double value) => value.ToString("R", CultureInfo.InvariantCulture);
     private static double Finite(double value) => double.IsFinite(value) ? value
         : throw new ArgumentException("The scene contains a non-finite value.");

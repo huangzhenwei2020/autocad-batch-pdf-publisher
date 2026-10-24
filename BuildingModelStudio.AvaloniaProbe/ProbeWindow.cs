@@ -422,6 +422,7 @@ internal sealed partial class ProbeWindow : Window
         var viewportInput = new Border { Background = Brushes.Transparent };
         viewportInput.PointerPressed += (_, e) =>
         {
+            if(OutdoorPress(e))return;
             _additiveSceneSelection=e.KeyModifiers.HasFlag(KeyModifiers.Control)||e.KeyModifiers.HasFlag(KeyModifiers.Shift);
             var buttons = e.GetCurrentPoint(viewportInput).Properties;
             var selecting = buttons.IsLeftButtonPressed;
@@ -475,6 +476,11 @@ internal sealed partial class ProbeWindow : Window
         };
         viewportInput.PointerMoved += (_, e) =>
         {
+            if(_outdoor!=null)
+            {
+                if(_outdoorReferenceMode!=0){_outdoorCursor=null;HoverOutdoorReference(e.GetPosition(_viewport));}
+                else {_outdoorCursor=OutdoorPoint(e.GetPosition(_viewport),e.KeyModifiers);UpdateOutdoorPreview();}
+            }
             if (_gizmo.IsDragging)
             {
                 _gizmo.Move(e.GetPosition(_viewport));
@@ -484,6 +490,7 @@ internal sealed partial class ProbeWindow : Window
             _viewport.MoveInteraction(e.GetPosition(_viewport), buttons.IsLeftButtonPressed,
                 buttons.IsMiddleButtonPressed || buttons.IsRightButtonPressed);
             _gizmo.InvalidateVisual();
+            _outdoorOverlay?.InvalidateVisual();
         };
         viewportInput.PointerReleased += (_, e) =>
         {
@@ -496,10 +503,12 @@ internal sealed partial class ProbeWindow : Window
         {
             _viewport.Zoom(e.Delta.Y);
             _gizmo.InvalidateVisual();
+            _outdoorOverlay?.InvalidateVisual();
             e.Handled = true;
         };
         viewportHost.Children.Add(viewportInput);
         viewportHost.Children.Add(_gizmo);
+        AttachOutdoorDrawing(viewportHost,viewportInput);
         var displayModes = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 1,
             HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
             Margin = new Thickness(10), Background = new SolidColorBrush(Color.Parse("#30485E")) };
@@ -822,6 +831,8 @@ internal sealed partial class ProbeWindow : Window
                 Action("删除", () => _ = DeleteSelectedAsync())),
             Group("编辑", Action("圆角",()=>_ = BeginFilletAsync()), Planned("相交"), Planned("修剪"), Planned("延伸")));
         pages["构件"] = Page(
+            Group("室外与屋面",Action("女儿墙",()=>_wallDrawingTask=OpenWallDrawingAsync(parapet:true)),
+                Action("阳台",()=>BeginOutdoorDrawing(true))),
             Group("梁柱",Action("绘制柱",()=>BeginStructureTool(PlanTool.Column)),Action("绘制梁",()=>BeginStructureTool(PlanTool.Beam))),
             Group("楼板", Action("绘制楼板", () => BeginSlabTool(PlanTool.Slab)),
                 Action("编辑轮廓", () => BeginSlabTool(PlanTool.SlabOutline)),Action("圆弧边",()=>_planCanvas.BeginContourArc()),Action("圆角",()=>_ = BeginFilletAsync())),
@@ -1079,6 +1090,8 @@ internal sealed partial class ProbeWindow : Window
         "选择" or "选择 Q" => ("mouse-pointer-2", "Q"),
         "画墙" => ("wall-plan", "WA"),
         "墙体" => ("wall-plan", "WA"),
+        "女儿墙" => ("brick-wall", null),
+        "阳台" => ("slab-outline", null),
         "弧墙" => ("wall-plan", "AW"),
         "圆角" => ("rotate-ccw", "F"),
         "圆弧边" => ("rotate-ccw", "A"),
@@ -1266,6 +1279,7 @@ internal sealed partial class ProbeWindow : Window
 
     private async Task<bool> LoadModelAsync(string path)
     {
+        StopOutdoorDrawing();
         if (_cadImportBusy || _storeyRequestBusy || _loadingModel || _savingModel) { _status.Text = "正在更新模型，请稍后打开其他模型。"; return false; }
         if(StudioLaunch.HasLiveSession(path)&&!StudioLaunch.IsCurrentSession(path))
         { _status.Text="此模型已在其他窗口打开，请通过模型管理激活该窗口。";return false; }
@@ -1334,6 +1348,9 @@ internal sealed partial class ProbeWindow : Window
         if (_cadRequestStamp == stamp) return;
         _cadImportBusy = true;
         string? requestId = null;
+        CadGenerationProgressWindow? progressWindow=null;
+        CadGenerationProgressPublisher? publisher=null;
+        Task? shownProgress=null;
         try
         {
             var request = await Task.Run(() => CadModelGenerationRequest.Load(path));
@@ -1345,9 +1362,18 @@ internal sealed partial class ProbeWindow : Window
             if (!string.Equals(Path.GetFullPath(request.Registry.ModelPath), Path.GetFullPath(path), StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("登记来源与当前模型不一致。");
             if (_session.Model.CadImport?.RequestId == requestId) { CadModelGenerationRequest.Acknowledge(path,requestId,null); return; }
-            if (!_session.TryImportCadFloors(request.Registry, requestId, out var error)) throw new InvalidDataException(error);
+            progressWindow=new CadGenerationProgressWindow();shownProgress=progressWindow.ShowDialog(this);
+            publisher=new CadGenerationProgressPublisher(path,requestId);
+            void ReportGeneration(CadGenerationProgress step)
+            {
+                publisher.Report(step);
+                Avalonia.Threading.Dispatcher.UIThread.Post(()=>{if(progressWindow.IsVisible)progressWindow.Report(step);});
+            }
+            await _session.ImportCadFloorsAsync(request.Registry,requestId,ReportGeneration);
+            ReportGeneration(new(){Stage="重建三维视图"});
             await RefreshModelAsync("已从 CAD 楼层登记生成建筑模型（可撤销）");
             _viewport.ResetView(); _planCanvas.Fit();
+            ReportGeneration(new(){Stage="保存模型与参照底图"});
             if (!await SaveModelAsync(false)) throw new IOException(_status.Text);
             CadModelGenerationRequest.Acknowledge(path, requestId, null);
             var imported=_session.Model.CadImport!;
@@ -1362,11 +1388,16 @@ internal sealed partial class ProbeWindow : Window
             if (requestId != null)
                 try { CadModelGenerationRequest.Acknowledge(path, requestId, ex.Message); } catch { }
         }
-        finally { _cadImportBusy = false; }
+        finally
+        {
+            publisher?.Dispose();progressWindow?.Finish();if(shownProgress!=null)await shownProgress;
+            _cadImportBusy = false;
+        }
     }
 
     private async Task<bool> SaveModelAsync(bool saveAs)
     {
+        if(_outdoor?.HasDraft==true){_status.Text="请先完成或取消当前绘制草稿，再保存模型。";return false;}
         if(_savingModel||_loadingModel)return false;
         _savingModel=true;
         try { return await SaveModelCoreAsync(saveAs); }
@@ -1679,7 +1710,7 @@ internal sealed partial class ProbeWindow : Window
                 _items.Add(new ElementItem { Id = opening.Id, Label = $"{floor.Name} · {BuildingElementNames.Opening(opening)}" });
             if (!slabsByStorey.TryGetValue(floor.Id, out var slabs)) slabs = new();
             foreach (var slab in slabs)
-                _items.Add(new ElementItem { Id = slab.Id, Label = $"{floor.Name} · 楼板  {slab.Code ?? slab.Id}" });
+                _items.Add(new ElementItem { Id = slab.Id, Label = $"{floor.Name} · {BuildingElementNames.Slab(slab)}" });
             if (!columnsByStorey.TryGetValue(floor.Id, out var columns)) columns = new();
             foreach (var column in columns)
                 _items.Add(new ElementItem { Id = column.Id, Label = $"{floor.Name} · 柱  {column.Code ?? "柱"}" });
@@ -1782,7 +1813,7 @@ internal sealed partial class ProbeWindow : Window
                     wallStoreys.TryGetValue(x.HostWallId, out var storey) && storey == floor.Id)
                 .Select(x => (x.Id, BuildingElementNames.Opening(x))));
             AddCategory(floorNode, "楼板", model.Slabs.Where(x => x.StoreyId == floor.Id)
-                .Select(x => (x.Id, "楼板  " + (x.Code ?? x.Id))));
+                .Select(x => (x.Id, BuildingElementNames.Slab(x))));
             AddCategory(floorNode, "柱", model.Columns.Where(x => x.StoreyId == floor.Id)
                 .Select(x => (x.Id, "柱  " + (x.Code ?? "柱"))));
             AddCategory(floorNode,"梁",model.Beams.Where(x=>x.StoreyId==floor.Id).Select(x=>(x.Id,"梁  "+(x.Code??"梁"))));
@@ -1895,6 +1926,7 @@ internal sealed partial class ProbeWindow : Window
 
     private void SetPlanTool(PlanTool tool)
     {
+        StopOutdoorDrawing();
         EndAxisEditing();
         _planCanvas.Tool = tool;
         _planCanvas.CancelDraft();
@@ -1932,6 +1964,7 @@ internal sealed partial class ProbeWindow : Window
 
     private void CancelActiveCommand()
     {
+        if(_outdoor!=null){CancelOutdoorDraft();return;}
         CancelParameterPreview();
         RefreshProperties();
         if(_workspaces.SelectedIndex==2)_drawingPreviewTask=RefreshDrawingViewAsync();
@@ -1946,6 +1979,7 @@ internal sealed partial class ProbeWindow : Window
     private void ExecuteCommand(string? input)
     {
         var command = input?.Trim() ?? "";
+        if(OutdoorCommand(command))return;
         if(_planCanvas.Tool==PlanTool.Fillet&&ModelCommandCatalog.TryLength(command,out var radius))
         {_planCanvas.FilletRadius=radius;_status.Text="圆角半径："+radius+" mm；继续点选，Esc 退出。";_planCanvas.Focus();return;}
         if(command.StartsWith("F ",StringComparison.OrdinalIgnoreCase)&&TryNumber(command.Substring(2),out var filletRadius))
@@ -2044,6 +2078,7 @@ internal sealed partial class ProbeWindow : Window
 
     private void BeginMove(bool copy = false)
     {
+        StopOutdoorDrawing();
         if (_session.Model.Slabs.Any(s => s.Id == _selectedId)) _workspaces.SelectedIndex = 1;
         if (_session.Model.Walls.All(w => w.Id != _selectedId)
             && _session.Model.Slabs.All(s => s.Id != _selectedId)
@@ -2104,6 +2139,13 @@ internal sealed partial class ProbeWindow : Window
 
     private void OnShortcutKeyDown(object? sender, KeyEventArgs e)
     {
+        if(_outdoor!=null&&!ShortcutEditingText(e.Source))
+        {
+            if(e.Key==Key.Escape){CancelOutdoorDraft();e.Handled=true;return;}
+            if(e.Key==Key.Enter){_outdoorCommitTask=FinishOutdoorDrawingAsync();e.Handled=true;return;}
+            if(e.Key==Key.Z&&e.KeyModifiers==KeyModifiers.Control){_ = UndoModelAsync();e.Handled=true;return;}
+            if(e.Key==Key.Delete||(e.KeyModifiers.HasFlag(KeyModifiers.Control)&&e.Key is Key.Z or Key.Y)){e.Handled=true;return;}
+        }
         if(_axisEditBusy){e.Handled=true;return;}
         if(_planCanvas.HasOpeningGrip&&_workspaces.SelectedIndex==1&&!ShortcutEditingText(e.Source)
             &&e.KeyModifiers==KeyModifiers.None&&e.Key is Key.Enter or Key.Space or Key.Escape) {
@@ -2221,6 +2263,8 @@ internal sealed partial class ProbeWindow : Window
 
     private async Task UndoModelAsync()
     {
+        if(_outdoor?.HasDraft==true){OutdoorPrevious();return;}
+        StopOutdoorDrawing();
         if (_gizmo.IsDragging)
         {
             _gizmo.Cancel();
@@ -2234,6 +2278,8 @@ internal sealed partial class ProbeWindow : Window
 
     private async Task RedoModelAsync()
     {
+        if(_outdoor?.HasDraft==true)return;
+        StopOutdoorDrawing();
         _gizmo.Cancel();
         _planCanvas.CancelDraft();
         if (_session.Redo()) await RefreshModelAsync("已重做（Ctrl+Y / Ctrl+Shift+Z）");
@@ -2280,6 +2326,7 @@ internal sealed partial class ProbeWindow : Window
         if (_slabPropertyMark != null) _slabPropertyMark.IsVisible = false;
         _slabPropertyCode.IsVisible = false;
         if(_workspaces.SelectedIndex==2) { BuildDrawingProperties();return; }
+        if(_outdoor!=null){BuildOutdoorProperties();return;}
         var slab = _session.Model.Slabs.FirstOrDefault(s => s.Id == _selectedId);
         if (slab != null) { BuildSlabProperties(slab); return; }
         _slabDraft = null;
@@ -2295,26 +2342,27 @@ internal sealed partial class ProbeWindow : Window
         if (wall != null)
         {
             var length = CurveGeometry.ForWall(wall).Length;
-            _properties.Children.Add(new TextBlock { Text = $"墙 {wall.Code} · {_session.Model.FindStorey(wall.StoreyId)?.Name} · 墙高 0 表示随楼层" });
+            _properties.Children.Add(new TextBlock { Text = $"{BuildingElementNames.Wall(wall)} · {_session.Model.FindStorey(wall.StoreyId)?.Name}",TextWrapping=TextWrapping.Wrap });
             if(Math.Abs(wall.Bulge)>1e-10) _properties.Children.Add(new TextBlock {Text="弧墙 · 半径 "+Mm(CurveGeometry.ForWall(wall).Radius)+" mm"});
             var lengthField = AddNumberField(Math.Abs(wall.Bulge)>1e-10?"弧长（mm）":"墙长（mm）", length);
             var bodyOffset = WallReferenceGeometry.BodyOffset(wall);
             var leftField = AddNumberField("轴线左侧墙厚（mm）", wall.Thickness / 2d + bodyOffset);
             var rightField = AddNumberField("轴线右侧墙厚（mm）", wall.Thickness / 2d - bodyOffset);
             var heightField = AddNumberField("墙高（mm）", wall.Height);
+            var baseField = AddNumberField("墙底相对楼层（mm）", wall.BaseOffset);
             _properties.Children.Add(new TextBlock { Text = "左右按墙起点 → 终点判断；两侧之和为总墙厚。",
                 TextWrapping = TextWrapping.Wrap });
             var apply = InspectorButton("应用墙体参数");
             apply.Click += async (_, _) => await ApplyGeometryAsync(
-                new[] { lengthField, leftField, rightField, heightField }, values =>
+                new[] { lengthField, leftField, rightField, heightField, baseField }, values =>
             {
                 var success = _session.TrySetWallGeometryBySides(wall.Id,
-                    values[0], values[1], values[2], values[3], out var error);
+                    values[0], values[1], values[2], values[3], out var error, values[4]);
                 return (success, error);
             });
             _properties.Children.Add(apply);
-            BindParameterPreview(new[] { lengthField,leftField,rightField,heightField },(trial,values)=>
-                trial.TrySetWallGeometryBySides(wall.Id,values[0],values[1],values[2],values[3],out _));
+            BindParameterPreview(new[] { lengthField,leftField,rightField,heightField,baseField },(trial,values)=>
+                trial.TrySetWallGeometryBySides(wall.Id,values[0],values[1],values[2],values[3],out _,values[4]));
             _properties.Children.Add(new TextBlock { Text = "整墙定位（门窗随墙移动）", FontWeight = FontWeight.Bold, Margin = new Thickness(0, 12, 0, 0) });
             var deltaXField = AddNumberField("水平位移 X（mm）", 0);
             var deltaYField = AddNumberField("竖直位移 Y（mm）", 0);
@@ -2438,6 +2486,7 @@ internal sealed partial class ProbeWindow : Window
 
     private async Task RefreshModelAsync(string message,BuildingModelDocument? beforeOpeningEdit=null,string? openingId=null)
     {
+        StopOutdoorDrawing();
         var basis=beforeOpeningEdit!=null && ReferenceEquals(beforeOpeningEdit,_sceneModel) && _parameterPreview==null
             ?_viewport.CurrentScene:null;
         var previewScene=_parameterPreviewScene!=null && _parameterPreview!=null
@@ -2594,6 +2643,8 @@ internal sealed partial class ProbeWindow : Window
             if(Program.UnderlayCheck){try{await RunUnderlayCheckAsync();}catch(Exception ex){Console.WriteLine("CAD_UNDERLAY_UI_FAILED "+ex);slabSuccess=false;}}
             if(Program.CurvesCheck){try{await RunCurvesCheckAsync();}catch(Exception ex){Console.WriteLine("CURVE_UI_FAILED "+ex);slabSuccess=false;}}
             if(Program.WallDrawingCheck){try{await RunWallDrawingCheckAsync();}catch(Exception ex){Console.WriteLine("WALL_DRAWING_UI_FAILED "+ex);slabSuccess=false;}}
+            if(Program.OutdoorDrawingCheck){try{await RunOutdoorDrawingCheckAsync();}catch(Exception ex){Console.WriteLine("OUTDOOR_UI_FAILED "+ex);slabSuccess=false;}}
+            if(Program.OutdoorReferenceCheck){try{await RunOutdoorReferenceCheckAsync();}catch(Exception ex){Console.WriteLine("OUTDOOR_REFERENCE_UI_FAILED "+ex);slabSuccess=false;}}
             if(Program.OpeningEditorInteractionCheck){try{await RunOpeningEditorInteractionCheckAsync();}catch(Exception ex){Console.WriteLine("OPENING_EDITOR_INTERACTION_FAILED "+ex);slabSuccess=false;}}
             if(Program.ProjectWorkflowCheck){try{await RunProjectWorkflowCheckAsync();}catch(Exception ex){Console.WriteLine("MODEL_PROJECT_STUDIO_UI_FAILED "+ex);slabSuccess=false;}}
             if(Program.ModelManagementCheck){try{await RunModelManagementCheckAsync();}catch(Exception ex){Console.WriteLine("MODEL_MANAGEMENT_STUDIO_FAILED "+ex);_modelManagerWindow?.Close();_modelManagerOpen=false;slabSuccess=false;}}
@@ -2652,7 +2703,7 @@ internal sealed partial class ProbeWindow : Window
             if (Program.GizmoCheck) success &= RunGizmoSmokeCheck() && RunCameraSmokeCheck();
             if (Program.ShortcutCheck) success &= await RunShortcutSmokeCheckAsync();
             success &= slabSuccess;
-            if(Program.ModelManagementCheck||Program.ModelExportCheck)_closeConfirmed=true;
+            if(Program.ModelManagementCheck||Program.ModelExportCheck||Program.OutdoorDrawingCheck||Program.OutdoorReferenceCheck)_closeConfirmed=true;
             if(Program.SnapshotDrawing)success &= _drawingCanvas.View!=null;
             if (Program.CadGenerationCheck)
             {

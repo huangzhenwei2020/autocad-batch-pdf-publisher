@@ -63,10 +63,15 @@ namespace BatchPdfPublisher.BuildingModel
 
     /// <summary>沿墙轴线起点到终点看，轴线落在墙厚的哪一侧。</summary>
     public enum WallAxisPlacement { Center, LeftFace, RightFace }
+    public enum WallPurpose { Building, Parapet }
+    public enum SlabPurpose { Floor, Balcony }
 
     /// <summary>墙：定位轴线两端 + 厚度 + 高度（从所属楼层的标高起算）。</summary>
     public sealed class WallModel
     {
+        public WallPurpose Purpose { get; set; }
+        /// <summary>Bottom relative to the owning floor; legacy walls remain at zero.</summary>
+        public double BaseOffset { get; set; }
         public string Id { get; set; }
         /// <summary>Stable user-facing number, separate from the internal identity.</summary>
         public string Code { get; set; }
@@ -106,7 +111,8 @@ namespace BatchPdfPublisher.BuildingModel
                 }
         }
 
-        public static string Wall(WallModel wall) { return "墙 " + wall.Code; }
+        public static string Wall(WallModel wall) { return (wall.Purpose == WallPurpose.Parapet ? "女儿墙 " : "墙 ") + wall.Code; }
+        public static string Slab(SlabModel slab) { return (slab.Purpose == SlabPurpose.Balcony ? "阳台 " : "楼板 ") + (slab.Code ?? slab.Id); }
         public static string Opening(OpeningModel opening)
         {
             return string.IsNullOrWhiteSpace(opening.Code) ? opening.Kind + "（未编号）" : opening.Code;
@@ -185,6 +191,7 @@ namespace BatchPdfPublisher.BuildingModel
     /// <summary>楼板：闭合轮廓 + 板厚 + 板顶标高。</summary>
     public sealed class SlabModel
     {
+        public SlabPurpose Purpose { get; set; }
         public string Id { get; set; }
         public string Code { get; set; }
         public string StoreyId { get; set; }
@@ -444,11 +451,11 @@ namespace BatchPdfPublisher.BuildingModel
             return null;
         }
 
-        /// <summary>墙的底标高（= 所属楼层标高）；找不到楼层时按 0。</summary>
+        /// <summary>Wall bottom follows its floor with an explicit relative offset.</summary>
         public double BaseElevationOf(WallModel wall)
         {
             var storey = wall == null ? null : FindStorey(wall.StoreyId);
-            return storey == null ? 0d : storey.Elevation;
+            return (storey == null ? 0d : storey.Elevation) + (wall == null ? 0d : wall.BaseOffset);
         }
 
         /// <summary>墙高：显式给了就用它，否则取层高，再不行按 3000。</summary>

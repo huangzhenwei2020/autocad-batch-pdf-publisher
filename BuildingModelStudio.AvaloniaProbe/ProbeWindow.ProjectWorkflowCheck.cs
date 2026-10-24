@@ -15,6 +15,20 @@ internal sealed partial class ProbeWindow
         void Check(bool ok,string why){if(!ok)throw new InvalidOperationException(why);}
         var oldModel=BuildingModelJson.ToJson(_session.Model);
         var folder=Path.GetFullPath(".artifacts/studio-project-workflow/"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(folder);
+        var progress=new CadGenerationProgressWindow();var progressClosed=progress.ShowDialog(this);await Task.Delay(300);
+        Check(progress.Bar.IsIndeterminate&&!string.IsNullOrEmpty(progress.Elapsed.Text),"Generation activity/elapsed timer is not updating.");
+        progress.Close();Check(progress.IsVisible&&!progressClosed.IsCompleted,"Closing progress interrupted active generation.");
+        foreach(var width in new[]{420d,500d})
+        {
+            progress.Width=width;progress.Report(new(){Stage="生成楼层：屋面层",Completed=2,Total=5});await Task.Delay(100);
+            Check(!progress.Bar.IsIndeterminate&&progress.Bar.Value==40&&progress.Stage.Text!.Contains("2/5"),"Progress fraction is not the actual stage fraction.");
+            Check(progress.Stage.Bounds.Bottom<progress.Bar.Bounds.Top&&progress.Bar.Bounds.Bottom<progress.Elapsed.Bounds.Top,"Progress layout overlaps.");
+            using(var bitmap=await ElementComposition.GetElementVisual(progress)!.Compositor.CreateCompositionVisualSnapshot(ElementComposition.GetElementVisual(progress)!,1))
+                bitmap.Save(Path.Combine(folder,"generation-progress-"+width+".png"),PngBitmapEncoderOptions.Default);
+        }
+        progress.Report(new(){Stage="保存模型与参照底图"});Check(progress.Bar.IsIndeterminate,"Saving without denominator displays fake percentage.");
+        progress.Finish();await progressClosed;
+        Console.WriteLine("CAD_GENERATION_PROGRESS_STUDIO_UI_OK elapsed modalCloseGuard truthfulStage small large "+folder);
         var dialog=new NewBuildingModelWindow(folder);var pending=dialog.ShowDialog<string?>(this);await Task.Delay(150);
         Check(dialog.Draft.Walls.Count==0&&dialog.Draft.Storeys.Count==1,"New dialog must be empty.");
         dialog.ModelName.Text="UI 新模型";
@@ -37,6 +51,8 @@ internal sealed partial class ProbeWindow
         var referenceRequest=CadModelGenerationRequest.Queue(referenceRegistry);await ReceiveCadGenerationAsync();
         Check(CadModelGenerationRequest.LoadResult(path!).Succeeded&&!File.Exists(CadModelGenerationRequest.FilePath(path!)),
             "Reference-only generation did not acknowledge success.");
+        Check(CadModelGenerationRequest.LoadProgress(path!,referenceRequest.Id)?.State=="completed"
+            &&!OwnedWindows.Any(w=>w is CadGenerationProgressWindow),"Saved generation left active progress or did not acknowledge it.");
         Check(_session.Model.CadImport?.RequestId==referenceRequest.Id&&_session.Model.Walls.Count==0
             &&_session.Model.CadImport.PendingOpenings.Count==1&&!HasChanges
             &&BuildingModelJson.LoadModel(path!).CadImport.RequestId==referenceRequest.Id,

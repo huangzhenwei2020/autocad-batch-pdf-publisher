@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><EnableDefaultCompileItems>false</EnableDefaultCompileItems></PropertyGroup>
+  <ItemGroup>
+    <Compile Include="LineCorrectionGeometryTests.cs" />
+    <Compile Include="../BatchPdfPublisher/Features/Drafting/Services/LineCorrectionGeometry.cs" Link="LineCorrectionGeometry.cs" />
+  </ItemGroup>
+</Project>

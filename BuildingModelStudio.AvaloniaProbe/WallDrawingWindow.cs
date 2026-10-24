@@ -16,6 +16,8 @@ namespace BuildingModelStudio.AvaloniaProbe;
 internal sealed class WallDrawingWindow : Window
 {
     internal readonly ListBox Choices=new();
+    internal readonly ComboBox PurposeInput=new(){ItemsSource=new[]{"建筑墙","女儿墙"}};
+    internal readonly NumericUpDown BaseInput=new(){Minimum=-100000,Maximum=100000,Increment=10,FormatString="0"};
     internal readonly NumericUpDown ThicknessInput=new(){Minimum=10,Maximum=10000,Increment=10,FormatString="0.###"};
     internal readonly NumericUpDown HeightInput=new(){Minimum=10,Maximum=100000,Increment=100,FormatString="0.###"};
     internal readonly CheckBox FollowStorey=new(){Content="随楼层高度"};
@@ -61,6 +63,7 @@ internal sealed class WallDrawingWindow : Window
         var fields=new StackPanel {Spacing=10,Margin=new Thickness(16,8,16,16)};
         fields.Children.Add(new TextBlock {Text="绘制参数",FontWeight=FontWeight.SemiBold,Margin=new Thickness(0,0,0,8)});
         void Field(string text,Control input){fields.Children.Add(new TextBlock {Text=text});input.HorizontalAlignment=HorizontalAlignment.Stretch;fields.Children.Add(input);}
+        Field("墙体用途",PurposeInput);Field("墙底相对楼层 mm",BaseInput);
         Field("墙厚 mm",ThicknessInput);fields.Children.Add(FollowStorey);Field("墙高 mm",HeightInput);
         Field("定位线",AxisInput);Field("定位偏移 mm",OffsetInput);Field("材料",MaterialInput);
         var settings=new Border {BorderBrush=edge,BorderThickness=new Thickness(1,0,0,0),Child=new ScrollViewer {
@@ -73,11 +76,16 @@ internal sealed class WallDrawingWindow : Window
         var bottom=new Border {BorderBrush=edge,BorderThickness=new Thickness(0,1,0,0),Child=footer};Grid.SetRow(bottom,2);Grid.SetColumnSpan(bottom,3);root.Children.Add(bottom);
         _loading=true;
         Choices.SelectedIndex=choice.Curved?1:0;ThicknessInput.Value=(decimal)choice.Thickness;
+        PurposeInput.SelectedIndex=(int)choice.Purpose;BaseInput.Value=(decimal)choice.BaseOffset;
         FollowStorey.IsChecked=choice.Height==0;HeightInput.Value=(decimal)(choice.Height==0?storeyHeight:choice.Height);
         _customHeight=HeightInput.Value.Value;
         AxisInput.SelectedIndex=choice.AxisOffset.HasValue?3:(int)choice.AxisPlacement;
         OffsetInput.Value=(decimal)(choice.AxisOffset??0);MaterialInput.Text=choice.Material;_loading=false;
         Choices.SelectionChanged+=(_,_)=>UpdateDraft();AxisInput.SelectionChanged+=(_,_)=>UpdateDraft();
+        PurposeInput.SelectionChanged+=(_,_)=>{
+            if(!_loading && PurposeInput.SelectedIndex==1 && FollowStorey.IsChecked==true){FollowStorey.IsChecked=false;HeightInput.Value=1100;}
+            UpdateDraft();
+        };
         FollowStorey.IsCheckedChanged+=(_,_)=>{
             if(_loading)return;
             _loading=true;
@@ -85,7 +93,7 @@ internal sealed class WallDrawingWindow : Window
             else HeightInput.Value=_customHeight;
             _loading=false;UpdateDraft();
         };
-        foreach(var input in new[]{ThicknessInput,HeightInput,OffsetInput}) {
+        foreach(var input in new[]{ThicknessInput,HeightInput,OffsetInput,BaseInput}) {
             input.ValueChanged+=(_,_)=>UpdateDraft();
             input.PropertyChanged+=(_,e)=>{if(e.Property==NumericUpDown.TextProperty)UpdateDraft();};
         }
@@ -109,18 +117,19 @@ internal sealed class WallDrawingWindow : Window
     {
         if(Choices.SelectedIndex<0||AxisInput.SelectedIndex<0)return null;
         bool Number(NumericUpDown field,out double number)=>double.TryParse(field.Text,NumberStyles.Float,CultureInfo.CurrentCulture,out number)&&double.IsFinite(number);
-        if(!Number(ThicknessInput,out var thickness))return null;
+        if(!Number(ThicknessInput,out var thickness)||!Number(BaseInput,out var baseOffset))return null;
         var height=0d;var offset=0d;
         if(FollowStorey.IsChecked!=true&&(!Number(HeightInput,out height)||height<10))return null;
         if(AxisInput.SelectedIndex==3&&!Number(OffsetInput,out offset))return null;
         return new(Choices.SelectedIndex==1,thickness,height,
             AxisInput.SelectedIndex==3?WallAxisPlacement.Center:(WallAxisPlacement)AxisInput.SelectedIndex,
-            AxisInput.SelectedIndex==3?offset:null,MaterialInput.Text??"");
+            AxisInput.SelectedIndex==3?offset:null,MaterialInput.Text??"",(WallPurpose)PurposeInput.SelectedIndex,baseOffset);
     }
     private void UpdateDraft()
     {
         if(_loading)return;
         HeightInput.IsEnabled=FollowStorey.IsChecked!=true;OffsetInput.IsEnabled=AxisInput.SelectedIndex==3;
+        FollowStorey.IsEnabled=PurposeInput.SelectedIndex!=1;
         var choice=Draft();var error=choice?.Validate()??(choice==null?"请填写有效参数；自定义墙高至少 10 mm。":null);
         Draw.IsEnabled=error==null;
         _heading.Text=Choices.SelectedIndex==1?"弧墙":"直墙";

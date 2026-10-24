@@ -12,11 +12,12 @@ namespace BatchPdfPublisher.BuildingModel
     public sealed class CadBuildingProbeDocument
     {
         public int SchemaVersion { get; set; } = 1;
-        public string Purpose { get; set; } = "天正墙门窗只读字段核验；不是模型导入文件";
+        public string Purpose { get; set; } = "天正构件只读核验；几何与对照类别不是模型导入映射";
         public string CapturedAt { get; set; }
         public string DrawingPath { get; set; }
         public string DrawingFingerprint { get; set; }
         public string CadVersion { get; set; }
+        public string DrawingUnits { get; set; }
         public string TianzhengEnvironment { get; set; }
         public int? DbmodBefore { get; set; }
         public int? DbmodAfter { get; set; }
@@ -43,11 +44,18 @@ namespace BatchPdfPublisher.BuildingModel
     {
         public string Handle { get; set; }
         public string DxfName { get; set; }
+        public string RxClassName { get; set; }
         public string ManagedType { get; set; }
         public string ComType { get; set; }
         public string Layer { get; set; }
         public string Category { get; set; }
         public string Note { get; set; }
+        /// <summary>User-supplied comparison label only; never an import classification.</summary>
+        public string ReferenceKind { get; set; }
+        public string GeometryStatus { get; set; }
+        public int UnsupportedGeometry { get; set; }
+        public bool GeometryTruncated { get; set; }
+        public List<CadProbeGeometryPath> GeometryPaths { get; set; } = new List<CadProbeGeometryPath>();
         public string CurveStatus { get; set; }
         public CadProbePoint CurveStart { get; set; }
         public CadProbePoint CurveMidpoint { get; set; }
@@ -67,6 +75,20 @@ namespace BatchPdfPublisher.BuildingModel
         public double? CandidateThickness { get; set; }
         public double? CandidateAxisOffset { get; set; }
         public string Caption { get { return Category + " · " + Handle + " · " + DxfName; } }
+    }
+
+    /// <summary>Read-only diagnostic geometry. Samples are for preview, not model contours.</summary>
+    public sealed class CadProbeGeometryPath
+    {
+        public string Kind { get; set; }
+        public string SourcePath { get; set; }
+        public bool Closed { get; set; }
+        public List<CadProbePoint> Vertices { get; set; } = new List<CadProbePoint>();
+        public List<double> Bulges { get; set; } = new List<double>();
+        public CadProbePoint Normal { get; set; }
+        /// <summary>Local-to-drawing matrix; raw vertices/bulges/normals remain local.</summary>
+        public List<double> SourceTransform { get; set; } = new List<double>();
+        public List<CadProbePoint> PreviewPoints { get; set; } = new List<CadProbePoint>();
     }
 
     public sealed class CadProbeSegment
@@ -96,6 +118,19 @@ namespace BatchPdfPublisher.BuildingModel
 
     public static class CadBuildingProbeRules
     {
+        // T20 V9 native samples and a disposable TBalcony fixture checked these
+        // scalar getters. A typelib declaration alone is not sufficient evidence.
+        public static string[] VerifiedProperties(string dxf)
+        {
+            if (string.Equals(dxf, "TCH_WALL", StringComparison.OrdinalIgnoreCase))
+                return new[] { "ObjectName", "LeftWidth", "RightWidth", "Height", "Elevation" };
+            if (string.Equals(dxf, "TCH_OPENING", StringComparison.OrdinalIgnoreCase))
+                return new[] { "ObjectName", "Width", "Height" };
+            if (string.Equals(dxf, "TCH_BALCONY", StringComparison.OrdinalIgnoreCase))
+                return new[] { "ObjectName", "Elevation", "RailWidth", "RailHeight", "SlabThickness", "GirderThickness", "HasGirder" };
+            return new string[0];
+        }
+
         public static bool VerifyCircularWall(CadBuildingProbeEntity entity)
         {
             if(entity==null)return false;
@@ -138,6 +173,8 @@ namespace BatchPdfPublisher.BuildingModel
             || string.Equals(dxf,"TCH_CURTAIN_WALL",StringComparison.OrdinalIgnoreCase);
         public static string Classify(string dxf, string com)
         {
+            if (string.Equals(dxf, "TCH_BALCONY", StringComparison.OrdinalIgnoreCase)) return "天正阳台候选（做法待核验）";
+            if (string.Equals(dxf, "TCH_APRON", StringComparison.OrdinalIgnoreCase)) return "天正散水候选（参数待核验）";
             var identities = new[] { dxf ?? "", com ?? "" };
             if(IsWall(dxf) && string.Equals(dxf,"TCH_CURTAIN_WALL",StringComparison.OrdinalIgnoreCase))return "天正幕墙";
             if (identities.Any(x => x.Equals("TCH_WALL", StringComparison.OrdinalIgnoreCase)

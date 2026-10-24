@@ -44,6 +44,9 @@ internal sealed partial class ProbeWindow
 
     private void BeginSlabTool(PlanTool tool)
     {
+        if(tool==PlanTool.SlabOutline&&_session.Model.Slabs.FirstOrDefault(s=>s.Id==_selectedId) is {Purpose:SlabPurpose.Balcony} balcony
+            &&balcony.Outline.Count<=256)
+        {BeginOutdoorDrawing(true,source:balcony);return;}
         if (tool != PlanTool.Slab && _session.Model.Slabs.All(s => s.Id != _selectedId))
         { _status.Text = "请先选择楼板。"; return; }
         if (tool != PlanTool.Slab && !ReadSlabDraft(out _)) return;
@@ -182,7 +185,7 @@ internal sealed partial class ProbeWindow
         }
         _properties.Margin = new Thickness(12, 0, 12, 8);
         _properties.Spacing = 8;
-        _propertyHeading.Text = "楼板属性";
+        _propertyHeading.Text = slab.Purpose==SlabPurpose.Balcony ? "阳台属性" : "楼板属性";
         _slabPropertyCode.Text = _slabDraft.Code; _slabPropertyCode.IsVisible = true;
         if (_slabPropertyMark != null) _slabPropertyMark.IsVisible = true;
         var basic = SlabSection("基本参数");

@@ -10,6 +10,8 @@
     <Compile Include="BuildingModelSceneExportTests.cs" />
     <Compile Include="BuildingModelNativeExportTests.cs" />
     <Compile Include="FbxPlanarFacesTests.cs" />
+    <Compile Include="FbxPrecisionCleanupTests.cs" />
+    <Compile Include="FbxDisplayLayerTests.cs" />
     <Compile Include="../BuildingModelStudio.AvaloniaProbe/ModelExportService.cs" Link="ModelExportService.cs" />
     <Compile Include="../BuildingModelStudio.AvaloniaProbe/BlenderProcessGuard.cs" Link="BlenderProcessGuard.cs" />
     <ProjectReference Include="../BuildingModel.Core/BuildingModel.Core.csproj" />

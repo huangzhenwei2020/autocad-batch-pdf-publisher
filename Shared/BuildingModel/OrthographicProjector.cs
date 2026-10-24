@@ -1503,7 +1503,8 @@ namespace BatchPdfPublisher.BuildingModel
                 for(var i=0;i+1<samples.Count;i++) {
                     var a=samples[i];var b=samples[i+1];
                     var piece=new WallModel {Id=wall.Id,StoreyId=wall.StoreyId,X1=a.X,Y1=a.Y,X2=b.X,Y2=b.Y,
-                        Thickness=wall.Thickness,Height=wall.Height,AxisOffset=WallReferenceGeometry.BodyOffset(wall)};
+                        Thickness=wall.Thickness,Height=wall.Height,AxisOffset=WallReferenceGeometry.BodyOffset(wall),
+                        Purpose=wall.Purpose,BaseOffset=wall.BaseOffset};
                     AddWall(model,piece,frame,isSection,cutProj,viewDepth,rects,cutRects,extraLines,openingDetails,openingLibrary,scale,document);
                 }
                 return;

@@ -9,6 +9,79 @@ import bpy
 from mathutils import Vector
 from mathutils.bvhtree import BVHTree
 from io_scene_fbx.import_fbx import validate_blend_names
+from io_scene_fbx import parse_fbx
+
+
+def coincident_wall_areas(path):
+    # Blender validates away coordinate-identical polygons, including opposite
+    # caps already present in the source. Account for multiplicity, not holes:
+    # every original triangle still undergoes the bidirectional distance test.
+    root, _ = parse_fbx.parse(str(path))
+    objects = {e.props[0]: e for e in next(e for e in root.elems if e.id == b'Objects').elems}
+    connections = next(e for e in root.elems if e.id == b'Connections').elems
+    attached = collections.defaultdict(list)
+    for c in connections:
+        if c.props[0] == b'OO': attached[c.props[2]].append(c.props[1])
+    result = {}
+    for model in objects.values():
+        if model.id != b'Model': continue
+        name = validate_blend_names(model.props[1].split(b'\x00\x01')[0])
+        parts = [objects[i] for i in attached[model.props[0]] if i in objects]
+        materials = [p.props[1].split(b'\x00\x01')[0] for p in parts if p.id == b'Material']
+        if len(materials) != 1 or not materials[0].startswith(b'WL_Material: wall ['): continue
+        removed = 0
+        for geometry in (p for p in parts if p.id == b'Geometry'):
+            data = {e.id: e for e in geometry.elems}
+            coords = data[b'Vertices'].props[0]
+            points = [tuple(coords[i:i+3]) for i in range(0,len(coords),3)]
+            seen = set(); loop = []
+            for index in data[b'PolygonVertexIndex'].props[0]:
+                loop.append(points[-index-1 if index < 0 else index])
+                if index >= 0: continue
+                rotations = [tuple(r[i:]+r[:i]) for r in (loop,loop[::-1]) for i in range(len(r))]
+                key = min(rotations)
+                if key in seen:
+                    normal = [0.,0.,0.]
+                    for i in range(1,len(loop)-1):
+                        u = [loop[i][j]-loop[0][j] for j in range(3)]
+                        v = [loop[i+1][j]-loop[0][j] for j in range(3)]
+                        cross = (u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0])
+                        normal = [normal[j]+cross[j] for j in range(3)]
+                    removed += math.sqrt(sum(n*n for n in normal))/2
+                else: seen.add(key)
+                loop = []
+        if removed: result[name] = removed
+    return result
+
+
+def check_display_layers(path, scene):
+    root, _ = parse_fbx.parse(str(path))
+    objects = next(e for e in root.elems if e.id == b'Objects').elems
+    layers = [e for e in objects if e.id == b'CollectionExclusive']
+    if not layers:
+        # Historical exports predate native floor layers and use ID-bearing names.
+        assert any(e.id == b'Model' and e.props[1].startswith(b'WL_Element: ') for e in objects)
+        return
+    props = lambda e: {p.props[0]: p.props[4:] for x in e.elems if x.id == b'Properties70' for p in x.elems}
+    assert len(layers) == len(scene['Storeys']), 'Floor layer count changed'
+    models = {props(e)[b'WL_ElementId'][0].decode(): e for e in objects
+              if e.id == b'Model' and b'WL_ElementId' in props(e)}
+    floors = {props(e)[b'WL_StoreyId'][0].decode(): e for e in layers}
+    connections = next(e for e in root.elems if e.id == b'Connections').elems
+    for floor in scene['Storeys']:
+        layer = floors[floor['Id']]
+        assert layer.props[2] == b'DisplayLayer'
+        assert layer.props[1].split(b'\0\1')[1] == b'DisplayLayer', 'Invalid FBX layer namespace'
+        assert props(layer)[b'Show'] == [1] and props(layer)[b'Freeze'] == [0]
+        members = [c.props[1] for c in connections if c.props[0] == b'OO' and c.props[2] == layer.props[0]]
+        expected = {models[i['Id']].props[0] for i in scene['Instances'] if i['StoreyId'] == floor['Id']}
+        assert expected.issubset(members) and len(members) == len(expected) + 1, 'Wrong floor membership'
+    for instance in scene['Instances']:
+        model = models[instance['Id']]
+        name = model.props[1].split(b'\0\1')[0].decode()
+        assert instance['Id'] not in name and '[' not in name, 'Internal ID in displayed object name'
+        assert props(model)[b'WL_StoreyId'][0].decode() == instance['StoreyId']
+    print('FBX_DISPLAY_LAYERS_OK', len(layers), 'readableNames hiddenIdentities exactMembership')
 
 
 def triangle_distance(point, a, b, c):
@@ -43,6 +116,7 @@ def triangle_distance(point, a, b, c):
 
 arguments = sys.argv[sys.argv.index("--") + 1:]
 source = Path(arguments[0]).resolve()
+coincident_caps = coincident_wall_areas(source)
 bpy.ops.wm.read_factory_settings(use_empty=True)
 bpy.ops.import_scene.fbx(filepath=str(source), use_anim=False)
 meshes = [obj for obj in bpy.context.scene.objects if obj.type == "MESH"]
@@ -54,6 +128,7 @@ dimensions = [(maximum[i] - minimum[i]) * 1000 for i in range(3)]
 scene = json.loads(Path(arguments[1]).read_text(encoding="utf-8-sig")) if len(arguments) > 1 else None
 expected_size = [7440, 5640, 6900]
 if scene:
+    check_display_layers(source, scene)
     world = [Vector([p[i] + instance["Translation"][i] for i in range(3)])
              for instance in scene["Instances"] for p in scene["Meshes"][instance["MeshIndex"]]["Vertices"]]
     expected_size = [max(p[i] for p in world) - min(p[i] for p in world) for i in range(3)]
@@ -73,7 +148,7 @@ if scene:
     maximum_area_relative_error = 0
     opening_boundaries = 0
     for obj in meshes:
-        matches = [i for i in scene["Instances"] if obj.name == validate_blend_names(
+        matches = [i for i in scene["Instances"] if obj.get('WL_ElementId') == i['Id'] or obj.name == validate_blend_names(
             ("WL_Element: " + i["Name"] + " [" + i["Id"] + "]").encode("utf-8"))]
         assert len(matches) == 1, obj.name
         instance = matches[0]; matched.add(instance["Id"])
@@ -131,6 +206,11 @@ if scene:
                     total+=math.sqrt(sum(x*x for x in cross))/2
                 return total
             expected_area = surface_area(expected_double, expected_faces)
+            if kind == 'wall' and obj.name in coincident_caps:
+                duplicate_area = coincident_caps[obj.name]
+                assert 0 < duplicate_area < expected_area
+                expected_area -= duplicate_area
+                print('FBX_COINCIDENT_CAPS_ACCOUNTED', obj.name, duplicate_area)
             actual_area = surface_area(actual_double, actual_faces)
             relative = abs(expected_area - actual_area)/max(1,expected_area)
             maximum_area_relative_error = max(maximum_area_relative_error, relative)
