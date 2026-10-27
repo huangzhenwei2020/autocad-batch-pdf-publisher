@@ -638,6 +638,7 @@ internal sealed partial class ProbeWindow : Window
         var axisEditStrip=BuildAxisEditStrip();Grid.SetRow(axisEditStrip,1);planLayout.Children.Add(axisEditStrip);
         Grid.SetRow(_planCanvas, 2);
         planLayout.Children.Add(_planCanvas);
+        Grid.SetRow(_outdoorPlanTools,2);planLayout.Children.Add(_outdoorPlanTools);
         var openingDistanceLayer=BuildOpeningDistanceLayer();Grid.SetRow(openingDistanceLayer,2);planLayout.Children.Add(openingDistanceLayer);
         _openingContextTools.HorizontalAlignment=HorizontalAlignment.Left;_openingContextTools.VerticalAlignment=VerticalAlignment.Top;
         _openingContextTools.Margin=new Thickness(8,8,0,0);Grid.SetRow(_openingContextTools,2);planLayout.Children.Add(_openingContextTools);
@@ -666,6 +667,7 @@ internal sealed partial class ProbeWindow : Window
         _workspaces.SelectionChanged += (_, e) => {
             if(!ReferenceEquals(e.Source,_workspaces))return;
             UpdateWorkspaceTabs();RefreshProperties();
+            OutdoorWorkspaceChanged();
             if(_workspaces.SelectedIndex==2) { FocusDrawingBrowser();_drawingPreviewTask=RefreshDrawingViewAsync(); }
         };
         _workspaces.SelectedIndex = Program.Smoke || Program.SnapshotPath != null ? 0 : 1;
@@ -2143,6 +2145,7 @@ internal sealed partial class ProbeWindow : Window
         {
             if(e.Key==Key.Escape){CancelOutdoorDraft();e.Handled=true;return;}
             if(e.Key==Key.Enter){_outdoorCommitTask=FinishOutdoorDrawingAsync();e.Handled=true;return;}
+            if(e.Key==Key.Back){OutdoorPrevious();e.Handled=true;return;}
             if(e.Key==Key.Z&&e.KeyModifiers==KeyModifiers.Control){_ = UndoModelAsync();e.Handled=true;return;}
             if(e.Key==Key.Delete||(e.KeyModifiers.HasFlag(KeyModifiers.Control)&&e.Key is Key.Z or Key.Y)){e.Handled=true;return;}
         }

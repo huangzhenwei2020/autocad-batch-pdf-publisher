@@ -78,12 +78,30 @@ public sealed class LineCorrectionNativeTests
             doc.Editor.SetImpliedSelection(Ids.ToArray());
             using (var form = (Form)Activator.CreateInstance(formType, BindingFlags.Instance | BindingFlags.NonPublic, null, new object[] { doc }, null))
             {
-                foreach (var size in new[] { new Size(800, 480), new Size(620, 400) })
+                foreach (var size in new[] { new Size(960, 660), new Size(800, 480), new Size(620, 400) })
                 {
                     form.ClientSize = size; form.Show(); System.Windows.Forms.Application.DoEvents(); form.PerformLayout(); form.Refresh();
                     var grid = (DataGridView)formType.GetField("_grid", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(form);
-                    Check(grid.Rows.Count == 8 && grid.Width > 500 && grid.Height > 80, "Window preview/layout is blank.");
+                    using (var diagnostic = new Bitmap(form.Width, form.Height))
+                    { form.DrawToBitmap(diagnostic, new Rectangle(Point.Empty, diagnostic.Size)); diagnostic.Save(System.IO.Path.Combine(_folder, "layout-" + size.Width + ".png")); }
+                    Check(grid.Rows.Count == 8 && grid.Width > 500 && grid.Height > 80, "Window preview/layout is blank: rows=" + grid.Rows.Count
+                        + " grid=" + grid.Size + " client=" + form.ClientSize);
                     Check(Controls(form).Any(c => c is Button && c.Text == "选择对象" && c.Visible && c.Height >= 25), "Selection button is hidden.");
+                    Check(form.BackColor.GetBrightness() < .25 && grid.BackgroundColor.GetBrightness() < .25, "Dialog theme is inconsistent.");
+                    foreach (var control in Controls(form).Where(c => c.Visible && (c is Button || c is CheckBox || c is NumericUpDown)))
+                        Check(control.Left >= 0 && control.Right <= control.Parent.ClientSize.Width + 1 && control.Top >= 0
+                            && control.Bottom <= control.Parent.ClientSize.Height + 1, "Clipped control: " + control.Text + " " + control.Bounds + " parent=" + control.Parent.ClientSize);
+                    var previewControl = (Control)formType.GetField("_preview", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(form);
+                    var compact = !previewControl.Visible;
+                    if (compact) { Controls(form).OfType<Button>().Single(c => c.Text == "预览").PerformClick(); System.Windows.Forms.Application.DoEvents(); }
+                    Check(previewControl.Width > 500 && previewControl.Height > 30, "Graphic preview is hidden.");
+                    var projectionField = previewControl.GetType().GetField("Projection", BindingFlags.Instance | BindingFlags.NonPublic);
+                    foreach (var mode in Controls(form).OfType<RadioButton>())
+                    {
+                        mode.Checked = true; System.Windows.Forms.Application.DoEvents();
+                        Check((int)projectionField.GetValue(previewControl) == (mode.Text == "XY" ? 0 : mode.Text == "XZ" ? 1 : 2), "Projection toggle did not update.");
+                    }
+                    Controls(form).OfType<RadioButton>().Single(c => c.Text == "XY").Checked = true;
                     var angle = (NumericUpDown)formType.GetField("_angle", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(form);
                     angle.Value = 0; System.Windows.Forms.Application.DoEvents();
                     Check(grid.Rows.Cast<DataGridViewRow>().Sum(r => Convert.ToInt32(r.Cells[2].Value)) == 0, "Angle input did not refresh preview.");
@@ -92,12 +110,41 @@ public sealed class LineCorrectionNativeTests
                     flatten.Checked = false; System.Windows.Forms.Application.DoEvents();
                     Check(grid.Rows.Cast<DataGridViewRow>().Sum(r => Convert.ToInt32(r.Cells[3].Value)) == 0, "Z toggle did not refresh preview.");
                     flatten.Checked = true;
+                    var horizontal = (CheckBox)formType.GetField("_horizontal", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(form);
+                    var vertical = (CheckBox)formType.GetField("_vertical", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(form);
+                    horizontal.Checked = false; vertical.Checked = false;
+                    Check(!angle.Enabled && grid.Rows.Cast<DataGridViewRow>().Sum(r => Convert.ToInt32(r.Cells[2].Value)) == 0, "Z-only mode changed directions.");
+                    flatten.Checked = false;
+                    var apply = (Button)formType.GetField("_apply", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(form);
+                    Check(!apply.Enabled, "No-op application remained enabled.");
+                    Controls(form).OfType<Button>().Single(c => c.Text == "恢复默认").PerformClick();
+                    Check(angle.Value == 1 && angle.Enabled && horizontal.Checked && vertical.Checked && flatten.Checked && apply.Enabled, "Default options did not reset.");
+                    Check(!string.IsNullOrWhiteSpace(angle.Text) && angle.Controls.OfType<TextBox>().All(c => !string.IsNullOrWhiteSpace(c.Text)), "Angle input text disappeared after re-enabling.");
+                    grid.CurrentCell = grid.Rows[1].Cells[0]; System.Windows.Forms.Application.DoEvents();
+                    Check(ReferenceEquals(previewControl.GetType().GetField("Highlight", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(previewControl), grid.Rows[1].DataBoundItem), "Row selection did not highlight the preview.");
+                    if (compact)
+                    {
+                        form.Refresh(); System.Windows.Forms.Application.DoEvents();
+                        using (var image = new Bitmap(form.Width, form.Height))
+                        { form.DrawToBitmap(image, new Rectangle(Point.Empty, image.Size)); image.Save(System.IO.Path.Combine(_folder, "line-ui-preview-" + size.Width + ".png")); }
+                        Controls(form).OfType<Button>().Single(c => c.Text == "明细").PerformClick(); System.Windows.Forms.Application.DoEvents();
+                        Check(grid.Visible && grid.Height > 80, "Compact details did not restore.");
+                    }
+                    form.Refresh(); System.Windows.Forms.Application.DoEvents();
                     using (var image = new Bitmap(form.Width, form.Height))
                     { form.DrawToBitmap(image, new Rectangle(Point.Empty, image.Size)); image.Save(System.IO.Path.Combine(_folder, "line-ui-" + size.Width + ".png")); }
                 }
                 form.Hide();
             }
             doc.Editor.SetImpliedSelection(new ObjectId[0]);
+            using (var empty = (Form)Activator.CreateInstance(formType, BindingFlags.Instance | BindingFlags.NonPublic, null, new object[] { doc }, null))
+            {
+                empty.Show(); System.Windows.Forms.Application.DoEvents();
+                Check(!((Button)formType.GetField("_apply", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(empty)).Enabled, "Empty selection may apply.");
+                using (var image = new Bitmap(empty.Width, empty.Height))
+                { empty.DrawToBitmap(image, new Rectangle(Point.Empty, image.Size)); image.Save(System.IO.Path.Combine(_folder, "line-ui-empty.png")); }
+                empty.Hide();
+            }
             using (var tx = doc.Database.TransactionManager.StartTransaction())
                 Check(((Line)tx.GetObject(Ids[0], OpenMode.ForRead)).StartPoint == new Point3d(100, 300, 10), "Preview/cancel wrote to CAD.");
             var assembly = typeof(BatchPdfPublisher.Commands).Assembly;

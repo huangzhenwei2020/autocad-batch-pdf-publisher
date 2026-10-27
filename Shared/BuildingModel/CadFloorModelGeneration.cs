@@ -172,6 +172,7 @@ namespace BatchPdfPublisher.BuildingModel
                 var hostMap = new Dictionary<string,WallModel>(StringComparer.OrdinalIgnoreCase);
                 hostMaps.Add(floor.Id,hostMap);
                 var wallNumber=0;
+                var projectedSourceWalls=0;
                 foreach (var source in capture.Floor.WallCandidates.Where(w=>w==null || !(capture.ExcludedWallHandles ?? new List<string>()).Contains(w.Handle)))
                 {
                     wallNumber++;
@@ -187,14 +188,20 @@ namespace BatchPdfPublisher.BuildingModel
                     // Verified native thickness takes priority; missing thickness uses the modelling default.
                     if(source.CandidateThickness.HasValue && !source.CandidateAxisOffset.HasValue)
                         throw new InvalidDataException(floor.Name + " · 第 " + wallNumber + " 面墙缺少左右墙厚定位。");
-                    var elevation = Number(source,"Elevation");
-                    if (!elevation.HasValue || !Finite(elevation.Value) || Math.Abs(elevation.Value*scale)>0.1)
-                        throw new InvalidDataException(floor.Name + " · 第 " + wallNumber + " 面墙的非零/未知墙底偏移尚未支持，请核对或排除。");
+                    // A registered plan supplies XY geometry, not the model's Z
+                    // datum. Tianzheng walls can retain an arbitrary absolute Z
+                    // after moving a plan; its display openings may still be Z=0.
+                    // Require an actual horizontal datum, then use the registered
+                    // model floor. Never flatten or rewrite the source drawing.
+                    if(!Finite(source.CurveStart.Z)||!Finite(source.CurveEnd.Z)
+                        ||Math.Abs(source.CurveStart.Z-source.CurveEnd.Z)*scale>.1)
+                        throw new InvalidDataException(floor.Name+" · 第 "+wallNumber+" 面墙的水平定位线无效。");
+                    var elevation=Number(source,"Elevation");
                     // CAD 平面提供位置与墙厚；模型的层高由楼层设置统一决定。
                     // Height=0 使用已有的随层高机制，引用层也采用各自的实际层高。
                     var wall = new WallModel { Id = Identity("wall",capture.Probe.DrawingFingerprint,floor.Id,source.Handle), StoreyId = floor.Id,
                         X1=a.X,Y1=a.Y,X2=b.X,Y2=b.Y,Bulge=circular?source.CurveBulge:0,Thickness=source.CandidateThickness.HasValue ? source.CandidateThickness.Value*scale : 200d,
-                        AxisOffset=source.CandidateAxisOffset.GetValueOrDefault()*scale,Height=0 };
+                        AxisOffset=source.CandidateAxisOffset.GetValueOrDefault()*scale,Height=0,BaseOffset=0 };
                     if (!Finite(wall.X1) || !Finite(wall.Y1) || !Finite(wall.X2) || !Finite(wall.Y2)
                         || !Finite(wall.Thickness) || wall.Thickness<=0 || !Finite(wall.AxisOffset.Value) || !Finite(wall.Height) || wall.Height<0
                         || Math.Sqrt((b.X-a.X)*(b.X-a.X)+(b.Y-a.Y)*(b.Y-a.Y))<1)
@@ -214,6 +221,7 @@ namespace BatchPdfPublisher.BuildingModel
                         structureMessages.Add(floor.Name+" · 已保留模型中修改过的门窗及其宿主墙，未覆盖该墙的 CAD 定位变化。");
                     }
                     hostMap.Add(source.Handle,wall); walls.Add(wall);
+                    if(Math.Abs(source.CurveStart.Z*scale)>.1||!elevation.HasValue||!Finite(elevation.Value)||Math.Abs(elevation.Value*scale)>.1)projectedSourceWalls++;
                     }
                     catch (Exception ex) when (ex is InvalidDataException || ex is ArgumentException)
                     {
@@ -228,6 +236,7 @@ namespace BatchPdfPublisher.BuildingModel
                         }
                     }
                 }
+                if(projectedSourceWalls>0)structureMessages.Add(floor.Name+" · "+projectedSourceWalls+" 面墙已按登记楼层标高定位，CAD 源 Z 仅作参考，原图未修改。");
                 foreach(var localHost in model.Walls.Where(w=>w.StoreyId==floor.Id && protectedHostIds.Contains(w.Id)
                     && previous.Walls.Any(old=>old.Id==w.Id) && !hostMap.Values.Any(existing=>existing.Id==w.Id)))
                 {

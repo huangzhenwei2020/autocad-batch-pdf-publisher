@@ -494,7 +494,27 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
                         ||generated.Walls[0].Thickness!=200 || generated.Walls[0].AxisOffset!=-20)
                         throw new InvalidDataException("原生圆弧未进入登记模型。");
                 }
+                foreach(var z in new[]{-10742.71653,3000d})
+                foreach(var isArc in new[]{false,true})
+                using(var native=isArc?(Curve)new Arc(new Point3d(0,0,z),4000,0,Math.PI/2):new Line(new Point3d(0,0,z),new Point3d(6000,0,z)))
+                {
+                    var record=new CadBuildingProbeEntity {Handle="PLAN-Z",DxfName="TCH_WALL",Category="天正墙候选",
+                        Fields=new List<CadProbeField> {CadBuildingProbeRules.Field("LeftWidth",true,80d,null),CadBuildingProbeRules.Field("RightWidth",true,120d,null)}};
+                    ReadNativeWallCurve(native,record);CadBuildingProbeRules.DeriveWall(record);
+                    if(record.CurveStart==null||Math.Abs(record.CurveStart.Z-z)>1e-8||(isArc?!record.CircularHorizontalArcVerified:!record.StraightHorizontalLineVerified))
+                        throw new InvalidDataException("Native plan Z geometry was not verified.");
+                    var model=BuildingModelProjectWorkflow.Empty("Plan Z QA");model.Storeys[0].Elevation=6000;
+                    var floor=CadFloorRegistrationContext.Create(Path.Combine(Path.GetTempPath(),"plan-z-native-qa","model.json"),model,"1F",new PointModel(),1);
+                    floor.SetSourceDatum(new PointModel(),new PointModel(10,0));floor.RegionMin=new PointModel(-9000,-9000);floor.RegionMax=new PointModel(9000,9000);
+                    floor.RegionPolygon=new List<PointModel>{new PointModel(-9000,-9000),new PointModel(9000,-9000),new PointModel(9000,9000),new PointModel(-9000,9000)};floor.WallCandidates.Add(record);
+                    var registry=new CadFloorPlanRegistry {ModelPath=floor.ModelPath,ReplaceRegisteredConstruction=true,Floors=new List<CadFloorPlanCapture>{
+                        new CadFloorPlanCapture {Floor=floor,Probe=new CadBuildingProbeDocument {DrawingFingerprint="native-plan-z",Entities=new List<CadBuildingProbeEntity>{record}}}}};
+                    var generated=CadFloorModelGeneration.Build(model,registry);
+                    if(generated.Walls.Count!=1||generated.BaseElevationOf(generated.Walls[0])!=6000||generated.Walls[0].Thickness!=200||generated.Walls[0].AxisOffset!=-20)
+                        throw new InvalidDataException("Native nonzero source Z suppressed a model-floor wall.");
+                }
                 if(Dbmod()!=dbmod)throw new InvalidDataException("弧墙核验修改了当前图纸。");
+                document.Editor.WriteMessage("\nCAD_REGISTERED_PLAN_Z_NATIVE_OK positiveNegativeSourceZ lineArc unknownElevation modelFloor6000 unchangedDrawing");
                 document.Editor.WriteMessage("\nCAD_REGISTERED_ARC_NATIVE_OK nativeArc bulgePolyline clockwise majorArc mirrored rejectEllipse tilted fullCircle mixedCurve verifiedSamples generateModel thicknessOffset unchangedDrawing");
             }
             finally { foreach(var curve in curves)curve.Dispose(); }

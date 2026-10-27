@@ -107,6 +107,19 @@ public sealed class CadModelWorkspaceModelessNativeTests
                     (Func<Task>)(()=> (Task)window.GetType().GetMethod("CaptureWorkspace",Private).Invoke(window,new object[]{true}))});
                 Check(picks==1&&window.IsVisible&&IsWindowEnabled(Application.MainWindow.Handle),"cancelled picking failed to restore modeless workspace");
                 Trace("cancelled pick completed");
+                var legacy=new CadFloorPlanRegistry {ModelPath=@"C:\old-computer\model.json"};
+                var legacyDatum=CadFloorRegistrationContext.Create(path,BuildingModelJson.LoadModel(path),"1F",new PointModel(),1);
+                legacyDatum.ModelPath=legacy.ModelPath;legacy.Datums.Add(legacyDatum);
+                void WriteLegacy(){using(var stream=File.Create(CadFloorPlanRegistry.FilePath(path)))new System.Runtime.Serialization.Json.DataContractJsonSerializer(typeof(CadFloorPlanRegistry)).WriteObject(stream,legacy);}
+                WriteLegacy();var legacyBytes=File.ReadAllBytes(CadFloorPlanRegistry.FilePath(path));window.LoadModel(path);await Task.Delay(100);
+                Check(Field<CadRegistryRecovery>(window,"_registryRecovery")!=null&&window.IsVisible&&IsWindowEnabled(Application.MainWindow.Handle),"mismatched registration blocks modeless CAD workspace");
+                var associate=Descendants(window).OfType<Button>().Single(b=>b.Name=="CadRegistryAssociate");associate.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));await Task.Delay(100);
+                Check(Field<CadRegistryRecovery>(window,"_registryRecovery")==null&&CadFloorPlanRegistry.Load(path).Datums.Single().ModelPath==path,"native association action failed");
+                Check(Directory.GetFiles(Path.GetDirectoryName(path),"*.before-association-*.bak").Any(p=>File.ReadAllBytes(p).SequenceEqual(legacyBytes))&&File.ReadAllBytes(path).SequenceEqual(initial),"native association backup/model preservation failed");
+                WriteLegacy();window.LoadModel(path);await Task.Delay(100);
+                Descendants(window).OfType<Button>().Single(b=>b.Name=="CadRegistryStartFresh").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));await Task.Delay(100);
+                Check(CadFloorPlanRegistry.Load(path).Datums.Count==0&&File.ReadAllBytes(path).SequenceEqual(initial),"native reset registration changed existing model");
+                Trace("registration recovery association backup reset modelUnchanged completed");
                 var existing=BuildingModelJson.ModelFilePath(host.ProjectFolder,"6#");
                 BuildingModelProjectWorkflow.CreateNew(existing,BuildingModelProjectWorkflow.Empty("6#"));
                 var oldModel=File.ReadAllBytes(existing);var replace=false;
@@ -166,7 +179,7 @@ public sealed class CadModelWorkspaceModelessNativeTests
                 Field<CadModelProjectEditor>(window,"_floorEditor").UndoDraft();
                 window.LoadModel(path);window.Close();await Task.Delay(100);
                 Trace("document lifecycle completed");
-                File.WriteAllText(Path.Combine(root,"result.txt"),"CAD_MODELESS_WORKSPACE_NATIVE_OK modelessMainEnabled actualCadLine singleWindow commandContext cancelledPick createThreeFloors activeCell duplicateChoice backup asyncHostCompletion generationProgress elapsed receipt lateCallback switchGuard noFocusSteal closedSourceDraft modelUnchanged");
+                File.WriteAllText(Path.Combine(root,"result.txt"),"CAD_MODELESS_WORKSPACE_NATIVE_OK modelessMainEnabled actualCadLine singleWindow commandContext cancelledPick registrationRecovery associateBackup resetExistingModel createThreeFloors activeCell duplicateChoice backup asyncHostCompletion generationProgress elapsed receipt lateCallback switchGuard noFocusSteal closedSourceDraft modelUnchanged");
             }
             catch(System.Exception ex)
             {

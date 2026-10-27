@@ -10,7 +10,7 @@ namespace BatchPdfPublisher.Services
     /// <summary>The approved iOS artwork is embedded in both CAD runtime builds.</summary>
     internal static class RibbonIconAssets
     {
-        internal const string StyleVersion = "WL_IOS_NATIVE_BADGE_8_";
+        internal const string StyleVersion = "WL_IOS_NATIVE_BADGE_9_";
         private static readonly string[] FeatureIds =
         {
             "publisher", "frame", "catalog", "architecture_spec", "stair_detail", "door_window",
@@ -78,7 +78,7 @@ namespace BatchPdfPublisher.Services
                     images.Add(FeatureIds[index], Rasterize(image, 32));
                     SmallImages.Add(FeatureIds[index], Rasterize(image, 16));
                 }
-                foreach (var id in new[] { "building_export", "building_place_view", "building_opening_types", "building_open_studio" })
+                foreach (var id in new[] { "building_export", "building_place_view", "building_opening_types", "building_open_studio", "line_correction" })
                 {
                     var icon = CreateBuildingIcon(id);
                     ScaledImages.Add(id, icon);
@@ -91,7 +91,6 @@ namespace BatchPdfPublisher.Services
                 foreach (var alias in new Dictionary<string, string>
                 {
                     { "room_statistics", "cad_table_xlsx" },
-                    { "line_correction", "drawing_scale" },
                     { "room_statistics_summary", "catalog" }
                 })
                 {
@@ -112,11 +111,13 @@ namespace BatchPdfPublisher.Services
             using (var drawing = visual.RenderOpen())
             {
                 drawing.PushTransform(new ScaleTransform(4, 4));
-                var top = id == "building_export" ? Color.FromRgb(49, 191, 250)
+                var top = id == "line_correction" ? Color.FromRgb(53, 198, 177)
+                    : id == "building_export" ? Color.FromRgb(49, 191, 250)
                     : id == "building_place_view" ? Color.FromRgb(96, 155, 255)
                     : id == "building_opening_types" ? Color.FromRgb(48, 218, 191)
                     : Color.FromRgb(144, 125, 255);
-                var bottom = id == "building_export" ? Color.FromRgb(0, 95, 220)
+                var bottom = id == "line_correction" ? Color.FromRgb(0, 111, 135)
+                    : id == "building_export" ? Color.FromRgb(0, 95, 220)
                     : id == "building_place_view" ? Color.FromRgb(35, 79, 206)
                     : id == "building_opening_types" ? Color.FromRgb(0, 141, 172)
                     : Color.FromRgb(80, 54, 188);
@@ -126,7 +127,14 @@ namespace BatchPdfPublisher.Services
                 drawing.DrawRoundedRectangle(new SolidColorBrush(Color.FromArgb(28, 255, 255, 255)), null,
                     new Rect(3.5, 3.5, 25, 10), 5, 5);
                 var white = new Pen(Brushes.White, 1.8) { LineJoin = PenLineJoin.Round, StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
-                if (id == "building_export")
+                if (id == "line_correction")
+                {
+                    var original = new Pen(new SolidColorBrush(Color.FromRgb(255, 214, 135)), 1.4) { DashStyle = DashStyles.Dash };
+                    DrawPath(drawing, original, "M 7,24 L 24,18 M 21,8 L 24,18");
+                    DrawPath(drawing, white, "M 7,21 L 24,21 24,8 M 19,21 L 19,16 24,16");
+                    drawing.DrawEllipse(Brushes.White, null, new Point(15.5, 21), 1.7, 1.7);
+                }
+                else if (id == "building_export")
                 {
                     DrawPath(drawing, white, "M 9,7 L 19,7 23,11 23,25 9,25 Z M 19,7 L 19,11 23,11 M 12,15 L 19,15 M 12,19 L 17,19");
                     DrawPath(drawing, white, "M 17,21 L 20,24 24,20 M 20,24 L 20,18");

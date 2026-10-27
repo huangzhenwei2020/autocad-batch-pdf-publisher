@@ -18,6 +18,13 @@ internal static class RibbonIconTests
             if (args.Length != 1) throw new ArgumentException("Supply a compiled plugin DLL.");
             var assembly = Assembly.Load(File.ReadAllBytes(Path.GetFullPath(args[0])));
             var flags = BindingFlags.Static | BindingFlags.NonPublic;
+            foreach(var icon in new[]{"file-plus","folder-open","save","copy","rotate-ccw","box","move","square-dashed","check"})
+                using(var stream=assembly.GetManifestResourceStream("WanLuo.ModelManager."+icon+".png"))
+                {
+                    Check(stream!=null,"Missing workspace icon: "+icon);
+                    var bitmap=new BitmapImage();bitmap.BeginInit();bitmap.CacheOption=BitmapCacheOption.OnLoad;bitmap.StreamSource=stream;bitmap.EndInit();
+                    Check(bitmap.PixelWidth>0&&bitmap.PixelHeight>0,"Empty workspace icon: "+icon);
+                }
             var assets = assembly.GetType("BatchPdfPublisher.Services.RibbonIconAssets", true);
             var registry = assembly.GetType("BatchPdfPublisher.Services.FeatureRegistry", true);
             var features = ((IEnumerable)registry.GetProperty("Items", flags).GetValue(null)).Cast<object>().ToList();
@@ -43,6 +50,7 @@ internal static class RibbonIconTests
                 }
             }
             var images = (IDictionary)assets.GetField("Images", flags).GetValue(null);
+            Check(!ReferenceEquals(images["line_correction"], images["drawing_scale"]), "Line correction must have dedicated artwork.");
             Check(ReferenceEquals(images["room_statistics"], images["cad_table_xlsx"]), "Room statistics icon mapping");
             Check(ReferenceEquals(images["room_statistics_summary"], images["catalog"]), "Room summary icon mapping");
             Console.WriteLine("RIBBON_ICONS_OK " + ids.Count + " features large small preview frozen nonblank roomMappings");

@@ -303,7 +303,9 @@ internal static class CadFloorModelGenerationTests
         capture.Openings.RemoveAt(capture.Openings.Count-1);
         capture.Probe.Entities.Clear();
         wall.StraightHorizontalLineVerified=false; WarnAndPreserve(model,registry); wall.StraightHorizontalLineVerified=true;
-        wall.Fields.First(f=>f.Name=="Elevation").Number=double.NaN; WarnAndPreserve(model,registry); wall.Fields.First(f=>f.Name=="Elevation").Number=0;
+        wall.Fields.First(f=>f.Name=="Elevation").Number=double.NaN;
+        Check(CadFloorModelGeneration.Build(model,registry).Walls.Count==1,"Unknown CAD elevation metadata must not suppress a verified plan wall.");
+        wall.Fields.First(f=>f.Name=="Elevation").Number=0;
         wall.Fields.First(f=>f.Name=="Height").Number=null;
         Check(CadFloorModelGeneration.Build(model,registry).Walls[0].Height==0,"Missing native wall height must still use the configured model storey height.");
         item.Height=2900;Check(CadFloorModelGeneration.Build(model,registry).CadImport.PendingOpenings.Count==1,
@@ -506,8 +508,7 @@ internal static class CadFloorModelGenerationTests
         foreach(var change in new Action<CadBuildingProbeEntity>[] {
             w=>w.StraightHorizontalLineVerified=false,w=>w.CurveStart=null,
             w=>w.CandidateAxisOffset=null,w=>w.CandidateThickness=-10,
-            w=>w.Fields.First(f=>f.Name=="Elevation").Number=100,
-            w=>w.Fields.First(f=>f.Name=="Elevation").Number=null,
+            w=>w.CurveStart.Z=double.NaN,w=>w.CurveEnd.Z=100,
             w=>w.CurveEnd.X=double.NaN,w=>w.CurveEnd=w.CurveStart,w=>w.Handle=null })
         {
             var mixed=registry.Clone();var bad=registry.Clone().Floors[0].Floor.WallCandidates[0];bad.Handle="bad-wall";change(bad);

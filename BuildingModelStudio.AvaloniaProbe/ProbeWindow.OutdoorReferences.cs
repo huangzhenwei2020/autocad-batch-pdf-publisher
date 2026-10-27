@@ -41,6 +41,7 @@ internal sealed partial class ProbeWindow
     private void ClearOutdoorReferenceHover()
     {
         _outdoorHoveredEdge=null;
+        _planCanvas.OutdoorReference.Clear();_planCanvas.InvalidateVisual();
         if(_outdoorReferenceLabel!=null)_outdoorReferenceLabel.Text="未选择源边";
         if(_outdoorOverlay!=null){_outdoorOverlay.ReferencePoints.Clear();_outdoorOverlay.InvalidateVisual();}
     }
@@ -48,7 +49,7 @@ internal sealed partial class ProbeWindow
     {
         _outdoorReferenceFloor=null;_outdoorEdges.Clear();ClearOutdoorReferenceHover();
     }
-    private OutdoorReferenceEdge? PickOutdoorReference(Point pixel)
+    private OutdoorReferenceEdge? PickOutdoorReference(Point pixel,bool plan=false)
     {
         if(_outdoor is not {} draft)return null;
         if(_outdoorReferenceFloor!=draft.StoreyId)
@@ -63,29 +64,36 @@ internal sealed partial class ProbeWindow
             if(_outdoorReferenceMode==2&&!ring.Closed||
                 _viewport.IsElementHidden(ring.ElementId)||
                 _viewport.IsElementFrozen(ring.ElementId)||
-                !_viewport.IsReferenceElementAvailable(ring.ElementId)&&draft.OriginalSlab?.Id!=ring.ElementId)continue;
+                (plan?!_planCanvas.IsElementSelectable(ring.ElementId):
+                    !_viewport.IsReferenceElementAvailable(ring.ElementId)&&draft.OriginalSlab?.Id!=ring.ElementId))continue;
             if((draft.HasDraft||!_outdoorUseReferenceElevation)&&Math.Abs(ring.Elevation-draft.Elevation(_session.Model))>.5)continue;
             var samples=edge.Samples;
             for(var i=1;i<samples.Count;i++)
             {
-                var a=_viewport.ProjectModelPoint(samples[i-1].X,samples[i-1].Y,ring.Elevation);
-                var b=_viewport.ProjectModelPoint(samples[i].X,samples[i].Y,ring.Elevation);
+                Point? a=plan?_planCanvas.OutdoorScreen(samples[i-1].X,samples[i-1].Y):_viewport.ProjectModelPoint(samples[i-1].X,samples[i-1].Y,ring.Elevation);
+                Point? b=plan?_planCanvas.OutdoorScreen(samples[i].X,samples[i].Y):_viewport.ProjectModelPoint(samples[i].X,samples[i].Y,ring.Elevation);
                 if(a==null||b==null)continue;
                 var dx=b.Value.X-a.Value.X;var dy=b.Value.Y-a.Value.Y;var length=dx*dx+dy*dy;if(length<.01)continue;
                 var t=Math.Clamp(((pixel.X-a.Value.X)*dx+(pixel.Y-a.Value.Y)*dy)/length,0,1);
                 var nearest=new Point(a.Value.X+t*dx,a.Value.Y+t*dy);
                 var distance=Math.Sqrt(Math.Pow(pixel.X-nearest.X,2)+Math.Pow(pixel.Y-nearest.Y,2));
-                if(distance>=best||!_viewport.TryScreenToPlan(nearest,ring.Elevation,out var at))continue;
-                var point=edge.Curve.At(edge.Curve.Parameter(at.X,at.Y));
-                if(!_viewport.IsModelPointVisible(point.X,point.Y,ring.Elevation,true))continue;
+                if(distance>=best)continue;
+                if(!plan){
+                    if(!_viewport.TryScreenToPlan(nearest,ring.Elevation,out var at))continue;
+                    var point=edge.Curve.At(edge.Curve.Parameter(at.X,at.Y));
+                    if(!_viewport.IsModelPointVisible(point.X,point.Y,ring.Elevation,true))continue;
+                }
                 best=distance;found=edge;
             }
         }
         return found;
     }
-    private void HoverOutdoorReference(Point pixel)
+    private void HoverOutdoorReference(Point pixel,bool plan=false)
     {
-        _outdoorHoveredEdge=PickOutdoorReference(pixel);
+        _outdoorHoveredEdge=PickOutdoorReference(pixel,plan);
+        _planCanvas.OutdoorReference=_outdoorHoveredEdge?.Path(_outdoorReferenceMode==2)??new();
+        _planCanvas.OutdoorReferenceClosed=_outdoorReferenceMode==2&&_outdoorHoveredEdge?.Ring.Closed==true;
+        _planCanvas.InvalidateVisual();
         if(_outdoorOverlay==null)return;
         _outdoorOverlay.ReferencePoints=_outdoorHoveredEdge?.Path(_outdoorReferenceMode==2)??new();
         _outdoorOverlay.ReferenceClosed=_outdoorReferenceMode==2&&_outdoorHoveredEdge?.Ring.Closed==true;

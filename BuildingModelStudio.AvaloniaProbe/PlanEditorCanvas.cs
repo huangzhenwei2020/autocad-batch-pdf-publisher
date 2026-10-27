@@ -486,6 +486,12 @@ internal sealed partial class PlanEditorCanvas : Control
         _lastPointer = point;
         UpdateShiftConstraint(point, _shiftHeld || e.KeyModifiers.HasFlag(KeyModifiers.Shift));
         var buttons = e.GetCurrentPoint(this).Properties;
+        if(OutdoorDraft!=null&&!buttons.IsMiddleButtonPressed)
+        {
+            if(buttons.IsLeftButtonPressed||buttons.IsRightButtonPressed)
+                OutdoorPressed?.Invoke(point,e.KeyModifiers,buttons.IsRightButtonPressed);
+            e.Handled=true;return;
+        }
         if(HandleOpeningCenterPress(e))return;
         if (buttons.IsMiddleButtonPressed || buttons.IsRightButtonPressed)
         {
@@ -631,6 +637,11 @@ internal sealed partial class PlanEditorCanvas : Control
             _centerY += (point.Y - previous.Y) / _scale;
             _panStart = point;
         }
+        if(OutdoorDraft!=null)
+        {
+            _preselectedId=null;_openingGripHover=null;
+            OutdoorMoved?.Invoke(point,e.KeyModifiers);InvalidateVisual();return;
+        }
         if (_gripWallId != null)
         {
             if (_gripPress is Point press && Distance(point, press) >= 3) _gripMoved = true;
@@ -729,6 +740,7 @@ internal sealed partial class PlanEditorCanvas : Control
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
+        if(OutdoorDraft!=null&&e.Key is Key.Enter or Key.Escape or Key.Back)return;
         if(HasOpeningGrip&&e.Key is Key.Space or Key.Enter) {
             ConfirmOpeningGrip();e.Handled=true;return;
         }
@@ -859,7 +871,7 @@ internal sealed partial class PlanEditorCanvas : Control
             context.DrawLine(gridPen, Screen(min.X, y), Screen(max.X, y));
         }
         DrawAxes(context);
-        foreach (var slab in _model.Slabs.Where(s => s.StoreyId == _storeyId && Visible(s.Id)))
+        foreach (var slab in _model.Slabs.Where(s => s.StoreyId == _storeyId && Visible(s.Id)&&s.Id!=OutdoorDraft?.OriginalSlab?.Id))
         {
             if (slab.Outline == null || slab.Outline.Count < 3) continue;
             var geometry = _slabGeometry[slab.Id];
@@ -1029,6 +1041,7 @@ internal sealed partial class PlanEditorCanvas : Control
             }
         }
         DrawCurveDraft(context);
+        DrawOutdoor(context);
         if (_wallStart != null && _cursor != null && _arcEnd==null)
             if(Tool is PlanTool.Wall or PlanTool.ArcWall)DrawWallDraft(context,new CurveGeometry(_wallStart,_cursor,0));
             else context.DrawLine(new Pen(new SolidColorBrush(Color.Parse("#65E8B2")), 2),

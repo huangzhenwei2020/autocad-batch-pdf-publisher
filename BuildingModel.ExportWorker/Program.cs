@@ -67,6 +67,7 @@ public static class ModelExportWorker
                     SerializedTriangleEquivalent = fbxValidation?.TriangleCount ?? scene.TriangleCount,
                     CoplanarPolygonsMerged = fbxValidation != null,
                     PlanarPartition = fbxValidation != null ? "ConvexWithCornerCuts" : "TransportTriangles",
+                    WallEdgeLayout = fbxValidation != null ? "LocalHorizontalVerticalBandsWhenRectilinear" : null,
                     CoincidentControlPointsJoined = fbxValidation != null,
                     Warnings = fbxValidation?.Warnings.ToArray() ?? Array.Empty<string>(),
                     Representation = "StaticCurrentPose", Sha256 = hash } };

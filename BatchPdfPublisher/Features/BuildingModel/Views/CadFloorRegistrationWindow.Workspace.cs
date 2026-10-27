@@ -42,6 +42,7 @@ namespace BatchPdfPublisher.Views
         private readonly Grid _workspaceRoot=new Grid(), _registrationBody=new Grid();
         private readonly ContentControl _inspector=new ContentControl();
         private CadModelProjectEditor _floorEditor;
+        private Button _workspaceGenerateButton;
         private readonly List<Button> _navigation=new List<Button>();
         private int _workspacePage=1;
         private bool _workspaceRefreshing,_workspaceBusy,_creatingModel,_propertiesCollapsed,_closePromptPending;
@@ -128,7 +129,7 @@ namespace BatchPdfPublisher.Views
             Closed+=(s,e)=>{_generationTimer.Stop();_generationActive=false;_generationEpoch++;};
             var actions=new StackPanel {Orientation=Orientation.Horizontal};
             actions.Children.Add(WorkspaceTool("box","打开三维",OpenWorkspaceStudio));
-            var generate=WorkspaceTool("box","生成并打开",GenerateWorkspace);generate.Background=WorkspaceBrush("#087FDD");actions.Children.Add(generate);
+            _workspaceGenerateButton=WorkspaceTool("box","生成模型并打开",GenerateWorkspace);_workspaceGenerateButton.Background=WorkspaceBrush("#087FDD");actions.Children.Add(_workspaceGenerateButton);
             Grid.SetColumn(actions,1);footer.Children.Add(actions);Grid.SetRow(footer,3);_workspaceRoot.Children.Add(footer);Content=_workspaceRoot;
             _scope.SelectionChanged+=(s,e)=>{if(!_workspaceRefreshing)RefreshModels();};
             _modelPicker.SelectionChanged+=async(s,e)=>
@@ -226,7 +227,15 @@ namespace BatchPdfPublisher.Views
         private void ShowWorkspacePage(int page)
         {
             _workspacePage=page;
+            if(_workspaceGenerateButton!=null)
+            {
+                var label=_creatingModel?"创建模型并生成":_model?.CadImport!=null?"更新模型并打开":"生成模型并打开";
+                ((StackPanel)_workspaceGenerateButton.Content).Children.OfType<TextBlock>().Last().Text=label;
+                _workspaceGenerateButton.IsEnabled=_registryRecovery==null;
+                _workspaceGenerateButton.ToolTip=_registryRecovery==null?label:"请先确认登记关联，或选择重新登记。";
+            }
             for(var i=0;i<_navigation.Count;i++){_navigation[i].BorderBrush=WorkspaceBrush(i==page?"#239BEF":"#1B2027");_navigation[i].Foreground=WorkspaceBrush(i==page?"#64C1FF":"#B5C1D0");}
+            if(_registryRecovery!=null){_workspaceContent.Content=BuildRegistryRecoveryPage();return;}
             if(_floorEditor==null&&_model!=null)SetFloorEditor(false);
             if(page==0)
             {
@@ -381,6 +390,7 @@ namespace BatchPdfPublisher.Views
         }
         public async Task<bool> SaveWorkspace(bool allowInvalidGenerationSettings=false)
         {
+            if(_registryRecovery!=null){ShowWorkspacePage(1);_workspaceStatus.Text="请先选择楼层对应关系并关联，或备份旧登记后重新登记。";return false;}
             _workspace.EnsureDocument?.Invoke();
             if(_floorEditor==null)throw new InvalidOperationException("请先新建或选择模型。");
             UpdateFloorProperties();
@@ -433,6 +443,7 @@ namespace BatchPdfPublisher.Views
         private async Task BeginNewModel()
         {
             if(!await ConfirmWorkspaceDraft())return;
+            _registryRecovery=null;_registryRecoveryRows=null;
             _model=BuildingModelProjectWorkflow.Empty("新建模型");_creatingModel=true;_workspaceFloorId=null;SetFloorEditor(true);ShowWorkspacePage(0);
             _workspaceRefreshing=true;try{_modelPicker.SelectedItem=null;}finally{_workspaceRefreshing=false;}
             _workspaceStatus.Text="新模型尚未创建";

@@ -12,6 +12,8 @@
     <Compile Include="../BatchPdfPublisher/Features/BuildingModel/Views/CadComponentPlanWindow.cs" />
     <Compile Include="../BatchPdfPublisher/Features/BuildingModel/Views/CadComponentPartPreview.cs" />
     <Compile Include="CadFloorModelGenerationTests.cs" />
+    <Compile Include="CadPlanElevationTests.cs" />
+    <Compile Include="CadRegistryRecoveryTests.cs" />
     <Compile Include="CadCurvedWallRegistrationTests.cs" />
     <Compile Include="CadReimportLocalOpeningTests.cs" />
     <Compile Include="CadFloorSlabGenerationTests.cs" />
@@ -19,6 +21,7 @@
     <Compile Include="../BatchPdfPublisher/Features/DoorWindows/Services/DoorWindowElevationSuggestionService.cs" Link="DoorWindowElevationSuggestionService.cs" />
     <Compile Include="../BatchPdfPublisher/Features/BuildingModel/Views/CadFloorRegistrationWindow.cs" Link="CadFloorRegistrationWindow.cs" />
     <Compile Include="../BatchPdfPublisher/Features/BuildingModel/Views/CadFloorRegistrationWindow.Workspace.cs" />
+    <Compile Include="../BatchPdfPublisher/Features/BuildingModel/Views/CadFloorRegistrationWindow.Recovery.cs" />
     <Compile Include="../BatchPdfPublisher/Features/BuildingModel/Views/CadModelWorkspaceHost.cs" />
     <Compile Include="../BatchPdfPublisher/Features/BuildingModel/Views/CadRegisteredPlanPreview.cs" />
     <EmbeddedResource Include="../BuildingModelStudio.AvaloniaProbe/Resources/Icons/*.png"><LogicalName>WanLuo.ModelManager.%(Filename)%(Extension)</LogicalName></EmbeddedResource>

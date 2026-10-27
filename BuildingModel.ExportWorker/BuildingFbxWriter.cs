@@ -316,6 +316,8 @@ internal static class BuildingFbxWriter
         foreach (var part in parts.Values)
         {
             FbxPlanarFaces.Merge(part.Mesh, part.Surfaces, cancellation);
+            if(target.Materials[part.Mesh.MaterialIndex].Name.StartsWith("WL_Material: wall [",StringComparison.Ordinal)
+                &&part.Surfaces.All(string.IsNullOrEmpty))FbxWallGrid.Apply(part.Mesh,cancellation);
             result.Add(target.MeshCount);
             target.Meshes.Add(part.Mesh);
         }

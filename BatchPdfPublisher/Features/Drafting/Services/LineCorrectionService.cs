@@ -12,6 +12,7 @@ namespace BatchPdfPublisher.Services
         internal ObjectId Id;
         internal List<CorrectionPoint> Original;
         internal LineCorrectionResult Result;
+        internal bool Closed, HasArcs;
         public string Handle { get; set; }
         public string Type { get; set; }
         public string Status { get; set; }
@@ -39,6 +40,7 @@ namespace BatchPdfPublisher.Services
                         { plan.Status = "锁定图层，跳过"; continue; }
                         bool closed, arcs; string error;
                         if (!Read(entity, tx, out plan.Original, out closed, out arcs, out error)) { plan.Status = error; continue; }
+                        plan.Closed = closed; plan.HasArcs = arcs;
                         plan.Result = LineCorrectionGeometry.Calculate(plan.Original, closed, arcs, options);
                         plan.Status = plan.Result.Changed ? "待校正" : "无需修改";
                         if (!string.IsNullOrEmpty(plan.Result.Warning)) plan.Status += " · " + plan.Result.Warning;

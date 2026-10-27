@@ -16,7 +16,7 @@ internal sealed partial class ProbeWindow
     {
         var saved=_session;var selected=_selectedId;var savedJson=_savedJson;
         void Check(bool value,string message){if(!value)throw new InvalidOperationException(message);}
-        void PressKey(Key key,KeyModifiers modifiers=KeyModifiers.None,Control? target=null)=>(target??_viewport).RaiseEvent(new KeyEventArgs {RoutedEvent=KeyDownEvent,Key=key,KeyModifiers=modifiers});
+        void PressKey(Key key,KeyModifiers modifiers=KeyModifiers.None,Control? target=null)=>(target??(_workspaces.SelectedIndex==1?(Control)_planCanvas:_viewport)).RaiseEvent(new KeyEventArgs {RoutedEvent=KeyDownEvent,Key=key,KeyModifiers=modifiers});
         var pointer=new Pointer(341,PointerType.Mouse,true);
         void Click(double x,double y)
         {
@@ -37,11 +37,13 @@ internal sealed partial class ProbeWindow
         }
         try
         {
+            await RunOutdoorPlanCheckAsync();
             var model=new BuildingModelDocument {Name="三维室外构件回归"};
             model.Storeys.Add(new(){Id="outdoor",Name="屋面",Elevation=3000,Height=3000});
             _session=new BuildingModelEditSession(model);_selectedId=null;await RefreshModelAsync("室外构件回归");
             BeginOutdoorDrawing(false,new(Thickness:200,Height:1100,Purpose:WallPurpose.Parapet,BaseOffset:100));
-            await _outdoorPreviewTask;Check(_workspaces.SelectedIndex==0,"Drawing forced plan workspace");
+            await _outdoorPreviewTask;Check(_workspaces.SelectedIndex==1,"Drawing did not start in plan workspace");
+            _workspaces.SelectedIndex=0;await _outdoorPreviewTask;
             var p=_viewport.ProjectModelPoint(1200,600,3100)!.Value;
             var projected=_viewport.TryScreenToPlan(p,3100,out var world);
             Check(projected&&Math.Abs(world.X-1200)<1&&Math.Abs(world.Y-600)<1,$"Ray/plane roundtrip failed {projected} ({world.X},{world.Y}) pixel={p} distance={_viewport.CameraDistance} target={_viewport.CameraTarget} bounds={_viewport.CurrentScene.Volume.Diagonal} faces={_viewport.CurrentScene.Volume.Faces.Count} valid={_outdoorParametersValid} status={_status.Text}");
@@ -71,7 +73,7 @@ internal sealed partial class ProbeWindow
             PressKey(Key.Enter);await _outdoorCommitTask;Check(_session.Model.Slabs.Count==0&&_outdoor!=null,"Unclosed balcony committed");
             ExecuteCommand("C");await Capture("balcony-draft");
             PressKey(Key.Enter);await _outdoorCommitTask;
-            Check(_session.Model.Slabs.Count==1&&_session.Model.Slabs[0].Purpose==SlabPurpose.Balcony,"Balcony missing semantic data");
+            Check(_session.Model.Slabs.Count==1&&_session.Model.Slabs[0].Purpose==SlabPurpose.Balcony,"Balcony missing semantic data: "+_status.Text+" draft="+(_outdoor!=null)+" points="+_outdoor?.Points.Count);
             BeginOutdoorDrawing(true);await _outdoorPreviewTask;
             ExecuteCommand("0,-3000");ExecuteCommand("4000,-3000");ExecuteCommand("4000,-1000");ExecuteCommand("0,-1000");ExecuteCommand("C");
             await FinishOutdoorDrawingAsync();Check(_session.Model.Slabs.Count==1&&_outdoorConflict!=null,"Duplicate slab not blocked");

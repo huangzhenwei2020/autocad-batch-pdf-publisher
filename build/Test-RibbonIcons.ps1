@@ -5,6 +5,20 @@ if ([Threading.Thread]::CurrentThread.GetApartmentState() -ne 'STA') { throw 'Ri
 Add-Type -AssemblyName PresentationCore,PresentationFramework,WindowsBase
 # Byte loading avoids locking a staged DLL after the test process exits.
 $assembly = [Reflection.Assembly]::Load([IO.File]::ReadAllBytes([IO.Path]::GetFullPath($PluginPath)))
+$workspaceSources=Join-Path (Split-Path -Parent $PSScriptRoot) 'BatchPdfPublisher/Features/BuildingModel/Views'
+$workspaceIcons=@(Get-ChildItem -LiteralPath $workspaceSources -Filter 'CadFloorRegistrationWindow*.cs' | ForEach-Object {
+    $code=Get-Content -LiteralPath $_.FullName -Raw -Encoding UTF8
+    [regex]::Matches($code,'WorkspaceTool\s*\(\s*"([^"]+)"')|ForEach-Object {$_.Groups[1].Value}
+} | Sort-Object -Unique)
+foreach($icon in $workspaceIcons){
+    $stream=$assembly.GetManifestResourceStream("WanLuo.ModelManager.$icon.png")
+    if(!$stream){throw "Missing workspace icon in released assembly: $icon"}
+    try{
+        $bitmap=New-Object Windows.Media.Imaging.BitmapImage
+        $bitmap.BeginInit();$bitmap.CacheOption=[Windows.Media.Imaging.BitmapCacheOption]::OnLoad;$bitmap.StreamSource=$stream;$bitmap.EndInit()
+        if($bitmap.PixelWidth -lt 1 -or $bitmap.PixelHeight -lt 1){throw "Empty workspace icon: $icon"}
+    }finally{$stream.Dispose()}
+}
 $flags = [Reflection.BindingFlags]'Static,NonPublic'
 $assets = $assembly.GetType('BatchPdfPublisher.Services.RibbonIconAssets', $true)
 $registry = $assembly.GetType('BatchPdfPublisher.Services.FeatureRegistry', $true)
@@ -39,4 +53,6 @@ foreach ($pair in @(@('room_statistics','cad_table_xlsx'),@('room_statistics_sum
     $images=$assets.GetField('Images',$flags).GetValue($null)
     if (-not [Object]::ReferenceEquals($images[$pair[0]],$images[$pair[1]])) { throw "Room icon mapping missing: $($pair[0])" }
 }
+$images=$assets.GetField('Images',$flags).GetValue($null)
+if ([Object]::ReferenceEquals($images['line_correction'],$images['drawing_scale'])) { throw 'Line correction still uses the scale icon.' }
 Write-Output "RIBBON_ICONS_OK $($features.Count) features large small preview frozen nonblank roomMappings"

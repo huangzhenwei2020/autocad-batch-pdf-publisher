@@ -26,6 +26,7 @@ internal static class BuildingModelNativeExportTests
             }
             BuildingModelSceneExportTests.Run();
             FbxPlanarFacesTests.Run();
+            FbxWallGridTests.Run();
             FbxPrecisionCleanupTests.Run();
             FbxDisplayLayerTests.Run();
             await CheckCommitRecoveryAsync();
@@ -227,6 +228,8 @@ internal static class BuildingModelNativeExportTests
         {
             Check(meta.RootElement.GetProperty("PlanarPartition").GetString() == "ConvexWithCornerCuts",
                 "FBX did not report the corner-preserving partition policy.");
+            Check(meta.RootElement.GetProperty("WallEdgeLayout").GetString()=="LocalHorizontalVerticalBandsWhenRectilinear",
+                "FBX did not report horizontal/vertical wall partitioning.");
             Check(meta.RootElement.GetProperty("DisplayLayerCount").GetInt32() == result.Storeys
                 && meta.RootElement.GetProperty("DisplayLayers").GetArrayLength() == result.Storeys
                 && meta.RootElement.GetProperty("ObjectNames").GetArrayLength() == result.Elements,

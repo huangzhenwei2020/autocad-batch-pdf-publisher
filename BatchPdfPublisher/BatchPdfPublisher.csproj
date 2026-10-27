@@ -65,7 +65,7 @@
       <LogicalName>WanLuo.ModelManager.%(Filename)%(Extension)</LogicalName>
     </EmbeddedResource>
     <Compile Include="..\Shared\BuildingModel\BuildingModelFileRequest.cs" />
-    <EmbeddedResource Include="..\BuildingModelStudio.AvaloniaProbe\Resources\Icons\box.png;..\BuildingModelStudio.AvaloniaProbe\Resources\Icons\move.png;..\BuildingModelStudio.AvaloniaProbe\Resources\Icons\square-dashed.png">
+    <EmbeddedResource Include="..\BuildingModelStudio.AvaloniaProbe\Resources\Icons\box.png;..\BuildingModelStudio.AvaloniaProbe\Resources\Icons\move.png;..\BuildingModelStudio.AvaloniaProbe\Resources\Icons\square-dashed.png;..\BuildingModelStudio.AvaloniaProbe\Resources\Icons\check.png">
       <LogicalName>WanLuo.ModelManager.%(Filename)%(Extension)</LogicalName>
     </EmbeddedResource>
     <Compile Include="..\Shared\BuildingModel\ComponentCatalog.cs" />
@@ -81,6 +81,7 @@
     <Compile Include="..\Shared\BuildingModel\SheetComposer.cs"><Link>Features\BuildingModel\Shared\SheetComposer.cs</Link></Compile>
     <Compile Include="..\Shared\BuildingModel\StudioLaunch.cs"><Link>Features\BuildingModel\Shared\StudioLaunch.cs</Link></Compile>
     <Compile Include="..\Shared\BuildingModel\CadFloorPlanRegistry.cs"><Link>Features\BuildingModel\Shared\CadFloorPlanRegistry.cs</Link></Compile>
+    <Compile Include="..\Shared\BuildingModel\CadRegistryRecovery.cs" />
     <Compile Include="..\Shared\BuildingModel\CadFloorModelGeneration.cs"><Link>Features\BuildingModel\Shared\CadFloorModelGeneration.cs</Link></Compile>
     <Compile Include="..\Shared\BuildingModel\CadGenerationProgress.cs"><Link>Features\BuildingModel\Shared\CadGenerationProgress.cs</Link></Compile>
     <Compile Include="..\Shared\BuildingModel\CadFloorSlabGeneration.cs"><Link>Features\BuildingModel\Shared\CadFloorSlabGeneration.cs</Link></Compile>

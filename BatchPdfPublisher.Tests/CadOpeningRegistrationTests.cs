@@ -16,6 +16,9 @@ internal static class CadOpeningRegistrationTests
     [STAThread]
     private static void Main(string[] args)
     {
+        if(args.Length==1&&args[0]=="--registry-recovery-check"){CadRegistryRecoveryTests.Run();return;}
+        if(args.Length==2&&args[0]=="--verify-registry-recovery"){CadRegistryRecoveryTests.VerifyCopy(args[1]);return;}
+        if((args.Length==3||args.Length==4)&&args[0]=="--verify-plan-elevation"){CadPlanElevationTests.VerifyPrivate(args[1],args[2],args.Length==4?args[3]:null);return;}
         if(args.Length==2&&args[0]=="--inspect-slab-topology") {
             var topologyPath=Path.GetFullPath(args[1]);Check(topologyPath.StartsWith(Path.GetFullPath(".artifacts")+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase),"Private copies only.");
             var topologyRegistry=CadFloorPlanRegistry.Load(topologyPath);
@@ -423,6 +426,8 @@ internal static class CadOpeningRegistrationTests
             "Cancelling a pick must preserve prior location, confirmation and row selection.");
         placementWindow.Close();
         CadFloorModelGenerationTests.Run();
+        CadPlanElevationTests.Run();
+        CadRegistryRecoveryTests.Run();
         CadCurvedWallRegistrationTests.Run();
         CadReimportLocalOpeningTests.Run();
         CadFloorSlabGenerationTests.Run();

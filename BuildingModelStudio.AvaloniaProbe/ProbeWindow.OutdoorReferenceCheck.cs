@@ -15,7 +15,7 @@ internal sealed partial class ProbeWindow
     {
         var saved=_session;var selected=_selectedId;var json=_savedJson;
         void Check(bool value,string message){if(!value)throw new InvalidOperationException(message);}
-        void KeyPress(Key key,KeyModifiers modifiers=KeyModifiers.None)=>_viewport.RaiseEvent(new KeyEventArgs {RoutedEvent=KeyDownEvent,Key=key,KeyModifiers=modifiers});
+        void KeyPress(Key key,KeyModifiers modifiers=KeyModifiers.None)=>(_workspaces.SelectedIndex==1?(Control)_planCanvas:_viewport).RaiseEvent(new KeyEventArgs {RoutedEvent=KeyDownEvent,Key=key,KeyModifiers=modifiers});
         void ReferenceMode(int index)=>_properties.Children.OfType<ComboBox>().Single(c=>c.Items.OfType<string>().Contains("逐边取线")).SelectedIndex=index;
         var pointer=new Pointer(452,PointerType.Mouse,true);
         void Input(Point pixel,bool click)
@@ -55,6 +55,7 @@ internal sealed partial class ProbeWindow
             var hidden=new[]{"cover","plate@STD@std","balcony@STD@std"};
             _viewport.SetViewState(hidden,Array.Empty<string>());_viewport.SelectElement("plate");_viewport.FrameSelection();
             BeginOutdoorDrawing(false,new(Thickness:200,Height:1100,Purpose:WallPurpose.Parapet));await _outdoorPreviewTask;
+            _workspaces.SelectedIndex=0;await _outdoorPreviewTask;
             ReferenceMode(1);var source=OutdoorReferenceEdges.Build(model,"floor").Single(r=>r.Key=="plate/outer");var edges=source.Edges().ToArray();
             Input(EdgePixel(edges[0]),false);
             Check(_outdoorHoveredEdge?.Ring.Key==source.Key&&_session.Revision==0,"Hover did not identify visible semantic arc");
@@ -90,7 +91,8 @@ internal sealed partial class ProbeWindow
             _viewport.SetViewState(hidden,Array.Empty<string>());
             var slab=_session.Model.Slabs.Single(s=>s.Id=="balcony");SelectById(slab.Id);_viewport.SelectElement(slab.Id);_viewport.FrameSelection();
             var before=BuildingModelJson.ToJson(_session.Model);BeginSlabTool(PlanTool.SlabOutline);await _outdoorPreviewTask;
-            Check(_workspaces.SelectedIndex==0&&_outdoor?.OriginalSlab?.Id==slab.Id,"Balcony edit forced plan view");
+            Check(_workspaces.SelectedIndex==1&&_outdoor?.OriginalSlab?.Id==slab.Id,"Balcony edit did not start in plan view");
+            _workspaces.SelectedIndex=0;await _outdoorPreviewTask;
             Check(_outdoorOverlay.OriginalPoints.Count==4,"Original outline not available as reference");
             ReferenceMode(1);var balconyEdge=OutdoorReferenceEdges.Build(model,"floor").Single(r=>r.Key=="balcony/outer").Edges().First();
             var balconyPixel=EdgePixel(balconyEdge);

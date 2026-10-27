@@ -16,6 +16,9 @@ internal sealed partial class ProbeWindow
     private readonly WrapPanel _outdoorTools=new(){IsVisible=false,Orientation=Orientation.Horizontal,
         HorizontalAlignment=HorizontalAlignment.Left,VerticalAlignment=VerticalAlignment.Top,
         Margin=new Thickness(10,48,10,0),MaxWidth=460};
+    private readonly WrapPanel _outdoorPlanTools=new(){IsVisible=false,Orientation=Orientation.Horizontal,
+        HorizontalAlignment=HorizontalAlignment.Left,VerticalAlignment=VerticalAlignment.Top,
+        Margin=new Thickness(8),MaxWidth=460};
     private PointModel? _outdoorCursor;
     private int _outdoorGeneration;
     private Task _outdoorPreviewTask=Task.CompletedTask;
@@ -39,13 +42,44 @@ internal sealed partial class ProbeWindow
         void Button(string title,string icon,Action action)
         {
             var b=SlabButton(title,icon);b.HorizontalAlignment=HorizontalAlignment.Left;b.Margin=new Thickness(0,0,2,2);
-            b.Click+=(_,_)=>{action();_viewport.Focus();};_outdoorTools.Children.Add(b);
+            b.Click+=(_,_)=>{action();FocusOutdoor();};_outdoorTools.Children.Add(b);
+            var plan=SlabButton(title,icon);plan.Margin=new Thickness(0,0,2,2);
+            plan.Click+=(_,_)=>{action();FocusOutdoor();};_outdoorPlanTools.Children.Add(plan);
         }
         Button("完成","check",()=>_outdoorCommitTask=FinishOutdoorDrawingAsync());
         Button("闭合","pentagon",()=>{if(_outdoor!=null){var error=_outdoor.Close();if(error!=null)_status.Text=error;UpdateOutdoorPreview();}});
         Button("上一步","undo-2",OutdoorPrevious);
         Button("反向","rotate-ccw",ReverseOutdoorPath);
         Button("退出","square-x",()=>StopOutdoorDrawing());
+        _planCanvas.OutdoorPressed=(pixel,modifiers,right)=>{
+            if(right){OpenOutdoorMenu(_planCanvas);return;}
+            if(_outdoorReferenceMode!=0)
+            {var edge=PickOutdoorReference(pixel,plan:true);if(edge==null)_status.Text="当前位置没有可用的源边。";else TakeOutdoorReference(edge);}
+            else if(_outdoor!=null)OutdoorAdd(_planCanvas.OutdoorPoint(pixel,_outdoorSnap,_outdoor.ArcEnd==null));
+        };
+        _planCanvas.OutdoorMoved=(pixel,modifiers)=>{
+            if(_outdoor==null)return;
+            if(_outdoorReferenceMode!=0){_outdoorCursor=null;HoverOutdoorReference(pixel,plan:true);}
+            else {_outdoorCursor=_planCanvas.OutdoorPoint(pixel,_outdoorSnap,_outdoor.ArcEnd==null);UpdateOutdoorPreview();}
+        };
+    }
+
+    private void FocusOutdoor(){if(_workspaces.SelectedIndex==1)_planCanvas.Focus();else _viewport.Focus();}
+    private void OutdoorWorkspaceChanged()
+    {
+        _outdoorTools.IsVisible=_outdoor!=null&&_workspaces.SelectedIndex==0;
+        _outdoorPlanTools.IsVisible=_outdoor!=null&&_workspaces.SelectedIndex==1;
+        if(_outdoor==null)return;
+        _outdoorCursor=null;ClearOutdoorReferenceHover();UpdateOutdoorPreview();
+    }
+    private void OpenOutdoorMenu(Control target)
+    {
+        var menu=new ContextMenu();var items=new List<MenuItem>();
+        foreach(var (name,action) in new (string,Action)[]{("完成",()=>_outdoorCommitTask=FinishOutdoorDrawingAsync()),
+            ("闭合",()=>{var error=_outdoor?.Close();if(error!=null)_status.Text=error;UpdateOutdoorPreview();}),
+            ("上一步",OutdoorPrevious),("取消当前路径",()=>{ClearOutdoorConflict();_outdoor?.Clear();UpdateOutdoorPreview();})})
+        {var item=new MenuItem {Header=name};item.Click+=(_,_)=>{action();FocusOutdoor();};items.Add(item);}
+        menu.ItemsSource=items;menu.Open(target);
     }
 
     private void BeginOutdoorDrawing(bool balcony,WallDrawingChoice? choice=null,SlabModel? source=null)
@@ -58,24 +92,30 @@ internal sealed partial class ProbeWindow
         if(!ReferenceEquals(_sceneModel,_session.Model)){_status.Text="模型视图正在更新，请稍后开始绘制。";return;}
         var floor=source?.StoreyId??(_storeyChooser.SelectedItem as StoreyItem)?.Id??_session.Model.Storeys.FirstOrDefault()?.Id;
         if(floor==null){_status.Text="请先新建楼层。";return;}
+        if(!string.IsNullOrWhiteSpace(_session.Model.FindStorey(floor)?.TemplateStoreyId))
+        {_status.Text="该层共用标准层，请选择来源楼层绘制；仅修改这一层需先拆为独立层。";return;}
+        EndAxisEditing();
         _planCanvas.Tool=PlanTool.Select;_planCanvas.CancelDraft();
         _outdoor=new OutdoorDrawingDraft(balcony,floor,choice??new(Purpose:WallPurpose.Parapet,Height:1100));
         if(source!=null){_outdoor.OriginalSlab=CopySlab(source);_outdoor.Thickness=source.Thickness;
             _outdoor.Offset=_session.Model.TopElevationOf(source)-(_session.Model.FindStorey(floor)?.Elevation??0);}
         _outdoorReferenceMode=0;ResetOutdoorReferences();
         _outdoorBase=_viewport.CurrentScene;_selectedId=null;_selectedVisualIds.Clear();_gizmo.SetSelection(null,0);_viewport.SelectElement(null);
+        _planCanvas.SetSelection(null);
         _outdoorExcludedIds=source==null?new HashSet<string>():_outdoorBase.Volume.Faces
             .Where(f=>StandardStoreyLayout.SourceElementId(_session.Model,f.ElementId)==source.Id).Select(f=>f.ElementId).ToHashSet();
-        _workspaces.SelectedIndex=0;_outdoorTools.IsVisible=true;_showSlabProperties?.Invoke();
-        BuildOutdoorProperties();UpdateOutdoorPreview();_viewport.Focus();
+        _planCanvas.OutdoorDraft=_outdoor;_storeyChooser.IsEnabled=false;
+        _storeyChooser.SelectedItem=_storeyChooser.Items.OfType<StoreyItem>().FirstOrDefault(s=>s.Id==floor);
+        _workspaces.SelectedIndex=1;OutdoorWorkspaceChanged();_showSlabProperties?.Invoke();
+        BuildOutdoorProperties();UpdateOutdoorPreview();FocusOutdoor();
         if(source!=null&&_outdoorOverlay!=null){_outdoorOverlay.OriginalPoints=source.Outline.Select(OutdoorDrawingDraft.Copy).ToList();
             _outdoorOverlay.OriginalElevation=_session.Model.TopElevationOf(source);_outdoorOverlay.InvalidateVisual();}
         Avalonia.Threading.Dispatcher.UIThread.Post(()=>{
             var scroll=_properties.GetVisualAncestors().OfType<ScrollViewer>().FirstOrDefault();
             if(scroll!=null)scroll.Offset=default;
         });
-        _status.Text=source!=null?"三维重绘阳台轮廓：原编号及板洞保留，完成后应用；Esc 取消。":
-            balcony?"阳台：指定轮廓点，闭合后点击完成。":"女儿墙：指定路径起点；完成后整条路径一起写入。";
+        _status.Text=source!=null?"平面重绘阳台：原编号及板洞保留；可切三维检查，完成后应用。":
+            balcony?"平面绘制阳台：指定轮廓点，闭合后完成；可捕捉 CAD 底图。":"平面绘制女儿墙：指定路径点，完成后整条写入；可切三维检查。";
     }
 
     private void BuildOutdoorProperties()
@@ -84,6 +124,11 @@ internal sealed partial class ProbeWindow
         _properties.Children.Clear();_slabFooter.IsVisible=false;_propertyHeading.Text=draft.Balcony?"绘制阳台":"绘制女儿墙";
         _slabPropertyCode.IsVisible=false;if(_slabPropertyMark!=null)_slabPropertyMark.IsVisible=false;
         _properties.Margin=new Thickness(12);_properties.Spacing=10;
+        var views=new Grid {ColumnDefinitions=new ColumnDefinitions("*,*")};
+        var planView=SlabButton("平面绘制","panel-top");var modelView=SlabButton("三维检查","box");
+        planView.Click+=(_,_)=>{_workspaces.SelectedIndex=1;FocusOutdoor();};
+        modelView.Click+=(_,_)=>{_workspaces.SelectedIndex=0;FocusOutdoor();};
+        views.Children.Add(planView);Grid.SetColumn(modelView,1);views.Children.Add(modelView);_properties.Children.Add(views);
         var floors=_session.Model.Storeys.Select(s=>new StoreyItem {Id=s.Id,Name=s.Name+"（"+Mm(s.Elevation)+" mm）"}).ToList();
         var floorInput=new ComboBox {ItemsSource=floors,SelectedItem=floors.FirstOrDefault(s=>s.Id==draft.StoreyId),HorizontalAlignment=HorizontalAlignment.Stretch};
         floorInput.IsEnabled=draft.OriginalSlab==null;
@@ -94,7 +139,7 @@ internal sealed partial class ProbeWindow
             _properties.Children.Add(new TextBlock {Text=BuildingElementNames.Slab(original)+(count>1?$" · 共用 {count} 层":" · 当前独立楼层"),TextWrapping=TextWrapping.Wrap});
             var restore=SlabButton("取原轮廓","contour-edit");restore.Click+=(_,_)=>{
                 var error=draft.TakeReference(original.Outline,true);if(error!=null){_status.Text=error;return;}
-                ClearOutdoorConflict();_outdoorCursor=null;UpdateOutdoorPreview();_viewport.Focus();};
+                ClearOutdoorConflict();_outdoorCursor=null;UpdateOutdoorPreview();FocusOutdoor();};
             _properties.Children.Add(restore);
         }
         var level=new TextBlock();_properties.Children.Add(level);
@@ -114,7 +159,7 @@ internal sealed partial class ProbeWindow
         AddOutdoorReferenceProperties(draft,mode);
         _properties.Children.Add(mode);
         var preview=new ComponentShapePreview {Height=130};_properties.Children.Add(preview);
-        var snap=new CheckBox {Content="捕捉同标高端点",IsChecked=true};_properties.Children.Add(snap);_outdoorSnap=true;
+        var snap=new CheckBox {Content="捕捉（平面含 CAD 底图）",IsChecked=_outdoorSnap};_properties.Children.Add(snap);
         snap.IsCheckedChanged+=(_,_)=>_outdoorSnap=snap.IsChecked==true;
         var conflict=SlabButton("选用重叠的已有楼板","layers");conflict.IsEnabled=false;
         _outdoorConflictButton=conflict;
@@ -143,7 +188,11 @@ internal sealed partial class ProbeWindow
             UpdateOutdoorPreview();
             conflict.IsEnabled=_outdoorConflict!=null;
         }
-        floorInput.SelectionChanged+=(_,_)=>{if(floorInput.SelectedItem is StoreyItem f){draft.StoreyId=f.Id;Change();}};
+        floorInput.SelectionChanged+=(_,_)=>{if(floorInput.SelectedItem is StoreyItem f){
+            if(!string.IsNullOrWhiteSpace(_session.Model.FindStorey(f.Id)?.TemplateStoreyId))
+            {_status.Text="请到标准层来源楼层绘制。";floorInput.SelectedItem=floors.FirstOrDefault(s=>s.Id==draft.StoreyId);return;}
+            draft.StoreyId=f.Id;_storeyChooser.SelectedItem=_storeyChooser.Items.OfType<StoreyItem>().FirstOrDefault(s=>s.Id==f.Id);
+            ResetOutdoorReferences();Change();}};
         mode.SelectionChanged+=(_,_)=>{if(draft.ArcEnd!=null)draft.Previous();draft.Arc=mode.SelectedIndex==1;UpdateOutdoorPreview();};
         side.SelectionChanged+=(_,_)=>Change();
         foreach(var input in new[]{offset,thick,height,centerOffset}) input.PropertyChanged+=(_,e)=>{
@@ -191,12 +240,7 @@ internal sealed partial class ProbeWindow
         var buttons=e.GetCurrentPoint(_viewport).Properties;
         if(buttons.IsRightButtonPressed)
         {
-            var menu=new ContextMenu();
-            var items=new List<MenuItem>();
-            foreach(var (name,action) in new (string,Action)[]{("完成",()=>_outdoorCommitTask=FinishOutdoorDrawingAsync()),("闭合",()=>{var error=_outdoor?.Close();if(error!=null)_status.Text=error;UpdateOutdoorPreview();}),
-                ("上一步",OutdoorPrevious),("取消当前路径",()=>{ClearOutdoorConflict();_outdoor?.Clear();UpdateOutdoorPreview();})})
-            {var item=new MenuItem {Header=name};item.Click+=(_,_)=>action();items.Add(item);}
-            menu.ItemsSource=items;menu.Open(_viewport);e.Handled=true;return true;
+            OpenOutdoorMenu(_viewport);e.Handled=true;return true;
         }
         if(!buttons.IsLeftButtonPressed)return false;
         if(_outdoorReferenceMode!=0)
@@ -230,15 +274,20 @@ internal sealed partial class ProbeWindow
             _viewport.SetScene(scene);
         }
         if(clearPath&&_outdoorOverlay!=null){_outdoorOverlay.Points.Clear();_outdoorOverlay.InvalidateVisual();}
+        _planCanvas.OutdoorGeometry=null;
+        if(clearPath)_planCanvas.OutdoorPath.Clear();_planCanvas.InvalidateVisual();
     }
     private void UpdateOutdoorPreview()
     {
         if(_outdoor is not {} draft||_outdoorBase==null)return;
+        _planCanvas.OutdoorPath=draft.PreviewPoints(_outdoorCursor);_planCanvas.OutdoorClosed=draft.PreviewClosed(_outdoorCursor);
+        _planCanvas.InvalidateVisual();
         if(!_outdoorParametersValid)return;
         if(_outdoorOverlay!=null){_outdoorOverlay.Points=draft.PreviewPoints(_outdoorCursor);_outdoorOverlay.Closed=draft.PreviewClosed(_outdoorCursor);
             _outdoorOverlay.Elevation=draft.Elevation(_session.Model);_outdoorOverlay.InvalidateVisual();}
         BuildingVolume preview;
-        try {preview=BuildingVolumeBuilder.Build(draft.Geometry(_session.Model,_outdoorCursor));}
+        try {var geometry=draft.Geometry(_session.Model,_outdoorCursor);_planCanvas.OutdoorGeometry=geometry;
+            preview=BuildingVolumeBuilder.Build(geometry);}
         catch(ArgumentException ex){ClearOutdoorPreview(false);_status.Text=ex.Message;return;}
         var source=_outdoorBase.Volume;
         var hiddenFloors=source.Faces.GroupBy(f=>f.StoreyId)
@@ -323,6 +372,8 @@ internal sealed partial class ProbeWindow
         ResetOutdoorReferences();_outdoorOffsetInput=null;
         _outdoorExcludedIds=new HashSet<string>();if(_outdoorOverlay!=null)_outdoorOverlay.OriginalPoints.Clear();
         _outdoor=null;_outdoorBase=null;_outdoorPhysical=null;_outdoorCursor=null;_outdoorTools.IsVisible=false;
+        _outdoorPlanTools.IsVisible=false;_planCanvas.OutdoorDraft=null;_planCanvas.OutdoorGeometry=null;
+        _planCanvas.OutdoorPath.Clear();_planCanvas.OutdoorReference.Clear();_planCanvas.InvalidateVisual();_storeyChooser.IsEnabled=true;
         RefreshProperties();_status.Text="已退出绘制，已完成的构件保留。";
     }
     private void CancelOutdoorDraft()

@@ -182,7 +182,14 @@ namespace BatchPdfPublisher.Views
         {
             var model = BuildingModelJson.LoadModel(path);
             if (model.Storeys == null || model.Storeys.Count == 0) throw new InvalidDataException("模型没有楼层，请先在建筑模型中设置并保存。");
-            var nextPath=Path.GetFullPath(path);var registry=CadFloorPlanRegistry.Load(nextPath);registry.ReconcileStoreys(model);
+            var nextPath=Path.GetFullPath(path);CadFloorPlanRegistry registry;CadRegistryRecovery recovery=null;
+            try {registry=CadFloorPlanRegistry.Load(nextPath);}
+            catch(CadRegistryModelMismatchException) when(_workspace!=null)
+            {
+                recovery=CadRegistryRecovery.Read(nextPath);
+                registry=new CadFloorPlanRegistry {ModelPath=nextPath};
+            }
+            registry.ReconcileStoreys(model);
             var contexts=new Dictionary<string,CadFloorRegistrationContext>(StringComparer.OrdinalIgnoreCase);
             foreach (var floor in model.Storeys.Where(f => f != null && string.IsNullOrWhiteSpace(f.TemplateStoreyId)))
             {
@@ -195,7 +202,8 @@ namespace BatchPdfPublisher.Views
                 throw new InvalidDataException("标准层来源无效，请在建筑模型中修正并保存。");
             if(_workspace!=null || _model==null || !string.Equals(_path,nextPath,StringComparison.OrdinalIgnoreCase))_slabThickness.Text=registry.ResolvedSlabThickness.ToString(CultureInfo.InvariantCulture);
             if(_workspace!=null) { _floorEditor=null;_workspaceOriginalHash=null;_generationMode.SelectedIndex=!File.Exists(CadFloorPlanRegistry.FilePath(nextPath))||registry.ReplaceRegisteredConstruction?0:1; }
-            _path=nextPath;_model=model;_registry=registry;
+            _path=nextPath;_model=model;_registry=registry;_registryRecovery=recovery;
+            _registryRecoveryRows=recovery?.Rows(model);
             _contexts.Clear();foreach(var pair in contexts)_contexts.Add(pair.Key,pair.Value);
             _floors.ItemsSource = model.Storeys.Where(f=>string.IsNullOrWhiteSpace(f.StandardGroupId) || f.StandardGroupId==f.Id).Select(f => new CadFloorRegistrationRow { Storey = f,
                 SourceName = !string.IsNullOrWhiteSpace(f.StandardFloorRange) ? "共用标准层平面" : string.IsNullOrWhiteSpace(f.TemplateStoreyId) ? "本层" : model.Storeys.First(s => string.Equals(s.Id, f.TemplateStoreyId, StringComparison.OrdinalIgnoreCase)).Name }).ToList();

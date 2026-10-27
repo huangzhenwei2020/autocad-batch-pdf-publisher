@@ -261,8 +261,10 @@ namespace BatchPdfPublisher.BuildingModel
             using (var stream = File.OpenRead(path))
             {
                 var result = (CadFloorPlanRegistry)new DataContractJsonSerializer(typeof(CadFloorPlanRegistry)).ReadObject(stream);
-                if (result == null || result.Floors == null || !string.Equals(result.ModelPath, Path.GetFullPath(modelPath), StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidDataException("楼层登记文件与当前建筑模型不匹配。");
+                if (result == null || result.Floors == null)
+                    throw new InvalidDataException("楼层登记文件无法读取，请恢复备份或重新登记。");
+                if (!string.Equals(result.ModelPath, Path.GetFullPath(modelPath), StringComparison.OrdinalIgnoreCase))
+                    throw new CadRegistryModelMismatchException(result.ModelPath,Path.GetFullPath(modelPath));
                 return result;
             }
         }

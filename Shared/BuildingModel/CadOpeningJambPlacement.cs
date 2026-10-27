@@ -6,6 +6,16 @@ namespace BatchPdfPublisher.BuildingModel
 {
     public static class CadOpeningJambPlacement
     {
+        private static bool AtWallPlane(CadBuildingProbeEntity opening,double z,double wallZ,double scale)
+        {
+            if(double.IsNaN(z)||double.IsInfinity(z)||double.IsNaN(wallZ)||double.IsInfinity(wallZ))return false;
+            // Tianzheng can expose its native 2D opening display at Z=0 while
+            // the real wall datum retains an arbitrary absolute CAD elevation.
+            // Only accept that known display convention or the actual wall plane;
+            // do not match arbitrary different nonzero planes or tilted segments.
+            return Math.Abs(z-wallZ)*scale<=.5
+                ||string.Equals(opening.DxfName,"TCH_OPENING",StringComparison.OrdinalIgnoreCase)&&Math.Abs(z)*scale<=.5;
+        }
         // Two actual jamb segments belonging to this opening must span the wall body,
         // be perpendicular to its verified datum and be separated by native opening width.
         // A full-width native envelope can recover axis-aligned openings only after
@@ -29,7 +39,7 @@ namespace BatchPdfPublisher.BuildingModel
                     var p=line.Start; var q=line.End;
                     var tp=(p.X-a.X)*dx+(p.Y-a.Y)*dy; var tq=(q.X-a.X)*dx+(q.Y-a.Y)*dy;
                     var np=-(p.X-a.X)*dy+(p.Y-a.Y)*dx; var nq=-(q.X-a.X)*dy+(q.Y-a.Y)*dx;
-                    if(Math.Abs(tp-tq)*scale>0.5 || Math.Abs(p.Z-q.Z)*scale>0.5 || Math.Abs(p.Z-a.Z)*scale>0.5) continue;
+                    if(Math.Abs(tp-tq)*scale>0.5 || Math.Abs(p.Z-q.Z)*scale>0.5 || !AtWallPlane(opening,p.Z,a.Z,scale)) continue;
                     // Jamb must actually cross both wall faces; a door leaf is insufficient.
                     if(Math.Min(np,nq)>offset-half+0.5/scale || Math.Max(np,nq)<offset+half-0.5/scale) continue;
                     var t=(tp+tq)/2;
@@ -59,7 +69,7 @@ namespace BatchPdfPublisher.BuildingModel
                     var np=-(p.X-a.X)*dy+(p.Y-a.Y)*dx; var nq=-(q.X-a.X)*dy+(q.Y-a.Y)*dx;
                     if(Math.Abs(np-nq)*scale>0.5 || Math.Abs(Math.Abs(tq-tp)*scale-width)>0.5
                         || Math.Abs(np-offset)>half+0.5/scale || Math.Abs(nq-offset)>half+0.5/scale
-                        || Math.Abs(p.Z-a.Z)*scale>0.5 || Math.Abs(q.Z-a.Z)*scale>0.5)continue;
+                        || Math.Abs(p.Z-q.Z)*scale>.5 || !AtWallPlane(opening,p.Z,a.Z,scale) || !AtWallPlane(opening,q.Z,a.Z,scale))continue;
                     try {
                         var placement=CadOpeningPlacement.Create(floor,wall.Handle,new PointModel(a.X,a.Y),new PointModel(b.X,b.Y),
                             new PointModel(a.X+tp*dx,a.Y+tp*dy),new PointModel(a.X+tq*dx,a.Y+tq*dy),width);
@@ -80,7 +90,7 @@ namespace BatchPdfPublisher.BuildingModel
                 var dx=b.X-a.X;var dy=b.Y-a.Y;var length=Math.Sqrt(dx*dx+dy*dy);if(length*scale<1)continue;
                 dx/=length;dy/=length;
                 // A rotated AABB has an enlarged span: never infer its endpoints.
-                if(Math.Min(Math.Abs(dx),Math.Abs(dy))>1e-8 || Math.Abs(min.Z-a.Z)*scale>0.5)continue;
+                if(Math.Min(Math.Abs(dx),Math.Abs(dy))>1e-8 || !AtWallPlane(opening,min.Z,a.Z,scale))continue;
                 var points=new[] { new PointModel(min.X,min.Y),new PointModel(max.X,min.Y),new PointModel(max.X,max.Y),new PointModel(min.X,max.Y) };
                 var ts=points.Select(p=>(p.X-a.X)*dx+(p.Y-a.Y)*dy).ToArray();
                 var ns=points.Select(p=>-(p.X-a.X)*dy+(p.Y-a.Y)*dx).ToArray();
@@ -113,7 +123,7 @@ namespace BatchPdfPublisher.BuildingModel
                     ||Math.Abs(np-nq)*scale>.5||Math.Abs(tp-tq)*scale<width*.3
                     ||Math.Abs(np-wall.CandidateAxisOffset.Value)>wall.CandidateThickness.Value/2+.5/scale
                     ||Math.Abs(nq-wall.CandidateAxisOffset.Value)>wall.CandidateThickness.Value/2+.5/scale
-                    ||Math.Abs(p.Z-a.Z)*scale>.5||Math.Abs(q.Z-a.Z)*scale>.5)continue;
+                    ||Math.Abs(p.Z-q.Z)*scale>.5||!AtWallPlane(opening,p.Z,a.Z,scale)||!AtWallPlane(opening,q.Z,a.Z,scale))continue;
                 tracks.Add(new[]{Math.Min(tp,tq),Math.Max(tp,tq),(np+nq)/2});
             }
             for(var i=0;i<tracks.Count;i++)for(var j=i+1;j<tracks.Count;j++) {
@@ -141,8 +151,9 @@ namespace BatchPdfPublisher.BuildingModel
                 if(arc.Center==null || arc.Start==null || arc.End==null
                     || new[] { arc.Radius,arc.Sweep,arc.Center.X,arc.Center.Y,arc.Center.Z,arc.Start.X,arc.Start.Y,arc.Start.Z,arc.End.X,arc.End.Y,arc.End.Z }.Any(v=>double.IsNaN(v) || double.IsInfinity(v))
                     || arc.Radius*scale<1 || arc.Sweep<Math.PI/6 || arc.Sweep>Math.PI/2+.01
-                    || Math.Abs(n(arc.Center)-offset)>half+.5/scale || Math.Abs(arc.Center.Z-a.Z)*scale>.5)continue;
-                var closed=new[] { arc.Start,arc.End }.Where(p=>Math.Abs(n(p)-n(arc.Center))*scale<.5 && Math.Abs(p.Z-a.Z)*scale<.5).ToList();
+                    || Math.Abs(n(arc.Center)-offset)>half+.5/scale || !AtWallPlane(opening,arc.Center.Z,a.Z,scale)
+                    ||Math.Abs(arc.Start.Z-arc.Center.Z)*scale>.5||Math.Abs(arc.End.Z-arc.Center.Z)*scale>.5)continue;
+                var closed=new[] { arc.Start,arc.End }.Where(p=>Math.Abs(n(p)-n(arc.Center))*scale<.5 && AtWallPlane(opening,p.Z,a.Z,scale)).ToList();
                 if(closed.Count!=1)continue;
                 var closedT=t(closed[0]);var centerT=t(arc.Center);
                 if(Math.Abs(Math.Abs(closedT-centerT)-arc.Radius)*scale>.5)continue;
@@ -155,7 +166,8 @@ namespace BatchPdfPublisher.BuildingModel
                     // the aperture, rather than treating leaf radius as door width.
                     if(leafThickness*scale<1 || leafThickness*scale>width*.2
                         || Math.Abs(n(p)-n(arc.Center))*scale>.5 || Math.Abs(n(q)-n(arc.Center))*scale>.5
-                        || Math.Abs((tp+tq)/2-centerT)*scale>.5 || Math.Abs(p.Z-a.Z)*scale>.5 || Math.Abs(q.Z-a.Z)*scale>.5)continue;
+                        || Math.Abs((tp+tq)/2-centerT)*scale>.5 || Math.Abs(p.Z-q.Z)*scale>.5
+                        ||Math.Abs(p.Z-arc.Center.Z)*scale>.5||!AtWallPlane(opening,p.Z,a.Z,scale)||!AtWallPlane(opening,q.Z,a.Z,scale))continue;
                     var outer=Math.Abs(tp-closedT)>Math.Abs(tq-closedT) ? tp : tq;
                     var leafWidth=arc.Radius+leafThickness/2;
                     if(Math.Abs(Math.Abs(outer-closedT)-leafWidth)*scale>.5)continue;
