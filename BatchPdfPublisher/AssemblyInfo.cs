@@ -5,3 +5,4 @@ using WanluoArchitectureTools;
 [assembly: AssemblyProduct("Batch PDF Publisher for AutoCAD")]
 [assembly: AssemblyVersion(ProductVersion.Assembly)]
 [assembly: AssemblyFileVersion(ProductVersion.Assembly)]
+[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("BatchPdfPublisher.DimensionEdit.Native.Tests")]

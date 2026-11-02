@@ -10,7 +10,7 @@
   "dependencies": {
     "lucide-react": "1.45.0",
     "prosemirror-commands": "1.7.1",
-    "prosemirror-history": "1.4.2",
+    "prosemirror-history": "1.4.1",
     "prosemirror-keymap": "1.2.3",
     "prosemirror-model": "1.25.4",
     "prosemirror-schema-basic": "1.2.4",

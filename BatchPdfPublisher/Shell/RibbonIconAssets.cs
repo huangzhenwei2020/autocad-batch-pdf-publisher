@@ -78,7 +78,7 @@ namespace BatchPdfPublisher.Services
                     images.Add(FeatureIds[index], Rasterize(image, 32));
                     SmallImages.Add(FeatureIds[index], Rasterize(image, 16));
                 }
-                foreach (var id in new[] { "building_export", "building_place_view", "building_opening_types", "building_open_studio", "line_correction" })
+                foreach (var id in new[] { "building_export", "building_place_view", "building_opening_types", "building_open_studio", "line_correction", "dimension_edit" })
                 {
                     var icon = CreateBuildingIcon(id);
                     ScaledImages.Add(id, icon);
@@ -127,7 +127,12 @@ namespace BatchPdfPublisher.Services
                 drawing.DrawRoundedRectangle(new SolidColorBrush(Color.FromArgb(28, 255, 255, 255)), null,
                     new Rect(3.5, 3.5, 25, 10), 5, 5);
                 var white = new Pen(Brushes.White, 1.8) { LineJoin = PenLineJoin.Round, StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
-                if (id == "line_correction")
+                if (id == "dimension_edit")
+                {
+                    DrawPath(drawing, white, "M 7,8 L 7,25 M 16,13 L 16,25 M 25,8 L 25,25 M 5,21 L 27,21 M 5,23 L 9,19 M 14,23 L 18,19 M 23,23 L 27,19");
+                    drawing.DrawEllipse(Brushes.White, null, new Point(16, 8), 1.7, 1.7);
+                }
+                else if (id == "line_correction")
                 {
                     var original = new Pen(new SolidColorBrush(Color.FromRgb(255, 214, 135)), 1.4) { DashStyle = DashStyles.Dash };
                     DrawPath(drawing, original, "M 7,24 L 24,18 M 21,8 L 24,18");

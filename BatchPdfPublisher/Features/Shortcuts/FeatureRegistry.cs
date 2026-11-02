@@ -27,6 +27,7 @@ namespace BatchPdfPublisher.Services
             F("layer_assignment", "归层", "GL", "GL", "图层工具", "层", "把所选对象归到指定图层，可同时把颜色、线型、线宽设为随层，并处理块属性。", null, "对象归层"),
             F("drawing_scale", "比例管理", "BL1", "BL1", "制图与标注", "比", "把所选对象转换到指定图纸比例，并同步普通 CAD 与天正标注。", null, "比例管理"),
             F("line_correction", "线条校正", "WLLINECORRECT", "XTJZ", "制图与标注", "直", "按角度容差将直线和多段线逐段校正为水平或垂直，以线段中点为基点，保持公共顶点连接；可将顶点 Z 归零。", null, "线条校正"),
+            F("dimension_edit", "连续尺寸编辑", "WLDIMEDIT", null, "制图与标注", "尺", "进入尺寸编辑模式：原生直线尺寸增补、零段合并和整串移动；支持斜向尺寸。", null, "尺寸编辑"),
             F("door_window", "门窗立面", "MCLM", "MCLM", "建筑工具", "窗", "读取门窗表，校验编号和洞口尺寸，并批量设置门窗立面分格与开启参数。", null, "门窗立面"),
             F("detail_layout", "大样排版", "WLDYLAYOUT", "DYPB", "建筑工具", "排", "逐个框选大样并自动计算边界，在登记图框中拖拽排序和分页排版。", null, "大样排版"),
             F("line_vision", "图像转 CAD", "LINEVISION", "TXC", "建筑工具", "绘", "识别建筑线稿、扫描图或截图中的线条，预览确认后生成可编辑 CAD 图元。", "TXC", "图像转绘"),

@@ -22,3 +22,7 @@ design-document workflows, especially manual CAD-plan export/import.
 - Build/install guidance: `docs/BUILD_AND_INSTALL.md`. Release entry point:
   `build/Build-Release.ps1`. UI tests need a Windows desktop session; native CAD
   checks use a disposable drawing and temporary side database.
+- Before starting any CAD-hosted plugin test (including Core Console), ask the
+  user first. Use AutoCAD 2022 only; AutoCAD 2024 is currently unavailable.
+  Deliver by backing up and updating the original installation, not separate
+  installed test versions. Source builds and non-CAD unit checks may continue.

@@ -42,12 +42,20 @@ namespace BatchPdfPublisher
         public void Terminate()
         {
             if (IsCoreConsole) return;
+            DimensionEditService.Close();
             CadSaveCloudSyncService.Remove(); CloudSyncCoordinator.Remove(); ProjectAutoSaveService.Remove();
             ShortcutAliasService.Remove(); RibbonService.Remove(); MenuService.Remove();
         }
 
         [CommandMethod("BPP")]
         public void BppCommand() => OpenPublisher();
+
+        [CommandMethod("WLDIMEDIT", CommandFlags.UsePickSet | CommandFlags.NoUndoMarker)]
+        public void EditDimensionChain() { DimensionEditService.Show(Application.DocumentManager.MdiActiveDocument); }
+        [CommandMethod("WLDIMACT", CommandFlags.NoUndoMarker)]
+        public void EditDimensionAction() { DimensionEditService.RunQueued(); }
+        [CommandMethod("WLDIMCOMMIT")]
+        public void EditDimensionCommit() { DimensionEditService.RunPendingWrite(); }
 
         [CommandMethod("WLHOTKEYS")]
         public void ConfigureShortcuts()
