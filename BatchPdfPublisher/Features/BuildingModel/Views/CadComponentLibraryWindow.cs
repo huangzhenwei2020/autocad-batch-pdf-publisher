@@ -13,7 +13,7 @@ namespace BatchPdfPublisher.Views
         private readonly ComponentCatalog _catalog;
         private readonly ListBox _items=new ListBox(),_types=new ListBox();
         private readonly TextBox _search=new TextBox {Height=34,VerticalContentAlignment=VerticalAlignment.Center};
-        private readonly ComboBox _kind=new ComboBox {ItemsSource=new[]{"装修门","窗"},SelectedIndex=0,Height=34};
+        private readonly ComboBox _kind=new ComboBox {ItemsSource=new[]{"装修门","窗","家具 / 设备"},SelectedIndex=0,Height=34};
         private readonly CheckBox _deleted=new CheckBox {Content="已删除资源",Margin=new Thickness(12,8,0,0)};
         private readonly TextBlock _status=new TextBlock {TextWrapping=TextWrapping.Wrap},_details=new TextBlock {TextWrapping=TextWrapping.Wrap};
         private readonly CadComponentPartPreview _preview=new CadComponentPartPreview {MinHeight=120};
@@ -42,7 +42,7 @@ namespace BatchPdfPublisher.Views
         public PointModel InsertionBase=>_preview.BasePoint;
         public CadComponentLibraryWindow(ComponentCatalog catalog)
         {
-            _catalog=catalog;Title="图库 · 门窗平面";Width=1180;Height=780;MinWidth=960;MinHeight=640;FontSize=14;FontFamily=new FontFamily("Microsoft YaHei UI");WindowStartupLocation=WindowStartupLocation.CenterOwner;
+            _catalog=catalog;Title="图库 · 门窗 / 家具平面";Width=1180;Height=780;MinWidth=960;MinHeight=640;FontSize=14;FontFamily=new FontFamily("Microsoft YaHei UI");WindowStartupLocation=WindowStartupLocation.CenterOwner;
             Background=Brush(16,25,35);Foreground=Brushes.WhiteSmoke;UseLayoutRounding=true;Resources.MergedDictionaries.Add(CadComponentPlanWindow.CreateTheme());
             Width=Math.Min(Width,Math.Max(760,SystemParameters.WorkArea.Width-32));Height=Math.Min(Height,Math.Max(560,SystemParameters.WorkArea.Height-32));MinWidth=Math.Min(MinWidth,Width);MinHeight=Math.Min(MinHeight,Height);
             _search.Background=Brush(14,24,34);_search.Foreground=Brushes.WhiteSmoke;_search.BorderBrush=Brush(52,76,96);_types.Background=Brush(14,24,34);_types.Foreground=Brushes.WhiteSmoke;_types.BorderBrush=Brush(52,76,96);foreach(var toggle in new Control[]{_deleted,_wall,_x,_y,_edge,_center})toggle.Foreground=Brushes.WhiteSmoke;
@@ -72,8 +72,8 @@ namespace BatchPdfPublisher.Views
             _catalog.SetDeleted(record.AssetId,record.Version,!record.IsDeleted);Reload();_status.Text=record.IsDeleted?"资源已恢复到共享图库。":"资源已删除；可勾选“已删除资源”恢复。";
         }
         private void InsertSelected()=>Run(()=>{var record=SelectedRecord;if(record==null||record.IsDeleted)throw new InvalidOperationException("请选择有效图库资源。");var units=Read(_units,.000001,1000000,"毫米换算");if(record.Plan.Category=="Door"&&AutoWall){var check=DoorWidth+DoorHeight+JambClearance+(WallThickness??0)+(OpeningAngle??0);if(InstanceCode.Length>64||InstanceCode.Any(char.IsControl))throw new InvalidOperationException("编号应在 64 字以内。");}_status.Text=InsertPlan?.Invoke(record,_y.IsChecked==true?"Y":"X",units,_preview.BasePoint)==true?"插入完成":"已取消插入";});
-        private string Category()=>_kind.SelectedIndex==0?"Door":"Window";
-        private void PopulateTypes(){_loading=true;_types.Items.Clear();_types.Items.Add("全部");foreach(var name in Category()=="Door"?ComponentPlanSymbols.DoorAssemblyNames:new[]{"全部窗型"})_types.Items.Add(name);_types.SelectedIndex=0;_loading=false;}
+        private string Category()=>_kind.SelectedIndex==0?"Door":_kind.SelectedIndex==1?"Window":"Furniture";
+        private void PopulateTypes(){_loading=true;_types.Items.Clear();_types.Items.Add("全部");if(Category()=="Door")foreach(var name in ComponentPlanSymbols.DoorAssemblyNames)_types.Items.Add(name);_types.SelectedIndex=0;_loading=false;}
         private void Selection()
         {
             var record=SelectedRecord;_preview.Symbol=record?.Plan;

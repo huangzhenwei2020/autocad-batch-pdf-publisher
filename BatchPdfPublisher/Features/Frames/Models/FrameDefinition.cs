@@ -18,10 +18,12 @@ namespace BatchPdfPublisher.Models
         public string Note { get; set; }
         public string BuildingAttributeTag { get; set; }
         public string SheetNumberAttributeTag { get; set; }
+        public string PageNumberAttributeTag { get; set; }
         public string SheetNameAttributeTag { get; set; }
         public string PrintScaleAttributeTag { get; set; }
         public string DefaultBuilding { get; set; }
         public string DefaultSheetNumber { get; set; }
+        public string DefaultPageNumber { get; set; }
         public string DefaultSheetName { get; set; }
         public string DefaultPrintScale { get; set; }
         public bool HasLayoutRange { get; set; }
@@ -41,6 +43,25 @@ namespace BatchPdfPublisher.Models
                 if (string.IsNullOrWhiteSpace(block)) return paper;
                 return paper + "（" + block + "）";
             }
+        }
+    }
+
+    public static class FramePageNumber
+    {
+        public static readonly string[] Tags = { "序号", "页码", "图纸序号", "图纸页码", "PAGE", "PAGENO", "PAGE_NO", "PAGENUMBER", "PAGE_NUMBER", "SHEETINDEX", "SHEET_INDEX", "INDEX", "NO" };
+
+        public static string FindTag(System.Collections.Generic.IEnumerable<string> tags)
+        {
+            var available = new System.Collections.Generic.List<string>(tags);
+            foreach (var alias in Tags)
+                foreach (var tag in available)
+                    if (string.Equals(Normalize(tag), Normalize(alias), System.StringComparison.OrdinalIgnoreCase)) return tag;
+            return null;
+        }
+
+        private static string Normalize(string value)
+        {
+            return new string(System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Where(value ?? string.Empty, char.IsLetterOrDigit)));
         }
     }
 }

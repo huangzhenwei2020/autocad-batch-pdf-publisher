@@ -95,6 +95,7 @@ namespace BatchPdfPublisher.Services
                     if (TagMatches(tag, frame.PrintScaleAttributeTag, "比例", "SCALE", "PRINTSCALE", "PRINT_SCALE")) value = "1:" + drawingScale;
                     else if (TagMatches(tag, frame.BuildingAttributeTag, "子项目名称")) value = PreferDefault(frame.DefaultBuilding, value);
                     else if (TagMatches(tag, frame.SheetNumberAttributeTag, "图号")) value = PreferDefault(frame.DefaultSheetNumber, value);
+                    else if (TagMatches(tag, frame.PageNumberAttributeTag, FramePageNumber.Tags)) value = PreferDefault(frame.DefaultPageNumber, value);
                     else if (TagMatches(tag, frame.SheetNameAttributeTag, "图纸名称", "图名")) value = PreferDefault(frame.DefaultSheetName, value);
                     attribute.TextString = string.IsNullOrWhiteSpace(value) || value.StartsWith("<", StringComparison.Ordinal) ? tag : value;
                     reference.AttributeCollection.AppendAttribute(attribute);

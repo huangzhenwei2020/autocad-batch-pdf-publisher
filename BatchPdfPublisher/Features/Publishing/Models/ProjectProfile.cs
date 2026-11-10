@@ -30,6 +30,8 @@ namespace BatchPdfPublisher.Models
         public List<string> CadFiles { get; set; } = new List<string>();
         public List<string> SelectedCadFiles { get; set; } = new List<string>();
         public List<string> SelectedPublishBuildings { get; set; } = new List<string>();
+        public List<string> BuildingOrder { get; set; } = new List<string>();
+        public string SheetSort { get; set; } = "PageNumberAscending";
         public bool ScanModelSpace { get; set; } = true;
         public bool ScanAllLayouts { get; set; } = true;
         public List<string> SelectedLayouts { get; set; } = new List<string>();

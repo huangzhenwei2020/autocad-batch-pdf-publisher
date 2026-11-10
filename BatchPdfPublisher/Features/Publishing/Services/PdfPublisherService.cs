@@ -199,7 +199,11 @@ namespace BatchPdfPublisher.Services
             string engineeringFolder, Action<int, int, SheetItem> progress = null)
         {
             var pages = sourcePages?.Where(x => x?.Sheet != null && !string.IsNullOrWhiteSpace(x.TemporaryPath) && File.Exists(x.TemporaryPath))
-                .OrderBy(x => x.Sheet.Building).ThenBy(x => x.Sheet.Order).ToList()
+                .OrderBy(x =>
+                {
+                    var index = project?.BuildingOrder?.IndexOf(x.Sheet.Building) ?? -1;
+                    return index < 0 ? int.MaxValue : index;
+                }).ThenBy(x => x.Sheet.Building).ThenBy(x => x.Sheet.Order).ToList()
                 ?? new List<PreparedPdfPage>();
             var result = new PdfPublishResult();
             var completed = 0;

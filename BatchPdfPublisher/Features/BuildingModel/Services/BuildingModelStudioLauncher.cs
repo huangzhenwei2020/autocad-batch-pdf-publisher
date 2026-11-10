@@ -79,7 +79,7 @@ namespace BatchPdfPublisher.Features.BuildingModel.Services
             try
             {
                 if (activePath != null) arguments = "--cad-project \"" + projectFolder.TrimEnd('\\', '/') + "\" --model \"" + activePath + "\"";
-                arguments += " --cad-fingerprint \""+document.Database.FingerprintGuid+"\" --cad-drawing \""+document.Name+"\"";
+                arguments += " --cad-fingerprint \""+document.Database.FingerprintGuid+"\" --cad-drawing \""+document.Name+"\" --cad-pid "+System.Diagnostics.Process.GetCurrentProcess().Id;
                 Process.Start(new ProcessStartInfo
                 {
                     FileName = executable,

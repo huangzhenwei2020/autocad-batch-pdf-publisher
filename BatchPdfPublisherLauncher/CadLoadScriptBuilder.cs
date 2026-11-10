@@ -29,7 +29,11 @@ namespace BatchPdfPublisherLauncher
                 + "(if (/= 0 (logand 1 (getvar \"CMDACTIVE\"))) (progn (command) (setq failure \"NETLOAD did not finish\")))) "
                 + "(setq failure (strcat \"Missing assembly: \" dll))))) ";
             return "(progn (vl-load-com) ((lambda (result dll failure) (setvar \"FILEDIA\" 0) "
-                + "(setq result (vl-catch-all-apply '(lambda () " + trust + loads + "(if (not failure) (command \"BPPSTARTUP\"))) nil)) "
+                // Keep native commands out of the Visual LISP catch/apply frame.
+                // Cold NETLOAD enters the CLR and third-party CAD startup reactors;
+                // wrapping that entry in nested VL evaluation can exhaust the host stack.
+                + "(setq result (vl-catch-all-apply '(lambda () " + trust + ") nil)) "
+                + "(if (not (vl-catch-all-error-p result)) (progn " + loads + "(if (not failure) (command \"BPPSTARTUP\")))) "
                 + "(setvar \"FILEDIA\" 1) "
                 + "(if (vl-catch-all-error-p result) (princ (strcat \"\\nWanLuo startup failed: \" (vl-catch-all-error-message result))) "
                 + "(if failure (princ (strcat \"\\nWanLuo startup failed: \" failure)) "

@@ -2641,6 +2641,7 @@ internal sealed partial class ProbeWindow : Window
             if(Program.AxisCheck){try{await RunAxisCheckAsync();}catch(Exception ex){Console.WriteLine("AXIS_FAILED "+ex);slabSuccess=false;}}
             if(Program.OpeningPlanCheck){try{await RunOpeningPlanCheckAsync();}catch(Exception ex){Console.WriteLine("OPENING_PLAN_FAILED "+ex);slabSuccess=false;}}
             if(Program.ComponentSourceCheck){try{await RunComponentSourceCheckAsync();}catch(Exception ex){Console.WriteLine("COMPONENT_SOURCE_UI_FAILED "+ex);slabSuccess=false;}}
+            if(Program.ComponentImportCheck){try{await RunComponentImportCheckAsync();}catch(Exception ex){Console.WriteLine("COMPONENT_IMPORT_UI_FAILED "+ex);slabSuccess=false;}}
             if(Program.ComponentPackageCheck){try{await RunComponentPackageCheckAsync();}catch(Exception ex){Console.WriteLine("COMPONENT_PACKAGE_UI_FAILED "+ex);slabSuccess=false;}}
             if(Program.StructureCheck){try{await RunStructureCheckAsync();}catch(Exception ex){Console.WriteLine("STRUCTURE_FAILED "+ex);slabSuccess=false;}}
             if(Program.UnderlayCheck){try{await RunUnderlayCheckAsync();}catch(Exception ex){Console.WriteLine("CAD_UNDERLAY_UI_FAILED "+ex);slabSuccess=false;}}
@@ -2706,7 +2707,7 @@ internal sealed partial class ProbeWindow : Window
             if (Program.GizmoCheck) success &= RunGizmoSmokeCheck() && RunCameraSmokeCheck();
             if (Program.ShortcutCheck) success &= await RunShortcutSmokeCheckAsync();
             success &= slabSuccess;
-            if(Program.ModelManagementCheck||Program.ModelExportCheck||Program.OutdoorDrawingCheck||Program.OutdoorReferenceCheck)_closeConfirmed=true;
+            if(Program.ModelManagementCheck||Program.ModelExportCheck||Program.OutdoorDrawingCheck||Program.OutdoorReferenceCheck||Program.ComponentImportCheck)_closeConfirmed=true;
             if(Program.SnapshotDrawing)success &= _drawingCanvas.View!=null;
             if (Program.CadGenerationCheck)
             {

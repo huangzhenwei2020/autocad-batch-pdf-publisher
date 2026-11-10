@@ -409,6 +409,7 @@ namespace BatchPdfPublisher.Services
                     Note = note,
                     BuildingAttributeTag = MatchAttributeTag(context.Attributes.Keys, "子项目名称", "楼栋", "BUILDING", "栋号", "SUBPROJECT", "SUBPROJECTNAME") ?? "子项目名称",
                     SheetNumberAttributeTag = MatchAttributeTag(context.Attributes.Keys, "图号", "SHEETNO", "SHEET_NO", "DRAWINGNO", "DRAWING_NO") ?? "图号",
+                    PageNumberAttributeTag = FramePageNumber.FindTag(context.Attributes.Keys),
                     SheetNameAttributeTag = MatchAttributeTag(context.Attributes.Keys, "图名", "图纸名称", "SHEETNAME", "SHEET_NAME", "DRAWINGNAME", "DRAWING_NAME") ?? "图名",
                     PrintScaleAttributeTag = MatchAttributeTag(context.Attributes.Keys, "比例", "SCALE", "PRINTSCALE", "PRINT_SCALE") ?? "比例",
                     DefaultPrintScale = context.Guess.PrintScale

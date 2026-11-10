@@ -23,6 +23,7 @@ namespace BatchPdfPublisher.Services
             window.EditRegion=()=>{using(document.Editor.StartUserInteraction(window))CadPlanRegionService.Execute(document);};
             window.SynchronizeWalls=()=>{using(var tx=document.Database.TransactionManager.StartTransaction()){CadLibraryDoorPlacement.Synchronize(document.Database,tx);tx.Commit();}document.Editor.Regen();};
             window.StorePlan=(category,selected)=> {
+                if(category=="Furniture")throw new InvalidOperationException("家具 / 设备请在建筑模型图库中导入三维模型，平面自动关联同一资源；此处可直接插入已有家具平面。");
                 CadComponentSymbolExporter.Execute(document,category,plan=> {
                     if(selected!=null && System.Windows.MessageBox.Show("更新所选资源的平面？平面有变化时，对应三维模型将标记为待复核。", "更新平面",System.Windows.MessageBoxButton.OKCancel)!=System.Windows.MessageBoxResult.OK)return null;
                     var saved=catalog.SavePlan(plan,selected?.AssetId,selected?.Version??0);

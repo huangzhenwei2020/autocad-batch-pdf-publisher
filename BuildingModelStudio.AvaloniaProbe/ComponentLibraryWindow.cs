@@ -53,12 +53,13 @@ internal sealed class ComponentLibraryWindow : Window
         Background=new SolidColorBrush(Color.Parse("#101923"));
         ComponentUi.Theme(this);
         var root=new Grid {RowDefinitions=new("56,*,64"),Margin=new Thickness(12),RowSpacing=8};
-        var toolbar=new Grid {ColumnDefinitions=new("*,150,36,36,Auto,Auto"),ColumnSpacing=8};toolbar.Children.Add(Search);
+        var toolbar=new Grid {ColumnDefinitions=new("*,150,36,36,Auto,Auto,Auto"),ColumnSpacing=8};toolbar.Children.Add(Search);
         Grid.SetColumn(_source,1);toolbar.Children.Add(_source);
         var grid=ComponentUi.Tool("grid-3x3","",()=>SetListMode(false));ToolTip.SetTip(grid,"缩略图网格");Grid.SetColumn(grid,2);toolbar.Children.Add(grid);
         var list=ComponentUi.Tool("rows-2","",()=>SetListMode(true));ToolTip.SetTip(list,"列表");Grid.SetColumn(list,3);toolbar.Children.Add(list);
         _import=ComponentUi.Tool("rotate-ccw","刷新",()=>_=ReloadAsync());_new=ComponentUi.Tool("box","补充三维",()=>_=NewPairingAsync());
         Grid.SetColumn(_import,4);toolbar.Children.Add(_import);Grid.SetColumn(_new,5);toolbar.Children.Add(_new);root.Children.Add(toolbar);
+        var external=ComponentUi.Tool("folder-open","导入三维 / 四向立面",()=>_=OpenExternalAsync());Grid.SetColumn(external,6);toolbar.Children.Add(external);
         _body=new Grid {ColumnDefinitions=new("180,*,430"),ColumnSpacing=12};Grid.SetRow(_body,1);root.Children.Add(_body);
         var categories=new StackPanel {Spacing=8,Margin=new Thickness(8)};
         Button Category(string title,string icon,string value) {
@@ -206,6 +207,12 @@ internal sealed class ComponentLibraryWindow : Window
             if(existing!=null)await window.LoadExistingAsync(existing);
             await window.ShowDialog(this);await ReloadAsync();
         }catch(Exception ex){_state.Text="未打开："+ex.Message;}finally{SetBusy(false);}
+    }
+    private async Task OpenExternalAsync()
+    {
+        if(_busy)return;SetBusy(true);
+        try{var record=(Assets.SelectedItem as Entry)?.Record;await new ComponentImportWindow(_library,record).ShowDialog(this);await ReloadAsync();}
+        catch(Exception ex){_state.Text=ex.Message;}finally{SetBusy(false);}
     }
     private static readonly FilePickerFileType PackageType=new("万落构件资源包"){Patterns=new[]{"*.wlopkg"}};
     private async Task ImportAsync()

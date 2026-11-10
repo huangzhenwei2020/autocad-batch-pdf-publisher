@@ -126,15 +126,15 @@ namespace BatchPdfPublisher.Views
             right.Controls.Add(actionsCard, 0, 0);
 
             var detailCard = CadDialogTheme.Card();
-            var detail = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 12,
+            var detail = new TableLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, RowCount = 13,
                 BackColor = CadDialogTheme.Surface, Margin = Padding.Empty };
             detail.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
             for (var i = 0; i < 3; i++) detail.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
             detail.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
             detail.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
             detail.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
-            for (var i = 0; i < 4; i++) detail.RowStyles.Add(new RowStyle(SizeType.Absolute, 43));
-            detail.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            for (var i = 0; i < 5; i++) detail.RowStyles.Add(new RowStyle(SizeType.Absolute, 43));
+            detail.RowStyles.Add(new RowStyle(SizeType.Absolute, 100));
             detail.Controls.Add(Section("▤  基本信息"), 0, 0);
             detail.Controls.Add(PairRow("图块名称", "block", "用户备注", "note"), 0, 1);
             detail.Controls.Add(PairRow("纸张规格", "paper", "加长", "extension"), 0, 2);
@@ -149,6 +149,7 @@ namespace BatchPdfPublisher.Views
             detail.Controls.Add(MappingRow("图号", "numberTag", "numberValue"), 0, 8);
             detail.Controls.Add(MappingRow("图名", "nameTag", "nameValue"), 0, 9);
             detail.Controls.Add(MappingRow("打印比例", "scaleTag", "scaleValue"), 0, 10);
+            detail.Controls.Add(MappingRow("序号 / 页码", "pageTag", "pageValue"), 0, 11);
             var bottom = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1,
                 BackColor = CadDialogTheme.Surface, Margin = new Padding(0, 8, 0, 0) };
             bottom.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
@@ -172,8 +173,8 @@ namespace BatchPdfPublisher.Views
             _scan.Text = "修改登记时检查同名图块和重复属性 TAG。";
             scanPane.Controls.Add(_scan, 0, 1);
             bottom.Controls.Add(scanPane, 1, 0);
-            detail.Controls.Add(bottom, 0, 11);
-            detailCard.Controls.Add(detail);
+            detail.Controls.Add(bottom, 0, 12);
+            detailCard.Controls.Add(new CadScrollHost(detail) { Dock = DockStyle.Fill });
             right.Controls.Add(detailCard, 0, 2);
 
             var footer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1,
@@ -325,6 +326,8 @@ namespace BatchPdfPublisher.Views
             Set("nameValue", frame?.DefaultSheetName);
             Set("scaleTag", frame?.PrintScaleAttributeTag);
             Set("scaleValue", frame?.DefaultPrintScale);
+            Set("pageTag", frame?.PageNumberAttributeTag);
+            Set("pageValue", frame?.DefaultPageNumber);
             _notice.Text = frame == null ? "请选择一项登记，或从 CAD 图中拾取新图框。"
                 : "当前图框规则已加载。修改前将检查 CAD 图块及属性标签。";
             _range.Text = frame == null ? "尚未选择图框" : Services.FrameLayoutRangeService.Describe(frame);

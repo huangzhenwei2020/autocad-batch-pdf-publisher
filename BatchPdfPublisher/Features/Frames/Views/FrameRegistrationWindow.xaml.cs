@@ -139,6 +139,8 @@ namespace BatchPdfPublisher.Views
                 Note = NoteBox.Text?.Trim(),
                 BuildingAttributeTag = TagOf(BuildingTagBox),
                 SheetNumberAttributeTag = TagOf(SheetNumberTagBox),
+                PageNumberAttributeTag = _existing?.PageNumberAttributeTag ?? FramePageNumber.FindTag(_attributeValues.Keys),
+                DefaultPageNumber = _existing?.DefaultPageNumber,
                 SheetNameAttributeTag = TagOf(SheetNameTagBox),
                 PrintScaleAttributeTag = TagOf(PrintScaleTagBox),
                 DefaultBuilding = BuildingValueBox.Text?.Trim(),

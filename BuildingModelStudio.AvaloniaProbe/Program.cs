@@ -35,6 +35,7 @@ internal static class Program
     public static bool OpeningEditorInteractionCheck { get; private set; }
     public static bool OpeningPlanCheck {get;private set;}
     public static bool ComponentSourceCheck {get;private set;}
+    public static bool ComponentImportCheck {get;private set;}
     public static bool ComponentPackageCheck {get;private set;}
     public static bool UnderlayCheck {get;private set;}
     public static bool CurvesCheck {get;private set;}
@@ -60,10 +61,13 @@ internal static class Program
     public static string? ProjectFolder { get; private set; }
     public static string? CadFingerprint {get;private set;}
     public static string? CadDrawingPath {get;private set;}
+    public static int CadProcessId {get;private set;}
 
     [STAThread]
     private static int Main(string[] args)
     {
+        if(args.Length>0&&args[0]=="--component-import-worker")return BatchPdfPublisher.BuildingModel.Export.ComponentImportWorker.Run(args[1..]);
+        if(args.Length>0&&args[0]=="--component-views-worker")return BatchPdfPublisher.BuildingModel.Export.ComponentImportWorker.Views(args[1..]);
         if (args.Length > 0 && args[0] == "--model-export-worker")
             return BatchPdfPublisher.BuildingModel.Export.ModelExportWorker.Run(args[1..]);
         if (args.Contains("--pick-check", StringComparer.OrdinalIgnoreCase))
@@ -86,6 +90,7 @@ internal static class Program
         }
         Smoke = args.Contains("--smoke", StringComparer.OrdinalIgnoreCase);
         ComponentSourceCheck=args.Contains("--component-source-check",StringComparer.OrdinalIgnoreCase);
+        ComponentImportCheck=args.Contains("--component-import-check",StringComparer.OrdinalIgnoreCase);
         ComponentPackageCheck=args.Contains("--component-package-check",StringComparer.OrdinalIgnoreCase);
         UnderlayCheck=args.Contains("--underlay-check",StringComparer.OrdinalIgnoreCase);
         CurvesCheck=args.Contains("--curves-check",StringComparer.OrdinalIgnoreCase);
@@ -189,6 +194,7 @@ internal static class Program
         var fingerprintIndex=Array.IndexOf(args,"--cad-fingerprint");
         if(fingerprintIndex>=0&&fingerprintIndex+1<args.Length)CadFingerprint=args[fingerprintIndex+1];
         var cadDrawingIndex=Array.IndexOf(args,"--cad-drawing");
+        var cadPidIndex=Array.IndexOf(args,"--cad-pid");if(cadPidIndex>=0&&cadPidIndex+1<args.Length&&int.TryParse(args[cadPidIndex+1],out var pid))CadProcessId=pid;
         if(cadDrawingIndex>=0&&cadDrawingIndex+1<args.Length)CadDrawingPath=args[cadDrawingIndex+1];
         if (cadProjectIndex >= 0 && cadProjectIndex + 1 < args.Length) ProjectFolder = Path.GetFullPath(args[cadProjectIndex + 1]);
         var modelIndex = Array.IndexOf(args, "--model");

@@ -32,6 +32,7 @@ internal static class CadLoadScriptTests
         }
         Require(depth == 0 && !quoted && expression.StartsWith("(progn") && expression.EndsWith("(princ))"), "Not one complete Lisp form");
         Require(!expression.Contains('\r') && !expression.Contains('\n') && expression.Contains("(command \"_.NETLOAD\" dll)"), "Raw interactive command stream remained");
+        Require(expression.IndexOf(") nil)) (if (not (vl-catch-all-error-p result)) (progn (foreach dll",StringComparison.Ordinal)>0,"Native NETLOAD must remain outside the Visual LISP catch/apply frame");
         Require(CadLoadScriptBuilder.ForCom(pathsToLoad).EndsWith("\r") && !CadLoadScriptBuilder.ForCom(pathsToLoad).Contains('\n'), "COM must receive one Enter, not CRLF");
         Require(CadLoadScriptBuilder.ForScript(pathsToLoad).EndsWith("\n") && !CadLoadScriptBuilder.ForScript(pathsToLoad).Contains('\r'), "SCR newline mismatch");
         Require(expression.Contains("vl-catch-all-apply") && expression.Contains("(setvar \"FILEDIA\" 1)") && expression.Contains("(command)"), "Error recovery missing");

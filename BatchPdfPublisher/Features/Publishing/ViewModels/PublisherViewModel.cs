@@ -22,11 +22,15 @@ namespace BatchPdfPublisher.ViewModels
         SheetNumberDescending,
         SheetNameAscending,
         SheetNameDescending,
-        SourceFileAscending
+        SourceFileAscending,
+        LayoutsBeforeModel,
+        PageNumberAscending,
+        PageNumberDescending
     }
 
     public sealed class PublisherViewModel : INotifyPropertyChanged, IDisposable
     {
+        public SheetSortMode CurrentSheetSort { get; private set; } = SheetSortMode.PageNumberAscending;
         private readonly DrawingScanner _scanner = new DrawingScanner();
         private readonly PublishPlanStore _store = new PublishPlanStore();
         private readonly PrintRangePreviewService _preview = new PrintRangePreviewService();
@@ -309,6 +313,7 @@ namespace BatchPdfPublisher.ViewModels
             var mergedSheets = MergeRescannedSheets(previousSheets, retained, scannedSheets);
             Sheets.Clear();
             foreach (var item in mergedSheets) Sheets.Add(item);
+            ApplySavedSort();
             NormalizeSheetOrder();
             RebuildBuildings(previousBuilding);
             SaveCurrentProject();
@@ -329,6 +334,53 @@ namespace BatchPdfPublisher.ViewModels
                 if (!CadFiles.Any(x => string.Equals(x.Path, path, StringComparison.OrdinalIgnoreCase)))
                     CadFiles.Add(new CadFileItem { Path = path, IsSelected = true });
             SaveCurrentProject();
+        }
+
+        public void MoveCadFile(string sourcePath, string targetPath, bool insertAfter)
+        {
+            if (IsPublishing) return;
+            var source = CadFiles.FirstOrDefault(file => string.Equals(file.Path, sourcePath, StringComparison.OrdinalIgnoreCase));
+            var target = CadFiles.FirstOrDefault(file => string.Equals(file.Path, targetPath, StringComparison.OrdinalIgnoreCase));
+            if (source == null || target == null || ReferenceEquals(source, target)) return;
+            var sourceIndex = CadFiles.IndexOf(source);
+            var destination = CadFiles.IndexOf(target) + (insertAfter ? 1 : 0);
+            if (sourceIndex < destination) destination--;
+            if (sourceIndex == destination) return;
+            CadFiles.Move(sourceIndex, destination);
+            var fileOrder = CadFiles.Select((file, index) => new { Path = NormalizeCadPath(file.Path), Index = index })
+                .GroupBy(file => file.Path, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.First().Index, StringComparer.OrdinalIgnoreCase);
+            var ordered = Sheets.OrderBy(sheet => fileOrder.TryGetValue(NormalizeCadPath(sheet.SourceFile), out var index) ? index : int.MaxValue)
+                .ThenBy(sheet => sheet.Order).ToList();
+            foreach (var group in ordered.GroupBy(sheet => sheet.Building))
+            {
+                var order = 1;
+                foreach (var sheet in group) sheet.Order = order++;
+            }
+            ApplySheetEdits();
+            Status = "CAD 文件及其图纸发布顺序已保存。";
+        }
+
+        public void MoveBuilding(string source, string target, bool insertAfter)
+        {
+            if (IsPublishing || _selectedProject == null || source == target || !Buildings.Contains(source) || !Buildings.Contains(target)) return;
+            var sourceIndex = Buildings.IndexOf(source);
+            var destination = Buildings.IndexOf(target) + (insertAfter ? 1 : 0);
+            if (sourceIndex < destination) destination--;
+            if (sourceIndex == destination) return;
+            Buildings.Move(sourceIndex, destination);
+            _selectedProject.BuildingOrder = Buildings.ToList();
+            NormalizeSheetOrder();
+            RebuildBuildings(source);
+            SaveCurrentProject();
+            OnPropertyChanged(nameof(Sheets));
+            Status = "子项目及其发布顺序已保存。";
+        }
+
+        private int BuildingRank(string building)
+        {
+            var index = _selectedProject?.BuildingOrder?.IndexOf(building) ?? -1;
+            return index < 0 ? int.MaxValue : index;
         }
 
         public void ScanSelectedCadFiles()
@@ -403,8 +455,9 @@ namespace BatchPdfPublisher.ViewModels
 
         public void ApplySheetEdits()
         {
+            CurrentSheetSort = SheetSortMode.Custom;
             var selected = SelectedSheet;
-            var ordered = Sheets.OrderBy(x => x.Building)
+            var ordered = Sheets.OrderBy(x => BuildingRank(x.Building)).ThenBy(x => x.Building)
                 .ThenBy(x => x.Order)
                 .ToList();
             for (var target = 0; target < ordered.Count; target++)
@@ -659,6 +712,8 @@ namespace BatchPdfPublisher.ViewModels
             _selectedProject.ScanAllLayouts = ScanAllLayouts;
             _selectedProject.SelectedPublishBuildings = PublishBuildings.Where(x => x.IsSelected).Select(x => x.Name).ToList();
             _selectedProject.CadFiles = CadFiles.Select(x => x.Path).ToList();
+            _selectedProject.BuildingOrder = Buildings.ToList();
+            _selectedProject.SheetSort = CurrentSheetSort.ToString();
             _selectedProject.SelectedCadFiles = CadFiles.Where(x => x.IsSelected).Select(x => x.Path).ToList();
             _selectedProject.MergeByBuilding = MergeByBuilding;
             _selectedProject.PreviewEnabled = PreviewEnabled;
@@ -678,6 +733,9 @@ namespace BatchPdfPublisher.ViewModels
                 foreach (var frame in project.Frames ?? new System.Collections.Generic.List<FrameDefinition>()) Frames.Add(frame);
                 Sheets.Clear();
                 foreach (var sheet in project.SavedSheets ?? new System.Collections.Generic.List<SheetCatalogItem>()) Sheets.Add(ToSheetItem(sheet));
+                CurrentSheetSort = Enum.TryParse(project.SheetSort, out SheetSortMode sort) && Enum.IsDefined(typeof(SheetSortMode), sort)
+                    ? sort : SheetSortMode.PageNumberAscending;
+                ApplySavedSort();
                 NormalizeSheetOrder();
                 RebuildBuildings(null);
                 PlotStyle = project.PlotStyle;
@@ -709,7 +767,7 @@ namespace BatchPdfPublisher.ViewModels
 
         private void NormalizeSheetOrder()
         {
-            var ordered = Sheets.OrderBy(x => x.Building).ThenBy(x => x.Order).ToList();
+            var ordered = Sheets.OrderBy(x => BuildingRank(x.Building)).ThenBy(x => x.Building).ThenBy(x => x.Order).ToList();
             for (var target = 0; target < ordered.Count; target++)
             {
                 var current = Sheets.IndexOf(ordered[target]);
@@ -725,7 +783,7 @@ namespace BatchPdfPublisher.ViewModels
         private void RebuildBuildings(string preferredBuilding)
         {
             Buildings.Clear();
-            foreach (var building in Sheets.Select(x => x.Building).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct()) Buildings.Add(building);
+            foreach (var building in Sheets.Select(x => x.Building).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct().OrderBy(BuildingRank)) Buildings.Add(building);
             var selected = Buildings.Contains(preferredBuilding) ? preferredBuilding : Buildings.FirstOrDefault();
             if (!string.Equals(SelectedBuilding, selected, StringComparison.Ordinal)) SelectedBuilding = selected;
             else { SheetView.Refresh(); UpdatePreview(); }
@@ -770,9 +828,9 @@ namespace BatchPdfPublisher.ViewModels
         {
             return new SheetCatalogItem
             {
-                Order = sheet.Order, BlockHandle = sheet.BlockHandle, BlockName = sheet.BlockName, Building = sheet.Building, SheetNumber = sheet.SheetNumber, SheetName = sheet.SheetName,
+                Order = sheet.Order, BlockHandle = sheet.BlockHandle, BlockName = sheet.BlockName, Building = sheet.Building, SheetNumber = sheet.SheetNumber, PageNumber = sheet.PageNumber, SheetName = sheet.SheetName,
                 Frame = sheet.Frame, Extension = sheet.Extension, FrameNote = sheet.FrameNote, PaperOrientation = sheet.PaperOrientation,
-                PrintScale = sheet.PrintScale, PlotStyle = sheet.PlotStyle, SourceFile = sheet.SourceFile, SourceLayout = sheet.SourceLayout,
+                PrintScale = sheet.PrintScale, PlotStyle = sheet.PlotStyle, SourceFile = sheet.SourceFile, SourceLayout = sheet.SourceLayout, SourceLayoutOrder = sheet.SourceLayoutOrder,
                 MinX = sheet.MinX, MinY = sheet.MinY, MaxX = sheet.MaxX, MaxY = sheet.MaxY
             };
         }
@@ -781,25 +839,16 @@ namespace BatchPdfPublisher.ViewModels
         {
             return new SheetItem
             {
-                Order = sheet.Order, BlockHandle = sheet.BlockHandle, BlockName = sheet.BlockName, Building = sheet.Building, SheetNumber = sheet.SheetNumber, SheetName = sheet.SheetName,
+                Order = sheet.Order, BlockHandle = sheet.BlockHandle, BlockName = sheet.BlockName, Building = sheet.Building, SheetNumber = sheet.SheetNumber, PageNumber = sheet.PageNumber, SheetName = sheet.SheetName,
                 Frame = sheet.Frame, Extension = sheet.Extension, FrameNote = sheet.FrameNote, PaperOrientation = sheet.PaperOrientation,
-                PrintScale = sheet.PrintScale, PlotStyle = sheet.PlotStyle, SourceFile = sheet.SourceFile, SourceLayout = sheet.SourceLayout,
+                PrintScale = sheet.PrintScale, PlotStyle = sheet.PlotStyle, SourceFile = sheet.SourceFile, SourceLayout = sheet.SourceLayout, SourceLayoutOrder = sheet.SourceLayoutOrder,
                 MinX = sheet.MinX, MinY = sheet.MinY, MaxX = sheet.MaxX, MaxY = sheet.MaxY
             };
         }
 
         private void Move(int delta)
         {
-            var visible = VisibleSheets().ToList();
-            var visibleIndex = visible.IndexOf(SelectedSheet);
-            var targetVisibleIndex = visibleIndex + delta;
-            if (visibleIndex < 0 || targetVisibleIndex < 0 || targetVisibleIndex >= visible.Count) return;
-            var index = Sheets.IndexOf(SelectedSheet);
-            var target = Sheets.IndexOf(visible[targetVisibleIndex]);
-            Sheets.Move(index, target);
-            visible = VisibleSheets().ToList();
-            for (var i = 0; i < visible.Count; i++) visible[i].Order = i + 1;
-            ApplySheetEdits();
+            MoveSheetsByOffset(new[] { SelectedSheet }, delta);
         }
 
         private static string SheetIdentity(SheetItem sheet)
@@ -898,20 +947,83 @@ namespace BatchPdfPublisher.ViewModels
 
         public void MoveSheet(SheetItem source, SheetItem target, bool insertAfter)
         {
-            if (source == null || ReferenceEquals(source, target)) return;
+            MoveSheets(new[] { source }, target, insertAfter);
+        }
+
+        public void MoveSheets(IEnumerable<SheetItem> sources, SheetItem target, bool insertAfter)
+        {
+            if (IsPublishing || IsScanning || sources == null) return;
             var visible = VisibleSheets().ToList();
-            if (!visible.Remove(source)) return;
+            var sourceSet = new HashSet<SheetItem>(sources);
+            var selected = visible.Where(sourceSet.Contains).ToList();
+            if (selected.Count == 0 || selected.Count != sourceSet.Count || selected.Any(sheet => !SameBuilding(sheet, selected[0]))) return;
+            if (target != null && (!SameBuilding(selected[0], target) || sourceSet.Contains(target))) return;
+            visible.RemoveAll(sourceSet.Contains);
             var targetIndex = target == null ? visible.Count : visible.IndexOf(target);
             if (targetIndex < 0) return;
             if (insertAfter && target != null) targetIndex++;
-            visible.Insert(Math.Min(targetIndex, visible.Count), source);
-            ApplyVisibleOrder(visible, source, "已保存拖动后的自定义图纸顺序。");
+            visible.InsertRange(targetIndex, selected);
+            if (visible.SequenceEqual(VisibleSheets())) return;
+            ApplyVisibleOrder(visible, sourceSet.Contains(SelectedSheet) ? SelectedSheet : selected[0],
+                "已移动 " + selected.Count + " 张图纸并保存自定义顺序。");
+        }
+
+        public void MoveSheetsByOffset(IEnumerable<SheetItem> sources, int delta, IEnumerable<SheetItem> displayedSheets = null)
+        {
+            if (IsPublishing || IsScanning || sources == null || (delta != -1 && delta != 1)) return;
+            var visible = VisibleSheets().ToList();
+            var displayed = new HashSet<SheetItem>(displayedSheets ?? visible);
+            var ordered = visible.Where(displayed.Contains).ToList();
+            var selected = new HashSet<SheetItem>(sources);
+            if (selected.Count == 0 || selected.Any(sheet => !ordered.Contains(sheet)) || selected.Any(sheet => !SameBuilding(sheet, selected.First()))) return;
+            var moved = false;
+            var start = delta < 0 ? 1 : ordered.Count - 2;
+            for (var index = start; index >= 0 && index < ordered.Count; index -= delta)
+            {
+                var neighbor = index + delta;
+                if (neighbor < 0 || neighbor >= ordered.Count || !selected.Contains(ordered[index]) || selected.Contains(ordered[neighbor]) || !SameBuilding(ordered[index], ordered[neighbor])) continue;
+                var sheet = ordered[index];
+                ordered[index] = ordered[neighbor];
+                ordered[neighbor] = sheet;
+                moved = true;
+            }
+            if (!moved) return;
+            var next = 0;
+            for (var index = 0; index < visible.Count; index++)
+                if (displayed.Contains(visible[index])) visible[index] = ordered[next++];
+            ApplyVisibleOrder(visible, selected.Contains(SelectedSheet) ? SelectedSheet : ordered.First(selected.Contains),
+                "已移动 " + selected.Count + " 张图纸并保存自定义顺序。");
+        }
+
+        public void MoveSheetsToEdge(IEnumerable<SheetItem> sources, bool toEnd)
+        {
+            if (sources == null) return;
+            var selected = new HashSet<SheetItem>(sources);
+            if (selected.Count == 0) return;
+            var target = toEnd ? null : VisibleSheets().FirstOrDefault(sheet => SameBuilding(sheet, selected.First()) && !selected.Contains(sheet));
+            MoveSheets(selected, target, toEnd);
         }
 
         public void SortVisibleSheets(SheetSortMode mode)
         {
-            if (mode == SheetSortMode.Custom) return;
-            var visible = VisibleSheets().ToList();
+            if (mode != SheetSortMode.Custom)
+                ApplyVisibleOrder(SortSheets(VisibleSheets(), mode).ToList(), SelectedSheet, "图纸已按所选字段排列，可继续拖动微调。");
+            CurrentSheetSort = mode;
+            SaveCurrentProject();
+        }
+
+        private void ApplySavedSort()
+        {
+            if (CurrentSheetSort == SheetSortMode.Custom) return;
+            foreach (var group in Sheets.GroupBy(sheet => sheet.Building))
+            {
+                var ordered = SortSheets(group, CurrentSheetSort).ToList();
+                for (var index = 0; index < ordered.Count; index++) ordered[index].Order = index + 1;
+            }
+        }
+
+        private static IEnumerable<SheetItem> SortSheets(IEnumerable<SheetItem> visible, SheetSortMode mode)
+        {
             var comparer = NaturalTextComparer.Instance;
             IEnumerable<SheetItem> ordered;
             switch (mode)
@@ -926,13 +1038,23 @@ namespace BatchPdfPublisher.ViewModels
                     ordered = visible.OrderByDescending(x => x.SheetName, comparer).ThenBy(x => x.SheetNumber, comparer);
                     break;
                 case SheetSortMode.SourceFileAscending:
-                    ordered = visible.OrderBy(x => x.SourceFileName, comparer).ThenBy(x => x.SourceLayout, comparer).ThenBy(x => x.Order);
+                    ordered = visible.OrderBy(x => x.SourceFileName, comparer).ThenBy(x => x.IsModelSpace).ThenBy(x => x.SourceLayoutOrder ?? int.MaxValue).ThenBy(x => x.SourceLayout, comparer).ThenBy(x => x.Order);
+                    break;
+                case SheetSortMode.LayoutsBeforeModel:
+                    ordered = visible.OrderBy(x => x.IsModelSpace).ThenBy(x => x.SourceFileName, comparer)
+                        .ThenBy(x => x.SourceLayoutOrder ?? int.MaxValue).ThenBy(x => x.SourceLayout, comparer).ThenBy(x => x.Order);
+                    break;
+                case SheetSortMode.PageNumberAscending:
+                    ordered = visible.OrderBy(x => string.IsNullOrWhiteSpace(x.PageNumber)).ThenBy(x => x.PageNumber, comparer).ThenBy(x => x.Order);
+                    break;
+                case SheetSortMode.PageNumberDescending:
+                    ordered = visible.OrderBy(x => string.IsNullOrWhiteSpace(x.PageNumber)).ThenByDescending(x => x.PageNumber, comparer).ThenBy(x => x.Order);
                     break;
                 default:
                     ordered = visible.OrderBy(x => x.SheetNumber, comparer).ThenBy(x => x.SheetName, comparer);
                     break;
             }
-            ApplyVisibleOrder(ordered.ToList(), SelectedSheet, "图纸已按所选字段排列，可继续拖动微调。");
+            return ordered;
         }
 
         private void ApplyVisibleOrder(System.Collections.Generic.IList<SheetItem> visible, SheetItem selected, string status)
@@ -956,43 +1078,6 @@ namespace BatchPdfPublisher.ViewModels
         private System.Collections.Generic.IEnumerable<SheetItem> VisibleSheets()
         {
             return Sheets.Where(x => string.IsNullOrEmpty(SelectedBuilding) || x.Building == SelectedBuilding);
-        }
-
-        private sealed class NaturalTextComparer : System.Collections.Generic.IComparer<string>
-        {
-            public static readonly NaturalTextComparer Instance = new NaturalTextComparer();
-
-            public int Compare(string left, string right)
-            {
-                left = left ?? string.Empty;
-                right = right ?? string.Empty;
-                var leftIndex = 0;
-                var rightIndex = 0;
-                while (leftIndex < left.Length && rightIndex < right.Length)
-                {
-                    if (char.IsDigit(left[leftIndex]) && char.IsDigit(right[rightIndex]))
-                    {
-                        var leftStart = leftIndex;
-                        var rightStart = rightIndex;
-                        while (leftIndex < left.Length && char.IsDigit(left[leftIndex])) leftIndex++;
-                        while (rightIndex < right.Length && char.IsDigit(right[rightIndex])) rightIndex++;
-                        var leftDigits = left.Substring(leftStart, leftIndex - leftStart).TrimStart('0');
-                        var rightDigits = right.Substring(rightStart, rightIndex - rightStart).TrimStart('0');
-                        if (leftDigits.Length == 0) leftDigits = "0";
-                        if (rightDigits.Length == 0) rightDigits = "0";
-                        var lengthResult = leftDigits.Length.CompareTo(rightDigits.Length);
-                        if (lengthResult != 0) return lengthResult;
-                        var digitResult = string.CompareOrdinal(leftDigits, rightDigits);
-                        if (digitResult != 0) return digitResult;
-                        continue;
-                    }
-                    var leftCharacter = char.ToUpperInvariant(left[leftIndex++]);
-                    var rightCharacter = char.ToUpperInvariant(right[rightIndex++]);
-                    var characterResult = leftCharacter.CompareTo(rightCharacter);
-                    if (characterResult != 0) return characterResult;
-                }
-                return left.Length.CompareTo(right.Length);
-            }
         }
 
         private void UpdatePreview()

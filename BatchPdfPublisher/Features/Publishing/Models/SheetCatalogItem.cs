@@ -8,6 +8,7 @@ namespace BatchPdfPublisher.Models
         public string BlockName { get; set; }
         public string Building { get; set; }
         public string SheetNumber { get; set; }
+        public string PageNumber { get; set; }
         public string SheetName { get; set; }
         public string Frame { get; set; }
         public string Extension { get; set; }
@@ -17,6 +18,7 @@ namespace BatchPdfPublisher.Models
         public string PlotStyle { get; set; }
         public string SourceFile { get; set; }
         public string SourceLayout { get; set; }
+        public int? SourceLayoutOrder { get; set; }
         public double MinX { get; set; }
         public double MinY { get; set; }
         public double MaxX { get; set; }

@@ -38,11 +38,14 @@ namespace BatchPdfPublisher
             ProjectAutoSaveService.Install();
             CloudSyncCoordinator.Install();
             CadSaveCloudSyncService.Install();
+            ComponentViewCadService.Install();
         }
         public void Terminate()
         {
             if (IsCoreConsole) return;
             DimensionEditService.Close();
+
+            ComponentViewCadService.Remove();
             CadSaveCloudSyncService.Remove(); CloudSyncCoordinator.Remove(); ProjectAutoSaveService.Remove();
             ShortcutAliasService.Remove(); RibbonService.Remove(); MenuService.Remove();
         }
@@ -56,6 +59,9 @@ namespace BatchPdfPublisher
         public void EditDimensionAction() { DimensionEditService.RunQueued(); }
         [CommandMethod("WLDIMCOMMIT")]
         public void EditDimensionCommit() { DimensionEditService.RunPendingWrite(); }
+
+        [CommandMethod("WLCOMPONENTVIEWS")]
+        public void InsertComponentViews()=>ComponentViewCadService.Execute(Application.DocumentManager.MdiActiveDocument);
 
         [CommandMethod("WLHOTKEYS")]
         public void ConfigureShortcuts()

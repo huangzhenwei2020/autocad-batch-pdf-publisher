@@ -11,7 +11,7 @@ namespace BatchPdfPublisher.Services
     {
         public IList<string> GetLayoutNames(Database database)
         {
-            var names = new List<string>();
+            var names = new List<Tuple<int, string>>();
             using (var transaction = database.TransactionManager.StartTransaction())
             {
                 var blockTable = (BlockTable)transaction.GetObject(database.BlockTableId, OpenMode.ForRead);
@@ -21,11 +21,11 @@ namespace BatchPdfPublisher.Services
                     if (record == null || !record.IsLayout) continue;
                     var layout = transaction.GetObject(record.LayoutId, OpenMode.ForRead) as Layout;
                     if (layout != null && layout.ModelType) continue;
-                    names.Add(layout == null ? record.Name : layout.LayoutName);
+                    names.Add(Tuple.Create(layout == null ? int.MaxValue : layout.TabOrder, layout == null ? record.Name : layout.LayoutName));
                 }
                 transaction.Commit();
             }
-            return names.OrderBy(x => x).ToList();
+            return names.OrderBy(x => x.Item1).ThenBy(x => x.Item2, NaturalTextComparer.Instance).Select(x => x.Item2).ToList();
         }
 
         public IList<SheetItem> Scan(Document document, IEnumerable<FrameDefinition> frameDefinitions, bool scanModelSpace = true, bool scanAllLayouts = true, IEnumerable<string> selectedLayouts = null)
@@ -84,6 +84,7 @@ namespace BatchPdfPublisher.Services
                         BlockName = blockName,
                             Building = GetAttribute(attributes, frame.BuildingAttributeTag, frame.DefaultBuilding, "未分组"),
                             SheetNumber = GetAttribute(attributes, frame.SheetNumberAttributeTag, frame.DefaultSheetNumber, "未填写图号"),
+                            PageNumber = GetAttribute(attributes, frame.PageNumberAttributeTag ?? FramePageNumber.FindTag(attributes.Keys), frame.DefaultPageNumber, string.Empty),
                             SheetName = GetAttribute(attributes, frame.SheetNameAttributeTag, frame.DefaultSheetName, "未填写图名"),
                             Frame = frame.PaperSize,
                             Extension = frame.Extension,
@@ -96,6 +97,7 @@ namespace BatchPdfPublisher.Services
                             PlotStyle = "使用输出设置",
                             SourceFile = sourceFile,
                             SourceLayout = SpaceName(space, transaction),
+                            SourceLayoutOrder = ((Layout)transaction.GetObject(space.LayoutId, OpenMode.ForRead)).TabOrder,
                             MinX = plotExtents.MinPoint.X,
                             MinY = plotExtents.MinPoint.Y,
                             MaxX = plotExtents.MaxPoint.X,
@@ -111,7 +113,11 @@ namespace BatchPdfPublisher.Services
                 transaction.Commit();
             }
             var sorted = result.OrderBy(x => x.Building)
+                .ThenBy(x => x.IsModelSpace)
+                .ThenBy(x => x.SourceLayoutOrder)
                 .ThenBy(TitlePriority)
+                .ThenBy(x => string.IsNullOrWhiteSpace(x.PageNumber))
+                .ThenBy(x => x.PageNumber, NaturalTextComparer.Instance)
                 .ThenBy(x => x.SheetNumber)
                 .ThenBy(x => x.SheetName)
                 .ToList();
@@ -182,6 +188,12 @@ namespace BatchPdfPublisher.Services
             {
                 var attribute = transaction.GetObject(id, OpenMode.ForRead) as AttributeReference;
                 if (attribute != null) values[attribute.Tag] = attribute.TextString;
+            }
+            var definition = (BlockTableRecord)transaction.GetObject(reference.BlockTableRecord, OpenMode.ForRead);
+            foreach (ObjectId id in definition)
+            {
+                var attribute = transaction.GetObject(id, OpenMode.ForRead) as AttributeDefinition;
+                if (attribute != null && attribute.Constant && !values.ContainsKey(attribute.Tag)) values[attribute.Tag] = attribute.TextString;
             }
             return values;
         }

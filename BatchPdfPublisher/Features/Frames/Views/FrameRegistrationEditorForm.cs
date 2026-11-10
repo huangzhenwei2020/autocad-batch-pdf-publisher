@@ -22,13 +22,13 @@ namespace BatchPdfPublisher.Views
         private readonly List<Image> _icons = new List<Image>();
         private readonly TextBox _block = new TextBox();
         private readonly TextBox _note = new TextBox();
-        private readonly TextBox[] _defaults = { new TextBox(), new TextBox(), new TextBox(), new TextBox() };
+        private readonly TextBox[] _defaults = { new TextBox(), new TextBox(), new TextBox(), new TextBox(), new TextBox() };
         private readonly PublisherForm.ThemedComboBox _paper = new PublisherForm.ThemedComboBox();
         private readonly PublisherForm.ThemedComboBox _extension = new PublisherForm.ThemedComboBox();
         private readonly PublisherForm.ThemedComboBox _orientation = new PublisherForm.ThemedComboBox();
         private readonly PublisherForm.ThemedComboBox[] _tags = {
             new PublisherForm.ThemedComboBox(), new PublisherForm.ThemedComboBox(),
-            new PublisherForm.ThemedComboBox(), new PublisherForm.ThemedComboBox() };
+            new PublisherForm.ThemedComboBox(), new PublisherForm.ThemedComboBox(), new PublisherForm.ThemedComboBox() };
         private readonly CadToggleSwitch _pickRange = new CadToggleSwitch();
         private readonly Label _rangeDescription = new Label();
         private readonly Label _scanResult = new Label();
@@ -77,7 +77,7 @@ namespace BatchPdfPublisher.Views
             root.Controls.Add(TitleBar(), 0, 0);
 
             var content = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true,
-                AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, RowCount = 11,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, RowCount = 12,
                 Padding = new Padding(20, 14, 20, 14), Margin = Padding.Empty,
                 BackColor = CadDialogTheme.Surface };
             content.RowStyles.Add(new RowStyle(SizeType.Absolute, 47));
@@ -86,7 +86,7 @@ namespace BatchPdfPublisher.Views
             content.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
             content.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
             content.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
-            for (var i = 0; i < 4; i++) content.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
+            for (var i = 0; i < 5; i++) content.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
             content.RowStyles.Add(new RowStyle(SizeType.Absolute, 128));
             content.Controls.Add(Heading("图框登记信息", PublisherForm.UiIcon.Frame), 0, 0);
             content.Controls.Add(PairRow("图块名称", Input(_block, true), "用户备注", Input(_note)), 0, 1);
@@ -98,8 +98,8 @@ namespace BatchPdfPublisher.Views
             content.Controls.Add(paperRow, 0, 3);
             content.Controls.Add(Heading("属性映射与默认值", PublisherForm.UiIcon.List), 0, 4);
             content.Controls.Add(MapHeader(), 0, 5);
-            var names = new[] { "子项目名称", "图号", "图名", "打印比例" };
-            for (var i = 0; i < 4; i++) content.Controls.Add(MapRow(names[i], i), 0, i + 6);
+            var names = new[] { "子项目名称", "图号", "图名", "打印比例", "序号 / 页码" };
+            for (var i = 0; i < 5; i++) content.Controls.Add(MapRow(names[i], i), 0, i + 6);
             var checks = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 3,
                 BackColor = CadDialogTheme.Surface, Margin = new Padding(0, 10, 0, 0) };
             checks.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
@@ -124,7 +124,7 @@ namespace BatchPdfPublisher.Views
             _scanResult.TextAlign = ContentAlignment.MiddleLeft;
             _scanResult.AutoEllipsis = true;
             checks.Controls.Add(_scanResult, 1, 2);
-            content.Controls.Add(checks, 0, 10);
+            content.Controls.Add(checks, 0, 11);
             root.Controls.Add(new CadScrollHost(content) { Dock = DockStyle.Fill, BackColor = CadDialogTheme.Surface }, 0, 1);
 
             var footer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, RowCount = 1,
@@ -282,7 +282,7 @@ namespace BatchPdfPublisher.Views
                 _orientation.Enabled = false;
                 var selectedTags = _existing == null ? Enumerable.Empty<string>() : new[] {
                     _existing.BuildingAttributeTag, _existing.SheetNumberAttributeTag,
-                    _existing.SheetNameAttributeTag, _existing.PrintScaleAttributeTag };
+                    _existing.SheetNameAttributeTag, _existing.PrintScaleAttributeTag, _existing.PageNumberAttributeTag };
                 var tags = new[] { DoNotRead }.Concat(_attributes.Keys).Concat(selectedTags)
                     .Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
                 foreach (var combo in _tags) combo.Items.AddRange(tags.Cast<object>().ToArray());
@@ -292,7 +292,8 @@ namespace BatchPdfPublisher.Views
                     SelectTag(1, tags, "图号", "SHEETNO", "SHEET_NO", "DRAWINGNO", "DRAWING_NO");
                     SelectTag(2, tags, "图名", "图纸名称", "SHEETNAME", "SHEET_NAME", "DRAWINGNAME", "DRAWING_NAME");
                     SelectTag(3, tags, "比例", "SCALE", "PRINTSCALE", "PRINT_SCALE");
-                    for (var i = 0; i < 4; i++) FillFromTag(i);
+                    SelectTag(4, tags, FramePageNumber.Tags);
+                    for (var i = 0; i < 5; i++) FillFromTag(i);
                     if (string.IsNullOrWhiteSpace(_defaults[3].Text)) _defaults[3].Text = _guess.PrintScale;
                 }
                 else
@@ -301,6 +302,10 @@ namespace BatchPdfPublisher.Views
                     Select(_tags[1], EmptyTag(_existing.SheetNumberAttributeTag));
                     Select(_tags[2], EmptyTag(_existing.SheetNameAttributeTag));
                     Select(_tags[3], EmptyTag(_existing.PrintScaleAttributeTag));
+                    if (_existing.PageNumberAttributeTag == null) SelectTag(4, tags, FramePageNumber.Tags);
+                    else Select(_tags[4], EmptyTag(_existing.PageNumberAttributeTag));
+                    _defaults[4].Text = _existing.DefaultPageNumber ?? string.Empty;
+                    if (_existing.PageNumberAttributeTag == null) FillFromTag(4);
                     _defaults[0].Text = _existing.DefaultBuilding ?? string.Empty;
                     _defaults[1].Text = _existing.DefaultSheetNumber ?? string.Empty;
                     _defaults[2].Text = _existing.DefaultSheetName ?? string.Empty;
@@ -428,6 +433,7 @@ namespace BatchPdfPublisher.Views
                 BuildingAttributeTag = AttributeTag(0), SheetNumberAttributeTag = AttributeTag(1),
                 SheetNameAttributeTag = AttributeTag(2), PrintScaleAttributeTag = AttributeTag(3),
                 DefaultBuilding = _defaults[0].Text.Trim(), DefaultSheetNumber = _defaults[1].Text.Trim(),
+                PageNumberAttributeTag = AttributeTag(4), DefaultPageNumber = _defaults[4].Text.Trim(),
                 DefaultSheetName = _defaults[2].Text.Trim(), DefaultPrintScale = _defaults[3].Text.Trim(),
                 HasLayoutRange = _existing?.HasLayoutRange ?? false,
                 LayoutLeftMargin = _existing?.LayoutLeftMargin ?? 0d,

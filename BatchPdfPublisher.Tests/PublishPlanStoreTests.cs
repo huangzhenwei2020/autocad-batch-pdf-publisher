@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using BatchPdfPublisher.Models;
@@ -22,6 +23,24 @@ internal static class PublishPlanStoreTests
             var projectFolder = Path.Combine(root, "external-project");
             var store = new PublishPlanStore();
             var project = store.CreateProject("恢复测试", projectFolder);
+            Assert(FramePageNumber.FindTag(new[] { "图号", "page-number" }) == "page-number", "page tag normalization failed");
+            Assert(FramePageNumber.FindTag(new[] { "SHEETNO", "图号" }) == null, "drawing number treated as page number");
+            var pageProject = store.CreateProject("页码保存", Path.Combine(root, "pages"));
+            pageProject.Frames.Add(new FrameDefinition { BlockName = "TK", PaperSize = "A3", PageNumberAttributeTag = "页码", DefaultPageNumber = "01" });
+            pageProject.SavedSheets.Add(new SheetCatalogItem { PageNumber = "003", SourceLayout = "布局2", SourceLayoutOrder = 2 });
+            store.SaveProject(pageProject);
+            var pageRestored = store.LoadProjects().Single(p => p.Name == "页码保存");
+            Assert(pageRestored.Frames.Single().PageNumberAttributeTag == "页码" && pageRestored.Frames.Single().DefaultPageNumber == "01"
+                && pageRestored.SavedSheets.Single().PageNumber == "003" && pageRestored.SavedSheets.Single().SourceLayoutOrder == 2, "page mapping or layout order lost on save");
+            Assert(pageRestored.SheetSort == "PageNumberAscending", "default page ordering was lost");
+            pageRestored.BuildingOrder = new List<string> { "八层", "四层" };
+            pageRestored.CadFiles = new List<string> { "b.dwg", "a.dwg" };
+            pageRestored.SheetSort = "Custom";
+            store.SaveProject(pageRestored);
+            var reorderedProject = store.LoadProjects().Single(p => p.Name == pageRestored.Name);
+            Assert(reorderedProject.BuildingOrder.SequenceEqual(pageRestored.BuildingOrder)
+                && reorderedProject.CadFiles.SequenceEqual(pageRestored.CadFiles) && reorderedProject.SheetSort == "Custom", "manual publication ordering lost on save");
+            Console.WriteLine("PASS PageNumberTagAndProjectRoundtrip");
             project.PlotStyle = "first.ctb";
             project.Frames.Add(new FrameDefinition
             {
