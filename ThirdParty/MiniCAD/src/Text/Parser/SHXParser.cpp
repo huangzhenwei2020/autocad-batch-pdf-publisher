@@ -1,0 +1,499 @@
+#include "SHXParser.h"
+#include "SHXVM.h"
+#include "Core/Log.h"
+#include "Core/PathUtils.h"
+
+#include <fstream>
+#include <algorithm>
+#include <cstring>
+#include <cctype>
+
+namespace MiniCAD
+{
+    std::vector<uint32_t> SHXParser::GetCodes() const
+    {
+        std::vector<uint32_t> codes;
+        codes.reserve(m_shapes.size());
+        for (const auto& [code, shape] : m_shapes)
+            codes.push_back(code);
+        return codes;
+    }
+
+    //==================================================================
+    // Low-level helpers
+    //==================================================================
+    static inline uint16_t RdU16LE(const uint8_t* p)
+    {
+        return uint16_t(p[0]) | (uint16_t(p[1]) << 8);
+    }
+    static inline uint32_t RdU32LE(const uint8_t* p)
+    {
+        return uint32_t(p[0])
+            | (uint32_t(p[1]) << 8)
+            | (uint32_t(p[2]) << 16)
+            | (uint32_t(p[3]) << 24);
+    }
+
+    // Read NUL-terminated ASCII string; advance p past the NUL.
+    // Returns "" and leaves p unchanged on overflow.
+    static std::string RdCStr(const uint8_t*& p, const uint8_t* end)
+    {
+        const uint8_t* s = p;
+        while (s < end && *s != 0) ++s;
+        if (s >= end) return {};
+        std::string out(reinterpret_cast<const char*>(p), s - p);
+        p = s + 1;
+        return out;
+    }
+
+    //==================================================================
+    // Load: orchestrator
+    //==================================================================
+    bool SHXParser::Load(const std::string& filePath)
+    {
+        LOG_TRACE("[SHX] Load entry: %s", filePath.c_str());
+
+        //----------------------------------------------------------------
+        // 0. Reset all state
+        //----------------------------------------------------------------
+        m_loaded = false;
+        m_kind = Kind::Unknown;
+        m_headerLine.clear();
+        m_version.clear();
+        m_fontName.clear();
+        m_fontHeight = 1.0;
+        m_defaultAdvance = 1.0;
+        m_shapes.clear();
+        m_fileData.clear();
+
+        //----------------------------------------------------------------
+        // 1. Read file into memory
+        //----------------------------------------------------------------
+        std::ifstream f(Utf8ToPath(filePath), std::ios::binary);
+        if (!f) {
+            LOG_ERROR("[SHX] cannot open file: %s", filePath.c_str());
+            return false;
+        }
+
+        m_fileData.assign(std::istreambuf_iterator<char>(f),
+            std::istreambuf_iterator<char>());
+
+        if (m_fileData.size() < 24) {
+            LOG_ERROR("[SHX] file too small: %zu bytes", m_fileData.size());
+            return false;
+        }
+
+        LOG_TRACE("[SHX] file read OK, size=%zu, first8= %02X %02X %02X %02X %02X %02X %02X %02X",
+            m_fileData.size(),
+            m_fileData[0], m_fileData[1], m_fileData[2], m_fileData[3],
+            m_fileData[4], m_fileData[5], m_fileData[6], m_fileData[7]);
+
+        //----------------------------------------------------------------
+        // 2. Strict signature check (rejects TTF/OTF immediately)
+        //----------------------------------------------------------------
+        if (std::memcmp(m_fileData.data(), "AutoCAD-", 8) != 0) {
+            LOG_WARN("[SHX] signature mismatch (not a SHX file): %02X %02X %02X %02X %02X %02X %02X %02X",
+                m_fileData[0], m_fileData[1], m_fileData[2], m_fileData[3],
+                m_fileData[4], m_fileData[5], m_fileData[6], m_fileData[7]);
+            return false;
+        }
+
+        //----------------------------------------------------------------
+        // 3. Find 0x1A header terminator, extract ASCII header line
+        //----------------------------------------------------------------
+        const uint8_t* base = m_fileData.data();
+        const uint8_t* end = base + m_fileData.size();
+        const uint8_t* sub = base;
+
+        while (sub < end && *sub != 0x1A) ++sub;
+
+        if (sub >= end) {
+            LOG_WARN("[SHX] no 0x1A terminator found");
+            return false;
+        }
+
+        const size_t hdrEnd = static_cast<size_t>(sub - base);
+        m_headerLine.assign(reinterpret_cast<const char*>(base), hdrEnd);
+
+        // strip trailing CR/LF
+        while (!m_headerLine.empty() &&
+            (m_headerLine.back() == '\r' || m_headerLine.back() == '\n')) {
+            m_headerLine.pop_back();
+        }
+        LOG_TRACE("[SHX] header line (%zu bytes): \"%s\"", hdrEnd, m_headerLine.c_str());
+
+        //----------------------------------------------------------------
+        // 4. Classify by header line
+        //----------------------------------------------------------------
+        m_kind = ClassifyHeader(m_headerLine);
+        if (m_kind == Kind::Unknown) {
+            LOG_WARN("[SHX] unrecognized header: \"%s\"", m_headerLine.c_str());
+            return false;
+        }
+
+        // version = last whitespace-separated token (e.g. "1.0")
+        {
+            auto pos = m_headerLine.find_last_of(' ');
+            if (pos != std::string::npos)
+                m_version = m_headerLine.substr(pos + 1);
+        }
+
+        static const char* kKindNames[] =
+        { "Unknown", "Shapes", "BigFont", "Unifont" };
+        LOG_TRACE("[SHX] kind=%s ver=%s", kKindNames[int(m_kind)], m_version.c_str());
+
+        //----------------------------------------------------------------
+        // 5. DIAGNOSTIC: dump 64 bytes starting at 0x1A
+        //    This is where the BigFont/Unifont/Shapes binary header begins.
+        //    Use this to verify field layout against real files.
+        //----------------------------------------------------------------
+        if (::MiniCAD::g_logLevel <= ::MiniCAD::LogLevel::Trace) {
+            const size_t kDumpBytes = 64;
+            const uint8_t* dp = base + hdrEnd;
+            size_t avail = std::min<size_t>(kDumpBytes, size_t(end - dp));
+            printf("[SHX-DUMP] %zu bytes from offset 0x%zX:\n", avail, hdrEnd);
+            for (size_t i = 0; i < avail; i += 16) {
+                printf("  %04zX:", hdrEnd + i);
+                for (size_t j = 0; j < 16 && i + j < avail; ++j)
+                    printf(" %02X", dp[i + j]);
+                printf("\n");
+            }
+            if (m_fileData.size() >= 32) {
+                const uint8_t* tp = end - 32;
+                const size_t   to = m_fileData.size() - 32;
+                printf("[SHX-DUMP] last 32 bytes at offset 0x%zX:\n", to);
+                for (size_t i = 0; i < 32; i += 16) {
+                    printf("  %04zX:", to + i);
+                    for (size_t j = 0; j < 16; ++j)
+                        printf(" %02X", tp[i + j]);
+                    printf("\n");
+                }
+            }
+        }
+
+        //----------------------------------------------------------------
+        // 7. Format-specific content parse
+        //----------------------------------------------------------------
+        const uint8_t* p = sub + 1;   // step past the 0x1A byte
+
+        bool ok = false;
+        switch (m_kind) {
+        case Kind::Shapes:  ok = ParseShapesContent(p, end); break;
+        case Kind::BigFont: ok = ParseBigFontContent(p, end); break;
+        case Kind::Unifont: ok = ParseUnifontContent(p, end); break;
+        default: break;
+        }
+
+        if (!ok) {
+            LOG_ERROR("[SHX] content parse FAILED for kind=%s", kKindNames[int(m_kind)]);
+        }
+
+        //----------------------------------------------------------------
+        // 8. Pull font name / height from glyph 0 (if present)
+        //----------------------------------------------------------------
+        if (ok) ExtractFontMeta();
+
+        //----------------------------------------------------------------
+        // 9. Final summary
+        //----------------------------------------------------------------
+        LOG_DEBUG("[SHX] loaded %s  kind=%s  ver=%s  name='%s'  glyphs=%zu  height=%.2f",
+            filePath.c_str(), kKindNames[int(m_kind)], m_version.c_str(),
+            m_fontName.c_str(), m_shapes.size(), m_fontHeight);
+
+        m_loaded = ok;
+        return ok;
+    }
+
+
+    //==================================================================
+    // ClassifyHeader: known-prefix table (no more "find('bigfont')")
+    //==================================================================
+    SHXParser::Kind SHXParser::ClassifyHeader(const std::string& line) const
+    {
+        std::string s;
+        s.reserve(line.size());
+        for (unsigned char c : line) s.push_back(char(std::tolower(c)));
+
+        // Strict known prefixes first
+        if (s.rfind("autocad-86 shapes", 0) == 0) return Kind::Shapes;
+        if (s.rfind("autocad-86 bigfont", 0) == 0) return Kind::BigFont;
+        if (s.rfind("autocad-86 unifont", 0) == 0) return Kind::Unifont;
+
+        // "extended AutoCAD-86 bigfont ..." and similar variants
+        if (s.find("bigfont") != std::string::npos) return Kind::BigFont;
+        if (s.find("unifont") != std::string::npos) return Kind::Unifont;
+        if (s.find("shapes") != std::string::npos) return Kind::Shapes;
+        return Kind::Unknown;
+    }
+
+    //==================================================================
+    // SHAPES 1.0 / 1.1
+    //  After 0x1A:
+    //    u16 first_code
+    //    u16 last_code
+    //    u16 nshape
+    //    [u16 code, u16 datalen] * nshape       (dispatch)
+    //    concatenated glyph bytes
+    //==================================================================
+    bool SHXParser::ParseShapesContent(const uint8_t* p, const uint8_t* end)
+    {
+        if (p + 6 > end) {
+            LOG_WARN("[SHX] shapes: header too short");
+            return false;
+        }
+        /*uint16_t first =*/ RdU16LE(p); p += 2;
+        /*uint16_t last  =*/ RdU16LE(p); p += 2;
+        uint16_t nshape = RdU16LE(p); p += 2;
+
+        if (nshape == 0) {
+            LOG_WARN("[SHX] shapes: nshape=0");
+            return false;
+        }
+
+        struct Entry { uint16_t code; uint16_t len; };
+        std::vector<Entry> table;
+        table.reserve(nshape);
+
+        for (uint16_t i = 0; i < nshape; ++i) {
+            if (p + 4 > end) {
+                LOG_WARN("[SHX] shapes: dispatch truncated at i=%u", i);
+                return false;
+            }
+            Entry e;
+            e.code = RdU16LE(p); p += 2;
+            e.len = RdU16LE(p); p += 2;
+            table.push_back(e);
+        }
+
+        const uint8_t* d = p;
+        for (const auto& e : table) {
+            if (d + e.len > end) {
+                LOG_WARN("[SHX] shapes: glyph 0x%04X exceeds file (len=%u)", e.code, e.len);
+                break;
+            }
+            m_shapes[e.code] = { d, size_t(e.len) };
+            d += e.len;
+        }
+        return !m_shapes.empty();
+    }
+
+    //==================================================================
+    // BigFont 1.0 binary layout (after 0x1A):
+    //   u16  reserved        // typically 0x0008, meaning unclear
+    //   u16  nshapes         // number of glyph dispatch entries
+    //   u16  nranges         // number of escape-byte ranges
+    //   [u16 lo, u16 hi] * nranges
+    //   [u16 code, u16 len, u32 offset] * nshapes
+    //==================================================================
+    bool SHXParser::ParseBigFontContent(const uint8_t* p, const uint8_t* end)
+    {
+        if (p + 6 > end) {
+            LOG_WARN("[SHX] bigfont: header too short");
+            return false;
+        }
+
+        uint16_t reserved = RdU16LE(p); p += 2;
+        uint16_t nshapes = RdU16LE(p); p += 2;
+        uint16_t nranges = RdU16LE(p); p += 2;
+        (void)reserved;
+
+        LOG_DEBUG("[SHX] bigfont: nshapes=%u  nranges=%u  reserved=0x%04X", nshapes, nranges, reserved);
+
+        if (nshapes == 0 || nshapes > 65000) {
+            LOG_WARN("[SHX] bigfont: implausible nshapes=%u", nshapes);
+            return false;
+        }
+
+        //--------------------------------------------------------------
+        // Skip the escape-range table (4 bytes per range)
+        //--------------------------------------------------------------
+        if (p + size_t(nranges) * 4 > end) {
+            LOG_WARN("[SHX] bigfont: range table truncated (need %u bytes, have %zu)",
+                unsigned(nranges) * 4, size_t(end - p));
+            return false;
+        }
+        for (uint16_t i = 0; i < nranges; ++i) {
+            uint16_t lo = RdU16LE(p); p += 2;
+            uint16_t hi = RdU16LE(p); p += 2;
+            LOG_TRACE("[SHX] bigfont: range[%u] = 0x%04X..0x%04X", i, lo, hi);
+        }
+
+        //--------------------------------------------------------------
+        // Parse dispatch table
+        //--------------------------------------------------------------
+        const size_t   fileSize = m_fileData.size();
+        const uint8_t* base = m_fileData.data();
+
+        size_t good = 0;
+        size_t bad = 0;
+
+        for (uint16_t i = 0; i < nshapes; ++i) {
+            if (p + 8 > end) {
+                LOG_WARN("[SHX] bigfont: dispatch truncated at i=%u", i);
+                break;
+            }
+            uint16_t code = RdU16LE(p);  p += 2;
+            uint16_t len = RdU16LE(p);  p += 2;
+            uint32_t offset = RdU32LE(p);  p += 4;
+
+            if (len == 0) continue;                      // empty slot
+
+            if (offset >= fileSize || offset + len > fileSize) {
+                if (++bad <= 4) {
+                    LOG_WARN("[SHX] bigfont: bad entry i=%u code=0x%04X len=%u off=%u", i, code, len, offset);
+                }
+                continue;
+            }
+
+            m_shapes[code] = { base + offset, size_t(len) };
+            ++good;
+        }
+
+        LOG_DEBUG("[SHX] bigfont: parsed dispatch: %zu good, %zu bad, %u total", good, bad, nshapes);
+
+        return good > 0;
+    }
+
+
+    //==================================================================
+    // Unifont 1.0 binary layout (after 0x1A):
+    //   u16 nshapes
+    //   Then sequentially for each shape:
+    //     u16 code
+    //     u16 length
+    //     u8[length] bytecode      (ends with 0x00 END opcode)
+    //
+    //   Shape 0 conventionally carries: NUL-terminated font name,
+    //   followed by 6 bytes (above, below, modes, encoding, embedded,
+    //   reserved).  ExtractFontMeta() already knows how to read it.
+    //==================================================================
+    bool SHXParser::ParseUnifontContent(const uint8_t* p, const uint8_t* end)
+    {
+        if (p + 2 > end) {
+            LOG_WARN("[SHX] unifont: header too short");
+            return false;
+        }
+
+        uint16_t nshapes = RdU16LE(p);  p += 2;
+        LOG_DEBUG("[SHX] unifont: nshapes=%u", nshapes);
+
+        if (nshapes == 0) {     // 形数是 16 位，不会过大；越界由下面逐个形检查剩余字节
+            LOG_WARN("[SHX] unifont: implausible nshapes=%u", nshapes);
+            return false;
+        }
+
+        size_t good = 0, bad = 0;
+
+        for (uint16_t i = 0; i < nshapes; ++i) {
+            if (p + 4 > end) {
+                LOG_WARN("[SHX] unifont: dispatch header truncated at i=%u", i);
+                break;
+            }
+            uint16_t code = RdU16LE(p); p += 2;
+            uint16_t len = RdU16LE(p); p += 2;
+
+            if (p + len > end) {
+                if (++bad <= 4)
+                    LOG_WARN("[SHX] unifont: data truncated i=%u code=U+%04X len=%u remaining=%zu",
+                        i, code, len, size_t(end - p));
+                break;
+            }
+
+            if (len > 0) {
+                m_shapes[code] = { p, size_t(len) };
+                ++good;
+            }
+            p += len;
+        }
+
+        LOG_DEBUG("[SHX] unifont: parsed: %zu good, %zu bad, %u total", good, bad, nshapes);
+
+        return good > 0;
+    }
+
+    //==================================================================
+    // ExtractFontMeta:
+    //   Glyph 0 in a font SHX is the "font info" pseudo-glyph.
+    //   Format: <NUL-terminated font name> <above> <below> <modes> 0x00
+    //==================================================================
+    void SHXParser::ExtractFontMeta()
+    {
+        auto it = m_shapes.find(0);
+        if (it == m_shapes.end()) return;
+
+        const uint8_t* p = it->second.data;
+        const uint8_t* end = p + it->second.len;
+        if (p >= end) return;
+
+        m_fontName = RdCStr(p, end);
+
+        if (p + 3 <= end) {
+            uint8_t above = p[0];
+            uint8_t below = p[1];
+            // uint8_t modes = p[2];
+            double h = double(above) + double(below);
+            if (h > 0) m_fontHeight = h;
+        }
+    }
+
+    //==================================================================
+    // Unchanged from before
+    //==================================================================
+    bool SHXParser::HasGlyph(uint32_t code) const {
+        return m_shapes.find(code) != m_shapes.end();
+    }
+
+    // 形定义以 NUL 结尾的形名开头（多数为空名，只有一个 0；simplex.shx 的“=”名为 "EQUALS SIGN"），
+    // 执行前跳过，否则形名的字节会被当作画笔指令
+    static void SkipShapeName(const uint8_t*& d, size_t& l)
+    {
+        for (size_t i = 0; i < l; ++i)
+            if (d[i] == 0) { d += i + 1; l -= i + 1; return; }
+    }
+
+    bool SHXParser::FetchShapeBytes(uint32_t code,
+        const uint8_t*& d, size_t& l) const
+    {
+        auto it = m_shapes.find(code);
+        if (it == m_shapes.end()) return false;
+        d = it->second.data;  l = it->second.len;
+        SkipShapeName(d, l);
+        return true;
+    }
+
+    Glyph SHXParser::BuildGlyph(uint32_t code) const
+    {
+        Glyph g;
+        auto it = m_shapes.find(code);
+        if (it == m_shapes.end()) return g;
+
+        SHXVM vm;
+        std::vector<Line> lines;
+        SHXSubshapeFetcher fetcher =
+            [this](uint32_t c, const uint8_t*& d, size_t& l) {
+            return FetchShapeBytes(c, d, l);
+            };
+
+        const bool isUnifont = (m_kind == Kind::Unifont);
+        double advX = 0.0;
+        const uint8_t* data = it->second.data;
+        size_t len = it->second.len;
+        SkipShapeName(data, len);
+        vm.Execute(data, len, lines, isUnifont, fetcher, &advX);
+
+        g.Lines   = std::move(lines);
+        g.Advance = advX;                    // SHX 单位，由上层除以 fontHeight 归一化
+        m_advanceCache[code] = advX;
+        return g;
+    }
+
+    double SHXParser::GetAdvance(uint32_t code) const
+    {
+        auto it = m_advanceCache.find(code);
+        if (it != m_advanceCache.end()) return it->second;
+        // 尚未执行过: 触发 BuildGlyph 填充缓存，再读取
+        BuildGlyph(code);
+        auto it2 = m_advanceCache.find(code);
+        return (it2 != m_advanceCache.end()) ? it2->second : m_defaultAdvance;
+    }
+}

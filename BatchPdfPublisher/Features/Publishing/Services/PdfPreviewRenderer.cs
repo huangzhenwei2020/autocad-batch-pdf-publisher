@@ -18,56 +18,61 @@ namespace BatchPdfPublisher.Services
 
         public static Bitmap RenderFirstPage(string pdfPath, int maximumWidth, int maximumHeight)
         {
-            if (string.IsNullOrWhiteSpace(pdfPath) || !File.Exists(pdfPath))
-                throw new FileNotFoundException("找不到临时打印预览文件。", pdfPath);
-            EnsureInitialized();
-            var pdfBytes = ReadCompletedPdf(pdfPath);
-            var pdfHandle = GCHandle.Alloc(pdfBytes, GCHandleType.Pinned);
-            var document = FPDF_LoadMemDocument(pdfHandle.AddrOfPinnedObject(), pdfBytes.Length, null);
-            if (document == IntPtr.Zero)
+            // PDFium shares native state across preview requests.
+            lock (Sync)
             {
-                pdfHandle.Free();
-                throw new InvalidOperationException("无法读取刚生成的打印预览 PDF（PDFium 错误 " + FPDF_GetLastError() + "）。");
-            }
-            try
-            {
-                if (FPDF_GetPageCount(document) < 1) throw new InvalidOperationException("打印预览 PDF 没有页面。");
-                var page = FPDF_LoadPage(document, 0);
-                if (page == IntPtr.Zero) throw new InvalidOperationException("无法读取打印预览第一页。");
+                if (string.IsNullOrWhiteSpace(pdfPath) || !File.Exists(pdfPath))
+                    throw new FileNotFoundException("找不到临时打印预览文件。", pdfPath);
+                EnsureInitialized();
+                var pdfBytes = ReadCompletedPdf(pdfPath);
+                var pdfHandle = GCHandle.Alloc(pdfBytes, GCHandleType.Pinned);
+                var document = FPDF_LoadMemDocument(pdfHandle.AddrOfPinnedObject(), pdfBytes.Length, null);
+                if (document == IntPtr.Zero)
+                {
+                    pdfHandle.Free();
+                    throw new InvalidOperationException("无法读取刚生成的打印预览 PDF（PDFium 错误 " + FPDF_GetLastError() + "）。");
+                }
                 try
                 {
-                    var pageWidth = Math.Max(1d, FPDF_GetPageWidthF(page));
-                    var pageHeight = Math.Max(1d, FPDF_GetPageHeightF(page));
-                    var scale = Math.Min(Math.Max(320, maximumWidth) / pageWidth, Math.Max(240, maximumHeight) / pageHeight);
-                    scale = Math.Max(.25d, Math.Min(4d, scale));
-                    var width = Math.Max(1, (int)Math.Round(pageWidth * scale));
-                    var height = Math.Max(1, (int)Math.Round(pageHeight * scale));
-                    var buffer = new byte[checked(width * height * 4)];
-                    var handle = GCHandle.Alloc(buffer, GCHandleType.Pinned);
+                    if (FPDF_GetPageCount(document) < 1) throw new InvalidOperationException("打印预览 PDF 没有页面。");
+                    var page = FPDF_LoadPage(document, 0);
+                    if (page == IntPtr.Zero) throw new InvalidOperationException("无法读取打印预览第一页。");
                     try
                     {
-                        var pdfBitmap = FPDFBitmap_CreateEx(width, height, FpdfBitmapBgra, handle.AddrOfPinnedObject(), width * 4);
-                        if (pdfBitmap == IntPtr.Zero) throw new InvalidOperationException("无法创建打印预览画布。");
+                        var pageWidth = Math.Max(1d, FPDF_GetPageWidthF(page));
+                        var pageHeight = Math.Max(1d, FPDF_GetPageHeightF(page));
+                        var scale = Math.Min(Math.Max(320, maximumWidth) / pageWidth, Math.Max(240, maximumHeight) / pageHeight);
+                        scale = Math.Max(.25d, Math.Min(4d, scale));
+                        var width = Math.Max(1, (int)Math.Round(pageWidth * scale));
+                        var height = Math.Max(1, (int)Math.Round(pageHeight * scale));
+                        var buffer = new byte[checked(width * height * 4)];
+                        var handle = GCHandle.Alloc(buffer, GCHandleType.Pinned);
                         try
                         {
-                            FPDFBitmap_FillRect(pdfBitmap, 0, 0, width, height, 0xFFFFFFFFu);
-                            FPDF_RenderPageBitmap(pdfBitmap, page, 0, 0, width, height, 0, FpdfAnnot | FpdfLcdText);
-                            var output = new Bitmap(width, height, PixelFormat.Format32bppArgb);
-                            var bits = output.LockBits(new Rectangle(0, 0, width, height), ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
-                            try { Marshal.Copy(buffer, 0, bits.Scan0, buffer.Length); }
-                            finally { output.UnlockBits(bits); }
-                            return output;
+                            var pdfBitmap = FPDFBitmap_CreateEx(width, height, FpdfBitmapBgra, handle.AddrOfPinnedObject(), width * 4);
+                            if (pdfBitmap == IntPtr.Zero) throw new InvalidOperationException("无法创建打印预览画布。");
+                            try
+                            {
+                                FPDFBitmap_FillRect(pdfBitmap, 0, 0, width, height, 0xFFFFFFFFu);
+                                FPDF_RenderPageBitmap(pdfBitmap, page, 0, 0, width, height, 0, FpdfAnnot | FpdfLcdText);
+                                var output = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+                                var bits = output.LockBits(new Rectangle(0, 0, width, height), ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
+                                try { Marshal.Copy(buffer, 0, bits.Scan0, buffer.Length); }
+                                finally { output.UnlockBits(bits); }
+                                return output;
+                            }
+                            finally { FPDFBitmap_Destroy(pdfBitmap); }
                         }
-                        finally { FPDFBitmap_Destroy(pdfBitmap); }
+                        finally { handle.Free(); }
                     }
-                    finally { handle.Free(); }
+                    finally { FPDF_ClosePage(page); }
                 }
-                finally { FPDF_ClosePage(page); }
-            }
-            finally
-            {
-                FPDF_CloseDocument(document);
-                pdfHandle.Free();
+                finally
+                {
+                    FPDF_CloseDocument(document);
+                    pdfHandle.Free();
+                }
+
             }
         }
 

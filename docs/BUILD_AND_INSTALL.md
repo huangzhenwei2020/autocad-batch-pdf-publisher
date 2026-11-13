@@ -18,8 +18,10 @@ git status --short
 需要：
 
 - Visual Studio Build Tools（含 MSBuild）。
+- 独立 CAD 内核和读图诊断引擎使用 C++20，需要 Visual Studio 的 x64 C++ 工具及 CMake 组件。
 - .NET Framework 4.8 或 4.8.1 Targeting Pack。
 - 编译 AutoCAD 2025–2026（R25）时需要 .NET 8 SDK。
+- 独立 WPF 工作台和三维编辑器使用 .NET 8 SDK 发布为自包含 Windows x64 程序。
 - 本机至少安装一个 AutoCAD 2021–2026，脚本会从固定磁盘及 Autodesk 注册表查找，包括非默认安装目录。
 
 推荐把 .NET 8 安装为系统 SDK。也可以把便携 SDK 放在仓库的 `.tools\dotnet`；该目录不会提交到 GitHub。
@@ -93,6 +95,7 @@ dist\WanLuoArchitectureTools\
 - 构建时工作区是否有未提交修改；
 - 启动器及各 CAD 代际插件 DLL 的 SHA-256。
 - 是否包含 PaddleOCR，以及其入口程序 SHA-256。
+- 独立工作台托管程序集及原生 CAD 内核的 SHA-256。
 
 用以下命令比较当前提交：
 

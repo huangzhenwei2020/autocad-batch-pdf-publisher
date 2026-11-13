@@ -1056,11 +1056,17 @@ internal sealed partial class ProbeWindow : Window
         {
             if (await OpenStartupModelAsync(Program.ModelPath))
             {
+                _workbenchReady = true;
                 if (Program.CadGenerationCheck) await ReceiveCadGenerationAsync();
                 ConfigureSmokeAndSnapshot();
             }
-            else if (Program.Smoke) { Program.SmokeFailed = true; Close(); }
+            else
+            {
+                _workbenchStartupError = _status.Text;
+                if (Program.Smoke) { Program.SmokeFailed = true; Close(); }
+            }
         };
+        ConfigureWorkbenchHost();
     }
 
     private async Task<bool> OpenStartupModelAsync(string path)

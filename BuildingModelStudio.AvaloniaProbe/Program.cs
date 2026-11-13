@@ -62,10 +62,26 @@ internal static class Program
     public static string? CadFingerprint {get;private set;}
     public static string? CadDrawingPath {get;private set;}
     public static int CadProcessId {get;private set;}
+    public static string? WorkbenchPipe { get; private set; }
+    public static bool WorkbenchCheck { get; private set; }
+    public static IntPtr WorkbenchParent { get; private set; }
+    public static uint WorkbenchProcess { get; private set; }
 
     [STAThread]
     private static int Main(string[] args)
     {
+        var hostIndex = Array.IndexOf(args, "--workbench-host");
+        if (hostIndex >= 0)
+        {
+            if (hostIndex + 3 >= args.Length || !long.TryParse(args[hostIndex + 1], out var parent)
+                || !uint.TryParse(args[hostIndex + 2], out var process)
+                || !args[hostIndex + 3].StartsWith("WanLuo-Studio-", StringComparison.Ordinal))
+                throw new ArgumentException("独立工作台连接参数不完整。");
+            WorkbenchParent = new IntPtr(parent);
+            WorkbenchProcess = process;
+            WorkbenchPipe = args[hostIndex + 3];
+            WorkbenchCheck = args.Contains("--workbench-check", StringComparer.Ordinal);
+        }
         if(args.Length>0&&args[0]=="--component-import-worker")return BatchPdfPublisher.BuildingModel.Export.ComponentImportWorker.Run(args[1..]);
         if(args.Length>0&&args[0]=="--component-views-worker")return BatchPdfPublisher.BuildingModel.Export.ComponentImportWorker.Views(args[1..]);
         if (args.Length > 0 && args[0] == "--model-export-worker")

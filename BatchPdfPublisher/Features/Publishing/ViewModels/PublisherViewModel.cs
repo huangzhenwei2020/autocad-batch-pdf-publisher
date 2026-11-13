@@ -1170,7 +1170,8 @@ namespace BatchPdfPublisher.ViewModels
                     else UpdatePreview();
                     SaveCurrentProject();
                     Status = $"发布前检查发现 {validationIssues.Count} 个图框问题。请在问题列表中定位或修改图框登记。";
-                    using (var dialog = new SheetValidationIssueForm(validationIssues, LocateValidationIssue, EditValidationIssue)) dialog.ShowDialog();
+                    var dialog = new BppValidationWindow(validationIssues, LocateValidationIssue, EditValidationIssue);
+                    Autodesk.AutoCAD.ApplicationServices.Application.ShowModalWindow(dialog);
                     return;
                 }
                 _previewErrorSheet = null;

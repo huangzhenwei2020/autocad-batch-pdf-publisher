@@ -1,0 +1,138 @@
+#pragma once
+#include "Import/TchOpening.h"
+#include <vector>
+
+namespace MiniCAD::Tch
+{
+    struct TchColumn
+    {
+        struct Vertex { double X = 0, Y = 0, Bulge = 0; };
+
+        MiniDWG::XYZ        Position;   // 柱的插入点（Z 为底标高）
+        std::vector<Vertex> Outline;    // 闭合轮廓，世界坐标；Bulge 为该顶点到下一顶点的凸度
+        double              Height = 0;
+        // 材料码（版本 2 时 0 / 1 / 2 换算为 60 / 70 / 40）：
+        // 40 砖、60 钢筋混凝土、70 钢；填充规则与墙相同（Tch::MaterialHatch）。版本 1 没有材料，按 0 不填充
+        int                 Material = 0;
+        double              Scale = 100;    // 出图比例
+    };
+
+    namespace Detail
+    {
+        inline const char* CheckColumn(const TchColumn& c)
+        {
+            if (c.Outline.size() < 2) return "invalid column outline vertex count";
+            for (const auto& v : c.Outline)
+                if (!std::isfinite(v.X) || !std::isfinite(v.Y) || !std::isfinite(v.Bulge) || std::abs(v.X) > 1e12 ||
+                    std::abs(v.Y) > 1e12 || std::abs(v.Bulge) > 1e6)
+                    return "nonfinite column outline";
+            if (!std::isfinite(c.Position.Z) || std::abs(c.Position.Z) > 1e12) return "nonfinite column position";
+            if (!std::isfinite(c.Scale) || c.Scale <= 0) return "invalid column scale";
+            return nullptr;
+        }
+
+        // 新版 TCH_COLUMN 版本 7-10
+        inline bool DecodeColumnCipher(const MiniDWG::UnknownEntity& entity, TchColumn& column, std::string* diagnostic)
+        {
+            auto fail = [&](const char* why) { if (diagnostic) *diagnostic = why; return false; };
+            CipherReader f(entity);
+            if (!f.ReadBase()) return fail("unsupported Tianzheng base layout");
+            const int version = f.Main.ReadByte();
+            if (version < 7 || version > 10) return fail("unsupported native column version");
+            f.ReadKey();
+            TchColumn c;
+            c.Position = f.Point3();
+            f.Main.ReadByte();
+            const int count = f.Main.ReadBitShort();
+            if (count < 2 || count > 4096) return fail("invalid column outline vertex count");
+            c.Outline.resize(static_cast<std::size_t>(count));
+            for (auto& v : c.Outline)
+            {
+                v.X = f.Main.ReadRawDouble();
+                v.Y = f.Main.ReadRawDouble();
+                v.Bulge = f.Main.ReadBitDouble();
+            }
+            c.Height = f.Double();
+            f.Byte();
+            for (int i = 0, n = f.Byte(); i < n && f.Ok(); ++i) f.Handle();
+            c.Material = f.Byte();
+            const int flags = f.Short();
+            f.Handle();
+            if (flags & 8)
+            {
+                f.Text(); f.Point2(); f.Handle(); f.Handle(); f.Double();
+            }
+            for (int i = 0, n = f.Byte(); i < n && f.Ok(); ++i) f.Handle();
+            f.Double(); f.Handle();
+            if (version >= 8) { f.Double(); f.Text(); f.Text(); }
+            c.Scale = f.Scale;
+            if (version >= 9)
+            {
+                const double scale = f.Double();
+                if (std::isfinite(scale) && scale > 0) c.Scale = scale;
+            }
+            if (version >= 10) for (int i = 0; i < 7; ++i) f.Double();
+            if (!f.Exact()) return fail("native column fields do not consume the payload exactly");
+            if (const char* why = CheckColumn(c)) return fail(why);
+            column = std::move(c);
+            if (diagnostic) diagnostic->clear();
+            return true;
+        }
+    }
+     
+    inline bool DecodeColumn(const MiniDWG::UnknownEntity& entity, TchColumn& column, std::string* diagnostic = nullptr)
+    {
+        using namespace MiniDWG;
+        const auto& data = entity.Raw.Dwg;
+        if (entity.Raw.DxfName != "TCH_COLUMN") return false;
+        if (Detail::IsCipherObject(data)) return Detail::DecodeColumnCipher(entity, column, diagnostic);
+        auto fail = [&](const char* why) { if (diagnostic) *diagnostic = why; return false; };
+        if (!Detail::SupportedVersion(data))
+            return fail("unsupported DWG version for native column");
+        DwgBitReader r(data.Main, data.Version, Codec::CodePage::Gbk);
+        TchBase base;
+        if (!ReadTchBase(r, base, &data)) return fail("unsupported Tianzheng base layout");
+        const int version = r.ReadByte();
+        if (version < 1 || version > 6) return fail("unsupported native column version");
+
+        TchColumn c;
+        c.Position = {r.ReadBitDouble(), r.ReadBitDouble(), r.ReadBitDouble()};
+        r.ReadByte();                                           // 形状类型
+        const int count = r.ReadBitShort();
+        if (count < 2 || count > 4096) return fail("invalid column outline vertex count");
+        c.Outline.resize(static_cast<std::size_t>(count));
+        for (auto& v : c.Outline)
+        {
+            v.X = r.ReadRawDouble();
+            v.Y = r.ReadRawDouble();
+            v.Bulge = r.ReadBitDouble();
+        }
+        c.Height = r.ReadBitDouble();
+        r.ReadByte();
+        r.ReadByte();                                           // 句柄个数（句柄在句柄流）
+        if (version >= 2)
+        {
+            const int material = r.ReadByte();
+            c.Material = version >= 3 ? material : material == 1 ? 70 : material == 2 ? 40 : 60;
+        }
+        c.Scale = base.Scale;
+        if (version > 3)
+        {
+            const int flags = r.ReadBitShort();
+            if (flags & 8)                                      // 字符串在文字流，两个句柄在句柄流
+            {
+                r.ReadRawDouble(); r.ReadRawDouble();
+                r.ReadBitDouble();
+            }
+        }
+        if (version > 4) r.ReadByte();                          // 句柄个数
+        if (version > 5) r.ReadBitDouble();
+        if (r.Failed() || r.PositionInBits() != data.MainBits)
+            return fail("native column fields do not consume the payload exactly");
+
+        if (const char* why = Detail::CheckColumn(c)) return fail(why);
+        column = std::move(c);
+        if (diagnostic) diagnostic->clear();
+        return true;
+    }
+}

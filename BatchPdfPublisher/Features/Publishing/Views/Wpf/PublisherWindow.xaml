@@ -1,0 +1,289 @@
+<Window x:Class="BatchPdfPublisher.Views.PublisherWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="clr-namespace:BatchPdfPublisher.Views" Title="万落建筑工具 · 批量 PDF 发布" Width="1640" Height="940" MinWidth="1100" MinHeight="640" FontSize="14" WindowStartupLocation="CenterScreen" Style="{DynamicResource {x:Type Window}}">
+    <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="BppTheme.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+            <Style x:Key="NavigationTab" TargetType="TabItem">
+                <Setter Property="Foreground" Value="{StaticResource BppMuted}" />
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="Height" Value="36" />
+                <Setter Property="Padding" Value="10,0" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="TabItem">
+                            <Border Background="{TemplateBinding Background}" CornerRadius="3" Padding="{TemplateBinding Padding}">
+                                <ContentPresenter ContentSource="Header" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter Property="Background" Value="{StaticResource BppRaised}" />
+                                </Trigger>
+                                <Trigger Property="IsSelected" Value="True">
+                                    <Setter Property="Background" Value="#1B609A" />
+                                    <Setter Property="Foreground" Value="White" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+        </ResourceDictionary>
+    </Window.Resources>
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <Border BorderBrush="{StaticResource BppBorder}" BorderThickness="0,0,0,1" Padding="8,4,8,14" Margin="0,0,0,12">
+            <WrapPanel x:Name="ProjectActions" VerticalAlignment="Center">
+                <TextBlock Text="批量 PDF 发布" FontSize="23" FontWeight="SemiBold" Margin="0,0,14,0" />
+                <TextBlock x:Name="VersionLabel" Foreground="{StaticResource BppMuted}" Margin="0,0,20,0" />
+                <ComboBox x:Name="ProjectsBox" Width="220" DisplayMemberPath="Name" ItemsSource="{Binding Projects}" SelectedItem="{Binding SelectedProject}" ToolTip="当前项目" />
+                <Button Content="项目管理" local:BppIcons.Kind="Folder" Click="ProjectManager_Click" />
+                <Button Content="图框登记" local:BppIcons.Kind="Frame" Click="FrameManager_Click" />
+                <Button Content="插入目录" local:BppIcons.Kind="List" Click="Catalog_Click" />
+                <Button Content="存入工程" local:BppIcons.Kind="Save" Click="SaveCad_Click" />
+            </WrapPanel>
+        </Border>
+        <Grid Grid.Row="1" x:Name="WorkArea">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition x:Name="LeftColumn" Width="290" MinWidth="220" />
+                <ColumnDefinition Width="8" />
+                <ColumnDefinition Width="2*" MinWidth="390" />
+                <ColumnDefinition Width="8" />
+                <ColumnDefinition x:Name="RightColumn" Width="1.55*" MinWidth="300" />
+            </Grid.ColumnDefinitions>
+            <Border Grid.Column="0" Style="{StaticResource BppCard}" Padding="8" Margin="0">
+                <DockPanel>
+                    <WrapPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
+                        <Button Content="更多文件操作" local:BppIcons.Kind="Gear" Click="OpenMenu_Click">
+                            <Button.ContextMenu>
+                                <ContextMenu>
+                                    <MenuItem Header="移除文件" local:BppIcons.Kind="Remove" Click="RemoveCad_Click" />
+                                    <MenuItem Header="全部保存" local:BppIcons.Kind="SaveAll" Click="SaveAll_Click" />
+                                    <Separator />
+                                    <MenuItem Header="扫描当前" local:BppIcons.Kind="Refresh" Click="Scan_Click" />
+                                    <MenuItem Header="扫描所选" local:BppIcons.Kind="Select" Click="ScanChecked_Click" />
+                                    <MenuItem Header="框选发布" local:BppIcons.Kind="Frame" Click="SelectionPublish_Click" />
+                                </ContextMenu>
+                            </Button.ContextMenu>
+                        </Button>
+                    </WrapPanel>
+                    <TabControl x:Name="NavigationTabs" SelectionChanged="NavigationTab_Changed" BorderThickness="0">
+                        <TabControl.Template>
+                            <ControlTemplate TargetType="TabControl">
+                                <DockPanel KeyboardNavigation.TabNavigation="Local">
+                                    <Border DockPanel.Dock="Top" Padding="2" Background="#101D27" BorderBrush="{StaticResource BppBorder}" BorderThickness="1" CornerRadius="5">
+                                        <UniformGrid IsItemsHost="True" Rows="1" Columns="2" />
+                                    </Border>
+                                    <ContentPresenter x:Name="PART_SelectedContentHost" ContentSource="SelectedContent" />
+                                </DockPanel>
+                            </ControlTemplate>
+                        </TabControl.Template>
+                        <TabItem Header="CAD 文件" Style="{StaticResource NavigationTab}">
+                            <DockPanel Margin="0,10,0,0">
+                                <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,10">
+                                    <Button Content="添加文件" local:BppIcons.Kind="Plus" Click="AddCad_Click" />
+                                    <Button Content="扫描" local:BppIcons.Kind="Refresh" Click="OpenMenu_Click">
+                                        <Button.ContextMenu>
+                                            <ContextMenu>
+                                                <MenuItem Header="扫描当前" Click="Scan_Click" />
+                                                <MenuItem Header="扫描所选" Click="ScanChecked_Click" />
+                                            </ContextMenu>
+                                        </Button.ContextMenu>
+                                    </Button>
+                                </WrapPanel>
+                                <ListBox x:Name="CadFilesList" ItemsSource="{Binding CadFiles}" AllowDrop="True" SelectionChanged="CadFiles_SelectionChanged" MouseDoubleClick="CadFiles_DoubleClick" BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Margin="0,4">
+                                                <DockPanel>
+                                                    <CheckBox DockPanel.Dock="Left" IsChecked="{Binding IsSelected}" Click="CadFileChecked_Click" ToolTip="勾选后参与“扫描所选”" Margin="2,0,8,0" />
+                                                    <TextBlock Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Path}" FontWeight="SemiBold" />
+                                                </DockPanel>
+                                                <ItemsControl ItemsSource="{Binding Groups}" Margin="20,5,0,0">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <Button Tag="{Binding}" Click="FileGroup_Click" Style="{StaticResource BppNavigationButton}" HorizontalContentAlignment="Stretch" ToolTip="{Binding Building}">
+                                                                <Grid>
+                                                                    <Grid.ColumnDefinitions>
+                                                                        <ColumnDefinition Width="*" />
+                                                                        <ColumnDefinition Width="Auto" />
+                                                                    </Grid.ColumnDefinitions>
+                                                                    <TextBlock Text="{Binding Building}" TextTrimming="CharacterEllipsis" />
+                                                                    <TextBlock Grid.Column="1" Foreground="{StaticResource BppMuted}" Margin="8,0,0,0" Text="{Binding Count,StringFormat={}{0} 张}" />
+                                                                </Grid>
+                                                            </Button>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </DockPanel>
+                        </TabItem>
+                        <TabItem Header="子项目" Style="{StaticResource NavigationTab}">
+                            <DockPanel Margin="0,12,0,0">
+                                <Button DockPanel.Dock="Top" Content="全部子项目" Click="AllGroups_Click" Margin="0,0,0,10" />
+                                <ListBox x:Name="BuildingsList" ItemsSource="{Binding Buildings}" SelectedItem="{Binding SelectedBuilding}" AllowDrop="True" SelectionChanged="Building_SelectionChanged" BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding}" TextTrimming="CharacterEllipsis" ToolTip="{Binding}" />
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </DockPanel>
+                        </TabItem>
+                    </TabControl>
+                </DockPanel>
+            </Border>
+            <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Center" Background="Transparent" />
+            <Border Grid.Column="2" Style="{StaticResource BppCard}" Padding="10" Margin="0">
+                <DockPanel>
+                    <StackPanel DockPanel.Dock="Top">
+                        <WrapPanel Margin="0,0,0,10">
+                            <TextBlock x:Name="ViewTitle" Text="图纸列表" FontSize="19" FontWeight="SemiBold" Margin="3,0,14,0" />
+                            <TextBlock Text="Shift 连选 · Ctrl 多选 · 拖动排序" Foreground="{StaticResource BppMuted}" FontSize="12" />
+                        </WrapPanel>
+                        <WrapPanel Margin="0,0,0,6">
+                            <Grid Width="170">
+                                <TextBox x:Name="SearchBox" TextChanged="Search_Changed" ToolTip="搜索序号、图号、图名或来源" />
+                                <TextBlock Text="搜索图号、图名" Foreground="{StaticResource BppMuted}" Margin="12,0" IsHitTestVisible="False">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Setter Property="VerticalAlignment" Value="Center" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Text,ElementName=SearchBox}" Value="">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Grid>
+                            <ComboBox x:Name="SortBox" Width="145" SelectionChanged="Sort_Changed" />
+                        </WrapPanel>
+                        <WrapPanel Margin="0,0,0,10">
+                            <TextBlock x:Name="CountLabel" Foreground="{StaticResource BppAccent}" FontSize="12" Margin="3,0,8,0" />
+                            <Button Content="上移" local:BppIcons.Kind="Up" Click="Up_Click" Style="{StaticResource BppCompactButton}" />
+                            <Button Content="下移" local:BppIcons.Kind="Down" Click="Down_Click" Style="{StaticResource BppCompactButton}" />
+                            <Button Content="移到顶部" Click="Top_Click" Style="{StaticResource BppCompactButton}" />
+                            <Button Content="移到尾部" Click="Bottom_Click" Style="{StaticResource BppCompactButton}" />
+                            <CheckBox Content="CAD 范围" IsChecked="{Binding PreviewEnabled}" ToolTip="在 CAD 中显示当前子项目图框范围" FontSize="12" />
+                            <Button Content="列设置" Click="Columns_Click" Style="{StaticResource BppCompactButton}" />
+                        </WrapPanel>
+                    </StackPanel>
+                    <DataGrid x:Name="SheetsGrid" SelectionChanged="Sheets_SelectionChanged" CellEditEnding="Sheets_EditEnding" AllowDrop="True" PreviewMouseLeftButtonDown="Sheets_MouseDown" PreviewMouseMove="Sheets_MouseMove" DragOver="Sheets_DragOver" Drop="Sheets_Drop" Sorting="Sheets_Sorting" GridLinesVisibility="Horizontal" HeadersVisibility="All" RowHeaderWidth="34" BorderThickness="0">
+                        <DataGrid.RowHeaderTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding DataContext.Order,RelativeSource={RelativeSource AncestorType=DataGridRow}}" FontSize="12" />
+                            </DataTemplate>
+                        </DataGrid.RowHeaderTemplate>
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="顺序" Visibility="Collapsed" Binding="{Binding Order}" IsReadOnly="True" Width="40" CanUserSort="False" />
+                            <DataGridTemplateColumn Header="状态" Width="64" CanUserSort="False">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding ReviewStatus}">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Foreground" Value="#4DCD6C" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding ReviewStatus}" Value="需检查">
+                                                            <Setter Property="Foreground" Value="#FF9720" />
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding ReviewStatus}" Value="空白风险">
+                                                            <Setter Property="Foreground" Value="#FF4949" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridComboBoxColumn x:Name="BuildingColumn" Header="子项目" SelectedItemBinding="{Binding Building}" Width="68" />
+                            <DataGridTextColumn Header="序号／页码" Binding="{Binding PageNumber}" Width="86" />
+                            <DataGridTextColumn Header="图号" Binding="{Binding SheetNumber}" Width="80" />
+                            <DataGridTextColumn Header="图名" Binding="{Binding SheetName}" Width="140" />
+                            <DataGridTextColumn Header="图框" Binding="{Binding FrameDisplay}" IsReadOnly="True" Width="52" />
+                            <DataGridTextColumn Header="PDF 尺寸" Binding="{Binding OutputPaperSize}" IsReadOnly="True" Width="126" />
+                            <DataGridComboBoxColumn x:Name="OrientationColumn" Header="方向" SelectedItemBinding="{Binding PaperOrientation, UpdateSourceTrigger=PropertyChanged}" Width="60" />
+                            <DataGridTextColumn Header="打印比例" Binding="{Binding PrintScale}" Width="100" />
+                            <DataGridComboBoxColumn x:Name="PlotStyleColumn" Header="打印样式" SelectedItemBinding="{Binding PlotStyle}" Width="150" />
+                            <DataGridTextColumn Header="CAD 文件" Binding="{Binding SourceFileName}" IsReadOnly="True" Width="220" />
+                            <DataGridTextColumn Header="来源文件" Binding="{Binding SourceFile}" IsReadOnly="True" Width="260" />
+                            <DataGridTextColumn Header="布局" Binding="{Binding SourceLayout}" IsReadOnly="True" Width="110" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+            </Border>
+            <GridSplitter Grid.Column="3" Width="6" HorizontalAlignment="Center" Background="Transparent" />
+            <Border Grid.Column="4" Style="{StaticResource BppCard}" Padding="12" Margin="0">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <StackPanel Margin="0,0,0,12">
+                        <WrapPanel>
+                            <TextBlock Text="打印预览" FontSize="19" FontWeight="SemiBold" Margin="2,0,14,0" />
+                            <Button Content="全部预览" Click="AllPreviews_Click" />
+                            <Button Content="更新预览" local:BppIcons.Kind="Refresh" Click="Preview_Click" Style="{StaticResource BppPrimary}" />
+                        </WrapPanel>
+                        <TextBlock x:Name="PreviewTitle" TextWrapping="Wrap" Foreground="{StaticResource BppMuted}" Margin="3,8,3,0" />
+                    </StackPanel>
+                    <Border Grid.Row="1" Background="#101D27" Padding="8">
+                        <ScrollViewer x:Name="PreviewViewport" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" SizeChanged="PreviewViewport_SizeChanged">
+                            <Image x:Name="PreviewImage" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center" MouseLeftButtonDown="PreviewImage_Click" />
+                        </ScrollViewer>
+                    </Border>
+                    <StackPanel Grid.Row="2" Margin="0,10,0,0">
+                        <WrapPanel>
+                            <Button Content="缩小" Click="ZoomOut_Click" />
+                            <Button Content="放大" Click="ZoomIn_Click" />
+                            <Button Content="适合页面" Click="FitPreview_Click" />
+                            <Button Content="上一张" Click="PreviousPreview_Click" />
+                            <Button Content="下一张" Click="NextPreview_Click" />
+                            <TextBlock x:Name="PreviewPosition" Foreground="{StaticResource BppMuted}" FontSize="12" Margin="6" />
+                        </WrapPanel>
+                        <TextBlock x:Name="PreviewFacts" TextWrapping="Wrap" Foreground="{StaticResource BppMuted}" Margin="3,6" />
+                        <WrapPanel>
+                            <TextBlock Text="当前图纸" Margin="3,0,6,0" />
+                            <ComboBox x:Name="QuickOrientation" Width="90" SelectionChanged="Quick_Changed" />
+                            <ComboBox x:Name="QuickScale" Width="115" IsEditable="True" LostKeyboardFocus="QuickScale_LostFocus" SelectionChanged="Quick_Changed" />
+                        </WrapPanel>
+                        <TextBlock x:Name="PreviewNotice" TextWrapping="Wrap" Foreground="{StaticResource BppMuted}" FontSize="12" Margin="3,6" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </Grid>
+        <Border Grid.Row="2" Style="{StaticResource BppCard}" Margin="0,12,0,0" Padding="10">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel VerticalAlignment="Center">
+                    <WrapPanel x:Name="FooterOptions">
+                        <TextBlock x:Name="PublishSummary" FontWeight="SemiBold" Margin="4,0,16,0" />
+                        <TextBlock Text="打印样式" Margin="6,0"/><ComboBox Width="165" ItemsSource="{Binding AvailablePlotStyles}" Text="{Binding PlotStyle,UpdateSourceTrigger=PropertyChanged}" IsEditable="True" ToolTip="CAD 打印样式" />
+                        <CheckBox Content="每个子项目一个 PDF" IsChecked="{Binding MergeByBuilding}" />
+                        <TextBlock x:Name="ActualOutputLabel" MaxWidth="280" TextTrimming="CharacterEllipsis" Foreground="{StaticResource BppMuted}" Margin="6" ToolTip="{Binding Text,RelativeSource={RelativeSource Self}}" />
+                    </WrapPanel>
+                    <TextBlock Text="{Binding Status}" TextTrimming="CharacterEllipsis" Foreground="{StaticResource BppMuted}" FontSize="12" Margin="4,5,4,0" />
+                    <ProgressBar x:Name="Progress" Height="4" Margin="4,6,4,0" Visibility="Collapsed" />
+                </StackPanel>
+                <WrapPanel Grid.Column="1" VerticalAlignment="Center">
+                    <Button x:Name="OutputSettingsButton" Content="输出设置" local:BppIcons.Kind="Gear" Click="OutputSettings_Click" />
+                    <Button x:Name="PublishButton" Content="发布 PDF" local:BppIcons.Kind="Publish" Style="{StaticResource BppPrimary}" Padding="20,10" Click="Publish_Click" />
+                </WrapPanel>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

@@ -1,0 +1,53 @@
+<local:BppCadWindow x:Class="BatchPdfPublisher.Views.BppSelectionPublishWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="clr-namespace:BatchPdfPublisher.Views" Title="发布当前图纸选择" Width="1060" Height="760" MinWidth="800" MinHeight="580" Style="{DynamicResource {x:Type Window}}">
+    <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="BppTheme.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Window.Resources>
+    <DockPanel Margin="16">
+        <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,10">
+            <Button Content="在 CAD 中框选图框" Click="Select_Click" Style="{StaticResource BppPrimary}" />
+            <Button Content="预览所选" Click="Preview_Click" />
+            <Button Content="全部预览" Click="PreviewAll_Click" />
+            <Button Content="上移" Click="Up_Click" />
+            <Button Content="下移" Click="Down_Click" />
+            <Button Content="移除选中" Click="Remove_Click" />
+        </WrapPanel>
+        <StackPanel DockPanel.Dock="Bottom">
+            <TextBlock Text="输出目录" />
+            <DockPanel>
+                <Button DockPanel.Dock="Right" Content="选择目录" Click="Folder_Click" />
+                <Button DockPanel.Dock="Right" Content="打开目录" Click="OpenFolder_Click" />
+                <TextBox x:Name="Folder" />
+            </DockPanel>
+            <TextBlock Text="文件名" />
+            <TextBox x:Name="FileName" />
+            <WrapPanel>
+                <TextBlock Text="打印样式" Margin="6" />
+                <ComboBox x:Name="PlotStyle" Width="210" IsEditable="True" />
+                <TextBlock Text="白边" Margin="6" />
+                <ComboBox x:Name="MarginMode" Width="170" />
+                <CheckBox x:Name="Overwrite" Content="同名 PDF 直接覆盖" />
+            </WrapPanel>
+            <DockPanel>
+                <Button DockPanel.Dock="Right" Content="合并并发布 PDF" Click="Publish_Click" Style="{StaticResource BppPrimary}" />
+                <TextBlock x:Name="Status" TextWrapping="Wrap" Margin="6" />
+            </DockPanel>
+            <ProgressBar x:Name="Progress" Height="5" Margin="4" />
+        </StackPanel>
+        <DataGrid x:Name="Sheets" IsReadOnly="True">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="顺序" Binding="{Binding Order}" Width="55" />
+                <DataGridTextColumn Header="序号／页码" Binding="{Binding PageNumber}" Width="105" />
+                <DataGridTextColumn Header="图号" Binding="{Binding SheetNumber}" Width="110" />
+                <DataGridTextColumn Header="图名" Binding="{Binding SheetName}" Width="*" MinWidth="150" />
+                <DataGridTextColumn Header="图框" Binding="{Binding FrameDisplay}" Width="100" />
+                <DataGridTextColumn Header="PDF 尺寸" Binding="{Binding OutputPaperSize}" Width="140" />
+                <DataGridTextColumn Header="打印比例" Binding="{Binding PrintScale}" Width="95" />
+                <DataGridTextColumn Header="空间" Binding="{Binding SourceLayout}" Width="100" />
+            </DataGrid.Columns>
+        </DataGrid>
+    </DockPanel>
+</local:BppCadWindow>

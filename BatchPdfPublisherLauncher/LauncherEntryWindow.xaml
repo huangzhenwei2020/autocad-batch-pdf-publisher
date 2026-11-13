@@ -1,0 +1,65 @@
+<Window x:Class="BatchPdfPublisherLauncher.LauncherEntryWindow" x:ClassModifier="internal" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="万落建筑工具" Width="1020" Height="740" MinWidth="700" MinHeight="540" Style="{DynamicResource {x:Type Window}}">
+  <Window.Resources>
+    <ResourceDictionary Source="WorkbenchTheme.xaml" />
+  </Window.Resources>
+  <Grid Margin="28">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="*" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+    <DockPanel Margin="0,0,0,24">
+      <TextBlock Text="万落建筑工具" FontSize="28" FontWeight="SemiBold" />
+      <TextBlock x:Name="Version" Foreground="{StaticResource MutedBrush}" HorizontalAlignment="Right" />
+    </DockPanel>
+    <Grid Grid.Row="1" Margin="0,0,0,20">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="Auto" />
+        <ColumnDefinition Width="*" />
+        <ColumnDefinition Width="Auto" />
+      </Grid.ColumnDefinitions>
+      <TextBlock Text="当前项目" Margin="3,0,14,0" />
+      <ComboBox Grid.Column="1" x:Name="Projects" DisplayMemberPath="Name" SelectionChanged="Projects_Changed" />
+      <Button Grid.Column="2" Content="项目管理" Click="ProjectManager_Click" />
+    </Grid>
+    <Grid Grid.Row="2" Margin="0,0,0,24">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*" />
+        <ColumnDefinition Width="18" />
+        <ColumnDefinition Width="*" />
+      </Grid.ColumnDefinitions>
+      <Button x:Name="StandaloneButton" Click="Standalone_Click" Background="#096FB7" Padding="24" MinHeight="160" HorizontalContentAlignment="Stretch">
+        <StackPanel>
+          <TextBlock Text="进入独立版" FontSize="25" FontWeight="SemiBold" />
+          <TextBlock Text="图纸浏览、项目与模型管理" Foreground="#D5EAF7" Margin="0,12,0,0" TextWrapping="Wrap" />
+        </StackPanel>
+      </Button>
+      <Button Grid.Column="2" x:Name="CadButton" Click="Cad_Click" Padding="24" MinHeight="160" HorizontalContentAlignment="Stretch">
+        <StackPanel>
+          <TextBlock Text="打开 AutoCAD／天正" FontSize="24" FontWeight="SemiBold" TextWrapping="Wrap" />
+          <TextBlock Text="选择 CAD 环境并加载万落插件" Foreground="{StaticResource MutedBrush}" Margin="0,12,0,0" TextWrapping="Wrap" />
+        </StackPanel>
+      </Button>
+    </Grid>
+    <DockPanel Grid.Row="3">
+      <TextBlock DockPanel.Dock="Top" Text="项目列表" FontSize="18" FontWeight="SemiBold" Margin="3,0,0,12" />
+      <ListBox x:Name="RecentProjects" SelectionChanged="Recent_Changed">
+        <ListBox.ItemTemplate>
+          <DataTemplate>
+            <Grid>
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="240" />
+                <ColumnDefinition Width="*" />
+              </Grid.ColumnDefinitions>
+              <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+              <TextBlock Grid.Column="1" Text="{Binding ProjectFolder}" Foreground="{StaticResource MutedBrush}" TextTrimming="CharacterEllipsis" ToolTip="{Binding ProjectFolder}" />
+            </Grid>
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+    </DockPanel>
+    <TextBlock Grid.Row="4" x:Name="Status" Text="选择项目及工作环境" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="3,18,3,0" />
+  </Grid>
+</Window>

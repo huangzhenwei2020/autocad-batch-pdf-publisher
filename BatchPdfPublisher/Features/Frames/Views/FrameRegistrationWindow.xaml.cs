@@ -50,7 +50,7 @@ namespace BatchPdfPublisher.Views
 
             var selectedTags = existing == null
                 ? Enumerable.Empty<string>()
-                : new[] { existing.BuildingAttributeTag, existing.SheetNumberAttributeTag, existing.SheetNameAttributeTag, existing.PrintScaleAttributeTag };
+                : new[] { existing.BuildingAttributeTag, existing.SheetNumberAttributeTag, existing.SheetNameAttributeTag, existing.PrintScaleAttributeTag, existing.PageNumberAttributeTag };
             var tags = new[] { DoNotRead }.Concat(_attributeValues.Keys).Concat(selectedTags)
                 .Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             foreach (var box in TagBoxes()) box.ItemsSource = tags;
@@ -74,6 +74,8 @@ namespace BatchPdfPublisher.Views
                 FillValueFromSelectedTag(SheetNumberTagBox, SheetNumberValueBox);
                 FillValueFromSelectedTag(SheetNameTagBox, SheetNameValueBox);
                 FillValueFromSelectedTag(PrintScaleTagBox, PrintScaleValueBox);
+                SelectStoredTag(PageNumberTagBox, FramePageNumber.FindTag(_attributeValues.Keys));
+                FillValueFromSelectedTag(PageNumberTagBox, PageNumberValueBox);
                 if (string.IsNullOrWhiteSpace(PrintScaleValueBox.Text)) PrintScaleValueBox.Text = guess.PrintScale;
             }
             else
@@ -82,10 +84,12 @@ namespace BatchPdfPublisher.Views
                 SelectStoredTag(SheetNumberTagBox, existing.SheetNumberAttributeTag);
                 SelectStoredTag(SheetNameTagBox, existing.SheetNameAttributeTag);
                 SelectStoredTag(PrintScaleTagBox, existing.PrintScaleAttributeTag);
+                SelectStoredTag(PageNumberTagBox, existing.PageNumberAttributeTag ?? FramePageNumber.FindTag(_attributeValues.Keys));
                 BuildingValueBox.Text = existing.DefaultBuilding ?? string.Empty;
                 SheetNumberValueBox.Text = existing.DefaultSheetNumber ?? string.Empty;
                 SheetNameValueBox.Text = existing.DefaultSheetName ?? string.Empty;
                 PrintScaleValueBox.Text = string.IsNullOrWhiteSpace(existing.DefaultPrintScale) ? guess.PrintScale : existing.DefaultPrintScale;
+                PageNumberValueBox.Text = existing.DefaultPageNumber ?? string.Empty;
                 Title = "修改图框登记";
             }
         }
@@ -139,8 +143,8 @@ namespace BatchPdfPublisher.Views
                 Note = NoteBox.Text?.Trim(),
                 BuildingAttributeTag = TagOf(BuildingTagBox),
                 SheetNumberAttributeTag = TagOf(SheetNumberTagBox),
-                PageNumberAttributeTag = _existing?.PageNumberAttributeTag ?? FramePageNumber.FindTag(_attributeValues.Keys),
-                DefaultPageNumber = _existing?.DefaultPageNumber,
+                PageNumberAttributeTag = TagOf(PageNumberTagBox),
+                DefaultPageNumber = PageNumberValueBox.Text?.Trim(),
                 SheetNameAttributeTag = TagOf(SheetNameTagBox),
                 PrintScaleAttributeTag = TagOf(PrintScaleTagBox),
                 DefaultBuilding = BuildingValueBox.Text?.Trim(),
@@ -236,6 +240,7 @@ namespace BatchPdfPublisher.Views
             else if (box == SheetNumberTagBox) FillValueFromSelectedTag(box, SheetNumberValueBox);
             else if (box == SheetNameTagBox) FillValueFromSelectedTag(box, SheetNameValueBox);
             else if (box == PrintScaleTagBox) FillValueFromSelectedTag(box, PrintScaleValueBox);
+            else if (box == PageNumberTagBox) FillValueFromSelectedTag(box, PageNumberValueBox);
         }
 
         private void FillValueFromSelectedTag(ComboBox tagBox, TextBox valueBox)
@@ -247,7 +252,7 @@ namespace BatchPdfPublisher.Views
 
         private IEnumerable<ComboBox> TagBoxes()
         {
-            return new[] { BuildingTagBox, SheetNumberTagBox, SheetNameTagBox, PrintScaleTagBox };
+            return new[] { BuildingTagBox, SheetNumberTagBox, SheetNameTagBox, PrintScaleTagBox, PageNumberTagBox };
         }
 
         private static string ItemText(ComboBox box)

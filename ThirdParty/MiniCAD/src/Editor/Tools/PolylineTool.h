@@ -1,0 +1,387 @@
+﻿#pragma once
+#include "Scene/Scene.h"
+#include "Editor/Tools/ITool.h"
+#include "Editor/EditorContext.h"
+#include "Document/Command/AddEntityCommand.h"
+#include "Core/Math/Point3.hpp"
+#include "Core/Math/Color4.hpp"
+#include "Core/Entity/PolylineEntity.hpp"
+#include "Core/Log.h"
+#include <vector>
+#include <cmath>
+#include <algorithm>
+
+namespace MiniCAD
+{
+    class PolylineTool : public ITool
+    {
+    public:
+
+        enum class DrawMode
+        {
+            Line,
+            Arc
+        };
+
+    public:
+
+        PolylineTool()
+        {
+            LOG_DEBUG("[PolylineTool] L=line A=arc C=close | click to add vertices | right-click / Enter commits | ESC cancels");
+        }
+
+        ~PolylineTool()
+        {
+            LOG_DEBUG("[PolylineTool] exit");
+        }
+
+    public:
+
+        bool OnInput(const EditorContext& ctx) override
+        {
+            m_ctx = &ctx;
+            m_overlay = &ctx.overlay;      // 事件之外只用它：m_ctx 指向的栈对象事件返回后即失效
+            const auto& e = ctx.event;
+
+            if (e.IsKeyPressed(KeyCode::L))
+            {
+                SwitchToLine();
+                return true;
+            }
+            if (e.IsKeyPressed(KeyCode::A))
+            {
+                SwitchToArc();
+                return true;
+            }
+            if (e.IsKeyPressed(KeyCode::C))
+            {
+                if (Close())
+                {
+                    Commit();
+                    Reset();
+                    if (OnFinished) OnFinished();
+                }
+                return true;
+            }
+
+            if (e.Type == InputEventType::MouseMove)
+            {
+                m_cursor = GetPoint(e);
+                RefreshOverlay();
+                return false;
+            }
+
+            if (e.IsLeftClick())
+            {
+                OnLeftClick(GetPoint(e));
+                return true;
+            }
+
+            if (e.IsRightClick() || e.IsKeyPressed(KeyCode::Enter) || e.IsKeyPressed(KeyCode::Space))
+            {
+                Commit();
+                Reset();
+                if (OnFinished) OnFinished();
+                return true;
+            }
+
+            if (e.IsCancel())
+            {
+                Reset();
+                if (OnFinished) OnFinished();
+                return true;
+            }
+
+            return false;
+        }
+
+        bool HasAnchor() const override
+        {
+            return !m_points.empty();
+        }
+
+        Math::Point3 GetAnchor() const override
+        {
+            return m_points.empty() ? Math::Point3{} : m_points.back();
+        }
+
+        std::string GetPrompt() const override
+        {
+            if (m_points.empty())
+                return Tr("指定起点 [L 直线/A 圆弧]:");
+            if (m_mode == DrawMode::Arc)
+                return m_hasArcMid ? Tr("指定圆弧终点:") : Tr("指定圆弧上一点:");
+            return CanClose() ? Tr("指定下一点 [L 直线/A 圆弧/C 闭合/右键提交/ESC]:")
+                              : Tr("指定下一点 [L 直线/A 圆弧/右键提交/ESC]:");
+        }
+
+        void OnSceneChanged() override
+        {
+            Reset();
+        }
+
+    private:
+
+        void SwitchToLine()
+        {
+            m_mode      = DrawMode::Line;
+            m_hasArcMid = false;
+            m_arcMid    = {};
+            LOG_INFO("[PolylineTool] mode = line");
+            RefreshOverlay();
+        }
+
+        void SwitchToArc()
+        {
+            m_mode      = DrawMode::Arc;
+            m_hasArcMid = false;
+            m_arcMid    = {};
+            LOG_INFO("[PolylineTool] mode = arc (three points: point on arc -> end)");
+            RefreshOverlay();
+        }
+
+        // 闭合（同 AutoCAD 的 C）：直线模式用直线段连回起点；圆弧模式已给出弧上点时用经过该点的圆弧连回起点，
+        // 否则也用直线段。至少要有 3 个顶点（已有圆弧段时 2 个也能围成区域）
+        bool CanClose() const
+        {
+            if (m_points.size() >= 3)
+                return true;
+            const bool hasArc = std::any_of(m_bulges.begin(), m_bulges.end(), [](double b) { return std::abs(b) > 1e-12; });
+            return m_points.size() == 2 && (hasArc || (m_mode == DrawMode::Arc && m_hasArcMid));
+        }
+
+        bool Close()
+        {
+            if (!CanClose())
+            {
+                LOG_INFO("[PolylineTool] closing needs at least 3 vertices");
+                return false;
+            }
+            const Math::Point3 start = m_points.front();
+            double bulge = 0.0;
+            if (m_mode == DrawMode::Arc && m_hasArcMid)
+                bulge = ComputeBulgeFromThreePoints(m_points.back(), m_arcMid, start);
+            m_hasArcMid = false;
+            m_arcMid    = {};
+            if (m_points.back() == start)
+                return true;   // 最后一点已点在起点上：已经闭合
+            m_bulges.push_back(bulge);
+            m_points.push_back(start);   // MiniCAD 的闭合多段线：末点与起点重合
+            return true;
+        }
+
+        void OnLeftClick(const Math::Point3& pt)
+        {
+            if (m_points.empty())
+            {
+                m_points.push_back(pt);
+                LOG_INFO("[PolylineTool] start (%.3f, %.3f)", pt.x, pt.y);
+                RefreshOverlay();
+                return;
+            }
+
+            if (m_mode == DrawMode::Line)
+            {
+                m_bulges.push_back(0.0);
+                m_points.push_back(pt);
+                LOG_INFO("[PolylineTool] line vertex #%zu (%.3f, %.3f)",  m_points.size(), pt.x, pt.y);
+            }
+            else
+            {
+                if (!m_hasArcMid)
+                {
+                    m_arcMid    = pt;
+                    m_hasArcMid = true;
+                    LOG_INFO("[PolylineTool] point on arc (%.3f, %.3f), click the arc end",  pt.x, pt.y);
+                }
+                else
+                {
+                    double bulge = ComputeBulgeFromThreePoints(m_points.back(), m_arcMid, pt);
+
+                    m_bulges.push_back(bulge);
+                    m_points.push_back(pt);
+
+                    LOG_DEBUG("[PolylineTool] arc end (%.3f, %.3f)  Bulge=%.6f",  pt.x, pt.y, bulge);
+
+                    m_hasArcMid = false;
+                    m_arcMid    = {};
+                }
+            }
+
+            RefreshOverlay();
+        }
+
+    public:
+
+        // 三点求 Bulge：A = 弧起点，M = 弧上经过点（光标），B = 弧终点。
+        //
+        // 符号必须与 Polyline::ComputeArc 的 DXF 组码 42 约定一致：
+        //   bulge > 0 ⇒ 逆时针(CCW) ⇒ 圆心在 A→B 左侧；bulge < 0 ⇒ 圆心在右侧。
+        // cross = (M−A) × (B−A) > 0 ⇒ M 在弦左侧 ⇒ A→M→B 逆时针 ⇒ 圆心在弦右侧 ⇒ bulge 负。
+        //
+        // ⚠ v0.2.0 之前 ComputeArc 把整套约定写反了（正凸度 = 顺时针），这里为与之匹配
+        //   也取了反，两者恰好抵消。ComputeArc 改成 DXF 约定后不再抵消：交互绘制的弧会
+        //   画到弦的**另一侧**、不经过用户点的那一点（预览同样如此）。因此这里必须一并翻过来。
+        //   同一函数在 PolylineGripHandler 里有一份拷贝，改这里必须同步那边。
+        //   半圆时圆心落在弦上（cross == 0），两种符号给出的 |bulge| 都是 1，测不出符号。
+        // public 是为了让测试直接调用（tests/Core/BulgeDirectionTests.cpp）。
+        static double ComputeBulgeFromThreePoints(
+            const Math::Point3& A,
+            const Math::Point3& M,
+            const Math::Point3& B)
+        {
+            double ax = A.x, ay = A.y;
+            double mx = M.x, my = M.y;
+            double bx = B.x, by = B.y;
+
+            double D = 2.0 * (ax * (my - by) + mx * (by - ay) + bx * (ay - my));
+            if (std::abs(D) < 1e-10)
+                return 0.0;
+
+            double a2 = ax * ax + ay * ay;
+            double m2 = mx * mx + my * my;
+            double b2 = bx * bx + by * by;
+
+            double cx = (a2 * (my - by) + m2 * (by - ay) + b2 * (ay - my)) / D;
+            double cy = (a2 * (bx - mx) + m2 * (ax - bx) + b2 * (mx - ax)) / D;
+
+            double sa = std::atan2(ay - cy, ax - cx);
+            double ea = std::atan2(by - cy, bx - cx);
+
+            double cross = (mx - ax) * (by - ay) - (my - ay) * (bx - ax);
+
+            double sweep;
+            if (cross >= 0.0)
+            {
+                // M 在弦左侧 ⇒ 逆时针 ⇒ 圆心在右 ⇒ bulge 负
+                sweep = ea - sa;
+                if (sweep <= 0.0) sweep += Math::TwoPI;
+                return std::tan(sweep * 0.25);
+            }
+            else
+            {
+                // M 在弦右侧 ⇒ 顺时针 ⇒ 圆心在左 ⇒ bulge 正
+                sweep = sa - ea;
+                if (sweep <= 0.0) sweep += Math::TwoPI;
+                return -std::tan(sweep * 0.25);
+            }
+        }
+
+        void RefreshOverlay()
+        {
+            if (!m_ctx) return;
+            m_ctx->overlay.Clear();
+            if (m_points.empty()) return;
+
+            const auto& layer = m_ctx->scene.GetLayerManager().GetActiveLayer();
+            const Math::Color4 layerColor  = layer.GetColor();
+            const Math::Color4 rubberColor = { 0.6f, 0.6f, 0.6f, 0.5f };
+            const Math::Color4 helperColor = { 0.5f, 0.5f, 0.5f, 0.25f };
+            const Math::Color4 midColor    = { 1.0f, 0.8f, 0.2f, 0.8f };
+
+            if (m_points.size() >= 2)
+            {
+                Polyline pl(m_points, m_bulges);
+                m_ctx->overlay.AddPolyline(pl, layerColor);
+            }
+
+            for (const auto& pt : m_points)
+                m_ctx->overlay.AddPoint(pt, midColor);
+
+            const Math::Point3& last = m_points.back();
+
+            if (m_mode == DrawMode::Line)
+            {
+                m_ctx->overlay.AddLine(last, m_cursor, rubberColor);
+            }
+            else
+            {
+                if (!m_hasArcMid)
+                {
+                    m_ctx->overlay.AddLine(last, m_cursor, rubberColor);
+                }
+                else
+                {
+                    m_ctx->overlay.AddPoint(m_arcMid, midColor);
+
+                    double bulgePreview =
+                        ComputeBulgeFromThreePoints(last, m_arcMid, m_cursor);
+
+                    if (std::abs(bulgePreview) > 1e-12)
+                    {
+                        ArcGeom arc = Polyline::ComputeArc(last, m_cursor, bulgePreview);
+                        if (arc.Radius > Math::LengthEPS)
+                        {
+                            m_ctx->overlay.AddArcGeom(arc, rubberColor);
+                        }
+                        else
+                        {
+                            m_ctx->overlay.AddLine(last, m_cursor, rubberColor);
+                        }
+                    }
+                    else
+                    {
+                        m_ctx->overlay.AddLine(last, m_cursor, rubberColor);
+                    }
+
+                    m_ctx->overlay.AddLine(last,     m_arcMid, helperColor);
+                    m_ctx->overlay.AddLine(m_arcMid, m_cursor, helperColor);
+                }
+            }
+        }
+
+        void Commit()
+        {
+            if (m_points.size() < 2)
+            {
+                LOG_WARN("[PolylineTool] not enough vertices, nothing committed");
+                return;
+            }
+
+            int arcCount = 0, lineCount = 0;
+            for (double b : m_bulges)
+                (std::abs(b) > 1e-12 ? arcCount : lineCount)++;
+
+            auto id     = m_ctx->scene.NextObjectID();
+            auto entity = std::make_unique<PolylineEntity>(id, m_points, m_bulges);
+            m_ctx->ApplyCurrentAttr(*entity);
+            auto cmd    = std::make_unique<AddEntityCommand>(std::move(entity));
+            m_ctx->cmdStack.Execute(std::move(cmd), m_ctx->scene);
+
+            LOG_DEBUG("[PolylineTool] commit Id=%d  vertices=%zu  lines=%d  arcs=%d", static_cast<int>(id), m_points.size(), lineCount, arcCount);
+        }
+
+        void Reset()
+        {
+            m_points.clear();
+            m_bulges.clear();
+            m_hasArcMid = false;
+            m_arcMid    = {};
+            m_cursor    = {};
+            if (m_overlay) m_overlay->Clear();
+        }
+
+        Math::Point3 GetPoint(const InputEvent& e) const
+        {
+            if (e.HasSnap) return e.SnapWorld;
+            auto p = m_ctx->viewport.GetCamera().ScreenToWorld(e.MouseX, e.MouseY);
+            return { p.x, p.y, 0.0 };
+        }
+
+    private:
+
+        const EditorContext* m_ctx = nullptr;
+
+        Overlay*              m_overlay = nullptr;
+
+        DrawMode m_mode = DrawMode::Line;
+
+        std::vector<Math::Point3> m_points;
+        std::vector<double>       m_bulges;
+
+        bool         m_hasArcMid = false;
+        Math::Point3 m_arcMid{};
+
+        Math::Point3 m_cursor{};
+    };
+}

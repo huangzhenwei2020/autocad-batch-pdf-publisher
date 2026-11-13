@@ -1,0 +1,1 @@
+Icons reuse the existing Wanluo Studio Lucide artwork. Additional icons use Lucide 0.468.0 from https://github.com/lucide-icons/lucide/tree/0.468.0/icons with original geometry and stroke color #9ccfff. PNGs are rendered at 96px. ISC and Feather MIT notices are retained in LUCIDE-LICENSE.

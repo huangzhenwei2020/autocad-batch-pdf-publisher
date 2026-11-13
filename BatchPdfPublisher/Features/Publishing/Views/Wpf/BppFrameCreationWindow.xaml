@@ -1,0 +1,81 @@
+<local:BppCadWindow x:Class="BatchPdfPublisher.Views.BppFrameCreationWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="clr-namespace:BatchPdfPublisher.Views" Title="创建／插入图框" Width="1020" Height="760" MinWidth="800" MinHeight="580" Style="{DynamicResource {x:Type Window}}">
+    <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="BppTheme.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Window.Resources>
+    <Grid Margin="12">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="340" />
+        </Grid.ColumnDefinitions>
+        <TabControl Margin="4">
+            <TabItem Header="新建图框">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="14">
+                        <TextBlock Text="纸张规格" />
+                        <ComboBox x:Name="Paper" SelectionChanged="Paper_Changed" />
+                        <TextBlock Text="加长" Margin="3,10,3,0" />
+                        <ComboBox x:Name="Extension" IsEditable="True" SelectionChanged="Size_Changed" LostKeyboardFocus="Size_LostFocus" />
+                        <TextBlock Text="方向" Margin="3,10,3,0" />
+                        <ComboBox x:Name="Orientation" SelectionChanged="Size_Changed" />
+                        <Button Content="插入图框外边线" Click="Border_Click" />
+                        <TextBlock Text="属性标签" Margin="3,14,3,0" />
+                        <ComboBox x:Name="Property" IsEditable="True" />
+                        <TextBlock Text="CAD 文字样式" Margin="3,10,3,0" />
+                        <ComboBox x:Name="FontName" IsEditable="True" />
+                        <WrapPanel>
+                            <StackPanel Width="160">
+                                <TextBlock Text="文字高度 mm" />
+                                <TextBox x:Name="TextHeight" Text="3.5" />
+                            </StackPanel>
+                            <StackPanel Width="160">
+                                <TextBlock Text="宽度系数" />
+                                <TextBox x:Name="WidthFactor" Text="1" />
+                            </StackPanel>
+                        </WrapPanel>
+                        <WrapPanel>
+                            <Button Content="文字颜色" Click="Color_Click" />
+                            <TextBlock x:Name="ColorName" Margin="6" />
+                            <Button Content="插入居中属性" Click="Property_Click" />
+                        </WrapPanel>
+                        <TextBlock Text="图框备注" Margin="3,12,3,0" />
+                        <TextBox x:Name="Remark" Text="自建图框" />
+                        <CheckBox x:Name="RegisterAfterCreation" Content="创建后自动登记到共用图框库" IsChecked="True" />
+                        <Button Content="选择对象创建图框块" Click="Create_Click" Style="{StaticResource BppPrimary}" />
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+            <TabItem Header="已登记图框">
+                <DockPanel Margin="12">
+                    <StackPanel DockPanel.Dock="Bottom">
+                        <TextBlock Text="插入比例" />
+                        <ComboBox x:Name="InsertScale" IsEditable="True" />
+                        <WrapPanel>
+                            <Button Content="插入登记图框" Click="Insert_Click" Style="{StaticResource BppPrimary}" />
+                            <Button Content="写入排版范围" Click="Range_Click" />
+                        </WrapPanel>
+                    </StackPanel>
+                    <ListBox x:Name="Frames" DisplayMemberPath="DisplayName" SelectionChanged="Frame_Changed" />
+                </DockPanel>
+            </TabItem>
+        </TabControl>
+        <Border Grid.Column="1" Style="{StaticResource BppCard}">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Bottom">
+                    <TextBlock x:Name="SizeInfo" TextWrapping="Wrap" Margin="4,12" />
+                    <TextBlock x:Name="FrameInfo" TextWrapping="Wrap" Margin="4,12" />
+                    <Button Content="关闭" Click="Close_Click" />
+                </StackPanel>
+                <Viewbox Margin="16" Stretch="Uniform">
+                    <Canvas x:Name="PaperPreview" Width="841" Height="594">
+                        <Rectangle x:Name="PaperOutline" Width="841" Height="594" Fill="#F6F7F8" Stroke="#1397FF" StrokeThickness="2" />
+                        <Rectangle x:Name="PaperInner" Canvas.Left="25" Canvas.Top="10" Width="806" Height="574" Stroke="#31404F" StrokeThickness="1" />
+                    </Canvas>
+                </Viewbox>
+            </DockPanel>
+        </Border>
+    </Grid>
+</local:BppCadWindow>

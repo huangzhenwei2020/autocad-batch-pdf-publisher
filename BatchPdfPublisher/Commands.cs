@@ -15,7 +15,7 @@ namespace BatchPdfPublisher
 {
     public sealed class Commands : IExtensionApplication
     {
-        private static PublisherForm _publisherForm;
+        private static PublisherWindow _publisherWindow;
         private static TianzhengRoomRenameForm _roomRenameForm;
         private static DoorWindowElevationForm _doorWindowElevationForm;
         private static LineVisionForm _lineVisionForm;
@@ -161,7 +161,7 @@ namespace BatchPdfPublisher
         {
             var document = Application.DocumentManager.MdiActiveDocument;
             if (document == null) return;
-            Application.ShowModelessDialog(new FrameCreationForm(document, null));
+            Application.ShowModelessWindow(new BppFrameCreationWindow(document, null));
         }
 
         [CommandMethod("WLDYLayout")]
@@ -1080,7 +1080,7 @@ namespace BatchPdfPublisher
             catch (System.Exception ex) { Trace("Catalog inserted; nonessential publisher refresh was skipped: " + ex); }
         }
 
-        private static void ShowPublisher(Action<PublisherForm> afterShow, bool display = true)
+        private static void ShowPublisher(Action<PublisherWindow> afterShow, bool display = true)
         {
             // Build the modeless UI only after AutoCAD has returned to its
             // idle message loop.
@@ -1091,22 +1091,22 @@ namespace BatchPdfPublisher
                 Application.Idle -= handler;
                 try
                 {
-                    if (_publisherForm == null || _publisherForm.IsDisposed)
+                    if (_publisherWindow == null)
                     {
-                        Trace("Creating modeless WinForms window");
-                        _publisherForm = new PublisherForm();
-                        _publisherForm.FormClosed += (closedSender, closedArgs) => _publisherForm = null;
-                        Trace("Modeless WinForms window created");
+                        Trace("Creating modeless WPF window");
+                        _publisherWindow = new PublisherWindow();
+                        _publisherWindow.Closed += (closedSender, closedArgs) => _publisherWindow = null;
+                        Trace("Modeless WPF window created");
                     }
-                    Trace("Showing modeless WinForms window");
-                    if (display && !_publisherForm.Visible)
+                    Trace("Showing modeless WPF window");
+                    if (display && !_publisherWindow.IsVisible)
                     {
-                        Application.ShowModelessDialog(_publisherForm);
+                        Application.ShowModelessWindow(_publisherWindow);
                     }
                     else if (display)
-                        _publisherForm.Activate();
-                    afterShow?.Invoke(_publisherForm);
-                    Trace("Modeless WinForms window visible");
+                        _publisherWindow.Activate();
+                    afterShow?.Invoke(_publisherWindow);
+                    Trace("Modeless WPF window visible");
                 }
                 catch (System.Exception exception)
                 {

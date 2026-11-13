@@ -1,0 +1,277 @@
+﻿#pragma once
+#include <vector>
+#include <memory>
+#include <cmath>
+#include <functional>
+#include "Core/Object/Object.hpp"
+#include "Viewport/Viewport.h"
+#include "Core/Math/Point3.hpp"
+#include "Core/Math/Color4.hpp"
+#include "Core/Math/Constants.hpp"
+#include "Core/GeomKernel/Polyline.hpp"
+#include "Core/GeomKernel/Ellipse.hpp"
+namespace MiniCAD
+{
+    /// <summary>
+    /// “非持久、仅用于显示”的临时几何数据
+    /// </summary>
+    // 端点按世界坐标（双精度）存，ToVertices 时才相对渲染原点转成 float：测绘坐标下直接存 float，
+    // 橡皮筋线会一格一格地跳（y≈368 万时 float 的间隔是 0.25）
+    class Overlay
+    {
+    public:
+        Overlay() = default;
+        void Bind(Viewport& viewport) { m_viewport = &viewport; }
+
+        // 清空
+        void Clear()
+        {
+            m_lines.clear();
+            m_points.clear();
+        }
+
+        // ===== Point =====
+        void AddPoint(const  Math::Point3& p, const  Math::Color4& color)
+        {
+            m_points.push_back({ p, ToFloat4(color) });
+        }
+
+        // ===== Line =====
+        void AddLine(const Math::Point3& aa, const Math::Point3& bb, const Math::Color4& mcolor)
+        {
+            m_lines.push_back({ aa, bb, ToFloat4(mcolor) });
+        }
+
+        // ===== Rect =====
+        void AddRect(const Math::Point3& a, const Math::Point3& b, const Math::Color4& mcolor)
+        {
+            // 规范化矩形：计算四个顶点
+            Math::Point3 p1 = { std::min(a.x, b.x), std::min(a.y, b.y), std::min(a.z, b.z) }; // BottomLeft
+            Math::Point3 p3 = { std::max(a.x, b.x), std::max(a.y, b.y), std::max(a.z, b.z) }; // TopRight
+			Math::Point3 p2 = { p3.x, p1.y, p1.z }; // BottomRight
+            Math::Point3 p4 = { p1.x, p3.y, p3.z }; // TopLeft
+			AddRect(p1, p2, p3, p4, mcolor);
+        }
+        void AddRect(const Math::Point3& p1, const Math::Point3& p2, const Math::Point3& p3, const Math::Point3& p4, const Math::Color4& mcolor)
+        {
+
+            AddLine(p1, p2, mcolor);
+            AddLine(p2, p3, mcolor);
+            AddLine(p3, p4, mcolor);
+			AddLine(p4, p1, mcolor);
+        }
+
+        // ===== Arc =====
+        // startAngle / endAngle 均为弧度，始终按 CCW 方向从 startAngle 画到 endAngle
+        // 适用于 ArcTool（Arc::FromThreePoints 返回的 StartAngle / EndAngle，约定 CCW）
+        void AddArc(const Math::Point3& center, double radius, double startAngle, double endAngle, const Math::Color4& mcolor, int segments = 64)
+        {
+            if (radius <= 0.0 || segments < 1)
+                return;
+
+            // CCW 角跨度，始终为正
+            double sweep = endAngle - startAngle;
+            if (sweep <= 0.0)
+                sweep += Math::TwoPI;
+
+            if (sweep < Math::AngleEPS)
+                return;
+
+            AddArcInternal(center, radius, startAngle, sweep, mcolor, segments);
+        }
+
+        // ===== ArcGeom =====
+        // 直接接受 ArcGeom，SweepAngle 为有符号值（正=CCW，负=CW）
+        // 适用于 PolylineTool（Polyline::ComputeArc 返回的 ArcGeom）
+        void AddArcGeom(const ArcGeom& arc, const Math::Color4& mcolor, int segments = 64)
+        {
+            if (arc.Radius <= 0.0 || segments < 1)
+                return;
+
+            if (std::abs(arc.SweepAngle) < Math::AngleEPS)
+                return;
+
+            // 直接使用有符号 sweep，不做任何归一化
+            AddArcInternal(arc.Center, arc.Radius, arc.StartAngle, arc.SweepAngle, mcolor, segments);
+        }
+
+        // ===== Ellipse =====
+        // 整椭圆或椭圆弧（参数角 t 从 Ellipse::StartParam 逆时针扫过 SweepParam）
+        void AddEllipse(const Ellipse& el, const Math::Color4& mcolor, int segments = 64)
+        {
+            const double t0    = el.IsFull() ? 0.0 : el.StartParam;
+            const double sweep = el.SweepParam();
+            const int    segs  = std::max(4, static_cast<int>(std::ceil(segments * sweep / Math::TwoPI)));
+            AddEllipse(el.Center, el.RadiusX, el.RadiusY, el.Rotation, mcolor, segs, t0, sweep);
+        }
+
+        void AddEllipse(const Math::Point3& center,  double rx, double ry, double rotation,  const Math::Color4& mcolor, int segments = 64,
+                        double startParam = 0.0, double sweepParam = Math::TwoPI)
+        {
+            if (rx <= 0.0 || ry <= 0.0 || segments < 1)
+                return;
+
+            const Float4 color = ToFloat4(mcolor);
+
+            double cosR = std::cos(rotation);
+            double sinR = std::sin(rotation);
+
+            m_lines.reserve(m_lines.size() + segments);
+
+            for (int i = 0; i < segments; ++i)
+            {
+                double t0 = startParam + sweepParam * i / segments;
+                double t1 = startParam + sweepParam * (i + 1) / segments;
+
+                // 参数方程（与 Ellipse::PointAt 完全一致）
+                const Math::Point3 p0 =
+                {
+                    center.x + rx * std::cos(t0) * cosR - ry * std::sin(t0) * sinR,
+                    center.y + rx * std::cos(t0) * sinR + ry * std::sin(t0) * cosR,
+                    center.z,
+                };
+                const Math::Point3 p1 =
+                {
+                    center.x + rx * std::cos(t1) * cosR - ry * std::sin(t1) * sinR,
+                    center.y + rx * std::cos(t1) * sinR + ry * std::sin(t1) * cosR,
+                    center.z,
+                };
+
+                m_lines.push_back({ p0, p1, color });
+            }
+        }
+        // ===== Circle =====
+        void AddCircle(const Math::Point3& center, double radius, const Math::Color4& mcolor, int segments = 64)
+        {
+            if (radius <= 0.0 || segments < 3)
+                return;
+
+            const Float4 color = ToFloat4(mcolor);
+
+            // 预分配：每段 1 条线 = 2 个顶点
+            m_lines.reserve(m_lines.size() + segments);
+
+            for (int i = 0; i < segments; ++i)
+            {
+                double a0 = (i / static_cast<double>(segments)) * Math::TwoPI;
+                double a1 = ((i + 1) / static_cast<double>(segments)) * Math::TwoPI;
+
+                const Math::Point3 p0 = { center.x + std::cos(a0) * radius, center.y + std::sin(a0) * radius, center.z };
+                const Math::Point3 p1 = { center.x + std::cos(a1) * radius, center.y + std::sin(a1) * radius, center.z };
+
+                m_lines.push_back({ p0, p1, color });
+            }
+        }
+
+        void AddPolyline(const Polyline& pl, const Math::Color4& color)
+        {
+            auto pts = pl.Tessellate();
+
+            if (pts.size() < 2)
+                return;
+
+            for (size_t i = 0; i + 1 < pts.size(); ++i)
+            {
+                AddLine(pts[i], pts[i + 1], color);
+            }
+        }
+
+        // ===== Export to GPU vertices =====
+        // 顶点 = 世界坐标 − origin（渲染原点，与场景流相同，见 ToRenderFloat3）
+        void ToVertices(std::vector<Vertex_P3_C4>& out, const Math::Point3& origin = {}) const
+        {
+            out.reserve(out.size() + m_lines.size() * 2 + m_points.size());
+
+            // Lines -> 2 vertices
+            for (const auto& l : m_lines)
+            {
+                out.push_back({ ToRenderFloat3(l.a, origin), {l.color.x, l.color.y, l.color.z, l.color.w} });
+                out.push_back({ ToRenderFloat3(l.b, origin), {l.color.x, l.color.y, l.color.z, l.color.w} });
+            }
+
+            // Points
+            for (const auto& pt : m_points)
+            {
+                // 生成圆
+                const float radius   = 6.0f;
+                const int   segments = 24;
+
+                auto& camera = m_viewport->GetCamera();
+
+                auto point = camera.WorldToScreen(pt.p);
+
+                for (int i = 0; i < segments; ++i)
+                {
+                    double a0 = (i / (float)segments)       * Math::TwoPI;
+                    double a1 = ((i + 1) / (float)segments) * Math::TwoPI;
+
+					auto worldP0 = camera.ScreenToWorld(point.x + cosf(a0) * radius, point.y + sinf(a0) * radius);
+					auto worldP1 = camera.ScreenToWorld(point.x + cosf(a1) * radius, point.y + sinf(a1) * radius);
+
+                    out.push_back({ ToRenderFloat3(worldP0, origin), { pt.color.x, pt.color.y, pt.color.z, pt.color.w } });
+                    out.push_back({ ToRenderFloat3(worldP1, origin), { pt.color.x, pt.color.y, pt.color.z, pt.color.w } });
+                }
+            }
+        }
+
+        bool Empty() const
+        {
+            return m_lines.empty() && m_points.empty();
+        }
+
+    private:
+
+        // 底层绘制：按有符号 sweepAngle 方向画弧（正=CCW，负=CW）
+        void AddArcInternal(const Math::Point3& center, double radius, double startAngle, double sweepAngle, const Math::Color4& mcolor, int segments)
+        {
+            const Float4 color = ToFloat4(mcolor);
+
+            m_lines.reserve(m_lines.size() + segments);
+
+            for (int i = 0; i < segments; ++i)
+            {
+                double a0 = startAngle + sweepAngle * i / segments;
+                double a1 = startAngle + sweepAngle * (i + 1) / segments;
+
+                const Math::Point3 p0 = { center.x + std::cos(a0) * radius, center.y + std::sin(a0) * radius, center.z };
+                const Math::Point3 p1 = { center.x + std::cos(a1) * radius, center.y + std::sin(a1) * radius, center.z };
+
+                m_lines.push_back({ p0, p1, color });
+            }
+        }
+
+        struct Float4
+        {
+            float x;
+            float y;
+            float z;
+            float w;
+        };
+
+        static Float4 ToFloat4(const Math::Color4& c)
+        {
+            return { static_cast<float>(c.r), static_cast<float>(c.g), static_cast<float>(c.b), static_cast<float>(c.a) };
+        }
+
+        struct Line
+        {
+            Math::Point3 a;
+            Math::Point3 b;
+            Float4       color;
+        };
+
+        struct Point
+        {
+            Math::Point3 p;
+            Float4       color;
+        };
+
+    private:
+        std::vector<Line>  m_lines;
+        std::vector<Point> m_points;
+
+    private:
+
+        Viewport* m_viewport = nullptr;
+    };
+}

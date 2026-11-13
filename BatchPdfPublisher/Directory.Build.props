@@ -1,5 +1,6 @@
 <Project>
-  <PropertyGroup>
+  <!-- WPF 临时工程复用 SDK 传入的中间目录和 NuGet 资产路径。 -->
+  <PropertyGroup Condition="!$([System.String]::Copy('$(MSBuildProjectName)').EndsWith('_wpftmp'))">
     <BaseIntermediateOutputPath>obj\$(MSBuildProjectName)\</BaseIntermediateOutputPath>
     <MSBuildProjectExtensionsPath>obj\$(MSBuildProjectName)\</MSBuildProjectExtensionsPath>
   </PropertyGroup>

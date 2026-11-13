@@ -1,0 +1,92 @@
+<UserControl x:Class="Wanluo.StandaloneWorkbench.CadWorkspace" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="clr-namespace:Wanluo.StandaloneWorkbench" PreviewKeyDown="Workspace_PreviewKeyDown" FontSize="12">
+  <Grid Background="#303945">
+    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="28"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+    <Grid>
+      <TabControl x:Name="EditTools" SelectedIndex="0" Style="{StaticResource CadTabs}" ItemContainerStyle="{StaticResource CadTab}">
+        <TabItem Header="常用"><ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"><StackPanel x:Name="CommonTools" Orientation="Horizontal" Height="76"/></ScrollViewer></TabItem>
+        <TabItem Header="绘图"><ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"><StackPanel x:Name="DrawTools" Orientation="Horizontal" Height="76"/></ScrollViewer></TabItem>
+        <TabItem Header="修改"><ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"><StackPanel x:Name="ModifyTools" Orientation="Horizontal" Height="76"/></ScrollViewer></TabItem>
+        <TabItem Header="标注"><ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"><StackPanel x:Name="AnnotationTools" Orientation="Horizontal" Height="76"/></ScrollViewer></TabItem>
+        <TabItem Header="插入"><ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"><StackPanel x:Name="InsertTools" Orientation="Horizontal" Height="76"/></ScrollViewer></TabItem>
+        <TabItem Header="视图"><StackPanel x:Name="ViewTools" Orientation="Horizontal" Height="76"/></TabItem>
+        <TabItem Header="管理"><StackPanel x:Name="FileTools" Orientation="Horizontal" Height="76"/></TabItem>
+      </TabControl>
+      <local:CadIconButton x:Name="RibbonCollapse" HorizontalAlignment="Right" VerticalAlignment="Top" Icon="chevron-up" Width="26" Height="24" MinHeight="24" ToolTip="收起／展开功能区 Ctrl+F1" Click="CollapseRibbon_Click"/>
+    </Grid>
+    <DockPanel Grid.Row="1" Background="#303945">
+      <local:CadIconButton x:Name="NewDrawingTabButton" DockPanel.Dock="Right" Icon="plus" Click="New_Click" ToolTip="新建图纸 Ctrl+N"/>
+      <ListBox x:Name="Documents" Style="{StaticResource CadStrip}" SelectionChanged="Documents_Changed" ToolTip="已打开的图纸，Ctrl+Tab 切换">
+        <ListBox.ItemTemplate><DataTemplate>
+          <StackPanel Orientation="Horizontal"><TextBlock Text="{Binding Label}" VerticalAlignment="Center" MaxWidth="220" TextTrimming="CharacterEllipsis" ToolTip="{Binding Path}"/><local:CadIconButton Icon="x" Width="20" Height="20" MinHeight="18" Padding="2" Margin="8,0,0,0" Click="CloseDocument_Click" ToolTip="关闭这张图纸"/></StackPanel>
+        </DataTemplate></ListBox.ItemTemplate>
+      </ListBox>
+    </DockPanel>
+    <Grid Grid.Row="2" x:Name="DrawingRegion">
+      <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="28"/></Grid.RowDefinitions>
+      <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition x:Name="InspectorDivider" Width="0"/><ColumnDefinition x:Name="InspectorColumn" Width="0"/><ColumnDefinition Width="28"/></Grid.ColumnDefinitions>
+      <Border BorderBrush="#424C58" BorderThickness="1"><local:CadViewport x:Name="Viewport"/></Border>
+      <GridSplitter Grid.Column="1" Grid.RowSpan="3" Width="4" HorizontalAlignment="Stretch" Background="#414A57"/>
+      <Border Grid.Column="2" Grid.RowSpan="3" x:Name="InspectorPanel" Visibility="Collapsed" BorderBrush="#495361" BorderThickness="1,0,0,0">
+        <DockPanel Background="#303945">
+          <DockPanel DockPanel.Dock="Top" Height="26"><local:CadIconButton DockPanel.Dock="Right" Icon="x" Click="HideInspector_Click" ToolTip="收起面板"/><TextBlock Text="对象与图层" Margin="8,0"/></DockPanel>
+          <TabControl x:Name="InspectorTabs" SelectedIndex="0" ItemContainerStyle="{StaticResource CadTab}" BorderThickness="0" Padding="0">
+            <TabItem Header="属性">
+              <DockPanel Margin="6">
+                <TextBlock DockPanel.Dock="Top" x:Name="SelectionInfo" Text="选择对象查看属性" Margin="3,6"/>
+                <Button DockPanel.Dock="Bottom" Content="应用所选参数" Click="ApplyProperty_Click" MinHeight="28" Padding="6,4"/>
+                <DataGrid x:Name="Properties" SelectionMode="Single" RowHeight="30">
+                  <DataGrid.Columns>
+                    <DataGridTextColumn Header="参数" Binding="{Binding Name}" IsReadOnly="True" Width="*"/>
+                    <DataGridTemplateColumn Header="值" Width="*"><DataGridTemplateColumn.CellTemplate><DataTemplate><TextBox Text="{Binding Value,UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding Editable}" Padding="3" Margin="0"/></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                  </DataGrid.Columns>
+                </DataGrid>
+              </DockPanel>
+            </TabItem>
+            <TabItem Header="图层">
+              <DockPanel Margin="6">
+                <TextBlock DockPanel.Dock="Top" Text="图层名称 · 显示 · 锁定" Foreground="{StaticResource MutedBrush}" Margin="3,6"/>
+                <StackPanel DockPanel.Dock="Bottom"><UniformGrid Columns="3"><Button Content="新建" Click="NewLayer_Click"/><Button Content="修改" Click="EditLayer_Click"/><Button Content="删除" Click="DeleteLayer_Click"/></UniformGrid><Button Content="设为当前图层" Click="CurrentLayer_Click" MinHeight="28" Padding="6,4"/></StackPanel>
+                <ListBox x:Name="Layers">
+                  <ListBox.ItemTemplate><DataTemplate>
+                    <StackPanel Margin="0,2"><TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Name}"/>
+                      <StackPanel Orientation="Horizontal"><CheckBox Content="显示" IsChecked="{Binding Visible}" Click="Layer_Click"/><CheckBox Content="锁定" IsChecked="{Binding Locked}" Click="Layer_Click"/>
+                        <TextBlock Text="当前" Foreground="#8ACDFF"><TextBlock.Style><Style TargetType="TextBlock"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding Current}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></TextBlock.Style></TextBlock>
+                      </StackPanel>
+                    </StackPanel>
+                  </DataTemplate></ListBox.ItemTemplate>
+                </ListBox>
+              </DockPanel>
+            </TabItem>
+          </TabControl>
+        </DockPanel>
+      </Border>
+      <StackPanel Grid.Column="3" Grid.RowSpan="3" Background="#303945">
+        <local:CadIconButton Icon="panel-right" Tag="0" Click="ToggleInspector_Click" ToolTip="对象属性 Ctrl+1" Padding="3,5"/>
+        <local:CadIconButton Icon="layers" Tag="1" Click="ToggleInspector_Click" ToolTip="图层管理" Padding="3,5"/>
+      </StackPanel>
+      <Grid Grid.Row="1" x:Name="CommandDock" Background="#343C47">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="28"/></Grid.RowDefinitions>
+        <TextBox x:Name="History" IsReadOnly="True" Height="96" Visibility="Collapsed" BorderThickness="0,1,0,0" Margin="0" Padding="7,3" Background="#303945" FontSize="12" VerticalScrollBarVisibility="Auto" TextWrapping="Wrap"/>
+        <Grid Grid.Row="1"><Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+          <local:CadIconButton Icon="terminal" Click="History_Click" ToolTip="展开／收起命令记录 F2" Width="26"/>
+          <TextBlock Grid.Column="1" x:Name="Prompt" Text="命令" Margin="4,0,8,0" MaxWidth="320" TextTrimming="CharacterEllipsis" ToolTip="{Binding Text,RelativeSource={RelativeSource Self}}"/>
+          <TextBox Grid.Column="2" x:Name="CommandInput" Cursor="IBeam" Margin="0,2" Padding="5,1" BorderThickness="1" BorderBrush="#566578" Background="#2C3440" VerticalContentAlignment="Center" PreviewKeyDown="CommandInput_KeyDown" ToolTip="输入命令、x,y 坐标、@dx,dy 相对坐标，空格／Enter 确认，Esc 结束"/>
+          <TextBlock Grid.Column="2" Text="输入命令或坐标，空格／Enter 确认" Foreground="#8F9EAF" Margin="7,0" IsHitTestVisible="False"><TextBlock.Style><Style TargetType="TextBlock"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding Text,ElementName=CommandInput}" Value=""><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></TextBlock.Style></TextBlock>
+          <Button Grid.Column="3" x:Name="CancelOpen" Content="取消打开" Visibility="Collapsed" Click="CancelOpen_Click" MinHeight="24" Padding="6,1" Margin="0"/>
+        </Grid>
+        <ProgressBar Grid.Row="1" x:Name="Progress" Height="2" Visibility="Collapsed" VerticalAlignment="Bottom" Margin="0" Minimum="0" Maximum="1"/>
+      </Grid>
+      <Grid Grid.Row="2" x:Name="StatusDock" Background="#303945">
+        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+        <ListBox x:Name="Layouts" Style="{StaticResource CadStrip}" DisplayMemberPath="Name" SelectionChanged="Layouts_Changed" MaxWidth="260" ToolTip="当前图纸的模型空间与布局"><ListBox.ContextMenu><ContextMenu><MenuItem Header="新建布局" Click="NewLayout_Click"/><MenuItem Header="删除当前布局" Click="DeleteLayout_Click"/></ContextMenu></ListBox.ContextMenu></ListBox>
+        <TextBlock Grid.Column="1" x:Name="Status" Text="就绪" Margin="8,0" Foreground="{StaticResource MutedBrush}" FontSize="11" TextTrimming="CharacterEllipsis" ToolTip="{Binding Text,RelativeSource={RelativeSource Self}}"/>
+        <StackPanel Grid.Column="2" Orientation="Horizontal">
+          <CheckBox x:Name="Snap" Content="捕捉 F3" Tag="@snap" Click="Toggle_Click" Style="{StaticResource CadStatusToggle}"/>
+          <CheckBox x:Name="Ortho" Content="正交 F8" Tag="@ortho" Click="Toggle_Click" Style="{StaticResource CadStatusToggle}"/>
+          <CheckBox x:Name="Polar" Content="极轴 F10" Tag="@polar" Click="Toggle_Click" Style="{StaticResource CadStatusToggle}"/>
+          <TextBlock x:Name="Coordinates" Foreground="{StaticResource MutedBrush}" Margin="8,0" Width="145" TextTrimming="CharacterEllipsis" FontSize="11"/>
+        </StackPanel>
+      </Grid>
+    </Grid>
+  </Grid>
+</UserControl>

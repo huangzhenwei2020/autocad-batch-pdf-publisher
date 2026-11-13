@@ -17,11 +17,16 @@ namespace BatchPdfPublisherLauncher
         private readonly ToolStripMenuItem _autoStart;
         private readonly Control _dispatcher;
         private CloudSyncHistoryForm _historyForm;
+        private readonly System.Threading.EventWaitHandle _requestSignal;
+        private readonly System.Threading.RegisteredWaitHandle _requestWait;
 
         public CloudSyncAgentContext()
         {
             _dispatcher = new Control();
             _dispatcher.CreateControl();
+            _requestSignal = new System.Threading.EventWaitHandle(false, System.Threading.EventResetMode.AutoReset, CloudSyncAgentSignal.EventName);
+            _requestWait = System.Threading.ThreadPool.RegisterWaitForSingleObject(_requestSignal,
+                (state, timedOut) => Post(() => CloudSyncCoordinator.QueueReload(true)), null, System.Threading.Timeout.Infinite, false);
             var settings = new CloudSyncSettingsStore().LoadSettings();
             _status = new ToolStripMenuItem("等待同步") { Enabled = false };
             _automaticSync = new ToolStripMenuItem("后台自动同步")
@@ -94,6 +99,8 @@ namespace BatchPdfPublisherLauncher
 
         protected override void ExitThreadCore()
         {
+            _requestWait.Unregister(null);
+            _requestSignal.Dispose();
             CloudSyncCoordinator.SynchronizationProgress -= OnProgress;
             CloudSyncCoordinator.SynchronizationCompleted -= OnCompleted;
             CloudSyncCoordinator.Remove();

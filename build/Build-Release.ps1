@@ -435,7 +435,7 @@ if (Test-Path -LiteralPath $studioProject) {
     $studioDotnet = Find-DotNet8
     Write-Host '编译建模程序（万落建筑模型）…' -ForegroundColor Cyan
     Invoke-Checked {
-        & $studioDotnet build $studioProject -c Release -o $studioOutput --nologo -v:minimal
+        & $studioDotnet publish $studioProject -c Release -r win-x64 --self-contained true -o $studioOutput --nologo -v:minimal
     } '编译建模程序'
     foreach ($name in @('万落建筑模型.exe', '万落建筑模型.dll', '万落建筑模型.deps.json', '万落建筑模型.runtimeconfig.json')) {
         if (-not (Test-Path -LiteralPath (Join-Path $studioOutput $name))) { throw "建模程序缺少文件：$name" }
@@ -451,14 +451,26 @@ if (Test-Path -LiteralPath $studioProject) {
         throw '三维导出组件缺少 Windows x64 Assimp 运行库。'
     }
     Get-ChildItem $studioOutput -Recurse -Filter '*.pdb' -File -ErrorAction SilentlyContinue | Remove-Item -Force
-    # Avalonia 编辑器需要 .NET 8 运行时。
+    # 自包含发布使独立入口可在没有 .NET SDK 或 CAD 的电脑上打开三维。
     @'
-万落建筑模型 需要 .NET 8 运行时。
-若双击没反应：到 https://dotnet.microsoft.com/download/dotnet/8.0 下载
-「.NET Runtime 8.x - Windows x64」安装后即可（或从 CAD 里执行 JZMX 命令启动）。
+万落建筑模型随包携带 Windows x64 运行时，可从独立工作台打开。
+请保留本目录的完整文件，使用发布根目录的万落建筑工具启动器进入。
 '@ | Set-Content -LiteralPath (Join-Path $studioOutput '运行说明.txt') -Encoding UTF8
     Write-Host ('建模程序已发布：' + $studioOutput) -ForegroundColor Green
 }
+
+$standaloneOutput = Join-Path $OutputRoot '独立工作台'
+$standaloneDotNet = Find-DotNet8
+Invoke-Checked {
+    & $standaloneDotNet publish (Join-Path $repositoryRoot 'StandaloneWorkbench\StandaloneWorkbench.csproj') `
+        -c Release -r win-x64 --self-contained true -o $standaloneOutput --nologo -v:minimal
+} '发布独立 WPF 工作台'
+& (Join-Path $PSScriptRoot 'Build-DrawingReader.ps1') -OutputDirectory (Join-Path $standaloneOutput '读图引擎')
+& (Join-Path $PSScriptRoot 'Build-CadKernel.ps1') -OutputDirectory (Join-Path $standaloneOutput 'CAD内核')
+foreach ($name in @('万落独立工作台.exe', '万落独立工作台.dll', 'coreclr.dll', 'PresentationFramework.dll', '读图引擎\WanluoDrawingReader.exe', '读图引擎\licenses\MiniDWG\LICENSE')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $standaloneOutput $name))) { throw "独立工作台缺少文件：$name" }
+}
+if (-not (Test-Path -LiteralPath (Join-Path $standaloneOutput 'CAD内核\WanluoCadKernel.dll'))) { throw '独立 CAD 内核缺失。' }
 
 # PDB files are developer symbols, not runtime dependencies. Keeping them out of
 # dist makes the installation directory unambiguous and prevents stale symbols
@@ -485,6 +497,13 @@ $manifest = [ordered]@{
     LauncherSha256 = (Get-FileHash -LiteralPath $launcher -Algorithm SHA256).Hash
     StudioSha256 = $(if (Test-Path -LiteralPath (Join-Path $OutputRoot '建筑模型\万落建筑模型.exe')) { (Get-FileHash -LiteralPath (Join-Path $OutputRoot '建筑模型\万落建筑模型.exe') -Algorithm SHA256).Hash } else { $null })
     StudioImplementation = 'Avalonia'
+    StudioDeployment = 'SelfContained-win-x64'
+    StandaloneImplementation = 'WPF-net8; MiniCAD-0.8.4-Document-Editor-D3D11'
+    StandaloneDeployment = 'SelfContained-win-x64'
+    StandaloneSha256 = (Get-FileHash -LiteralPath (Join-Path $standaloneOutput '万落独立工作台.exe') -Algorithm SHA256).Hash
+    StandaloneAssemblySha256 = (Get-FileHash -LiteralPath (Join-Path $standaloneOutput '万落独立工作台.dll') -Algorithm SHA256).Hash
+    DrawingReaderSha256 = (Get-FileHash -LiteralPath (Join-Path $standaloneOutput '读图引擎\WanluoDrawingReader.exe') -Algorithm SHA256).Hash
+    CadKernelSha256 = (Get-FileHash -LiteralPath (Join-Path $standaloneOutput 'CAD内核\WanluoCadKernel.dll') -Algorithm SHA256).Hash
     ModelExportImplementation = 'FBX-AssimpNetter6.0.5; SKP-local-SketchUp2026-CAPI'
     SketchUpNativeRuntimeBundled = $false
     PaddleOcrIncluded = [bool]$IncludePaddleOcr

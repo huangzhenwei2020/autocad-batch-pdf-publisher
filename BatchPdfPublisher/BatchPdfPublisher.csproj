@@ -102,6 +102,7 @@
     <Compile Include="Features\**\*.cs" Exclude="Features\Frames\Views\FrameRegistrationWindow.xaml.cs" />
     <Compile Include="Features\Frames\Views\FrameRegistrationWindow.xaml.cs"><DependentUpon>FrameRegistrationWindow.xaml</DependentUpon></Compile>
     <Page Include="Features\Frames\Views\FrameRegistrationWindow.xaml" />
+    <Page Include="Features\Publishing\Views\Wpf\*.xaml" />
     <Page Include="Features\BuildingModel\Views\BuildingModelChoiceWindow.xaml" />
     <Page Include="Features\BuildingModel\Views\BuildingModelBatchWindow.xaml" />
   </ItemGroup>

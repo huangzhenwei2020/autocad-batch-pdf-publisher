@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text;
 
 namespace BatchPdfPublisherLauncher
 {
@@ -42,6 +43,26 @@ namespace BatchPdfPublisherLauncher
 
         public static string ForCom(IEnumerable<string> assemblies) => BuildExpression(assemblies) + "\r";
         public static string ForScript(IEnumerable<string> assemblies) => BuildExpression(assemblies) + "\n";
+
+        public static string CreateLoadRequest(IEnumerable<string> assemblies, string directory, bool forCom)
+        {
+            directory = Path.GetFullPath(directory);
+            Directory.CreateDirectory(directory);
+            var basename = Path.Combine(directory, "WanluoLoader-" + Guid.NewGuid().ToString("N"));
+            var ansi = basename + ".ansi.lsp";
+            var unicode = basename + ".utf8.lsp";
+            var expression = BuildExpression(assemblies) + Environment.NewLine;
+            File.WriteAllText(ansi, expression, Encoding.Default);
+            File.WriteAllText(unicode, expression, new UTF8Encoding(true));
+            // Keep the interactive command short. The legacy Lisp reader and the
+            // Unicode reader need different source encodings for Chinese paths.
+            var trusted = ";" + directory.Replace('\\', '/').TrimEnd('/') + ";";
+            return "(progn (vl-load-com) (if (not (vl-string-search " + Quote(trusted.ToUpperInvariant())
+                + " (strcase (strcat \";\" (vl-string-translate \"\\\\\" \"/\" (getvar \"TRUSTEDPATHS\")) \";\")))) "
+                + "(setvar \"TRUSTEDPATHS\" (strcat (getvar \"TRUSTEDPATHS\") " + Quote(trusted.TrimEnd(';')) + "))) "
+                + "(load (if (= 0 (getvar \"LISPSYS\")) " + Quote(ansi) + " " + Quote(unicode) + ")) (princ))"
+                + (forCom ? "\r" : "\n");
+        }
 
         private static string List(IEnumerable<string> values) => "(" + string.Join(" ", values.Select(Quote)) + ")";
         private static string Quote(string value)

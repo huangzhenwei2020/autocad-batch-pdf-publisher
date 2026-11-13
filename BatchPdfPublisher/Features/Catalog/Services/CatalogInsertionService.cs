@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
@@ -16,6 +17,27 @@ namespace BatchPdfPublisher.Services
         public int RowsPerPage = 30; public double RowHeight = 7, TextHeight = 3.5, Scale = 1;
         public double[] ColumnWidths = { 20, 30, 70, 24, 24 };
         public string Font = "黑体"; public Autodesk.AutoCAD.Colors.Color Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 7);
+
+        internal static bool TryParseDrawingScale(string text, out double scale)
+        {
+            scale = 0;
+            if (string.IsNullOrWhiteSpace(text)) return false;
+            var value = text.Trim().Replace('：', ':').Replace('／', '/');
+            var separator = value.IndexOf(':');
+            if (separator < 0) separator = value.IndexOf('/');
+            if (separator >= 0)
+            {
+                var leftText = value.Substring(0, separator).Trim();
+                var rightText = value.Substring(separator + 1).Trim();
+                if (!double.TryParse(leftText, NumberStyles.Float, CultureInfo.InvariantCulture, out var left) ||
+                    !double.TryParse(rightText, NumberStyles.Float, CultureInfo.InvariantCulture, out var right) || left <= 0 || right <= 0)
+                    return false;
+                scale = right / left;
+            }
+            else if (!double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out scale))
+                return false;
+            return scale > 0 && !double.IsNaN(scale) && !double.IsInfinity(scale);
+        }
     }
 
     public static class CatalogInsertionService

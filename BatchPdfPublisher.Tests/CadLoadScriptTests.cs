@@ -38,6 +38,20 @@ internal static class CadLoadScriptTests
         Require(expression.Contains("vl-catch-all-apply") && expression.Contains("(setvar \"FILEDIA\" 1)") && expression.Contains("(command)"), "Error recovery missing");
         Require(expression.Contains("vl-string-translate") && expression.Contains("member key seen"), "Trusted paths are not deduplicated");
         Require(!expression.Contains("MAIN.dll") && expression.Contains("other space/part.dll"), "Assembly deduplication or quoted path lost");
+        var loaderDirectory = Path.Combine(Path.GetTempPath(), "WanluoLoadRequestQA-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var longPaths = Enumerable.Range(0, 12).Select(index => Path.Combine(loaderDirectory, "中文路径 与 空格", new string('a', 100), index + ".dll")).ToArray();
+            var request = CadLoadScriptBuilder.CreateLoadRequest(longPaths, loaderDirectory, true);
+            Require(request.Length < 1000 && request.EndsWith("\r") && !request.Contains('\n'), "Interactive loader request grew with assembly paths");
+            Require(request.Contains("LISPSYS") && request.Contains(".ansi.lsp") && request.Contains(".utf8.lsp"), "Legacy and Unicode readers must select their own encoding");
+            var ansiFile = Directory.GetFiles(loaderDirectory, "*.ansi.lsp").Single();
+            var utf8File = Directory.GetFiles(loaderDirectory, "*.utf8.lsp").Single();
+            Require(File.ReadAllText(ansiFile, System.Text.Encoding.Default).TrimEnd() == CadLoadScriptBuilder.BuildExpression(longPaths), "Native loader payload changed");
+            Require(File.ReadAllBytes(utf8File).Take(3).SequenceEqual(new byte[] { 239, 187, 191 }), "Unicode loader needs its UTF-8 signature");
+            Require(File.ReadAllText(utf8File).TrimEnd() == CadLoadScriptBuilder.BuildExpression(longPaths), "Unicode paths were damaged");
+        }
+        finally { if (Directory.Exists(loaderDirectory)) Directory.Delete(loaderDirectory, true); }
         var start = DateTime.UtcNow.AddMinutes(-1);
         string Receipt(string stage, int pid, string path, DateTime when) => when.ToString("O") + " | " + stage + " | PID=" + pid + " | " + path;
         var main = Path.GetFullPath(pathsToLoad[0]);

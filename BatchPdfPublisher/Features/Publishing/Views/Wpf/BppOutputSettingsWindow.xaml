@@ -1,0 +1,48 @@
+<Window x:Class="BatchPdfPublisher.Views.BppOutputSettingsWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="输出设置" Width="640" Height="760" MinWidth="480" MinHeight="480" WindowStartupLocation="CenterOwner" Style="{DynamicResource {x:Type Window}}">
+    <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="BppTheme.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Window.Resources>
+    <DockPanel Margin="16">
+        <Button DockPanel.Dock="Bottom" Content="完成" Click="Close_Click" HorizontalAlignment="Right" MinWidth="100" Style="{StaticResource BppPrimary}" Margin="0,12,0,0" />
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="6">
+                <TextBlock Text="CAD 打印样式" />
+                <ComboBox IsEditable="True" ItemsSource="{Binding AvailablePlotStyles}" Text="{Binding PlotStyle, UpdateSourceTrigger=PropertyChanged}" />
+                <WrapPanel>
+                    <Button Content="刷新样式" Command="{Binding RefreshPlotStylesCommand}" />
+                    <Button Content="收藏样式" Command="{Binding SaveFavoritePlotStyleCommand}" />
+                </WrapPanel>
+                <TextBlock Text="白边／出血位" Margin="3,12,0,0" />
+                <ComboBox x:Name="MarginBox" SelectedItem="{Binding MarginMode}" />
+                <TextBlock Text="输出目录" Margin="3,12,0,0" />
+                <TextBox Text="{Binding OutputDirectory, UpdateSourceTrigger=PropertyChanged}" />
+                <WrapPanel>
+                    <Button Content="选择目录" Click="ChooseOutput_Click" />
+                    <Button Content="打开目录" Click="OpenOutput_Click" />
+                </WrapPanel>
+                <CheckBox Content="输出到各 CAD 文件同级目录" IsChecked="{Binding OutputNextToCadFile}" />
+                <TextBlock x:Name="ActualOutputLabel" TextWrapping="Wrap" Foreground="{StaticResource BppMuted}" Margin="6" />
+                <CheckBox Content="每个子项目生成一个 PDF" IsChecked="{Binding MergeByBuilding}" />
+                <WrapPanel>
+                    <TextBlock Text="发布子项目" FontWeight="SemiBold" Margin="3" />
+                    <Button Content="全选" Click="SelectBuildings_Click" />
+                    <Button Content="清空" Click="ClearBuildings_Click" />
+                </WrapPanel>
+                <ItemsControl ItemsSource="{Binding PublishBuildings}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <CheckBox Content="{Binding Name}" IsChecked="{Binding IsSelected}" Click="PublishBuildingChecked_Click" />
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <CheckBox Content="文件名包含工程名" IsChecked="{Binding IncludeProjectNameInFileName}" />
+                <CheckBox Content="文件名包含子项目名" IsChecked="{Binding IncludeBuildingNameInFileName}" />
+                <CheckBox Content="同名 PDF 直接覆盖" IsChecked="{Binding OverwriteExistingPdf}" />
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</Window>

@@ -80,6 +80,21 @@ namespace BatchPdfPublisher.BuildingModel
             using(var stream=File.OpenRead(path))using(var hash=SHA256.Create())
                 return BitConverter.ToString(hash.ComputeHash(stream)).Replace("-","");
         }
+        public static void SaveExisting(string path, BuildingModelDocument model, string expectedHash)
+        {
+            ValidateName(model.Name);
+            ValidateStoreys(model.Storeys);
+            path = Path.GetFullPath(path);
+            if (string.IsNullOrWhiteSpace(expectedHash)) throw new ArgumentException("保存前请先读取模型。");
+            WithGate(path, () =>
+            {
+                if (StudioLaunch.HasLiveSession(path))
+                    throw new IOException("此模型正在三维编辑器中打开。请在三维中保存并关闭模型，再重新载入楼层设置。");
+                if (!File.Exists(path) || ModelFileHash(path) != expectedHash)
+                    throw new IOException("模型已在其他窗口修改，请重新载入或另存当前修改。");
+                BuildingModelJson.SaveModel(path, model);
+            });
+        }
         public static string ReplaceExisting(string path,BuildingModelDocument model,string expectedHash)
         {
             ValidateName(model.Name);ValidateStoreys(model.Storeys);

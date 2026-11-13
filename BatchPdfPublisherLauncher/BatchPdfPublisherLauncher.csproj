@@ -34,6 +34,10 @@
     <Reference Include="System.Runtime.Serialization" />
     <Reference Include="System.Xml" />
     <Reference Include="System.Windows.Forms" />
+    <Reference Include="WindowsBase" />
+    <Reference Include="PresentationCore" />
+    <Reference Include="PresentationFramework" />
+    <Reference Include="System.Xaml" />
     <!-- 删项目时的“移到回收站”用 Microsoft.VisualBasic.FileIO（与主插件同一做法）。 -->
     <Reference Include="Microsoft.VisualBasic" />
   </ItemGroup>
@@ -46,6 +50,11 @@
     <Compile Include="CloudSyncCoordinatorStub.cs" />
     <Compile Include="ProjectManagerForm.cs" />
     <Compile Include="LauncherUi.cs" />
+    <Compile Include="LauncherEntryWindow.xaml.cs"><DependentUpon>LauncherEntryWindow.xaml</DependentUpon></Compile>
+    <Compile Include="StandaloneLaunch.cs" />
+    <Compile Include="..\Shared\CloudSyncAgentSignal.cs"><Link>Shared\CloudSyncAgentSignal.cs</Link></Compile>
+    <Page Include="LauncherEntryWindow.xaml" />
+    <Page Include="..\Shared\UI\WorkbenchTheme.xaml"><Link>WorkbenchTheme.xaml</Link></Page>
     <None Include="app.config" />
     <Compile Include="..\Shared\ProductVersion.cs"><Link>ProductVersion.cs</Link></Compile>
     <Compile Include="Properties\AssemblyInfo.cs" />

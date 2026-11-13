@@ -1,0 +1,136 @@
+#include "InputResolver.h"
+#include "Editor/EditorContext.h"
+namespace MiniCAD
+{
+    Math::Point3 InputResolver::ScreenToWorld(const EditorContext& ctx) const
+    {
+        auto p = ctx.viewport.GetCamera().ScreenToWorld(
+            ctx.event.MouseX,
+            ctx.event.MouseY
+        );
+
+        return { p.x, p.y, 0.0 };
+    }
+
+    bool InputResolver::ShouldSnap(const EditorContext& ctx) const
+    {
+        return false;
+    }
+
+    void InputResolver::Resolve(EditorContext& ctx)
+    {
+        InputResult& out = ctx.resolved;
+
+        // 1. 原始世界坐标
+        Math::Point3 raw = ScreenToWorld(ctx);
+        out.rawPoint = raw;
+        out.hasRaw   = true;
+
+        Math::Point3 current = raw;
+
+        // 2. Snap（只查询，不修改输入）
+        // 仅在有激活工具或正在拖拽夹点时计算最近点；纯鼠标悬停不计算
+        SnapResult snap;
+        bool hasSnap = false;
+
+        const bool dragging = ctx.grip && ctx.grip->IsDragging();
+        if (ctx.snap.IsEnabled() && (ctx.tool || dragging))
+        {
+            const auto& exclude = dragging ? ctx.picking.GetSelection() : std::unordered_set<Object::ObjectID>{};
+
+            // 垂足捕捉的基点：绘制工具的锚点，或拖拽中的活动夹点。
+            Math::Point3 fromStorage;
+            const Math::Point3* fromPoint = nullptr;
+            if (ctx.tool && ctx.tool->HasAnchor())
+            {
+                fromStorage = ctx.tool->GetAnchor();
+                fromPoint   = &fromStorage;
+            }
+            else if (dragging && ctx.grip)
+            {
+                if (const Grip* g = ctx.grip->GetActiveGrip())
+                {
+                    fromStorage = g->WorldPos;
+                    fromPoint   = &fromStorage;
+                }
+            }
+
+            Math::Point2 sp{ static_cast<double>(ctx.event.MouseX),  static_cast<double>(ctx.event.MouseY) };
+
+            // 空间索引粗筛：只把光标孔径附近的实体交给捕捉引擎，
+            // 避免每种捕捉模式都全场景遍历（2 万实体时为主要瓶颈）。
+            // 窗口比孔径略放大，避免投影/取整误差漏掉边界候选。
+            ctx.picking.CollectSnapCandidates(sp, ctx.snap.GetSnapRadiusPx() + 2.0, m_snapCandidates);
+
+            snap = ctx.snap.Query(
+                sp,
+                ctx.scene,
+                ctx.viewport.GetCamera(),
+                exclude,
+                fromPoint,
+                &m_snapCandidates
+            );
+
+            hasSnap = snap.IsValid();
+        }
+
+        if (hasSnap)
+        {
+            out.hasSnap = true;
+            out.snap = snap;
+            current = snap.WorldPos;
+        }
+
+        // 3. Constraint（基于 anchor + snap/raw）
+        // 对象捕捉优先（同 AutoCAD）：捕捉到对象上的点（端点、交点、圆上的点……）时不再套正交 / 极轴，否则捕捉到的点
+        // 会被挪到水平 / 竖直线或极轴角的射线上，线头差一点或冒出一点。网格捕捉不是对象捕捉，照常约束
+        const bool objectSnap = hasSnap && snap.SnapType != SnapResult::Type::Grid;
+        Math::Point3 anchor;
+        bool hasAnchor = false;
+
+        if (ctx.tool && ctx.tool->HasAnchor())
+        {
+            anchor = ctx.tool->GetAnchor();
+            hasAnchor = true;
+        }
+        else if (ctx.grip && ctx.grip->IsDragging())
+        {
+            if (const Grip* g = ctx.grip->GetActiveGrip())
+            {
+                anchor = g->WorldPos;
+                hasAnchor = true;
+            }
+        }
+
+        if (hasAnchor && ctx.constraint.IsAnyActive() && objectSnap)
+            ctx.constraint.Clear();   // 这一帧没有约束：不留上一次的辅助线
+        else if (hasAnchor && ctx.constraint.IsAnyActive())
+        {
+            ConstraintContext cctx;
+            cctx.anchor = anchor;
+            cctx.input = current;
+
+            if (ctx.constraint.Apply(cctx))
+            {
+                current = ctx.constraint.GetConstrainedPoint();
+                out.hasConstraint = true;
+                out.constrainedPoint = current;
+            }
+        }
+
+        // 4. Picking（基于 raw 或 snap 视情况）
+        if (ctx.event.Type == InputEventType::MouseButtonDown || ctx.event.Type == InputEventType::MouseMove)
+        {
+              // out.pickedObject = ctx.picking.HitTest(raw, 10.0);
+        }
+
+        // 5. 输出最终点
+        out.point = current;
+        out.hasPoint = true;
+
+        // 6. 回填到事件：工具直接读取 event.HasSnap / SnapWorld，无需感知 Resolver
+        ctx.event.HasSnap = out.hasPoint && (out.hasSnap || out.hasConstraint);
+        if (ctx.event.HasSnap)
+            ctx.event.SnapWorld = out.point;
+    }
+}

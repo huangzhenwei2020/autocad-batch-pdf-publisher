@@ -1,0 +1,98 @@
+#pragma once
+#include "../GeomKernel/Arc.hpp"
+#include "../GeomKernel/Curves.hpp"
+#include "../Math/Point3.hpp"
+#include "../Math/Color4.hpp"
+#include "Entity.hpp"
+#include "ICurveEntity.hpp"
+#include "../Draw/CurveSampling.hpp"
+#include <algorithm>
+#include <cmath>
+#include <stdexcept>
+
+namespace MiniCAD
+{
+    class ArcEntity : public Entity, public ICurveEntity
+    {
+    public:
+        // ── 方式 1：圆心 + 半径 + 起止角（弧度）────────────────────────
+        ArcEntity(ObjectID id, const Math::Point3& center, double radius, double startAngle, double endAngle)
+            : Entity(id)
+            , m_arc(center, radius, startAngle, endAngle)
+        {
+        }
+
+        // ── 方式 2：三点法（起点 / 弧上一点 / 终点）─────────────────────
+        //   三点共线时抛出 std::invalid_argument
+        static ArcEntity FromThreePoints(ObjectID id, const Math::Point3& p1, const Math::Point3& p2, const Math::Point3& p3)
+        {
+            auto arc = Arc::FromThreePoints(p1, p2, p3);
+            if (!arc)
+                throw std::invalid_argument("ArcEntity::FromThreePoints: points are collinear");
+            return ArcEntity(id, *arc);
+        }
+
+        std::unique_ptr<Entity> Clone(ObjectID newId) const override
+        {
+            auto e = std::make_unique<ArcEntity>(newId, m_arc.Center, m_arc.Radius, m_arc.StartAngle, m_arc.EndAngle);
+            e->SetAttr(GetAttr());
+            return e;
+        } 
+
+        // ── 访问 / 修改 ───────────────────────────────────────────────
+        void       SetArc(const Arc& arc) { m_arc = arc; }
+        const Arc& GetArc() const         { return m_arc; }
+
+        void SetCenter(const Math::Point3& c)  { m_arc.Center     = c; }
+        void SetRadius(double r)               { m_arc.Radius     = r; }
+        void SetStartAngle(double a)           { m_arc.StartAngle = a; }
+        void SetEndAngle(double a)             { m_arc.EndAngle   = a; }
+
+        // 用新的三点重新定义弧（失败时保持原弧不变，返回 false）
+        bool RedefineFromThreePoints(const Math::Point3& p1, const Math::Point3& p2, const Math::Point3& p3)
+        {
+            auto arc = Arc::FromThreePoints(p1, p2, p3);
+            if (!arc) return false;
+            m_arc = *arc;
+            return true;
+        }
+
+        // ── ICurveEntity ──────────────────────────────────────────────
+        std::unique_ptr<ICurve> MakeCurve() const override { return std::make_unique<ArcCurve>(m_arc); }
+        ICurveEntity*       AsCurveEntity()       override { return this; }
+        const ICurveEntity* AsCurveEntity() const override { return this; }
+
+        // ── Entity 接口 ───────────────────────────────────────────────
+        virtual AABB GetBoundingBox() const override { return m_arc.GetBounds(); }
+
+        virtual void Draw(IDrawSink& sink, bool isSelected, bool isHovered) const override
+        {
+            const auto& attr  = GetAttr();
+            const Math::Color4& color = isSelected ? IDrawSink::kSelectionColor : isHovered ? IDrawSink::kHoverColor : ResolveDrawColor(sink);
+            // 分段数按张角比例，与整圆 64 段的密度相同（小弧不必也分 64 段）；深度放大时 sink 要求在视图附近加密
+            const double sweep     = m_arc.SweepAngle();
+            const int    kSegments = std::max(4, static_cast<int>(std::ceil(std::abs(sweep) / (Math::TwoPI / 64.0))));
+
+            std::vector<Math::Point3> pts;
+            pts.reserve(static_cast<size_t>(kSegments) + 1);
+            SampleCurve(sink, m_arc.StartAngle, sweep, kSegments, m_arc.Radius,
+                        [&](double a) { return m_arc.PointAt(a); },
+                        [&](const Math::Point3& p0, const Math::Point3& p1)
+                        {
+                            if (pts.empty()) pts.push_back(p0);
+                            pts.push_back(p1);
+                        });
+            sink.DrawPath(pts, color, false);
+        }
+
+        DECLARE_RUNTIME_TYPE(ArcEntity, Entity)
+
+    private:
+        // 供 FromThreePoints 工厂使用的私有构造
+        ArcEntity(ObjectID id, const Arc& arc) : Entity(id), m_arc(arc)
+        {
+        }
+
+        Arc m_arc;
+    };
+}

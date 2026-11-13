@@ -27,6 +27,15 @@ namespace BatchPdfPublisher.Models
         public bool IsModelSpace => SourceLayoutOrder == 0 || string.IsNullOrWhiteSpace(SourceLayout)
             || string.Equals(SourceLayout, "Model", System.StringComparison.OrdinalIgnoreCase) || SourceLayout == "模型";
         public string SourceFileName => string.IsNullOrWhiteSpace(SourceFile) ? string.Empty : System.IO.Path.GetFileName(SourceFile);
+        public string ReviewStatus
+        {
+            get
+            {
+                if (MaxX <= MinX || MaxY <= MinY) return "空白风险";
+                if (string.IsNullOrWhiteSpace(FrameDisplay) || string.IsNullOrWhiteSpace(OutputPaperSize) || string.IsNullOrWhiteSpace(PaperOrientation) || string.IsNullOrWhiteSpace(PrintScale)) return "需检查";
+                return "正常";
+            }
+        }
         public double MinX { get; set; }
         public double MinY { get; set; }
         public double MaxX { get; set; }

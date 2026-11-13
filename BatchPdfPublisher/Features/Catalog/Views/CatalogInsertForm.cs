@@ -481,7 +481,7 @@ namespace BatchPdfPublisher.Views
             if (!int.TryParse(_rows.Text, out var rows) || rows < 1 ||
                 !double.TryParse(_rowHeight.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var rowHeight) || rowHeight <= 0 ||
                 !double.TryParse(_textHeight.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var textHeight) || textHeight <= 0 ||
-                !TryParseDrawingScale(_insertScale.Text, out var scale))
+                !CatalogSettings.TryParseDrawingScale(_insertScale.Text, out var scale))
             {
                 MessageBox.Show(this, "行数、行高、文字高度必须有效；图纸比例请输入例如 1:20、1:50 或 1:100。", "插入目录");
                 return;
@@ -617,24 +617,6 @@ namespace BatchPdfPublisher.Views
         private static CheckBox Check(string text, bool value) => new CadToggleSwitch { Text = text, Checked = value };
         private static PublisherForm.ThemedComboBox Preset(params string[] values) { var box = new PublisherForm.ThemedComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 110 }; box.Items.AddRange(values); box.SelectedIndex = 0; return box; }
         private static PublisherForm.ThemedComboBox RatioPreset(params string[] values) { var box = new PublisherForm.ThemedComboBox { DropDownStyle = ComboBoxStyle.DropDown, Width = 120 }; box.Items.AddRange(values); box.SelectedIndex = 3; return box; }
-
-        private static bool TryParseDrawingScale(string text, out double scale)
-        {
-            scale = 0;
-            if (string.IsNullOrWhiteSpace(text)) return false;
-            var value = text.Trim().Replace('：', ':').Replace('／', '/');
-            var separator = value.IndexOf(':');
-            if (separator < 0) separator = value.IndexOf('/');
-            if (separator >= 0)
-            {
-                var leftText = value.Substring(0, separator).Trim();
-                var rightText = value.Substring(separator + 1).Trim();
-                if (!double.TryParse(leftText, NumberStyles.Float, CultureInfo.InvariantCulture, out var left) || !double.TryParse(rightText, NumberStyles.Float, CultureInfo.InvariantCulture, out var right) || left <= 0 || right <= 0) return false;
-                scale = right / left;
-                return scale > 0;
-            }
-            return double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out scale) && scale > 0;
-        }
 
         private sealed class CatalogPreviewControl : Control
         {

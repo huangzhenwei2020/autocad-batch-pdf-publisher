@@ -14,6 +14,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using OpenFileDialog = System.Windows.Forms.OpenFileDialog;
 
 namespace BatchPdfPublisherLauncher
 {
@@ -57,7 +58,38 @@ namespace BatchPdfPublisherLauncher
                     }
                     return;
                 }
+                var entrySmoke = args == null ? -1 : Array.IndexOf(args, "--entry-smoke");
+                if (entrySmoke >= 0)
+                {
+                    if (entrySmoke + 1 >= args.Length) throw new ArgumentException("入口自测需要输出目录。");
+                    LauncherEntryWindow.Smoke(args[entrySmoke + 1]);
+                    return;
+                }
                 EnsureCloudSyncAgentRunning();
+                var projectIndex = args == null ? -1 : Array.IndexOf(args, "--project");
+                if (projectIndex >= 0 && projectIndex + 1 < args.Length)
+                {
+                    var store = new BatchPdfPublisher.Services.PublishPlanStore();
+                    var projectFolder = Path.GetFullPath(args[projectIndex + 1]).TrimEnd('\\');
+                    var project = store.LoadProjects(false).FirstOrDefault(item => string.Equals(Path.GetFullPath(store.GetProjectFolder(item)).TrimEnd('\\'), projectFolder, StringComparison.OrdinalIgnoreCase));
+                    if (project != null) store.SetActiveProject(project.Name);
+                }
+                var directCad = args != null && args.Contains("--cad");
+                var directStandalone = args != null && args.Contains("--standalone");
+                if (!directCad && !directStandalone)
+                {
+                    var entry = new LauncherEntryWindow();
+                    if (entry.ShowDialog() != true) return;
+                    directStandalone = entry.Mode == LauncherEntryMode.Standalone;
+                }
+                if (directStandalone)
+                {
+                    var store = new BatchPdfPublisher.Services.PublishPlanStore();
+                    var project = store.GetActiveProject();
+                    Process.Start(StandaloneLaunch.Create(PackageRoot, store.GetProjectFolder(project)));
+                    Log("独立工作台已启动");
+                    return;
+                }
                 var launcherDirectory = AppDomain.CurrentDomain.BaseDirectory;
                 var lastPlatform = LoadLastPlatform();
                 // Cached platform discovery is cheaper than starting the thread pool on a
@@ -117,6 +149,14 @@ namespace BatchPdfPublisherLauncher
             catch (Exception exception)
             {
                 Log("启动失败: " + exception);
+                var smokeIndex = args == null ? -1 : Array.IndexOf(args, "--entry-smoke");
+                if (smokeIndex >= 0 && smokeIndex + 1 < args.Length)
+                {
+                    Directory.CreateDirectory(args[smokeIndex + 1]);
+                    File.WriteAllText(Path.Combine(args[smokeIndex + 1], "launcher-failure.txt"), exception.ToString());
+                    Environment.ExitCode = 1;
+                    return;
+                }
                 MessageBox.Show(exception.Message, "万落建筑工具启动失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
@@ -548,7 +588,7 @@ namespace BatchPdfPublisherLauncher
             if(!deferred)
             {
                 var startupScript = Path.Combine(EnsureDirectory(Path.Combine(UserDataRoot, "Temp")), "BatchPdfPublisher." + Guid.NewGuid().ToString("N") + ".scr");
-                File.WriteAllText(startupScript, CadLoadScriptBuilder.ForScript(loadableAssemblies), Encoding.Default);
+                File.WriteAllText(startupScript, CadLoadScriptBuilder.CreateLoadRequest(loadableAssemblies, Path.GetDirectoryName(startupScript), false), Encoding.Default);
                 arguments+=" /b \""+startupScript+"\"";
             }
             var sentUtc = DateTime.UtcNow;
@@ -609,7 +649,7 @@ namespace BatchPdfPublisherLauncher
                     {
                         var since=DateTime.UtcNow;submitted=true;
                         Log("天正目标 CAD 已持续空闲，提交唯一加载请求：PID="+pid+"，版本="+version);
-                        SendCommand(document,CadLoadScriptBuilder.ForCom(assemblies));
+                        SendCommand(document,CadLoadScriptBuilder.CreateLoadRequest(assemblies, Path.Combine(UserDataRoot, "Temp"), true));
                         if(!WaitForLoadReceipt(30,assemblies[0],(int)pid,since))
                             throw new InvalidOperationException("已发送一次空闲加载请求，但目标 CAD 尚未完成 BPPSTARTUP；未重复排队，请检查 CAD 命令历史。");
                         Log("天正插件已通过空闲加载确认成功：PID="+pid);
@@ -664,6 +704,13 @@ namespace BatchPdfPublisherLauncher
 
         private static string ResolveUserDataRoot()
         {
+            var explicitRoot = Environment.GetEnvironmentVariable("WANLUO_USER_DATA_ROOT");
+            if (!string.IsNullOrWhiteSpace(explicitRoot))
+            {
+                explicitRoot = Path.GetFullPath(explicitRoot);
+                Directory.CreateDirectory(explicitRoot);
+                return explicitRoot;
+            }
             var stableRoot = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                 "WanluoArchitectureTools",
@@ -751,7 +798,7 @@ namespace BatchPdfPublisherLauncher
                     if (pid == 0) throw new InvalidOperationException("无法确认目标 CAD 进程，未发送加载命令。");
                     var sentUtc = DateTime.UtcNow;
                     submitted = true;
-                    SendCommand(document, CadLoadScriptBuilder.ForCom(loadableAssemblies));
+                    SendCommand(document, CadLoadScriptBuilder.CreateLoadRequest(loadableAssemblies, Path.Combine(UserDataRoot, "Temp"), true));
                     if (!WaitForLoadReceipt(30, loadableAssemblies.FirstOrDefault(), (int)pid, sentUtc))
                         throw new InvalidOperationException("已发送一次加载请求，但目标 CAD 尚未完成 BPPSTARTUP。未重复排队；请检查命令行和启动日志。");
                     Log("已向运行中的 AutoCAD 加载插件并收到成功回执；未自动打开 BPP 面板");

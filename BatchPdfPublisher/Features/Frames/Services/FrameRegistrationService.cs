@@ -99,21 +99,18 @@ namespace BatchPdfPublisher.Services
 
         private static FrameDefinition ShowDialog(Document document, FrameContext context, FrameDefinition existing)
         {
-            using (var dialog = new FrameRegistrationEditorForm(context.BlockName, context.Guess, context.Attributes, existing,
+            var dialog = new FrameRegistrationWindow(context.BlockName, context.Guess, context.Attributes, existing,
                 context.AttributeTagSignature, context.DefinitionSignature, context.AspectRatio,
-                () => ScanProjectCadFiles(document, context.BlockName)))
+                () => ScanProjectCadFiles(document, context.BlockName));
+            var accepted = Autodesk.AutoCAD.ApplicationServices.Application.ShowModalWindow(dialog) == true;
+            if (dialog.RequestedIssues.Count > 0) ScheduleIssueAction(dialog.RequestedIssues, dialog.OpenAllRequested);
+            if (!accepted) return null;
+            if (dialog.PickLayoutRangeRequested)
             {
-                var accepted = Autodesk.AutoCAD.ApplicationServices.Application.ShowModalDialog(dialog)
-                    == System.Windows.Forms.DialogResult.OK;
-                if (dialog.RequestedIssues.Count > 0) ScheduleIssueAction(dialog.RequestedIssues, dialog.OpenAllRequested);
-                if (!accepted) return null;
-                if (dialog.PickLayoutRangeRequested)
-                {
-                    try { PromptLayoutRange(document, dialog.Definition); }
-                    catch (Exception exception) { MessageBox.Show("排版范围未写入：" + exception.Message, "登记图框", MessageBoxButton.OK, MessageBoxImage.Warning); }
-                }
-                return dialog.Definition;
+                try { PromptLayoutRange(document, dialog.Definition); }
+                catch (Exception exception) { MessageBox.Show("排版范围未写入：" + exception.Message, "登记图框", MessageBoxButton.OK, MessageBoxImage.Warning); }
             }
+            return dialog.Definition;
         }
 
         private static bool PromptLayoutRange(Document document, FrameDefinition definition)
