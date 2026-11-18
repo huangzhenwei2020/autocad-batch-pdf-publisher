@@ -6,6 +6,7 @@
 #include "../Math/Color4.hpp"
 #include "../Math/Constants.hpp"
 #include "Entity.hpp"
+#include "../Draw/TransformDrawSink.hpp"
 #include <vector>
 #include <string>
 #include <cmath>
@@ -276,7 +277,7 @@ namespace MiniCAD
             HatchEdge e; e.Type = Kind::Spline; e.Spl = std::move(s); return e;
         }
 
-        // 追加离散点（世界坐标）。includeLast=false 时丢弃末点，避免与下一条边接缝重复。
+        // 追加离散点（填充的 OCS 坐标）。includeLast=false 时丢弃末点，避免与下一条边接缝重复。
         void Tessellate(std::vector<Math::Point3>& out, bool includeLast) const
         {
             std::vector<Math::Point3> pts;
@@ -384,10 +385,48 @@ namespace MiniCAD
         }
 
         // ── 访问 / 修改 ────────────────────────────────────────────────────
+        // Boundary vertices and pattern axes are stored in the object's OCS.
         const std::vector<HatchLoop>& GetLoops()   const { return m_loops; }
         std::vector<HatchLoop>&       GetLoops()          { return m_loops; }
         void AddLoop(HatchLoop loop)                      { m_loops.push_back(std::move(loop)); }
         void AddLoop(Polyline loop)                       { m_loops.push_back(HatchLoop::FromPolyline(std::move(loop))); }
+
+        Math::Vec3 LocalDisplacement(const Math::Vec3& world) const
+        {
+            const auto frame = GetOCS();
+            return {Math::Dot(world, frame.Ux), Math::Dot(world, frame.Uy), Math::Dot(world, frame.Uz)};
+        }
+
+        template<class PointTransform>
+        void ReorientBoundary(const Math::Vec3& normal, PointTransform worldTransform)
+        {
+            // The supplied rigid transform preserves the handedness of the 2D boundary basis.
+            const auto before = GetOCS(), after = Math::BuildOCS(normal);
+            auto transform = [&](const Math::Point3& p)
+            { return Math::WcsToOcs(after, worldTransform(Math::OcsToWcs(before,p))); };
+            const auto axis = transform({1,0,0}) - transform({});
+            const double angle = std::atan2(axis.y, axis.x);
+            for (auto& loop : m_loops)
+                for (auto& edge : loop.Edges)
+                {
+                    switch (edge.Type)
+                    {
+                    case HatchEdge::Kind::Poly:
+                        for (auto& p : edge.Poly.Points) p = transform(p);
+                        break;
+                    case HatchEdge::Kind::EllipseArc:
+                        edge.Ell.Center = transform(edge.Ell.Center);
+                        edge.Ell.Rotation += angle;
+                        break;
+                    case HatchEdge::Kind::Spline:
+                        for (auto& p : edge.Spl.FitPoints) p = transform(p);
+                        for (auto& p : edge.Spl.ControlPoints) p = transform(p);
+                        edge.Spl.Build();
+                        break;
+                    }
+                }
+            SetExtrusion(after.Uz);
+        }
 
         const HatchPattern& GetPattern() const           { return m_pattern; }
         void SetPattern(HatchPattern p)                  { m_pattern = std::move(p); }
@@ -417,12 +456,13 @@ namespace MiniCAD
         virtual AABB GetBoundingBox() const override
         {
             AABB box = AABB::Empty();
+            const auto frame = GetOCS();
             bool any = false;
             for (const auto& loop : m_loops)
             {
                 for (const auto& p : loop.Tessellate())
                 {
-                    box.Expand(p);
+                    box.Expand(Math::OcsToWcs(frame,p));
                     any = true;
                 }
             }
@@ -441,6 +481,20 @@ namespace MiniCAD
         }
 
         virtual void Draw(IDrawSink& sink, bool isSelected, bool isHovered) const override
+        {
+            if (HasDefaultExtrusion())
+                DrawInPlane(sink, isSelected, isHovered);
+            else
+            {
+                TransformDrawSink transformed(sink, Math::OcsToWcsMatrix(GetOCS()));
+                DrawInPlane(transformed, isSelected, isHovered);
+            }
+        }
+
+        DECLARE_RUNTIME_TYPE(HatchEntity, Entity)
+
+    private:
+        void DrawInPlane(IDrawSink& sink, bool isSelected, bool isHovered) const
         {
             // 把每条边界环离散为闭合多边形点列
             std::vector<std::vector<Math::Point3>> polys;
@@ -494,9 +548,6 @@ namespace MiniCAD
             }
         }
 
-        DECLARE_RUNTIME_TYPE(HatchEntity, Entity)
-
-    private:
         // ── 工具：确保多边形闭合（首尾点相同）───────────────────────────────
         static void ClosePolygon(std::vector<Math::Point3>& pts)
         {

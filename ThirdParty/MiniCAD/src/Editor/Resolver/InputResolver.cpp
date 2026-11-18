@@ -1,5 +1,11 @@
 #include "InputResolver.h"
 #include "Editor/EditorContext.h"
+#include "Core/Entity/CircleEntity.hpp"
+#include "Core/Entity/ArcEntity.hpp"
+#include "Core/Entity/EllipseEntity.hpp"
+#include "Core/Entity/HatchEntity.hpp"
+#include "Core/Entity/MTextEntity.hpp"
+#include "Core/Entity/PolylineEntity.hpp"
 namespace MiniCAD
 {
     Math::Point3 InputResolver::ScreenToWorld(const EditorContext& ctx) const
@@ -9,7 +15,7 @@ namespace MiniCAD
             ctx.event.MouseY
         );
 
-        return { p.x, p.y, 0.0 };
+        return p;
     }
 
     bool InputResolver::ShouldSnap(const EditorContext& ctx) const
@@ -23,8 +29,31 @@ namespace MiniCAD
 
         // 1. 原始世界坐标
         Math::Point3 raw = ScreenToWorld(ctx);
+        auto plane = ctx.scene.CurrentSpaceIsPaper() ? Math::WorkingPlane{} : ctx.scene.GetWorkingPlane();
+        if (ctx.tool && ctx.tool->DrawsAtAnchorElevation())
+            plane.Origin += plane.Normal() * plane.ToLocal(ctx.tool->GetAnchor()).z;
+        if (ctx.grip && ctx.grip->IsDragging())
+        {
+            if (const auto* grip = ctx.grip->GetActiveGrip())
+            {
+                const auto* entity = ctx.scene.GetEntity(grip->OwnerID);
+                if (entity && (entity->IsKindOf<CircleEntity>() || entity->IsKindOf<ArcEntity>() || entity->IsKindOf<EllipseEntity>() || entity->IsKindOf<HatchEntity>() ||
+                    (entity->IsKindOf<MTextEntity>() && grip->GripType == Grip::Type::Radius && !static_cast<const Entity*>(entity)->HasDefaultExtrusion()) ||
+                    (entity->IsKindOf<PolylineEntity>() && !static_cast<const Entity*>(entity)->HasDefaultExtrusion())))
+                {
+                    if (grip->GripType == Grip::Type::Center && !entity->IsKindOf<HatchEntity>())
+                        plane.Origin = grip->WorldPos;
+                    else
+                    {
+                        const auto frame = Math::BuildOCS(static_cast<const Entity*>(entity)->GetExtrusion());
+                        plane.Set(grip->WorldPos, frame.Ux, frame.Uy);
+                    }
+                }
+            }
+        }
+        const bool intersects = ctx.viewport.GetCamera().ScreenToPlane(ctx.event.MouseX, ctx.event.MouseY, plane, raw);
         out.rawPoint = raw;
-        out.hasRaw   = true;
+        out.hasRaw   = intersects;
 
         Math::Point3 current = raw;
 
@@ -72,6 +101,20 @@ namespace MiniCAD
             );
 
             hasSnap = snap.IsValid();
+            if (hasSnap && snap.SnapType == SnapResult::Type::Grid)
+            {
+                hasSnap = intersects;
+                if (intersects)
+                {
+                    auto local = plane.ToLocal(raw);
+                    const double size = ctx.snap.GetGridSize();
+                    local.x = std::round(local.x / size) * size;
+                    local.y = std::round(local.y / size) * size;
+                    local.z = 0;
+                    snap.WorldPos = plane.ToWorld(local);
+                    hasSnap = ctx.picking.ContainsClip(snap.WorldPos);
+                }
+            }
         }
 
         if (hasSnap)
@@ -104,13 +147,13 @@ namespace MiniCAD
 
         if (hasAnchor && ctx.constraint.IsAnyActive() && objectSnap)
             ctx.constraint.Clear();   // 这一帧没有约束：不留上一次的辅助线
-        else if (hasAnchor && ctx.constraint.IsAnyActive())
+        else if (hasAnchor && ctx.constraint.IsAnyActive() && (intersects || hasSnap))
         {
             ConstraintContext cctx;
             cctx.anchor = anchor;
             cctx.input = current;
 
-            if (ctx.constraint.Apply(cctx))
+            if (ctx.constraint.Apply(cctx, plane))
             {
                 current = ctx.constraint.GetConstrainedPoint();
                 out.hasConstraint = true;
@@ -126,10 +169,10 @@ namespace MiniCAD
 
         // 5. 输出最终点
         out.point = current;
-        out.hasPoint = true;
+        out.hasPoint = intersects || hasSnap;
 
         // 6. 回填到事件：工具直接读取 event.HasSnap / SnapWorld，无需感知 Resolver
-        ctx.event.HasSnap = out.hasPoint && (out.hasSnap || out.hasConstraint);
+        ctx.event.HasSnap = out.hasPoint;
         if (ctx.event.HasSnap)
             ctx.event.SnapWorld = out.point;
     }

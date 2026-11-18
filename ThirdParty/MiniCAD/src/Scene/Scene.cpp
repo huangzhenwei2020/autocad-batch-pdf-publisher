@@ -1,8 +1,10 @@
 #include "Scene/Scene.h"
 #include "Core/Entity/Entity.hpp"
 #include "Core/Entity/InsertEntity.hpp"
+#include "Core/Entity/ViewportEntity.hpp"
 #include "Serialization/ISerializer.h"
 #include "Serialization/EntityIO.h"
+#include "Serialization/SerializeHelpers.hpp"
 #include <algorithm>
 #include <memory>
 #include <utility>
@@ -12,6 +14,20 @@ namespace MiniCAD
 	{
 		if (!entity) return;
 		ObjectID id = entity->GetID();
+		if (auto* viewport = dynamic_cast<ViewportEntity*>(entity.get());
+			viewport && viewport->GetAttr().InPaperSpace && std::abs(viewport->GetViewportId()) > 1)
+		{
+			int maximum = std::abs(viewport->GetViewportId());
+			bool duplicate = false;
+			for (const auto& [otherId, object] : m_entities)
+				if (const auto* other = dynamic_cast<const ViewportEntity*>(object.get());
+					other && otherId != id && other->GetAttr().LayoutKey == viewport->GetAttr().LayoutKey)
+				{
+					maximum = std::max(maximum, std::abs(other->GetViewportId()));
+					duplicate |= std::abs(other->GetViewportId()) == std::abs(viewport->GetViewportId());
+				}
+			if (duplicate) viewport->SetViewportId((viewport->GetViewportId() < 0 ? -1 : 1) * (maximum + 1));
+		}
 		if (entity->IsKindOf<InsertEntity>())
 			ResolveInsert(static_cast<InsertEntity&>(*entity));
 		m_entities[id] = std::move(entity);
@@ -87,6 +103,14 @@ namespace MiniCAD
 		s.Value("maxX", l.MaxX);
 		s.Value("maxY", l.MaxY);
 		s.Value("ownerKey", l.OwnerKey);
+		if (!s.IsLoading() || s.Has("paperWidth"))
+		{
+			s.Value("paperWidth", l.PaperWidth);
+			s.Value("paperHeight", l.PaperHeight);
+			if (!s.IsLoading() || s.Has("paperUnitToMm")) s.Value("paperUnitToMm", l.PaperUnitToMm);
+			s.Value("paperSizeEdited", l.PaperSizeEdited);
+			s.Value("sourceKey", l.SourceKey);
+		}
 		if (!s.IsLoading() || s.Has("viewHeight"))      // 旧文件没有：保持 0
 		{
 			s.Value("viewCenterX", l.ViewCenterX);
@@ -124,11 +148,17 @@ namespace MiniCAD
 
 	void Scene::ResolveAllInserts()
 	{
+		std::function<void(Object&)> resolve = [&](Object& object)
+		{
+			if (auto* insert = dynamic_cast<InsertEntity*>(&object)) ResolveInsert(*insert);
+			if (auto* block = dynamic_cast<BlockEntity*>(&object))
+				for (const auto& child : block->GetEntities()) if (child) resolve(*child);
+		};
 		for (auto& [id, obj] : m_entities)
 		{
-			if (obj && obj->IsKindOf<InsertEntity>())
-				ResolveInsert(static_cast<InsertEntity&>(*obj));
+			if (obj) resolve(*obj);
 		}
+		m_blockTable.ForEach([&](BlockID id, const BlockEntity&) { resolve(*m_blockTable.Find(id)); });
 	}
 
 	std::unique_ptr<Object> Scene::RemoveEntity(ObjectID id)
@@ -170,7 +200,7 @@ namespace MiniCAD
 		return ids;
 	}
 
-	bool Scene::GetExtents(AABB& out) const
+	bool Scene::GetExtents(AABB& out, bool currentSpaceOnly) const
 	{
 		AABB box = AABB::Empty();
 		bool any = false;
@@ -179,6 +209,8 @@ namespace MiniCAD
 			if (!obj || !obj->IsKindOf<Entity>())
 				continue;
 			const Entity& e = static_cast<const Entity&>(*obj);
+			if (currentSpaceOnly && (e.GetAttr().InPaperSpace != m_currentPaper ||
+				(m_currentPaper && e.GetAttr().LayoutKey && e.GetAttr().LayoutKey != m_currentLayoutKey))) continue;
 			if (e.IsBoundless() || !e.GetAttr().Visible)
 				continue;
 			const Layer* layer = m_layerManager.GetLayer(e.GetAttr().LayerId);
@@ -232,7 +264,7 @@ namespace MiniCAD
 		public:
 			std::vector<TextStyleID> ids;
 			void DrawLine(const Math::Point3&, const Math::Point3&, const Math::Color4&, bool) override {}
-			void EmitMText(const Math::Point3&, const std::string&, uint32_t styleId, double, double, double, const Math::Color4&) override
+			void EmitMText(const Math::Point3&, const std::string&, uint32_t styleId, double, double, double, const Math::Color4&, const Math::Vec3&) override
 			{
 				if (std::find(ids.begin(), ids.end(), styleId) == ids.end())
 					ids.push_back(styleId);
@@ -258,6 +290,16 @@ namespace MiniCAD
 
 	void Scene::Serialize(ISerializer& s) const
 	{
+        if (s.BeginObject("workingPlane"))
+        {
+            auto origin = m_workingPlane.Origin;
+            Math::Point3 x{m_workingPlane.X.x, m_workingPlane.X.y, m_workingPlane.X.z};
+            Math::Point3 y{m_workingPlane.Y.x, m_workingPlane.Y.y, m_workingPlane.Y.z};
+            Ser::Value(s, "origin", origin); Ser::Value(s, "x", x); Ser::Value(s, "y", y);
+            bool edited = m_workingPlaneEdited;
+            s.Value("edited", edited);
+            s.EndObject();
+        }
 		uint64_t nextId = m_nextObjectID.load(std::memory_order_relaxed);
 		s.Value("nextObjectId", nextId);
 		uint32_t clt = m_currentLineType;
@@ -346,6 +388,16 @@ namespace MiniCAD
 
 	void Scene::Deserialize(ISerializer& s)
 	{
+        m_workingPlane = {};
+        m_workingPlaneEdited = false;
+        if (s.BeginObject("workingPlane"))
+        {
+            Math::Point3 origin{}, x{1,0,0}, y{0,1,0};
+            Ser::Value(s, "origin", origin); Ser::Value(s, "x", x); Ser::Value(s, "y", y);
+            m_workingPlane.Set(origin, {x.x,x.y,x.z}, {y.x,y.y,y.z});
+            s.Value("edited", m_workingPlaneEdited);
+            s.EndObject();
+        }
 		m_entities.clear();
 		m_previews.clear();
 

@@ -13,6 +13,7 @@ namespace MiniCAD
     class LineTool : public ITool
     {
     public:
+        bool SupportsWorkingPlane() const override { return true; }
         LineTool()
         {
             LOG_DEBUG("[LineTool] click start | click to continue | right-click ends | Space continues | ESC exits");
@@ -70,7 +71,7 @@ namespace MiniCAD
 
         Math::Point3 GetAnchor() const override
         {
-            return Math::Point3(m_start.x, m_start.y, 0.f);
+            return m_start;
         }
 
         std::string GetPrompt() const override

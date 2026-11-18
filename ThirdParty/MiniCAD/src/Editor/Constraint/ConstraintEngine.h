@@ -2,6 +2,7 @@
 #include "OrthoConstraint.h"
 #include "PolarConstraint.h"
 #include "Core/GeomKernel/Line.hpp"
+#include "Core/Math/WorkingPlane.hpp"
 
 namespace MiniCAD
 {
@@ -12,7 +13,7 @@ namespace MiniCAD
     public:
         // 尝试应用已启用的约束，返回 true 表示有约束生效。
         // 结果可通过 GetConstrainedPoint() / GetGuideLine() 读取。
-        bool Apply(const ConstraintContext& ctx);
+        bool Apply(const ConstraintContext& ctx, const Math::WorkingPlane& plane = {});
         // 这一次不约束（如对象捕捉优先）：清掉上一次的结果与辅助线
         void Clear() { m_hasResult = false; m_guideLine = { {}, {} }; }
 

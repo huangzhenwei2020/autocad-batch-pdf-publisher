@@ -40,7 +40,9 @@ namespace MiniCAD
         } 
 
         // ── 访问 / 修改 ───────────────────────────────────────────────
-        void       SetArc(const Arc& arc) { m_arc = arc; }
+        void SetAttr(const EntityAttr& attr) override { Entity::SetAttr(attr); m_arc.Normal = attr.Extrusion; }
+        void SetExtrusion(const Math::Vec3& normal) override { Entity::SetExtrusion(normal); m_arc.Normal = normal; }
+        void SetArc(const Arc& arc) { m_arc = arc; Entity::SetExtrusion(arc.Normal); }
         const Arc& GetArc() const         { return m_arc; }
 
         void SetCenter(const Math::Point3& c)  { m_arc.Center     = c; }

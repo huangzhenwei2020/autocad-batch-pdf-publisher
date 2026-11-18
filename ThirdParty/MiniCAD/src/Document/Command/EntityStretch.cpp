@@ -14,6 +14,7 @@
 #include "Core/Entity/InsertEntity.hpp"
 #include "Core/Entity/DimensionEntity.hpp"
 #include "Core/Entity/HatchEntity.hpp"
+#include "Document/Command/EntityTranslate.h"
 #include "Core/Entity/LeaderEntity.hpp"
 #include "Core/Entity/MLeaderEntity.hpp"
 #include "Core/Entity/RayEntity.hpp"
@@ -157,7 +158,14 @@ namespace MiniCAD
         {
             auto& pe = static_cast<PolylineEntity&>(entity);
             Polyline pl = pe.GetPolyline();
-            for (auto& p : pl.Points) mv(p);
+            const auto frame = pe.GetOCS();
+            for (auto& p : pl.Points)
+            {
+                const auto original = p;
+                mv(p);
+                if (!pl.HasDefaultPlane())
+                    p -= frame.Uz * Math::Dot(p - original, frame.Uz);
+            }
             if (mv.moved) pe.SetPolyline(std::move(pl));
             return mv.moved;
         }
@@ -219,25 +227,7 @@ namespace MiniCAD
             const AABB box = entity.GetBoundingBox();
             if (!(w.Contains(box.Min) && w.Contains(box.Max)))
                 return false;
-            auto& he = static_cast<HatchEntity&>(entity);
-            for (auto& loop : he.GetLoops())
-                for (auto& edge : loop.Edges)
-                {
-                    switch (edge.Type)
-                    {
-                    case HatchEdge::Kind::Poly:
-                        for (auto& p : edge.Poly.Points) Translate(p, dx, dy);
-                        break;
-                    case HatchEdge::Kind::EllipseArc:
-                        Translate(edge.Ell.Center, dx, dy);
-                        break;
-                    case HatchEdge::Kind::Spline:
-                        for (auto& p : edge.Spl.FitPoints)     Translate(p, dx, dy);
-                        for (auto& p : edge.Spl.ControlPoints) Translate(p, dx, dy);
-                        edge.Spl.Build();
-                        break;
-                    }
-                }
+            TranslateEntityInPlace(entity, {dx,dy,0});
             return true;
         }
 

@@ -29,7 +29,7 @@ namespace MiniCAD::PolylineOps
         if (pl.Points.size() < 3) return false;
         const auto& a = pl.Points.front();
         const auto& b = pl.Points.back();
-        return std::hypot(a.x - b.x, a.y - b.y) < 1e-9;
+        return (a - b).Length() < 1e-9;
     }
 
     namespace detail
@@ -43,6 +43,12 @@ namespace MiniCAD::PolylineOps
             if (f >= 1.0) return B;
             if (!pl.SegIsArc(i))
                 return { A.x + (B.x - A.x) * f, A.y + (B.y - A.y) * f, A.z + (B.z - A.z) * f };
+            if (!pl.HasDefaultPlane())
+            {
+                const auto frame = Math::BuildOCS(pl.Normal);
+                const Polyline local({Math::WcsToOcs(frame, A), Math::WcsToOcs(frame, B)}, {pl.SegBulge(i)});
+                return Math::OcsToWcs(frame, SegPoint(local, 0, f));
+            }
             const auto g = Polyline::ComputeArc(A, B, pl.SegBulge(i));
             if (g.Radius < Math::LengthEPS)
                 return { A.x + (B.x - A.x) * f, A.y + (B.y - A.y) * f, A.z + (B.z - A.z) * f };
@@ -87,6 +93,12 @@ namespace MiniCAD::PolylineOps
     inline Math::Vec3 TangentAt(const Polyline& pl, double u)
     {
         if (pl.Points.size() < 2) return {};
+        if (!pl.HasDefaultPlane())
+        {
+            const auto t = TangentAt(pl.ToOcs(), u);
+            const auto frame = Math::BuildOCS(pl.Normal);
+            return frame.Ux * t.x + frame.Uy * t.y + frame.Uz * t.z;
+        }
         int seg; double f;
         detail::Split(pl, u, seg, f);
         const Math::Point3& A = pl.Points[static_cast<size_t>(seg)];
@@ -102,6 +114,8 @@ namespace MiniCAD::PolylineOps
     // 点 p 投影到多段线上最近处的参数（总是落在 [0, N]）
     inline double ParamOf(const Polyline& pl, const Math::Point3& p)
     {
+        if (!pl.HasDefaultPlane())
+            return ParamOf(pl.ToOcs(), Math::WcsToOcs(Math::BuildOCS(pl.Normal), p));
         double bestU = 0.0, bestD = 1e300;
         for (int i = 0; i < pl.SegCount(); ++i)
         {
@@ -146,6 +160,7 @@ namespace MiniCAD::PolylineOps
     inline Polyline Sub(const Polyline& pl, double u0, double u1)
     {
         Polyline out;
+        out.Normal = pl.Normal;
         const int n = pl.SegCount();
         if (n < 1) return out;
         u0 = std::clamp(u0, 0.0, static_cast<double>(n));

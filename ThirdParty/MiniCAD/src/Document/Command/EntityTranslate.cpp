@@ -1,5 +1,6 @@
 #include "EntityTranslate.h"
 #include "Core/Entity/Solid3DEntity.hpp"
+#include "Core/Entity/ViewportEntity.hpp"
 
 #include "Core/Entity/PointEntity.hpp"
 #include "Core/Entity/LineEntity.hpp"
@@ -24,6 +25,8 @@ namespace MiniCAD
 {
     void TranslateEntityInPlace(Entity& entity, const Math::Vec3& d)
     {
+        if (auto* viewport = dynamic_cast<ViewportEntity*>(&entity))
+        { viewport->SetCenter(viewport->GetCenter() + d); return; }
         if (entity.IsKindOf<Solid3DEntity>())
         {
             static_cast<Solid3DEntity&>(entity).ApplyTransform(Solid3DEntity::MoveMatrix(d));
@@ -125,19 +128,21 @@ namespace MiniCAD
         if (entity.IsKindOf<HatchEntity>())
         {
             auto& he = static_cast<HatchEntity&>(entity);
+            const auto shift = he.LocalDisplacement(d);
             for (auto& loop : he.GetLoops())
                 for (auto& edge : loop.Edges)
                 {
                     switch (edge.Type)
                     {
                     case HatchEdge::Kind::Poly:
-                        for (auto& p : edge.Poly.Points) p += d;
+                        for (auto& p : edge.Poly.Points) p += shift;
                         break;
                     case HatchEdge::Kind::EllipseArc:
-                        edge.Ell.Center = edge.Ell.Center + d;
+                        edge.Ell.Center = edge.Ell.Center + shift;
                         break;
                     case HatchEdge::Kind::Spline:
-                        for (auto& p : edge.Spl.FitPoints) p += d;
+                        for (auto& p : edge.Spl.FitPoints) p += shift;
+                        for (auto& p : edge.Spl.ControlPoints) p += shift;
                         edge.Spl.Build();
                         break;
                     }

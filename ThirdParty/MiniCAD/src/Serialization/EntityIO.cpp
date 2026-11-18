@@ -262,6 +262,7 @@ namespace MiniCAD::EntityIO
         {
             Point3 c = e.GetCircle().Center;
             double r = e.GetCircle().Radius;
+            bool worldCurve = true; s.Value("worldCurve", worldCurve);
             Ser::Value(s, "center", c);
             s.Value("radius", r);
         }
@@ -276,6 +277,7 @@ namespace MiniCAD::EntityIO
         void WriteArc(ISerializer& s, const ArcEntity& e)
         {
             const Arc& a = e.GetArc();
+            bool worldCurve = true; s.Value("worldCurve", worldCurve);
             Point3 c = a.Center; double r = a.Radius, a0 = a.StartAngle, a1 = a.EndAngle;
             Ser::Value(s, "center", c);
             s.Value("radius", r);
@@ -346,6 +348,24 @@ namespace MiniCAD::EntityIO
             double vh = e.GetViewHeight();         s.Value("viewHeight", vh);
             double tw = e.GetTwist();              s.Value("twist", tw);
             int32_t vid = e.GetViewportId();       s.Value("viewportId", vid);
+            bool locked = e.IsLocked();           s.Value("locked", locked);
+            bool plan = e.IsPlanView();           s.Value("plan", plan);
+            bool perspective = e.IsPerspective(); s.Value("perspective", perspective);
+            auto optics = e.GetCameraOptics();
+            s.Value("viewLens", optics.Lens);
+            s.Value("viewFront", optics.Front);
+            s.Value("viewBack", optics.Back);
+            s.Value("viewClipFront", optics.FrontEnabled);
+            s.Value("viewClipBack", optics.BackEnabled);
+            s.Value("viewClipAtEye", optics.FrontAtEye);
+            if (e.HasSpatialView())
+            {
+                auto direction=e.GetViewDirection(), target=e.GetViewTarget();
+                Ser::Value(s,"viewDirection",direction); Ser::Value(s,"viewTarget",target);
+            }
+            auto clip = e.ClipCoordinates(); Ser::Value(s, "viewportClip", clip);
+            bool known = e.ClipKnown(); s.Value("viewportClipKnown", known);
+            bool ellipse = e.ClipEllipse(); s.Value("viewportClipEllipse", ellipse);
             // 本视口冻结的图层（VPLAYER）：只在非空时写，旧文件没有这项
             if (!e.GetFrozenLayers().empty())
             {
@@ -375,6 +395,32 @@ namespace MiniCAD::EntityIO
             e->SetViewHeight(vh);
             e->SetTwist(tw);
             e->SetViewportId(vid);
+            bool locked = true;
+            if (s.Has("locked")) s.Value("locked", locked);
+            e->SetLocked(locked);
+            bool plan = true;
+            if (s.Has("plan")) s.Value("plan", plan);
+            e->SetPlanView(plan);
+            bool perspective = false;
+            if (s.Has("perspective")) s.Value("perspective", perspective);
+            e->SetPerspective(perspective);
+            ViewportEntity::CameraOptics optics;
+            if (s.Has("viewLens")) s.Value("viewLens", optics.Lens);
+            if (s.Has("viewFront")) s.Value("viewFront", optics.Front);
+            if (s.Has("viewBack")) s.Value("viewBack", optics.Back);
+            if (s.Has("viewClipFront")) s.Value("viewClipFront", optics.FrontEnabled);
+            if (s.Has("viewClipBack")) s.Value("viewClipBack", optics.BackEnabled);
+            if (s.Has("viewClipAtEye")) s.Value("viewClipAtEye", optics.FrontAtEye);
+            e->SetCameraOptics(optics);
+            if (s.Has("viewDirection"))
+            {
+                Math::Point3 direction,target;
+                Ser::Value(s,"viewDirection",direction); Ser::Value(s,"viewTarget",target);
+                e->SetSpatialView(direction,target,{}); e->SetViewCenter(vc);
+            }
+            if (s.Has("viewportClip")) { std::vector<Math::Point3> clip; Ser::Value(s, "viewportClip", clip); e->SetClipCoordinates(std::move(clip)); }
+            if (s.Has("viewportClipEllipse")) { bool ellipse = false; s.Value("viewportClipEllipse", ellipse); e->SetClipEllipse(ellipse); }
+            if (s.Has("viewportClipKnown")) { bool known = true; s.Value("viewportClipKnown", known); e->SetClipKnown(known); }
             size_t n = 0;
             if (s.BeginArray("frozenLayers", n))
             {
@@ -737,7 +783,8 @@ namespace MiniCAD::EntityIO
 
         void WritePolyline(ISerializer& s, const PolylineEntity& e)
         {
-            Polyline pl = e.GetPolyline();
+            // Native documents keep planar vertices in OCS for compatibility with earlier readers.
+            Polyline pl = e.GetPolyline().ToOcs();
             Ser::PolylineGeom(s, "polyline", pl);
             double w = e.GetWidth();
             s.Value("width", w);
@@ -1503,6 +1550,30 @@ namespace MiniCAD::EntityIO
         EntityAttr attr = e->GetAttr();
         Ser::Attr(s, attr);
         e->SetAttr(attr);
+        if (type == "PolylineEntity" && !e->HasDefaultExtrusion())
+        {
+            auto& polyline = static_cast<PolylineEntity&>(*e);
+            auto geometry = polyline.GetPolyline();
+            const auto frame = polyline.GetOCS();
+            for (auto& point : geometry.Points) point = Math::OcsToWcs(frame, point);
+            polyline.SetPolyline(std::move(geometry));
+        }
+        bool worldCurve = false;
+        if (e->IsKindOf<CircleEntity>() || e->IsKindOf<ArcEntity>())
+        {
+            s.Value("worldCurve", worldCurve);
+            if (!worldCurve && !e->HasDefaultExtrusion())
+            {
+                if (auto* circle = dynamic_cast<CircleEntity*>(e.get()))
+                    circle->SetCenter(Math::OcsToWcs(circle->GetOCS(), circle->GetCircle().Center));
+                if (auto* arc = dynamic_cast<ArcEntity*>(e.get()))
+                {
+                    auto geometry = arc->GetArc();
+                    geometry.Center = Math::OcsToWcs(arc->GetOCS(), geometry.Center);
+                    arc->SetArc(geometry);
+                }
+            }
+        }
         return e;
     }
 }

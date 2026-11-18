@@ -37,6 +37,9 @@ namespace MiniCAD
 
     public:
 
+        bool SupportsWorkingPlane() const override { return true; }
+        bool DrawsAtAnchorElevation() const override { return HasAnchor(); }
+
         bool OnInput(const EditorContext& ctx) override
         {
             m_ctx = &ctx;
@@ -160,7 +163,7 @@ namespace MiniCAD
             const Math::Point3 start = m_points.front();
             double bulge = 0.0;
             if (m_mode == DrawMode::Arc && m_hasArcMid)
-                bulge = ComputeBulgeFromThreePoints(m_points.back(), m_arcMid, start);
+                bulge = BulgeInPlane(m_points.back(), m_arcMid, start);
             m_hasArcMid = false;
             m_arcMid    = {};
             if (m_points.back() == start)
@@ -196,7 +199,7 @@ namespace MiniCAD
                 }
                 else
                 {
-                    double bulge = ComputeBulgeFromThreePoints(m_points.back(), m_arcMid, pt);
+                    double bulge = BulgeInPlane(m_points.back(), m_arcMid, pt);
 
                     m_bulges.push_back(bulge);
                     m_points.push_back(pt);
@@ -281,8 +284,7 @@ namespace MiniCAD
 
             if (m_points.size() >= 2)
             {
-                Polyline pl(m_points, m_bulges);
-                m_ctx->overlay.AddPolyline(pl, layerColor);
+                m_ctx->overlay.AddPolyline(Geometry(m_points, m_bulges), layerColor);
             }
 
             for (const auto& pt : m_points)
@@ -305,24 +307,9 @@ namespace MiniCAD
                     m_ctx->overlay.AddPoint(m_arcMid, midColor);
 
                     double bulgePreview =
-                        ComputeBulgeFromThreePoints(last, m_arcMid, m_cursor);
+                        BulgeInPlane(last, m_arcMid, m_cursor);
 
-                    if (std::abs(bulgePreview) > 1e-12)
-                    {
-                        ArcGeom arc = Polyline::ComputeArc(last, m_cursor, bulgePreview);
-                        if (arc.Radius > Math::LengthEPS)
-                        {
-                            m_ctx->overlay.AddArcGeom(arc, rubberColor);
-                        }
-                        else
-                        {
-                            m_ctx->overlay.AddLine(last, m_cursor, rubberColor);
-                        }
-                    }
-                    else
-                    {
-                        m_ctx->overlay.AddLine(last, m_cursor, rubberColor);
-                    }
+                    m_ctx->overlay.AddPolyline(Geometry({last, m_cursor}, {bulgePreview}), rubberColor);
 
                     m_ctx->overlay.AddLine(last,     m_arcMid, helperColor);
                     m_ctx->overlay.AddLine(m_arcMid, m_cursor, helperColor);
@@ -343,7 +330,7 @@ namespace MiniCAD
                 (std::abs(b) > 1e-12 ? arcCount : lineCount)++;
 
             auto id     = m_ctx->scene.NextObjectID();
-            auto entity = std::make_unique<PolylineEntity>(id, m_points, m_bulges);
+            auto entity = std::make_unique<PolylineEntity>(id, Geometry(m_points, m_bulges));
             m_ctx->ApplyCurrentAttr(*entity);
             auto cmd    = std::make_unique<AddEntityCommand>(std::move(entity));
             m_ctx->cmdStack.Execute(std::move(cmd), m_ctx->scene);
@@ -361,11 +348,38 @@ namespace MiniCAD
             if (m_overlay) m_overlay->Clear();
         }
 
+        Math::WorkingPlane Plane() const
+        {
+            return m_ctx->scene.CurrentSpaceIsPaper() ? Math::WorkingPlane{} : m_ctx->scene.GetWorkingPlane();
+        }
+
+        Polyline Geometry(std::vector<Math::Point3> points, std::vector<double> bulges) const
+        {
+            Polyline polyline(std::move(points), std::move(bulges));
+            polyline.Normal = Plane().Normal();
+            return polyline;
+        }
+
+        double BulgeInPlane(const Math::Point3& start, const Math::Point3& through, const Math::Point3& end) const
+        {
+            auto plane = Plane();
+            plane.Origin = start;
+            return ComputeBulgeFromThreePoints({}, plane.ToLocal(through), plane.ToLocal(end));
+        }
+
         Math::Point3 GetPoint(const InputEvent& e) const
         {
-            if (e.HasSnap) return e.SnapWorld;
-            auto p = m_ctx->viewport.GetCamera().ScreenToWorld(e.MouseX, e.MouseY);
-            return { p.x, p.y, 0.0 };
+            auto plane = Plane();
+            if (!m_points.empty()) plane.Origin = m_points.front();
+            if (e.HasSnap)
+            {
+                auto local = plane.ToLocal(e.SnapWorld);
+                if (!m_points.empty()) local.z = 0.0;
+                return plane.ToWorld(local);
+            }
+            Math::Point3 point = plane.Origin;
+            m_ctx->viewport.GetCamera().ScreenToPlane(e.MouseX, e.MouseY, plane, point);
+            return point;
         }
 
     private:

@@ -36,7 +36,7 @@ namespace Wanluo.StandaloneWorkbench
             buttons.Children.Add(ApplyButton);
             buttons.Children.Add(new Button { Content = "取消", IsCancel = true, MinWidth = 78, Margin = new Thickness(8, 0, 0, 0), Padding = new Thickness(12, 7, 12, 7) });
             bottom.Children.Add(buttons); body.Children.Add(bottom);
-            body.Children.Add(new ScrollViewer { Content = _fields, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, MaxHeight = Math.Max(260, SystemParameters.WorkArea.Height - 230) });
+            body.Children.Add(new ScrollViewer { Content = _fields, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, MaxHeight = Math.Max(260, SystemParameters.WorkArea.Height - 230) });
             Content = body;
             Loaded += (sender, args) => Inputs.Values.FirstOrDefault()?.Focus();
         }
@@ -47,6 +47,38 @@ namespace Wanluo.StandaloneWorkbench
             Add(key, label, box);
         }
         internal void Numeric(string key, string label, double value, bool enabled = true) => Text(key, label, value.ToString("0.########", CultureInfo.CurrentCulture), enabled: enabled);
+        internal void NumericPair(string firstKey, string firstLabel, double firstValue, string secondKey, string secondLabel, double secondValue)
+        {
+            var grid = new Grid();
+            grid.ColumnDefinitions.Add(new ColumnDefinition());
+            grid.ColumnDefinitions.Add(new ColumnDefinition());
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            var fields = new[] { (firstKey, firstLabel, firstValue), (secondKey, secondLabel, secondValue) };
+            for (var index = 0; index < fields.Length; ++index)
+            {
+                var label = new TextBlock { Text = fields[index].Item2, Margin = new Thickness(index == 0 ? 0 : 8, 9, 0, 5) };
+                var input = new TextBox { Text = fields[index].Item3.ToString("0.########", CultureInfo.CurrentCulture), MinHeight = 30, Margin = new Thickness(index == 0 ? 0 : 8, 0, 0, 0), Cursor = Cursors.IBeam };
+                Inputs.Add(fields[index].Item1, input);
+                Grid.SetColumn(label, index); Grid.SetColumn(input, index); Grid.SetRow(input, 1);
+                grid.Children.Add(label); grid.Children.Add(input);
+            }
+            _fields.Children.Add(grid);
+        }
+        internal void Note(string text) => _fields.Children.Add(new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 0), FontSize = 12 });
+        internal void Field(string key, string label, Control input) => Add(key, label, input);
+        internal void File(string key, string label, string value)
+        {
+            Text(key, label, value);
+            var browse = new Button { Content = "选择字体文件…", HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 4, 0, 0) };
+            browse.Click += (sender, args) =>
+            {
+                var picker = new Microsoft.Win32.OpenFileDialog { Filter = "字体文件|*.ttf;*.ttc;*.otf;*.shx", InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.Fonts) };
+                if (picker.ShowDialog(this) == true) ((TextBox)Inputs[key]).Text = picker.FileName;
+            };
+            browse.SetBinding(IsEnabledProperty, new System.Windows.Data.Binding("IsEnabled") { Source = Inputs[key] });
+            _fields.Children.Add(browse);
+        }
         internal void Choice(string key, string label, System.Collections.IEnumerable values, object selected)
         {
             var box = new ComboBox { ItemsSource = values, SelectedItem = selected, MinHeight = 30 };

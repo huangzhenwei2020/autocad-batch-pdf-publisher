@@ -29,6 +29,9 @@ namespace MiniCAD
             LOG_DEBUG("Exit drawing");
         }
 
+        bool SupportsWorkingPlane() const override { return true; }
+        bool DrawsAtAnchorElevation() const override { return HasAnchor(); }
+
         bool OnInput(const EditorContext& ctx) override
         {
             m_ctx = &ctx;
@@ -49,15 +52,15 @@ namespace MiniCAD
 
                     case 1:
                     {
-                        double rx = Distance2D(m_center, pt);
+                        const auto axis = AxisComponents(pt);
+                        double rx = std::hypot(axis.x, axis.y);
                         if (rx < Math::LengthEPS)
                         {
                             LOG_WARN("[EllipseTool] major axis too short, click again");
                             break;
                         }
                         m_rx       = rx;
-                        m_rotation = std::atan2(pt.y - m_center.y,
-                                                pt.x - m_center.x);
+                        m_rotation = std::atan2(axis.y, axis.x);
                         m_step     = 2;
                         LOG_INFO("[EllipseTool] major axis set, rx=%.3f rot=%.1f°, click minor axis end",
                                m_rx, m_rotation * 180.0 / Math::PI);
@@ -72,13 +75,13 @@ namespace MiniCAD
                             LOG_WARN("[EllipseTool] minor axis too short, click again");
                             break;
                         }
+                        m_ry = ry;
                         if (!m_arcMode)
                         {
-                            Commit(Ellipse(m_center, m_rx, ry, m_rotation));
+                            Commit(CurrentEllipse());
                             Reset();
                             break;
                         }
-                        m_ry   = ry;
                         m_step = 3;
                         break;
                     }
@@ -127,45 +130,17 @@ namespace MiniCAD
                 if (m_step == 1)
                 {
                     m_ctx->overlay.AddLine(m_center, cursor, helperColor);
-                    double rx = Distance2D(m_center, cursor);
-                    if (rx > Math::LengthEPS)
-                        m_ctx->overlay.AddCircle(m_center, rx, { layerColor.r, layerColor.g,  layerColor.b, layerColor.a });
+                    const double radius = (cursor - m_center).Length();
+                    if (radius > Math::LengthEPS)
+                        m_ctx->overlay.AddCircle(Circle{m_center, radius, Plane().Normal()}, layerColor);
                 }
                 else if (m_step == 2)
                 {
-                    double ry = ComputeRY(cursor);
-
-                    Math::Point3 axisEnd =
-                    {
-                        m_center.x + m_rx * std::cos(m_rotation),
-                        m_center.y + m_rx * std::sin(m_rotation),
-                        m_center.z
-                    };
-                    Math::Point3 axisStart =
-                    {
-                        m_center.x - m_rx * std::cos(m_rotation),
-                        m_center.y - m_rx * std::sin(m_rotation),
-                        m_center.z
-                    };
-                    m_ctx->overlay.AddLine(axisStart, axisEnd, axisColor);
-
-                    double perpAngle = m_rotation + Math::PI * 0.5;
-                    Math::Point3 perpEnd =
-                    {
-                        m_center.x + ry * std::cos(perpAngle),
-                        m_center.y + ry * std::sin(perpAngle),
-                        m_center.z
-                    };
-                    Math::Point3 perpStart =
-                    {
-                        m_center.x - ry * std::cos(perpAngle),
-                        m_center.y - ry * std::sin(perpAngle),
-                        m_center.z
-                    };
-                    m_ctx->overlay.AddLine(perpStart, perpEnd, axisColor);
-
-                    if (ry > Math::LengthEPS)
-                        m_ctx->overlay.AddEllipse(m_center, m_rx, ry, m_rotation, layerColor);
+                    auto ellipse = CurrentEllipse();
+                    ellipse.RadiusY = ComputeRY(cursor);
+                    m_ctx->overlay.AddLine(ellipse.VertexW(), ellipse.VertexE(), axisColor);
+                    m_ctx->overlay.AddLine(ellipse.VertexS(), ellipse.VertexN(), axisColor);
+                    if (ellipse.IsValid()) m_ctx->overlay.AddEllipse(ellipse, layerColor);
                 }
                 else if (m_step == 3)
                 {
@@ -209,28 +184,42 @@ namespace MiniCAD
         void OnSceneChanged() override { Reset(); }
 
     private:
-        Math::Point3 GetPoint(const InputEvent& e) const
+        Math::WorkingPlane Plane() const
         {
-            if (e.HasSnap) return e.SnapWorld;
-            return m_ctx->viewport.GetCamera().ScreenToWorld(e.MouseX, e.MouseY);
+            return m_ctx->scene.CurrentSpaceIsPaper() ? Math::WorkingPlane{} : m_ctx->scene.GetWorkingPlane();
         }
 
-        static double Distance2D(const Math::Point3& a, const Math::Point3& b)
+        Math::Point3 GetPoint(const InputEvent& event) const
         {
-            double dx = b.x - a.x, dy = b.y - a.y;
-            return std::sqrt(dx * dx + dy * dy);
+            auto plane = Plane();
+            if (HasAnchor()) plane.Origin = m_center;
+            if (event.HasSnap)
+            {
+                auto local = plane.ToLocal(event.SnapWorld);
+                if (HasAnchor()) local.z = 0;
+                return plane.ToWorld(local);
+            }
+            Math::Point3 point = plane.Origin;
+            m_ctx->viewport.GetCamera().ScreenToPlane(event.MouseX, event.MouseY, plane, point);
+            return point;
         }
 
-        double ComputeRY(const Math::Point3& p) const
+        Math::Point3 AxisComponents(const Math::Point3& point) const
         {
-            double dx   = p.x - m_center.x;
-            double dy   = p.y - m_center.y;
-            double cosR = std::cos(m_rotation);
-            double sinR = std::sin(m_rotation);
-            return std::abs(dx * sinR - dy * cosR);
+            const auto delta = point - m_center;
+            return Math::WcsToOcs(Math::BuildOCS(Plane().Normal()), {delta.x, delta.y, delta.z});
         }
 
-        Ellipse CurrentEllipse() const { return Ellipse(m_center, m_rx, m_ry, m_rotation); }
+        double ComputeRY(const Math::Point3& point) const
+        {
+            const auto [x, y] = CurrentEllipse().Axes();
+            return std::abs(Math::Dot(point - m_center, y));
+        }
+
+        Ellipse CurrentEllipse() const
+        {
+            return {m_center, m_rx, m_ry, m_rotation, 0, Math::TwoPI, Plane().Normal()};
+        }
 
         void Commit(const Ellipse& el)
         {

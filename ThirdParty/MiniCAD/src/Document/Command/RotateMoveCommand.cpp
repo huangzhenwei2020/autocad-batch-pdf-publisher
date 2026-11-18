@@ -7,6 +7,7 @@
 #include "Core/Entity/CircleEntity.hpp"
 #include "Core/Entity/RectangleEntity.hpp"
 #include "Core/Entity/ArcEntity.hpp"
+#include "Core/GeomKernel/SpatialCurveTransform.hpp"
 #include "Core/Entity/EllipseEntity.hpp"
 #include "Core/Entity/PolylineEntity.hpp"
 #include "Core/Entity/SplineEntity.hpp"
@@ -50,6 +51,8 @@ namespace MiniCAD
             return o;
         }
         Circle Rotate(const Circle& src, const Math::Point3& piv, double a) {
+            if (!Math::IsDefaultExtrusion(src.Normal))
+                return TransformSpatialCircle(src, [&](const Math::Point3& point) { return RotatePoint(point, piv, a); });
             Circle o = src; o.Center = RotatePoint(src.Center, piv, a); return o;
         }
         Rectangle Rotate(const Rectangle& src, const Math::Point3& piv, double a) {
@@ -61,6 +64,8 @@ namespace MiniCAD
             return o;
         }
         Arc Rotate(const Arc& src, const Math::Point3& piv, double a) {
+            if (!Math::IsDefaultExtrusion(src.Normal))
+                return TransformSpatialArc(src, [&](const Math::Point3& point) { return RotatePoint(point, piv, a); });
             Arc o = src;
             o.Center     = RotatePoint(src.Center, piv, a);
             o.StartAngle = Norm(src.StartAngle + a);
@@ -68,14 +73,12 @@ namespace MiniCAD
             return o;
         }
         Ellipse Rotate(const Ellipse& src, const Math::Point3& piv, double a) {
-            Ellipse o = src;
-            o.Center   = RotatePoint(src.Center, piv, a);
-            o.Rotation = src.Rotation + a;
-            return o;
+            return RotateEllipse(src, piv, a);
         }
         Polyline Rotate(const Polyline& src, const Math::Point3& piv, double a) {
             Polyline o = src;
             for (auto& p : o.Points) p = RotatePoint(p, piv, a);
+            o.Normal = RotVec2D(o.Normal, a);
             return o;
         }
         Spline Rotate(const Spline& src, const Math::Point3& piv, double a) {
@@ -180,17 +183,21 @@ namespace MiniCAD
             {
                 auto* te = static_cast<TextEntity*>(entity);
                 e.Kind       = MoveEntityEntry::Kind::Text;
-                e.BeforeText = { te->GetPosition(), te->GetRotation() };
-                e.AfterText  = { RotatePoint(te->GetPosition(), pivot, angle),
-                                 te->GetRotation() + angle };
+                e.BeforeText = { te->GetPosition(), te->GetRotation(), te->GetExtrusion() };
+                auto preview = te->Clone(te->GetID());
+                RotateEntityInPlace(*preview, pivot, angle);
+                const auto& transformed = static_cast<const TextEntity&>(*preview);
+                e.AfterText = { transformed.GetPosition(), transformed.GetRotation(), transformed.GetExtrusion() };
             }
             else if (entity->IsKindOf<MTextEntity>())
             {
                 auto* me = static_cast<MTextEntity*>(entity);
                 e.Kind        = MoveEntityEntry::Kind::MText;
-                e.BeforeMText = { me->GetPosition(), me->GetRotation() };
-                e.AfterMText  = { RotatePoint(me->GetPosition(), pivot, angle),
-                                  me->GetRotation() + angle };
+                e.BeforeMText = { me->GetPosition(), me->GetRotation(), me->GetExtrusion() };
+                auto preview = me->Clone(me->GetID());
+                RotateEntityInPlace(*preview, pivot, angle);
+                const auto& transformed = static_cast<const MTextEntity&>(*preview);
+                e.AfterMText = { transformed.GetPosition(), transformed.GetRotation(), transformed.GetExtrusion() };
             }
             else if (entity->IsKindOf<InsertEntity>())
             {
@@ -217,7 +224,18 @@ namespace MiniCAD
                 auto* he = static_cast<HatchEntity*>(entity);
                 e.Kind        = MoveEntityEntry::Kind::Hatch;
                 e.BeforeHatch = he->GetLoops();
-                e.AfterHatch  = RotateLoops(he->GetLoops(), pivot, angle);
+                e.BeforeHatchNormal = he->GetExtrusion();
+                e.AfterHatchNormal = e.BeforeHatchNormal;
+                if (he->HasDefaultExtrusion())
+                    e.AfterHatch = RotateLoops(he->GetLoops(), pivot, angle);
+                else
+                {
+                    auto transformed = he->Clone(he->GetID());
+                    RotateEntityInPlace(*transformed, pivot, angle);
+                    auto& hatch = static_cast<HatchEntity&>(*transformed);
+                    e.AfterHatch = std::move(hatch.GetLoops());
+                    e.AfterHatchNormal = hatch.GetExtrusion();
+                }
             }
             else if (entity->IsKindOf<LeaderEntity>())
             {
@@ -321,6 +339,7 @@ namespace MiniCAD
             const auto& snap = useAfter ? e.AfterText : e.BeforeText;
             auto* te = static_cast<TextEntity*>(entity);
             te->SetPosition(snap.pos);
+            te->SetExtrusion(snap.normal);
             te->SetRotation(static_cast<float>(snap.rotation));
             break;
         }
@@ -329,6 +348,7 @@ namespace MiniCAD
             const auto& snap = useAfter ? e.AfterMText : e.BeforeMText;
             auto* me = static_cast<MTextEntity*>(entity);
             me->SetPosition(snap.pos);
+            me->SetExtrusion(snap.normal);
             me->SetRotation(snap.rotation);
             break;
         }
@@ -353,6 +373,7 @@ namespace MiniCAD
         }
         case MoveEntityEntry::Kind::Hatch:
             static_cast<HatchEntity*>(entity)->GetLoops() = useAfter ? e.AfterHatch : e.BeforeHatch;
+            entity->SetExtrusion(useAfter ? e.AfterHatchNormal : e.BeforeHatchNormal);
             break;
         case MoveEntityEntry::Kind::Leader:
             static_cast<LeaderEntity*>(entity)->SetVertices(useAfter ? e.AfterLeaderVerts : e.BeforeLeaderVerts);

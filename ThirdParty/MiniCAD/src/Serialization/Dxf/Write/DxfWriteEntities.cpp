@@ -827,7 +827,13 @@ namespace MiniDWG::DxfWrite
             WriteInt(71, text.Mirror);
         if (text.HorizontalAlignment != TextHorizontalAlignment::Left)
             WriteInt(72, text.HorizontalAlignment);
-        WriteXYZ(11, text.AlignmentPoint);
+        // AutoCAD uses group 31 as the shared elevation even for baseline TEXT.
+        if (!dynamic_cast<const AttributeBase*>(&text) &&
+            text.HorizontalAlignment == TextHorizontalAlignment::Left &&
+            text.VerticalAlignment == TextVerticalAlignmentType::Baseline)
+            WriteXYZ(11, text.InsertPoint);
+        else
+            WriteXYZ(11, text.AlignmentPoint);
         WriteXYZIfNot(210, text.Normal, XYZ::AxisZ());
 
         const bool verticalAligned = text.VerticalAlignment != TextVerticalAlignmentType::Baseline;
@@ -1001,7 +1007,9 @@ namespace MiniDWG::DxfWrite
         Enqueue(reactor);
         // 裁剪类型：两个点是矩形（1），多于两个是多边形（2）
         // DXF 中多边形边界首尾相同（AutoCAD 写出的样子），DWG 中不重复首点：读自 DWG 的补上闭合点
-        const auto& clip = image.ClipBoundaryVertices;
+        auto clip = image.ClipBoundaryVertices;
+        if (clip.size() < 2)
+            clip = {{-0.5, -0.5}, {image.Size.X - 0.5, image.Size.Y - 0.5}};
         const bool polygon = clip.size() > 2;
         const bool addClosing = polygon && !(clip.front() == clip.back());
         WriteInt(71, polygon ? 2 : 1);

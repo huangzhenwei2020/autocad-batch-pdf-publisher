@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include "Scene/Scene.h"
 #include "Editor/Tools/ITool.h"
 #include "Editor/EditorContext.h"
@@ -123,6 +123,7 @@ namespace MiniCAD
             if (obj && m_ctx->scene.IsEntityLocked(*obj)) return nullptr;     // 锁定图层上的对象不能修改
             if (!obj || !obj->IsKindOf<Entity>()) return nullptr;
             Entity* ent = static_cast<Entity*>(obj);
+            if (!ent->HasDefaultExtrusion()) return nullptr;
             if (!ent->AsCurveEntity()) return nullptr;
             if (ent->IsKindOf<LineEntity>() || ent->IsKindOf<ArcEntity>())
                 return ent;
@@ -155,6 +156,7 @@ namespace MiniCAD
                 if (id == targetId) continue;
                 const Object* obj = m_ctx->scene.GetEntity(id);
                 if (!obj || !obj->IsKindOf<Entity>()) continue;
+                if (!static_cast<const Entity*>(obj)->HasDefaultExtrusion()) continue;
                 const ICurveEntity* ce = static_cast<const Entity*>(obj)->AsCurveEntity();
                 if (!ce) continue;
                 auto other = ce->MakeCurve();
@@ -187,6 +189,7 @@ namespace MiniCAD
                     if (obj.GetID() == targetId)   return;
                     if (!obj.IsKindOf<Entity>())   return;
                     const auto& ent = static_cast<const Entity&>(obj);
+                    if (!ent.HasDefaultExtrusion()) return;
                     const ICurveEntity* ce = ent.AsCurveEntity();
                     if (!ce) return;
                     // 无界实体(XLine/Ray)包围盒退化为基点,不可按盒粗筛,一律精确求交

@@ -2,6 +2,7 @@
 #include "Vec3.hpp"
 #include "Point3.hpp"
 #include "MathUtils.hpp"
+#include "Mat4.hpp"
 #include <cmath>
 
 namespace MiniCAD::Math
@@ -33,6 +34,16 @@ namespace MiniCAD::Math
         return { ax, ay, n };
     }
 
+    inline Vec3 PlaneDirection(const OCS& ocs, double angle)
+    {
+        return ocs.Ux * std::cos(angle) + ocs.Uy * std::sin(angle);
+    }
+
+    inline double PlaneAngle(const OCS& ocs, const Vec3& direction)
+    {
+        return std::atan2(Dot(direction, ocs.Uy), Dot(direction, ocs.Ux));
+    }
+
     // OCS 坐标 → WCS 坐标。
     inline Point3 OcsToWcs(const OCS& ocs, const Point3& p)
     {
@@ -51,6 +62,15 @@ namespace MiniCAD::Math
             ocs.Uy.x * p.x + ocs.Uy.y * p.y + ocs.Uy.z * p.z,
             ocs.Uz.x * p.x + ocs.Uz.y * p.y + ocs.Uz.z * p.z,
         };
+    }
+
+    inline Mat4 OcsToWcsMatrix(const OCS& ocs)
+    {
+        Mat4 matrix = Mat4::Identity();
+        matrix.m[0] = ocs.Ux.x; matrix.m[1] = ocs.Ux.y; matrix.m[2] = ocs.Ux.z;
+        matrix.m[4] = ocs.Uy.x; matrix.m[5] = ocs.Uy.y; matrix.m[6] = ocs.Uy.z;
+        matrix.m[8] = ocs.Uz.x; matrix.m[9] = ocs.Uz.y; matrix.m[10] = ocs.Uz.z;
+        return matrix;
     }
 
     // 法向是否为默认 +Z(即纯 2D,无需 OCS 变换)。

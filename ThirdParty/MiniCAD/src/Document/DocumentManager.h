@@ -130,6 +130,7 @@ namespace MiniCAD
 
         // ── 内部剪贴板:复制当前选中实体的快照,可跨文档粘贴 ──
         void Paste();
+        bool CanPaste() const { return !m_clipboard.empty(); }
         void CopySelected();
         void CopySelectedWithBase();   // 带基点复制(AutoCAD COPYBASE):拾取基点,粘贴时光标即基点
         void CutSelected();   // 复制到剪贴板 + 删除选中(删除为一步撤销)
@@ -172,6 +173,7 @@ namespace MiniCAD
         std::vector<std::unique_ptr<Entity>> m_clipboard;
         Math::Point3 m_clipboardBase{};            // 带基点复制的基点(仅 m_clipboardHasBase 时有效)
         bool         m_clipboardHasBase = false;
+        std::shared_ptr<Scene> m_clipboardDependencies;
 
     private:
         int m_untitledCounter = 0;

@@ -6,6 +6,8 @@
 #include "Core/Object/Object.hpp"
 #include "Core/Entity/EntityAttr.hpp"
 #include "Core/Math/Point2.hpp"
+#include "Core/Math/WorkingPlane.hpp"
+#include "Document/WipeClip.hpp"
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -36,6 +38,34 @@ namespace MiniCAD
         // 传空函数 = 不过滤（模型页，或未绑文档的场景）。
         using LayoutFilter = std::function<bool(const EntityAttr&)>;
         void SetLayoutFilter(LayoutFilter filter) { m_layoutFilter = std::move(filter); }
+        void SetLayerFilter(std::function<bool(LayerID)> filter) { m_layerFilter = std::move(filter); }
+        // Boundary points are in the clipping plane, while model geometry remains in WCS.
+        void SetClipBoundary(std::vector<Math::Point3> points, const Math::WorkingPlane& plane)
+        {
+            if (points == m_viewportClip.pts && plane.Origin == m_viewportClipPlane.Origin &&
+                (plane.X - m_viewportClipPlane.X).LengthSq() == 0 &&
+                (plane.Y - m_viewportClipPlane.Y).LengthSq() == 0) return;
+            m_viewportClip = WipeClip::Poly(points);
+            m_viewportClipPlane = plane;
+            m_pickGeometry.clear(); MarkDirty();
+        }
+        bool ContainsClip(const Math::Point3& worldPoint) const
+        {
+            if (!m_viewportClip.Valid()) return true;
+            const auto point = m_viewportClipPlane.ToLocal(worldPoint);
+            if (m_viewportClip.Contains(point.x, point.y)) return true;
+            const double tolerance = std::max({1.0, m_viewportClip.maxX-m_viewportClip.minX, m_viewportClip.maxY-m_viewportClip.minY}) * 1e-10;
+            if (!m_viewportClip.BoxOverlaps(point.x-tolerance,point.y-tolerance,point.x+tolerance,point.y+tolerance)) return false;
+            for (size_t i=0;i<m_viewportClip.pts.size();++i)
+            {
+                const auto& a = m_viewportClip.pts[i];
+                const auto& b = m_viewportClip.pts[(i+1)%m_viewportClip.pts.size()];
+                const double dx=b.x-a.x, dy=b.y-a.y, length=dx*dx+dy*dy;
+                const double t=length>0 ? std::clamp(((point.x-a.x)*dx+(point.y-a.y)*dy)/length,0.0,1.0) : 0;
+                if (std::hypot(point.x-a.x-t*dx,point.y-a.y-t*dy)<=tolerance) return true;
+            }
+            return false;
+        }
 
         // 输入入口
         bool OnInput(const InputEvent& e);
@@ -181,6 +211,7 @@ namespace MiniCAD
         // 布局过滤（布局页）：非空时 IsPickable 先用它排除不属于当前布局的图纸空间实体，
         // 与渲染侧的 Document::IsVisibleInActiveLayout 保持同一口径
         LayoutFilter m_layoutFilter;
+        std::function<bool(LayerID)> m_layerFilter;
 
         // 空间索引及其同步的几何版本（UINT64_MAX = 尚未构建）
         SpatialIndex m_index;
@@ -199,8 +230,12 @@ namespace MiniCAD
             // 点的屏幕尺寸是 1 像素，命中判定按世界距离 + 阈值即可。
             std::vector<Math::Point3>                          Points;
         };
-        const PickGeometry& GetPickGeometry(const Object& obj);
-        std::unordered_map<ObjectID, PickGeometry> m_pickGeometry;
+        AABB ProjectClipBounds(const Entity& entity) const;
+        bool NeedsViewportClip(const Object& obj) const;
+        const PickGeometry& GetPickGeometry(const Object& obj) const;
+        mutable std::unordered_map<ObjectID, PickGeometry> m_pickGeometry;
+        WipeClip::Poly m_viewportClip{std::vector<Math::Point3>{}};
+        Math::WorkingPlane m_viewportClipPlane;
         uint64_t m_selectionVersion = 0;
     };
 }

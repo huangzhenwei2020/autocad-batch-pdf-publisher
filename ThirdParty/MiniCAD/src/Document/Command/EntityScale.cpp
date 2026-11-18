@@ -194,22 +194,24 @@ namespace MiniCAD
         if (entity.IsKindOf<HatchEntity>())          // 含面域
         {
             auto& he = static_cast<HatchEntity&>(entity);
+            const auto baseInPlane = Math::WcsToOcs(he.GetOCS(), base);
+            auto scalePoint = [&](const auto& p) { return ScalePoint(p, baseInPlane, k); };
             for (auto& loop : he.GetLoops())
                 for (auto& edge : loop.Edges)
                 {
                     switch (edge.Type)
                     {
                     case HatchEdge::Kind::Poly:
-                        for (auto& p : edge.Poly.Points) p = sp(p);
+                        for (auto& p : edge.Poly.Points) p = scalePoint(p);
                         break;
                     case HatchEdge::Kind::EllipseArc:
-                        edge.Ell.Center = sp(edge.Ell.Center);
+                        edge.Ell.Center = scalePoint(edge.Ell.Center);
                         edge.Ell.RadiusX *= k;
                         edge.Ell.RadiusY *= k;
                         break;
                     case HatchEdge::Kind::Spline:
-                        for (auto& p : edge.Spl.FitPoints)     p = sp(p);
-                        for (auto& p : edge.Spl.ControlPoints) p = sp(p);
+                        for (auto& p : edge.Spl.FitPoints)     p = scalePoint(p);
+                        for (auto& p : edge.Spl.ControlPoints) p = scalePoint(p);
                         edge.Spl.Build();
                         break;
                     }

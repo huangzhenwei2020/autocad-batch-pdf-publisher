@@ -1,5 +1,6 @@
 #pragma once
 #include "Core/Object/Object.hpp" 
+#include "Core/Math/WorkingPlane.hpp"
 #include "Scene/LayerManager.h"
 #include "Scene/LineTypeTable.h"
 #include "Scene/TextStyleTable.h"
@@ -31,6 +32,11 @@ namespace MiniCAD
 		double      MaxX = 420.0;      // A3 横向，与 AutoCAD 默认图纸相近
 		double      MaxY = 297.0;
 		uint64_t    OwnerKey = 0;      // LAYOUT 组码 330
+		double      PaperWidth = 420.0;
+		double      PaperHeight = 297.0;
+		double      PaperUnitToMm = 1.0;
+		bool        PaperSizeEdited = false;
+		uint64_t    SourceKey = 0;
 		// 保存的图纸空间视图（AutoCAD 布局的主视口：中心与高度，纸面单位）。打开布局时 AutoCAD 显示的是它，
 		// 不是纸张范围 —— 内容画在纸张外的图纸（实测总平面样图 B）按纸张范围框住是一页空白。0 = 没有，按纸张范围
 		double      ViewCenterX = 0.0;
@@ -101,6 +107,10 @@ namespace MiniCAD
 		const TextStyleTable& GetTextStyleTable() const { return m_textStyleTable; }
 		// 场景实体与块定义中用到的文字样式 ID（按绘制时输出的文字统计，覆盖所有带文字的实体）
 		std::vector<TextStyleID> CollectUsedTextStyles() const;
+        const Math::WorkingPlane& GetWorkingPlane() const { return m_workingPlane; }
+        bool WorkingPlaneEdited() const { return m_workingPlaneEdited; }
+        void SetWorkingPlane(const Math::WorkingPlane& plane, bool edited = true)
+        { m_workingPlane = plane; m_workingPlaneEdited = edited; MarkDirty(); }
 		TextStyleID GetCurrentTextStyle() const          { return m_currentTextStyle; }
 		void        SetCurrentTextStyle(TextStyleID id)  { m_currentTextStyle = id; }
 
@@ -200,7 +210,7 @@ namespace MiniCAD
 		int EntityCount() const  { return (int)m_entities.size(); }
 
 		// 所有可见的有界实体的包围盒（缩放到全图用）；没有可算的实体时返回 false
-		bool GetExtents(AABB& out) const;
+		bool GetExtents(AABB& out, bool currentSpaceOnly = false) const;
 		  
 		// ── 序列化 ───────────────────────────────────────────
 		void Serialize(ISerializer& s) const;
@@ -222,6 +232,8 @@ namespace MiniCAD
 		BlockTable    m_blockTable;        // 块定义表，拥有全部 BlockEntity
 		LineTypeTable m_lineTypeTable;     // 线型定义表，拥有全部 LineTypeEntity
 		TextStyleTable m_textStyleTable;   // 文字样式表
+        Math::WorkingPlane m_workingPlane;
+        bool m_workingPlaneEdited = false;
 		TextStyleID    m_currentTextStyle = TextStyleTable::StandardID;   // 当前文字样式(TEXTSTYLE)
 		MLineStyleTable m_mlineStyleTable; // 多线样式表
 		MLineStyleID    m_currentMLineStyle = MLineStyleTable::StandardID;   // 当前多线样式(CMLSTYLE)

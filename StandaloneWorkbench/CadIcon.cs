@@ -28,7 +28,10 @@ namespace Wanluo.StandaloneWorkbench
             ["array"] = "M3,3 L9,3 L9,9 L3,9 Z M15,3 L21,3 L21,9 L15,9 Z M3,15 L9,15 L9,21 L3,21 Z M15,15 L21,15 L21,21 L15,21 Z",
             ["block"] = "M3,3 L14,3 L14,14 L3,14 Z M10,10 L21,10 L21,21 L10,21 Z",
             ["image"] = "M3,3 L21,3 L21,21 L3,21 Z M3,17 L9,11 L15,17 L18,14 L21,17 M16,7 A1,1 0 1 0 18,7 A1,1 0 1 0 16,7",
-            ["table"] = "M3,3 L21,3 L21,21 L3,21 Z M3,9 L21,9 M3,15 L21,15 M9,3 L9,21 M15,3 L15,21"
+            ["table"] = "M3,3 L21,3 L21,21 L3,21 Z M3,9 L21,9 M3,15 L21,15 M9,3 L9,21 M15,3 L15,21",
+            ["page-setup"] = "M5,2 L15,2 L20,7 L20,22 L5,22 Z M15,2 L15,7 L20,7 M8,11 L17,11 M8,15 L17,15 M8,19 L13,19",
+            ["viewport"] = "M2,3 L22,3 L22,21 L2,21 Z M6,7 L18,7 L18,17 L6,17 Z M8,15 L11,10 L14,14 L16,11",
+            ["viewport-edit"] = "M2,3 L22,3 L22,21 L2,21 Z M6,7 L15,7 M6,7 L6,17 L10,17 M12,16 L18,10 L21,13 L15,19 L11,20 Z"
         };
         public static readonly DependencyProperty GlyphProperty = DependencyProperty.Register(nameof(Glyph), typeof(string), typeof(CadIcon), new PropertyMetadata(null, Changed));
         public string Glyph { get => (string)GetValue(GlyphProperty); set => SetValue(GlyphProperty, value); }

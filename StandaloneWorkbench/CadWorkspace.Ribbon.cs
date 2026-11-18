@@ -53,21 +53,32 @@ namespace Wanluo.StandaloneWorkbench
             DrawTools.Children.Add(Group("曲线与辅助线", Tool("ellipse", "椭圆", "EL", "ELLIPSE"), Tool("ellipse", "椭圆弧", "ELA", "ELLIPSEARC"), Tool("spline", "样条", "SP", "SPLINE"), Tool("point", "点", "PT", "POINT"), Tool("slash", "构造线", "XL", "XLINE"), Tool("ray", "射线", "", "RAY")));
             DrawTools.Children.Add(Group("边界与填充", Tool("columns-2", "多线", "ML", "MLINE"), Tool("hatch", "填充", "H", "HATCH"), Tool("square", "面域", "REG", "REGION"), Tool("square", "实心面", "SO", "SOLID"), Tool("square", "覆盖", "WI", "WIPEOUT")));
             DrawTools.Children.Add(Group("绘图辅助", Tool("grid-3x3", "捕捉", "F3", "@snap"), Tool("columns-2", "正交", "F8", "@ortho"), Tool("waypoints", "极轴", "F10", "@polar")));
+            DrawTools.Children.Add(Group("样式管理", ActionButton("point", "点样式", PointStyle), ActionButton("slash", "线型管理", LineTypes)));
             ModifyTools.Children.Add(Group("位置与尺寸", Tool("move", "移动", "M", "MOVE"), Tool("rotate-ccw", "旋转", "RO", "ROTATE"), Tool("copy", "复制", "CO", "COPY"), Tool("flip-horizontal-2", "镜像", "MI", "MIRROR"), Tool("scaling", "缩放", "SC", "SCALE")));
             ModifyTools.Children.Add(Group("边界修改", Tool("offset", "偏移", "O", "OFFSET"), Tool("scissors", "修剪", "TR", "TRIM"), Tool("extend", "延伸", "EX", "EXTEND"), Tool("break", "打断", "BR", "BREAK"), Tool("corner-down-right", "圆角", "F", "FILLET"), Tool("chamfer", "倒角", "CHA", "CHAMFER")));
             ModifyTools.Children.Add(Group("组合编辑", Tool("scaling", "拉伸", "S", "STRETCH"), Tool("array", "阵列", "AR", "ARRAY"), Tool("expand", "分解", "X", "EXPLODE"), Tool("trash", "删除", "Del", "@delete")));
+            ModifyTools.Children.Add(Group("多线", Tool("columns-2", "多线编辑", "MLEDIT", "MLEDIT")));
+            ModifyTools.Children.Add(Group("剪贴板", Tool("scissors", "剪切", "Ctrl+X", "@cut"), Tool("copy", "复制", "Ctrl+C", "@copyclip"), Tool("copy", "带基点复制", "Ctrl+Shift+C", "@copybase"), Tool("block", "粘贴", "Ctrl+V", "@paste")));
             AnnotationTools.Children.Add(Group("文字与表格", Tool("text", "单行文字", "DT", "TEXT"), Tool("mtext", "多行文字", "MT", "MTEXT"), Tool("table", "表格", "TB", "TABLE"), ActionButton("text", "默认字高", TextHeight)));
             AnnotationTools.Children.Add(Group("尺寸标注", Tool("dimension", "线性标注", "DLI", "DIMLINEAR"), Tool("dimension", "对齐标注", "DAL", "DIMALIGNED"), Tool("angular", "角度标注", "DAN", "DIMANGULAR"), Tool("radius", "半径标注", "DRA", "DIMRADIUS"), Tool("radius", "直径标注", "DDI", "DIMDIAMETER")));
             AnnotationTools.Children.Add(Group("其他标注", Tool("radius", "折弯标注", "DJO", "DIMJOGGED"), Tool("angular", "弧长标注", "DAR", "DIMARC"), Tool("dimension", "坐标标注", "DOR", "DIMORDINATE"), Tool("ray", "引线", "LE", "LEADER"), Tool("ray", "多重引线", "MLE", "MLEADER"), Tool("dimension", "面积查询", "AA", "AREA")));
             AnnotationTools.Children.Add(Group("标注设置", ActionButton("dimension", "标注参数", DimensionSettings)));
+            AnnotationTools.Children.Add(Group("命名样式", Tool("text", "文字样式", "STYLE", "STYLE"), Tool("columns-2", "多线样式", "MLS", "MLSTYLE")));
             InsertTools.Children.Add(Group("块与图像", Tool("block", "定义块", "B", "BLOCK"), Tool("block", "插入块", "I", "INSERT"), Tool("image", "图像", "IM", "IMAGE"), Tool("expand", "分解", "X", "EXPLODE")));
+            InsertTools.Children.Add(Group("参照", ActionButton("folder-open", "外部参照", LocateReferences)));
             ModifyTools.Children.Add(Group("撤销与重做", Tool("undo-2", "撤销", "Ctrl+Z", "@undo"), Tool("redo-2", "重做", "Ctrl+Y", "@redo")));
             ViewTools.Children.Add(Group("视图操作", Tool("maximize", "全图", "ZF", "@fit"), Tool("zoom-in", "缩放", "Z", "ZOOM"), Tool("hand", "平移", "PAN", "PAN")));
+            ViewTools.Children.Add(Group("标准视图", StandardViews()));
+            ViewTools.Children.Add(Group("视觉样式", ActionButton("box", "线框", () => Run(() => CadNative.Check(CadNative.wl_visual_style(Client.Handle, 0)))), ActionButton("box", "着色", () => Run(() => CadNative.Check(CadNative.wl_visual_style(Client.Handle, 1))))));
+            ViewTools.Children.Add(Group("显示辅助", Tool("grid-3x3", "栅格", "F7", "@grid"), Tool("waypoints", "坐标轴", "", "@axis"), Tool("box", "视图导航", "", "@gizmo"), ActionButton("waypoints", "工作平面", WorkingPlaneSettings)));
             ViewTools.Children.Add(Group("工作面板", ActionButton("panel-right", "属性", () => ShowInspector(0)), ActionButton("layers", "图层", () => ShowInspector(1)), ActionButton("panel-left", "项目", () => UiActionRequested?.Invoke("project")), ActionButton("terminal", "命令记录", ToggleHistory)));
             ViewTools.Children.Add(Group("画布空间", ActionButton("expand", "清屏", () => UiActionRequested?.Invoke("clean"))));
-            ViewTools.Children.Add(Group("图纸布局", ActionButton("file-plus", "新建布局", () => NewLayout_Click(this, new RoutedEventArgs())), ActionButton("trash", "删除布局", () => DeleteLayout_Click(this, new RoutedEventArgs()))));
+            ViewTools.Children.Add(Group("图纸布局", CompactActions(ActionButton("file-plus", "新建布局", () => NewLayout_Click(this, new RoutedEventArgs())), ActionButton("page-setup", "布局设置", () => LayoutSettings()), ActionButton("copy", "复制布局", () => LayoutSettings(true)), ActionButton("trash", "删除布局", () => DeleteLayout_Click(this, new RoutedEventArgs())))));
+            ViewTools.Children.Add(Group("布局视口", CompactActions(ActionButton("viewport", "矩形视口", () => PaperViewport()), ActionButton("viewport-edit", "修改视口", () => PaperViewport(true)), ActionButton("hand", "调整内容", () => NavigateViewport()), ActionButton("viewport-edit", "裁剪视口", () => ClipViewport()), ActionButton("viewport", "编辑模型", () => EditViewportModel()), ActionButton("viewport-edit", "原位编辑", () => EditViewportModel(true)))));
             FileTools.Children.Add(Group("图纸文件", ActionButton("file-plus", "新建", () => NewDrawing()), ActionButton("folder-open", "打开", async () => await PickDrawingAsync()), ActionButton("save", "保存", async () => await SaveWithDialogAsync(false)), ActionButton("save-all", "另存为", async () => await SaveWithDialogAsync(true)), ActionButton("x", "关闭", async () => await CloseCurrentAsync())));
             FileTools.Children.Add(Group("项目与模型", ActionButton("panel-left", "项目", () => UiActionRequested?.Invoke("project")), ActionButton("box", "模型楼层", () => UiActionRequested?.Invoke("models")), ActionButton("app-window", "AutoCAD", () => UiActionRequested?.Invoke("cad"))));
+            FileTools.Children.Add(Group("绘图设置", ActionButton("slash", "线型管理", LineTypes), ActionButton("point", "点样式", PointStyle)));
+            FileTools.Children.Add(Group("多图纸", ActionButton("save-all", "全部保存", async () => await SaveAllDrawingsAsync())));
         }
 
         private FrameworkElement[] DrawButtons() => new FrameworkElement[]
@@ -96,6 +107,18 @@ namespace Wanluo.StandaloneWorkbench
             return button;
         }
 
+        private FrameworkElement CompactActions(params CadIconButton[] buttons)
+        {
+            var grid = new System.Windows.Controls.Primitives.UniformGrid { Rows = 2, VerticalAlignment = VerticalAlignment.Center };
+            foreach (var button in buttons)
+            {
+                button.Style = (Style)FindResource(typeof(CadIconButton));
+                button.MinWidth = 88;
+                grid.Children.Add(button);
+            }
+            return grid;
+        }
+
         private static Border Group(string name, params FrameworkElement[] tools)
         {
             var grid = new Grid { Margin = new Thickness(5, 0, 5, 0) };
@@ -115,6 +138,17 @@ namespace Wanluo.StandaloneWorkbench
             if (command.Equals("NEW", StringComparison.OrdinalIgnoreCase) || command.Equals("QNEW", StringComparison.OrdinalIgnoreCase))
                 return NewDrawing();
             if (Client.IsBusy || _parameterOpen) return false;
+            if (command.Equals("UCS", StringComparison.OrdinalIgnoreCase)) { WorkingPlaneSettings(); return true; }
+            if (command.Equals("VPMAX", StringComparison.OrdinalIgnoreCase)) { if (Client.State.EditingViewport == 0 || Client.State.InlineViewport) EditViewportModel(); return true; }
+            if (command.Equals("MSPACE", StringComparison.OrdinalIgnoreCase)) { if (!Client.State.InlineViewport) EditViewportModel(true); return true; }
+            if (command.Equals("VPCLIP", StringComparison.OrdinalIgnoreCase)) { ClipViewport(); return true; }
+            if (command.Equals("VPVIEW", StringComparison.OrdinalIgnoreCase)) { NavigateViewport(); return true; }
+            if (new[] { "MVIEW", "MV" }.Contains(command.ToUpperInvariant())) { PaperViewport(); return true; }
+            if (new[] { "VPORTS", "VPEDIT" }.Contains(command.ToUpperInvariant())) { PaperViewport(true); return true; }
+            if (command.Equals("PAGESETUP", StringComparison.OrdinalIgnoreCase)) { LayoutSettings(); return true; }
+            if (command.Equals("XREF", StringComparison.OrdinalIgnoreCase)) { LocateReferences(); return true; }
+            if (new[] { "LINETYPE", "LT", "LTYPE", "LTSCALE" }.Contains(command.ToUpperInvariant())) { LineTypes(command.Equals("LTSCALE", StringComparison.OrdinalIgnoreCase)); return true; }
+            if (new[] { "PTYPE", "DDPTYPE" }.Contains(command.ToUpperInvariant())) { PointStyle(); return true; }
             if (explicitTool && !command.StartsWith("@", StringComparison.Ordinal) && Client.State.ActiveId != 0)
                 if (!Run(() => Client.Command("@cancel"))) return false;
             if (DrawingCommands.Contains(command) && Client.State.ActiveId == 0 && !NewDrawing()) return false;

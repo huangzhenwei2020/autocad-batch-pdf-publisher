@@ -2,6 +2,7 @@
 #include "LineGripHandler.h"
 #include "CircleGripHandler.h"
 #include "PointGripHandler.h"
+#include "ViewportGripHandler.h"
 #include "RectangleGripHandler.h"
 #include "ImageGripHandler.h"
 #include "TableGripHandler.h"
@@ -49,6 +50,7 @@ namespace MiniCAD
         RegisterHandler<LineEntity>     (std::make_unique<LineGripHandler>());
         RegisterHandler<CircleEntity>   (std::make_unique<CircleGripHandler>());
         RegisterHandler<PointEntity>    (std::make_unique<PointGripHandler>());
+        RegisterHandler<ViewportEntity> (std::make_unique<ViewportGripHandler>());
         RegisterHandler<RectangleEntity>(std::make_unique<RectangleGripHandler>());
         RegisterHandler<TableEntity>    (std::make_unique<TableGripHandler>());
         RegisterHandler<ImageEntity>    (std::make_unique<ImageGripHandler>());
@@ -402,6 +404,7 @@ namespace MiniCAD
 
         for (int i = 0; i < (int)m_grips.size(); ++i)
         {
+            if (m_picking && !m_picking->ContainsClip(m_grips[i].WorldPos)) continue;
             Math::Point2 sc = m_viewport->GetCamera().WorldToScreen(m_grips[i].WorldPos);
             float d = std::hypot(screenPt.x - sc.x, screenPt.y - sc.y);
 
@@ -424,6 +427,7 @@ namespace MiniCAD
 
         for (int i = 0; i < (int)m_grips.size(); ++i)
         {
+            if (m_picking && !m_picking->ContainsClip(m_grips[i].WorldPos)) continue;
             Math::Point2 sc = m_viewport->GetCamera().WorldToScreen(m_grips[i].WorldPos);
             float d = std::hypot(screenPt.x - sc.x, screenPt.y - sc.y);
 

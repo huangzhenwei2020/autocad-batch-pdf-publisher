@@ -27,7 +27,7 @@ namespace MiniCAD::CadDimensionExchange
             triangle->ThirdCorner = Point(c); triangle->FourthCorner = Point(c);
             triangle->Color = MiniDWG::Color::ByBlock(); m_db.AddEntity(m_block, std::move(triangle));
         }
-        void EmitMText(const Math::Point3& p, const std::string& value, uint32_t, double height, double rotation, double width, const Math::Color4&) override
+        void EmitMText(const Math::Point3& p, const std::string& value, uint32_t, double height, double rotation, double width, const Math::Color4&, const Math::Vec3&) override
         {
             auto text = std::make_unique<MiniDWG::MText>(); text->InsertPoint = Point(p); text->Value = value;
             text->Height = height; text->RectangleWidth = width; text->AlignmentPoint = {std::cos(rotation), std::sin(rotation), 0};

@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include "Scene/Scene.h"
 #include "Editor/Tools/ITool.h"
 #include "Editor/EditorContext.h"
@@ -13,6 +13,7 @@ namespace MiniCAD
     class ArcTool : public ITool
     {
     public:
+        bool SupportsWorkingPlane() const override { return true; }
         ArcTool()
         {
             LOG_DEBUG("[ArcTool] click start | click point on arc | click end | right-click/ESC exits");
@@ -51,7 +52,7 @@ namespace MiniCAD
                     case 2:
                     {
                         m_p3 = pt;
-                        auto arc = Arc::FromThreePoints(m_p1, m_p2, m_p3);
+                        auto arc = MakeArc(m_p1, m_p2, m_p3);
                         if (arc)
                         {
                             Commit(*arc);
@@ -91,10 +92,10 @@ namespace MiniCAD
                 }
                 else if (m_step == 2)
                 {
-                    auto arc = Arc::FromThreePoints(m_p1, m_p2, cursor);
+                    auto arc = MakeArc(m_p1, m_p2, cursor);
                     if (arc)
                     {
-                        m_ctx->overlay.AddArc(arc->Center, arc->Radius, arc->StartAngle, arc->EndAngle, layerColor);
+                        m_ctx->overlay.AddArc(*arc, layerColor);
                     }
                     else
                     {
@@ -140,8 +141,28 @@ namespace MiniCAD
     private:
         Math::Point3 GetPoint(const InputEvent& e) const
         {
-            if (e.HasSnap) return e.SnapWorld;
-            return m_ctx->viewport.GetCamera().ScreenToWorld(e.MouseX, e.MouseY);
+            const auto& plane = m_ctx->scene.GetWorkingPlane();
+            auto point = e.SnapWorld;
+            if (!e.HasSnap && !m_ctx->viewport.GetCamera().ScreenToPlane(e.MouseX, e.MouseY, plane, point))
+                point = plane.Origin;
+            auto local = plane.ToLocal(point);
+            local.z = m_step > 0 ? plane.ToLocal(m_p1).z : local.z;
+            return plane.ToWorld(local);
+        }
+
+        std::optional<Arc> MakeArc(const Math::Point3& a, const Math::Point3& b, const Math::Point3& c) const
+        {
+            const auto& plane = m_ctx->scene.GetWorkingPlane();
+            auto arc = Arc::FromThreePoints(plane.ToLocal(a), plane.ToLocal(b), plane.ToLocal(c));
+            if (!arc) return std::nullopt;
+            arc->Center = plane.ToWorld(arc->Center);
+            arc->Normal = plane.Normal();
+            const auto frame = Math::BuildOCS(arc->Normal);
+            const double offset = std::atan2(Math::WorkingPlane::Dot(plane.X, frame.Uy),
+                Math::WorkingPlane::Dot(plane.X, frame.Ux));
+            arc->StartAngle += offset;
+            arc->EndAngle += offset;
+            return arc;
         }
 
         void Commit(const Arc& arc)
@@ -150,6 +171,7 @@ namespace MiniCAD
             auto entity = std::make_unique<ArcEntity>(id, arc.Center, arc.Radius,
                                                       arc.StartAngle, arc.EndAngle);
             m_ctx->ApplyCurrentAttr(*entity);
+            entity->SetArc(arc);
             auto cmd    = std::make_unique<AddEntityCommand>(std::move(entity));
             m_ctx->cmdStack.Execute(std::move(cmd), m_ctx->scene);
 

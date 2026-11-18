@@ -47,6 +47,7 @@ namespace MiniCAD
             auto* hatch = static_cast<HatchEntity*>(entity);
             const auto& loops = hatch->GetLoops();
             const auto  id    = entity->GetID();
+            const auto firstGrip = outGrips.size();
 
             for (int li = 0; li < static_cast<int>(loops.size()); ++li)
             {
@@ -59,7 +60,8 @@ namespace MiniCAD
                     case HatchEdge::Kind::Poly:
                     {
                         const Polyline& pl = e.Poly;
-                        for (int i = 0; i < static_cast<int>(pl.Points.size()); ++i)
+                        const int uniquePoints = static_cast<int>(pl.Points.size()) - (PolylineOps::IsRing(pl) ? 1 : 0);
+                        for (int i = 0; i < uniquePoints; ++i)
                             outGrips.push_back({ id, Grip::Type::Start, pl.Points[i], Pack(li, ei, i) });
                         for (int i = 0; i < pl.SegCount(); ++i)
                             outGrips.push_back({ id, Grip::Type::Mid, SegMid(pl, i), Pack(li, ei, i) });
@@ -67,8 +69,11 @@ namespace MiniCAD
                     }
                     case HatchEdge::Kind::EllipseArc:
                         outGrips.push_back({ id, Grip::Type::Center,   e.Ell.Center,        Pack(li, ei, 0) });
-                        outGrips.push_back({ id, Grip::Type::Start,    e.Ell.PointAt(e.A0), Pack(li, ei, 0) });
-                        outGrips.push_back({ id, Grip::Type::End,      e.Ell.PointAt(e.A1), Pack(li, ei, 0) });
+                        if (e.StartPt() != e.EndPt())
+                        {
+                            outGrips.push_back({ id, Grip::Type::Start, e.StartPt(), Pack(li, ei, 0) });
+                            outGrips.push_back({ id, Grip::Type::End, e.EndPt(), Pack(li, ei, 0) });
+                        }
                         outGrips.push_back({ id, Grip::Type::Quadrant, e.Ell.VertexE(),     Pack(li, ei, 0) });
                         outGrips.push_back({ id, Grip::Type::Quadrant, e.Ell.VertexN(),     Pack(li, ei, 1) });
                         break;
@@ -79,6 +84,9 @@ namespace MiniCAD
                     }
                 }
             }
+            const auto frame = hatch->GetOCS();
+            for (size_t i = firstGrip; i < outGrips.size(); ++i)
+                outGrips[i].WorldPos = Math::OcsToWcs(frame, outGrips[i].WorldPos);
         }
 
         std::unique_ptr<IGripDragState> BeginDrag(Entity* entity, const Grip& /*activeGrip*/) override
@@ -90,7 +98,7 @@ namespace MiniCAD
             return state;
         }
 
-        void UpdateDrag(Entity* entity, IGripDragState* dragState, const Grip& activeGrip, const Math::Point3& worldPos, std::vector<Grip>& grips) override
+        void UpdateDrag(Entity* entity, IGripDragState* dragState, const Grip& activeGrip, const Math::Point3& world, std::vector<Grip>& grips) override
         {
             auto* hatch = static_cast<HatchEntity*>(entity);
             auto* state = static_cast<HatchDragState*>(dragState);
@@ -104,6 +112,8 @@ namespace MiniCAD
             if (ei < 0 || ei >= static_cast<int>(edges.size())) return;
             HatchEdge&       e    = edges[ei];
             const HatchEdge& base = state->Base[li].Edges[ei];
+            auto worldPos = Math::WcsToOcs(hatch->GetOCS(), world);
+            worldPos.z = Math::WcsToOcs(hatch->GetOCS(), activeGrip.WorldPos).z;
 
             switch (e.Type)
             {
@@ -111,10 +121,17 @@ namespace MiniCAD
             {
                 Polyline&       pl = e.Poly;
                 const Polyline& bp = base.Poly;
+                const bool closed = PolylineOps::IsRing(bp);
+                auto setVertex = [&](int i, const Math::Point3& value)
+                {
+                    pl.Points[i] = value;
+                    if (closed && i == 0) pl.Points.back() = value;
+                    if (closed && i == bp.SegCount()) pl.Points.front() = value;
+                };
                 if (activeGrip.GripType == Grip::Type::Start)
                 {
                     if (local >= 0 && local < static_cast<int>(pl.Points.size()))
-                        pl.Points[local] = worldPos;
+                        setVertex(local, worldPos);
                 }
                 else if (activeGrip.GripType == Grip::Type::Mid)
                 {
@@ -130,8 +147,9 @@ namespace MiniCAD
                         {
                             Math::Point3 oldMid = SegLineMid(bp.SegStart(seg), bp.SegEnd(seg));
                             double dx = worldPos.x - oldMid.x, dy = worldPos.y - oldMid.y;
-                            pl.Points[seg].x     += dx;  pl.Points[seg].y     += dy;
-                            pl.Points[seg + 1].x += dx;  pl.Points[seg + 1].y += dy;
+                            const Math::Vec3 delta{dx, dy, 0};
+                            setVertex(seg, bp.SegStart(seg) + delta);
+                            setVertex(seg + 1, bp.SegEnd(seg) + delta);
                         }
                     }
                 }
@@ -175,7 +193,7 @@ namespace MiniCAD
             }
 
             hatch->GetLoops() = out;
-            SyncGrips(entity->GetID(), out, grips);
+            SyncGrips(entity->GetID(), out, hatch->GetOCS(), grips);
         }
 
         void DrawPreview(Entity* entity, IGripDragState* dragState, const Grip& /*activeGrip*/, Overlay& overlay) override
@@ -185,6 +203,8 @@ namespace MiniCAD
             for (const auto& loop : state->Base)
             {
                 std::vector<Math::Point3> pts = loop.Tessellate();
+                const auto frame = static_cast<const HatchEntity*>(entity)->GetOCS();
+                for (auto& p : pts) p = Math::OcsToWcs(frame, p);
                 for (size_t i = 0; i + 1 < pts.size(); ++i)
                     overlay.AddLine(pts[i], pts[i + 1], kGhost);
                 if (pts.size() >= 2) overlay.AddLine(pts.back(), pts.front(), kGhost);
@@ -214,7 +234,7 @@ namespace MiniCAD
     private:
 
         // ── 夹点坐标同步 ───────────────────────────────────────────────────
-        static void SyncGrips(Object::ObjectID ownerId, const std::vector<HatchLoop>& loops, std::vector<Grip>& grips)
+        static void SyncGrips(Object::ObjectID ownerId, const std::vector<HatchLoop>& loops, const Math::OCS& frame, std::vector<Grip>& grips)
         {
             for (auto& g : grips)
             {
@@ -255,6 +275,7 @@ namespace MiniCAD
                         g.WorldPos = e.Spl.FitPoints[local];
                     break;
                 }
+                g.WorldPos = Math::OcsToWcs(frame, g.WorldPos);
             }
         }
 
@@ -292,18 +313,11 @@ namespace MiniCAD
         // 三点求 bulge(A=弧起点,M=弧上经过点,B=弧终点)。
         static double ComputeBulgeFromThreePoints(const Math::Point3& A, const Math::Point3& M, const Math::Point3& B)
         {
-            double ax = A.x, ay = A.y, mx = M.x, my = M.y, bx = B.x, by = B.y;
-            double D = 2.0 * (ax * (my - by) + mx * (by - ay) + bx * (ay - my));
-            if (std::abs(D) < 1e-10) return 0.0;
-            double a2 = ax * ax + ay * ay, m2 = mx * mx + my * my, b2 = bx * bx + by * by;
-            double cx = (a2 * (my - by) + m2 * (by - ay) + b2 * (ay - my)) / D;
-            double cy = (a2 * (bx - mx) + m2 * (ax - bx) + b2 * (mx - ax)) / D;
-            double sa = std::atan2(ay - cy, ax - cx);
-            double ea = std::atan2(by - cy, bx - cx);
-            double cross = (mx - ax) * (by - ay) - (my - ay) * (bx - ax);
-            double sweep;
-            if (cross >= 0.0) { sweep = ea - sa; if (sweep <= 0.0) sweep += Math::TwoPI; return -std::tan(sweep * 0.25); }
-            else              { sweep = sa - ea; if (sweep <= 0.0) sweep += Math::TwoPI; return  std::tan(sweep * 0.25); }
+            const auto middle = M - A, end = B - A;
+            const auto arc = Arc::FromThreePoints({}, {middle.x,middle.y,0}, {end.x,end.y,0});
+            if (!arc) return 0.0;
+            const double direction = Math::Cross(middle,end).z < 0 ? -1.0 : 1.0;
+            return direction * std::tan(arc->SweepAngle() * 0.25);
         }
     };
 }

@@ -311,11 +311,9 @@ namespace MiniCAD
             const Math::Point3 tl = AnchorTopLeft(w, h);
             const double off = IsLeftAttachment() ? 0.0 : IsRightAttachment() ? w - tw : (w - tw) * 0.5;
             const double x0 = tl.x + off, x1 = x0 + tw, y0 = tl.y - h, y1 = tl.y;
-            const double c = std::cos(m_rotation), s = std::sin(m_rotation);
-            auto rot = [&](double x, double y) -> Math::Point3
+            auto rot = [&](double x, double y)
             {
-                const double dx = x - m_position.x, dy = y - m_position.y;
-                return { m_position.x + dx * c - dy * s, m_position.y + dx * s + dy * c, m_position.z };
+                return TextPoint(x - m_position.x, y - m_position.y);
             };
             return { rot(x0, y1), rot(x1, y1), rot(x1, y0), rot(x0, y0) };
         }
@@ -324,13 +322,10 @@ namespace MiniCAD
         AABB GetBoundingBox() const override
         {
             const auto f = GetTextFrame();
-            Math::Point3 lo = f[0], hi = f[0];
-            for (const auto& p : f)
-            {
-                lo.x = std::min(lo.x, p.x); lo.y = std::min(lo.y, p.y);
-                hi.x = std::max(hi.x, p.x); hi.y = std::max(hi.y, p.y);
-            }
-            return AABB(lo, hi);
+            AABB bounds(f[0], f[0]);
+            for (const auto& corner : f)
+                bounds.Expand(corner);
+            return bounds;
         }
 
         void Draw(IDrawSink& sink, bool isSelected, bool isHovered) const override
@@ -369,7 +364,7 @@ namespace MiniCAD
                 }
             if (w <= 0.0) w = m_height;
             if (h <= 0.0) h = m_height;
-            sink.EmitRichMText(DrawOrigin(w, h), block, m_rotation, color);
+            sink.EmitRichMText(DrawOrigin(w, h), block, m_rotation, color, GetExtrusion());
         }
 
         double LineSpacing() const { return m_lineSpacingFactor > 0.0 ? m_lineSpacingFactor : 1.0; }
@@ -507,8 +502,14 @@ namespace MiniCAD
         {
             const Math::Point3 tl = AnchorTopLeft(w, h);
             const double dx = tl.x - m_position.x, dy = tl.y - m_height - m_position.y;
-            const double c = std::cos(m_rotation), s = std::sin(m_rotation);
-            return { m_position.x + dx * c - dy * s, m_position.y + dx * s + dy * c, m_position.z };
+            return TextPoint(dx, dy);
+        }
+
+        Math::Point3 TextPoint(double x, double y) const
+        {
+            const auto ocs = GetOCS();
+            const auto u = Math::PlaneDirection(ocs, m_rotation);
+            return m_position + u * x + Math::Cross(ocs.Uz, u) * y;
         }
 
         // 未旋转时文字块的左上角

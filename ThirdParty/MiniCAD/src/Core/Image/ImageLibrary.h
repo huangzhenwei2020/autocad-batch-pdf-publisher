@@ -21,6 +21,7 @@ namespace MiniCAD
 
         // 取得图像；找不到 / 解码失败返回 nullptr（失败结果也会缓存，避免每帧重试）
         std::shared_ptr<const ImageData> Get(const std::string& path);
+        bool GetSize(const std::string& path, uint32_t& width, uint32_t& height) const;
 
         // 丢弃某路径的缓存，下次 Get 重新读盘
         void Reload(const std::string& path) { m_cache.erase(path); }

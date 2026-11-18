@@ -59,8 +59,9 @@ namespace MiniCAD
             double& bestDist,
             SnapResult& best,
             SnapResult::Type type,
-            Object::ObjectID id)
+            Object::ObjectID id, const std::function<bool(const Math::Point3&)>& filter)
         {
+            if (filter && !filter(worldPt)) return;
             double d = Math::Distance(sp, cam.WorldToScreen(worldPt));
             if (d < snapRadiusPx && d < bestDist)
             {
@@ -108,7 +109,8 @@ namespace MiniCAD
         m_queryCandidates = nullptr;   // 候选集指针仅本次查询有效
 
         if (best.IsValid()) return best;
-        if (IsModeEnabled(SnapMode::Grid)) return TryGrid(sp, cam);
+        if (IsModeEnabled(SnapMode::Grid))
+            return TryGrid(sp, cam);
         return {};
     }
 
@@ -133,7 +135,7 @@ namespace MiniCAD
                 pts.clear();
                 CollectFeaturePoints(static_cast<const Entity&>(obj), static_cast<FeatureKind>(kind), pts);
                 for (const auto& p : pts)
-                    TryUpdateBest(p, sp, cam, m_snapRadiusPx, bestDist, best, type, obj.GetID());
+                    TryUpdateBest(p, sp, cam, m_snapRadiusPx, bestDist, best, type, obj.GetID(), m_pointFilter);
             });
 
         return best;
@@ -185,7 +187,7 @@ namespace MiniCAD
                     auto* e = static_cast<const LineEntity*>(&obj);
                     auto& L = e->GetLine();
                     Math::Point3 closest = Math::ClosestPointOnSegment(worldMouse, L.Start, L.End);
-                    TryUpdateBest(closest, sp, cam, m_snapRadiusPx, bestDist, best, T, id);
+                    TryUpdateBest(closest, sp, cam, m_snapRadiusPx, bestDist, best, T, id, m_pointFilter);
                 }
 
                 // ── Rectangle ──────────────────────────────────────────────────
@@ -198,7 +200,7 @@ namespace MiniCAD
                         std::pair{r.P1, r.P2}, {r.P2, r.P3}, {r.P3, r.P4}, {r.P4, r.P1} })
                     {
                         TryUpdateBest(Math::ClosestPointOnSegment(worldMouse, a, b),
-                            sp, cam, m_snapRadiusPx, bestDist, best, T, id);
+                            sp, cam, m_snapRadiusPx, bestDist, best, T, id, m_pointFilter);
                     }
                 }
 
@@ -208,34 +210,41 @@ namespace MiniCAD
                     auto* e = static_cast<const CircleEntity*>(&obj);
                     const auto& c = e->GetCircle();
 
-                    double dx = worldMouse.x - c.Center.x;
-                    double dy = worldMouse.y - c.Center.y;
-                    double len = std::sqrt(dx * dx + dy * dy);
-                    if (len < 1e-10) return;
-
-                    Math::Point3 onCircle =
-                    {
-                        c.Center.x + c.Radius * (dx / len),
-                        c.Center.y + c.Radius * (dy / len),
-                        c.Center.z
-                    };
-                    TryUpdateBest(onCircle, sp, cam, m_snapRadiusPx, bestDist, best, T, id);
+                    Math::WorkingPlane plane;
+                    const auto frame = Math::BuildOCS(c.Normal);
+                    plane.Set(c.Center, frame.Ux, frame.Uy);
+                    Math::Point3 onPlane = worldMouse;
+                    cam.ScreenToPlane(sp.x, sp.y, plane, onPlane);
+                    const auto onCircle = c.ClosestPoint(onPlane);
+                    TryUpdateBest(onCircle, sp, cam, m_snapRadiusPx, bestDist, best, T, id, m_pointFilter);
                 }
 
                 // ── Arc：弧上最近点（考虑角度范围）────────────────────────────
                 if (obj.IsKindOf<ArcEntity>())
                 {
                     auto* e = static_cast<const ArcEntity*>(&obj);
-                    Math::Point3 closest = e->GetArc().ClosestPoint(worldMouse);
-                    TryUpdateBest(closest, sp, cam, m_snapRadiusPx, bestDist, best, T, id);
+                    const auto& arc = e->GetArc();
+                    Math::WorkingPlane plane;
+                    const auto frame = Math::BuildOCS(arc.Normal);
+                    plane.Set(arc.Center, frame.Ux, frame.Uy);
+                    Math::Point3 onPlane = worldMouse;
+                    cam.ScreenToPlane(sp.x, sp.y, plane, onPlane);
+                    Math::Point3 closest = arc.ClosestPoint(onPlane);
+                    TryUpdateBest(closest, sp, cam, m_snapRadiusPx, bestDist, best, T, id, m_pointFilter);
                 }
 
                 // ── Ellipse：椭圆周最近点（牛顿迭代）─────────────────────────
                 if (obj.IsKindOf<EllipseEntity>())
                 {
                     auto* e = static_cast<const EllipseEntity*>(&obj);
-                    Math::Point3 closest = e->GetEllipse().ClosestPoint(worldMouse);
-                    TryUpdateBest(closest, sp, cam, m_snapRadiusPx, bestDist, best, T, id);
+                    const auto& ellipse = e->GetEllipse();
+                    const auto [x, y] = ellipse.Axes();
+                    Math::WorkingPlane plane;
+                    plane.Set(ellipse.Center, x, y);
+                    auto onPlane = worldMouse;
+                    cam.ScreenToPlane(sp.x, sp.y, plane, onPlane);
+                    const auto closest = ellipse.ClosestPoint(onPlane);
+                    TryUpdateBest(closest, sp, cam, m_snapRadiusPx, bestDist, best, T, id, m_pointFilter);
                 }
 
                 // ── Polyline：Tessellate 后逐段最近点 ────────────────────────
@@ -245,8 +254,16 @@ namespace MiniCAD
                     const auto& pl = e->GetPolyline();
 
                     // 直接用 Polyline 的几何最近点查询（内部处理弧段）
-                    Math::Point3 closest = pl.ClosestPoint(worldMouse);
-                    TryUpdateBest(closest, sp, cam, m_snapRadiusPx, bestDist, best, T, id);
+                    Math::Point3 onPlane = worldMouse;
+                    if (!pl.HasDefaultPlane() && !pl.Points.empty())
+                    {
+                        const auto frame = Math::BuildOCS(pl.Normal);
+                        Math::WorkingPlane plane;
+                        plane.Set(pl.Points.front(), frame.Ux, frame.Uy);
+                        cam.ScreenToPlane(sp.x, sp.y, plane, onPlane);
+                    }
+                    Math::Point3 closest = pl.ClosestPoint(onPlane);
+                    TryUpdateBest(closest, sp, cam, m_snapRadiusPx, bestDist, best, T, id, m_pointFilter);
                 }
 
                 // ── Spline：Tessellate 后逐段最近点 ──────────────────────────
@@ -258,7 +275,7 @@ namespace MiniCAD
 
                     // 用 Spline::ClosestPoint（内部逐段采样）
                     Math::Point3 closest = sp_.ClosestPoint(worldMouse);
-                    TryUpdateBest(closest, sp, cam, m_snapRadiusPx, bestDist, best, T, id);
+                    TryUpdateBest(closest, sp, cam, m_snapRadiusPx, bestDist, best, T, id, m_pointFilter);
                 }
 
                 // ── Solid3D：线框各段上最近点 ───────────────────────────────
@@ -267,7 +284,7 @@ namespace MiniCAD
                     for (const auto& line : static_cast<const Solid3DEntity&>(obj).GetWorldWire())
                         for (size_t i = 1; i < line.size(); ++i)
                             TryUpdateBest(Math::ClosestPointOnSegment(worldMouse, line[i - 1], line[i]),
-                                sp, cam, m_snapRadiusPx, bestDist, best, T, id);
+                                sp, cam, m_snapRadiusPx, bestDist, best, T, id, m_pointFilter);
                 }
 
                 // ── XLine：无限直线上最近点（参数不设限）──────────────────────
@@ -276,7 +293,7 @@ namespace MiniCAD
                     auto* e = static_cast<const XLineEntity*>(&obj);
                     const XLine& xl = e->GetXLine();
                     if (!xl.IsValid()) return;
-                    TryUpdateBest(xl.ClosestPoint(worldMouse), sp, cam, m_snapRadiusPx, bestDist, best, T, id);
+                    TryUpdateBest(xl.ClosestPoint(worldMouse), sp, cam, m_snapRadiusPx, bestDist, best, T, id, m_pointFilter);
                 }
 
                 // ── Ray：半无限直线上最近点（参数 clamp 到 t ≥ 0）─────────────
@@ -286,7 +303,7 @@ namespace MiniCAD
                     const XLine& r = e->GetRay();
                     if (!r.IsValid()) return;
                     double t = std::max(0.0, r.ProjectParam(worldMouse));
-                    TryUpdateBest(r.PointAt(t), sp, cam, m_snapRadiusPx, bestDist, best, T, id);
+                    TryUpdateBest(r.PointAt(t), sp, cam, m_snapRadiusPx, bestDist, best, T, id, m_pointFilter);
                 }
             });
 
@@ -312,7 +329,10 @@ namespace MiniCAD
                 if (exclude.contains(obj.GetID()) || !IsSnapVisible(scene, obj))   return;
                 if (!obj.IsKindOf<Entity>())         return;
 
-                const ICurveEntity* ce = static_cast<const Entity*>(&obj)->AsCurveEntity();
+                const auto& entity = static_cast<const Entity&>(obj);
+                // The intersection solver works in XY.
+                if (!entity.HasDefaultExtrusion()) return;
+                const ICurveEntity* ce = entity.AsCurveEntity();
                 if (!ce) return;
 
                 auto curve = ce->MakeCurve();
@@ -333,7 +353,7 @@ namespace MiniCAD
                 {
                     const double before = bestDist;
                     TryUpdateBest(p, sp, cam, m_snapRadiusPx, bestDist, best,
-                                  SnapResult::Type::Intersection, cands[i].id);
+                                  SnapResult::Type::Intersection, cands[i].id, m_pointFilter);
                     if (bestDist < before) best.SourceID2 = cands[j].id;
                 }
             }
@@ -367,7 +387,7 @@ namespace MiniCAD
 
                 Math::Point3 foot = ce->MakeCurve()->ClosestPoint(fromPoint);
                 TryUpdateBest(foot, sp, cam, m_snapRadiusPx, bestDist, best,
-                              SnapResult::Type::Perpendicular, obj.GetID());
+                              SnapResult::Type::Perpendicular, obj.GetID(), m_pointFilter);
             });
 
         return best;

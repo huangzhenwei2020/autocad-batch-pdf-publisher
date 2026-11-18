@@ -5,6 +5,7 @@
 #include "Entity.hpp"
 #include "ICurveEntity.hpp"
 #include "../Draw/CurveSampling.hpp"
+#include "../Draw/TransformDrawSink.hpp"
 #include "../GeomKernel/Curves.hpp"
 #include <algorithm>
 
@@ -17,7 +18,9 @@ namespace MiniCAD
         PolylineEntity(ObjectID id, Polyline polyline)
             : Entity(id)
             , m_polyline(std::move(polyline))
-        {}
+        {
+            Entity::SetExtrusion(m_polyline.Normal);
+        }
 
         // Convenience: pure-line polyline from a point list
         PolylineEntity(ObjectID id, std::vector<Math::Point3> pts)
@@ -32,7 +35,24 @@ namespace MiniCAD
         {}
 
         // ── Accessors ─────────────────────────────────────────────────────────
-        void             SetPolyline(Polyline pl) { m_polyline = std::move(pl); SyncSegmentWidths(); }
+        void SetAttr(const EntityAttr& attr) override
+        {
+            Entity::SetAttr(attr);
+            m_polyline.Normal = attr.Extrusion;
+        }
+
+        void SetExtrusion(const Math::Vec3& normal) override
+        {
+            Entity::SetExtrusion(normal);
+            m_polyline.Normal = normal;
+        }
+
+        void SetPolyline(Polyline pl)
+        {
+            m_polyline = std::move(pl);
+            Entity::SetExtrusion(m_polyline.Normal);
+            SyncSegmentWidths();
+        }
         const Polyline&  GetPolyline()      const { return m_polyline; }
 
         // 多段线恒定宽度(DXF LWPOLYLINE 组码 43,模型单位)。>= 1 时按粗线填充绘制。
@@ -163,6 +183,11 @@ namespace MiniCAD
                 const double hw = lineWidth * 0.5;
                 box.Min.x -= hw; box.Min.y -= hw;
                 box.Max.x += hw; box.Max.y += hw;
+                if (!m_polyline.HasDefaultPlane())
+                {
+                    box.Min.z -= hw;
+                    box.Max.z += hw;
+                }
             }
             return box;
         }
@@ -204,8 +229,21 @@ namespace MiniCAD
         {
             if (!m_polyline.IsValid()) return;
 
-            const auto& attr  = GetAttr();
             const Math::Color4& color = isSelected ? IDrawSink::kSelectionColor : isHovered ? IDrawSink::kHoverColor : ResolveDrawColor(sink);
+            if (m_polyline.HasDefaultPlane())
+                DrawInPlane(sink, m_polyline, color);
+            else
+            {
+                TransformDrawSink transform(sink, Math::OcsToWcsMatrix(GetOCS()));
+                DrawInPlane(transform, m_polyline.ToOcs(), color);
+            }
+        }
+
+        DECLARE_RUNTIME_TYPE(PolylineEntity, Entity)
+
+    private:
+        void DrawInPlane(IDrawSink& sink, const Polyline& planePolyline, const Math::Color4& color) const
+        {
             constexpr double kAngleTol = Math::PI / 36.0;   // 5°
 
             // 有宽度：实体由填充三角形拼接而成（折点处用 miter 尖角补缺口）。
@@ -235,12 +273,12 @@ namespace MiniCAD
                         pathW.push_back(w);
                     };
 
-                    for (int i = 0; i < m_polyline.SegCount(); ++i)
+                    for (int i = 0; i < planePolyline.SegCount(); ++i)
                     {
-                        const auto& A = m_polyline.SegStart(i);
-                        const auto& B = m_polyline.SegEnd(i);
+                        const auto& A = planePolyline.SegStart(i);
+                        const auto& B = planePolyline.SegEnd(i);
                         const double ws = SegmentStartWidth(i), we = SegmentEndWidth(i);
-                        if (m_polyline.SegIsLine(i))
+                        if (planePolyline.SegIsLine(i))
                         {
                             push(A, ws);
                             push(B, we);
@@ -248,7 +286,7 @@ namespace MiniCAD
                         else
                         {
                             // 圆弧细分点上宽度按弧长线性插值，端点用本段的起止宽度
-                            if (!SampleArcSegment(sink, A, B, m_polyline.SegBulge(i), kAngleTol,
+                            if (!SampleArcSegment(sink, A, B, planePolyline.SegBulge(i), kAngleTol,
                                                   [&](const Math::Point3& p, const Math::Point3& q, double t0, double t1)
                                                   {
                                                       push(p, ws + (we - ws) * t0);
@@ -264,14 +302,14 @@ namespace MiniCAD
                     return;
                 }
 
-                const std::vector<Node> nodes = BuildNodes(sink, kAngleTol);
+                const std::vector<Node> nodes = BuildNodes(sink, planePolyline, kAngleTol);
                 EmitThickPolyline(sink, nodes, color);
                 return;
             }
 
             // 整条串成一条路径，虚线相位跨段连续
             std::vector<Math::Point3> path;
-            path.reserve(static_cast<size_t>(m_polyline.SegCount()) + 1);
+            path.reserve(static_cast<size_t>(planePolyline.SegCount()) + 1);
             auto push = [&](const Math::Point3& p)
             {
                 // 段与段的连接处是同一个顶点，不重复收进路径
@@ -284,17 +322,17 @@ namespace MiniCAD
                 path.push_back(p);
             };
 
-            for (int i = 0; i < m_polyline.SegCount(); ++i)
+            for (int i = 0; i < planePolyline.SegCount(); ++i)
             {
-                const auto& A = m_polyline.SegStart(i);
-                const auto& B = m_polyline.SegEnd(i);
+                const auto& A = planePolyline.SegStart(i);
+                const auto& B = planePolyline.SegEnd(i);
 
-                if (m_polyline.SegIsLine(i))
+                if (planePolyline.SegIsLine(i))
                 {
                     push(A);
                     push(B);
                 }
-                else if (!SampleArcSegment(sink, A, B, m_polyline.SegBulge(i), kAngleTol,
+                else if (!SampleArcSegment(sink, A, B, planePolyline.SegBulge(i), kAngleTol,
                                            [&](const Math::Point3& p, const Math::Point3& q, double, double)
                                            { push(p); push(q); }))
                 {
@@ -305,9 +343,6 @@ namespace MiniCAD
             sink.DrawPath(path, color, false);
         }
 
-        DECLARE_RUNTIME_TYPE(PolylineEntity, Entity)
-
-    private:
         // 圆弧段 A→B 按参数 t ∈ [0, 1] 细分，取点与 Polyline::TessellateArc 相同（每 angleTol 一段，末点就是 B）；
         // 深度放大时 sink 要求在视图附近加密（见 SampleCurveSpans；halfWidth：带宽度时的半宽，外边缘比中心线伸出这么多）。
         // emit(p, q, tp, tq)。半径太小（当直线段画）时返回 false
@@ -353,18 +388,18 @@ namespace MiniCAD
 
         // 把多段线按角度容差离散成带半宽的节点序列（含所有顶点与圆弧插值点）。
         // 圆弧段上的半宽按弧长线性插值——宽度沿段均匀变化，与 AutoCAD 一致。
-        std::vector<Node> BuildNodes(const IDrawSink& sink, double angleTol) const
+        std::vector<Node> BuildNodes(const IDrawSink& sink, const Polyline& planePolyline, double angleTol) const
         {
             std::vector<Node> nodes;
-            if (!m_polyline.IsValid()) return nodes;
+            if (!planePolyline.IsValid()) return nodes;
 
-            const int segs = m_polyline.SegCount();
+            const int segs = planePolyline.SegCount();
             auto halfOf = [](double w) { return w * 0.5; };
 
             for (int i = 0; i < segs; ++i)
             {
-                const Math::Point3& A = m_polyline.SegStart(i);
-                const Math::Point3& B = m_polyline.SegEnd(i);
+                const Math::Point3& A = planePolyline.SegStart(i);
+                const Math::Point3& B = planePolyline.SegEnd(i);
                 const double h0 = halfOf(SegmentStartWidth(i));   // 段起点端半宽
                 const double h1 = halfOf(SegmentEndWidth(i));     // 段终点端半宽
 
@@ -374,7 +409,7 @@ namespace MiniCAD
                 // 折点处：上一段的 hIn 保留（那是到达它的宽度），这里只补上离开它的宽度。
                 nodes.back().hOut = h0;
 
-                if (m_polyline.SegIsLine(i))
+                if (planePolyline.SegIsLine(i))
                 {
                     // B 的 hIn = 本段终点宽度；hOut 待下一段覆盖
                     nodes.push_back({ B, h1, h1 });
@@ -383,7 +418,7 @@ namespace MiniCAD
                 {
                     // 每段的终点进节点（起点 A 已是上面的折点：再压一次会复制成两个重合节点，
                     // 使「上一段 → 本弧」接缝处的斜接被 l0==0 判掉而留下缺口）；最后一段的终点就是 B，下面单独压
-                    SampleArcSegment(sink, A, B, m_polyline.SegBulge(i), angleTol,
+                    SampleArcSegment(sink, A, B, planePolyline.SegBulge(i), angleTol,
                                      [&](const Math::Point3&, const Math::Point3& q, double, double t)
                                      {
                                          if (t < 1.0)

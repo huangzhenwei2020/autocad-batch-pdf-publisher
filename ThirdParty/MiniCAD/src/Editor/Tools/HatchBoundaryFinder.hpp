@@ -10,6 +10,7 @@
 #include "Core/Entity/RectangleEntity.hpp"
 #include "Core/Entity/HatchEntity.hpp"
 #include "Core/Math/Point3.hpp"
+#include "Core/Entity/WipeoutEntity.hpp"
 #include <vector>
 #include <set>
 #include <map>
@@ -34,8 +35,7 @@ namespace MiniCAD::HatchBoundary
         // 来源曲线:保存几何 + 折线采样及对应参数,供还原类型化边界边。
         struct Source
         {
-            enum K { Line, Arc, Ellipse, Spline, Poly } kind;
-            Math::Point3 a, b;                 // Line
+            enum K { Line, Arc, Ellipse, Spline } kind;
             MiniCAD::Arc arc;                  // Arc / Circle(full)
             MiniCAD::Ellipse ell;              // Ellipse
             MiniCAD::Spline  spl;              // Spline
@@ -60,80 +60,129 @@ namespace MiniCAD::HatchBoundary
             src.push_back(std::move(s));
         }
 
-        inline void CollectSources(const Scene& scene, std::vector<Source>& src)
+        inline void CollectSources(const Scene& scene, std::vector<Source>& src,
+                                   const Math::OCS& frame, double elevation)
         {
-            scene.ForEachObject([&](const Object& o)
+            // Compare distances in the hatch plane's normal direction.
+            constexpr double planeTolerance = 1e-6;
+            auto point = [&](const Math::Point3& world) { return Math::WcsToOcs(frame, world); };
+            auto coplanar = [&](const Math::Point3& local) { return std::abs(local.z - elevation) <= planeTolerance; };
+            auto parallel = [&](const Math::Vec3& normal)
             {
-                const Entity* ent = static_cast<const Entity*>(&o);
+                return Math::Cross(Math::BuildOCS(normal).Uz, frame.Uz).Length() <= 1e-9;
+            };
+            auto addLine = [&](Math::Point3 a, Math::Point3 b)
+            {
+                a.z = b.z = elevation;
+                Source s; s.kind = Source::Line;
+                s.tp = {a,b}; s.tparam = {0,1};
+                src.push_back(std::move(s));
+            };
+            auto localAngle = [&](const Math::Vec3& direction)
+            {
+                return std::atan2(Math::Dot(direction, frame.Uy), Math::Dot(direction, frame.Ux));
+            };
 
-                if (ent->IsKindOf<LineEntity>())
+            scene.ForEachObject([&](const Object& object)
+            {
+                const auto* ent = dynamic_cast<const Entity*>(&object);
+                if (!ent || !ent->GetAttr().Visible || ent->GetAttr().InPaperSpace != scene.CurrentSpaceIsPaper() ||
+                    (scene.CurrentSpaceIsPaper() && ent->GetAttr().LayoutKey != scene.CurrentLayoutKey())) return;
+                const auto* layer = scene.GetLayerManager().GetLayer(ent->GetLayerID());
+                if (layer && !layer->IsVisible()) return;
+
+                if (const auto* line = dynamic_cast<const LineEntity*>(ent))
                 {
-                    const Line& L = static_cast<const LineEntity*>(ent)->GetLine();
-                    Source s; s.kind = Source::Line; s.a = L.Start; s.b = L.End;
-                    s.tp = { L.Start, L.End }; s.tparam = { 0.0, 1.0 };
-                    src.push_back(std::move(s));
-                    return;
+                    const auto a = point(line->GetLine().Start), b = point(line->GetLine().End);
+                    if (coplanar(a) && coplanar(b)) addLine(a,b);
                 }
-                if (ent->IsKindOf<ArcEntity>())
+                else if (const auto* circle = dynamic_cast<const CircleEntity*>(ent))
                 {
-                    AddArcSource(src, static_cast<const ArcEntity*>(ent)->GetArc(), false);
-                    return;
+                    const auto& c = circle->GetCircle();
+                    auto center = point(c.Center);
+                    if (!coplanar(center) || !parallel(c.Normal)) return;
+                    center.z = elevation;
+                    AddArcSource(src, Arc{center, c.Radius, 0, Math::TwoPI}, true);
                 }
-                if (ent->IsKindOf<CircleEntity>())
+                else if (const auto* arc = dynamic_cast<const ArcEntity*>(ent))
                 {
-                    const Circle& c = static_cast<const CircleEntity*>(ent)->GetCircle();
-                    AddArcSource(src, MiniCAD::Arc{ c.Center, c.Radius, 0.0, 0.0 }, true);
-                    return;
+                    const auto& a = arc->GetArc();
+                    auto center = point(a.Center);
+                    if (!coplanar(center) || !parallel(a.Normal)) return;
+                    center.z = elevation;
+                    const bool reversed = Math::Dot(a.Normal, frame.Uz) < 0;
+                    const double start = localAngle((reversed ? a.EndPoint() : a.StartPoint()) - a.Center);
+                    AddArcSource(src, Arc{center, a.Radius, start, start + a.SweepAngle()}, false);
                 }
-                if (ent->IsKindOf<EllipseEntity>())
+                else if (const auto* ellipse = dynamic_cast<const EllipseEntity*>(ent))
                 {
-                    const Ellipse& el = static_cast<const EllipseEntity*>(ent)->GetEllipse();
-                    if (!el.IsValid()) return;
-                    // 椭圆弧为开放来源;参数沿弧单调递增(可越过 2π,PointAt 按周期求值)。
-                    // 来源只存整椭圆几何,区间由 tparam 表达——还原出的 HatchEdge 用 A0/A1 而非 Ell 的参数。
-                    Source s; s.kind = Source::Ellipse; s.ell = el; s.closed = el.IsFull();
-                    s.ell.StartParam = 0.0; s.ell.EndParam = Math::TwoPI;
-                    const double t0    = el.IsFull() ? 0.0 : el.StartParam;
-                    const double sweep = el.SweepParam();
-                    int n = std::max(12, static_cast<int>(std::ceil(72.0 * sweep / Math::TwoPI)));
-                    for (int k = 0; k <= n; ++k)
+                    const auto& geometry = ellipse->GetEllipse();
+                    auto center = point(geometry.Center);
+                    if (!geometry.IsValid() || !coplanar(center) || !parallel(geometry.Normal)) return;
+                    center.z = elevation;
+                    const bool reversed = Math::Dot(geometry.Normal, frame.Uz) < 0;
+                    const double start = geometry.IsFull() ? 0.0 :
+                        (reversed ? -(geometry.StartParam + geometry.SweepParam()) : geometry.StartParam);
+                    const double sweep = geometry.SweepParam();
+                    Source s; s.kind = Source::Ellipse; s.closed = geometry.IsFull();
+                    s.ell = Ellipse{center, geometry.RadiusX, geometry.RadiusY, localAngle(geometry.Axes().first)};
+                    const int count = std::max(12, static_cast<int>(std::ceil(72 * sweep / Math::TwoPI)));
+                    for (int i = 0; i <= count; ++i)
                     {
-                        double t = t0 + sweep * (static_cast<double>(k) / n);
-                        s.tp.push_back(el.PointAt(t)); s.tparam.push_back(t);
+                        const double t = start + sweep * i / count;
+                        s.tp.push_back(s.ell.PointAt(t));
+                        s.tparam.push_back(t);
                     }
                     src.push_back(std::move(s));
-                    return;
                 }
-                if (ent->IsKindOf<SplineEntity>())
+                else if (const auto* poly = dynamic_cast<const PolylineEntity*>(ent))
                 {
-                    const Spline& sp = static_cast<const SplineEntity*>(ent)->GetSpline();
-                    if (!sp.IsValid()) return;
-                    Source s; s.kind = Source::Spline; s.spl = sp; s.closed = sp.IsClosed();
-                    s.tp = sp.Tessellate(24);
-                    int m = static_cast<int>(s.tp.size());
-                    for (int k = 0; k < m; ++k)
-                        s.tparam.push_back(m > 1 ? static_cast<double>(k) / (m - 1) : 0.0);
-                    if (m >= 2) src.push_back(std::move(s));
-                    return;
+                    if (ent->IsKindOf<WipeoutEntity>()) return;
+                    const auto& path = poly->GetPolyline();
+                    const bool curvesInPlane = parallel(path.Normal);
+                    const double sign = Math::Dot(path.Normal, frame.Uz) < 0 ? -1 : 1;
+                    for (int i = 0; i < path.SegCount(); ++i)
+                    {
+                        auto a = point(path.SegStart(i)), b = point(path.SegEnd(i));
+                        if (!coplanar(a) || !coplanar(b)) continue;
+                        if (path.SegIsLine(i)) { addLine(a,b); continue; }
+                        if (!curvesInPlane) continue;
+                        a.z = b.z = elevation;
+                        const auto arc = Polyline::ComputeArc(a, b, sign * path.SegBulge(i));
+                        const double end = arc.StartAngle + arc.SweepAngle;
+                        AddArcSource(src, Arc{arc.Center, arc.Radius, std::min(arc.StartAngle,end),
+                                             std::max(arc.StartAngle,end)}, false);
+                    }
                 }
-                if (ent->IsKindOf<PolylineEntity>())
+                else if (const auto* rectangle = dynamic_cast<const RectangleEntity*>(ent))
                 {
-                    Source s; s.kind = Source::Poly;
-                    s.tp = static_cast<const PolylineEntity*>(ent)->GetPolyline().Tessellate();
-                    int m = static_cast<int>(s.tp.size());
-                    for (int k = 0; k < m; ++k)
-                        s.tparam.push_back(k);
-                    if (m >= 2) src.push_back(std::move(s));
-                    return;
+                    const auto& r = rectangle->GetRectangle();
+                    const Math::Point3 vertices[] = {point(r.P1),point(r.P2),point(r.P3),point(r.P4)};
+                    if (!std::all_of(std::begin(vertices), std::end(vertices), coplanar)) return;
+                    for (int i = 0; i < 4; ++i) addLine(vertices[i],vertices[(i+1)%4]);
                 }
-                if (ent->IsKindOf<RectangleEntity>())
+                else if (const auto* spline = dynamic_cast<const SplineEntity*>(ent))
                 {
-                    const Rectangle& r = static_cast<const RectangleEntity*>(ent)->GetRectangle();
-                    Source s; s.kind = Source::Poly;
-                    s.tp = { r.P1, r.P2, r.P3, r.P4, r.P1 };
-                    for (int k = 0; k < 5; ++k) s.tparam.push_back(k);
+                    const auto& geometry = spline->GetSpline();
+                    if (!geometry.IsValid()) return;
+                    Source s; s.kind = Source::Spline; s.spl = geometry; s.closed = geometry.IsClosed();
+                    auto localize = [&](auto& points)
+                    {
+                        for (auto& p : points)
+                        {
+                            p = point(p);
+                            if (!coplanar(p)) return false;
+                            p.z = elevation;
+                        }
+                        return true;
+                    };
+                    s.tp = geometry.Tessellate(24);
+                    if (!localize(s.tp) || !localize(s.spl.ControlPoints) || !localize(s.spl.FitPoints)) return;
+                    s.spl.Build();
+                    if (s.tp.size() < 2) return;
+                    for (size_t i = 0; i < s.tp.size(); ++i)
+                        s.tparam.push_back(static_cast<double>(i) / (s.tp.size()-1));
                     src.push_back(std::move(s));
-                    return;
                 }
             });
         }
@@ -160,12 +209,13 @@ namespace MiniCAD::HatchBoundary
     }
 
     // 探测包含 pick 的最小有界闭合环;成功填入 outLoop(类型化边界环)。
-    inline bool FindEnclosingLoop(const Scene& scene, const Math::Point3& pick, HatchLoop& outLoop)
+    inline bool FindEnclosingLoop(const Scene& scene, const Math::Point3& pick, HatchLoop& outLoop,
+                                  const Math::OCS& frame = {})
     {
         using namespace detail;
 
         std::vector<Source> sources;
-        CollectSources(scene, sources);
+        CollectSources(scene, sources, frame, pick.z);
         if (sources.empty()) return false;
 
         // 原始线段(带来源 + 端点参数)。
@@ -403,29 +453,34 @@ namespace MiniCAD::HatchBoundary
 
             if (s.kind == Source::Arc)
             {
-                double amin = run.front().pStart, amax = run.back().pEnd;
-                if (amax < amin) std::swap(amin, amax);
-                Math::Point3 A = s.arc.PointAt(amin), B = s.arc.PointAt(amax);
-                Polyline pl({ A, B }, { -std::tan((amax - amin) * 0.25) });
+                const double start = run.front().pStart, end = run.back().pEnd;
+                Polyline pl({s.arc.PointAt(start), s.arc.PointAt(end)}, {std::tan((end - start) * 0.25)});
                 edges.push_back(HatchEdge::MakePoly(std::move(pl)));
             }
             else if (s.kind == Source::Ellipse)
             {
                 double amin = run.front().pStart, amax = run.back().pEnd;
-                if (amax < amin) std::swap(amin, amax);
-                edges.push_back(HatchEdge::MakeEllipseArc(s.ell, amin, amax));
+                if (amax >= amin)
+                    edges.push_back(HatchEdge::MakeEllipseArc(s.ell, amin, amax));
+                else
+                {
+                    const int count = std::max(4, static_cast<int>(std::ceil((amin-amax) / (Math::PI/36))));
+                    std::vector<Math::Point3> points;
+                    for (int k = 0; k <= count; ++k)
+                        points.push_back(s.ell.PointAt(amin + (amax-amin)*k/count));
+                    edges.push_back(HatchEdge::MakePoly(Polyline(std::move(points))));
+                }
             }
             else if (s.kind == Source::Spline)
             {
                 double amin = run.front().pStart, amax = run.back().pEnd;
-                if (amax < amin) std::swap(amin, amax);
                 std::vector<Math::Point3> fit;
                 int n = 8;
                 for (int k = 0; k <= n; ++k)
                     fit.push_back(WorldAtParam(s, amin + (amax - amin) * (static_cast<double>(k) / n)));
                 edges.push_back(HatchEdge::MakeSpline(Spline(std::move(fit))));
             }
-            else // Line / Poly
+            else // Line
             {
                 std::vector<Math::Point3> pts;
                 pts.push_back(nodes3(run.front().from));

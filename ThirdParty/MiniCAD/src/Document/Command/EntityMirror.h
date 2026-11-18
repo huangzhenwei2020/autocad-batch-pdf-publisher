@@ -5,6 +5,7 @@
 
 namespace MiniCAD
 {
+    struct Ellipse;
     // 镜像线由两个点定义(在 XY 平面内,z 忽略)
     struct MirrorAxis
     {
@@ -17,6 +18,8 @@ namespace MiniCAD
 
     // 对单个向量做镜像(不平移,只反射方向)
     Math::Vec3   ReflectVector(const Math::Vec3& v, const MirrorAxis& axis);
+
+    Ellipse MirrorEllipse(const Ellipse& source, const MirrorAxis& axis);
 
     // 把 Entity 几何原地镜像
     void MirrorEntityInPlace(Entity& e, const MirrorAxis& axis);

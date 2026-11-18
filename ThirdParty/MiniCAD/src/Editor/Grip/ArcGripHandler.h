@@ -3,6 +3,7 @@
 #include "GripType.h"
 #include "Core/Entity/ArcEntity.hpp"
 #include "Core/GeomKernel/Arc.hpp"
+#include "Core/GeomKernel/Circle.hpp"
 #include "Core/Math/Constants.hpp"
 #include "Editor/Overlay/Overlay.h"
 #include <memory>
@@ -88,18 +89,14 @@ namespace MiniCAD
             // ── 圆心拖动：整体平移 ────────────────────────────────────
             case Grip::Type::Center:
             {
-                double dx = worldPos.x - state->Base.Center.x;
-                double dy = worldPos.y - state->Base.Center.y;
-                out.Center.x += dx;
-                out.Center.y += dy;
+                out.Center = worldPos;
                 break;
             }
 
             // ── 起点拖动：修改 StartAngle ─────────────────────────────
             case Grip::Type::Start:
             {
-                double angle = std::atan2(worldPos.y - state->Base.Center.y,
-                                          worldPos.x - state->Base.Center.x);
+                double angle = state->Base.AngleAt(worldPos);
                 out.StartAngle = angle;
                 break;
             }
@@ -107,8 +104,7 @@ namespace MiniCAD
             // ── 终点拖动：修改 EndAngle ───────────────────────────────
             case Grip::Type::End:
             {
-                double angle = std::atan2(worldPos.y - state->Base.Center.y,
-                                          worldPos.x - state->Base.Center.x);
+                double angle = state->Base.AngleAt(worldPos);
                 out.EndAngle = angle;
                 break;
             }
@@ -116,9 +112,7 @@ namespace MiniCAD
             // ── 弧中点拖动：修改 Radius ───────────────────────────────
             case Grip::Type::Mid:
             {
-                double dx = worldPos.x - state->Base.Center.x;
-                double dy = worldPos.y - state->Base.Center.y;
-                double r  = std::sqrt(dx * dx + dy * dy);
+                double r = Circle{state->Base.Center, state->Base.Radius, state->Base.Normal}.ProjectedRadius(worldPos);
                 out.Radius = (r > 1e-6) ? r : 1e-6;
                 break;
             }
@@ -144,8 +138,7 @@ namespace MiniCAD
             const Math::Color4 kHelper = { 1.0,  0.85, 0.0,  0.60 };  // 金黄辅助线
 
             // Ghost：原始弧
-            overlay.AddArc(state->Base.Center, state->Base.Radius,
-                           state->Base.StartAngle, state->Base.EndAngle, kGhost);
+            overlay.AddArc(state->Base, kGhost);
 
             // 辅助线：圆心 → 起点 / 圆心 → 终点
             overlay.AddLine(state->Base.Center, state->Base.StartPoint(), kHelper);
@@ -169,6 +162,7 @@ namespace MiniCAD
             // 未变化则不产生命令
             if (std::abs(after.Center.x   - b.Center.x)   < Math::LengthEPS &&
                 std::abs(after.Center.y   - b.Center.y)   < Math::LengthEPS &&
+                std::abs(after.Center.z   - b.Center.z)   < Math::LengthEPS &&
                 std::abs(after.Radius     - b.Radius)     < Math::LengthEPS &&
                 std::abs(after.StartAngle - b.StartAngle) < Math::AngleEPS  &&
                 std::abs(after.EndAngle   - b.EndAngle)   < Math::AngleEPS)

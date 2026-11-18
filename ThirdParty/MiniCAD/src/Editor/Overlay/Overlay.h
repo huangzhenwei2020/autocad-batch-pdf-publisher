@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <vector>
 #include <memory>
 #include <cmath>
@@ -10,6 +10,8 @@
 #include "Core/Math/Constants.hpp"
 #include "Core/GeomKernel/Polyline.hpp"
 #include "Core/GeomKernel/Ellipse.hpp"
+#include "Core/GeomKernel/Circle.hpp"
+#include "Core/GeomKernel/Arc.hpp"
 namespace MiniCAD
 {
     /// <summary>
@@ -80,6 +82,22 @@ namespace MiniCAD
             AddArcInternal(center, radius, startAngle, sweep, mcolor, segments);
         }
 
+        void AddArc(const Arc& arc, const Math::Color4& color, int segments = 64)
+        {
+            if (!arc.IsValid() || segments < 1) return;
+            for (int i = 0; i < segments; ++i)
+                AddLine(arc.PointAt(arc.StartAngle + arc.SweepAngle() * i / segments),
+                    arc.PointAt(arc.StartAngle + arc.SweepAngle() * (i + 1) / segments), color);
+        }
+
+        void AddCircle(const Circle& circle, const Math::Color4& color, int segments = 64)
+        {
+            if (!circle.IsValid() || segments < 3) return;
+            for (int i = 0; i < segments; ++i)
+                AddLine(circle.PointAt(Math::TwoPI * i / segments),
+                    circle.PointAt(Math::TwoPI * (i + 1) / segments), color);
+        }
+
         // ===== ArcGeom =====
         // 直接接受 ArcGeom，SweepAngle 为有符号值（正=CCW，负=CW）
         // 适用于 PolylineTool（Polyline::ComputeArc 返回的 ArcGeom）
@@ -102,7 +120,14 @@ namespace MiniCAD
             const double t0    = el.IsFull() ? 0.0 : el.StartParam;
             const double sweep = el.SweepParam();
             const int    segs  = std::max(4, static_cast<int>(std::ceil(segments * sweep / Math::TwoPI)));
-            AddEllipse(el.Center, el.RadiusX, el.RadiusY, el.Rotation, mcolor, segs, t0, sweep);
+            if (!el.IsValid()) return;
+            auto previous = el.PointAt(t0);
+            for (int i = 1; i <= segs; ++i)
+            {
+                const auto next = el.PointAt(t0 + sweep * i / segs);
+                AddLine(previous, next, mcolor);
+                previous = next;
+            }
         }
 
         void AddEllipse(const Math::Point3& center,  double rx, double ry, double rotation,  const Math::Color4& mcolor, int segments = 64,

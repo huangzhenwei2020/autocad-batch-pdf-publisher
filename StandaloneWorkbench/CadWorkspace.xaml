@@ -8,8 +8,8 @@
         <TabItem Header="修改"><ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"><StackPanel x:Name="ModifyTools" Orientation="Horizontal" Height="76"/></ScrollViewer></TabItem>
         <TabItem Header="标注"><ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"><StackPanel x:Name="AnnotationTools" Orientation="Horizontal" Height="76"/></ScrollViewer></TabItem>
         <TabItem Header="插入"><ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"><StackPanel x:Name="InsertTools" Orientation="Horizontal" Height="76"/></ScrollViewer></TabItem>
-        <TabItem Header="视图"><StackPanel x:Name="ViewTools" Orientation="Horizontal" Height="76"/></TabItem>
-        <TabItem Header="管理"><StackPanel x:Name="FileTools" Orientation="Horizontal" Height="76"/></TabItem>
+        <TabItem Header="视图"><ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"><StackPanel x:Name="ViewTools" Orientation="Horizontal" Height="76"/></ScrollViewer></TabItem>
+        <TabItem Header="管理"><ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"><StackPanel x:Name="FileTools" Orientation="Horizontal" Height="76"/></ScrollViewer></TabItem>
       </TabControl>
       <local:CadIconButton x:Name="RibbonCollapse" HorizontalAlignment="Right" VerticalAlignment="Top" Icon="chevron-up" Width="26" Height="24" MinHeight="24" ToolTip="收起／展开功能区 Ctrl+F1" Click="CollapseRibbon_Click"/>
     </Grid>
@@ -78,13 +78,15 @@
       </Grid>
       <Grid Grid.Row="2" x:Name="StatusDock" Background="#303945">
         <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-        <ListBox x:Name="Layouts" Style="{StaticResource CadStrip}" DisplayMemberPath="Name" SelectionChanged="Layouts_Changed" MaxWidth="260" ToolTip="当前图纸的模型空间与布局"><ListBox.ContextMenu><ContextMenu><MenuItem Header="新建布局" Click="NewLayout_Click"/><MenuItem Header="删除当前布局" Click="DeleteLayout_Click"/></ContextMenu></ListBox.ContextMenu></ListBox>
+        <ListBox x:Name="Layouts" Style="{StaticResource CadStrip}" DisplayMemberPath="Name" SelectionChanged="Layouts_Changed" MaxWidth="400" ToolTip="当前图纸的模型空间与布局"><ListBox.ContextMenu><ContextMenu><MenuItem Header="新建布局" Click="NewLayout_Click"/><MenuItem Header="布局与页面设置" Click="LayoutSettings_Click"/><MenuItem Header="复制当前布局" Click="CopyLayout_Click"/><MenuItem Header="删除当前布局" Click="DeleteLayout_Click"/></ContextMenu></ListBox.ContextMenu></ListBox>
         <TextBlock Grid.Column="1" x:Name="Status" Text="就绪" Margin="8,0" Foreground="{StaticResource MutedBrush}" FontSize="11" TextTrimming="CharacterEllipsis" ToolTip="{Binding Text,RelativeSource={RelativeSource Self}}"/>
         <StackPanel Grid.Column="2" Orientation="Horizontal">
+          <Button x:Name="ViewportEditingButton" Content="视口编辑" Click="ViewportEditing_Click" ToolTip="最大化编辑布局视口中的模型，VPMAX／VPMIN" Margin="0,0,6,0" Padding="8,2"/>
           <CheckBox x:Name="Snap" Content="捕捉 F3" Tag="@snap" Click="Toggle_Click" Style="{StaticResource CadStatusToggle}"/>
           <CheckBox x:Name="Ortho" Content="正交 F8" Tag="@ortho" Click="Toggle_Click" Style="{StaticResource CadStatusToggle}"/>
           <CheckBox x:Name="Polar" Content="极轴 F10" Tag="@polar" Click="Toggle_Click" Style="{StaticResource CadStatusToggle}"/>
-          <TextBlock x:Name="Coordinates" Foreground="{StaticResource MutedBrush}" Margin="8,0" Width="145" TextTrimming="CharacterEllipsis" FontSize="11"/>
+          <Button x:Name="WorkingPlaneButton" Content="UCS 世界" Click="WorkingPlane_Click" Margin="0" Padding="6,1" Height="22" MinHeight="22" VerticalAlignment="Center" VerticalContentAlignment="Center" FontSize="11"/>
+          <TextBlock x:Name="Coordinates" Foreground="{StaticResource MutedBrush}" Margin="8,0" Width="185" TextTrimming="CharacterEllipsis" FontSize="11"/>
         </StackPanel>
       </Grid>
     </Grid>

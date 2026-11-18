@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include "Scene/Scene.h"
 #include "Editor/Tools/ITool.h"
 #include "Editor/EditorContext.h"
@@ -28,6 +28,7 @@ namespace MiniCAD
     class CopyTool : public ITool
     {
     public:
+        bool SupportsWorkingPlane() const override { return true; }
         CopyTool(std::vector<Object*> targets)
             : m_targets(std::move(targets))
         {
@@ -149,7 +150,7 @@ namespace MiniCAD
             if (entity->IsKindOf<CircleEntity>())
             {
                 const auto& c = static_cast<CircleEntity*>(entity)->GetCircle();
-                m_ctx->overlay.AddCircle(c.Center + d, c.Radius, color);
+                m_ctx->overlay.AddCircle(Circle{c.Center + d, c.Radius, c.Normal}, color);
                 return;
             }
             if (entity->IsKindOf<RectangleEntity>())
@@ -161,7 +162,7 @@ namespace MiniCAD
             if (entity->IsKindOf<ArcEntity>())
             {
                 const auto& a = static_cast<ArcEntity*>(entity)->GetArc();
-                m_ctx->overlay.AddArc(a.Center + d, a.Radius, a.StartAngle, a.EndAngle, color);
+                m_ctx->overlay.AddArc(Arc{a.Center + d, a.Radius, a.StartAngle, a.EndAngle, a.Normal}, color);
                 return;
             }
             if (entity->IsKindOf<EllipseEntity>())
@@ -188,11 +189,11 @@ namespace MiniCAD
             }
             if (entity->IsKindOf<TextEntity>() || entity->IsKindOf<MTextEntity>())
             {
-                auto box = entity->GetBoundingBox();
-                m_ctx->overlay.AddRect(
-                    { box.Min.x + d.x, box.Min.y + d.y, box.Min.z },
-                    { box.Max.x + d.x, box.Max.y + d.y, box.Max.z },
-                    color);
+                const auto frame = entity->IsKindOf<TextEntity>()
+                    ? static_cast<const TextEntity&>(*entity).GetTextFrame()
+                    : static_cast<const MTextEntity&>(*entity).GetTextFrame();
+                for (size_t i = 0; i < frame.size(); ++i)
+                    m_ctx->overlay.AddLine(frame[i] + d, frame[(i + 1) % frame.size()] + d, color);
                 return;
             }
         }

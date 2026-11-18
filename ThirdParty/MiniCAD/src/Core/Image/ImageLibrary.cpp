@@ -103,6 +103,38 @@ namespace MiniCAD
 
     uint64_t ImageLibrary::NextKey() { return g_nextKey++; }
 
+    bool ImageLibrary::GetSize(const std::string& path, uint32_t& width, uint32_t& height) const
+    {
+        if (auto found = m_cache.find(path); found != m_cache.end() && found->second)
+        {
+            width = found->second->Width;
+            height = found->second->Height;
+            return true;
+        }
+        try
+        {
+            const auto resolved = Resolve(path);
+            if (resolved.empty()) return false;
+            std::ifstream stream(FromUtf8(resolved), std::ios::binary);
+            const stbi_io_callbacks callbacks{
+                [](void* user, char* data, int size)
+                {
+                    auto& input = *static_cast<std::ifstream*>(user);
+                    input.read(data, size);
+                    return static_cast<int>(input.gcount());
+                },
+                [](void* user, int size) { static_cast<std::ifstream*>(user)->seekg(size, std::ios::cur); },
+                [](void* user) { return static_cast<std::ifstream*>(user)->peek() == std::char_traits<char>::eof() ? 1 : 0; }
+            };
+            int x = 0, y = 0, channels = 0;
+            if (!stbi_info_from_callbacks(&callbacks, &stream, &x, &y, &channels) || x <= 0 || y <= 0) return false;
+            width = static_cast<uint32_t>(x);
+            height = static_cast<uint32_t>(y);
+            return true;
+        }
+        catch (const std::exception&) { return false; }
+    }
+
 
     std::shared_ptr<const ImageData> ImageLibrary::Get(const std::string& path)
     {

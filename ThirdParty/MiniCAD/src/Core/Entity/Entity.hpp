@@ -14,13 +14,13 @@ namespace MiniCAD
 	public:
 		EntityAttr&       GetAttr()                    { return m_attr; }
 		const EntityAttr& GetAttr() const              { return m_attr; } 
-		void              SetAttr(const EntityAttr& a) { m_attr = a; } 
+		virtual void      SetAttr(const EntityAttr& a) { m_attr = a; }
 		LayerID           GetLayerID() const           { return m_attr.LayerId; }
 		void              SetLayerId(LayerID id)       { m_attr.LayerId = id; }
 
 		// ── OCS / 挤出方向(DXF 210/220/230)────────────────────────────────
 		const Math::Vec3& GetExtrusion() const         { return m_attr.Extrusion; }
-		void              SetExtrusion(const Math::Vec3& n) { m_attr.Extrusion = n; }
+		virtual void      SetExtrusion(const Math::Vec3& n) { m_attr.Extrusion = n; }
 		// 由挤出方向构造的物体坐标系,用于 OCS<->WCS 变换。
 		Math::OCS         GetOCS() const               { return Math::BuildOCS(m_attr.Extrusion); }
 		bool              HasDefaultExtrusion() const   { return Math::IsDefaultExtrusion(m_attr.Extrusion); }

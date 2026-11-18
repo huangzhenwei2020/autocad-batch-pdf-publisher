@@ -23,9 +23,26 @@ namespace MiniCAD
             : Entity(id)
             , m_ellipse(e)
         {
+            Entity::SetExtrusion(e.Normal);
         }
 
-        void            SetEllipse(const Ellipse& e) { m_ellipse = e; }
+        void SetAttr(const EntityAttr& attr) override
+        {
+            Entity::SetAttr(attr);
+            m_ellipse.Normal = attr.Extrusion;
+        }
+
+        void SetExtrusion(const Math::Vec3& normal) override
+        {
+            Entity::SetExtrusion(normal);
+            m_ellipse.Normal = normal;
+        }
+
+        void SetEllipse(const Ellipse& ellipse)
+        {
+            m_ellipse = ellipse;
+            Entity::SetExtrusion(ellipse.Normal);
+        }
         const Ellipse&  GetEllipse() const           { return m_ellipse; }
 
         // 便捷修改器
@@ -57,7 +74,6 @@ namespace MiniCAD
 
         virtual void Draw(IDrawSink& sink, bool isSelected, bool isHovered) const override
         {
-            const auto& attr = GetAttr();
             const Math::Color4& color = isSelected ? IDrawSink::kSelectionColor : isHovered ? IDrawSink::kHoverColor : ResolveDrawColor(sink);
             // 分段数按跨度比例取，椭圆弧与整椭圆的弦密度一致；深度放大时 sink 要求在视图附近加密（弦高按长半轴估）
             const double t0       = m_ellipse.IsFull() ? 0.0 : m_ellipse.StartParam;

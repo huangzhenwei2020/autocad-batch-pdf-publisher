@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include "Shader.h"
 #include "Core/Math/Mat4.hpp"
 #include "Render/IRenderer.h"
@@ -49,6 +49,7 @@ namespace MiniCAD
         virtual void* GetNativeDevice() override;
 
         ID3D11Device* GetDevice() { return m_device; }
+        void SetLayerCompositing(bool enabled) { m_layerCompositing = enabled; }
     private:
         void Initialize();
 
@@ -114,6 +115,8 @@ namespace MiniCAD
 
         ComPtr<ID3D11RasterizerState>  m_rsNoCull;
         ComPtr<ID3D11BlendState>       m_blendAlpha;
+        ComPtr<ID3D11BlendState>       m_blendPremultiplied;
+        bool m_layerCompositing = false;
         ComPtr<ID3D11SamplerState>     m_sampler;
 
         LineShader m_lineShader;

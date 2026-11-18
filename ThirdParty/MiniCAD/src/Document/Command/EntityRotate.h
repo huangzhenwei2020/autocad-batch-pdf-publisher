@@ -4,8 +4,11 @@
 
 namespace MiniCAD
 {
+    struct Ellipse;
     // 绕 pivot 旋转 angle 弧度(CCW)
     Math::Point3 RotatePoint(const Math::Point3& p,  const Math::Point3& pivot,   double angle);
+
+    Ellipse RotateEllipse(const Ellipse& source, const Math::Point3& pivot, double angle);
 
     // 把 Entity 几何原地绕 pivot 旋转 angle 弧度(CCW)
     void RotateEntityInPlace(Entity& e,  const Math::Point3& pivot,    double angle);

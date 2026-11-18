@@ -139,7 +139,7 @@ namespace MiniCAD::RegionBuilder
             else if (e->IsKindOf<EllipseEntity>())
             {
                 const Ellipse& el = static_cast<const EllipseEntity*>(e)->GetEllipse();
-                if (el.IsValid() && el.IsFull())
+                if (el.IsValid() && el.IsFull() && e->HasDefaultExtrusion())
                 {
                     HatchLoop lp;
                     lp.Edges.push_back(HatchEdge::MakeEllipseArc(el, 0.0, Math::TwoPI));

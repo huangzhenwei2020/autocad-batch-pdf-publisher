@@ -36,11 +36,13 @@ namespace MiniCAD
     {
     public:
         using Clipboard = std::vector<std::unique_ptr<Entity>>;
+        using CommandFactory = std::function<std::unique_ptr<ICommand>(std::vector<std::unique_ptr<Object>>)>;
 
         PasteTool(const Clipboard* clipboard, std::function<void()> onCommitted,
-                  const Math::Point3* basePoint = nullptr)
+                  const Math::Point3* basePoint = nullptr, CommandFactory factory = {})
             : m_clipboard(clipboard)
             , m_onCommitted(std::move(onCommitted))
+            , m_factory(std::move(factory))
         {
             if (basePoint)
             {
@@ -217,7 +219,7 @@ namespace MiniCAD
                 clones.push_back(std::move(c));
             }
 
-            auto cmd = std::make_unique<BatchAddCommand>(std::move(clones));
+            std::unique_ptr<ICommand> cmd = m_factory ? m_factory(std::move(clones)) : std::make_unique<BatchAddCommand>(std::move(clones));
             if (m_ctx->cmdStack.Execute(std::move(cmd), scene))
             {
                 if (m_onCommitted) m_onCommitted();
@@ -229,6 +231,7 @@ namespace MiniCAD
     private:
         const Clipboard*      m_clipboard;        // 非拥有,由 DocumentManager 持有
         std::function<void()> m_onCommitted;      // 落场成功回调(标脏等)
+        CommandFactory m_factory;
 
         const EditorContext* m_ctx = nullptr;
 

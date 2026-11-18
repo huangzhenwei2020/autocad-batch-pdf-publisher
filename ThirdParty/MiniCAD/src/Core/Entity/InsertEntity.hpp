@@ -32,6 +32,7 @@ namespace MiniCAD
         // ── 引用的块 ─────────────────────────────────────────────────────────
         BlockID            GetBlockId()   const { return m_blockId; }
         const std::string& GetBlockName() const { return m_blockName; }
+        void SetReference(BlockID id, std::string name) { m_blockId = id; m_blockName = std::move(name); m_block = nullptr; m_resolvedDirty = true; }
 
         // 解析(链接)到实际块定义。绘制需要它;由调用方在块表中查到后注入。
         void               SetBlock(const BlockEntity* blk) { m_block = blk; m_resolvedDirty = true; }

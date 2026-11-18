@@ -1,6 +1,7 @@
 #pragma once
 #include "Core/Math/Point3.hpp"
 #include "Render/VertexTypes.hpp"
+#include "Render/ImageDraw.hpp"
 #include "Document/GlyphMeshLibrary.hpp"
 #include <algorithm>
 #include <cmath>
@@ -98,6 +99,68 @@ namespace MiniCAD::WipeClip
 
     namespace detail
     {
+        inline std::vector<Poly> ConvexParts(const Poly& polygon)
+        {
+            if (polygon.convex) return {polygon};
+            auto points = polygon.pts;
+            double area = 0;
+            for (size_t i = 0; i < points.size(); ++i)
+                area += points[i].x * points[(i + 1) % points.size()].y - points[(i + 1) % points.size()].x * points[i].y;
+            if (area < 0) std::reverse(points.begin(), points.end());
+            auto cross = [](const auto& a, const auto& b, const auto& c)
+            { return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x); };
+            std::vector<Poly> result;
+            while (points.size() > 3)
+            {
+                bool found = false;
+                for (size_t i = 0; i < points.size(); ++i)
+                {
+                    const size_t previous = (i + points.size() - 1) % points.size();
+                    const size_t next = (i + 1) % points.size();
+                    const auto a = points[previous], b = points[i], c = points[next];
+                    const double turn = cross(a, b, c);
+                    if (turn == 0)
+                    {
+                        points.erase(points.begin() + i);
+                        found = true;
+                        break;
+                    }
+                    if (turn < 0) continue;
+                    bool occupied = false;
+                    for (size_t j = 0; j < points.size(); ++j)
+                    {
+                        if (j == previous || j == i || j == next) continue;
+                        if (cross(a, b, points[j]) >= 0 && cross(b, c, points[j]) >= 0 && cross(c, a, points[j]) >= 0)
+                        { occupied = true; break; }
+                    }
+                    if (occupied) continue;
+                    result.emplace_back(std::vector<Math::Point3>{a, b, c});
+                    points.erase(points.begin() + i);
+                    found = true;
+                    break;
+                }
+                if (!found) return {};
+            }
+            if (points.size() == 3) result.emplace_back(points);
+            return result;
+        }
+
+        // A conservative test keeps fully contained glyphs instanced, including with concave boundaries.
+        inline bool BoxInside(const Poly& polygon, double x0, double y0, double x1, double y1)
+        {
+            if (!polygon.Contains(x0, y0) || !polygon.Contains(x1, y0) ||
+                !polygon.Contains(x1, y1) || !polygon.Contains(x0, y1)) return false;
+            if (polygon.convex) return true;
+            for (size_t i = 0; i < polygon.pts.size(); ++i)
+            {
+                const auto& a = polygon.pts[i];
+                const auto& b = polygon.pts[(i + 1) % polygon.pts.size()];
+                if (std::min(a.x, b.x) <= x1 && std::max(a.x, b.x) >= x0 &&
+                    std::min(a.y, b.y) <= y1 && std::max(a.y, b.y) >= y0) return false;
+            }
+            return true;
+        }
+
         // 线段 p→p+r 与 q→q+s 的交点参数：成功返回 true，t 为在第一条上的参数
         inline bool SegSeg(double px, double py, double rx, double ry,
                            double qx, double qy, double sx, double sy, double& t)
@@ -191,12 +254,24 @@ namespace MiniCAD::WipeClip
             return m;
         }
 
+        inline Vertex_P3_C4_UV Lerp(const Vertex_P3_C4_UV& a, const Vertex_P3_C4_UV& b, double t)
+        {
+            const float amount = static_cast<float>(t);
+            Vertex_P3_C4_UV result;
+            result.pos = {std::lerp(a.pos.x, b.pos.x, amount), std::lerp(a.pos.y, b.pos.y, amount), std::lerp(a.pos.z, b.pos.z, amount)};
+            result.color = {std::lerp(a.color.x, b.color.x, amount), std::lerp(a.color.y, b.color.y, amount),
+                            std::lerp(a.color.z, b.color.z, amount), std::lerp(a.color.w, b.color.w, amount)};
+            result.uv = {std::lerp(a.uv.x, b.uv.x, amount), std::lerp(a.uv.y, b.uv.y, amount)};
+            return result;
+        }
+
         // 用有向直线 p→q 切凸片段：left 为 true 保留左侧，否则保留右侧（线上的点两侧都保留）
-        inline void ClipHalf(const Piece& in, const Math::Point3& p, const Math::Point3& q, bool left, Piece& out)
+        template<class Vertex>
+        inline void ClipHalf(const std::vector<Vertex>& in, const Math::Point3& p, const Math::Point3& q, bool left, std::vector<Vertex>& out)
         {
             out.clear();
             const double ex = q.x - p.x, ey = q.y - p.y;
-            auto side = [&](const Vertex_P3_C4& v)
+            auto side = [&](const Vertex& v)
             {
                 const double s = ex * (v.pos.y - p.y) - ey * (v.pos.x - p.x);
                 return left ? s : -s;
@@ -204,8 +279,8 @@ namespace MiniCAD::WipeClip
             const size_t n = in.size();
             for (size_t i = 0; i < n; ++i)
             {
-                const Vertex_P3_C4& a = in[i];
-                const Vertex_P3_C4& b = in[(i + 1) % n];
+                const Vertex& a = in[i];
+                const Vertex& b = in[(i + 1) % n];
                 const double sa = side(a), sb = side(b);
                 if (sa >= 0) out.push_back(a);
                 if ((sa > 0 && sb < 0) || (sa < 0 && sb > 0))
@@ -373,6 +448,29 @@ namespace MiniCAD::WipeClip
     {
         if (!poly.Valid() || v.size() < from + 3) return;
 
+        if (keepInside)
+        {
+            const auto pieces = detail::ConvexParts(poly);
+            if (!pieces.empty())
+            {
+                std::vector<Vertex_P3_C4> clipped;
+                detail::Piece current,temp;
+                for (size_t i=from;i+2<v.size();i+=3)
+                    for (const auto& piece : pieces)
+                    {
+                        current.assign(v.begin()+i,v.begin()+i+3);
+                        for (size_t edge=0;edge<piece.pts.size() && current.size()>=3;++edge)
+                        {
+                            detail::ClipHalf(current,piece.pts[edge],piece.pts[(edge+1)%piece.pts.size()],true,temp);
+                            current.swap(temp);
+                        }
+                        for (size_t j=1;j+1<current.size();++j)
+                            clipped.insert(clipped.end(),{current[0],current[j],current[j+1]});
+                    }
+                v.resize(from); v.insert(v.end(),clipped.begin(),clipped.end()); return;
+            }
+        }
+
         auto overlaps = [&](const Vertex_P3_C4* t)
         {
             const double x0 = std::min({ t[0].pos.x, t[1].pos.x, t[2].pos.x });
@@ -437,6 +535,69 @@ namespace MiniCAD::WipeClip
             }
         }
         v.resize(w);
+    }
+
+    // Textured streams retain six-vertex batches. Only the final padding triangle is degenerate.
+    inline void ClipTexturedInside(std::vector<Vertex_P3_C4_UV>& vertices, const Poly& polygon, size_t from = 0)
+    {
+        if (!polygon.Valid() || vertices.size() < from + 3) return;
+        const auto pieces = detail::ConvexParts(polygon);
+        std::vector<Vertex_P3_C4_UV> result, current, temporary;
+        for (size_t i = from; i + 2 < vertices.size(); i += 3)
+        {
+            const auto& a = vertices[i].pos;
+            const auto& b = vertices[i + 1].pos;
+            const auto& c = vertices[i + 2].pos;
+            const double x0 = std::min({a.x, b.x, c.x}), x1 = std::max({a.x, b.x, c.x});
+            const double y0 = std::min({a.y, b.y, c.y}), y1 = std::max({a.y, b.y, c.y});
+            if (!polygon.BoxOverlaps(x0, y0, x1, y1)) continue;
+            if (detail::BoxInside(polygon, x0, y0, x1, y1))
+            { result.insert(result.end(), vertices.begin() + i, vertices.begin() + i + 3); continue; }
+            for (const auto& piece : pieces)
+            {
+                current.assign(vertices.begin() + i, vertices.begin() + i + 3);
+                for (size_t edge = 0; edge < piece.pts.size() && current.size() >= 3; ++edge)
+                {
+                    detail::ClipHalf(current, piece.pts[edge], piece.pts[(edge + 1) % piece.pts.size()], true, temporary);
+                    current.swap(temporary);
+                }
+                for (size_t j = 1; j + 1 < current.size(); ++j)
+                    result.insert(result.end(), {current[0], current[j], current[j + 1]});
+            }
+        }
+        if (result.size() % 6 != 0)
+        {
+            const auto padding = result.back();
+            result.insert(result.end(), 3, padding);
+        }
+        vertices.resize(from);
+        vertices.insert(vertices.end(), result.begin(), result.end());
+    }
+
+    // Fully contained glyphs retain their mesh instances. Only boundary glyphs are expanded and cut.
+    inline void ClipViewportGlyphs(std::vector<GlyphInstance>& glyphs, const Poly& polygon, size_t from,
+                                   const GlyphMeshLibrary& library, std::vector<Vertex_P3_C4>& lines,
+                                   std::vector<Vertex_P3_C4>& fills)
+    {
+        if (!polygon.Valid() || glyphs.size() <= from) return;
+        size_t kept = from;
+        std::vector<Vertex_P3_C4> glyphLines, glyphFills;
+        for (size_t i = from; i < glyphs.size(); ++i)
+        {
+            if (glyphs[i].mesh >= library.View().Meshes.size()) continue;
+            double x0, y0, x1, y1;
+            library.Bounds(glyphs[i], x0, y0, x1, y1);
+            if (!polygon.BoxOverlaps(x0, y0, x1, y1)) continue;
+            if (detail::BoxInside(polygon, x0, y0, x1, y1))
+            { glyphs[kept++] = glyphs[i]; continue; }
+            glyphLines.clear(); glyphFills.clear();
+            library.Expand(glyphs[i], glyphLines, glyphFills);
+            ClipLines(glyphLines, polygon, 0, true);
+            ClipFills(glyphFills, polygon, 5, 0, true);
+            lines.insert(lines.end(), glyphLines.begin(), glyphLines.end());
+            fills.insert(fills.end(), glyphFills.begin(), glyphFills.end());
+        }
+        glyphs.resize(kept);
     }
 
     // 纹理文字流（每个字符 6 个顶点）：字符中心落在多边形内则整个字符删去
@@ -507,13 +668,31 @@ namespace MiniCAD::WipeClip
     // 逐个 SubmitImage）。ComposeModelIntoViewport 若不裁它，贴图就整张溢出到
     // 视口外的纸面上 —— 与字形实例同属「漏了一路」的问题。
     //
-    // 按**中心点**整体取舍（与 ClipDrawSink::EmitImage 的既有语义一致）：
-    // 跨边界的图像不切碎，中心在框内就整张画、在框外就整张丢。
+    // 视口内保留部分按三角形精确裁剪并插值 UV；外部遮罩调用保留原整项取舍语义。
     // 只处理下标 from 起的图像。
     inline void ClipImages(std::vector<ImageDraw>& v, const Poly& poly,
                            size_t from = 0, bool keepInside = true)
     {
         if (!poly.Valid() || v.size() <= from) return;
+        if (keepInside)
+        {
+            std::vector<ImageDraw> clipped;
+            for (size_t i = from; i < v.size(); ++i)
+            {
+                std::vector<Vertex_P3_C4_UV> vertices(std::begin(v[i].Verts), std::end(v[i].Verts));
+                ClipTexturedInside(vertices, poly);
+                for (size_t j = 0; j + 5 < vertices.size(); j += 6)
+                {
+                    ImageDraw part;
+                    part.Image = v[i].Image;
+                    std::copy_n(vertices.begin() + j, 6, part.Verts);
+                    clipped.push_back(std::move(part));
+                }
+            }
+            v.resize(from);
+            v.insert(v.end(), std::make_move_iterator(clipped.begin()), std::make_move_iterator(clipped.end()));
+            return;
+        }
         size_t w = from;
         for (size_t k = from; k < v.size(); ++k)
         {

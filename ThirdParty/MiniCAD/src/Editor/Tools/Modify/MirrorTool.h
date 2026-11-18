@@ -192,7 +192,7 @@ namespace MiniCAD
             if (entity->IsKindOf<CircleEntity>())
             {
                 const auto& c = static_cast<CircleEntity*>(entity)->GetCircle();
-                m_ctx->overlay.AddCircle(c.Center, c.Radius, color);
+                m_ctx->overlay.AddCircle(c, color);
                 return;
             }
             if (entity->IsKindOf<RectangleEntity>())
@@ -204,7 +204,7 @@ namespace MiniCAD
             if (entity->IsKindOf<ArcEntity>())
             {
                 const auto& a = static_cast<ArcEntity*>(entity)->GetArc();
-                m_ctx->overlay.AddArc(a.Center, a.Radius, a.StartAngle, a.EndAngle, color);
+                m_ctx->overlay.AddArc(a, color);
                 return;
             }
             if (entity->IsKindOf<EllipseEntity>())

@@ -1,9 +1,11 @@
 #pragma once
+#include "../Math/OCS.hpp"
 #include "../Math/Point3.hpp"
 #include "../Math/Constants.hpp"
 #include "AABB.hpp"
 #include <cmath>
 #include <algorithm>
+#include <utility>
 
 namespace MiniCAD
 {
@@ -19,21 +21,24 @@ namespace MiniCAD
         Math::Point3 Center;
         double       RadiusX    = 0.0;          // 沿 Rotation 方向的半轴
         double       RadiusY    = 0.0;          // 垂直于 Rotation 方向的半轴
-        double       Rotation   = 0.0;          // 长轴相对 +X 轴的旋转角（弧度）
+        double       Rotation   = 0.0;          // X half-axis angle relative to the OCS X axis
         double       StartParam = 0.0;          // 起始参数角
         double       EndParam   = Math::TwoPI;  // 终止参数角
+        Math::Vec3   Normal{0, 0, 1};
 
         Ellipse() = default;
 
         constexpr Ellipse(const Math::Point3& center,
                           double rx, double ry, double rotation = 0.0,
-                          double startParam = 0.0, double endParam = Math::TwoPI)
+                          double startParam = 0.0, double endParam = Math::TwoPI,
+                          const Math::Vec3& normal = {0, 0, 1})
             : Center(center)
             , RadiusX(rx)
             , RadiusY(ry)
             , Rotation(rotation)
             , StartParam(startParam)
             , EndParam(endParam)
+            , Normal(normal)
         {
         }
 
@@ -87,20 +92,25 @@ namespace MiniCAD
         Math::Point3 StartPoint() const { return PointAt(StartParam); }
         Math::Point3 EndPoint()   const { return PointAt(StartParam + SweepParam()); }
 
+        std::pair<Math::Vec3, Math::Vec3> Axes() const
+        {
+            const auto frame = Math::BuildOCS(Normal);
+            const double c = std::cos(Rotation), s = std::sin(Rotation);
+            return {frame.Ux * c + frame.Uy * s, frame.Uy * c - frame.Ux * s};
+        }
+
+        void SetAxisDirection(const Math::Vec3& direction)
+        {
+            const auto frame = Math::BuildOCS(Normal);
+            Rotation = std::atan2(Math::Dot(direction, frame.Uy), Math::Dot(direction, frame.Ux));
+        }
+
         // ── 参数点 ──────────────────────────────────────────────────────
         // 参数 t 为参数角（周期 TwoPI），逆时针
         Math::Point3 PointAt(double t) const
         {
-            double cosR = std::cos(Rotation);
-            double sinR = std::sin(Rotation);
-            double cosT = std::cos(t);
-            double sinT = std::sin(t);
-            return
-            {
-                Center.x + RadiusX * cosT * cosR - RadiusY * sinT * sinR,
-                Center.y + RadiusX * cosT * sinR + RadiusY * sinT * cosR,
-                Center.z
-            };
+            const auto [x, y] = Axes();
+            return Center + x * (RadiusX * std::cos(t)) + y * (RadiusY * std::sin(t));
         }
 
         // 四个特征点（对应参数 t = 0, PI/2, PI, 3PI/2）
@@ -112,12 +122,9 @@ namespace MiniCAD
         // 世界方向角 → 参数角（点 p 相对圆心，去旋转后按半轴缩放再 atan2）
         double ParamOfPoint(const Math::Point3& p) const
         {
-            double cosR = std::cos(Rotation);
-            double sinR = std::sin(Rotation);
-            double dx   = p.x - Center.x;
-            double dy   = p.y - Center.y;
-            double lx   =  dx * cosR + dy * sinR;
-            double ly   = -dx * sinR + dy * cosR;
+            const auto [x, y] = Axes();
+            const auto delta = p - Center;
+            const double lx = Math::Dot(delta, x), ly = Math::Dot(delta, y);
             return std::atan2(ly / (RadiusY + Math::LengthEPS), lx / (RadiusX + Math::LengthEPS));
         }
 
@@ -130,8 +137,7 @@ namespace MiniCAD
                 return PointAt(t);
             const Math::Point3 s = StartPoint();
             const Math::Point3 e = EndPoint();
-            const double ds = (p.x - s.x) * (p.x - s.x) + (p.y - s.y) * (p.y - s.y);
-            const double de = (p.x - e.x) * (p.x - e.x) + (p.y - e.y) * (p.y - e.y);
+            const double ds = (p - s).LengthSq(), de = (p - e).LengthSq();
             return ds <= de ? s : e;
         }
 
@@ -140,12 +146,9 @@ namespace MiniCAD
         double ClosestParamFull(const Math::Point3& p) const
         {
             // 变换到局部坐标（去旋转）
-            double cosR = std::cos(Rotation);
-            double sinR = std::sin(Rotation);
-            double dx   = p.x - Center.x;
-            double dy   = p.y - Center.y;
-            double lx   =  dx * cosR + dy * sinR;   // 局部 x
-            double ly   = -dx * sinR + dy * cosR;   // 局部 y
+            const auto [x, y] = Axes();
+            const auto delta = p - Center;
+            const double lx = Math::Dot(delta, x), ly = Math::Dot(delta, y);
 
             // 初始猜测：直接用 atan2
             double t = std::atan2(ly / (RadiusY + Math::LengthEPS),  lx / (RadiusX + Math::LengthEPS));
@@ -176,46 +179,29 @@ namespace MiniCAD
         // 点 p 到椭圆周的距离
         double DistanceToPoint(const Math::Point3& p) const
         {
-            Math::Point3 cp = ClosestPoint(p);
-            double dx = p.x - cp.x, dy = p.y - cp.y;
-            return std::sqrt(dx * dx + dy * dy);
+            return (p - ClosestPoint(p)).Length();
         }
 
-        // ── 轴对齐包围盒（解析解）────────────────────────────────────────
-        // 整椭圆：对旋转椭圆的 AABB 有精确公式：
-        //   half_width  = sqrt((rx*cosR)^2 + (ry*sinR)^2)
-        //   half_height = sqrt((rx*sinR)^2 + (ry*cosR)^2)
-        // 椭圆弧：两端点 + 落在弧内的 x / y 极值点
-        //   dx/dt = 0 → t = atan2(-ry*sinR, rx*cosR) (+π)
-        //   dy/dt = 0 → t = atan2( ry*cosR, rx*sinR) (+π)
+        // Extrema of Center + u cos(t) + v sin(t), evaluated in world axes.
         AABB GetBounds() const
         {
-            if (!IsFull())
+            const auto [x, y] = Axes();
+            const auto u = x * RadiusX, v = y * RadiusY;
+            if (IsFull())
             {
-                const Math::Point3 s = StartPoint(), e = EndPoint();
-                double minX = std::min(s.x, e.x), maxX = std::max(s.x, e.x);
-                double minY = std::min(s.y, e.y), maxY = std::max(s.y, e.y);
-                const double cr = std::cos(Rotation), sr = std::sin(Rotation);
-                const double tx = std::atan2(-RadiusY * sr, RadiusX * cr);
-                const double ty = std::atan2( RadiusY * cr, RadiusX * sr);
-                for (double t : { tx, tx + Math::PI, ty, ty + Math::PI })
-                {
-                    if (!ContainsParam(t)) continue;
-                    const Math::Point3 q = PointAt(t);
-                    minX = std::min(minX, q.x);  maxX = std::max(maxX, q.x);
-                    minY = std::min(minY, q.y);  maxY = std::max(maxY, q.y);
-                }
-                return { { minX, minY, Center.z }, { maxX, maxY, Center.z } };
+                const Math::Vec3 extent{std::hypot(u.x,v.x), std::hypot(u.y,v.y), std::hypot(u.z,v.z)};
+                return {Center - extent, Center + extent};
             }
-            double cosR = std::cos(Rotation);
-            double sinR = std::sin(Rotation);
-            double hw   = std::sqrt(RadiusX * RadiusX * cosR * cosR +  RadiusY * RadiusY * sinR * sinR);
-            double hh   = std::sqrt(RadiusX * RadiusX * sinR * sinR +  RadiusY * RadiusY * cosR * cosR);
-            return
+
+            AABB box;
+            box.Expand(StartPoint());
+            box.Expand(EndPoint());
+            for (double t : {std::atan2(v.x,u.x), std::atan2(v.y,u.y), std::atan2(v.z,u.z)})
             {
-                { Center.x - hw, Center.y - hh, Center.z },
-                { Center.x + hw, Center.y + hh, Center.z }
-            };
+                if (ContainsParam(t)) box.Expand(PointAt(t));
+                if (ContainsParam(t + Math::PI)) box.Expand(PointAt(t + Math::PI));
+            }
+            return box;
         }
     };
 }

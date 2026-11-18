@@ -131,11 +131,12 @@ namespace MiniCAD
         Math::Vec3   TangentAt(double angle) const override
         {
             // d/dθ [Center + R·(cosθ, sinθ)] = R·(-sinθ, cosθ)（逆时针正向）
-            return { -std::sin(angle) * m_arc.Radius, std::cos(angle) * m_arc.Radius, 0.0 };
+            const auto frame = Math::BuildOCS(m_arc.Normal);
+            return frame.Ux * (-std::sin(angle) * m_arc.Radius) + frame.Uy * (std::cos(angle) * m_arc.Radius);
         }
         double ProjectParam(const Math::Point3& p) const override
         {
-            return std::atan2(p.y - m_arc.Center.y, p.x - m_arc.Center.x);
+            return m_arc.AngleAt(p);
         }
         AABB Bounds() const override { return m_arc.GetBounds(); }
 
@@ -196,11 +197,12 @@ namespace MiniCAD
         Math::Point3 PointAt(double angle) const override { return m_circle.PointAt(angle); }
         Math::Vec3   TangentAt(double angle) const override
         {
-            return { -std::sin(angle) * m_circle.Radius, std::cos(angle) * m_circle.Radius, 0.0 };
+            const auto frame = Math::BuildOCS(m_circle.Normal);
+            return frame.Ux * (-std::sin(angle) * m_circle.Radius) + frame.Uy * (std::cos(angle) * m_circle.Radius);
         }
         double ProjectParam(const Math::Point3& p) const override
         {
-            return std::atan2(p.y - m_circle.Center.y, p.x - m_circle.Center.x);
+            return m_circle.AngleAt(p);
         }
         AABB Bounds() const override { return m_circle.GetBounds(); }
         Math::Point3 ClosestPoint(const Math::Point3& p) const override { return m_circle.ClosestPoint(p); }
@@ -229,17 +231,8 @@ namespace MiniCAD
         Math::Point3 PointAt(double t) const override { return m_ellipse.PointAt(t); }
         Math::Vec3   TangentAt(double t) const override
         {
-            // d/dt P(t) = -Rx·sin(t)·[cosR, sinR] + Ry·cos(t)·[-sinR, cosR]
-            const double cosR = std::cos(m_ellipse.Rotation);
-            const double sinR = std::sin(m_ellipse.Rotation);
-            const double cosT = std::cos(t);
-            const double sinT = std::sin(t);
-            return
-            {
-                -m_ellipse.RadiusX * sinT * cosR - m_ellipse.RadiusY * cosT * sinR,
-                -m_ellipse.RadiusX * sinT * sinR + m_ellipse.RadiusY * cosT * cosR,
-                0.0
-            };
+            const auto [x, y] = m_ellipse.Axes();
+            return x * (-m_ellipse.RadiusX * std::sin(t)) + y * (m_ellipse.RadiusY * std::cos(t));
         }
         // 整椭圆上最近点的参数角（投影到无界母曲线，即整椭圆）。
         double ProjectParam(const Math::Point3& p) const override

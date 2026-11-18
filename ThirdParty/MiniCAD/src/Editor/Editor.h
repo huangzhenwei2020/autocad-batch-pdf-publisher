@@ -23,6 +23,7 @@
 #include "Solid/ISolidKernel.h"
 #include "Document/GlyphTypes.h"
 #include "Core/GeomKernel/Line.hpp"
+#include "Core/Math/WorkingPlane.hpp"
 #include "Core/Object/Object.hpp"
 #include "Render/VertexTypes.hpp"
 #include "Document/GlyphMeshLibrary.hpp"
@@ -64,6 +65,11 @@ namespace MiniCAD
         // 换视口（文档拖出到独立窗口或拖回主窗口，见 DocumentManager::DetachDocument）：显示数据、选择集都保留，
         // 进行中的工具取消；随视图变化的缓存（动态流按缩放、夹点、捕捉标记、视图过渡）下一帧按新视口的相机重建
         void      SetViewport(Viewport& viewport);
+        void InvalidateDisplay() { m_displayInvalid = true; }
+        void SetViewportClip(std::vector<Math::Point3> points, const Math::WorkingPlane& plane)
+        {
+            m_picking.SetClipBoundary(std::move(points), plane);
+        }
         Viewport* GetViewport() const { return m_viewport; }
         // 新建文档的编辑器从当前编辑器继承用户设置（细线、捕捉、正交、极轴、悬停、视觉样式、字高、
         // 填充 / 多线设置、内核、过渡时长、字形提供者……），不复制文档相关的状态
@@ -76,7 +82,7 @@ namespace MiniCAD
         bool OnInput(const InputEvent& e);
 
         // ── 渲染：收集顶点 + 提交到 Viewport ─────────────────
-        void Render();
+        void Render(bool interactionOnly = false);
 
         // ── Picking / 选择 ────────────────────────────────────
         const std::unordered_set<Object::ObjectID>& GetSelection();
@@ -129,6 +135,7 @@ namespace MiniCAD
         float              GetPickBox() const { return m_pickBox; }
         // 工具是否还在进行：工具刚结束（等下一次输入事件才释放）的收尾期不算
         bool               IsToolRunning() const { return !m_selectionCommand.empty() || (m_tool != nullptr && !m_pendingToolReset); }
+        void EndContentNavigation() { if (m_tool && m_tool->HandlesNavigation()) m_tool->Cancel(); }
         bool               IsSelectingForCommand() const { return !m_selectionCommand.empty(); }
         bool               IsBoxSelecting() const { return m_picking.IsBoxSelecting(); }
         // 最近启动的工具 ID（"Line"、"Move"…）；IsActiveTool 为 true 时即当前工具
@@ -177,7 +184,8 @@ namespace MiniCAD
         // basePoint 非空时为带基点复制(COPYBASE)的基点,光标即基点;否则取包围盒左下角
         void StartPasteTool(const std::vector<std::unique_ptr<Entity>>* clipboard,
                             std::function<void()> onCommitted,
-                            const Math::Point3* basePoint = nullptr);
+                            const Math::Point3* basePoint = nullptr,
+                            std::function<std::unique_ptr<ICommand>(std::vector<std::unique_ptr<Object>>)> factory = {});
 
         // 单点拾取:左键拾取一个点后回调并结束,右键/ESC 取消(带基点复制等轻交互)
         void StartPickPointTool(std::string prompt, std::function<void(const Math::Point3&)> onPicked);   // prompt：N_ 标记的原文
@@ -318,6 +326,7 @@ namespace MiniCAD
             Math::Point3     InsertPos;
             float            Height       = 2.5f;
             float            Rotation     = 0.f;
+            Math::WorkingPlane Plane;
             Object::ObjectID EditTargetId = Object::InvalidID;
             std::string      InitialText;
         };
@@ -334,6 +343,7 @@ namespace MiniCAD
             double           Height       = 2.5;
             double           Rotation     = 0.0;
             double           BoxWidth     = 0.0;
+            Math::WorkingPlane Plane;
             Object::ObjectID EditTargetId = Object::InvalidID;
             std::string      InitialText;
             std::string      DisplayText;            // 编辑框里显示的去码文字，提交时经 MTextEntity::ApplyPlainEdit 对回 InitialText
@@ -748,6 +758,7 @@ namespace MiniCAD
         // Viewport 把它（ViewState::RenderOrigin）合进视图投影矩阵。所有实体重新细分时（UpdateSceneVertices 的
         // invalidateAll）重新选（ChooseRenderOrigin）；改动的实体离它太远时（NeedsRenderRebase）也整体重新细分、换原点
         Math::Point3                 m_renderOrigin;
+        uint64_t                     m_interactionRevision = ~0ull;
         double                       m_renderReach = 0.0;        // 选原点时（抽样的）可见实体中心离它最远多少
         void ChooseRenderOrigin(const std::function<bool(const Entity&)>& isShown);
         bool NeedsRenderRebase(const std::function<bool(const Entity&)>& isShown) const;

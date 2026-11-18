@@ -48,6 +48,8 @@ namespace MiniCAD
 
         const std::string& GetXRefPath() const { return m_xrefPath; }       // 组码 1
         void               SetXRefPath(std::string p) { m_xrefPath = std::move(p); }
+        const std::string& GetResolvedXRefPath() const { return m_resolvedXrefPath; }
+        void SetResolvedXRefPath(std::string path) { m_resolvedXrefPath = std::move(path); }
 
         bool IsXRef()         const { return (m_flags & (XRef | XRefOverlay)) != 0; }
         bool IsXRefUnloaded() const { return m_xrefUnloaded; }               // 组码 71：外部参照已卸载（不显示）
@@ -93,6 +95,7 @@ namespace MiniCAD
             blk->m_flags       = m_flags;
             blk->m_description  = m_description;
             blk->m_xrefPath     = m_xrefPath;
+            blk->m_resolvedXrefPath = m_resolvedXrefPath;
             blk->m_xrefUnloaded = m_xrefUnloaded;
             blk->m_entities.reserve(m_entities.size());
             for (const auto& e : m_entities)
@@ -108,6 +111,7 @@ namespace MiniCAD
         uint16_t                             m_flags = None;          // 块标志(组码 70)
         std::string                          m_description;           // 块说明(组码 4)
         std::string                          m_xrefPath;              // 外部参照路径(组码 1)
+        std::string                          m_resolvedXrefPath;      // Runtime location for cross-document copying.
         bool                                 m_xrefUnloaded = false;  // 外部参照已卸载(组码 71)
         std::vector<std::unique_ptr<Entity>> m_entities;             // 块内子实体
     };

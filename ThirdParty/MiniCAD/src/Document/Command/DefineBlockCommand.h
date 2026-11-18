@@ -57,6 +57,11 @@ namespace MiniCAD
                     blk->AddEntity(e->Clone(e->GetID()));
 
                 m_insertId = scene.NextObjectID();
+                m_insertAttr.LayerId = scene.GetLayerManager().GetActiveLayerID();
+                m_insertAttr.LineType = scene.GetCurrentLineType();
+                m_insertAttr.Lineweight = scene.GetCurrentLineweight();
+                m_insertAttr.InPaperSpace = scene.CurrentSpaceIsPaper();
+                m_insertAttr.LayoutKey = scene.CurrentLayoutKey();
             }
 
             // 移除原实体(所有权暂存,供 Undo 恢复)
@@ -70,6 +75,7 @@ namespace MiniCAD
             // 原位添加块引用
             auto ins = std::make_unique<InsertEntity>(m_insertId, m_blockId, m_name, m_base);
             ins->SetBlock(table.Find(m_blockId));
+            ins->SetAttr(m_insertAttr);
             scene.AddEntity(std::move(ins));
             return true;
         }
@@ -91,5 +97,6 @@ namespace MiniCAD
         BlockID                              m_blockId  = BlockTable::InvalidID;
         Object::ObjectID                     m_insertId = Object::InvalidID;
         std::vector<std::unique_ptr<Object>> m_removed;   // Execute 暂存,Undo 归还场景
+        EntityAttr m_insertAttr;
     };
 }

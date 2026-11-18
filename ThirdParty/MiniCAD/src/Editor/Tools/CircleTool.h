@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include "Scene/Scene.h"
 #include "Editor/Tools/ITool.h"
 #include "Editor/EditorContext.h"
@@ -13,6 +13,7 @@ namespace MiniCAD
     class CircleTool : public ITool
     {
     public:
+        bool SupportsWorkingPlane() const override { return true; }
         CircleTool()
         {
             LOG_DEBUG("[CircleTool] click center | click radius | right-click/ESC exits");
@@ -66,7 +67,7 @@ namespace MiniCAD
 
                 const  auto& layer = m_ctx->scene.GetLayerManager().GetActiveLayer();
 
-                m_ctx->overlay.AddCircle(m_center, r, layer.GetColor());
+                m_ctx->overlay.AddCircle(Circle{m_center, r, m_ctx->scene.GetWorkingPlane().Normal()}, layer.GetColor());
                 m_ctx->overlay.AddLine  (m_center, cursor, { 0.6, 0.6, 0.6, 0.4 });
 
                 return false;
@@ -82,7 +83,7 @@ namespace MiniCAD
 
         Math::Point3 GetAnchor() const override
         {
-            return { m_center.x, m_center.y, 0.0 };
+            return m_center;
         }
 
         std::string GetPrompt() const override
@@ -99,15 +100,20 @@ namespace MiniCAD
     private:
         Math::Point3 GetPoint(const InputEvent& e) const
         {
-            if (e.HasSnap) return e.SnapWorld;
-            return m_ctx->viewport.GetCamera().ScreenToWorld(e.MouseX, e.MouseY);
+            const auto& plane = m_ctx->scene.GetWorkingPlane();
+            auto point = e.SnapWorld;
+            if (!e.HasSnap && !m_ctx->viewport.GetCamera().ScreenToPlane(e.MouseX, e.MouseY, plane, point))
+                point = plane.Origin;
+            auto local = plane.ToLocal(point);
+            local.z = m_hasCenter ? plane.ToLocal(m_center).z : local.z;
+            return plane.ToWorld(local);
         }
 
         static double Distance2D(const Math::Point3& a, const Math::Point3& b)
         {
             double dx = b.x - a.x;
             double dy = b.y - a.y;
-            return std::sqrt(dx * dx + dy * dy);
+            return std::hypot(dx, dy, b.z - a.z);
         }
 
         void Commit(const Math::Point3& center, double radius)
@@ -115,6 +121,7 @@ namespace MiniCAD
             auto id = m_ctx->scene.NextObjectID();
             auto circle = std::make_unique<CircleEntity>(id, center, radius);
             m_ctx->ApplyCurrentAttr(*circle);
+            circle->SetExtrusion(m_ctx->scene.GetWorkingPlane().Normal());
             auto cmd = std::make_unique<AddEntityCommand>(std::move(circle));
             m_ctx->cmdStack.Execute(std::move(cmd), m_ctx->scene);
             LOG_DEBUG("Circle Id %d center(%.3f,%.3f) r=%.3f",

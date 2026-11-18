@@ -6,6 +6,7 @@
 #include "Core/Entity/CircleEntity.hpp"
 #include "Core/Entity/RectangleEntity.hpp"
 #include "Core/Entity/ArcEntity.hpp"
+#include "Core/GeomKernel/SpatialCurveTransform.hpp"
 #include "Core/Entity/EllipseEntity.hpp"
 #include "Core/Entity/PolylineEntity.hpp"
 #include "Core/Entity/SplineEntity.hpp"
@@ -42,6 +43,15 @@ namespace MiniCAD
         return { v.x * c - v.y * s, v.x * s + v.y * c, v.z };
     }
 
+    Ellipse RotateEllipse(const Ellipse& source, const Math::Point3& pivot, double angle)
+    {
+        Ellipse ellipse = source;
+        ellipse.Center = RotatePoint(source.Center, pivot, angle);
+        ellipse.Normal = RotateVec2D(source.Normal, angle);
+        ellipse.SetAxisDirection(RotateVec2D(source.Axes().first, angle));
+        return ellipse;
+    }
+
     void RotateEntityInPlace(Entity& entity, const Math::Point3& pivot, double angle)
     {
         if (entity.IsKindOf<Solid3DEntity>())
@@ -72,6 +82,11 @@ namespace MiniCAD
         {
             auto& ce = static_cast<CircleEntity&>(entity);
             Circle c = ce.GetCircle();
+            if (!entity.HasDefaultExtrusion())
+            {
+                ce.SetCircle(TransformSpatialCircle(c, [&](const Math::Point3& point) { return RotatePoint(point, pivot, angle); }));
+                return;
+            }
             c.Center = RotatePoint(c.Center, pivot, angle);
             ce.SetCircle(c);
             return;
@@ -93,6 +108,11 @@ namespace MiniCAD
         {
             auto& ae = static_cast<ArcEntity&>(entity);
             Arc a = ae.GetArc();
+            if (!entity.HasDefaultExtrusion())
+            {
+                ae.SetArc(TransformSpatialArc(a, [&](const Math::Point3& point) { return RotatePoint(point, pivot, angle); }));
+                return;
+            }
             a.Center     = RotatePoint(a.Center, pivot, angle);
             a.StartAngle = a.StartAngle + angle;
             a.EndAngle   = a.EndAngle   + angle;
@@ -110,10 +130,7 @@ namespace MiniCAD
         if (entity.IsKindOf<EllipseEntity>())
         {
             auto& ee = static_cast<EllipseEntity&>(entity);
-            Ellipse el = ee.GetEllipse();
-            el.Center   = RotatePoint(el.Center, pivot, angle);
-            el.Rotation = el.Rotation + angle;
-            ee.SetEllipse(el);
+            ee.SetEllipse(RotateEllipse(ee.GetEllipse(), pivot, angle));
             return;
         }
 
@@ -122,6 +139,7 @@ namespace MiniCAD
             auto& pe = static_cast<PolylineEntity&>(entity);
             Polyline pl = pe.GetPolyline();
             for (auto& p : pl.Points) p = RotatePoint(p, pivot, angle);
+            pl.Normal = RotateVec2D(pl.Normal, angle);
             pe.SetPolyline(std::move(pl));
             return;
         }
@@ -139,7 +157,9 @@ namespace MiniCAD
         {
             auto& te = static_cast<TextEntity&>(entity);
             te.SetPosition(RotatePoint(te.GetPosition(), pivot, angle));
-            te.SetRotation(te.GetRotation() + static_cast<float>(angle));
+            const auto basis = te.GetOCS();
+            te.SetExtrusion(RotateVec2D(basis.Uz, angle));
+            te.SetRotation(Math::PlaneAngle(te.GetOCS(), RotateVec2D(Math::PlaneDirection(basis, te.GetRotation()), angle)));
             return;
         }
 
@@ -147,7 +167,9 @@ namespace MiniCAD
         {
             auto& me = static_cast<MTextEntity&>(entity);
             me.SetPosition(RotatePoint(me.GetPosition(), pivot, angle));
-            me.SetRotation(me.GetRotation() + angle);
+            const auto basis = me.GetOCS();
+            me.SetExtrusion(RotateVec2D(basis.Uz, angle));
+            me.SetRotation(Math::PlaneAngle(me.GetOCS(), RotateVec2D(Math::PlaneDirection(basis, me.GetRotation()), angle)));
             return;
         }
 
@@ -173,6 +195,11 @@ namespace MiniCAD
         if (entity.IsKindOf<HatchEntity>())
         {
             auto& he = static_cast<HatchEntity&>(entity);
+            if (!he.HasDefaultExtrusion())
+            {
+                he.ReorientBoundary(RotateVec2D(he.GetExtrusion(), angle), [&](const Math::Point3& p) { return RotatePoint(p, pivot, angle); });
+                return;
+            }
             for (auto& loop : he.GetLoops())
                 for (auto& edge : loop.Edges)
                 {

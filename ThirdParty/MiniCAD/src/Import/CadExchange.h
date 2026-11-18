@@ -82,4 +82,5 @@ namespace MiniCAD
 
     // 原图中模型空间的TCH对象（TCH_*）个数；source 为空时为 0
     int CadSourceTchCount(const CadSource* source);
+    bool CadStyleIsReferenced(const CadSource* source, bool multiline, uint32_t style);
 }

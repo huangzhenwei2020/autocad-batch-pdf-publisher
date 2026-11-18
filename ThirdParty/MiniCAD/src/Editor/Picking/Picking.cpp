@@ -17,6 +17,7 @@
 #include "Core/Entity/TextEntity.hpp"
 #include "Core/Entity/MTextEntity.hpp"
 #include "Core/Entity/TableEntity.hpp"
+#include "Core/Entity/ViewportEntity.hpp"
 #include "Core/Entity/XLineEntity.hpp"
 #include "Core/Entity/RayEntity.hpp"
 #include "Core/Entity/Entity.hpp"
@@ -42,10 +43,9 @@ namespace MiniCAD
         // Sink、再在屏幕空间统一做距离 / 区域命中测试来支持拾取。
         // (XLine / Ray 已单独特化,见 AsXLineGeometry / ParamLineClipBox2。)
         // 这样组合型实体(标注、块引用展开的子实体)无需在拾取里重复其几何构造逻辑。
-        // 文字的屏幕外框（凸四边形）：多行文字按实际文字的旋转矩形，单行文字按包围盒
-        bool TextScreenQuad(const Object& obj, const Camera& camera, std::array<Math::Point2, 4>& q)
+        // 文字的屏幕外框（凸四边形）：多行文字按实际文字的旋转矩形，单行文字也按旋转后的文字外框
+        bool TextWorldQuad(const Object& obj, std::array<Math::Point3, 4>& w)
         {
-            std::array<Math::Point3, 4> w;
             if (obj.IsKindOf<TableEntity>())
             {
                 const auto& table = static_cast<const TableEntity&>(obj);
@@ -55,13 +55,16 @@ namespace MiniCAD
             else if (obj.IsKindOf<MTextEntity>())
                 w = static_cast<const MTextEntity&>(obj).GetTextFrame();
             else if (obj.IsKindOf<TextEntity>())
-            {
-                const auto b = static_cast<const TextEntity&>(obj).GetBoundingBox();
-                w = { Math::Point3{ b.Min.x, b.Max.y, b.Min.z }, Math::Point3{ b.Max.x, b.Max.y, b.Min.z },
-                      Math::Point3{ b.Max.x, b.Min.y, b.Min.z }, Math::Point3{ b.Min.x, b.Min.y, b.Min.z } };
-            }
+                w = static_cast<const TextEntity&>(obj).GetTextFrame();
             else
                 return false;
+            return true;
+        }
+
+        bool TextScreenQuad(const Object& obj, const Camera& camera, std::array<Math::Point2, 4>& q)
+        {
+            std::array<Math::Point3, 4> w;
+            if (!TextWorldQuad(obj, w)) return false;
             for (size_t i = 0; i < 4; ++i)
                 q[i] = camera.WorldToScreen(w[i]);
             return true;
@@ -80,13 +83,13 @@ namespace MiniCAD
                 if (sign == 0) sign = sc;
                 else if (sc != sign) return false;
             }
-            return true;
+            return sign != 0;
         }
 
         class PickCollectSink : public IDrawSink
         {
         public:
-            explicit PickCollectSink(const LayerManager& layers) : m_layers(layers) {}
+            PickCollectSink(const LayerManager& layers, const std::function<bool(LayerID)>& filter) : m_layers(layers), m_filter(filter) {}
 
             std::vector<std::pair<Math::Point3, Math::Point3>> Segments;
             std::vector<std::array<Math::Point3, 3>>           Triangles;
@@ -95,6 +98,7 @@ namespace MiniCAD
             // 块内关闭 / 冻结图层上的子实体不参与拾取
             bool IsLayerVisible(LayerID layerId) const override
             {
+                if (m_filter && !m_filter(layerId)) return false;
                 const Layer* layer = m_layers.GetLayer(layerId);
                 return !layer || layer->IsVisible();
             }
@@ -118,11 +122,14 @@ namespace MiniCAD
 
         private:
             const LayerManager& m_layers;
+            const std::function<bool(LayerID)>& m_filter;
         };
 
         // 该实体是否已在拾取中单独特化(避免被通用回退重复处理)。
-        bool HasSpecializedPick(const Object& obj)
+        bool HasSpecializedPick(const Object& obj, const Camera& camera)
         {
+            if ((obj.IsKindOf<CircleEntity>() || obj.IsKindOf<ArcEntity>() || obj.IsKindOf<PolylineEntity>() || obj.IsKindOf<EllipseEntity>()) &&
+                (!camera.IsPlanView() || !static_cast<const Entity&>(obj).HasDefaultExtrusion())) return false;
             return obj.IsKindOf<LineEntity>()      || obj.IsKindOf<RectangleEntity>()
                 || obj.IsKindOf<CircleEntity>()    || obj.IsKindOf<PointEntity>()
                 || obj.IsKindOf<ArcEntity>()       || obj.IsKindOf<EllipseEntity>()
@@ -303,6 +310,8 @@ namespace MiniCAD
     bool Picking::IsPickable(const Object& obj) const
     {
         if (!obj.IsKindOf<Entity>()) return true;
+        if (const auto* viewport = dynamic_cast<const ViewportEntity*>(&obj);
+            viewport && viewport->GetViewportId() == 1 && !viewport->ShowsModel()) return false;
 
         const auto& attr = static_cast<const Entity&>(obj).GetAttr();
         if (!attr.Visible) return false;
@@ -313,6 +322,21 @@ namespace MiniCAD
         if (const Layer* layer = m_scene->GetLayerManager().GetLayer(attr.LayerId))
             if (!layer->IsVisible() || layer->IsLocked())
                 return false;
+
+        if (m_viewportClip.Valid())
+        {
+            const auto& entity = static_cast<const Entity&>(obj);
+            if (!entity.IsBoundless())
+            {
+                const auto bounds = ProjectClipBounds(entity);
+                if (!m_viewportClip.BoxOverlaps(bounds.Min.x, bounds.Min.y, bounds.Max.x, bounds.Max.y)) return false;
+            }
+            if (NeedsViewportClip(obj))
+            {
+                const auto& geometry = GetPickGeometry(obj);
+                if (geometry.Segments.empty() && geometry.Triangles.empty() && geometry.Points.empty()) return false;
+            }
+        }
 
         return true;
     }
@@ -339,13 +363,15 @@ namespace MiniCAD
 
         auto& camera = m_viewport->GetCamera();
         const Math::Point3 worldPt = camera.ScreenToWorld(pt.x, pt.y);
+        if (!ContainsClip(worldPt)) return Object::InvalidID;
 
         // 单实体精确命中测试（含细分）。仅对空间索引筛出的候选执行。
         auto testOne = [&](const Object& obj)
             {
                 if (!IsPickable(obj)) return;
+                const bool clipped = NeedsViewportClip(obj);
 
-                if (obj.IsKindOf<LineEntity>())
+                if (!clipped && obj.IsKindOf<LineEntity>())
                 {
                     auto line = static_cast<const LineEntity*>(&obj);
                     auto a = camera.WorldToScreen(line->GetLine().Start);
@@ -359,7 +385,7 @@ namespace MiniCAD
                     }
                 }
 
-                if (obj.IsKindOf<RectangleEntity>())
+                if (!clipped && obj.IsKindOf<RectangleEntity>())
                 {
                     auto rectEntity = static_cast<const RectangleEntity*>(&obj);
                     auto& rect = rectEntity->GetRectangle();
@@ -384,7 +410,7 @@ namespace MiniCAD
                     testEdge(p4, p1);
 
                     // 二维填充是实心的：落在内部也算命中
-                    if (obj.IsKindOf<SolidEntity>() && bestDist > 0.0
+                    if (!clipped && obj.IsKindOf<SolidEntity>() && bestDist > 0.0
                         && (PointInTriangle2(pt, p1, p2, p3) || PointInTriangle2(pt, p1, p3, p4)))
                     {
                         bestDist = 0.0;
@@ -392,7 +418,7 @@ namespace MiniCAD
                     }
                 }
 
-                if (obj.IsKindOf<CircleEntity>())
+                if (!clipped && camera.IsPlanView() && obj.IsKindOf<CircleEntity>() && static_cast<const Entity&>(obj).HasDefaultExtrusion())
                 {
                     auto  circle = static_cast<const CircleEntity*>(&obj);
                     auto& c = circle->GetCircle();
@@ -413,7 +439,7 @@ namespace MiniCAD
                     }
                 }
 
-                if (obj.IsKindOf<PointEntity>())
+                if (!clipped && obj.IsKindOf<PointEntity>())
                 {
                     auto point = static_cast<const PointEntity*>(&obj);
                     auto a = camera.WorldToScreen(point->GetPoint().Position);
@@ -427,7 +453,7 @@ namespace MiniCAD
                 }
 
                 // ── ArcEntity 点选 ─────────────────────────────────────────────────────
-                if (obj.IsKindOf<ArcEntity>())
+                if (!clipped && camera.IsPlanView() && obj.IsKindOf<ArcEntity>() && static_cast<const Entity&>(obj).HasDefaultExtrusion())
                 {
                     auto        arcEnt = static_cast<const ArcEntity*>(&obj);
                     const auto& arc = arcEnt->GetArc();
@@ -504,7 +530,7 @@ namespace MiniCAD
                 }
 
                 // ── EllipseEntity 点选 ────────────────────────────────────────────────
-                if (obj.IsKindOf<EllipseEntity>())
+                if (!clipped && camera.IsPlanView() && obj.IsKindOf<EllipseEntity>() && static_cast<const Entity&>(obj).HasDefaultExtrusion())
                 {
                     auto  ellEnt   = static_cast<const EllipseEntity*>(&obj);
                     const auto& el = ellEnt->GetEllipse();
@@ -535,7 +561,7 @@ namespace MiniCAD
                 }
 
                 // ── PolylineEntity 点选 ───────────────────────────────────────────────
-                if (obj.IsKindOf<PolylineEntity>())
+                if (!clipped && camera.IsPlanView() && obj.IsKindOf<PolylineEntity>() && static_cast<const Entity&>(obj).HasDefaultExtrusion())
                 {
                     auto  plEnt = static_cast<const PolylineEntity*>(&obj);
                     const auto& pl = plEnt->GetPolyline();
@@ -561,7 +587,7 @@ namespace MiniCAD
                 }
 
                 // ── SplineEntity 点选 ─────────────────────────────────────────────────
-                if (obj.IsKindOf<SplineEntity>())
+                if (!clipped && obj.IsKindOf<SplineEntity>())
                 {
                     auto  spEnt = static_cast<const SplineEntity*>(&obj);
                     const auto& sp = spEnt->GetSpline();
@@ -591,7 +617,7 @@ namespace MiniCAD
 
                 // ── TextEntity / MTextEntity 点选 ────────────────────────────────────
                 // 区域型实体：点在文字外框的屏幕投影内（外扩 thresh 像素）即命中，用点到中心距离竞争
-                if (std::array<Math::Point2, 4> q; TextScreenQuad(obj, camera, q))
+                if (std::array<Math::Point2, 4> q; !clipped && TextScreenQuad(obj, camera, q))
                 {
                     bool inside = PointInConvexQuad(pt, q);
                     for (size_t i = 0; i < 4 && !inside; ++i)
@@ -612,7 +638,7 @@ namespace MiniCAD
                 // 无限直线/射线:在屏幕空间求光标到直线(射线)的投影距离。
                 // 端点在 ±1e6 处,不能用 Draw() 折线近似(投影后坐标巨大、精度差),
                 // 故单独特化精确求距。
-                if (bool isRay = false; const XLine* geo = AsXLineGeometry(obj, isRay))
+                if (bool isRay = false; const XLine* geo = clipped ? nullptr : AsXLineGeometry(obj, isRay))
                 {
                     if (geo->IsValid())
                     {
@@ -641,7 +667,7 @@ namespace MiniCAD
                 // 未单独特化的实体(Dimension / Leader / MLeader /
                 // Tolerance / Hatch / Insert 等):收集其 Draw() 输出的线段与三角形,
                 // 在屏幕空间统一做距离 / 区域命中测试。
-                if (obj.IsKindOf<Entity>() && !HasSpecializedPick(obj))
+                if (obj.IsKindOf<Entity>() && (clipped || !HasSpecializedPick(obj, camera)))
                 {
                     const PickGeometry& geom = GetPickGeometry(obj);
 
@@ -747,12 +773,35 @@ namespace MiniCAD
         return best;
     }
 
-    const Picking::PickGeometry& Picking::GetPickGeometry(const Object& obj)
+    AABB Picking::ProjectClipBounds(const Entity& entity) const
+    {
+        const auto bounds = entity.GetBoundingBox();
+        if (bounds.Min.x > bounds.Max.x || bounds.Min.y > bounds.Max.y || bounds.Min.z > bounds.Max.z)
+            return AABB::Empty();
+        const auto center = m_viewportClipPlane.ToLocal(bounds.Center());
+        const auto extents = bounds.Extents();
+        auto radius = [&](const Math::Vec3& axis)
+        {
+            return std::abs(axis.x) * extents.x + std::abs(axis.y) * extents.y + std::abs(axis.z) * extents.z;
+        };
+        const double x = radius(m_viewportClipPlane.X), y = radius(m_viewportClipPlane.Y);
+        return {{center.x - x, center.y - y, 0}, {center.x + x, center.y + y, 0}};
+    }
+
+    bool Picking::NeedsViewportClip(const Object& obj) const
+    {
+        if (!m_viewportClip.Valid()) return false;
+        if (static_cast<const Entity&>(obj).IsBoundless()) return true;
+        const auto bounds = ProjectClipBounds(static_cast<const Entity&>(obj));
+        return !WipeClip::detail::BoxInside(m_viewportClip, bounds.Min.x, bounds.Min.y, bounds.Max.x, bounds.Max.y);
+    }
+
+    const Picking::PickGeometry& Picking::GetPickGeometry(const Object& obj) const
     {
         auto it = m_pickGeometry.find(obj.GetID());
         if (it == m_pickGeometry.end())
         {
-            PickCollectSink sink(m_scene->GetLayerManager());
+            PickCollectSink sink(m_scene->GetLayerManager(), m_layerFilter);
             static_cast<const Entity&>(obj).Draw(sink, false, false);
             PickGeometry g;
             g.Segments  = std::move(sink.Segments);
@@ -761,6 +810,30 @@ namespace MiniCAD
             // 漏了它则点的命中判定永远拿不到几何 —— 表现为点阵填充
             // 框选能选中（框选路径直接用 sink），但悬停 / 点选选不中。
             g.Points    = std::move(sink.Points);
+            if (NeedsViewportClip(obj))
+            {
+                if (std::array<Math::Point3, 4> text; TextWorldQuad(obj, text))
+                {
+                    g.Triangles.push_back({text[0], text[1], text[2]});
+                    g.Triangles.push_back({text[0], text[2], text[3]});
+                }
+                const VertexColor white{1,1,1,1};
+                std::vector<Vertex_P3_C4> lines, fills, points;
+                auto local = [&](const auto& p) { return ToRenderFloat3(m_viewportClipPlane.ToLocal(p), {}); };
+                for (const auto& edge : g.Segments)
+                { lines.push_back({local(edge.first),white}); lines.push_back({local(edge.second),white}); }
+                for (const auto& triangle : g.Triangles)
+                    for (const auto& p : triangle) fills.push_back({local(p),white});
+                for (const auto& p : g.Points) points.push_back({local(p),white});
+                WipeClip::ClipLines(lines, m_viewportClip, 0, true);
+                WipeClip::ClipFills(fills, m_viewportClip, 6, 0, true);
+                WipeClip::ClipPoints(points, m_viewportClip, 0, true);
+                auto world = [&](const auto& v) { return m_viewportClipPlane.ToWorld({v.pos.x, v.pos.y, v.pos.z}); };
+                g.Segments.clear(); g.Triangles.clear(); g.Points.clear();
+                for (size_t i=0;i+1<lines.size();i+=2) g.Segments.emplace_back(world(lines[i]),world(lines[i+1]));
+                for (size_t i=0;i+2<fills.size();i+=3) g.Triangles.push_back({world(fills[i]),world(fills[i+1]),world(fills[i+2])});
+                for (const auto& p : points) g.Points.push_back(world(p));
+            }
             it = m_pickGeometry.emplace(obj.GetID(), std::move(g)).first;
         }
         return it->second;
@@ -792,8 +865,9 @@ namespace MiniCAD
         auto testOne = [&](const Object& obj)
             {
                 if (!IsPickable(obj)) return;
+                const bool clipped = NeedsViewportClip(obj);
 
-                if (obj.IsKindOf<PointEntity>())
+                if (!clipped && obj.IsKindOf<PointEntity>())
                 {
                     auto point = static_cast<const PointEntity*>(&obj);
                     auto s     = camera.WorldToScreen(point->GetPoint().Position);
@@ -805,7 +879,7 @@ namespace MiniCAD
 
                 }
 
-                if (obj.IsKindOf<LineEntity>())
+                if (!clipped && obj.IsKindOf<LineEntity>())
                 {
                     auto line = static_cast<const LineEntity*>(&obj);
                     auto s    = camera.WorldToScreen(line->GetLine().Start);
@@ -818,7 +892,7 @@ namespace MiniCAD
                         result.insert(obj.GetID());
                 }
 
-                if (obj.IsKindOf<RectangleEntity>())
+                if (!clipped && obj.IsKindOf<RectangleEntity>())
                 {
                     auto rectEntity = static_cast<const RectangleEntity*>(&obj);
                     auto& rect      = rectEntity->GetRectangle();
@@ -853,7 +927,7 @@ namespace MiniCAD
 
                 }
 
-                if (obj.IsKindOf<CircleEntity>())
+                if (!clipped && camera.IsPlanView() && obj.IsKindOf<CircleEntity>() && static_cast<const Entity&>(obj).HasDefaultExtrusion())
                 {
                     auto circle = static_cast<const CircleEntity*>(&obj);
                     const auto& c = circle->GetCircle();
@@ -935,7 +1009,7 @@ namespace MiniCAD
                 }
 
                 // ── ArcEntity 框选 ────────────────────────────────────────────────────
-                if (obj.IsKindOf<ArcEntity>())
+                if (!clipped && camera.IsPlanView() && obj.IsKindOf<ArcEntity>() && static_cast<const Entity&>(obj).HasDefaultExtrusion())
                 {
                     auto  arcEnt = static_cast<const ArcEntity*>(&obj);
                     const auto& arc = arcEnt->GetArc();
@@ -1015,7 +1089,7 @@ namespace MiniCAD
                 }
 
                 // ── EllipseEntity 框选 ────────────────────────────────────────────────
-                if (obj.IsKindOf<EllipseEntity>())
+                if (!clipped && camera.IsPlanView() && obj.IsKindOf<EllipseEntity>() && static_cast<const Entity&>(obj).HasDefaultExtrusion())
                 {
                     auto  ellEnt   = static_cast<const EllipseEntity*>(&obj);
                     const auto& el = ellEnt->GetEllipse();
@@ -1076,7 +1150,7 @@ namespace MiniCAD
                 }
 
                 // ── PolylineEntity 框选 ───────────────────────────────────────────────
-                if (obj.IsKindOf<PolylineEntity>())
+                if (!clipped && camera.IsPlanView() && obj.IsKindOf<PolylineEntity>() && static_cast<const Entity&>(obj).HasDefaultExtrusion())
                 {
                     auto  plEnt = static_cast<const PolylineEntity*>(&obj);
                     const auto& pl = plEnt->GetPolyline();
@@ -1118,7 +1192,7 @@ namespace MiniCAD
                 }
 
                 // ── SplineEntity 框选 ─────────────────────────────────────────────────
-                if (obj.IsKindOf<SplineEntity>())
+                if (!clipped && obj.IsKindOf<SplineEntity>())
                 {
                     auto  spEnt = static_cast<const SplineEntity*>(&obj);
                     const auto& sp = spEnt->GetSpline();
@@ -1163,7 +1237,7 @@ namespace MiniCAD
                 }
 
                 // ── TextEntity / MTextEntity 框选 ────────────────────────────────────
-                if (std::array<Math::Point2, 4> corners; TextScreenQuad(obj, camera, corners))
+                if (std::array<Math::Point2, 4> corners; !clipped && TextScreenQuad(obj, camera, corners))
                 {
                     bool hit = false;
                     if (fullyContain)
@@ -1182,7 +1256,7 @@ namespace MiniCAD
                 // ── XLineEntity / RayEntity 框选 ─────────────────────────────────────
                 // 无限直线/射线向无穷延伸,永远不可能被窗口(全包含)选中;
                 // 仅交叉框选:用参数化直线/射线裁剪选择框,判断是否穿过框区域。
-                if (bool isRay = false; const XLine* geo = AsXLineGeometry(obj, isRay))
+                if (bool isRay = false; const XLine* geo = clipped ? nullptr : AsXLineGeometry(obj, isRay))
                 {
                     if (geo->IsValid() && !fullyContain)
                     {
@@ -1209,7 +1283,7 @@ namespace MiniCAD
                 // 未单独特化的实体:收集其 Draw() 输出的线段(三角形拆为三条边)
                 // 与点图元，投影到屏幕空间。右框(fullyContain)要求全部顶点在框内;
                 // 左框(crossing)任一段/点触碰框即命中。
-                if (obj.IsKindOf<Entity>() && !HasSpecializedPick(obj))
+                if (obj.IsKindOf<Entity>() && (clipped || !HasSpecializedPick(obj, camera)))
                 {
                     // 与点选共用缓存的拾取几何（世界坐标）：以前每次框选都把块、标注、填充重画一遍收集线段
                     const PickGeometry& sink = GetPickGeometry(obj);

@@ -2,6 +2,7 @@
 #include "../Math/Point3.hpp"
 #include "../Math/Constants.hpp"
 #include "AABB.hpp"
+#include "Arc.hpp"
 #include <vector>
 #include <cmath>
 #include <algorithm>
@@ -45,6 +46,7 @@ namespace MiniCAD
     {
         std::vector<Math::Point3> Points;
         std::vector<double>       Bulges;   // size == Points.size() - 1  (when valid)
+        Math::Vec3 Normal{0, 0, 1};         // WCS vertices, bulges measured about this normal
 
         Polyline() = default;
 
@@ -80,6 +82,26 @@ namespace MiniCAD
         }
         bool SegIsArc(int i) const { return std::abs(SegBulge(i)) > 1e-12; }
         bool SegIsLine(int i) const { return !SegIsArc(i); }
+
+        bool HasDefaultPlane() const { return Math::IsDefaultExtrusion(Normal); }
+
+        Polyline ToOcs() const
+        {
+            Polyline local = *this;
+            if (!HasDefaultPlane())
+            {
+                const auto frame = Math::BuildOCS(Normal);
+                for (auto& point : local.Points) point = Math::WcsToOcs(frame, point);
+            }
+            local.Normal = {0, 0, 1};
+            return local;
+        }
+
+        ArcGeom SegmentArc(int i) const
+        {
+            const auto frame = Math::BuildOCS(Normal);
+            return ComputeArc(Math::WcsToOcs(frame, SegStart(i)), Math::WcsToOcs(frame, SegEnd(i)), SegBulge(i));
+        }
 
         // ── Arc geometry from a bulge value ───────────────────────────────────
         //
@@ -160,6 +182,13 @@ namespace MiniCAD
         // ── Build a dense point list (for rendering / length) ─────────────────
         std::vector<Math::Point3> Tessellate(double angleTol = Math::PI / 36.0) const
         {
+            if (!HasDefaultPlane())
+            {
+                auto points = ToOcs().Tessellate(angleTol);
+                const auto frame = Math::BuildOCS(Normal);
+                for (auto& point : points) point = Math::OcsToWcs(frame, point);
+                return points;
+            }
             if (!IsValid()) return {};
 
             std::vector<Math::Point3> result;
@@ -195,13 +224,13 @@ namespace MiniCAD
             }
 
             // Arc case: tangent = velocity at the arc's end angle
-            ArcGeom arc = ComputeArc(A, B, SegBulge(i));
+            ArcGeom arc = SegmentArc(i);
             double endAngle = arc.StartAngle + arc.SweepAngle;
 
             // For CW sweep (sweepAngle < 0):  tangent = ( sin(e), −cos(e), 0)
             // For CCW sweep (sweepAngle > 0):  tangent = (−sin(e),  cos(e), 0)
             double s = (arc.SweepAngle < 0) ? 1.0 : -1.0;
-            return { s * std::sin(endAngle), -s * std::cos(endAngle), 0.0 };
+            return Math::OcsToWcs(Math::BuildOCS(Normal), {s * std::sin(endAngle), -s * std::cos(endAngle), 0.0});
         }
 
         // ── Bulge from a tangent constraint ───────────────────────────────────
@@ -268,7 +297,7 @@ namespace MiniCAD
                 double dx = B.x - A.x, dy = B.y - A.y, dz = B.z - A.z;
                 return std::sqrt(dx * dx + dy * dy + dz * dz);
             }
-            ArcGeom arc = ComputeArc(A, B, SegBulge(i));
+            ArcGeom arc = SegmentArc(i);
             return arc.Radius * std::abs(arc.SweepAngle);
         }
 
@@ -283,6 +312,11 @@ namespace MiniCAD
         // ── Closest point ─────────────────────────────────────────────────────
         Math::Point3 ClosestPoint(const Math::Point3& p) const
         {
+            if (!HasDefaultPlane())
+            {
+                const auto frame = Math::BuildOCS(Normal);
+                return Math::OcsToWcs(frame, ToOcs().ClosestPoint(Math::WcsToOcs(frame, p)));
+            }
             if (Points.empty()) return p;
             if (Points.size() == 1) return Points[0];
 
@@ -310,6 +344,22 @@ namespace MiniCAD
         AABB GetBounds() const
         {
             if (Points.empty()) return { {0,0,0}, {0,0,0} };
+            if (!HasDefaultPlane())
+            {
+                AABB box;
+                for (const auto& point : Points) box.Expand(point);
+                const auto frame = Math::BuildOCS(Normal);
+                for (int i = 0; i < SegCount(); ++i)
+                {
+                    if (!SegIsArc(i)) continue;
+                    const auto arc = SegmentArc(i);
+                    if (arc.Radius < Math::LengthEPS) continue;
+                    const double end = arc.StartAngle + arc.SweepAngle;
+                    box.Expand(Arc{Math::OcsToWcs(frame, arc.Center), arc.Radius,
+                        std::min(arc.StartAngle, end), std::max(arc.StartAngle, end), Normal}.GetBounds());
+                }
+                return box;
+            }
 
             double minX = Points[0].x, maxX = Points[0].x;
             double minY = Points[0].y, maxY = Points[0].y;

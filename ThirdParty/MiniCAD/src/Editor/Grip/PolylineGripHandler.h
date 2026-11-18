@@ -79,6 +79,18 @@ namespace MiniCAD
 
             // 从快照出发，避免累积误差
             Polyline out = state->Base;
+            const auto frame = Math::BuildOCS(out.Normal);
+            auto local = Math::WcsToOcs(frame, worldPos);
+            if (!out.HasDefaultPlane())
+                local.z = Math::WcsToOcs(frame, out.Points.front()).z;
+            const auto target = Math::OcsToWcs(frame, local);
+            const bool closed = PolylineOps::IsRing(out);
+            auto setVertex = [&](int index, const Math::Point3& point)
+            {
+                out.Points[index] = point;
+                if (closed && index == 0) out.Points.back() = point;
+                if (closed && index == out.SegCount()) out.Points.front() = point;
+            };
 
             switch (activeGrip.GripType)
             {
@@ -87,7 +99,7 @@ namespace MiniCAD
             {
                 int idx = activeGrip.SubIndex;
                 if (idx >= 0 && idx < static_cast<int>(out.Points.size()))
-                    out.Points[idx] = worldPos;
+                    setVertex(idx, target);
                 break;
             }
 
@@ -108,7 +120,11 @@ namespace MiniCAD
                     const Math::Point3& p1 = out.Points[segIdx];  // 起点（不变）
                     const Math::Point3& p2 = out.Points[segIdx + 1];  // 终点（不变）
 
-                    double newBulge = ComputeBulgeFromThreePoints(p1, worldPos, p2);
+                    const auto start = Math::WcsToOcs(frame, p1);
+                    const auto end = Math::WcsToOcs(frame, p2);
+                    const auto through = local - start;
+                    const auto chord = end - start;
+                    double newBulge = ComputeBulgeFromThreePoints({}, {through.x, through.y, 0}, {chord.x, chord.y, 0});
 
                     // 退化保护：三点共线时保持原 Bulge，不退化为直线
                     if (std::abs(newBulge) > 1e-12)
@@ -121,11 +137,10 @@ namespace MiniCAD
                         state->Base.SegStart(segIdx),
                         state->Base.SegEnd(segIdx));
 
-                    double dx = worldPos.x - oldMid.x;
-                    double dy = worldPos.y - oldMid.y;
-
-                    out.Points[segIdx].x += dx;  out.Points[segIdx].y += dy;
-                    out.Points[segIdx + 1].x += dx;  out.Points[segIdx + 1].y += dy;
+                    auto delta = target - oldMid;
+                    if (out.HasDefaultPlane()) delta.z = 0;
+                    setVertex(segIdx, state->Base.Points[segIdx] + delta);
+                    setVertex(segIdx + 1, state->Base.Points[segIdx + 1] + delta);
                 }
                 break;
             }
@@ -228,14 +243,7 @@ namespace MiniCAD
         // 弧段的弧中点（t=0.5 处的参数点）
         static Math::Point3 ArcGeomMid(const Polyline& pl, int i)
         {
-            ArcGeom arc = Polyline::ComputeArc(pl.SegStart(i), pl.SegEnd(i), pl.SegBulge(i));
-            double midAngle = arc.StartAngle + arc.SweepAngle * 0.5;
-            return
-            {
-                arc.Center.x + arc.Radius * std::cos(midAngle),
-                arc.Center.y + arc.Radius * std::sin(midAngle),
-                pl.SegStart(i).z
-            };
+            return PolylineOps::PointAt(pl, i + 0.5);
         }
 
         // 同步 grips 中属于 ownerId 的所有夹点坐标

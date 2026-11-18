@@ -3,6 +3,7 @@
 #include "Core/Math/Point2.hpp"
 #include "Core/Math/Vec3.hpp"
 #include "Core/Math/Mat4.hpp"
+#include "Core/Math/WorkingPlane.hpp"
 #include "Core/GeomKernel/AABB.hpp"
 
 namespace MiniCAD
@@ -16,6 +17,9 @@ namespace MiniCAD
         double       Zoom      = 100.0;
         double       Azimuth   = -90.0;
         double       Elevation = 90.0;
+        double       Roll      = 0.0;
+
+        void AlignToView(const Math::Vec3& right, const Math::Vec3& up);
     };
 
     enum class StandardView { Top, Bottom, Front, Back, Left, Right, SWIso, SEIso, NEIso, NWIso };
@@ -69,6 +73,7 @@ namespace MiniCAD
 
         Math::Point3 ScreenToWorld(int px, int py)               const;
         Math::Point3 ScreenToWorld(double px, double py)         const;
+        bool ScreenToPlane(double px, double py, const Math::WorkingPlane& plane, Math::Point3& result) const;
         Math::Point2 WorldToScreen(const Math::Point3& worldPos) const;
 
     private:
@@ -85,6 +90,7 @@ namespace MiniCAD
         Math::Point3  m_target       = { };          // 观察中心
         double        m_azimuth      = -90.0;
         double        m_elevation    = 90.0;
+        double        m_roll         = 0.0;
         Math::Vec3    m_right        = { 1, 0, 0 };
         Math::Vec3    m_up           = { 0, 1, 0 };
         Math::Vec3    m_forward      = { 0, 0, -1 };

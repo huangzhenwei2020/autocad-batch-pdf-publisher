@@ -72,6 +72,7 @@ namespace MiniCAD
         // 布局页上只捕捉本布局的图纸空间实体：看不见的模型实体不该被捕捉到。空函数 = 不过滤
         using LayoutFilter = std::function<bool(const EntityAttr&)>;
         void SetLayoutFilter(LayoutFilter filter) { m_layoutFilter = std::move(filter); }
+        void SetPointFilter(std::function<bool(const Math::Point3&)> filter) { m_pointFilter = std::move(filter); }
 
     private:
         SnapResult TryEndpoint     (const Math::Point2&, const Scene&, const Camera&, const std::unordered_set<Object::ObjectID>&) const;
@@ -117,5 +118,6 @@ namespace MiniCAD
         mutable const std::vector<Object::ObjectID>* m_queryCandidates = nullptr;
 
         LayoutFilter m_layoutFilter;   // 布局过滤（Editor::Bind 设置）
+        std::function<bool(const Math::Point3&)> m_pointFilter;
     };
 }

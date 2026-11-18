@@ -1,7 +1,7 @@
 #pragma once
 #include "Import/CadExchange.h"
 
-namespace MiniCAD { class FontSystem; }
+namespace MiniCAD { class FontSystem; class ViewportEntity; }
 namespace MiniCAD::Nodes { class Graph; }
 
 #include "Scene/Scene.h"
@@ -47,6 +47,7 @@ namespace MiniCAD
 		void SetName(const std::string& name);
 
 		bool IsDirty() const { return m_dirty; }
+		const CadSource* GetCadSource() const { return m_cadSource.get(); }
 		void MarkDirty()     { m_dirty = true; }
 		void MarkSaved()     { m_dirty = false; }
 
@@ -86,12 +87,18 @@ namespace MiniCAD
 		// 切换布局：保存旧布局的视图、换新布局的视图、清选择集。
 		// 相机状态由调用方使用（Document 不持有 Viewport），返回值是切换后应采用的相机状态
 		bool SetActiveLayout(int index, CameraState& camera);
+		bool HasLayoutView(uint64_t key) const { return m_layoutViews.contains(key); }
 		// 当前布局已被删除（删除布局、撤销新建布局）时回到模型页，camera 换成模型页的视图；
 		// 返回是否切换了。界面在每次命令后调用
 		bool ValidateActiveLayout(CameraState& camera);
 		// 实体是否应在**当前布局**下显示。
 		// 模型页：显示模型空间实体；布局页：显示本布局的图纸空间实体。
 		bool IsVisibleInActiveLayout(const EntityAttr& attr) const;
+        const ViewportEntity* EditingViewport() const;
+        bool BeginViewportEdit(uint64_t viewport, CameraState& camera, double aspect, bool inlineEdit = false);
+        bool EndViewportEdit(CameraState& camera);
+        bool InlineViewportEdit() const { return m_editingViewport && m_inlineViewport; }
+        void SetPaperDisplay(bool paper) { m_paperDisplay = paper; }
 
 		// ── 节点图（参数化定义，docs/NodeGraph/PLAN.md）──────────────
 		// 每个文档一张，随 .mcad / JSON 保存（DWG / DXF 不保存）。修改后由编辑器调用 MarkDirty
@@ -118,6 +125,10 @@ namespace MiniCAD
 
 		// ── 布局状态 ──────────────────────────────────────────
 		uint64_t m_activeKey = 0;      // 当前布局的 OwnerKey（0 = 模型页）
+        uint64_t m_editingViewport = 0;
+        bool m_inlineViewport = false;
+        bool m_paperDisplay = false;
+        CameraState m_viewportPaperCamera;
 		// 每张布局各自的视图，按 OwnerKey（模型页为 0）记（切换布局时保存 / 恢复，避免来回切换后视角乱跳）
 		std::unordered_map<uint64_t, CameraState> m_layoutViews;
 	};

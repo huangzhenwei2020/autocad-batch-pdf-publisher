@@ -3,6 +3,8 @@
 #include <atomic>
 #include "Document/Document.h"
 #include "Document/DrawContext.hpp"
+#include "Document/PerspectiveViewport.hpp"
+#include <optional>
 #include "Document/CommandStack/CommandStack.h"
 #include "Document/Command/BatchDeleteCommand.h"
 #include "Document/TextStyleResolver.h"
@@ -191,9 +193,11 @@ namespace MiniCAD
             // 块内关闭 / 冻结图层上的子实体不高亮
             bool IsLayerVisible(LayerID layerId) const override
             {
+                if (m_frozenLayers && std::binary_search(m_frozenLayers->begin(), m_frozenLayers->end(), layerId)) return false;
                 const Layer* layer = m_layers.GetLayer(layerId);
                 return !layer || layer->IsVisible();
             }
+            void SetFrozenLayers(const std::vector<LayerID>* layers) { m_frozenLayers = layers; }
 
             void DrawLine(const Math::Point3& a, const Math::Point3& b,
                           const Math::Color4&, bool) override
@@ -232,6 +236,7 @@ namespace MiniCAD
             std::vector<Vertex_P3_C4>& m_out;
             Math::Color4               m_color;
             const LayerManager&        m_layers;
+            const std::vector<LayerID>* m_frozenLayers = nullptr;
             Math::Point3               m_origin;
             CurveRefinement            m_refine;
         };
@@ -326,11 +331,17 @@ namespace MiniCAD
         {
             return m_doc->IsVisibleInActiveLayout(attr);
         });
+        m_picking.SetLayerFilter([this](LayerID id)
+        {
+            const auto* viewport = m_doc->EditingViewport();
+            return !viewport || !viewport->IsLayerFrozen(id);
+        });
         // 捕捉同理：布局页上看不见的模型实体不能被捕捉到
         m_snap.SetLayoutFilter([this](const EntityAttr& attr)
         {
             return !m_doc || m_doc->IsVisibleInActiveLayout(attr);
         });
+        m_snap.SetPointFilter([this](const Math::Point3& point) { return m_picking.ContainsClip(point); });
         m_gripEditor.Bind(viewport, scene, cmdStack, m_picking, m_overlay);
 
         scene.MarkDirty();
@@ -501,8 +512,12 @@ namespace MiniCAD
             auto tool = std::make_unique<TextTool>();
             tool->OnInsertPointPicked = [this](Math::Point3 pos)
             {
+                m_textRequest = {};
                 m_textRequest.Active    = true;
                 m_textRequest.InsertPos = pos;
+                const auto& scene = m_doc->GetScene();
+                if (!scene.CurrentSpaceIsPaper())
+                    m_textRequest.Plane = scene.GetWorkingPlane();
                 m_textRequest.Height    = static_cast<float>(CurrentTextHeight());
 #ifdef MINICAD_WEB
                 EM_ASM({ if (typeof window._minicadShowTextInput === 'function') window._minicadShowTextInput(); });
@@ -516,8 +531,12 @@ namespace MiniCAD
             auto tool = std::make_unique<MTextTool>();
             tool->OnInsertPointPicked = [this](Math::Point3 pos)
             {
+                m_mtextRequest = {};
                 m_mtextRequest.Active    = true;
                 m_mtextRequest.InsertPos = pos;
+                const auto& scene = m_doc->GetScene();
+                if (!scene.CurrentSpaceIsPaper())
+                    m_mtextRequest.Plane = scene.GetWorkingPlane();
                 m_mtextRequest.Height    = CurrentTextHeight();
 #ifdef MINICAD_WEB
                 EM_ASM({ if (typeof window._minicadShowMTextInput === 'function') window._minicadShowMTextInput(); });
@@ -891,7 +910,13 @@ namespace MiniCAD
         if (!m_doc || !m_viewport)
             return;
         AABB box = AABB::Empty();
-        bool any = m_doc->GetScene().GetExtents(box);
+        bool any = m_doc->GetScene().GetExtents(box, true);
+        if (m_doc->ActiveLayoutIsPaper())
+        {
+            const auto& sheet = m_doc->GetScene().Layouts()[m_doc->ActiveLayout()];
+            box.Expand(AABB{{sheet.MinX, sheet.MinY, 0}, {sheet.MaxX, sheet.MaxY, 0}});
+            any = true;
+        }
         if (AABB preview; GetPreviewBounds(preview))   // 节点图预览也算在全图范围内
         {
             box.Expand(preview);
@@ -906,7 +931,7 @@ namespace MiniCAD
         const CameraState before = cam.GetState();
         cam.ZoomToBounds(box);   // 俯视时只按 XY；三维视图按视图方向投影
         const CameraState after = cam.GetState();
-        if (undoable)
+        if (undoable && !m_doc->EditingViewport())
         {
             cam.SetState(before);   // 由命令来应用，撤销时回到 before
             m_doc->GetCommandStack().Execute(std::make_unique<ZoomViewCommand>(cam, before, after), m_doc->GetScene());
@@ -1175,6 +1200,12 @@ namespace MiniCAD
     // ─────────────────────────────────────────────────────────────
     void Editor::ActivateTool(std::unique_ptr<ITool> tool)
     {
+        if (m_doc && !m_doc->GetScene().CurrentSpaceIsPaper() && !m_doc->GetScene().GetWorkingPlane().IsWorld() &&
+            !tool->SupportsWorkingPlane())
+        {
+            m_commandLine.Echo("当前工作平面支持直线、多段线、点、圆、圆弧、椭圆、椭圆弧、填充、文字、移动和复制；此工具的平面表达仍待接入。可用 UCS WORLD 返回世界 XY。");
+            return;
+        }
         if (m_tool)
         {
             m_tool->Cancel();
@@ -1255,7 +1286,8 @@ namespace MiniCAD
             m_textRequest.InsertPos,
             utf8Text,
             m_textRequest.Height,
-            m_textRequest.Rotation,
+            static_cast<float>(Math::PlaneAngle(Math::BuildOCS(m_textRequest.Plane.Normal()),
+                m_textRequest.Plane.ToWorldVector(std::cos(m_textRequest.Rotation), std::sin(m_textRequest.Rotation)))),
             scene.GetCurrentTextStyle());
 
         EntityAttr attr;                                   // 颜色默认 ByLayer,随层显示
@@ -1264,6 +1296,7 @@ namespace MiniCAD
         attr.Lineweight = scene.GetCurrentLineweight();
         attr.InPaperSpace = scene.CurrentSpaceIsPaper();
         attr.LayoutKey = scene.CurrentLayoutKey();
+        attr.Extrusion = m_textRequest.Plane.Normal();
         ent->SetAttr(attr);
 
         auto cmd = std::make_unique<AddEntityCommand>(std::move(ent));
@@ -1329,10 +1362,11 @@ namespace MiniCAD
         auto ent = std::make_unique<MTextEntity>(
             id,
             scene.GetCurrentTextStyle(),
-            utf8Text,
+            MTextEntity::ApplyPlainEdit({}, utf8Text),
             m_mtextRequest.InsertPos,
             m_mtextRequest.Height,
-            m_mtextRequest.Rotation,
+            Math::PlaneAngle(Math::BuildOCS(m_mtextRequest.Plane.Normal()),
+                             m_mtextRequest.Plane.ToWorldVector(std::cos(m_mtextRequest.Rotation), std::sin(m_mtextRequest.Rotation))),
             m_mtextRequest.BoxWidth);
 
         EntityAttr attr;                                   // 颜色默认 ByLayer,随层显示
@@ -1341,6 +1375,7 @@ namespace MiniCAD
         attr.Lineweight = scene.GetCurrentLineweight();
         attr.InPaperSpace = scene.CurrentSpaceIsPaper();
         attr.LayoutKey = scene.CurrentLayoutKey();
+        attr.Extrusion = m_mtextRequest.Plane.Normal();
         ent->SetAttr(attr);
 
         auto cmd = std::make_unique<AddEntityCommand>(std::move(ent));
@@ -1363,7 +1398,8 @@ namespace MiniCAD
 
     void Editor::StartPasteTool(const std::vector<std::unique_ptr<Entity>>* clipboard,
                                 std::function<void()> onCommitted,
-                                const Math::Point3* basePoint)
+                                const Math::Point3* basePoint,
+                                std::function<std::unique_ptr<ICommand>(std::vector<std::unique_ptr<Object>>)> factory)
     {
         if (!IsBound() || !clipboard || clipboard->empty())
         {
@@ -1373,7 +1409,7 @@ namespace MiniCAD
 
         m_commandLine.Echo(TrF("命令: {0}", "Paste"));
         LOG_INFO("[Editor] Start Paste");
-        ActivateTool(std::make_unique<PasteTool>(clipboard, std::move(onCommitted), basePoint));
+        ActivateTool(std::make_unique<PasteTool>(clipboard, std::move(onCommitted), basePoint, std::move(factory)));
     }
 
     void Editor::StartPickPointTool(std::string prompt, std::function<void(const Math::Point3&)> onPicked)
@@ -1614,7 +1650,7 @@ namespace MiniCAD
     {
         if (!m_doc || !m_viewport)
             return;
-        if (m_doc->ActiveLayoutIsPaper())       // 布局是二维图纸，只有俯视
+        if (m_doc->ActiveLayoutIsPaper() || m_doc->EditingViewport())
         {
             m_commandLine.Echo(Tr("布局中不能切换三维视图"));
             return;
@@ -1623,7 +1659,7 @@ namespace MiniCAD
         const CameraState before = cam.GetState();
         cam.SetView(azimuthDeg, elevationDeg);
         AABB box = AABB::Empty(), preview;
-        const bool hasScene   = m_doc->GetScene().GetExtents(box);
+        const bool hasScene   = m_doc->GetScene().GetExtents(box, true);
         const bool hasPreview = GetPreviewBounds(preview);   // 节点图预览也算在全图范围内
         if (hasPreview)
             box.Expand(preview);
@@ -2278,16 +2314,18 @@ namespace MiniCAD
     Editor::DynamicInputState Editor::GetDynamicInput() const
     {
         DynamicInputState s;
-        if (!m_tool || !m_tool->HasAnchor() || !m_hasResolved)
+        if (!m_doc || !m_tool || !m_tool->HasAnchor() || !m_hasResolved)
             return s;
 
         s.Active  = true;
         s.Anchor  = m_tool->GetAnchor();
         s.Current = m_lastResolved;
 
-        const double dx = s.Current.x - s.Anchor.x;
-        const double dy = s.Current.y - s.Anchor.y;
-        s.Length = std::sqrt(dx * dx + dy * dy);
+        const auto plane = m_doc->GetScene().CurrentSpaceIsPaper() ? Math::WorkingPlane{} : m_doc->GetScene().GetWorkingPlane();
+        const auto localStart = plane.ToLocal(s.Anchor), localEnd = plane.ToLocal(s.Current);
+        const double dx = localEnd.x - localStart.x;
+        const double dy = localEnd.y - localStart.y;
+        s.Length = std::hypot(dx, dy, localEnd.z - localStart.z);
 
         double deg = std::atan2(dy, dx) * 180.0 / Math::PI;
         if (deg < 0.0) deg += 360.0;
@@ -2309,21 +2347,19 @@ namespace MiniCAD
         const Math::Point3 anchor = m_tool->GetAnchor();
 
         // 方向:键入角度优先,否则取当前橡皮筋方向
-        double dirX = 1.0, dirY = 0.0;
+        const auto plane = m_doc->GetScene().CurrentSpaceIsPaper() ? Math::WorkingPlane{} : m_doc->GetScene().GetWorkingPlane();
+        Math::Vec3 direction = plane.X;
         if (hasAngle)
         {
             const double rad = angleDeg * Math::PI / 180.0;
-            dirX = std::cos(rad);
-            dirY = std::sin(rad);
+            direction = plane.ToWorldVector(std::cos(rad), std::sin(rad));
         }
         else if (m_hasResolved)
         {
-            const double dx = m_lastResolved.x - anchor.x;
-            const double dy = m_lastResolved.y - anchor.y;
-            const double d  = std::sqrt(dx * dx + dy * dy);
+            const auto delta = m_lastResolved - anchor;
+            const double d = std::hypot(delta.x, delta.y, delta.z);
             if (d < Math::LengthEPS) return;   // 无方向可依
-            dirX = dx / d;
-            dirY = dy / d;
+            direction = delta * (1 / d);
         }
 
         // 距离:键入长度优先,否则取当前橡皮筋长度
@@ -2334,13 +2370,12 @@ namespace MiniCAD
         }
         else
         {
-            const double dx = m_lastResolved.x - anchor.x;
-            const double dy = m_lastResolved.y - anchor.y;
-            dist = std::sqrt(dx * dx + dy * dy);
+            const auto delta = m_lastResolved - anchor;
+            dist = std::hypot(delta.x, delta.y, delta.z);
         }
         if (dist <= Math::LengthEPS) return;
 
-        const Math::Point3 target{ anchor.x + dirX * dist, anchor.y + dirY * dist, anchor.z };
+        const Math::Point3 target = anchor + direction * dist;
         SubmitPoint(target);
     }
 
@@ -2383,7 +2418,7 @@ namespace MiniCAD
 
     bool Editor::SubmitCoordinateText(const std::string& raw)
     {
-        if (!m_tool || m_toolSuspended)
+        if (!m_doc || !m_tool || m_toolSuspended)
             return false;
 
         // 去空白；全角逗号、小于号、@ 也接受（中文输入法下常见）
@@ -2423,6 +2458,7 @@ namespace MiniCAD
         }
 
         const bool relative = text[0] == '@';
+        const auto plane = m_doc->GetScene().CurrentSpaceIsPaper() ? Math::WorkingPlane{} : m_doc->GetScene().GetWorkingPlane();
         const std::string body = relative ? text.substr(1) : text;
         Math::Point3 anchor;
         const bool hasAnchor = m_tool->HasAnchor();
@@ -2432,37 +2468,39 @@ namespace MiniCAD
         Math::Point3 target;
         const size_t comma = body.find(',');
         const size_t less  = body.find('<');
-        double a = 0.0, b = 0.0;
-        if (comma != std::string::npos && number(body.substr(0, comma), a) && number(body.substr(comma + 1), b))
+        const size_t secondComma = comma == std::string::npos ? std::string::npos : body.find(',', comma + 1);
+        double a = 0.0, b = 0.0, z = 0.0;
+        if (comma != std::string::npos && number(body.substr(0, comma), a) &&
+            number(body.substr(comma + 1, secondComma == std::string::npos ? std::string::npos : secondComma - comma - 1), b) &&
+            (secondComma == std::string::npos || number(body.substr(secondComma + 1), z)))
         {
             // "a,b" 两个数且工具要的就是两个数值（如倒角距离）：交给工具
-            if (!relative && m_tool->OnNumberPairInput(a, b))
+            if (!relative && secondComma == std::string::npos && m_tool->OnNumberPairInput(a, b))
             {
                 m_commandLine.Echo(raw);
                 return true;
             }
             if (relative && !hasAnchor)
                 return false;
-            target = relative ? Math::Point3{ anchor.x + a, anchor.y + b, anchor.z } : Math::Point3{ a, b, 0.0 };
+            target = relative ? anchor + plane.ToWorldVector(a, b, z) : plane.ToWorld({a, b, z});
         }
         else if (relative && less != std::string::npos && number(body.substr(0, less), a) && number(body.substr(less + 1), b))
         {
             if (!hasAnchor)
                 return false;
             const double rad = b * Math::PI / 180.0;
-            target = { anchor.x + a * std::cos(rad), anchor.y + a * std::sin(rad), anchor.z };
+            target = anchor + plane.ToWorldVector(a * std::cos(rad), a * std::sin(rad));
         }
         else if (!relative && number(body, a))
         {
             // 直接距离：沿当前橡皮筋方向
             if (!hasAnchor || !m_hasResolved || a <= Math::LengthEPS)
                 return false;
-            const double dx = m_lastResolved.x - anchor.x;
-            const double dy = m_lastResolved.y - anchor.y;
-            const double d  = std::sqrt(dx * dx + dy * dy);
+            const auto delta = m_lastResolved - anchor;
+            const double d = std::hypot(delta.x, delta.y, delta.z);
             if (d < Math::LengthEPS)
                 return false;
-            target = { anchor.x + dx / d * a, anchor.y + dy / d * a, anchor.z };
+            target = anchor + delta * (a / d);
         }
         else
         {
@@ -2538,6 +2576,9 @@ namespace MiniCAD
                 .grip       = &m_gripEditor
         };
 
+        if (m_tool && !m_toolSuspended && m_tool->HandlesNavigation() && m_tool->OnInput(ctx))
+            return true;
+
         m_resolver.Resolve(ctx);
         m_currentSnap  = ctx.resolved.hasSnap ? ctx.resolved.snap : SnapResult{};
         m_lastResolved = ctx.resolved.point;
@@ -2566,6 +2607,13 @@ namespace MiniCAD
 
         if (HandleGlobal(e))
             return true;
+
+        if (!ctx.resolved.hasPoint && (m_tool || m_gripEditor.IsDragging()) &&
+            (e.Type == InputEventType::MouseMove || e.IsLeftClick()))
+        {
+            if (e.IsLeftClick()) m_commandLine.Echo("当前视图与工作平面平行，请调整视图或使用 UCS VIEW 设置视图平面。");
+            return true;
+        }
 
         if (m_tool && !m_toolSuspended)
             return m_tool->OnInput(ctx);
@@ -2812,7 +2860,7 @@ namespace MiniCAD
 
         // 布局是二维图纸：不环绕，Shift + 中键按普通中键平移处理
         if (e.Type == InputEventType::MouseMove && e.IsMouseButtonDown(MouseButton::Middle) && e.HasModifier(ModifierKey::Shift) &&
-            !(m_doc && m_doc->ActiveLayoutIsPaper()))
+            !(m_doc && (m_doc->ActiveLayoutIsPaper() || m_doc->EditingViewport())))
         {
             // Shift + 中键拖动：绕视图中心环绕（同 AutoCAD 的 3DORBIT）
             m_viewport->GetCamera().Orbit(e.MouseX - e.LastMouseX, e.MouseY - e.LastMouseY);
@@ -2992,6 +3040,7 @@ namespace MiniCAD
             return 0;
 
         std::unordered_set<Object::ObjectID> ids;
+        m_picking.SyncIndex();
         m_doc->GetScene().ForEachObject([&](const Object& o)
         {
             if (o.IsKindOf<Entity>() && m_picking.IsPickable(o))
@@ -3150,7 +3199,7 @@ namespace MiniCAD
     // ─────────────────────────────────────────────────────────────
     //  渲染
     // ─────────────────────────────────────────────────────────────
-    void Editor::Render()
+    void Editor::Render(bool interactionOnly)
     {
         if (!m_doc || !m_viewport) return;
 
@@ -3177,10 +3226,22 @@ namespace MiniCAD
         // Scene::ClearDirty 之前,否则脏集被清掉后索引只能整表重建。
         m_picking.SyncIndex();
         // 深度放大时进 / 出局部显示（用拾取索引查视图附近的实体，所以在同步之后）
-        UpdateLocalDisplay(worldPerPixel);
-
-        bool sceneRebuilt = UpdateSceneVertices(worldPerPixel, zoomChanged);
-        UpdateShadedVertices(sceneRebuilt);
+        bool sceneRebuilt;
+        if (interactionOnly)
+        {
+            const auto origin = m_viewport->GetCamera().GetState().Target;
+            sceneRebuilt = m_interactionRevision != m_doc->GetScene().GeometryVersion() ||
+                origin.x != m_renderOrigin.x || origin.y != m_renderOrigin.y || origin.z != m_renderOrigin.z;
+            m_interactionRevision = m_doc->GetScene().GeometryVersion();
+            m_renderOrigin = origin;
+            m_entityVertexCache.clear();
+        }
+        else
+        {
+            UpdateLocalDisplay(worldPerPixel);
+            sceneRebuilt = UpdateSceneVertices(worldPerPixel, zoomChanged);
+            UpdateShadedVertices(sceneRebuilt);
+        }
 
         // 场景或选择集变化时清预览、重建夹点（原先在场景重建路径内）
         if ((sceneRebuilt || selectionDirty) && !IsActiveTool() && !dragging)
@@ -3196,6 +3257,18 @@ namespace MiniCAD
         }
 
         m_overlay.ToVertices(m_overlayVertices, m_renderOrigin);
+        if (const auto* viewport = m_doc->EditingViewport())
+        {
+            const auto boundary = viewport->PaperBoundary();
+            const Math::Float4 color{0.35f, 0.65f, 0.85f, 0.7f};
+            for (size_t i = 0; i < boundary.size(); ++i)
+            {
+                const auto a = viewport->PaperToModel(boundary[i]);
+                const auto b = viewport->PaperToModel(boundary[(i + 1) % boundary.size()]);
+                m_overlayVertices.push_back({ToRenderFloat3(a, m_renderOrigin), color});
+                m_overlayVertices.push_back({ToRenderFloat3(b, m_renderOrigin), color});
+            }
+        }
         // 节点图预览点在模型空间，布局页上不画（同 UpdateShadedVertices 里的预览实体）
         if ((!m_previewPoints.empty() || !m_previewHighlightPoints.empty()) && !m_doc->ActiveLayoutIsPaper())
         {
@@ -3306,6 +3379,7 @@ namespace MiniCAD
             return;
 
         HoverHighlightSink sink(out, IDrawSink::kHoverColor, scene.GetLayerManager(), m_renderOrigin);
+        sink.SetFrozenLayers(m_doc->EditingViewport() ? &m_doc->EditingViewport()->GetFrozenLayers() : nullptr);
         sink.SetCurveRefinement(LocalRefinement());
         sink.SetPointStyle(scene.GetPointDisplayMode(), scene.GetPointDisplaySize(),
                            m_viewport->GetCamera().GetWorldPerPixel(), static_cast<double>(m_viewport->GetHeight()));
@@ -3533,29 +3607,64 @@ namespace MiniCAD
         const size_t clipGlyphFrom = ctx.GlyphCount();
         const size_t clipImageFrom = ctx.ImageCount();
 
-        // 行向量约定（P' = P·M），最左矩阵最先作用
-        using namespace Math;
-        Mat4 m = Mat4::Translation(Vec3{ -vp.GetViewCenter().x, -vp.GetViewCenter().y, 0.0 })
-               * Mat4::Scale(Vec3{ s, s, 1.0 });
-        // ⚠ 内容旋转用 **R(+Twist)**，不是 R(-Twist)。
-        //
-        // 依据（实测 5 个 Twist=95.69° 的浮动视口）：
-        //   这 5 个视口在纸面上并排一行（Center.x 步长 +420），各看模型里
-        //   195 宽的一条带（scale=2，195×2=390=框宽）。把 ViewCenter 按
-        //   DCS→WCS 的 R(-Twist) 转过之后，相邻 WCS 位移单位向量恒等于
-        //   该视口的 UcsXAxis=(-0.0991,-0.9951) —— 即「纸面 +X 对应的模型方向」。
-        //   内容变换必须把 UcsXAxis 映射到纸面 +X：
-        //       R(+Twist)·UcsXAxis = (+1.0000, -0.0000)  ✔
-        //       R(-Twist)·UcsXAxis = (-0.9804, +0.1972)  ✘（偏 95.7°）
-        //   ⇒ 只有 R(+Twist) 能让视口横向对上 UCS 横向。
-        //   用 R(-Twist) 时内容整体转错约 90°，视口里的图元相对视口边框是斜的。
-        if (vp.GetTwist() != 0.0)
-            m = m * Mat4::RotationZ(vp.GetTwist());
-        m = m * Mat4::Translation(Vec3{ vp.GetCenter().x, vp.GetCenter().y, 0.0 });
-
+        const auto m = vp.ModelToPaperMatrix();
         ViewportComposeSink vsink(ctx, m, vp);
 
         auto& scene = m_doc->GetScene();
+        std::optional<PerspectiveViewport> projection;
+        std::vector<Vertex_P3_C4> modelLines, modelFills;
+        std::vector<Vertex_P3_C4_UV> modelTexts;
+        std::optional<DrawContext> source;
+        if (vp.IsPerspective())
+        {
+            projection.emplace(vp);
+            if (!projection->Valid())
+            {
+                ctx.SetLineTypeScale(lineTypeScale);
+                return;
+            }
+            // Vector glyphs are expanded in model space so every stroke shares the camera projection.
+            const double paperPixel = ctx.GetWorldPerPixel();
+            source.emplace(modelLines, modelFills, modelTexts, m_overlay, scene.GetLayerManager(),
+                           scene.GetLineTypeTable(), paperPixel / s);
+            source->CopyViewportResources(ctx);
+            source->SetRenderOrigin(vp.GetViewCenter());
+            source->SetFrozenLayers(&vp.GetFrozenLayers());
+            source->SetViewportHeightPx(paperPixel > 0 ? vp.GetHeight() / paperPixel : 0);
+            source->SetLineTypeScale(scene.GetPaperSpaceLineTypeScaling() ? lineTypeScale / s : lineTypeScale);
+        }
+        auto appendPerspectiveEntity = [&]()
+        {
+            const auto& origin = ctx.GetRenderOrigin();
+            for (size_t i = 0; i + 1 < modelLines.size(); i += 2)
+                if (projection->Line(modelLines[i], modelLines[i + 1], origin))
+                {
+                    ctx.Lines().push_back(modelLines[i]);
+                    ctx.Lines().push_back(modelLines[i + 1]);
+                }
+            auto appendTriangles = [&](const auto& input, auto& output)
+            {
+                for (size_t i = 0; i + 2 < input.size(); i += 3)
+                    projection->Triangle(input[i], input[i + 1], input[i + 2], origin,
+                        [&](const auto& a, const auto& b, const auto& c) { output.insert(output.end(), {a, b, c}); });
+            };
+            appendTriangles(modelFills, ctx.Fills());
+            appendTriangles(modelTexts, ctx.Texts());
+            for (auto point : source->Points())
+                if (projection->Point(point, origin)) ctx.Points().push_back(point);
+            for (const auto& image : source->Images())
+                for (size_t i = 0; i < 6; i += 3)
+                    projection->Triangle(image.Verts[i], image.Verts[i + 1], image.Verts[i + 2], origin,
+                        [&](const auto& a, const auto& b, const auto& c)
+                        { ctx.Images().push_back({image.Image, {a, b, c, c, c, c}}); });
+            if (source->HasViewDependentGeometry()) ctx.MarkViewDependent();
+            source->ResetViewDependentFlag();
+            source->ClearPoints();
+            modelLines.clear();
+            modelFills.clear();
+            modelTexts.clear();
+        };
+        IDrawSink& viewSink = source ? static_cast<IDrawSink&>(*source) : static_cast<IDrawSink&>(vsink);
         scene.ForEachObject([&](const Object& obj)
         {
             if (!obj.IsKindOf<Entity>())
@@ -3583,36 +3692,33 @@ namespace MiniCAD
                 return;
 
             // 逐实体切上下文：各实体的线型 / 线宽 / 线型比例不同
-            vsink.BeginEntity(&e.GetAttr());
-            e.Draw(vsink, /*isSelected*/ false, /*isHovered*/ false);
-            vsink.BeginEntity(nullptr);
+            viewSink.BeginEntity(&e.GetAttr());
+            e.Draw(viewSink, /*isSelected*/ false, /*isHovered*/ false);
+            viewSink.BeginEntity(nullptr);
+            if (source) appendPerspectiveEntity();
         });
         ctx.SetLineTypeScale(lineTypeScale);
 
         // 循环结束后裁掉本次合成落在视口矩形外的顶点（只裁 [from, end) 区间）。
         // 顶点相对渲染原点，裁剪矩形也减去原点；下面的延迟长虚线段是纸面坐标，按原来的矩形裁
-        const double hw = vp.GetWidth() * 0.5;
-        const double hh = vp.GetHeight() * 0.5;
-        const Math::Point3 vc = vp.GetCenter();
         const Math::Point3& o = ctx.GetRenderOrigin();
-        const WipeClip::Poly clipRect({ Math::Point3{ vc.x - hw - o.x, vc.y - hh - o.y, vc.z - o.z },
-                                        Math::Point3{ vc.x + hw - o.x, vc.y - hh - o.y, vc.z - o.z },
-                                        Math::Point3{ vc.x + hw - o.x, vc.y + hh - o.y, vc.z - o.z },
-                                        Math::Point3{ vc.x - hw - o.x, vc.y + hh - o.y, vc.z - o.z } });
+        auto boundary = vp.PaperBoundary();
+        for (auto& point : boundary) point = {point.x-o.x, point.y-o.y, point.z-o.z};
+        const WipeClip::Poly clipRect(boundary);
         if (clipRect.Valid())
         {
             // keepInside=true：只保留视口矩形**内**的内容。
             // （区域覆盖用默认的 keepInside=false，语义相反：挖掉内部）
             WipeClip::ClipLines(ctx.Lines(), clipRect, clipLineFrom, /*keepInside*/ true);
             WipeClip::ClipFills(ctx.Fills(), clipRect, 5, clipFillFrom, /*keepInside*/ true);
-            WipeClip::ClipTexts(ctx.Texts(), clipRect, clipTextFrom);
+            WipeClip::ClipTexturedInside(ctx.Texts(), clipRect, clipTextFrom);
             WipeClip::ClipPoints(ctx.Points(), clipRect, clipPointFrom, /*keepInside*/ true);
             // ⚠ 字形实例是**单独提交**的一路（桌面 / 网页两版的文字都走它），
             //    漏了它就是漏裁整份文字 —— 表现为「布局页里文字铺到视口外面」。
             //    少了这一行时上面四路裁得再对也看不出问题：线与填充确实规矩了，
             //    只有文字一类整行溢出，用户报的就是「图元在视口外还显示」。
             if (std::vector<GlyphInstance>* glyphs = ctx.Glyphs())
-                WipeClip::ClipGlyphInstances(*glyphs, clipRect, clipGlyphFrom, /*keepInside*/ true);
+                WipeClip::ClipViewportGlyphs(*glyphs, clipRect, clipGlyphFrom, m_glyphLibrary, ctx.Lines(), ctx.Fills());
             // 光栅图像同样是单独提交的一路（Viewport 里逐个 SubmitImage），
             // 不裁就整张贴图溢出到视口外的纸面上
             WipeClip::ClipImages(ctx.Images(), clipRect, clipImageFrom, /*keepInside*/ true);
@@ -3620,33 +3726,25 @@ namespace MiniCAD
             // 合成期间延迟出来的长虚线段（铺进动态流时才展开）同样只留视口矩形内的部分：
             // 视口框是纸面上的轴对齐矩形，直接 Liang–Barsky；裁掉前半段时把相位往后推，裁剪处的 dash / gap 不错位
             auto& dashes = ctx.DeferredDashes();
-            const double xmin = vc.x - hw, xmax = vc.x + hw, ymin = vc.y - hh, ymax = vc.y + hh;
-            size_t kept = clipDashFrom;
+            std::vector<DeferredDash> clipped;
             for (size_t i = clipDashFrom; i < dashes.size(); ++i)
             {
-                DeferredDash d = dashes[i];
-                const double dx = d.b.x - d.a.x, dy = d.b.y - d.a.y, dz = d.b.z - d.a.z;
-                double t0 = 0.0, t1 = 1.0;
-                auto clip = [&](double p, double q)
+                const auto& dash = dashes[i];
+                std::vector<Vertex_P3_C4> line(2);
+                line[0].pos = ToRenderFloat3(dash.a, o); line[1].pos = ToRenderFloat3(dash.b, o);
+                WipeClip::ClipLines(line, clipRect, 0, true);
+                for (size_t j = 0; j + 1 < line.size(); j += 2)
                 {
-                    if (p == 0.0) return q >= 0.0;
-                    const double r = q / p;
-                    if (p < 0.0) { if (r > t1) return false; if (r > t0) t0 = r; }
-                    else         { if (r < t0) return false; if (r < t1) t1 = r; }
-                    return true;
-                };
-                if (!clip(-dx, d.a.x - xmin) || !clip(dx, xmax - d.a.x) || !clip(-dy, d.a.y - ymin) || !clip(dy, ymax - d.a.y))
-                    continue;
-                if (t0 > 0.0 || t1 < 1.0)
-                {
-                    const Math::Point3 a = d.a;
-                    d.a = { a.x + dx * t0, a.y + dy * t0, a.z + dz * t0 };
-                    d.b = { a.x + dx * t1, a.y + dy * t1, a.z + dz * t1 };
-                    d.phase += t0 * std::sqrt(dx * dx + dy * dy + dz * dz);
+                    auto part = dash;
+                    part.a = {line[j].pos.x+o.x,line[j].pos.y+o.y,line[j].pos.z+o.z};
+                    part.b = {line[j+1].pos.x+o.x,line[j+1].pos.y+o.y,line[j+1].pos.z+o.z};
+                    const double dx=part.a.x-dash.a.x, dy=part.a.y-dash.a.y, dz=part.a.z-dash.a.z;
+                    part.phase += std::sqrt(dx*dx+dy*dy+dz*dz);
+                    clipped.push_back(part);
                 }
-                dashes[kept++] = d;
             }
-            dashes.resize(kept);
+            dashes.resize(clipDashFrom);
+            dashes.insert(dashes.end(), clipped.begin(), clipped.end());
         }
     }
 
@@ -4191,6 +4289,7 @@ namespace MiniCAD
                         layerMgr, scene.GetLineTypeTable(), worldPerPixel,
                         m_glyphProvider, MakeFontResolver(m_doc));
         ctx.SetImageProvider(imageProvider);
+        ctx.SetFrozenLayers(m_doc->EditingViewport() ? &m_doc->EditingViewport()->GetFrozenLayers() : nullptr);
         ctx.SetThinLines(m_thinLines);
         ctx.SetRenderOrigin(m_renderOrigin);
         ctx.SetCurveRefinement(LocalRefinement());
@@ -4975,6 +5074,7 @@ namespace MiniCAD
                             layerMgr, scene.GetLineTypeTable(), worldPerPixel,
                             m_glyphProvider, MakeFontResolver(m_doc));
             ctx.SetThinLines(m_thinLines);
+            ctx.SetFrozenLayers(m_doc->EditingViewport() ? &m_doc->EditingViewport()->GetFrozenLayers() : nullptr);
             ctx.SetRenderOrigin(m_renderOrigin);   // 与场景流同一个原点：下面还从逐实体缓存复制顶点
             ctx.SetCurveRefinement(LocalRefinement());
             // 选中流的虚线周期必须与场景流一致，否则同一实体选中前后线型疏密不同

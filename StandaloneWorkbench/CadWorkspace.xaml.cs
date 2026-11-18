@@ -110,9 +110,16 @@ namespace Wanluo.StandaloneWorkbench
                 CanUndo = state.CanUndo; CanRedo = state.CanRedo;
                 var label = state.Documents.FirstOrDefault(item => item.Id == state.ActiveId)?.Label ?? "";
                 if (_activeDrawingLabel != label) { _activeDrawingLabel = label; ActiveDrawingChanged?.Invoke(label); }
-                SelectionInfo.Text = $"对象 {state.EntityCount} · 已选择 {state.SelectionCount}";
-                Coordinates.Text = $"X {state.X:0.##}  Y {state.Y:0.##}";
+                SelectionInfo.Text = (state.InlineViewport ? "原位编辑 · " : "") + $"对象 {state.EntityCount} · 已选择 {state.SelectionCount}";
+                ViewportEditingButton.Content = state.EditingViewport != 0 ? "返回布局" : "视口编辑";
+                ViewportEditingButton.ToolTip = state.InlineViewport ? "双击视口外或输入PSPACE返回纸空间" : "原位编辑布局视口中的模型，MSPACE／PSPACE";
+                ViewportEditingButton.IsEnabled = !Client.IsBusy && state.ActiveId != 0 && (state.EditingViewport != 0 || state.Layouts.Any(item => item.Current && !item.Model));
+                Coordinates.Text = $"X {state.LocalX:0.##}  Y {state.LocalY:0.##}  Z {state.LocalZ:0.##}";
+                Coordinates.ToolTip = $"世界坐标 X {state.X:0.######}  Y {state.Y:0.######}  Z {state.Z:0.######}";
+                WorkingPlaneButton.Content = state.WorkPlane.World ? "UCS 世界" : "UCS 自定义";
+                WorkingPlaneButton.ToolTip = $"工作平面原点（世界坐标）X {state.WorkPlane.OriginX:0.##}  Y {state.WorkPlane.OriginY:0.##}  Z {state.WorkPlane.OriginZ:0.##}";
                 Snap.IsChecked = state.Snap; Ortho.IsChecked = state.Ortho; Polar.IsChecked = state.Polar;
+                _standardViews.SelectedIndex = state.StandardView;
                 Prompt.Text = string.IsNullOrWhiteSpace(state.Prompt) ? "命令" : state.Prompt;
                 var log = string.Join(Environment.NewLine, state.Log);
                 if (History.Text != log) { History.Text = log; History.ScrollToEnd(); }
@@ -244,7 +251,8 @@ namespace Wanluo.StandaloneWorkbench
         }
         private void Layouts_Changed(object sender, SelectionChangedEventArgs e)
         {
-            if (!_updating && Layouts.SelectedItem is CadLayout layout) Run(() => CadNative.Check(CadNative.wl_layout(Client.Handle, layout.Id)));
+            if (!_updating && Layouts.SelectedItem is CadLayout layout && Run(() => CadNative.Check(CadNative.wl_layout(Client.Handle, layout.Id))))
+                Status.Text = layout.Model ? "已切换到模型空间。" : "已切换到布局“" + layout.Name + "”。";
         }
         private void Layer_Click(object sender, RoutedEventArgs e)
         {
@@ -279,6 +287,12 @@ namespace Wanluo.StandaloneWorkbench
             if (e.Handled) return;
             if ((Keyboard.Modifiers & ModifierKeys.Control) != 0)
             {
+                if ((e.Key == Key.C || e.Key == Key.V || e.Key == Key.X) && !(Keyboard.FocusedElement is System.Windows.Controls.Primitives.TextBoxBase))
+                {
+                    e.Handled = true;
+                    var clipboardCommand = e.Key == Key.V ? "@paste" : e.Key == Key.X ? "@cut" : (Keyboard.Modifiers & ModifierKeys.Shift) != 0 ? "@copybase" : "@copyclip";
+                    Run(() => Client.Command(clipboardCommand)); Viewport.FocusDrawing(); return;
+                }
                 if (e.Key == Key.F1) { e.Handled = true; ToggleRibbon(); return; }
                 if (e.Key == Key.D1) { e.Handled = true; ToggleProperties(); return; }
                 if (e.Key == Key.Tab) { e.Handled = true; NextDocument((Keyboard.Modifiers & ModifierKeys.Shift) != 0); return; }
@@ -293,6 +307,7 @@ namespace Wanluo.StandaloneWorkbench
                 return;
             }
             if (e.Key == Key.F2) { e.Handled = true; ToggleHistory(); return; }
+            if (e.Key == Key.F7) { e.Handled = true; Run(() => Client.Command("@grid")); return; }
             var command = e.Key == Key.F3 ? "@snap" : e.Key == Key.F8 ? "@ortho" : e.Key == Key.F10 ? "@polar" : null;
             if (command != null) { e.Handled = true; Run(() => Client.Command(command)); }
         }

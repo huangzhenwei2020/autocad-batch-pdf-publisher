@@ -230,16 +230,7 @@ namespace MiniCAD
                 const auto& pl = static_cast<const PolylineEntity&>(obj).GetPolyline();
                 for (int i = 0; i < pl.SegCount(); ++i)
                 {
-                    if (pl.SegIsArc(i))
-                    {
-                        ArcGeom arc = Polyline::ComputeArc(pl.SegStart(i), pl.SegEnd(i), pl.SegBulge(i));
-                        const double midAngle = arc.StartAngle + arc.SweepAngle * 0.5;
-                        out.push_back({ arc.Center.x + arc.Radius * std::cos(midAngle),
-                                        arc.Center.y + arc.Radius * std::sin(midAngle),
-                                        pl.SegStart(i).z });
-                    }
-                    else
-                        out.push_back(Math::Midpoint(pl.SegStart(i), pl.SegEnd(i)));
+                    out.push_back(PolylineOps::PointAt(pl, i + 0.5));
                 }
             }
 
@@ -262,10 +253,10 @@ namespace MiniCAD
             if (obj.IsKindOf<CircleEntity>())
             {
                 const auto& c = static_cast<const CircleEntity&>(obj).GetCircle();
-                out.push_back({ c.Center.x + c.Radius, c.Center.y,            c.Center.z });
-                out.push_back({ c.Center.x,            c.Center.y + c.Radius, c.Center.z });
-                out.push_back({ c.Center.x - c.Radius, c.Center.y,            c.Center.z });
-                out.push_back({ c.Center.x,            c.Center.y - c.Radius, c.Center.z });
+                out.push_back(c.QuadrantE());
+                out.push_back(c.QuadrantN());
+                out.push_back(c.QuadrantW());
+                out.push_back(c.QuadrantS());
             }
 
             if (obj.IsKindOf<ArcEntity>())

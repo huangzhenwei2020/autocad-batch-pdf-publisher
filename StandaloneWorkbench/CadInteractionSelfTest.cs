@@ -23,9 +23,12 @@ namespace Wanluo.StandaloneWorkbench
             var boxNumber = 0;
             void Space(string text)
             {
-                input.Text = text;
-                input.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(input), 0, Key.Space) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
-                Check(input.Text.Length == 0, "Space did not submit the command field");
+                CadTestKeyboard.WithModifiers(() =>
+                {
+                    input.Text = text;
+                    input.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(input), 0, Key.Space) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
+                    Check(input.Text.Length == 0, $"Space did not submit the command field, input={text}, modifiers={Keyboard.Modifiers}, busy={client.IsBusy}");
+                });
             }
             void Mouse(uint message, double x, double y)
             {
@@ -70,9 +73,7 @@ namespace Wanluo.StandaloneWorkbench
             Check(client.State.SelectionCount == 1, "Left-to-right enclosure selection failed");
             ClickWithMotion(2500, 0, 6, 4);
             Check(client.State.SelectionCount == 2, "Ordinary clicks did not add to selection");
-            var keys = new byte[256]; GetKeyboardState(keys); var shift = (byte[])keys.Clone(); shift[0x10] = 0x80;
-            try { SetKeyboardState(shift); Click(250, 0); }
-            finally { SetKeyboardState(keys); }
+            CadTestKeyboard.WithModifiers(() => Click(250, 0), shift: true);
             Check(client.State.SelectionCount == 1, "Shift click did not remove an object");
             client.Command("@cancel");
             Box(900, -100, 1100, 100);
@@ -101,7 +102,5 @@ namespace Wanluo.StandaloneWorkbench
         }
         private static void Check(bool condition, string why) { if (!condition) throw new InvalidOperationException(why); }
         [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr window, uint message, IntPtr wparam, IntPtr lparam);
-        [DllImport("user32.dll")] private static extern bool GetKeyboardState(byte[] state);
-        [DllImport("user32.dll")] private static extern bool SetKeyboardState(byte[] state);
     }
 }

@@ -6,6 +6,7 @@
 #include "Core/Entity/CircleEntity.hpp"
 #include "Core/Entity/RectangleEntity.hpp"
 #include "Core/Entity/ArcEntity.hpp"
+#include "Core/GeomKernel/SpatialCurveTransform.hpp"
 #include "Core/Entity/EllipseEntity.hpp"
 #include "Core/Entity/PolylineEntity.hpp"
 #include "Core/Entity/SplineEntity.hpp"
@@ -55,6 +56,17 @@ namespace MiniCAD
 
     static double ReflectAngle(double a, double theta) { return 2.0 * theta - a; }
 
+    Ellipse MirrorEllipse(const Ellipse& source, const MirrorAxis& axis)
+    {
+        Ellipse ellipse = source;
+        ellipse.Center = ReflectPoint(source.Center, axis);
+        ellipse.Normal = ReflectVector(source.Normal, axis);
+        ellipse.SetAxisDirection(ReflectVector(source.Axes().first, axis));
+        if (!source.IsFull())
+            ellipse.SetParams(-source.EndParam, -source.StartParam);
+        return ellipse;
+    }
+
     void MirrorEntityInPlace(Entity& entity, const MirrorAxis& axis)
     {
         if (entity.IsKindOf<Solid3DEntity>())
@@ -85,6 +97,11 @@ namespace MiniCAD
         {
             auto& ce = static_cast<CircleEntity&>(entity);
             Circle c = ce.GetCircle();
+            if (!entity.HasDefaultExtrusion())
+            {
+                ce.SetCircle(TransformSpatialCircle(c, [&](const Math::Point3& point) { return ReflectPoint(point, axis); }));
+                return;
+            }
             c.Center = ReflectPoint(c.Center, axis);
             ce.SetCircle(c);
             return;
@@ -106,6 +123,11 @@ namespace MiniCAD
         {
             auto& ae = static_cast<ArcEntity&>(entity);
             Arc a = ae.GetArc();
+            if (!entity.HasDefaultExtrusion())
+            {
+                ae.SetArc(TransformSpatialArc(a, [&](const Math::Point3& point) { return ReflectPoint(point, axis); }));
+                return;
+            }
             double theta = AxisAngle(axis);
             a.Center = ReflectPoint(a.Center, axis);
             double newEnd   = ReflectAngle(a.StartAngle, theta);
@@ -124,14 +146,7 @@ namespace MiniCAD
         if (entity.IsKindOf<EllipseEntity>())
         {
             auto& ee = static_cast<EllipseEntity&>(entity);
-            Ellipse el = ee.GetEllipse();
-            double theta = AxisAngle(axis);
-            el.Center   = ReflectPoint(el.Center, axis);
-            el.Rotation = ReflectAngle(el.Rotation, theta);
-            // 反射后参数方向反转：P(t) 的像为新椭圆的 P'(-t)，弧 [s, e] → [-e, -s]
-            if (!el.IsFull())
-                el.SetParams(-el.EndParam, -el.StartParam);
-            ee.SetEllipse(el);
+            ee.SetEllipse(MirrorEllipse(ee.GetEllipse(), axis));
             return;
         }
 
@@ -140,7 +155,10 @@ namespace MiniCAD
             auto& pe = static_cast<PolylineEntity&>(entity);
             Polyline pl = pe.GetPolyline();
             for (auto& p : pl.Points) p = ReflectPoint(p, axis);
-            for (auto& b : pl.Bulges) b = -b;
+            if (pl.HasDefaultPlane())
+                for (auto& b : pl.Bulges) b = -b;
+            else
+                pl.Normal = -ReflectVector(pl.Normal, axis);
             pe.SetPolyline(std::move(pl));
             return;
         }
@@ -157,18 +175,20 @@ namespace MiniCAD
         if (entity.IsKindOf<TextEntity>())
         {
             auto& te = static_cast<TextEntity&>(entity);
-            double theta = AxisAngle(axis);
+            const auto basis = te.GetOCS();
             te.SetPosition(ReflectPoint(te.GetPosition(), axis));
-            te.SetRotation(static_cast<float>(ReflectAngle(te.GetRotation(), theta)));
+            te.SetExtrusion(ReflectVector(basis.Uz, axis));
+            te.SetRotation(Math::PlaneAngle(te.GetOCS(), ReflectVector(Math::PlaneDirection(basis, te.GetRotation()), axis)));
             return;
         }
 
         if (entity.IsKindOf<MTextEntity>())
         {
             auto& me = static_cast<MTextEntity&>(entity);
-            double theta = AxisAngle(axis);
+            const auto basis = me.GetOCS();
             me.SetPosition(ReflectPoint(me.GetPosition(), axis));
-            me.SetRotation(ReflectAngle(me.GetRotation(), theta));
+            me.SetExtrusion(ReflectVector(basis.Uz, axis));
+            me.SetRotation(Math::PlaneAngle(me.GetOCS(), ReflectVector(Math::PlaneDirection(basis, me.GetRotation()), axis)));
             return;
         }
 
@@ -202,6 +222,11 @@ namespace MiniCAD
         if (entity.IsKindOf<HatchEntity>())
         {
             auto& he = static_cast<HatchEntity&>(entity);
+            if (!he.HasDefaultExtrusion())
+            {
+                he.ReorientBoundary(-ReflectVector(he.GetExtrusion(), axis), [&](const Math::Point3& p) { return ReflectPoint(p, axis); });
+                return;
+            }
             double theta = AxisAngle(axis);
             for (auto& loop : he.GetLoops())
                 for (auto& edge : loop.Edges)

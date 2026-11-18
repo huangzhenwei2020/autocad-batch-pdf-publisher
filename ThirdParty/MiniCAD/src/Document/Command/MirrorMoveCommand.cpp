@@ -1,11 +1,13 @@
 #include "MirrorMoveCommand.h"
 #include "Scene/Scene.h"
+#include "Document/Command/EntityMirror.h"
 
 #include "Core/Entity/PointEntity.hpp"
 #include "Core/Entity/LineEntity.hpp"
 #include "Core/Entity/CircleEntity.hpp"
 #include "Core/Entity/RectangleEntity.hpp"
 #include "Core/Entity/ArcEntity.hpp"
+#include "Core/GeomKernel/SpatialCurveTransform.hpp"
 #include "Core/Entity/EllipseEntity.hpp"
 #include "Core/Entity/PolylineEntity.hpp"
 #include "Core/Entity/SplineEntity.hpp"
@@ -41,6 +43,8 @@ namespace MiniCAD
             return o;
         }
         Circle Mirror(const Circle& src, const MirrorAxis& axis) {
+            if (!Math::IsDefaultExtrusion(src.Normal))
+                return TransformSpatialCircle(src, [&](const Math::Point3& point) { return ReflectPoint(point, axis); });
             Circle o = src; o.Center = ReflectPoint(src.Center, axis); return o;
         }
         Rectangle Mirror(const Rectangle& src, const MirrorAxis& axis) {
@@ -52,6 +56,8 @@ namespace MiniCAD
             return o;
         }
         Arc Mirror(const Arc& src, const MirrorAxis& axis) {
+            if (!Math::IsDefaultExtrusion(src.Normal))
+                return TransformSpatialArc(src, [&](const Math::Point3& point) { return ReflectPoint(point, axis); });
             Arc o = src;
             double theta = AxisTheta(axis);
             o.Center = ReflectPoint(src.Center, axis);
@@ -67,19 +73,15 @@ namespace MiniCAD
             return o;
         }
         Ellipse Mirror(const Ellipse& src, const MirrorAxis& axis) {
-            Ellipse o = src;
-            double theta = AxisTheta(axis);
-            o.Center   = ReflectPoint(src.Center, axis);
-            o.Rotation = 2.0 * theta - src.Rotation;
-            // 反射后参数方向反转：P(t) 的像为新椭圆的 P'(-t)，弧 [s, e] → [-e, -s]
-            if (!o.IsFull())
-                o.SetParams(-src.EndParam, -src.StartParam);
-            return o;
+            return MirrorEllipse(src, axis);
         }
         Polyline Mirror(const Polyline& src, const MirrorAxis& axis) {
             Polyline o = src;
             for (auto& p : o.Points) p = ReflectPoint(p, axis);
-            for (auto& b : o.Bulges) b = -b;
+            if (o.HasDefaultPlane())
+                for (auto& b : o.Bulges) b = -b;
+            else
+                o.Normal = -ReflectVector(o.Normal, axis);
             return o;
         }
         Spline Mirror(const Spline& src, const MirrorAxis& axis) {
@@ -186,17 +188,21 @@ namespace MiniCAD
             {
                 auto* te = static_cast<TextEntity*>(entity);
                 e.Kind       = MoveEntityEntry::Kind::Text;
-                e.BeforeText = { te->GetPosition(), te->GetRotation() };
-                e.AfterText  = { ReflectPoint(te->GetPosition(), axis),
-                                 2.0 * theta - te->GetRotation() };
+                e.BeforeText = { te->GetPosition(), te->GetRotation(), te->GetExtrusion() };
+                auto preview = te->Clone(te->GetID());
+                MirrorEntityInPlace(*preview, axis);
+                const auto& transformed = static_cast<const TextEntity&>(*preview);
+                e.AfterText = { transformed.GetPosition(), transformed.GetRotation(), transformed.GetExtrusion() };
             }
             else if (entity->IsKindOf<MTextEntity>())
             {
                 auto* me = static_cast<MTextEntity*>(entity);
                 e.Kind        = MoveEntityEntry::Kind::MText;
-                e.BeforeMText = { me->GetPosition(), me->GetRotation() };
-                e.AfterMText  = { ReflectPoint(me->GetPosition(), axis),
-                                  2.0 * theta - me->GetRotation() };
+                e.BeforeMText = { me->GetPosition(), me->GetRotation(), me->GetExtrusion() };
+                auto preview = me->Clone(me->GetID());
+                MirrorEntityInPlace(*preview, axis);
+                const auto& transformed = static_cast<const MTextEntity&>(*preview);
+                e.AfterMText = { transformed.GetPosition(), transformed.GetRotation(), transformed.GetExtrusion() };
             }
             else if (entity->IsKindOf<InsertEntity>())
             {
@@ -228,7 +234,18 @@ namespace MiniCAD
                 auto* he = static_cast<HatchEntity*>(entity);
                 e.Kind        = MoveEntityEntry::Kind::Hatch;
                 e.BeforeHatch = he->GetLoops();
-                e.AfterHatch  = MirrorLoops(he->GetLoops(), axis);
+                e.BeforeHatchNormal = he->GetExtrusion();
+                e.AfterHatchNormal = e.BeforeHatchNormal;
+                if (he->HasDefaultExtrusion())
+                    e.AfterHatch = MirrorLoops(he->GetLoops(), axis);
+                else
+                {
+                    auto transformed = he->Clone(he->GetID());
+                    MirrorEntityInPlace(*transformed, axis);
+                    auto& hatch = static_cast<HatchEntity&>(*transformed);
+                    e.AfterHatch = std::move(hatch.GetLoops());
+                    e.AfterHatchNormal = hatch.GetExtrusion();
+                }
             }
             else if (entity->IsKindOf<LeaderEntity>())
             {
@@ -332,6 +349,7 @@ namespace MiniCAD
             const auto& snap = useAfter ? e.AfterText : e.BeforeText;
             auto* te = static_cast<TextEntity*>(entity);
             te->SetPosition(snap.pos);
+            te->SetExtrusion(snap.normal);
             te->SetRotation(static_cast<float>(snap.rotation));
             break;
         }
@@ -340,6 +358,7 @@ namespace MiniCAD
             const auto& snap = useAfter ? e.AfterMText : e.BeforeMText;
             auto* me = static_cast<MTextEntity*>(entity);
             me->SetPosition(snap.pos);
+            me->SetExtrusion(snap.normal);
             me->SetRotation(snap.rotation);
             break;
         }
@@ -365,6 +384,7 @@ namespace MiniCAD
         }
         case MoveEntityEntry::Kind::Hatch:
             static_cast<HatchEntity*>(entity)->GetLoops() = useAfter ? e.AfterHatch : e.BeforeHatch;
+            entity->SetExtrusion(useAfter ? e.AfterHatchNormal : e.BeforeHatchNormal);
             break;
         case MoveEntityEntry::Kind::Leader:
             static_cast<LeaderEntity*>(entity)->SetVertices(useAfter ? e.AfterLeaderVerts : e.BeforeLeaderVerts);

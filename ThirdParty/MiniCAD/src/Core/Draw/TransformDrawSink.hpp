@@ -1,6 +1,6 @@
 #pragma once
 #include "IDrawSink.hpp"
-#include "Core/Math/Mat4.hpp"
+#include "Core/Math/OCS.hpp"
 #include <algorithm>
 #include <cmath>
 
@@ -107,20 +107,22 @@ namespace MiniCAD
         }
 
         // 镜像的插入：基线方向照样经变换，字形沿基线上下翻转（见 IDrawSink::ToggleTextMirror）
-        void EmitMText(const Math::Point3& pos, const std::string& utf8Text, uint32_t styleId, double height, double rotation, double boxWidth, const Math::Color4& color) override
+        void EmitMText(const Math::Point3& pos, const std::string& utf8Text, uint32_t styleId, double height, double rotation, double boxWidth, const Math::Color4& color, const Math::Vec3& normal) override
         {
             if (m_mirrored) m_target.ToggleTextMirror();
-            m_target.EmitMText(m_xform * pos, utf8Text, styleId, height * m_scale, TextRotation(rotation), boxWidth * m_scale, color);
+            const auto [angle, transformedNormal] = TransformTextPlane(rotation, normal);
+            m_target.EmitMText(m_xform * pos, utf8Text, styleId, height * m_scale, angle, boxWidth * m_scale, color, transformedNormal);
             if (m_mirrored) m_target.ToggleTextMirror();
         }
 
-        void EmitRichMText(const Math::Point3& pos, const MTextBlock& block, double rotation, const Math::Color4& color) override
+        void EmitRichMText(const Math::Point3& pos, const MTextBlock& block, double rotation, const Math::Color4& color, const Math::Vec3& normal) override
         {
             MTextBlock scaled = block;
             scaled.height   *= m_scale;
             scaled.boxWidth *= m_scale;
             if (m_mirrored) m_target.ToggleTextMirror();
-            m_target.EmitRichMText(m_xform * pos, scaled, TextRotation(rotation), color);
+            const auto [angle, transformedNormal] = TransformTextPlane(rotation, normal);
+            m_target.EmitRichMText(m_xform * pos, scaled, angle, color, transformedNormal);
             if (m_mirrored) m_target.ToggleTextMirror();
         }
 
@@ -137,10 +139,11 @@ namespace MiniCAD
         }
 
         void EmitAlignedText(const Math::Point3& pos, const std::string& utf8Text, uint32_t styleId, double height, double rotation,
-                             int hAlign, int vAlign, double widthFactor, const Math::Color4& color) override
+                             int hAlign, int vAlign, double widthFactor, const Math::Color4& color, const Math::Vec3& normal) override
         {
             if (m_mirrored) m_target.ToggleTextMirror();
-            m_target.EmitAlignedText(m_xform * pos, utf8Text, styleId, height * m_scale, TextRotation(rotation), hAlign, vAlign, widthFactor, color);
+            const auto [angle, transformedNormal] = TransformTextPlane(rotation, normal);
+            m_target.EmitAlignedText(m_xform * pos, utf8Text, styleId, height * m_scale, angle, hAlign, vAlign, widthFactor, color, transformedNormal);
             if (m_mirrored) m_target.ToggleTextMirror();
         }
 
@@ -206,6 +209,28 @@ namespace MiniCAD
         void   ToggleTextMirror() override          { m_target.ToggleTextMirror(); }
 
     private:
+        struct TextPlane
+        {
+            double Rotation;
+            Math::Vec3 Normal;
+        };
+
+        TextPlane TransformTextPlane(double rotation, const Math::Vec3& normal) const
+        {
+            const auto transformVector = [&](const Math::Vec3& v)
+            {
+                const double* m = m_xform.Data();
+                return Math::Vec3{v.x * m[0] + v.y * m[4] + v.z * m[8],
+                                  v.x * m[1] + v.y * m[5] + v.z * m[9],
+                                  v.x * m[2] + v.y * m[6] + v.z * m[10]};
+            };
+            const auto basis = Math::BuildOCS(normal);
+            auto newNormal = Math::Cross(transformVector(basis.Ux), transformVector(basis.Uy)).Normalized();
+            if (m_mirrored) newNormal = -newNormal;
+            const auto newBasis = Math::BuildOCS(newNormal);
+            return {Math::PlaneAngle(newBasis, transformVector(Math::PlaneDirection(basis, rotation))), newBasis.Uz};
+        }
+
         // 文字基线方向 (cos r, sin r) 经变换后的角度。镜像时不是"文字角度 + 块的转角"：
         // 沿 X 轴镜像的块里 30° 的文字画出来是 -30°
         double TextRotation(double rotation) const

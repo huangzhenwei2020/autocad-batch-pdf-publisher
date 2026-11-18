@@ -5,6 +5,7 @@
 #include "Core/Entity/LineEntity.hpp"
 #include "Core/Entity/CircleEntity.hpp"
 #include "Core/Entity/PointEntity.hpp"
+#include "Core/Entity/ViewportEntity.hpp"
 #include "Core/Entity/RectangleEntity.hpp"
 #include "Core/Entity/ArcEntity.hpp"
 #include "Core/Entity/EllipseEntity.hpp"
@@ -60,6 +61,13 @@ namespace MiniCAD
                 if (!obj) continue;
                 scene.MarkEntityDirty(e.Id);   // 原位改几何:标脏,撤销 / 重做后该实体重新细分
 
+                if (e.Kind == DragEntityEntry::Kind::Viewport)
+                {
+                    auto* viewport = static_cast<ViewportEntity*>(obj);
+                    const auto& snap = useAfter ? e.AfterViewport : e.BeforeViewport;
+                    viewport->SetCenter(snap.Center); viewport->SetSize(snap.Width, snap.Height); viewport->SetViewHeight(snap.ViewHeight);
+                }
+
                 if (e.Kind == DragEntityEntry::Kind::Line)
                 {
                     auto* line = static_cast<LineEntity*>(obj);
@@ -78,7 +86,7 @@ namespace MiniCAD
                 {
                     auto* circle = static_cast<CircleEntity*>(obj);
                     const auto& snap = useAfter ? e.AfterCircle : e.BeforeCircle;
-                    circle->SetCircle({ snap.Center,snap.Radius });
+                    circle->SetCircle(snap);
                 }
 
                 if (e.Kind == DragEntityEntry::Kind::Rectangle)

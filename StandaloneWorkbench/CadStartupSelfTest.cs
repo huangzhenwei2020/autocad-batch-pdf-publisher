@@ -53,9 +53,12 @@ namespace Wanluo.StandaloneWorkbench
                 var source = PresentationSource.FromVisual(input);
                 if (source == null) throw new InvalidOperationException("Command field is not attached for '" + text + "', workspace="
                     + ((TabControl)window.FindName("Workspace")).SelectedIndex + ", visible=" + cad.IsVisible + ", loaded=" + cad.IsLoaded);
-                input.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, source, 0, Key.Space)
-                    { RoutedEvent = Keyboard.PreviewKeyDownEvent });
-                Check(input.Text.Length == 0, "New drawing command did not accept Space");
+                CadTestKeyboard.WithModifiers(() =>
+                {
+                    input.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, source, 0, Key.Space)
+                        { RoutedEvent = Keyboard.PreviewKeyDownEvent });
+                    Check(input.Text.Length == 0, $"New drawing command did not accept Space, input={text}, modifiers={Keyboard.Modifiers}, busy={client.IsBusy}");
+                });
             }
             void Point(double x, double y)
             {
@@ -87,10 +90,7 @@ namespace Wanluo.StandaloneWorkbench
             await cad.CloseCurrentAsync();
             Check(client.State.Documents.Count == 0, "Saved startup drawing did not close");
 
-            var previous = new byte[256]; GetKeyboardState(previous);
-            var control = new byte[256]; control[0x11] = 0x80;
-            try { SetKeyboardState(control); SendMessage(viewport.Handle, 0x0100, new IntPtr('N'), new IntPtr(1)); }
-            finally { SetKeyboardState(previous); }
+            CadTestKeyboard.WithModifiers(() => SendMessage(viewport.Handle, 0x0100, new IntPtr('N'), new IntPtr(1)), control: true);
             Ready();
             await cad.CloseCurrentAsync();
             Check(client.State.Documents.Count == 0, "Empty new drawing unexpectedly required saving");
@@ -137,7 +137,5 @@ namespace Wanluo.StandaloneWorkbench
             }
         }
         [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wparam, IntPtr lparam);
-        [DllImport("user32.dll")] private static extern bool GetKeyboardState(byte[] state);
-        [DllImport("user32.dll")] private static extern bool SetKeyboardState(byte[] state);
     }
 }

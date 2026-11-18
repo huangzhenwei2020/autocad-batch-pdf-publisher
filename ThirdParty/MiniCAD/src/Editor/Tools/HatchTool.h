@@ -43,6 +43,8 @@ namespace MiniCAD
             LOG_DEBUG("[HatchTool] exit");
         }
 
+        bool SupportsWorkingPlane() const override { return true; }
+
         bool OnInput(const EditorContext& ctx) override
         {
             m_ctx = &ctx;
@@ -103,7 +105,7 @@ namespace MiniCAD
             m_ctx->overlay.Clear();
 
             m_loop.Edges.clear();
-            m_hasLoop = HatchBoundary::FindEnclosingLoop(m_ctx->scene, m_cursor, m_loop);
+            m_hasLoop = HatchBoundary::FindEnclosingLoop(m_ctx->scene, m_cursor, m_loop, Frame());
             if (!m_hasLoop) return;
 
             const Math::Color4 edge = { 0.2f, 0.9f, 1.0f, 0.9f };   // 青色边界
@@ -111,18 +113,20 @@ namespace MiniCAD
 
             // 按边界真实曲线离散后高亮(圆弧/椭圆/样条均跟随原形)
             std::vector<Math::Point3> pts = m_loop.Tessellate();
+            const auto frame = Frame();
+            for (auto& p : pts) p = Math::OcsToWcs(frame, p);
             for (size_t i = 0; i + 1 < pts.size(); ++i)
                 m_ctx->overlay.AddLine(pts[i], pts[i + 1], edge);
             if (pts.size() >= 2)
                 m_ctx->overlay.AddLine(pts.back(), pts.front(), edge);
 
-            m_ctx->overlay.AddPoint(m_cursor, mark);
+            m_ctx->overlay.AddPoint(Math::OcsToWcs(frame, m_cursor), mark);
         }
 
         void CreateAt(const Math::Point3& pt)
         {
             HatchLoop loop;
-            if (!HatchBoundary::FindEnclosingLoop(m_ctx->scene, pt, loop))
+            if (!HatchBoundary::FindEnclosingLoop(m_ctx->scene, pt, loop, Frame()))
             {
                 LOG_WARN("[HatchTool] the point is not inside a closed area, no hatch created");
                 return;
@@ -133,7 +137,11 @@ namespace MiniCAD
             const HatchPattern pattern = HatchPatternLibrary::Instance().Get(m_settings.Pattern);
             auto entity = std::make_unique<HatchEntity>(id, std::move(loops), pattern);
             entity->SetScale(m_settings.Scale);
-            entity->SetAngle(m_settings.AngleDeg);
+            const auto plane = Plane();
+            const auto frame = Frame();
+            const double offset = std::atan2(Math::Dot(plane.X, frame.Uy), Math::Dot(plane.X, frame.Ux));
+            entity->SetAngle(m_settings.AngleDeg + offset * 180.0 / Math::PI);
+            entity->SetExtrusion(frame.Uz);
             m_ctx->ApplyCurrentAttr(*entity);
             auto cmd    = std::make_unique<AddEntityCommand>(std::move(entity));
             m_ctx->cmdStack.Execute(std::move(cmd), m_ctx->scene);
@@ -146,11 +154,23 @@ namespace MiniCAD
             UpdatePreview();
         }
 
+        Math::WorkingPlane Plane() const
+        {
+            return m_ctx->scene.CurrentSpaceIsPaper() ? Math::WorkingPlane{} : m_ctx->scene.GetWorkingPlane();
+        }
+
+        Math::OCS Frame() const { return Math::BuildOCS(Plane().Normal()); }
+
         Math::Point3 GetPoint(const InputEvent& e) const
         {
-            if (e.HasSnap) return e.SnapWorld;
-            auto p = m_ctx->viewport.GetCamera().ScreenToWorld(e.MouseX, e.MouseY);
-            return { p.x, p.y, 0.0 };
+            const auto plane = Plane();
+            const auto frame = Frame();
+            auto world = plane.Origin;
+            if (e.HasSnap)
+                world = e.SnapWorld;
+            else
+                m_ctx->viewport.GetCamera().ScreenToPlane(e.MouseX, e.MouseY, plane, world);
+            return Math::WcsToOcs(frame, world);
         }
 
     private:

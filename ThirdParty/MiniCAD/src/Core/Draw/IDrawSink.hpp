@@ -192,13 +192,13 @@ namespace MiniCAD
         // 矢量多行文字（SHX / TTF 路径）：原始数据透传，渲染逻辑由 DrawContext 实现
         // styleId: FontStyle ID（由 DocumentManager 管理）
         // boxWidth: 自动换行宽度，0 = 不限宽
-        virtual void EmitMText(const Math::Point3& pos, const std::string& utf8Text, uint32_t styleId, double height, double rotation, double boxWidth, const Math::Color4& color) {}
+        virtual void EmitMText(const Math::Point3& pos, const std::string& utf8Text, uint32_t styleId, double height, double rotation, double boxWidth, const Math::Color4& color, const Math::Vec3& = {0, 0, 1}) {}
 
         // 带格式的多行文字（MTextEntity）：各段字体、字高、宽度、颜色不同，按段落缩进、对齐，分数堆叠。
         // pos 与 EmitMText 相同（首行"基准字高的顶"下一个基准字高处）。默认按去码后的文字交给 EmitMText；转发型 sink 要转发
-        virtual void EmitRichMText(const Math::Point3& pos, const MTextBlock& block, double rotation, const Math::Color4& color)
+        virtual void EmitRichMText(const Math::Point3& pos, const MTextBlock& block, double rotation, const Math::Color4& color, const Math::Vec3& normal = {0, 0, 1})
         {
-            EmitMText(pos, block.plain, block.styleId, block.height, rotation, block.boxWidth, color);
+            EmitMText(pos, block.plain, block.styleId, block.height, rotation, block.boxWidth, color, normal);
         }
         // 量 EmitRichMText 排出来的宽（最宽一行的右端）与高（首行顶到末行基线）；false = 量不了（调用方按估算）
         virtual bool MeasureRichMText(const MTextBlock& /*block*/, double& /*width*/, double& /*height*/) { return false; }
@@ -207,10 +207,10 @@ namespace MiniCAD
         // widthFactor > 0 时代替样式的宽度因子（TEXT 自身的组码 41），0 = 用样式的。
         // 默认当作左对齐基线交给 EmitMText（只关心样式等的 sink 不必实现）
         virtual void EmitAlignedText(const Math::Point3& pos, const std::string& utf8Text, uint32_t styleId, double height, double rotation,
-                                     int hAlign, int vAlign, double widthFactor, const Math::Color4& color)
+                                     int hAlign, int vAlign, double widthFactor, const Math::Color4& color, const Math::Vec3& normal = {0, 0, 1})
         {
             (void)hAlign; (void)vAlign; (void)widthFactor;
-            EmitMText(pos, utf8Text, styleId, height, rotation, 0.0, color);
+            EmitMText(pos, utf8Text, styleId, height, rotation, 0.0, color, normal);
         }
 
         // ── 文字测量（多重引线的基线要画到文字边缘）─────────────────────────

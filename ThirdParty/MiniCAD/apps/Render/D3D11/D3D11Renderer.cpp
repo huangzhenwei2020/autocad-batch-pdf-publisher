@@ -97,6 +97,8 @@ namespace MiniCAD
         bd.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
 
         m_device->CreateBlendState(&bd, m_blendAlpha.GetAddressOf());
+        bd.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
+        m_device->CreateBlendState(&bd, m_blendPremultiplied.GetAddressOf());
     }
 
     void D3D11Renderer::BeginFrame(IRenderTarget& target, const ViewportDesc& vp)
@@ -278,7 +280,7 @@ namespace MiniCAD
     // 文字通路的公共状态：文字着色器 + topology + depth + blend + 矩阵 + 纹理
     void D3D11Renderer::SetTextState(const Math::Mat4& viewProj, void* nativeSRV, bool depth, bool blend)
     {
-        auto pso = m_textShader.GetPipeline();
+        auto pso = m_layerCompositing ? m_imageShader.GetPipeline() : m_textShader.GetPipeline();
         m_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         m_context->IASetInputLayout(pso.layout);
         m_context->VSSetShader(pso.shader->vs.Get(), nullptr, 0);
@@ -287,7 +289,7 @@ namespace MiniCAD
 
         m_context->OMSetDepthStencilState(depth ? m_depthEnabled.Get() : m_depthDisabled.Get(), 0);
         float f[4] = {};
-        m_context->OMSetBlendState(blend ? m_blendAlpha.Get() : nullptr, f, 0xffffffff);
+        m_context->OMSetBlendState(blend ? (m_layerCompositing ? m_blendPremultiplied.Get() : m_blendAlpha.Get()) : nullptr, f, 0xffffffff);
 
         UploadViewProj(viewProj);
 

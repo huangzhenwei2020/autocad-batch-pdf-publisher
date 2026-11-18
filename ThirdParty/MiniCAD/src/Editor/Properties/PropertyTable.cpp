@@ -19,6 +19,7 @@
 #include "Core/Entity/SolidEntity.hpp"
 #include "Core/Entity/TableEntity.hpp"
 #include "Core/Entity/WipeoutEntity.hpp"
+#include "Core/Entity/ViewportEntity.hpp"
 #include "Core/Math/Constants.hpp"
 #include <algorithm>
 #include <cmath>
@@ -112,6 +113,7 @@ namespace MiniCAD
             return {
                 Coord<T>(N_("圆心 X"), [](const T& e) { return e.GetCircle().Center.x; }, [](T& e, double v) { auto c = e.GetCircle().Center; c.x = v; e.SetCenter(c); }),
                 Coord<T>(N_("圆心 Y"), [](const T& e) { return e.GetCircle().Center.y; }, [](T& e, double v) { auto c = e.GetCircle().Center; c.y = v; e.SetCenter(c); }),
+                Coord<T>(N_("圆心 Z"), [](const T& e) { return e.GetCircle().Center.z; }, [](T& e, double v) { auto c = e.GetCircle().Center; c.z = v; e.SetCenter(c); }),
                 Editable<T>(N_("半径"), PropKind::Number, [](const T& e) { return e.GetCircle().Radius; },
                             [](T& e, double v) { if (v <= kEps) return false; e.SetRadius(v); return true; }),
                 Editable<T>(N_("直径"), PropKind::Number, [](const T& e) { return e.GetCircle().Radius * 2.0; },
@@ -128,6 +130,7 @@ namespace MiniCAD
             return {
                 Coord<T>(N_("圆心 X"), [](const T& e) { return e.GetArc().Center.x; }, [](T& e, double v) { auto c = e.GetArc().Center; c.x = v; e.SetCenter(c); }),
                 Coord<T>(N_("圆心 Y"), [](const T& e) { return e.GetArc().Center.y; }, [](T& e, double v) { auto c = e.GetArc().Center; c.y = v; e.SetCenter(c); }),
+                Coord<T>(N_("圆心 Z"), [](const T& e) { return e.GetArc().Center.z; }, [](T& e, double v) { auto c = e.GetArc().Center; c.z = v; e.SetCenter(c); }),
                 Editable<T>(N_("半径"), PropKind::Number, [](const T& e) { return e.GetArc().Radius; },
                             [](T& e, double v) { if (v <= kEps) return false; e.SetRadius(v); return true; }),
                 Editable<T>(N_("起始角"), PropKind::Angle, [](const T& e) { return Deg(e.GetArc().StartAngle); },
@@ -238,6 +241,7 @@ namespace MiniCAD
             return {
                 Coord<T>(N_("圆心 X"), [](const T& e) { return e.GetEllipse().Center.x; }, [=](T& e, double v) { modify(e, [v](Ellipse& el) { el.Center.x = v; }); }),
                 Coord<T>(N_("圆心 Y"), [](const T& e) { return e.GetEllipse().Center.y; }, [=](T& e, double v) { modify(e, [v](Ellipse& el) { el.Center.y = v; }); }),
+                Coord<T>(N_("圆心 Z"), [](const T& e) { return e.GetEllipse().Center.z; }, [](T& e, double v) { auto center = e.GetEllipse().Center; center.z = v; e.SetCenter(center); }),
                 Editable<T>(N_("半轴 X"), PropKind::Number, [](const T& e) { return e.GetEllipse().RadiusX; },
                             [=](T& e, double v) { if (v <= kEps) return false; modify(e, [v](Ellipse& el) { el.RadiusX = v; }); return true; }),
                 Editable<T>(N_("半轴 Y"), PropKind::Number, [](const T& e) { return e.GetEllipse().RadiusY; },
@@ -259,7 +263,23 @@ namespace MiniCAD
             {
                 Polyline pl = e.GetPolyline();
                 if (index >= pl.Points.size()) return false;
-                if (isX) pl.Points[index].x = v; else pl.Points[index].y = v;
+                const auto before = pl.Points[index];
+                auto after = before;
+                if (isX) after.x = v; else after.y = v;
+                if (!pl.HasDefaultPlane())
+                {
+                    const auto normal = e.GetOCS().Uz;
+                    // Preserve the edited world coordinate while keeping the vertex on the entity plane.
+                    const Math::Vec3 axis = isX ? Math::Vec3{1,0,0} : Math::Vec3{0,1,0};
+                    const auto alongPlane = axis - normal * Math::Dot(axis, normal);
+                    const double component = Math::Dot(axis, alongPlane);
+                    if (component < 1e-12) return false;
+                    after = before + alongPlane * ((v - (isX ? before.x : before.y)) / component);
+                }
+                const bool closed = PolylineOps::IsRing(pl);
+                pl.Points[index] = after;
+                if (closed && index == 0) pl.Points.back() = after;
+                if (closed && index + 1 == pl.Points.size()) pl.Points.front() = after;
                 e.SetPolyline(std::move(pl));
                 return true;
             };
@@ -373,6 +393,24 @@ namespace MiniCAD
             };
         }
 
+        std::vector<PropertyDesc> MakeViewportProps()
+        {
+            using T = ViewportEntity;
+            return {
+                Coord<T>("纸面中心 X", [](const T& e) { return e.GetCenter().x; }, [](T& e, double v) { auto p = e.GetCenter(); p.x = v; e.SetCenter(p); }),
+                Coord<T>("纸面中心 Y", [](const T& e) { return e.GetCenter().y; }, [](T& e, double v) { auto p = e.GetCenter(); p.y = v; e.SetCenter(p); }),
+                Editable<T>("视口宽", PropKind::Number, [](const T& e) { return e.GetWidth(); },
+                    [](T& e, double v) { if (v <= kEps) return false; e.SetSize(v, e.GetHeight()); return true; }),
+                Editable<T>("视口高", PropKind::Number, [](const T& e) { return e.GetHeight(); },
+                    [](T& e, double v) { if (v <= kEps) return false; const double ratio = e.GetViewHeight() / e.GetHeight(); e.SetSize(e.GetWidth(), v); e.SetViewHeight(v * ratio); return true; }),
+                Editable<T>("比例分母 1:N", PropKind::Number, [](const T& e) { return e.GetViewHeight() / e.GetHeight(); },
+                    [](T& e, double v) { if (v <= kEps) return false; e.SetViewHeight(e.GetHeight() * v); return true; }),
+                Coord<T>("模型中心 X", [](const T& e) { return e.GetViewCenter().x; }, [](T& e, double v) { auto p = e.GetViewCenter(); p.x = v; e.SetViewCenter(p); }),
+                Coord<T>("模型中心 Y", [](const T& e) { return e.GetViewCenter().y; }, [](T& e, double v) { auto p = e.GetViewCenter(); p.y = v; e.SetViewCenter(p); }),
+                Editable<T>("视口旋转角", PropKind::Angle, [](const T& e) { return Deg(e.GetTwist()); }, [](T& e, double v) { e.SetTwist(Rad(v)); return true; }),
+            };
+        }
+
         // ── 面域（全部只读）──────────────────────────────────────────────
         std::vector<PropertyDesc> MakeRegionProps()
         {
@@ -387,6 +425,8 @@ namespace MiniCAD
     const std::vector<PropertyDesc>& PropertiesOf(const Entity& e)
     {
         static const std::vector<PropertyDesc> kNone;
+        static const std::vector<PropertyDesc> kViewport = MakeViewportProps();
+        if (e.IsKindOf<ViewportEntity>()) return kViewport;
         static const std::vector<PropertyDesc> kLine   = MakeLineProps();
         static const std::vector<PropertyDesc> kCircle = MakeCircleProps();
         static const std::vector<PropertyDesc> kArc    = MakeArcProps();

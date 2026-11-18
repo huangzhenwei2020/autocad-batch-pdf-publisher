@@ -46,6 +46,7 @@ namespace MiniDWG::DxfWrite
             "$CELWEIGHT", "$CLAYER", "$CMLJUST", "$CMLSCALE", "$CMLSTYLE", "$DIMSTYLE", "$TEXTSIZE",
             "$TEXTSTYLE", "$LUNITS", "$LUPREC", "$MIRRTEXT", "$EXTNAMES", "$INSBASE", "$INSUNITS",
             "$MEASUREMENT", "$LTSCALE", "$LWDISPLAY", "$PDMODE", "$PDSIZE", "$PLINEGEN", "$PSLTSCALE",
+            "$UCSORG", "$UCSXDIR", "$UCSYDIR", "$UCSNAME",
             "$SPLINESEGS", "$SURFU", "$SURFV", "$TDCREATE", "$TDUCREATE", "$TDUPDATE", "$TDUUPDATE", "$TDINDWG",
         };
 

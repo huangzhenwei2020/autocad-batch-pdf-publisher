@@ -98,8 +98,23 @@ namespace MiniCAD
 
         bool IsLayerVisible(LayerID layerId) const override
         {
+            if (m_frozenLayers && std::binary_search(m_frozenLayers->begin(), m_frozenLayers->end(), layerId)) return false;
             const Layer* layer = m_layerManager.GetLayer(layerId);
             return !layer || layer->IsVisible();
+        }
+        void SetFrozenLayers(const std::vector<LayerID>* layers) { m_frozenLayers = layers; }
+
+        void CopyViewportResources(const DrawContext& paper)
+        {
+            m_fontResolver = paper.m_fontResolver;
+            m_inlineFontResolver = paper.m_inlineFontResolver;
+            m_shapeFontResolver = paper.m_shapeFontResolver;
+            m_glyphProvider = paper.m_glyphProvider;
+            m_imageProvider = paper.m_imageProvider;
+            m_textStyles = paper.m_textStyles;
+            m_pointMode = paper.m_pointMode;
+            m_pointSize = paper.m_pointSize;
+            m_thinLines = paper.m_thinLines;
         }
 
         std::string GetLayerName(LayerID layerId) const override
@@ -860,13 +875,13 @@ namespace MiniCAD
                        double              height,
                        double              rotation,
                        double              boxWidth,
-                       const Math::Color4& color) override
+                       const Math::Color4& color, const Math::Vec3& normal) override
         {
             NoteInput(pos);
-            EmitLaidOutText(pos, utf8Text, styleId, height, rotation, boxWidth, TextLayoutEngine::HAlign::Left, 0.0, 0.0, color);
+            EmitLaidOutText(pos, utf8Text, styleId, height, rotation, boxWidth, TextLayoutEngine::HAlign::Left, 0.0, 0.0, color, normal);
         }
 
-        void EmitRichMText(const Math::Point3& pos, const MTextBlock& block, double rotation, const Math::Color4& color) override
+        void EmitRichMText(const Math::Point3& pos, const MTextBlock& block, double rotation, const Math::Color4& color, const Math::Vec3& normal) override
         {
             NoteInput(pos);
             TextLayoutEngine::LayoutResult result;
@@ -874,7 +889,7 @@ namespace MiniCAD
             const VertexColor entity = ToColor(color);
             if (!block.runColors)
             {
-                EmitLayout(pos, result, rotation, 0.0, [entity](int) { return entity; });
+                EmitLayout(pos, result, rotation, 0.0, normal, [entity](int) { return entity; });
                 return;
             }
             const auto& runs = block.content->runs;
@@ -882,7 +897,7 @@ namespace MiniCAD
             for (size_t r = 0; r < runs.size(); ++r)
                 if (runs[r].colorKind == MTextRun::Color::Rgb) colors[r] = ToColor(runs[r].color);
                 else if (runs[r].colorKind == MTextRun::Color::ByLayer) colors[r] = ToColor(block.layerColor);
-            EmitLayout(pos, result, rotation, 0.0, [&](int r) { return r >= 0 && size_t(r) < colors.size() ? colors[size_t(r)] : entity; });
+            EmitLayout(pos, result, rotation, 0.0, normal, [&](int r) { return r >= 0 && size_t(r) < colors.size() ? colors[size_t(r)] : entity; });
         }
 
         bool MeasureRichMText(const MTextBlock& block, double& width, double& height) override
@@ -897,19 +912,20 @@ namespace MiniCAD
         // 单行文字按对齐点：水平按排版宽度居中 / 右对齐；竖直以字高（大写字母高）为准，
         // “底”取基线下 0.2 × 字高（下伸部）
         void EmitAlignedText(const Math::Point3& pos, const std::string& utf8Text, uint32_t styleId, double height, double rotation,
-                             int hAlign, int vAlign, double widthFactor, const Math::Color4& color) override
+                             int hAlign, int vAlign, double widthFactor, const Math::Color4& color, const Math::Vec3& normal) override
         {
             NoteInput(pos);
             const auto align = hAlign == 1 ? TextLayoutEngine::HAlign::Center : hAlign == 2 ? TextLayoutEngine::HAlign::Right
                                                                                              : TextLayoutEngine::HAlign::Left;
             const double baseline = vAlign == 1 ? 0.2 * height : vAlign == 2 ? -0.5 * height : vAlign == 3 ? -height : 0.0;
-            EmitLaidOutText(pos, utf8Text, styleId, height, rotation, 0.0, align, baseline, widthFactor, color);
+            EmitLaidOutText(pos, utf8Text, styleId, height, rotation, 0.0, align, baseline, widthFactor, color, normal);
         }
 
     private:
         // 排版并输出字形；baseline 为基线相对 pos 的局部 y 偏移（随文字旋转），widthFactor > 0 时代替样式的宽度因子
         void EmitLaidOutText(const Math::Point3& pos, const std::string& utf8Text, uint32_t styleId, double height, double rotation,
-                             double boxWidth, TextLayoutEngine::HAlign align, double baseline, double widthFactor, const Math::Color4& color)
+                             double boxWidth, TextLayoutEngine::HAlign align, double baseline, double widthFactor, const Math::Color4& color,
+                             const Math::Vec3& normal = {0, 0, 1})
         {
             if (utf8Text.empty() || !m_fontResolver) return;
 
@@ -923,7 +939,7 @@ namespace MiniCAD
             const double shear = std::tan(rs.Oblique);     // 倾斜：字形 x 随高度错切
             for (auto& g : result.m_glyphs) g.m_shear = shear;
             const VertexColor c4 = ToColor(color);
-            EmitLayout(pos, result, rotation, baseline, [c4](int) { return c4; });
+            EmitLayout(pos, result, rotation, baseline, normal, [c4](int) { return c4; });
         }
 
         // 多行文字各段的字体与字形变换：格式码的字体经 InlineFontResolver，宽度因子 = 格式码的，或（实体的，没有时样式的）× 相对的 \W
@@ -963,12 +979,14 @@ namespace MiniCAD
 
         // 输出排好的字形与装饰线；baseline 为基线相对 pos 的局部 y 偏移（随文字旋转），colorOf(段下标) 给出颜色
         template <class ColorOf>
-        void EmitLayout(const Math::Point3& pos, const TextLayoutEngine::LayoutResult& result, double rotation, double baseline, ColorOf colorOf)
+        void EmitLayout(const Math::Point3& pos, const TextLayoutEngine::LayoutResult& result, double rotation, double baseline, const Math::Vec3& normal, ColorOf colorOf)
         {
             // 排版坐标的 x 沿基线方向 u，y 沿 v：v 是 u 逆时针转 90°；镜像的块参照里（ToggleTextMirror）取反，字沿基线上下翻转
-            const double ux = std::cos(rotation), uy = std::sin(rotation);
-            const double up = m_textMirror ? -1.0 : 1.0;
-            const double vx = -uy * up, vy = ux * up;
+            const auto basis = Math::BuildOCS(normal);
+            const auto u = Math::PlaneDirection(basis, rotation);
+            const auto v = Math::Cross(basis.Uz, u) * (m_textMirror ? -1.0 : 1.0);
+            // The current glyph instance stream stores only XY basis vectors.
+            const bool useInstances = m_glyphs && Math::IsDefaultExtrusion(normal);
 
             for (const auto& inst : result.m_glyphs)
             {
@@ -978,20 +996,21 @@ namespace MiniCAD
                 {
                     double x = (lp.x * wf + lp.y * shear) * inst.m_scale + inst.m_position.x;
                     double y = lp.y * inst.m_scale + inst.m_position.y + baseline;
-                    return { pos.x + x * ux + y * vx, pos.y + x * uy + y * vy, pos.z };
+                    return pos + u * x + v * y;
                 };
 
                 const Glyph& glyph = *inst.m_glyph;
-                if (m_glyphs)
+                if (useInstances)
                 {
                     // 实例：局部 → 世界的仿射变换（与上面 xform 相同，只是不逐点计算）
                     uint32_t mesh;
                     if (!m_glyphLib->Register(glyph, mesh)) continue;
                     const double s  = inst.m_scale;
                     const double ox = inst.m_position.x, oy = inst.m_position.y + baseline;
-                    PutGlyph({ wf * s * ux, wf * s * uy,
-                               shear * s * ux + s * vx, shear * s * uy + s * vy,
-                               pos.x + ox * ux + oy * vx, pos.y + ox * uy + oy * vy, pos.z, c4, mesh });
+                    const auto origin = pos + u * ox + v * oy;
+                    const auto vertical = u * (shear * s) + v * s;
+                    PutGlyph({ wf * s * u.x, wf * s * u.y, vertical.x, vertical.y,
+                               origin.x, origin.y, origin.z, c4, mesh });
                     continue;
                 }
                 if (glyph.Filled && !glyph.Triangles.empty())
@@ -1018,8 +1037,8 @@ namespace MiniCAD
             {
                 const VertexColor c4 = colorOf(d.m_run);
                 const double y0 = d.m_y + baseline, y1 = y0 + d.m_rise;
-                PutLine({ pos.x + d.m_x0 * ux + y0 * vx, pos.y + d.m_x0 * uy + y0 * vy, pos.z }, c4);
-                PutLine({ pos.x + d.m_x1 * ux + y1 * vx, pos.y + d.m_x1 * uy + y1 * vy, pos.z }, c4);
+                PutLine(pos + u * d.m_x0 + v * y0, c4);
+                PutLine(pos + u * d.m_x1 + v * y1, c4);
             }
         }
 
@@ -1727,6 +1746,7 @@ namespace MiniCAD
         std::vector<Vertex_P3_C4_UV>&  m_textVerts;
         Overlay&                       m_overlay;
         const LayerManager&            m_layerManager;
+        const std::vector<LayerID>*     m_frozenLayers = nullptr;
         const LineTypeTable&           m_lineTypes;
         double                         m_worldPerPixel = 0.0;   // 1 屏幕像素对应的世界长度
         double                         m_viewportHeightPx = 0.0;   // 视口像素高度（$PDSIZE<=0 换算世界尺寸用）

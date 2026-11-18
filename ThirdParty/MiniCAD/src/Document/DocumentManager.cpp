@@ -1,5 +1,6 @@
 #include "DocumentManager.h"
 #include "Document.h"
+#include "Document/ClipboardTransfer.h"
 #include "Core/Log.h"
 #include "MiniI18n/I18n.h"
 #include "Import/CadExchange.h"
@@ -869,6 +870,7 @@ for (auto& doc : m_docs)
 
     void DocumentManager::CopySelected()
     {
+        if (!m_active || GetEditor().GetSelection().empty()) return;
         m_clipboard.clear();
         m_clipboardHasBase = false;   // 普通复制无基点,粘贴回退到包围盒左下角
 
@@ -876,6 +878,13 @@ for (auto& doc : m_docs)
             return;
 
         Scene& scene = m_active->GetScene();
+        m_clipboardDependencies = std::make_shared<Scene>();
+        ClipboardTransfer::RestoreTables(*m_clipboardDependencies, ClipboardTransfer::SaveTables(scene));
+        scene.GetBlockTable().ForEach([&](BlockID id, const BlockEntity& source)
+        {
+            if (source.IsXRef() && !source.GetResolvedXRefPath().empty())
+                m_clipboardDependencies->GetBlockTable().Find(id)->SetXRefPath(source.GetResolvedXRefPath());
+        });
         for (auto id : GetEditor().GetSelection())
         {
             auto* obj = scene.GetEntity(id);
@@ -883,7 +892,9 @@ for (auto& doc : m_docs)
                 continue;
 
             // 克隆快照存入剪贴板;ID 仅占位,粘贴时按目标场景重新分配
-            m_clipboard.push_back(static_cast<Entity*>(obj)->Clone(id));
+            auto copy = static_cast<Entity*>(obj)->Clone(id);
+            if (auto* insert = dynamic_cast<InsertEntity*>(copy.get())) m_clipboardDependencies->ResolveInsert(*insert);
+            m_clipboard.push_back(std::move(copy));
         }
 
         LOG_DEBUG("CopySelected: %zu entities", m_clipboard.size());
@@ -929,11 +940,16 @@ for (auto& doc : m_docs)
     {
         if (!m_active || m_clipboard.empty())
             return;
+        if (!m_active->ActiveLayoutIsPaper() && std::any_of(m_clipboard.begin(), m_clipboard.end(),
+            [](const auto& entity) { return entity->template IsKindOf<ViewportEntity>(); }))
+        { GetEditor().GetCmdLine().Echo("剪贴板包含布局视口，请切换到图纸布局后粘贴。"); return; }
 
         // 启动交互式粘贴:剪贴板实体跟随光标预览,左键指定插入点(类 AutoCAD)
         // 标脏由 CommandStack 的 OnMutate 回调统一处理
         GetEditor().StartPasteTool(&m_clipboard, nullptr,
-                                m_clipboardHasBase ? &m_clipboardBase : nullptr);
+                                m_clipboardHasBase ? &m_clipboardBase : nullptr,
+            [dependencies = m_clipboardDependencies](std::vector<std::unique_ptr<Object>> objects)
+            { return std::make_unique<ClipboardTransfer::PasteCommand>(dependencies, std::move(objects)); });
     }
 
     std::string DocumentManager::GenerateUniqueName()

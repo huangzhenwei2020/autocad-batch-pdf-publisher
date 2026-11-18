@@ -2,6 +2,7 @@
 #include "Entity.hpp"
 #include "Core/Math/Point3.hpp"
 #include <algorithm>
+#include <array>
 #include <string>
 #include <cstdint>
 #include <cmath>
@@ -44,7 +45,7 @@ namespace MiniCAD
         void SetAlignment(int h, int v)         { m_hAlign = std::clamp(h, 0, 2); m_vAlign = std::clamp(v, 0, 3); }
         void SetWidthFactor(double w)           { m_widthFactor = w > 0.0 ? w : 0.0; }
 
-        AABB GetBoundingBox() const override
+        std::array<Math::Point3, 4> GetTextFrame() const
         {
             // 近似宽度：字高 × 0.6 × 字符数（UTF-8 按字节估算字符数不准，用字节数 / 1.5）
             float approxChars = static_cast<float>(m_text.size()) / 1.5f;
@@ -54,41 +55,37 @@ namespace MiniCAD
 
             // 文字矩形(局部,未旋转):x∈[0,w],y∈[-0.2h,h](含下伸部余量);
             // 绕插入点旋转四角后取轴对齐包围盒,任意角度均正确。
-            const double c = std::cos(static_cast<double>(m_rotation));
-            const double s = std::sin(static_cast<double>(m_rotation));
+            const auto u = Math::PlaneDirection(GetOCS(), m_rotation);
+            const auto v = Math::Cross(GetOCS().Uz, u);
             // 对齐点在文字矩形中的位置（与 EmitAlignedText 一致）
             const double dx = m_hAlign == 1 ? -0.5 * approxW : m_hAlign == 2 ? -static_cast<double>(approxW) : 0.0;
             const double dy = m_vAlign == 1 ? 0.2 * m_height : m_vAlign == 2 ? -0.5 * m_height : m_vAlign == 3 ? -static_cast<double>(m_height) : 0.0;
             const double xs[2] = { dx, dx + static_cast<double>(approxW) };
             const double ys[2] = { dy - 0.2 * m_height, dy + static_cast<double>(m_height) };
 
-            double minX =  1e300, minY =  1e300;
-            double maxX = -1e300, maxY = -1e300;
-            for (double x : xs)
-                for (double y : ys)
-                {
-                    const double rx = x * c - y * s;
-                    const double ry = x * s + y * c;
-                    minX = std::min(minX, rx); maxX = std::max(maxX, rx);
-                    minY = std::min(minY, ry); maxY = std::max(maxY, ry);
-                }
+            const auto corner = [&](double x, double y) { return m_position + u * x + v * y; };
+            return {corner(xs[0], ys[1]), corner(xs[1], ys[1]),
+                    corner(xs[1], ys[0]), corner(xs[0], ys[0])};
+        }
 
-            return AABB(
-                { m_position.x + minX, m_position.y + minY, m_position.z },
-                { m_position.x + maxX, m_position.y + maxY, m_position.z }
-            );
+        AABB GetBoundingBox() const override
+        {
+            const auto frame = GetTextFrame();
+            AABB bounds(frame[0], frame[0]);
+            for (const auto& corner : frame)
+                bounds.Expand(corner);
+            return bounds;
         }
 
         void Draw(IDrawSink& sink, bool isSelected, bool isHovered) const override
         {
-            const auto& attr = GetAttr();
             const Math::Color4& col = isSelected ? IDrawSink::kSelectionColor
                                     : isHovered  ? IDrawSink::kHoverColor
                                                  : ResolveDrawColor(sink);
             if (m_hAlign == 0 && m_vAlign == 0 && m_widthFactor <= 0.0)
-                sink.EmitMText(m_position, m_text, m_styleId, m_height, m_rotation, 0.0, col);
+                sink.EmitMText(m_position, m_text, m_styleId, m_height, m_rotation, 0.0, col, GetExtrusion());
             else
-                sink.EmitAlignedText(m_position, m_text, m_styleId, m_height, m_rotation, m_hAlign, m_vAlign, m_widthFactor, col);
+                sink.EmitAlignedText(m_position, m_text, m_styleId, m_height, m_rotation, m_hAlign, m_vAlign, m_widthFactor, col, GetExtrusion());
         }
 
         std::unique_ptr<Entity> Clone(ObjectID newId) const override

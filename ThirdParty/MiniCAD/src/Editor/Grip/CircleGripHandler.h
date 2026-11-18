@@ -41,7 +41,6 @@ namespace MiniCAD
         {
             auto* circle = static_cast<CircleEntity*>(entity);
             const auto& C = circle->GetCircle();
-            const double r = C.Radius;
 
             // 圆心夹点
             outGrips.push_back({ entity->GetID(), Grip::Type::Center,   C.Center, 0 });
@@ -51,10 +50,10 @@ namespace MiniCAD
             //   1 →  90° → ( 0, +r)
             //   2 → 180° → (-r,  0)
             //   3 → 270° → ( 0, -r)
-            outGrips.push_back({ entity->GetID(), Grip::Type::Quadrant, { C.Center.x + r, C.Center.y,     C.Center.z }, 0 });
-            outGrips.push_back({ entity->GetID(), Grip::Type::Quadrant, { C.Center.x,     C.Center.y + r, C.Center.z }, 1 });
-            outGrips.push_back({ entity->GetID(), Grip::Type::Quadrant, { C.Center.x - r, C.Center.y,     C.Center.z }, 2 });
-            outGrips.push_back({ entity->GetID(), Grip::Type::Quadrant, { C.Center.x,     C.Center.y - r, C.Center.z }, 3 });
+            outGrips.push_back({ entity->GetID(), Grip::Type::Quadrant, C.QuadrantE(), 0 });
+            outGrips.push_back({ entity->GetID(), Grip::Type::Quadrant, C.QuadrantN(), 1 });
+            outGrips.push_back({ entity->GetID(), Grip::Type::Quadrant, C.QuadrantW(), 2 });
+            outGrips.push_back({ entity->GetID(), Grip::Type::Quadrant, C.QuadrantS(), 3 });
         }
 
         // ─────────────────────────────────────────
@@ -67,7 +66,7 @@ namespace MiniCAD
 
             auto state      = std::make_unique<CircleDragState>();
             state->EntityId = entity->GetID();
-            state->Base     = { C.Center, C.Radius };
+            state->Base     = C;
 
             return state;
         }
@@ -104,9 +103,7 @@ namespace MiniCAD
             // ─────────────────────────────────────
             case Grip::Type::Quadrant:
             {
-                double dx = worldPos.x - state->Base.Center.x;
-                double dy = worldPos.y - state->Base.Center.y;
-                double r  = std::sqrt(dx * dx + dy * dy);
+                double r = state->Base.ProjectedRadius(worldPos);
 
                 out.Radius = (r > 1e-6) ? r : 1e-6;   // 防止半径退化为 0
                 break;
@@ -117,7 +114,7 @@ namespace MiniCAD
             }
 
             // 更新 Entity 几何
-            circle->SetCircle({ out.Center, out.Radius });
+            circle->SetCircle(out);
 
             // 同步 m_grips 中属于该 Entity 的夹点坐标
             SyncGrips(entity->GetID(), out, grips);
@@ -133,7 +130,7 @@ namespace MiniCAD
             const Math::Color4 kFixed = { 1.0,  0.85, 0.0,  0.90 };   // 金黄（固定端点）
              
             // ── 1. Ghost：原始线段位置 ────────────────────────────────
-            overlay.AddCircle(state->Base.Center, state->Base.Radius, kGhost);
+            overlay.AddCircle(state->Base, kGhost);
             overlay.AddLine  (state->Base.Center, circle->GetCircle().Center, kFixed);  // 从圆心到光标的辅助线，显示拖动方向 
         }
 
@@ -150,7 +147,7 @@ namespace MiniCAD
                 return false;
             
             const auto& C = circle->GetCircle();
-            Circle after  = { C.Center, C.Radius };
+            Circle after = C;
 
             // 位置和半径都未变，不产生命令 
             auto& b = state->Base;
@@ -176,7 +173,7 @@ namespace MiniCAD
             auto* circle = static_cast<CircleEntity*>(entity);
             auto* state  = static_cast<CircleDragState*>(baseState);
 
-            circle->SetCircle({ state->Base.Center, state->Base.Radius });
+            circle->SetCircle(state->Base);
         }
 
     private:
@@ -192,7 +189,6 @@ namespace MiniCAD
         // ─────────────────────────────────────────
         static void SyncGrips(Object::ObjectID ownerId,    const Circle& snap,  std::vector<Grip>& grips)
         {
-            const double r  = snap.Radius;
             const auto&  c  = snap.Center;
 
             for (auto& grip : grips)
@@ -206,14 +202,7 @@ namespace MiniCAD
                     break;
 
                 case Grip::Type::Quadrant:
-                    switch (grip.SubIndex)
-                    {
-                    case 0: grip.WorldPos = { c.x + r, c.y,     c.z }; break;
-                    case 1: grip.WorldPos = { c.x,     c.y + r, c.z }; break;
-                    case 2: grip.WorldPos = { c.x - r, c.y,     c.z }; break;
-                    case 3: grip.WorldPos = { c.x,     c.y - r, c.z }; break;
-                    default: break;
-                    }
+                    grip.WorldPos = snap.PointAt(grip.SubIndex * Math::PI * 0.5);
                     break;
 
                 default:

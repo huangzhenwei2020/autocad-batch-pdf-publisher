@@ -119,6 +119,7 @@ namespace MiniCAD
             Object* obj = m_ctx->scene.GetEntity(id);
             if (!obj || !obj->IsKindOf<Entity>()) return nullptr;
             Entity* ent = static_cast<Entity*>(obj);
+            if (!ent->HasDefaultExtrusion()) return nullptr;
             const bool ok = ent->IsKindOf<LineEntity>()  || ent->IsKindOf<RayEntity>()
                          || ent->IsKindOf<XLineEntity>() || ent->IsKindOf<CircleEntity>()
                          || ent->IsKindOf<ArcEntity>()

@@ -2,6 +2,7 @@
 #include "../Math/Point3.hpp"
 #include "../Math/Constants.hpp"
 #include "AABB.hpp"
+#include "../Math/OCS.hpp"
 #include <cmath>
 #include <algorithm>
 #include <optional>
@@ -14,17 +15,19 @@ namespace MiniCAD
         double       Radius     = 0.0;
         double       StartAngle = 0.0;  // 弧度，逆时针，从 +X 轴开始
         double       EndAngle   = 0.0;  // 弧度，逆时针
+        Math::Vec3 Normal{0,0,1};
 
         // ----------------------------------------------------------------
         // 构造
         // ----------------------------------------------------------------
         Arc() = default;
 
-        constexpr Arc(const Math::Point3& center, double radius, double startAngle, double endAngle)
+        constexpr Arc(const Math::Point3& center, double radius, double startAngle, double endAngle, const Math::Vec3& normal = {0,0,1})
             : Center(center)
             , Radius(radius)
             , StartAngle(startAngle)
             , EndAngle(endAngle)
+            , Normal(normal)
         {
         }
 
@@ -99,12 +102,15 @@ namespace MiniCAD
 
         Math::Point3 PointAt(double angle) const
         {
-            return
-            {
-                Center.x + std::cos(angle) * Radius,
-                Center.y + std::sin(angle) * Radius,
-                Center.z
-            };
+            const auto frame = Math::BuildOCS(Normal);
+            return Center + frame.Ux * (std::cos(angle) * Radius) + frame.Uy * (std::sin(angle) * Radius);
+        }
+
+        double AngleAt(const Math::Point3& point) const
+        {
+            const auto delta = point - Center;
+            const auto local = Math::WcsToOcs(Math::BuildOCS(Normal), {delta.x,delta.y,delta.z});
+            return std::atan2(local.y, local.x);
         }
 
         Math::Point3 StartPoint() const { return PointAt(StartAngle); }
@@ -125,7 +131,7 @@ namespace MiniCAD
 
         Math::Point3 ClosestPoint(const Math::Point3& p) const
         {
-            double angle = std::atan2(p.y - Center.y, p.x - Center.x);
+            double angle = AngleAt(p);
 
             if (ContainsAngle(angle))
                 return PointAt(angle);
@@ -133,44 +139,32 @@ namespace MiniCAD
             // 投影角在弧外，返回最近端点
             Math::Point3 s = StartPoint();
             Math::Point3 e = EndPoint();
-            double ds = (p.x - s.x) * (p.x - s.x) + (p.y - s.y) * (p.y - s.y);
-            double de = (p.x - e.x) * (p.x - e.x) + (p.y - e.y) * (p.y - e.y);
+            const auto startDelta = p - s, endDelta = p - e;
+            double ds = startDelta.LengthSq();
+            double de = endDelta.LengthSq();
             return ds <= de ? s : e;
         }
 
         double DistanceToPoint(const Math::Point3& p) const
         {
             Math::Point3 cp = ClosestPoint(p);
-            double dx = p.x - cp.x, dy = p.y - cp.y;
-            return std::sqrt(dx * dx + dy * dy);
+            const auto delta = p - cp;
+            return std::hypot(delta.x, delta.y, delta.z);
         }
 
-        // 轴对齐包围盒（含四个象限极值点检查）
+        // 世界坐标包围盒，检查各坐标分量沿圆弧的极值。
         AABB GetBounds() const
         {
-            Math::Point3 s = StartPoint();
-            Math::Point3 e = EndPoint();
-
-            double minX = std::min(s.x, e.x), maxX = std::max(s.x, e.x);
-            double minY = std::min(s.y, e.y), maxY = std::max(s.y, e.y);
-
-            constexpr double kQuadAngles[4] =
-            {
-                0.0,
-                Math::PI * 0.5,
-                Math::PI,
-                Math::PI * 1.5
-            };
-            for (double qa : kQuadAngles)
-            {
-                if (ContainsAngle(qa))
-                {
-                    Math::Point3 qp = PointAt(qa);
-                    minX = std::min(minX, qp.x);  maxX = std::max(maxX, qp.x);
-                    minY = std::min(minY, qp.y);  maxY = std::max(maxY, qp.y);
-                }
-            }
-            return { { minX, minY, Center.z }, { maxX, maxY, Center.z } };
+            AABB bounds;
+            bounds.Expand(StartPoint());
+            bounds.Expand(EndPoint());
+            const auto frame = Math::BuildOCS(Normal);
+            const double extrema[] = {std::atan2(frame.Uy.x, frame.Ux.x),
+                std::atan2(frame.Uy.y, frame.Ux.y), std::atan2(frame.Uy.z, frame.Ux.z)};
+            for (double angle : extrema)
+                for (double candidate : {angle, angle + Math::PI})
+                    if (ContainsAngle(candidate)) bounds.Expand(PointAt(candidate));
+            return bounds;
         }
     };
 }

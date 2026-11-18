@@ -41,6 +41,7 @@ namespace MiniCAD
             XLine,       // XLineEntity     — 基点 + 方向向量
             Tolerance,   // ToleranceEntity — 插入点 + 方向向量
             Transform,   // Solid3DEntity   — 局部 → 世界的变换矩阵
+            Viewport,
         } Kind;
 
         // 仅使用与 Kind 对应的那对字段，其余字段未定义但不读取
@@ -54,7 +55,7 @@ namespace MiniCAD
         Spline    BeforeSpline,   AfterSpline;
 
         // Text / MText：位置 + 旋转角
-        struct TextSnap { Math::Point3 pos = {}; double rotation = 0.0; };
+        struct TextSnap { Math::Point3 pos = {}; double rotation = 0.0; Math::Vec3 normal{0, 0, 1}; };
         TextSnap BeforeText,  AfterText;
         TextSnap BeforeMText, AfterMText;
 
@@ -79,6 +80,7 @@ namespace MiniCAD
 
         // Hatch：完整边界环结构
         std::vector<HatchLoop> BeforeHatch, AfterHatch;
+        Math::Vec3 BeforeHatchNormal{0,0,1}, AfterHatchNormal{0,0,1};
 
         // Ray / XLine / Tolerance：原点/插入点 + 方向向量（旋转/镜像时方向也变）
         struct PosVecSnap { Math::Point3 pos = {}; Math::Vec3 dir = {}; };

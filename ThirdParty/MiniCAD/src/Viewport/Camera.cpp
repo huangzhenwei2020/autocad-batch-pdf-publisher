@@ -29,6 +29,17 @@ namespace MiniCAD
         }
     }
 
+    void CameraState::AlignToView(const Math::Vec3& right, const Math::Vec3& up)
+    {
+        const auto eye = Cross(right, up);
+        const double az = std::atan2(eye.y, eye.x);
+        Azimuth = az / kDeg;
+        Elevation = std::atan2(eye.z, std::hypot(eye.x, eye.y)) / kDeg;
+        const Math::Vec3 baseRight{-std::sin(az), std::cos(az), 0};
+        const auto baseUp = Cross(eye, baseRight);
+        Roll = std::atan2(Dot(right, baseUp), Dot(right, baseRight)) / kDeg;
+    }
+
     Camera::Camera(double width, double height) { Resize(width, height); }
 
     // 去掉留边后的区域：scaleX / scaleY = 整个屏幕 / 区域（≥ 1），dx / dy = 区域中心相对屏幕中心的像素偏移（向右、向下为正）。
@@ -131,27 +142,14 @@ namespace MiniCAD
         if (std::abs(delta) < 1e-6)
             return;
 
-        // 1. 缩放前：记录鼠标对应的世界坐标
-        Math::Point3 worldBefore = ScreenToWorld(mouseX, mouseY);
-
-        // 2. 更新缩放
+        const double before = GetWorldPerPixel();
         constexpr double zoomFactor = 1.1;
         m_zoom /= std::pow(zoomFactor, std::clamp(delta, -10.0, 10.0));
-
         m_zoom = std::clamp(m_zoom, kMinZoom, kMaxZoom);
-
-        // 3. zoom 变了，先刷新矩阵
-        UpdateViewProj();
-
-        // 4. 缩放后：同一屏幕点对应的新世界坐标
-        Math::Point3 worldAfter = ScreenToWorld(mouseX, mouseY);
-
-        // 5. 平移 target，使鼠标下的世界点保持不动（正交投影下整体平移不改变屏幕上的相对位置，三维视图同样成立）
-        m_target.x += worldBefore.x - worldAfter.x;
-        m_target.y += worldBefore.y - worldAfter.y;
-        m_target.z += worldBefore.z - worldAfter.z;
-
-        // 6. target 变了，再刷新一次
+        // Move the target within its view plane so the world point under the cursor stays fixed.
+        const double change = before - GetWorldPerPixel();
+        m_target += m_right * ((mouseX - m_screenWidth * .5) * change)
+                  + m_up * ((m_screenHeight * .5 - mouseY) * change);
         UpdateViewProj();
     }
 
@@ -161,6 +159,7 @@ namespace MiniCAD
     {
         m_azimuth   = WrapDeg(azimuthDeg);
         m_elevation = std::clamp(elevationDeg, -90.0, 90.0);
+        m_roll      = 0.0;
         UpdateBasis();
         UpdateViewProj();
     }
@@ -186,12 +185,15 @@ namespace MiniCAD
     void Camera::Orbit(double dxPixels, double dyPixels)
     {
         // 像抓住模型转动：向右拖模型向右转（眼睛向左绕），向下拖看到更多顶面
-        SetView(m_azimuth - dxPixels * kOrbitDegPerPixel, m_elevation + dyPixels * kOrbitDegPerPixel);
+        auto state = GetState();
+        state.Azimuth -= dxPixels * kOrbitDegPerPixel;
+        state.Elevation += dyPixels * kOrbitDegPerPixel;
+        SetState(state);
     }
 
     bool Camera::IsPlanView() const
     {
-        return m_elevation >= 90.0 - 1e-9 && std::abs(WrapDeg(m_azimuth + 90.0)) < 1e-9;
+        return m_elevation >= 90.0 - 1e-9 && std::abs(WrapDeg(m_azimuth + m_roll + 90.0)) < 1e-9;
     }
 
     void Camera::UpdateBasis()
@@ -201,6 +203,13 @@ namespace MiniCAD
         m_right   = { -std::sin(az), std::cos(az), 0.0 };
         m_up      = Cross(eye, m_right);
         m_forward = -eye;
+        if (m_roll != 0.0)
+        {
+            const double c = std::cos(m_roll * kDeg), s = std::sin(m_roll * kDeg);
+            const auto right = m_right;
+            m_right = right * c + m_up * s;
+            m_up = m_up * c - right * s;
+        }
         if (IsPlanView())   // 精确值，避免三角函数的舍入
         {
             m_right   = { 1, 0, 0 };
@@ -244,7 +253,7 @@ namespace MiniCAD
 
     CameraState Camera::GetState() const
     {
-        return { m_target, m_zoom, m_azimuth, m_elevation };
+        return { m_target, m_zoom, m_azimuth, m_elevation, m_roll };
     }
 
     void Camera::SetState(const CameraState& s)
@@ -253,6 +262,7 @@ namespace MiniCAD
         m_zoom = s.Zoom;
         m_azimuth   = WrapDeg(s.Azimuth);
         m_elevation = std::clamp(s.Elevation, -90.0, 90.0);
+        m_roll      = WrapDeg(s.Roll);
         UpdateBasis();
         UpdateViewProj();
     }
@@ -293,6 +303,18 @@ namespace MiniCAD
         double sx = (clip.x * 0.5 + 0.5) * m_screenWidth;
         double sy = (-clip.y * 0.5 + 0.5) * m_screenHeight;
         return { sx, sy };
+    }
+
+    bool Camera::ScreenToPlane(double px, double py, const Math::WorkingPlane& plane, Math::Point3& result) const
+    {
+        if (!(m_screenWidth > 0 && m_screenHeight > 0)) return false;
+        const auto point = m_target + m_right * ((px / m_screenWidth - .5) * m_zoom * m_aspect) +
+            m_up * ((.5 - py / m_screenHeight) * m_zoom);
+        const auto normal = plane.Normal();
+        const double denominator = Dot(m_forward, normal);
+        if (std::abs(denominator) < 1e-9) return false;
+        result = point + m_forward * (Math::WorkingPlane::Dot(plane.Origin - point, normal) / denominator);
+        return std::isfinite(result.x) && std::isfinite(result.y) && std::isfinite(result.z);
     }
 
     Math::Point3 Camera::GetCameraPos() const

@@ -16,6 +16,8 @@ namespace Wanluo.StandaloneWorkbench
     {
         internal static async Task RunAsync(MainWindow window, CadWorkspace cad, string root, Action<Window, string> capture)
         {
+            window.WindowState = WindowState.Normal;
+            await LayoutAsync(window);
             var viewport = (CadViewport)cad.FindName("Viewport");
             var ribbon = (TabControl)cad.FindName("EditTools");
             var baseline = viewport.ActualWidth;
@@ -31,7 +33,7 @@ namespace Wanluo.StandaloneWorkbench
                     foreach (var label in Descendants<TextBlock>(button))
                         Check(label.DesiredSize.Width <= button.ActualWidth + 1, "Ribbon label is clipped " + button.Label);
                 }
-                if (Equals(tab.Header, "绘图") || Equals(tab.Header, "修改") || Equals(tab.Header, "标注") || Equals(tab.Header, "插入"))
+                if (Equals(tab.Header, "绘图") || Equals(tab.Header, "修改") || Equals(tab.Header, "标注") || Equals(tab.Header, "插入") || Equals(tab.Header, "视图"))
                     capture(window, Path.Combine(root, "cad-tools-" + tab.Header + ".png"));
             }
             ribbon.SelectedIndex = 0; await LayoutAsync(window);
@@ -41,7 +43,7 @@ namespace Wanluo.StandaloneWorkbench
             var buttonPoint = maximize.PointToScreen(new Point(maximize.ActualWidth / 2, maximize.ActualHeight / 2));
             Check(SendMessage(nativeWindow, 0x0084, IntPtr.Zero, new IntPtr(((int)buttonPoint.Y << 16) | ((int)buttonPoint.X & 0xffff))).ToInt32() == 1, "Title-bar controls are not mouse interactive");
             Click(maximize); await LayoutAsync(window);
-            Check(window.WindowState == WindowState.Maximized, "Maximize caption button failed");
+            Check(window.WindowState == WindowState.Maximized, $"Maximize caption button failed (state={window.WindowState}, enabled={window.IsEnabled}, visible={window.IsVisible}, resize={window.ResizeMode}, button={maximize.IsEnabled})");
             Click(maximize); await LayoutAsync(window);
             Check(window.WindowState == WindowState.Normal, "Restore caption button failed");
             var projectToggle = Descendants<CadIconButton>(window).First(item => Equals(item.ToolTip, "显示／收起项目浏览器"));
@@ -108,6 +110,9 @@ namespace Wanluo.StandaloneWorkbench
                 var status = ((FrameworkElement)cad.FindName("StatusDock")).TransformToAncestor(window).TransformBounds(new Rect(((FrameworkElement)cad.FindName("StatusDock")).RenderSize));
                 Check(Math.Abs(canvas.Left - command.Left) < 2 && Math.Abs(canvas.Right - command.Right) < 2, "Command and canvas edges differ");
                 Check(Math.Abs(canvas.Left - status.Left) < 2 && Math.Abs(canvas.Right - status.Right) < 2, "Status and canvas edges differ");
+                var planeButton = (FrameworkElement)cad.FindName("WorkingPlaneButton");
+                var planeBounds = planeButton.TransformToAncestor(window).TransformBounds(new Rect(planeButton.RenderSize));
+                Check(planeBounds.Top >= status.Top - .5 && planeBounds.Bottom <= status.Bottom + .5, "UCS status button is clipped");
                 var content = (FrameworkElement)window.Content;
                 var ratio = canvas.Width * canvas.Height / (content.ActualWidth * content.ActualHeight);
                 Check(ratio > (size.Width == 1000 ? .59 : .68), "Drawing area ratio below the CAD layout target");
@@ -131,14 +136,9 @@ namespace Wanluo.StandaloneWorkbench
         }
         private static void Shortcut(CadViewport viewport, int key, bool control)
         {
-            var previous = new byte[256]; GetKeyboardState(previous);
-            var keys = new byte[256]; if (control) keys[0x11] = 0x80;
-            try { SetKeyboardState(keys); SendMessage(viewport.Handle, 0x0100, new IntPtr(key), new IntPtr(1)); }
-            finally { SetKeyboardState(previous); }
+            CadTestKeyboard.WithModifiers(() => SendMessage(viewport.Handle, 0x0100, new IntPtr(key), new IntPtr(1)), control: control);
         }
         private static void Check(bool condition, string message) { if (!condition) throw new InvalidOperationException(message); }
-        [DllImport("user32.dll")] private static extern bool GetKeyboardState(byte[] keys);
-        [DllImport("user32.dll")] private static extern bool SetKeyboardState(byte[] keys);
         [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wparam, IntPtr lparam);
     }
 }

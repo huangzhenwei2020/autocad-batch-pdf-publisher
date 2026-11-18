@@ -10,6 +10,7 @@ namespace MiniCAD
     class MTextTool : public ITool
     {
     public:
+        bool SupportsWorkingPlane() const override { return true; }
         MTextTool()
         {
             LOG_DEBUG("[MTextTool] click insertion point | ESC exits");
@@ -25,12 +26,10 @@ namespace MiniCAD
 
             if (e.IsLeftClick())
             {
-                Math::Point3 pt = e.HasSnap
-                    ? e.SnapWorld
-                    : ctx.viewport.GetCamera().ScreenToWorld(e.MouseX, e.MouseY);
+                if (!e.HasSnap) return true;
 
                 if (OnInsertPointPicked)
-                    OnInsertPointPicked(pt);
+                    OnInsertPointPicked(e.SnapWorld);
 
                 if (OnFinished) OnFinished();
                 return true;

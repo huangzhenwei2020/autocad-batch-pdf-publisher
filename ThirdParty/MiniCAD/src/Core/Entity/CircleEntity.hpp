@@ -17,7 +17,9 @@ namespace MiniCAD
         {
         }
 
-        void          SetCircle(const Circle& circle) { m_circle = circle; }
+        void SetAttr(const EntityAttr& attr) override { Entity::SetAttr(attr); m_circle.Normal = attr.Extrusion; }
+        void SetExtrusion(const Math::Vec3& normal) override { Entity::SetExtrusion(normal); m_circle.Normal = normal; }
+        void SetCircle(const Circle& circle) { m_circle = circle; Entity::SetExtrusion(circle.Normal); }
         const Circle& GetCircle() const { return m_circle; }
 
         // 便捷修改器
@@ -47,13 +49,12 @@ namespace MiniCAD
             // 默认 64 段；深度放大时 sink 要求在视图附近加密（见 SampleCurve）
             constexpr int kSegments = 64;
 
-            const auto& center = m_circle.Center;
             const double r    = m_circle.Radius;
 
             std::vector<Math::Point3> pts;
             pts.reserve(kSegments + 1);
             SampleCurve(sink, 0.0, Math::TwoPI, kSegments, r,
-                        [&](double a) { return Math::Point3{ center.x + r * std::cos(a), center.y + r * std::sin(a), center.z }; },
+                        [&](double a) { return m_circle.PointAt(a); },
                         [&](const Math::Point3& p0, const Math::Point3& p1)
                         {
                             if (pts.empty()) pts.push_back(p0);

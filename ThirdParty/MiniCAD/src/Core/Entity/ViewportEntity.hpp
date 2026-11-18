@@ -2,9 +2,11 @@
 #include "Entity.hpp"
 #include "Core/GeomKernel/AABB.hpp"
 #include "Core/Math/Point3.hpp"
+#include "Core/Math/Mat4.hpp"
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <limits>
 #include <vector>
 
 namespace MiniCAD
@@ -35,6 +37,16 @@ namespace MiniCAD
     class ViewportEntity : public Entity
     {
     public:
+        struct CameraOptics
+        {
+            double Lens = 50.0;
+            double Front = 0.0;
+            double Back = 0.0;
+            bool FrontEnabled = false;
+            bool BackEnabled = false;
+            bool FrontAtEye = true;
+        };
+
         ViewportEntity(ObjectID id,
                        const Math::Point3& center,
                        double width,
@@ -107,6 +119,86 @@ namespace MiniCAD
         int GetViewportId() const { return m_id; }
         void SetViewportId(int id) { m_id = id; }
 
+        bool IsLocked() const { return m_locked; }
+        void SetLocked(bool locked) { m_locked = locked; }
+        bool IsPlanView() const { return m_planView; }
+        void SetPlanView(bool plan) { m_planView = plan; }
+        bool HasSpatialView() const { return m_spatialView; }
+        bool SupportsModelEdit(bool inlineEdit) const
+        {
+            return ShowsModel() && !m_perspective && (m_planView || m_spatialView) &&
+                (!inlineEdit || ClipKnown());
+        }
+        bool IsPerspective() const { return m_perspective; }
+        void SetPerspective(bool perspective) { m_perspective = perspective; }
+        const CameraOptics& GetCameraOptics() const { return m_optics; }
+        void SetCameraOptics(const CameraOptics& optics) { m_optics = optics; }
+        const Math::Point3& GetViewDirection() const { return m_viewDirection; }
+        const Math::Point3& GetViewTarget() const { return m_viewTarget; }
+        std::pair<Math::Vec3, Math::Vec3> ViewAxes() const
+        {
+            const auto& d = m_viewDirection;
+            const double length = std::hypot(d.x, d.y, d.z);
+            const double x = d.x / length, y = d.y / length, z = d.z / length;
+            double ux = -y, uy = x, uz = 0;
+            // AutoCAD's arbitrary axis algorithm uses a square polar cap.
+            if (std::abs(x) < 1.0 / 64 && std::abs(y) < 1.0 / 64)
+            {
+                ux = z;
+                uy = 0;
+                uz = -x;
+            }
+            const double size = std::hypot(ux, uy, uz);
+            ux /= size;
+            uy /= size;
+            uz /= size;
+            const double vx = y * uz - z * uy;
+            const double vy = z * ux - x * uz;
+            const double vz = x * uy - y * ux;
+            const double c = std::cos(m_twist), s = std::sin(m_twist);
+            return {{c * ux - s * vx, c * uy - s * vy, c * uz - s * vz},
+                    {s * ux + c * vx, s * uy + c * vy, s * uz + c * vz}};
+        }
+        void SetSpatialView(const Math::Point3& direction, const Math::Point3& target, const Math::Point3& dcs)
+        {
+            const double length = std::hypot(direction.x, direction.y, direction.z);
+            if (!(length > 1e-12) || !std::isfinite(length)) return;
+            m_viewDirection = direction;
+            m_viewTarget = target;
+            m_spatialView = true;
+            const auto [right, up] = ViewAxes();
+            m_viewCenter = {target.x + right.x * dcs.x + up.x * dcs.y,
+                            target.y + right.y * dcs.x + up.y * dcs.y,
+                            target.z + right.z * dcs.x + up.z * dcs.y};
+        }
+        Math::Point3 SpatialViewCenterDcs() const
+        {
+            const auto [right, up] = ViewAxes();
+            const auto delta = m_viewCenter - m_viewTarget;
+            return {delta.x * right.x + delta.y * right.y + delta.z * right.z,
+                    delta.x * up.x + delta.y * up.y + delta.z * up.z, 0};
+        }
+        Math::Mat4 ModelToPaperMatrix() const
+        {
+            if (!m_spatialView)
+                return Math::Mat4::Translation({-m_viewCenter.x,-m_viewCenter.y,0}) *
+                    Math::Mat4::Scale({ModelToPaperScale(),ModelToPaperScale(),1}) * Math::Mat4::RotationZ(m_twist) *
+                    Math::Mat4::Translation({m_center.x,m_center.y,0});
+            const auto [right, up] = ViewAxes();
+            const double scale = ModelToPaperScale();
+            auto matrix = Math::Mat4::Identity();
+            matrix.m[0] = right.x * scale;
+            matrix.m[4] = right.y * scale;
+            matrix.m[8] = right.z * scale;
+            matrix.m[1] = up.x * scale;
+            matrix.m[5] = up.y * scale;
+            matrix.m[9] = up.z * scale;
+            matrix.m[2] = matrix.m[6] = matrix.m[10] = 0;
+            matrix.m[12] = m_center.x - scale * (right.x * m_viewCenter.x + right.y * m_viewCenter.y + right.z * m_viewCenter.z);
+            matrix.m[13] = m_center.y - scale * (up.x * m_viewCenter.x + up.y * m_viewCenter.y + up.z * m_viewCenter.z);
+            return matrix;
+        }
+
         // ── 本视口里冻结的图层（组码 331）──────────────────────────────
         //
         // AutoCAD 的 VPLAYER：同一个图层可以在这个视口里冻结、在别的视口里显示，
@@ -140,6 +232,8 @@ namespace MiniCAD
         {
             if (!(m_width > 0.0) || !(m_height > 0.0) || !(m_viewHeight > 0.0))
                 return false;
+            if (m_id < 0) return false;
+            if (m_id > 1) return true;
 
             constexpr double kEps = 1.0e-6;
             const bool looksLikePaper =
@@ -173,6 +267,11 @@ namespace MiniCAD
         // 视口就差在这里。
         AABB ModelVisibleBox() const
         {
+            if (m_spatialView || m_perspective)
+            {
+                const double extent=std::numeric_limits<double>::max()/4;
+                return {{-extent,-extent,-extent},{extent,extent,extent}};
+            }
             const double hh = m_viewHeight * 0.5;
             const double aspect = (m_height > 0.0) ? (m_width / m_height) : 1.0;
             const double hw = hh * aspect;
@@ -208,6 +307,7 @@ namespace MiniCAD
         //   会让内容整体转错约 90°（实测 5 个 Twist=95.69° 视口）。
         Math::Point3 ModelToPaper(const Math::Point3& p) const
         {
+            if (m_spatialView) return ModelToPaperMatrix()*p;
             const double s = ModelToPaperScale();
             double dx = p.x - m_viewCenter.x;
             double dy = p.y - m_viewCenter.y;
@@ -225,6 +325,31 @@ namespace MiniCAD
         }
 
         // 纸张空间下的矩形（用于裁剪与包围盒）。
+        Math::Point3 PaperToModel(const Math::Point3& point) const
+        {
+            if (m_spatialView)
+                return m_viewCenter + PaperVectorToModel(point.x - m_center.x, point.y - m_center.y);
+            const double scale = ModelToPaperScale();
+            const double x = (point.x - m_center.x) / scale;
+            const double y = (point.y - m_center.y) / scale;
+            const double c = std::cos(m_twist), sn = std::sin(m_twist);
+            return {m_viewCenter.x + x*c + y*sn, m_viewCenter.y - x*sn + y*c, 0};
+        }
+
+        Math::Vec3 PaperVectorToModel(double x, double y) const
+        {
+            const double scale = ModelToPaperScale();
+            if (m_spatialView)
+            {
+                const auto [right, up] = ViewAxes();
+                return {(right.x * x + up.x * y) / scale,
+                        (right.y * x + up.y * y) / scale,
+                        (right.z * x + up.z * y) / scale};
+            }
+            const double c = std::cos(m_twist), s = std::sin(m_twist);
+            return {(x * c + y * s) / scale, (-x * s + y * c) / scale, 0};
+        }
+
         AABB GetBoundingBox() const override
         {
             const double hw = m_width * 0.5;
@@ -235,21 +360,71 @@ namespace MiniCAD
 
         bool ContainsPaper(const Math::Point3& p) const
         {
+            if (m_clipEllipse && m_width > 0 && m_height > 0)
+            {
+                const double x = (p.x - m_center.x) * 2 / m_width;
+                const double y = (p.y - m_center.y) * 2 / m_height;
+                return x * x + y * y <= 1 + 1e-10;
+            }
+            if (!m_clip.empty())
+            {
+                const auto points = PaperBoundary();
+                bool inside = false;
+                for (size_t i = 0, j = points.size() - 1; i < points.size(); j = i++)
+                {
+                    const auto& a = points[j]; const auto& b = points[i];
+                    const double cross = (p.x-a.x)*(b.y-a.y)-(p.y-a.y)*(b.x-a.x);
+                    if (std::abs(cross) < 1e-8 && p.x >= std::min(a.x,b.x)-1e-8 && p.x <= std::max(a.x,b.x)+1e-8 &&
+                        p.y >= std::min(a.y,b.y)-1e-8 && p.y <= std::max(a.y,b.y)+1e-8) return true;
+                    if ((a.y > p.y) != (b.y > p.y) && p.x < (b.x-a.x)*(p.y-a.y)/(b.y-a.y)+a.x) inside = !inside;
+                }
+                return inside;
+            }
             const double hw = m_width * 0.5;
             const double hh = m_height * 0.5;
             return p.x >= m_center.x - hw && p.x <= m_center.x + hw
                 && p.y >= m_center.y - hh && p.y <= m_center.y + hh;
         }
 
+        const std::vector<Math::Point3>& ClipCoordinates() const { return m_clip; }
+        void SetClipCoordinates(std::vector<Math::Point3> points) { m_clip = std::move(points); m_clipKnown = true; m_clipEllipse = false; }
+        bool ClipEllipse() const { return m_clipEllipse; }
+        void SetClipEllipse(bool ellipse) { m_clipEllipse = ellipse; }
+        bool ClipKnown() const { return m_clipKnown; }
+        void SetClipKnown(bool known) { m_clipKnown = known; }
+        std::vector<Math::Point3> PaperBoundary() const
+        {
+            if (m_clipEllipse)
+            {
+                std::vector<Math::Point3> points;
+                for (int i = 0; i < 256; ++i)
+                {
+                    const double angle = i * 2 * std::acos(-1.0) / 256;
+                    points.push_back({m_center.x + m_width * .5 * std::cos(angle), m_center.y + m_height * .5 * std::sin(angle), m_center.z});
+                }
+                return points;
+            }
+            if (m_clip.empty()) return {{m_center.x-m_width/2,m_center.y-m_height/2,0}, {m_center.x+m_width/2,m_center.y-m_height/2,0},
+                {m_center.x+m_width/2,m_center.y+m_height/2,0}, {m_center.x-m_width/2,m_center.y+m_height/2,0}};
+            auto points = m_clip;
+            for (auto& p : points) p = {m_center.x+p.x*m_width,m_center.y+p.y*m_height,m_center.z};
+            return points;
+        }
         std::unique_ptr<Entity> Clone(ObjectID newId) const override
         {
             auto e = std::make_unique<ViewportEntity>(newId, m_center, m_width, m_height);
             e->SetAttr(GetAttr());
             e->m_viewCenter = m_viewCenter;
+            e->m_spatialView=m_spatialView; e->m_viewDirection=m_viewDirection; e->m_viewTarget=m_viewTarget;
+            e->m_perspective = m_perspective;
+            e->m_optics = m_optics;
             e->m_viewHeight = m_viewHeight;
             e->m_twist      = m_twist;
             e->m_id         = m_id;
+            e->m_locked     = m_locked;
+            e->m_planView   = m_planView;
             e->m_frozenLayers = m_frozenLayers;
+            e->m_clip = m_clip; e->m_clipKnown = m_clipKnown; e->m_clipEllipse = m_clipEllipse;
             return e;
         }
 
@@ -260,22 +435,22 @@ namespace MiniCAD
                                       : isHovered  ? IDrawSink::kHoverColor
                                                    : ResolveDrawColor(sink);
 
-            const double hw = m_width * 0.5;
-            const double hh = m_height * 0.5;
-            const Math::Point3 a{ m_center.x - hw, m_center.y - hh, m_center.z };
-            const Math::Point3 b{ m_center.x + hw, m_center.y - hh, m_center.z };
-            const Math::Point3 c{ m_center.x + hw, m_center.y + hh, m_center.z };
-            const Math::Point3 d{ m_center.x - hw, m_center.y + hh, m_center.z };
-
-            sink.DrawLine(a, b, color, false);
-            sink.DrawLine(b, c, color, false);
-            sink.DrawLine(c, d, color, false);
-            sink.DrawLine(d, a, color, false);
+            const auto points = PaperBoundary();
+            for (size_t i = 0; i < points.size(); ++i) sink.DrawLine(points[i], points[(i+1)%points.size()], color, false);
         }
 
         DECLARE_RUNTIME_TYPE(ViewportEntity, Entity)
 
     private:
+        bool         m_locked = true;
+        std::vector<Math::Point3> m_clip;
+        bool m_clipKnown = true;
+        bool m_clipEllipse = false;
+        bool m_spatialView = false;
+        bool m_perspective = false;
+        CameraOptics m_optics;
+        Math::Point3 m_viewDirection{0,0,1}, m_viewTarget{};
+        bool         m_planView = true;
         Math::Point3 m_center{ 0.0, 0.0, 0.0 };      // 纸张上的中心（10/20）
         double       m_width  = 0.0;                 // 纸张上的宽（40）
         double       m_height = 0.0;                 // 纸张上的高（41）

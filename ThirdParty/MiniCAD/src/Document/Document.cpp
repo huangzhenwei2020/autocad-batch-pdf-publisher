@@ -1,4 +1,5 @@
 #include "Document.h"
+#include "Core/Entity/ViewportEntity.hpp"
 #include "Core/Log.h"
 #include "MiniI18n/I18n.h"
 #include "Document/DimAssoc.h"
@@ -306,11 +307,12 @@ namespace MiniCAD
 
         if (s.BeginObject("camera"))
         {
-            CameraState cam = m_cameraState;
+            CameraState cam = m_editingViewport && !m_inlineViewport ? m_viewportPaperCamera : m_cameraState;
             Ser::Value(s, "target", cam.Target);
             s.Value("zoom", cam.Zoom);
             s.Value("azimuth", cam.Azimuth);       // 视图方向（M6）；旧文件没有时为俯视
             s.Value("elevation", cam.Elevation);
+            s.Value("roll", cam.Roll);
             s.EndObject();
         }
 
@@ -340,6 +342,8 @@ namespace MiniCAD
                 s.Value("azimuth", m_cameraState.Azimuth);
                 s.Value("elevation", m_cameraState.Elevation);
             }
+            m_cameraState.Roll = 0.0;
+            if (s.Has("roll")) s.Value("roll", m_cameraState.Roll);
             s.EndObject();
         }
 
@@ -369,7 +373,51 @@ namespace MiniCAD
 
     bool Document::ActiveLayoutIsPaper() const
     {
-        return m_scene.FindLayout(m_activeKey) >= 0;
+        return (m_paperDisplay || !m_editingViewport) && m_scene.FindLayout(m_activeKey) >= 0;
+    }
+
+    const ViewportEntity* Document::EditingViewport() const
+    {
+        return m_editingViewport && !m_paperDisplay ? dynamic_cast<const ViewportEntity*>(m_scene.GetEntity(m_editingViewport)) : nullptr;
+    }
+
+    bool Document::BeginViewportEdit(uint64_t id, CameraState& camera, double aspect, bool inlineEdit)
+    {
+        if (m_editingViewport) return false;
+        const auto* viewport = dynamic_cast<const ViewportEntity*>(m_scene.GetEntity(id));
+        if (!viewport || !ActiveLayoutIsPaper() || !viewport->SupportsModelEdit(inlineEdit) ||
+            !IsVisibleInActiveLayout(viewport->GetAttr())) return false;
+        m_viewportPaperCamera = camera;
+        m_editingViewport = id;
+        m_inlineViewport = inlineEdit;
+        if (!inlineEdit)
+        {
+            camera.Target = viewport->GetViewCenter();
+            camera.Zoom = viewport->GetViewHeight() * std::max(1.0, viewport->GetWidth() / viewport->GetHeight() / aspect);
+            camera.Azimuth = -90.0 - viewport->GetTwist() * 180.0 / std::acos(-1.0);
+            camera.Elevation = 90.0;
+            camera.Roll = 0.0;
+            if (!viewport->IsPlanView())
+            {
+                const auto [right, up] = viewport->ViewAxes();
+                camera.AlignToView(right, up);
+            }
+        }
+        m_scene.SetCurrentSpace(false, 0);
+        m_scene.MarkDirty();
+        return true;
+    }
+
+    bool Document::EndViewportEdit(CameraState& camera)
+    {
+        if (!m_editingViewport) return false;
+        m_editingViewport = 0;
+        if (!m_inlineViewport) camera = m_viewportPaperCamera;
+        m_inlineViewport = false;
+        m_cameraState = camera;
+        m_scene.SetCurrentSpace(m_activeKey != 0, m_activeKey);
+        m_scene.MarkDirty();
+        return true;
     }
 
     uint64_t Document::ActiveLayoutOwnerKey() const
@@ -382,10 +430,11 @@ namespace MiniCAD
         const auto& layouts = m_scene.Layouts();
         if (index < 0 || index >= static_cast<int>(layouts.size()))
             return false;
+        const bool endedViewportEdit = EndViewportEdit(camera);
         const uint64_t key  = layouts[static_cast<size_t>(index)].Model ? 0 : layouts[static_cast<size_t>(index)].OwnerKey;
         const uint64_t from = ActiveLayoutOwnerKey();
         if (key == from && m_activeKey == from)
-            return false;
+            return endedViewportEdit;
 
         // 保存当前布局的视图（当前布局刚被删掉时它的视图也没用了，照样记下无妨）
         m_layoutViews[from] = camera;
@@ -403,6 +452,7 @@ namespace MiniCAD
             // 布局是二维图纸：模型页可能在三维视图里，进布局时回到俯视
             camera.Azimuth   = CameraState{}.Azimuth;
             camera.Elevation = CameraState{}.Elevation;
+            camera.Roll = 0.0;
             if (sheet.ViewHeight > 0.0)
                 camera.Target = { sheet.ViewCenterX, sheet.ViewCenterY, 0.0 };   // 保存的图纸空间视图
             else if (sheet.MaxX > sheet.MinX && sheet.MaxY > sheet.MinY)
@@ -429,6 +479,14 @@ namespace MiniCAD
 
     bool Document::ValidateActiveLayout(CameraState& camera)
     {
+        if (m_editingViewport)
+        {
+            const auto* viewport = EditingViewport();
+            if (viewport && viewport->GetAttr().LayoutKey == m_activeKey && m_scene.FindLayout(m_activeKey) >= 0)
+                return false;
+            EndViewportEdit(camera);
+            if (m_scene.FindLayout(m_activeKey) >= 0) return true;
+        }
         if (m_activeKey == 0 || ActiveLayoutIsPaper())
             return false;
         // 当前布局已不在布局表里：回到模型页，恢复模型页的视图
@@ -444,6 +502,8 @@ namespace MiniCAD
 
     bool Document::IsVisibleInActiveLayout(const EntityAttr& attr) const
     {
+        if (const auto* viewport = EditingViewport())
+            return !attr.InPaperSpace && !viewport->IsLayerFrozen(attr.LayerId);
         const bool paper = ActiveLayoutIsPaper();
         // 模型空间实体只在模型页显示；图纸空间实体只在布局页显示
         if (attr.InPaperSpace != paper)

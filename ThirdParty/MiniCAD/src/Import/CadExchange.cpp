@@ -1,4 +1,5 @@
 #include "Import/CadExchange.h"
+#include "Core/Image/ImageLibrary.h"
 #include "Serialization/Database/CadDatabase.h"
 #include "Serialization/Database/Mesh.h"
 #include "Import/TchWall.h"
@@ -62,6 +63,7 @@
 
 #include "Database/CadDatabase.h"
 #include "Database/CadFileFormat.h"
+#include "Database/DxfMeta.h"
 #include "Database/UnknownObjects.h"
 #include "Dwg/Read/DwgBitReader.h"
 #include "Dwg/Read/DwgReader.h"
@@ -98,12 +100,15 @@ namespace MiniCAD
             std::string Signature;  // 导入完成时场景实体的序列化文本；另存时不同即视为修改过
         };
 
+        std::string Path;
         std::vector<std::uint8_t> Bytes;
         Dwg::CadFileFormat        Format  = Dwg::CadFileFormat::Unknown;
         Dwg::CadVersion           Version = Dwg::CadVersion::Unknown;
         std::map<Object::ObjectID, Link>   Links;            // 模型空间：场景实体 → 原图实体
         std::map<std::string, std::string> LayerSignatures;  // 图层名 → 导入时的属性
         std::map<std::string, std::string> StyleSignatures;  // 文字样式名 → 导入时的属性
+        std::map<std::string, std::string> LineTypeSignatures;
+        std::map<uint32_t, std::string> TextStyleNames, MLineStyleNames;
         int TchCount = 0;                                    // 模型空间的 TCH_* 对象（含无法显示的）
     };
 
@@ -244,6 +249,17 @@ namespace MiniCAD
             os.precision(17);
             os << r.FontFile << '|' << r.BigFontFile << '|' << r.Height << '|' << r.WidthFactor << '|' << r.ObliqueDeg;
             return os.str();
+        }
+
+        std::string LineTypeSignature(const LineTypeRecord& record)
+        {
+            std::ostringstream text; text.imbue(std::locale::classic()); text.precision(17);
+            text << record.Description << '|' << record.PatternLength;
+            for (auto length : record.Pattern) text << '|' << length;
+            for (const auto& symbol : record.Symbols)
+                text << '|' << symbol.PatternIndex << ',' << symbol.Text << ',' << symbol.Rotation << ',' << symbol.Scale
+                    << ',' << symbol.OffsetX << ',' << symbol.OffsetY << ',' << symbol.StyleId << ',' << symbol.AbsoluteRotation << ',' << symbol.Shape << ',' << symbol.ShapeFont;
+            return text.str();
         }
 
         bool IsTch(const Dwg::CadObject& o)
@@ -442,11 +458,63 @@ namespace MiniCAD
         // ════════════════════════════════════════════════════════════════
         //  导入：CadDatabase → Scene
         // ════════════════════════════════════════════════════════════════
+        bool IsViewportEllipse(const Dwg::CadDatabase& db, const Dwg::Viewport& viewport)
+        {
+            const auto* object = db.Find(viewport.BoundaryHandle);
+            if (!(static_cast<int>(viewport.Status) & 65536) || viewport.Width <= 0 || viewport.Height <= 0) return false;
+            const double tolerance = std::max(viewport.Width, viewport.Height) * 1e-7;
+            auto centered = [&](const auto& point) { return std::abs(point.X - viewport.Center.X) < tolerance && std::abs(point.Y - viewport.Center.Y) < tolerance; };
+            if (const auto* circle = dynamic_cast<const Dwg::Circle*>(object); circle && !dynamic_cast<const Dwg::Arc*>(object))
+                return centered(circle->Center) && std::abs(circle->Normal.X) < 1e-9 && std::abs(circle->Normal.Y) < 1e-9 && circle->Normal.Z > .999 &&
+                    std::abs(viewport.Width - 2 * circle->Radius) < tolerance && std::abs(viewport.Height - 2 * circle->Radius) < tolerance;
+            if (const auto* ellipse = dynamic_cast<const Dwg::Ellipse*>(object))
+            {
+                const auto axis = ellipse->MajorAxisEndPoint;
+                const double x = std::abs(axis.X), y = std::abs(axis.Y);
+                return centered(ellipse->Center) && std::abs(ellipse->Normal.X) < 1e-9 && std::abs(ellipse->Normal.Y) < 1e-9 && ellipse->Normal.Z > .999 &&
+                    std::abs(ellipse->EndParameter - ellipse->StartParameter - 2 * std::acos(-1.0)) < 1e-7 &&
+                    ((y < tolerance && std::abs(viewport.Width - 2*x) < tolerance && std::abs(viewport.Height - 2*x*ellipse->RadiusRatio) < tolerance) ||
+                     (x < tolerance && std::abs(viewport.Height - 2*y) < tolerance && std::abs(viewport.Width - 2*y*ellipse->RadiusRatio) < tolerance));
+            }
+            return false;
+        }
+
+        std::vector<Math::Point3> ReadViewportPolygon(const Dwg::CadDatabase& db, const Dwg::Viewport& viewport)
+        {
+            if (!(static_cast<int>(viewport.Status) & 65536) || viewport.Width <= 0 || viewport.Height <= 0) return {};
+            if (IsViewportEllipse(db, viewport))
+            {
+                std::vector<Math::Point3> points;
+                for (int i = 0; i < 256; ++i)
+                {
+                    const double angle = i * 2 * std::acos(-1.0) / 256;
+                    points.push_back({.5*std::cos(angle), .5*std::sin(angle), 0});
+                }
+                return points;
+            }
+            const auto* boundary = db.FindAs<Dwg::LwPolyline>(viewport.BoundaryHandle);
+            if (!boundary || !(static_cast<int>(boundary->Flags) & 1) || boundary->Vertices.size() < 3 ||
+                std::abs(boundary->Normal.X) > 1e-9 || std::abs(boundary->Normal.Y) > 1e-9 || boundary->Normal.Z < 0.999) return {};
+            std::vector<Math::Point3> points;
+            for (const auto& vertex : boundary->Vertices)
+            {
+                if (vertex.Bulge != 0) return {};
+                points.push_back({(vertex.Location.X-viewport.Center.X)/viewport.Width,
+                                  (vertex.Location.Y-viewport.Center.Y)/viewport.Height,0});
+            }
+            return points;
+        }
+
         class Importer
         {
         public:
             Importer(const Dwg::CadDatabase& db, Scene& scene, CadSource* source, ImportProgress progress = nullptr)
-                : m_db(db), m_scene(scene), m_source(source), m_progress(std::move(progress)) {}
+                : m_db(db), m_scene(scene), m_source(source), m_progress(std::move(progress))
+            {
+                for (const auto& [handle, object] : db.Objects())
+                    if (const auto* vp = dynamic_cast<const Dwg::Viewport*>(object.get()); vp && !ReadViewportPolygon(db, *vp).empty())
+                        m_viewportBoundaries.insert(vp->BoundaryHandle);
+            }
 
             // 外部参照的解析环境（宿主图纸有路径时才有；没有就不读外部文件）
             void SetXrefContext(std::shared_ptr<XrefContext> ctx) { m_xref = std::move(ctx); }
@@ -570,6 +638,20 @@ namespace MiniCAD
                 ImportTextStyles();
                 ImportLineTypes();
                 ImportMLineStyles();     // 多线样式（MLINE 的组码 340 引用它）
+                if (!IsXref())
+                {
+                    const auto text = m_scene.GetTextStyleTable().FindByName(m_db.Header.CurrentTextStyleName);
+                    if (text != TextStyleTable::InvalidID) m_scene.SetCurrentTextStyle(text);
+                    const auto mline = m_scene.GetMLineStyleTable().FindByName(m_db.Header.CurrentMLineStyleName);
+                    if (mline != MLineStyleTable::InvalidID) m_scene.SetCurrentMLineStyle(mline);
+                    m_scene.SetCurrentLineType(m_scene.GetLineTypeTable().FindByName(m_db.Header.CurrentLineTypeName));
+                    Math::WorkingPlane plane;
+                    const auto& header = m_db.Header;
+                    if (plane.Set(ToPoint(header.ModelSpaceOrigin),
+                        {header.ModelSpaceXAxis.X, header.ModelSpaceXAxis.Y, header.ModelSpaceXAxis.Z},
+                        {header.ModelSpaceYAxis.X, header.ModelSpaceYAxis.Y, header.ModelSpaceYAxis.Z}))
+                        m_scene.SetWorkingPlane(plane, false);
+                }
                 ImportLayers();
                 ImportPaperSpaceLineTypeScaling();
                 ImportPointStyle();
@@ -946,11 +1028,11 @@ namespace MiniCAD
                     MLineStyleRecord rec;
                     rec.Name        = Prefixed(st->Name);
                     rec.Description = st->Description;
-                    // 封口 / 连接：Flags 位（1 = 起点封口、2 = 终点封口、4 = 顶点连接线）
+                    // DXF MLINESTYLE flags use independent square-cap and joint bits.
                     const int flags = static_cast<int>(st->Flags);
-                    rec.StartCap = (flags & 1) != 0;
-                    rec.EndCap   = (flags & 2) != 0;
-                    rec.Joints   = (flags & 4) != 0;
+                    rec.StartCap = (flags & 16) != 0;
+                    rec.EndCap   = (flags & 256) != 0;
+                    rec.Joints   = (flags & 2) != 0;
 
                     for (const auto& el : st->Elements)
                     {
@@ -968,7 +1050,9 @@ namespace MiniCAD
                     if (rec.Elements.empty())
                         continue;
 
-                    const MLineStyleID id = table.Add(std::move(rec));
+                    auto id = table.FindByName(rec.Name);
+                    if (id == MLineStyleTable::InvalidID) id = table.Add(std::move(rec));
+                    else if (!IsXref()) table.Update(id, rec);
                     m_mlineStyles[handle] = id;
                 }
                 m_mlineStyles[Dwg::kNullHandle] = MLineStyleTable::StandardID;
@@ -1110,6 +1194,7 @@ namespace MiniCAD
                 ctx->Loading.insert(key);
                 Importer nested(*db, scene, nullptr);
                 nested.ImportAsXref(name + "|", target, std::move(ctx));
+                target.SetResolvedXRefPath(PathToUtf8(file));
                 LOG_INFO_TR("外部参照 {0}：从 {1} 读入 {2} 个实体", name.c_str(), PathToUtf8(file).c_str(), target.GetEntities().size());
                 return true;
             }
@@ -1250,6 +1335,10 @@ namespace MiniCAD
                     dl.Name = lay->Name;
                     dl.Model = false;
                     dl.Order = static_cast<int>(layouts.size());
+                    dl.PaperUnitToMm = lay->PaperUnits == Dwg::PlotPaperUnits::Inches ? 25.4 : 1.0;
+                    dl.PaperWidth = lay->PaperWidth;
+                    dl.PaperHeight = lay->PaperHeight;
+                    if (static_cast<int>(lay->PaperRotation) % 2 != 0) std::swap(dl.PaperWidth, dl.PaperHeight);
                     // 纸张范围：Layout 的 MaxExtents(15/25) 是纸张外框，
                     // 缺失时用 PlotSettings 的 PaperSize 兜底，再不行用 A3。
                     //
@@ -1265,6 +1354,7 @@ namespace MiniCAD
                     }
                     // 归属键：图纸空间实体的 owner（330）就是这张布局的块记录句柄
                     dl.OwnerKey = static_cast<uint64_t>(lay->AssociatedBlockHandle);
+                    dl.SourceKey = dl.OwnerKey;
                     layouts.push_back(std::move(dl));
                 }
 
@@ -1309,6 +1399,8 @@ namespace MiniCAD
                             // 判据一：视图中心与框中心重合、视图高 = 框高（文件里的纸张主视口）
                             // （12/22 是相对视图目标点 17/27 的 DCS 坐标，纸张主视口目标点为原点，加上不影响）
                             const bool paperSized =
+                                std::abs(static_cast<int>(vp->ActiveStatus)) <= 1 &&
+                                !(static_cast<int>(vp->Status) & 65536) &&
                                 vp->Width > 0.0 && vp->Height > 0.0 && vp->ViewHeight > 0.0 &&
                                 std::abs(vp->ViewCenter.X + vp->ViewTarget.X - vp->Center.X) <= kEps &&
                                 std::abs(vp->ViewCenter.Y + vp->ViewTarget.Y - vp->Center.Y) <= kEps &&
@@ -1455,7 +1547,13 @@ namespace MiniCAD
                     if (const Layer* layer = layers.GetLayer(id))
                         m_source->LayerSignatures[layer->GetName()] = LayerSignature(*layer);
                 for (const auto& rec : m_scene.GetTextStyleTable().Records())
+                {
                     m_source->StyleSignatures[rec.Name] = StyleSignature(rec);
+                    m_source->TextStyleNames[rec.Id] = rec.Name;
+                }
+                for (const auto& rec : m_scene.GetMLineStyleTable().Records()) m_source->MLineStyleNames[rec.Id] = rec.Name;
+                for (const auto& rec : m_scene.GetLineTypeTable().Records())
+                    m_source->LineTypeSignatures[rec.Name] = LineTypeSignature(rec);
             }
 
             // ── 实体 ────────────────────────────────────────────────────
@@ -1614,6 +1712,7 @@ namespace MiniCAD
 
             std::unique_ptr<Entity> Convert(const Dwg::Entity& src)
             {
+                if (m_viewportBoundaries.contains(src.ObjectHandle)) return nullptr;
                 if (const auto* unknown = dynamic_cast<const Dwg::UnknownEntity*>(&src))
                 {
                     if (unknown->Raw.DxfName == "OLE2FRAME")
@@ -2409,7 +2508,7 @@ namespace MiniCAD
                 {
                     // 法向 -Z：圆心是 OCS，换到 WCS 后按 +Z 存（不留法向，导出才不会再镜像一次）
                     if (!IsFlippedNormal(e->Normal))
-                        return Make<ArcEntity>(src, &e->Normal, ToPoint(e->Center), e->Radius, e->StartAngle, e->EndAngle);
+                        return Make<ArcEntity>(src, &e->Normal, OcsMap(e->Normal, e->Center.Z).Point(e->Center.X, e->Center.Y), e->Radius, e->StartAngle, e->EndAngle);
                     const OcsMap map(e->Normal, e->Center.Z);
                     return Make<ArcEntity>(src, nullptr, map.Point(e->Center.X, e->Center.Y), e->Radius,
                                            kPi - e->EndAngle, kPi - e->StartAngle);
@@ -2418,23 +2517,27 @@ namespace MiniCAD
                 if (auto* e = dynamic_cast<const Dwg::Circle*>(&src))
                 {
                     if (!IsFlippedNormal(e->Normal))
-                        return Make<CircleEntity>(src, &e->Normal, ToPoint(e->Center), e->Radius);
+                        return Make<CircleEntity>(src, &e->Normal, OcsMap(e->Normal, e->Center.Z).Point(e->Center.X, e->Center.Y), e->Radius);
                     const OcsMap map(e->Normal, e->Center.Z);
                     return Make<CircleEntity>(src, nullptr, map.Point(e->Center.X, e->Center.Y), e->Radius);
                 }
 
                 if (auto* e = dynamic_cast<const Dwg::Ellipse*>(&src))
                 {
-                    const double mx = e->MajorAxisEndPoint.X, my = e->MajorAxisEndPoint.Y;
-                    const double a  = std::hypot(mx, my);
-                    if (a < 1e-12)
+                    const Math::Vec3 major{e->MajorAxisEndPoint.X, e->MajorAxisEndPoint.Y, e->MajorAxisEndPoint.Z};
+                    const double a = major.Length();
+                    if (a < 1e-12 || e->RadiusRatio <= 0)
                         return nullptr;
-                    // 中心与长轴本来是 WCS；法向 -Z 时短轴反向，参数区间镜像成 (−e, −s)
+                    // ELLIPSE stores its center and axis vector in WCS.
                     const bool flipped = IsFlippedNormal(e->Normal);
-                    const double s = flipped ? -e->EndParameter : e->StartParameter;
-                    const double t = flipped ? -e->StartParameter : e->EndParameter;
-                    return Make<EllipseEntity>(src, nullptr,
-                        Ellipse(ToPoint(e->Center), a, a * e->RadiusRatio, std::atan2(my, mx), s, t));
+                    const Math::Vec3 normal = flipped ? Math::Vec3{0,0,1}
+                        : Math::BuildOCS({e->Normal.X,e->Normal.Y,e->Normal.Z}).Uz;
+                    const auto ocs = Math::BuildOCS(normal);
+                    const double angle = std::atan2(Math::Dot(major, ocs.Uy), Math::Dot(major, ocs.Ux));
+                    const double start = flipped ? -e->EndParameter : e->StartParameter;
+                    const double end = flipped ? -e->StartParameter : e->EndParameter;
+                    return Make<EllipseEntity>(src, flipped ? nullptr : &e->Normal,
+                        Ellipse(ToPoint(e->Center), a, a * e->RadiusRatio, angle, start, end, normal));
                 }
 
                 if (auto* e = dynamic_cast<const Dwg::Point*>(&src))
@@ -2579,7 +2682,9 @@ namespace MiniCAD
                     const int hAlign = h72 == 1 || h72 == 4 ? 1 : h72 == 2 ? 2 : 0;
                     const int vAlign = h72 == 4 ? 2 : h72 == 3 || h72 == 5 ? 0 : std::clamp(v73, 0, 3);
                     const bool aligned = hAlign != 0 || vAlign != 0;
-                    auto text = Make<TextEntity>(src, &e->Normal, ToPoint(aligned ? e->AlignmentPoint : e->InsertPoint),
+                    const auto ocs = Math::BuildOCS(Math::Vec3{e->Normal.X, e->Normal.Y, e->Normal.Z});
+                    const auto anchor = Math::OcsToWcs(ocs, ToPoint(aligned ? e->AlignmentPoint : e->InsertPoint));
+                    auto text = Make<TextEntity>(src, &e->Normal, anchor,
                         e->Value, static_cast<float>(e->Height), static_cast<float>(e->Rotation), LookupStyle(e->StyleHandle));
                     if (text)
                     {
@@ -2592,9 +2697,8 @@ namespace MiniCAD
 
                 if (auto* e = dynamic_cast<const Dwg::MText*>(&src))
                 {
-                    double rot = 0.0;
-                    if (std::hypot(e->AlignmentPoint.X, e->AlignmentPoint.Y) > 1e-12)
-                        rot = std::atan2(e->AlignmentPoint.Y, e->AlignmentPoint.X);
+                    const auto ocs = Math::BuildOCS(Math::Vec3{e->Normal.X, e->Normal.Y, e->Normal.Z});
+                    const double rot = Math::PlaneAngle(ocs, {e->AlignmentPoint.X, e->AlignmentPoint.Y, e->AlignmentPoint.Z});
                     auto ent = Make<MTextEntity>(src, &e->Normal, LookupStyle(e->StyleHandle), e->Value,
                                                  ToPoint(e->InsertPoint), e->Height, rot, e->RectangleWidth);
                     auto& mt = static_cast<MTextEntity&>(*ent);
@@ -2727,18 +2831,25 @@ namespace MiniCAD
                     vp->SetViewCenterDcs(Math::Point3{ e->ViewCenter.X, e->ViewCenter.Y, 0.0 },
                                          e->TwistAngle,
                                          Math::Point3{ e->ViewTarget.X, e->ViewTarget.Y, 0.0 });
+                    auto polygon = ReadViewportPolygon(m_db, *e);
+                    vp->SetClipCoordinates(std::move(polygon));
+                    vp->SetClipEllipse(IsViewportEllipse(m_db, *e));
+                    if ((static_cast<int>(e->Status) & 65536) && vp->ClipCoordinates().empty()) vp->SetClipKnown(false);
                     vp->SetViewHeight(e->ViewHeight);
                     vp->SetViewportId(e->ActiveStatus);
-                    // 视线不是 +Z（三维视口）时只能按俯视合成，提示一下
-                    if (e->ViewDirection.Z <= 0.0 ||
-                        std::abs(e->ViewDirection.X) > 1.0e-9 * std::abs(e->ViewDirection.Z) ||
-                        std::abs(e->ViewDirection.Y) > 1.0e-9 * std::abs(e->ViewDirection.Z))
+                    vp->SetLocked((static_cast<int>(e->Status) & static_cast<int>(Dwg::ViewportStatusFlags::ViewportZoomLocking)) != 0);
+                    vp->SetPerspective((static_cast<int>(e->Status) & static_cast<int>(Dwg::ViewportStatusFlags::PerspectiveMode)) != 0);
+                    const auto hasViewFlag = [&](Dwg::ViewportStatusFlags flag)
                     {
-                        char handle[24];
-                        std::snprintf(handle, sizeof(handle), "%llx", static_cast<unsigned long long>(src.ObjectHandle));
-                        LOG_WARN_TR("VIEWPORT {0}：视线方向 ({1},{2},{3}) 不是俯视，按俯视显示", handle,
-                                    e->ViewDirection.X, e->ViewDirection.Y, e->ViewDirection.Z);
-                    }
+                        return (static_cast<int>(e->Status) & static_cast<int>(flag)) != 0;
+                    };
+                    vp->SetCameraOptics({e->LensLength, e->FrontClipPlane, e->BackClipPlane,
+                        hasViewFlag(Dwg::ViewportStatusFlags::FrontClipping), hasViewFlag(Dwg::ViewportStatusFlags::BackClipping),
+                        !hasViewFlag(Dwg::ViewportStatusFlags::FrontClipNotAtEye)});
+                    vp->SetPlanView(e->ViewDirection.Z > 0 && std::abs(e->ViewDirection.X) < 1e-9 * e->ViewDirection.Z && std::abs(e->ViewDirection.Y) < 1e-9 * e->ViewDirection.Z);
+                    if (!vp->IsPlanView() || vp->IsPerspective())
+                        vp->SetSpatialView({e->ViewDirection.X,e->ViewDirection.Y,e->ViewDirection.Z},
+                            {e->ViewTarget.X,e->ViewTarget.Y,e->ViewTarget.Z},{e->ViewCenter.X,e->ViewCenter.Y,0});
                     // 本视口里冻结的图层（331，VPLAYER）
                     std::vector<LayerID> frozen;
                     for (Dwg::Handle lh : e->FrozenLayers)
@@ -3363,8 +3474,7 @@ namespace MiniCAD
                 const OcsMap map(e.Normal, e.Elevation);
                 for (const auto& v : e.Vertices)
                 {
-                    pts.push_back(flipped ? map.Point(v.Location.X, v.Location.Y)
-                                          : Math::Point3{ v.Location.X, v.Location.Y, e.Elevation });
+                    pts.push_back(map.Point(v.Location.X, v.Location.Y));
                     bulges.push_back(flipped ? -v.Bulge : v.Bulge);
                     startW.push_back(v.StartWidth);
                     endW.push_back(v.EndWidth);
@@ -3386,7 +3496,7 @@ namespace MiniCAD
 
             std::unique_ptr<Entity> ConvertHatch(const Dwg::Hatch& h)
             {
-                const OcsMap map(h.Normal, h.Elevation);
+                const OcsMap map(Dwg::XYZ::AxisZ(), h.Elevation);
                 std::vector<HatchLoop> loops;
                 for (const auto& path : h.Paths)
                 {
@@ -3434,7 +3544,7 @@ namespace MiniCAD
                         angleDeg = h.PatternAngle * 180.0 / kPi;
                     }
                 }
-                auto ent = Make<HatchEntity>(h, nullptr, std::move(loops), std::move(pattern));
+                auto ent = Make<HatchEntity>(h, &h.Normal, std::move(loops), std::move(pattern));
                 auto& hatch = static_cast<HatchEntity&>(*ent);
                 hatch.SetScale(scale);
                 hatch.SetAngle(angleDeg);
@@ -3564,13 +3674,19 @@ namespace MiniCAD
                     }
                     else if (const auto* el = dynamic_cast<const Dwg::HatchBoundaryPathEllipse*>(edge.get()))
                     {
-                        // 椭圆弧离散成折线（起止值按参数角处理）
                         double s = 0.0;
                         const double sweep = sweepOf(el->StartAngle, el->EndAngle, el->CounterClockWise, s);
                         const double mx = el->MajorAxisEndPoint.X, my = el->MajorAxisEndPoint.Y;
                         const double ra = std::hypot(mx, my), rb = ra * el->RadiusRatio;
                         if (ra < 1e-12)
                             continue;
+                        if (path.Edges.size() == 1 && std::abs(sweep) >= kTwoPi - 1e-9)
+                        {
+                            const Ellipse ellipse(map.Point(el->Center.X,el->Center.Y), ra, rb, std::atan2(my,mx));
+                            loop.Edges.push_back(HatchEdge::MakeEllipseArc(ellipse, 0, kTwoPi));
+                            return loop;
+                        }
+                        // Open elliptical edges are sampled in traversal order.
                         const double ca = mx / ra, sa = my / ra;
                         auto at = [&](double t)
                         {
@@ -3959,6 +4075,9 @@ namespace MiniCAD
 
                 std::vector<Math::Point3> pts;
                 std::vector<double>       bulges;
+                const bool planar = !Any(e.Flags & Dwg::PolylineFlags::Polyline3D);
+                const OcsMap map(e.Normal, e.Elevation);
+                const bool flipped = planar && IsFlippedNormal(e.Normal);
                 // 旧式 POLYLINE 的顶点同样带起止宽度（VERTEX 的组码 40/41），一并保留
                 std::vector<double>       startW;
                 std::vector<double>       endW;
@@ -3967,8 +4086,9 @@ namespace MiniCAD
                     const auto* v = m_db.FindAs<Dwg::Vertex>(h);
                     if (v == nullptr || Any(v->Flags & Dwg::VertexFlags::SplineFrameControlPoint))   // 样条拟合的控制点不画
                         continue;
-                    pts.push_back({ v->Location.X, v->Location.Y, v->Location.Z });
-                    bulges.push_back(v->Bulge);
+                    pts.push_back(planar ? map.Point(v->Location.X, v->Location.Y)
+                                         : Math::Point3{v->Location.X, v->Location.Y, v->Location.Z});
+                    bulges.push_back(flipped ? -v->Bulge : v->Bulge);
                     startW.push_back(v->StartWidth);
                     endW.push_back(v->EndWidth);
                 }
@@ -3978,7 +4098,7 @@ namespace MiniCAD
                     pts.push_back(pts.front());
                 else
                     bulges.pop_back();
-                auto ent = Make<PolylineEntity>(e, &e.Normal, std::move(pts), std::move(bulges));
+                auto ent = Make<PolylineEntity>(e, planar && !flipped ? &e.Normal : nullptr, std::move(pts), std::move(bulges));
                 auto& pl = static_cast<PolylineEntity&>(*ent);
                 pl.SetWidth(e.StartWidth);
 
@@ -4002,6 +4122,7 @@ namespace MiniCAD
             static bool Any(E flags) { return static_cast<std::int64_t>(flags) != 0; }
 
         private:
+            std::set<Dwg::Handle> m_viewportBoundaries;
             const Dwg::CadDatabase& m_db;
             Scene&                  m_scene;
             CadSource*              m_source;
@@ -4049,11 +4170,20 @@ namespace MiniCAD
         {
         public:
             // source 非空：db 是重新读出的原图，以它为底只改写变化的部分（见 CadSource）；为空：db 是空库，重新生成
-            Exporter(const Scene& scene, Dwg::CadDatabase& db, Dwg::CadVersion version, const CadSource* source)
-                : m_scene(scene), m_db(db), m_version(version), m_source(source) {}
+            Exporter(const Scene& scene, Dwg::CadDatabase& db, Dwg::CadVersion version, const CadSource* source,
+                     const Dwg::CadDatabase* metadata, const CadSource* originalSource)
+                : m_scene(scene), m_db(db), m_version(version), m_source(source), m_metadata(metadata), m_originalSource(originalSource)
+            {
+                if (originalSource && !originalSource->Path.empty())
+                    m_exportImages.SetBaseDir(PathToUtf8(PathFromUtf8(originalSource->Path).parent_path()));
+            }
 
             void Run()
             {
+                std::set<Dwg::Handle> oldViewportBoundaries;
+                for (const auto& [handle, object] : m_db.Objects())
+                    if (const auto* viewport = dynamic_cast<const Dwg::Viewport*>(object.get()); viewport && !ReadViewportPolygon(m_db, *viewport).empty())
+                        oldViewportBoundaries.insert(viewport->BoundaryHandle);
                 if (m_source == nullptr)
                 {
                     m_db.SetVersion(m_version);
@@ -4083,9 +4213,23 @@ namespace MiniCAD
                                                                                          : Dwg::SpaceLineTypeScaling::Viewport;
                 }
 
+                SyncNamedStyles();
+                const auto& plane = m_scene.GetWorkingPlane();
+                m_db.Header.ModelSpaceOrigin = ToXYZ(plane.Origin);
+                m_db.Header.ModelSpaceXAxis = ToXYZ(plane.X);
+                m_db.Header.ModelSpaceYAxis = ToXYZ(plane.Y);
+                if (m_scene.WorkingPlaneEdited()) m_db.Header.UcsName.clear();
                 ExportLineTypes();
+                if (const auto* current = m_scene.GetLineTypeTable().Find(m_scene.GetCurrentLineType())) m_db.Header.CurrentLineTypeName = current->Name;
+                m_db.Header.LineTypeScale = m_scene.GetLineTypeScale();
+                m_db.Header.PaperSpaceLineTypeScaling = m_scene.GetPaperSpaceLineTypeScaling() ? Dwg::SpaceLineTypeScaling::Normal : Dwg::SpaceLineTypeScaling::Viewport;
+                m_db.Header.PointDisplayMode = static_cast<std::int16_t>(m_scene.GetPointDisplayMode());
+                m_db.Header.PointDisplaySize = m_scene.GetPointDisplaySize();
                 ExportLayers();
                 ExportTextStyles();
+                for (const auto& style : m_scene.GetMLineStyleTable().Records()) MLineStyleHandle(style);
+                m_db.Header.CurrentTextStyleName = m_scene.GetTextStyleTable().Resolve(m_scene.GetCurrentTextStyle()).Name;
+                m_db.Header.CurrentMLineStyleName = m_scene.GetMLineStyleTable().Resolve(m_scene.GetCurrentMLineStyle()).Name;
                 ExportBlocks();
 
                 if (m_source != nullptr)
@@ -4127,6 +4271,15 @@ namespace MiniCAD
                 // LAYOUT 对象：把布局名 / 纸张范围 / 对应的图纸空间块记录写进 OBJECTS 段。
                 // 不写的话，另存为后布局标签会整批消失（实体会留着，但无处可去）。
                 ExportLayouts();
+                for (const auto& [handle, object] : m_db.Objects())
+                    if (const auto* viewport = dynamic_cast<const Dwg::Viewport*>(object.get())) oldViewportBoundaries.erase(viewport->BoundaryHandle);
+                for (auto handle : oldViewportBoundaries)
+                {
+                    for (const auto& [ownerHandle, object] : m_db.Objects())
+                        if (auto* block = dynamic_cast<Dwg::BlockRecord*>(object.get())) std::erase(block->Entities, handle);
+                    m_db.RemoveObject(handle);
+                }
+
 
                 for (const auto& [name, count] : m_skipped)
                     LOG_WARN_TR("DWG/DXF 导出：不支持的实体 {0} × {1} 已跳过", name.c_str(), count);
@@ -4145,7 +4298,7 @@ namespace MiniCAD
 
                 std::set<Object::ObjectID> alive;
                 std::set<Dwg::Handle> removed;
-                std::vector<std::unique_ptr<Dwg::Entity>> appended;
+                std::vector<std::pair<Dwg::Handle, std::unique_ptr<Dwg::Entity>>> appended;
                 int kept = 0, keptTch = 0, rewrittenTch = 0;
                 m_scene.ForEachObject([&](const Object& o)
                 {
@@ -4156,18 +4309,28 @@ namespace MiniCAD
                     const auto link = m_source->Links.find(e.GetID());
                     const Dwg::Entity* original = link != m_source->Links.end()
                         ? m_db.FindAs<Dwg::Entity>(link->second.Handle) : nullptr;
-                    if (original != nullptr && !link->second.Signature.empty() && link->second.Signature == EntitySignature(e))
+                    bool imageSizeMatches = true;
+                    if (const auto* image = dynamic_cast<const ImageEntity*>(&e))
+                        if (const auto* raster = dynamic_cast<const Dwg::RasterImage*>(original))
+                        {
+                            const auto size = ImagePixelSize(*image);
+                            imageSizeMatches = raster->Size == size;
+                        }
+                    if (original != nullptr && imageSizeMatches && !link->second.Signature.empty() && link->second.Signature == EntitySignature(e))
                     {
                         ++kept;
                         keptTch += IsTch(*original) ? 1 : 0;
                         return;
                     }
 
+                    auto* owner = e.GetAttr().InPaperSpace ? PaperSpaceRecordFor(e.GetAttr().LayoutKey) : model;
+                    if (!owner) throw std::runtime_error("Paper-space owner is unavailable during source update");
+                    const auto oldOwner = original ? original->OwnerHandle : Dwg::kNullHandle;
                     auto conv = Convert(e);
                     if (original == nullptr)
                     {
                         if (conv)
-                            appended.push_back(std::move(conv));
+                            appended.emplace_back(owner->ObjectHandle, std::move(conv));
                         return;
                     }
                     const Dwg::Handle h = link->second.Handle;
@@ -4177,13 +4340,20 @@ namespace MiniCAD
                     if (conv && !custom)
                     {
                         conv->ObjectHandle = h;     // 位置不变：模型空间的实体列表里仍是这个句柄
-                        if (Dwg::Entity* added = m_db.AddEntity<Dwg::Entity>(nullptr, std::move(conv)))
-                            added->OwnerHandle = model->ObjectHandle;
+                        if (oldOwner == owner->ObjectHandle)
+                        {
+                            if (auto* added = m_db.AddEntity<Dwg::Entity>(nullptr, std::move(conv))) added->OwnerHandle = owner->ObjectHandle;
+                        }
+                        else
+                        {
+                            if (auto* previous = m_db.FindAs<Dwg::BlockRecord>(oldOwner)) std::erase(previous->Entities, h);
+                            m_db.AddEntity(owner, std::move(conv));
+                        }
                         return;
                     }
                     removed.insert(h);
                     if (conv)
-                        appended.push_back(std::move(conv));
+                        appended.emplace_back(owner->ObjectHandle, std::move(conv));
                 });
 
                 for (const auto& [id, link] : m_source->Links)
@@ -4194,9 +4364,11 @@ namespace MiniCAD
                         removed.insert(link.Handle);
                     }
                 }
-                std::erase_if(model->Entities, [&](Dwg::Handle h) { return removed.count(h) != 0; });
-                for (auto& e : appended)
-                    m_db.AddEntity(model, std::move(e));
+                for (const auto& [handle, object] : m_db.Objects())
+                    if (auto* block = dynamic_cast<Dwg::BlockRecord*>(object.get()))
+                        std::erase_if(block->Entities, [&](Dwg::Handle h) { return removed.count(h) != 0; });
+                for (auto& [owner, entity] : appended)
+                    m_db.AddEntity(m_db.FindAs<Dwg::BlockRecord>(owner), std::move(entity));
 
                 LOG_INFO_TR("DWG/DXF 导出：以原图为底，{0} 个未修改的实体原样写回（其中TCH对象 {1} 个）", kept, keptTch);
                 if (rewrittenTch > 0)
@@ -4215,8 +4387,10 @@ namespace MiniCAD
             // 写出侧据所有者自动写组码 67，实体与布局的归属关系随之保留。
             Dwg::BlockRecord* PaperSpaceRecordFor(uint64_t layoutKey)
             {
+                if (auto found = m_paperRecords.find(layoutKey); found != m_paperRecords.end())
+                    return m_db.FindAs<Dwg::BlockRecord>(found->second);
                 // 先按 LayoutKey（= 导入时的块记录句柄）找已存在的记录
-                if (layoutKey != 0)
+                if (m_source != nullptr && layoutKey != 0)
                     if (auto* rec = m_db.FindAs<Dwg::BlockRecord>(static_cast<Dwg::Handle>(layoutKey)))
                         return rec;
 
@@ -4232,9 +4406,24 @@ namespace MiniCAD
                 }
                 const std::string name = paperIndex == 0 ? "*Paper_Space"
                                                          : "*Paper_Space" + std::to_string(paperIndex - 1);
+                if (m_source != nullptr)
+                {
+                    int suffix = 0;
+                    std::string available;
+                    do { available = "*Paper_Space" + std::to_string(suffix++); }
+                    while (m_db.FindTableEntry<Dwg::BlockRecord>(m_db.BlockRecords(), available));
+                    auto* created = m_db.CreateBlockRecord(available);
+                    if (created) m_paperRecords[layoutKey] = created->ObjectHandle;
+                    return created;
+                }
                 if (auto* existing = m_db.FindTableEntry<Dwg::BlockRecord>(m_db.BlockRecords(), name))
+                {
+                    m_paperRecords[layoutKey] = existing->ObjectHandle;
                     return existing;
-                return m_db.CreateBlockRecord(name);
+                }
+                auto* created = m_db.CreateBlockRecord(name);
+                if (created) m_paperRecords[layoutKey] = created->ObjectHandle;
+                return created;
             }
 
             // 把 Scene 的布局表写成 LAYOUT 对象。
@@ -4264,26 +4453,14 @@ namespace MiniCAD
                     root->EntryHandles.push_back(layoutDict->ObjectHandle);
                 }
 
+                std::map<uint64_t, Dwg::Layout*> originalLayouts;
+                for (const auto& [handle, object] : m_db.Objects())
+                    if (auto* layout = dynamic_cast<Dwg::Layout*>(object.get())) originalLayouts[layout->AssociatedBlockHandle] = layout;
+                std::set<Dwg::Handle> retained;
                 int order = 0;
-                // ⚠ 先清空字典里已有的布局项、并删掉旧 LAYOUT 对象，再按 Scene 的布局表重建。
-                //   两层原因：
-                //     1. `CadDatabase::CreateDefaults()` 会预置一个 "Layout1"，不删就重复；
-                //     2. 以原图为底时读出的原库也带着原图的 LAYOUT，同样要按当前场景重写。
-                //   只清字典项不够 —— 对象本身还在 m_db.Objects() 里，写出时会作为
-                //   「未被引用但所有者已写出」的对象再写一遍（实测 4 张布局读回变 5 张）。
-                // ⚠ 删掉**所有**已有 LAYOUT 对象，再按 Scene 的布局表重建。
-                //   两层来源都要清：
-                //     1. `CadDatabase::CreateDefaults()` 预置的 "Layout1"（关联 *Paper_Space）；
-                //     2. 以原图为底时从原库读出的原图 LAYOUT。
-                //   只按字典项删除不够 —— 实测 CreateDefaults 的那个不在字典项里，
-                //   漏掉就导致「Layout1」重复（4 张布局读回变 5 张）。
+                // Rebuild dictionary membership while retaining the original objects
+                // and their handles. Remove orphan defaults after all layouts are mapped.
                 {
-                    std::vector<Dwg::Handle> stale;
-                    for (const auto& [h, obj] : m_db.Objects())
-                        if (dynamic_cast<const Dwg::Layout*>(obj.get()) != nullptr)
-                            stale.push_back(h);
-                    for (Dwg::Handle h : stale)
-                        m_db.RemoveObject(h);
                     // 块记录上还挂着 LayoutHandle 反向引用（CreateLayout 里设的），
                     // 不清掉的话写出时会顺着它把已删的布局再写一遍。
                     if (const Dwg::CadTable* recs = m_db.BlockRecords())
@@ -4296,12 +4473,49 @@ namespace MiniCAD
 
                 for (const DrawingLayout& dl : layouts)
                 {
-                    if (dl.Model) { ++order; continue; }
+                    if (dl.Model)
+                    {
+                        if (auto* model = m_db.ModelSpace())
+                            if (auto found = originalLayouts.find(model->ObjectHandle); found != originalLayouts.end())
+                            {
+                                retained.insert(found->second->ObjectHandle);
+                                layoutDict->EntryNames.push_back(found->second->Name);
+                                layoutDict->EntryHandles.push_back(found->second->ObjectHandle);
+                                model->LayoutHandle = found->second->ObjectHandle;
+                            }
+                        ++order; continue;
+                    }
 
                     Dwg::BlockRecord* rec = PaperSpaceRecordFor(dl.OwnerKey);
                     if (rec == nullptr) { ++order; continue; }
 
-                    auto lay = std::make_unique<Dwg::Layout>();
+                    Dwg::Layout* lay = nullptr;
+                    if (auto found = originalLayouts.find(dl.OwnerKey); m_source && found != originalLayouts.end()) lay = found->second;
+                    const Dwg::Layout* pageTemplate = lay;
+                    if (!pageTemplate && m_metadata)
+                        for (const auto& [handle, object] : m_metadata->Objects())
+                            if (const auto* page = dynamic_cast<const Dwg::Layout*>(object.get());
+                                page && page->AssociatedBlockHandle == (dl.SourceKey ? dl.SourceKey : dl.OwnerKey)) { pageTemplate = page; break; }
+                    if (!pageTemplate)
+                        if (auto found = originalLayouts.find(dl.SourceKey); found != originalLayouts.end()) pageTemplate = found->second;
+                    if (!lay)
+                    {
+                        auto created = std::make_unique<Dwg::Layout>();
+                        // A copied layout inherits its source page setup without sharing
+                        // the original layout identity or extension dictionary.
+                        if (pageTemplate)
+                        {
+                            for (const auto& subclass : pageTemplate->GetClassInfo().Subclasses)
+                                if (subclass.Marker == "AcDbPlotSettings")
+                                    for (const auto& property : subclass.Properties)
+                                        if (property.Get && property.Set && (m_source || (property.Kind != Dwg::DxfValueKind::Handle && !property.HasFlag(Dwg::DxfReferenceType::Handle))))
+                                            for (int i = 0; i < property.CodeCount; ++i)
+                                                property.Set(*created, property.Codes[i], property.Get(*pageTemplate, property.Codes[i]));
+                            created->UnprintableMargin = pageTemplate->UnprintableMargin;
+                        }
+                        lay = m_db.Add(std::move(created));
+                    }
+                    if (!lay) { ++order; continue; }
                     lay->Name          = dl.Name;
                     lay->TabOrder      = order;
                     lay->AssociatedBlockHandle = rec->ObjectHandle;
@@ -4309,15 +4523,76 @@ namespace MiniCAD
                     lay->MinExtents    = Dwg::XYZ{ dl.MinX, dl.MinY, 0.0 };
                     lay->MaxLimits     = Dwg::XY{ dl.MaxX, dl.MaxY };
                     lay->MinLimits     = Dwg::XY{ dl.MinX, dl.MinY };
-                    lay->InsertionBasePoint = Dwg::XYZ{ 0.0, 0.0, 0.0 };
-
-                    if (Dwg::Layout* added = m_db.Add(std::move(lay)))
+                    if (dl.PaperSizeEdited || !pageTemplate)
                     {
-                        layoutDict->EntryNames.push_back(dl.Name);
-                        layoutDict->EntryHandles.push_back(added->ObjectHandle);
+                        lay->PaperWidth = dl.PaperWidth; lay->PaperHeight = dl.PaperHeight;
+                        lay->PaperRotation = static_cast<Dwg::PlotRotation>(0);
+                        lay->PaperUnits = dl.PaperUnitToMm == 25.4 ? Dwg::PlotPaperUnits::Inches : Dwg::PlotPaperUnits::Millimeters;
+                        lay->PaperSize = "UserDefinedMetric";
                     }
+                    retained.insert(lay->ObjectHandle);
+                    lay->OwnerHandle = layoutDict->ObjectHandle;
+                    rec->LayoutHandle = lay->ObjectHandle;
+                    layoutDict->EntryNames.push_back(dl.Name);
+                    layoutDict->EntryHandles.push_back(lay->ObjectHandle);
                     ++order;
                 }
+                std::vector<Dwg::Handle> stale;
+                for (const auto& [handle, object] : m_db.Objects())
+                    if (dynamic_cast<const Dwg::Layout*>(object.get()) && !retained.contains(handle)) stale.push_back(handle);
+                for (auto handle : stale) m_db.RemoveObject(handle);
+                // The database default builder requires the canonical paper record.
+                // A deleted first layout must release that name to a surviving page.
+                if (auto* primary = m_db.PaperSpace(); primary && !primary->LayoutHandle)
+                {
+                    Dwg::BlockRecord* surviving = nullptr;
+                    for (const auto& layout : layouts)
+                        if (!layout.Model) { surviving = PaperSpaceRecordFor(layout.OwnerKey); break; }
+                    if (surviving && surviving != primary)
+                    {
+                        primary->Name = "*WanluoRemovedPaper" + std::to_string(primary->ObjectHandle);
+                        if (auto* block = m_db.FindAs<Dwg::Block>(primary->BlockEntityHandle)) block->Name = primary->Name;
+                        surviving->Name = "*Paper_Space";
+                        if (auto* block = m_db.FindAs<Dwg::Block>(surviving->BlockEntityHandle)) block->Name = surviving->Name;
+                    }
+                }
+            }
+
+            void SyncNamedStyles()
+            {
+                if (!m_source) return;
+                // Remove unused definitions first so a later rename can reuse a purged name.
+                for (const auto& [id, name] : m_source->TextStyleNames)
+                    if (!m_scene.GetTextStyleTable().Find(id))
+                        if (const auto* record = m_db.FindTableEntry<Dwg::TextStyle>(m_db.TextStyles(), name))
+                        {
+                            const auto handle = record->ObjectHandle;
+                            auto& entries = m_db.TextStyles()->Entries;
+                            entries.erase(std::remove(entries.begin(), entries.end(), handle), entries.end()); m_db.RemoveObject(handle);
+                        }
+                if (auto* dictionary = m_db.FindNamedDictionary("ACAD_MLINESTYLE"))
+                    for (const auto& [id, name] : m_source->MLineStyleNames)
+                        if (!m_scene.GetMLineStyleTable().Find(id))
+                            for (size_t i = 0; i < dictionary->EntryNames.size(); ++i)
+                                if (EqualsNoCase(dictionary->EntryNames[i], name.c_str()))
+                                {
+                                    const auto handle = dictionary->EntryHandles[i];
+                                    dictionary->EntryNames.erase(dictionary->EntryNames.begin() + i);
+                                    dictionary->EntryHandles.erase(dictionary->EntryHandles.begin() + i); m_db.RemoveObject(handle); break;
+                                }
+                for (const auto& [id, name] : m_source->TextStyleNames)
+                    if (const auto* current = m_scene.GetTextStyleTable().Find(id); current && current->Name != name)
+                        if (auto* record = m_db.FindTableEntry<Dwg::TextStyle>(m_db.TextStyles(), name)) record->Name = current->Name;
+                if (auto* dictionary = m_db.FindNamedDictionary("ACAD_MLINESTYLE"))
+                    for (const auto& [id, name] : m_source->MLineStyleNames)
+                        if (const auto* current = m_scene.GetMLineStyleTable().Find(id); current && current->Name != name)
+                            for (size_t i = 0; i < dictionary->EntryNames.size(); ++i)
+                                if (EqualsNoCase(dictionary->EntryNames[i], name.c_str()))
+                                {
+                                    dictionary->EntryNames[i] = current->Name;
+                                    if (auto* record = m_db.FindAs<Dwg::MLineStyle>(dictionary->EntryHandles[i])) record->Name = current->Name;
+                                    break;
+                                }
             }
 
             void ExportLineTypes()            {
@@ -4330,7 +4605,8 @@ namespace MiniCAD
                 {
                     if (m_source != nullptr)
                     {
-                        if (const auto* existing = m_db.FindTableEntry<Dwg::LineType>(m_db.LineTypes(), records[i].Name))
+                        if (const auto* existing = m_db.FindTableEntry<Dwg::LineType>(m_db.LineTypes(), records[i].Name);
+                            existing && Unchanged(&m_source->LineTypeSignatures, records[i].Name, LineTypeSignature(records[i])))
                         {
                             m_lineTypeHandles[static_cast<LineTypeID>(i)] = existing->ObjectHandle;
                             continue;
@@ -4338,6 +4614,7 @@ namespace MiniCAD
                     }
                     auto lt = std::make_unique<Dwg::LineType>();
                     lt->Name        = records[i].Name;
+                    if (lt->Name.find('|') != std::string::npos) lt->Flags = Dwg::StandardFlags::XrefDependent;
                     lt->Description = records[i].Description;
                     lt->Segments.resize(records[i].Pattern.size());
                     for (size_t k = 0; k < records[i].Pattern.size(); ++k)
@@ -4370,7 +4647,13 @@ namespace MiniCAD
                         seg.StyleHandle = isShape ? ShapeStyleHandle(sy.ShapeFont)
                                                   : StyleHandle(sy.StyleId);
                     }
-                    if (auto* added = m_db.AddTableEntry(m_db.LineTypes(), std::move(lt)))
+                    if (auto* existing = m_db.FindTableEntry<Dwg::LineType>(m_db.LineTypes(), records[i].Name))
+                    {
+                        existing->Description = lt->Description; existing->Segments = std::move(lt->Segments);
+                        existing->Flags |= lt->Flags;
+                        m_lineTypeHandles[static_cast<LineTypeID>(i)] = existing->ObjectHandle;
+                    }
+                    else if (auto* added = m_db.AddTableEntry(m_db.LineTypes(), std::move(lt)))
                         m_lineTypeHandles[static_cast<LineTypeID>(i)] = added->ObjectHandle;
                 }
             }
@@ -4396,6 +4679,7 @@ namespace MiniCAD
                     {
                         auto layer = std::make_unique<Dwg::Layer>();
                         layer->Name = src->GetName();
+                        if (layer->Name.find('|') != std::string::npos) layer->Flags = Dwg::StandardFlags::XrefDependent;
                         dst = m_db.AddTableEntry(m_db.Layers(), std::move(layer));
                     }
                     if (dst == nullptr)
@@ -4424,12 +4708,11 @@ namespace MiniCAD
                         m_styleHandles[rec.Id] = dst->ObjectHandle;
                         continue;
                     }
-                    if (dst == nullptr && m_source != nullptr)
-                        continue;           // 以原图为底：原图没有的样式等写出的实体用到时再建（StyleHandle）
                     if (dst == nullptr)
                     {
                         auto st = std::make_unique<Dwg::TextStyle>();
                         st->Name = rec.Name;
+                        if (st->Name.find('|') != std::string::npos) st->Flags = Dwg::StandardFlags::XrefDependent;
                         dst = m_db.AddTableEntry(m_db.TextStyles(), std::move(st));
                     }
                     if (dst == nullptr)
@@ -4457,7 +4740,17 @@ namespace MiniCAD
             void ExportBlocks()
             {
                 if (m_source != nullptr)
+                {
+                    m_scene.GetBlockTable().ForEach([&](BlockID, const BlockEntity& block)
+                    {
+                        if (!block.IsXRef()) return;
+                        const auto* record = m_db.FindTableEntry<Dwg::BlockRecord>(m_db.BlockRecords(), block.GetName());
+                        if (record)
+                            if (auto* sourceBlock = m_db.FindAs<Dwg::Block>(record->BlockEntityHandle))
+                            { sourceBlock->XRefPath = block.GetXRefPath(); sourceBlock->IsUnloaded = block.IsXRefUnloaded(); }
+                    });
                     return;
+                }
                 const BlockTable& table = m_scene.GetBlockTable();
 
                 // 先建全部块记录，嵌套插入才能找到目标
@@ -4821,12 +5114,51 @@ namespace MiniCAD
             // （不是符号表），所以走字典查找 / 新建。
             Dwg::Handle MLineStyleHandle(const MLineStyleRecord& rec)
             {
+                const auto signature = [](const MLineStyleRecord& style)
+                {
+                    std::ostringstream key; key.imbue(std::locale::classic()); key << std::setprecision(15);
+                    key << style.Name << '\n' << style.Description << '\n' << style.StartCap << style.EndCap << style.Joints;
+                    for (const auto& element : style.Elements)
+                    {
+                        key << '|' << element.Offset << ',' << element.UseColor;
+                        if (element.UseColor)
+                            key << ',' << std::lround(element.Color.r * 255) << ',' << std::lround(element.Color.g * 255) << ',' << std::lround(element.Color.b * 255);
+                    }
+                    return key.str();
+                };
+                const auto key = signature(rec);
+                if (auto found = m_mlineStyleHandles.find(key); found != m_mlineStyleHandles.end()) return found->second;
                 // 先按名字找已有的条目
                 if (Dwg::CadDictionary* dict = m_db.FindNamedDictionary("ACAD_MLINESTYLE"))
                 {
                     for (size_t i = 0; i < dict->EntryNames.size() && i < dict->EntryHandles.size(); ++i)
                         if (EqualsNoCase(dict->EntryNames[i], rec.Name.c_str()))
-                            return dict->EntryHandles[i];
+                        {
+                            auto* existing = dynamic_cast<Dwg::MLineStyle*>(m_db.Find(dict->EntryHandles[i]));
+                            if (!existing) continue;
+                            MLineStyleRecord previous; previous.Name = rec.Name; previous.Description = existing->Description;
+                            previous.StartCap = (int(existing->Flags) & 16) != 0;
+                            previous.EndCap = (int(existing->Flags) & 256) != 0; previous.Joints = (int(existing->Flags) & 2) != 0;
+                            for (const auto& item : existing->Elements)
+                            {
+                                MLineElement element; element.Offset = item.Offset;
+                                element.UseColor = !item.Color.IsByLayer() && !item.Color.IsByBlock();
+                                if (element.UseColor) element.Color = LayerColorToColor4(item.Color);
+                                previous.Elements.push_back(element);
+                            }
+                            previous.Normalize();
+                            const auto oldKey = signature(previous);
+                            m_mlineStyleHandles[oldKey] = existing->ObjectHandle;
+                            if (oldKey == key) return existing->ObjectHandle;
+                            // Keep original entities on their original style handle while the
+                            // edited named definition supplies subsequent drawings.
+                            std::string alias;
+                            int suffix = 1;
+                            do { alias = rec.Name + "_Snapshot_" + std::to_string(suffix++); }
+                            while (std::any_of(dict->EntryNames.begin(), dict->EntryNames.end(), [&](const auto& name) { return EqualsNoCase(name, alias.c_str()); }));
+                            dict->EntryNames[i] = alias; existing->Name = alias;
+                            break;
+                        }
                 }
                 else
                 {
@@ -4846,9 +5178,9 @@ namespace MiniCAD
                 st->Name        = rec.Name;
                 st->Description = rec.Description;
                 int flags = 0;
-                if (rec.StartCap) flags |= 1;
-                if (rec.EndCap)   flags |= 2;
-                if (rec.Joints)   flags |= 4;
+                if (rec.StartCap) flags |= 16;
+                if (rec.EndCap)   flags |= 256;
+                if (rec.Joints)   flags |= 2;
                 st->Flags = static_cast<Dwg::MLineStyleFlags>(flags);
                 for (const auto& el : rec.Elements)
                 {
@@ -4879,6 +5211,7 @@ namespace MiniCAD
                         dict->EntryNames.push_back(rec.Name);
                         dict->EntryHandles.push_back(added->ObjectHandle);
                     }
+                    m_mlineStyleHandles[key] = added->ObjectHandle;
                     return added->ObjectHandle;
                 }
                 return Dwg::kNullHandle;
@@ -4921,20 +5254,107 @@ namespace MiniCAD
                 if (auto* s = dynamic_cast<const ViewportEntity*>(&e))
                 {
                     auto d = std::make_unique<Dwg::Viewport>();
+                    if (m_originalSource && m_metadata)
+                        if (auto found = m_originalSource->Links.find(e.GetID()); found != m_originalSource->Links.end())
+                            if (const auto* original = m_metadata->FindAs<Dwg::Viewport>(found->second.Handle))
+                            {
+                                for (const auto& subclass : original->GetClassInfo().Subclasses)
+                                    if (subclass.Marker == "AcDbViewport")
+                                        for (const auto& property : subclass.Properties)
+                                            if (property.Get && property.Set && (m_source || (property.Kind != Dwg::DxfValueKind::Handle && !property.HasFlag(Dwg::DxfReferenceType::Handle))))
+                                                for (int i = 0; i < property.CodeCount; ++i)
+                                                    property.Set(*d, property.Codes[i], property.Get(*original, property.Codes[i]));
+                            }
+                    if (s->ClipKnown())
+                    {
+                        const auto oldBoundary = d->BoundaryHandle;
+                        d->BoundaryHandle = 0;
+                        d->Status = static_cast<Dwg::ViewportStatusFlags>(static_cast<int>(d->Status) & ~65536);
+                        if (!s->ClipCoordinates().empty())
+                        {
+                            std::unique_ptr<Dwg::Entity> boundary;
+                            if (s->ClipEllipse())
+                            {
+                                if (std::abs(s->GetWidth() - s->GetHeight()) < 1e-8)
+                                {
+                                    auto circle = std::make_unique<Dwg::Circle>();
+                                    circle->Center = ToXYZ(s->GetCenter()); circle->Radius = s->GetWidth() / 2;
+                                    boundary = std::move(circle);
+                                }
+                                else
+                                {
+                                    auto ellipse = std::make_unique<Dwg::Ellipse>();
+                                    ellipse->Center = ToXYZ(s->GetCenter());
+                                    const bool horizontal = s->GetWidth() >= s->GetHeight();
+                                    ellipse->MajorAxisEndPoint = horizontal ? Dwg::XYZ{s->GetWidth()/2,0,0} : Dwg::XYZ{0,s->GetHeight()/2,0};
+                                    ellipse->RadiusRatio = std::min(s->GetWidth(),s->GetHeight()) / std::max(s->GetWidth(),s->GetHeight());
+                                    boundary = std::move(ellipse);
+                                }
+                            }
+                            else
+                            {
+                                auto polyline = std::make_unique<Dwg::LwPolyline>();
+                                polyline->Flags = Dwg::LwPolylineFlags::Closed;
+                                for (const auto& point : s->PaperBoundary())
+                                { Dwg::LwPolylineVertex vertex; vertex.Location = {point.x,point.y}; polyline->Vertices.push_back(vertex); }
+                                boundary = std::move(polyline);
+                            }
+                            ApplyAttr(e, *boundary);
+                            // Replace only an unshared owned boundary; retain its handle for source references.
+                            int references = 0;
+                            if (oldBoundary) for (const auto& [handle, object] : m_db.Objects())
+                                if (const auto* other = dynamic_cast<const Dwg::Viewport*>(object.get()); other && other->BoundaryHandle == oldBoundary) ++references;
+                            auto* owner = PaperSpaceRecordFor(e.GetAttr().LayoutKey);
+                            if (m_source && oldBoundary && references == 1 && owner)
+                            {
+                                if (auto* old = m_db.FindAs<Dwg::Entity>(oldBoundary))
+                                {
+                                    if (auto* previous = m_db.FindAs<Dwg::BlockRecord>(old->OwnerHandle)) std::erase(previous->Entities,oldBoundary);
+                                    m_db.RemoveObject(oldBoundary);
+                                    boundary->ObjectHandle = oldBoundary;
+                                }
+                            }
+                            if (auto* added = m_db.AddEntity(owner, std::move(boundary))) d->BoundaryHandle = added->ObjectHandle;
+                            if (d->BoundaryHandle) d->Status |= Dwg::ViewportStatusFlags::NonRectangularClipping;
+                        }
+                    }
                     d->Center     = ToXYZ(s->GetCenter());
                     d->Width      = s->GetWidth();
                     d->Height     = s->GetHeight();
                     // ViewCenter(12/22) 要写 **DCS** 值：内部存的是 WCS，
                     // 转回去（R(+Twist)）。Twist 为 0 时是恒等变换。
-                    d->ViewCenter = Dwg::XY{ s->GetViewCenterDcs(s->GetTwist()).x,
+                    if (s->IsPlanView()) d->ViewCenter = Dwg::XY{ s->GetViewCenterDcs(s->GetTwist()).x,
                                              s->GetViewCenterDcs(s->GetTwist()).y };
+                    if (s->HasSpatialView())
+                    {
+                        const auto center=s->SpatialViewCenterDcs();
+                        d->ViewCenter={center.x,center.y};
+                        d->ViewDirection=ToXYZ(s->GetViewDirection());
+                        d->ViewTarget=ToXYZ(s->GetViewTarget());
+                        d->TwistAngle=s->GetTwist();
+                    }
                     d->ViewHeight = s->GetViewHeight();
-                    d->TwistAngle = s->GetTwist();
+                    if (s->IsPlanView()) d->TwistAngle = s->GetTwist();
                     d->ActiveStatus = static_cast<std::int16_t>(s->GetViewportId());
-                    d->ViewDirection = Dwg::XYZ::AxisZ();
+                    const auto setFlag = [&](Dwg::ViewportStatusFlags flag, bool enabled)
+                    {
+                        const int mask = static_cast<int>(flag);
+                        d->Status = static_cast<Dwg::ViewportStatusFlags>(
+                            (static_cast<int>(d->Status) & ~mask) | (enabled ? mask : 0));
+                    };
+                    setFlag(Dwg::ViewportStatusFlags::ViewportZoomLocking, s->IsLocked());
+                    setFlag(Dwg::ViewportStatusFlags::PerspectiveMode, s->IsPerspective());
+                    const auto& optics = s->GetCameraOptics();
+                    d->LensLength = optics.Lens;
+                    d->FrontClipPlane = optics.Front;
+                    d->BackClipPlane = optics.Back;
+                    setFlag(Dwg::ViewportStatusFlags::FrontClipping, optics.FrontEnabled);
+                    setFlag(Dwg::ViewportStatusFlags::BackClipping, optics.BackEnabled);
+                    setFlag(Dwg::ViewportStatusFlags::FrontClipNotAtEye, !optics.FrontAtEye);
+                    if (!s->HasSpatialView() && s->IsPlanView()) d->ViewDirection = Dwg::XYZ::AxisZ();
                     // ViewTarget(17/27) 是 DCS 的原点：12/22 已经写成完整的 WCS 位置（转过 Twist），
                     // 目标点就写 (0,0,0)。以前把视图中心同时写进目标点，按 DCS 的定义会被加两遍
-                    d->ViewTarget = Dwg::XYZ{ 0.0, 0.0, 0.0 };
+                    if (!s->HasSpatialView() && s->IsPlanView()) d->ViewTarget = Dwg::XYZ{ 0.0, 0.0, 0.0 };
                     // 本视口冻结的图层（331）
                     for (LayerID lid : s->GetFrozenLayers())
                         if (auto it = m_layerHandles.find(lid); it != m_layerHandles.end())
@@ -5057,7 +5477,7 @@ namespace MiniCAD
                 if (auto* s = dynamic_cast<const ArcEntity*>(&e))
                 {
                     auto d = std::make_unique<Dwg::Arc>();
-                    d->Center     = ToXYZ(s->GetArc().Center);
+                    d->Center     = ToXYZ(Math::WcsToOcs(s->GetOCS(), s->GetArc().Center));
                     d->Radius     = s->GetArc().Radius;
                     d->StartAngle = s->GetArc().StartAngle;
                     d->EndAngle   = s->GetArc().EndAngle;
@@ -5067,7 +5487,7 @@ namespace MiniCAD
                 if (auto* s = dynamic_cast<const CircleEntity*>(&e))
                 {
                     auto d = std::make_unique<Dwg::Circle>();
-                    d->Center = ToXYZ(s->GetCircle().Center);
+                    d->Center = ToXYZ(Math::WcsToOcs(s->GetOCS(), s->GetCircle().Center));
                     d->Radius = s->GetCircle().Radius;
                     d->Normal = NormalOf(e);
                     return Finish(e, std::move(d));
@@ -5131,7 +5551,7 @@ namespace MiniCAD
                 if (auto* s = dynamic_cast<const TextEntity*>(&e))
                 {
                     auto d = std::make_unique<Dwg::TextEntity>();
-                    d->InsertPoint = ToXYZ(s->GetPosition());
+                    d->InsertPoint = ToXYZ(Math::WcsToOcs(s->GetOCS(), s->GetPosition()));
                     if (s->GetHAlign() != 0 || s->GetVAlign() != 0)
                     {
                         // 非左对齐基线：对齐点为准，插入点由 CAD 重新计算
@@ -5163,7 +5583,7 @@ namespace MiniCAD
                     }
                     d->Height         = s->GetHeight();
                     d->RectangleWidth = s->GetBoxWidth();
-                    d->AlignmentPoint = { std::cos(s->GetRotation()), std::sin(s->GetRotation()), 0.0 };
+                    d->AlignmentPoint = ToXYZ(Math::PlaneDirection(s->GetOCS(), s->GetRotation()));
                     d->AttachmentPoint = static_cast<Dwg::AttachmentPointType>(static_cast<int>(s->GetAttachment()));
                     d->LineSpacing      = s->GetLineSpacingFactor() > 0.0 ? s->GetLineSpacingFactor() : 1.0;
                     d->LineSpacingStyle = s->GetLineSpacingStyle() == MTextLineSpacing::Exact ? Dwg::LineSpacingStyleType::Exact
@@ -5518,10 +5938,12 @@ namespace MiniCAD
             {
                 auto d = std::make_unique<Dwg::Ellipse>();
                 d->Center = ToXYZ(el.Center);
-                const double c = std::cos(el.Rotation), s = std::sin(el.Rotation);
+                const auto [x, y] = el.Axes();
+                const auto normal = Math::BuildOCS(el.Normal).Uz;
+                d->Normal = {normal.x, normal.y, normal.z};
                 if (el.RadiusX >= el.RadiusY)
                 {
-                    d->MajorAxisEndPoint = { c * el.RadiusX, s * el.RadiusX, 0.0 };
+                    d->MajorAxisEndPoint = { x.x * el.RadiusX, x.y * el.RadiusX, x.z * el.RadiusX };
                     d->RadiusRatio       = el.RadiusX > 0.0 ? el.RadiusY / el.RadiusX : 1.0;
                     d->StartParameter    = el.StartParam;
                     d->EndParameter      = el.EndParam;
@@ -5529,15 +5951,14 @@ namespace MiniCAD
                 else
                 {
                     // 短轴在 Rotation 方向：长轴取 Y 半轴的反方向，参数整体平移 π/2
-                    d->MajorAxisEndPoint = { s * el.RadiusY, -c * el.RadiusY, 0.0 };
+                    d->MajorAxisEndPoint = { -y.x * el.RadiusY, -y.y * el.RadiusY, -y.z * el.RadiusY };
                     d->RadiusRatio       = el.RadiusY > 0.0 ? el.RadiusX / el.RadiusY : 1.0;
                     d->StartParameter    = el.StartParam + kPi / 2.0;
                     d->EndParameter      = el.EndParam + kPi / 2.0;
                 }
                 // 参数规整到 [0, 2π)
                 auto wrap = [](double t) { t = std::fmod(t, kTwoPi); return t < 0.0 ? t + kTwoPi : t; };
-                const double sweep = el.EndParam - el.StartParam;
-                if (std::abs(sweep - kTwoPi) < 1e-9)
+                if (el.IsFull())
                 {
                     d->StartParameter = 0.0;
                     d->EndParameter   = kTwoPi;
@@ -5556,14 +5977,14 @@ namespace MiniCAD
                                                          const std::vector<double>* segStartW = nullptr,
                                                          const std::vector<double>* segEndW = nullptr)
             {
-                const auto& pts = pl.Points;
-                if (pts.size() < 2)
+                if (pl.Points.size() < 2)
                     return Skip(e);
 
                 auto d = std::make_unique<Dwg::LwPolyline>();
+                const auto ocs = Math::BuildOCS(pl.Normal);
+                const auto& pts = pl.Points;
                 size_t count = pts.size();
-                const double dx = pts.front().x - pts.back().x, dy = pts.front().y - pts.back().y;
-                const bool closed = count >= 3 && std::hypot(dx, dy) < 1e-9;
+                const bool closed = PolylineOps::IsRing(pl);
                 if (closed)
                 {
                     --count;   // 末点与起点重合：用闭合标志表示，最后一段的 bulge 落到末顶点上
@@ -5573,7 +5994,8 @@ namespace MiniCAD
                 for (size_t i = 0; i < count; ++i)
                 {
                     Dwg::LwPolylineVertex v;
-                    v.Location = { pts[i].x, pts[i].y };
+                    const auto local = Math::WcsToOcs(ocs, pts[i]);
+                    v.Location = {local.x, local.y};
                     v.Bulge    = i < pl.Bulges.size() ? pl.Bulges[i] : 0.0;
                     if (hasSegWidths)
                     {
@@ -5582,9 +6004,9 @@ namespace MiniCAD
                     }
                     d->Vertices.push_back(v);
                 }
-                d->Elevation = pts.front().z;
+                d->Elevation = Math::WcsToOcs(ocs, pts.front()).z;
                 // 有逐段宽度时不再写恒定宽度（组码 43）：两者同时存在会让顶点宽度被覆盖
-                d->ConstantWidth = (hasSegWidths && HasNonZero(*segStartW, *segEndW)) ? 0.0 : (width >= 1.0 ? width : 0.0);
+                d->ConstantWidth = (hasSegWidths && HasNonZero(*segStartW, *segEndW)) ? 0.0 : width;
                 d->Normal        = NormalOf(e);
                 return Finish(e, std::move(d));
             }
@@ -5601,6 +6023,7 @@ namespace MiniCAD
             std::unique_ptr<Dwg::Entity> ConvertHatch(const Entity& e, const HatchEntity& h)
             {
                 auto d = std::make_unique<Dwg::Hatch>();
+                d->Normal = NormalOf(e);
                 bool hasElevation = false;
                 auto elevation = [&](const Math::Point3& p)
                 {
@@ -5796,51 +6219,63 @@ namespace MiniCAD
             // DWG/DXF 只存文件名，像素在 ImageDefinition 里；路径为空时也照常写（AutoCAD 打开后显示找不到图像的占位）。
             // ImageDefinition 必须挂到根字典的 ACAD_IMAGE_DICT 下才会被写出（否则写出器把它当孤儿丢掉），
             // 读回来时也要能顺着 340 句柄找到它，所以路径去重后共用一份定义。
-            Dwg::Handle ImageDefinitionHandle(std::string_view path)
+            const Dwg::RasterImage* OriginalImage(const Entity& image) const
+            {
+                if (!m_originalSource) return nullptr;
+                const auto found = m_originalSource->Links.find(image.GetID());
+                if (found == m_originalSource->Links.end()) return nullptr;
+                const auto* database = m_source ? &m_db : m_metadata;
+                return database ? database->FindAs<Dwg::RasterImage>(found->second.Handle) : nullptr;
+            }
+
+            Dwg::XY ImagePixelSize(const ImageEntity& image)
+            {
+                if (auto found = m_imageSizes.find(image.GetPath()); found != m_imageSizes.end()) return found->second;
+                uint32_t width = 0, height = 0;
+                Dwg::XY size{1, 1};
+                if (m_exportImages.GetSize(image.GetPath(), width, height)) size = {double(width), double(height)};
+                else if (const auto* original = OriginalImage(image); original && original->Size.X > 0 && original->Size.Y > 0)
+                    size = original->Size;
+                m_imageSizes[image.GetPath()] = size;
+                return size;
+            }
+
+            Dwg::Handle ImageDefinitionHandle(std::string_view path, const Dwg::XY& size)
             {
                 const std::string key(path);
-                auto cached = m_imageDefs.find(key);
-                if (cached != m_imageDefs.end())
-                    return cached->second;
-
-                Dwg::CadDictionary* root = m_db.RootDictionary();
-                if (root == nullptr)
-                    return Dwg::kNullHandle;
-
-                // ACAD_IMAGE_DICT 不存在时新建（与 ACAD_MLINESTYLE 的处理相同）
-                if (Dwg::CadDictionary* dict = m_db.FindNamedDictionary("ACAD_IMAGE_DICT"); dict != nullptr)
+                if (auto found = m_imageDefs.find(key); found != m_imageDefs.end()) return found->second;
+                auto* root = m_db.RootDictionary();
+                if (!root) return Dwg::kNullHandle;
+                auto* dictionary = m_db.FindNamedDictionary("ACAD_IMAGE_DICT");
+                if (!dictionary)
                 {
-                    for (size_t i = 0; i < dict->EntryNames.size() && i < dict->EntryHandles.size(); ++i)
-                        if (EqualsNoCase(dict->EntryNames[i], key.c_str()))
-                            return dict->EntryHandles[i];
-                }
-                else
-                {
-                    auto newDict = std::make_unique<Dwg::CadDictionary>();
-                    Dwg::CadDictionary* addedDict = m_db.Add(std::move(newDict));
-                    if (addedDict == nullptr)
-                        return Dwg::kNullHandle;
+                    auto created = std::make_unique<Dwg::CadDictionary>();
+                    created->OwnerHandle = root->ObjectHandle;
+                    dictionary = m_db.Add(std::move(created));
+                    if (!dictionary) return Dwg::kNullHandle;
                     root->EntryNames.push_back("ACAD_IMAGE_DICT");
-                    root->EntryHandles.push_back(addedDict->ObjectHandle);
+                    root->EntryHandles.push_back(dictionary->ObjectHandle);
                 }
-
-                auto def  = std::make_unique<Dwg::ImageDefinition>();
-                def->FileName      = key;
-                def->Size          = { 1.0, 1.0 };
-                def->DefaultSize   = { 1.0, 1.0 };
-                def->IsLoaded      = false;   // 像素不内嵌，只是引用文件
-                Dwg::Handle handle = Dwg::kNullHandle;
-                if (Dwg::ImageDefinition* added = m_db.Add(std::move(def)))
-                {
-                    handle = added->ObjectHandle;
-                    if (Dwg::CadDictionary* dict = m_db.FindNamedDictionary("ACAD_IMAGE_DICT"); dict != nullptr)
+                for (auto handle : dictionary->EntryHandles)
+                    if (auto* existing = m_db.FindAs<Dwg::ImageDefinition>(handle); existing && existing->FileName == key)
                     {
-                        dict->EntryNames.push_back(key);
-                        dict->EntryHandles.push_back(handle);
+                        existing->OwnerHandle = dictionary->ObjectHandle;
+                        existing->Size = size;
+                        m_imageDefs[key] = handle;
+                        return handle;
                     }
-                }
-                m_imageDefs.emplace(key, handle);
-                return handle;
+                auto definition = std::make_unique<Dwg::ImageDefinition>();
+                definition->FileName = key;
+                definition->Size = size;
+                definition->DefaultSize = {1, 1};
+                definition->IsLoaded = false;
+                definition->OwnerHandle = dictionary->ObjectHandle;
+                auto* added = m_db.Add(std::move(definition));
+                if (!added) return Dwg::kNullHandle;
+                dictionary->EntryNames.push_back(key);
+                dictionary->EntryHandles.push_back(added->ObjectHandle);
+                m_imageDefs[key] = added->ObjectHandle;
+                return added->ObjectHandle;
             }
 
             std::unique_ptr<Dwg::Entity> ConvertRasterImage(const Entity& e, const ImageEntity& img)
@@ -5854,14 +6289,29 @@ namespace MiniCAD
                 // P1→P2 为 U、P1→P4 为 V（导入时的逆过程），旋转、斜置的图像也原样写回
                 auto d = std::make_unique<Dwg::RasterImage>();
                 d->InsertPoint = ToXYZ(r.P1);
-                d->UVector     = ToXYZ(r.P2 - r.P1);
-                d->VVector     = ToXYZ(r.P4 - r.P1);
-                d->Size        = { 1.0, 1.0 };   // 像素数未知，写成 1×1（只影响坐标换算，不影响外观）
+                const auto pixels = ImagePixelSize(img);
+                d->UVector     = ToXYZ((r.P2 - r.P1) / pixels.X);
+                d->VVector     = ToXYZ((r.P4 - r.P1) / pixels.Y);
+                d->Size        = pixels;
                 d->Flags       = Dwg::ImageDisplayFlags::ShowImage | Dwg::ImageDisplayFlags::ShowNotAlignedImage;
 
+                if (const auto* original = OriginalImage(e))
+                {
+                    d->ClassVersion = original->ClassVersion;
+                    d->Flags = original->Flags;
+                    d->ClippingState = original->ClippingState;
+                    d->Brightness = original->Brightness;
+                    d->Contrast = original->Contrast;
+                    d->Fade = original->Fade;
+                    d->ClipMode = original->ClipMode;
+                    if (original->Size.X > 0 && original->Size.Y > 0)
+                        for (const auto& point : original->ClipBoundaryVertices)
+                            d->ClipBoundaryVertices.push_back({(point.X + .5) / original->Size.X * pixels.X - .5,
+                                                               (point.Y + .5) / original->Size.Y * pixels.Y - .5});
+                }
                 const std::string& path = img.GetPath();
                 if (!path.empty())
-                    d->DefinitionHandle = ImageDefinitionHandle(path);
+                    d->DefinitionHandle = ImageDefinitionHandle(path, pixels);
                 return Finish(e, std::move(d));
             }
 
@@ -5907,10 +6357,16 @@ namespace MiniCAD
             const CadSource*  m_source;
 
             std::map<LayerID, Dwg::Handle>     m_layerHandles;
+            std::map<uint64_t, Dwg::Handle> m_paperRecords;
+            const Dwg::CadDatabase* m_metadata;
+            const CadSource* m_originalSource;
             std::map<LineTypeID, Dwg::Handle>  m_lineTypeHandles;
             std::map<TextStyleID, Dwg::Handle> m_styleHandles;
+            std::map<std::string, Dwg::Handle> m_mlineStyleHandles;
             // 线型形段的形文件(如 "ltypeshp.shx") → 指向它的匿名 STYLE 句柄
             std::map<std::string, Dwg::Handle> m_shapeStyleHandles;
+            ImageLibrary m_exportImages;
+            std::map<std::string, Dwg::XY> m_imageSizes;
             std::map<std::string, Dwg::Handle> m_imageDefs;      // 图像路径 → ImageDefinition 句柄（同一路径共用一份定义）
             int                                m_solidNoMesh   = 0;
             int                                m_solidTooLarge = 0;
@@ -6020,6 +6476,7 @@ namespace MiniCAD
         if (source != nullptr)
         {
             src = std::make_shared<CadSource>();
+            src->Path    = sourcePath;
             src->Bytes   = data;
             src->Format  = info.format;
             src->Version = db->GetVersion();
@@ -6069,11 +6526,57 @@ namespace MiniCAD
             const std::string name = blk->GetName();
             const std::string path = blk->GetXRefPath();
             if (Importer::LoadXref(scene, *ctx, name, path, *blk))
-                ++loaded;
+              {
+                  const auto resolved = ResolveXrefPath(*ctx, path);
+                  if (!resolved.empty()) blk->SetXRefPath(PathToUtf8(resolved));
+                  ++loaded;
+              }
         }
         if (loaded > 0)
             scene.MarkDirty();
         return loaded;
+    }
+
+    bool CadStyleIsReferenced(const CadSource* source, bool multiline, uint32_t style)
+    {
+        if (!source) return false;
+        const auto& names = multiline ? source->MLineStyleNames : source->TextStyleNames;
+        const auto original = names.find(style);
+        if (original == names.end()) return false;
+        const auto database = ReadDatabase(source->Bytes, source->Format, nullptr);
+        if (!database) return true;
+        if (!multiline && EqualsNoCase(database->Header.DimensionTextStyleName, original->second.c_str())) return true;
+        Dwg::Handle handle = Dwg::kNullHandle;
+        if (multiline)
+        {
+            if (const auto* dictionary = database->FindNamedDictionary("ACAD_MLINESTYLE"))
+                for (size_t i = 0; i < dictionary->EntryNames.size(); ++i)
+                    if (EqualsNoCase(dictionary->EntryNames[i], original->second.c_str())) handle = dictionary->EntryHandles[i];
+        }
+        else if (const auto* record = database->FindTableEntry<Dwg::TextStyle>(database->TextStyles(), original->second)) handle = record->ObjectHandle;
+        if (handle == Dwg::kNullHandle) return false;
+        std::set<Dwg::Handle> converted;
+        for (const auto& [id, link] : source->Links) converted.insert(link.Handle);
+        for (const auto& [id, object] : database->Objects())
+        {
+            if (id == handle) continue;
+            const auto* raw = Dwg::RawDataOf(*object);
+            if (converted.count(id) && !raw) continue; // Current scene checks replace stale source-entity references.
+            if (raw)
+            {
+                if (std::find(raw->Dwg.References.begin(), raw->Dwg.References.end(), handle) != raw->Dwg.References.end()) return true;
+                for (const auto& group : raw->Dxf.Groups)
+                    if (((group.Code >= 320 && group.Code <= 369) && group.Value.AsHandle() == handle) ||
+                        (group.Code == (multiline ? 2 : 7) && EqualsNoCase(group.Value.AsString(), original->second.c_str()))) return true;
+            }
+            for (const auto& subclass : object->GetClassInfo().Subclasses)
+                for (const auto& property : subclass.Properties)
+                    if (property.Kind == Dwg::DxfValueKind::Handle && property.Get && property.Get(*object, property.Codes[0]).AsHandle() == handle) return true;
+            if (!multiline)
+                if (const auto* line = dynamic_cast<const Dwg::LineType*>(object.get()))
+                    for (const auto& segment : line->Segments) if (segment.StyleHandle == handle) return true;
+        }
+        return false;
     }
 
     int CadSourceTchCount(const CadSource* source)
@@ -6094,6 +6597,7 @@ namespace MiniCAD
 
         // 格式与版本都与原图相同：以重新读出的原图为底（未建模对象的原始数据只能写回同一格式、同一版本）
         std::unique_ptr<Dwg::CadDatabase> db;
+        std::unique_ptr<Dwg::CadDatabase> metadata;
         const CadSource* base = nullptr;
         if (source != nullptr && source->Version == target
             && (kind == CadFileKind::Dwg ? source->Format == Dwg::CadFileFormat::Dwg
@@ -6110,16 +6614,16 @@ namespace MiniCAD
             // changing file format without copying source-database object handles.
             db->Header.InsUnits = Dwg::UnitsType::Millimeters;
             if (source != nullptr)
-                if (const auto original = ReadDatabase(source->Bytes, source->Format, nullptr))
+                if (metadata = ReadDatabase(source->Bytes, source->Format, nullptr))
                 {
-                    db->Header.InsUnits = original->Header.InsUnits;
-                    db->Header.ModelSpaceInsertionBase = original->Header.ModelSpaceInsertionBase;
-                    db->Header.PaperSpaceInsertionBase = original->Header.PaperSpaceInsertionBase;
+                    db->Header.InsUnits = metadata->Header.InsUnits;
+                    db->Header.ModelSpaceInsertionBase = metadata->Header.ModelSpaceInsertionBase;
+                    db->Header.PaperSpaceInsertionBase = metadata->Header.PaperSpaceInsertionBase;
                 }
             if (CadSourceTchCount(source) > 0)
                 LOG_WARN_TR("DWG/DXF 导出：格式或版本与原图不同，TCH对象 TCH对象 不能原样写回，只写出显示用的普通几何", CadSourceTchCount(source));
         }
-        Exporter(scene, *db, target, base).Run();
+        Exporter(scene, *db, target, base, metadata ? metadata.get() : db.get(), source).Run();
 
         std::vector<std::uint8_t> out;
         if (kind == CadFileKind::Dwg)

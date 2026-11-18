@@ -602,6 +602,18 @@ namespace MiniDWG::DxfRead
             return;
         }
 
+        if (auto* viewport = dynamic_cast<Viewport*>(obj))
+        {
+            // FrozenLayers is marked Ignored in the generated metadata. VIEWPORT's
+            // repeated 331 handles still carry VPLAYER state and need explicit input.
+            Process(item, r, [&](const DxfGroup& group, std::size_t&, const ParseState& state) -> bool {
+                if (group.Code != 331 || state.Subclass != "AcDbViewport") return false;
+                viewport->FrozenLayers.push_back(group.Value.AsHandle());
+                return true;
+            });
+            return;
+        }
+
         if (auto* leader = dynamic_cast<Leader*>(obj))
         {
             Process(item, r, [&](const DxfGroup& g, std::size_t&, const ParseState&) -> bool {

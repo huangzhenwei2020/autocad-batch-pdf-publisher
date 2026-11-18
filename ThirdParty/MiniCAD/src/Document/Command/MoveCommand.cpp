@@ -20,6 +20,7 @@
 #include "Core/Entity/XLineEntity.hpp"
 #include "Core/Entity/ToleranceEntity.hpp"
 #include "Core/Entity/Solid3DEntity.hpp"
+#include "Core/Entity/ViewportEntity.hpp"
 #include "Core/GeomKernel/Line.hpp"
 
 namespace MiniCAD
@@ -27,9 +28,9 @@ namespace MiniCAD
     // ── 几何整体平移 ──────────────────────────────────────────────
     static Point     Translate(const Point& p,     const Math::Vec3& d) { return Point    { p.Position + d }; }
     static Line      Translate(const Line& l,      const Math::Vec3& d) { return Line     { l.Start + d, l.End + d }; }
-    static Circle    Translate(const Circle& c,    const Math::Vec3& d) { return Circle   { c.Center + d, c.Radius }; }
+    static Circle    Translate(const Circle& c,    const Math::Vec3& d) { return Circle   { c.Center + d, c.Radius, c.Normal }; }
     static Rectangle Translate(const Rectangle& r, const Math::Vec3& d) { return Rectangle{ r.P1 + d, r.P2 + d, r.P3 + d, r.P4 + d }; }
-    static Arc       Translate(const Arc& a,       const Math::Vec3& d) { return Arc      { a.Center + d, a.Radius, a.StartAngle, a.EndAngle }; }
+    static Arc       Translate(const Arc& a,       const Math::Vec3& d) { return Arc      { a.Center + d, a.Radius, a.StartAngle, a.EndAngle, a.Normal }; }
     static Ellipse   Translate(const Ellipse& e,   const Math::Vec3& d) { Ellipse o = e; o.Center = e.Center + d; return o; }
 
     static Polyline Translate(const Polyline& src, const Math::Vec3& d)
@@ -60,6 +61,7 @@ namespace MiniCAD
             break;
         case HatchEdge::Kind::Spline:
             for (auto& p : out.Spl.FitPoints) p += d;
+            for (auto& p : out.Spl.ControlPoints) p += d;
             out.Spl.Build();
             break;
         }
@@ -177,7 +179,7 @@ namespace MiniCAD
                 auto* he = static_cast<HatchEntity*>(entity);
                 e.Kind        = MoveEntityEntry::Kind::Hatch;
                 e.BeforeHatch = he->GetLoops();
-                e.AfterHatch  = TranslateHatchLoops(he->GetLoops(), delta);
+                e.AfterHatch  = TranslateHatchLoops(he->GetLoops(), he->LocalDisplacement(delta));
             }
             else if (entity->IsKindOf<LeaderEntity>())
             {
@@ -224,6 +226,12 @@ namespace MiniCAD
                 e.Kind         = MoveEntityEntry::Kind::Tolerance;
                 e.BeforePosVec = { te->GetInsertion(), te->GetDirection() };
                 e.AfterPosVec  = { te->GetInsertion() + delta, te->GetDirection() };
+            }
+            else if (auto* viewport = dynamic_cast<ViewportEntity*>(entity))
+            {
+                e.Kind = MoveEntityEntry::Kind::Viewport;
+                e.BeforePosVec.pos = viewport->GetCenter();
+                e.AfterPosVec.pos = viewport->GetCenter() + delta;
             }
             else if (entity->IsKindOf<Solid3DEntity>())
             {
@@ -353,6 +361,9 @@ namespace MiniCAD
         }
         case MoveEntityEntry::Kind::Transform:
             static_cast<Solid3DEntity*>(entity)->SetTransform(useAfter ? e.AfterTransform : e.BeforeTransform);
+            break;
+        case MoveEntityEntry::Kind::Viewport:
+            static_cast<ViewportEntity*>(entity)->SetCenter(useAfter ? e.AfterPosVec.pos : e.BeforePosVec.pos);
             break;
         }
     }

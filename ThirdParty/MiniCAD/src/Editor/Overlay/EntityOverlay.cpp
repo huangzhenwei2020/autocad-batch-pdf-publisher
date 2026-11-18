@@ -31,7 +31,7 @@ namespace MiniCAD
         if (entity.IsKindOf<CircleEntity>())
         {
             const auto& c = static_cast<const CircleEntity&>(entity).GetCircle();
-            overlay.AddCircle(c.Center, c.Radius, color);
+            overlay.AddCircle(c, color);
             return;
         }
         if (entity.IsKindOf<RectangleEntity>())
@@ -43,7 +43,7 @@ namespace MiniCAD
         if (entity.IsKindOf<ArcEntity>())
         {
             const auto& a = static_cast<const ArcEntity&>(entity).GetArc();
-            overlay.AddArc(a.Center, a.Radius, a.StartAngle, a.EndAngle, color);
+            overlay.AddArc(a, color);
             return;
         }
         if (entity.IsKindOf<EllipseEntity>())

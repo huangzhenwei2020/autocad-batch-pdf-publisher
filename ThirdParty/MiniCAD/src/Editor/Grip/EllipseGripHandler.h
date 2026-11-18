@@ -46,8 +46,10 @@ namespace MiniCAD
             for (int k = 0; k < 4; ++k)     // +X / +Y / -X / -Y
             {
                 const double t = Math::PI * 0.5 * k;
-                if (el.ContainsParam(t))
-                    outGrips.push_back({ id, Grip::Type::Quadrant, el.PointAt(t), k });
+                if (!el.ContainsParam(t)) continue;
+                const auto point = el.PointAt(t);
+                if (!el.IsFull() && (point == el.StartPoint() || point == el.EndPoint())) continue;
+                outGrips.push_back({ id, Grip::Type::Quadrant, point, k });
             }
             if (!el.IsFull())
             {
@@ -94,14 +96,9 @@ namespace MiniCAD
             // ── 轴端点拖动：修改半轴长 ───────────────────────────────
             case Grip::Type::Quadrant:
             {
-                double dx     = worldPos.x - state->Base.Center.x;
-                double dy     = worldPos.y - state->Base.Center.y;
-                double cosR   = std::cos(state->Base.Rotation);
-                double sinR   = std::sin(state->Base.Rotation);
-
-                // 投影到局部坐标轴
-                double localX = dx * cosR + dy * sinR;  // 沿长轴分量
-                double localY = -dx * sinR + dy * cosR; // 沿短轴分量
+                const auto [x, y] = state->Base.Axes();
+                const auto delta = worldPos - state->Base.Center;
+                const double localX = Math::Dot(delta,x), localY = Math::Dot(delta,y);
 
                 switch (activeGrip.SubIndex)
                 {
@@ -122,9 +119,11 @@ namespace MiniCAD
             // ── 弧端点拖动：沿椭圆改起止参数 ─────────────────────────
             case Grip::Type::Start:
                 out.SetParams(out.ParamOfPoint(worldPos), out.EndParam);
+                if (out.IsFull()) out = state->Base;
                 break;
             case Grip::Type::End:
                 out.SetParams(out.StartParam, out.ParamOfPoint(worldPos));
+                if (out.IsFull()) out = state->Base;
                 break;
 
             default:
@@ -164,6 +163,7 @@ namespace MiniCAD
 
             if (std::abs(after.Center.x  - b.Center.x)  < Math::LengthEPS &&
                 std::abs(after.Center.y  - b.Center.y)  < Math::LengthEPS &&
+                std::abs(after.Center.z  - b.Center.z)  < Math::LengthEPS &&
                 std::abs(after.RadiusX   - b.RadiusX)   < Math::LengthEPS &&
                 std::abs(after.RadiusY   - b.RadiusY)   < Math::LengthEPS &&
                 std::abs(after.Rotation  - b.Rotation)  < Math::AngleEPS &&

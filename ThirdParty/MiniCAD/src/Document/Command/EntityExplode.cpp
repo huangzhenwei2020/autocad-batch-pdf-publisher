@@ -51,14 +51,13 @@ namespace MiniCAD
                 const Math::Point3& b = p.Points[static_cast<size_t>(i) + 1];
                 if (p.SegIsArc(i))
                 {
-                    const auto g = Polyline::ComputeArc(a, b, p.SegBulge(i));
+                    const auto g = p.SegmentArc(i);
                     if (g.Radius > Math::LengthEPS)
                     {
                         // ArcEntity 只有逆时针弧：顺时针（SweepAngle < 0）的弧交换起止角
                         const double s0 = g.StartAngle, s1 = g.StartAngle + g.SweepAngle;
-                        auto arc = g.SweepAngle >= 0
-                            ? std::make_unique<ArcEntity>(0, g.Center, g.Radius, s0, s1)
-                            : std::make_unique<ArcEntity>(0, g.Center, g.Radius, s1, s0);
+                        const auto center = Math::OcsToWcs(pl.GetOCS(), g.Center);
+                        auto arc = std::make_unique<ArcEntity>(0, center, g.Radius, std::min(s0,s1), std::max(s0,s1));
                         arc->SetAttr(pl.GetAttr());
                         out.push_back(std::move(arc));
                         continue;

@@ -17,7 +17,7 @@ namespace Wanluo.StandaloneWorkbench
 
         private bool ShowParameters(CadParameterWindow dialog)
         {
-            if (_parameterOpen || Client.IsBusy) return false;
+            if (_disposed || _parameterOpen || Client.IsBusy) return false;
             _parameterOpen = true;
             try
             {
@@ -30,7 +30,7 @@ namespace Wanluo.StandaloneWorkbench
 
         private void CheckToolDialog()
         {
-            if (_parameterOpen || SuppressToolDialogs || !IsLoaded || Client.IsBusy) return;
+            if (_disposed || _parameterOpen || SuppressToolDialogs || !IsLoaded || Client.IsBusy) return;
             var request = CadNative.DialogState(Client.Handle);
             if (string.IsNullOrEmpty(request.Kind)) return;
             // Run after the current state refresh so a modal window cannot reenter its update.
@@ -43,7 +43,7 @@ namespace Wanluo.StandaloneWorkbench
                 catch (Exception error)
                 {
                     Status.Text = error.Message;
-                    if (!Client.IsBusy && Client.State.ActiveId == current.DocumentId)
+                    if (!_disposed && !Client.IsBusy && Client.State.ActiveId == current.DocumentId)
                         Run(() => CadNative.Check(CadNative.wl_dialog_cancel(Client.Handle, current.DocumentId, current.Kind)));
                 }
             }));
@@ -51,10 +51,15 @@ namespace Wanluo.StandaloneWorkbench
 
         internal void ShowToolDialog(CadDialogRequest request)
         {
+            if (_disposed) return;
             var document = request.DocumentId;
             CadParameterWindow dialog;
             switch (request.Kind)
             {
+                case "textStyle":
+                case "mlineStyle":
+                    dialog = StyleDialog(document, request.Kind == "mlineStyle");
+                    break;
                 case "text":
                 case "mtext":
                     var multiline = request.Kind == "mtext";
@@ -62,7 +67,7 @@ namespace Wanluo.StandaloneWorkbench
                         CadNative.Check(CadNative.wl_text_submit(Client.Handle, document, multiline ? 1 : 0, ((TextBox)form.Inputs["text"]).Text, form.Number("height"), form.Number("rotation"), multiline ? form.Number("width") : 0)));
                     dialog.Text("text", "文字内容", request.Text, multiline);
                     dialog.Numeric("height", "字高 mm", request.Height, !request.Editing);
-                    dialog.Numeric("rotation", "旋转角度 °", request.Rotation, !request.Editing);
+                    dialog.Numeric("rotation", request.Editing ? "旋转角度 °" : "相对工作平面 X 轴 °", request.Rotation, !request.Editing);
                     if (multiline) dialog.Numeric("width", "文本框宽度 mm · 0为自动", request.Width, !request.Editing);
                     break;
                 case "hatch":
@@ -128,7 +133,7 @@ namespace Wanluo.StandaloneWorkbench
                     return;
                 default: return;
             }
-            if (!ShowParameters(dialog) && Client.State.ActiveId == document)
+            if (!ShowParameters(dialog) && !_disposed && Client.State.ActiveId == document)
                 Run(() => CadNative.Check(CadNative.wl_dialog_cancel(Client.Handle, document, request.Kind)));
         }
 
@@ -203,16 +208,19 @@ namespace Wanluo.StandaloneWorkbench
             if (!(Layers.SelectedItem is CadLayer layer)) { Status.Text = "请先选择图层。"; return; }
             var weights = new[] { -3, 0, 5, 9, 13, 15, 18, 20, 25, 30, 35, 40, 50, 53, 60, 70, 80, 90, 100, 106, 120, 140, 158, 200, 211 };
             var labels = weights.Select(value => value < 0 ? "默认" : (value / 100d).ToString("0.00", CultureInfo.CurrentCulture) + " mm").ToArray();
+            var types = CadNative.DrawingSettings(Client.Handle).Types.Where(item => item.Id >= 2).ToArray();
+            var document = Client.State.ActiveId;
             var dialog = new CadParameterWindow("修改图层", form =>
             {
                 var color = (Color)ColorConverter.ConvertFromString(form.Value("color"));
                 var rgb = (color.R << 16) | (color.G << 8) | color.B;
-                CadNative.Check(CadNative.wl_layer_manage(Client.Handle, 2, layer.Id, form.Value("name"), rgb, weights[form.Index("weight")]));
+                CadNative.Check(CadNative.wl_layer_details(Client.Handle, document, layer.Id, form.Value("name"), rgb, weights[form.Index("weight")], ((CadLineType)form.Selected("lineType")).Id));
             });
             dialog.Text("name", "图层名称", layer.Name);
             dialog.Text("color", "颜色 #RRGGBB", "#" + layer.Rgb.ToString("X6", CultureInfo.InvariantCulture));
             var index = Array.IndexOf(weights, layer.Weight);
             dialog.Choice("weight", "线宽", labels, labels[Math.Max(0, index)]);
+            dialog.Choice("lineType", "图层线型", types, types.FirstOrDefault(item => item.Id == layer.LineType) ?? types[0]);
             ShowParameters(dialog);
         }
         private void DeleteLayer_Click(object sender, RoutedEventArgs args)

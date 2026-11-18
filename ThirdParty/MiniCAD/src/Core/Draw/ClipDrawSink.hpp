@@ -239,22 +239,22 @@ namespace MiniCAD
             else NoteAltered();
         }
 
-        void EmitMText(const Math::Point3& pos, const std::string& utf8Text, uint32_t styleId, double height, double rotation, double boxWidth, const Math::Color4& color) override
+        void EmitMText(const Math::Point3& pos, const std::string& utf8Text, uint32_t styleId, double height, double rotation, double boxWidth, const Math::Color4& color, const Math::Vec3& normal) override
         {
-            if (Contains(pos.x, pos.y)) m_target.EmitMText(pos, utf8Text, styleId, height, rotation, boxWidth, color);
+            if (Contains(pos.x, pos.y)) m_target.EmitMText(pos, utf8Text, styleId, height, rotation, boxWidth, color, normal);
             else NoteAltered();
         }
 
-        void EmitRichMText(const Math::Point3& pos, const MTextBlock& block, double rotation, const Math::Color4& color) override
+        void EmitRichMText(const Math::Point3& pos, const MTextBlock& block, double rotation, const Math::Color4& color, const Math::Vec3& normal) override
         {
-            if (Contains(pos.x, pos.y)) m_target.EmitRichMText(pos, block, rotation, color);
+            if (Contains(pos.x, pos.y)) m_target.EmitRichMText(pos, block, rotation, color, normal);
             else NoteAltered();
         }
 
         void EmitAlignedText(const Math::Point3& pos, const std::string& utf8Text, uint32_t styleId, double height, double rotation,
-                             int hAlign, int vAlign, double widthFactor, const Math::Color4& color) override
+                             int hAlign, int vAlign, double widthFactor, const Math::Color4& color, const Math::Vec3& normal) override
         {
-            if (Contains(pos.x, pos.y)) m_target.EmitAlignedText(pos, utf8Text, styleId, height, rotation, hAlign, vAlign, widthFactor, color);
+            if (Contains(pos.x, pos.y)) m_target.EmitAlignedText(pos, utf8Text, styleId, height, rotation, hAlign, vAlign, widthFactor, color, normal);
             else NoteAltered();
         }
 

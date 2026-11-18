@@ -13,6 +13,7 @@ namespace MiniCAD
     class PointTool : public ITool
     {
     public:
+        bool SupportsWorkingPlane() const override { return true; }
         PointTool()
         {
             LOG_DEBUG("[PointTool] click to place points | right-click exits");

@@ -121,11 +121,14 @@ namespace MiniCAD
             Insert,
             Table,
             Transform,   // Solid3DEntity：变换矩阵
+            Viewport,
         } Kind;
 
 
         Math::Point3   BeforePoint;
         Math::Point3   AfterPoint;
+        struct ViewportSnapshot { Math::Point3 Center; double Width, Height, ViewHeight; };
+        ViewportSnapshot BeforeViewport{}, AfterViewport{};
 
         Line     BeforeLine;
         Line     AfterLine;

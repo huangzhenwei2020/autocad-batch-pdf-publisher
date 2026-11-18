@@ -56,6 +56,9 @@ namespace Wanluo.StandaloneWorkbench
 
     internal sealed class CadState
     {
+        public CadWorkPlane WorkPlane { get; set; } = new CadWorkPlane();
+        public ulong EditingViewport { get; set; }
+        public bool InlineViewport { get; set; }
         public ulong ActiveId { get; set; }
         public List<CadDrawing> Documents { get; set; } = new List<CadDrawing>();
         public int EntityCount { get; set; }
@@ -65,8 +68,13 @@ namespace Wanluo.StandaloneWorkbench
         public bool Snap { get; set; }
         public bool Ortho { get; set; }
         public bool Polar { get; set; }
+        public int StandardView { get; set; } = -1;
         public double X { get; set; }
         public double Y { get; set; }
+        public double Z { get; set; }
+        public double LocalX { get; set; }
+        public double LocalY { get; set; }
+        public double LocalZ { get; set; }
         public double BuildProgress { get; set; }
         public string Prompt { get; set; }
         public string CursorMode { get; set; }
@@ -95,9 +103,14 @@ namespace Wanluo.StandaloneWorkbench
         public bool Current { get; set; }
         public int Rgb { get; set; }
         public int Weight { get; set; }
+        public uint LineType { get; set; }
     }
     internal sealed class CadLayout
     {
+        public ulong Key { get; set; }
+        public double Width { get; set; }
+        public double Height { get; set; }
+        public double UnitToMm { get; set; } = 1;
         public int Id { get; set; }
         public string Name { get; set; }
         public bool Current { get; set; }
