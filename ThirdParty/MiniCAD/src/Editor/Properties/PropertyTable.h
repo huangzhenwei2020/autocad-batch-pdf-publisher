@@ -15,7 +15,7 @@ namespace MiniCAD
     // 表里只有语义，没有界面：单位换算（角度一律用度）、派生值（直径、长度）、
     // 合法性校验（半径 > 0）都写在 get / set 里。面板、命令、测试共用同一份。
     // =========================================================================
-    enum class PropKind { Number, Angle, String };    // Angle：界面与 get / set 都用「度」
+    enum class PropKind { Number, Angle, String, Boolean };    // Angle 用度，Boolean 用 0/1。
 
     using PropValue = std::variant<double, std::string>;
 

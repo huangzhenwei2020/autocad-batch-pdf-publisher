@@ -33,11 +33,43 @@
             <TabItem Header="属性">
               <DockPanel Margin="6">
                 <TextBlock DockPanel.Dock="Top" x:Name="SelectionInfo" Text="选择对象查看属性" Margin="3,6"/>
-                <Button DockPanel.Dock="Bottom" Content="应用所选参数" Click="ApplyProperty_Click" MinHeight="28" Padding="6,4"/>
                 <DataGrid x:Name="Properties" SelectionMode="Single" RowHeight="30">
+                  <DataGrid.Resources>
+                    <DataTemplate x:Key="PropertyText">
+                      <TextBox Text="{Binding Value,Mode=OneWay}" IsEnabled="{Binding Editable}" Padding="3" Margin="0"
+                               PreviewKeyDown="PropertyText_KeyDown" LostKeyboardFocus="PropertyText_LostFocus"
+                               ToolTip="按 Enter 或离开输入框提交，Esc 取消当前输入。"/>
+                    </DataTemplate>
+                    <DataTemplate x:Key="PropertyBoolean">
+                      <ComboBox SelectedValue="{Binding Value,Mode=OneWay}" SelectedValuePath="Tag"
+                                IsEnabled="{Binding Editable}" SelectionChanged="PropertyChoice_Changed"
+                                ToolTip="选择后立即生效。编辑透视参数前，请解除视口及所在图层的锁定。" ToolTipService.ShowOnDisabled="True"
+                                MinHeight="24" Padding="3,0" Margin="0" VerticalAlignment="Center">
+                        <ComboBoxItem Tag="1" Content="{Binding EnabledLabel}"/>
+                        <ComboBoxItem Tag="0" Content="{Binding DisabledLabel}"/>
+                      </ComboBox>
+                    </DataTemplate>
+                  </DataGrid.Resources>
                   <DataGrid.Columns>
                     <DataGridTextColumn Header="参数" Binding="{Binding Name}" IsReadOnly="True" Width="*"/>
-                    <DataGridTemplateColumn Header="值" Width="*"><DataGridTemplateColumn.CellTemplate><DataTemplate><TextBox Text="{Binding Value,UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding Editable}" Padding="3" Margin="0"/></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                    <DataGridTemplateColumn Header="值" Width="*">
+                      <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                          <ContentControl Content="{Binding}" HorizontalContentAlignment="Stretch">
+                            <ContentControl.Style>
+                              <Style TargetType="ContentControl">
+                                <Setter Property="ContentTemplate" Value="{StaticResource PropertyText}"/>
+                                <Style.Triggers>
+                                  <DataTrigger Binding="{Binding Kind}" Value="3">
+                                    <Setter Property="ContentTemplate" Value="{StaticResource PropertyBoolean}"/>
+                                  </DataTrigger>
+                                </Style.Triggers>
+                              </Style>
+                            </ContentControl.Style>
+                          </ContentControl>
+                        </DataTemplate>
+                      </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
                   </DataGrid.Columns>
                 </DataGrid>
               </DockPanel>

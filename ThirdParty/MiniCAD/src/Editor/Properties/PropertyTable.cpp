@@ -20,10 +20,12 @@
 #include "Core/Entity/TableEntity.hpp"
 #include "Core/Entity/WipeoutEntity.hpp"
 #include "Core/Entity/ViewportEntity.hpp"
+#include "Document/PerspectiveViewport.hpp"
 #include "Core/Math/Constants.hpp"
 #include <algorithm>
 #include <cmath>
 #include <string_view>
+#include <type_traits>
 
 namespace MiniCAD
 {
@@ -69,8 +71,10 @@ namespace MiniCAD
             return {
                 Coord<T>(N_("起点 X"), [](const T& e) { return e.GetLine().Start.x; }, [=](T& e, double v) { modify(e, [v](Line& l) { l.Start.x = v; }); }),
                 Coord<T>(N_("起点 Y"), [](const T& e) { return e.GetLine().Start.y; }, [=](T& e, double v) { modify(e, [v](Line& l) { l.Start.y = v; }); }),
+                Coord<T>(N_("起点 Z"), [](const T& e) { return e.GetLine().Start.z; }, [=](T& e, double v) { modify(e, [v](Line& l) { l.Start.z = v; }); }),
                 Coord<T>(N_("端点 X"), [](const T& e) { return e.GetLine().End.x; },   [=](T& e, double v) { modify(e, [v](Line& l) { l.End.x = v; }); }),
                 Coord<T>(N_("端点 Y"), [](const T& e) { return e.GetLine().End.y; },   [=](T& e, double v) { modify(e, [v](Line& l) { l.End.y = v; }); }),
+                Coord<T>(N_("端点 Z"), [](const T& e) { return e.GetLine().End.z; },   [=](T& e, double v) { modify(e, [v](Line& l) { l.End.z = v; }); }),
                 // 长度：起点不动，沿原方向伸缩端点；零长度的线没有方向，不能改
                 Editable<T>(N_("长度"), PropKind::Number, [](const T& e) { return e.GetLine().Length(); },
                     [=](T& e, double v)
@@ -180,6 +184,7 @@ namespace MiniCAD
             return {
                 Coord<T>(N_("位置 X"), [](const T& e) { return e.GetPoint().Position.x; }, [=](T& e, double v) { at(e, [v](Math::Point3& q) { q.x = v; }); }),
                 Coord<T>(N_("位置 Y"), [](const T& e) { return e.GetPoint().Position.y; }, [=](T& e, double v) { at(e, [v](Math::Point3& q) { q.y = v; }); }),
+                Coord<T>(N_("位置 Z"), [](const T& e) { return e.GetPoint().Position.z; }, [=](T& e, double v) { at(e, [v](Math::Point3& q) { q.z = v; }); }),
             };
         }
 
@@ -397,6 +402,8 @@ namespace MiniCAD
         {
             using T = ViewportEntity;
             return {
+                Editable<T>("视口锁定", PropKind::Boolean, [](const T& e) { return e.IsLocked() ? 1.0 : 0.0; },
+                    [](T& e, double v) { if (v != 0 && v != 1) return false; e.SetLocked(v == 1); return true; }),
                 Coord<T>("纸面中心 X", [](const T& e) { return e.GetCenter().x; }, [](T& e, double v) { auto p = e.GetCenter(); p.x = v; e.SetCenter(p); }),
                 Coord<T>("纸面中心 Y", [](const T& e) { return e.GetCenter().y; }, [](T& e, double v) { auto p = e.GetCenter(); p.y = v; e.SetCenter(p); }),
                 Editable<T>("视口宽", PropKind::Number, [](const T& e) { return e.GetWidth(); },
@@ -409,6 +416,60 @@ namespace MiniCAD
                 Coord<T>("模型中心 Y", [](const T& e) { return e.GetViewCenter().y; }, [](T& e, double v) { auto p = e.GetViewCenter(); p.y = v; e.SetViewCenter(p); }),
                 Editable<T>("视口旋转角", PropKind::Angle, [](const T& e) { return Deg(e.GetTwist()); }, [](T& e, double v) { e.SetTwist(Rad(v)); return true; }),
             };
+        }
+
+        bool SetPerspectiveOptics(ViewportEntity& viewport, const ViewportEntity::CameraOptics& optics)
+        {
+            if (optics.FrontEnabled && !optics.FrontAtEye && optics.BackEnabled && optics.Front <= optics.Back)
+                return false;
+            viewport.SetCameraOptics(optics);
+            return PerspectiveViewport(viewport).Valid();
+        }
+
+        template<typename Field>
+        PropertyDesc ClipProperty(const char* name, Field ViewportEntity::CameraOptics::* member)
+        {
+            using T = ViewportEntity;
+            return Editable<T>(name, std::is_same_v<Field, bool> ? PropKind::Boolean : PropKind::Number,
+                [member](const T& e) { return static_cast<double>(e.GetCameraOptics().*member); },
+                [member](T& e, double value)
+                {
+                    if (!std::isfinite(value)) return false;
+                    if constexpr (std::is_same_v<Field, bool>)
+                        if (value != 0 && value != 1) return false;
+                    auto optics = e.GetCameraOptics();
+                    optics.*member = static_cast<Field>(value);
+                    return SetPerspectiveOptics(e, optics);
+                });
+        }
+
+        std::vector<PropertyDesc> MakePerspectiveViewportProps(bool locked)
+        {
+            using T = ViewportEntity;
+            auto properties = MakeViewportProps();
+            std::vector<PropertyDesc> optics{
+                Editable<T>("透视焦距 (mm)", PropKind::Number,
+                    [](const T& e) { return PerspectiveViewport(e).Lens(); },
+                    [](T& e, double lens)
+                    {
+                        if (!std::isfinite(lens) || lens <= 0) return false;
+                        const double viewHeight = e.GetViewHeight() * (PerspectiveViewport(e).Lens() / lens);
+                        if (!std::isfinite(viewHeight) || viewHeight <= 0) return false;
+                        auto camera = e.GetCameraOptics();
+                        camera.Lens = lens;
+                        e.SetViewHeight(viewHeight);
+                        return SetPerspectiveOptics(e, camera);
+                    }),
+                ClipProperty("前裁剪", &T::CameraOptics::FrontEnabled),
+                ClipProperty("前裁剪随眼点", &T::CameraOptics::FrontAtEye),
+                ClipProperty("前裁剪距目标", &T::CameraOptics::Front),
+                ClipProperty("后裁剪", &T::CameraOptics::BackEnabled),
+                ClipProperty("后裁剪距目标", &T::CameraOptics::Back),
+            };
+            if (locked)
+                for (auto& property : optics) property.set = nullptr;
+            properties.insert(properties.begin() + 1, optics.begin(), optics.end());
+            return properties;
         }
 
         // ── 面域（全部只读）──────────────────────────────────────────────
@@ -426,7 +487,14 @@ namespace MiniCAD
     {
         static const std::vector<PropertyDesc> kNone;
         static const std::vector<PropertyDesc> kViewport = MakeViewportProps();
-        if (e.IsKindOf<ViewportEntity>()) return kViewport;
+        if (e.IsKindOf<ViewportEntity>())
+        {
+            const auto& viewport = static_cast<const ViewportEntity&>(e);
+            static const auto kPerspective = MakePerspectiveViewportProps(false);
+            static const auto kLockedPerspective = MakePerspectiveViewportProps(true);
+            if (viewport.IsPerspective()) return viewport.IsLocked() ? kLockedPerspective : kPerspective;
+            return kViewport;
+        }
         static const std::vector<PropertyDesc> kLine   = MakeLineProps();
         static const std::vector<PropertyDesc> kCircle = MakeCircleProps();
         static const std::vector<PropertyDesc> kArc    = MakeArcProps();

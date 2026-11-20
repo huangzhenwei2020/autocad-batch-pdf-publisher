@@ -1,4 +1,5 @@
 #pragma once
+#include "Core/Entity/PointEntity.hpp"
 #include "Document/Document.h"
 #include "Document/PerspectiveViewport.hpp"
 #include <fstream>
@@ -213,6 +214,24 @@ inline void WritePerspectiveProjectionFixture(const std::filesystem::path& root)
         std::abs(farPoint.pos.y - (100 - 80*lens/1200)) > 1e-4 ||
         projection.Point(nearPoint = point(0,0,800), {}) || projection.Point(farPoint = point(0,0,-600), {}))
         throw std::runtime_error("Perspective depth, scale or front/back clipping failed");
+    const auto offset = projection.TargetPlaneOffset(25, -15);
+    auto targetAnchor = Vertex_P3_C4{ToRenderFloat3(center + offset, center), {1,1,1,1}};
+    if (!projection.Point(targetAnchor, {}) ||
+        std::hypot(targetAnchor.pos.x - 175, targetAnchor.pos.y - 85) > 1e-4)
+        throw std::runtime_error("Perspective navigation did not use the target plane projection");
+    Math::WorkingPlane tilted;
+    tilted.Set(center, right + normal, up);
+    const auto onPlane = tilted.ToWorld({20, 30, 0});
+    const auto paperPoint = projection.ModelPointToPaper(onPlane);
+    const auto picked = paperPoint ? projection.PaperPointOnPlane(*paperPoint, tilted) : std::nullopt;
+    Math::WorkingPlane parallel;
+    parallel.Set(center, right, normal);
+    Math::WorkingPlane clipped;
+    clipped.Origin = world(0, 0, -600);
+    if (!picked || (*picked - onPlane).Length() > 1e-8 ||
+        projection.PaperPointOnPlane(viewport->GetCenter(), parallel) ||
+        projection.PaperPointOnPlane(viewport->GetCenter(), clipped))
+        throw std::runtime_error("Perspective ray intersection did not respect the working plane and camera clipping");
     auto a = point(30,0,0), b = point(30,0,1500);
     if (!projection.Line(a, b, {}) || std::abs(b.pos.x - (150 + 30*lens/400)) > 1e-4)
         throw std::runtime_error("A segment crossing the front clip was not truncated correctly");
@@ -298,4 +317,46 @@ inline void CheckSpatialNavigationFiles(const std::filesystem::path& root)
         if (viewport && viewport->IsPerspective()) ++count;
     });
     if (count != 1) throw std::runtime_error("Perspective viewport flag lost");
+
+    for (const wchar_t* extension : {L".dwg", L".dxf"})
+    {
+        Document edited;
+        load(edited, root / (std::wstring(L"透视视口移动复制") + extension));
+        const auto& scene = edited.GetScene();
+        const ViewportEntity* view = nullptr;
+        const LineEntity* moved = nullptr;
+        std::vector<Math::Point3> points;
+        int modelLines = 0;
+        scene.ForEachObject([&](const Object& object)
+        {
+            if (const auto* viewport = dynamic_cast<const ViewportEntity*>(&object); viewport && viewport->IsPerspective())
+                view = viewport;
+            if (const auto* line = dynamic_cast<const LineEntity*>(&object); line && !line->GetAttr().InPaperSpace)
+            {
+                ++modelLines;
+                if (std::abs(line->GetLine().End.z - 550) < 1e-7) moved = line;
+            }
+            if (const auto* point = dynamic_cast<const PointEntity*>(&object); point && !point->GetAttr().InPaperSpace)
+                points.push_back(point->GetPoint().Position);
+        });
+        if (!view || !view->IsLocked() || view->GetCameraOptics().Lens != 42 ||
+            view->GetCameraOptics().Front != 600 || view->GetCameraOptics().Back != -400 ||
+            (view->GetViewDirection() - Math::Point3{0,0,1000}).Length() > 1e-7)
+            throw std::runtime_error("Moving through the viewport changed its camera or lock");
+        if (!moved || modelLines != 5 || points.size() != 3)
+            throw std::runtime_error("Perspective move and copy did not preserve model space or object counts");
+        const auto [right, up] = view->ViewAxes();
+        const auto normal = Math::Cross(right, up);
+        const auto center = view->GetViewCenter();
+        const double distance = 20 * 700 / std::hypot(300., 200.);
+        const auto shiftedStart = center + right * (-120 + distance) + up * (50 + distance) + normal * 300;
+        const auto& line = moved->GetLine();
+        if ((line.Start - shiftedStart).Length() > 3 || std::abs(line.Start.z - 600) > 1e-7 ||
+            (line.End - line.Start - right * 240 + normal * 50).Length() > 1e-7 || moved->GetAttr().Color.Aci != 1)
+            throw std::runtime_error("Perspective move did not keep the line elevation, length or color");
+        const auto source = center - up * 80 - normal * 150;
+        for (const auto& offset : {Math::Vec3{}, {70,25,50}, {-50,80,-25}})
+            if (std::none_of(points.begin(), points.end(), [&](const auto& point) { return (point - (source + offset)).Length() < 1e-7; }))
+                throw std::runtime_error("Perspective point copy lost the source or a relative XYZ destination");
+    }
 }

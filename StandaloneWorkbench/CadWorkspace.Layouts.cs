@@ -122,6 +122,7 @@ namespace Wanluo.StandaloneWorkbench
             });
             if (edit) dialog.Choice("viewport", "当前布局的视口", viewports, selected);
             else dialog.Choice("method", "创建方式", new[] { "两点绘制矩形边界", "输入纸面位置及尺寸" }, "两点绘制矩形边界");
+            dialog.Toggle("locked", "锁定视口平移和缩放", selected?.Locked ?? true);
             dialog.NumericPair("x", "纸面中心 X", selected?.X ?? layout.Width / (2 * layout.UnitToMm), "y", "纸面中心 Y", selected?.Y ?? layout.Height / (2 * layout.UnitToMm));
             dialog.NumericPair("width", "视口宽（图纸单位）", selected?.Width ?? Math.Max(1, layout.Width - 40) / layout.UnitToMm, "height", "视口高（图纸单位）", selected?.Height ?? Math.Max(1, layout.Height - 40) / layout.UnitToMm);
             var ratio = new ComboBox { IsEditable = true, MinHeight = 30, ItemsSource = new[] { "1:1", "1:20", "1:25", "1:50", "1:75", "1:100", "1:150", "1:200", "1:500" } };
@@ -130,7 +131,6 @@ namespace Wanluo.StandaloneWorkbench
             dialog.Toggle("fit", "自动适合全部模型范围", !edit);
             dialog.NumericPair("modelX", "模型中心 X", selected?.ModelX ?? 0, "modelY", "模型中心 Y", selected?.ModelY ?? 0);
             dialog.Numeric("twist", "内容旋转角度 °", selected?.Twist ?? 0);
-            dialog.Toggle("locked", "锁定视口比例", selected?.Locked ?? true);
             var layers = new ListBox { SelectionMode = SelectionMode.Multiple, DisplayMemberPath = "Name", ItemsSource = state.Layers, MaxHeight = 120, MinHeight = 65 };
             dialog.Field("frozen", "仅在此视口冻结的图层（单击切换）", layers);
             foreach (var layer in state.Layers.Where(item => selected?.Frozen.Contains(item.Id) == true)) layers.SelectedItems.Add(layer);
@@ -183,7 +183,7 @@ namespace Wanluo.StandaloneWorkbench
         internal void NavigateViewport()
         {
             CadNative.Check(CadNative.wl_viewport_navigate(Client.Handle));
-            Status.Text = "单击正投影视口内部，用中键平移、滚轮缩放。支持立面及等轴测，锁定视口需先解除锁定。";
+            Status.Text = "单击视口内部，用中键平移、滚轮缩放。视口锁定可在属性面板修改。";
             Viewport.FocusDrawing();
         }
         internal void EditViewportModel(bool inlineEdit = false)
@@ -243,8 +243,8 @@ namespace Wanluo.StandaloneWorkbench
             var dialog=new CadParameterWindow("视口边界裁剪 · VPCLIP", form =>
                 CadNative.Check(CadNative.wl_viewport_clip(Client.Handle,state.ActiveId,((CadPaperViewport)form.Selected("viewport")).Id,form.Index("method"))));
             dialog.Choice("viewport","要裁剪的视口",viewports,viewports.FirstOrDefault(item => item.Selected) ?? viewports[0]);
-            dialog.Choice("method","操作",new[] {"绘制／重画多边形边界","恢复矩形边界","绘制圆形边界","绘制椭圆边界"},"绘制／重画多边形边界");
-            dialog.Note("多边形依次指定顶点后Enter完成。圆形指定圆心和圆周点，椭圆指定外包矩形的两个对角点。Backspace退回，Esc取消，Ctrl+Z撤销。");
+            dialog.Choice("method","操作",new[] {"绘制／重画多边形边界","恢复矩形边界","绘制圆形边界","绘制轴向椭圆边界","绘制旋转椭圆边界"},"绘制／重画多边形边界");
+            dialog.Note("多边形指定顶点后按 Enter。圆形指定圆心和圆周点，轴向椭圆指定外包矩形的对角点，旋转椭圆依次指定中心、长轴端点及短轴半径。Backspace 退回，Esc 取消，Ctrl+Z 撤销。");
             ShowParameters(dialog);
         }
         private void CopyLayout_Click(object sender, RoutedEventArgs args) => LayoutSettings(true);

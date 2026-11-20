@@ -3,11 +3,14 @@
 #include "Core/Math/Point3.hpp"
 #include "MiniI18n/I18n.h"      // 工具的提示与回显经 Tr 翻译
 #include <functional>
+#include <optional>
 #include <string>
 
 namespace MiniCAD
 {
     struct EditorContext;
+    class Scene;
+    class Overlay;
 
     class ITool
     {
@@ -24,6 +27,9 @@ namespace MiniCAD
         virtual bool     DrawsAtAnchorElevation() const { return false; }
         virtual bool     HidesCrosshair() const { return false; } // 不画十字光标，宿主改用系统光标（平移时的手形）
         virtual bool     HandlesNavigation() const { return false; }
+        // A tool may expose a single property target independently of normal edit selection.
+        virtual std::optional<uint64_t> PropertySelection(const Scene&) const { return std::nullopt; }
+        virtual void RefreshOverlay(const Scene&, Overlay&) const {}
 
         virtual Math::Point3 GetAnchor() const { return {}; }     // 获取锚点（仅在 HasAnchor() == true 时有效）
 

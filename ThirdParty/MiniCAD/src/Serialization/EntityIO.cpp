@@ -366,6 +366,11 @@ namespace MiniCAD::EntityIO
             auto clip = e.ClipCoordinates(); Ser::Value(s, "viewportClip", clip);
             bool known = e.ClipKnown(); s.Value("viewportClipKnown", known);
             bool ellipse = e.ClipEllipse(); s.Value("viewportClipEllipse", ellipse);
+            if (ellipse)
+            {
+                double correlation = e.ClipEllipseCorrelation();
+                s.Value("viewportClipCorrelation", correlation);
+            }
             // 本视口冻结的图层（VPLAYER）：只在非空时写，旧文件没有这项
             if (!e.GetFrozenLayers().empty())
             {
@@ -419,7 +424,13 @@ namespace MiniCAD::EntityIO
                 e->SetSpatialView(direction,target,{}); e->SetViewCenter(vc);
             }
             if (s.Has("viewportClip")) { std::vector<Math::Point3> clip; Ser::Value(s, "viewportClip", clip); e->SetClipCoordinates(std::move(clip)); }
-            if (s.Has("viewportClipEllipse")) { bool ellipse = false; s.Value("viewportClipEllipse", ellipse); e->SetClipEllipse(ellipse); }
+            if (s.Has("viewportClipEllipse"))
+            {
+                bool ellipse = false; s.Value("viewportClipEllipse", ellipse);
+                double correlation = 0;
+                if (s.Has("viewportClipCorrelation")) s.Value("viewportClipCorrelation", correlation);
+                if (ellipse && std::abs(correlation) < 1) e->SetClipEllipse(correlation);
+            }
             if (s.Has("viewportClipKnown")) { bool known = true; s.Value("viewportClipKnown", known); e->SetClipKnown(known); }
             size_t n = 0;
             if (s.BeginArray("frozenLayers", n))

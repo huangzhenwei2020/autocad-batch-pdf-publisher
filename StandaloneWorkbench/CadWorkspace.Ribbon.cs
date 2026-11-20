@@ -75,6 +75,8 @@ namespace Wanluo.StandaloneWorkbench
             ViewTools.Children.Add(Group("画布空间", ActionButton("expand", "清屏", () => UiActionRequested?.Invoke("clean"))));
             ViewTools.Children.Add(Group("图纸布局", CompactActions(ActionButton("file-plus", "新建布局", () => NewLayout_Click(this, new RoutedEventArgs())), ActionButton("page-setup", "布局设置", () => LayoutSettings()), ActionButton("copy", "复制布局", () => LayoutSettings(true)), ActionButton("trash", "删除布局", () => DeleteLayout_Click(this, new RoutedEventArgs())))));
             ViewTools.Children.Add(Group("布局视口", CompactActions(ActionButton("viewport", "矩形视口", () => PaperViewport()), ActionButton("viewport-edit", "修改视口", () => PaperViewport(true)), ActionButton("hand", "调整内容", () => NavigateViewport()), ActionButton("viewport-edit", "裁剪视口", () => ClipViewport()), ActionButton("viewport", "编辑模型", () => EditViewportModel()), ActionButton("viewport-edit", "原位编辑", () => EditViewportModel(true)))));
+            ViewTools.Children.Add(Group("透视视口", Tool("slash", "透视绘线", "", "VPLINE"), Tool("point", "透视画点", "", "VPPOINT"),
+                Tool("mouse-pointer-2", "透视选取", "", "VPPICK"), Tool("move", "透视移动", "", "VPMOVE"), Tool("copy", "透视复制", "", "VPCOPY")));
             FileTools.Children.Add(Group("图纸文件", ActionButton("file-plus", "新建", () => NewDrawing()), ActionButton("folder-open", "打开", async () => await PickDrawingAsync()), ActionButton("save", "保存", async () => await SaveWithDialogAsync(false)), ActionButton("save-all", "另存为", async () => await SaveWithDialogAsync(true)), ActionButton("x", "关闭", async () => await CloseCurrentAsync())));
             FileTools.Children.Add(Group("项目与模型", ActionButton("panel-left", "项目", () => UiActionRequested?.Invoke("project")), ActionButton("box", "模型楼层", () => UiActionRequested?.Invoke("models")), ActionButton("app-window", "AutoCAD", () => UiActionRequested?.Invoke("cad"))));
             FileTools.Children.Add(Group("绘图设置", ActionButton("slash", "线型管理", LineTypes), ActionButton("point", "点样式", PointStyle)));
@@ -143,6 +145,13 @@ namespace Wanluo.StandaloneWorkbench
             if (command.Equals("MSPACE", StringComparison.OrdinalIgnoreCase)) { if (!Client.State.InlineViewport) EditViewportModel(true); return true; }
             if (command.Equals("VPCLIP", StringComparison.OrdinalIgnoreCase)) { ClipViewport(); return true; }
             if (command.Equals("VPVIEW", StringComparison.OrdinalIgnoreCase)) { NavigateViewport(); return true; }
+            if (command.Equals("VPPICK", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!CommitFocusedProperty() || !Run(() => Client.Command(command))) return false;
+                ShowInspector(0);
+                Viewport.FocusDrawing();
+                return true;
+            }
             if (new[] { "MVIEW", "MV" }.Contains(command.ToUpperInvariant())) { PaperViewport(); return true; }
             if (new[] { "VPORTS", "VPEDIT" }.Contains(command.ToUpperInvariant())) { PaperViewport(true); return true; }
             if (command.Equals("PAGESETUP", StringComparison.OrdinalIgnoreCase)) { LayoutSettings(); return true; }
@@ -189,8 +198,9 @@ namespace Wanluo.StandaloneWorkbench
         }
         private void NextDocument(bool previous)
         {
+            if (Client.IsBusy || !CommitFocusedProperty()) return;
             var state = Client.State;
-            if (state.Documents.Count < 2 || Client.IsBusy) return;
+            if (state.Documents.Count < 2) return;
             var index = state.Documents.FindIndex(item => item.Id == state.ActiveId);
             var next = (index + state.Documents.Count + (previous ? -1 : 1)) % state.Documents.Count;
             Run(() => Client.Activate(state.Documents[next].Id));

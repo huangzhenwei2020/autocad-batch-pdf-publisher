@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text.Json;
@@ -63,6 +64,8 @@ namespace Wanluo.StandaloneWorkbench
         public List<CadDrawing> Documents { get; set; } = new List<CadDrawing>();
         public int EntityCount { get; set; }
         public int SelectionCount { get; set; }
+        public ulong SelectionVersion { get; set; }
+        public ulong PropertySelectionId { get; set; }
         public bool CanUndo { get; set; }
         public bool CanRedo { get; set; }
         public bool Snap { get; set; }
@@ -116,11 +119,34 @@ namespace Wanluo.StandaloneWorkbench
         public bool Current { get; set; }
         public bool Model { get; set; }
     }
-    internal sealed class CadProperty
+    internal sealed class CadProperty : INotifyPropertyChanged
     {
+        private string _value;
+        private bool _editable;
         public string Name { get; set; }
-        public string Value { get; set; }
-        public bool Editable { get; set; }
+        public string Value
+        {
+            get => _value;
+            set
+            {
+                if (_value == value) return;
+                _value = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Value)));
+            }
+        }
+        public bool Editable
+        {
+            get => _editable;
+            set
+            {
+                if (_editable == value) return;
+                _editable = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Editable)));
+            }
+        }
         public int Kind { get; set; }
+        [System.Text.Json.Serialization.JsonIgnore] public string EnabledLabel => Name == "视口锁定" ? "已锁定" : "已开启";
+        [System.Text.Json.Serialization.JsonIgnore] public string DisabledLabel => Name == "视口锁定" ? "已解锁" : "已关闭";
+        public event PropertyChangedEventHandler PropertyChanged;
     }
 }

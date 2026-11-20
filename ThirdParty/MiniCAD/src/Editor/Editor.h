@@ -100,6 +100,7 @@ namespace MiniCAD
 
         // 选择集的几何特性（属性描述表）：多种类型取公共特性；没有选择返回空
         std::vector<CommonProperty> GetSelectionProperties();
+        std::optional<uint64_t> PropertySelection() const;
         // 把选择集里所有具有该特性的对象改成 value，一步可撤销。
         // 值非法 / 只读 / 没有变化的对象跳过；一个都没改返回 false（不入撤销栈）
         bool SetSelectionProperty(const std::string& name, const PropValue& value);
@@ -135,7 +136,8 @@ namespace MiniCAD
         float              GetPickBox() const { return m_pickBox; }
         // 工具是否还在进行：工具刚结束（等下一次输入事件才释放）的收尾期不算
         bool               IsToolRunning() const { return !m_selectionCommand.empty() || (m_tool != nullptr && !m_pendingToolReset); }
-        void EndContentNavigation() { if (m_tool && m_tool->HandlesNavigation()) m_tool->Cancel(); }
+        void EndContentNavigation(bool keepPropertyTool = false)
+        { if (m_tool && m_tool->HandlesNavigation() && !(keepPropertyTool && PropertySelection())) m_tool->Cancel(); }
         bool               IsSelectingForCommand() const { return !m_selectionCommand.empty(); }
         bool               IsBoxSelecting() const { return m_picking.IsBoxSelecting(); }
         // 最近启动的工具 ID（"Line"、"Move"…）；IsActiveTool 为 true 时即当前工具

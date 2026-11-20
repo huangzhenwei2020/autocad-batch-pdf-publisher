@@ -2,12 +2,33 @@
 #include "Document/Command/LayoutCommands.h"
 #include "Document/Command/GeometryEditCommand.h"
 #include "Document/Command/AddEntityCommand.h"
+#include "Document/PerspectiveViewport.hpp"
 #include "Editor/Tools/ITool.h"
 #include "Editor/EditorContext.h"
 #include "Core/Entity/ViewportEntity.hpp"
 #include <cmath>
 #include <stdexcept>
 #include <limits>
+
+inline const MiniCAD::ViewportEntity* FindPaperViewport(const MiniCAD::Scene& scene, uint64_t layout,
+    const MiniCAD::Math::Point3& point, bool perspectiveOnly = false)
+{
+    using namespace MiniCAD;
+    const ViewportEntity* picked = nullptr;
+    double area = std::numeric_limits<double>::max();
+    scene.ForEachObject([&](const Object& object)
+    {
+        const auto* viewport = dynamic_cast<const ViewportEntity*>(&object);
+        if (!viewport || !viewport->GetAttr().InPaperSpace || viewport->GetAttr().LayoutKey != layout ||
+            !viewport->ShowsModel() || (perspectiveOnly && !viewport->IsPerspective()) ||
+            !viewport->ContainsPaper(point) || !viewport->GetAttr().Visible) return;
+        const auto* layer = scene.GetLayerManager().GetLayer(viewport->GetLayerID());
+        if (layer && !layer->IsVisible()) return;
+        const double candidate = viewport->GetWidth() * viewport->GetHeight();
+        if (candidate < area) { area = candidate; picked = viewport; }
+    });
+    return picked;
+}
 
 struct CadViewportParameters
 {
@@ -47,6 +68,16 @@ inline void ApplyViewportParameters(MiniCAD::ViewportEntity& viewport, const Cad
     viewport.SetViewHeight(std::max({1.0, viewHeight, viewWidth * parameters.Height / parameters.Width}) * 1.1);
 }
 
+inline void ApplyViewportClipFrame(MiniCAD::ViewportEntity& viewport, double x, double y, double width, double height)
+{
+    const auto center = viewport.GetCenter();
+    const double ratio = viewport.GetViewHeight() / viewport.GetHeight();
+    viewport.SetViewCenter(viewport.GetViewCenter() + viewport.PaperVectorToModel(x - center.x, y - center.y));
+    viewport.SetCenter({x, y, center.z});
+    viewport.SetSize(width, height);
+    viewport.SetViewHeight(height * ratio);
+}
+
 inline void ApplyViewportClip(MiniCAD::ViewportEntity& viewport, const std::vector<MiniCAD::Math::Point3>& points)
 {
     if (points.size() < 3) throw std::invalid_argument("请至少指定三个不同的顶点。");
@@ -76,10 +107,7 @@ inline void ApplyViewportClip(MiniCAD::ViewportEntity& viewport, const std::vect
         }
     }
     if (std::abs(area)<1e-10) throw std::invalid_argument("裁剪边界需要形成有效面积。");
-    const auto center=viewport.GetCenter(), model=viewport.GetViewCenter();
-    viewport.SetViewCenter(model + viewport.PaperVectorToModel(x - center.x, y - center.y));
-    const double ratio=viewport.GetViewHeight()/viewport.GetHeight();
-    viewport.SetCenter({x,y,center.z}); viewport.SetSize(width,height); viewport.SetViewHeight(height*ratio);
+    ApplyViewportClipFrame(viewport,x,y,width,height);
     viewport.SetClipCoordinates(std::move(normalized));
 }
 
@@ -94,6 +122,12 @@ public:
         if (!m_error.empty()) return m_error;
         if (m_kind == 2) return m_points.empty() ? "指定圆形视口的圆心" : "指定圆周点，单击完成，Backspace退回，Esc取消";
         if (m_kind == 3) return m_points.empty() ? "指定椭圆外包矩形第一个角点" : "指定对角点，单击完成，Backspace退回，Esc取消";
+        if (m_kind == 4)
+        {
+            if (m_points.empty()) return "指定旋转椭圆的中心";
+            if (m_points.size() == 1) return "指定长轴端点，Backspace退回，Esc取消";
+            return "指定短轴半径，单击完成，Backspace退回，Esc取消";
+        }
         return "指定裁剪顶点，Enter／空格完成，Backspace退回顶点，Esc取消";
     }
     bool OnInput(const MiniCAD::EditorContext& context) override
@@ -111,15 +145,21 @@ public:
         const auto point = context.event.HasSnap ? context.event.SnapWorld : context.viewport.GetCamera().ScreenToWorld(context.event.MouseX,context.event.MouseY);
         if (context.event.IsLeftClick()) { m_points.push_back(point); m_error.clear(); }
         const bool finish = context.event.IsKeyPressed(KeyCode::Enter) || context.event.IsKeyPressed(KeyCode::Space) ||
-            context.event.IsRightClick() || (m_kind > 1 && m_points.size() == 2 && context.event.IsLeftClick());
+            context.event.IsRightClick() || (m_kind > 1 && m_points.size() == CurvePointCount() && context.event.IsLeftClick());
         if (finish)
         {
             try
             {
                 if (context.scene.IsEntityLocked(*viewport)) throw std::invalid_argument("视口所在图层已锁定。");
                 auto after = viewport->Clone(m_id);
-                ApplyViewportClip(static_cast<ViewportEntity&>(*after), Boundary(m_points));
-                static_cast<ViewportEntity&>(*after).SetClipEllipse(m_kind > 1);
+                auto& edited = static_cast<ViewportEntity&>(*after);
+                if (m_kind > 1)
+                {
+                    const auto [center, frame] = Curve(m_points);
+                    ApplyViewportClipFrame(edited, center.x, center.y, frame.Width, frame.Height);
+                    edited.SetClipEllipse(frame.Correlation);
+                }
+                else ApplyViewportClip(edited, m_points);
                 std::vector<GeometryEditCommand::Item> edits;
                 edits.push_back({m_id, viewport->Clone(m_id), std::move(after)});
                 context.cmdStack.Execute(std::make_unique<GeometryEditCommand>("裁剪布局视口",std::move(edits)),context.scene);
@@ -128,7 +168,7 @@ public:
             catch (const std::exception& error)
             {
                 m_error = error.what();
-                if (m_kind > 1 && m_points.size() > 1) m_points.pop_back();
+                if (m_kind > 1 && m_points.size() == CurvePointCount()) m_points.pop_back();
             }
             return true;
         }
@@ -137,7 +177,17 @@ public:
             context.overlay.Clear();
             auto preview = m_points;
             if (!preview.empty()) preview.push_back(point);
-            try { preview = Boundary(preview); } catch (const std::exception&) { preview.clear(); }
+            if (m_kind > 1)
+            {
+                try
+                {
+                    const auto [center, frame] = Curve(preview);
+                    ViewportEntity outline(0, center, frame.Width, frame.Height);
+                    outline.SetClipEllipse(frame.Correlation);
+                    preview = outline.PaperBoundary();
+                }
+                catch (const std::invalid_argument&) { preview.clear(); }
+            }
             for (size_t i = 1; i < preview.size(); ++i) context.overlay.AddLine(preview[i-1],preview[i],{0.4f,0.75f,1,1});
             if (preview.size() > 2) context.overlay.AddLine(preview.back(),preview.front(),{0.4f,0.75f,1,1});
         }
@@ -146,25 +196,40 @@ public:
     void Cancel() override { if (m_overlay) m_overlay->Clear(); if (OnFinished) OnFinished(); }
     void OnSceneChanged() override { Cancel(); }
 private:
-    std::vector<MiniCAD::Math::Point3> Boundary(const std::vector<MiniCAD::Math::Point3>& points) const
+    size_t CurvePointCount() const { return m_kind == 4 ? 3 : 2; }
+    std::pair<MiniCAD::Math::Point3, MiniCAD::ViewportEntity::EllipseClipFrame>
+    Curve(const std::vector<MiniCAD::Math::Point3>& points) const
     {
-        if (m_kind < 2) return points;
-        if (points.size() < 2) throw std::invalid_argument("请指定两个不同的点。");
-        double x = (points[0].x + points[1].x) / 2, y = (points[0].y + points[1].y) / 2;
-        double rx = std::abs(points[1].x - points[0].x) / 2, ry = std::abs(points[1].y - points[0].y) / 2;
-        if (m_kind == 2)
+        using namespace MiniCAD;
+        if (points.size() < CurvePointCount())
+            throw std::invalid_argument(m_kind == 4 ? "请依次指定椭圆中心、长轴端点和短轴半径。" : "请指定两个不同的点。");
+        const auto delta = points[1] - points[0];
+        Math::Point3 center = points[0];
+        ViewportEntity::EllipseClipFrame frame{};
+        if (m_kind == 4)
         {
-            x = points[0].x; y = points[0].y;
-            rx = ry = std::hypot(points[1].x - x, points[1].y - y);
+            const double major = std::hypot(delta.x, delta.y);
+            if (!(major > 1e-9)) throw std::invalid_argument("长轴半径需要大于0。");
+            const Math::Vec3 perpendicular{-delta.y / major, delta.x / major, 0};
+            const double minor = std::abs(Math::Dot(points[2] - center, perpendicular));
+            if (!(minor > 1e-9 && minor <= major)) throw std::invalid_argument("短轴半径需要大于0且不超过长轴半径。");
+            frame = ViewportEntity::EllipseClipFrame::FromAxes({delta.x, delta.y, 0}, perpendicular * minor);
         }
-        if (rx <= 1e-9 || ry <= 1e-9) throw std::invalid_argument("圆或椭圆的半径需要大于0。");
-        std::vector<MiniCAD::Math::Point3> result;
-        for (int i = 0; i < 256; ++i)
+        else if (m_kind == 2)
         {
-            const double angle = i * 2 * std::acos(-1.0) / 256;
-            result.push_back({x + rx * std::cos(angle), y + ry * std::sin(angle), 0});
+            const double diameter = 2 * std::hypot(delta.x, delta.y);
+            frame = {diameter, diameter, 0};
         }
-        return result;
+        else
+        {
+            center = center + delta * .5;
+            frame = {std::abs(delta.x), std::abs(delta.y), 0};
+        }
+        if (!(frame.Width > 1e-9 && frame.Height > 1e-9 && std::isfinite(frame.Width) &&
+            std::isfinite(frame.Height) && std::abs(frame.Correlation) < 1))
+            throw std::invalid_argument("请指定有效的圆或椭圆半径。");
+        center.z = 0;
+        return {center, frame};
     }
     uint64_t m_id, m_layout;
     int m_kind;
@@ -232,8 +297,9 @@ public:
     std::string GetPrompt() const override
     {
         if (!m_id) return "单击要调整的视口内部";
-        if (m_unsupported) return "此视口的观察参数暂不支持调整内容，可选择正投影视口；Esc 退出";
-        return m_locked ? "视口已锁定，请在修改视口中解除锁定；单击可切换视口，Esc 退出" :
+        if (m_unsupported) return "此视口的观察参数暂不支持调整内容，请单击切换视口；Esc 退出";
+        if (m_layerLocked) return "视口所在图层已锁定，请先在图层面板解锁；Esc 退出";
+        return m_locked ? "视口已锁定，Esc 退出后选中边框，在属性面板中解锁" :
             "中键拖动平移内容，滚轮缩放；单击切换视口，Enter／空格／Esc 退出，Ctrl+Z 撤销";
     }
     bool OnInput(const MiniCAD::EditorContext& context) override
@@ -250,23 +316,15 @@ public:
         const auto point = context.viewport.GetCamera().ScreenToWorld(e.MouseX, e.MouseY);
         if (e.IsLeftClick() && !m_before)
         {
-            m_id = 0;
-            double area = std::numeric_limits<double>::max();
-            context.scene.ForEachObject([&](const Object& object)
-            {
-                const auto* viewport = dynamic_cast<const ViewportEntity*>(&object);
-                if (!viewport || viewport->GetAttr().LayoutKey != m_layout || !viewport->ShowsModel() ||
-                    !viewport->ContainsPaper(point) || !viewport->GetAttr().Visible) return;
-                const auto* layer = context.scene.GetLayerManager().GetLayer(viewport->GetLayerID());
-                if (layer && !layer->IsVisible()) return;
-                const auto size = viewport->GetWidth() * viewport->GetHeight();
-                if (size < area) { area = size; m_id = viewport->GetID(); }
-            });
+            const auto* picked = FindPaperViewport(context.scene, m_layout, point);
+            m_id = picked ? picked->GetID() : 0;
         }
         auto* viewport = dynamic_cast<ViewportEntity*>(context.scene.GetEntity(m_id));
         if (!viewport) return true;
-        m_locked = viewport->IsLocked() || context.scene.IsEntityLocked(*viewport);
-        m_unsupported = viewport->IsPerspective() || (!viewport->IsPlanView() && !viewport->HasSpatialView());
+        m_layerLocked = context.scene.IsEntityLocked(*viewport);
+        m_locked = viewport->IsLocked() || m_layerLocked;
+        m_unsupported = viewport->IsPerspective() ? !PerspectiveViewport(*viewport).Valid() :
+            (!viewport->IsPlanView() && !viewport->HasSpatialView());
         context.overlay.Clear();
         const auto boundary = viewport->PaperBoundary();
         for (size_t i=0;i<boundary.size();++i) context.overlay.AddLine(boundary[i],boundary[(i+1)%boundary.size()],{0.3f,0.8f,1,1});
@@ -278,7 +336,7 @@ public:
         if (e.IsMiddleDrag() && m_before)
         {
             const auto* before = static_cast<const ViewportEntity*>(m_before.get());
-            const auto delta = before->PaperVectorToModel(point.x - m_anchor.x, point.y - m_anchor.y);
+            const auto delta = ViewOffset(*before, point.x - m_anchor.x, point.y - m_anchor.y);
             const auto center = before->GetViewCenter();
             viewport->SetViewCenter(center - delta);
             context.scene.MarkDirty();
@@ -290,11 +348,18 @@ public:
             const double factor = std::pow(1.2, -std::clamp(double(e.WheelDelta), -10.0, 10.0));
             const double height = viewport->GetViewHeight() * factor;
             if (!std::isfinite(height) || height < 1e-9 || height > 1e15) return true;
+            auto optics = viewport->GetCameraOptics();
+            if (viewport->IsPerspective())
+            {
+                optics.Lens = PerspectiveViewport(*viewport).Lens() / factor;
+                if (!std::isfinite(optics.Lens) || optics.Lens <= 0) return true;
+            }
             m_before = viewport->Clone(m_id);
-            const auto offset = viewport->PaperVectorToModel(point.x - viewport->GetCenter().x, point.y - viewport->GetCenter().y);
+            const auto offset = ViewOffset(*viewport, point.x - viewport->GetCenter().x, point.y - viewport->GetCenter().y);
             const auto center = viewport->GetViewCenter();
             viewport->SetViewCenter(center + offset * (1 - factor));
             viewport->SetViewHeight(height);
+            if (viewport->IsPerspective()) viewport->SetCameraOptics(optics);
             Commit(context, *viewport);
         }
         return true;
@@ -308,6 +373,13 @@ public:
     }
     void OnSceneChanged() override { Cancel(); }
 private:
+    static MiniCAD::Math::Vec3 ViewOffset(const MiniCAD::ViewportEntity& viewport, double paperX, double paperY)
+    {
+        if (viewport.IsPerspective())
+            return MiniCAD::PerspectiveViewport(viewport).TargetPlaneOffset(paperX, paperY);
+        return viewport.PaperVectorToModel(paperX, paperY);
+    }
+
     void Commit(const MiniCAD::EditorContext& context, MiniCAD::ViewportEntity& viewport)
     {
         const auto* before = static_cast<const MiniCAD::ViewportEntity*>(m_before.get());
@@ -322,6 +394,7 @@ private:
     }
     uint64_t m_layout, m_id = 0;
     bool m_locked = false;
+    bool m_layerLocked = false;
     bool m_unsupported = false;
     MiniCAD::Math::Point3 m_anchor;
     MiniCAD::Scene* m_scene = nullptr;

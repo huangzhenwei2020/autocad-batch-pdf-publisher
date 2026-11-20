@@ -25,6 +25,7 @@ namespace Wanluo.StandaloneWorkbench
         private bool _initialized;
         private Task _operation = Task.CompletedTask;
         private string _documents = "", _layers = "", _layouts = "", _properties = "";
+        private (ulong Document, int Layout, ulong Viewport, ulong Selection, ulong Object) _propertyTarget;
         internal event Action<string> DrawingOpened;
 
         public CadWorkspace()
@@ -97,14 +98,7 @@ namespace Wanluo.StandaloneWorkbench
                     Layouts.SelectedItem = state.Layouts.FirstOrDefault(item => item.Current);
                     _layouts = layouts;
                 }
-                var properties = JsonSerializer.Serialize(state.Properties);
-                if (properties != _properties && !Properties.IsKeyboardFocusWithin)
-                {
-                    foreach (var property in state.Properties.Where(item => item.Kind != 2 && item.Value != null))
-                        if (double.TryParse(property.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)) property.Value = value.ToString("0.########", CultureInfo.CurrentCulture);
-                    Properties.ItemsSource = state.Properties;
-                    _properties = properties;
-                }
+                RefreshProperties(state);
                 foreach (var button in _undoButtons) button.IsEnabled = state.CanUndo;
                 foreach (var button in _redoButtons) button.IsEnabled = state.CanRedo;
                 CanUndo = state.CanUndo; CanRedo = state.CanRedo;
@@ -138,7 +132,7 @@ namespace Wanluo.StandaloneWorkbench
         }
         internal bool NewDrawing()
         {
-            if (!Run(Client.New)) return false;
+            if (!CommitFocusedProperty() || !Run(Client.New)) return false;
             Status.Text = "新图纸已创建，可以开始绘图。";
             Viewport.FocusDrawing();
             return true;
@@ -182,7 +176,7 @@ namespace Wanluo.StandaloneWorkbench
         private void CancelOpen_Click(object sender, RoutedEventArgs e) { Client.CancelOpen(); Status.Text = "正在取消打开图纸…"; }
         internal async Task<bool> SaveWithDialogAsync(bool saveAs)
         {
-            if (Client.IsBusy) return false;
+            if (Client.IsBusy || !CommitFocusedProperty()) return false;
             var state = Client.State;
             var doc = state.Documents.FirstOrDefault(item => item.Id == state.ActiveId);
             if (doc == null) { Status.Text = "请先新建或打开图纸。"; return false; }
@@ -230,6 +224,7 @@ namespace Wanluo.StandaloneWorkbench
         }
         internal async Task<bool> ConfirmCloseAllAsync(bool close = false)
         {
+            if (!CommitFocusedProperty()) return false;
             Client.CancelOpen();
             await _operation;
             var docs = Client.State.Documents;
@@ -260,18 +255,94 @@ namespace Wanluo.StandaloneWorkbench
         }
         private void ApplyLayer(CadLayer layer, bool current) => Run(() => CadNative.Check(CadNative.wl_layer(Client.Handle, layer.Id, layer.Visible ? 1 : 0, layer.Locked ? 1 : 0, current ? 1 : 0)));
         private void CurrentLayer_Click(object sender, RoutedEventArgs e) { if (Layers.SelectedItem is CadLayer layer) ApplyLayer(layer, true); }
-        private void ApplyProperty_Click(object sender, RoutedEventArgs e)
+        private static (ulong Document, int Layout, ulong Viewport, ulong Selection, ulong Object) PropertyTarget(CadState state) =>
+            (state.ActiveId, state.Layouts.FindIndex(layout => layout.Current), state.EditingViewport, state.SelectionVersion, state.PropertySelectionId);
+
+        private static string DisplayPropertyValue(CadProperty property) =>
+            property.Kind < 2 && double.TryParse(property.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
+                ? value.ToString("G", CultureInfo.CurrentCulture) : property.Value;
+
+        private TextBox FocusedPropertyText() =>
+            Properties.IsKeyboardFocusWithin && Keyboard.FocusedElement is TextBox input && input.DataContext is CadProperty
+                ? input : null;
+
+        private void RefreshProperties(CadState state)
         {
-            Properties.CommitEdit();
-            if (!(Properties.SelectedItem is CadProperty property)) { Status.Text = "请选择需要修改的参数行。"; return; }
-            var value = property.Value;
+            var target = PropertyTarget(state);
+            var snapshot = JsonSerializer.Serialize(state.Properties);
+            if (target == _propertyTarget && snapshot == _properties) return;
+            var input = FocusedPropertyText();
+            if (target == _propertyTarget && input != null && input.Text != ((CadProperty)input.DataContext).Value) return;
+            if (target == _propertyTarget && Properties.ItemsSource is System.Collections.Generic.List<CadProperty> current &&
+                current.Count == state.Properties.Count &&
+                current.Zip(state.Properties).All(pair => pair.First.Name == pair.Second.Name && pair.First.Kind == pair.Second.Kind))
+            {
+                foreach (var (oldProperty, property) in current.Zip(state.Properties))
+                {
+                    oldProperty.Editable = property.Editable;
+                    oldProperty.Value = DisplayPropertyValue(property);
+                }
+            }
+            else
+            {
+                foreach (var property in state.Properties) property.Value = DisplayPropertyValue(property);
+                Properties.ItemsSource = state.Properties;
+            }
+            _propertyTarget = target;
+            _properties = snapshot;
+        }
+
+        private bool CommitProperty(CadProperty property, string value)
+        {
+            if (value == (property.Value ?? "")) return true;
+            if (_updating || _disposed || !property.Editable || !Properties.Items.Contains(property)) return false;
             if (property.Kind != 2)
             {
-                if (!double.TryParse(value, NumberStyles.Float, CultureInfo.CurrentCulture, out var number)) { Status.Text = "请输入有效数值。"; return; }
+                if (!double.TryParse(value, NumberStyles.Float, CultureInfo.CurrentCulture, out var number) || !double.IsFinite(number))
+                { Status.Text = "请输入有效数值。"; return false; }
+                if (double.TryParse(property.Value, NumberStyles.Float, CultureInfo.CurrentCulture, out var original) && number == original)
+                    return true;
                 value = number.ToString("R", CultureInfo.InvariantCulture);
             }
-            if (Run(() => CadNative.Check(CadNative.wl_property(Client.Handle, property.Name, value, property.Kind))))
-            { _properties = ""; Viewport.FocusDrawing(); RefreshState(); }
+            return Run(() =>
+            {
+                if (PropertyTarget(Client.State) != _propertyTarget)
+                    throw new InvalidOperationException("选择已改变，请重新选中对象后修改属性。");
+                CadNative.Check(CadNative.wl_property(Client.Handle, property.Name, value, property.Kind));
+                var updated = Client.State.Properties.FirstOrDefault(item => item.Name == property.Name && item.Kind == property.Kind);
+                if (updated != null) property.Value = DisplayPropertyValue(updated);
+            });
+        }
+
+        private bool CommitPropertyText(TextBox input)
+        {
+            var applied = input.DataContext is not CadProperty property || CommitProperty(property, input.Text);
+            input.GetBindingExpression(TextBox.TextProperty)?.UpdateTarget();
+            return applied;
+        }
+
+        private bool CommitFocusedProperty() => FocusedPropertyText() is not TextBox input || CommitPropertyText(input);
+
+        private void PropertyText_LostFocus(object sender, KeyboardFocusChangedEventArgs e)
+        {
+            if (!_updating) CommitPropertyText((TextBox)sender);
+        }
+
+        private void PropertyText_KeyDown(object sender, KeyEventArgs e)
+        {
+            var input = (TextBox)sender;
+            if (e.Key == Key.Enter) CommitPropertyText(input);
+            else if (e.Key == Key.Escape) input.GetBindingExpression(TextBox.TextProperty)?.UpdateTarget();
+            else return;
+            e.Handled = true;
+        }
+
+        private void PropertyChoice_Changed(object sender, SelectionChangedEventArgs e)
+        {
+            var combo = (ComboBox)sender;
+            if (_updating || combo.DataContext is not CadProperty property || e.AddedItems.Count != 1 ||
+                e.AddedItems[0] is not ComboBoxItem { Tag: string value }) return;
+            if (!CommitProperty(property, value)) combo.GetBindingExpression(ComboBox.SelectedValueProperty)?.UpdateTarget();
         }
         private void CommandInput_KeyDown(object sender, KeyEventArgs e)
         {
@@ -296,7 +367,10 @@ namespace Wanluo.StandaloneWorkbench
                 if (e.Key == Key.F1) { e.Handled = true; ToggleRibbon(); return; }
                 if (e.Key == Key.D1) { e.Handled = true; ToggleProperties(); return; }
                 if (e.Key == Key.Tab) { e.Handled = true; NextDocument((Keyboard.Modifiers & ModifierKeys.Shift) != 0); return; }
-                if ((e.Key == Key.Z || e.Key == Key.Y) && !(Keyboard.FocusedElement is System.Windows.Controls.Primitives.TextBoxBase))
+                var propertyInput = FocusedPropertyText();
+                var committedProperty = propertyInput != null && propertyInput.Text == (((CadProperty)propertyInput.DataContext).Value ?? "");
+                if ((e.Key == Key.Z || e.Key == Key.Y) &&
+                    (committedProperty || Keyboard.FocusedElement is not System.Windows.Controls.Primitives.TextBoxBase))
                 {
                     e.Handled = true;
                     Run(() => Client.Command(e.Key == Key.Z ? "@undo" : "@redo"));

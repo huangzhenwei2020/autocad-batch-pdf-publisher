@@ -4,6 +4,7 @@
 #include "Dxf/Read/DxfReader.h"
 #include "Render/ImageDraw.hpp"
 #include "Document/WipeClip.hpp"
+#include "Document/Document.h"
 #include "DetailedClippingCheck.h"
 #include <cmath>
 #include <filesystem>
@@ -79,5 +80,44 @@ inline void CheckLayoutFiles(const std::filesystem::path& root)
             return count;
         };
         check(layoutCount(*removed) == layoutCount(*copied) - 1, "Deleting a layout resurrected an orphan page");
+        const auto rotatedPath = root / (std::wstring(L"旋转椭圆视口") + extension);
+        for (bool duplicate : {false, true})
+        {
+            auto rotated = read(duplicate ? root / (std::wstring(L"旋转椭圆布局复制") + extension) : rotatedPath);
+            MiniDWG::Handle firstBoundary{};
+            for (const char* name : {"裁剪平面", "旋转椭圆副本"})
+            {
+                if (firstBoundary && !duplicate) break;
+                const auto* layout = find(*rotated, name);
+                const auto* paper = rotated->FindAs<MiniDWG::BlockRecord>(layout->AssociatedBlockHandle);
+                const MiniDWG::Viewport* viewport = nullptr;
+                for (auto handle : paper->Entities)
+                    if (const auto* view = rotated->FindAs<MiniDWG::Viewport>(handle); view && view->BoundaryHandle) viewport = view;
+                check(viewport != nullptr, "Missing rotated ellipse viewport");
+                const auto* ellipse = rotated->FindAs<MiniDWG::Ellipse>(viewport->BoundaryHandle);
+                check(ellipse && ellipse->OwnerHandle == paper->ObjectHandle && ellipse->ObjectHandle != firstBoundary,
+                    "Rotated clip was saved as a circle or shares a boundary after layout duplication");
+                check(std::abs(ellipse->Center.X - 170) < 1e-8 && std::abs(ellipse->Center.Y - 110) < 1e-8 &&
+                    std::abs(ellipse->MajorAxisEndPoint.X - 100) < 1e-8 && std::abs(ellipse->MajorAxisEndPoint.Y - 100) < 1e-8 &&
+                    std::abs(ellipse->RadiusRatio - .4) < 1e-8 && std::abs(viewport->ViewHeight / viewport->Height - 50) < 1e-8,
+                    "Rotated ellipse center, axes or viewport scale were lost");
+                firstBoundary = ellipse->ObjectHandle;
+            }
+        }
+        MiniCAD::Document source;
+        const auto utf8 = rotatedPath.u8string();
+        check(source.LoadFromFile(std::string(utf8.begin(), utf8.end())), "Rotated viewport could not be opened");
+        MiniCAD::Document restored;
+        check(restored.LoadFromString(source.SaveToString()), "Rotated viewport could not be serialized");
+        int ellipseCount = 0;
+        restored.GetScene().ForEachObject([&](const MiniCAD::Object& object)
+        {
+            const auto* viewport = dynamic_cast<const MiniCAD::ViewportEntity*>(&object);
+            if (!viewport || !viewport->ClipEllipse()) return;
+            ++ellipseCount;
+            check(viewport->ContainsPaper({245,185,0}) && !viewport->ContainsPaper({225,55,0}),
+                "Rotated viewport hit testing did not use the ellipse orientation");
+        });
+        check(ellipseCount == 1, "Rotated viewport lost its analytic clip after reloading");
     }
 }

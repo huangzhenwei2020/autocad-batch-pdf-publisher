@@ -2930,13 +2930,29 @@ namespace MiniCAD
         return m_doc->GetCommandStack().Execute(std::make_unique<ChangeAttrCommand>(std::move(ids), change), m_doc->GetScene());
     }
 
+    std::optional<uint64_t> Editor::PropertySelection() const
+    {
+        return m_doc && m_tool && !m_pendingToolReset ? m_tool->PropertySelection(m_doc->GetScene()) : std::nullopt;
+    }
+
     std::vector<CommonProperty> Editor::GetSelectionProperties()
     {
         std::vector<const Entity*> entities;
-        for (Object* obj : GetSelectedObjects())
-            if (const auto* e = dynamic_cast<const Entity*>(obj))
+        if (const auto property = PropertySelection())
+        {
+            if (const auto* e = dynamic_cast<const Entity*>(m_doc->GetScene().GetEntity(*property)))
                 entities.push_back(e);
-        return CommonProperties(entities);
+        }
+        else
+            for (Object* obj : GetSelectedObjects())
+                if (const auto* e = dynamic_cast<const Entity*>(obj))
+                    entities.push_back(e);
+        auto properties = CommonProperties(entities);
+        if (m_doc && std::all_of(entities.begin(), entities.end(), [&](const Entity* e)
+            { return m_doc->GetScene().IsEntityLocked(*e); }))
+            for (auto& property : properties)
+                property.editable = false;
+        return properties;
     }
 
     bool Editor::SetSelectionProperty(const std::string& name, const PropValue& value)
@@ -2944,7 +2960,14 @@ namespace MiniCAD
         if (!m_doc)
             return false;
 
-        const std::vector<Object::ObjectID> ids = EditableSelectionIds();
+        std::vector<Object::ObjectID> ids;
+        if (const auto property = PropertySelection())
+        {
+            const auto& scene = m_doc->GetScene();
+            if (const auto* entity = scene.GetEntity(*property); entity && !scene.IsEntityLocked(*entity))
+                ids.push_back(*property);
+        }
+        else ids = EditableSelectionIds();
 
         std::vector<GeometryEditCommand::Item> items;
         for (auto id : ids)
@@ -3204,6 +3227,7 @@ namespace MiniCAD
         if (!m_doc || !m_viewport) return;
 
         AdvanceViewTransition();
+        if (m_tool && !m_pendingToolReset) m_tool->RefreshOverlay(m_doc->GetScene(), m_overlay);
 
         // 命令行提示 = 当前工具的状态提示（无工具时为空）
         m_commandLine.SetPrompt(m_tool ? m_tool->GetPrompt()

@@ -142,6 +142,7 @@ public static class StandaloneCadRoundtripNativeTests
             VerifySpatialMaximizedEditing(output);
             VerifySpatialInlineEditing(output);
             VerifyLayoutPerspective(output);
+            VerifyPerspectiveTransfer(output);
             VerifyWorkingPlane(output);
             VerifySpatialCurves(output);
             VerifyWorkingPolylines(output);
@@ -408,8 +409,9 @@ public static class StandaloneCadRoundtripNativeTests
 
     private static void VerifyLayoutPerspective(string output)
     {
+        foreach (var name in new[] { "透视视口回读", "透视视口导航", "透视参数编辑" })
         foreach (var extension in new[] { ".dwg", ".dxf" })
-        using (var db = Open(Path.Combine(output, "透视视口回读" + extension)))
+        using (var db = Open(Path.Combine(output, name + extension)))
         using (var tx = db.TransactionManager.StartTransaction())
         {
             var dictionary = (DBDictionary)tx.GetObject(db.LayoutDictionaryId, OpenMode.ForRead);
@@ -417,15 +419,86 @@ public static class StandaloneCadRoundtripNativeTests
             var paper = (BlockTableRecord)tx.GetObject(layout.BlockTableRecordId, OpenMode.ForRead);
             var viewport = paper.Cast<ObjectId>().Select(id => tx.GetObject(id, OpenMode.ForRead))
                 .OfType<Viewport>().Single(item => item.PerspectiveOn);
+            var navigated = name == "透视视口导航";
+            var editedOptics = name == "透视参数编辑";
             Check(!viewport.Locked && viewport.FrontClipOn && viewport.BackClipOn && !viewport.FrontClipAtEyeOn &&
-                Math.Abs(viewport.LensLength - 42) < 1e-8 && Math.Abs(viewport.FrontClipDistance - 600) < 1e-8 &&
-                Math.Abs(viewport.BackClipDistance + 400) < 1e-8, "Perspective optics or depth clipping was not preserved");
+                Math.Abs(viewport.LensLength - (editedOptics ? 63 : navigated ? 50.4 : 42)) < 1e-8 &&
+                Math.Abs(viewport.FrontClipDistance - (editedOptics ? 250 : 600)) < 1e-8 &&
+                Math.Abs(viewport.BackClipDistance - (editedOptics ? -300 : -400)) < 1e-8,
+                "Perspective optics or depth clipping was not preserved");
+            var modelPerPaper = 1000 / Math.Sqrt(300 * 300 + 200 * 200);
+            var center = navigated
+                ? new Point2d(10 + (-30 + 25 / 6.0) * modelPerPaper, -15 + (-20 - 15 / 6.0) * modelPerPaper)
+                : new Point2d(10,-15);
             Check(viewport.ViewDirection.IsEqualTo(new Vector3d(0,0,1000)) &&
                 viewport.ViewTarget.DistanceTo(new Point3d(100,200,300)) < 1e-7 &&
-                viewport.ViewCenter.GetDistanceTo(new Point2d(10,-15)) < 1e-7 &&
-                Math.Abs(viewport.ViewHeight - 2000) < 1e-7 && Math.Abs(viewport.TwistAngle - .2) < 1e-8,
+                viewport.ViewCenter.GetDistanceTo(center) < (navigated ? 5 : 1e-7) &&
+                Math.Abs(viewport.ViewHeight - 2000 / (editedOptics ? 1.5 : navigated ? 1.2 : 1)) < 1e-7 &&
+                viewport.CenterPoint.DistanceTo(new Point3d(150,100,0)) < 1e-7 &&
+                Math.Abs(viewport.Width - 300) < 1e-7 && Math.Abs(viewport.Height - 200) < 1e-7 &&
+                Math.Abs(viewport.TwistAngle - .2) < 1e-8,
                 "Perspective camera or view field was not preserved");
             Check(Model(db, tx).OfType<Line>().Count() == 4, "Display clipping changed model geometry");
+        }
+        foreach (var edited in new[] { false, true })
+        foreach (var extension in new[] { ".dwg", ".dxf" })
+        using (var db = Open(Path.Combine(output, (edited ? "透视视口属性" : "透视视口绘图") + extension)))
+        using (var tx = db.TransactionManager.StartTransaction())
+        {
+            var dictionary = (DBDictionary)tx.GetObject(db.LayoutDictionaryId, OpenMode.ForRead);
+            var layout = (Layout)tx.GetObject(dictionary.GetAt("Layout1"), OpenMode.ForRead);
+            var paper = (BlockTableRecord)tx.GetObject(layout.BlockTableRecordId, OpenMode.ForRead);
+            var viewport = paper.Cast<ObjectId>().Select(id => tx.GetObject(id, OpenMode.ForRead))
+                .OfType<Viewport>().Single(item => item.PerspectiveOn);
+            var entities = Model(db, tx);
+            var lines = entities.OfType<Line>().ToArray();
+            var drawn = lines.Single(line => Math.Abs(line.EndPoint.Z) < 1e-7);
+            var near = lines.Single(line => Math.Abs(line.EndPoint.Z - (edited ? 550 : 600)) < 1e-7);
+            var far = lines.Single(line => Math.Abs(line.EndPoint.Z - 100) < 1e-7);
+            var midpoint = far.StartPoint + (far.EndPoint - far.StartPoint) * .5;
+            if (edited) midpoint = new Point3d(midpoint.X, midpoint.Y, 150);
+            var center = new Point3d(100 + 10 * Math.Cos(.2) - 15 * Math.Sin(.2),
+                200 - 10 * Math.Sin(.2) - 15 * Math.Cos(.2), 0);
+            Check(lines.Length == 5 && drawn.StartPoint.DistanceTo(near.StartPoint) < 1e-7 && drawn.EndPoint.DistanceTo(center) < 5 &&
+                entities.OfType<DBPoint>().Single().Position.DistanceTo(midpoint) < 1e-7,
+                "Perspective drawing transferred the wrong coordinates or space");
+            Check(viewport.Locked && viewport.ViewDirection.IsEqualTo(new Vector3d(0,0,1000)) &&
+                Math.Abs(viewport.LensLength - 42) < 1e-8 && Math.Abs(viewport.FrontClipDistance - 600) < 1e-8 &&
+                Math.Abs(viewport.BackClipDistance + 400) < 1e-8, "Perspective drawing changed the viewport camera");
+        }
+    }
+
+    private static void VerifyPerspectiveTransfer(string output)
+    {
+        foreach (var extension in new[] { ".dwg", ".dxf" })
+        using (var db = Open(Path.Combine(output, "透视视口移动复制" + extension)))
+        using (var tx = db.TransactionManager.StartTransaction())
+        {
+            var model = Model(db, tx);
+            var lines = model.OfType<Line>().ToArray();
+            var points = model.OfType<DBPoint>().Select(point => point.Position).ToArray();
+            var moved = lines.Single(line => Math.Abs(line.EndPoint.Z - 550) < 1e-7);
+            var right = new Vector3d(Math.Cos(.2), -Math.Sin(.2), 0);
+            var up = new Vector3d(Math.Sin(.2), Math.Cos(.2), 0);
+            var center = new Point3d(100, 200, 300) + right * 10 - up * 15;
+            var distance = 20 * 700 / Math.Sqrt(300 * 300 + 200 * 200);
+            var expectedStart = center + right * (-120 + distance) + up * (50 + distance) + new Vector3d(0, 0, 300);
+            Check(lines.Length == 5 && moved.ColorIndex == 1 && moved.StartPoint.DistanceTo(expectedStart) < 3 &&
+                Math.Abs(moved.StartPoint.Z - 600) < 1e-7 &&
+                (moved.EndPoint - moved.StartPoint - right * 240 + new Vector3d(0,0,50)).Length < 1e-7,
+                "Perspective move did not preserve line geometry, elevation or color");
+            var source = center - up * 80 - new Vector3d(0, 0, 150);
+            Check(points.Length == 3 && new[] { new Vector3d(0,0,0), new Vector3d(70,25,50), new Vector3d(-50,80,-25) }
+                .All(offset => points.Any(point => point.DistanceTo(source + offset) < 1e-7)),
+                "Perspective copy lost the source or a relative XYZ destination");
+
+            var layouts = (DBDictionary)tx.GetObject(db.LayoutDictionaryId, OpenMode.ForRead);
+            var layout = (Layout)tx.GetObject(layouts.GetAt("Layout1"), OpenMode.ForRead);
+            var paper = (BlockTableRecord)tx.GetObject(layout.BlockTableRecordId, OpenMode.ForRead);
+            var viewport = paper.Cast<ObjectId>().Select(id => tx.GetObject(id, OpenMode.ForRead)).OfType<Viewport>().Single(item => item.PerspectiveOn);
+            Check(viewport.Locked && Math.Abs(viewport.LensLength - 42) < 1e-7 &&
+                Math.Abs(viewport.FrontClipDistance - 600) < 1e-7 && Math.Abs(viewport.BackClipDistance + 400) < 1e-7 &&
+                viewport.ViewDirection.IsEqualTo(new Vector3d(0,0,1000)), "Perspective move and copy changed the camera");
         }
     }
 
@@ -729,19 +802,21 @@ public static class StandaloneCadRoundtripNativeTests
     private static void VerifyCurveClipping(string output)
     {
         foreach (var extension in new[] { ".dwg", ".dxf" })
-        foreach (var name in new[] { "圆形视口", "椭圆视口", "竖向椭圆视口", "椭圆复制", "曲线恢复矩形" })
+        foreach (var name in new[] { "圆形视口", "椭圆视口", "竖向椭圆视口", "椭圆复制", "曲线恢复矩形", "旋转椭圆视口", "旋转椭圆布局复制" })
         using (var db = Open(Path.Combine(output, name + extension)))
         using (var tx = db.TransactionManager.StartTransaction())
         {
             var dictionary = (DBDictionary)tx.GetObject(db.LayoutDictionaryId, OpenMode.ForRead);
-            var layouts = name == "椭圆复制" ? new[] { "裁剪平面", "曲线副本" } : new[] { "裁剪平面" };
+            var rotated = name.StartsWith("旋转椭圆", StringComparison.Ordinal);
+            var layouts = name == "椭圆复制" ? new[] { "裁剪平面", "曲线副本" } :
+                name == "旋转椭圆布局复制" ? new[] { "裁剪平面", "旋转椭圆副本" } : new[] { "裁剪平面" };
             var boundaries = new List<ObjectId>();
             foreach (var layoutName in layouts)
             {
                 var layout = (Layout)tx.GetObject(dictionary.GetAt(layoutName), OpenMode.ForRead);
                 var paper = (BlockTableRecord)tx.GetObject(layout.BlockTableRecordId, OpenMode.ForRead);
                 var entities = paper.Cast<ObjectId>().Select(id => tx.GetObject(id, OpenMode.ForRead)).ToArray();
-                var width = name == "圆形视口" || name == "竖向椭圆视口" ? 160 : 280;
+                var width = rotated ? 2 * Math.Sqrt(11600) : name == "圆形视口" || name == "竖向椭圆视口" ? 160 : 280;
                 var viewport = entities.OfType<Viewport>().Single(item => Math.Abs(item.Width - width) < .001);
                 Check(Math.Abs(viewport.CustomScale - .02) < 1e-8, "Curve viewport scale changed " + name + extension);
                 if (name == "曲线恢复矩形")
@@ -757,6 +832,14 @@ public static class StandaloneCadRoundtripNativeTests
                 {
                     var circle = boundary as Circle;
                     Check(circle != null && Math.Abs(circle.Radius - 80) < .001 && circle.Center.DistanceTo(new Point3d(150, 100, 0)) < .001, "Native circle dimensions changed " + extension);
+                }
+                else if (rotated)
+                {
+                    var ellipse = boundary as Ellipse;
+                    Check(ellipse != null && ellipse.Center.DistanceTo(new Point3d(170,110,0)) < 1e-8 &&
+                        Math.Abs(ellipse.MajorRadius - Math.Sqrt(20000)) < 1e-8 && Math.Abs(ellipse.MinorRadius - Math.Sqrt(3200)) < 1e-8 &&
+                        Math.Abs(Math.Abs(ellipse.MajorAxis.GetNormal().DotProduct(new Vector3d(1,1,0).GetNormal())) - 1) < 1e-8,
+                        "Rotated ellipse dimensions or axis changed " + extension);
                 }
                 else
                 {

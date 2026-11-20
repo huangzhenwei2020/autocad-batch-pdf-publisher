@@ -10,6 +10,8 @@
 #include "CadStyleCommand.h"
 #include "CadDrawingSettingsCommand.h"
 #include "CadLayoutTools.h"
+#include "CadPerspectiveDrawTool.h"
+#include "CadPerspectiveSelectTool.h"
 #include "Document/WipeClip.hpp"
 #include "Scene/HatchPatternLibrary.h"
 #include "Editor/Tools/LeaderTool.h"
@@ -749,7 +751,30 @@ namespace
             { SetWorkingPlane(true, DocumentRef().GetScene().GetWorkingPlane().Origin); return; }
             if (text == "@cancel" || text == "@undo" || text == "@redo") FinishInlineNavigation(false);
             auto& editor = EditorRef();
-            if (_stricmp(text.c_str(), "VPMIN") == 0 || _stricmp(text.c_str(), "PSPACE") == 0) EditViewport(0);
+            const bool pickPerspective = _stricmp(text.c_str(), "VPPICK") == 0;
+            const bool movePerspective = _stricmp(text.c_str(), "VPMOVE") == 0;
+            const bool copyPerspective = _stricmp(text.c_str(), "VPCOPY") == 0;
+            const bool selectPerspective = pickPerspective || movePerspective || copyPerspective;
+            if (selectPerspective || _stricmp(text.c_str(), "VPLINE") == 0 || _stricmp(text.c_str(), "VPPOINT") == 0)
+            {
+                const auto& doc = DocumentRef();
+                if (!doc.ActiveLayoutIsPaper()) throw std::invalid_argument("请先切换到包含透视视口的图纸布局。");
+                const auto layout = doc.ActiveLayoutOwnerKey();
+                if (selectPerspective)
+                {
+                    using Operation = CadPerspectiveSelectTool::Operation;
+                    const auto operation = movePerspective ? Operation::Move : copyPerspective ? Operation::Copy : Operation::Inspect;
+                    editor.RegisterTool("WanluoPerspectiveSelect", [layout, operation] { return std::make_unique<CadPerspectiveSelectTool>(layout, operation); });
+                    editor.ActivateToolById("WanluoPerspectiveSelect");
+                }
+                else
+                {
+                    const bool point = _stricmp(text.c_str(), "VPPOINT") == 0;
+                    editor.RegisterTool("WanluoPerspectiveDraw", [layout, point] { return std::make_unique<CadPerspectiveDrawTool>(layout, point); });
+                    editor.ActivateToolById("WanluoPerspectiveDraw");
+                }
+            }
+            else if (_stricmp(text.c_str(), "VPMIN") == 0 || _stricmp(text.c_str(), "PSPACE") == 0) EditViewport(0);
             else if (_stricmp(text.c_str(), "VPMAX") == 0 || _stricmp(text.c_str(), "MSPACE") == 0)
             {
                 const bool inlineEdit = _stricmp(text.c_str(), "MSPACE") == 0;
@@ -769,7 +794,7 @@ namespace
             }
             else if (text == "@undo" || text == "@redo")
             {
-                editor.EndContentNavigation();
+                editor.EndContentNavigation(true);
                 if (text == "@undo") manager.Undo(); else manager.Redo();
                 auto camera = manager.GetMainViewport().GetCamera().GetState();
                 if (DocumentRef().ValidateActiveLayout(camera))
@@ -860,7 +885,11 @@ namespace
                     << ",\"axisYX\":" << plane.Y.x << ",\"axisYY\":" << plane.Y.y << ",\"axisYZ\":" << plane.Y.z << '}';
                 json << ",\"editingViewport\":" << (doc->EditingViewport() ? doc->EditingViewport()->GetID() : 0);
                 json << ",\"inlineViewport\":" << doc->InlineViewportEdit();
-                json << ",\"entityCount\":" << doc->GetScene().GetAllIDs().size() << ",\"selectionCount\":" << editor.GetSelection().size()
+                const auto propertySelection = editor.PropertySelection();
+                json << ",\"entityCount\":" << doc->GetScene().GetAllIDs().size()
+                    << ",\"selectionCount\":" << (propertySelection ? size_t(*propertySelection != 0) : editor.GetSelection().size())
+                    << ",\"propertySelectionId\":" << propertySelection.value_or(0)
+                    << ",\"selectionVersion\":" << editor.GetSelectionVersion()
                     << ",\"canUndo\":" << doc->CanUndo() << ",\"canRedo\":" << doc->CanRedo() << ",\"snap\":" << editor.IsSnapEnabled()
                     << ",\"ortho\":" << editor.IsOrthoEnabled() << ",\"polar\":" << editor.IsPolarEnabled()
                     << ",\"prompt\":" << Quote(editor.IsBoxSelecting() ? "指定对角点，单击完成／Esc 取消" : editor.IsSelectingForCommand() ? "选择对象，空格或回车确认" : editor.IsToolRunning() ? editor.GetCmdLine().Prompt() : "命令") << ",\"buildProgress\":" << editor.DisplayBuildProgress()
@@ -894,6 +923,7 @@ namespace
                     if (comma) json << ','; comma = true;
                     json << "{\"name\":" << Quote(property.name) << ",\"kind\":" << int(property.kind) << ",\"editable\":" << property.editable << ",\"value\":";
                     if (!property.value) json << "null";
+                    else if (property.kind == PropKind::Boolean) json << Quote(std::get<double>(*property.value) == 1 ? "1" : "0");
                     else if (auto number = std::get_if<double>(&*property.value)) json << Quote(std::to_string(*number));
                     else json << Quote(std::get<std::string>(*property.value));
                     json << '}';
@@ -1754,7 +1784,7 @@ API int wl_viewport_clip(Session* session, uint64_t document, uint64_t object, i
     auto* viewport=dynamic_cast<ViewportEntity*>(scene.GetEntity(object));
     if (!doc.ActiveLayoutIsPaper() || !viewport || !doc.IsVisibleInActiveLayout(viewport->GetAttr()) || scene.IsEntityLocked(*viewport))
         throw std::invalid_argument("请选择当前布局中可编辑的视口。");
-    if (remove < 0 || remove > 3) throw std::invalid_argument("裁剪方式无效。");
+    if (remove < 0 || remove > 4) throw std::invalid_argument("裁剪方式无效。");
     if (remove == 1)
     {
         auto after=viewport->Clone(object); static_cast<ViewportEntity&>(*after).SetClipCoordinates({});

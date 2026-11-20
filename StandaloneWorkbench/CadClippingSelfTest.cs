@@ -127,8 +127,37 @@ namespace Wanluo.StandaloneWorkbench
                 var curve=CadNative.PaperViewports(client.Handle).Single();
                 Assert(curve.ClipEllipse && Math.Abs(curve.Width-160)<.001 && Math.Abs(curve.Height-280)<.001,"Vertical ellipse roundtrip failed");
             }
+            var diameter = 2 * Math.Sqrt(100*100 + 40*40);
+            void CheckRotatedClip()
+            {
+                var curve = CadNative.PaperViewports(client.Handle).Single();
+                Assert(curve.ClipEllipse && Math.Abs(curve.Width-diameter)<.001 && Math.Abs(curve.Height-diameter)<.001 &&
+                    Math.Abs(curve.Ratio-50)<1e-8 && Math.Abs(curve.ModelX-6000)<1e-8 && Math.Abs(curve.ModelY-5500)<1e-8,
+                    "Rotated ellipse changed bounds, scale or model-to-paper transform.");
+            }
+            StartCurve(4);
+            Point(170,110); Point(270,210); Point(220,160);
+            Assert(Math.Abs(CadNative.PaperViewports(client.Handle).Single().Width-160)<.001, "A zero minor-axis radius was accepted.");
+            SendMessage(((CadViewport)workspace.FindName("Viewport")).Handle,0x0100,new IntPtr(8),IntPtr.Zero);
+            Point(270,210); Point(130,150); CheckRotatedClip();
+            client.Command("@undo");
+            Assert(Math.Abs(CadNative.PaperViewports(client.Handle).Single().Width-160)<.001,"Rotated ellipse undo did not restore the vertical ellipse.");
+            client.Command("@redo"); CheckRotatedClip();
+            client.Command("@fit"); await Task.Delay(100);
+            capture(Window.GetWindow(workspace),Path.Combine(root,"viewport-rotated-clip.png"));
+            foreach (var extension in new[] { ".dwg", ".dxf" })
+            {
+                var file = Path.Combine(root,"旋转椭圆视口"+extension);
+                await client.SaveAsync(file); client.Close(document); await client.OpenAsync(file); document=client.State.ActiveId;
+                CadNative.Check(CadNative.wl_layout(client.Handle,client.State.Layouts.Single(item=>item.Name=="裁剪平面").Id));
+                CheckRotatedClip();
+                var page = client.State.Layouts.Single(item=>item.Current);
+                CadNative.Check(CadNative.wl_layout_update(client.Handle,document,page.Key,"旋转椭圆副本",page.Width,page.Height,1,1));
+                await client.SaveAsync(Path.Combine(root,"旋转椭圆布局复制"+extension)); client.Command("@undo");
+                CadNative.Check(CadNative.wl_layout(client.Handle,client.State.Layouts.Single(item=>item.Name=="裁剪平面").Id));
+            }
             client.Close(document); client.Activate(original); workspace.RefreshState();
-            File.WriteAllText(Path.Combine(root,"cad-clipping-result.txt"),"CAD_CLIPPING_OK concave circle ellipse vertical UI validation undo redo clear DWG DXF");
+            File.WriteAllText(Path.Combine(root,"cad-clipping-result.txt"),"CAD_CLIPPING_OK concave circle ellipse vertical rotated UI validation undo redo clear DWG DXF");
         }
     }
 }

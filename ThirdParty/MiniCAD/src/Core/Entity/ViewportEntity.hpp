@@ -7,6 +7,7 @@
 #include <cmath>
 #include <memory>
 #include <limits>
+#include <stdexcept>
 #include <vector>
 
 namespace MiniCAD
@@ -45,6 +46,18 @@ namespace MiniCAD
             bool FrontEnabled = false;
             bool BackEnabled = false;
             bool FrontAtEye = true;
+        };
+
+        struct EllipseClipFrame
+        {
+            double Width, Height, Correlation;
+
+            static EllipseClipFrame FromAxes(const Math::Vec3& major, const Math::Vec3& minor)
+            {
+                const double rx = std::hypot(major.x, minor.x), ry = std::hypot(major.y, minor.y);
+                if (!(rx > 0 && ry > 0)) return {0, 0, 0};
+                return {2 * rx, 2 * ry, (major.x / rx) * (major.y / ry) + (minor.x / rx) * (minor.y / ry)};
+            }
         };
 
         ViewportEntity(ObjectID id,
@@ -364,7 +377,8 @@ namespace MiniCAD
             {
                 const double x = (p.x - m_center.x) * 2 / m_width;
                 const double y = (p.y - m_center.y) * 2 / m_height;
-                return x * x + y * y <= 1 + 1e-10;
+                const double skew = y - m_clipCorrelation * x;
+                return x * x + skew * skew / (1 - m_clipCorrelation * m_clipCorrelation) <= 1 + 1e-10;
             }
             if (!m_clip.empty())
             {
@@ -387,23 +401,34 @@ namespace MiniCAD
         }
 
         const std::vector<Math::Point3>& ClipCoordinates() const { return m_clip; }
-        void SetClipCoordinates(std::vector<Math::Point3> points) { m_clip = std::move(points); m_clipKnown = true; m_clipEllipse = false; }
+        void SetClipCoordinates(std::vector<Math::Point3> points)
+        {
+            m_clip = std::move(points);
+            m_clipKnown = true;
+            m_clipEllipse = false;
+            m_clipCorrelation = 0;
+        }
         bool ClipEllipse() const { return m_clipEllipse; }
-        void SetClipEllipse(bool ellipse) { m_clipEllipse = ellipse; }
+        double ClipEllipseCorrelation() const { return m_clipCorrelation; }
+        void SetClipEllipse(double correlation)
+        {
+            if (!(std::abs(correlation) < 1)) throw std::invalid_argument("Invalid viewport ellipse");
+            m_clipKnown = m_clipEllipse = true;
+            m_clipCorrelation = correlation;
+            const double rest = std::sqrt(1 - correlation * correlation);
+            m_clip.clear();
+            m_clip.reserve(256);
+            for (int i = 0; i < 256; ++i)
+            {
+                const double angle = i * 2 * std::acos(-1.0) / 256;
+                const double x = std::cos(angle);
+                m_clip.push_back({.5 * x, .5 * (correlation * x + rest * std::sin(angle)), 0});
+            }
+        }
         bool ClipKnown() const { return m_clipKnown; }
         void SetClipKnown(bool known) { m_clipKnown = known; }
         std::vector<Math::Point3> PaperBoundary() const
         {
-            if (m_clipEllipse)
-            {
-                std::vector<Math::Point3> points;
-                for (int i = 0; i < 256; ++i)
-                {
-                    const double angle = i * 2 * std::acos(-1.0) / 256;
-                    points.push_back({m_center.x + m_width * .5 * std::cos(angle), m_center.y + m_height * .5 * std::sin(angle), m_center.z});
-                }
-                return points;
-            }
             if (m_clip.empty()) return {{m_center.x-m_width/2,m_center.y-m_height/2,0}, {m_center.x+m_width/2,m_center.y-m_height/2,0},
                 {m_center.x+m_width/2,m_center.y+m_height/2,0}, {m_center.x-m_width/2,m_center.y+m_height/2,0}};
             auto points = m_clip;
@@ -424,7 +449,7 @@ namespace MiniCAD
             e->m_locked     = m_locked;
             e->m_planView   = m_planView;
             e->m_frozenLayers = m_frozenLayers;
-            e->m_clip = m_clip; e->m_clipKnown = m_clipKnown; e->m_clipEllipse = m_clipEllipse;
+            e->m_clip = m_clip; e->m_clipKnown = m_clipKnown; e->m_clipEllipse = m_clipEllipse; e->m_clipCorrelation = m_clipCorrelation;
             return e;
         }
 
@@ -446,6 +471,7 @@ namespace MiniCAD
         std::vector<Math::Point3> m_clip;
         bool m_clipKnown = true;
         bool m_clipEllipse = false;
+        double m_clipCorrelation = 0; // Off-diagonal term when both frame semi-axes are normalized to one.
         bool m_spatialView = false;
         bool m_perspective = false;
         CameraOptics m_optics;

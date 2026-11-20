@@ -131,10 +131,10 @@ namespace Wanluo.StandaloneWorkbench
             CadNative.Check(CadNative.wl_layout(client.Handle, 1));
             client.Command("@fit");
             var perspective = CadNative.PaperViewports(client.Handle).Single(item => item.Perspective);
-            Lock(perspective, false);
+            Lock(perspective, true);
             Select(perspective); Pan(perspective); Wheel(perspective); client.Command("@cancel");
             Check(SameCenter(Current(perspective.Id), perspective) && Current(perspective.Id).Ratio == perspective.Ratio,
-                "Perspective viewport used orthographic navigation");
+                "Locked perspective viewport changed");
             await client.SaveAsync(Path.Combine(root, "透视视口保护.dwg"));
             client.Close(perspectiveDocument); client.Activate(document); workspace.RefreshState();
         }

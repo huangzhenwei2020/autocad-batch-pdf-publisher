@@ -458,40 +458,36 @@ namespace MiniCAD
         // ════════════════════════════════════════════════════════════════
         //  导入：CadDatabase → Scene
         // ════════════════════════════════════════════════════════════════
-        bool IsViewportEllipse(const Dwg::CadDatabase& db, const Dwg::Viewport& viewport)
+        std::optional<double> ReadViewportEllipse(const Dwg::CadDatabase& db, const Dwg::Viewport& viewport)
         {
             const auto* object = db.Find(viewport.BoundaryHandle);
-            if (!(static_cast<int>(viewport.Status) & 65536) || viewport.Width <= 0 || viewport.Height <= 0) return false;
+            if (!(static_cast<int>(viewport.Status) & 65536) || viewport.Width <= 0 || viewport.Height <= 0) return {};
             const double tolerance = std::max(viewport.Width, viewport.Height) * 1e-7;
             auto centered = [&](const auto& point) { return std::abs(point.X - viewport.Center.X) < tolerance && std::abs(point.Y - viewport.Center.Y) < tolerance; };
             if (const auto* circle = dynamic_cast<const Dwg::Circle*>(object); circle && !dynamic_cast<const Dwg::Arc*>(object))
-                return centered(circle->Center) && std::abs(circle->Normal.X) < 1e-9 && std::abs(circle->Normal.Y) < 1e-9 && circle->Normal.Z > .999 &&
-                    std::abs(viewport.Width - 2 * circle->Radius) < tolerance && std::abs(viewport.Height - 2 * circle->Radius) < tolerance;
+            {
+                if (centered(circle->Center) && std::abs(circle->Normal.X) < 1e-9 && std::abs(circle->Normal.Y) < 1e-9 && circle->Normal.Z > .999 &&
+                    std::abs(viewport.Width - 2 * circle->Radius) < tolerance && std::abs(viewport.Height - 2 * circle->Radius) < tolerance)
+                    return 0.0;
+                return {};
+            }
             if (const auto* ellipse = dynamic_cast<const Dwg::Ellipse*>(object))
             {
                 const auto axis = ellipse->MajorAxisEndPoint;
-                const double x = std::abs(axis.X), y = std::abs(axis.Y);
-                return centered(ellipse->Center) && std::abs(ellipse->Normal.X) < 1e-9 && std::abs(ellipse->Normal.Y) < 1e-9 && ellipse->Normal.Z > .999 &&
-                    std::abs(ellipse->EndParameter - ellipse->StartParameter - 2 * std::acos(-1.0)) < 1e-7 &&
-                    ((y < tolerance && std::abs(viewport.Width - 2*x) < tolerance && std::abs(viewport.Height - 2*x*ellipse->RadiusRatio) < tolerance) ||
-                     (x < tolerance && std::abs(viewport.Height - 2*y) < tolerance && std::abs(viewport.Width - 2*y*ellipse->RadiusRatio) < tolerance));
+                const double ratio = ellipse->RadiusRatio;
+                if (!centered(ellipse->Center) || std::abs(ellipse->Normal.X) > 1e-9 || std::abs(ellipse->Normal.Y) > 1e-9 ||
+                    std::abs(ellipse->Normal.Z) < .999 || std::abs(axis.Z) > tolerance || !(ratio > 0 && ratio <= 1) ||
+                    std::abs(ellipse->EndParameter - ellipse->StartParameter - 2 * std::acos(-1.0)) > 1e-7) return {};
+                const auto frame = ViewportEntity::EllipseClipFrame::FromAxes({axis.X, axis.Y, 0}, {-axis.Y * ratio, axis.X * ratio, 0});
+                if (std::abs(viewport.Width - frame.Width) < tolerance && std::abs(viewport.Height - frame.Height) < tolerance &&
+                    std::abs(frame.Correlation) < 1) return frame.Correlation;
             }
-            return false;
+            return {};
         }
 
         std::vector<Math::Point3> ReadViewportPolygon(const Dwg::CadDatabase& db, const Dwg::Viewport& viewport)
         {
             if (!(static_cast<int>(viewport.Status) & 65536) || viewport.Width <= 0 || viewport.Height <= 0) return {};
-            if (IsViewportEllipse(db, viewport))
-            {
-                std::vector<Math::Point3> points;
-                for (int i = 0; i < 256; ++i)
-                {
-                    const double angle = i * 2 * std::acos(-1.0) / 256;
-                    points.push_back({.5*std::cos(angle), .5*std::sin(angle), 0});
-                }
-                return points;
-            }
             const auto* boundary = db.FindAs<Dwg::LwPolyline>(viewport.BoundaryHandle);
             if (!boundary || !(static_cast<int>(boundary->Flags) & 1) || boundary->Vertices.size() < 3 ||
                 std::abs(boundary->Normal.X) > 1e-9 || std::abs(boundary->Normal.Y) > 1e-9 || boundary->Normal.Z < 0.999) return {};
@@ -512,7 +508,8 @@ namespace MiniCAD
                 : m_db(db), m_scene(scene), m_source(source), m_progress(std::move(progress))
             {
                 for (const auto& [handle, object] : db.Objects())
-                    if (const auto* vp = dynamic_cast<const Dwg::Viewport*>(object.get()); vp && !ReadViewportPolygon(db, *vp).empty())
+                    if (const auto* vp = dynamic_cast<const Dwg::Viewport*>(object.get()); vp &&
+                        (ReadViewportEllipse(db, *vp) || !ReadViewportPolygon(db, *vp).empty()))
                         m_viewportBoundaries.insert(vp->BoundaryHandle);
             }
 
@@ -2831,9 +2828,8 @@ namespace MiniCAD
                     vp->SetViewCenterDcs(Math::Point3{ e->ViewCenter.X, e->ViewCenter.Y, 0.0 },
                                          e->TwistAngle,
                                          Math::Point3{ e->ViewTarget.X, e->ViewTarget.Y, 0.0 });
-                    auto polygon = ReadViewportPolygon(m_db, *e);
-                    vp->SetClipCoordinates(std::move(polygon));
-                    vp->SetClipEllipse(IsViewportEllipse(m_db, *e));
+                    if (const auto ellipse = ReadViewportEllipse(m_db, *e)) vp->SetClipEllipse(*ellipse);
+                    else vp->SetClipCoordinates(ReadViewportPolygon(m_db, *e));
                     if ((static_cast<int>(e->Status) & 65536) && vp->ClipCoordinates().empty()) vp->SetClipKnown(false);
                     vp->SetViewHeight(e->ViewHeight);
                     vp->SetViewportId(e->ActiveStatus);
@@ -5275,19 +5271,25 @@ namespace MiniCAD
                             std::unique_ptr<Dwg::Entity> boundary;
                             if (s->ClipEllipse())
                             {
-                                if (std::abs(s->GetWidth() - s->GetHeight()) < 1e-8)
+                                // Recover the principal axes after scaling the normalized clip to the frame.
+                                const double rx = s->GetWidth() * .5, ry = s->GetHeight() * .5, rho = s->ClipEllipseCorrelation();
+                                const double xx = rx * rx, yy = ry * ry, xy = rho * rx * ry;
+                                const double spread = std::hypot(xx - yy, 2 * xy);
+                                if (spread <= std::max(xx, yy) * 1e-12)
                                 {
                                     auto circle = std::make_unique<Dwg::Circle>();
-                                    circle->Center = ToXYZ(s->GetCenter()); circle->Radius = s->GetWidth() / 2;
+                                    circle->Center = ToXYZ(s->GetCenter()); circle->Radius = rx;
                                     boundary = std::move(circle);
                                 }
                                 else
                                 {
                                     auto ellipse = std::make_unique<Dwg::Ellipse>();
                                     ellipse->Center = ToXYZ(s->GetCenter());
-                                    const bool horizontal = s->GetWidth() >= s->GetHeight();
-                                    ellipse->MajorAxisEndPoint = horizontal ? Dwg::XYZ{s->GetWidth()/2,0,0} : Dwg::XYZ{0,s->GetHeight()/2,0};
-                                    ellipse->RadiusRatio = std::min(s->GetWidth(),s->GetHeight()) / std::max(s->GetWidth(),s->GetHeight());
+                                    const double majorSquared = (xx + yy + spread) * .5;
+                                    const double major = std::sqrt(majorSquared);
+                                    const double angle = std::atan2(2 * xy, xx - yy) * .5;
+                                    ellipse->MajorAxisEndPoint = {major * std::cos(angle), major * std::sin(angle), 0};
+                                    ellipse->RadiusRatio = rx * ry * std::sqrt(1 - rho * rho) / majorSquared;
                                     boundary = std::move(ellipse);
                                 }
                             }
