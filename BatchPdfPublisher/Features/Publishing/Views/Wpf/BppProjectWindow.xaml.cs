@@ -4,6 +4,7 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using BatchPdfPublisher.Models;
+using BatchPdfPublisher.Services;
 using BatchPdfPublisher.ViewModels;
 
 namespace BatchPdfPublisher.Views
@@ -41,6 +42,7 @@ namespace BatchPdfPublisher.Views
                 return;
             ProjectName.Text = project.Name;
             ProjectFolder.Text = _viewModel.GetProjectFolder(project);
+            RefreshCompanyFrames(project);
             AutoSave.Text = _viewModel.GetProjectAutoSaveMinutes(project).ToString();
             ModelSpace.IsChecked = project.ScanModelSpace;
             AllLayouts.IsChecked = project.ScanAllLayouts;
@@ -50,6 +52,29 @@ namespace BatchPdfPublisher.Views
             LayoutItems.ItemsSource = null;
             LayoutItems.ItemsSource = _layouts;
             _folderChosen = false;
+        }
+
+        private void RefreshCompanyFrames(ProjectProfile project)
+        {
+            CompanyFrames.IsEnabled = true;
+            try
+            {
+                var libraries = new PublishPlanStore().LoadCompanyFrameLibraries().OrderBy(item => item.Name).ToList();
+                CompanyFramesInfo.Text = libraries.Count == 0
+                    ? "可在「图框登记」中将现有图框存入公司图框库。"
+                    : "用于默认扫描和自动套框。扫描时可临时切换，手动插入可选择任意公司。";
+                libraries.Insert(0, new CompanyFrameLibrary { Id = string.Empty, Name = "仅使用本项目登记" });
+                var currentId = project.CompanyFrameLibraryId ?? string.Empty;
+                if (!libraries.Any(item => item.Id == currentId))
+                    libraries.Add(new CompanyFrameLibrary { Id = currentId, Name = "本机缺少所选公司图框库" });
+                CompanyFrames.ItemsSource = libraries;
+                CompanyFrames.SelectedValue = currentId;
+            }
+            catch (Exception error)
+            {
+                CompanyFrames.IsEnabled = false;
+                CompanyFramesInfo.Text = "公司图框库读取失败：" + error.Message;
+            }
         }
 
         private void ActivateSelected()
@@ -71,8 +96,30 @@ namespace BatchPdfPublisher.Views
         private void Create_Click(object sender, RoutedEventArgs e)
         {
             var exists = _viewModel.Projects.Any(project => string.Equals(project.Name, ProjectName.Text.Trim(), StringComparison.OrdinalIgnoreCase));
-            _viewModel.CreateOrSelectProject(ProjectName.Text, !exists && _folderChosen ? ProjectFolder.Text : null);
+            var companyId = CompanyFrames.IsEnabled ? CompanyFrames.SelectedValue as string : null;
+            if (_viewModel.CreateOrSelectProject(ProjectName.Text, !exists && _folderChosen ? ProjectFolder.Text : null)
+                && !exists && !string.IsNullOrWhiteSpace(companyId))
+            {
+                try { _viewModel.SetCompanyFrameLibrary(companyId); }
+                catch (Exception error) { RefreshProjects(); Status.Text = "项目已创建，公司图框选择保存失败：" + error.Message; return; }
+            }
             RefreshProjects();
+        }
+
+        private void SaveCompanyFrames_Click(object sender, RoutedEventArgs e)
+        {
+            if (!(Projects.SelectedItem is ProjectProfile) || !CompanyFrames.IsEnabled || !(CompanyFrames.SelectedValue is string companyId))
+                return;
+            ActivateSelected();
+            try
+            {
+                _viewModel.SetCompanyFrameLibrary(companyId.Length == 0 ? null : companyId);
+                Status.Text = _viewModel.Status;
+            }
+            catch (Exception error)
+            {
+                Status.Text = "公司图框选择保存失败：" + error.Message;
+            }
         }
 
         private void Switch_Click(object sender, RoutedEventArgs e)

@@ -6,6 +6,7 @@ namespace BatchPdfPublisher.Models
         public int Order { get; set; }
         public string BlockHandle { get; set; }
         public string BlockName { get; set; }
+        public string FrameRegistrationId { get; set; }
         public string Building { get; set; }
         public string SheetNumber { get; set; }
         public string PageNumber { get; set; }

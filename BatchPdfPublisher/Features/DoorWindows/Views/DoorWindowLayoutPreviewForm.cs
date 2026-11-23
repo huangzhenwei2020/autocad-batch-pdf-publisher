@@ -38,7 +38,7 @@ namespace BatchPdfPublisher.Views
             _document = document;
             _source = DoorWindowElevationInsertionService.ExpandFireRescueElevations(items);
             _scale = Math.Max(1, drawingScale);
-            _frames = new PublishPlanStore().LoadFrames().Where(x => !string.IsNullOrWhiteSpace(x.BlockName)).ToList();
+            _frames = new PublishPlanStore().LoadInsertionFrames().Where(x => !string.IsNullOrWhiteSpace(x.BlockName)).ToList();
             var saved = LoadSavedMargins();
             _initialFrame = selectedFrame
                 ?? _frames.FirstOrDefault(x => !string.IsNullOrWhiteSpace(saved.LayoutFrameRegistrationId) && string.Equals(x.RegistrationId, saved.LayoutFrameRegistrationId, StringComparison.OrdinalIgnoreCase))
@@ -54,8 +54,9 @@ namespace BatchPdfPublisher.Views
             foreach (var frame in _frames) _frameChoice.Items.Add(new FrameChoice { Frame = frame });
             if (_frameChoice.Items.Count == 0) _frameChoice.Items.Add(new FrameChoice());
             var index = _frames.FindIndex(x => _initialFrame != null
-                && ((!string.IsNullOrWhiteSpace(_initialFrame.RegistrationId) && string.Equals(x.RegistrationId, _initialFrame.RegistrationId, StringComparison.OrdinalIgnoreCase))
-                    || string.Equals(x.BlockName, _initialFrame.BlockName, StringComparison.OrdinalIgnoreCase)));
+                && (!string.IsNullOrWhiteSpace(_initialFrame.RegistrationId)
+                    ? string.Equals(x.RegistrationId, _initialFrame.RegistrationId, StringComparison.OrdinalIgnoreCase)
+                    : string.Equals(x.BlockName, _initialFrame.BlockName, StringComparison.OrdinalIgnoreCase)));
             _frameChoice.SelectedIndex = index >= 0 ? index : 0;
             _frameChoice.SelectedIndexChanged += (s, e) => { SaveMargins(); RefreshLayout(); };
             toolbar.Controls.Add(_frameChoice);
@@ -169,7 +170,7 @@ namespace BatchPdfPublisher.Views
             catch { }
         }
 
-        private sealed class FrameChoice { public FrameDefinition Frame; public override string ToString() { return Frame == null ? "未选择图框" : Frame.DisplayName; } }
+        private sealed class FrameChoice { public FrameDefinition Frame; public override string ToString() { return Frame == null ? "未选择图框" : Frame.SelectionName; } }
 
         private void SetMargins(DoorWindowElevationInsertionService.DoorWindowLayoutOptions options)
         {
@@ -200,6 +201,7 @@ namespace BatchPdfPublisher.Views
         {
             var frame = SelectedFrame();
             if (frame == null) { MessageBox.Show(this, "请选择排版图框。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+            if (!FrameLayoutRangeService.ConfirmCompanyRangeUpdate(frame)) return;
             Hide(); DetailLayoutOptions selected = null; Exception failure = null;
             try
             {

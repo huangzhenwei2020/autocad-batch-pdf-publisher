@@ -65,7 +65,7 @@ namespace BatchPdfPublisher.Services
             catch (Exception exception) { error = exception.Message; return false; }
         }
 
-        public static void EnsureAvailable(Document document, FrameDefinition frame)
+        public static ObjectId EnsureAvailable(Document document, FrameDefinition frame)
         {
             if (document == null) throw new ArgumentNullException("document");
             var database = document.Database;
@@ -75,21 +75,35 @@ namespace BatchPdfPublisher.Services
                 || mode == DocumentLockMode.ProtectedAutoWrite || mode == DocumentLockMode.AutoWrite;
             using (var writeLock = alreadyLocked ? null : document.LockDocument())
             {
+                if (frame.IsCompanyFrame && FrameTemplatePaths.ExistingSnapshot(frame) == null
+                    && !TryRestoreSnapshot(frame, out var recoveryError))
+                    throw new InvalidOperationException(recoveryError);
+
+                var importName = frame.BlockName;
                 using (var transaction = database.TransactionManager.StartOpenCloseTransaction())
                 {
                     var blocks = (BlockTable)transaction.GetObject(database.BlockTableId, OpenMode.ForRead);
-                    if (blocks.Has(frame.BlockName)) return;
+                    var alias = FrameIdentityService.CompanyBlockAlias(frame);
+                    if (alias != null && blocks.Has(alias))
+                    {
+                        var aliasRecord = (BlockTableRecord)transaction.GetObject(blocks[alias], OpenMode.ForRead);
+                        if (MatchingSignature(aliasRecord, transaction, frame) == null)
+                            throw new InvalidOperationException("当前图纸的公司图框块已修改，请在 CAD 中重命名该块后重新插入。");
+                        return aliasRecord.ObjectId;
+                    }
+                    if (blocks.Has(frame.BlockName))
+                    {
+                        var record = (BlockTableRecord)transaction.GetObject(blocks[frame.BlockName], OpenMode.ForRead);
+                        if (!frame.IsCompanyFrame || MatchingSignature(record, transaction, frame) != null)
+                            return record.ObjectId;
+                        importName = alias ?? throw new InvalidOperationException("同名公司图框缺少有效的登记编号，请重新保存该图框登记。");
+                    }
                 }
-                var path = UserDataPaths.ResolveFromRoot(frame.TemplateRelativePath);
-                if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                if (FrameTemplatePaths.ExistingSnapshot(frame) == null)
                 {
-                    var project = new PublishPlanStore().GetActiveProject();
-                    var paths = (project.CadFiles ?? new List<string>()).Concat(new[] { frame.TemplateSourceDrawingPath });
-                    foreach (Document open in Application.DocumentManager) paths = paths.Concat(new[] { DrawingPath(open) });
-                    string error;
-                    if (!TryRecover(frame, paths, out error)) throw new InvalidOperationException(error);
+                    if (!TryRestoreSnapshot(frame, out var error)) throw new InvalidOperationException(error);
                 }
-                ImportTemplate(database, frame);
+                return ImportTemplate(database, frame, importName);
             }
         }
         public static bool TryPrepare(Document document, FrameDefinition frame, out string error)
@@ -97,6 +111,40 @@ namespace BatchPdfPublisher.Services
             try { EnsureAvailable(document, frame); error = null; return true; }
             catch (Exception ex) { error = ex.Message; return false; }
         }
+
+        public static bool TryRestoreSnapshot(FrameDefinition frame, out string error)
+        {
+            error = null;
+            try
+            {
+                if (FrameTemplatePaths.ExistingSnapshot(frame) != null) return true;
+                var store = new PublishPlanStore();
+                var projects = frame.IsCompanyFrame
+                    ? store.LoadProjects(false).Where(project => project.Frames.Any(registered => registered != null && PublishPlanStore.SameFrameVariant(registered, frame))).ToList()
+                    : new List<ProjectProfile> { store.GetActiveProject() };
+                var matching = projects.SelectMany(project => project.Frames)
+                    .Where(registered => registered != null && PublishPlanStore.SameFrameVariant(registered, frame)).ToList();
+
+                if (frame.IsCompanyFrame && !string.IsNullOrWhiteSpace(frame.DefinitionSignature))
+                {
+                    var snapshot = matching.Where(registered => string.Equals(registered.DefinitionSignature, frame.DefinitionSignature, StringComparison.Ordinal))
+                        .Select(FrameTemplatePaths.ExistingSnapshot).FirstOrDefault(path => path != null);
+                    if (snapshot != null)
+                    {
+                        frame.TemplateRelativePath = store.SaveCompanyFrameTemplate(frame, destination => File.Copy(snapshot, destination));
+                        return true;
+                    }
+                }
+
+                var paths = new[] { frame.TemplateSourceDrawingPath }
+                    .Concat(matching.Select(registered => registered.TemplateSourceDrawingPath))
+                    .Concat(Application.DocumentManager.Cast<Document>().Select(DrawingPath))
+                    .Concat(projects.SelectMany(project => project.CadFiles ?? new List<string>()));
+                return TryRecover(frame, paths, out error);
+            }
+            catch (Exception ex) { error = ex.Message; return false; }
+        }
+
         public static bool TryRecover(FrameDefinition frame, IEnumerable<string> drawingPaths, out string error)
         {
             error = null;
@@ -118,9 +166,28 @@ namespace BatchPdfPublisher.Services
                         }
                     }); } catch { }
                 }
-                if (candidates.Count == 0) throw new InvalidOperationException("未找到与登记“" + frame.DisplayName + "”一致的图框模板。已检查原来源、打开图纸及当前项目 CAD 文件；登记参数已保留。");
+                if (candidates.Count == 0) throw new InvalidOperationException("未找到与登记「" + frame.DisplayName + "」一致的图框。已有登记参数已保留。");
                 if (candidates.Select(c => c.Value).Distinct().Count() != 1) throw new InvalidOperationException("找到多个同名图框版本，不能自动确定原版本。请选择原图纸补齐模板，避免插入错误图框。");
-                var store = new PublishPlanStore();var project = store.GetActiveProject();
+                var store = new PublishPlanStore();
+                var candidate = candidates[0];
+                void WriteMatchingTemplate(string targetPath) => WithDrawing(candidate.Key, db =>
+                {
+                    using (var tr = db.TransactionManager.StartOpenCloseTransaction())
+                    {
+                        var blocks = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+                        var record = (BlockTableRecord)tr.GetObject(blocks[frame.BlockName], OpenMode.ForRead);
+                        if (MatchingSignature(record, tr, frame) != candidate.Value) throw new InvalidOperationException("原图框已变化，请重新选择图纸。");
+                        WriteTemplate(db, record, targetPath);
+                    }
+                });
+                if (frame.IsCompanyFrame)
+                {
+                    frame.TemplateRelativePath = store.SaveCompanyFrameTemplate(frame, WriteMatchingTemplate, candidate.Value);
+                    if (string.IsNullOrWhiteSpace(frame.DefinitionSignature)) frame.DefinitionSignature = candidate.Value;
+                    return true;
+                }
+
+                var project = store.GetActiveProject();
                 var registrations = (project.Frames ?? new List<FrameDefinition>()).Where(f => f != null &&
                     (!string.IsNullOrWhiteSpace(frame.RegistrationId)
                         ? string.Equals(f.RegistrationId, frame.RegistrationId, StringComparison.OrdinalIgnoreCase)
@@ -129,32 +196,26 @@ namespace BatchPdfPublisher.Services
                 if (stored == null) throw new InvalidOperationException("当前项目的图框登记已变化，请重新打开图框窗口。");
                 var oldPath = UserDataPaths.ResolveFromRoot(stored.TemplateRelativePath);
                 var destination = FrameTemplatePaths.ReadablePath(project.Name, frame, oldPath);
-                var candidate = candidates[0];
-                WithDrawing(candidate.Key, db => {
-                    using (var tr = db.TransactionManager.StartOpenCloseTransaction()) {
-                        var blocks = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
-                        var record = (BlockTableRecord)tr.GetObject(blocks[frame.BlockName], OpenMode.ForRead);
-                        if (MatchingSignature(record, tr, frame) != candidate.Value) throw new InvalidOperationException("原图框已变化，请重新选择图纸。");
-                        WriteTemplate(db, record, destination);
-                    }
-                });
+                WriteMatchingTemplate(destination);
                 var relative = UserDataPaths.RelativeToRoot(destination);
                 if (string.IsNullOrWhiteSpace(stored.RegistrationId)) stored.RegistrationId = Guid.NewGuid().ToString("N");
+                if (string.IsNullOrWhiteSpace(stored.DefinitionSignature)) stored.DefinitionSignature = candidate.Value;
                 stored.TemplateRelativePath = relative;stored.TemplateSourceDrawingPath = candidate.Key;
                 store.SaveProject(project);
                 frame.RegistrationId = stored.RegistrationId;frame.TemplateRelativePath = relative;frame.TemplateSourceDrawingPath = candidate.Key;
+                frame.DefinitionSignature = stored.DefinitionSignature;
                 return true;
             }
             catch (Exception ex) { error = ex.Message; return false; }
         }
-        private static void ImportTemplate(Database database, FrameDefinition frame)
+        private static ObjectId ImportTemplate(Database database, FrameDefinition frame, string blockName = null)
         {
             var path = UserDataPaths.ResolveFromRoot(frame.TemplateRelativePath);
             if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) throw new InvalidOperationException("图框模板文件不存在，请补齐原图框模板。");
                 using (var source = new Database(false, true))
                 {
                     source.ReadDwgFile(path, FileOpenMode.OpenForReadAndAllShare, true, string.Empty);
-                    database.Insert(frame.BlockName, source, false);
+                    return database.Insert(blockName ?? frame.BlockName, source, false);
                 }
         }
         private static void WriteTemplate(Database database, BlockTableRecord record, string path)
@@ -175,8 +236,9 @@ namespace BatchPdfPublisher.Services
         }
         private static bool OwnedTemplate(string path)
         {
-            return !string.IsNullOrWhiteSpace(path) && Path.GetFullPath(path).StartsWith(
-                Path.GetFullPath(UserDataPaths.FrameTemplatesDirectory).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+            return !string.IsNullOrWhiteSpace(path) && (PublishPlanStore.IsCompanyTemplatePath(path)
+                || Path.GetFullPath(path).StartsWith(
+                    Path.GetFullPath(UserDataPaths.FrameTemplatesDirectory).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
         }
         private static string MatchingSignature(BlockTableRecord record, Transaction transaction, FrameDefinition frame)
         {

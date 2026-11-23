@@ -1030,6 +1030,7 @@ namespace BatchPdfPublisher.Views
             if (!Busy)
             {
                 BppDialog.ShowFrames(_viewModel, this);
+                _viewModel.RefreshFrameScanSources();
                 RefreshRows();
             }
         }

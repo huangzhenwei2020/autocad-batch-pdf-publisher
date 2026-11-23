@@ -84,6 +84,32 @@ namespace BatchPdfPublisher.Views
             _viewModel.SaveFrameLibraryCommand.Execute(null);
         }
 
+        private void Company_Click(object sender, RoutedEventArgs e)
+        {
+            if (!(Frames.SelectedItem is FrameDefinition frame))
+            {
+                CompanyStatus.Text = "请先选中一项已登记图框。";
+                return;
+            }
+
+            try
+            {
+                var dialog = new BppCompanyFrameWindow(frame, _viewModel.Frames.ToList());
+                if (BppDialog.Show(dialog, this) == true)
+                {
+                    var library = dialog.SavedLibrary;
+                    var missingTemplates = library.Frames.Count(item => FrameTemplatePaths.ExistingSnapshot(item) == null);
+                    CompanyStatus.Text = "已保存到「" + library.Name + "」公司图框库（共 " + library.Frames.Count
+                        + " 项）。在「项目管理」中为项目选用。"
+                        + (missingTemplates == 0 ? string.Empty : " 库中仍有 " + missingTemplates + " 项历史登记待补齐模板。");
+                }
+            }
+            catch (Exception error)
+            {
+                CompanyStatus.Text = "公司图框库读取失败：" + error.Message;
+            }
+        }
+
         private void Delete_Click(object sender, RoutedEventArgs e)
         {
             if (!(Frames.SelectedItem is FrameDefinition frame))

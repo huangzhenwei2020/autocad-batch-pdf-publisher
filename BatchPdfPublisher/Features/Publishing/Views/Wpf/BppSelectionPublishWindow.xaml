@@ -7,6 +7,10 @@
         </ResourceDictionary>
     </Window.Resources>
     <DockPanel Margin="16">
+        <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,4">
+            <TextBlock Text="扫描图框范围" Margin="6" VerticalAlignment="Center" />
+            <ComboBox x:Name="ScanFrames" DisplayMemberPath="Name" MinWidth="220" MaxWidth="440" />
+        </WrapPanel>
         <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,10">
             <Button Content="在 CAD 中框选图框" Click="Select_Click" Style="{StaticResource BppPrimary}" />
             <Button Content="预览所选" Click="Preview_Click" />

@@ -34,6 +34,12 @@
                         <Button Content="切换选中项目" Click="Switch_Click" />
                         <Button Content="删除项目记录" Click="Delete_Click" />
                     </WrapPanel>
+                    <TextBlock Text="公司图框" FontWeight="SemiBold" Margin="3,0,3,4" />
+                    <DockPanel>
+                        <Button DockPanel.Dock="Right" Content="保存公司图框选择" Click="SaveCompanyFrames_Click" />
+                        <ComboBox x:Name="CompanyFrames" DisplayMemberPath="Name" SelectedValuePath="Id" />
+                    </DockPanel>
+                    <TextBlock x:Name="CompanyFramesInfo" Foreground="{StaticResource BppMuted}" TextWrapping="Wrap" Margin="3,3,3,12" />
                     <TextBlock Text="自动保存间隔（分钟）" />
                     <TextBox x:Name="AutoSave" Text="0" />
                     <TextBlock Text="0 使用 CAD 自动保存设置" Foreground="{StaticResource BppMuted}" Margin="6" />

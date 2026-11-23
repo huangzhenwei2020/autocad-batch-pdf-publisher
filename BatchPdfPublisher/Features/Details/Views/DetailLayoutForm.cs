@@ -41,7 +41,7 @@ namespace BatchPdfPublisher.Views
         public DetailLayoutForm(Document document)
         {
             _document = document;
-            _frames = new PublishPlanStore().LoadFrames().Where(x => x != null && !string.IsNullOrWhiteSpace(x.BlockName)).ToList();
+            _frames = new PublishPlanStore().LoadInsertionFrames().Where(x => x != null && !string.IsNullOrWhiteSpace(x.BlockName)).ToList();
             Text = "大样排版"; StartPosition = FormStartPosition.CenterScreen; ClientSize = new Size(1050, 690); MinimumSize = new Size(850, 540);
             Font = new Font("Microsoft YaHei UI", 9f); BackColor = Color.White;
             _documentBinding = new ModelessDocumentBinding(this, document);
@@ -507,6 +507,7 @@ namespace BatchPdfPublisher.Views
         private async void RegisterLayoutRange()
         {
             var frame = SelectedFrame(); if (frame == null) { MessageBox.Show(this, "请选择登记图框。", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            if (!FrameLayoutRangeService.ConfirmCompanyRangeUpdate(frame)) return;
             var current = ReadOptions();
             Hide(); DetailLayoutOptions selected = null; Exception failure = null;
             try
@@ -595,7 +596,9 @@ namespace BatchPdfPublisher.Views
             try { if (File.Exists(SettingsPath)) foreach (var line in File.ReadAllLines(SettingsPath)) { var i = line.IndexOf('='); if (i > 0) values[line.Substring(0, i)] = line.Substring(i + 1); } } catch { }
             _left.Text = Read(values, "Left", "40"); _right.Text = Read(values, "Right", "80"); _top.Text = Read(values, "Top", "20"); _bottom.Text = Read(values, "Bottom", "20"); _gap.Text = Read(values, "ItemGap", "5"); _pageGap.Text = Read(values, "PageGap", "30"); _scale.Text = Read(values, "Scale", "1:50"); _hasExplicitRange = Read(values, "HasRange", "0") == "1"; _deleteSources.Checked = Read(values, "DeleteSources", "0") == "1";
             var frameId = Read(values, "FrameId", string.Empty); var block = Read(values, "FrameBlock", string.Empty);
-            var index = _frames.FindIndex(x => (!string.IsNullOrWhiteSpace(frameId) && string.Equals(x.RegistrationId, frameId, StringComparison.OrdinalIgnoreCase)) || (!string.IsNullOrWhiteSpace(block) && string.Equals(x.BlockName, block, StringComparison.OrdinalIgnoreCase)));
+            var index = _frames.FindIndex(x => !string.IsNullOrWhiteSpace(frameId)
+                ? string.Equals(x.RegistrationId, frameId, StringComparison.OrdinalIgnoreCase)
+                : !string.IsNullOrWhiteSpace(block) && string.Equals(x.BlockName, block, StringComparison.OrdinalIgnoreCase));
             if (index >= 0) _frame.SelectedIndex = index;
             _rangeFrameId = Read(values, "RangeFrameId", frameId); _rangeFrameBlock = Read(values, "RangeFrameBlock", block);
             int savedScale; _rangeScale = int.TryParse(Read(values, "RangeScale", ParseScaleText(_scale.Text)), out savedScale) ? savedScale : 0;
@@ -623,8 +626,9 @@ namespace BatchPdfPublisher.Views
             var frame = SelectedFrame(); if (frame == null || _rangeScale <= 0) return false;
             int scale; try { scale = ParseScale(); } catch { return false; }
             if (scale != _rangeScale) return false;
-            return (!string.IsNullOrWhiteSpace(_rangeFrameId) && string.Equals(_rangeFrameId, frame.RegistrationId, StringComparison.OrdinalIgnoreCase))
-                || (!string.IsNullOrWhiteSpace(_rangeFrameBlock) && string.Equals(_rangeFrameBlock, frame.BlockName, StringComparison.OrdinalIgnoreCase));
+            return !string.IsNullOrWhiteSpace(_rangeFrameId)
+                ? string.Equals(_rangeFrameId, frame.RegistrationId, StringComparison.OrdinalIgnoreCase)
+                : !string.IsNullOrWhiteSpace(_rangeFrameBlock) && string.Equals(_rangeFrameBlock, frame.BlockName, StringComparison.OrdinalIgnoreCase);
         }
 
         private static string ParseScaleText(string text)
@@ -634,7 +638,7 @@ namespace BatchPdfPublisher.Views
         }
 
         private static string Read(IDictionary<string, string> values, string key, string fallback) { string value; return values.TryGetValue(key, out value) ? value : fallback; }
-        private sealed class FrameChoice { public FrameDefinition Frame; public override string ToString() { return Frame == null ? "未登记图框" : Frame.DisplayName; } }
+        private sealed class FrameChoice { public FrameDefinition Frame; public override string ToString() { return Frame == null ? "未登记图框" : Frame.SelectionName; } }
         private static TextBox Box() { return new TextBox { Width = 48 }; }
         private static Label LabelFor(string text) { return new Label { Text = text, AutoSize = true, Margin = new Padding(6, 7, 2, 0), ForeColor = Color.FromArgb(45, 55, 70) }; }
         private static Button ButtonFor(string text) { return new Button { Text = text, AutoSize = true, Height = 28, Margin = new Padding(4, 2, 0, 0), FlatStyle = FlatStyle.Standard }; }

@@ -58,7 +58,8 @@
                             <Button Content="写入排版范围" Click="Range_Click" />
                         </WrapPanel>
                     </StackPanel>
-                    <ListBox x:Name="Frames" DisplayMemberPath="DisplayName" SelectionChanged="Frame_Changed" />
+                    <ComboBox x:Name="FrameSource" DockPanel.Dock="Top" SelectionChanged="FrameSource_Changed" ToolTip="按公司或本项目筛选可插入的图框。" />
+                    <ListBox x:Name="Frames" DisplayMemberPath="SelectionName" SelectionChanged="Frame_Changed" />
                 </DockPanel>
             </TabItem>
         </TabControl>

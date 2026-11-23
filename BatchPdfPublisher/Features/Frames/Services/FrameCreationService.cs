@@ -56,7 +56,7 @@ namespace BatchPdfPublisher.Services
             if (drawingScale <= 0) throw new InvalidOperationException("图框比例必须是大于 0 的整数。");
 
             var templateTiming = System.Diagnostics.Stopwatch.StartNew();
-            FrameTemplateStore.EnsureAvailable(document, frame);
+            var definitionId = FrameTemplateStore.EnsureAvailable(document, frame);
             var templateMilliseconds = templateTiming.ElapsedMilliseconds;
             var point = document.Editor.GetPoint("\n指定登记图框左下角插入点: ");
             if (point.Status != PromptStatus.OK) return false;
@@ -67,11 +67,6 @@ namespace BatchPdfPublisher.Services
             {
                 var database = document.Database;
                 var frameLayerId = DraftingStandardService.EnsureFrameLayer(database, transaction);
-                var blocks = (BlockTable)transaction.GetObject(database.BlockTableId, OpenMode.ForRead);
-                if (!blocks.Has(frame.BlockName))
-                    throw new InvalidOperationException("无法加载登记图框块“" + frame.BlockName + "”。");
-
-                var definitionId = blocks[frame.BlockName];
                 var definition = (BlockTableRecord)transaction.GetObject(definitionId, OpenMode.ForRead);
                 var placement = FrameBlockPlacementService.Measure(definition, transaction, frame, drawingScale);
                 var reference = new BlockReference(placement.PositionForLowerLeft(point.Value), definitionId)

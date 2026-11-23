@@ -13,6 +13,7 @@
         </Grid.ColumnDefinitions>
         <Border Style="{StaticResource BppCard}">
             <DockPanel>
+                <TextBlock DockPanel.Dock="Top" Text="本项目已登记图框" FontWeight="SemiBold" Margin="6,3,6,8" />
                 <TextBox x:Name="Search" DockPanel.Dock="Top" ToolTip="搜索图框名称或备注" TextChanged="Search_Changed" />
                 <ListBox x:Name="Frames" DisplayMemberPath="DisplayName" SelectionChanged="Frame_Changed" />
             </DockPanel>
@@ -24,9 +25,13 @@
                     <Button Content="创建图框" Click="Create_Click" />
                     <Button Content="修改信息" Click="Edit_Click" />
                     <Button Content="保存图框库" Click="Save_Click" />
+                    <Button Content="存为公司图框" Click="Company_Click" />
                     <Button Content="删除登记" Click="Delete_Click" />
                 </WrapPanel>
-                <Button DockPanel.Dock="Bottom" Content="关闭" Click="Close_Click" HorizontalAlignment="Right" />
+                <DockPanel DockPanel.Dock="Bottom">
+                    <Button DockPanel.Dock="Right" Content="关闭" Click="Close_Click" />
+                    <TextBlock x:Name="CompanyStatus" Margin="6" VerticalAlignment="Center" TextWrapping="Wrap" />
+                </DockPanel>
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="10">
                         <TextBlock x:Name="Details" FontSize="15" TextWrapping="Wrap" />

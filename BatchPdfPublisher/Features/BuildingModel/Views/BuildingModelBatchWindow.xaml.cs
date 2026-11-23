@@ -215,12 +215,12 @@ namespace BatchPdfPublisher.Views
             var choices = _frames.Select((frame, index) => new BuildingModelChoice
             {
                 Value = index,
-                Title = frame.DisplayName,
+                Title = frame.SelectionName,
                 Subtitle = (frame.PaperOrientation ?? "方向未登记")
                     + (string.IsNullOrWhiteSpace(frame.Note) ? string.Empty : " · " + frame.Note),
                 Badge = frame == _selectedFrame ? "当前" : string.Empty
             });
-            var picker = new BuildingModelChoiceWindow("选择项目图框", "只列出当前项目已经登记的图框。",
+            var picker = new BuildingModelChoiceWindow("选择排版图框", "可使用本项目登记或任意公司图框。",
                 choices, false, "使用此图框") { Owner = this };
             if (picker.ShowDialog() != true || !picker.SelectedValue.HasValue) return;
             _selectedFrame = _frames[picker.SelectedValue.Value];
@@ -231,7 +231,7 @@ namespace BatchPdfPublisher.Views
         {
             var project = FrameMode == BuildingFrameMode.Project;
             FrameSelectButton.IsEnabled = project && _selectedFrame != null;
-            FrameNameText.Text = project ? (_selectedFrame?.DisplayName ?? "请先登记项目图框")
+            FrameNameText.Text = project ? (_selectedFrame?.SelectionName ?? "请先登记图框")
                 : FrameMode == BuildingFrameMode.BuiltIn ? "使用视图自带图框" : "仅落视图内容";
             FramePaperText.Text = project ? (_selectedFrame?.PaperDisplay ?? "—")
                 + " " + (_selectedFrame?.PaperOrientation ?? "") : FrameMode == BuildingFrameMode.BuiltIn ? "图纸原规格" : "无图框";

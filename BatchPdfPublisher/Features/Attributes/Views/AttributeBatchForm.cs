@@ -54,7 +54,7 @@ namespace BatchPdfPublisher.Views
             _document = document;
             _settings = AttributeBatchSettings.Load();
             _presetItems = AttributePresetStore.Load();
-            _registeredBlockNames = new HashSet<string>(new PublishPlanStore().LoadFrames().Select(x => x.BlockName).Where(x => !string.IsNullOrWhiteSpace(x)), StringComparer.OrdinalIgnoreCase);
+            _registeredBlockNames = new HashSet<string>(new PublishPlanStore().LoadEffectiveFrames().Select(x => x.BlockName).Where(x => !string.IsNullOrWhiteSpace(x)), StringComparer.OrdinalIgnoreCase);
             Build();
             FormClosed += (s, e) => { _markers.Dispose(); _toolTip.Dispose(); };
         }

@@ -65,8 +65,20 @@ namespace BatchPdfPublisher.Services
         public static FrameDefinition SelectBest(IEnumerable<FrameDefinition> source, string blockName,
             string attributeSignature, string definitionSignature, double aspectRatio)
         {
-            var candidates = (source ?? Enumerable.Empty<FrameDefinition>())
-                .Where(x => string.Equals(x.BlockName, blockName, StringComparison.OrdinalIgnoreCase)).ToList();
+            var frames = source as IList<FrameDefinition> ?? (source ?? Enumerable.Empty<FrameDefinition>()).ToList();
+            var alias = blockName != null && blockName.StartsWith("WL_FRAME_", StringComparison.OrdinalIgnoreCase)
+                ? frames.FirstOrDefault(x => IsCompanyAlias(x, blockName)) : null;
+            if (alias != null)
+                return frames.FirstOrDefault(x => !x.IsCompanyFrame
+                    && (string.Equals(x.BlockName, blockName, StringComparison.OrdinalIgnoreCase)
+                        || PublishPlanStore.SameFrameVariant(x, alias))) ?? alias;
+
+            var candidates = frames.Where(x => string.Equals(x.BlockName, blockName, StringComparison.OrdinalIgnoreCase)
+                && (!x.IsCompanyFrame || IsSameVariant(x, attributeSignature, definitionSignature, aspectRatio))).ToList();
+            if (candidates.Count <= 1) return candidates.FirstOrDefault();
+            var local = candidates.Where(x => !x.IsCompanyFrame).ToList();
+            candidates.RemoveAll(candidate => candidate.IsCompanyFrame
+                && local.Any(project => PublishPlanStore.SameFrameVariant(project, candidate)));
             if (candidates.Count <= 1) return candidates.FirstOrDefault();
             var exactDefinition = candidates.Where(x => !string.IsNullOrWhiteSpace(x.DefinitionSignature)
                 && string.Equals(x.DefinitionSignature, definitionSignature, StringComparison.Ordinal)).ToList();
@@ -77,6 +89,12 @@ namespace BatchPdfPublisher.Services
             return pool.OrderBy(x => x.ReferenceAspectRatio <= 0d || aspectRatio <= 0d
                 ? double.MaxValue : Math.Abs(x.ReferenceAspectRatio - aspectRatio)).FirstOrDefault();
         }
+
+        internal static string CompanyBlockAlias(FrameDefinition frame) =>
+            frame?.IsCompanyFrame == true && Guid.TryParseExact(frame.RegistrationId, "N", out var id) ? "WL_FRAME_" + id.ToString("N") : null;
+
+        internal static bool IsCompanyAlias(FrameDefinition frame, string blockName) =>
+            !string.IsNullOrWhiteSpace(blockName) && string.Equals(CompanyBlockAlias(frame), blockName, StringComparison.OrdinalIgnoreCase);
 
         public static bool IsSameVariant(FrameDefinition frame, string attributeSignature,
             string definitionSignature, double aspectRatio)

@@ -1277,7 +1277,7 @@ namespace BatchPdfPublisher.Services
                 document.Editor.WriteMessage("\n读取已落图状态失败：" + exception.Message);
             }
             List<FrameDefinition> frames;
-            try { frames = new PublishPlanStore().LoadFrames(); }
+            try { frames = new PublishPlanStore().LoadInsertionFrames(); }
             catch (Exception exception)
             {
                 document.Editor.WriteMessage("\n读取项目图框失败：" + exception.Message);
@@ -1373,7 +1373,7 @@ namespace BatchPdfPublisher.Services
             try
             {
                 var frames = selectedFrame == null
-                    ? new PublishPlanStore().LoadFrames()
+                    ? new PublishPlanStore().LoadEffectiveFrames()
                         .Where(f => f != null && !string.IsNullOrWhiteSpace(f.BlockName)).ToList()
                     : new List<FrameDefinition> { selectedFrame };
                 if (frames.Count == 0)
@@ -1389,15 +1389,7 @@ namespace BatchPdfPublisher.Services
                         + " 的登记图框：本次用图纸自带的图框。）");
                     return null;
                 }
-                FrameTemplateStore.EnsureAvailable(document, frame);
-                var blockTable = (BlockTable)transaction.GetObject(document.Database.BlockTableId, OpenMode.ForRead);
-                if (!blockTable.Has(frame.BlockName))
-                {
-                    if (strict) throw new InvalidOperationException("所选图框块“" + frame.BlockName + "”不在当前图纸里。");
-                    document.Editor.WriteMessage("\n（图框块“" + frame.BlockName + "”不在当前图纸里：本次用图纸自带的图框。）");
-                    return null;
-                }
-                var definitionId = blockTable[frame.BlockName];
+                var definitionId = FrameTemplateStore.EnsureAvailable(document, frame);
                 var definition = (BlockTableRecord)transaction.GetObject(definitionId, OpenMode.ForRead);
                 var bounds = DefinitionBounds(definition, transaction);
                 if (bounds == null)
@@ -1423,7 +1415,7 @@ namespace BatchPdfPublisher.Services
                 transaction.AddNewlyCreatedDBObject(reference, true);
                 insertedId = reference.ObjectId;
                 FillFrameAttributes(definition, transaction, reference, frame, view);
-                document.Editor.WriteMessage("\n已套用项目图框：“" + frame.DisplayName + "”（按纸张缩放到 "
+                document.Editor.WriteMessage("\n已套用图框：“" + frame.SelectionName + "”（按纸张缩放到 "
                     + paperWidth.ToString("0") + "×" + paperHeight.ToString("0") + "，图纸自带图框已跳过）。");
                 return frame;
             }

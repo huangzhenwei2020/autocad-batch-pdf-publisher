@@ -31,8 +31,15 @@ namespace BatchPdfPublisher.Services
 
         public static void SaveRange(FrameDefinition frame, double left, double right, double top, double bottom)
         {
+            var store = new PublishPlanStore();
+            if (frame.IsCompanyFrame)
+            {
+                store.UpdateCompanyFrame(frame, companyFrame => SetRange(companyFrame, left, right, top, bottom));
+                SetRange(frame, left, right, top, bottom);
+                return;
+            }
             SetRange(frame, left, right, top, bottom);
-            var store = new PublishPlanStore(); var frames = store.LoadFrames();
+            var frames = store.LoadFrames();
             var stored = frames.FirstOrDefault(value => value != null
                 && ((!string.IsNullOrWhiteSpace(frame.RegistrationId) && string.Equals(value.RegistrationId, frame.RegistrationId, StringComparison.OrdinalIgnoreCase))
                     || (string.IsNullOrWhiteSpace(frame.RegistrationId) && string.Equals(value.BlockName, frame.BlockName, StringComparison.OrdinalIgnoreCase))));
@@ -43,7 +50,7 @@ namespace BatchPdfPublisher.Services
 
         public static bool PromptAndSaveRange(Document document, FrameDefinition frame)
         {
-            if (document == null || frame == null) return false;
+            if (document == null || frame == null || !ConfirmCompanyRangeUpdate(frame)) return false;
             var anchor = DetailLayoutService.InsertFrameForRange(document, frame, 1);
             if (anchor == null) return false;
             var selected = DetailLayoutService.PromptLayoutRange(document, frame, 1, anchor, new DetailLayoutOptions());
@@ -52,6 +59,12 @@ namespace BatchPdfPublisher.Services
             document.Editor.WriteMessage("\n图框排版范围已重新登记成功：" + Describe(frame) + "。\n");
             return true;
         }
+
+        public static bool ConfirmCompanyRangeUpdate(FrameDefinition frame) =>
+            !frame.IsCompanyFrame || System.Windows.Forms.MessageBox.Show(
+                "写入后，使用「" + frame.CompanyName + "」此图框的项目都会使用新的排版范围。继续吗？", "更新公司图框",
+                System.Windows.Forms.MessageBoxButtons.YesNo, System.Windows.Forms.MessageBoxIcon.Question,
+                System.Windows.Forms.MessageBoxDefaultButton.Button2) == System.Windows.Forms.DialogResult.Yes;
 
         public static string Describe(FrameDefinition frame)
         {

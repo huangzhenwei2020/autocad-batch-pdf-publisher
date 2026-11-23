@@ -32,6 +32,13 @@ namespace BatchPdfPublisher.Models
         public double LayoutTopMargin { get; set; }
         public double LayoutBottomMargin { get; set; }
 
+        internal bool IsCompanyFrame { get; set; }
+        internal string CompanyName { get; set; }
+
+        public string SelectionName => IsCompanyFrame ? (CompanyName + " · " + DisplayName) : DisplayName;
+
+        internal FrameDefinition Copy() => (FrameDefinition)MemberwiseClone();
+
         public string PaperDisplay => string.IsNullOrWhiteSpace(Extension) ? PaperSize : PaperSize + "+" + PaperSizeCatalog.NormalizeExtension(Extension);
         public string DisplayName
         {

@@ -15,6 +15,7 @@ namespace BatchPdfPublisher.Models
         public string CloudId { get; set; }
         // Empty means the standard per-user project directory is used.
         public string ProjectFolder { get; set; }
+        public string CompanyFrameLibraryId { get; set; }
         public List<FrameDefinition> Frames { get; set; } = new List<FrameDefinition>();
         public string PlotStyle { get; set; } = "monochrome.ctb";
         public string MarginMode { get; set; } = "自动适配";
@@ -37,5 +38,25 @@ namespace BatchPdfPublisher.Models
         public List<string> SelectedLayouts { get; set; } = new List<string>();
         // Null means an older project that should follow AutoCAD SAVETIME.
         public int? AutoSaveMinutes { get; set; }
+    }
+
+    public sealed class CompanyFrameLibrary
+    {
+        public string Id { get; set; }
+        public string Name { get; set; }
+        public List<FrameDefinition> Frames { get; set; } = new List<FrameDefinition>();
+    }
+
+    public sealed class FrameScanSource
+    {
+        // null uses the project setting, empty uses only the project registrations.
+        public string CompanyId { get; }
+        public string Name { get; }
+
+        internal FrameScanSource(string companyId, string name)
+        {
+            CompanyId = companyId;
+            Name = name;
+        }
     }
 }

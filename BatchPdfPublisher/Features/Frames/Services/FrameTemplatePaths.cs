@@ -65,6 +65,14 @@ namespace BatchPdfPublisher.Services
 
         public static bool SameFile(string left, string right) { try { return !string.IsNullOrWhiteSpace(right) && string.Equals(Path.GetFullPath(left), Path.GetFullPath(right), StringComparison.OrdinalIgnoreCase); } catch { return false; } }
 
+        public static string ExistingSnapshot(FrameDefinition frame)
+        {
+            if (frame == null || string.IsNullOrWhiteSpace(frame.TemplateRelativePath)) return null;
+            var path = UserDataPaths.ResolveFromRoot(frame.TemplateRelativePath);
+            if (!string.Equals(Path.GetExtension(path), ".dwg", StringComparison.OrdinalIgnoreCase) || !File.Exists(path)) return null;
+            return new FileInfo(path).Length == 0 ? null : path;
+        }
+
         public static string SafeName(string value, string fallback)
         {
             var result = string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();

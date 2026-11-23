@@ -8,6 +8,7 @@ namespace BatchPdfPublisher.Models
         public ObjectId BlockId { get; set; }
         public string BlockHandle { get; set; }
         public string BlockName { get; set; }
+        public string FrameRegistrationId { get; set; }
         public int Order { get; set; }
         public string Building { get; set; }
         public string SheetNumber { get; set; }

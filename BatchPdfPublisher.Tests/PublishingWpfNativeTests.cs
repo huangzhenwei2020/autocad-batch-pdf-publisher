@@ -341,6 +341,7 @@ public sealed class PublishingWpfNativeTests
             Pump();
             Check(editor.Definition != null && editor.Definition.DefaultPageNumber == "007" && editor.Definition.PageNumberAttributeTag == "PAGE_NO", "Page mapping lost in WPF registration");
             model.Dispose();
+            CheckCompanyFrameScopes(document, root);
             AcApplication.DocumentManager.MdiActiveDocument.Editor.WriteMessage("\nPUBLISH_WPF_QA_OK\n");
         }
         catch (System.Exception error)
@@ -354,6 +355,80 @@ public sealed class PublishingWpfNativeTests
     {
         if (!ok)
             throw new System.Exception(message);
+    }
+
+    private static void CheckCompanyFrameScopes(Document document, string root)
+    {
+        const string blockName = "WL_COMPANY_TEST_FRAME";
+        var store = new PublishPlanStore();
+        var project = store.GetActiveProject();
+        var database = document.Database;
+        ObjectId frameAId;
+        CompanyFrameLibrary companyB;
+        using (document.LockDocument())
+        {
+            CompanyFrameLibrary RegisterCompany(string name, string scale, bool extraLine, string definitionName, out ObjectId definitionId)
+            {
+                var templatePath = Path.Combine(root, name + ".dwg");
+                using (var template = new Database(true, true))
+                {
+                    using (var tr = template.TransactionManager.StartTransaction())
+                    {
+                        var space = (BlockTableRecord)tr.GetObject(template.CurrentSpaceId, OpenMode.ForWrite);
+                        var outline = new Polyline { Closed = true };
+                        outline.AddVertexAt(0, new Point2d(0, 0), 0, 0, 0);
+                        outline.AddVertexAt(1, new Point2d(420, 0), 0, 0, 0);
+                        outline.AddVertexAt(2, new Point2d(420, 297), 0, 0, 0);
+                        outline.AddVertexAt(3, new Point2d(0, 297), 0, 0, 0);
+                        space.AppendEntity(outline);
+                        tr.AddNewlyCreatedDBObject(outline, true);
+                        if (extraLine)
+                        {
+                            var line = new Line(new Point3d(10, 20, 0), new Point3d(390, 20, 0));
+                            space.AppendEntity(line);
+                            tr.AddNewlyCreatedDBObject(line, true);
+                        }
+                        tr.Commit();
+                    }
+                    template.SaveAs(templatePath, DwgVersion.Current);
+                    definitionId = database.Insert(definitionName, template, true);
+                }
+                using (var tr = database.TransactionManager.StartOpenCloseTransaction())
+                {
+                    var definition = (BlockTableRecord)tr.GetObject(definitionId, OpenMode.ForRead);
+                    return store.SaveCompanyFrames(name, new[] { new FrameDefinition
+                    {
+                        BlockName = blockName, PaperSize = "A3", PaperOrientation = "横向", DefaultPrintScale = scale,
+                        DefinitionSignature = FrameIdentityService.DefinitionSignature(definition, tr),
+                        TemplateRelativePath = UserDataPaths.RelativeToRoot(templatePath)
+                    } });
+                }
+            }
+
+            var companyA = RegisterCompany("QA company A", "1:50", false, blockName, out frameAId);
+            companyB = RegisterCompany("QA company B", "1:75", true, blockName + "_SOURCE", out _);
+            Check(store.ResolveInsertionFrames(project).Count(frame => frame.BlockName == blockName) == 2, "Both company frames must be globally available.");
+            var frameB = store.ResolveInsertionFrames(project).Single(frame => frame.RegistrationId == companyB.Frames.Single().RegistrationId);
+            var frameBId = FrameTemplateStore.EnsureAvailable(document, frameB);
+            Check(frameAId != frameBId && FrameTemplateStore.EnsureAvailable(document, frameB) == frameBId, "Conflicting company block was replaced or duplicated.");
+            using (var tr = database.TransactionManager.StartTransaction())
+            {
+                var space = (BlockTableRecord)tr.GetObject(database.CurrentSpaceId, OpenMode.ForWrite);
+                foreach (var id in new[] { frameAId, frameBId })
+                {
+                    var item = new BlockReference(new Point3d(id == frameAId ? 0 : 1000, 0, 0), id);
+                    space.AppendEntity(item);
+                    tr.AddNewlyCreatedDBObject(item, true);
+                }
+                tr.Commit();
+            }
+            var scanner = new DrawingScanner();
+            var resultA = scanner.Scan(document, store.ResolveScanFrames(project, companyA.Id));
+            var resultB = scanner.Scan(document, store.ResolveScanFrames(project, companyB.Id));
+            Check(resultA.Count == 1 && resultA[0].PrintScale == "1:50", "Company A scan included another company's frame.");
+            Check(resultB.Count == 1 && resultB[0].PrintScale == "1:75", "Company B scan did not recognize its renamed frame.");
+            Check(scanner.Scan(document, store.ResolveScanFrames(project, string.Empty)).Count == 0, "Project-only scan included shared frames.");
+        }
     }
 
     private static void CheckNavigationAndScrolling(PublisherWindow window, string root)

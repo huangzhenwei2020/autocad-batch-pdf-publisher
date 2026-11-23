@@ -82,6 +82,7 @@ namespace BatchPdfPublisher.Services
                         BlockId = reference.ObjectId,
                         BlockHandle = reference.Handle.ToString(),
                         BlockName = blockName,
+                            FrameRegistrationId = frame.RegistrationId,
                             Building = GetAttribute(attributes, frame.BuildingAttributeTag, frame.DefaultBuilding, "未分组"),
                             SheetNumber = GetAttribute(attributes, frame.SheetNumberAttributeTag, frame.DefaultSheetNumber, "未填写图号"),
                             PageNumber = GetAttribute(attributes, frame.PageNumberAttributeTag ?? FramePageNumber.FindTag(attributes.Keys), frame.DefaultPageNumber, string.Empty),

@@ -23,7 +23,7 @@ namespace BatchPdfPublisher.Views
     {
         public static StairLayoutFrameInfo[] GetRegisteredFrames()
         {
-            return new PublishPlanStore().LoadFrames()
+            return new PublishPlanStore().LoadInsertionFrames()
                 .Where(frame => frame != null && !string.IsNullOrWhiteSpace(frame.BlockName)
                     && FrameLayoutRangeService.HasValidRange(frame))
                 .Select(frame =>
@@ -33,7 +33,7 @@ namespace BatchPdfPublisher.Views
                     return new StairLayoutFrameInfo
                     {
                         RegistrationId = frame.RegistrationId,
-                        DisplayName = frame.DisplayName,
+                        DisplayName = frame.SelectionName,
                         PageWidth = paper[0],
                         PageHeight = paper[1],
                         LeftMargin = frame.LayoutLeftMargin,
@@ -56,7 +56,7 @@ namespace BatchPdfPublisher.Views
         {
             var document = Application.DocumentManager.MdiActiveDocument;
             if (document == null) throw new InvalidOperationException("当前没有活动图纸。");
-            var frame = new PublishPlanStore().LoadFrames().FirstOrDefault(value => value != null
+            var frame = new PublishPlanStore().LoadInsertionFrames().FirstOrDefault(value => value != null
                 && string.Equals(value.RegistrationId, registrationId, StringComparison.OrdinalIgnoreCase));
             if (frame == null) throw new InvalidOperationException("找不到所选登记图框，请刷新楼梯窗口后重试。");
             DetailLayoutService.InsertRegisteredFramesAt(document, frame, scale,

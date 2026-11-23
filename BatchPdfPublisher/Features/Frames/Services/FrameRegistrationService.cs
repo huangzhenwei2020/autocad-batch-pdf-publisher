@@ -51,7 +51,7 @@ namespace BatchPdfPublisher.Services
                     if (!FrameTemplateStore.TrySave(document, objectId, sameVariant, out legacyTemplateError))
                     { MessageBox.Show("无法为旧登记补建便携图框模板。\r\n" + legacyTemplateError, "登记图框", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
                     store.SaveFrames(frames);
-                    MessageBox.Show("旧登记已保留，并已补建便携图框模板。以后复制整个插件文件夹即可使用。", "登记图框", MessageBoxButton.OK, MessageBoxImage.Information);
+                    MessageBox.Show("已为旧登记补建系统图框模板。之后可以直接插入此图框。", "登记图框", MessageBoxButton.OK, MessageBoxImage.Information);
                     return;
                 }
                 MessageBox.Show("图块“" + context.BlockName + "”的这个版本已经登记。请在图框登记窗口中选择对应项修改。", "重复图框", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -74,8 +74,17 @@ namespace BatchPdfPublisher.Services
         public void Edit(Document document, FrameDefinition existing)
         {
             if (document == null || existing == null) return;
+            var companyAlias = FrameIdentityService.CompanyBlockAlias(existing);
+            if (existing.IsCompanyFrame)
+            {
+                existing = existing.Copy();
+                existing.IsCompanyFrame = false;
+                existing.CompanyName = null;
+                existing.RegistrationId = null;
+                existing.TemplateRelativePath = null;
+            }
             FrameContext context;
-            using (document.LockDocument()) context = FindReference(document, existing);
+            using (document.LockDocument()) context = FindReference(document, existing, companyAlias);
             if (!ConfirmUniqueAttributeTags(document, context)) return;
             var definition = ShowDialog(document, context, existing);
             if (definition == null) return;
@@ -282,7 +291,7 @@ namespace BatchPdfPublisher.Services
             public List<FrameProjectScanIssue> Issues { get; } = new List<FrameProjectScanIssue>();
         }
 
-        private static FrameContext FindReference(Document document, FrameDefinition existing)
+        private static FrameContext FindReference(Document document, FrameDefinition existing, string companyAlias)
         {
             using (var transaction = document.Database.TransactionManager.StartTransaction())
             {
@@ -293,7 +302,8 @@ namespace BatchPdfPublisher.Services
                     var reference = transaction.GetObject(id, OpenMode.ForRead) as BlockReference;
                     if (reference == null) continue;
                     var record = (BlockTableRecord)transaction.GetObject(reference.DynamicBlockTableRecord, OpenMode.ForRead);
-                    if (!string.Equals(record.Name, existing.BlockName, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (!string.Equals(record.Name, existing.BlockName, StringComparison.OrdinalIgnoreCase)
+                        && !string.Equals(record.Name, companyAlias, StringComparison.OrdinalIgnoreCase)) continue;
                     var candidate = CreateContext(reference, record.Name, transaction); candidate.ReferenceId = reference.ObjectId;
                     if (FrameIdentityService.IsSameVariant(existing, candidate.AttributeTagSignature, candidate.DefinitionSignature, candidate.AspectRatio)) return candidate;
                 }

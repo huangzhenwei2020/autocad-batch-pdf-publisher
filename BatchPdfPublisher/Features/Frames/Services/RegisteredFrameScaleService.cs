@@ -15,7 +15,8 @@ namespace BatchPdfPublisher.Services
             var record = transaction.GetObject(recordId, OpenMode.ForRead, false) as BlockTableRecord;
             if (record == null) return null;
             var candidates = (source ?? Enumerable.Empty<FrameDefinition>())
-                .Where(x => x != null && string.Equals(x.BlockName, record.Name, StringComparison.OrdinalIgnoreCase)).ToList();
+                .Where(x => x != null && (string.Equals(x.BlockName, record.Name, StringComparison.OrdinalIgnoreCase)
+                    || FrameIdentityService.IsCompanyAlias(x, record.Name))).ToList();
 
             var tags = new List<string>();
             var attributes = new List<AttributeReference>();

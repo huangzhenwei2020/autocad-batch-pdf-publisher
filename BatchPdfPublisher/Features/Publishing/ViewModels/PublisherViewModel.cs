@@ -39,6 +39,7 @@ namespace BatchPdfPublisher.ViewModels
         private SheetItem _selectedSheet;
         private FrameDefinition _selectedFrame;
         private ProjectProfile _selectedProject;
+        private FrameScanSource _selectedFrameScanSource;
         private string _newProjectName = "新工程";
         private string _plotStyle;
         private string _marginMode;
@@ -101,6 +102,37 @@ namespace BatchPdfPublisher.ViewModels
 
         public ObservableCollection<ProjectProfile> Projects { get; }
         public ObservableCollection<FrameDefinition> Frames { get; }
+        public List<FrameScanSource> FrameScanSources { get; private set; }
+        public FrameScanSource SelectedFrameScanSource
+        {
+            get => _selectedFrameScanSource;
+            set
+            {
+                if (value == null || ReferenceEquals(value, _selectedFrameScanSource)) return;
+                _selectedFrameScanSource = value;
+                OnPropertyChanged();
+            }
+        }
+
+        public void RefreshFrameScanSources(bool reset = false)
+        {
+            var selectedId = reset ? null : SelectedFrameScanSource?.CompanyId;
+            try { FrameScanSources = _store.GetFrameScanSources(_selectedProject); }
+            catch (System.Exception error)
+            {
+                FrameScanSources = new List<FrameScanSource>
+                {
+                    new FrameScanSource(null, "跟随项目设置"),
+                    new FrameScanSource(string.Empty, "仅扫描本项目图框")
+                };
+                Status = "公司图框库读取失败：" + error.Message;
+            }
+            OnPropertyChanged(nameof(FrameScanSources));
+            SelectedFrameScanSource = FrameScanSources.FirstOrDefault(source => source.CompanyId == selectedId) ?? FrameScanSources[0];
+        }
+
+        public List<FrameDefinition> GetScanFrames(FrameScanSource source) =>
+            _store.ResolveScanFrames(_selectedProject, source?.CompanyId);
         public ObservableCollection<SheetItem> Sheets { get; }
         public ObservableCollection<string> Buildings { get; }
         public ObservableCollection<CadFileItem> CadFiles { get; }
@@ -215,6 +247,11 @@ namespace BatchPdfPublisher.ViewModels
                 .ToList();
             if (paths.Count == 0) { Status = "没有选择可读取的 DWG 文件。"; return; }
 
+            List<FrameDefinition> frames;
+            var frameSource = SelectedFrameScanSource;
+            try { frames = GetScanFrames(frameSource); }
+            catch (System.Exception exception) { Status = "无法读取扫描图框：" + exception.Message; return; }
+            if (frames.Count == 0) { Status = "当前扫描范围没有已登记的图框，请先登记或切换扫描图框范围。"; return; }
             var previousBuilding = SelectedBuilding;
             var previousSheets = Sheets.ToList();
             _preview.Clear();
@@ -231,7 +268,7 @@ namespace BatchPdfPublisher.ViewModels
                 try
                 {
                     var openDocument = FindOpenDocument(path);
-                    WriteScanStage("开始扫描：" + path + "；图框规则=" + Frames.Count + "；来源="
+                    WriteScanStage("开始扫描：" + path + "；" + (frameSource?.Name ?? "跟随项目设置") + "；图框规则=" + frames.Count + "；来源="
                         + (openDocument == null ? "磁盘只读" : "已打开文档")
                         + (openDocument == null ? string.Empty : "；Name=" + openDocument.Name + "；Database=" + openDocument.Database?.Filename));
                     var beforeCount = scannedSheets.Count;
@@ -242,7 +279,7 @@ namespace BatchPdfPublisher.ViewModels
                             if (CadCompatibilityService.IsTianzhengDrawing(openDocument.Database)) tianzhengFiles.Add(path);
                             // Keep the project DWG path as the catalog source even when
                             // AutoCAD currently exposes an autosave .sv$ database path.
-                            scannedSheets.AddRange(_scanner.Scan(openDocument.Database, path, Frames, ScanModelSpace, ScanAllLayouts, _selectedProject?.SelectedLayouts));
+                            scannedSheets.AddRange(_scanner.Scan(openDocument.Database, path, frames, ScanModelSpace, ScanAllLayouts, _selectedProject?.SelectedLayouts));
                         }
                     }
                     else
@@ -251,7 +288,7 @@ namespace BatchPdfPublisher.ViewModels
                         {
                             database.ReadDwgFile(path, System.IO.FileShare.Read, true, string.Empty);
                             if (CadCompatibilityService.IsTianzhengDrawing(database)) tianzhengFiles.Add(path);
-                            scannedSheets.AddRange(_scanner.Scan(database, path, Frames, ScanModelSpace, ScanAllLayouts, _selectedProject?.SelectedLayouts));
+                            scannedSheets.AddRange(_scanner.Scan(database, path, frames, ScanModelSpace, ScanAllLayouts, _selectedProject?.SelectedLayouts));
                         }
                     }
                     var cadItem = CadFiles.FirstOrDefault(x => string.Equals(x.Path, path, StringComparison.OrdinalIgnoreCase));
@@ -559,6 +596,24 @@ namespace BatchPdfPublisher.ViewModels
             Status = "工程参数已保存。";
         }
 
+        public void SetCompanyFrameLibrary(string libraryId)
+        {
+            if (_selectedProject == null) return;
+            var previous = _selectedProject.CompanyFrameLibraryId;
+            _selectedProject.CompanyFrameLibraryId = libraryId;
+            try
+            {
+                SaveCurrentProject();
+                RefreshFrameScanSources();
+                Status = "公司图框设置已保存。扫描 CAD 可刷新已有图纸列表。";
+            }
+            catch
+            {
+                _selectedProject.CompanyFrameLibraryId = previous;
+                throw;
+            }
+        }
+
         public string GetProjectFolder(ProjectProfile project = null)
         {
             return _store.GetProjectFolder(project ?? SelectedProject);
@@ -753,6 +808,7 @@ namespace BatchPdfPublisher.ViewModels
                 PreviewEnabled = false;
                 project.PreviewEnabled = false;
                 SelectedFrame = Frames.FirstOrDefault();
+                RefreshFrameScanSources(true);
             }
             finally { _loadingProject = false; }
         }
@@ -828,7 +884,7 @@ namespace BatchPdfPublisher.ViewModels
         {
             return new SheetCatalogItem
             {
-                Order = sheet.Order, BlockHandle = sheet.BlockHandle, BlockName = sheet.BlockName, Building = sheet.Building, SheetNumber = sheet.SheetNumber, PageNumber = sheet.PageNumber, SheetName = sheet.SheetName,
+                Order = sheet.Order, BlockHandle = sheet.BlockHandle, BlockName = sheet.BlockName, FrameRegistrationId = sheet.FrameRegistrationId, Building = sheet.Building, SheetNumber = sheet.SheetNumber, PageNumber = sheet.PageNumber, SheetName = sheet.SheetName,
                 Frame = sheet.Frame, Extension = sheet.Extension, FrameNote = sheet.FrameNote, PaperOrientation = sheet.PaperOrientation,
                 PrintScale = sheet.PrintScale, PlotStyle = sheet.PlotStyle, SourceFile = sheet.SourceFile, SourceLayout = sheet.SourceLayout, SourceLayoutOrder = sheet.SourceLayoutOrder,
                 MinX = sheet.MinX, MinY = sheet.MinY, MaxX = sheet.MaxX, MaxY = sheet.MaxY
@@ -839,7 +895,7 @@ namespace BatchPdfPublisher.ViewModels
         {
             return new SheetItem
             {
-                Order = sheet.Order, BlockHandle = sheet.BlockHandle, BlockName = sheet.BlockName, Building = sheet.Building, SheetNumber = sheet.SheetNumber, PageNumber = sheet.PageNumber, SheetName = sheet.SheetName,
+                Order = sheet.Order, BlockHandle = sheet.BlockHandle, BlockName = sheet.BlockName, FrameRegistrationId = sheet.FrameRegistrationId, Building = sheet.Building, SheetNumber = sheet.SheetNumber, PageNumber = sheet.PageNumber, SheetName = sheet.SheetName,
                 Frame = sheet.Frame, Extension = sheet.Extension, FrameNote = sheet.FrameNote, PaperOrientation = sheet.PaperOrientation,
                 PrintScale = sheet.PrintScale, PlotStyle = sheet.PlotStyle, SourceFile = sheet.SourceFile, SourceLayout = sheet.SourceLayout, SourceLayoutOrder = sheet.SourceLayoutOrder,
                 MinX = sheet.MinX, MinY = sheet.MinY, MaxX = sheet.MaxX, MaxY = sheet.MaxY
@@ -1490,11 +1546,14 @@ namespace BatchPdfPublisher.ViewModels
             // Match by the actual block name first (reliable), then fall back to
             // paper size for entries restored from an older project file that did
             // not record the block name.
-            var frame = Frames.FirstOrDefault(x => !string.IsNullOrWhiteSpace(sheet.BlockName)
-                && string.Equals(x.BlockName, sheet.BlockName, StringComparison.OrdinalIgnoreCase))
-                ?? Frames.FirstOrDefault(x => string.Equals(x.BlockName, sheet.Frame, StringComparison.OrdinalIgnoreCase));
+            var frames = _store.ResolveInsertionFrames(_selectedProject);
+            var frame = !string.IsNullOrWhiteSpace(sheet.FrameRegistrationId)
+                ? frames.FirstOrDefault(x => string.Equals(x.RegistrationId, sheet.FrameRegistrationId, StringComparison.OrdinalIgnoreCase))
+                : frames.FirstOrDefault(x => !string.IsNullOrWhiteSpace(sheet.BlockName)
+                    && string.Equals(x.BlockName, sheet.BlockName, StringComparison.OrdinalIgnoreCase))
+                    ?? frames.FirstOrDefault(x => string.Equals(x.BlockName, sheet.Frame, StringComparison.OrdinalIgnoreCase));
             if (frame == null) { Application.ShowAlertDialog("当前工程没有找到图框登记：" + (string.IsNullOrWhiteSpace(sheet.BlockName) ? sheet.Frame : sheet.BlockName)); return; }
-            SelectedFrame = frame;
+            if (!frame.IsCompanyFrame) SelectedFrame = frame;
             var document = FindOpenDocument(sheet.SourceFile);
             if (document == null && !string.IsNullOrWhiteSpace(sheet.SourceFile) && System.IO.File.Exists(sheet.SourceFile)) document = Application.DocumentManager.Open(sheet.SourceFile, false);
             if (document == null) { Application.ShowAlertDialog("找不到对应 DWG：" + sheet.SourceFile); return; }

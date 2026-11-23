@@ -1860,7 +1860,7 @@ namespace BatchPdfPublisher.Views
 
         private void OpenCurrentSelectionPublisher()
         {
-            var dialog = new CurrentSelectionPublishForm(_viewModel.Frames.ToList(), _plotStyle.Text, _marginMode.Text);
+            var dialog = new CurrentSelectionPublishForm(_viewModel.GetScanFrames(_viewModel.SelectedFrameScanSource), _plotStyle.Text, _marginMode.Text);
             Autodesk.AutoCAD.ApplicationServices.Application.ShowModelessDialog(dialog);
         }
 

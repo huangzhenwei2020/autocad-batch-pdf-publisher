@@ -22,6 +22,8 @@ namespace BatchPdfPublisher.Views
             _ownerModel = viewModel;
             BindDocument(document);
             InitializeComponent();
+            ScanFrames.ItemsSource = viewModel.FrameScanSources;
+            ScanFrames.SelectedItem = viewModel.SelectedFrameScanSource;
             Sheets.ItemsSource = _sheets;
             PlotStyle.ItemsSource = viewModel.AvailablePlotStyles;
             PlotStyle.Text = viewModel.PlotStyle;
@@ -43,6 +45,10 @@ namespace BatchPdfPublisher.Views
 
         private void Select_Click(object sender, RoutedEventArgs e)
         {
+            List<FrameDefinition> frames;
+            try { frames = _ownerModel.GetScanFrames(ScanFrames.SelectedItem as FrameScanSource); }
+            catch (Exception error) { Status.Text = error.Message; return; }
+            if (frames.Count == 0) { Status.Text = "当前扫描范围没有已登记图框，请切换范围或先登记。"; return; }
             List<SheetItem> picked = null;
             RunCad(() =>
             {
@@ -50,7 +56,7 @@ namespace BatchPdfPublisher.Views
                 if (result.Status != PromptStatus.OK)
                     return;
                 var handles = new HashSet<string>(result.Value.GetObjectIds().Select(id => id.Handle.ToString()), StringComparer.OrdinalIgnoreCase);
-                picked = new DrawingScanner().Scan(SourceDocument, _ownerModel.Frames.ToList(), true, true).Where(sheet => handles.Contains(sheet.BlockHandle)).ToList();
+                picked = new DrawingScanner().Scan(SourceDocument, frames, true, true).Where(sheet => handles.Contains(sheet.BlockHandle)).ToList();
             }, () =>
             {
                 if (picked == null)
@@ -63,7 +69,7 @@ namespace BatchPdfPublisher.Views
                 foreach (var sheet in picked)
                     _sheets.Add(sheet);
                 Renumber();
-                Status.Text = "已选中 " + _sheets.Count + " 张图纸";
+                Status.Text = _sheets.Count == 0 ? "当前扫描范围未识别到所选图框。" : "已选中 " + _sheets.Count + " 张图纸";
                 if (_sheets.Count > 0)
                     _preview.Show(SourceDocument, _sheets, _sheets[0]);
             });

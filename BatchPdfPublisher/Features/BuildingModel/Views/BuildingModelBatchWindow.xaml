@@ -150,14 +150,14 @@
           <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
           <TextBlock Text="图框" FontSize="20" FontWeight="SemiBold"/>
           <StackPanel Grid.Row="1" Margin="0,17,0,0">
-            <RadioButton x:Name="ProjectFrameRadio" Content="项目图框" GroupName="FrameMode" IsChecked="True" Checked="FrameMode_Changed"/>
+            <RadioButton x:Name="ProjectFrameRadio" Content="登记图框" GroupName="FrameMode" IsChecked="True" Checked="FrameMode_Changed"/>
             <RadioButton x:Name="BuiltInFrameRadio" Content="图纸自带图框" GroupName="FrameMode" Margin="0,13,0,0" Checked="FrameMode_Changed"/>
             <RadioButton x:Name="NoFrameRadio" Content="无图框" GroupName="FrameMode" Margin="0,13,0,0" Checked="FrameMode_Changed"/>
           </StackPanel>
           <Button x:Name="FrameSelectButton" Grid.Row="2" Style="{StaticResource ActionButton}"
                   HorizontalContentAlignment="Stretch" Margin="0,19,0,12" Click="FrameSelectButton_Click">
             <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-              <TextBlock x:Name="FrameNameText" Text="选择项目图框" TextTrimming="CharacterEllipsis"/>
+              <TextBlock x:Name="FrameNameText" Text="选择登记图框" TextTrimming="CharacterEllipsis"/>
               <TextBlock Grid.Column="1" Text="⌄" FontSize="18" Margin="9,-5,0,0"/>
             </Grid>
           </Button>

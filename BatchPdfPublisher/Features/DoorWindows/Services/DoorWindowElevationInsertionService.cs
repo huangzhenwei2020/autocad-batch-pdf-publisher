@@ -339,7 +339,7 @@ namespace BatchPdfPublisher.Services
             }
 
             // 有图框：指定第一张图框左下角插入点，门窗按图框纸张分页排版并插入图框块。
-            FrameTemplateStore.EnsureAvailable(document, frame);
+            var frameDefinitionId = FrameTemplateStore.EnsureAvailable(document, frame);
             var framePoint = document.Editor.GetPoint("\n指定第一张门窗立面图框左下角插入点: ");
             if (framePoint.Status != PromptStatus.OK) return 0;
             var pagedTiming = System.Diagnostics.Stopwatch.StartNew();
@@ -354,10 +354,9 @@ namespace BatchPdfPublisher.Services
                 var dimensionStyle = DraftingStandardService.EnsureDimensionStyleForScale(database, transaction, drawingScale, profile, resources, true);
                 var doorWindowLayers = EnsureDoorWindowLayers(database, transaction);
                 pagedPreparationMilliseconds = pagedTiming.ElapsedMilliseconds;
-                var blocks = (BlockTable)transaction.GetObject(database.BlockTableId, OpenMode.ForWrite);
                 var space = (BlockTableRecord)transaction.GetObject(database.CurrentSpaceId, OpenMode.ForWrite);
                 var elevations = items.Select(item => CreatePlacement(item, drawingScale)).ToList();
-                pageCount = InsertPaged(elevations, originalItems, framePoint.Value, drawingScale, frame, blocks, space, transaction, resources, dimensionStyle, doorWindowLayers, progress, layoutOptions);
+                pageCount = InsertPaged(elevations, originalItems, framePoint.Value, drawingScale, frame, frameDefinitionId, space, transaction, resources, dimensionStyle, doorWindowLayers, progress, layoutOptions);
                 transaction.Commit();
             }
             LogInsertionTiming(document, items.Count, true, pagedPreparationMilliseconds, pagedTiming.ElapsedMilliseconds);
@@ -698,12 +697,10 @@ namespace BatchPdfPublisher.Services
         }
 
         /// <summary>按登记图框纸张分页排版：每页插入图框块，门窗按 ComputeLayout 槽位排入。</summary>
-        private static int InsertPaged(IList<ElevationPlacement> elevations, IList<DoorWindowScheduleItem> scheduleItems, Point3d origin, int scale, FrameDefinition frame, BlockTable blockTable, BlockTableRecord space, Transaction transaction, DraftingStandardResources resources, ObjectId dimensionStyle, DoorWindowLayers doorWindowLayers, Action<int, int, string> progress, DoorWindowLayoutOptions layoutOptions = null)
+        private static int InsertPaged(IList<ElevationPlacement> elevations, IList<DoorWindowScheduleItem> scheduleItems, Point3d origin, int scale, FrameDefinition frame, ObjectId frameDefinitionId, BlockTableRecord space, Transaction transaction, DraftingStandardResources resources, ObjectId dimensionStyle, DoorWindowLayers doorWindowLayers, Action<int, int, string> progress, DoorWindowLayoutOptions layoutOptions = null)
         {
             if (frame == null || string.IsNullOrWhiteSpace(frame.BlockName)) throw new InvalidOperationException("请选择有效的登记图框。");
-            if (!blockTable.Has(frame.BlockName)) throw new InvalidOperationException("当前图纸不存在已登记图框块“" + frame.BlockName + "”。请先把该图框插入当前图纸，或重新登记当前图纸中的图框。");
             var useTianzhengTitle = layoutOptions == null || layoutOptions.UseTianzhengTitle;
-            var frameDefinitionId = blockTable[frame.BlockName];
             var frameRecord = (BlockTableRecord)transaction.GetObject(frameDefinitionId, OpenMode.ForRead);
             Point3d definitionMin; double definitionWidth, definitionHeight;
             GetDefinitionBounds(frameRecord, transaction, out definitionMin, out definitionWidth, out definitionHeight);

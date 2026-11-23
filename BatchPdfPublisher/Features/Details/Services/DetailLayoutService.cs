@@ -164,7 +164,7 @@ namespace BatchPdfPublisher.Services
             if (document == null) throw new ArgumentNullException("document");
             if (frame == null || string.IsNullOrWhiteSpace(frame.BlockName)) throw new InvalidOperationException("请选择登记图框。");
             scale = Math.Max(1, scale);
-            FrameTemplateStore.EnsureAvailable(document, frame);
+            var definitionId = FrameTemplateStore.EnsureAvailable(document, frame);
             var point = document.Editor.GetPoint("\n指定大样排版图框的左下角插入点: ");
             if (point.Status != PromptStatus.OK) return null;
             var anchor = new DetailLayoutFrameAnchor { Origin = point.Value, FrameRegistrationId = frame.RegistrationId, FrameBlockName = frame.BlockName, Scale = scale };
@@ -173,9 +173,6 @@ namespace BatchPdfPublisher.Services
             {
                 var database = document.Database;
                 var frameLayer = DraftingStandardService.EnsureFrameLayer(database, transaction);
-                var blocks = (BlockTable)transaction.GetObject(database.BlockTableId, OpenMode.ForRead);
-                if (!blocks.Has(frame.BlockName)) throw new InvalidOperationException("当前图纸无法加载登记图框块“" + frame.BlockName + "”。");
-                var definitionId = blocks[frame.BlockName];
                 var definition = (BlockTableRecord)transaction.GetObject(definitionId, OpenMode.ForRead);
                 var space = (BlockTableRecord)transaction.GetObject(database.CurrentSpaceId, OpenMode.ForWrite);
                 anchor.ReferenceId = AddFrame(space, transaction, definition, definitionId, frame, point.Value, scale, frameLayer, 1);
@@ -218,10 +215,10 @@ namespace BatchPdfPublisher.Services
         {
             if (document == null) throw new ArgumentNullException("document");
             var plan = ComputeLayout(items, frame, scale, options);
-            FrameTemplateStore.EnsureAvailable(document, frame);
+            var definitionId = FrameTemplateStore.EnsureAvailable(document, frame);
             var point = document.Editor.GetPoint("\n指定正式大样排版第一张图框的左下角插入点: ");
             if (point.Status != PromptStatus.OK) return 0;
-            return InsertPlan(document, plan, frame, scale, options, point.Value, true);
+            return InsertPlan(document, plan, frame, scale, options, point.Value, definitionId);
         }
 
         public static int InsertWithoutFrame(Document document,
@@ -245,7 +242,7 @@ namespace BatchPdfPublisher.Services
                 throw new InvalidOperationException(
                     "所选内容无法全部放进框选范围，请扩大排版范围或缩小大样间距。");
             return InsertPlan(document, plan, null, Math.Max(1, scale), options,
-                min, false);
+                min, ObjectId.Null);
         }
 
         private static DetailLayoutPlan ComputeLayoutInRange(
@@ -314,26 +311,22 @@ namespace BatchPdfPublisher.Services
 
         private static int InsertPlan(Document document, DetailLayoutPlan plan,
             FrameDefinition frame, int scale, DetailLayoutOptions options,
-            Point3d insertionOrigin, bool includeFrame)
+            Point3d insertionOrigin, ObjectId definitionId)
         {
             options = options ?? new DetailLayoutOptions();
 
             var copied = 0;
+            var includeFrame = !definitionId.IsNull;
             var cachedPlans = new List<CachedPlanInsertion>();
             using (var documentLock = AcquireWriteLock(document))
             using (var transaction = document.Database.TransactionManager.StartTransaction())
             {
                 var database = document.Database;
                 var frameLayer = ObjectId.Null;
-                var definitionId = ObjectId.Null;
                 BlockTableRecord definition = null;
                 if (includeFrame)
                 {
                     frameLayer = DraftingStandardService.EnsureFrameLayer(database, transaction);
-                    var blockTable = (BlockTable)transaction.GetObject(database.BlockTableId, OpenMode.ForRead);
-                    if (!blockTable.Has(frame.BlockName))
-                        throw new InvalidOperationException("当前图纸无法加载登记图框块“" + frame.BlockName + "”。");
-                    definitionId = blockTable[frame.BlockName];
                     definition = (BlockTableRecord)transaction.GetObject(definitionId, OpenMode.ForRead);
                 }
                 var space = (BlockTableRecord)transaction.GetObject(database.CurrentSpaceId, OpenMode.ForWrite);
@@ -469,7 +462,7 @@ namespace BatchPdfPublisher.Services
                 throw new InvalidOperationException("当前图框尚未登记排版范围。");
             scale = Math.Max(1, scale);
             pageCount = Math.Max(1, pageCount);
-            FrameTemplateStore.EnsureAvailable(document, frame);
+            var definitionId = FrameTemplateStore.EnsureAvailable(document, frame);
             var paper = PaperSizeCatalog.GetSize(frame.PaperSize, frame.Extension,
                 string.IsNullOrWhiteSpace(frame.PaperOrientation) ? "横向" : frame.PaperOrientation);
             var pageWidth = paper[0] * scale;
@@ -478,10 +471,6 @@ namespace BatchPdfPublisher.Services
             {
                 var database = document.Database;
                 var frameLayer = DraftingStandardService.EnsureFrameLayer(database, transaction);
-                var blockTable = (BlockTable)transaction.GetObject(database.BlockTableId, OpenMode.ForRead);
-                if (!blockTable.Has(frame.BlockName))
-                    throw new InvalidOperationException("当前图纸无法加载登记图框块“" + frame.BlockName + "”。");
-                var definitionId = blockTable[frame.BlockName];
                 var definition = (BlockTableRecord)transaction.GetObject(definitionId, OpenMode.ForRead);
                 var space = (BlockTableRecord)transaction.GetObject(database.CurrentSpaceId, OpenMode.ForWrite);
                 for (var page = 0; page < pageCount; page++)
@@ -528,8 +517,9 @@ namespace BatchPdfPublisher.Services
         private static bool AnchorMatches(DetailLayoutFrameAnchor anchor, FrameDefinition frame, int scale)
         {
             if (anchor == null || frame == null || anchor.Scale != Math.Max(1, scale)) return false;
-            return (!string.IsNullOrWhiteSpace(anchor.FrameRegistrationId) && string.Equals(anchor.FrameRegistrationId, frame.RegistrationId, StringComparison.OrdinalIgnoreCase))
-                || string.Equals(anchor.FrameBlockName, frame.BlockName, StringComparison.OrdinalIgnoreCase);
+            return !string.IsNullOrWhiteSpace(anchor.FrameRegistrationId)
+                ? string.Equals(anchor.FrameRegistrationId, frame.RegistrationId, StringComparison.OrdinalIgnoreCase)
+                : string.Equals(anchor.FrameBlockName, frame.BlockName, StringComparison.OrdinalIgnoreCase);
         }
 
         private static bool TagMatches(string tag, string configured, params string[] aliases)

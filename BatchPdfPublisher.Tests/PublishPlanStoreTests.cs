@@ -105,8 +105,143 @@ internal static class PublishPlanStoreTests
             catch (InvalidOperationException) { nestedRejected = true; }
             Assert(nestedRejected, "workspace nested inside a source project was accepted");
             Console.WriteLine("PASS RejectsWorkspaceInsideProjectFolder");
+            VerifyCompanyFrames(store);
         }
         finally { try { Directory.Delete(root, true); } catch { } }
+    }
+
+    private static void VerifyCompanyFrames(PublishPlanStore store)
+    {
+        var source = store.CreateProject("登记来源");
+        Directory.CreateDirectory(FrameTemplatePaths.FolderFor(source.Name));
+        var template = Path.Combine(FrameTemplatePaths.FolderFor(source.Name), "A3_TK.dwg");
+        File.WriteAllText(template, "公司甲模板");
+        var registered = new FrameDefinition
+        {
+            BlockName = "TK",
+            DefinitionSignature = "company-a-a3",
+            PaperSize = "A3",
+            PaperOrientation = "横向",
+            TemplateRelativePath = UserDataPaths.RelativeToRoot(template),
+            TemplateSourceDrawingPath = "source.dwg",
+            DefaultBuilding = "原项目子项目",
+            DefaultSheetNumber = "PM-01",
+            DefaultSheetName = "原项目图名",
+            DefaultPageNumber = "01",
+            PageNumberAttributeTag = "PAGE",
+            DefaultPrintScale = "1:75",
+            HasLayoutRange = true,
+            LayoutLeftMargin = 20
+        };
+        source.Frames.Add(registered);
+        store.SaveProject(source);
+        var firstCompany = store.SaveCompanyFrames(" 公司甲 ", source.Frames);
+        var overrideFrame = new FrameDefinition { BlockName = "TK", DefinitionSignature = "company-a-a3", PaperSize = "A3", DefaultPrintScale = "1:50" };
+        var variant = new FrameDefinition { BlockName = "TK", DefinitionSignature = "company-a-a4", PaperSize = "A4", TemplateRelativePath = registered.TemplateRelativePath };
+        var secondCompany = store.SaveCompanyFrames("公司乙", new[] { new FrameDefinition
+            { BlockName = "TK", DefinitionSignature = "company-b", PaperSize = "A3", TemplateRelativePath = registered.TemplateRelativePath } });
+        var extended = store.SaveCompanyFrames("公司甲", new[] { variant });
+        Assert(extended.Id == firstCompany.Id && extended.Frames.Count == 2, "existing company must keep its identity and other variants");
+        var companyFolder = Path.GetDirectoryName(FrameTemplatePaths.ExistingSnapshot(firstCompany.Frames.Single()));
+        var snapshotCount = Directory.GetFiles(companyFolder, "*.dwg").Length;
+        var missing = new FrameDefinition { BlockName = "缺图块", PaperSize = "A4" };
+        var missingTemplateRejected = false;
+        try { store.SaveCompanyFrames("无模板", new[] { registered, missing }); }
+        catch (InvalidOperationException) { missingTemplateRejected = true; }
+        Assert(missingTemplateRejected && !store.LoadCompanyFrameLibraries().Any(item => item.Name == "无模板")
+            && Directory.GetFiles(companyFolder, "*.dwg").Length == snapshotCount, "incomplete batch left a company record or stray template");
+        var projectA = store.CreateProject("使用甲");
+        projectA.CompanyFrameLibraryId = firstCompany.Id;
+        store.SaveProject(projectA);
+        var projectB = store.CreateProject("使用乙");
+        projectB.CompanyFrameLibraryId = secondCompany.Id;
+        store.SaveProject(projectB);
+        var legacy = store.CreateProject("没有公司图框");
+        legacy.Frames.Add(overrideFrame);
+        store.SaveProject(legacy);
+
+        File.WriteAllText(template, "源项目后来修改的图框");
+        File.Delete(template);
+        var reload = new PublishPlanStore();
+        var reloaded = reload.LoadProjects();
+        projectA = reloaded.Single(project => project.Name == projectA.Name);
+        projectB = reloaded.Single(project => project.Name == projectB.Name);
+        var firstFrames = reload.ResolveFrames(projectA);
+        var shared = firstFrames.Single(frame => frame.DefinitionSignature == registered.DefinitionSignature);
+        Assert(projectA.Frames.Count == 0 && firstFrames.Count == 2 && shared.IsCompanyFrame, "company registrations were not resolved independently");
+        Assert(File.ReadAllText(UserDataPaths.ResolveFromRoot(shared.TemplateRelativePath)) == "公司甲模板",
+            "company template should remain available after removing the project template");
+        Assert(shared.DefaultPrintScale == "1:75" && shared.PageNumberAttributeTag == "PAGE" && shared.HasLayoutRange
+            && shared.LayoutLeftMargin == 20 && shared.TemplateSourceDrawingPath == null && shared.DefaultBuilding == null
+            && shared.DefaultSheetName == null && shared.DefaultSheetNumber == null && shared.DefaultPageNumber == null,
+            "company registration must keep reusable rules and omit source project values");
+        Assert(reload.ResolveFrames(projectB).Single().DefinitionSignature == "company-b", "other company frames leaked into project");
+        Assert(reload.ResolveFrames(reloaded.Single(project => project.Name == legacy.Name)).Single().DefaultPrintScale == "1:50",
+            "legacy project frames changed");
+        var original = reloaded.Single(project => project.Name == source.Name).Frames.Single();
+        Assert(original.DefaultBuilding == registered.DefaultBuilding && original.TemplateRelativePath == registered.TemplateRelativePath,
+            "saving company library changed the source project");
+
+        projectA.Frames.Add(overrideFrame);
+        var combined = reload.ResolveFrames(projectA);
+        Assert(combined.Count == 2 && combined.Single(frame => frame.DefinitionSignature == registered.DefinitionSignature) == overrideFrame,
+            "project registration did not take precedence over the same company variant");
+        var updated = reload.SaveCompanyFrames("公司甲", new[] { overrideFrame });
+        Assert(updated.Id == firstCompany.Id && updated.Frames.Count == 2
+            && updated.Frames.Single(frame => frame.RegistrationId == shared.RegistrationId).TemplateRelativePath == shared.TemplateRelativePath,
+            "updating the same variant without a cached template discarded its existing usable template");
+        projectA.CompanyFrameLibraryId = "unavailable-company";
+        Assert(reload.ResolveFrames(projectA).Single() == overrideFrame, "missing company library should fall back to project frames");
+        Console.WriteLine("PASS ReusesCompanyFrameLibrariesAcrossProjects");
+
+        projectA.CompanyFrameLibraryId = firstCompany.Id;
+        var scanSources = reload.GetFrameScanSources(projectA);
+        Assert(scanSources.Count == 4 && scanSources[0].CompanyId == null && scanSources[0].Name.Contains("公司甲")
+            && scanSources[1].CompanyId == string.Empty, "scan source choices did not distinguish project default and project-only");
+        Assert(reload.ResolveScanFrames(projectA, string.Empty).Single() == overrideFrame, "project-only scan included company frames");
+        Assert(reload.ResolveScanFrames(projectA, secondCompany.Id).Single().DefinitionSignature == "company-b",
+            "company-only scan included frames from the project or its default company");
+        Assert(reload.ResolveScanFrames(projectA, null).Count == 3 && projectA.CompanyFrameLibraryId == firstCompany.Id,
+            "a temporary scan changed the default company or discarded the shared alias record");
+        var insertion = reload.ResolveInsertionFrames(legacy);
+        Assert(insertion.Count == 4 && insertion.Count(frame => frame.IsCompanyFrame && frame.SelectionName.Contains("公司甲")) == 2
+            && insertion.Count(frame => frame.IsCompanyFrame && frame.SelectionName.Contains("公司乙")) == 1,
+            "project without a default library could not pick from every company");
+        var missingCompanyRejected = false;
+        try { reload.ResolveScanFrames(projectA, "unavailable-company"); }
+        catch (InvalidOperationException) { missingCompanyRejected = true; }
+        Assert(missingCompanyRejected, "an explicit missing company should not replace saved scan results with fallback matches");
+
+        var recoveredFrame = insertion.Single(frame => frame.DefinitionSignature == "company-b");
+        File.Delete(FrameTemplatePaths.ExistingSnapshot(recoveredFrame));
+        Assert(reload.ResolveScanFrames(projectB, null).Single().RegistrationId == recoveredFrame.RegistrationId,
+            "missing legacy snapshot made its registration unreadable");
+        var recoveredPath = reload.SaveCompanyFrameTemplate(recoveredFrame, path => File.WriteAllText(path, "公司乙模板"));
+        var restoredTemplate = reload.ResolveScanFrames(projectB, null).Single();
+        Assert(restoredTemplate.TemplateRelativePath == recoveredPath
+            && File.ReadAllText(UserDataPaths.ResolveFromRoot(recoveredPath)) == "公司乙模板" && projectB.Frames.Count == 0,
+            "shared template recovery changed the project or failed to update the company library");
+        Console.WriteLine("PASS SelectsCompanyScanScopeAndGlobalInsertionFrames");
+        Console.WriteLine("PASS RequiresCompanyTemplateSnapshotAndRollsBackIncompleteBatch");
+
+        var repairedWhilePromptWasOpen = false;
+        try { reload.DeleteMissingCompanyFrame(recoveredFrame); }
+        catch (InvalidOperationException) { repairedWhilePromptWasOpen = true; }
+        Assert(repairedWhilePromptWasOpen && reload.ResolveScanFrames(projectB, null).Count == 1,
+            "a stale delete prompt removed a company frame that was already repaired");
+        File.Delete(UserDataPaths.ResolveFromRoot(recoveredPath));
+        reload.DeleteMissingCompanyFrame(restoredTemplate);
+        var companyAfterRemoval = reload.LoadCompanyFrameLibraries().Single(item => item.Id == secondCompany.Id);
+        Assert(companyAfterRemoval.Frames.Count == 0
+            && reload.LoadProjects().Single(item => item.Name == projectB.Name).CompanyFrameLibraryId == secondCompany.Id,
+            "deleting the final frame changed the identity or projects selecting that library");
+        Assert(reload.ResolveInsertionFrames(legacy).All(frame => frame.RegistrationId != restoredTemplate.RegistrationId)
+            && reload.ResolveScanFrames(projectA, firstCompany.Id).Count == 2
+            && reload.ResolveScanFrames(legacy, string.Empty).Single().BlockName == restoredTemplate.BlockName,
+            "deletion did not remove exactly the selected company registration");
+        Assert(File.ReadAllText(Path.Combine(companyFolder, "公司图框.json.bak")).Contains(restoredTemplate.RegistrationId),
+            "previous company catalog was not retained before deletion");
+        Console.WriteLine("PASS DeletesOnlyTheSelectedMissingCompanyFrame");
     }
 
     private static void Assert(bool value, string message)

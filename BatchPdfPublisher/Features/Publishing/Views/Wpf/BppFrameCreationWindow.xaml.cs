@@ -140,18 +140,46 @@ namespace BatchPdfPublisher.Views
             }
         }
 
+        private List<FrameDefinition> _insertionFrames = new List<FrameDefinition>();
+
         private void ReloadFrames()
         {
             var selected = Frames.SelectedItem as FrameDefinition;
-            var frames = new PublishPlanStore().LoadFrames();
+            _insertionFrames = new PublishPlanStore().LoadInsertionFrames();
+            var source = (FrameSource.SelectedItem as ComboBoxItem)?.Tag as string;
+            var choices = new List<ComboBoxItem>
+            {
+                new ComboBoxItem { Content = "图框来源 · 全部" },
+                new ComboBoxItem { Content = "图框来源 · 本项目", Tag = string.Empty }
+            };
+            choices.AddRange(_insertionFrames.Where(frame => frame.IsCompanyFrame).Select(frame => frame.CompanyName)
+                .Distinct().OrderBy(name => name).Select(name => new ComboBoxItem { Content = name, Tag = name }));
+            FrameSource.ItemsSource = choices;
+            FrameSource.SelectedItem = choices.FirstOrDefault(item => (item.Tag as string) == source) ?? choices[0];
+            ShowFrames(selected);
+        }
+
+        private void FrameSource_Changed(object sender, SelectionChangedEventArgs e)
+        {
+            if (Frames != null && FrameSource.SelectedItem != null)
+                ShowFrames(Frames.SelectedItem as FrameDefinition);
+        }
+
+        private void ShowFrames(FrameDefinition selected)
+        {
+            var company = (FrameSource.SelectedItem as ComboBoxItem)?.Tag as string;
+            var frames = _insertionFrames.Where(frame => company == null || (frame.CompanyName ?? string.Empty) == company).ToList();
             Frames.ItemsSource = frames;
-            Frames.SelectedItem = frames.FirstOrDefault(frame => frame.RegistrationId == (selected?.RegistrationId ?? Value("InsertFrameId", string.Empty))) ?? frames.FirstOrDefault(frame => frame.BlockName == Value("InsertFrameBlock", string.Empty)) ?? frames.FirstOrDefault();
+            var id = selected?.RegistrationId ?? Value("InsertFrameId", string.Empty);
+            var block = selected?.BlockName ?? Value("InsertFrameBlock", string.Empty);
+            Frames.SelectedItem = frames.FirstOrDefault(frame => !string.IsNullOrWhiteSpace(id) && frame.RegistrationId == id)
+                ?? frames.FirstOrDefault(frame => frame.BlockName == block) ?? frames.FirstOrDefault();
         }
 
         private void Frame_Changed(object sender, SelectionChangedEventArgs e)
         {
             var frame = Frames.SelectedItem as FrameDefinition;
-            FrameInfo.Text = frame == null ? "请选择已登记图框" : frame.DisplayName + "\n" + frame.Note + "\n" + FrameLayoutRangeService.Describe(frame);
+            FrameInfo.Text = frame == null ? "请选择已登记图框" : frame.SelectionName + "\n" + frame.Note + "\n" + FrameLayoutRangeService.Describe(frame);
         }
 
         private double Positive(string text, string name)
@@ -250,7 +278,20 @@ namespace BatchPdfPublisher.Views
                 string templateError;
                 using (SourceDocument.LockDocument())
                     prepared = FrameTemplateStore.TryPrepare(SourceDocument, frame, out templateError);
-                if (!prepared)
+                if (!prepared && frame.IsCompanyFrame && FrameTemplatePaths.ExistingSnapshot(frame) == null)
+                {
+                    var dialog = new BppMissingCompanyFrameWindow(frame, templateError);
+                    if (BppDialog.Show(dialog, this) != true)
+                    {
+                        if (dialog.Deleted)
+                        {
+                            ReloadFrames();
+                            _refresh?.Invoke();
+                        }
+                        return;
+                    }
+                }
+                else if (!prepared)
                 {
                     if (MessageBox.Show(this, templateError + "\n\n选择含原图框的 DWG 补齐模板？", "补齐图框模板", MessageBoxButton.YesNo) != MessageBoxResult.Yes)
                         return;

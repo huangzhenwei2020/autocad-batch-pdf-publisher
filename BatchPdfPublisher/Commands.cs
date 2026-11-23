@@ -678,7 +678,7 @@ namespace BatchPdfPublisher
             var cadDimensionIds = new System.Collections.Generic.List<Autodesk.AutoCAD.DatabaseServices.ObjectId>();
             var registeredFrames = new System.Collections.Generic.Dictionary<Autodesk.AutoCAD.DatabaseServices.ObjectId, BatchPdfPublisher.Models.FrameDefinition>();
             var frameBlocksToSynchronize = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var frameDefinitions = new PublishPlanStore().LoadFrames();
+            var frameDefinitions = new PublishPlanStore().LoadEffectiveFrames();
             var tianzhengSettings = TianzhengDimensionSettings.Load();
             var geometryChanged = 0;
             var cadLayered = 0;

@@ -64,7 +64,7 @@ namespace BatchPdfPublisher.Views
         {
             _document = document ?? throw new ArgumentNullException(nameof(document));
             _refresh = refresh;
-            _registeredFrames = new PublishPlanStore().LoadFrames()
+            _registeredFrames = new PublishPlanStore().LoadInsertionFrames()
                 .Where(frame => frame != null && !string.IsNullOrWhiteSpace(frame.BlockName)).ToList();
 
             Text = "创建 / 插入图框";
@@ -524,7 +524,7 @@ namespace BatchPdfPublisher.Views
             details.Controls.Add(SectionHeading("图框信息", PublisherForm.UiIcon.List), 0, 0);
 
             _registeredSelection.DropDownStyle = ComboBoxStyle.DropDownList;
-            _registeredSelection.DisplayMember = nameof(FrameDefinition.DisplayName);
+            _registeredSelection.DisplayMember = nameof(FrameDefinition.SelectionName);
             details.Controls.Add(InlineFieldCell("选择图框", _registeredSelection, 128), 0, 1);
             details.Controls.Add(InlineFieldCell("插入比例",
                 ConfigureCombo(_insertScale, new[] { "1:1", "1:2", "1:5", "1:10", "1:20", "1:25", "1:50", "1:100", "1:150", "1:200" }, ComboBoxStyle.DropDown), 128), 0, 2);
@@ -888,7 +888,21 @@ namespace BatchPdfPublisher.Views
             if (frame == null) throw new InvalidOperationException("请先选择已登记的图框。");
             var scale = ParseScale(_insertScale.Text);
             string error;
-            if (!FrameTemplateStore.TryPrepare(_document, frame, out error))
+            var prepared = FrameTemplateStore.TryPrepare(_document, frame, out error);
+            if (!prepared && frame.IsCompanyFrame && FrameTemplatePaths.ExistingSnapshot(frame) == null)
+            {
+                var dialog = new BppMissingCompanyFrameWindow(frame, error);
+                if (BppDialog.Show(dialog, null) != true)
+                {
+                    if (dialog.Deleted)
+                    {
+                        ReloadRegisteredFrames(null);
+                        _refresh?.Invoke();
+                    }
+                    return;
+                }
+            }
+            else if (!prepared)
             {
                 if (MessageBox.Show(error + "\r\n\r\n是否选择含原图框的 DWG 补齐模板？已有登记参数会保留，不修改源图纸。",
                     "补齐图框模板", MessageBoxButtons.YesNo, MessageBoxIcon.Information) != DialogResult.Yes) return;
@@ -974,7 +988,7 @@ namespace BatchPdfPublisher.Views
             var preferred = string.IsNullOrWhiteSpace(selectedIdOrName)
                 ? previous?.RegistrationId : selectedIdOrName;
             _registeredFrames.Clear();
-            _registeredFrames.AddRange(new PublishPlanStore().LoadFrames()
+            _registeredFrames.AddRange(new PublishPlanStore().LoadInsertionFrames()
                 .Where(frame => frame != null && !string.IsNullOrWhiteSpace(frame.BlockName)));
 
             _synchronizingFrameSelection = true;
@@ -1222,7 +1236,7 @@ namespace BatchPdfPublisher.Views
                 e.Graphics.DrawImage(selected ? _selectedIcon : _icon, iconBounds);
                 var x = e.Bounds.Left + 52;
                 var width = Math.Max(1, e.Bounds.Width - 63);
-                TextRenderer.DrawText(e.Graphics, frame.DisplayName ?? frame.BlockName, Font,
+                TextRenderer.DrawText(e.Graphics, frame.SelectionName ?? frame.BlockName, Font,
                     new Rectangle(x, e.Bounds.Top + 12, width, 24), ForeColor,
                     TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
                 var details = (frame.PaperDisplay ?? "—") + "  |  " + (frame.PaperOrientation ?? "—");
