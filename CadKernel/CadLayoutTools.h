@@ -6,6 +6,9 @@
 #include "Editor/Tools/ITool.h"
 #include "Editor/EditorContext.h"
 #include "Core/Entity/ViewportEntity.hpp"
+#include "Core/Entity/PolylineEntity.hpp"
+#include "Core/Entity/SplineEntity.hpp"
+#include "Core/GeomKernel/PolylineOps.hpp"
 #include <cmath>
 #include <stdexcept>
 #include <limits>
@@ -78,14 +81,17 @@ inline void ApplyViewportClipFrame(MiniCAD::ViewportEntity& viewport, double x, 
     viewport.SetViewHeight(height * ratio);
 }
 
-inline void ApplyViewportClip(MiniCAD::ViewportEntity& viewport, const std::vector<MiniCAD::Math::Point3>& points)
+inline void ApplyViewportClip(MiniCAD::ViewportEntity& viewport, const std::vector<MiniCAD::Math::Point3>& points,
+                              const MiniCAD::AABB* bounds = nullptr)
 {
     if (points.size() < 3) throw std::invalid_argument("请至少指定三个不同的顶点。");
     double minX=points[0].x,maxX=minX,minY=points[0].y,maxY=minY;
     for (const auto& p : points) { if (!std::isfinite(p.x) || !std::isfinite(p.y)) throw std::invalid_argument("裁剪顶点需要有效坐标。");
         minX=std::min(minX,p.x); maxX=std::max(maxX,p.x); minY=std::min(minY,p.y); maxY=std::max(maxY,p.y); }
+    if (bounds) { minX=bounds->Min.x; maxX=bounds->Max.x; minY=bounds->Min.y; maxY=bounds->Max.y; }
     const double width=maxX-minX,height=maxY-minY;
-    if (width <= 1e-9 || height <= 1e-9) throw std::invalid_argument("裁剪边界需要形成有效面积。");
+    if (!(width > 1e-9 && height > 1e-9 && std::isfinite(width) && std::isfinite(height)))
+        throw std::invalid_argument("裁剪边界需要形成有效面积。");
     std::vector<MiniCAD::Math::Point3> normalized;
     const double x=(minX+maxX)/2,y=(minY+maxY)/2;
     for (const auto& p : points) normalized.push_back({(p.x-x)/width,(p.y-y)/height,0});
@@ -115,11 +121,14 @@ class CadViewportClipTool : public MiniCAD::ITool
 {
 public:
     CadViewportClipTool(uint64_t id, uint64_t layout, int kind = 0) : m_id(id), m_layout(layout), m_kind(kind) {}
+    bool HandlesNavigation() const override { return m_kind >= 5; }
     bool HasAnchor() const override { return m_kind > 1 && !m_points.empty(); }
     MiniCAD::Math::Point3 GetAnchor() const override { return m_points.empty() ? MiniCAD::Math::Point3{} : m_points.front(); }
     std::string GetPrompt() const override
     {
         if (!m_error.empty()) return m_error;
+        if (m_kind == 5) return "单击当前布局内闭合多段线的边，Esc取消";
+        if (m_kind == 6) return "单击当前布局内闭合样条曲线，Esc取消";
         if (m_kind == 2) return m_points.empty() ? "指定圆形视口的圆心" : "指定圆周点，单击完成，Backspace退回，Esc取消";
         if (m_kind == 3) return m_points.empty() ? "指定椭圆外包矩形第一个角点" : "指定对角点，单击完成，Backspace退回，Esc取消";
         if (m_kind == 4)
@@ -136,6 +145,7 @@ public:
         m_overlay = &context.overlay;
         auto* viewport = dynamic_cast<ViewportEntity*>(context.scene.GetEntity(m_id));
         if (!viewport || context.scene.CurrentLayoutKey() != m_layout || context.event.IsCancel()) { Cancel(); return true; }
+        if (m_kind >= 5) return PickBoundary(context, *viewport);
         if (context.event.IsKeyPressed(KeyCode::Backspace))
         {
             if (!m_points.empty()) m_points.pop_back();
@@ -196,6 +206,82 @@ public:
     void Cancel() override { if (m_overlay) m_overlay->Clear(); if (OnFinished) OnFinished(); }
     void OnSceneChanged() override { Cancel(); }
 private:
+    bool PickBoundary(const MiniCAD::EditorContext& context, const MiniCAD::ViewportEntity& viewport)
+    {
+        using namespace MiniCAD;
+        if (context.event.IsRightClick()) { Cancel(); return true; }
+        if (!context.event.IsLeftClick() || context.event.HasSnap) return false;
+        const auto& camera = context.viewport.GetCamera();
+        auto point = camera.ScreenToWorld(context.event.MouseX, context.event.MouseY);
+        const MiniCAD::Polyline* selected = nullptr;
+        std::optional<MiniCAD::Spline> spline;
+        std::vector<Math::Point3> splineSamples;
+        double nearest = camera.GetWorldPerPixel() * 6;
+        context.scene.ForEachObject([&](const Object& object)
+        {
+            const auto* entity = dynamic_cast<const Entity*>(&object);
+            if (!entity || !entity->GetAttr().InPaperSpace || entity->GetAttr().LayoutKey != m_layout ||
+                !entity->GetAttr().Visible) return;
+            const auto* layer = context.scene.GetLayerManager().GetLayer(entity->GetLayerID());
+            if (layer && !layer->IsVisible()) return;
+            if (m_kind == 6)
+            {
+                const auto* curve = dynamic_cast<const SplineEntity*>(entity);
+                if (!curve) return;
+                auto prepared = ViewportEntity::PrepareClipSpline(curve->GetSpline());
+                if (!prepared) return;
+                auto samples = ViewportEntity::SampleClipSpline(*prepared);
+                if (samples.empty()) return;
+                samples.push_back(samples.front());
+                const MiniCAD::Polyline outline(std::move(samples));
+                point.z = outline.Points.front().z;
+                const double distance = outline.DistanceToPoint(point);
+                if (distance >= nearest || !std::isfinite(distance)) return;
+                nearest = distance;
+                spline = std::move(*prepared);
+                splineSamples.assign(outline.Points.begin(), outline.Points.end() - 1);
+                return;
+            }
+            const auto* polyline = dynamic_cast<const PolylineEntity*>(entity);
+            if (!polyline) return;
+            const auto& boundary = polyline->GetPolyline();
+            if (!boundary.HasDefaultPlane() || !PolylineOps::IsRing(boundary)) return;
+            point.z = boundary.Points.front().z;
+            if (!std::all_of(boundary.Points.begin(), boundary.Points.end(), [&](const auto& p)
+                { return std::abs(p.z - point.z) < 1e-9 && std::isfinite(p.x) && std::isfinite(p.y); })) return;
+            const double distance = boundary.DistanceToPoint(point);
+            if (distance < nearest) { nearest = distance; selected = &boundary; }
+        });
+        if (!selected && !spline)
+        {
+            m_error = m_kind == 6 ? "请单击当前布局中平面闭合的样条曲线" : "请单击当前布局中平面闭合多段线的边，可包含圆弧";
+            return true;
+        }
+        try
+        {
+            if (context.scene.IsEntityLocked(viewport)) throw std::invalid_argument("视口所在图层已锁定。");
+            auto after = viewport.Clone(m_id);
+            auto& edited = static_cast<ViewportEntity&>(*after);
+            if (spline)
+            {
+                ApplyViewportClip(edited, splineSamples);
+                edited.SetClipSpline(std::move(*spline));
+            }
+            else
+            {
+                const auto bounds = selected->GetBounds();
+                ApplyViewportClip(edited, ViewportEntity::SampleClipPolyline(*selected), &bounds);
+                edited.SetClipPolyline(*selected);
+            }
+            std::vector<GeometryEditCommand::Item> edits;
+            edits.push_back({m_id, viewport.Clone(m_id), std::move(after)});
+            context.cmdStack.Execute(std::make_unique<GeometryEditCommand>("裁剪布局视口", std::move(edits)), context.scene);
+            Cancel();
+        }
+        catch (const std::invalid_argument& error) { m_error = error.what(); }
+        return true;
+    }
+
     size_t CurvePointCount() const { return m_kind == 4 ? 3 : 2; }
     std::pair<MiniCAD::Math::Point3, MiniCAD::ViewportEntity::EllipseClipFrame>
     Curve(const std::vector<MiniCAD::Math::Point3>& points) const

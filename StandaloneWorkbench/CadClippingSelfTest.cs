@@ -156,8 +156,78 @@ namespace Wanluo.StandaloneWorkbench
                 await client.SaveAsync(Path.Combine(root,"旋转椭圆布局复制"+extension)); client.Command("@undo");
                 CadNative.Check(CadNative.wl_layout(client.Handle,client.State.Layouts.Single(item=>item.Name=="裁剪平面").Id));
             }
+            client.Command("PLINE");
+            Point(100,60); Point(200,60); client.Command("A"); Point(250,110); Point(200,160);
+            client.Command("L"); Point(100,160); client.Command("C");
+            client.Command("@fit");
+            var host = (CadViewport)workspace.FindName("Viewport");
+            void Click(double x, double y)
+            {
+                CadNative.Check(CadNative.wl_world_to_screen(client.Handle,x,y,out var px,out var py));
+                var position = new IntPtr((py << 16) | (px & 0xffff));
+                SendMessage(host.Handle,0x0201,new IntPtr(1),position);
+                SendMessage(host.Handle,0x0202,IntPtr.Zero,position);
+            }
+            StartCurve(5);
+            Click(175,110);
+            Assert(CadNative.PaperViewports(client.Handle).Single().ClipEllipse,"Interior click selected a polyline edge.");
+            Click(250,110);
+            void CheckArcClip()
+            {
+                var view = CadNative.PaperViewports(client.Handle).Single();
+                Assert(!view.ClipEllipse && view.ClipCount>4 && Math.Abs(view.Width-150)<1e-8 &&
+                    Math.Abs(view.Height-100)<1e-8 && Math.Abs(view.Ratio-50)<1e-8 && client.State.EntityCount==4,
+                    "Arc clip lost its curve, scale or editable source polyline.");
+            }
+            CheckArcClip();
+            client.Command("@undo");
+            Assert(CadNative.PaperViewports(client.Handle).Single().ClipEllipse,"Undo did not restore the prior ellipse.");
+            client.Command("@redo"); CheckArcClip();
+            foreach (var extension in new[] { ".dwg", ".dxf" })
+            {
+                var file = Path.Combine(root,"圆弧多段线视口"+extension);
+                await client.SaveAsync(file); client.Close(document); await client.OpenAsync(file); document=client.State.ActiveId;
+                CadNative.Check(CadNative.wl_layout(client.Handle,client.State.Layouts.Single(item=>item.Name=="裁剪平面").Id));
+                CheckArcClip();
+                var layout = client.State.Layouts.Single(item=>item.Current);
+                CadNative.Check(CadNative.wl_layout_update(client.Handle,document,layout.Key,"圆弧轮廓副本",layout.Width,layout.Height,1,1));
+                await client.SaveAsync(Path.Combine(root,"圆弧多段线布局复制"+extension)); client.Command("@undo");
+                CadNative.Check(CadNative.wl_layout(client.Handle,client.State.Layouts.Single(item=>item.Name=="裁剪平面").Id));
+            }
+            client.Command("SPLINE");
+            Point(70,110); Point(140,50); Point(225,110); Point(140,180);
+            client.Command("C");
+            client.Command("");
+            Assert(client.State.EntityCount==5,"Source spline was not created.");
+            client.Command("@fit");
+            StartCurve(6);
+            Click(140,110);
+            Assert(CadNative.PaperViewports(client.Handle).Single().Width==150,"Interior click selected the spline.");
+            Click(70,110);
+            void CheckSplineClip()
+            {
+                var view = CadNative.PaperViewports(client.Handle).Single();
+                Assert(view.ClipCount>=100 && !view.ClipEllipse && view.Width>=155-1e-7 && view.Height>=130-1e-7 &&
+                    Math.Abs(view.Ratio-50)<1e-8 && client.State.EntityCount==5,
+                    $"Spline clip lost its shape, scale or editable source. Points={view.ClipCount}, size={view.Width}×{view.Height}, ratio={view.Ratio}, entities={client.State.EntityCount}, prompt={client.State.Prompt}.");
+            }
+            CheckSplineClip();
+            client.Command("@undo");
+            Assert(CadNative.PaperViewports(client.Handle).Single().Width==150,"Spline undo did not restore the arc boundary.");
+            client.Command("@redo"); CheckSplineClip();
+            foreach (var extension in new[] { ".dwg", ".dxf" })
+            {
+                var file = Path.Combine(root,"样条视口"+extension);
+                await client.SaveAsync(file); client.Close(document); await client.OpenAsync(file); document=client.State.ActiveId;
+                CadNative.Check(CadNative.wl_layout(client.Handle,client.State.Layouts.Single(item=>item.Name=="裁剪平面").Id));
+                CheckSplineClip();
+                var layout = client.State.Layouts.Single(item=>item.Current);
+                CadNative.Check(CadNative.wl_layout_update(client.Handle,document,layout.Key,"样条轮廓副本",layout.Width,layout.Height,1,1));
+                await client.SaveAsync(Path.Combine(root,"样条布局复制"+extension)); client.Command("@undo");
+                CadNative.Check(CadNative.wl_layout(client.Handle,client.State.Layouts.Single(item=>item.Name=="裁剪平面").Id));
+            }
             client.Close(document); client.Activate(original); workspace.RefreshState();
-            File.WriteAllText(Path.Combine(root,"cad-clipping-result.txt"),"CAD_CLIPPING_OK concave circle ellipse vertical rotated UI validation undo redo clear DWG DXF");
+            File.WriteAllText(Path.Combine(root,"cad-clipping-result.txt"),"CAD_CLIPPING_OK concave circle ellipse vertical rotated bulges spline UI validation undo redo clear DWG DXF");
         }
     }
 }

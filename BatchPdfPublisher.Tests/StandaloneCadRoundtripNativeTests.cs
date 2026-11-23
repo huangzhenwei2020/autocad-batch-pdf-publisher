@@ -102,6 +102,8 @@ public static class StandaloneCadRoundtripNativeTests
             VerifyManagement(output);
             VerifyLayouts(output);
             VerifyCurveClipping(output);
+            VerifyArcPolylineClipping(output);
+            VerifySplineClipping(output);
             VerifyViewportEditing(output);
             VerifyInlineViewportEditing(output);
             var projectionPath = Path.Combine(Directory.GetParent(output).FullName, "native-fixtures", "spatial-projection.txt");
@@ -848,6 +850,54 @@ public static class StandaloneCadRoundtripNativeTests
                 }
             }
             Check(boundaries.Distinct().Count() == boundaries.Count, "Copied curve layouts share one boundary " + extension);
+        }
+    }
+
+    private static void VerifyArcPolylineClipping(string output)
+    {
+        foreach (var extension in new[] { ".dwg", ".dxf" })
+        using (var db = Open(Path.Combine(output, "圆弧多段线布局复制" + extension)))
+        using (var tx = db.TransactionManager.StartTransaction())
+        {
+            var layouts = (DBDictionary)tx.GetObject(db.LayoutDictionaryId, OpenMode.ForRead);
+            var boundaries = new List<ObjectId>();
+            foreach (var name in new[] { "裁剪平面", "圆弧轮廓副本" })
+            {
+                var layout = (Layout)tx.GetObject(layouts.GetAt(name), OpenMode.ForRead);
+                var paper = (BlockTableRecord)tx.GetObject(layout.BlockTableRecordId, OpenMode.ForRead);
+                var entities = paper.Cast<ObjectId>().Select(id => tx.GetObject(id, OpenMode.ForRead)).ToArray();
+                var view = entities.OfType<Viewport>().Single(item => item.NonRectClipOn);
+                var boundary = (Polyline)tx.GetObject(view.NonRectClipEntityId, OpenMode.ForRead);
+                Check(boundary.OwnerId == paper.ObjectId && boundary.Closed && boundary.NumberOfVertices == 4 &&
+                    Math.Abs(boundary.GetBulgeAt(1) - 1) < 1e-8 && Math.Abs(view.CustomScale - .02) < 1e-8 &&
+                    entities.OfType<Polyline>().Count() == 2, "Arc clip, source outline or view scale changed " + extension);
+                boundaries.Add(boundary.ObjectId);
+            }
+            Check(boundaries.Distinct().Count() == boundaries.Count, "The layouts share an arc clip boundary " + extension);
+        }
+    }
+
+    private static void VerifySplineClipping(string output)
+    {
+        foreach (var extension in new[] { ".dwg", ".dxf" })
+        using (var db = Open(Path.Combine(output, "样条布局复制" + extension)))
+        using (var tx = db.TransactionManager.StartTransaction())
+        {
+            var layouts = (DBDictionary)tx.GetObject(db.LayoutDictionaryId, OpenMode.ForRead);
+            var boundaries = new List<ObjectId>();
+            foreach (var name in new[] { "裁剪平面", "样条轮廓副本" })
+            {
+                var layout = (Layout)tx.GetObject(layouts.GetAt(name), OpenMode.ForRead);
+                var paper = (BlockTableRecord)tx.GetObject(layout.BlockTableRecordId, OpenMode.ForRead);
+                var entities = paper.Cast<ObjectId>().Select(id => tx.GetObject(id, OpenMode.ForRead)).ToArray();
+                var view = entities.OfType<Viewport>().Single(item => item.NonRectClipOn);
+                var boundary = (Spline)tx.GetObject(view.NonRectClipEntityId, OpenMode.ForRead);
+                Check(boundary.OwnerId == paper.ObjectId && boundary.Closed && boundary.Degree == 3 &&
+                    Math.Abs(view.CustomScale - .02) < 1e-8 && entities.OfType<Spline>().Count() == 2,
+                    "Spline clip, source outline or view scale changed " + extension);
+                boundaries.Add(boundary.ObjectId);
+            }
+            Check(boundaries.Distinct().Count() == boundaries.Count, "The layouts share a spline boundary " + extension);
         }
     }
 

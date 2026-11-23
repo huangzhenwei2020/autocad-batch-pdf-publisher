@@ -458,6 +458,77 @@ namespace MiniCAD
         // ════════════════════════════════════════════════════════════════
         //  导入：CadDatabase → Scene
         // ════════════════════════════════════════════════════════════════
+        Spline ReadSplineGeometry(const Dwg::Spline& s)
+        {
+            Spline sp;
+            sp.Degree = s.Degree;
+            sp.Flags  = static_cast<int>(s.Flags) & (SplineFlag_Closed | SplineFlag_Periodic | SplineFlag_Planar | SplineFlag_Linear);
+            for (const auto& p : s.ControlPoints)
+                sp.ControlPoints.push_back(ToPoint(p));
+            sp.Knots = s.Knots;
+            if (!s.Weights.empty() && s.Weights.size() == s.ControlPoints.size()
+                && (static_cast<int>(s.Flags & Dwg::SplineFlags::Rational) != 0
+                    || std::any_of(s.Weights.begin(), s.Weights.end(), [](double w) { return std::abs(w - 1.0) > 1e-12; })))
+            {
+                sp.Weights = s.Weights;
+                sp.Flags |= SplineFlag_Rational;
+            }
+            for (const auto& p : s.FitPoints)
+                sp.FitPoints.push_back(ToPoint(p));
+            sp.StartTangent  = ToPoint(s.StartTangent);
+            sp.EndTangent    = ToPoint(s.EndTangent);
+            sp.FitTolerance  = s.FitTolerance;
+            sp.KnotTolerance = s.KnotTolerance;
+            sp.CtrlTolerance = s.ControlPointTolerance;
+            if (!sp.HasControlData())
+            {
+                if (sp.FitPoints.size() < 2)
+                    return {};
+                sp.ControlPoints.clear();
+                sp.Knots.clear();
+                sp.Weights.clear();
+                auto nonZero = [](const Math::Point3& t) { return std::abs(t.x) + std::abs(t.y) + std::abs(t.z) > 1e-12; };
+                sp.Boundary = (sp.Flags & SplineFlag_Closed) ? SplineBoundary::Closed
+                            : nonZero(sp.StartTangent) && nonZero(sp.EndTangent) ? SplineBoundary::Clamped
+                                                                                 : SplineBoundary::Natural;
+            }
+            if (!sp.FitPoints.empty())
+                sp.Build();
+            return sp;
+        }
+
+        std::unique_ptr<Dwg::Spline> WriteSplineGeometry(const Spline& sp)
+        {
+            auto d = std::make_unique<Dwg::Spline>();
+            d->Degree = sp.HasControlData() ? sp.Degree : 3;
+            int flags = sp.Flags & (SplineFlag_Closed | SplineFlag_Periodic | SplineFlag_Planar | SplineFlag_Linear);
+            if (sp.IsClosed())
+                flags |= SplineFlag_Closed;
+            if (sp.HasControlData())
+            {
+                for (const auto& p : sp.ControlPoints)
+                    d->ControlPoints.push_back(ToXYZ(p));
+                d->Knots = sp.Knots;
+                if (sp.IsRational())
+                {
+                    d->Weights = sp.Weights;
+                    flags |= SplineFlag_Rational;
+                }
+            }
+            for (const auto& p : sp.FitPoints)
+                d->FitPoints.push_back(ToXYZ(p));
+            if (!sp.HasControlData() && sp.Boundary == SplineBoundary::Clamped)
+            {
+                d->StartTangent = ToXYZ(sp.StartTangent);
+                d->EndTangent   = ToXYZ(sp.EndTangent);
+            }
+            d->Flags                 = static_cast<Dwg::SplineFlags>(flags);
+            d->FitTolerance          = sp.FitTolerance;
+            d->KnotTolerance         = sp.KnotTolerance;
+            d->ControlPointTolerance = sp.CtrlTolerance;
+            return d;
+        }
+
         std::optional<double> ReadViewportEllipse(const Dwg::CadDatabase& db, const Dwg::Viewport& viewport)
         {
             const auto* object = db.Find(viewport.BoundaryHandle);
@@ -485,20 +556,35 @@ namespace MiniCAD
             return {};
         }
 
-        std::vector<Math::Point3> ReadViewportPolygon(const Dwg::CadDatabase& db, const Dwg::Viewport& viewport)
+        std::optional<Polyline> ReadViewportPolyline(const Dwg::CadDatabase& db, const Dwg::Viewport& viewport)
         {
-            if (!(static_cast<int>(viewport.Status) & 65536) || viewport.Width <= 0 || viewport.Height <= 0) return {};
+            const double aspect = viewport.Width / viewport.Height;
+            if (!(static_cast<int>(viewport.Status) & 65536) || !(viewport.Width > 0 && viewport.Height > 0 &&
+                aspect > 0 && std::isfinite(aspect))) return {};
             const auto* boundary = db.FindAs<Dwg::LwPolyline>(viewport.BoundaryHandle);
-            if (!boundary || !(static_cast<int>(boundary->Flags) & 1) || boundary->Vertices.size() < 3 ||
+            if (!boundary || !(static_cast<int>(boundary->Flags) & 1) || boundary->Vertices.size() < 2 ||
                 std::abs(boundary->Normal.X) > 1e-9 || std::abs(boundary->Normal.Y) > 1e-9 || boundary->Normal.Z < 0.999) return {};
             std::vector<Math::Point3> points;
+            std::vector<double> bulges;
             for (const auto& vertex : boundary->Vertices)
             {
-                if (vertex.Bulge != 0) return {};
-                points.push_back({(vertex.Location.X-viewport.Center.X)/viewport.Width,
-                                  (vertex.Location.Y-viewport.Center.Y)/viewport.Height,0});
+                if (!std::isfinite((vertex.Location.X - viewport.Center.X) / viewport.Height) ||
+                    !std::isfinite((vertex.Location.Y - viewport.Center.Y) / viewport.Height) || !std::isfinite(vertex.Bulge)) return {};
+                points.push_back({vertex.Location.X, vertex.Location.Y, 0});
+                bulges.push_back(vertex.Bulge);
             }
-            return points;
+            if (points.size() == 2 && std::none_of(bulges.begin(), bulges.end(), [](double b) { return std::abs(b) > 1e-12; }))
+                return {};
+            points.push_back(points.front());
+            return Polyline(std::move(points), std::move(bulges));
+        }
+
+        std::optional<Spline> ReadViewportSpline(const Dwg::CadDatabase& db, const Dwg::Viewport& viewport)
+        {
+            if (!(static_cast<int>(viewport.Status) & 65536) || !(viewport.Width > 0 && viewport.Height > 0) ||
+                !std::isfinite(viewport.Width) || !std::isfinite(viewport.Height)) return {};
+            const auto* spline = db.FindAs<Dwg::Spline>(viewport.BoundaryHandle);
+            return spline ? ViewportEntity::PrepareClipSpline(ReadSplineGeometry(*spline)) : std::nullopt;
         }
 
         class Importer
@@ -509,7 +595,7 @@ namespace MiniCAD
             {
                 for (const auto& [handle, object] : db.Objects())
                     if (const auto* vp = dynamic_cast<const Dwg::Viewport*>(object.get()); vp &&
-                        (ReadViewportEllipse(db, *vp) || !ReadViewportPolygon(db, *vp).empty()))
+                        (ReadViewportEllipse(db, *vp) || ReadViewportPolyline(db, *vp) || ReadViewportSpline(db, *vp)))
                         m_viewportBoundaries.insert(vp->BoundaryHandle);
             }
 
@@ -2829,7 +2915,8 @@ namespace MiniCAD
                                          e->TwistAngle,
                                          Math::Point3{ e->ViewTarget.X, e->ViewTarget.Y, 0.0 });
                     if (const auto ellipse = ReadViewportEllipse(m_db, *e)) vp->SetClipEllipse(*ellipse);
-                    else vp->SetClipCoordinates(ReadViewportPolygon(m_db, *e));
+                    else if (auto polyline = ReadViewportPolyline(m_db, *e)) vp->SetClipPolyline(std::move(*polyline));
+                    else if (auto spline = ReadViewportSpline(m_db, *e)) vp->SetClipSpline(std::move(*spline));
                     if ((static_cast<int>(e->Status) & 65536) && vp->ClipCoordinates().empty()) vp->SetClipKnown(false);
                     vp->SetViewHeight(e->ViewHeight);
                     vp->SetViewportId(e->ActiveStatus);
@@ -3789,41 +3876,9 @@ namespace MiniCAD
             // 样条：有控制点与节点时按 NURBS 显示（拟合点一并保留），只有拟合点时按拟合点插值
             std::unique_ptr<Entity> ConvertSpline(const Dwg::Spline& s)
             {
-                Spline sp;
-                sp.Degree = s.Degree;
-                sp.Flags  = static_cast<int>(s.Flags) & (SplineFlag_Closed | SplineFlag_Periodic | SplineFlag_Planar | SplineFlag_Linear);
-                for (const auto& p : s.ControlPoints)
-                    sp.ControlPoints.push_back(ToPoint(p));
-                sp.Knots = s.Knots;
-                if (!s.Weights.empty() && s.Weights.size() == s.ControlPoints.size()
-                    && (Any(s.Flags & Dwg::SplineFlags::Rational)
-                        || std::any_of(s.Weights.begin(), s.Weights.end(), [](double w) { return std::abs(w - 1.0) > 1e-12; })))
-                {
-                    sp.Weights = s.Weights;
-                    sp.Flags |= SplineFlag_Rational;
-                }
-                for (const auto& p : s.FitPoints)
-                    sp.FitPoints.push_back(ToPoint(p));
-                sp.StartTangent  = ToPoint(s.StartTangent);
-                sp.EndTangent    = ToPoint(s.EndTangent);
-                sp.FitTolerance  = s.FitTolerance;
-                sp.KnotTolerance = s.KnotTolerance;
-                sp.CtrlTolerance = s.ControlPointTolerance;
-                if (!sp.HasControlData())
-                {
-                    if (sp.FitPoints.size() < 2)
-                        return Skip(s);
-                    sp.ControlPoints.clear();
-                    sp.Knots.clear();
-                    sp.Weights.clear();
-                    auto nonZero = [](const Math::Point3& t) { return std::abs(t.x) + std::abs(t.y) + std::abs(t.z) > 1e-12; };
-                    sp.Boundary = Any(s.Flags & Dwg::SplineFlags::Closed) ? SplineBoundary::Closed
-                                : nonZero(sp.StartTangent) && nonZero(sp.EndTangent) ? SplineBoundary::Clamped
-                                                                                     : SplineBoundary::Natural;
-                }
-                if (!sp.FitPoints.empty())
-                    sp.Build();
-                return Make<SplineEntity>(s, nullptr, std::move(sp));
+                auto spline = ReadSplineGeometry(s);
+                if (!spline.IsValid()) return Skip(s);
+                return Make<SplineEntity>(s, nullptr, std::move(spline));
             }
 
             // 多面网格（POLYLINE，AcDbPolyFaceMesh）→ MeshEntity：四边形面拆成两个三角形，面记录的负索引（边不可见）按绝对值
@@ -4178,7 +4233,8 @@ namespace MiniCAD
             {
                 std::set<Dwg::Handle> oldViewportBoundaries;
                 for (const auto& [handle, object] : m_db.Objects())
-                    if (const auto* viewport = dynamic_cast<const Dwg::Viewport*>(object.get()); viewport && !ReadViewportPolygon(m_db, *viewport).empty())
+                    if (const auto* viewport = dynamic_cast<const Dwg::Viewport*>(object.get()); viewport &&
+                        (ReadViewportEllipse(m_db, *viewport) || ReadViewportPolyline(m_db, *viewport) || ReadViewportSpline(m_db, *viewport)))
                         oldViewportBoundaries.insert(viewport->BoundaryHandle);
                 if (m_source == nullptr)
                 {
@@ -5293,12 +5349,26 @@ namespace MiniCAD
                                     boundary = std::move(ellipse);
                                 }
                             }
+                            else if (const auto spline = s->PaperClipSpline())
+                                boundary = WriteSplineGeometry(*spline);
                             else
                             {
                                 auto polyline = std::make_unique<Dwg::LwPolyline>();
                                 polyline->Flags = Dwg::LwPolylineFlags::Closed;
-                                for (const auto& point : s->PaperBoundary())
-                                { Dwg::LwPolylineVertex vertex; vertex.Location = {point.x,point.y}; polyline->Vertices.push_back(vertex); }
+                                if (const auto curve = s->PaperClipPolyline())
+                                {
+                                    for (int i = 0; i < curve->SegCount(); ++i)
+                                    {
+                                        const auto& point = curve->SegStart(i);
+                                        Dwg::LwPolylineVertex vertex;
+                                        vertex.Location = {point.x, point.y};
+                                        vertex.Bulge = curve->SegBulge(i);
+                                        polyline->Vertices.push_back(vertex);
+                                    }
+                                }
+                                else
+                                    for (const auto& point : s->PaperBoundary())
+                                    { Dwg::LwPolylineVertex vertex; vertex.Location = {point.x,point.y}; polyline->Vertices.push_back(vertex); }
                                 boundary = std::move(polyline);
                             }
                             ApplyAttr(e, *boundary);
@@ -6320,36 +6390,8 @@ namespace MiniCAD
             // 样条：有控制点时写控制点与节点（拟合点一并写出），否则只写拟合点（AutoCAD 打开时重算控制点）
             std::unique_ptr<Dwg::Entity> ConvertSpline(const Entity& e, const Spline& sp)
             {
-                if (!sp.HasControlData() && sp.FitPoints.size() < 2)
-                    return Skip(e);
-                auto d = std::make_unique<Dwg::Spline>();
-                d->Degree = sp.HasControlData() ? sp.Degree : 3;
-                int flags = sp.Flags & (SplineFlag_Closed | SplineFlag_Periodic | SplineFlag_Planar | SplineFlag_Linear);
-                if (sp.IsClosed())
-                    flags |= SplineFlag_Closed;
-                if (sp.HasControlData())
-                {
-                    for (const auto& p : sp.ControlPoints)
-                        d->ControlPoints.push_back(ToXYZ(p));
-                    d->Knots = sp.Knots;
-                    if (sp.IsRational())
-                    {
-                        d->Weights = sp.Weights;
-                        flags |= SplineFlag_Rational;
-                    }
-                }
-                for (const auto& p : sp.FitPoints)
-                    d->FitPoints.push_back(ToXYZ(p));
-                if (!sp.HasControlData() && sp.Boundary == SplineBoundary::Clamped)
-                {
-                    d->StartTangent = ToXYZ(sp.StartTangent);
-                    d->EndTangent   = ToXYZ(sp.EndTangent);
-                }
-                d->Flags                 = static_cast<Dwg::SplineFlags>(flags);
-                d->FitTolerance          = sp.FitTolerance;
-                d->KnotTolerance         = sp.KnotTolerance;
-                d->ControlPointTolerance = sp.CtrlTolerance;
-                return Finish(e, std::move(d));
+                if (!sp.HasControlData() && sp.FitPoints.size() < 2) return Skip(e);
+                return Finish(e, WriteSplineGeometry(sp));
             }
 
         private:

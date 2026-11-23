@@ -119,5 +119,101 @@ inline void CheckLayoutFiles(const std::filesystem::path& root)
                 "Rotated viewport hit testing did not use the ellipse orientation");
         });
         check(ellipseCount == 1, "Rotated viewport lost its analytic clip after reloading");
+
+        const auto polylinePath = root / (std::wstring(L"圆弧多段线视口") + extension);
+        auto polylineCopy = read(root / (std::wstring(L"圆弧多段线布局复制") + extension));
+        MiniDWG::Handle originalArcBoundary{};
+        for (const char* name : {"裁剪平面", "圆弧轮廓副本"})
+        {
+            const auto* layout = find(*polylineCopy, name);
+            const auto* paper = polylineCopy->FindAs<MiniDWG::BlockRecord>(layout->AssociatedBlockHandle);
+            const MiniDWG::Viewport* viewport = nullptr;
+            int curves = 0;
+            for (auto handle : paper->Entities)
+            {
+                if (const auto* view = polylineCopy->FindAs<MiniDWG::Viewport>(handle); view && view->BoundaryHandle)
+                    viewport = view;
+                if (polylineCopy->FindAs<MiniDWG::LwPolyline>(handle)) ++curves;
+            }
+            check(viewport && curves == 2, "The layout should contain one source and one clipping polyline");
+            const auto* boundary = polylineCopy->FindAs<MiniDWG::LwPolyline>(viewport->BoundaryHandle);
+            check(boundary && boundary->OwnerHandle == paper->ObjectHandle && boundary->ObjectHandle != originalArcBoundary &&
+                boundary->Vertices.size() == 4 && std::abs(boundary->Vertices[1].Bulge - 1) < 1e-8,
+                "The viewport copy did not retain an independent native arc boundary");
+            originalArcBoundary = boundary->ObjectHandle;
+        }
+        MiniCAD::Document arcSource;
+        const auto arcUtf8 = polylinePath.u8string();
+        check(arcSource.LoadFromFile(std::string(arcUtf8.begin(), arcUtf8.end())), "Arc viewport could not be opened");
+        MiniCAD::Document arcRestored;
+        check(arcRestored.LoadFromString(arcSource.SaveToString()), "Arc viewport could not be serialized");
+        int arcCount = 0;
+        arcRestored.GetScene().ForEachObject([&](const MiniCAD::Object& object)
+        {
+            const auto* viewport = dynamic_cast<const MiniCAD::ViewportEntity*>(&object);
+            if (!viewport || !viewport->ClipPolylineDefinition()) return;
+            ++arcCount;
+            const auto curve = viewport->PaperClipPolyline();
+            check(curve && curve->Points.size() == 5 && std::abs(curve->SegBulge(1)-1) < 1e-8 &&
+                viewport->ContainsPaper({245,110,0}) && !viewport->ContainsPaper({245,150,0}),
+                "Arc viewport lost clipping or its original circular arc");
+        });
+        check(arcCount == 1, "Arc viewport lost its analytic clip after reloading");
+
+        const auto splinePath = root / (std::wstring(L"样条视口") + extension);
+        auto splineCopy = read(root / (std::wstring(L"样条布局复制") + extension));
+        MiniDWG::Handle originalSplineBoundary{};
+        for (const char* name : {"裁剪平面", "样条轮廓副本"})
+        {
+            const auto* layout = find(*splineCopy, name);
+            const auto* paper = splineCopy->FindAs<MiniDWG::BlockRecord>(layout->AssociatedBlockHandle);
+            const MiniDWG::Viewport* viewport = nullptr;
+            int splines = 0;
+            for (auto handle : paper->Entities)
+            {
+                if (const auto* view = splineCopy->FindAs<MiniDWG::Viewport>(handle); view && view->BoundaryHandle)
+                    viewport = view;
+                if (splineCopy->FindAs<MiniDWG::Spline>(handle)) ++splines;
+            }
+            check(viewport && splines == 2 && std::abs(viewport->ViewHeight / viewport->Height - 50) < 1e-8,
+                "The layout should contain the source spline, its clip and the original view scale");
+            const auto* boundary = splineCopy->FindAs<MiniDWG::Spline>(viewport->BoundaryHandle);
+            check(boundary && boundary->OwnerHandle == paper->ObjectHandle && boundary->ObjectHandle != originalSplineBoundary &&
+                (static_cast<int>(boundary->Flags) & 1) && boundary->Degree == 3 &&
+                boundary->ControlPoints.size() == 13 && boundary->Knots.size() == 17,
+                "The layout copy lost the closed native spline boundary");
+            originalSplineBoundary = boundary->ObjectHandle;
+        }
+        MiniCAD::Document splineSource;
+        const auto splineUtf8 = splinePath.u8string();
+        check(splineSource.LoadFromFile(std::string(splineUtf8.begin(), splineUtf8.end())), "Spline viewport could not be opened");
+        MiniCAD::Document splineRestored;
+        check(splineRestored.LoadFromString(splineSource.SaveToString()), "Spline viewport could not be serialized");
+        const MiniCAD::Spline fitted({{70,110,0},{140,50,0},{225,110,0},{140,180,0}}, MiniCAD::SplineBoundary::Closed);
+        int splineCount = 0;
+        splineRestored.GetScene().ForEachObject([&](const MiniCAD::Object& object)
+        {
+            const auto* viewport = dynamic_cast<const MiniCAD::ViewportEntity*>(&object);
+            if (!viewport || !viewport->ClipSplineDefinition()) return;
+            ++splineCount;
+            check(viewport->ContainsPaper({140,110,0}) && !viewport->ContainsPaper({75,170,0}),
+                "Spline clipping did not survive reloading");
+            const auto original = viewport->PaperClipSpline();
+            check(original.has_value(), "Native spline boundary is missing after reopening");
+            for (size_t i = 0; i < fitted.Segments.size(); ++i)
+                for (double t : {.25, .5, .75})
+                    check((original->EvaluateNURBS(double(i) + t) - fitted.Segments[i].Evaluate(t)).Length() < 1e-8,
+                        "Converting fitted points to native spline control points changed the curve");
+            auto clone = viewport->Clone(viewport->GetID());
+            auto& resized = static_cast<MiniCAD::ViewportEntity&>(*clone);
+            resized.SetSize(2 * viewport->GetWidth(), viewport->GetHeight());
+            const auto scaled = resized.PaperClipSpline();
+            const auto origin = viewport->GetCenter();
+            check(original && scaled && scaled->Knots == original->Knots &&
+                std::abs(scaled->ControlPoints.front().x - (2 * original->ControlPoints.front().x - origin.x)) < 1e-8 &&
+                std::abs(scaled->ControlPoints.front().y - original->ControlPoints.front().y) < 1e-8,
+                "Resizing the viewport did not preserve the spline under an affine scale");
+        });
+        check(splineCount == 1, "Viewport lost its analytic spline after reloading");
     }
 }

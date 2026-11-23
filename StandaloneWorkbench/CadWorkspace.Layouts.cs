@@ -243,8 +243,8 @@ namespace Wanluo.StandaloneWorkbench
             var dialog=new CadParameterWindow("视口边界裁剪 · VPCLIP", form =>
                 CadNative.Check(CadNative.wl_viewport_clip(Client.Handle,state.ActiveId,((CadPaperViewport)form.Selected("viewport")).Id,form.Index("method"))));
             dialog.Choice("viewport","要裁剪的视口",viewports,viewports.FirstOrDefault(item => item.Selected) ?? viewports[0]);
-            dialog.Choice("method","操作",new[] {"绘制／重画多边形边界","恢复矩形边界","绘制圆形边界","绘制轴向椭圆边界","绘制旋转椭圆边界"},"绘制／重画多边形边界");
-            dialog.Note("多边形指定顶点后按 Enter。圆形指定圆心和圆周点，轴向椭圆指定外包矩形的对角点，旋转椭圆依次指定中心、长轴端点及短轴半径。Backspace 退回，Esc 取消，Ctrl+Z 撤销。");
+            dialog.Choice("method","操作",new[] {"绘制／重画多边形边界","恢复矩形边界","绘制圆形边界","绘制轴向椭圆边界","绘制旋转椭圆边界","拾取闭合多段线","拾取闭合样条曲线"},"绘制／重画多边形边界");
+            dialog.Note("多边形指定顶点后按 Enter。圆形指定圆心和圆周点，轴向椭圆指定外包矩形的对角点，旋转椭圆依次指定中心、长轴端点及短轴半径。拾取时单击闭合多段线或样条曲线的边。Backspace 退回，Esc 取消，Ctrl+Z 撤销。");
             ShowParameters(dialog);
         }
         private void CopyLayout_Click(object sender, RoutedEventArgs args) => LayoutSettings(true);

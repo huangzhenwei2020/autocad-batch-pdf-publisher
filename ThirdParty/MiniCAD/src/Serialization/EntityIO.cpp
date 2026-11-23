@@ -371,6 +371,20 @@ namespace MiniCAD::EntityIO
                 double correlation = e.ClipEllipseCorrelation();
                 s.Value("viewportClipCorrelation", correlation);
             }
+            if (const auto& boundary = e.ClipPolylineDefinition())
+            {
+                auto points = boundary->Points;
+                auto bulges = boundary->Bulges;
+                double aspect = e.ClipPolylineAspect();
+                Ser::Value(s, "viewportClipPolyline", points);
+                s.Value("viewportClipBulges", bulges);
+                s.Value("viewportClipAspect", aspect);
+            }
+            if (const auto& boundary = e.ClipSplineDefinition())
+            {
+                auto spline = *boundary;
+                Ser::SplineGeom(s, "viewportClipSpline", spline);
+            }
             // 本视口冻结的图层（VPLAYER）：只在非空时写，旧文件没有这项
             if (!e.GetFrozenLayers().empty())
             {
@@ -430,6 +444,22 @@ namespace MiniCAD::EntityIO
                 double correlation = 0;
                 if (s.Has("viewportClipCorrelation")) s.Value("viewportClipCorrelation", correlation);
                 if (ellipse && std::abs(correlation) < 1) e->SetClipEllipse(correlation);
+            }
+            if (s.Has("viewportClipPolyline") && s.Has("viewportClipBulges") && s.Has("viewportClipAspect"))
+            {
+                std::vector<Math::Point3> points;
+                std::vector<double> bulges;
+                double aspect{};
+                Ser::Value(s, "viewportClipPolyline", points);
+                s.Value("viewportClipBulges", bulges);
+                s.Value("viewportClipAspect", aspect);
+                e->SetClipPolylineDefinition(Polyline(std::move(points), std::move(bulges)), aspect);
+            }
+            if (s.Has("viewportClipSpline"))
+            {
+                Spline spline;
+                Ser::SplineGeom(s, "viewportClipSpline", spline);
+                e->SetClipSplineDefinition(std::move(spline));
             }
             if (s.Has("viewportClipKnown")) { bool known = true; s.Value("viewportClipKnown", known); e->SetClipKnown(known); }
             size_t n = 0;

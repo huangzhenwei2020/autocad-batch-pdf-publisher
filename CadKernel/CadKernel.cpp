@@ -1784,7 +1784,7 @@ API int wl_viewport_clip(Session* session, uint64_t document, uint64_t object, i
     auto* viewport=dynamic_cast<ViewportEntity*>(scene.GetEntity(object));
     if (!doc.ActiveLayoutIsPaper() || !viewport || !doc.IsVisibleInActiveLayout(viewport->GetAttr()) || scene.IsEntityLocked(*viewport))
         throw std::invalid_argument("请选择当前布局中可编辑的视口。");
-    if (remove < 0 || remove > 4) throw std::invalid_argument("裁剪方式无效。");
+    if (remove < 0 || remove > 6) throw std::invalid_argument("裁剪方式无效。");
     if (remove == 1)
     {
         auto after=viewport->Clone(object); static_cast<ViewportEntity&>(*after).SetClipCoordinates({});

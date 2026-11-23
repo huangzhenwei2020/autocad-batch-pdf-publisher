@@ -1,12 +1,15 @@
 #pragma once
 #include "Entity.hpp"
 #include "Core/GeomKernel/AABB.hpp"
+#include "Core/GeomKernel/Polyline.hpp"
+#include "Core/GeomKernel/Spline.hpp"
 #include "Core/Math/Point3.hpp"
 #include "Core/Math/Mat4.hpp"
 #include <algorithm>
 #include <cmath>
 #include <memory>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
@@ -407,6 +410,120 @@ namespace MiniCAD
             m_clipKnown = true;
             m_clipEllipse = false;
             m_clipCorrelation = 0;
+            m_clipPolyline.reset();
+            m_clipSpline.reset();
+        }
+        static std::optional<Spline> PrepareClipSpline(Spline boundary)
+        {
+            if (!boundary.IsClosed() || !boundary.IsValid()) return {};
+            if (!boundary.HasControlData())
+            {
+                if (boundary.FitPoints.size() < 3) return {};
+                // Convert fitted cubic segments to a degree-three B-spline without refitting.
+                boundary.Degree = 3;
+                boundary.Flags = SplineFlag_Closed;
+                boundary.ControlPoints = {boundary.Segments.front().A};
+                boundary.Weights.clear();
+                boundary.Knots.assign(4, 0);
+                for (size_t i = 0; i < boundary.Segments.size(); ++i)
+                {
+                    const auto& segment = boundary.Segments[i];
+                    const auto end = boundary.Segments[(i + 1) % boundary.Segments.size()].A;
+                    boundary.ControlPoints.push_back(segment.A + (segment.Derivative(0) - Math::Point3{}) / 3);
+                    boundary.ControlPoints.push_back(end - (segment.Derivative(1) - Math::Point3{}) / 3);
+                    boundary.ControlPoints.push_back(end);
+                    boundary.Knots.insert(boundary.Knots.end(), i + 1 == boundary.Segments.size() ? 4 : 3, double(i + 1));
+                }
+                boundary.FitPoints.clear();
+            }
+            const auto& knots = boundary.Knots;
+            const auto& points = boundary.ControlPoints;
+            if (!std::is_sorted(knots.begin(), knots.end()) || !std::all_of(knots.begin(), knots.end(), [](double k) { return std::isfinite(k); }) ||
+                !(knots[boundary.Degree] < knots[points.size()]) ||
+                (boundary.IsRational() && !std::all_of(boundary.Weights.begin(), boundary.Weights.end(), [](double w) { return w > 0 && std::isfinite(w); })))
+                return {};
+            const double z = points.front().z;
+            auto planar = [z](const auto& p) { return std::isfinite(p.x) && std::isfinite(p.y) && std::abs(p.z - z) < 1e-8; };
+            if (!std::all_of(points.begin(), points.end(), planar) || !std::all_of(boundary.FitPoints.begin(), boundary.FitPoints.end(), planar))
+                return {};
+            const auto start = boundary.EvaluateNURBS(knots[boundary.Degree]);
+            const auto end = boundary.EvaluateNURBS(knots[points.size()]);
+            if (!planar(start) || !planar(end) || (end - start).Length() > 1e-7) return {};
+            boundary.Flags |= SplineFlag_Planar;
+            boundary.Segments.clear();
+            boundary.Params.clear();
+            return boundary;
+        }
+        static std::vector<Math::Point3> SampleClipSpline(const Spline& boundary)
+        {
+            std::vector<Math::Point3> points;
+            constexpr int samplesPerSpan = 32;
+            for (size_t i = boundary.Degree; i < boundary.ControlPoints.size(); ++i)
+            {
+                const double start = boundary.Knots[i], end = boundary.Knots[i + 1];
+                if (start == end) continue;
+                for (int j = 0; j < samplesPerSpan; ++j)
+                    points.push_back(boundary.EvaluateNURBS(std::lerp(start, end, double(j) / samplesPerSpan)));
+            }
+            return points;
+        }
+        void SetClipSpline(Spline boundary)
+        {
+            ScaleClipSpline(boundary, -m_center.x / m_width, -m_center.y / m_height, 1 / m_width, 1 / m_height, 0);
+            SetClipSplineDefinition(std::move(boundary));
+        }
+        void SetClipSplineDefinition(Spline boundary)
+        {
+            auto prepared = PrepareClipSpline(std::move(boundary));
+            if (!prepared) throw std::invalid_argument("Invalid closed spline viewport boundary");
+            SetClipCoordinates(SampleClipSpline(*prepared));
+            m_clipSpline = std::move(prepared);
+        }
+        const std::optional<Spline>& ClipSplineDefinition() const { return m_clipSpline; }
+        std::optional<Spline> PaperClipSpline() const
+        {
+            if (!m_clipSpline) return {};
+            auto result = *m_clipSpline;
+            ScaleClipSpline(result, m_center.x, m_center.y, m_width, m_height, m_center.z);
+            return result;
+        }
+        static std::vector<Math::Point3> SampleClipPolyline(const Polyline& boundary)
+        {
+            auto samples = boundary.Tessellate(Math::PI / 128);
+            if (!samples.empty()) samples.pop_back(); // The last vertex repeats the first.
+            return samples;
+        }
+        void SetClipPolyline(Polyline boundary)
+        {
+            for (auto& p : boundary.Points)
+                p = {(p.x - m_center.x) / m_height, (p.y - m_center.y) / m_height, 0};
+            SetClipPolylineDefinition(std::move(boundary), m_width / m_height);
+        }
+        void SetClipPolylineDefinition(Polyline boundary, double aspect)
+        {
+            if (!(aspect > 0 && std::isfinite(aspect)) || boundary.Points.size() < 3 ||
+                (boundary.Points.back() - boundary.Points.front()).LengthSq() > 1e-16 ||
+                !std::all_of(boundary.Points.begin(), boundary.Points.end(), [](const auto& p) { return std::isfinite(p.x) && std::isfinite(p.y); }) ||
+                !std::all_of(boundary.Bulges.begin(), boundary.Bulges.end(), [](double b) { return std::isfinite(b); }))
+                throw std::invalid_argument("Invalid closed viewport boundary");
+            auto sampled = SampleClipPolyline(boundary);
+            for (auto& p : sampled) p.x /= aspect;
+            SetClipCoordinates(std::move(sampled));
+            if (std::any_of(boundary.Bulges.begin(), boundary.Bulges.end(), [](double b) { return std::abs(b) > 1e-12; }))
+            {
+                m_clipPolyline = std::move(boundary);
+                m_clipPolylineAspect = aspect;
+            }
+        }
+        const std::optional<Polyline>& ClipPolylineDefinition() const { return m_clipPolyline; }
+        double ClipPolylineAspect() const { return m_clipPolylineAspect; }
+        std::optional<Polyline> PaperClipPolyline() const
+        {
+            // A nonuniform resize turns the circular arcs into elliptical arcs.
+            if (!m_clipPolyline || std::abs(m_width / m_height / m_clipPolylineAspect - 1) > 1e-9) return {};
+            auto result = *m_clipPolyline;
+            for (auto& p : result.Points) p = {m_center.x + p.x * m_height, m_center.y + p.y * m_height, m_center.z};
+            return result;
         }
         bool ClipEllipse() const { return m_clipEllipse; }
         double ClipEllipseCorrelation() const { return m_clipCorrelation; }
@@ -414,6 +531,8 @@ namespace MiniCAD
         {
             if (!(std::abs(correlation) < 1)) throw std::invalid_argument("Invalid viewport ellipse");
             m_clipKnown = m_clipEllipse = true;
+            m_clipPolyline.reset();
+            m_clipSpline.reset();
             m_clipCorrelation = correlation;
             const double rest = std::sqrt(1 - correlation * correlation);
             m_clip.clear();
@@ -450,6 +569,8 @@ namespace MiniCAD
             e->m_planView   = m_planView;
             e->m_frozenLayers = m_frozenLayers;
             e->m_clip = m_clip; e->m_clipKnown = m_clipKnown; e->m_clipEllipse = m_clipEllipse; e->m_clipCorrelation = m_clipCorrelation;
+            e->m_clipPolyline = m_clipPolyline; e->m_clipPolylineAspect = m_clipPolylineAspect;
+            e->m_clipSpline = m_clipSpline;
             return e;
         }
 
@@ -467,11 +588,21 @@ namespace MiniCAD
         DECLARE_RUNTIME_TYPE(ViewportEntity, Entity)
 
     private:
+        static void ScaleClipSpline(Spline& boundary, double x, double y, double sx, double sy, double z)
+        {
+            for (auto* points : {&boundary.ControlPoints, &boundary.FitPoints})
+                for (auto& p : *points) p = {x + p.x * sx, y + p.y * sy, z};
+            boundary.StartTangent = {boundary.StartTangent.x * sx, boundary.StartTangent.y * sy, 0};
+            boundary.EndTangent = {boundary.EndTangent.x * sx, boundary.EndTangent.y * sy, 0};
+        }
         bool         m_locked = true;
         std::vector<Math::Point3> m_clip;
         bool m_clipKnown = true;
         bool m_clipEllipse = false;
         double m_clipCorrelation = 0; // Off-diagonal term when both frame semi-axes are normalized to one.
+        std::optional<Polyline> m_clipPolyline;
+        double m_clipPolylineAspect = 1;
+        std::optional<Spline> m_clipSpline;
         bool m_spatialView = false;
         bool m_perspective = false;
         CameraOptics m_optics;
