@@ -485,9 +485,10 @@ namespace BatchPdfPublisher.Services
             }
         }
 
-        private static ObjectId AddFrame(BlockTableRecord space, Transaction transaction, BlockTableRecord definition, ObjectId definitionId, FrameDefinition frame, Point3d origin, int scale, ObjectId layer, int page)
+        internal static ObjectId AddFrame(BlockTableRecord space, Transaction transaction, BlockTableRecord definition, ObjectId definitionId, FrameDefinition frame, Point3d origin, int scale, ObjectId layer, int page, double units = 1d, string sheetName = null)
         {
             var placement = FrameBlockPlacementService.Measure(definition, transaction, frame, scale);
+            placement.Factor *= units;
             var reference = new BlockReference(placement.PositionForLowerLeft(origin), definitionId)
             {
                 ScaleFactors = new Scale3d(placement.Factor),
@@ -505,7 +506,7 @@ namespace BatchPdfPublisher.Services
                 var tag = (attributeDefinition.Tag ?? string.Empty).Trim();
                 var value = attributeDefinition.TextString;
                 if (TagMatches(tag, frame.PrintScaleAttributeTag, "比例")) value = "1:" + scale;
-                else if (TagMatches(tag, frame.SheetNameAttributeTag, "图纸名称", "图名")) value = "大样图（" + page + "）";
+                else if (TagMatches(tag, frame.SheetNameAttributeTag, "图纸名称", "图名")) value = (sheetName ?? "大样图") + "（" + page + "）";
                 else if (TagMatches(tag, frame.BuildingAttributeTag, "子项目名称") && !string.IsNullOrWhiteSpace(frame.DefaultBuilding)) value = frame.DefaultBuilding;
                 attribute.TextString = string.IsNullOrWhiteSpace(value) || value.StartsWith("<", StringComparison.Ordinal) ? tag : value;
                 reference.AttributeCollection.AppendAttribute(attribute);
@@ -648,11 +649,29 @@ namespace BatchPdfPublisher.Services
             return text.Trim();
         }
 
-        private static void CapturePreview(Entity entity, IList<DetailPreviewPrimitive> output, int depth)
+        internal static void CapturePreview(Entity entity, IList<DetailPreviewPrimitive> output, int depth, bool traceCurves = false)
         {
             if (entity == null || output == null || output.Count >= 2500) return;
             var line = entity as Line;
             if (line != null) { output.Add(LinePrimitive(line.StartPoint, line.EndPoint)); return; }
+            if (traceCurves && entity is Curve curve && !(entity is Circle) && !(entity is Xline) && !(entity is Ray))
+            {
+                try
+                {
+                    var start = curve.StartParam;
+                    var span = curve.EndParam - start;
+                    var steps = curve is Polyline vertices ? Math.Min(1400, Math.Max(24, vertices.NumberOfVertices * 12)) : 72;
+                    var previous = curve.StartPoint;
+                    for (var step = 1; step <= steps && output.Count < 2500; step++)
+                    {
+                        var next = step == steps ? curve.EndPoint : curve.GetPointAtParameter(start + span * step / steps);
+                        output.Add(LinePrimitive(previous, next));
+                        previous = next;
+                    }
+                    return;
+                }
+                catch (Autodesk.AutoCAD.Runtime.Exception) { }
+            }
             var polyline = entity as Polyline;
             if (polyline != null)
             {
@@ -672,7 +691,7 @@ namespace BatchPdfPublisher.Services
                 try
                 {
                     entity.Explode(exploded);
-                    if (exploded.Count > 0) { foreach (DBObject value in exploded) CapturePreview(value as Entity, output, depth + 1); return; }
+                    if (exploded.Count > 0) { foreach (DBObject value in exploded) CapturePreview(value as Entity, output, depth + 1, traceCurves); return; }
                 }
                 catch { }
                 finally { foreach (DBObject value in exploded) value.Dispose(); }

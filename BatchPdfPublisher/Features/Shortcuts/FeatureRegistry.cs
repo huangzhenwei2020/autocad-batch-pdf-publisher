@@ -20,6 +20,7 @@ namespace BatchPdfPublisher.Services
             F("catalog", "插入目录", "ML1", "ML1", "图纸与发布", "目", "根据当前工程图纸顺序生成目录表并插入 CAD。", null, "插入目录"),
             F("attribute_batch", "批量改属性", "BPPATTR", "SBB", "图块与属性", "属", "框选不同类型的属性图块，按坐标排序、批量递增并写入同一属性标记。", null, "批改属性"),
             F("attribute_definition", "属性定义编辑", "BPPATTDEF", "BPA", "图块与属性", "定", "拾取图块后修改图块名称、属性 TAG、默认内容、字体、字高、宽度和对齐方式。", null, "属性定义"),
+            F("external_cad_library", "外部 CAD 图库", "WLEXTERNALLIB", null, "图块与属性", "库", "把图块或框选对象收录到自选文件夹，支持单项插入和批量图框排版。", null, "外部图库"),
             F("architecture_spec", "建筑设计说明", "WLJZSM", "JZSM", "建筑工具", "说", "打开万落建筑工具中的建筑设计说明助手。", "JZSM", "建筑说明"),
             F("cad_table_xlsx", "CAD表格编辑/Excel", "WLCAD2XLSX", "CE", "建筑工具", "表", "拾取线框、文字或现有 CAD 表格进行编辑，可导出 Excel 或重新插入 CAD。", "CE", "表格编辑"),
             F("stair_detail", "楼梯大样", "WLLTDY", "LTDY", "建筑工具", "梯", "打开楼梯构件编辑器，按楼层、梯段和构造参数一键生成楼梯大样。", "LTDY", "楼梯大样"),

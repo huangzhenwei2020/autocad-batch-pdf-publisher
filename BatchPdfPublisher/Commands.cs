@@ -250,6 +250,24 @@ namespace BatchPdfPublisher
             CadComponentLibraryService.Execute(Application.DocumentManager.MdiActiveDocument);
         }
 
+        [CommandMethod("WLEXTERNALLIB")]
+        public void OpenExternalCadLibrary()
+        {
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document == null) return;
+            try { ExternalCadLibraryWindow.Open(document); }
+            catch (System.Exception ex) { document.Editor.WriteMessage("\n外部 CAD 图库：" + ex.Message); }
+        }
+
+        [CommandMethod("WLEXTERNALLIBQA")]
+        public void CheckExternalCadLibrary()
+        {
+            var document = Application.DocumentManager.MdiActiveDocument;
+            if (document == null) return;
+            try { ExternalCadLibraryCheck.Run(document); }
+            catch (System.Exception ex) { document.Editor.WriteMessage("\nEXTERNAL_CAD_LIBRARY_FAILED " + ex); }
+        }
+
         [CommandMethod("WLLIBRARYQA")]
         public void CheckSharedComponentLibrary()
         {

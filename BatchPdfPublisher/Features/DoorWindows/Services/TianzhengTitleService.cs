@@ -134,6 +134,25 @@ namespace BatchPdfPublisher.Services
         /// </summary>
         public static bool TryInsertNativeTitle(Database database, BlockTableRecord space, Transaction transaction, Point3d center, string title, int drawingScale, double targetWidth, DoorWindowElevationMetadata metadata = null)
         {
+            return TryInsertNativeTitleCore(database, space, transaction, center, title, drawingScale, targetWidth, metadata, null);
+        }
+
+        internal static bool TryInsertVerifiedNativeTitle(Database database, ObjectId spaceId, Extents3d area, string title, int scale)
+        {
+            using (var tr = database.TransactionManager.StartTransaction())
+            {
+                var space = (BlockTableRecord)tr.GetObject(spaceId, OpenMode.ForWrite);
+                var center = area.MinPoint + (area.MaxPoint - area.MinPoint) / 2;
+                if (!TryInsertNativeTitleCore(database, space, tr, center, title, scale, area.MaxPoint.X - area.MinPoint.X, null, area))
+                    return false;
+                tr.Commit();
+                return true;
+            }
+        }
+
+        private static bool TryInsertNativeTitleCore(Database database, BlockTableRecord space, Transaction transaction,
+            Point3d center, string title, int drawingScale, double targetWidth, DoorWindowElevationMetadata metadata, Extents3d? area)
+        {
             if (database == null || space == null || transaction == null) return false;
             try
             {
@@ -160,16 +179,40 @@ namespace BatchPdfPublisher.Services
                 clone.SetDatabaseDefaults();
                 Append(space, transaction, clone, metadata);
                 var com = clone.AcadObject;
+                var titleWritten = false;
+                var scaleWritten = false;
                 if (com != null)
                 {
                     // 比例（更新比例功能已验证可写）。
                     TrySetCom(com, "Scale", Convert.ToDouble(drawingScale, CultureInfo.InvariantCulture));
                     TrySetCom(com, "DrawScale", true);
                     TrySetCom(com, "ScaleText", "1:" + drawingScale.ToString(CultureInfo.InvariantCulture));
+                    if (area.HasValue)
+                    {
+                        var expected = "1:" + drawingScale.ToString(CultureInfo.InvariantCulture);
+                        var value = ReadComString(com, "ScaleText");
+                        scaleWritten = string.Equals(value, expected, StringComparison.Ordinal) ||
+                            double.TryParse(ReadComString(com, "Scale"), NumberStyles.Float, CultureInfo.InvariantCulture, out var actualScale)
+                            && Math.Abs(actualScale - drawingScale) < 1e-8;
+                    }
                     // 图名文字：逐个尝试候选属性，写入成功即停。
                     foreach (var property in TitleTextCandidates)
-                        if (TrySetCom(com, property, title ?? string.Empty)) break;
+                    {
+                        if (!TrySetCom(com, property, title ?? string.Empty)) continue;
+                        titleWritten = !area.HasValue || string.Equals(ReadComString(com, property), title, StringComparison.Ordinal);
+                        if (titleWritten) break;
+                    }
                     try { com.GetType().InvokeMember("Update", System.Reflection.BindingFlags.InvokeMethod, null, com, null, CultureInfo.CurrentCulture); } catch { }
+                }
+                if (area.HasValue)
+                {
+                    if (!titleWritten || !scaleWritten) return false;
+                    var actual = clone.GeometricExtents;
+                    var box = area.Value;
+                    const double tolerance = 1e-6;
+                    if (actual.MinPoint.X < box.MinPoint.X - tolerance || actual.MaxPoint.X > box.MaxPoint.X + tolerance
+                        || actual.MinPoint.Y < box.MinPoint.Y - tolerance || actual.MaxPoint.Y > box.MaxPoint.Y + tolerance)
+                        return false;
                 }
                 return true;
             }

@@ -263,6 +263,13 @@ namespace BatchPdfPublisher.Services
             return result;
         }
 
+        internal static ObjectId EnsureAnnotationTextStyle(Database db, Transaction tr)
+        {
+            var profile = LoadProfile();
+            var style = profile.TextStyles.First(value => value.Key == DraftingStandardProfile.AnnotationTextKey);
+            return EnsureTextStyle(db, tr, style.Name, style.FontFile, style.BigFontFile, style.TextHeight, style.WidthFactor, false);
+        }
+
         public static ObjectId ResolveTextStyle(Database db, Transaction tr, string requestedName, bool title)
         {
             var r = EnsureAll(db, tr); if (string.IsNullOrWhiteSpace(requestedName)) return title ? r.TitleTextStyleId : r.BodyTextStyleId;

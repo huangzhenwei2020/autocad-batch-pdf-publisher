@@ -88,6 +88,9 @@ namespace BatchPdfPublisher.Services
                 images.Add("building_component_library", images["building_opening_types"]);
                 ScaledImages.Add("building_component_library", ScaledImages["building_opening_types"]);
                 SmallImages.Add("building_component_library", SmallImages["building_opening_types"]);
+                images.Add("external_cad_library", images["building_opening_types"]);
+                ScaledImages.Add("external_cad_library", ScaledImages["building_opening_types"]);
+                SmallImages.Add("external_cad_library", SmallImages["building_opening_types"]);
                 foreach (var alias in new Dictionary<string, string>
                 {
                     { "room_statistics", "cad_table_xlsx" },
