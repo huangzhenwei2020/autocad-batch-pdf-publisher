@@ -145,6 +145,7 @@ public static class StandaloneCadRoundtripNativeTests
             VerifySpatialInlineEditing(output);
             VerifyLayoutPerspective(output);
             VerifyPerspectiveTransfer(output);
+            VerifyPerspectiveCurveEditing(output);
             VerifyWorkingPlane(output);
             VerifySpatialCurves(output);
             VerifyWorkingPolylines(output);
@@ -530,6 +531,42 @@ public static class StandaloneCadRoundtripNativeTests
                 viewport.ViewTarget.DistanceTo(new Point3d(100,200,300)) < 1e-8 &&
                 viewport.ViewCenter.GetDistanceTo(new Point2d(0,0)) < 1e-8,
                 "Spatial inline navigation undo did not preserve viewport parameters");
+        }
+    }
+
+    private static void VerifyPerspectiveCurveEditing(string output)
+    {
+        foreach (var extension in new[] { ".dwg", ".dxf" })
+        using (var db = Open(Path.Combine(output, "透视曲线编辑" + extension)))
+        using (var tx = db.TransactionManager.StartTransaction())
+        {
+            var model = Model(db, tx);
+            var circles = model.OfType<Circle>().ToArray();
+            var polylines = model.OfType<Polyline>().ToArray();
+            Check(circles.Length == 2 && model.OfType<Arc>().Count() == 1
+                && model.OfType<Ellipse>().Count() == 1 && polylines.Length == 2,
+                "Perspective curve editing did not preserve native model curves");
+            var right = new Vector3d(Math.Cos(.2), -Math.Sin(.2), 0);
+            var up = new Vector3d(Math.Sin(.2), Math.Cos(.2), 0);
+            var center = new Point3d(100, 200, 300) + right * 10 - up * 15;
+            var moved = circles.Single(circle => Math.Abs(circle.Radius - 36) < 1e-7);
+            var movedCenter = center - right * 220 + up * 130 + new Vector3d(12, 25, 160);
+            Check(moved.Center.DistanceTo(movedCenter) < 1e-6, "Perspective circle move lost its model coordinates");
+            var vertices = new[] { center - right * 230 - up * 150, center - right * 140 - up * 150, center - right * 140 - up * 120 };
+            foreach (var delta in new[] { new Vector3d(0, 0, 0), new Vector3d(40, -35, 20) })
+            {
+                Check(polylines.Any(polyline => polyline.NumberOfVertices == vertices.Length
+                    && Math.Abs(polyline.GetBulgeAt(0) - .5) < 1e-7
+                    && vertices.Select((point, index) => polyline.GetPoint3dAt(index).DistanceTo(point + delta)).All(distance => distance < 1e-6)),
+                    "Perspective polyline copy lost its model vertices or bulge");
+            }
+            var layouts = (DBDictionary)tx.GetObject(db.LayoutDictionaryId, OpenMode.ForRead);
+            var layout = (Layout)tx.GetObject(layouts.GetAt("Layout1"), OpenMode.ForRead);
+            var paper = (BlockTableRecord)tx.GetObject(layout.BlockTableRecordId, OpenMode.ForRead);
+            var view = paper.Cast<ObjectId>().Select(id => tx.GetObject(id, OpenMode.ForRead)).OfType<Viewport>().Single(item => item.PerspectiveOn);
+            Check(view.Locked && Math.Abs(view.LensLength - 42) < 1e-7 &&
+                Math.Abs(view.FrontClipDistance - 600) < 1e-7 && Math.Abs(view.BackClipDistance + 400) < 1e-7 &&
+                view.ViewDirection.IsEqualTo(new Vector3d(0, 0, 1000)), "Perspective curve editing changed the viewport camera");
         }
     }
 

@@ -1,5 +1,9 @@
 #pragma once
 #include "Core/Entity/PointEntity.hpp"
+#include "Core/Entity/ArcEntity.hpp"
+#include "Core/Entity/CircleEntity.hpp"
+#include "Core/Entity/EllipseEntity.hpp"
+#include "Core/Entity/PolylineEntity.hpp"
 #include "Document/Document.h"
 #include "Document/PerspectiveViewport.hpp"
 #include <fstream>
@@ -169,7 +173,7 @@ inline void WriteSpatialInlineClipFixture(const std::filesystem::path& root)
         throw std::runtime_error("Could not write non-planar inline clip drawing");
 }
 
-inline void WritePerspectiveProjectionFixture(const std::filesystem::path& root)
+inline void WritePerspectiveProjectionFixture(const std::filesystem::path& root, bool curveEditing = false)
 {
     using namespace MiniCAD;
     Document document;
@@ -202,6 +206,15 @@ inline void WritePerspectiveProjectionFixture(const std::filesystem::path& root)
     line(world(-120,-80,-200), world(120,-80,-200), 3);  // far, green
     line(world(-120,0,800), world(120,0,800), 5);       // in front of the clip
     line(world(-120,0,-600), world(120,0,-600), 2);     // behind the back clip
+    if (curveEditing)
+    {
+        scene.AddEntity(std::make_unique<CircleEntity>(scene.NextObjectID(), world(-220,130,120), 36));
+        scene.AddEntity(std::make_unique<ArcEntity>(scene.NextObjectID(), world(160,130,0), 32, -.2, Math::PI * .5 - .2));
+        scene.AddEntity(std::make_unique<EllipseEntity>(scene.NextObjectID(), world(160,-180,-100), 47, 26, -.2));
+        scene.AddEntity(std::make_unique<PolylineEntity>(scene.NextObjectID(),
+            std::vector{world(-230,-150,0), world(-140,-150,0), world(-140,-120,0)}, std::vector{.5, 0.}));
+        scene.AddEntity(std::make_unique<CircleEntity>(scene.NextObjectID(), world(50,-20,750), 8));
+    }
 
     const PerspectiveViewport projection(*viewport);
     auto point = [&](double x, double y, double z)
@@ -262,9 +275,65 @@ inline void WritePerspectiveProjectionFixture(const std::filesystem::path& root)
             throw std::runtime_error("Perspective optics did not survive internal serialization");
         ++restoredViews;
     });
-    const auto path = (root / L"perspective-projection.dwg").u8string();
+    const auto path = (root / (curveEditing ? L"perspective-curve-editing.dwg" : L"perspective-projection.dwg")).u8string();
     if (restoredViews != 1 || !document.SaveAs(std::string(path.begin(), path.end())))
         throw std::runtime_error("Could not save the perspective fixture");
+}
+
+inline void CheckPerspectiveCurveFiles(const std::filesystem::path& root)
+{
+    using namespace MiniCAD;
+    for (const wchar_t* extension : {L".dwg", L".dxf"})
+    {
+        Document document;
+        const auto path = (root / (std::wstring(L"透视曲线编辑") + extension)).u8string();
+        if (!document.LoadFromFile(std::string(path.begin(), path.end())))
+            throw std::runtime_error("Perspective curve edit file could not be read");
+        const ViewportEntity* view = nullptr;
+        const CircleEntity* moved = nullptr;
+        std::vector<const PolylineEntity*> polylines;
+        int circles = 0, arcs = 0, ellipses = 0;
+        document.GetScene().ForEachObject([&](const Object& object)
+        {
+            if (const auto* viewport = dynamic_cast<const ViewportEntity*>(&object); viewport && viewport->IsPerspective())
+                view = viewport;
+            const auto* entity = dynamic_cast<const Entity*>(&object);
+            if (!entity || entity->GetAttr().InPaperSpace) return;
+            if (const auto* circle = dynamic_cast<const CircleEntity*>(entity))
+            {
+                ++circles;
+                if (std::abs(circle->GetCircle().Radius - 36) < 1e-7) moved = circle;
+            }
+            if (dynamic_cast<const ArcEntity*>(entity)) ++arcs;
+            if (dynamic_cast<const EllipseEntity*>(entity)) ++ellipses;
+            if (const auto* polyline = dynamic_cast<const PolylineEntity*>(entity)) polylines.push_back(polyline);
+        });
+        if (!view || !view->IsLocked() || view->GetCameraOptics().Lens != 42 ||
+            view->GetCameraOptics().Front != 600 || view->GetCameraOptics().Back != -400 ||
+            (view->GetViewDirection() - Math::Point3{0,0,1000}).Length() > 1e-7 ||
+            !moved || circles != 2 || arcs != 1 || ellipses != 1 || polylines.size() != 2)
+            throw std::runtime_error("Perspective curve editing lost the camera, lock, or native model entities");
+        const auto [right, up] = view->ViewAxes();
+        const auto normal = Math::Cross(right, up);
+        const auto center = view->GetViewCenter();
+        const auto expectedCircle = center - right * 220 + up * 130 + normal * 120 + Math::Vec3{12, 25, 40};
+        if ((moved->GetCircle().Center - expectedCircle).Length() > 1e-6)
+            throw std::runtime_error("Perspective circle move lost XYZ");
+        const std::vector expected{center - right * 230 - up * 150, center - right * 140 - up * 150,
+                                   center - right * 140 - up * 120};
+        for (const auto& delta : {Math::Vec3{}, {40,-35,20}})
+        {
+            const auto found = std::any_of(polylines.begin(), polylines.end(), [&](const PolylineEntity* entity)
+            {
+                const auto& polyline = entity->GetPolyline();
+                if (polyline.Points.size() != expected.size() || std::abs(polyline.SegBulge(0) - .5) > 1e-7) return false;
+                for (size_t i = 0; i < expected.size(); ++i)
+                    if ((polyline.Points[i] - (expected[i] + delta)).Length() > 1e-6) return false;
+                return true;
+            });
+            if (!found) throw std::runtime_error("Perspective polyline copy lost a vertex, elevation or bulge");
+        }
+    }
 }
 
 inline void CheckSpatialNavigationFiles(const std::filesystem::path& root)

@@ -1,5 +1,7 @@
 #pragma once
 #include "Document/PerspectiveViewport.hpp"
+#include "Core/Entity/ICurveEntity.hpp"
+#include "Core/Entity/WipeoutEntity.hpp"
 #include "Scene/Scene.h"
 
 inline bool IsVisibleThroughViewport(const MiniCAD::Entity& entity, const MiniCAD::Scene& scene,
@@ -33,4 +35,19 @@ void ForEachPerspectiveSegment(const MiniCAD::ViewportEntity& view, const MiniCA
     auto toPaper = [&](const auto& vertex) { return origin + Math::Vec3{vertex.pos.x, vertex.pos.y, vertex.pos.z}; };
     for (size_t i = 1; i < vertices.size(); i += 2)
         emit(toPaper(vertices[i - 1]), toPaper(vertices[i]));
+}
+
+template<typename Emit>
+void ForEachPerspectiveCurveSegment(const MiniCAD::Entity& entity, const MiniCAD::ViewportEntity& view,
+    const MiniCAD::PerspectiveViewport& projection, const MiniCAD::WipeClip::Poly& boundary,
+    const MiniCAD::Math::Vec3& delta, Emit emit)
+{
+    const auto* source = entity.AsCurveEntity();
+    if (!source || entity.IsKindOf<MiniCAD::WipeoutEntity>()) return;
+    const auto curve = source->MakeCurve();
+    if (!curve || !curve->IsBounded()) return;
+    std::vector<MiniCAD::Math::Point3> points;
+    curve->Tessellate(points, 128);
+    for (size_t i = 1; i < points.size(); ++i)
+        ForEachPerspectiveSegment(view, projection, boundary, points[i - 1] + delta, points[i] + delta, emit);
 }

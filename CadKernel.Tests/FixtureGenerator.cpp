@@ -25,6 +25,7 @@ static int RunFixtures(int count, wchar_t** arguments)
     {
         CheckLayoutFiles(arguments[2]);
         CheckSpatialNavigationFiles(arguments[2]);
+        CheckPerspectiveCurveFiles(arguments[2]);
         CheckWorkingPolylineFiles(arguments[2]);
         CheckWorkingEllipseFiles(arguments[2]);
         return 0;
@@ -35,6 +36,7 @@ static int RunFixtures(int count, wchar_t** arguments)
     WriteSpatialViewportFixture(root);
     WriteSpatialInlineClipFixture(root);
     WritePerspectiveProjectionFixture(root);
+    WritePerspectiveProjectionFixture(root, true);
     CheckWorkingPlane();
     CheckSpatialCurves();
     CheckWorkingPolyline();

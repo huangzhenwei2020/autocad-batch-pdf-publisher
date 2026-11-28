@@ -58,6 +58,29 @@ namespace MiniCAD
             return Math::Point3{m_center.x + view.x * scale, m_center.y + view.y * scale, m_center.z};
         }
 
+        // Reject a bounds only when every corner is outside the same plane of
+        // the pick aperture. A curve crossing the near plane can still be hit.
+        bool BoundsMayHitPaper(const AABB& bounds, const Math::Point3& paper, double radius) const
+        {
+            const auto offset = paper - m_center;
+            unsigned outside = (1u << kPlaneCount) - 1;
+            for (unsigned corner = 0; corner < 8 && outside; ++corner)
+            {
+                const Math::Point3 model{corner & 1 ? bounds.Max.x : bounds.Min.x,
+                                         corner & 2 ? bounds.Max.y : bounds.Min.y,
+                                         corner & 4 ? bounds.Max.z : bounds.Min.z};
+                const auto view = ToView(model - m_modelCenter);
+                if (!std::isfinite(view.x) || !std::isfinite(view.y) || !std::isfinite(view.z)) return true;
+                const double x = m_focalPaper * view.x - offset.x * view.z;
+                const double y = m_focalPaper * view.y - offset.y * view.z;
+                const double span = radius * view.z;
+                const std::array distances{view.z - m_near, m_far - view.z, span + x, span - x, span + y, span - y};
+                for (size_t plane = 0; plane < distances.size(); ++plane)
+                    if (distances[plane] >= 0) outside &= ~(1u << plane);
+            }
+            return outside == 0;
+        }
+
         std::optional<Math::Point3> PaperPointOnPlane(const Math::Point3& point, const Math::WorkingPlane& plane) const
         {
             const auto ray = m_right * ((point.x - m_center.x) / m_focalPaper) +

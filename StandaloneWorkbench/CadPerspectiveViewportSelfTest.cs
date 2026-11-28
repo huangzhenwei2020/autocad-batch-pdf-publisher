@@ -72,12 +72,105 @@ namespace Wanluo.StandaloneWorkbench
                 }
                 await VerifyNavigationAsync(workspace, root);
                 await VerifyDrawingAsync(workspace, fixture, root);
+                await VerifyCurveEditingAsync(workspace, Path.Combine(Path.GetDirectoryName(fixture), "perspective-curve-editing.dwg"), root);
             }
             finally
             {
                 if (document != 0) client.Close(document);
                 client.Activate(previous);
                 workspace.RefreshState();
+            }
+        }
+
+        private static async Task VerifyCurveEditingAsync(CadWorkspace workspace, string fixture, string root)
+        {
+            var client = workspace.Client;
+            var host = (CadViewport)workspace.FindName("Viewport");
+            var wasVisible = ((FrameworkElement)workspace.FindName("InspectorPanel")).IsVisible;
+            var previousTab = ((TabControl)workspace.FindName("InspectorTabs")).SelectedIndex;
+            await client.OpenAsync(fixture);
+            var document = client.State.ActiveId;
+            try
+            {
+                CadNative.Check(CadNative.wl_layout(client.Handle, client.State.Layouts.Single(item => item.Name == "Layout1").Id));
+                client.Command("@fit");
+                var count = client.State.EntityCount;
+                var focal = Math.Sqrt(300 * 300 + 200 * 200);
+                void ClickAt(double x, double y)
+                {
+                    CadNative.Check(CadNative.wl_world_to_screen(client.Handle, x, y, out var px, out var py));
+                    var position = new IntPtr((py << 16) | (px & 0xffff));
+                    SendMessage(host.Handle, 0x0201, new IntPtr(1), position);
+                    SendMessage(host.Handle, 0x0202, IntPtr.Zero, position);
+                }
+                void ClickModel(double x, double y, double z) =>
+                    ClickAt(150 + x * focal / (1000 - z), 100 + y * focal / (1000 - z));
+                async Task RequirePromptAsync(string expected)
+                {
+                    await Task.Delay(80);
+                    if (!client.State.Prompt.Contains(expected))
+                        throw new InvalidOperationException("Expected perspective prompt " + expected + ", got " + client.State.Prompt);
+                }
+                async Task StartTransferAsync(string command)
+                {
+                    if (!workspace.ExecuteCommand(command, true)) throw new InvalidOperationException(command + " did not start.");
+                    ClickAt(150, 100);
+                    await RequirePromptAsync("选取模型点");
+                }
+                void Select(double x, double y, double z, string property)
+                {
+                    ClickModel(x, y, z);
+                    if (client.State.PropertySelectionId == 0 || !client.State.Properties.Any(item => item.Name == property))
+                        throw new InvalidOperationException("Perspective curve could not be picked: " + property);
+                }
+
+                if (!workspace.ExecuteCommand("VPPICK", true)) throw new InvalidOperationException("VPPICK did not start.");
+                workspace.UpdateLayout();
+                await Task.Delay(100);
+                ClickAt(150, 100);
+                ClickModel(58, -20, 750);
+                if (client.State.PropertySelectionId != 0) throw new InvalidOperationException("A depth-clipped circle was picked.");
+                Select(-184, 130, 120, "直径");
+                Select(160 + 32 / Math.Sqrt(2), 130 + 32 / Math.Sqrt(2), 0, "弧长");
+                Select(207, -180, -100, "半轴 X");
+                Select(-185, -172.5, 0, "顶点数");
+                client.Command("@cancel");
+
+                await StartTransferAsync("VPMOVE");
+                var layer = client.State.Layers.Single(item => item.Name == "0");
+                CadNative.Check(CadNative.wl_layer(client.Handle, layer.Id, 1, 1, 0));
+                ClickModel(-184, 130, 120);
+                await RequirePromptAsync("图层已锁定");
+                CadNative.Check(CadNative.wl_layer(client.Handle, layer.Id, 1, 0, 0));
+                ClickModel(-184, 130, 120);
+                await RequirePromptAsync("模型基点");
+                client.Command("100,200,300");
+                client.Command("@12,25,40");
+                if (client.State.EntityCount != count) throw new InvalidOperationException("Moving the circle created a duplicate.");
+                client.Command("@undo");
+                client.Command("@redo");
+
+                await StartTransferAsync("VPCOPY");
+                ClickModel(-185, -172.5, 0);
+                await RequirePromptAsync("模型基点");
+                client.Command("100,200,300");
+                client.Command("@40,-35,20");
+                client.Command("");
+                if (client.State.EntityCount != count + 1) throw new InvalidOperationException("Perspective polyline copy did not commit.");
+                client.Command("@undo");
+                if (client.State.EntityCount != count) throw new InvalidOperationException("Perspective polyline copy undo failed.");
+                client.Command("@redo");
+                if (client.State.EntityCount != count + 1) throw new InvalidOperationException("Perspective polyline copy redo failed.");
+                foreach (var extension in new[] { ".dwg", ".dxf" })
+                    await client.SaveAsync(Path.Combine(root, "透视曲线编辑" + extension));
+            }
+            finally
+            {
+                client.Command("@cancel");
+                client.Close(document);
+                if (wasVisible) workspace.ShowInspector(previousTab);
+                else if (((FrameworkElement)workspace.FindName("InspectorPanel")).IsVisible) workspace.ToggleProperties();
+                workspace.UpdateLayout();
             }
         }
 

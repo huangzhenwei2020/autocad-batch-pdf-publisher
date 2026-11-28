@@ -1,7 +1,6 @@
 #pragma once
 #include "CadLayoutTools.h"
 #include "CadPerspectivePoints.h"
-#include "Core/Entity/LineEntity.hpp"
 #include "Core/Entity/PointEntity.hpp"
 #include "Document/Command/CopyCommand.h"
 #include "Document/Command/MoveCommand.h"
@@ -18,7 +17,7 @@ public:
     {
         if (!m_issue.empty()) return m_issue;
         if (!m_viewport) return "单击要查看的透视视口内部，Esc 退出";
-        if (!m_selected) return "在透视视口内点选模型点或直线，Esc 退出";
+        if (!m_selected) return "选取模型点、直线、圆、圆弧、椭圆或多段线，Esc 退出";
         if (m_operation != Operation::Inspect)
         {
             if (!m_base) return "指定模型基点，Esc 取消";
@@ -155,17 +154,14 @@ private:
                        const MiniCAD::Math::Vec3& delta, const MiniCAD::Math::Color4& color, MiniCAD::Overlay& overlay)
     {
         using namespace MiniCAD;
-        if (const auto* line = dynamic_cast<const LineEntity*>(&object))
-        {
-            const auto& segment = line->GetLine();
-            ForEachPerspectiveSegment(view, projection, boundary, segment.Start + delta, segment.End + delta,
-                [&](const Point& a, const Point& b) { overlay.AddLine(a, b, color); });
-        }
-        else if (const auto* node = dynamic_cast<const PointEntity*>(&object))
+        if (const auto* node = dynamic_cast<const PointEntity*>(&object))
         {
             const auto paper = projection.ModelPointToPaper(node->GetPoint().Position + delta);
             if (paper && view.ContainsPaper(*paper)) overlay.AddPoint(*paper, color);
+            return;
         }
+        ForEachPerspectiveCurveSegment(object, view, projection, boundary, delta,
+            [&](const Point& a, const Point& b) { overlay.AddLine(a, b, color); });
     }
 
     const MiniCAD::ViewportEntity* View(const MiniCAD::Scene& scene) const
@@ -186,8 +182,8 @@ private:
         const auto boundary = PerspectivePaperBoundary(view);
         const Point hit{paper.x, paper.y, view.GetCenter().z};
         const double radius = 6 * pixel;
-        uint64_t pointId = 0, lineId = 0;
-        double bestPoint = radius * radius, bestLine = bestPoint;
+        uint64_t pointId = 0, curveId = 0;
+        double bestPoint = radius * radius, bestCurve = bestPoint;
         scene.ForEachObject([&](const Object& object)
         {
             const auto* entity = dynamic_cast<const Entity*>(&object);
@@ -199,20 +195,19 @@ private:
                 const double distance = (*candidate - hit).LengthSq();
                 if (distance < bestPoint) { bestPoint = distance; pointId = entity->GetID(); }
             }
-            else if (const auto* line = dynamic_cast<const LineEntity*>(entity))
+            else if (entity->AsCurveEntity() && projection.BoundsMayHitPaper(entity->GetBoundingBox(), hit, radius))
             {
-                const auto& segment = line->GetLine();
-                ForEachPerspectiveSegment(view, projection, boundary, segment.Start, segment.End, [&](const Point& a, const Point& b)
+                ForEachPerspectiveCurveSegment(*entity, view, projection, boundary, {}, [&](const Point& a, const Point& b)
                 {
                     const auto v = b - a;
                     const double length = v.LengthSq();
                     const double t = length > 0 ? std::clamp(Math::Dot(hit - a, v) / length, 0.0, 1.0) : 0;
                     const double distance = (hit - (a + v * t)).LengthSq();
-                    if (distance < bestLine) { bestLine = distance; lineId = entity->GetID(); }
+                    if (distance < bestCurve) { bestCurve = distance; curveId = entity->GetID(); }
                 });
             }
         });
-        return pointId && std::sqrt(bestPoint) <= std::sqrt(bestLine) + pixel ? pointId : lineId;
+        return pointId && std::sqrt(bestPoint) <= std::sqrt(bestCurve) + pixel ? pointId : curveId;
     }
 
     uint64_t m_layout, m_viewport = 0, m_selected = 0;
