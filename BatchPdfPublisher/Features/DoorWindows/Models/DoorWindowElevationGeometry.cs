@@ -80,6 +80,11 @@ namespace BatchPdfPublisher.Models
                 if(cell.Opening=="双扇平开")cell.Opening=cell.Left<(left+right)/2d?"左平开":"右平开";
             }
             MarkDoorCells(item, cells, left, right);
+            if (item.UseCombinedOpeningPanelDefaults && item.ElevationType == "门联窗"
+                && ((item.DivisionPreset ?? string.Empty).Trim() != "自定义" || string.IsNullOrWhiteSpace(item.CustomCellLayout)))
+            {
+                foreach (var cell in cells) cell.Material = cell.IsDoor ? "实板" : "玻璃";
+            }
             result.Cells.AddRange(cells);
             if (item.HasInstallationGap && gap > 0d) result.Lines.AddRange(BuildInstallationGapOutline(cells, gap));
             AddCellBoundaryLines(result, cells, item);

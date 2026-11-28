@@ -36,7 +36,7 @@ namespace BatchPdfPublisher.BuildingModel
             if(source.Count==0)return false;target.Push(DoorWindowElevationGeometryBuilder.SerializeCellLayout(Cells));
             Cells=DoorWindowElevationGeometryBuilder.ParseCellLayout(source.Pop());return true;
         }
-        public bool Split(IEnumerable<int> indices,bool vertical,int count,out string error)
+        public bool Split(IEnumerable<int> indices,bool vertical,int count,out string error,bool glazeNewWindowCells=false)
         {
             var selected=new HashSet<int>(indices);count=Math.Max(2,Math.Min(20,count));
             return Edit(cells=> {
@@ -48,7 +48,9 @@ namespace BatchPdfPublisher.BuildingModel
                         Right=vertical ? c.Left+(c.Right-c.Left)*(i+1)/count : c.Right,
                         Bottom=vertical ? c.Bottom : c.Bottom+(c.Top-c.Bottom)*i/count,
                         Top=vertical ? c.Top : c.Bottom+(c.Top-c.Bottom)*(i+1)/count,
-                        IsDoor=i==0 && c.IsDoor,Material=c.Material,Opening=c.Opening });
+                        IsDoor=i==0 && c.IsDoor,
+                        Material=glazeNewWindowCells && i>0 && c.IsDoor && (c.Material=="实板" || c.Material=="无") ? "玻璃" : c.Material,
+                        Opening=c.Opening });
                 }cells.AddRange(extra);
             },out error);
         }

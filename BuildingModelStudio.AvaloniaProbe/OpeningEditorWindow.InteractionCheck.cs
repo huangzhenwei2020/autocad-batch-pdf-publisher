@@ -9,6 +9,80 @@ namespace BuildingModelStudio.AvaloniaProbe;
 
 internal sealed partial class OpeningEditorWindow
 {
+    internal async Task RunCombinedPanelMaterialsCheckAsync()
+    {
+        void Check(bool success,string message){if(!success)throw new InvalidOperationException(message);}
+        void Select(params int[] indices)
+        {
+            _canvas.Selected.Clear();
+            _canvas.Selected.UnionWith(indices);
+            _canvas.Notify(false);
+        }
+        async Task Flush(){_timer.Stop();await PreviewAsync();await Task.Delay(150);}
+
+        await Task.Delay(200);
+        Check(_canvas.State.Cells.Select(c=>c.Material).SequenceEqual(new[]{"实板","玻璃"}),"内置门联窗材料异常。");
+        _presets.SelectedItem="单格";
+        await Flush();
+        _divisionCount.Text="4";
+        RaiseEvent(new KeyEventArgs {RoutedEvent=KeyDownEvent,Key=Key.X});
+        await Flush();
+        Check(_canvas.State.Cells.Select(c=>c.Material).SequenceEqual(new[]{"实板","玻璃","玻璃","玻璃"}),"门扇等分生成的窗格缺少默认玻璃。");
+        _presets.SelectedItem="四扇等分";
+        await Flush();
+        Check(_canvas.State.Cells.Select(c=>c.Material).SequenceEqual(new[]{"实板","玻璃","玻璃","玻璃"}),"门联窗四等分缺少默认玻璃。");
+        Check(OpeningConstruction.Build(_opening,_draft,200).Count(p=>p.Kind=="glass")==3 && _preview.FrameRendered,
+            "四等分结果未生成三块玻璃并完成三维预览。");
+        await SaveCheckImage("mlc2424-four-panels.png");
+
+        Check(_canvas.State.Split(new[]{1},false,2,out var error),error??"窗格分隔失败。");
+        _canvas.Notify();
+        await Flush();
+        Check(_canvas.State.Cells.Count(c=>c.Material=="玻璃")==4,"窗格分隔没有继承玻璃。");
+        RaiseEvent(new KeyEventArgs {RoutedEvent=KeyDownEvent,Key=Key.Z,KeyModifiers=KeyModifiers.Control});
+        await Flush();
+        Check(_canvas.State.Cells.Count==4,"分格撤销失败。");
+
+        Select(1);
+        _material.SelectedItem="无";
+        _openingMode.SelectedItem="上悬";
+        await Flush();
+        Check(OpeningConstruction.Build(_opening,_draft,200).Count(p=>p.Kind=="glass")==2,"显式无材料被覆盖。");
+        Select(1,2,3);
+        _material.SelectedItem="玻璃";
+        await Flush();
+        Check(_canvas.State.Cells[1].Opening=="上悬" && _canvas.State.Cells.Skip(2).All(c=>!c.IsDoor && c.Opening=="固定"),
+            "批量补玻璃覆盖了其他窗格属性。");
+        this.GetVisualDescendants().OfType<Avalonia.Controls.Button>().Single(b=>b.Name=="ApplyOpeningEditor")
+            .RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
+        await _applyTask;
+        Check(_closed,"门联窗分格未提交。");
+    }
+
+    internal async Task RunLegacyGlazingCheckAsync()
+    {
+        async Task Flush(){_timer.Stop();await PreviewAsync();await Task.Delay(100);}
+        void Click(Avalonia.Controls.Button button)=>button.RaiseEvent(
+            new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
+        await Task.Delay(180);
+        await Flush();
+        var original=DoorWindowElevationGeometryBuilder.SerializeCellLayout(_canvas.State.Cells);
+        if(_fillEmptyWindowCells.Content?.ToString()!="补玻璃（4 格）"||!_fillEmptyWindowCells.IsVisible)
+            throw new InvalidOperationException("旧 MLC2730 未显示四格补玻璃入口。");
+        Click(_fillEmptyWindowCells);await Flush();
+        if(_fillEmptyWindowCells.IsVisible||OpeningConstruction.Build(_opening,_draft,200).Count(p=>p.Kind=="glass")!=8)
+            throw new InvalidOperationException("未生成八格玻璃。");
+        RaiseEvent(new KeyEventArgs {RoutedEvent=KeyDownEvent,Key=Key.Z,KeyModifiers=KeyModifiers.Control});
+        await Flush();
+        if(DoorWindowElevationGeometryBuilder.SerializeCellLayout(_canvas.State.Cells)!=original||!_fillEmptyWindowCells.IsVisible)
+            throw new InvalidOperationException("补玻璃无法一步撤销。");
+        Click(_fillEmptyWindowCells);await Flush();
+        await SaveCheckImage("mlc2730-legacy-glazing.png");
+        Click(this.GetVisualDescendants().OfType<Avalonia.Controls.Button>().Single(b=>b.Name=="ApplyOpeningEditor"));
+        await _applyTask;
+        if(!_closed)throw new InvalidOperationException("旧门联窗材料未提交。");
+    }
+
     internal async Task RunRoundedFitApplyCheckAsync(bool reject,bool compact=false)
     {
         if(compact){Width=1120;Height=720;}

@@ -245,6 +245,40 @@ namespace BatchPdfPublisher.BuildingModel
                 if(opening.Sill+opening.Height>(wall.Height>0?wall.Height:reference.Height)+.5){error="门窗顶部超出引用层墙高。";return false;}
             Commit(candidate);return true;
         }
+        public bool TryCopyOpening(string sourceId,string wallId,double offset,out string id,out string error)
+        {
+            id=null;
+            if(!Finite(offset)){error="门窗位置必须是有效数值。";return false;}
+            var wall=Model.Walls.FirstOrDefault(w=>Same(w.Id,wallId));
+            if(wall==null){error="请选择可编辑的宿主墙。引用楼层请到来源层操作。";return false;}
+
+            var sourceModel=Model.Openings.Any(o=>Same(o.Id,sourceId))?Model:StandardStoreyLayout.Materialize(Model);
+            var source=sourceModel.Openings.FirstOrDefault(o=>Same(o.Id,sourceId));
+            if(source==null){error="找不到要复制的门窗。";return false;}
+
+            var candidate=Clone(Model);
+            var opening=source.CopyAt("O-"+Guid.NewGuid().ToString("N"),wall.Id,offset);
+            candidate.Openings.Add(opening);
+            var construction=sourceModel.OpeningOverrides?.FirstOrDefault(o=>Same(o.OpeningId,source.Id));
+            if(construction!=null)
+            {
+                candidate.OpeningOverrides=candidate.OpeningOverrides??new List<OpeningInstanceOverride>();
+                candidate.OpeningOverrides.Add(new OpeningInstanceOverride {
+                    OpeningId=opening.Id,TypeCode=construction.TypeCode,
+                    Definition=construction.Definition==null?null:OpeningConstruction.Copy(construction.Definition)
+                });
+            }
+            error=ValidateOpeningGeometry(candidate,wall,opening)
+                ??OpeningConstruction.Validate(opening,OpeningConstruction.Resolve(candidate,opening));
+            if(error!=null)return false;
+            if(candidate.Storeys.Any(s=>Same(s.TemplateStoreyId,wall.StoreyId)
+                && opening.Sill+opening.Height>(wall.Height>0?wall.Height:s.Height)+.5))
+            {error="门窗顶部超出引用层墙高。";return false;}
+            Commit(candidate);
+            id=opening.Id;
+            return true;
+        }
+
         public bool TryPlacePendingOpening(string storeyId,string sourceHandle,string wallId,double offset,out string id,out string error)
         {
             id=null;error=null;

@@ -263,6 +263,7 @@ internal sealed partial class ProbeWindow
         _workspaces.SelectedIndex=1;await Task.Delay(100);
         await RunWallSelectionPreviewCheckAsync();
         await RunOpeningPlacementCheckAsync();
+        await CheckOpeningCopyCommandAsync();
         foreach(var name in new[]{"door","window"}) {
             var atlas=BuildingModelJson.LoadModel(System.IO.Path.GetFullPath($".artifacts/opening-symbols/{name}-atlas.json"));
             var axes=BuildingAxisLayout.Resolve(atlas);foreach(var axis in axes)axis.Hidden=true;atlas.Axes=axes;
@@ -270,6 +271,57 @@ internal sealed partial class ProbeWindow
             _planCanvas.Fit();await Task.Delay(300);await SaveOpeningCheck(name+"-atlas.png");
         }
         _workspaces.SelectedIndex=0;_viewport.ResetView();_viewport.SelectElement("w0");_viewport.FrameSelection();await Task.Delay(300);
+    }
+
+    private async Task CheckOpeningCopyCommandAsync()
+    {
+        void Check(bool ok,string message){if(!ok)throw new InvalidOperationException(message);}
+        var source=new OpeningModel {Id="source",Code="M0921",Kind="门",HostWallId="wall",Width=900,Height=2100,Offset=1300,
+            ThresholdHeight=40,PlanFlipAlong=true,PlanFlipNormal=true,PlanOpenAngle=45,OpenIn3D=true,PlanLabelAlong=30};
+        var model=new BuildingModelDocument {Storeys=new(){new StoreyModel {Id="1F",Height=3000}},
+            Walls=new(){new WallModel {Id="wall",StoreyId="1F",X2=8000,Thickness=200}},Openings=new(){source}};
+        var definition=OpeningConstruction.Default(source);
+        definition.DivisionPreset="自定义";definition.CustomCellLayout="0,0,900,2100,左平开,1,0,玻璃";
+        model.OpeningOverrides.Add(new OpeningInstanceOverride {OpeningId=source.Id,TypeCode=source.Code,Definition=definition});
+        _session=new(model);_workspaces.SelectedIndex=1;SetPlanTool(PlanTool.Select);
+        await RefreshModelAsync("CO 门窗校对");_planCanvas.Fit();SelectById(source.Id);
+        var before=BuildingModelJson.ToJson(_session.Model);
+        var pointer=new Pointer(889,PointerType.Mouse,true);
+        void Click(Control canvas,Point point)
+        {
+            var root=canvas.TranslatePoint(point,this)!.Value;
+            canvas.RaiseEvent(new PointerPressedEventArgs(canvas,pointer,this,root,0,
+                new PointerPointProperties(RawInputModifiers.LeftMouseButton,PointerUpdateKind.LeftButtonPressed),KeyModifiers.None,1));
+            canvas.RaiseEvent(new PointerReleasedEventArgs(canvas,pointer,this,root,1,
+                new PointerPointProperties(RawInputModifiers.None,PointerUpdateKind.LeftButtonReleased),KeyModifiers.None,MouseButton.Left));
+        }
+        ExecuteCommand("CO");
+        Click(_planCanvas,_planCanvas.ModelToScreen(new PointModel(1300,0)));
+        Check(BuildingModelJson.ToJson(_session.Model)==before,"CO 重叠时仍复制了门窗。");
+        Click(_planCanvas,_planCanvas.ModelToScreen(new PointModel(3900,0)));
+        await Task.Delay(250);
+        var copy=_session.Model.Openings.Single(o=>o.Id!=source.Id);
+        var copiedType=OpeningConstruction.Resolve(_session.Model,copy);
+        Check(Math.Abs(copy.Offset-3900)<1&&copy.HostWallId=="wall"&&copy.Code==source.Code
+            &&copy.ThresholdHeight==40&&copy.PlanFlipAlong&&copy.PlanFlipNormal&&copy.PlanOpenAngle==45
+            &&copy.OpenIn3D==true&&copy.PlanLabelAlong==30&&copiedType.CustomCellLayout==definition.CustomCellLayout,
+            "平面 CO 丢失门窗几何或实例参数。");
+        CancelActiveCommand();
+        Check(_session.Undo()&&BuildingModelJson.ToJson(_session.Model)==before&&_session.Redo(),"CO 无法一步撤销和重做。");
+        await RefreshModelAsync("CO 三维校对");_workspaces.SelectedIndex=0;SelectById(source.Id);
+        _viewport.ResetView();await Task.Delay(200);
+        ExecuteCommand("CO");
+        var location=_viewport.ProjectModelPoint(6200,0,1400)
+            ?? throw new InvalidOperationException("无法投影三维目标墙。");
+        var input=this.GetVisualDescendants().OfType<Border>().Single(b=>b.Name=="ModelViewportInput");
+        Click(input,location);
+        await Task.Delay(250);
+        var copiedIn3D=_session.Model.Openings.Single(o=>o.Id!=source.Id&&o.Id!=copy.Id);
+        Check(Math.Abs(copiedIn3D.Offset-6200)<250&&copiedIn3D.HostWallId=="wall","三维 CO 目标墙落点不正确。");
+        var saved=BuildingModelJson.FromJson(BuildingModelJson.ToJson(_session.Model));
+        Check(saved.Openings.Count==3&&saved.OpeningOverrides.Count==3,"CO 保存回读丢失门窗或实例做法。");
+        CancelActiveCommand();
+        Console.WriteLine("OPENING_COPY_COMMAND_OK CO plan and3D wallPick overlap rejection override attributes undo redo reload");
     }
     private async Task SaveOpeningCheck(string name)
     {

@@ -206,6 +206,7 @@ internal sealed partial class ProbeWindow : Window
         };
         _planCanvas.OpeningRequested += async (kind, wallId, offset) =>
         {
+            if(_openingCopySourceId!=null){await CopyOpeningAtAsync(wallId,offset);return;}
             var choice=_planCanvas.PlacementOpeningChoice;if(choice==null)return;
             var type=choice.Type;var opening=choice.CreateOpening(wallId,offset);
             if (!_session.TryAddOpening(opening,type, out var id, out var error))
@@ -419,13 +420,15 @@ internal sealed partial class ProbeWindow : Window
 
         var viewportHost = new Grid();
         viewportHost.Children.Add(_viewport);
-        var viewportInput = new Border { Background = Brushes.Transparent };
+        var viewportInput = new Border { Name="ModelViewportInput",Background = Brushes.Transparent };
         viewportInput.PointerPressed += (_, e) =>
         {
             if(OutdoorPress(e))return;
             _additiveSceneSelection=e.KeyModifiers.HasFlag(KeyModifiers.Control)||e.KeyModifiers.HasFlag(KeyModifiers.Shift);
             var buttons = e.GetCurrentPoint(viewportInput).Properties;
             var selecting = buttons.IsLeftButtonPressed;
+            if(selecting&&_openingCopySourceId!=null)
+            {e.Handled=true;_ = CopyOpeningInViewportAsync(e.GetPosition(_viewport));return;}
             if(selecting && e.ClickCount==2 && !_movingInViewport) {
                 var id=_viewport.PickElement(e.GetPosition(_viewport));
                 if(StandardStoreyLayout.Materialize(_session.Model).Openings.Any(o=>o.Id==id)) {
@@ -666,6 +669,7 @@ internal sealed partial class ProbeWindow : Window
         }
         _workspaces.SelectionChanged += (_, e) => {
             if(!ReferenceEquals(e.Source,_workspaces))return;
+            CancelOpeningCopy();
             UpdateWorkspaceTabs();RefreshProperties();
             OutdoorWorkspaceChanged();
             if(_workspaces.SelectedIndex==2) { FocusDrawingBrowser();_drawingPreviewTask=RefreshDrawingViewAsync(); }
@@ -1934,6 +1938,7 @@ internal sealed partial class ProbeWindow : Window
 
     private void SetPlanTool(PlanTool tool)
     {
+        CancelOpeningCopy();
         StopOutdoorDrawing();
         EndAxisEditing();
         _planCanvas.Tool = tool;
@@ -2087,11 +2092,18 @@ internal sealed partial class ProbeWindow : Window
     private void BeginMove(bool copy = false)
     {
         StopOutdoorDrawing();
+        if(copy&&_selectedId!=null&&_workspaces.SelectedIndex is 0 or 1)
+        {
+            var model=StandardStoreyLayout.Materialize(_session.Model);
+            var opening=model.Openings.FirstOrDefault(o=>o.Id==_selectedId);
+            if(opening!=null){BeginOpeningCopy(opening,model);return;}
+        }
+        CancelOpeningCopy();
         if (_session.Model.Slabs.Any(s => s.Id == _selectedId)) _workspaces.SelectedIndex = 1;
         if (_session.Model.Walls.All(w => w.Id != _selectedId)
             && _session.Model.Slabs.All(s => s.Id != _selectedId)
             && _session.Model.Columns.All(c=>c.Id!=_selectedId)&&_session.Model.Beams.All(b=>b.Id!=_selectedId))
-        { _status.Text = "请先选择要操作的墙、楼板、梁或柱。"; return; }
+        { _status.Text = copy?"请先选择要复制的门窗、墙、楼板、梁或柱。":"请先选择要操作的墙、楼板、梁或柱。"; return; }
         _gizmo.Cancel();
         _commandInput.PlaceholderText = "可输入 @ΔX,ΔY 精确提交，例如 @300,0";
         if (_workspaces.SelectedIndex == 1)
@@ -2111,6 +2123,7 @@ internal sealed partial class ProbeWindow : Window
 
     private void CancelMove()
     {
+        CancelOpeningCopy();
         _movingInViewport = false;
         _copyingInViewport = false;
         _viewportMoveBase = null;

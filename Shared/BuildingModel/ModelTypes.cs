@@ -175,6 +175,13 @@ namespace BatchPdfPublisher.BuildingModel
         public double PlanLabelAlong { get; set; }
         public double PlanLabelNormal { get; set; }
 
+        internal OpeningModel CopyAt(string id,string hostWallId,double offset)
+        {
+            var copy=(OpeningModel)MemberwiseClone();
+            copy.Id=id;copy.HostWallId=hostWallId;copy.Offset=offset;
+            return copy;
+        }
+
         /// <summary>组合门窗只显示闭合构件；旧模型误标为门时仍按 MLC 编号识别。</summary>
         public bool HasSwingLeaf()
         {

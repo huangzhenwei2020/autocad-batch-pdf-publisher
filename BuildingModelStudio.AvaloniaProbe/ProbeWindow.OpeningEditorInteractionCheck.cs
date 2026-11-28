@@ -1,6 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.VisualTree;
 using BatchPdfPublisher.BuildingModel;
+using BatchPdfPublisher.Models;
 
 namespace BuildingModelStudio.AvaloniaProbe;
 
@@ -9,6 +10,8 @@ internal sealed partial class ProbeWindow
     private async Task RunOpeningEditorInteractionCheckAsync()
     {
         Directory.CreateDirectory(".artifacts/opening-editor");
+        await CheckCombinedPanelMaterialsAsync();
+        await CheckLegacyGlazingAsync();
         var shortcutOpening=new OpeningModel {Id="shortcuts",Code="MLC3030",Kind="门联窗",Width=3000,Height=3000};
         var shortcutType=OpeningConstruction.Default(shortcutOpening);shortcutType.DivisionPreset="单格";shortcutType.CustomCellLayout=null;
         var shortcutWindow=new OpeningEditorWindow(shortcutOpening,shortcutType,1,null);
@@ -35,6 +38,57 @@ internal sealed partial class ProbeWindow
         await CheckEditorCollectionsAsync();
         await CheckRoundedFitApplyAsync();
         await CheckPendingOpeningSizesAsync();
+    }
+
+    private async Task CheckCombinedPanelMaterialsAsync()
+    {
+        var type=OpeningPlacementCatalog.BuiltIns().Single(e=>e.Type.Code=="MLC2424").Type;
+        var opening=new OpeningModel {Id="mlc2424-panels",Code=type.Code,Kind=type.Kind,Width=type.Width,Height=type.Height};
+        var editor=new OpeningEditorWindow(opening,type,1,null);
+        if(Width<1300){editor.Width=1120;editor.Height=720;}
+        Exception? failure=null;
+        editor.Opened+=async(_,_)=>{try{await editor.RunCombinedPanelMaterialsCheckAsync();}catch(Exception ex){failure=ex;editor.Close();}};
+        var result=await editor.ShowDialog<OpeningEditResult?>(this);
+        if(failure!=null)System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(failure);
+        if(result==null)throw new InvalidOperationException("门联窗编辑器未返回应用的类型。");
+
+        var model=SampleModelFactory.CreateEmptyModel("MLC2424 分格");
+        model.OpeningTypes.Add(result.Type);
+        var saved=BuildingModelJson.FromJson(BuildingModelJson.ToJson(model)).OpeningTypes.Single();
+        var parts=OpeningConstruction.Build(opening,saved,200);
+        if(parts.Count(p=>p.Kind=="glass")!=3 || parts.Count(p=>p.Kind=="door" && p.Cell.IsDoor)!=1)
+            throw new InvalidOperationException("门联窗保存回读后分格材料错误。");
+        Console.WriteLine("OPENING_COMBINED_PANEL_MATERIALS_OK MLC2424 fourPanels split undo clear intentionally batchGlass preservesOpening preview apply JSON");
+    }
+
+    private async Task CheckLegacyGlazingAsync()
+    {
+        var originalSession=_session;var originalSelection=_selectedId;
+        var model=new BuildingModelDocument {Storeys=new(){new StoreyModel {Id="1F",Height=3400}},
+            Walls=new(){new WallModel {Id="host",StoreyId="1F",X2=5400,Thickness=200}},
+            Openings=new(){new OpeningModel {Id="legacy-mlc",Code="MLC2730",Kind="门联窗",HostWallId="host",Offset=2700,Width=2700,Height=3000}}};
+        var type=new OpeningTypeModel {Code="MLC2730",Kind="门联窗",ElevationType="门联窗",Width=2700,Height=3000,HasInstallationGap=false,
+            DivisionPreset="自定义",CustomCellLayout="0,0,600,2400,固定,0,0,无|0,2400,600,3000,固定,0,0,无|600,0,1350,2400,左平开,1,0,玻璃|600,2400,1350,3000,固定,0,0,玻璃|1350,0,2100,2400,右平开,1,0,玻璃|1350,2400,2100,3000,固定,0,0,玻璃|2100,0,2700,2400,固定,0,0,无|2100,2400,2700,3000,固定,0,0,无"};
+        model.OpeningTypes.Add(type);
+        try
+        {
+            _session=new(model);await RefreshModelAsync("旧 MLC2730 补玻璃测试");
+            var before=BuildingModelJson.ToJson(_session.Model);
+            _openingEditorCheckDriver=w=>w.RunLegacyGlazingCheckAsync();
+            await OpenOpeningEditorAsync("legacy-mlc");
+            var after=BuildingModelJson.ToJson(_session.Model);
+            var loaded=BuildingModelJson.FromJson(after);
+            if(loaded.OpeningTypes.Single().CustomCellLayout!=type.CustomCellLayout.Replace(",无",",玻璃")
+                ||!_session.Undo()||BuildingModelJson.ToJson(_session.Model)!=before
+                ||!_session.Redo()||BuildingModelJson.ToJson(_session.Model)!=after)
+                throw new InvalidOperationException("补玻璃写入了其他分格属性，或无法在模型中一步撤销重做。");
+            Console.WriteLine("OPENING_LEGACY_GLAZING_OK MLC2730 fourEmpty toEightGlass preservesLayout andHinges preview apply reload undo redo");
+        }
+        finally
+        {
+            _openingEditorCheckDriver=null;_session=originalSession;_selectedId=originalSelection;
+            await RefreshModelAsync("恢复模型");
+        }
     }
 
     private async Task CheckRoundedFitApplyAsync()

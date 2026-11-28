@@ -738,16 +738,24 @@ internal sealed class ModelViewport : OpenGlControlBase
         Interlocked.Increment(ref _renderedFrameCount);
     }
 
-    private string? Pick(Point point)
+    private string? Pick(Point point)=>PickSurfaceAt(point,out _);
+
+    internal string? PickPlanSurface(Point point,out PointModel position)
     {
+        var id=PickSurfaceAt(point,out var hit);
+        var center=_volume.Center;
+        var scale=(float)(10d/Math.Max(1d,_volume.Diagonal));
+        position=new PointModel(hit.X/scale+center.X,center.Y-hit.Z/scale);
+        return id;
+    }
+
+    private string? PickSurfaceAt(Point point,out Vector3 hit)
+    {
+        hit=default;
         if (Bounds.Width <= 0 || Bounds.Height <= 0) return null;
-        var model = Matrix4x4.Identity;
-        var view = CameraView();
-        var projection = Matrix4x4.CreatePerspectiveFieldOfView(0.8f,
-            (float)(Bounds.Width / Bounds.Height), 0.1f, 100f);
         var x = (float)(point.X / Bounds.Width * 2 - 1);
         var y = (float)(1 - point.Y / Bounds.Height * 2);
-        return PickNormalized(_snapshot, model * view * projection, x, y,_frozenElements);
+        return PickSurfaceNormalized(_snapshot,ViewProjection(),x,y,out hit,_frozenElements);
     }
 
     private static string? PickNormalized(MeshSnapshot snapshot, Matrix4x4 transform, float x, float y,ISet<string>? frozen=null)

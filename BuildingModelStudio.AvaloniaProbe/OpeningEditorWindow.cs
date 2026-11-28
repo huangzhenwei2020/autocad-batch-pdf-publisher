@@ -39,6 +39,7 @@ internal sealed partial class OpeningEditorWindow : Window
         FormatString="0",ParsingNumberStyle=NumberStyles.Integer,Width=54,Height=32,MinHeight=32,ShowButtonSpinner=false,ClipValueToMinMax=true};
     private readonly Dictionary<string,OpeningTypeModel> _templates=new();
     private readonly ComboBox _material=new() { ItemsSource=new[]{"玻璃","实板","百叶","无"},SelectedIndex=0 };
+    private readonly Button _fillEmptyWindowCells=new() { Name="FillEmptyWindowCells",IsVisible=false };
     private readonly ComboBox _openingMode=new() { ItemsSource=new[]{"固定","左平开","右平开","左推拉","右推拉","双向推拉","上悬","下悬","百叶","无"},SelectedIndex=0 };
     private readonly CheckBox _door=new() { Content="此格为门扇" },_deleted=new() {Content="删除此格"};
     private readonly CheckBox _outer=new() {Content="外框"},_mullion=new() {Content="分隔框"},_gap=new() {Content="安装缝"};
@@ -174,7 +175,12 @@ internal sealed partial class OpeningEditorWindow : Window
         _planStyle.SelectionChanged+=(_,_)=>{if(_fields["planInset"].Parent is Control row)row.IsVisible=_planStyle.SelectedItem?.ToString()=="梯形凸窗";if(!_updating)QueuePreview();};
         Label("分格预设");
         _presets=new ComboBox {ItemsSource=new[]{"单格","双扇等分","三扇等分","四扇等分","五扇等分","上亮","侧亮","上亮+侧亮","拱形亮子","门联窗","自定义"},SelectedIndex=0};panel.Children.Add(_presets);
-        _presets.SelectionChanged+=(_,_)=>{if(_updating||_presets.SelectedItem?.ToString()=="自定义")return;StoreFace();var preset=_presets.SelectedItem?.ToString();if(_face.SelectedIndex==0){_draft.DivisionPreset=preset;_draft.CustomCellLayout=null;}LoadFace(preset);StoreFace();QueuePreview();};
+        _presets.SelectionChanged+=(_,_)=>{
+            if(_updating||_presets.SelectedItem is not string preset||preset=="自定义")return;
+            StoreFace();
+            if(_face.SelectedIndex==0){_draft.DivisionPreset=preset;_draft.CustomCellLayout=null;}
+            LoadFace(preset);StoreFace();QueuePreview();
+        };
         var doorOptions=new StackPanel {Spacing=8};panel.Children.Add(doorOptions);
         doorOptions.Children.Add(new TextBlock {Text="门框形式 / 门扇靠位  [N]",FontWeight=FontWeight.Bold});doorOptions.Children.Add(_doorFrame);doorOptions.Children.Add(_doorPlacement);
         ToolTip.SetTip(_doorFrame,"N：N型 / 口型切换；保留门扇靠位。");
@@ -182,7 +188,11 @@ internal sealed partial class OpeningEditorWindow : Window
         void DoorVisibility(){doorOptions.IsVisible=(_kind.SelectedItem?.ToString()??"").Contains("门");if(_fields["doorEdge"].Parent is Control row)row.IsVisible=doorOptions.IsVisible;}
         _kind.SelectionChanged+=(_,_)=>DoorVisibility();
         panel=divisionPanel;
-        Label("面板参数");panel.Children.Add(new TextBlock {Text="面板材料"});panel.Children.Add(_material);panel.Children.Add(new TextBlock {Text="开启方式  [K]"});panel.Children.Add(_openingMode);
+        Label("面板参数");panel.Children.Add(new TextBlock {Text="面板材料"});panel.Children.Add(_material);
+        _fillEmptyWindowCells.Click+=(_,_)=>RunDraftCommand(FillEmptyWindowCells);
+        ToolTip.SetTip(_fillEmptyWindowCells,"把门联窗主面中材料为「无」的窗格填为玻璃。门扇、已删除格及其他材料保留。");
+        panel.Children.Add(_fillEmptyWindowCells);
+        panel.Children.Add(new TextBlock {Text="开启方式  [K]"});panel.Children.Add(_openingMode);
         ToolTip.SetTip(_openingMode,"K：依次切换所选分格的开启方式。");
         var paneFlags=new WrapPanel();_door.FontSize=_deleted.FontSize=12;_door.Margin=new Thickness(0,0,12,0);paneFlags.Children.Add(_door);paneFlags.Children.Add(_deleted);panel.Children.Add(paneFlags);
         Field("cellWidth","当前格宽 mm",opening.Width);Field("cellHeight","当前格高 mm",opening.Height);
@@ -202,7 +212,10 @@ internal sealed partial class OpeningEditorWindow : Window
         var constructionPanel=panel;panel=new StackPanel {Spacing=7};constructionPanel.Children.Add(panel);var bayPanel=panel;
         Label("飘窗转折与封板");panel.Children.Add(_left);Field("leftDepth","左侧进深",type.BayLeftDepth);panel.Children.Add(_right);Field("rightDepth","右侧进深",type.BayRightDepth);
         Field("bayCap","飘窗上下封板厚度",type.BayCapThickness??100);
-        _kind.SelectionChanged+=(_,_)=>bayPanel.IsVisible=_kind.SelectedItem?.ToString()=="凸窗";
+        _kind.SelectionChanged+=(_,_)=>{
+            bayPanel.IsVisible=_kind.SelectedItem?.ToString()=="凸窗";
+            if(_canvas.State!=null)UpdateEmptyWindowCellsAction();
+        };
         Tab("模板");Label("项目模板");var chooser=_templateChooser=new ComboBox {ItemsSource=_templates.Keys.ToArray()};panel.Children.Add(chooser);
         var use=new Button {Content="套用所选模板"};use.Click+=(_,_)=>{if(chooser.SelectedItem is not string name||!_templates.TryGetValue(name,out var template))return;var copy=OpeningConstruction.Copy(template);copy.Code=_draft.Code;ScaleTemplate(copy);_draft=copy;LoadControls();LoadFace();QueuePreview();};panel.Children.Add(use);
         var templateName=new TextBox {PlaceholderText="模板名称"};panel.Children.Add(templateName);var saveTemplate=new Button {Content="保存为项目模板（应用后保存）"};saveTemplate.Click+=(_,_)=>{if(!ReadDraft()||string.IsNullOrWhiteSpace(templateName.Text))return;StoreFace();_templates[templateName.Text.Trim()]=OpeningConstruction.Copy(_draft);chooser.ItemsSource=_templates.Keys.ToArray();_status.Text="模板已加入草稿，应用后保存。";};panel.Children.Add(saveTemplate);
@@ -225,7 +238,10 @@ internal sealed partial class OpeningEditorWindow : Window
         foreach(var combo in new[]{_kind,_planStyle,_presets,_material,_openingMode,_doorFrame,_doorPlacement,_position,_left,_right})combo.HorizontalAlignment=HorizontalAlignment.Stretch;
         Content=root;
         _canvas.Changed+=()=>{StoreFace();if(!_applyingCellSize)QueuePreview();};_canvas.SelectionChanged+=UpdateSelection;_canvas.Error+=message=>_status.Text=message;
-        _material.SelectionChanged+=(_,_)=>ApplyCell();_openingMode.SelectionChanged+=(_,_)=>ApplyCell();_door.IsCheckedChanged+=(_,_)=>ApplyCell();_deleted.IsCheckedChanged+=(_,_)=>ApplyCell();
+        _material.SelectionChanged+=(_,_)=>{if(_material.SelectedItem is string material)ApplyCell(c=>c.Material=material);};
+        _openingMode.SelectionChanged+=(_,_)=>{if(_openingMode.SelectedItem is string mode)ApplyCell(c=>c.Opening=mode);};
+        _door.IsCheckedChanged+=(_,_)=>ApplyCell(c=>c.IsDoor=!c.IsDeleted&&_door.IsChecked==true);
+        _deleted.IsCheckedChanged+=(_,_)=>ApplyCell(c=>{c.IsDeleted=_deleted.IsChecked==true;if(c.IsDeleted)c.IsDoor=false;});
         foreach(var box in new[]{_outer,_mullion,_gap})box.IsCheckedChanged+=(_,_)=>{if(!_updating)QueuePreview();};
         _scope.SelectionChanged+=(_,_)=>{if(!_updating)QueuePreview();};
         _sash.IsCheckedChanged+=(_,_)=>{if(!_updating){if(_sash.IsChecked==true && (!Number("sashWidth",out var w)||w<=0))_fields["sashWidth"].Text="50";QueuePreview();}};
@@ -252,7 +268,15 @@ internal sealed partial class OpeningEditorWindow : Window
             {RunDraftCommand(()=>_doorFrame.SelectedIndex=(_doorFrame.SelectedIndex+1)%_doorFrame.Items.Count);e.Handled=true;}
         };
         LoadControls();LoadFace();StoreFace();InitializeDraftHistory();Opened+=(_,_)=>QueuePreview();
-        void Split(bool vertical){if(!int.TryParse(_divisionCount.Text,NumberStyles.Integer,CultureInfo.InvariantCulture,out var n)||n<2||n>20){_status.Text="等分数量须为 2～20 的整数。";return;}if(_canvas.Selected.Count==0)_canvas.Selected.Add(0);if(_canvas.State.Split(_canvas.Selected,vertical,n,out var error)){_canvas.Selected.Clear();_canvas.Notify();}else _status.Text=error;}
+        void Split(bool vertical)
+        {
+            if(!int.TryParse(_divisionCount.Text,NumberStyles.Integer,CultureInfo.InvariantCulture,out var n)||n<2||n>20)
+            {_status.Text="等分数量须为 2～20 的整数。";return;}
+            if(_canvas.Selected.Count==0)_canvas.Selected.Add(0);
+            if(_canvas.State.Split(_canvas.Selected,vertical,n,out var error,glazeNewWindowCells:_draft.ElevationType=="门联窗"))
+            {_canvas.Selected.Clear();_canvas.Notify();}
+            else _status.Text=error;
+        }
     }
     private void RunDraftCommand(Action action)
     {
@@ -358,6 +382,16 @@ internal sealed partial class OpeningEditorWindow : Window
         if(preset!=null){item.DivisionPreset=preset;item.CustomCellLayout=null;}
         var g=DoorWindowElevationGeometryBuilder.Build(item);
         var cells=g.Cells.Select(c=>new DoorWindowLayoutCell {Left=c.Left-g.FrameLeft,Right=c.Right-g.FrameLeft,Bottom=c.Bottom-g.FrameBottom,Top=c.Top-g.FrameBottom,Opening=c.Opening,Material=c.Material,IsDoor=c.IsDoor,IsDeleted=c.IsDeleted}).ToList();
+        if(item.DivisionPreset=="自定义")
+        {
+            // Deleted cells are omitted from generated geometry but are still editable layout data.
+            var savedCells=DoorWindowElevationGeometryBuilder.ParseCellLayout(item.CustomCellLayout);
+            if(savedCells.Any(c=>c.IsDeleted))
+            {
+                var activeIndex=0;
+                cells=savedCells.Select(c=>c.IsDeleted?c:cells[activeIndex++]).ToList();
+            }
+        }
         _canvas.State=new OpeningLayoutEditing(g.FrameRight-g.FrameLeft,g.FrameTop-g.FrameBottom,cells);_canvas.Opening=opening;_canvas.Type=type;_canvas.IsReturnFace=face!=0;
         _canvas.Selected.Clear();_canvas.Selected.Add(0);_canvas.IsEnabled=face==0 || (face==1 ? _draft.BayLeftSide : _draft.BayRightSide)=="窗";_canvas.Notify(false);
     }
@@ -371,17 +405,36 @@ internal sealed partial class OpeningEditorWindow : Window
     {
         _selectionSummary.Text=_canvas.Selected.Count==0 ? "属性 · 未选择面板" : _canvas.Selected.Count==1 ? "属性 · 当前面板" : $"属性 · 已选择 {_canvas.Selected.Count} 个面板";
         _updating=true;var index=_canvas.Selected.FirstOrDefault(-1);
-        if(index>=0 && index<_canvas.State.Cells.Count){var c=_canvas.State.Cells[index];_material.SelectedItem=c.Material;_openingMode.SelectedItem=c.Opening;_door.IsChecked=c.IsDoor;_deleted.IsChecked=c.IsDeleted;
+        if(index>=0 && index<_canvas.State.Cells.Count){var c=_canvas.State.Cells[index];
+            _material.SelectedItem=_canvas.Selected.All(i=>_canvas.State.Cells[i].Material==c.Material)?c.Material:null;
+            _openingMode.SelectedItem=_canvas.Selected.All(i=>_canvas.State.Cells[i].Opening==c.Opening)?c.Opening:null;
+            _door.IsChecked=c.IsDoor;_deleted.IsChecked=c.IsDeleted;
             if(!_applyingCellSize||_pendingEditKey!="cellWidth")_fields["cellWidth"].Text=(c.Right-c.Left).ToString("0",CultureInfo.InvariantCulture);
             if(!_applyingCellSize||_pendingEditKey!="cellHeight")_fields["cellHeight"].Text=(c.Top-c.Bottom).ToString("0",CultureInfo.InvariantCulture);}
         _fields["cellWidth"].IsEnabled=_fields["cellHeight"].IsEnabled=_canvas.Selected.Count==1;
         if(!_applyingCellSize&&!_restoringDraft){_pendingEditKey=null;_lastHistoryKey=null;}
         _updating=false;
+        UpdateEmptyWindowCellsAction();
     }
-    private void ApplyCell()
+    private static bool IsEmptyWindowCell(DoorWindowLayoutCell cell)=>!cell.IsDoor&&!cell.IsDeleted&&cell.Material=="无";
+    private void UpdateEmptyWindowCellsAction()
+    {
+        var count=_loadedFace==0&&Equals(_kind.SelectedItem,"门联窗")
+            ?_canvas.State.Cells.Count(IsEmptyWindowCell):0;
+        _fillEmptyWindowCells.IsVisible=count>0;
+        _fillEmptyWindowCells.Content=$"补玻璃（{count} 格）";
+    }
+    private void FillEmptyWindowCells()
+    {
+        if(_loadedFace!=0||_draft.ElevationType!="门联窗")return;
+        if(_canvas.State.Edit(cells=>{foreach(var cell in cells.Where(IsEmptyWindowCell))cell.Material="玻璃";},out var error))
+            _canvas.Notify();
+        else _status.Text=error;
+    }
+    private void ApplyCell(Action<DoorWindowLayoutCell> update)
     {
         if(_updating || _canvas.State==null || _canvas.Selected.Count==0)return;
-        if(_canvas.State.Edit(cells=>{foreach(var i in _canvas.Selected){cells[i].Material=_material.SelectedItem?.ToString()??"无";cells[i].Opening=_openingMode.SelectedItem?.ToString()??"固定";cells[i].IsDeleted=_deleted.IsChecked==true;cells[i].IsDoor=!cells[i].IsDeleted&&_door.IsChecked==true;}},out var error))_canvas.Notify();else _status.Text=error;
+        if(_canvas.State.Edit(cells=>{foreach(var i in _canvas.Selected)update(cells[i]);},out var error))_canvas.Notify();else _status.Text=error;
     }
     private void ScaleTemplate(OpeningTypeModel type)
     {

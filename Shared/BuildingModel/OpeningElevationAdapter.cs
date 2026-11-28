@@ -193,6 +193,7 @@ namespace BatchPdfPublisher.BuildingModel
                 BayLeftCellLayout = type == null ? null : type.BayLeftCellLayout,
                 BayRightCellLayout = type == null ? null : type.BayRightCellLayout,
                 Material = type == null || string.IsNullOrWhiteSpace(type.Material) || simplifiedDetail ? "无" : type.Material,
+                UseCombinedOpeningPanelDefaults = !simplifiedDetail && string.IsNullOrWhiteSpace(type?.Material),
                 AtlasName = type == null ? null : type.AtlasName
             };
             return item;

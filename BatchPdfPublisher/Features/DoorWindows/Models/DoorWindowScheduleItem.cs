@@ -27,6 +27,7 @@ namespace BatchPdfPublisher.Models
         }
         public string SourceNote { get; set; }
         public string Material { get; set; } = "无";
+        internal bool UseCombinedOpeningPanelDefaults { get; set; }
         public string AtlasName { get; set; }
         /// <summary>区分用户在下拉框中的明确选择和旧版本自动推断值。</summary>
         public bool AtlasNameExplicitlySelected { get; set; }
